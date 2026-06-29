@@ -9038,6 +9038,50 @@ def main() -> int:
         except Exception:  # noqa: BLE001
             pass
 
+    # L44 house-rules classifier health check — runs once at boot so operators
+    # learn about a broken classifier before users hit it in production. A fresh
+    # install with a missing Ollama model or unauthenticated cloud CLI would
+    # otherwise block every request with a confusing "safety-check" message.
+    try:
+        import house_rules as _hr_boot  # type: ignore
+        hermes_url_boot = os.environ.get("CORVIN_HERMES_URL", "http://localhost:11434")
+        # Quick probe: does Ollama respond at all?
+        _ollama_ok = False
+        try:
+            import urllib.request as _ur_boot
+            with _ur_boot.urlopen(f"{hermes_url_boot}/api/tags", timeout=3.0) as _r:
+                import json as _json_boot
+                _tags = _json_boot.loads(_r.read())
+                _models = [m.get("name", "") for m in _tags.get("models", [])]
+                _ollama_ok = bool(_models)
+                if not _ollama_ok:
+                    log(
+                        "house-rules: WARNING — Ollama is reachable but has NO models "
+                        "pulled. The L44 classifier will fail-closed and block every "
+                        "request. Fix: ollama pull qwen3:8b  (or any supported model)"
+                    )
+                else:
+                    _configured = (
+                        os.environ.get("CORVIN_HERMES_MODEL", "").strip() or "qwen3:8b"
+                    )
+                    if _configured not in _models:
+                        log(
+                            f"house-rules: WARNING — configured classifier model "
+                            f"{_configured!r} not found in Ollama (available: {_models}). "
+                            f"Auto-discover will pick {_models[0]!r} as fallback. "
+                            f"Set CORVIN_HERMES_MODEL={_models[0]} to suppress this."
+                        )
+                    else:
+                        log(f"house-rules: classifier model {_configured!r} confirmed in Ollama")
+        except Exception as _oe:
+            log(
+                f"house-rules: WARNING — Ollama not reachable at {hermes_url_boot} "
+                f"({_oe}). L44 will fall back to cloud Haiku. If cloud is also "
+                f"unavailable, every request will be blocked. Check: is Ollama running?"
+            )
+    except Exception as e:  # noqa: BLE001
+        log(f"house-rules: boot health-check skipped ({e})")
+
     # Boot-time self-test for the rest of the stack — memory, audit chain,
     # MCP servers, tenant tree, vault, engines, license. Classified checks:
     # CRITICAL failures emit `boot.self_test_failed` and surface prominently

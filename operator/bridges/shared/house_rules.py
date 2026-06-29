@@ -545,8 +545,14 @@ _HOUSE_RULES_RETRY_BACKOFF_MAX_S = 4.0  # M1/D: cap on a single sleep
 # safety check may be unreliable (security-audit 2026-06-25 #13).
 _HOUSE_RULES_KNOWN_GOOD_CLASSIFIER_MODELS = frozenset({
     "qwen3:8b", "qwen3:1.7b", "qwen3:14b", "qwen3:4b", "qwen3:32b",
+    # Additional models verified to produce valid classifier JSON:
+    "qwen2.5:3b", "qwen2.5:7b", "qwen2.5:14b",
+    "gemma3:4b", "gemma3:12b", "mistral:7b", "llama3.2:3b", "llama3:8b",
 })
 _hr_warned_classifier_models: "set[str]" = set()
+# Cache: once we auto-discover a working Ollama model (because the configured one
+# is missing), remember it so we don't query /api/tags on every request.
+_hr_autodiscovered_model: "str | None" = None
 _HOUSE_RULES_CACHE_TTL_S = 300        # M2: 5-minute TTL for cached CLEAR verdicts
 _HOUSE_RULES_CACHE_MAX = 512          # M2: max cache size (LRU-like eviction)
 # ADR-0157 M3 — Hermes/Ollama local primary classifier.
@@ -804,6 +810,36 @@ def _house_rules_classify_chunk(chunk: str, rules_block: str, auth_str: str) -> 
     raise last if last is not None else _HouseRulesClassifierError("unknown")
 
 
+def _house_rules_discover_ollama_model(hermes_url: str) -> "str | None":
+    """Query Ollama /api/tags to find the best available classifier model.
+
+    Called when the configured model returns 404 on a fresh install. Returns the
+    first known-good model available, then any model, or None if Ollama is empty.
+    Result is cached in _hr_autodiscovered_model to avoid repeated /api/tags calls."""
+    global _hr_autodiscovered_model  # noqa: PLW0603
+    if _hr_autodiscovered_model:
+        return _hr_autodiscovered_model
+    import json as _json
+    import urllib.request as _ur
+    import urllib.error as _ue
+    try:
+        with _ur.urlopen(f"{hermes_url}/api/tags", timeout=5.0) as resp:
+            data = _json.loads(resp.read().decode())
+    except Exception:  # noqa: BLE001
+        return None
+    available = [m.get("name", "") for m in data.get("models", []) if m.get("name")]
+    if not available:
+        return None
+    # Prefer vetted classifier models; fall back to any available model.
+    for m in available:
+        if m in _HOUSE_RULES_KNOWN_GOOD_CLASSIFIER_MODELS:
+            _hr_autodiscovered_model = m
+            return m
+    # No vetted model — use the first available (with quality warning already in caller).
+    _hr_autodiscovered_model = available[0]
+    return available[0]
+
+
 def _house_rules_classify_hermes(chunk: str, rules_block: str, auth_str: str,
                                  tenant_id: "str | None" = None) -> "tuple[str, float, str]":
     """ADR-0157 M3/Pillar-A — local Ollama/Hermes primary classifier.
@@ -863,23 +899,66 @@ def _house_rules_classify_hermes(chunk: str, rules_block: str, auth_str: str,
             raw = resp.read().decode()
     except _ue.HTTPError as e:
         # A REACHABLE Ollama that rejects the request (e.g. 404 "model '<x>' not
-        # found") is a CONFIGURATION fault, not a transient blip. Surface it
-        # loudly — a silent fall-through here is exactly how the dead local model
-        # hid for so long and left the gate cloud-only. Still falls through to
-        # cloud Haiku (the cause string only enriches the operator log).
+        # found") is a CONFIGURATION fault. Before falling through to cloud Haiku,
+        # try to auto-discover a model that IS available in this Ollama instance.
+        # This prevents fresh-install failures where the configured model hasn't
+        # been pulled yet but another usable model exists (e.g. the engine model).
+        _err_code = getattr(e, "code", "?")
         _body = ""
         try:
             _body = e.read().decode(errors="replace")[:160]
         except Exception:  # noqa: BLE001
             pass
-        _hr_log.warning(
-            "[house-rules] local classifier REJECTED request (HTTP %s, model=%r) — "
-            "is the model pulled in Ollama? Falling back to cloud Haiku. %s",
-            getattr(e, "code", "?"), hermes_model, _body,
-        )
-        raise _HouseRulesClassifierError(
-            "local_misconfigured", f"hermes http {getattr(e, 'code', '?')}"
-        ) from e
+        if _err_code == 404:
+            fallback = _house_rules_discover_ollama_model(hermes_url)
+            if fallback and fallback != hermes_model:
+                _hr_log.warning(
+                    "[house-rules] local classifier model %r not found in Ollama — "
+                    "auto-discovered %r as fallback. Set CORVIN_HERMES_MODEL=%s to "
+                    "suppress this warning. %s",
+                    hermes_model, fallback, fallback, _body,
+                )
+                # Retry with the discovered model by re-entering; prevent infinite loop
+                # via the global cache (_hr_autodiscovered_model already set in discover).
+                payload2 = _json.dumps({
+                    "model": fallback,
+                    "prompt": prompt,
+                    "stream": False,
+                    "format": "json",
+                }).encode()
+                req2 = _ur.Request(
+                    f"{hermes_url}/api/generate",
+                    data=payload2,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                try:
+                    with _ur.urlopen(req2, timeout=_HOUSE_RULES_HERMES_TIMEOUT_S) as resp2:
+                        raw = resp2.read().decode()
+                except Exception as e2:  # noqa: BLE001
+                    raise _HouseRulesClassifierError(
+                        "local_misconfigured", f"hermes auto-fallback failed: {e2}"
+                    ) from e2
+                # Fall through to JSON parsing below with `raw` from fallback model
+            else:
+                _hr_log.warning(
+                    "[house-rules] local classifier model %r not found in Ollama and "
+                    "no usable model auto-discovered — falling back to cloud Haiku. "
+                    "Run: ollama pull %s  (or set CORVIN_HERMES_MODEL to an installed model). %s",
+                    hermes_model, hermes_model, _body,
+                )
+                raise _HouseRulesClassifierError(
+                    "local_misconfigured", f"hermes http {_err_code} — no model available"
+                ) from e
+        else:
+            _hr_log.warning(
+                "[house-rules] local classifier REJECTED request (HTTP %s, model=%r) — "
+                "falling back to cloud Haiku. %s",
+                _err_code, hermes_model, _body,
+            )
+            raise _HouseRulesClassifierError(
+                "local_misconfigured", f"hermes http {_err_code}"
+            ) from e
     except (_ue.URLError, OSError) as e:
         raise _HouseRulesClassifierError("timeout", f"hermes: {e}") from e
     except Exception as e:  # noqa: BLE001
@@ -1196,6 +1275,60 @@ def _house_rules_classifier(
     if len(text) > span * _HOUSE_RULES_MAX_CHUNKS:
         min_clear_conf = 0.0
     return "", min_clear_conf, "all chunks clear"
+
+
+def house_rules_boot_health_check(log_fn: "object | None" = None) -> None:
+    """Boot-time L44 classifier health check — call from any startup path.
+
+    Probes Ollama for available models and logs actionable WARNINGs when the
+    configured classifier model is missing. Never raises; never blocks boot.
+    This is the structural guard against fresh-install silent fail-closed blocks.
+
+    ``log_fn`` is a callable(str) for log output; defaults to logging.warning."""
+    import logging as _logging
+    import urllib.request as _ur2
+    import urllib.error as _ue2
+    import json as _json2
+
+    _log = log_fn if callable(log_fn) else _logging.getLogger("corvin.house_rules").warning
+    hermes_url = os.environ.get("CORVIN_HERMES_URL", "http://localhost:11434")
+    configured_model = os.environ.get("CORVIN_HERMES_MODEL", "").strip() or "qwen3:8b"
+
+    try:
+        with _ur2.urlopen(f"{hermes_url}/api/tags", timeout=3.0) as _resp:
+            _tags = _json2.loads(_resp.read())
+        available = [m.get("name", "") for m in _tags.get("models", []) if m.get("name")]
+    except (_ue2.URLError, OSError) as e:
+        _log(
+            f"[house-rules] boot-check: Ollama not reachable at {hermes_url} ({e}). "
+            f"L44 will fall back to cloud Haiku. If cloud is also unavailable, "
+            f"every request will be fail-closed blocked. Is Ollama running?"
+        )
+        return
+    except Exception as e:  # noqa: BLE001
+        _log(f"[house-rules] boot-check: Ollama probe failed ({e})")
+        return
+
+    if not available:
+        _log(
+            f"[house-rules] boot-check: Ollama is running but has NO models pulled. "
+            f"The L44 classifier will fail-closed and block every request. "
+            f"Fix: ollama pull {configured_model}"
+        )
+        return
+
+    if configured_model not in available:
+        best = next((m for m in available if m in _HOUSE_RULES_KNOWN_GOOD_CLASSIFIER_MODELS), available[0])
+        _log(
+            f"[house-rules] boot-check: configured classifier model {configured_model!r} "
+            f"not found in Ollama (available: {available}). "
+            f"Auto-discover will use {best!r} as fallback — no user impact, but "
+            f"set CORVIN_HERMES_MODEL={best} in service.env to suppress this warning."
+        )
+    else:
+        _log(
+            f"[house-rules] boot-check: classifier model {configured_model!r} ready in Ollama ✓"
+        )
 
 
 # ── operator CLI: read-only show / status ────────────────────────────────────

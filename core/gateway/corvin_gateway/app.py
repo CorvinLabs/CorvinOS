@@ -137,6 +137,22 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         await app.state.dispatcher.recover_pending()
     except Exception:
         pass
+    # L44 house-rules classifier health check — surfaces missing Ollama models
+    # at startup so operators know BEFORE users hit fail-closed blocks.
+    try:
+        import sys as _sys, os as _os
+        _bridges = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                                 "..", "..", "..", "..",
+                                 "operator", "bridges", "shared")
+        _bridges = _os.path.normpath(_bridges)
+        if _bridges not in _sys.path:
+            _sys.path.insert(0, _bridges)
+        from house_rules import house_rules_boot_health_check as _hr_boot  # type: ignore
+        import logging as _logging
+        _hr_boot(log_fn=_logging.getLogger("corvin.house_rules").warning)
+    except Exception:
+        pass  # best-effort — never blocks gateway startup
+
     # ACO Boot-Healer: scan + repair stalled sessions after install / restart.
     # Runs as a non-blocking background task; never delays the lifespan.
     _healer_task = None
