@@ -109,5 +109,29 @@ def test_run_merges_low_risk_with_capability(tmp_path, capsys, monkeypatch):
     assert "x = 42" in head
 
 
+def test_nightly_noop_without_capability(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+    rc = CLI.main(["nightly", "--repo", str(tmp_path)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["status"] == "noop"        # no spam, clean exit
+    assert "not a contributor" in out["reason"]
+
+
+def test_nightly_noop_empty_queue(tmp_path, capsys, monkeypatch):
+    from cryptography.hazmat.primitives import serialization as S
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    import base64
+    sk = Ed25519PrivateKey.generate()
+    priv = sk.private_bytes(S.Encoding.Raw, S.PrivateFormat.Raw, S.NoEncryption())
+    pub = sk.public_key().public_bytes(S.Encoding.Raw, S.PublicFormat.Raw)
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CORVIN_INSTANCE_ID", "n1")
+    monkeypatch.setenv("CORVIN_MAINTAINER_PUBKEY", base64.b64encode(pub).decode())
+    monkeypatch.setenv("CORVIN_MAINTAINER_CAP", MC.issue(priv, instance_id="n1", subject="shumway"))
+    rc = CLI.main(["nightly", "--repo", str(tmp_path)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0 and out["status"] == "noop" and out["reason"] == "queue empty"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
