@@ -268,6 +268,16 @@ def cmd_nightly(args) -> int:
             _git_q(repo, "worktree", "prune")
 
     out = {"status": "done", "processed": len(results), "results": results}
+    # On any non-success outcome, attach a fresh support bundle so the maintainer
+    # has the full debug material for the failed run without asking the user.
+    _ok = {"pr_opened", "pr_ready_dryrun", "skip_exists"}
+    if any(r.get("status") not in _ok for r in results):
+        try:
+            from . import support_bundle as SB
+            out["support_bundle"] = str(SB.create_bundle(_paths.corvin_home(),
+                                                         out_dir=qroot / "failed"))
+        except Exception as exc:  # noqa: BLE001 — bundle is a convenience, never fatal
+            out["support_bundle_error"] = str(exc)[:120]
     print(json.dumps(out, indent=2))
     try:
         with (qroot / "nightly.log").open("a", encoding="utf-8") as fh:
