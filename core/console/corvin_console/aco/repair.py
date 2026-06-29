@@ -11,7 +11,7 @@ Loss signal (LDD-style):
 
 Repair actions are log-only — they do NOT restart processes or modify code.
 Operator-level actions (gateway restart, engine swap) are outside this scope.
-For the actuating L5 engine that applies code-level repairs, see repair_actions.py.
+For the actuating Layer 5 engine (self-healing actions), see repair_actions.py (ADR-0178).
 """
 from __future__ import annotations
 
