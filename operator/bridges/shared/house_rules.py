@@ -205,7 +205,7 @@ Classifier = Callable[[str, "tuple[HouseRule, ...]", dict[str, Any]],
 # violations to ensure only CLEARLY classified tasks block. Dual-use rules need
 # higher bars to prevent legitimate work from blocking (no-offensive-cyber: 0.9+).
 _VIOLATION_MIN_CONFIDENCE = 0.85  # 85%+ sure before hard action (was 0.8)
-_CLEAR_MIN_CONFIDENCE = 0.75      # 75%+ sure before hard escalate on tier0 hit (was 0.7)
+_CLEAR_MIN_CONFIDENCE = 0.85      # 85%+ sure before hard escalate on tier0 hit (was 0.75)
 
 # Confidence floors per-rule for dual-use categories. Rules not in this dict
 # use _VIOLATION_MIN_CONFIDENCE. Dual-use rules need stricter bars to avoid
@@ -428,15 +428,12 @@ class HouseRulesGate:
             return self._decide(dec, persona, channel, chat_key, engine_id, tier0_hits)
 
         # Classifier cleared the task (named no rule). A low-confidence clear
-        # escalates ONLY when a Tier-0 keyword ALSO hit — i.e. the task touched a
-        # restricted keyword AND the model was unsure it was clean (genuinely
-        # suspicious). A low-confidence clear with NO keyword hit (the common
-        # false-positive: a benign data/CSV/analysis task the model rated <floor)
-        # now falls through to the policy default_action (allow) instead of
-        # escalating — the gate was over-blocking benign requests (operator
-        # decision 2026-06-25; the no-keyword + no-named-violation case is benign).
-        # A confident clear always falls to default_action.
-        if confidence < _CLEAR_MIN_CONFIDENCE and tier0_hits > 0:
+        # escalates ONLY when genuinely suspicious: either VERY unsure (<50%) OR
+        # MULTIPLE tier-0 hits + modestly unsure (<85%). A single keyword match
+        # with a confident-enough clear (>50%) now allows — reduces false escalates
+        # of legitimate work (debugging, CSV analysis, security engineering).
+        # Operator decision 2026-06-30: stricter escalate bar to prevent user friction.
+        if (confidence < 0.50) or (confidence < _CLEAR_MIN_CONFIDENCE and tier0_hits > 1):
             dec = HouseRulesDecision("escalate", "", _REASON_CLEAR_LOWCONF, confidence)
         else:
             dec = HouseRulesDecision(self.policy.default_action, "",
