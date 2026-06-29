@@ -166,6 +166,18 @@ def cmd_run(args) -> int:
     return 1
 
 
+def cmd_bundle(args) -> int:
+    """Collect all healing/logging artifacts into one zippable support folder.
+    No capability needed — any user runs this to send their errors to the
+    maintainer. Secret-safe (logs + metadata only)."""
+    from . import support_bundle as SB
+    out = SB.create_default(out_dir=args.out)
+    print(json.dumps({"status": "ok", "bundle": str(out),
+                      "hint": "send this .zip to the maintainer — it contains logs"
+                              " + metadata only, no secrets"}, indent=2))
+    return 0
+
+
 def _git_q(repo, *args: str) -> tuple[int, str]:
     p = subprocess.run(["git", "-C", str(repo), *args],
                        capture_output=True, text=True, timeout=180)
@@ -283,6 +295,10 @@ def main(argv: list[str] | None = None) -> int:
 
     v = sub.add_parser("verify", help="check the pinned key + token in the env")
     v.set_defaults(fn=cmd_verify)
+
+    b = sub.add_parser("bundle", help="zip all logs/healing into one sendable folder")
+    b.add_argument("--out", help="output dir (default: <corvin_home>/aco/support-bundles)")
+    b.set_defaults(fn=cmd_bundle)
 
     r = sub.add_parser("run", help="drive one L6 maintenance-loop iteration")
     r.add_argument("--repo", required=True, help="repo working dir to operate on")

@@ -9,11 +9,23 @@ vom Nervensystem erfasst werden.
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+import time
 from pathlib import Path
 
-from .nerve import NerveFiber, NerveSignal, SEVERITY_OK, SEVERITY_HIGH, SEVERITY_CRITICAL
+from .nerve import (NerveFiber, NerveSignal, SEVERITY_OK, SEVERITY_LOW,
+                    SEVERITY_MEDIUM, SEVERITY_HIGH, SEVERITY_CRITICAL)
 
 logger = logging.getLogger(__name__)
+
+
+def _home() -> Path | None:
+    try:
+        from forge import paths as _p  # type: ignore
+        return _p.corvin_home()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # ── Fiber: Session-Gesundheit (L1-L5 ACO) ────────────────────────────────────
@@ -326,6 +338,121 @@ class ComplianceFiber(NerveFiber):
         return signals
 
 
+# ── Fiber: System-Ressourcen (Disk + Memory) ─────────────────────────────────
+
+class ResourceFiber(NerveFiber):
+    """Disk- und Speicher-Headroom für das corvin_home. Disk-Full ist eine der
+    häufigsten verdeckten Fehlerursachen (Writes scheitern still)."""
+    fiber_id = "sys.resources"
+    fiber_version = "1.0.0"
+    fiber_description = "Disk- + RAM-Headroom (sys.resources): warnt bei Knappheit"
+
+    def scan(self) -> list[NerveSignal]:
+        out: list[NerveSignal] = []
+        home = _home()
+        try:
+            if home is not None:
+                du = shutil.disk_usage(str(home))
+                free_mb = du.free // (1024 * 1024)
+                if free_mb < 100:
+                    sev = SEVERITY_CRITICAL
+                elif free_mb < 500:
+                    sev = SEVERITY_HIGH
+                else:
+                    sev = None
+                if sev:
+                    out.append(NerveSignal(
+                        fiber_id=self.fiber_id, signal_type="resources.low_disk",
+                        severity=sev, message=f"Wenig Speicherplatz: {free_mb} MB frei",
+                        data={"free_mb": free_mb, "total_mb": du.total // (1024 * 1024)},
+                        repair_hint="Speicher freigeben / L5 orphan_tmp + stale_lock sweep"))
+        except OSError:
+            pass
+        try:  # Linux best-effort memory probe
+            mi = Path("/proc/meminfo")
+            if mi.is_file():
+                kv = {}
+                for line in mi.read_text().splitlines():
+                    k, _, v = line.partition(":")
+                    kv[k.strip()] = v.strip()
+                avail = int(kv.get("MemAvailable", "0 kB").split()[0]) // 1024
+                if 0 < avail < 200:
+                    out.append(NerveSignal(
+                        fiber_id=self.fiber_id, signal_type="resources.low_mem",
+                        severity=SEVERITY_HIGH, message=f"Wenig RAM verfügbar: {avail} MB",
+                        data={"avail_mb": avail},
+                        repair_hint="Speicher-Last prüfen / Engine-Parallelität senken"))
+        except (OSError, ValueError):
+            pass
+        return out
+
+
+# ── Fiber: Log-Gesundheit (Fehlerrate im Debug-Log) ──────────────────────────
+
+class LogHealthFiber(NerveFiber):
+    """Tastet die letzten Zeilen von corvin.log ab und meldet Fehler-Spitzen —
+    detaillierte, kontinuierliche Selbst-Beobachtung des Logging-Systems."""
+    fiber_id = "aco.log_health"
+    fiber_version = "1.0.0"
+    fiber_description = "Fehlerrate im Debug-Log (aco.log_health): meldet Spitzen"
+    _TAIL = 800
+
+    def scan(self) -> list[NerveSignal]:
+        home = _home()
+        if home is None:
+            return []
+        log = home / "logs" / "corvin.log"
+        if not log.is_file():
+            return []
+        try:
+            with log.open("r", encoding="utf-8", errors="replace") as fh:
+                tail = fh.readlines()[-self._TAIL:]
+        except OSError:
+            return []
+        errs = sum(1 for ln in tail if "ERROR" in ln or "CRITICAL" in ln or "Traceback" in ln)
+        if not tail:
+            return []
+        rate = errs / len(tail)
+        if errs >= 50 or rate >= 0.25:
+            sev = SEVERITY_HIGH if errs >= 50 else SEVERITY_MEDIUM
+            return [NerveSignal(
+                fiber_id=self.fiber_id, signal_type="log.error_spike", severity=sev,
+                message=f"Erhöhte Fehlerrate im Log: {errs}/{len(tail)} Zeilen",
+                data={"errors": errs, "window": len(tail)},
+                repair_hint="ACO L4 Diagnose auf die jüngsten Tracebacks ansetzen")]
+        return []
+
+
+# ── Fiber: Config-Drift (nicht-parsebare Konfigurationen) ─────────────────────
+
+class ConfigDriftFiber(NerveFiber):
+    """Findet beschädigte ``*.config.json`` unter dem Home (Boot-Blocker). Detection
+    only — die actuating Reparatur macht L5 corrupt_config_reset (opt-in)."""
+    fiber_id = "config.drift"
+    fiber_version = "1.0.0"
+    fiber_description = "Beschädigte *.config.json (config.drift): meldet Parse-Fehler"
+
+    def scan(self) -> list[NerveSignal]:
+        import json as _json
+        home = _home()
+        if home is None:
+            return []
+        out: list[NerveSignal] = []
+        for p in list(home.rglob("*.config.json"))[:200]:
+            try:
+                if p.is_file():
+                    _json.loads(p.read_text(encoding="utf-8"))
+            except _json.JSONDecodeError:
+                out.append(NerveSignal(
+                    fiber_id=self.fiber_id, signal_type="config.corrupt",
+                    severity=SEVERITY_HIGH, message=f"Beschädigte Konfiguration: {p.name}",
+                    data={"path": str(p.relative_to(home))},
+                    repair_hint="L5 corrupt_config_reset (CORVIN_ACO_L5_RISKY=1)"))
+            except OSError:
+                pass
+        return out
+
+
 # ── Registry der Built-in Fibers (wird von nerve.py importiert) ───────────────
 
 _BUILTIN_FIBERS: list[NerveFiber] = [
@@ -335,4 +462,7 @@ _BUILTIN_FIBERS: list[NerveFiber] = [
     IntegrityFiber(),     # Immunsystem
     EngineFiber(),        # Engine + Voice
     SessionFiber(),       # Chat-Sessions
+    ResourceFiber(),      # Disk + RAM Headroom (NEU)
+    LogHealthFiber(),     # Log-Fehlerrate (NEU)
+    ConfigDriftFiber(),   # Beschädigte Configs (NEU)
 ]
