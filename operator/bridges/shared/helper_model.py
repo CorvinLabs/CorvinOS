@@ -80,6 +80,19 @@ def resolve_claude_bin() -> str:
         pass
     return name
 
+
+def is_hermes_available() -> bool:
+    """Check if Hermes (Ollama fallback engine) is reachable.
+
+    Used before degrading from Claude to Hermes to ensure the fallback
+    actually works. Never raises — best-effort check only."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2.0) as resp:
+            return getattr(resp, "status", 200) == 200
+    except Exception:  # noqa: BLE001
+        return False
+
 # Curated site identifiers. Each helper passes one of these as ``site``;
 # unknown sites fall through the resolver harmlessly (return default).
 SITE_VOICE_SUMMARY: Final[str] = "voice_summary"
