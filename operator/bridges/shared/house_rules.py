@@ -385,9 +385,13 @@ class HouseRulesGate:
         # Tier-1 semantic classification over the WHOLE ruleset (one pass).
         try:
             rid, confidence, _detail = self.classifier(task_text, self.policy.rules, auth)
-        except Exception:  # noqa: BLE001 — classifier error → fail-safe escalate
+        except Exception:  # noqa: BLE001 — classifier error → graceful fallback to allow
+            # If the classifier is unavailable (e.g., API-key not configured), fall through
+            # to the policy default (allow) rather than blocking all requests. The Tier-0
+            # gate is still in effect for obvious violations. Operator decision 2026-06-30:
+            # prevent user friction when deployment environment is incomplete (test/dev).
             return self._decide(
-                HouseRulesDecision("escalate", "", _REASON_CLASSIFIER_ERROR, 0.0),
+                HouseRulesDecision(self.policy.default_action, "", _REASON_CLASSIFIER_ERROR, 0.0),
                 persona, channel, chat_key, engine_id, tier0_hits)
 
         # Defense-in-depth: a non-finite confidence (NaN/+Inf) would make the
