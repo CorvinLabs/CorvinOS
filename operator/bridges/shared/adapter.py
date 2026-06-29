@@ -1954,12 +1954,16 @@ def _check_house_rules_or_fail(
                     )
                 except Exception:  # noqa: BLE001 — observability never blocks the gate
                     pass
-            return (
-                "[house-rules] This request couldn't be safety-checked just now — "
-                "the automated acceptable-use check was inconclusive (it did not "
-                "flag your request). Please send it again in a moment; if it keeps "
-                "happening an operator will review it."
-            )
+                return (
+                    "[house-rules] This request couldn't be safety-checked just now — "
+                    "the automated acceptable-use check was inconclusive (it did not "
+                    "flag your request). Please send it again in a moment; if it keeps "
+                    "happening an operator will review it."
+                )
+            # clear_low_confidence: classifier ran successfully and did NOT flag the
+            # request — it was merely uncertain. Allow through silently so normal
+            # questions are never blocked by classifier confidence noise.
+            return None
         return (
             f"[house-rules] This request needs operator approval before it can run "
             f"(rule '{rid}'). It touches a restricted or uncertain area. "

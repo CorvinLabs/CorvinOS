@@ -183,16 +183,26 @@ def _run_escalate_message(adapter, monkeypatch, reason: str, rule_id: str):
 
 
 def test_escalate_message_soft_for_transient_and_clean(monkeypatch) -> None:
-    """A transient classifier_error or a low-confidence CLEAR must NOT tell the user
-    their request "touches a restricted area" — those are not findings against the
-    content. They get the neutral try-again message instead (fixes the "too
-    sensitive / misleading" complaint), while the request is STILL blocked."""
+    """classifier_error must NOT tell the user their request "touches a restricted
+    area" — it's a technical failure, not a finding against their content. It gets
+    the neutral try-again message and the request is STILL blocked.
+    clear_low_confidence (classifier ran fine, just uncertain, did not flag) is
+    allowed through silently — blocking normal questions on confidence noise is bad UX."""
     adapter = _fresh_adapter()
-    for reason in ("classifier_error", "clear_low_confidence"):
-        msg = _run_escalate_message(adapter, monkeypatch, reason, "")
-        assert msg is not None, "fail-closed: request must still be blocked"
-        assert "couldn't be safety-checked" in msg, f"{reason!r} → {msg!r}"
-        assert "needs operator approval" not in msg, f"{reason!r} leaked firm wording"
+
+    # classifier_error: technical failure → still blocked, neutral wording
+    msg = _run_escalate_message(adapter, monkeypatch, "classifier_error", "")
+    assert msg is not None, "fail-closed: classifier_error must still be blocked"
+    assert "couldn't be safety-checked" in msg, f"classifier_error → {msg!r}"
+    assert "needs operator approval" not in msg, "classifier_error leaked firm wording"
+
+    # clear_low_confidence: classifier ran fine, did NOT flag the request, merely
+    # uncertain → allow through silently (return None)
+    msg = _run_escalate_message(adapter, monkeypatch, "clear_low_confidence", "")
+    assert msg is None, (
+        "clear_low_confidence must pass through — classifier did not flag the request, "
+        "blocking on confidence noise causes false positives on normal questions"
+    )
 
 
 def test_escalate_message_firm_for_genuine_borderline(monkeypatch) -> None:

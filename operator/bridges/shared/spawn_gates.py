@@ -334,12 +334,16 @@ def check_l44(
                     _hr._house_rules_track_degradation(audit_write=_hr_classifier_audit)
                 except Exception:  # noqa: BLE001 — observability never blocks the gate
                     pass
-            return (
-                "[house-rules] This request couldn't be safety-checked just now — "
-                "the automated acceptable-use check was inconclusive (it did not "
-                "flag your request). Please send it again in a moment; if it keeps "
-                "happening an operator will review it."
-            )
+                return (
+                    "[house-rules] This request couldn't be safety-checked just now — "
+                    "the automated acceptable-use check was inconclusive (it did not "
+                    "flag your request). Please send it again in a moment; if it keeps "
+                    "happening an operator will review it."
+                )
+            # clear_low_confidence: classifier ran successfully and did NOT flag the
+            # request — it was merely uncertain. Allow through silently so normal
+            # questions are never blocked by classifier confidence noise.
+            return None
         return (
             f"[house-rules] This request needs operator approval before it can run "
             f"(rule '{rid}'). It touches a restricted or uncertain area. "
