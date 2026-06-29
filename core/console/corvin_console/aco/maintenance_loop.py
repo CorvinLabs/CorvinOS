@@ -167,6 +167,7 @@ def run_maintenance_loop(
     capability_token: Optional[str] = None,
     public_key_bytes: Optional[bytes] = None,
     gate_runner: Optional[Callable[[], tuple[bool, str]]] = None,
+    repro_runner: Optional[Callable[[Patch], Any]] = None,
     enable_direct_main: bool = False,
     enable_push: bool = False,
     now: Optional[int] = None,
@@ -201,6 +202,29 @@ def run_maintenance_loop(
     tele["requires_ack"] = gate.requires_ack
     if not gate.passed:
         return LoopResult("gate_failed", "; ".join(gate.reasons),
+                         requires_ack=gate.requires_ack, gate_reasons=gate.reasons, telemetry=tele)
+
+    # 3.5) reproduction proof gate (ADR-0179) — the hard guarantee that code only
+    # ever changes when the bug is PROVEN and the fix WORKS. Deny-by-default:
+    #   * a runner present → the patch must show red→green→suite-green or we refuse.
+    #   * a diagnosis that demands a proof but has no runner wired → refuse (never
+    #     commit an unproven fix just because the proof harness is missing).
+    if repro_runner is not None:
+        try:
+            repro = repro_runner(patch)
+        except Exception as exc:  # noqa: BLE001
+            return LoopResult("repro_failed", f"reproduction gate raised: {exc}",
+                             requires_ack=gate.requires_ack, gate_reasons=gate.reasons,
+                             telemetry=tele)
+        tele["repro"] = repro.to_dict() if hasattr(repro, "to_dict") else {"proven": bool(repro)}
+        if not getattr(repro, "proven", bool(repro)):
+            return LoopResult("repro_failed", getattr(repro, "detail", "not proven"),
+                             requires_ack=gate.requires_ack, gate_reasons=gate.reasons,
+                             telemetry=tele)
+    elif diagnosis.get("requires_repro_test"):
+        return LoopResult("repro_failed",
+                         "diagnosis requires a reproduction proof but no repro_runner "
+                         "was wired — refusing to commit an unproven fix",
                          requires_ack=gate.requires_ack, gate_reasons=gate.reasons, telemetry=tele)
 
     # 4) write edits + branch + commit (scoped to repo, never -A).

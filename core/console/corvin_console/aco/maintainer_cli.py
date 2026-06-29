@@ -218,6 +218,41 @@ def _pr_body(diag: dict, result) -> str:
     )
 
 
+def cmd_telemetry(args) -> int:
+    """Manage opt-in error telemetry (no capability needed — this is for ANY user,
+    incl. foreign installs, to help fix bugs without sharing content)."""
+    from forge import paths as _paths  # type: ignore
+    from . import telemetry as TEL
+    home = _paths.corvin_home()
+    if args.action == "opt-in":
+        TEL.grant_consent(home, pseudonym=args.pseudonym or "anon")
+        print(json.dumps({"telemetry": "opted_in", "pseudonym": args.pseudonym or "anon",
+                          "note": "only scrubbed error signatures are sent; never content"}))
+    elif args.action == "opt-out":
+        TEL.revoke_consent(home)
+        print(json.dumps({"telemetry": "opted_out"}))
+    elif args.action == "preview":
+        rep = TEL.collect_local(home)
+        print(json.dumps({"consent": TEL.consent_granted(home),
+                          "would_send": rep or "(nothing / no consent)"}, indent=2))
+    else:  # status
+        print(json.dumps({"consent": TEL.consent_granted(home)}))
+    return 0
+
+
+def cmd_synthesize(args) -> int:
+    """Synthesize diagnoses from logs (+ telemetry inbox) into the queue."""
+    from forge import paths as _paths  # type: ignore
+    from . import diagnosis_synth as DS
+    from . import telemetry as TEL
+    home = _paths.corvin_home()
+    inbox = Path(args.telemetry_inbox) if args.telemetry_inbox else home / "aco" / "telemetry" / "inbox"
+    tsigs = TEL.ingest_inbox(inbox)
+    res = DS.synthesize(home, telemetry_sigs=tsigs, min_occurrences=int(args.min_occurrences))
+    print(json.dumps(res, indent=2))
+    return 0
+
+
 def _pypi_token(repo: Path) -> str:
     t = os.environ.get("PYPI_TOKEN") or os.environ.get("TWINE_PASSWORD") or ""
     if t:
@@ -339,9 +374,28 @@ def cmd_nightly(args) -> int:
             remote_pull = {"error": str(exc)[:160]}
 
     repo = Path(args.repo).resolve()
-    items = sorted(pend.glob("*.json"))[: int(args.max)]
+
+    # Synthesize diagnoses from logs + mirrored remotes + opted-in telemetry, so
+    # the queue is filled from REAL recurring, localized errors (ADR-0179).
+    synth = None
+    if getattr(args, "synthesize", False):
+        try:
+            from . import diagnosis_synth as DS
+            from . import telemetry as TEL
+            inbox = (Path(args.telemetry_inbox) if getattr(args, "telemetry_inbox", None)
+                     else _paths.corvin_home() / "aco" / "telemetry" / "inbox")
+            tsigs = TEL.ingest_inbox(inbox)
+            synth = DS.synthesize(_paths.corvin_home(), telemetry_sigs=tsigs,
+                                  min_occurrences=int(args.min_occurrences))
+        except Exception as exc:  # noqa: BLE001 — synthesis is best-effort
+            synth = {"error": str(exc)[:160]}
+
+    # Oldest-first (mtime) so a freshly-synthesized diagnosis can't be starved
+    # forever behind hash-lucky stale entries when --max truncates (review LOW-MED).
+    items = sorted(pend.glob("*.json"), key=lambda p: p.stat().st_mtime)[: int(args.max)]
     if not items:
-        out = {"status": "noop", "reason": "queue empty", "remote": remote_pull}
+        out = {"status": "noop", "reason": "queue empty", "remote": remote_pull,
+               "synthesized": synth}
         if getattr(args, "release", False):
             out["release"] = _release(repo, dry_run=bool(args.dry_run))
         print(json.dumps(out))
@@ -350,7 +404,12 @@ def cmd_nightly(args) -> int:
     test_cmd = (args.test_cmd.split() if args.test_cmd else
                 [sys.executable, "-m", "pytest",
                  "core/console/tests/test_aco_repair_actions.py", "-q"])
+    # Stage C (regression) MUST run a BROAD suite, not the narrow gate file — else
+    # a fix that breaks anything outside that file ships green (review HIGH).
+    repro_full_cmd = (args.repro_full_cmd.split() if getattr(args, "repro_full_cmd", None)
+                      else [sys.executable, "-m", "pytest", "core/console/tests", "-q"])
     from .patch_generator import engine_patch_source, default_llm
+    from .reproduction import build_repro_runner
     results = []
     for dj in items:
         try:
@@ -374,7 +433,8 @@ def cmd_nightly(args) -> int:
                 diagnosis=diag, repo_dir=wt,
                 patch_source=engine_patch_source(repo_dir=wt, llm=llm),
                 capability_token=None,
-                gate_runner=_pytest_gate(test_cmd, str(wt)))
+                gate_runner=_pytest_gate(test_cmd, str(wt)),
+                repro_runner=build_repro_runner(wt, full_cmd=repro_full_cmd))
             if r.status == "pr_ready" and not args.dry_run:
                 _git_q(wt, "push", "-u", "origin", branch)
                 pr = subprocess.run(
@@ -395,7 +455,7 @@ def cmd_nightly(args) -> int:
             _git_q(repo, "worktree", "prune")
 
     out = {"status": "done", "processed": len(results), "results": results,
-           "remote": remote_pull}
+           "remote": remote_pull, "synthesized": synth}
     # On any non-success outcome, attach a fresh support bundle so the maintainer
     # has the full debug material for the failed run without asking the user.
     _ok = {"pr_opened", "pr_ready_dryrun", "skip_exists"}
@@ -461,12 +521,31 @@ def main(argv: list[str] | None = None) -> int:
     n.add_argument("--max", default="3", help="max diagnoses to process per run")
     n.add_argument("--model", help="engine model")
     n.add_argument("--test-cmd", help="override the gate test command")
+    n.add_argument("--repro-full-cmd",
+                   help="broad suite for the repro stage-C regression check "
+                        "(default: pytest core/console/tests)")
     n.add_argument("--dry-run", action="store_true", help="run loop but don't push/PR")
     n.add_argument("--release", action="store_true",
                    help="auto-publish next PyPI version if main advanced (maintainer-only)")
+    n.add_argument("--synthesize", action="store_true",
+                   help="synthesize diagnoses from logs + telemetry before processing")
+    n.add_argument("--min-occurrences", default="3",
+                   help="min recurrences before a signature becomes a code-patch diagnosis")
+    n.add_argument("--telemetry-inbox",
+                   help="dir of submitted telemetry reports (default <home>/aco/telemetry/inbox)")
     n.add_argument("--pull-remotes", action="store_true",
                    help="mirror + analyse configured remote instances' logs first")
     n.set_defaults(fn=cmd_nightly)
+
+    tl = sub.add_parser("telemetry", help="opt in/out of scrubbed error telemetry (any user)")
+    tl.add_argument("action", choices=["opt-in", "opt-out", "status", "preview"])
+    tl.add_argument("--pseudonym", help="non-PII label for your reports (opt-in)")
+    tl.set_defaults(fn=cmd_telemetry)
+
+    sy = sub.add_parser("synthesize", help="logs + telemetry → diagnosis queue")
+    sy.add_argument("--min-occurrences", default="3")
+    sy.add_argument("--telemetry-inbox")
+    sy.set_defaults(fn=cmd_synthesize)
 
     rel = sub.add_parser("release", help="publish next PyPI version if main advanced (maintainer-only)")
     rel.add_argument("--repo", required=True, help="repo working dir")

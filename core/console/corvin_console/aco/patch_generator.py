@@ -54,8 +54,19 @@ def build_prompt(diagnosis: dict, file_contents: dict[str, str]) -> str:
         "Return ONLY a JSON object, no prose, of the exact shape:",
         '{"summary": "<one line>", "edits": '
         '[{"path": "<repo-relative>", "new_content": "<FULL new file content>"}]}',
-        "Rules: edit only the file(s) named in the diagnosis; return the COMPLETE "
-        "new content of each edited file (not a diff); make the smallest change "
+        "",
+        "Your patch MUST contain BOTH of these, or it will be rejected:",
+        "  1. A NEW regression test (path under a 'tests/' dir, file named "
+        "test_<something>.py) that REPRODUCES the bug: it MUST FAIL on the current "
+        "code and PASS only after your fix. A test that already passes proves "
+        "nothing and the patch is rejected.",
+        "  2. The actual FIX in the diagnosed source file(s).",
+        "The reproduction gate will run your test on the UNPATCHED code (must fail), "
+        "then with your fix (must pass), then the full suite (must stay green). "
+        "Only then is the fix committed. So make the test genuinely exercise the bug.",
+        "",
+        "Rules: edit only the diagnosed file(s) plus your new test; return the "
+        "COMPLETE new content of each file (not a diff); make the smallest change "
         "that fixes the root cause; never touch LICENSE/NOTICE/CLA/audit/policy/keys.",
         "",
         "DIAGNOSIS:",

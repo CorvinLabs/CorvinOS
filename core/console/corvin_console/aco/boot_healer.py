@@ -147,6 +147,32 @@ async def _heal_cycle() -> None:
     except Exception:
         logger.debug("[ACO] L5 actuating repair failed", exc_info=True)
 
+    # ── Step L5.1: opt-in error telemetry (ADR-0179, foreign users) ──────
+    # A machine that cannot fix its own code (no maintainer capability) still
+    # helps fix bugs everywhere: IF (and only if) the operator opted in, it ships
+    # SCRUBBED error signatures — never content — to the maintainer intake, who
+    # synthesizes a proven fix and releases it via PyPI. Deny-by-default: without
+    # consent this whole step is a no-op. Best-effort, never blocks the cycle.
+    try:
+        from ..aco import telemetry as _tel
+        from forge import paths as _paths_t
+        _home_t = _paths_t.corvin_home()
+        if _tel.consent_granted(_home_t):
+            def _emit():
+                import time as _t
+                rep = _tel.collect_local(_home_t)
+                if not rep:
+                    return None
+                _tel.write_outbox(_home_t, rep, stamp=str(int(_t.time())))
+                return _tel.submit(_home_t)
+            res = await asyncio.get_event_loop().run_in_executor(None, _emit)
+            if res and res.get("sent"):
+                logger.info("[ACO] telemetry: %d scrubbed report(s) submitted", res["sent"])
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("[ACO] telemetry emit failed", exc_info=True)
+
     # ── Step 0: Security Integrity Scan ──────────────────────────────────
     try:
         from ..aco.integrity_monitor import run_integrity_scan

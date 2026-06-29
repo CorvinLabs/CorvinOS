@@ -29,6 +29,7 @@ Corvin is **structurally constrained** by EU AI Act 2026 + GDPR. Every feature m
 | Path-gate hook (L10, fail-closed) | GDPR Art. 32 | [Layer 10](docs/claude-ref/layer-10-path-gate.md) |
 | Voice-transcribe audit (metadata only, never text) | GDPR Art. 5 | [Layer 23](docs/claude-ref/layer-23-stt.md) |
 | House-rules gate (acceptable-use, fail-closed) | EU AI Act Art. 5, 50 | [Layer 44](docs/claude-ref/layer-44-house-rules.md) |
+| Error telemetry (opt-in, scrubbed signatures only, deny-by-default) | GDPR Art. 5, 6, 7, 25 | ADR-0179 (`aco/telemetry.py`) |
 
 **Must NOT do (absolute):**
 - Don't weaken disclosure — AI-nature statement and opt-out (`/pass`, `/leave`) are locked.
@@ -38,6 +39,9 @@ Corvin is **structurally constrained** by EU AI Act 2026 + GDPR. Every feature m
 - Don't leak PII into labels, audit details, or log lines.
 - Don't add "compliance-off mode" via any env var.
 - Don't silence `voice-audit verify` exit-1.
+- Don't make telemetry opt-out/default-on, or send anything but scrubbed signatures (ADR-0179
+  `_assert_safe` is fail-closed); don't commit an auto-fix that didn't pass the red→green
+  reproduction gate (`aco/reproduction.py`).
 
 → Full reference: [compliance-baseline.md](docs/claude-ref/compliance-baseline.md)
 
