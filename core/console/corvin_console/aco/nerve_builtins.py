@@ -453,6 +453,49 @@ class ConfigDriftFiber(NerveFiber):
         return out
 
 
+# ── Fiber: Remote-Instanz-Logs (z.B. Hetzner) ────────────────────────────────
+
+class RemoteLogFiber(NerveFiber):
+    """Analysiert die gespiegelten Logs ANDERER CorvinOS-Instanzen unter
+    ``aco/remote/<name>/`` (per ``corvin-maintainer pull-remote`` geholt). So
+    tauchen Fehler des Hetzner-Servers im selben Nervensystem-Scan auf."""
+    fiber_id = "remote.log_health"
+    fiber_version = "1.0.0"
+    fiber_description = "Fehlerrate in gespiegelten Remote-Instanz-Logs (remote.log_health)"
+    _TAIL = 800
+
+    def scan(self) -> list[NerveSignal]:
+        home = _home()
+        if home is None:
+            return []
+        out: list[NerveSignal] = []
+        remote_root = home / "aco" / "remote"
+        if not remote_root.is_dir():
+            return []
+        for inst in remote_root.iterdir():
+            if not inst.is_dir():
+                continue
+            for log in inst.rglob("corvin.log"):
+                try:
+                    with log.open("r", encoding="utf-8", errors="replace") as fh:
+                        tail = fh.readlines()[-self._TAIL:]
+                except OSError:
+                    continue
+                if not tail:
+                    continue
+                errs = sum(1 for ln in tail
+                           if "ERROR" in ln or "CRITICAL" in ln or "Traceback" in ln)
+                if errs >= 30:
+                    out.append(NerveSignal(
+                        fiber_id=self.fiber_id, signal_type="remote.error_spike",
+                        severity=SEVERITY_HIGH if errs >= 80 else SEVERITY_MEDIUM,
+                        message=f"Remote '{inst.name}': {errs} Fehler in den letzten "
+                                f"{len(tail)} Log-Zeilen",
+                        data={"remote": inst.name, "errors": errs, "window": len(tail)},
+                        repair_hint="Remote-Logs im Support-Bundle prüfen / L4-Diagnose"))
+        return out
+
+
 # ── Registry der Built-in Fibers (wird von nerve.py importiert) ───────────────
 
 _BUILTIN_FIBERS: list[NerveFiber] = [
@@ -465,4 +508,5 @@ _BUILTIN_FIBERS: list[NerveFiber] = [
     ResourceFiber(),      # Disk + RAM Headroom (NEU)
     LogHealthFiber(),     # Log-Fehlerrate (NEU)
     ConfigDriftFiber(),   # Beschädigte Configs (NEU)
+    RemoteLogFiber(),     # Remote-Instanz-Logs, z.B. Hetzner (NEU)
 ]

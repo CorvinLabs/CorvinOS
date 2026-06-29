@@ -166,6 +166,24 @@ def cmd_run(args) -> int:
     return 1
 
 
+def cmd_remotes(args) -> int:
+    """List or add remote-instance log sources (used by `nightly --pull-remotes`)."""
+    from forge import paths as _paths  # type: ignore
+    from . import remote_logs as RL
+    home = _paths.corvin_home()
+    remotes = RL.load_remotes(home)
+    if args.action == "add":
+        if not (args.name and args.ssh):
+            raise SystemExit("error: add needs --name and --ssh USER@HOST")
+        remotes = [r for r in remotes if r.get("name") != args.name]
+        remotes.append({"name": args.name, "ssh": args.ssh,
+                        "remote_home": args.remote_home})
+        RL.save_remotes(home, remotes)
+    print(json.dumps({"remotes": remotes,
+                      "config": str(RL.remotes_config_path(home))}, indent=2))
+    return 0
+
+
 def cmd_bundle(args) -> int:
     """Collect all healing/logging artifacts into one zippable support folder.
     No capability needed — any user runs this to send their errors to the
@@ -214,9 +232,32 @@ def cmd_nightly(args) -> int:
     if not cap.allowed:
         print(json.dumps({"status": "noop", "reason": f"not a contributor: {cap.reason}"}))
         return 0  # not provisioned → quietly do nothing
+
+    # Optionally mirror remote instances' logs (e.g. Hetzner) first, so the nerve
+    # scan + any support bundle below cover them too. Runs even on an empty queue.
+    remote_pull = None
+    if getattr(args, "pull_remotes", False):
+        try:
+            from . import remote_logs as RL
+            home = _paths.corvin_home()
+            remote_pull = RL.pull_all(home)
+            # surface remote health as a fresh nerve scan + bundle if anything is hot
+            from .nerve import NerveRegistry
+            sigs = [s for s in NerveRegistry.scan_all()
+                    if getattr(s, "fiber_id", "") == "remote.log_health"]
+            if sigs:
+                from . import support_bundle as SB
+                bz = SB.create_bundle(home, out_dir=qroot / "failed")
+                remote_pull = {"pulled": remote_pull,
+                               "remote_signals": [s.to_dict() for s in sigs],
+                               "support_bundle": str(bz)}
+        except Exception as exc:  # noqa: BLE001 — remote analysis is best-effort
+            remote_pull = {"error": str(exc)[:160]}
+
     items = sorted(pend.glob("*.json"))[: int(args.max)]
     if not items:
-        print(json.dumps({"status": "noop", "reason": "queue empty"}))
+        print(json.dumps({"status": "noop", "reason": "queue empty",
+                          "remote": remote_pull}))
         return 0
 
     repo = Path(args.repo).resolve()
@@ -267,7 +308,8 @@ def cmd_nightly(args) -> int:
             _git_q(repo, "worktree", "remove", "--force", str(wt))
             _git_q(repo, "worktree", "prune")
 
-    out = {"status": "done", "processed": len(results), "results": results}
+    out = {"status": "done", "processed": len(results), "results": results,
+           "remote": remote_pull}
     # On any non-success outcome, attach a fresh support bundle so the maintainer
     # has the full debug material for the failed run without asking the user.
     _ok = {"pr_opened", "pr_ready_dryrun", "skip_exists"}
@@ -330,7 +372,15 @@ def main(argv: list[str] | None = None) -> int:
     n.add_argument("--model", help="engine model")
     n.add_argument("--test-cmd", help="override the gate test command")
     n.add_argument("--dry-run", action="store_true", help="run loop but don't push/PR")
+    n.add_argument("--pull-remotes", action="store_true",
+                   help="mirror + analyse configured remote instances' logs first")
     n.set_defaults(fn=cmd_nightly)
+
+    rr = sub.add_parser("remotes", help="manage remote-instance log sources")
+    rr.add_argument("action", choices=["list", "add"])
+    rr.add_argument("--name"); rr.add_argument("--ssh")
+    rr.add_argument("--remote-home", default=".corvin")
+    rr.set_defaults(fn=cmd_remotes)
 
     args = p.parse_args(argv)
     return int(args.fn(args) or 0)
