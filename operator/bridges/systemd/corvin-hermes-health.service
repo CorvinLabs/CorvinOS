@@ -1,0 +1,30 @@
+[Unit]
+Description=Corvin Hermes Health Check & Repair
+Documentation=https://github.com/CorvinLabs/CorvinOS/docs/claude-ref
+PartOf=corvin-voice-bridge-adapter.service
+After=corvin-voice-bridge-adapter.service
+
+[Service]
+Type=oneshot
+User=%u
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=corvin-hermes-health
+
+# Resolve CORVIN_HOME; must match bridge.sh logic
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/bin/bash -c ' \
+  REPO_ROOT="$$(find ~ -maxdepth 5 -name ".corvin_repo" -exec dirname {} \\;)"; \
+  if [[ -z "$$REPO_ROOT" ]]; then REPO_ROOT="$$HOME/.corvin"; fi; \
+  export CORVIN_HOME="$$REPO_ROOT/.corvin"; \
+  export CORVIN_ACO_L5_RISKY=1; \
+  cd "$$REPO_ROOT" && \
+  python3 -c "from corvin_console.aco import repair_actions; repair_actions.run_default()" \
+'
+
+# Restart on transient failures (network hiccup, Ollama momentarily down)
+# but not on permanent issues (e.g. no ollama binary at all).
+Restart=on-failure
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=3

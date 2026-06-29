@@ -1,0 +1,17 @@
+[Unit]
+Description=Corvin Hermes Health Check & Repair Timer
+Documentation=https://github.com/CorvinLabs/CorvinOS/docs/claude-ref
+PartOf=corvin-voice-bridge-adapter.service
+After=corvin-voice-bridge-adapter.service
+
+# Run the health check every 5 minutes, with a 30-second randomized offset
+# to avoid thundering herd on multi-instance deployments.
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
+Persistent=yes
+AccuracySec=1min
+
+[Install]
+WantedBy=corvin-voice-bridge-adapter.service

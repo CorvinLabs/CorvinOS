@@ -92,6 +92,8 @@ UNIT_CORVIN_SUPPLY_CHAIN_CRITICAL_TIMER="corvin-supply-chain-critical.timer"
 UNIT_CORVIN_WEBUI="corvin-webui.service"
 UNIT_WATCHDOG_SVC="corvin-voice-bridge-watchdog.service"
 UNIT_WATCHDOG_TIMER="corvin-voice-bridge-watchdog.timer"
+UNIT_CORVIN_HERMES_HEALTH_SVC="corvin-hermes-health.service"
+UNIT_CORVIN_HERMES_HEALTH_TIMER="corvin-hermes-health.timer"
 ALL_UNITS=("$UNIT_ADAPTER" "$UNIT_WA" "$UNIT_TG" "$UNIT_DC" "$UNIT_SK" "$UNIT_EM" \
            "$UNIT_WATCHDOG_TIMER" "$UNIT_WATCHDOG_SVC" \
            "$UNIT_CORVIN_TIMEOUT_TIMER" "$UNIT_CORVIN_TIMEOUT_SVC" \
@@ -100,6 +102,7 @@ ALL_UNITS=("$UNIT_ADAPTER" "$UNIT_WA" "$UNIT_TG" "$UNIT_DC" "$UNIT_SK" "$UNIT_EM
            "$UNIT_CORVIN_ENGINE_CANARY_TIMER" "$UNIT_CORVIN_ENGINE_CANARY_SVC" \
            "$UNIT_CORVIN_SUPPLY_CHAIN_WEEKLY_TIMER" "$UNIT_CORVIN_SUPPLY_CHAIN_WEEKLY_SVC" \
            "$UNIT_CORVIN_SUPPLY_CHAIN_CRITICAL_TIMER" "$UNIT_CORVIN_SUPPLY_CHAIN_CRITICAL_SVC" \
+           "$UNIT_CORVIN_HERMES_HEALTH_TIMER" "$UNIT_CORVIN_HERMES_HEALTH_SVC" \
            "$UNIT_CORVIN_WEBUI")
 
 # Resolve absolute paths to node + python so systemd's empty PATH doesn't
@@ -240,6 +243,8 @@ install_units() {
               "$BRIDGES_DIR/discord/systemd/$UNIT_DC" \
               "$BRIDGES_DIR/slack/systemd/$UNIT_SK" \
               "$BRIDGES_DIR/email/systemd/$UNIT_EM" \
+              "$BRIDGES_DIR/systemd/$UNIT_CORVIN_HERMES_HEALTH_SVC" \
+              "$BRIDGES_DIR/systemd/$UNIT_CORVIN_HERMES_HEALTH_TIMER" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_TIMEOUT_SVC" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_TIMEOUT_TIMER" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_AUDIT_VERIFY_SVC" \
@@ -340,6 +345,17 @@ cmd_up() {
     ok "corvin supply-chain critical-diff timer enabled (daily 05:00)"
   else
     warn "corvin supply-chain critical-diff timer could not be enabled"
+  fi
+  # Hermes health check & repair (every 5 minutes, ACO L5 + Tier LOCAL fallback).
+  # Ensures Ollama is reachable and the qwen3 model is available; auto-repairs
+  # if necessary (requires CORVIN_ACO_L5_RISKY=1). This guarantees a working
+  # fallback engine for OS turns even if Claude Code becomes unavailable.
+  UNIT_CORVIN_HERMES_HEALTH="corvin-hermes-health.service"
+  UNIT_CORVIN_HERMES_HEALTH_TIMER="corvin-hermes-health.timer"
+  if systemctl --user enable --now "$UNIT_CORVIN_HERMES_HEALTH_TIMER" 2>/dev/null; then
+    ok "corvin hermes-health timer enabled (every 5 minutes)"
+  else
+    warn "corvin hermes-health timer could not be enabled — run 'bash $BRIDGES_DIR/setup-hermes-pib.sh --check' to diagnose"
   fi
   # WebUI host — uvicorn serving corvin-console under the gateway ASGI
   # app on 127.0.0.1:8765. Runs WITHOUT --reload so the command-centre chat

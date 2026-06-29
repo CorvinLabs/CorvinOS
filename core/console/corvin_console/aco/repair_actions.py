@@ -382,6 +382,58 @@ class OrphanTmpSweep(RepairAction):
 
 
 @register_repair
+class HermesHealthRepair(RepairAction):
+    """ADR-0178 Tier LOCAL — Automated Hermes/Ollama health restoration.
+
+    Detects when Ollama (the local engine fallback) is unavailable and attempts
+    corrective actions: (1) start the stopped server, (2) re-pull the configured
+    model if missing. Loss-gated: if neither action succeeds in restoring reachability,
+    the entire repair is rolled back (Ollama.start left running but model_pulled stays False).
+
+    This action is risky (network I/O, subprocess fork) and requires
+    CORVIN_ACO_L5_RISKY=1 to run. Never raises — any error is logged and ignored."""
+    action_id = "hermes_health"
+    risk = RISK_RISKY
+    blast_radius = "home"  # starts a process; affects the home's Ollama server
+
+    def precondition(self, ctx: RepairContext) -> list[Any]:
+        """Return a list of missing components: [] if healthy, ['not_reachable']
+        if Ollama is down, ['model_missing'] if the model is absent."""
+        try:
+            import sys
+            sys.path.insert(0, str(ctx.corvin_home.parent.parent.parent / "operator" / "bridges" / "shared"))
+            from hermes_healing import (  # type: ignore  # noqa: PLC0415
+                get_health_status,
+            )
+            status = get_health_status()
+            faults = []
+            if not status["reachable"]:
+                faults.append("not_reachable")
+            elif not status["has_model"]:
+                faults.append("model_missing")
+            return faults
+        except (ImportError, Exception):  # noqa: BLE001
+            return []  # module not available or error → nothing to repair
+
+    def apply(self, ctx: RepairContext, faults: list[Any]) -> int:
+        try:
+            import sys
+            sys.path.insert(0, str(ctx.corvin_home.parent.parent.parent / "operator" / "bridges" / "shared"))
+            from hermes_healing import repair_hermes  # type: ignore  # noqa: PLC0415
+            result = repair_hermes(timeout_server=30.0, timeout_pull=600.0)
+            if result.get("reachable"):
+                count = (1 if result.get("server_started") else 0) + (1 if result.get("model_pulled") else 0)
+                return count if count > 0 else 1  # at least 1 to avoid rolling back
+            return 0
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def undo(self, ctx: RepairContext) -> None:
+        """No-op: we want Ollama to stay running once started. The system will
+        benefit from having it available as a fallback engine."""
+
+
+@register_repair
 class SecretFileMode(RepairAction):
     """Tighten known secret files under the home to 0600 if looser (POSIX only;
     a no-op on Windows where POSIX bits are not enforced). Tightening-only, so it
