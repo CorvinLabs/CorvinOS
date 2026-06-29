@@ -218,6 +218,90 @@ def _pr_body(diag: dict, result) -> str:
     )
 
 
+def _pypi_token(repo: Path) -> str:
+    t = os.environ.get("PYPI_TOKEN") or os.environ.get("TWINE_PASSWORD") or ""
+    if t:
+        return t.strip()
+    envf = repo / ".env"
+    try:
+        for line in envf.read_text(encoding="utf-8").splitlines():
+            if line.startswith("PYPI_TOKEN="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _bump_patch(version: str) -> str:
+    parts = version.strip().split(".")
+    if not parts[-1].isdigit():
+        return version
+    parts[-1] = str(int(parts[-1]) + 1)
+    return ".".join(parts)
+
+
+def _release(repo: Path, *, dry_run: bool = False) -> dict:
+    """Auto-publish the NEXT PyPI version — but ONLY for the maintainer instance
+    AND only when main advanced since the last release tag. Double deny-by-default
+    gate: the signed maintainer.commit capability + the PYPI_TOKEN secret. A repo
+    clone / other user has neither, so they can NEVER publish."""
+    import re as _re
+    cap = MC.is_contributor()
+    if not cap.allowed:
+        return {"released": False, "reason": f"not a contributor: {cap.reason}"}
+    token = _pypi_token(repo)
+    if not token:
+        return {"released": False, "reason": "no PYPI_TOKEN (not the maintainer instance)"}
+    # something new since the last vX.Y.Z tag?
+    rc, last = _git_q(repo, "describe", "--tags", "--abbrev=0", "--match", "v*")
+    last = last.strip()
+    if rc == 0 and last:
+        rc2, cnt = _git_q(repo, "rev-list", f"{last}..HEAD", "--count")
+        if rc2 == 0 and cnt.strip() == "0":
+            return {"released": False, "reason": f"nothing new since {last}"}
+    pyproj = repo / "pyproject.toml"
+    text = pyproj.read_text(encoding="utf-8")
+    m = _re.search(r'^version = "([^"]+)"', text, _re.M)
+    if not m:
+        return {"released": False, "reason": "version not found"}
+    cur, new = m.group(1), _bump_patch(m.group(1))
+    if dry_run:
+        return {"released": False, "reason": "dry_run", "would_bump": f"{cur} -> {new}",
+                "since_tag": last or "(none)"}
+    pyproj.write_text(_re.sub(r'^version = "[^"]+"', f'version = "{new}"', text, count=1,
+                              flags=_re.M), encoding="utf-8")
+    spa = repo / "core" / "console" / "corvin_console" / "web-next"
+    subprocess.run(["npm", "run", "build"], cwd=spa, capture_output=True, text=True, timeout=900)
+    import shutil as _sh
+    for d in ("dist", "build"):
+        _sh.rmtree(repo / d, ignore_errors=True)
+    b = subprocess.run([sys.executable, "-m", "build"], cwd=repo,
+                       capture_output=True, text=True, timeout=900)
+    if b.returncode != 0:
+        _git_q(repo, "checkout", "--", "pyproject.toml")  # revert bump on failure
+        return {"released": False, "reason": "build failed", "detail": b.stderr[-300:]}
+    arts = [str(p) for p in (repo / "dist").glob(f"corvinos-{new}*")]
+    up = subprocess.run([sys.executable, "-m", "twine", "upload", "--non-interactive",
+                         "-u", "__token__", "-p", token, *arts],
+                        cwd=repo, capture_output=True, text=True, timeout=900)
+    if up.returncode != 0:
+        _git_q(repo, "checkout", "--", "pyproject.toml")
+        return {"released": False, "reason": "upload failed", "detail": up.stderr[-300:]}
+    _git_q(repo, "add", "pyproject.toml")
+    _git_q(repo, "commit", "-m",
+           f"chore(release): {new} — nightly auto-release (ADR-0178 maintainer-only)")
+    _git_q(repo, "tag", f"v{new}")
+    _git_q(repo, "push", "origin", "main", "--tags")
+    return {"released": True, "version": new, "previous": cur}
+
+
+def cmd_release(args) -> int:
+    res = _release(Path(args.repo).resolve(), dry_run=bool(args.dry_run))
+    print(json.dumps(res, indent=2))
+    return 0 if (res.get("released") or res.get("reason") in
+                 ("dry_run",) or "nothing new" in res.get("reason", "")) else 1
+
+
 def cmd_nightly(args) -> int:
     """Process the diagnosis queue → one PR per actionable diagnosis. No-op (exit 0)
     when no capability or the queue is empty — never spams. Idempotent: skips a
@@ -254,13 +338,15 @@ def cmd_nightly(args) -> int:
         except Exception as exc:  # noqa: BLE001 — remote analysis is best-effort
             remote_pull = {"error": str(exc)[:160]}
 
+    repo = Path(args.repo).resolve()
     items = sorted(pend.glob("*.json"))[: int(args.max)]
     if not items:
-        print(json.dumps({"status": "noop", "reason": "queue empty",
-                          "remote": remote_pull}))
+        out = {"status": "noop", "reason": "queue empty", "remote": remote_pull}
+        if getattr(args, "release", False):
+            out["release"] = _release(repo, dry_run=bool(args.dry_run))
+        print(json.dumps(out))
         return 0
 
-    repo = Path(args.repo).resolve()
     test_cmd = (args.test_cmd.split() if args.test_cmd else
                 [sys.executable, "-m", "pytest",
                  "core/console/tests/test_aco_repair_actions.py", "-q"])
@@ -320,6 +406,10 @@ def cmd_nightly(args) -> int:
                                                          out_dir=qroot / "failed"))
         except Exception as exc:  # noqa: BLE001 — bundle is a convenience, never fatal
             out["support_bundle_error"] = str(exc)[:120]
+    # Auto-publish the next PyPI version IFF main advanced since the last tag
+    # (maintainer-only: capability + PYPI_TOKEN double-gate).
+    if getattr(args, "release", False):
+        out["release"] = _release(repo, dry_run=bool(args.dry_run))
     print(json.dumps(out, indent=2))
     try:
         with (qroot / "nightly.log").open("a", encoding="utf-8") as fh:
@@ -372,9 +462,16 @@ def main(argv: list[str] | None = None) -> int:
     n.add_argument("--model", help="engine model")
     n.add_argument("--test-cmd", help="override the gate test command")
     n.add_argument("--dry-run", action="store_true", help="run loop but don't push/PR")
+    n.add_argument("--release", action="store_true",
+                   help="auto-publish next PyPI version if main advanced (maintainer-only)")
     n.add_argument("--pull-remotes", action="store_true",
                    help="mirror + analyse configured remote instances' logs first")
     n.set_defaults(fn=cmd_nightly)
+
+    rel = sub.add_parser("release", help="publish next PyPI version if main advanced (maintainer-only)")
+    rel.add_argument("--repo", required=True, help="repo working dir")
+    rel.add_argument("--dry-run", action="store_true", help="report would-bump, don't publish")
+    rel.set_defaults(fn=cmd_release)
 
     rr = sub.add_parser("remotes", help="manage remote-instance log sources")
     rr.add_argument("action", choices=["list", "add"])

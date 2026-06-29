@@ -133,5 +133,70 @@ def test_nightly_noop_empty_queue(tmp_path, capsys, monkeypatch):
     assert rc == 0 and out["status"] == "noop" and out["reason"] == "queue empty"
 
 
+def _cap_env(monkeypatch, inst="rel1"):
+    from cryptography.hazmat.primitives import serialization as S
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    import base64
+    sk = Ed25519PrivateKey.generate()
+    priv = sk.private_bytes(S.Encoding.Raw, S.PrivateFormat.Raw, S.NoEncryption())
+    pub = sk.public_key().public_bytes(S.Encoding.Raw, S.PublicFormat.Raw)
+    monkeypatch.setenv("CORVIN_INSTANCE_ID", inst)
+    monkeypatch.setenv("CORVIN_MAINTAINER_PUBKEY", base64.b64encode(pub).decode())
+    monkeypatch.setenv("CORVIN_MAINTAINER_CAP", MC.issue(priv, instance_id=inst, subject="shumway"))
+
+
+def _tagged_repo(tmp_path, version="0.9.0", tag="v0.9.0"):
+    repo = tmp_path / "repo"; repo.mkdir()
+    def g(*a): subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+    g("init", "-b", "main"); g("config", "user.email", "t@t"); g("config", "user.name", "t")
+    (repo / "pyproject.toml").write_text(f'[project]\nname = "corvinos"\nversion = "{version}"\n',
+                                         encoding="utf-8")
+    g("add", "-A"); g("commit", "-m", "init"); g("tag", tag)
+    return repo
+
+
+def test_bump_patch():
+    assert CLI._bump_patch("0.9.54") == "0.9.55"
+    assert CLI._bump_patch("1.0.9") == "1.0.10"
+    assert CLI._bump_patch("0.9.9rc1") == "0.9.9rc1"  # non-numeric tail untouched
+
+
+def test_release_denied_without_capability(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYPI_TOKEN", "pypi-xxx")
+    res = CLI._release(_tagged_repo(tmp_path), dry_run=True)
+    assert res["released"] is False and "not a contributor" in res["reason"]
+
+
+def test_release_noop_without_token(tmp_path, monkeypatch):
+    _cap_env(monkeypatch)
+    monkeypatch.delenv("PYPI_TOKEN", raising=False)
+    monkeypatch.delenv("TWINE_PASSWORD", raising=False)
+    repo = _tagged_repo(tmp_path)  # no .env in repo → no token anywhere
+    res = CLI._release(repo, dry_run=True)
+    assert res["released"] is False and "PYPI_TOKEN" in res["reason"]
+
+
+def test_release_noop_when_nothing_new(tmp_path, monkeypatch):
+    _cap_env(monkeypatch)
+    monkeypatch.setenv("PYPI_TOKEN", "pypi-xxx")
+    repo = _tagged_repo(tmp_path)  # HEAD == v0.9.0 → nothing new
+    res = CLI._release(repo, dry_run=False)
+    assert res["released"] is False and "nothing new" in res["reason"]
+
+
+def test_release_dryrun_bumps_when_main_advanced(tmp_path, monkeypatch):
+    _cap_env(monkeypatch)
+    monkeypatch.setenv("PYPI_TOKEN", "pypi-xxx")
+    repo = _tagged_repo(tmp_path)
+    (repo / "feature.py").write_text("y = 2\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "feat"], check=True, capture_output=True)
+    res = CLI._release(repo, dry_run=True)
+    assert res["released"] is False and res["reason"] == "dry_run"
+    assert res["would_bump"] == "0.9.0 -> 0.9.1"
+    # dry-run must NOT mutate pyproject
+    assert 'version = "0.9.0"' in (repo / "pyproject.toml").read_text()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
