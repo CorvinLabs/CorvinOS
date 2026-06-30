@@ -104,7 +104,12 @@ const { loadSettings, currentSettings, saveSettings } =
 const settings = loadSettings(); // boot snapshot — held mutable for debug-list edits
 
 // V-022: operator_name is required for EU AI Act Art. 50 disclosure quality.
-const OPERATOR_NAME = (settings.operator_name || '').trim();
+if (!settings.operator_name) {
+  settings.operator_name = 'CorvinOS (Discord Bridge)';
+  saveSettings(settings);
+}
+const currentON = currentSettings().operator_name || settings.operator_name || '';
+const OPERATOR_NAME = currentON.trim();
 if (!OPERATOR_NAME || OPERATOR_NAME === '(owner)') {
   log('[security] V-022: operator_name not set in settings.json — disclosure card will show "(owner)" placeholder. Configure operator_name for Art. 50 compliance.');
 }
