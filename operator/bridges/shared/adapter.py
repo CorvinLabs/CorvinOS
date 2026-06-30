@@ -8326,6 +8326,20 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     finally:
         hb_stop.set()
 
+    # HTML error-page guard: if the engine returned a raw HTTP error page
+    # (Cloudflare 50x, nginx, caddy, etc.) instead of a real answer, replace
+    # it with a clean message.  This is the last-resort catch — individual
+    # engine paths and ACS worker parsing should filter HTML earlier, but this
+    # layer ensures it never reaches the user's chat no matter what.
+    if answer and answer.lstrip().startswith(("<!DOCTYPE", "<!doctype", "<html", "<HTML")):
+        import re as _re_html_guard
+        _t = _re_html_guard.search(
+            r"<title[^>]*>([^<]{1,120})</title>", answer, _re_html_guard.IGNORECASE
+        )
+        _label = _t.group(1).strip() if _t else "HTTP-Fehlerseite"
+        log(f"html-guard: intercepted raw HTML page ({_label!r}) — replacing with error message")
+        answer = f"⚠️ Der Server hat eine Fehlerseite zurückgegeben ({_label}). Bitte versuche es in einem Moment erneut."
+
     # Mirror new Forge/ACS artifact files (images/plots/PDFs) to outputs/ so
     # they are picked up as chat attachments. Works for ALL engines because the
     # adapter is the common layer — no engine-specific PostToolUse hook needed.
