@@ -59,7 +59,7 @@ def _load_key_from_env_files() -> str | None:
                     continue
                 k, _, v = line.partition("=")
                 k = k.strip()
-                if k in ("OPENAI_API_KEY", "OPENAI_APIKEY"):
+                if k in ("OPENAI_API_KEY", "OPENAI_APIKEY", "CORVIN_TTS_OPENAI_KEY"):
                     v = v.strip().strip('"').strip("'")
                     if v:
                         return v
@@ -69,7 +69,11 @@ def _load_key_from_env_files() -> str | None:
 
 
 def _resolve_key() -> str | None:
-    return os.environ.get("OPENAI_API_KEY") or _load_key_from_env_files()
+    return (
+        os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("CORVIN_TTS_OPENAI_KEY")
+        or _load_key_from_env_files()
+    )
 
 
 def _openai_voice_for(lang: str, voice: str | None = None) -> str:
