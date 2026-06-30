@@ -2264,6 +2264,17 @@ async def stream_turn(
         res = await run_task
         ok = res.status == "success"
         final = (res.summary or "").strip()
+
+        # Safety net: raw HTML error pages (Cloudflare 50x, nginx, …) that
+        # slip through the ACS layer must never appear verbatim in the chat.
+        if final and final.lstrip().startswith(("<!DOCTYPE", "<!doctype", "<html", "<HTML")):
+            import re as _re_html
+            _t = _re_html.search(r"<title[^>]*>([^<]{1,120})</title>",
+                                 final, _re_html.IGNORECASE)
+            _label = _t.group(1).strip() if _t else "HTTP-Fehlerseite"
+            final = f"Fehler: Der Server hat \"{_label}\" zurückgegeben. Bitte versuche es erneut."
+            ok = False
+
         if not final:
             final = ("Delegation abgeschlossen." if ok
                      else f"Delegation fehlgeschlagen: {res.error or 'unknown error'}")

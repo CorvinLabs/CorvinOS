@@ -1231,9 +1231,30 @@ def _call_worker_sync(
     return output_text, tokens_used, attestation
 
 
+def _is_html_error_page(text: str) -> bool:
+    """Return True when text is a raw HTTP error page (Cloudflare 50x, nginx, etc.)."""
+    t = text.lstrip()
+    return t.startswith(("<!DOCTYPE", "<!doctype", "<html", "<HTML"))
+
+
 def _parse_worker_output(text: str, worker_id: str) -> WorkerResult:
     """Parse worker JSON output into a WorkerResult."""
     text = text.strip()
+
+    # Raw HTML error pages (Cloudflare 502, nginx 50x, …) must never propagate
+    # as worker output — they indicate an upstream HTTP failure.  Surface a
+    # clean, human-readable error instead of kilobytes of markup.
+    if _is_html_error_page(text):
+        import re as _re
+        _title = _re.search(r"<title[^>]*>([^<]{1,120})</title>", text, _re.IGNORECASE)
+        _label = _title.group(1).strip() if _title else "HTTP error page"
+        return WorkerResult(
+            worker_id=worker_id,
+            status="failed",
+            result={},
+            error=f"upstream returned {_label!r} instead of a valid response",
+        )
+
     data: dict = {}
 
     # Try direct parse
