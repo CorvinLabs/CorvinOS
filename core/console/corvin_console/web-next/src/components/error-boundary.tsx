@@ -83,7 +83,12 @@ export class RouteErrorBoundary extends React.Component<
 > {
   state: RouteErrorBoundaryState = { error: null, showDetails: false };
 
-  static getDerivedStateFromError(error: Error): RouteErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): RouteErrorBoundaryState | null {
+    // Chunk-load errors (stale deployment — hash changed) must not be swallowed
+    // here. Return null so the error propagates to the outer ChunkErrorBoundary
+    // which triggers a hard reload. "Try again" (state reset) can never fix a
+    // 404'd JS chunk — only a full page reload can.
+    if (isChunkLoadError(error)) return null;
     return { error, showDetails: false };
   }
 
