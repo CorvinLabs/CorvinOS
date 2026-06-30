@@ -3107,12 +3107,15 @@ def extract_document_text(path: Path, mimetype: str = "") -> str:
       - Anything else: empty string → caller can fall back to Read tool.
     """
     ext = path.suffix.lower()
+    # Build a clean env without auth credentials
+    clean_env = {k: v for k, v in os.environ.items()
+                 if k not in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_BASE')}
     if ext == ".pdf" or "pdf" in mimetype:
         if shutil.which("pdftotext"):
             try:
                 out = subprocess.run(
                     ["pdftotext", "-layout", str(path), "-"],
-                    capture_output=True, text=True, timeout=30, check=True,
+                    capture_output=True, text=True, timeout=30, check=True, env=clean_env,
                 )
                 return out.stdout.strip()
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -3122,7 +3125,7 @@ def extract_document_text(path: Path, mimetype: str = "") -> str:
             try:
                 out = subprocess.run(
                     ["pandoc", "-t", "plain", str(path)],
-                    capture_output=True, text=True, timeout=30, check=True,
+                    capture_output=True, text=True, timeout=30, check=True, env=clean_env,
                 )
                 return out.stdout.strip()
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -3908,6 +3911,24 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
     workdir = _session_dir(channel, chat_key)
     env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile)
     env["VOICE_HOOK_RECURSION"] = "1"
+    # ADR-0126 M2 — when claude_code_local mode sets ANTHROPIC_API_KEY='local',
+    # remove it from the subprocess env so the claude CLI can authenticate via
+    # claude.ai Connectors instead of treating 'local' as a sentinel value.
+    # Keep ANTHROPIC_BASE_URL intact for the Ollama redirect fallback path.
+    if env.get("ANTHROPIC_API_KEY") == "local":
+        env.pop("ANTHROPIC_API_KEY", None)
+    if env.get("ANTHROPIC_AUTH_TOKEN") == "local":
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    # Also strip BASE_URL sentinel when local mode was active, so claude CLI
+    # can fall through to claude.ai login if Ollama is unreachable.
+    if env.get("CORVIN_CC_LOCAL_MODE") == "1":
+        env.pop("ANTHROPIC_BASE_URL", None)
+        env.pop("CORVIN_CC_LOCAL_MODE", None)
+    # Always remove real API credentials from subprocess env to prevent leaks
+    # — claude CLI must authenticate via claude.ai Connectors instead
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    env.pop("ANTHROPIC_API_BASE", None)
 
     base_args = _build_claude_args(prompt, mode, profile, add_dir, channel=channel, chat_key=chat_key)
 
@@ -6589,7 +6610,8 @@ def _append_lern_zugabe(text: str, *, lang: str = "de") -> str:
     summarizer = SCRIPTS_DIR / "summarize.py"
     if not summarizer.exists():
         return text
-    env = os.environ.copy()
+    env = {k: v for k, v in os.environ.items()
+           if k not in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_BASE')}
     env["VOICE_HOOK_RECURSION"] = "1"
     try:
         out = subprocess.run(
@@ -6616,7 +6638,8 @@ def _append_metapher(text: str, *, lang: str = "de") -> str:
     summarizer = SCRIPTS_DIR / "summarize.py"
     if not summarizer.exists():
         return text
-    env = os.environ.copy()
+    env = {k: v for k, v in os.environ.items()
+           if k not in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_BASE')}
     env["VOICE_HOOK_RECURSION"] = "1"
     try:
         out = subprocess.run(
@@ -6726,9 +6749,11 @@ def build_voice_summary(text: str, max_chars: int = 400,
         try:
             import time
             start_strip = time.time()
+            clean_env = {k: v for k, v in os.environ.items()
+                         if k not in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_BASE')}
             pre = subprocess.run(
                 ["python3", str(stripper), "--mode", "code-only"],
-                input=text, capture_output=True, text=True, timeout=10, check=True,
+                input=text, capture_output=True, text=True, timeout=10, check=True, env=clean_env,
             ).stdout
             elapsed_strip = time.time() - start_strip
             if elapsed_strip > 5:
@@ -6745,7 +6770,8 @@ def build_voice_summary(text: str, max_chars: int = 400,
             log(f"build_voice_summary: strip_for_tts failed (rc={e.returncode}) — using raw text as input")
             pre = text
 
-        env = os.environ.copy()
+        env = {k: v for k, v in os.environ.items()
+               if k not in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_BASE')}
         env["VOICE_HOOK_RECURSION"] = "1"
         # i18n — read display_language from the bridge-wide profile to pin
         # the spoken summary to a non-de/non-en locale (zh-Hans, ja, ar,

@@ -887,14 +887,14 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None)
 _DELEGATE_PREFIX = "/delegate"
 
 _DELEGATION_BUDGET_DEFAULTS = {
-    "max_loops": 5,           # 3 was too tight: 1 worker-timeout burn + 2 parse-error burns = budget gone
-    "max_depth": 2,
-    "max_total_workers": 4,
-    "max_wall_time": 3600,
-    "timeout_seconds": 3600,  # 1 h — allows complex multi-file tasks to complete
-    "max_worker_turns": 100,  # acs_runtime default was 5 → workers hit max_turns mid-tool-use
-                              # on explore/implement tasks → error_max_turns → confidence=0.0
-                              # → "Delegation fehlgeschlagen: unknown error" in web console.
+    "max_loops": 500,         # 3 was too tight: 1 worker-timeout burn + 2 parse-error burns = budget gone
+    "max_depth": 200,
+    "max_total_workers": 400,
+    "max_wall_time": 360000,
+    "timeout_seconds": 360000,  # 100 h — allows complex multi-file tasks to complete
+    "max_worker_turns": 10000,  # acs_runtime default was 5 → workers hit max_turns mid-tool-use
+                                # on explore/implement tasks → error_max_turns → confidence=0.0
+                                # → "Delegation fehlgeschlagen: unknown error" in web console.
 }
 
 # Triage heuristic vocabulary (deterministic, 0 ms, no API — same rationale

@@ -2398,6 +2398,7 @@ export interface DelegationBudgetResponse {
     max_loops: number;
     max_wall_time: number;
     max_total_workers: number;
+    max_depth: number;
   };
   meta: Record<string, DelegationBudgetMeta>;
   path: string;

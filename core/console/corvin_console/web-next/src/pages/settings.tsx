@@ -266,10 +266,11 @@ function AutoUpdateCard({ csrf }: { csrf: string }) {
 
 const BUDGET_LABELS: Record<string, { label: string; unit: string; description: string }> = {
   timeout_seconds:   { label: "Worker timeout",     unit: "s",       description: "Max seconds a single worker subprocess may run." },
-  max_worker_turns:  { label: "Max turns / worker", unit: "turns",   description: "Max tool-call turns per claude worker (100 = headroom for large tasks)." },
+  max_worker_turns:  { label: "Max turns / worker", unit: "turns",   description: "Max tool-call turns per claude worker." },
   max_loops:         { label: "Max iterations",     unit: "loops",   description: "How many planner→worker cycles the ACS orchestrator runs." },
   max_wall_time:     { label: "Max wall time",      unit: "s",       description: "Hard overall time limit for a full delegation run." },
   max_total_workers: { label: "Max workers",        unit: "workers", description: "How many parallel worker processes ACS may spawn per run." },
+  max_depth:         { label: "Max nesting depth",  unit: "levels",  description: "Maximum recursion depth for nested delegation calls." },
 };
 
 function DelegationBudgetCard({ csrf }: { csrf: string }) {

@@ -294,11 +294,12 @@ def put_auto_update(
 
 # Keys the UI is allowed to touch — a subset of _DELEGATION_BUDGET_DEFAULTS.
 _BUDGET_KEYS = {
-    "timeout_seconds":  {"type": int, "min": 30,    "max": 86400,  "default": 3600},
-    "max_worker_turns": {"type": int, "min": 1,     "max": 500,    "default": 100},
-    "max_loops":        {"type": int, "min": 1,     "max": 20,     "default": 5},
-    "max_wall_time":    {"type": int, "min": 60,    "max": 86400,  "default": 3600},
-    "max_total_workers":{"type": int, "min": 1,     "max": 16,     "default": 4},
+    "timeout_seconds":  {"type": int, "min": 30,    "max": 8640000, "default": 360000},
+    "max_worker_turns": {"type": int, "min": 1,     "max": 50000,   "default": 10000},
+    "max_loops":        {"type": int, "min": 1,     "max": 2000,    "default": 500},
+    "max_wall_time":    {"type": int, "min": 60,    "max": 8640000, "default": 360000},
+    "max_total_workers":{"type": int, "min": 1,     "max": 1600,    "default": 400},
+    "max_depth":        {"type": int, "min": 1,     "max": 2000,    "default": 200},
 }
 
 
@@ -335,6 +336,7 @@ class DelegationBudgetRequest(BaseModel):
     max_loops:         int | None = None
     max_wall_time:     int | None = None
     max_total_workers: int | None = None
+    max_depth:         int | None = None
     model_config = {"extra": "forbid"}
 
 
