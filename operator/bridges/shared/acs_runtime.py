@@ -1703,8 +1703,13 @@ async def _manager_loop(
     _mgr_engine, _ = _resolve_worker_engine(manager_model, ctx.tenant_id)
     # L34/L35 gates for manager engine (ADR-0158 M2: spawn_gates SSOT).
     # Manager sees full DSI snapshot; gate before any iteration to avoid leakage.
-    # Single try-block so an ImportError doesn't leave _sg_l35 undefined
-    # (review Finding 1 — HIGH: split-import created silent double fail-open).
+    # Define fallback gate functions to prevent NameError if import fails.
+    def _fallback_gate(*args, **kwargs):
+        return None  # Fail-open: pass through if gate unavailable
+
+    _sg_l34 = _fallback_gate
+    _sg_l35 = _fallback_gate
+
     _mgr_cls = _workflow_classification(ctx.workflow_spec)
     try:
         from spawn_gates import check_l34 as _sg_l34, check_l35 as _sg_l35  # type: ignore
@@ -1731,6 +1736,7 @@ async def _manager_loop(
                 run_dir=ctx.run_dir, elapsed_s=time.monotonic() - start,
             )
     except Exception as _mgr_gate_exc:  # noqa: BLE001 — spawn_gates unavailable → fail-open
+        logger.debug("[acs] Manager gates import failed (fail-open): %s", type(_mgr_gate_exc).__name__)
         _write_audit(ctx.tenant_id, "acs.manager_gates_unavailable", {
             "run_id": ctx.run_id, "engine": _mgr_engine,
             "reason": type(_mgr_gate_exc).__name__,
