@@ -201,7 +201,7 @@ def _try_edge(out_path: Path, text: str, lang: str) -> bool:
 # BCP-47 prefix → Piper model stem (quality "medium" unless noted).
 # Models must be placed in PIPER_MODEL_DIR as <stem>.onnx + <stem>.onnx.json.
 _PIPER_MODELS: dict[str, str] = {
-    "de":  "de_DE-thorsten-high",
+    "de":  "de_DE-thorsten-medium",
     "en":  "en_US-amy-medium",
     "zh":  "zh_CN-huayan-medium",
     "ja":  "ja_JP-kokoro-medium",
