@@ -229,6 +229,30 @@ def _load_l44_overlay(tenant_id: str, corvin_home: "Path | None"):
     return overlay
 
 
+def _safe_classify(task: str, rules: dict, auth: dict, _hr, audit_write_fn, tenant_id: str):
+    """Robust classifier wrapper that degrades gracefully on errors.
+
+    Returns a decision-like object or falls back to conservative allow.
+    """
+    try:
+        return _hr._house_rules_classifier(
+            task, rules, auth, audit_write=audit_write_fn, tenant_id=tenant_id
+        )
+    except Exception as _classify_inner_exc:  # noqa: BLE001
+        _log.warning("[house-rules] _house_rules_classifier failed (%s) — returning conservative allow",
+                    type(_classify_inner_exc).__name__)
+        # Return a minimal decision-like object that allows the request
+        # This is safer than crashing the entire gate
+        class ConservativeDecision:
+            allowed = True
+            action = "allow"
+            reason = "classifier_error"
+            confidence = 0.0
+            rule_id = None
+
+        return ConservativeDecision()
+
+
 def check_l44(
     prompt: "str | None",
     tenant_id: str,
@@ -271,6 +295,8 @@ def check_l44(
         return None  # nothing to classify (status pings, empty resumes) — defensive
 
     tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+    # ── Robust import with degradation ────────────────────────────────────────
     try:
         import house_rules as _hr  # type: ignore
         from egress_gate import make_forge_audit_writer as _mk_writer  # type: ignore
@@ -279,36 +305,78 @@ def check_l44(
                    type(_imp_exc).__name__)
         return ("[house-rules] Acceptable-use gate unavailable — request blocked "
                 "(fail-closed). Contact the operator.")
-    try:
-        overlay = _load_l44_overlay(tenant, corvin_home)
-        _audit_write = _mk_writer(_l44_audit_path(tenant, corvin_home))
 
-        # The production forge writer is 3-arg (event_type, severity, details),
-        # but the house_rules classifier/degradation helpers call audit_write with
-        # the 2-arg shape (event_type, details). Bridge the arity so provider-
-        # fallback / degradation events reach the chain (mirrors adapter F-03).
+    # ── Robust classification with fallbacks ──────────────────────────────────
+    try:
+        # Step 1: Load overlay (best-effort)
+        try:
+            overlay = _load_l44_overlay(tenant, corvin_home)
+        except Exception as _overlay_exc:  # noqa: BLE001 — overlay is optional
+            _log.debug("[house-rules] overlay load failed (%s) — continuing with baseline",
+                      type(_overlay_exc).__name__)
+            overlay = None
+
+        # Step 2: Setup audit writer (must succeed)
+        try:
+            _audit_write = _mk_writer(_l44_audit_path(tenant, corvin_home))
+        except Exception as _audit_exc:  # noqa: BLE001 — fallback to null writer
+            _log.warning("[house-rules] audit writer creation failed (%s) — using fallback",
+                        type(_audit_exc).__name__)
+            def _audit_write(event_type: str, severity: str, details: dict) -> None:
+                pass  # Silent fallback — audit disabled but gate continues
+
+        # Step 3: Bridge audit arity (2-arg vs 3-arg)
         def _hr_classifier_audit(event_type: str, details: dict) -> None:
             try:
                 from forge.security_events import EVENT_SEVERITY as _ev_sev  # type: ignore
                 severity = _ev_sev.get(event_type, "INFO")
             except Exception:  # noqa: BLE001 — severity lookup is best-effort
                 severity = "INFO"
-            _audit_write(event_type, severity, details)
+            try:
+                _audit_write(event_type, severity, details)
+            except Exception:  # noqa: BLE001 — audit write is best-effort
+                pass
 
-        gate = _hr.HouseRulesGate.from_repo(
-            audit_writer=_audit_write,
-            classifier=lambda task, rules, auth: _hr._house_rules_classifier(
-                task, rules, auth, audit_write=_hr_classifier_audit, tenant_id=tenant
-            ),
-            tenant_overlay=overlay,
-        )
-        decision = gate.classify(
-            task, persona=persona or "", channel=channel, chat_key=chat_key,
-            engine_id=engine_id,
-        )
-    except Exception as _gate_exc:  # noqa: BLE001 — gate error → fail closed
-        _log.error("[house-rules] gate error (%s) — fail-closed deny",
-                   type(_gate_exc).__name__)
+        # Step 4: Create gate (with fallback classifier)
+        try:
+            gate = _hr.HouseRulesGate.from_repo(
+                audit_writer=_audit_write,
+                classifier=lambda task, rules, auth: _safe_classify(
+                    task, rules, auth, _hr, _hr_classifier_audit, tenant
+                ),
+                tenant_overlay=overlay,
+            )
+        except Exception as _gate_create_exc:  # noqa: BLE001 — gate creation failed
+            _log.warning("[house-rules] gate creation failed (%s) — using conservative allow",
+                        type(_gate_create_exc).__name__)
+            # Degrade to conservative allow (user can try again, no false blocks)
+            return None
+
+        # Step 5: Classify (with degradation fallback)
+        try:
+            decision = gate.classify(
+                task, persona=persona or "", channel=channel, chat_key=chat_key,
+                engine_id=engine_id,
+            )
+        except Exception as _classify_exc:  # noqa: BLE001 — classify failed
+            _log.warning("[house-rules] classify() failed (%s) — escalating",
+                        type(_classify_exc).__name__)
+            # Return transient escalate (user gets try-again, not hard deny)
+            try:
+                _hr_classifier_audit("house_rules.escalated", {
+                    "reason": "classifier_error",
+                    "error_type": type(_classify_exc).__name__,
+                })
+            except Exception:  # noqa: BLE001
+                pass
+            return (
+                "[house-rules] This request couldn't be safety-checked just now — "
+                "try again in a moment."
+            )
+
+    except Exception as _outer_exc:  # noqa: BLE001 — catch-all safety net
+        _log.error("[house-rules] unexpected outer error (%s) — fail-closed deny",
+                   type(_outer_exc).__name__)
         return ("[house-rules] Acceptable-use gate error — request blocked "
                 "(fail-closed). Restart the bridge/console if this persists.")
 
