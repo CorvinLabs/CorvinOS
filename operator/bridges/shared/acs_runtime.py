@@ -1031,7 +1031,7 @@ def _call_manager_sync(prompt: str, model: str, tenant_id: str = "_default") -> 
     engine_id, resolved = _resolve_worker_engine(model, tenant_id)
     _assert_engine_licensed(engine_id)
     if engine_id == "hermes":
-        out = _ollama_chat(prompt, _MANAGER_SYSTEM, resolved, timeout=120)
+        out = _ollama_chat(prompt, _MANAGER_SYSTEM, resolved, timeout=300)
         return out, max(len(prompt.split()) + len(out.split()), 100)
     binary = _claude_binary()
     if not (shutil.which(binary) or os.path.isfile(binary)):
@@ -1041,6 +1041,8 @@ def _call_manager_sync(prompt: str, model: str, tenant_id: str = "_default") -> 
         )
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
     result = subprocess.run(
         [
             binary, "-p", prompt,
@@ -1050,8 +1052,8 @@ def _call_manager_sync(prompt: str, model: str, tenant_id: str = "_default") -> 
             "--max-turns", "1",
             "--output-format", "json",  # extract text from envelope so parse never sees CLI wrapper
         ],
-        capture_output=True, text=True, env=env,
-        timeout=120, check=False,
+        capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL,
+        timeout=300, check=False,
     )
     raw = result.stdout.strip()
     output = raw  # fallback: pass through if not a JSON envelope
