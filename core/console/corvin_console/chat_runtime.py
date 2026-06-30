@@ -2044,7 +2044,7 @@ async def stream_turn(
         except ImportError:
             pass  # entity_extract not installed — skip CCC (degraded mode)
         except Exception as _ccc_err:  # noqa: BLE001
-            logger.debug("CCC hook error (non-fatal): %s", _ccc_err)
+            _log.debug("CCC hook error (non-fatal): %s", _ccc_err)
 
     # ── ADR-0114 M1/M2 — delegation path ─────────────────────────────────
     # Tenant opt-in + triage: substantive tasks run on ACS workers (which
@@ -2078,7 +2078,7 @@ async def stream_turn(
                 sys.path.insert(0, str(_bridge_shared))
             import acs_runtime as _acs  # type: ignore  # noqa: PLC0415
         except Exception as _import_err:  # noqa: BLE001
-            logger.warning("[delegation] Failed to import ACS runtime: %s", _import_err)
+            _log.warning("[delegation] Failed to import ACS runtime: %s", _import_err)
             _acs = None
         if _acs is None or not task_text:
             reason = "empty task" if not task_text else "ACS runtime unavailable"
@@ -2304,7 +2304,7 @@ async def stream_turn(
 
         if not final:
             # Debug: log the actual result state
-            logger.debug(
+            _log.debug(
                 "[delegation] Final result: status=%s, error=%s, summary=%s",
                 res.status, repr(res.error), repr(res.summary)
             )
