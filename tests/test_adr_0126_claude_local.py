@@ -171,13 +171,14 @@ class TestL34ComplianceOverride:
         return DataFlowGuard.from_tenant_config({})
 
     def test_claude_code_blocks_confidential_by_default(self) -> None:
+        # ADR-0173: L34 now opt-in — DEFAULT_MATRIX is permissive for CONFIDENTIAL
         guard = self._make_guard()
         from data_classification import DataClassification
         decision = guard.validate(
             classification=DataClassification.CONFIDENTIAL,
             engine_id="claude_code",
         )
-        assert not decision.allowed
+        assert decision.allowed
 
     def test_claude_code_local_allows_confidential(self) -> None:
         guard = self._make_guard()
