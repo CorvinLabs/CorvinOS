@@ -2071,8 +2071,14 @@ async def stream_turn(
         task_text = _task_text
         _acs = None
         try:
+            # Ensure operator/bridges/shared is in path for spawn_gates and other deps
+            # Path: core/console/corvin_console/chat_runtime.py → CorvinOS/operator/bridges/shared
+            _bridge_shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+            if str(_bridge_shared) not in sys.path:
+                sys.path.insert(0, str(_bridge_shared))
             import acs_runtime as _acs  # type: ignore  # noqa: PLC0415
-        except Exception:  # noqa: BLE001
+        except Exception as _import_err:  # noqa: BLE001
+            logger.warning("[delegation] Failed to import ACS runtime: %s", _import_err)
             _acs = None
         if _acs is None or not task_text:
             reason = "empty task" if not task_text else "ACS runtime unavailable"
@@ -2236,6 +2242,7 @@ async def stream_turn(
                 _live_artifact_parts.append(_persist)
             return results
 
+        res = None
         try:
             while not run_task.done():
                 await asyncio.sleep(2.0)
@@ -2250,6 +2257,8 @@ async def stream_turn(
                        "text": f"✓ Worker {worker} abgeschlossen\n"}
             for _la in _new_live_artifacts():
                 yield _la
+            # Await the result — may raise if ACSRuntime encountered an error
+            res = await run_task
         except (asyncio.CancelledError, GeneratorExit):
             # Client gone mid-run — mirror v1 semantics (no orphaned work).
             # No await after GeneratorExit; retrieve the task's outcome via
@@ -2260,8 +2269,26 @@ async def stream_turn(
             _audit_emit(sess, "web.turn.cancelled", delegated_run_id=run_id)
             _os_emit_completed(rc=-1)
             raise
+        except Exception as exc:
+            # ACS runtime or other unexpected error — capture and return as failed result
+            import traceback
+            error_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
+            tb_lines = traceback.format_exc().split('\n')[-4:-1]  # Last 3 lines of traceback
+            error_detail = " | ".join(line.strip() for line in tb_lines if line.strip())
+            logger.exception("[delegation] Unexpected error in ACS run: %s", error_msg)
+            res = _acs.ACSResult(
+                run_id=run_id, workflow_id="unknown", status="failed",
+                error=error_msg, summary=f"Unexpected error: {error_detail}",
+                run_dir=run_dir,
+            )
 
-        res = await run_task
+        if res is None:
+            # Fallback — should not happen but guard against empty result
+            res = _acs.ACSResult(
+                run_id=run_id, workflow_id="unknown", status="failed",
+                error="No result returned from ACS runtime",
+                run_dir=run_dir,
+            )
         ok = res.status == "success"
         final = (res.summary or "").strip()
 
@@ -2276,8 +2303,28 @@ async def stream_turn(
             ok = False
 
         if not final:
+            # Debug: log the actual result state
+            logger.debug(
+                "[delegation] Final result: status=%s, error=%s, summary=%s",
+                res.status, repr(res.error), repr(res.summary)
+            )
+            # Use best available error message (prefer error, then summary, then construct from status)
+            if res.error:
+                error_msg = res.error
+            elif res.summary:
+                error_msg = res.summary
+            else:
+                # Fallback: construct message from status and iterations/workers
+                details = []
+                if hasattr(res, "iterations") and res.iterations:
+                    details.append(f"{res.iterations} iteration(s)")
+                if hasattr(res, "workers_spawned") and res.workers_spawned:
+                    details.append(f"{res.workers_spawned} worker(s)")
+                detail_str = f" ({', '.join(details)})" if details else ""
+                error_msg = f"ACS workflow failed with status '{res.status}'{detail_str}"
+
             final = ("Delegation abgeschlossen." if ok
-                     else f"Delegation fehlgeschlagen: {res.error or 'unknown error'}")
+                     else f"Delegation fehlgeschlagen: {error_msg[:250]}")
         _dbg(sess.workdir, "acs.run.done",
              run_id=getattr(res, "run_id", run_id),
              status=res.status,
