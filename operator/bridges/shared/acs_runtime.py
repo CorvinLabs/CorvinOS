@@ -67,6 +67,11 @@ _DEFAULT_MODEL_WORKER = "claude-haiku-4-5-20251001"
 _MANAGER_OUTPUT_CAP = 65536   # 64 KB max manager JSON response
 _WORKER_OUTPUT_CAP = 131072   # 128 KB max worker response
 
+# ACS timeouts (in seconds) — generous to allow complex workflows
+_MANAGER_TIMEOUT = 1800   # 30 min for manager decisions
+_WORKER_TIMEOUT = 1800    # 30 min for worker execution
+_DEFAULT_BUDGET_TIMEOUT = 600  # 10 min default (can be overridden per budget)
+
 _MANAGER_SYSTEM = """\
 You are an ACS Manager Agent running inside CorvinOS. Your role is to
 direct a team of worker agents to complete a complex workflow.
@@ -1031,7 +1036,7 @@ def _call_manager_sync(prompt: str, model: str, tenant_id: str = "_default") -> 
     engine_id, resolved = _resolve_worker_engine(model, tenant_id)
     _assert_engine_licensed(engine_id)
     if engine_id == "hermes":
-        out = _ollama_chat(prompt, _MANAGER_SYSTEM, resolved, timeout=300)
+        out = _ollama_chat(prompt, _MANAGER_SYSTEM, resolved, timeout=_MANAGER_TIMEOUT)
         return out, max(len(prompt.split()) + len(out.split()), 100)
     binary = _claude_binary()
     if not (shutil.which(binary) or os.path.isfile(binary)):
@@ -1053,7 +1058,7 @@ def _call_manager_sync(prompt: str, model: str, tenant_id: str = "_default") -> 
             "--output-format", "json",  # extract text from envelope so parse never sees CLI wrapper
         ],
         capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL,
-        timeout=300, check=False,
+        timeout=_MANAGER_TIMEOUT, check=False,
     )
     raw = result.stdout.strip()
     output = raw  # fallback: pass through if not a JSON envelope
@@ -1141,7 +1146,7 @@ def _call_worker_sync(
     engine_id, resolved = _resolve_worker_engine(model, tenant_id)
     _assert_engine_licensed(engine_id)  # ADR-0150 LIC-ENG-USE-02 (fail-closed)
     if engine_id == "hermes":
-        timeout = min(int(budget.get("timeout_seconds", 180)), 3600)
+        timeout = min(int(budget.get("timeout_seconds", _DEFAULT_BUDGET_TIMEOUT)), 3600)
         out = _ollama_chat(prompt, system, resolved, timeout=timeout)
         attestation = {"engine_id": "hermes", "model_id": resolved,
                        "attested": True, "locality": "local"}
@@ -1158,7 +1163,7 @@ def _call_worker_sync(
     # ADR-0109 M6: propagate ACS worker context for engine-trace hooks
     if extra_env is not None:
         env.update(extra_env)
-    timeout = min(int(budget.get("timeout_seconds", 180)), 300)
+    timeout = min(int(budget.get("timeout_seconds", _DEFAULT_BUDGET_TIMEOUT)), _WORKER_TIMEOUT)
     # max-turns: 20 gives workers enough headroom for multi-file explore/implement
     # tasks. 5 was too tight — workers hit the limit mid-tool-use and returned
     # error_max_turns, which _parse_worker_output silently treated as
@@ -1173,7 +1178,7 @@ def _call_worker_sync(
             "--max-turns", worker_max_turns,
             "--output-format", "json",
         ],
-        capture_output=True, text=True, env=env,
+        capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL,
         timeout=timeout, check=False,
     )
     raw = result.stdout.strip()
