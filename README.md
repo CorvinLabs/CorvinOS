@@ -32,10 +32,10 @@ CorvinOS is a self-hosted agentic OS that connects **Ollama, Claude, GPT-4, and 
 
 ```bash
 # macOS / Linux — no Python or package manager required
-curl -fsSL https://raw.githubusercontent.com/CorvinLabs/CorvinOS/main/install.sh | sh
+curl -fsSL https://corvin-labs.com/install.sh | sh
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/CorvinLabs/CorvinOS/main/install.ps1 | iex
+irm https://corvin-labs.com/install.ps1 | iex
 ```
 
 - **Local-first** — run 100 % offline with Ollama and `--engine hermes`. No API key needed.
@@ -60,15 +60,11 @@ See [INSTALLATION.md](INSTALLATION.md) for the complete setup guide.
 
 ```bash
 # macOS / Linux
-curl -fsSL https://raw.githubusercontent.com/CorvinLabs/CorvinOS/main/install.sh | sh
+curl -fsSL https://corvin-labs.com/install.sh | sh
 
 # Windows (PowerShell)
-irm https://raw.githubusercontent.com/CorvinLabs/CorvinOS/main/install.ps1 | iex
+irm https://corvin-labs.com/install.ps1 | iex
 ```
-
-> Once the site is deployed these also work as the shorter
-> `curl -fsSL https://corvin-labs.com/install.sh | sh` /
-> `irm https://corvin-labs.com/install.ps1 | iex`.
 
 The bootstrap installer brings its **own Python** (via [uv](https://docs.astral.sh/uv/)),
 so you need **no system Python, no pip, and no package manager** installed first. It
