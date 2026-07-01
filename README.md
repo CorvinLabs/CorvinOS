@@ -28,7 +28,7 @@
 
 **One install. Seven bridges. Any LLM.**
 
-CorvinOS is a self-hosted agentic OS that connects **Ollama, Claude, GPT-4, and any OpenRouter model** to **Discord, Telegram, WhatsApp, Slack, Email, Teams, and Signal** — through a single pip package.
+CorvinOS is a self-hosted agentic OS that connects **Claude Code, Codex, Hermes, Ollama and any OpenRouter model** to **Discord, Telegram, WhatsApp, Slack, Email, Teams, and Signal** — through a single pip package.
 
 ```bash
 # macOS / Linux — no Python or package manager required
