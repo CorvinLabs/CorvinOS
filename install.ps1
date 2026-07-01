@@ -1,7 +1,8 @@
 #Requires -Version 5.1
 param(
     [Alias("e")]
-    [string]$Editable = ""
+    [string]$Editable = "",
+    [switch]$NoHermes
 )
 # install.ps1 — CorvinOS installer for Windows (PowerShell 5.1+).
 # Usage:
@@ -65,6 +66,54 @@ if (-not (Get-Command corvinos-serve -ErrorAction SilentlyContinue)) {
 
 Write-Host ""
 Write-Ok "Package installed."
+
+# ── 2b. Hermes (local offline engine): Ollama + model, working out of the box ──
+$SkipHermes = $NoHermes -or ($env:CORVIN_SKIP_HERMES -eq "1")
+if (-not $SkipHermes) {
+    Write-Host ""
+    Write-Step "Setting up Hermes (local offline engine) ..."
+    # pick a model by RAM
+    $ramMB = 8000
+    try { $ramMB = [int]((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB) } catch {}
+    $HModel = if ($ramMB -lt 6000) { "qwen3:1.7b" } else { "qwen3:8b" }
+    Write-Step "RAM ~$ramMB MB -> model $HModel"
+
+    # ensure Ollama is installed (winget)
+    if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            Write-Step "Installing Ollama ..."
+            winget install --silent --accept-package-agreements --accept-source-agreements Ollama.Ollama
+            $env:Path = "$env:LOCALAPPDATA\Programs\Ollama;$env:Path"
+        } else {
+            Write-Warn "winget not found — install Ollama from https://ollama.com/download/windows"
+        }
+    }
+
+    # ensure the Ollama server is reachable (start it if needed)
+    function Test-Ollama { try { Invoke-RestMethod -TimeoutSec 2 http://localhost:11434/api/tags | Out-Null; $true } catch { $false } }
+    if (-not (Test-Ollama)) {
+        if (Get-Command ollama -ErrorAction SilentlyContinue) {
+            Start-Process -WindowStyle Hidden ollama -ArgumentList "serve" -ErrorAction SilentlyContinue
+        }
+        for ($i = 0; $i -lt 30 -and -not (Test-Ollama); $i++) { Start-Sleep 1 }
+    }
+
+    # pull the model so Hermes is immediately usable offline
+    if ((Get-Command ollama -ErrorAction SilentlyContinue) -and (Test-Ollama)) {
+        $have = $false
+        try { $have = ((Invoke-RestMethod http://localhost:11434/api/tags).models.name -join ",") -match [regex]::Escape($HModel) } catch {}
+        if ($have) {
+            Write-Ok "Hermes model $HModel already present"
+        } else {
+            Write-Step "Pulling $HModel (one-time, a few GB) ..."
+            ollama pull $HModel
+            if ($LASTEXITCODE -eq 0) { Write-Ok "Hermes ready — $HModel installed" }
+            else { Write-Warn "model pull failed — finish later with: ollama pull $HModel" }
+        }
+    } else {
+        Write-Warn "Ollama not reachable — Hermes self-heals on first run (or see https://ollama.com/download)"
+    }
+}
 
 # ── 3. setup wizard ───────────────────────────────────────────────────────────
 if (Get-Command corvin-install -ErrorAction SilentlyContinue) {

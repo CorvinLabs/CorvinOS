@@ -72,8 +72,13 @@ irm https://raw.githubusercontent.com/CorvinLabs/CorvinOS/main/install.ps1 | iex
 
 The bootstrap installer brings its **own Python** (via [uv](https://docs.astral.sh/uv/)),
 so you need **no system Python, no pip, and no package manager** installed first. It
-puts `corvinos-serve` on your `PATH` and runs the setup wizard. The Windows one-liner
-uses `irm | iex` (no `&&`), so it works in both PowerShell 5.1 and 7.
+puts `corvinos-serve` on your `PATH`, and it **also sets up Hermes** — installs Ollama
+and pulls a local model (`qwen3:8b`, or `qwen3:1.7b` on <6 GB RAM) — so CorvinOS runs
+**fully offline with `--engine hermes` from the first start**. The Windows one-liner uses
+`irm | iex` (no `&&`), so it works in both PowerShell 5.1 and 7.
+
+> Only want cloud engines (Claude/GPT)? Skip the local model with `--no-hermes`
+> (`sh -s -- --no-hermes`) or `CORVIN_SKIP_HERMES=1`.
 
 **Already have Python 3.10+?** A plain pip install works identically on all three OSes:
 
