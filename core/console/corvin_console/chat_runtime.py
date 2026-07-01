@@ -2113,6 +2113,32 @@ async def stream_turn(
             _cq_inc(_cq_home, channel="web-chat-acs", chat_key=f"web:{sess.tenant_id}:{sess.sid}")
         except _CQErr:  # type: ignore[misc]
             _quota_fallback = True
+            # L34/L35 fix: re-gate with the ACTUAL fallback engine.  The initial
+            # gate (above) was called with engine_id="acs"; after quota fallback the
+            # real engine is _os_engine (claude_code / hermes / …).  Without this
+            # second check, CONFIDENTIAL data could bypass residency policy because
+            # the gate never evaluated the engine that will actually spawn.
+            _fb_gate = _spawn_gates.check_console_spawn_or_refusal(
+                _task_text, tenant_id=sess.tenant_id, persona="assistant",
+                channel=CHANNEL, chat_key=sess.chat_key,
+                engine_id=_os_engine,
+            )
+            if _fb_gate is not None:
+                _os_audit("os_turn.started", {"model": _os_model_used})
+                tm.record_event(task_id, {
+                    "event": "task.failed", "exit_code": 1,
+                    "error": "quota-fallback engine blocked by pre-spawn gate",
+                })
+                _audit_emit(sess, "web.turn.completed", rc=1,
+                            result_chars=len(_fb_gate), usage=None,
+                            reason="pre_spawn_gate_blocked")
+                _os_emit_completed(rc=1)
+                yield {"type": "delta", "text": _fb_gate}
+                yield {"type": "result", "text": _fb_gate, "usage": None}
+                touch(sess, increment_turn=True)
+                _append_turn(sess, "assistant", [{"kind": "text", "text": _fb_gate}])
+                yield {"type": "done"}
+                return
             _quota_notice = (
                 "Dein tägliches ACS-Kontingent ist ausgeschöpft "
                 "(1 Delegation-Run/Tag im Free-Tier). "

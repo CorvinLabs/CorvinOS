@@ -254,5 +254,73 @@ class ACSQuotaFallbackTest(unittest.TestCase):
         self.assertEqual(types_seen[-1], "done")
 
 
+    # ── (G) Quota exhausted + fallback engine also gate-blocked → hard refusal ─
+    def test_quota_fallback_gate_blocks_fallback_engine(self) -> None:
+        """When ACS quota is exhausted AND the fallback engine (claude_code) is
+        also blocked by L34/L35, the turn must hard-block — NOT yield the quota
+        notice and NOT spawn the fallback engine.  The gate must remain fail-closed
+        even on the degraded path (fixes the CONFIRMED CRITICAL L34/L35 bypass)."""
+        self._pin_house_rules_allowed()
+        self._inject_license(raise_on_check=True)  # quota exhausted
+        self._inject_fake_acs()
+        spawn_called = self._no_spawn_guard()
+
+        # Make the fallback gate (non-ACS engine) return a refusal string.
+        _GATE_REFUSAL = "[L34] Fallback engine blocked by data-residency policy."
+
+        prompt = "review and refactor the auth module"
+
+        import corvin_console._spawn_gates as _sg  # type: ignore[import]
+        original_fn = _sg.check_console_spawn_or_refusal
+
+        call_count = {"n": 0}
+
+        def _fake_gate(task_text, tenant_id=None, persona=None, channel=None,
+                       chat_key=None, engine_id=None):
+            call_count["n"] += 1
+            # First call: ACS gate → pass (delegation proceeds to quota check).
+            # Second call: fallback-engine gate → block.
+            if engine_id == "acs":
+                return None
+            return _GATE_REFUSAL
+
+        _sg.check_console_spawn_or_refusal = _fake_gate  # type: ignore[assignment]
+        try:
+            with (
+                patch.object(self.cr, "_delegation_enabled", return_value=True),
+                patch.object(self.cr, "_should_delegate", return_value=True),
+            ):
+                events = _drain(self.cr.stream_turn(self.sess, prompt))
+        finally:
+            _sg.check_console_spawn_or_refusal = original_fn  # type: ignore[assignment]
+
+        types_seen = [e.get("type") for e in events]
+
+        # Gate was called at least twice (once for ACS, once for fallback engine).
+        self.assertGreaterEqual(call_count["n"], 2,
+                                "Fallback gate must be called for the real engine")
+
+        # NO quota_fallback notice — gate blocked before the notice could emit.
+        notice_events = [e for e in events if e.get("type") == "notice"
+                         and e.get("subtype") == "quota_fallback"]
+        self.assertFalse(notice_events,
+                         "Gate-blocked fallback must NOT emit quota_fallback notice")
+
+        # Gate refusal text IS present in the stream.
+        refusal_deltas = [e for e in events
+                          if e.get("type") in ("delta", "result")
+                          and _GATE_REFUSAL in (e.get("text") or "")]
+        self.assertTrue(refusal_deltas,
+                        "Gate refusal text must be streamed when fallback is blocked")
+
+        # Turn completes cleanly.
+        self.assertEqual(types_seen[-1], "done",
+                         "Turn must still end with 'done' even on gate-blocked fallback")
+
+        # No subprocess spawned.
+        self.assertFalse(spawn_called["hit"],
+                         "No subprocess must spawn when fallback engine is gate-blocked")
+
+
 if __name__ == "__main__":
     unittest.main()
