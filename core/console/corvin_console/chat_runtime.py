@@ -2108,405 +2108,413 @@ async def stream_turn(
         # ~/.corvin inside a repo where canonical returns <repo>/.corvin → the
         # reader (this counter) and the writer diverge → quota silently miscounted.
         _cq_home = _forge_paths.corvin_home()
+        _quota_fallback = False
         try:
             _cq_inc(_cq_home, channel="web-chat-acs", chat_key=f"web:{sess.tenant_id}:{sess.sid}")
         except _CQErr:  # type: ignore[misc]
-            yield {"type": "error", "code": 402,
-                   "message": "daily compute limit reached (compute_units_per_day)"}
-            yield {"type": "done"}
-            return
+            _quota_fallback = True
+            _quota_notice = (
+                "Dein tägliches ACS-Kontingent ist ausgeschöpft "
+                "(1 Delegation-Run/Tag im Free-Tier). "
+                "Der Task wird über Claude Code ausgeführt — ohne parallele Worker.\n"
+                "Für unbegrenzte ACS-Runs: [Member-Upgrade](https://corvin-labs.com/pricing)\n\n"
+            )
+            yield {"type": "notice", "subtype": "quota_fallback",
+                   "message": _quota_notice}
+            yield {"type": "delta", "text": _quota_notice}
         except Exception:  # noqa: BLE001 — operational error swallowed by increment_and_check
             pass
 
-        run_id = f"acs-web-{int(time.time())}-{secrets.token_hex(3)}"
-        run_dir = sess.workdir / "acs" / "runs" / run_id
-        spec_dict = _build_delegation_spec(task_text, _delegation_budget(sess.tenant_id))
-        _dbg(sess.workdir, "acs.run.start",
-             run_id=run_id, task_len=len(task_text), task_preview=task_text[:120],
-             budget=_delegation_budget(sess.tenant_id))
-        rt_kwargs: dict[str, Any] = {
-            "tenant_id": sess.tenant_id, "bridge": CHANNEL, "chat": sess.sid,
-        }
-        if _os_model:  # manager = OS role → adaptive model (ADR-0112)
-            rt_kwargs["manager_model"] = _os_model
-        # When the OS engine is LOCAL (Hermes/Ollama), pin BOTH manager and
-        # worker model to a concrete local model (see _acs_local_pin_model) so
-        # ACS never falls back to cloud-Claude and dies with "claude CLI not
-        # found" → 0 workers → empty worker-engine graph on a fresh local install.
-        _pin_model = _acs_local_pin_model(_os_engine, _os_model, sess.tenant_id)
-        if _pin_model:
-            rt_kwargs["manager_model"] = _pin_model
-            rt_kwargs["worker_model"] = _pin_model
-        # Pass session workdir so ACSRuntime writes acs.worker.* events into
-        # chat_debug.jsonl — enables ACO Layer 3 to correlate worker errors.
-        rt_kwargs["session_debug_log"] = sess.workdir
-        runtime = _acs.ACSRuntime(**rt_kwargs)
+        if not _quota_fallback:
+            run_id = f"acs-web-{int(time.time())}-{secrets.token_hex(3)}"
+            run_dir = sess.workdir / "acs" / "runs" / run_id
+            spec_dict = _build_delegation_spec(task_text, _delegation_budget(sess.tenant_id))
+            _dbg(sess.workdir, "acs.run.start",
+                 run_id=run_id, task_len=len(task_text), task_preview=task_text[:120],
+                 budget=_delegation_budget(sess.tenant_id))
+            rt_kwargs: dict[str, Any] = {
+                "tenant_id": sess.tenant_id, "bridge": CHANNEL, "chat": sess.sid,
+            }
+            if _os_model:  # manager = OS role → adaptive model (ADR-0112)
+                rt_kwargs["manager_model"] = _os_model
+            # When the OS engine is LOCAL (Hermes/Ollama), pin BOTH manager and
+            # worker model to a concrete local model (see _acs_local_pin_model) so
+            # ACS never falls back to cloud-Claude and dies with "claude CLI not
+            # found" → 0 workers → empty worker-engine graph on a fresh local install.
+            _pin_model = _acs_local_pin_model(_os_engine, _os_model, sess.tenant_id)
+            if _pin_model:
+                rt_kwargs["manager_model"] = _pin_model
+                rt_kwargs["worker_model"] = _pin_model
+            # Pass session workdir so ACSRuntime writes acs.worker.* events into
+            # chat_debug.jsonl — enables ACO Layer 3 to correlate worker errors.
+            rt_kwargs["session_debug_log"] = sess.workdir
+            runtime = _acs.ACSRuntime(**rt_kwargs)
 
-        # Lifecycle marker for the delegation path. This turn runs INLINE
-        # within the live request (awaited below) and fans out to ACS workers
-        # rather than a single tracked `claude` subprocess, so no engine pid is
-        # recorded here: if the console dies mid-delegation the task is a
-        # genuine orphan and the boot reaper correctly finalizes it.
-        tm.record_event(task_id, {
-            "event": "task.started", "engine": "acs-delegation",
-            "turn": sess.turn_count,
-        })
-        _os_audit("os_turn.started", {"model": _os_model_used})
-        yield {"type": "delta",
-               "text": f"⚙ Delegation an ACS-Worker gestartet (run {run_id})…\n"}
+            # Lifecycle marker for the delegation path. This turn runs INLINE
+            # within the live request (awaited below) and fans out to ACS workers
+            # rather than a single tracked `claude` subprocess, so no engine pid is
+            # recorded here: if the console dies mid-delegation the task is a
+            # genuine orphan and the boot reaper correctly finalizes it.
+            tm.record_event(task_id, {
+                "event": "task.started", "engine": "acs-delegation",
+                "turn": sess.turn_count,
+            })
+            _os_audit("os_turn.started", {"model": _os_model_used})
+            yield {"type": "delta",
+                   "text": f"⚙ Delegation an ACS-Worker gestartet (run {run_id})…\n"}
 
-        run_task = asyncio.create_task(runtime.run(spec_dict, run_id=run_id))
-        seen_traces: set[str] = set()
+            run_task = asyncio.create_task(runtime.run(spec_dict, run_id=run_id))
+            seen_traces: set[str] = set()
 
-        def _new_worker_traces() -> list[str]:
-            traces_dir = run_dir / "traces"
-            if not traces_dir.is_dir():
-                return []
-            fresh = [tf.stem for tf in sorted(traces_dir.glob("*.json"))
-                     if tf.name not in seen_traces]
-            for name in fresh:
-                seen_traces.add(name + ".json")
-            return fresh
+            def _new_worker_traces() -> list[str]:
+                traces_dir = run_dir / "traces"
+                if not traces_dir.is_dir():
+                    return []
+                fresh = [tf.stem for tf in sorted(traces_dir.glob("*.json"))
+                         if tf.name not in seen_traces]
+                for name in fresh:
+                    seen_traces.add(name + ".json")
+                return fresh
 
-        # M2 (ADR-0170) — live artifact streaming.
-        # Track file sizes between polls; only emit once the size is stable
-        # (unchanged from the previous poll) so partially-written files are
-        # never surfaced. ``_live_emitted`` is read by the M1 post-run scan
-        # to skip files that were already delivered during the run.
-        _live_prev_sizes: dict[Path, int] = {}
-        _live_emitted: set[str] = set()
-        # M2 persistence: mirror of yielded live artifacts in the "kind" format
-        # so they can be added to _turn_parts and persisted to turns.jsonl.
-        # Without this, live-delivered artifacts are absent from session history.
-        _live_artifact_parts: list[dict[str, Any]] = []
+            # M2 (ADR-0170) — live artifact streaming.
+            # Track file sizes between polls; only emit once the size is stable
+            # (unchanged from the previous poll) so partially-written files are
+            # never surfaced. ``_live_emitted`` is read by the M1 post-run scan
+            # to skip files that were already delivered during the run.
+            _live_prev_sizes: dict[Path, int] = {}
+            _live_emitted: set[str] = set()
+            # M2 persistence: mirror of yielded live artifacts in the "kind" format
+            # so they can be added to _turn_parts and persisted to turns.jsonl.
+            # Without this, live-delivered artifacts are absent from session history.
+            _live_artifact_parts: list[dict[str, Any]] = []
 
-        def _new_live_artifacts() -> list[dict[str, Any]]:
-            if not run_dir.is_dir():
-                return []
-            results: list[dict[str, Any]] = []
-            for _fp in sorted(run_dir.rglob("*")):
-                if not _fp.is_file() or _fp.name.startswith("."):
-                    continue
-                if _fp.suffix == ".jsonl":
-                    continue
-                try:
-                    _rel_parts = _fp.relative_to(run_dir).parts
-                except ValueError:
-                    continue
-                if _rel_parts and _rel_parts[0] in _ACS_SKIP_DIRS:
-                    continue
-                if _fp.parent == run_dir and _fp.name in _ACS_SKIP_ROOT_FILES:
-                    continue
-                _key = str(_fp)
-                if _key in _live_emitted:
-                    continue
-                try:
-                    _sz = _fp.stat().st_size
-                except OSError:
-                    continue
-                _prev = _live_prev_sizes.get(_fp)
-                if _prev is None:
-                    _live_prev_sizes[_fp] = _sz  # first sighting, wait one poll
-                    continue
-                if _prev != _sz:
-                    _live_prev_sizes[_fp] = _sz  # still growing, wait
-                    continue
-                # Size stable — file is fully written
-                _mime = _artifact_mime(_fp)
-                if _mime is None:
-                    continue
-                try:
-                    _relpath = _fp.relative_to(sess.workdir)
-                except ValueError:
-                    _relpath = _fp.relative_to(run_dir)
-                _live_emitted.add(_key)
-                _live_label = _acs_artifact_label(_fp, run_dir)
-                _evt: dict[str, Any] = {
-                    "type": "artifact", "name": _fp.name,
-                    "path": str(_relpath), "mime": _mime, "size": _sz,
-                }
-                if _live_label:
-                    _evt["label"] = _live_label
-                else:
-                    _evt["label"] = "live"
-                results.append(_evt)
-                # Persist alongside the text turn so the artifact survives reload.
-                _persist: dict[str, Any] = {
-                    "kind": "artifact", "name": _fp.name,
-                    "path": str(_relpath), "mime": _mime, "size": _sz,
-                }
-                if _live_label:
-                    _persist["label"] = _live_label
-                else:
-                    _persist["label"] = "live"
-                _live_artifact_parts.append(_persist)
-            return results
+            def _new_live_artifacts() -> list[dict[str, Any]]:
+                if not run_dir.is_dir():
+                    return []
+                results: list[dict[str, Any]] = []
+                for _fp in sorted(run_dir.rglob("*")):
+                    if not _fp.is_file() or _fp.name.startswith("."):
+                        continue
+                    if _fp.suffix == ".jsonl":
+                        continue
+                    try:
+                        _rel_parts = _fp.relative_to(run_dir).parts
+                    except ValueError:
+                        continue
+                    if _rel_parts and _rel_parts[0] in _ACS_SKIP_DIRS:
+                        continue
+                    if _fp.parent == run_dir and _fp.name in _ACS_SKIP_ROOT_FILES:
+                        continue
+                    _key = str(_fp)
+                    if _key in _live_emitted:
+                        continue
+                    try:
+                        _sz = _fp.stat().st_size
+                    except OSError:
+                        continue
+                    _prev = _live_prev_sizes.get(_fp)
+                    if _prev is None:
+                        _live_prev_sizes[_fp] = _sz  # first sighting, wait one poll
+                        continue
+                    if _prev != _sz:
+                        _live_prev_sizes[_fp] = _sz  # still growing, wait
+                        continue
+                    # Size stable — file is fully written
+                    _mime = _artifact_mime(_fp)
+                    if _mime is None:
+                        continue
+                    try:
+                        _relpath = _fp.relative_to(sess.workdir)
+                    except ValueError:
+                        _relpath = _fp.relative_to(run_dir)
+                    _live_emitted.add(_key)
+                    _live_label = _acs_artifact_label(_fp, run_dir)
+                    _evt: dict[str, Any] = {
+                        "type": "artifact", "name": _fp.name,
+                        "path": str(_relpath), "mime": _mime, "size": _sz,
+                    }
+                    if _live_label:
+                        _evt["label"] = _live_label
+                    else:
+                        _evt["label"] = "live"
+                    results.append(_evt)
+                    # Persist alongside the text turn so the artifact survives reload.
+                    _persist: dict[str, Any] = {
+                        "kind": "artifact", "name": _fp.name,
+                        "path": str(_relpath), "mime": _mime, "size": _sz,
+                    }
+                    if _live_label:
+                        _persist["label"] = _live_label
+                    else:
+                        _persist["label"] = "live"
+                    _live_artifact_parts.append(_persist)
+                return results
 
-        res = None
-        try:
-            while not run_task.done():
-                await asyncio.sleep(2.0)
+            res = None
+            try:
+                while not run_task.done():
+                    await asyncio.sleep(2.0)
+                    for worker in _new_worker_traces():
+                        yield {"type": "delta",
+                               "text": f"✓ Worker {worker} abgeschlossen\n"}
+                    for _la in _new_live_artifacts():
+                        yield _la
+                # Final poll — catch workers/artifacts that landed in the last window.
                 for worker in _new_worker_traces():
                     yield {"type": "delta",
                            "text": f"✓ Worker {worker} abgeschlossen\n"}
                 for _la in _new_live_artifacts():
                     yield _la
-            # Final poll — catch workers/artifacts that landed in the last window.
-            for worker in _new_worker_traces():
-                yield {"type": "delta",
-                       "text": f"✓ Worker {worker} abgeschlossen\n"}
-            for _la in _new_live_artifacts():
-                yield _la
-            # Await the result — may raise if ACSRuntime encountered an error
-            res = await run_task
-        except (asyncio.CancelledError, GeneratorExit):
-            # Client gone mid-run — mirror v1 semantics (no orphaned work).
-            # No await after GeneratorExit; retrieve the task's outcome via
-            # callback so asyncio doesn't log "exception was never retrieved".
-            run_task.cancel()
-            run_task.add_done_callback(
-                lambda t: None if t.cancelled() else t.exception())
-            _audit_emit(sess, "web.turn.cancelled", delegated_run_id=run_id)
-            _os_emit_completed(rc=-1)
-            raise
-        except Exception as exc:
-            # ACS runtime or other unexpected error — capture and return as failed result
-            import traceback
-            error_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
-            tb_lines = traceback.format_exc().split('\n')[-4:-1]  # Last 3 lines of traceback
-            error_detail = " | ".join(line.strip() for line in tb_lines if line.strip())
-            logger.exception("[delegation] Unexpected error in ACS run: %s", error_msg)
-            res = _acs.ACSResult(
-                run_id=run_id, workflow_id="unknown", status="failed",
-                error=error_msg, summary=f"Unexpected error: {error_detail}",
-                run_dir=run_dir,
-            )
-
-        if res is None:
-            # Fallback — should not happen but guard against empty result
-            res = _acs.ACSResult(
-                run_id=run_id, workflow_id="unknown", status="failed",
-                error="No result returned from ACS runtime",
-                run_dir=run_dir,
-            )
-        ok = res.status == "success"
-        final = (res.summary or "").strip()
-
-        # Safety net: raw HTML error pages (Cloudflare 50x, nginx, …) that
-        # slip through the ACS layer must never appear verbatim in the chat.
-        if final and final.lstrip().startswith(("<!DOCTYPE", "<!doctype", "<html", "<HTML")):
-            import re as _re_html
-            _t = _re_html.search(r"<title[^>]*>([^<]{1,120})</title>",
-                                 final, _re_html.IGNORECASE)
-            _label = _t.group(1).strip() if _t else "HTTP-Fehlerseite"
-            final = f"Fehler: Der Server hat \"{_label}\" zurückgegeben. Bitte versuche es erneut."
-            ok = False
-
-        if not final:
-            # Debug: log the actual result state
-            _log.debug(
-                "[delegation] Final result: status=%s, error=%s, summary=%s",
-                res.status, repr(res.error), repr(res.summary)
-            )
-            # Use best available error message (prefer error, then summary, then construct from status)
-            if res.error:
-                error_msg = res.error
-            elif res.summary:
-                error_msg = res.summary
-            else:
-                # Fallback: construct message from status and iterations/workers
-                details = []
-                if hasattr(res, "iterations") and res.iterations:
-                    details.append(f"{res.iterations} iteration(s)")
-                if hasattr(res, "workers_spawned") and res.workers_spawned:
-                    details.append(f"{res.workers_spawned} worker(s)")
-                detail_str = f" ({', '.join(details)})" if details else ""
-                error_msg = f"ACS workflow failed with status '{res.status}'{detail_str}"
-
-            final = ("Delegation abgeschlossen." if ok
-                     else f"Delegation fehlgeschlagen: {error_msg[:250]}")
-        _dbg(sess.workdir, "acs.run.done",
-             run_id=getattr(res, "run_id", run_id),
-             status=res.status,
-             ok=ok,
-             elapsed_s=getattr(res, "elapsed_s", None),
-             iterations=getattr(res, "iterations", None),
-             workers_spawned=getattr(res, "workers_spawned", None),
-             budget_breach=getattr(res, "budget_breach", None),
-             error=getattr(res, "error", None),
-             summary_len=len(final),
-             elapsed_total_ms=int((time.monotonic() - _dbg_t0) * 1000),
-        )
-
-        # M3 (ADR-0170) — render delegation topology graph.
-        # Run in a thread pool so matplotlib file I/O + PNG encoding do not
-        # block the asyncio event loop (confirmed blocking bug: code-review
-        # 2026-06-27). Best-effort: any error is silently suppressed.
-        _scan_root_m3 = Path(res.run_dir) if res.run_dir else run_dir
-        try:
-            await asyncio.to_thread(_render_acs_graph, _scan_root_m3)
-        except Exception:  # noqa: BLE001
-            pass
-
-        # #4 — surface the chat-triggered ACS run under Agentic Compute.
-        # ACSRuntime writes its run data (manifest, iterations, workers,
-        # gate_results, output) into a SESSION-scoped run_dir; the console's
-        # list_acs_runs/get_acs_run (acs_engine_adapter.py) scan the
-        # TENANT-GLOBAL index at <tenant>/global/acs/runs/<run_id>/manifest.json
-        # and follow its "run_dir" pointer to the session data. This branch
-        # builds ACSRuntime directly (compute-charge bypass — kept intact, charged
-        # above), so run_acs_workflow's global-index write never fires and the
-        # run stays invisible. Mirror that thin manifest here — index write ONLY,
-        # no second compute charge. Path matches _acs_runs_dir() exactly so the
-        # reader finds it. Best-effort: a failed index write never breaks the chat.
-        _acs_actual_run_dir = Path(res.run_dir) if res.run_dir else run_dir
-        try:
-            _acs_global_index = (
-                _forge_paths.tenant_global_dir(sess.tenant_id)
-                / "acs" / "runs" / res.run_id
-            )
-            _acs_manifest = {
-                "run_id": res.run_id,
-                "workflow_id": res.workflow_id,
-                "status": res.status,
-                "engine": "acs",
-                "started_at": _os_turn_start_wall,
-                "completed_at": time.time(),
-                "duration_s": round(res.elapsed_s, 3),
-                "iterations": res.iterations,
-                "workers_spawned": res.workers_spawned,
-                "budget_breach": res.budget_breach,
-                "run_dir": str(_acs_actual_run_dir),
-                "source": "web-chat-delegation",
-            }
-            _acs_global_index.mkdir(parents=True, exist_ok=True)
-            _acs_idx_tmp = _acs_global_index / "manifest.json.tmp"
-            _acs_idx_fd = os.open(
-                _acs_idx_tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
-            )
-            try:
-                os.write(
-                    _acs_idx_fd,
-                    (json.dumps(_acs_manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+                # Await the result — may raise if ACSRuntime encountered an error
+                res = await run_task
+            except (asyncio.CancelledError, GeneratorExit):
+                # Client gone mid-run — mirror v1 semantics (no orphaned work).
+                # No await after GeneratorExit; retrieve the task's outcome via
+                # callback so asyncio doesn't log "exception was never retrieved".
+                run_task.cancel()
+                run_task.add_done_callback(
+                    lambda t: None if t.cancelled() else t.exception())
+                _audit_emit(sess, "web.turn.cancelled", delegated_run_id=run_id)
+                _os_emit_completed(rc=-1)
+                raise
+            except Exception as exc:
+                # ACS runtime or other unexpected error — capture and return as failed result
+                import traceback
+                error_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
+                tb_lines = traceback.format_exc().split('\n')[-4:-1]  # Last 3 lines of traceback
+                error_detail = " | ".join(line.strip() for line in tb_lines if line.strip())
+                logger.exception("[delegation] Unexpected error in ACS run: %s", error_msg)
+                res = _acs.ACSResult(
+                    run_id=run_id, workflow_id="unknown", status="failed",
+                    error=error_msg, summary=f"Unexpected error: {error_detail}",
+                    run_dir=run_dir,
                 )
-                os.fsync(_acs_idx_fd)
-            finally:
-                os.close(_acs_idx_fd)
-            _acs_idx_tmp.replace(_acs_global_index / "manifest.json")
 
-            # Also drop a result.json beside the session run data so the
-            # console detail view (get_acs_run follows run_dir → result.json)
-            # renders the summary instead of an empty body. ACSRuntime itself
-            # does not write result.json — only run_acs_workflow does.
-            if _acs_actual_run_dir.is_dir():
-                _acs_result = {
+            if res is None:
+                # Fallback — should not happen but guard against empty result
+                res = _acs.ACSResult(
+                    run_id=run_id, workflow_id="unknown", status="failed",
+                    error="No result returned from ACS runtime",
+                    run_dir=run_dir,
+                )
+            ok = res.status == "success"
+            final = (res.summary or "").strip()
+
+            # Safety net: raw HTML error pages (Cloudflare 50x, nginx, …) that
+            # slip through the ACS layer must never appear verbatim in the chat.
+            if final and final.lstrip().startswith(("<!DOCTYPE", "<!doctype", "<html", "<HTML")):
+                import re as _re_html
+                _t = _re_html.search(r"<title[^>]*>([^<]{1,120})</title>",
+                                     final, _re_html.IGNORECASE)
+                _label = _t.group(1).strip() if _t else "HTTP-Fehlerseite"
+                final = f"Fehler: Der Server hat \"{_label}\" zurückgegeben. Bitte versuche es erneut."
+                ok = False
+
+            if not final:
+                # Debug: log the actual result state
+                _log.debug(
+                    "[delegation] Final result: status=%s, error=%s, summary=%s",
+                    res.status, repr(res.error), repr(res.summary)
+                )
+                # Use best available error message (prefer error, then summary, then construct from status)
+                if res.error:
+                    error_msg = res.error
+                elif res.summary:
+                    error_msg = res.summary
+                else:
+                    # Fallback: construct message from status and iterations/workers
+                    details = []
+                    if hasattr(res, "iterations") and res.iterations:
+                        details.append(f"{res.iterations} iteration(s)")
+                    if hasattr(res, "workers_spawned") and res.workers_spawned:
+                        details.append(f"{res.workers_spawned} worker(s)")
+                    detail_str = f" ({', '.join(details)})" if details else ""
+                    error_msg = f"ACS workflow failed with status '{res.status}'{detail_str}"
+
+                final = ("Delegation abgeschlossen." if ok
+                         else f"Delegation fehlgeschlagen: {error_msg[:250]}")
+            _dbg(sess.workdir, "acs.run.done",
+                 run_id=getattr(res, "run_id", run_id),
+                 status=res.status,
+                 ok=ok,
+                 elapsed_s=getattr(res, "elapsed_s", None),
+                 iterations=getattr(res, "iterations", None),
+                 workers_spawned=getattr(res, "workers_spawned", None),
+                 budget_breach=getattr(res, "budget_breach", None),
+                 error=getattr(res, "error", None),
+                 summary_len=len(final),
+                 elapsed_total_ms=int((time.monotonic() - _dbg_t0) * 1000),
+            )
+
+            # M3 (ADR-0170) — render delegation topology graph.
+            # Run in a thread pool so matplotlib file I/O + PNG encoding do not
+            # block the asyncio event loop (confirmed blocking bug: code-review
+            # 2026-06-27). Best-effort: any error is silently suppressed.
+            _scan_root_m3 = Path(res.run_dir) if res.run_dir else run_dir
+            try:
+                await asyncio.to_thread(_render_acs_graph, _scan_root_m3)
+            except Exception:  # noqa: BLE001
+                pass
+
+            # #4 — surface the chat-triggered ACS run under Agentic Compute.
+            # ACSRuntime writes its run data (manifest, iterations, workers,
+            # gate_results, output) into a SESSION-scoped run_dir; the console's
+            # list_acs_runs/get_acs_run (acs_engine_adapter.py) scan the
+            # TENANT-GLOBAL index at <tenant>/global/acs/runs/<run_id>/manifest.json
+            # and follow its "run_dir" pointer to the session data. This branch
+            # builds ACSRuntime directly (compute-charge bypass — kept intact, charged
+            # above), so run_acs_workflow's global-index write never fires and the
+            # run stays invisible. Mirror that thin manifest here — index write ONLY,
+            # no second compute charge. Path matches _acs_runs_dir() exactly so the
+            # reader finds it. Best-effort: a failed index write never breaks the chat.
+            _acs_actual_run_dir = Path(res.run_dir) if res.run_dir else run_dir
+            try:
+                _acs_global_index = (
+                    _forge_paths.tenant_global_dir(sess.tenant_id)
+                    / "acs" / "runs" / res.run_id
+                )
+                _acs_manifest = {
                     "run_id": res.run_id,
                     "workflow_id": res.workflow_id,
                     "status": res.status,
-                    "summary": res.summary,
-                    "final_output": res.final_output,
-                    "error": res.error,
+                    "engine": "acs",
+                    "started_at": _os_turn_start_wall,
+                    "completed_at": time.time(),
+                    "duration_s": round(res.elapsed_s, 3),
                     "iterations": res.iterations,
                     "workers_spawned": res.workers_spawned,
                     "budget_breach": res.budget_breach,
-                    "elapsed_s": res.elapsed_s,
+                    "run_dir": str(_acs_actual_run_dir),
+                    "source": "web-chat-delegation",
                 }
-                _acs_res_tmp = _acs_actual_run_dir / "result.json.tmp"
-                _acs_res_fd = os.open(
-                    _acs_res_tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+                _acs_global_index.mkdir(parents=True, exist_ok=True)
+                _acs_idx_tmp = _acs_global_index / "manifest.json.tmp"
+                _acs_idx_fd = os.open(
+                    _acs_idx_tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
                 )
                 try:
                     os.write(
-                        _acs_res_fd,
-                        (json.dumps(_acs_result, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+                        _acs_idx_fd,
+                        (json.dumps(_acs_manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
                     )
-                    os.fsync(_acs_res_fd)
+                    os.fsync(_acs_idx_fd)
                 finally:
-                    os.close(_acs_res_fd)
-                _acs_res_tmp.replace(_acs_actual_run_dir / "result.json")
-        except OSError:
-            pass  # index surfacing is best-effort; the chat reply already streamed
+                    os.close(_acs_idx_fd)
+                _acs_idx_tmp.replace(_acs_global_index / "manifest.json")
 
-        # M1 post-run artifact scan (ADR-0114 M2.1 + ADR-0170).
-        # Covers every qualifying file in run_dir that was NOT already surfaced
-        # by the M2 live poll (_live_emitted deduplication).
-        # _ACS_SKIP_DIRS / _ACS_SKIP_ROOT_FILES are module-level constants.
-        _acs_artifact_parts: list[dict[str, Any]] = []
-        _scan_root = Path(res.run_dir) if res.run_dir else run_dir
-        if ok and _scan_root.is_dir():
-            for _fpath in sorted(_scan_root.rglob("*")):
-                if not _fpath.is_file() or _fpath.name.startswith("."):
-                    continue
-                if _fpath.suffix == ".jsonl":
-                    continue
-                try:
-                    _parts = _fpath.relative_to(_scan_root).parts
-                except ValueError:
-                    continue
-                if _parts and _parts[0] in _ACS_SKIP_DIRS:
-                    continue
-                if _fpath.parent == _scan_root and _fpath.name in _ACS_SKIP_ROOT_FILES:
-                    continue
-                # M2 dedup: skip files already delivered live during the run.
-                if str(_fpath) in _live_emitted:
-                    continue
-                _mime = _artifact_mime(_fpath)
-                if _mime is None:
-                    continue
-                try:
-                    _rel = _fpath.relative_to(sess.workdir)
-                except ValueError:
-                    _rel = _fpath.relative_to(_scan_root)
-                try:
-                    _size = _fpath.stat().st_size
-                except OSError:
-                    continue
-                # M5 provenance label
-                _label = _acs_artifact_label(_fpath, _scan_root)
-                _part: dict[str, Any] = {
-                    "kind": "artifact",
-                    "name": _fpath.name,
-                    "path": str(_rel),
-                    "mime": _mime,
-                    "size": _size,
+                # Also drop a result.json beside the session run data so the
+                # console detail view (get_acs_run follows run_dir → result.json)
+                # renders the summary instead of an empty body. ACSRuntime itself
+                # does not write result.json — only run_acs_workflow does.
+                if _acs_actual_run_dir.is_dir():
+                    _acs_result = {
+                        "run_id": res.run_id,
+                        "workflow_id": res.workflow_id,
+                        "status": res.status,
+                        "summary": res.summary,
+                        "final_output": res.final_output,
+                        "error": res.error,
+                        "iterations": res.iterations,
+                        "workers_spawned": res.workers_spawned,
+                        "budget_breach": res.budget_breach,
+                        "elapsed_s": res.elapsed_s,
+                    }
+                    _acs_res_tmp = _acs_actual_run_dir / "result.json.tmp"
+                    _acs_res_fd = os.open(
+                        _acs_res_tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+                    )
+                    try:
+                        os.write(
+                            _acs_res_fd,
+                            (json.dumps(_acs_result, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+                        )
+                        os.fsync(_acs_res_fd)
+                    finally:
+                        os.close(_acs_res_fd)
+                    _acs_res_tmp.replace(_acs_actual_run_dir / "result.json")
+            except OSError:
+                pass  # index surfacing is best-effort; the chat reply already streamed
+
+            # M1 post-run artifact scan (ADR-0114 M2.1 + ADR-0170).
+            # Covers every qualifying file in run_dir that was NOT already surfaced
+            # by the M2 live poll (_live_emitted deduplication).
+            # _ACS_SKIP_DIRS / _ACS_SKIP_ROOT_FILES are module-level constants.
+            _acs_artifact_parts: list[dict[str, Any]] = []
+            _scan_root = Path(res.run_dir) if res.run_dir else run_dir
+            if ok and _scan_root.is_dir():
+                for _fpath in sorted(_scan_root.rglob("*")):
+                    if not _fpath.is_file() or _fpath.name.startswith("."):
+                        continue
+                    if _fpath.suffix == ".jsonl":
+                        continue
+                    try:
+                        _parts = _fpath.relative_to(_scan_root).parts
+                    except ValueError:
+                        continue
+                    if _parts and _parts[0] in _ACS_SKIP_DIRS:
+                        continue
+                    if _fpath.parent == _scan_root and _fpath.name in _ACS_SKIP_ROOT_FILES:
+                        continue
+                    # M2 dedup: skip files already delivered live during the run.
+                    if str(_fpath) in _live_emitted:
+                        continue
+                    _mime = _artifact_mime(_fpath)
+                    if _mime is None:
+                        continue
+                    try:
+                        _rel = _fpath.relative_to(sess.workdir)
+                    except ValueError:
+                        _rel = _fpath.relative_to(_scan_root)
+                    try:
+                        _size = _fpath.stat().st_size
+                    except OSError:
+                        continue
+                    # M5 provenance label
+                    _label = _acs_artifact_label(_fpath, _scan_root)
+                    _part: dict[str, Any] = {
+                        "kind": "artifact",
+                        "name": _fpath.name,
+                        "path": str(_rel),
+                        "mime": _mime,
+                        "size": _size,
+                    }
+                    if _label:
+                        _part["label"] = _label
+                    _acs_artifact_parts.append(_part)
+
+            yield {"type": "result", "text": final, "usage": None}
+
+            for _ap in _acs_artifact_parts:
+                _ae: dict[str, Any] = {
+                    "type": "artifact", "name": _ap["name"], "path": _ap["path"],
+                    "mime": _ap["mime"], "size": _ap["size"],
                 }
-                if _label:
-                    _part["label"] = _label
-                _acs_artifact_parts.append(_part)
+                if "label" in _ap:
+                    _ae["label"] = _ap["label"]
+                yield _ae
 
-        yield {"type": "result", "text": final, "usage": None}
+            _turn_parts: list[dict[str, Any]] = [{"kind": "text", "text": final}]
+            # M2 live-delivered artifacts must be persisted so they survive reload.
+            # Without this, _live_emitted dedup removes them from _acs_artifact_parts
+            # and _append_turn would write a history entry with no artifacts.
+            _turn_parts.extend(_live_artifact_parts)
+            _turn_parts.extend(_acs_artifact_parts)
 
-        for _ap in _acs_artifact_parts:
-            _ae: dict[str, Any] = {
-                "type": "artifact", "name": _ap["name"], "path": _ap["path"],
-                "mime": _ap["mime"], "size": _ap["size"],
-            }
-            if "label" in _ap:
-                _ae["label"] = _ap["label"]
-            yield _ae
-
-        _turn_parts: list[dict[str, Any]] = [{"kind": "text", "text": final}]
-        # M2 live-delivered artifacts must be persisted so they survive reload.
-        # Without this, _live_emitted dedup removes them from _acs_artifact_parts
-        # and _append_turn would write a history entry with no artifacts.
-        _turn_parts.extend(_live_artifact_parts)
-        _turn_parts.extend(_acs_artifact_parts)
-
-        _audit_emit(sess, "web.turn.completed", rc=0 if ok else 1,
-                    result_chars=len(final), usage=None, delegated_run_id=run_id,
-                    artifacts=len(_live_artifact_parts) + len(_acs_artifact_parts))
-        if ok:
-            tm.record_event(task_id, {
-                "event": "task.completed", "exit_code": 0,
-                "summary": f"delegated to ACS run {run_id}: {len(final)} chars output",
-            })
-        else:
-            tm.record_event(task_id, {"event": "task.failed", "exit_code": 1})
-        _os_emit_completed(0 if ok else 1)
-        touch(sess, increment_turn=True)
-        _append_turn(sess, "assistant", _turn_parts)
-        yield {"type": "done"}
-        return
+            _audit_emit(sess, "web.turn.completed", rc=0 if ok else 1,
+                        result_chars=len(final), usage=None, delegated_run_id=run_id,
+                        artifacts=len(_live_artifact_parts) + len(_acs_artifact_parts))
+            if ok:
+                tm.record_event(task_id, {
+                    "event": "task.completed", "exit_code": 0,
+                    "summary": f"delegated to ACS run {run_id}: {len(final)} chars output",
+                })
+            else:
+                tm.record_event(task_id, {"event": "task.failed", "exit_code": 1})
+            _os_emit_completed(0 if ok else 1)
+            touch(sess, increment_turn=True)
+            _append_turn(sess, "assistant", _turn_parts)
+            yield {"type": "done"}
+            return
 
     # #8 — engine-respect guard.
     # The console web-chat drives two OS engines: claude_code (the direct
