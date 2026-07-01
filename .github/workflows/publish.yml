@@ -73,11 +73,15 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  # ── 2. Publish to TestPyPI (staging) ────────────────────────────────────────
+  # ── 2. Publish to TestPyPI (staging, optional) ───────────────────────────────
+  # Requires a Trusted Publisher configured on test.pypi.org:
+  #   Owner: CorvinLabs  Repository: CorvinOS  Workflow: publish.yml  Env: testpypi
+  # Until configured, this job is allowed to fail without blocking the PyPI publish.
   publish-testpypi:
     name: Publish to TestPyPI
     needs: build
     runs-on: ubuntu-latest
+    continue-on-error: true
     environment:
       name: testpypi
       url: https://test.pypi.org/p/corvinos
@@ -98,7 +102,9 @@ jobs:
   # ── 3. Publish to PyPI (production) ─────────────────────────────────────────
   publish-pypi:
     name: Publish to PyPI
-    needs: publish-testpypi
+    needs: [build, publish-testpypi]
+    # Run even if TestPyPI fails — TestPyPI is an optional staging check.
+    if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: pypi
