@@ -142,6 +142,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: core/console/corvin_console/web-next/package-lock.json
+
+      - name: Build React SPA
+        working-directory: core/console/corvin_console/web-next
+        run: npm ci --no-audit && npm run build
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

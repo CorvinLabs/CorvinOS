@@ -54,8 +54,10 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # Use repository_owner (org name) not actor — GITHUB_TOKEN scoped to
+          # org-level packages requires the org name as the registry username.
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Extract tags + labels
         id: meta

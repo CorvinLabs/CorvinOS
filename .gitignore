@@ -84,7 +84,10 @@ operator/**/*.session.json
 
 # ── Build artifacts ────────────────────────────────────────────────────────
 node_modules/
-package-lock.json
+# package-lock.json is committed for the web console SPA (reproducible CI builds;
+# npm ci requires the lock file). Only suppress it in operator bridges where npm
+# install runs at container/deploy time and the lock file is environment-specific.
+operator/**/package-lock.json
 *.pyc
 __pycache__/
 .pytest_cache/
