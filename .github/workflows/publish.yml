@@ -1,20 +1,9 @@
 name: Publish corvinOS to PyPI
 
 # Triggered when a GitHub Release is published (tag vX.Y.Z → PyPI).
-# Trusted-Publisher (OIDC) — no API token stored in GitHub secrets.
-#
-# PyPI setup (one-time, on pypi.org):
-#   Publishing → Trusted Publishers → Add publisher
-#     Owner:        CorvinLabs
-#     Repository:   CorvinOS
-#     Workflow:     .github/workflows/publish.yml
-#     Environment:  pypi
-#
-# TestPyPI setup (one-time, on test.pypi.org):
-#   Same as above, environment: testpypi
-#
-# GitHub setup (one-time):
-#   Repository → Settings → Environments → create "pypi" and "testpypi"
+# Auth: PYPI_TOKEN secret (API token). To migrate to OIDC Trusted Publishing,
+# configure a publisher on pypi.org for Owner=CorvinLabs / Repo=CorvinOS /
+# Workflow=publish.yml / Environment=pypi, then remove the password line.
 
 on:
   release:
@@ -73,44 +62,14 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  # ── 2. Publish to TestPyPI (staging, optional) ───────────────────────────────
-  # Requires a Trusted Publisher configured on test.pypi.org:
-  #   Owner: CorvinLabs  Repository: CorvinOS  Workflow: publish.yml  Env: testpypi
-  # Until configured, this job is allowed to fail without blocking the PyPI publish.
-  publish-testpypi:
-    name: Publish to TestPyPI
-    needs: build
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    environment:
-      name: testpypi
-      url: https://test.pypi.org/p/corvinos
-    permissions:
-      id-token: write
-
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: python-package-distributions
-          path: dist/
-
-      - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-
-  # ── 3. Publish to PyPI (production) ─────────────────────────────────────────
+  # ── 2. Publish to PyPI (production) ─────────────────────────────────────────
   publish-pypi:
     name: Publish to PyPI
-    needs: [build, publish-testpypi]
-    # Run even if TestPyPI fails — TestPyPI is an optional staging check.
-    if: needs.build.result == 'success'
+    needs: build
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/p/corvinos
-    permissions:
-      id-token: write
 
     steps:
       - uses: actions/download-artifact@v4
@@ -120,3 +79,6 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_TOKEN }}
