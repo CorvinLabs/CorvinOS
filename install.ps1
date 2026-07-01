@@ -1,31 +1,32 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 param(
     [Alias("e")]
     [string]$Editable = ""
 )
-# install.ps1 — CorvinOS installer for Windows (PowerShell).
+# install.ps1 — CorvinOS installer for Windows (PowerShell 5.1+).
 # Usage:
 #   irm https://corvin-labs.com/install.ps1 | iex
-#   .\install.ps1 -Editable C:\path\to\CorvinOS   # dev install from local clone
-#   .\install.ps1 -e C:\path\to\CorvinOS
+#   .\install.ps1 -Editable C:\path\to\CorvinOS   # dev install from a local clone
+#
+# ZERO prerequisites: it bootstraps `uv` (a single binary that also manages its
+# own Python), so you need NO Python, NO pip, NO package manager pre-installed.
+# `irm | iex` uses no shell operators, so it works in PowerShell 5.1 AND 7 alike.
 
 $ErrorActionPreference = "Stop"
-$VenvDir   = Join-Path $env:USERPROFILE "corvin_venv"
-$Package   = "corvinos"
+$Package = if ($env:CORVIN_PKG) { $env:CORVIN_PKG } else { "corvinos" }
 
-function Write-Step  { param($msg) Write-Host "  $msg" }
-function Write-Ok    { param($msg) Write-Host "  $msg" -ForegroundColor Green }
-function Write-Warn  { param($msg) Write-Host "  $msg" -ForegroundColor Yellow }
-function Write-Fail  { param($msg) Write-Host "`n  Error: $msg" -ForegroundColor Red; exit 1 }
-function Write-Head  { param($msg) Write-Host $msg -ForegroundColor Cyan }
-function Write-Cmd   { param($msg) Write-Host "    $msg" -ForegroundColor White }
-function Write-Hint  { param($msg) Write-Host "    $msg" -ForegroundColor DarkGray }
+function Write-Step { param($m) Write-Host "  $m" }
+function Write-Ok   { param($m) Write-Host "  $m" -ForegroundColor Green }
+function Write-Warn { param($m) Write-Host "  $m" -ForegroundColor Yellow }
+function Write-Fail { param($m) Write-Host "`n  Error: $m" -ForegroundColor Red; exit 1 }
+function Write-Head { param($m) Write-Host $m -ForegroundColor Cyan }
+function Write-Cmd  { param($m) Write-Host "    $m" -ForegroundColor White }
+function Write-Hint { param($m) Write-Host "    $m" -ForegroundColor DarkGray }
 
 Write-Host ""
-Write-Host "CorvinOS installer" -ForegroundColor White
+Write-Host "CorvinOS installer — self-hosted, local-first AI voice agent" -ForegroundColor White
 
 # ── editable path validation ──────────────────────────────────────────────────
-
 $EditablePath = ""
 if ($Editable -ne "") {
     if (-not (Test-Path $Editable -PathType Container)) {
@@ -34,136 +35,67 @@ if ($Editable -ne "") {
     $EditablePath = (Resolve-Path $Editable).Path
 }
 
-# ── Python version check ──────────────────────────────────────────────────────
-
-$Python = $null
-foreach ($candidate in @("python", "python3", "py")) {
-    try {
-        $ver = & $candidate -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
-        if ($LASTEXITCODE -eq 0 -and $ver -match "^3\.(\d+)$") {
-            $minor = [int]$Matches[1]
-            if ($minor -ge 10) {
-                $Python = $candidate
-                break
-            }
-        }
-    } catch {}
+# ── 1. ensure uv (brings its own Python → zero prerequisites) ─────────────────
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Write-Step "Bootstrapping the uv runtime (brings its own Python) ..."
+    irm https://astral.sh/uv/install.ps1 | iex
+    # uv installs to %USERPROFILE%\.local\bin — make it usable in THIS session.
+    $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
 }
-
-if (-not $Python) {
-    Write-Fail @"
-Python 3.10+ is required but not found.
-  Download: https://www.python.org/downloads/windows/
-  Tip: check 'Add Python to PATH' during installation.
-"@
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Write-Fail "uv is not on PATH after install. Open a new terminal and re-run."
 }
+Write-Ok ("uv " + (((uv --version) 2>$null) -split " ")[1] + " — OK")
 
-$pyVer = & $Python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
-Write-Ok "Python $pyVer — OK"
-
-# ── virtual environment ───────────────────────────────────────────────────────
-
-Write-Step "Creating virtual environment at $VenvDir ..."
-& $Python -m venv $VenvDir
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "Failed to create virtual environment at $VenvDir"
-}
-
-$Pip       = Join-Path $VenvDir "Scripts\pip.exe"
-$CorvinBin = Join-Path $VenvDir "Scripts\corvinos-serve.exe"
-
-# ── install package ───────────────────────────────────────────────────────────
-
-Write-Step "Upgrading pip ..."
-& $Pip install --quiet --upgrade pip
-if ($LASTEXITCODE -ne 0) { Write-Fail "Failed to upgrade pip" }
-
+# ── 2. install CorvinOS as an isolated tool (uv fetches Python if needed) ─────
 if ($EditablePath -ne "") {
-    Write-Step "Installing CorvinOS in editable mode from $EditablePath ..."
-    & $Pip install -e $EditablePath
+    Write-Step "Installing CorvinOS (editable) from $EditablePath ..."
+    uv tool install --force --editable $EditablePath
 } else {
-    Write-Step "Installing $Package ..."
-    & $Pip install $Package
+    Write-Step "Installing $Package (first run can take a minute) ..."
+    uv tool install --force --upgrade $Package
 }
+if ($LASTEXITCODE -ne 0) { Write-Fail "install failed — see the error above" }
+uv tool update-shell 2>$null | Out-Null   # persist the tool bin on the user PATH
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "pip install failed — see the error above"
+if (-not (Get-Command corvinos-serve -ErrorAction SilentlyContinue)) {
+    # PATH was updated persistently but may not be live in this session yet.
+    $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
 }
-
-if (-not (Test-Path $CorvinBin)) {
-    Write-Fail "Installation succeeded but 'corvinos-serve.exe' not found at $CorvinBin"
-}
-
-# ── PATH setup (User scope, permanent) ───────────────────────────────────────
-
-$BinDir   = Join-Path $VenvDir "Scripts"
-$UserPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
-
-if ($UserPath -notlike "*$BinDir*") {
-    [System.Environment]::SetEnvironmentVariable(
-        "PATH",
-        "$BinDir;$UserPath",
-        "User"
-    )
-    Write-Ok "Added $BinDir to your user PATH."
-} else {
-    Write-Step "$BinDir is already in PATH."
-}
-
-# ── run setup wizard ──────────────────────────────────────────────────────────
-
-$CorvinInstallBin = Join-Path $VenvDir "Scripts\corvin-install.exe"
 
 Write-Host ""
 Write-Ok "Package installed."
 
-if (Test-Path $CorvinInstallBin) {
+# ── 3. setup wizard ───────────────────────────────────────────────────────────
+if (Get-Command corvin-install -ErrorAction SilentlyContinue) {
     Write-Host ""
     Write-Step "Launching setup wizard ..."
     Write-Host ""
-    & $CorvinInstallBin
+    corvin-install
     if ($LASTEXITCODE -ne 0) {
-        Write-Warn "Setup wizard exited with an error. You can re-run it later with: corvin-install"
+        Write-Warn "Setup wizard exited early. Re-run later with: corvin-install"
     }
 }
 
-# ── done / cheat sheet ───────────────────────────────────────────────────────
-
+# ── done / cheat sheet ────────────────────────────────────────────────────────
 Write-Host ""
 Write-Head "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 Write-Host " CorvinOS is ready!" -ForegroundColor Green
 Write-Head "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 Write-Host ""
-Write-Host " Step 1 — Open a new terminal window " -ForegroundColor White -NoNewline
-Write-Host "(so PATH is updated)" -ForegroundColor DarkGray
-Write-Host "         Or activate right now without restarting:" -ForegroundColor DarkGray
-Write-Host ""
-Write-Cmd  "$VenvDir\Scripts\Activate.ps1"
-Write-Hint "# Type 'deactivate' to leave the environment again"
-Write-Host ""
-Write-Host " Step 2 — Start the web console" -ForegroundColor White
+Write-Host " Open a NEW terminal (so PATH is updated), then start the console:" -ForegroundColor White
 Write-Host ""
 Write-Cmd  "corvinos-serve"
-Write-Hint "# Then open:  http://localhost:8765/console/"
+Write-Hint "# then open  http://localhost:8765/console/"
 Write-Host ""
 Write-Head "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-Write-Host " All available commands" -ForegroundColor White
+Write-Host " Commands" -ForegroundColor White
 Write-Head "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 Write-Host ""
 Write-Host "   corvinos-serve     " -NoNewline -ForegroundColor White; Write-Host "Start the web console"
-Write-Host "   corvin-install     " -NoNewline -ForegroundColor White; Write-Host "Run the setup wizard (bridges, tokens, voice)"
-Write-Host "   corvin-uninstall   " -NoNewline -ForegroundColor White; Write-Host "Remove CorvinOS (services, plugins, config)"
-Write-Host "   corvin-restore     " -NoNewline -ForegroundColor White; Write-Host "Restore a previous installation"
-Write-Host "   corvin-flow        " -NoNewline -ForegroundColor White; Write-Host "Manage declarative multi-node workflows"
-Write-Host "   corvin-layer       " -NoNewline -ForegroundColor White; Write-Host "Manage layer extensions"
+Write-Host "   corvin-install     " -NoNewline -ForegroundColor White; Write-Host "Setup wizard (bridges, tokens, voice)"
+Write-Host "   corvin-uninstall   " -NoNewline -ForegroundColor White; Write-Host "Remove CorvinOS"
 Write-Host "   corvin-a2a         " -NoNewline -ForegroundColor White; Write-Host "Agent-to-agent pairing and messaging"
 Write-Host ""
-Write-Head "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-Write-Host " Optional: local AI model" -ForegroundColor White -NoNewline
-Write-Host "  (for offline / private use)" -ForegroundColor DarkGray
-Write-Head "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-Write-Host ""
-Write-Cmd  "ollama pull qwen3:8b     # 5.2 GB  — enables /engine hermes"
-Write-Cmd  "ollama pull qwen3:1.7b   # 1.4 GB  — lighter/faster variant"
-Write-Hint "Skip if you only use cloud engines (Claude, Codex, Copilot)."
+Write-Cmd  "ollama pull qwen3:8b   # optional local model (offline /engine hermes)"
 Write-Host ""

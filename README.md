@@ -30,8 +30,12 @@
 
 CorvinOS is a self-hosted agentic OS that connects **Ollama, Claude, GPT-4, and any OpenRouter model** to **Discord, Telegram, WhatsApp, Slack, Email, Teams, and Signal** — through a single pip package.
 
-```
-pip install corvinos && python -m corvinOS
+```bash
+# macOS / Linux — no Python or package manager required
+curl -fsSL https://corvin-labs.com/install.sh | sh
+
+# Windows (PowerShell)
+irm https://corvin-labs.com/install.ps1 | iex
 ```
 
 - **Local-first** — run 100 % offline with Ollama and `--engine hermes`. No API key needed.
@@ -52,7 +56,22 @@ Every compliance requirement — disclosure, consent, audit integrity, data resi
 
 See [INSTALLATION.md](INSTALLATION.md) for the complete setup guide.
 
-**Recommended — works identically on Linux, macOS, and Windows:**
+**Recommended — one line, every platform, zero prerequisites:**
+
+```bash
+# macOS / Linux
+curl -fsSL https://corvin-labs.com/install.sh | sh
+
+# Windows (PowerShell)
+irm https://corvin-labs.com/install.ps1 | iex
+```
+
+The bootstrap installer brings its **own Python** (via [uv](https://docs.astral.sh/uv/)),
+so you need **no system Python, no pip, and no package manager** installed first. It
+puts `corvinos-serve` on your `PATH` and runs the setup wizard. The Windows one-liner
+uses `irm | iex` (no `&&`), so it works in both PowerShell 5.1 and 7.
+
+**Already have Python 3.10+?** A plain pip install works identically on all three OSes:
 
 ```bash
 pip install corvinos

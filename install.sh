@@ -1,195 +1,107 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # install.sh — CorvinOS installer for Linux and macOS.
 # Usage:
-#   curl -fsSL https://corvin-labs.com/install.sh | bash
-#   bash install.sh --editable /path/to/CorvinOS   # dev install from local clone
-set -euo pipefail
+#   curl -fsSL https://corvin-labs.com/install.sh | sh
+#   sh install.sh --editable /path/to/CorvinOS    # dev install from a local clone
+#
+# POSIX sh, ZERO prerequisites: it bootstraps `uv` (a single static binary that
+# also manages its own Python), so you need NO system Python, NO pip, and NO
+# package manager pre-installed. Idempotent — safe to re-run.
+set -eu
 
-VENV_DIR="${HOME}/corvin_venv"
-PACKAGE="corvinos"
-EDITABLE_PATH=""
-
-# ── helpers ───────────────────────────────────────────────────────────────────
+PKG="${CORVIN_PKG:-corvinos}"
+EDITABLE=""
 
 _bold()  { printf '\033[1m%s\033[0m' "$*"; }
 _green() { printf '\033[32m%s\033[0m' "$*"; }
 _red()   { printf '\033[31m%s\033[0m' "$*"; }
 _yellow(){ printf '\033[33m%s\033[0m' "$*"; }
 _dim()   { printf '\033[2m%s\033[0m' "$*"; }
-
-die() { echo "$(_red "Error:") $*" >&2; exit 1; }
-
-trap 'echo "" >&2; echo "$(_red "Installation failed.") See the error above." >&2' ERR
+die() { printf '%s %s\n' "$(_red 'Error:')" "$*" >&2; exit 1; }
 
 # ── argument parsing ──────────────────────────────────────────────────────────
-
-while [[ $# -gt 0 ]]; do
+while [ $# -gt 0 ]; do
     case "$1" in
         -e|--editable)
-            [[ $# -lt 2 ]] && die "--editable requires a path argument"
-            EDITABLE_PATH="$2"
-            shift 2
-            ;;
+            [ $# -lt 2 ] && die "--editable requires a path argument"
+            EDITABLE="$2"; shift 2 ;;
         *)
             die "Unknown argument: $1
-Usage: $0 [--editable|-e <path>]
-  --editable <path>   Install in editable mode from a local clone (dev only)"
-            ;;
+Usage: $0 [--editable|-e <path>]" ;;
     esac
 done
-
-if [[ -n "$EDITABLE_PATH" ]]; then
-    [[ -d "$EDITABLE_PATH" ]] || die "Editable path does not exist: $EDITABLE_PATH"
-    EDITABLE_PATH="$(cd "$EDITABLE_PATH" && pwd)"
+if [ -n "$EDITABLE" ]; then
+    [ -d "$EDITABLE" ] || die "Editable path does not exist: $EDITABLE"
+    EDITABLE="$(cd "$EDITABLE" && pwd)"
 fi
 
-# ── Python version check ──────────────────────────────────────────────────────
+printf '\n%s — self-hosted, local-first AI voice agent\n\n' "$(_bold 'CorvinOS installer')"
 
-PYTHON=""
-for candidate in python3 python; do
-    if command -v "$candidate" &>/dev/null; then
-        version=$("$candidate" -c 'import sys; print(sys.version_info.minor)' 2>/dev/null || echo "0")
-        major=$("$candidate" -c 'import sys; print(sys.version_info.major)' 2>/dev/null || echo "0")
-        if [ "$major" -eq 3 ] && [ "$version" -ge 10 ]; then
-            PYTHON="$candidate"
-            break
-        fi
-    fi
-done
-
-if [ -z "$PYTHON" ]; then
-    die "Python 3.10+ is required but not found.
-  Linux:  sudo apt install python3  (or your distro's package manager)
-  macOS:  brew install python3  (https://brew.sh)
-  Or:     https://www.python.org/downloads/"
-fi
-
-PYTHON_VER=$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-echo "$(_bold "CorvinOS installer")"
-echo "  Python $PYTHON_VER — $(_green "OK")"
-
-# ── venv availability check ───────────────────────────────────────────────────
-
-if ! "$PYTHON" -c "import venv" 2>/dev/null; then
-    die "Python 'venv' module is missing.
-  Ubuntu/Debian:  sudo apt install python3-venv
-  Fedora/RHEL:    sudo dnf install python3
-  Arch:           python already includes venv
-  macOS:          brew install python3 (already includes venv)"
-fi
-
-# ── virtual environment ───────────────────────────────────────────────────────
-
-echo "  Creating virtual environment at $VENV_DIR ..."
-"$PYTHON" -m venv "$VENV_DIR"
-
-PIP="$VENV_DIR/bin/pip"
-
-# pip is normally bundled via ensurepip, but some Linux distros strip it out
-# (e.g. Ubuntu python3-venv without python3-pip). Bootstrap it if missing.
-if [ ! -f "$PIP" ]; then
-    echo "  pip not bundled — bootstrapping via ensurepip ..."
-    "$VENV_DIR/bin/python" -m ensurepip --upgrade 2>/dev/null || \
-        die "Could not bootstrap pip in the virtual environment.
-  Ubuntu/Debian:  sudo apt install python3-pip
-  Fedora/RHEL:    sudo dnf install python3-pip"
-fi
-
-# ── install package ───────────────────────────────────────────────────────────
-
-echo "  Upgrading pip ..."
-"$PIP" install --quiet --upgrade pip
-
-if [[ -n "$EDITABLE_PATH" ]]; then
-    echo "  Installing CorvinOS in editable mode from $EDITABLE_PATH ..."
-    "$PIP" install -e "$EDITABLE_PATH"
-else
-    echo "  Installing $PACKAGE ..."
-    "$PIP" install "$PACKAGE"
-fi
-
-CORVIN_SERVE_BIN="$VENV_DIR/bin/corvinos-serve"
-if [ ! -x "$CORVIN_SERVE_BIN" ]; then
-    die "pip install succeeded but 'corvinos-serve' not found at $CORVIN_SERVE_BIN"
-fi
-
-# ── PATH setup ────────────────────────────────────────────────────────────────
-
-BIN_DIR="$VENV_DIR/bin"
-EXPORT_LINE="export PATH=\"$BIN_DIR:\$PATH\""
-
-_add_to_profile() {
-    local profile="$1"
-    if [ -f "$profile" ] && ! grep -qF "$BIN_DIR" "$profile"; then
-        echo "" >> "$profile"
-        echo "# Added by CorvinOS installer" >> "$profile"
-        echo "$EXPORT_LINE" >> "$profile"
-        echo "  Added PATH entry to $profile"
-    fi
-}
-
-_add_to_profile "${HOME}/.bashrc"
-_add_to_profile "${HOME}/.zshrc"
-_add_to_profile "${HOME}/.profile"
-
-# ── run setup wizard ──────────────────────────────────────────────────────────
-
-trap - ERR
-
-CORVIN_INSTALL_BIN="$VENV_DIR/bin/corvin-install"
-
-echo ""
-echo "  $(_green "$(_bold "Package installed.")")"
-
-if [ -x "$CORVIN_INSTALL_BIN" ]; then
-    if [ -t 0 ]; then
-        echo "  Launching setup wizard ..."
-        echo ""
-        "$CORVIN_INSTALL_BIN"
+# ── 1. ensure uv (brings its own Python → zero prerequisites) ─────────────────
+if ! command -v uv >/dev/null 2>&1; then
+    echo "  Bootstrapping the uv runtime (brings its own Python) ..."
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL https://astral.sh/uv/install.sh | sh
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- https://astral.sh/uv/install.sh | sh
     else
-        echo ""
-        echo "  $(_yellow "Note:") Detected non-interactive shell (e.g. piped via curl)."
-        echo "  Run the setup wizard once your terminal is ready:"
-        echo ""
-        echo "    $(_bold "corvin-install")"
+        die "Need curl or wget to bootstrap uv. Please install one and re-run."
+    fi
+fi
+# uv lands in ~/.local/bin (current) or ~/.cargo/bin (older installs)
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+command -v uv >/dev/null 2>&1 || die "uv is not on PATH after install. Open a new terminal and re-run."
+echo "  uv $(uv --version 2>/dev/null | awk '{print $2}') — $(_green OK)"
+
+# ── 2. install CorvinOS as an isolated tool (uv fetches Python if needed) ─────
+if [ -n "$EDITABLE" ]; then
+    echo "  Installing CorvinOS (editable) from $EDITABLE ..."
+    uv tool install --force --editable "$EDITABLE"
+else
+    echo "  Installing $PKG (first run can take a minute) ..."
+    uv tool install --force --upgrade "$PKG"
+fi
+uv tool update-shell >/dev/null 2>&1 || true   # persist ~/.local/bin on PATH
+
+command -v corvinos-serve >/dev/null 2>&1 \
+    || die "install succeeded but 'corvinos-serve' is not on PATH — open a new terminal and retry"
+
+printf '\n  %s\n' "$(_green "$(_bold 'Package installed.')")"
+
+# ── 3. setup wizard (only on an interactive terminal, not when piped) ─────────
+if command -v corvin-install >/dev/null 2>&1; then
+    if [ -t 0 ]; then
+        echo "  Launching setup wizard ..."; echo ""
+        corvin-install || true
+    else
+        printf '\n  %s Piped install detected — run the wizard once your terminal is ready:\n\n    %s\n' \
+            "$(_yellow 'Note:')" "$(_bold 'corvin-install')"
     fi
 fi
 
 # ── done / cheat sheet ────────────────────────────────────────────────────────
+cat <<EOF
 
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo " $(_green "$(_bold "CorvinOS is ready!")")"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo " $(_bold "Step 1 — Open a new terminal window") (so PATH is updated)"
-echo "         Or activate right now without restarting:"
-echo ""
-echo "           source $VENV_DIR/bin/activate"
-echo "           $(_dim "# Type 'deactivate' to leave the environment again")"
-echo ""
-echo " $(_bold "Step 2 — Start the web console")"
-echo ""
-echo "           $(_bold "corvinos-serve")"
-echo "           $(_dim "# Then open:  http://localhost:8765/console/")"
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo " $(_bold "All available commands")"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "   $(_bold "corvinos-serve")      Start the web console"
-echo "   $(_bold "corvin-install")      Run the setup wizard (bridges, tokens, voice)"
-echo "   $(_bold "corvin-uninstall")    Remove CorvinOS (services, plugins, config)"
-echo "   $(_bold "corvin-restore")      Restore a previous installation"
-echo "   $(_bold "corvin-flow")         Manage declarative multi-node workflows"
-echo "   $(_bold "corvin-layer")        Manage layer extensions"
-echo "   $(_bold "corvin-a2a")          Agent-to-agent pairing and messaging"
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo " $(_bold "Optional: local AI model")  $(_dim "(for offline / private use)")"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "   $(_bold "ollama pull qwen3:8b")     5.2 GB  — enables /engine hermes"
-echo "   $(_bold "ollama pull qwen3:1.7b")   1.4 GB  — lighter/faster variant"
-echo "   $(_dim "Skip if you only use cloud engines (Claude, Codex, Copilot).")"
-echo ""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ $(_green "$(_bold 'CorvinOS is ready!')")
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ $(_bold 'Start the web console:')
+
+     $(_bold 'corvinos-serve')
+     $(_dim '# then open  http://localhost:8765/console/')
+
+ $(_dim 'If a command is not found, open a new terminal (PATH was updated).')
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ $(_bold 'Commands')
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+   $(_bold 'corvinos-serve')      Start the web console
+   $(_bold 'corvin-install')      Setup wizard (bridges, tokens, voice)
+   $(_bold 'corvin-uninstall')    Remove CorvinOS
+   $(_bold 'corvin-a2a')          Agent-to-agent pairing and messaging
+
+ $(_dim 'Optional local model:')  $(_bold 'ollama pull qwen3:8b')  $(_dim '(offline /engine hermes)')
+
+EOF
