@@ -184,7 +184,14 @@ class CorvinInstaller:
                     print("  Skipping Hermes bootstrap.")
                     return
 
-            result = bootstrap_hermes(force_model=model)
+            # stream=True + a progress callback so the multi-GB model pull shows
+            # LIVE progress (Ollama's native download bar) instead of looking
+            # frozen at "[Step 6]" — the same on Linux, macOS and Windows.
+            print(f"  Downloading {model} now — live progress below "
+                  f"(this is a one-time ~2–9 GB download):", flush=True)
+            result = bootstrap_hermes(
+                force_model=model, stream=True,
+                progress=lambda m: print(f"  · {m}", flush=True))
 
             if result.get("error"):
                 print(f"  ⚠ Hermes bootstrap warning: {result['error']}")

@@ -165,8 +165,10 @@ pull_model() {
     fail "Ollama binary not found (needed to pull $model)"
     return 1
   fi
-  step "Pulling model: $model"
-  if "$ollama_bin" pull "$model" 2>&1 | tail -5; then
+  step "Pulling model: $model  (live progress below — one-time multi-GB download)"
+  # Stream Ollama's native progress bar straight to the terminal (no capture/tail),
+  # so the pull never looks frozen.
+  if "$ollama_bin" pull "$model"; then
     ok "Model $model pulled successfully"
     return 0
   else

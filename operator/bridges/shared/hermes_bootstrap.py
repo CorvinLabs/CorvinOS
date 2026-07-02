@@ -247,15 +247,61 @@ def _diagnose_ollama_serve() -> str:
         return f"{type(e).__name__}: {e}"[:400]
 
 
-def pull_model(model: str, timeout: float = 1800.0) -> bool:
-    """Pull an Ollama model. Returns True on success."""
-    rc, _, _ = _run([_ollama_bin() or "ollama", "pull", model], timeout=timeout)
-    return rc == 0
+def pull_model(model: str, timeout: float = 1800.0, stream: bool = False,
+               on_progress: Optional[Callable[[str], None]] = None) -> bool:
+    """Pull an Ollama model. Returns True on success.
+
+    A model pull downloads several GB and takes minutes. With ``stream=False``
+    (default) the output is captured — fine for background/non-interactive use.
+    With ``stream=True`` the download progress is surfaced LIVE so a terminal
+    never looks frozen (the "Step 6 hangs" symptom):
+      * ``on_progress`` given  → each output line is forwarded to it.
+      * ``on_progress`` None    → Ollama's native progress bar is inherited by
+        the current terminal (works identically on Linux, macOS, Windows).
+    """
+    ollama = _ollama_bin() or "ollama"
+    cmd = [ollama, "pull", model]
+    if not stream:
+        rc, _, _ = _run(cmd, timeout=timeout)
+        return rc == 0
+    if on_progress is None:
+        # Inherit stdio → Ollama draws its real-time download bar in the terminal.
+        try:
+            return subprocess.run(cmd, timeout=timeout).returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return False
+    # Programmatic streaming: forward each progress line to the callback.
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, bufsize=1)
+    except (FileNotFoundError, OSError):
+        return False
+    deadline = time.monotonic() + timeout
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\r\n")
+            if line:
+                try:
+                    on_progress(line)
+                except Exception:  # noqa: BLE001
+                    pass
+            if time.monotonic() > deadline:
+                proc.kill()
+                return False
+        return proc.wait(timeout=30) == 0
+    except Exception:  # noqa: BLE001
+        try:
+            proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+        return False
 
 
 def bootstrap_hermes(
     force_model: Optional[str] = None,
     progress: Optional[Callable[[str], None]] = None,
+    stream: bool = False,
 ) -> dict:
     """Auto-bootstrap Hermes:
     1. Select model based on available RAM (or use force_model).
@@ -330,7 +376,13 @@ def bootstrap_hermes(
             return status
 
         _p(f"Downloading model {model} — this can take several minutes…")
-        status["model_pulled"] = pull_model(model)
+        # stream=True surfaces the live download progress so the caller's terminal
+        # never looks frozen during the multi-GB pull ("Step 6 hangs"). We inherit
+        # stdio (on_progress=None) so Ollama's native \r-updated progress bar
+        # renders live — line-forwarding would stall inside a single large layer
+        # (Ollama uses \r, not \n, within a layer). Phase text still goes through
+        # the `progress` callback above.
+        status["model_pulled"] = pull_model(model, stream=stream)
         if not status["model_pulled"]:
             status["error"] = f"Failed to pull {model} — run: ollama pull {model}"
         else:
