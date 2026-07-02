@@ -71,6 +71,20 @@ command -v corvinos-serve >/dev/null 2>&1 \
 
 printf '\n  %s\n' "$(_green "$(_bold 'Package installed.')")"
 
+# ── auto-launch console in default browser ─────────────────────────────────────
+if [ -t 1 ]; then
+    # interactive terminal: try to open browser
+    CONSOLE_URL="http://localhost:8765/console/"
+    echo "  Launching CorvinOS console in your browser ..."
+    if command -v open >/dev/null 2>&1; then
+        open "$CONSOLE_URL" 2>/dev/null || true
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$CONSOLE_URL" 2>/dev/null || true
+    elif command -v wslview >/dev/null 2>&1; then
+        wslview "$CONSOLE_URL" 2>/dev/null || true
+    fi
+fi
+
 # ── 2b. Hermes (local offline engine): Ollama + model, working out of the box ──
 # So CorvinOS runs fully offline with `--engine hermes` from the first start.
 # Opt out with --no-hermes or CORVIN_SKIP_HERMES=1 (e.g. cloud-only / CI).

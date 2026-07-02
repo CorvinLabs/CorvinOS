@@ -57,7 +57,10 @@ if ($EditablePath -ne "") {
     uv tool install --force --upgrade $Package
 }
 if ($LASTEXITCODE -ne 0) { Write-Fail "install failed — see the error above" }
+$prevErrorAction = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 uv tool update-shell 2>$null | Out-Null   # persist the tool bin on the user PATH
+$ErrorActionPreference = $prevErrorAction
 
 if (-not (Get-Command corvinos-serve -ErrorAction SilentlyContinue)) {
     # PATH was updated persistently but may not be live in this session yet.
@@ -66,6 +69,15 @@ if (-not (Get-Command corvinos-serve -ErrorAction SilentlyContinue)) {
 
 Write-Host ""
 Write-Ok "Package installed."
+
+# ── auto-launch console in default browser ─────────────────────────────────────
+$ConsoleURL = "http://localhost:8765/console/"
+Write-Step "Launching CorvinOS console in your browser ..."
+try {
+    Start-Process $ConsoleURL
+} catch {
+    Write-Warn "Could not auto-launch browser. Open manually: $ConsoleURL"
+}
 
 # ── 2b. Hermes (local offline engine): Ollama + model, working out of the box ──
 $SkipHermes = $NoHermes -or ($env:CORVIN_SKIP_HERMES -eq "1")
