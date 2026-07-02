@@ -74,7 +74,11 @@ Write-Ok "Package installed."
 $ConsoleURL = "http://localhost:8765/console/"
 Write-Step "Launching CorvinOS console in your browser ..."
 try {
-    Start-Process $ConsoleURL
+    if ($PSVersionTable.OS -match "Windows") {
+        cmd /c start $ConsoleURL 2>$null
+    } else {
+        Start-Process $ConsoleURL 2>$null
+    }
 } catch {
     Write-Warn "Could not auto-launch browser. Open manually: $ConsoleURL"
 }
