@@ -69,22 +69,6 @@ uv tool update-shell >/dev/null 2>&1 || true   # persist ~/.local/bin on PATH
 command -v corvinos-serve >/dev/null 2>&1 \
     || die "install succeeded but 'corvinos-serve' is not on PATH — open a new terminal and retry"
 
-printf '\n  %s\n' "$(_green "$(_bold 'Package installed.')")"
-
-# ── auto-launch console in default browser ─────────────────────────────────────
-if [ -t 1 ]; then
-    # interactive terminal: try to open browser
-    CONSOLE_URL="http://localhost:8765/console/"
-    echo "  Launching CorvinOS console in your browser ..."
-    if command -v open >/dev/null 2>&1; then
-        open "$CONSOLE_URL" 2>/dev/null || true
-    elif command -v xdg-open >/dev/null 2>&1; then
-        xdg-open "$CONSOLE_URL" 2>/dev/null || true
-    elif command -v wslview >/dev/null 2>&1; then
-        wslview "$CONSOLE_URL" 2>/dev/null || true
-    fi
-fi
-
 # ── 2b. Hermes (local offline engine): Ollama + model, working out of the box ──
 # So CorvinOS runs fully offline with `--engine hermes` from the first start.
 # Opt out with --no-hermes or CORVIN_SKIP_HERMES=1 (e.g. cloud-only / CI).
@@ -152,6 +136,44 @@ if command -v corvin-install >/dev/null 2>&1; then
     fi
 fi
 
+# ── 4. start server + wait for readiness + auto-launch console ──────────────────
+echo ""
+echo "  Starting CorvinOS console server ..."
+
+CONSOLE_URL="http://localhost:8765/console/"
+MAX_RETRIES=30
+RETRY_COUNT=0
+
+# Start server in background
+nohup corvinos-serve >/dev/null 2>&1 &
+SERVER_PID=$!
+
+# Wait for server to be ready
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+    if curl -s -m 2 http://localhost:8765/api/health >/dev/null 2>&1; then
+        printf '  %s Server is ready!\n' "$(_green '✓')"
+        break
+    fi
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    sleep 1
+done
+
+# Launch browser if server is ready
+if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+    if [ -t 1 ]; then
+        echo "  Launching CorvinOS console in your browser ..."
+        if command -v open >/dev/null 2>&1; then
+            open "$CONSOLE_URL" 2>/dev/null || true
+        elif command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "$CONSOLE_URL" 2>/dev/null || true
+        elif command -v wslview >/dev/null 2>&1; then
+            wslview "$CONSOLE_URL" 2>/dev/null || true
+        fi
+    fi
+else
+    printf '  %s Server startup timeout. Open manually: %s\n' "$(_yellow '⚠')" "$CONSOLE_URL"
+fi
+
 # ── done / cheat sheet ────────────────────────────────────────────────────────
 cat <<EOF
 
@@ -159,12 +181,14 @@ cat <<EOF
  $(_green "$(_bold 'CorvinOS is ready!')")
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
- $(_bold 'Start the web console:')
+ $(_bold 'Your console is running:')
 
-     $(_bold 'corvinos-serve')
-     $(_dim '# then open  http://localhost:8765/console/')
+     $(_dim '→ http://localhost:8765/console/')
+     $(_dim '→ Background PID: '"$SERVER_PID")
 
- $(_dim 'If a command is not found, open a new terminal (PATH was updated).')
+ $(_dim 'To stop the server:')
+
+     $(_bold 'kill '"$SERVER_PID"' || killall corvinos-serve')
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  $(_bold 'Commands')

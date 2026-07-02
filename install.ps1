@@ -70,19 +70,6 @@ if (-not (Get-Command corvinos-serve -ErrorAction SilentlyContinue)) {
 Write-Host ""
 Write-Ok "Package installed."
 
-# ── auto-launch console in default browser ─────────────────────────────────────
-$ConsoleURL = "http://localhost:8765/console/"
-Write-Step "Launching CorvinOS console in your browser ..."
-try {
-    if ($PSVersionTable.OS -match "Windows") {
-        cmd /c start $ConsoleURL 2>$null
-    } else {
-        Start-Process $ConsoleURL 2>$null
-    }
-} catch {
-    Write-Warn "Could not auto-launch browser. Open manually: $ConsoleURL"
-}
-
 # ── 2b. Hermes (local offline engine): Ollama + model, working out of the box ──
 $SkipHermes = $NoHermes -or ($env:CORVIN_SKIP_HERMES -eq "1")
 if (-not $SkipHermes) {
@@ -139,6 +126,46 @@ if (Get-Command corvin-install -ErrorAction SilentlyContinue) {
     corvin-install
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "Setup wizard exited early. Re-run later with: corvin-install"
+    }
+}
+
+# ── 4. start server + wait for readiness + auto-launch console ──────────────────
+Write-Host ""
+Write-Step "Starting CorvinOS console server ..."
+
+$ConsoleURL = "http://localhost:8765/console/"
+$MaxRetries = 30
+$RetryCount = 0
+
+# Start server in background
+Start-Job -ScriptBlock {
+    corvinos-serve
+} | Out-Null
+
+# Wait for server to be ready
+while ($RetryCount -lt $MaxRetries) {
+    try {
+        $response = Invoke-WebRequest -Uri "http://localhost:8765/api/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
+        if ($response.StatusCode -eq 200) {
+            Write-Ok "Server is ready!"
+            break
+        }
+    } catch {
+        # Server not ready yet
+    }
+    $RetryCount++
+    Start-Sleep -Seconds 1
+}
+
+if ($RetryCount -ge $MaxRetries) {
+    Write-Warn "Server startup timeout. You can open manually: $ConsoleURL"
+} else {
+    # Server is ready, launch browser
+    Write-Step "Launching CorvinOS console in your browser ..."
+    try {
+        cmd /c start $ConsoleURL 2>$null
+    } catch {
+        Write-Warn "Could not auto-launch browser. Open manually: $ConsoleURL"
     }
 }
 
