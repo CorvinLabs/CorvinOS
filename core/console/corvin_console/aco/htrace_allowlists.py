@@ -51,7 +51,6 @@ NS_ALLOWLIST: frozenset[str] = frozenset({
     "reproduction",
     "replay",
     "adapter",
-    "chat_runtime",
     "_spawn_gates",
 })
 

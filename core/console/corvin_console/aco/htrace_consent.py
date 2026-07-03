@@ -24,9 +24,14 @@ logger = logging.getLogger(__name__)
 _CONSENT_VERSION = "htrace/1.1"
 _CONSENT_TEXT_FILE = Path(__file__).parent / "consent_texts" / "htrace-1.0.txt"
 
-# SHA-256 of the exact consent text (htrace-1.0.txt). Must match the file.
-# Any change to the text requires bumping _CONSENT_VERSION and this hash.
-_CONSENT_TEXT_SHA256 = ""  # computed lazily on first use
+# SHA-256 of the exact consent text shipped in htrace-1.0.txt, pinned at
+# development time.  Any change to the text requires bumping _CONSENT_VERSION
+# AND updating this constant (compute: sha256sum htrace-1.0.txt).
+# Pinning prevents a tampered consent file from silently passing is_text_intact:
+# _consent_text_sha256() now returns the pinned value, not the file's live hash.
+_CONSENT_TEXT_SHA256_PINNED = (
+    "559b776af1ab0697e01cc0888150a309d38ef6154af32bc125c88b9cc3c23a03"
+)
 
 
 def _consent_text() -> str:
@@ -34,12 +39,13 @@ def _consent_text() -> str:
 
 
 def _consent_text_sha256() -> str:
-    global _CONSENT_TEXT_SHA256  # noqa: PLW0603
-    if not _CONSENT_TEXT_SHA256:
-        _CONSENT_TEXT_SHA256 = hashlib.sha256(
-            _consent_text().encode("utf-8")
-        ).hexdigest()
-    return _CONSENT_TEXT_SHA256
+    """Return the pinned SHA-256 of the shipped consent text.
+
+    Using the pinned value (not a live file hash) means a tampered htrace-1.0.txt
+    cannot make is_text_intact() return True — the stored act.text_sha256 would
+    match the pinned value only if the user consented to the original text.
+    """
+    return _CONSENT_TEXT_SHA256_PINNED
 
 
 # ── ConsentAct ────────────────────────────────────────────────────────────────

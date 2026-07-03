@@ -221,6 +221,12 @@ def _assert_safe_htrace(record: dict) -> None:
         if fld in record:
             _scan_value(record[fld], reduced=(fld in _HASH_FIELDS))
 
+    # error_line must be an int — a string "192.168.1.1" would bypass _scan_value
+    if "error_line" in record and not isinstance(record["error_line"], int):
+        raise ValueError(
+            f"HealingTrace: error_line must be int, got {type(record['error_line']).__name__}"
+        )
+
     for frame in record.get("stack_frames", []):
         # Enforce STACK_FRAME_FIELD_ALLOWLIST — extra keys bypass PII scanner
         extra_keys = set(frame.keys()) - STACK_FRAME_FIELD_ALLOWLIST
@@ -230,6 +236,12 @@ def _assert_safe_htrace(record: dict) -> None:
         ns = frame.get("ns", "")
         if ns not in NS_ALLOWLIST and ns != "[external]":
             raise ValueError(f"HealingTrace: unsafe stack frame ns {ns!r}")
+        # ln must be an int — a string IP/email would bypass _scan_value
+        ln = frame.get("ln", 0)
+        if not isinstance(ln, int):
+            raise ValueError(
+                f"HealingTrace: stack frame ln must be int, got {type(ln).__name__}"
+            )
 
     for ev in record.get("event_sequence", []):
         if ev not in EVENT_SEQ_ALLOWLIST and ev != "[event.redacted]":

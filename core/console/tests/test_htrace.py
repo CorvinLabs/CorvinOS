@@ -476,3 +476,71 @@ class TestHealingTracesEnabled:
         act.save(tmpdir)
         cfg = {"telemetry": {"healing_traces": True}}
         assert healing_traces_enabled(tmpdir, cfg=cfg) is False
+
+
+# ── Fix regression tests (R1 findings) ────────────────────────────────────────
+
+class TestR1Fixes:
+    """Regression tests for findings fixed in review round 1."""
+
+    def test_error_line_string_raises(self, minimal_record):
+        """error_line must be int — string PII bypassed _scan_value before fix."""
+        minimal_record["error_line"] = "user@example.com"
+        with pytest.raises(ValueError, match="error_line must be int"):
+            _assert_safe_htrace(minimal_record)
+
+    def test_stack_frame_ln_string_raises(self, minimal_record):
+        """stack_frames.ln must be int — string IP bypassed _scan_value before fix."""
+        minimal_record["stack_frames"] = [{"ns": "chat_runtime", "fn": "f", "ln": "192.168.1.1"}]
+        with pytest.raises(ValueError, match="stack frame ln must be int"):
+            _assert_safe_htrace(minimal_record)
+
+    def test_consent_text_sha256_is_pinned(self):
+        """_consent_text_sha256() must return the pinned constant, not a live file hash."""
+        from corvin_console.aco.htrace_consent import (
+            _consent_text_sha256,
+            _CONSENT_TEXT_SHA256_PINNED,
+        )
+        assert _consent_text_sha256() == _CONSENT_TEXT_SHA256_PINNED
+
+    def test_pinned_hash_matches_shipped_file(self):
+        """Pinned SHA-256 must match the actual consent text file (CI guard)."""
+        import hashlib
+        from corvin_console.aco.htrace_consent import (
+            _consent_text,
+            _CONSENT_TEXT_SHA256_PINNED,
+        )
+        actual = hashlib.sha256(_consent_text().encode("utf-8")).hexdigest()
+        assert actual == _CONSENT_TEXT_SHA256_PINNED, (
+            f"htrace-1.0.txt was modified without updating _CONSENT_TEXT_SHA256_PINNED. "
+            f"New hash: {actual}"
+        )
+
+    def test_ns_allowlist_no_duplicates(self):
+        """NS_ALLOWLIST frozenset must contain chat_runtime and have a stable minimum size."""
+        from corvin_console.aco.htrace_allowlists import NS_ALLOWLIST
+        assert "chat_runtime" in NS_ALLOWLIST
+        assert len(NS_ALLOWLIST) >= 35
+
+    def test_uploader_module_imports_without_fcntl(self):
+        """htrace_uploader must be importable on platforms without fcntl (Windows)."""
+        import sys
+        import builtins
+        mods_to_remove = [k for k in sys.modules if "htrace_uploader" in k]
+        for m in mods_to_remove:
+            del sys.modules[m]
+        real_import = builtins.__import__
+        def _no_fcntl(name, *args, **kwargs):
+            if name == "fcntl":
+                raise ImportError("simulated Windows: no module named 'fcntl'")
+            return real_import(name, *args, **kwargs)
+        builtins.__import__ = _no_fcntl
+        try:
+            import importlib
+            import corvin_console.aco.htrace_uploader as uploader
+            importlib.reload(uploader)
+            assert uploader._HAS_FLOCK is False
+        finally:
+            builtins.__import__ = real_import
+            for m in [k for k in sys.modules if "htrace_uploader" in k]:
+                del sys.modules[m]

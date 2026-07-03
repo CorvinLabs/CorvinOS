@@ -502,7 +502,8 @@ def _make_htrace_fiber():
     try:
         from .htrace_uploader import HealingTraceUploaderFiber
         return HealingTraceUploaderFiber()
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("htrace: HealingTraceUploaderFiber unavailable — %s", exc)
         return None
 
 

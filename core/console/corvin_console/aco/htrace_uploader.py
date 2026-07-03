@@ -16,7 +16,6 @@ On network failure: leave file, retry on next trigger (14-day cap).
 """
 from __future__ import annotations
 
-import fcntl
 import gzip
 import json
 import logging
@@ -26,6 +25,16 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+
+# fcntl is POSIX-only (unavailable on Windows).  Conditional import keeps the
+# module importable on all platforms; file locking is silently skipped when absent
+# (Windows concurrent-upload race is a known limitation — single-instance installs
+# are not affected).
+try:
+    import fcntl as _fcntl
+    _HAS_FLOCK = True
+except ImportError:
+    _HAS_FLOCK = False
 
 from .htrace import (
     _assert_safe_htrace,
@@ -278,11 +287,19 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
     # it in a dedicated except branch if flock raises.  Without this the FD
     # leaks on every concurrent invocation because the finally block of the
     # inner try is never entered when flock raises before it is reached.
+    # Double-gate: both YAML flag and ConsentAct must be present.
+    # scan() also checks this, but run_upload_cycle() is a public function —
+    # direct callers (e.g. maintainer_cli upload) must not bypass consent.
+    if not healing_traces_enabled(home):
+        logger.debug("htrace: upload skipped — consent gate not active")
+        return "skipped", 0
+
     lf = None
     try:
         htrace_dir(home).mkdir(parents=True, exist_ok=True)
         lf = lock_file.open("w")
-        fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if _HAS_FLOCK:
+            _fcntl.flock(lf, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
     except (OSError, BlockingIOError):
         logger.debug("htrace: upload already running (lock held)")
         if lf is not None:
@@ -345,9 +362,20 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
                 instance_token=inst_token,
                 consent_act_id=consent_act_id,
             )
-        _push_to_corvinlogs(gz, instance_token=inst_token)  # always try mirror
 
         if sent:
+            # Only push to CorvinLogs after primary upload confirmed — prevents
+            # data appearing on the public mirror without auth/audit trail.
+            cl_token = _load_corvinlogs_token()
+            if cl_token:
+                mirror_ok = _push_to_corvinlogs(gz, instance_token=inst_token)
+                if not mirror_ok:
+                    logger.warning("htrace: CorvinLogs mirror failed — bundle kept locally")
+                    try:
+                        from forge import audit as _audit  # type: ignore[import]
+                        _audit.audit_event("htrace.mirror.failed", {"bundle": gz.name})
+                    except Exception:  # noqa: BLE001
+                        pass
             gz.replace(sent_dir / gz.name)
             _record_upload(home)
             _write_upload_audit_event("sent", count)
@@ -364,7 +392,8 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
     finally:
         try:
             if lf is not None:
-                fcntl.flock(lf, fcntl.LOCK_UN)
+                if _HAS_FLOCK:
+                    _fcntl.flock(lf, _fcntl.LOCK_UN)
                 lf.close()
             lock_file.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
