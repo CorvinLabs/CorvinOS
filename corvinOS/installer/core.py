@@ -17,6 +17,53 @@ from corvinOS.shared.paths import corvin_home, voice_config_dir
 from corvinOS.installer.service_manager import get_service_manager
 from corvinOS.installer.bridge_manager import BridgeManager
 from corvinOS.installer.steps import platform as _platform
+
+
+def _robust_rmtree(path) -> list[str]:
+    """Remove a directory tree resiliently — the fix for Windows uninstall
+    crashing with ``PermissionError [WinError 32] … used by another process`` (a
+    still-running console/bridge holds a handle on e.g. ``audit.jsonl``) or
+    ``[WinError 5]`` (read-only files). Retries with backoff, clears the
+    read-only bit, and — rather than raising — returns the list of paths it could
+    NOT delete so the caller can guide the user. Never raises."""
+    import os
+    import stat as _stat
+    path = Path(path)
+    if not path.exists():
+        return []
+    leftover: list[str] = []
+
+    def _handle(func, p, exc):  # works for both onexc (3.12+) and onerror
+        for attempt in range(5):
+            try:
+                try:
+                    os.chmod(p, _stat.S_IWRITE)  # clear read-only (WinError 5)
+                    parent = os.path.dirname(p)  # unlink needs a writable parent
+                    if parent:
+                        os.chmod(parent, _stat.S_IRWXU)
+                except OSError:
+                    pass
+                func(p)                          # retry the failed unlink/rmdir
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError:
+                time.sleep(0.4 * (attempt + 1))  # locked (WinError 32) — brief wait
+            except OSError:
+                break
+        leftover.append(str(p))
+
+    try:
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(path, onexc=_handle)
+        else:  # pragma: no cover - older Pythons
+            shutil.rmtree(path, onerror=lambda f, p, i: _handle(f, p, i))
+    except FileNotFoundError:
+        pass
+    except Exception:  # noqa: BLE001 — uninstall must never crash on removal
+        if path.exists():
+            leftover.append(str(path))
+    return leftover
 from corvinOS.installer.steps import dependencies as _deps
 from corvinOS.installer.steps import keys as _keys
 from corvinOS.installer.steps import plugins as _plugins
@@ -793,7 +840,7 @@ class CorvinInstaller:
                 ) / (1024 * 1024)
                 print(f"  Path: {plugin_cache}  ({cache_size_mb:.1f} MB)")
                 if purge or input("  Delete plugin cache? [Y/n]: ").strip().lower() != "n":
-                    shutil.rmtree(plugin_cache)
+                    _robust_rmtree(plugin_cache)
                     print("  ✓ Removed plugin cache")
                 else:
                     print("  ⚠ Kept plugin cache")
@@ -829,7 +876,7 @@ class CorvinInstaller:
             for artifact_dir in (webnext / "dist", webnext / "node_modules"):
                 if artifact_dir.exists():
                     try:
-                        shutil.rmtree(artifact_dir)
+                        _robust_rmtree(artifact_dir)
                         print(f"  ✓ Removed: {artifact_dir}")
                     except Exception as e:
                         print(f"  ⚠ Could not remove {artifact_dir}: {e}")
@@ -849,7 +896,7 @@ class CorvinInstaller:
             for venv_dir in bridges_root.glob("*/venv"):
                 if venv_dir.is_dir():
                     try:
-                        shutil.rmtree(venv_dir)
+                        _robust_rmtree(venv_dir)
                         print(f"  ✓ Removed orphaned venv: {venv_dir}")
                     except Exception as e:
                         print(f"  ⚠ {e}")
@@ -873,7 +920,7 @@ class CorvinInstaller:
                 input("  Delete voice config (API keys, secrets)? [y/N]: ").strip().lower() == "y"
             )
             if confirmed:
-                shutil.rmtree(self.voice_config)
+                _robust_rmtree(self.voice_config)
                 print(f"  ✓ Removed {self.voice_config}")
             else:
                 print(f"  ⚠ Kept {self.voice_config}")
@@ -901,8 +948,15 @@ class CorvinInstaller:
                 .strip().lower() == "y"
             )
             if confirmed:
-                shutil.rmtree(self.corvin_home)
-                print(f"  ✓ Removed {self.corvin_home}")
+                leftover = _robust_rmtree(self.corvin_home)
+                if not leftover:
+                    print(f"  ✓ Removed {self.corvin_home}")
+                else:
+                    print(f"  ⚠ Removed most of {self.corvin_home}, but "
+                          f"{len(leftover)} item(s) are locked by a running process.")
+                    print("     Close any running CorvinOS window (web console, voice "
+                          "bridge, `corvinos-serve`) and re-run `corvin-uninstall`,")
+                    print(f"     or delete {self.corvin_home} manually.")
             else:
                 print(f"  ⚠ Kept {self.corvin_home}")
                 print(f"     Run `rm -rf {self.corvin_home}` manually to finish.")
@@ -918,7 +972,7 @@ class CorvinInstaller:
                 input("  Delete in-repo Corvin directory? [y/N]: ").strip().lower() == "y"
             )
             if confirmed:
-                shutil.rmtree(repo_corvin)
+                _robust_rmtree(repo_corvin)
                 print(f"  ✓ Removed {repo_corvin}")
             else:
                 print(f"  ⚠ Kept {repo_corvin}")
