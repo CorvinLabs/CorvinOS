@@ -71,10 +71,13 @@ _PII_NO_LONGHEX = re.compile(
     r"(?:\d{1,3}\.){3}\d{1,3}",
 )
 
-# Fields that contain legitimate sha256 hashes — use the reduced scanner
+# Fields that contain legitimate long-hex values (sha256 hashes, HMAC tokens).
+# Use the reduced scanner (_PII_NO_LONGHEX) for these — the long-hex check
+# would otherwise reject valid fingerprints and HMAC pseudonyms.
 _HASH_FIELDS = frozenset({
     "error_fingerprint",
     "config_profile_hash",
+    "instance_token",  # HMAC-SHA256(server_secret, instance_id) — 64 hex chars
 })
 
 
