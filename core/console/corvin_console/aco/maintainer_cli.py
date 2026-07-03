@@ -550,7 +550,14 @@ def cmd_healing_traces(args) -> int:
             print("Local healing-trace data deleted.")
         try:
             from forge import audit as _audit  # type: ignore[import]
-            _audit.audit_event("telemetry.erasure.completed", {"scope": "healing_traces"})
+            # Use 'local_only' rather than 'completed' because the server-side
+            # deletion is a placeholder until M4 (POST /v1/telemetry/healing-
+            # traces/erase).  Emitting 'completed' would be a false assertion
+            # in the Art. 30 audit trail and mislead GDPR compliance reviews.
+            _audit.audit_event("telemetry.erasure.local_only", {
+                "scope": "healing_traces",
+                "server_side_pending": True,
+            })
         except Exception:  # noqa: BLE001
             pass
         return 0

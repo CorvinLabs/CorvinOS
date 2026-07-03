@@ -1,4 +1,4 @@
-Healing Trace Telemetry — version 1.0
+Healing Trace Telemetry — version 1.1
 
 What will be sent (once per day):
 
@@ -39,12 +39,12 @@ RETENTION:
   14 days maximum local retention on your machine.
 
 REVOCATION:
-  corvin-maintainer telemetry opt-out --healing-traces
+  corvin-maintainer healing-traces opt-out
   Takes effect immediately; no further data is sent.
 
 ERASURE (Art. 17 GDPR):
-  corvin-maintainer telemetry erase --healing-traces
-  Deletes all server-side data linked to your instance.
+  corvin-maintainer healing-traces erase --confirm
+  Deletes local healing-trace data and queues a server-side erasure request.
 
 PRIVACY POLICY:
   https://corvin-labs.com/privacy

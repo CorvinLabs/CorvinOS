@@ -207,15 +207,25 @@ def _assert_safe_htrace(record: dict) -> None:
             for item in v:
                 _scan_value(item, reduced=reduced)
 
+    # Scan ALL string-typed top-level fields, not just the 9 that were
+    # originally listed.  omitting corvin_version / platform / python /
+    # schema / ts_day / heal_outcome / tenant_shape left those fields open
+    # to PII injection via direct HealingTrace() construction + validated().
     for fld in (
+        "schema", "corvin_version", "platform", "python", "ts_day",
         "error_type", "error_module_ns", "error_function", "error_template",
-        "heal_action", "consent_act_id", "instance_token",
+        "heal_action", "heal_outcome", "tenant_shape",
+        "consent_act_id", "instance_token",
         "error_fingerprint", "config_profile_hash",
     ):
         if fld in record:
             _scan_value(record[fld], reduced=(fld in _HASH_FIELDS))
 
     for frame in record.get("stack_frames", []):
+        # Enforce STACK_FRAME_FIELD_ALLOWLIST — extra keys bypass PII scanner
+        extra_keys = set(frame.keys()) - STACK_FRAME_FIELD_ALLOWLIST
+        if extra_keys:
+            raise ValueError(f"HealingTrace: unknown stack frame keys {extra_keys!r}")
         _scan_value(frame.get("fn", ""))
         ns = frame.get("ns", "")
         if ns not in NS_ALLOWLIST and ns != "[external]":
@@ -270,7 +280,12 @@ class HealingTrace:
         while tb is not None:
             co = tb.tb_frame.f_code
             tb_frames.append({
-                "module": co.co_filename,
+                # Use __name__ (dotted module path) so _norm_ns extracts the
+                # terminal component correctly (e.g. 'chat_runtime').
+                # co_filename is an OS path ending in '.py' — _norm_ns would
+                # strip everything before the last '.' and return 'py', which
+                # is absent from NS_ALLOWLIST, making every frame external.
+                "module": tb.tb_frame.f_globals.get("__name__", co.co_filename),
                 "fn": co.co_name,
                 "ln": tb.tb_lineno,
             })
@@ -278,12 +293,18 @@ class HealingTrace:
 
         norm_frames = [_norm_frame(f) for f in tb_frames]
 
-        top_ns = next(
-            (f["ns"] for f in norm_frames if f["ns"] != "[external]"),
-            "unknown",
+        # All three attribution fields (ns, fn, ln) must come from the same
+        # frame.  Previously top_fn and top_ln were taken from norm_frames[0]
+        # (outermost) while top_ns was the first non-external frame, making
+        # the record semantically incoherent when external library frames sit
+        # at the top of the traceback.
+        top_frame = next(
+            (f for f in norm_frames if f["ns"] != "[external]"),
+            norm_frames[0] if norm_frames else None,
         )
-        top_fn = norm_frames[0]["fn"] if norm_frames else ""
-        top_ln = norm_frames[0]["ln"] if norm_frames else 0
+        top_ns = top_frame["ns"] if top_frame else "unknown"
+        top_fn = top_frame["fn"] if top_frame else ""
+        top_ln = top_frame["ln"] if top_frame else 0
 
         exc_type = type(exc).__name__
         fp = make_fingerprint(exc_type, top_ns, top_fn)
@@ -379,14 +400,27 @@ def _inc_dropped(home: Path) -> None:
 
 
 def _enforce_caps(home: Path) -> None:
-    """Expire files older than MAX_RETAIN_DAYS or if total dir exceeds MAX_TOTAL_BYTES."""
+    """Expire files older than MAX_RETAIN_DAYS or if total dir exceeds MAX_TOTAL_BYTES.
+
+    Scans both the top-level healing-traces/ directory and the sent/ sub-
+    directory so uploaded bundles are also subject to the 14-day / 50 MB cap.
+    Without this, sent/ accumulates indefinitely because the normal write/
+    upload paths never touch it after the initial move.
+    """
     try:
         d = htrace_dir(home)
         today_str = _today_utc()
         cutoff = time.time() - (_MAX_RETAIN_DAYS * 86400)
         files = sorted(d.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
         gz_files = sorted(d.glob("*.jsonl.gz"), key=lambda p: p.stat().st_mtime)
-        all_files = files + gz_files
+        # Include sent/ subdirectory so uploaded bundles are also capped
+        sent_dir = d / "sent"
+        sent_gz_files = (
+            sorted(sent_dir.glob("*.jsonl.gz"), key=lambda p: p.stat().st_mtime)
+            if sent_dir.is_dir()
+            else []
+        )
+        all_files = files + gz_files + sent_gz_files
         total = sum(p.stat().st_size for p in all_files if p.exists())
         for p in all_files:
             if p.name.startswith(today_str):
@@ -404,19 +438,47 @@ def compress_for_upload(home: Path, date_str: str | None = None) -> Optional[Pat
     """Compress a previous day's .jsonl → .jsonl.gz for upload.
 
     Returns the compressed path or None if nothing to compress.
+
+    Security: date_str is validated to YYYY-MM-DD to prevent path traversal.
+    Concurrency: the source file is renamed to a temporary path before being
+    read, making it invisible to concurrent write_trace calls which target
+    the original path.  Any write that races with the rename creates a fresh
+    file under the original name and is preserved for the next cycle.
+    Crash-safety: the gz is fsynced before the source is deleted.
     """
     if date_str is None:
         date_str = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+        raise ValueError(f"htrace: invalid date_str {date_str!r} — must match YYYY-MM-DD")
     src = htrace_dir(home) / f"{date_str}.jsonl"
     if not src.exists():
         return None
     dst = src.with_suffix(".jsonl.gz")
+    # Rename atomically so any concurrent write_trace creates a fresh .jsonl
+    # file under the original name instead of appending to a file we're
+    # about to read and delete.
+    tmp = src.with_suffix(".jsonl.compressing")
     try:
-        with src.open("rb") as fi, gzip.open(dst, "wb", compresslevel=6) as fo:
+        src.rename(tmp)
+    except OSError as e:
+        logger.warning("htrace: compress rename failed: %s", e)
+        return None
+    try:
+        with tmp.open("rb") as fi, gzip.open(dst, "wb", compresslevel=6) as fo:
             fo.write(fi.read())
-        src.unlink()
+        # fsync the gz before removing the only copy of the data
+        try:
+            with dst.open("rb") as fsync_fh:
+                os.fsync(fsync_fh.fileno())
+        except OSError:
+            pass
+        tmp.unlink()
         logger.info("htrace: compressed %s → %s", src.name, dst.name)
         return dst
     except Exception as e:  # noqa: BLE001
         logger.warning("htrace: compress failed: %s", e)
+        try:
+            tmp.rename(src)  # restore so data is not lost
+        except Exception:  # noqa: BLE001
+            pass
         return None

@@ -67,9 +67,22 @@ def _load_instance_token(home: Path) -> str:
 
 
 def _load_telemetry_token(home: Path) -> str:
-    """Load the scoped telemetry Bearer token (scope=healing_traces, 90d TTL)."""
+    """Load the scoped telemetry Bearer token (scope=healing_traces, 90d TTL).
+
+    Enforces 0o600 permissions on the token file.  ConsentAct.save() does the
+    same for htrace-consent-act.json, but .telemetry_token is provisioned
+    externally and may be written with a permissive umask.  A world-readable
+    token would allow any local user to post forged bundles.
+    """
     try:
         p = home / "aco" / "telemetry" / ".telemetry_token"
+        if not p.exists():
+            return ""
+        try:
+            if p.stat().st_mode & 0o777 != 0o600:
+                p.chmod(0o600)
+        except OSError:
+            pass  # best-effort; proceed to read
         return p.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
@@ -127,12 +140,18 @@ def _validate_bundle(gz_path: Path) -> tuple[bool, int]:
 
     Drops records that fail _assert_safe_htrace. Returns False if the bundle
     cannot be read or is too large.
+
+    stat() is inside the try block so that a FileNotFoundError (file deleted
+    between compress_for_upload and _validate_bundle) is caught and returns
+    (False, 0) instead of propagating to the outer except in run_upload_cycle
+    and incorrectly returning 'error'.
     """
-    if gz_path.stat().st_size > _MAX_BUNDLE_BYTES:
-        logger.warning("htrace: bundle too large (%d bytes) — skipping", gz_path.stat().st_size)
-        return False, 0
     count = 0
     try:
+        size = gz_path.stat().st_size
+        if size > _MAX_BUNDLE_BYTES:
+            logger.warning("htrace: bundle too large (%d bytes) — skipping", size)
+            return False, 0
         with gzip.open(gz_path, "rt", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
@@ -255,12 +274,22 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
     Acquires a file lock to prevent concurrent runs.
     """
     lock_file = htrace_dir(home) / _LOCK_FILENAME
+    # Open the lock file before entering the main try block so we can close
+    # it in a dedicated except branch if flock raises.  Without this the FD
+    # leaks on every concurrent invocation because the finally block of the
+    # inner try is never entered when flock raises before it is reached.
+    lf = None
     try:
         htrace_dir(home).mkdir(parents=True, exist_ok=True)
         lf = lock_file.open("w")
         fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (OSError, BlockingIOError):
         logger.debug("htrace: upload already running (lock held)")
+        if lf is not None:
+            try:
+                lf.close()
+            except Exception:  # noqa: BLE001
+                pass
         return "skipped", 0
 
     try:
@@ -285,7 +314,14 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
 
         ok, count = _validate_bundle(gz)
         if not ok or count == 0:
-            gz.replace(htrace_dir(home) / "sent" / gz.name)
+            # Move the invalid/empty bundle to sent/ so it is still subject to
+            # the 14-day cap.  Ensure sent/ exists first — on a fresh install
+            # (or after the directory was removed) it doesn't exist yet, and
+            # Path.replace() would raise FileNotFoundError which is then
+            # swallowed by the outer except, leaving the gz as an orphan.
+            skip_dir = htrace_dir(home) / "sent"
+            skip_dir.mkdir(exist_ok=True)
+            gz.replace(skip_dir / gz.name)
             _write_upload_audit_event("skipped", 0)
             return "skipped", 0
 
@@ -293,6 +329,12 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
         inst_token = _load_instance_token(home)
         consent_act_id = load_consent_act_id(home)
         url = _upload_url(home)
+
+        # Create sent/ before posting so a disk-full / permission error on
+        # mkdir doesn't cause a duplicate POST on the next cycle.  If mkdir
+        # fails here we abort cleanly before touching the network.
+        sent_dir = htrace_dir(home) / "sent"
+        sent_dir.mkdir(exist_ok=True)
 
         sent = False
         if bearer:
@@ -305,8 +347,6 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
             )
         _push_to_corvinlogs(gz, instance_token=inst_token)  # always try mirror
 
-        sent_dir = htrace_dir(home) / "sent"
-        sent_dir.mkdir(exist_ok=True)
         if sent:
             gz.replace(sent_dir / gz.name)
             _record_upload(home)
@@ -323,8 +363,9 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
         return "error", 0
     finally:
         try:
-            fcntl.flock(lf, fcntl.LOCK_UN)
-            lf.close()
+            if lf is not None:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+                lf.close()
             lock_file.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001
             pass

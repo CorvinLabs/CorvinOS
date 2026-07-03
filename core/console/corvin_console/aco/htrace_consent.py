@@ -21,7 +21,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_CONSENT_VERSION = "htrace/1.0"
+_CONSENT_VERSION = "htrace/1.1"
 _CONSENT_TEXT_FILE = Path(__file__).parent / "consent_texts" / "htrace-1.0.txt"
 
 # SHA-256 of the exact consent text (htrace-1.0.txt). Must match the file.
@@ -123,6 +123,13 @@ def healing_traces_enabled(home: Path, *, cfg: dict | None = None) -> bool:
         logger.info("htrace: consent version mismatch (%s vs %s) — paused",
                     act.consent_version, _CONSENT_VERSION)
         return False
+    # Gate 3: text integrity — a modified consent text without a version bump
+    # must also block uploads (GDPR Art. 7 specificity: consent must cover the
+    # exact text shown to the user).  is_text_intact compares the stored
+    # text_sha256 against the current file hash.
+    if not act.is_text_intact:
+        logger.info("htrace: consent text SHA-256 mismatch — paused (re-consent required)")
+        return False
     return True
 
 
@@ -183,12 +190,26 @@ def run_revoke_flow(home: Path) -> None:
     """Revoke consent. Immediate effect — no further uploads."""
     p = _consent_act_path(home)
     if p.exists():
+        # Capture the existing act BEFORE overwriting — the file content is
+        # replaced with a minimal {revoked: True} stub that cannot be
+        # deserialized back into a ConsentAct, so the act_id is unrecoverable
+        # afterwards.  We need it for the audit trail (GDPR Art. 7(3), Art. 30).
+        existing_act: Optional[ConsentAct] = ConsentAct.load(home)
         p.write_text(
             json.dumps({"revoked": True, "ts_utc": datetime.now(timezone.utc).isoformat()}),
             encoding="utf-8",
         )
-        _write_revoke_audit_event(home)
+        _write_revoke_audit_event(home, existing_act)
     print("Healing trace telemetry disabled. No further data will be sent.")
+    # Run cap enforcement once now: after revocation, healing_traces_enabled()
+    # returns False so neither write_trace nor run_upload_cycle will call
+    # _enforce_caps again, causing JSONL files to persist past the 14-day
+    # retention limit promised in the consent text (GDPR Art. 5(1)(e)).
+    try:
+        from .htrace import _enforce_caps  # local import avoids circular dependency
+        _enforce_caps(home)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ── L16 audit chain integration ───────────────────────────────────────────────
@@ -209,9 +230,20 @@ def _write_consent_audit_event(home: Path, act: ConsentAct) -> None:
         pass
 
 
-def _write_revoke_audit_event(home: Path) -> None:
+def _write_revoke_audit_event(home: Path, act: Optional["ConsentAct"] = None) -> None:
     try:
         from forge import audit as _audit  # type: ignore[import]
-        _audit.audit_event("telemetry.consent.revoked", {})
+        # Include the consent_act_id so GDPR Art. 30 audits can correlate the
+        # revocation event with the specific ConsentAct that was active.
+        # Previously the payload was {}, making the revocation event
+        # uncorrelatable after the on-disk file was overwritten.
+        payload: dict = {}
+        if act is not None:
+            payload = {
+                "consent_act_id": act.consent_act_id,
+                "consent_version": act.consent_version,
+                "text_sha256": act.text_sha256[:16],
+            }
+        _audit.audit_event("telemetry.consent.revoked", payload)
     except Exception:  # noqa: BLE001
         pass

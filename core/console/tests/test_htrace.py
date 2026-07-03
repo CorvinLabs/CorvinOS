@@ -127,6 +127,20 @@ class TestAssertSafeHtrace:
     def test_all_allowlisted_fields_are_accepted(self, minimal_record):
         assert set(minimal_record.keys()) == HTRACE_FIELD_ALLOWLIST
 
+    def test_pii_in_corvin_version_raises(self, minimal_record):
+        """corvin_version is now scanned — PII injected via direct field set is caught."""
+        minimal_record["corvin_version"] = "user@example.com"
+        with pytest.raises(ValueError, match="PII"):
+            _assert_safe_htrace(minimal_record)
+
+    def test_extra_stack_frame_key_raises(self, minimal_record):
+        """Extra keys in stack frames bypass the PII scanner — must be rejected."""
+        minimal_record["stack_frames"] = [
+            {"ns": "chat_runtime", "fn": "send", "ln": 1, "user": "alice@example.com"}
+        ]
+        with pytest.raises(ValueError, match="unknown stack frame keys"):
+            _assert_safe_htrace(minimal_record)
+
 
 # ── PII injection attempts ────────────────────────────────────────────────────
 
@@ -345,6 +359,15 @@ class TestCompressForUpload:
         result = compress_for_upload(tmpdir, date_str="2000-01-01")
         assert result is None
 
+    def test_invalid_date_str_raises(self, tmpdir):
+        """Path traversal via date_str must be rejected."""
+        with pytest.raises(ValueError, match="invalid date_str"):
+            compress_for_upload(tmpdir, date_str="../../etc/passwd")
+
+    def test_date_str_traversal_with_dotdot_raises(self, tmpdir):
+        with pytest.raises(ValueError, match="invalid date_str"):
+            compress_for_upload(tmpdir, date_str="2026-07-02/../../../etc")
+
 
 # ── ConsentAct ───────────────────────────────────────────────────────────────
 
@@ -432,6 +455,21 @@ class TestHealingTracesEnabled:
             consent_version="htrace/0.9",   # wrong version
             ts_utc="2026-07-03T12:00:00Z",
             text_sha256=_consent_text_sha256(),
+            method="cli",
+            corvin_version="0.9.60",
+        )
+        act.save(tmpdir)
+        cfg = {"telemetry": {"healing_traces": True}}
+        assert healing_traces_enabled(tmpdir, cfg=cfg) is False
+
+    def test_disabled_on_text_hash_mismatch(self, tmpdir):
+        """is_text_intact must block consent whose text_sha256 no longer matches the file."""
+        from corvin_console.aco.htrace_consent import _CONSENT_VERSION
+        act = ConsentAct(
+            consent_act_id=str(uuid.uuid4()),
+            consent_version=_CONSENT_VERSION,   # version is correct …
+            ts_utc="2026-07-03T12:00:00Z",
+            text_sha256="a" * 64,               # … but hash is wrong
             method="cli",
             corvin_version="0.9.60",
         )
