@@ -498,6 +498,14 @@ class RemoteLogFiber(NerveFiber):
 
 # ── Registry der Built-in Fibers (wird von nerve.py importiert) ───────────────
 
+def _make_htrace_fiber():
+    try:
+        from .htrace_uploader import HealingTraceUploaderFiber
+        return HealingTraceUploaderFiber()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 _BUILTIN_FIBERS: list[NerveFiber] = [
     InstallFiber(),       # Immer zuerst — frische Installation
     AuditChainFiber(),    # L16 Kern-Sicherheit
@@ -505,8 +513,9 @@ _BUILTIN_FIBERS: list[NerveFiber] = [
     IntegrityFiber(),     # Immunsystem
     EngineFiber(),        # Engine + Voice
     SessionFiber(),       # Chat-Sessions
-    ResourceFiber(),      # Disk + RAM Headroom (NEU)
-    LogHealthFiber(),     # Log-Fehlerrate (NEU)
-    ConfigDriftFiber(),   # Beschädigte Configs (NEU)
-    RemoteLogFiber(),     # Remote-Instanz-Logs, z.B. Hetzner (NEU)
+    ResourceFiber(),      # Disk + RAM Headroom
+    LogHealthFiber(),     # Log-Fehlerrate
+    ConfigDriftFiber(),   # Beschädigte Configs
+    RemoteLogFiber(),     # Remote-Instanz-Logs, z.B. Hetzner
+    *([f] if (f := _make_htrace_fiber()) else []),  # ADR-0180 HealingTrace-Uploader
 ]

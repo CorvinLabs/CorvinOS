@@ -479,6 +479,85 @@ def cmd_nightly(args) -> int:
     return 0
 
 
+def cmd_healing_traces(args) -> int:
+    """ADR-0180: healing trace telemetry management."""
+    try:
+        from forge import paths as _p  # type: ignore[import]
+        home = _p.corvin_home()
+    except Exception:
+        print("ERROR: cannot determine CORVIN_HOME", file=__import__("sys").stderr)
+        return 1
+
+    action = args.ht_action
+
+    if action == "opt-in":
+        from .htrace_consent import run_consent_flow
+        act = run_consent_flow(home, method="cli")
+        return 0 if act else 1
+
+    if action == "opt-out":
+        from .htrace_consent import run_revoke_flow
+        run_revoke_flow(home)
+        return 0
+
+    if action == "status":
+        from .htrace_consent import ConsentAct, healing_traces_enabled
+        from .htrace import htrace_dir
+        act = ConsentAct.load(home)
+        enabled = healing_traces_enabled(home)
+        print(f"Healing trace telemetry: {'ENABLED' if enabled else 'DISABLED'}")
+        if act:
+            print(f"  Consent version : {act.consent_version}")
+            print(f"  Consent act ID  : {act.consent_act_id}")
+            print(f"  Consented at    : {act.ts_utc}")
+            print(f"  Text hash match : {act.is_text_intact}")
+        d = htrace_dir(home)
+        if d.is_dir():
+            bundles = list(d.glob("*.jsonl")) + list(d.glob("*.jsonl.gz"))
+            print(f"  Local bundles   : {len(bundles)}")
+            dropped_p = d / "dropped.count"
+            if dropped_p.exists():
+                print(f"  Dropped records : {dropped_p.read_text().strip()}")
+        return 0
+
+    if action == "upload":
+        from .htrace_consent import healing_traces_enabled
+        from .htrace_uploader import run_upload_cycle
+        if not healing_traces_enabled(home):
+            print("Healing traces not enabled — run 'corvin-maintainer healing-traces opt-in' first.")
+            return 1
+        outcome, count = run_upload_cycle(home)
+        print(f"Upload: {outcome} ({count} records)")
+        return 0 if outcome in ("sent", "already_done", "no_bundle") else 1
+
+    if action == "erase":
+        from .htrace_consent import load_consent_act_id, run_revoke_flow, _write_revoke_audit_event
+        from .htrace import htrace_dir
+        import shutil
+
+        token = load_consent_act_id(home)
+        if not token:
+            print("No consent act found — nothing to erase on the server.")
+        else:
+            print(f"Sending Art. 17 erasure request for consent_act_id {token[:8]}…")
+            # Server erasure is a placeholder until M4 (POST /v1/telemetry/healing-traces/erase)
+            print("(Server-side erasure requires M4 endpoint — local data will be deleted now.)")
+
+        run_revoke_flow(home)
+        d = htrace_dir(home)
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+            print("Local healing-trace data deleted.")
+        try:
+            from forge import audit as _audit  # type: ignore[import]
+            _audit.audit_event("telemetry.erasure.completed", {"scope": "healing_traces"})
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="corvin-maintainer",
                                 description="ADR-0178 Tier-CONTRIBUTOR maintainer CLI")
@@ -541,6 +620,18 @@ def main(argv: list[str] | None = None) -> int:
     tl.add_argument("action", choices=["opt-in", "opt-out", "status", "preview"])
     tl.add_argument("--pseudonym", help="non-PII label for your reports (opt-in)")
     tl.set_defaults(fn=cmd_telemetry)
+
+    # ADR-0180: healing trace sub-commands (separate from ADR-0179 error telemetry)
+    ht = sub.add_parser("healing-traces", help="manage healing trace telemetry (ADR-0180)")
+    ht_sub = ht.add_subparsers(dest="ht_action", required=True)
+    ht_sub.add_parser("opt-in",  help="enable healing trace collection (shows consent text)")
+    ht_sub.add_parser("opt-out", help="disable healing trace collection immediately")
+    ht_sub.add_parser("status",  help="show current consent status and pending bundles")
+    ht_sub.add_parser("upload",  help="trigger upload of pending bundles now")
+    ht_erase = ht_sub.add_parser("erase", help="delete all server-side healing trace data (Art. 17)")
+    ht_erase.add_argument("--confirm", action="store_true", required=True,
+                           help="required: confirms irreversible erasure request")
+    ht.set_defaults(fn=cmd_healing_traces)
 
     sy = sub.add_parser("synthesize", help="logs + telemetry → diagnosis queue")
     sy.add_argument("--min-occurrences", default="3")

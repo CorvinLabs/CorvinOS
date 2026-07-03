@@ -1,0 +1,52 @@
+Healing Trace Telemetry — version 1.0
+
+What will be sent (once per day):
+
+INCLUDED — error metadata only, NO content:
+  • Error type and normalised location (function in CorvinOS core code only)
+  • Last N audit event names before the error (from a fixed allow-list; no message text)
+  • CorvinOS version, OS platform, Python major.minor version
+  • SHA-256 of your CorvinOS configuration key NAMES (not the values)
+  • A pseudonymous instance token (server-derived; not reversible even by Corvin Labs)
+  • Date of the error (day only, no time)
+
+NOT INCLUDED:
+  • Any message content, prompts, or conversation text
+  • Your name, e-mail address, IP address, or any personal identifier
+  • Configuration values of any kind
+  • API keys, secrets, tokens, or credentials
+  • Third-party plugin names or file system paths
+  • Stack frames from code outside the CorvinOS core
+
+PURPOSE:
+  Stability improvements to CorvinOS. Healing traces help the maintainer
+  detect bugs that only appear on specific platforms or configurations and
+  could not otherwise be observed. No profiling, no advertising, no sale of data.
+
+TRANSPARENCY:
+  Aggregated, pseudonymised traces are published to the public repository
+  github.com/CorvinLabs/CorvinLogs — you can inspect exactly what is stored.
+
+DATA CONTROLLER:
+  Corvin Labs UG (haftungsbeschränkt), Berlin, Germany.
+  Contact: privacy@corvin-labs.com
+
+LEGAL BASIS:
+  Art. 6(1)(a) GDPR — your explicit consent (this prompt).
+
+RETENTION:
+  90 days from upload date on the server, then automatically deleted.
+  14 days maximum local retention on your machine.
+
+REVOCATION:
+  corvin-maintainer telemetry opt-out --healing-traces
+  Takes effect immediately; no further data is sent.
+
+ERASURE (Art. 17 GDPR):
+  corvin-maintainer telemetry erase --healing-traces
+  Deletes all server-side data linked to your instance.
+
+PRIVACY POLICY:
+  https://corvin-labs.com/privacy
+
+Type "yes" to enable healing trace telemetry, anything else to cancel:
