@@ -83,6 +83,69 @@ def _resolve_base_url() -> str:
     return "http://localhost:11434"
 
 
+def _ping_ollama(base_url: str, timeout: float = 3.0) -> bool:
+    """True if the Ollama HTTP API answers."""
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=timeout) as r:
+            return 200 <= getattr(r, "status", 200) < 300
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _import_ensure_ollama_running():
+    """Locate ensure_ollama_running across install layouts (installed package,
+    bridges-shared on sys.path, or the operator path)."""
+    for mod in ("corvin_console.hermes_bootstrap", "hermes_bootstrap",
+                "operator.bridges.shared.hermes_bootstrap"):
+        try:
+            return __import__(mod, fromlist=["ensure_ollama_running"]).ensure_ollama_running
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def ensure_hermes_ready(base_url: str, model: str, timeout: float = 120.0) -> tuple[bool, str]:
+    """Make Hermes actually usable at call time — the fix for the post-install
+    "hermes connect error: timed out" on Windows/macOS (no systemd healing there):
+
+      1. If the Ollama server isn't reachable, START it (desktop app on Windows,
+         `ollama serve` on POSIX) and wait for the HTTP API.
+      2. WARM the model (load it into RAM via /api/generate with keep_alive) using
+         a GENEROUS timeout, so the subsequent streaming request — clamped to a
+         short per-read timeout so cancel() stays responsive — doesn't time out on
+         the one-time cold model load (which takes 20-60 s for a multi-GB model).
+
+    Cheap when already warm (keep_alive holds the model loaded). Returns (ok, detail).
+    """
+    if not _ping_ollama(base_url, 3.0):
+        starter = _import_ensure_ollama_running()
+        if starter is not None:
+            try:
+                starter()
+            except Exception:  # noqa: BLE001
+                pass
+        deadline = time.time() + 30.0
+        while time.time() < deadline and not _ping_ollama(base_url, 2.0):
+            time.sleep(1.0)
+        if not _ping_ollama(base_url, 2.0):
+            return False, (f"Ollama server not reachable at {base_url} and could not be "
+                           f"started — launch the Ollama app (or run `ollama serve`).")
+    # Preload the model so the first real request returns tokens promptly.
+    try:
+        warm = json.dumps({"model": model, "keep_alive": "30m"}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{base_url}/api/generate", data=warm,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=max(60.0, min(timeout, 300.0))) as r:
+            r.read()
+        return True, "ready"
+    except urllib.error.HTTPError as e:  # model likely not pulled
+        return False, (f"Hermes model '{model}' is not available ({e.code}) — "
+                       f"run: ollama pull {model}")
+    except Exception as e:  # noqa: BLE001
+        return False, f"Hermes model '{model}' could not be loaded: {e}"
+
+
 # ---------------------------------------------------------------------------
 # HermesEngine
 # ---------------------------------------------------------------------------
@@ -211,6 +274,16 @@ class HermesEngine:
         )
 
         start_time = time.time()
+
+        # Ensure Ollama is running AND the model is warm BEFORE the streaming
+        # request — otherwise a cold model load (20-60 s for a multi-GB model)
+        # blows past the short per-read socket timeout below and surfaces as the
+        # opaque "hermes connect error: timed out" (esp. on Windows/macOS, which
+        # have no systemd healing to keep the server up). Cheap when already warm.
+        _ready, _detail = ensure_hermes_ready(self.base_url, effective_model, timeout)
+        if not _ready:
+            yield StreamEvent(type="error", error=f"hermes not ready: {_detail}")
+            return
 
         # Per-read socket timeout clamped to 10 s so cancel() takes effect
         # within that window even when Ollama is between tokens.
