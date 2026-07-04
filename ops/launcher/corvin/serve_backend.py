@@ -128,6 +128,33 @@ def maybe_pypi_autoupdate() -> None:
         print("(update check skipped)")
 
 
+# ── Telemetry notice (one-time, opt-out) ──────────────────────────────────────
+
+_TELEMETRY_NOTICE_FILE = Path.home() / ".corvin" / "aco" / "telemetry" / ".notice_shown"
+
+
+def _show_telemetry_notice_once() -> None:
+    """Print a one-time disclosure about the anonymous activity ping.
+
+    The ping is opt-out (default ON): it sends only a pseudonymous instance
+    token + the installed version to count how many instances are active.
+    No personal data is transmitted. This message is shown exactly once per
+    installation; it will not appear again after the user has seen it.
+    """
+    try:
+        if _TELEMETRY_NOTICE_FILE.exists():
+            return
+        print(
+            "\n  CorvinOS sends a daily anonymous ping (version + pseudonymous ID)\n"
+            "  to count active instances. No personal data is included.\n"
+            "  To opt out: corvin config set telemetry.ping_enabled false\n"
+        )
+        _TELEMETRY_NOTICE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _TELEMETRY_NOTICE_FILE.touch()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # ── Start ─────────────────────────────────────────────────────────────────────
 
 
@@ -155,6 +182,7 @@ def start(
     Returns the uvicorn process exit code.
     """
     url = console_url(port)
+    _show_telemetry_notice_once()
 
     if open_browser:
         _schedule_browser_open(url.rstrip("/") + open_path, delay=1.6)

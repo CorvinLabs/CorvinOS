@@ -48,6 +48,8 @@ from .htrace_consent import (
     healing_traces_enabled,
     load_consent_act_id,
     load_or_create_instance_id,
+    ping_enabled,
+    ensure_ping_tokens,
     _tenant_cfg_path,
 )
 from .nerve import NerveFiber, NerveSignal, SEVERITY_OK, SEVERITY_LOW, SEVERITY_MEDIUM
@@ -127,12 +129,21 @@ def ping_if_due(home: Path) -> bool:
 
     Returns True if the ping was sent (or already sent today), False on error.
     Fail-soft: never raises, never blocks startup.
-    Gate: telemetry must be enabled (healing_traces_enabled(home)).
+    Gate: ping_enabled(home) — opt-out, default ON. No ConsentAct required;
+          the ping sends only a pseudonymous token + version, no personal data.
     Rate: once per 24h, tracked by ~/.corvin/aco/telemetry/last_ping.
+
+    On the very first call (no tokens provisioned yet) ensure_ping_tokens()
+    provisions them automatically so a fresh install is counted immediately.
     """
     try:
-        # Gate: same double-gate as healing-trace uploads (YAML flag + ConsentAct).
-        if not healing_traces_enabled(home):
+        # Opt-out gate — true by default, disabled only by explicit config flag.
+        if not ping_enabled(home):
+            return False
+
+        # Auto-provision tokens on first boot; fail-soft if unreachable.
+        if not ensure_ping_tokens(home):
+            logger.debug("htrace: ping skipped — token provisioning not yet complete")
             return False
 
         # Rate-limit: skip if a ping was already sent within the last 24h.

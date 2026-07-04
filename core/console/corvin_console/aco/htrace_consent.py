@@ -274,6 +274,46 @@ def load_consent_act_id(home: Path) -> str:
     return act.consent_act_id if act is not None else ""
 
 
+# ── Opt-out ping gate (no ConsentAct required) ────────────────────────────────
+
+def ping_enabled(home: Path) -> bool:
+    """Return True unless the operator explicitly opted out.
+
+    The activity ping is opt-out (default ON).  It sends only a pseudonymous
+    HMAC token + the installed version — no personal data.  Legal basis:
+    GDPR Art. 6(1)(f) legitimate interests (anonymous instance counting).
+
+    To opt out, set ``spec.telemetry.ping_enabled: false`` in
+    ``<corvin_home>/tenants/_default/global/tenant.corvin.yaml``
+    or run: corvin config set telemetry.ping_enabled false
+    """
+    try:
+        import yaml  # type: ignore[import]
+        cfg_path = _tenant_cfg_path(home)
+        if cfg_path.exists():
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            spec = data.get("spec", data)
+            return bool(spec.get("telemetry", {}).get("ping_enabled", True))
+    except Exception:  # noqa: BLE001
+        pass
+    return True  # default ON
+
+
+def ensure_ping_tokens(home: Path) -> bool:
+    """Provision HMAC tokens if not yet present; fail-soft.
+
+    Called automatically by ping_if_due() on every fresh install so the
+    operator does not need to run a separate consent step just to be counted.
+    Returns True if tokens are ready (freshly provisioned or already present).
+    """
+    inst_p = _instance_token_path(home)
+    tel_p = _telemetry_token_path(home)
+    if inst_p.exists() and tel_p.exists():
+        return True  # already provisioned
+    instance_id = load_or_create_instance_id(home)
+    return provision_telemetry_tokens(home, instance_id)
+
+
 # ── CLI consent flow ──────────────────────────────────────────────────────────
 
 def run_consent_flow(home: Path, *, method: str = "cli") -> Optional[ConsentAct]:
