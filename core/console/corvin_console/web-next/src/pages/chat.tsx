@@ -1177,8 +1177,49 @@ function ChatPane({
   // ── Voice recording ──────────────────────────────────────────────
   const mediaRef = React.useRef<MediaRecorder | null>(null);
   const chunksRef = React.useRef<Blob[]>([]);
+  // Holds a live SpeechRecognition instance when the Web Speech API path is active.
+  const recognitionRef = React.useRef<any>(null);
 
   const startRecording = async () => {
+    // Prefer the browser's built-in Web Speech API: works on Chrome and Edge
+    // without any API key (audio goes to Google/Microsoft, no user credential
+    // required).  Falls back to MediaRecorder → Python STT for Firefox or if
+    // the browser API errors out.
+    const SpeechRecognitionImpl =
+      (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
+
+    if (SpeechRecognitionImpl) {
+      try {
+        const recognition = new SpeechRecognitionImpl();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = navigator.language || "de-DE";
+        recognition.onresult = (event: any) => {
+          const transcript = Array.from(event.results as any[])
+            .map((r: any) => r[0].transcript)
+            .join(" ");
+          if (transcript.trim()) {
+            setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+          }
+        };
+        recognition.onerror = () => {
+          recognitionRef.current = null;
+          setRecording(false);
+        };
+        recognition.onend = () => {
+          recognitionRef.current = null;
+          setRecording(false);
+        };
+        recognition.start();
+        recognitionRef.current = recognition;
+        setRecording(true);
+        return;
+      } catch (_e) {
+        // Web Speech API start failed — fall through to MediaRecorder
+      }
+    }
+
+    // MediaRecorder → Python STT (Firefox, or Web Speech API unavailable)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       chunksRef.current = [];
@@ -1205,8 +1246,13 @@ function ChatPane({
   };
 
   const stopRecording = () => {
-    mediaRef.current?.stop();
-    mediaRef.current = null;
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (_e) {}
+      recognitionRef.current = null;
+    } else {
+      mediaRef.current?.stop();
+      mediaRef.current = null;
+    }
     setRecording(false);
   };
 

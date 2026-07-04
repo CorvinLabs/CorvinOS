@@ -6983,6 +6983,99 @@ def _cap_for_openai_tts(text: str, cap: int = _OPENAI_TTS_HARD_CAP) -> str:
     return cut
 
 
+_EDGE_TTS_VOICES: dict[str, str] = {
+    "de": "de-DE-KatjaNeural",
+    "en": "en-US-AriaNeural",
+    "fr": "fr-FR-DeniseNeural",
+    "es": "es-ES-ElviraNeural",
+    "it": "it-IT-ElsaNeural",
+    "pt": "pt-BR-FranciscaNeural",
+    "nl": "nl-NL-ColetteNeural",
+    "pl": "pl-PL-AgnieszkaNeural",
+    "ru": "ru-RU-SvetlanaNeural",
+    "zh": "zh-CN-XiaoxiaoNeural",
+    "ja": "ja-JP-NanamiNeural",
+    "ko": "ko-KR-SunHiNeural",
+    "ar": "ar-SA-ZariyahNeural",
+    "tr": "tr-TR-EmelNeural",
+    "sv": "sv-SE-SofieNeural",
+}
+
+
+def _edge_voice_for(lang: str) -> str:
+    lc = lang.lower()
+    env_key = f"CORVIN_EDGE_VOICE_{lc.upper().replace('-', '_')}"
+    env_val = os.environ.get(env_key)
+    if env_val and env_val.strip():
+        return env_val.strip()
+    return (
+        _EDGE_TTS_VOICES.get(lc)
+        or _EDGE_TTS_VOICES.get(lc.split("-")[0])
+        or "en-US-AriaNeural"
+    )
+
+
+def _try_edge_tts(text: str, lang: str = "de") -> Path | None:
+    """Attempt edge-tts (Microsoft Neural TTS, HTTPS, no API key) → OGG-Opus.
+
+    edge-tts is a base dependency on all platforms. Requires ffmpeg for
+    MP3 → OGG-Opus conversion. Returns OGG path on success, None otherwise.
+    """
+    try:
+        import edge_tts as _edge_tts_mod  # noqa: PLC0415
+    except ImportError:
+        log("edge TTS: edge-tts not installed")
+        return None
+
+    import shutil as _shutil
+    ffmpeg_bin = os.environ.get("FFMPEG_BIN") or _shutil.which("ffmpeg")
+    if not ffmpeg_bin:
+        log("edge TTS: ffmpeg not found — cannot convert MP3 to OGG")
+        return None
+
+    voice = _edge_voice_for(lang)
+    import tempfile as _tmp
+    mp3_fd, mp3_path_str = _tmp.mkstemp(suffix=".mp3")
+    out_path = ROOT / "outbox" / f"voice_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}.ogg"
+    try:
+        os.close(mp3_fd)
+
+        async def _run() -> None:
+            communicate = _edge_tts_mod.Communicate(text, voice)
+            await asyncio.wait_for(communicate.save(mp3_path_str), timeout=15)
+
+        try:
+            asyncio.run(_run())
+        except Exception as e:  # noqa: BLE001
+            log(f"edge TTS: synthesis failed: {e}")
+            return None
+
+        if not os.path.getsize(mp3_path_str):
+            log("edge TTS: empty output from Microsoft TTS")
+            return None
+
+        import subprocess as _sp
+        ff = _sp.run(
+            [ffmpeg_bin, "-y", "-i", mp3_path_str,
+             "-c:a", "libopus", "-b:a", "24k", "-ar", "24000", "-ac", "1",
+             str(out_path)],
+            capture_output=True, timeout=30,
+        )
+        if ff.returncode != 0:
+            log(f"edge TTS: ffmpeg failed: "
+                f"{ff.stderr[-200:].decode('utf-8', errors='replace')}")
+            return None
+        return out_path
+    except Exception as e:  # noqa: BLE001
+        log(f"edge TTS failed: {e}")
+        return None
+    finally:
+        try:
+            os.unlink(mp3_path_str)
+        except OSError:
+            pass
+
+
 def _try_openai_tts(
     text: str,
     lang: str,
@@ -7156,18 +7249,25 @@ def synthesize_voice_note(
     lang: str = "de",
     voice: str | None = None,
 ) -> Path | None:
-    """Generate an OGG-Opus voice note. Tries OpenAI TTS → Piper → text-only.
+    """Generate an OGG-Opus voice note. Tries OpenAI → edge-tts → Piper → text-only.
 
-    Returns the path to the OGG file, or None when both engines are
+    Returns the path to the OGG file, or None when all engines are
     unavailable. On None the caller delivers text only; voice_skip_reason()
     carries an optional notice to append so the user knows why voice is off.
 
     Fallback order:
       1. OpenAI TTS (skipped silently if no key / quota backoff / import error)
-      2. Piper local TTS (skipped if binary / model / ffmpeg absent)
-      3. None → caller falls back to text-only delivery
+      2. edge-tts (Microsoft Neural TTS, no API key, requires internet + ffmpeg)
+      3. Piper local TTS (skipped if binary / model / ffmpeg absent)
+      4. None → caller falls back to text-only delivery
     """
     path = _try_openai_tts(text, lang, voice)
+    if path is not None:
+        with _voice_engine_lock:
+            _voice_engine_state["last_skip_reason"] = None
+        return path
+
+    path = _try_edge_tts(text, lang)
     if path is not None:
         with _voice_engine_lock:
             _voice_engine_state["last_skip_reason"] = None
@@ -7179,21 +7279,20 @@ def synthesize_voice_note(
             _voice_engine_state["last_skip_reason"] = None
         return path
 
-    # Both engines failed — set a user-facing notice explaining why.
+    # All engines failed — set a user-facing notice explaining why.
     now = time.time()
-    # Only show the quota message if we're inside quota backoff AND Piper also
-    # failed. Otherwise the user doesn't need to know OpenAI is in backoff.
     with _voice_engine_lock:
         if now < _voice_engine_state.get("quota_until", 0.0):
             _voice_engine_state["last_skip_reason"] = (
-                "Voice note unavailable — OpenAI hit rate limit and "
-                "Piper is not available. OpenAI will retry in about 1 hour."
+                "Voice note unavailable — OpenAI hit rate limit, "
+                "edge-tts unavailable (no internet / ffmpeg), "
+                "and Piper is not installed. OpenAI will retry in about 1 hour."
             )
         else:
             _voice_engine_state["last_skip_reason"] = (
                 "Voice note unavailable — no TTS engine available. "
-                "Default: Piper (local, no API key needed). "
-                "Optional: add OpenAI key to ~/.config/corvin-voice/.env as OPENAI_API_KEY=sk-..."
+                "edge-tts (no API key needed) requires internet + ffmpeg. "
+                "Or add OPENAI_API_KEY to ~/.config/corvin-voice/service.env."
             )
     return None
 
