@@ -192,9 +192,32 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
             pass
         raise
     os.close(fd)
-    os.replace(tmp_path, str(path))
+    _replace_atomic(tmp_path, str(path))
     if sys.platform != "win32":
         os.chmod(str(path), _REQUIRED_MODE)
+
+
+def _replace_atomic(src: str, dst: str) -> None:
+    """Atomic rename with Windows retry.
+
+    On POSIX os.replace() is a true atomic rename. On Windows it raises
+    PermissionError (WinError 5) when another thread holds the destination
+    open for reading — which happens constantly in FastAPI's threadpool.
+    Retry with short exponential backoff; the reader releases the handle
+    within a few ms.
+    """
+    if sys.platform != "win32":
+        os.replace(src, dst)
+        return
+    for attempt in range(6):  # max ~310 ms total (10+20+40+80+160 ms)
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt < 5:
+                time.sleep(0.01 * (2 ** attempt))
+    # Final attempt — let it raise so the caller can log and handle.
+    os.replace(src, dst)
 
 
 def _read_record(path: Path, sid: str) -> SessionRecord:

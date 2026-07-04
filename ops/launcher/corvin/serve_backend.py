@@ -94,16 +94,34 @@ def maybe_pypi_autoupdate() -> None:
 
     print("  Checking for updates …", end=" ", flush=True)
     try:
+        # Step 1: check PyPI for the latest version (no install yet).
+        import importlib.metadata as _meta  # noqa: PLC0415
+        import urllib.request as _ur         # noqa: PLC0415
+        current = _meta.version("corvinos")
+        with _ur.urlopen(  # noqa: S310
+            "https://pypi.org/pypi/corvinos/json", timeout=10
+        ) as _r:
+            latest = __import__("json").loads(_r.read())["info"]["version"]
+        if latest == current:
+            print(f"up to date ({current})")
+            return
+        # Step 2: a newer version exists — attempt upgrade.
+        print(f"upgrading {current} → {latest} …", end=" ", flush=True)
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "--quiet", "corvinos"],
+            [sys.executable, "-m", "pip", "install", f"corvinos=={latest}", "--quiet"],
             capture_output=True,
-            timeout=60,
+            timeout=120,
             text=True,
         )
         if result.returncode == 0:
-            print("up to date")
+            print("done — restart corvin-serve to apply")
         else:
-            print("(update check failed — continuing)")
+            # pip failed (UAC, network, read-only env, …) — tell the user the
+            # exact command rather than silently continuing.
+            print(
+                f"\n  ⚠ auto-upgrade failed. Run manually:\n"
+                f"    pip install corvinos=={latest}"
+            )
     except subprocess.TimeoutExpired:
         print("(timed out — continuing)")
     except Exception:
