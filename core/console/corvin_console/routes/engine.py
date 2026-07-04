@@ -580,7 +580,11 @@ def get_engine_model_registry(
     """
     try:
         from engine_models import registry_as_dict  # type: ignore[import]
-        return registry_as_dict()
+        # force_reload → always serve the current model catalog so a registry
+        # edit or package upgrade shows up on a browser refresh (no server
+        # restart needed; the module otherwise caches the registry for the
+        # process lifetime, which hid freshly-added models like Sonnet 5).
+        return registry_as_dict(force_reload=True)
     except Exception:  # noqa: BLE001
         return {}
 

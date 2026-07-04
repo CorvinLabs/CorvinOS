@@ -112,10 +112,14 @@ def load_registry(force_reload: bool = False) -> dict[str, EngineModelSpec]:
     return result
 
 
-def registry_as_dict() -> dict[str, Any]:
-    """Return the registry as a JSON-serialisable dict for the console API."""
+def registry_as_dict(force_reload: bool = False) -> dict[str, Any]:
+    """Return the registry as a JSON-serialisable dict for the console API.
+
+    ``force_reload=True`` re-reads the YAML from disk (bypassing the process
+    cache) so a model-catalog update takes effect on a browser refresh, without
+    restarting the console — the /registry route uses this."""
     result = {}
-    for engine_id, spec in load_registry().items():
+    for engine_id, spec in load_registry(force_reload=force_reload).items():
         result[engine_id] = {
             "label": spec.label,
             "supports_os_turn": spec.supports_os_turn,
