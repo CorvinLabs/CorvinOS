@@ -35,7 +35,7 @@ SYSTEMD_DIR="$HOME/.config/systemd/user"
 # to <corvin_home>/logs/corvin.log. Operators flip off with
 # `CORVIN_DEBUG=0 bridge.sh restart`. CORVIN_LOG_LEVEL overrides
 # outright (DEBUG / INFO / WARNING / ERROR).
-export CORVIN_DEBUG="${CORVIN_DEBUG:-1}"
+export CORVIN_DEBUG="${CORVIN_DEBUG:-0}"
 # Default the log file under the same root the rest of the stack uses.
 # Resolution: CORVIN_HOME wins, then <repo>/.corvin, then ~/.corvin.
 _resolve_corvin_log_dir() {

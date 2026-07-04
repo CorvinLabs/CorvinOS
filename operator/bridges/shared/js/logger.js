@@ -6,7 +6,7 @@
 // any bridge daemon without pulling in npm side-effects.
 //
 // Env (all optional; sane defaults):
-//   CORVIN_DEBUG       1/true/on (default ON) → debug level; 0/off → info
+//   CORVIN_DEBUG       1/true/on → debug level; 0/off (default OFF) → info
 //   CORVIN_LOG_LEVEL   debug|info|warn|error  (overrides CORVIN_DEBUG)
 //   CORVIN_LOG_FILE    explicit log path; default <corvin_home>/logs/corvin.log
 //   CORVIN_LOG_STDERR  1 (default) → also log to stderr
@@ -42,7 +42,7 @@ function resolveLevel() {
   if (explicit && LEVELS[String(explicit).trim().toLowerCase()] !== undefined) {
     return String(explicit).trim().toLowerCase();
   }
-  return envTruthy("CORVIN_DEBUG", true) ? "debug" : "info";
+  return envTruthy("CORVIN_DEBUG", false) ? "debug" : "info";
 }
 
 function resolveCorvinHome() {

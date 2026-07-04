@@ -92,8 +92,8 @@ def _resolve_level() -> int:
         lvl = logging.getLevelName(name)
         if isinstance(lvl, int):
             return lvl
-    # Otherwise CORVIN_DEBUG (default ON) flips DEBUG vs INFO.
-    debug = _env_truthy(_resolve_env("CORVIN_DEBUG"), True)
+    # Otherwise CORVIN_DEBUG (default OFF) flips DEBUG vs INFO.
+    debug = _env_truthy(_resolve_env("CORVIN_DEBUG"), False)
     return logging.DEBUG if debug else logging.INFO
 
 
