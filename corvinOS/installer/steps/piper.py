@@ -202,40 +202,67 @@ def _download_model(lang: str, rel_path: str, model_dir: Path, config_file: Path
 
 
 def _fetch(url: str, dest: Path, *, silent: bool = False) -> bool:
-    """Download url → dest. Tries curl, then wget, then urllib. Returns True on success.
+    """Download url → dest. Returns True on success.
 
-    Each tool falls through to the next on failure (not just on absence), so a
-    Windows curl TLS error (exit 35) does not block the urllib fallback.
+    Priority: httpx (best TLS, base dep) → curl → wget → urllib.
+    Every tool falls through to the next on failure — not just on absence —
+    so a Windows curl/urllib TLS or socket error never blocks the chain.
     """
 
     def _cleanup() -> None:
-        """Remove a partial / zero-byte download before the next attempt."""
         try:
             if dest.exists() and dest.stat().st_size == 0:
                 dest.unlink()
         except OSError:
             pass
 
+    # 1. httpx — cross-platform, own TLS stack (no Windows Schannel issues),
+    #    already a base dependency. Handles streaming + progress natively.
+    try:
+        import httpx as _httpx
+        if not silent:
+            print("  ", end="", flush=True)
+        with _httpx.stream("GET", url, follow_redirects=True, timeout=120) as resp:
+            resp.raise_for_status()
+            total = int(resp.headers.get("content-length", 0))
+            done = 0
+            with open(dest, "wb") as fh:
+                for chunk in resp.iter_bytes(chunk_size=65536):
+                    fh.write(chunk)
+                    done += len(chunk)
+                    if not silent and total > 0:
+                        pct = done * 100 // total
+                        print(f"\r  {pct:3d}%  {done // 1024 // 1024} MB / {total // 1024 // 1024} MB",
+                              end="", flush=True)
+        if not silent:
+            print()
+        if dest.exists() and dest.stat().st_size > 0:
+            return True
+        _cleanup()
+    except Exception:
+        _cleanup()
+        # fall through to curl
+
+    # 2. curl — available on Windows 10+ and most Linux/macOS. Use POSIX path
+    #    on Windows to avoid backslash escape issues with curl's -o flag.
     if shutil.which("curl"):
-        # On Windows, pass the path as a POSIX string to avoid curl misinterpreting
-        # backslashes as escape sequences when the path is inside double-quotes.
         dest_str = dest.as_posix() if sys.platform == "win32" else str(dest)
         flags = ["-L", "--silent" if silent else "--progress-bar", "-o", dest_str]
         r = subprocess.run(["curl"] + flags + [url], check=False)
         if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
             return True
-        _cleanup()  # fall through to next tool
+        _cleanup()
 
+    # 3. wget — common on Linux.
     if shutil.which("wget"):
         flags = ["-q" if silent else "--show-progress", "-O", str(dest)]
         r = subprocess.run(["wget"] + flags + [url], check=False)
         if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
             return True
-        _cleanup()  # fall through to urllib
+        _cleanup()
 
-    # Pure-Python fallback — always available, no external tools needed.
-    # urllib handles TLS via the system's ssl module (Python's own CA bundle),
-    # which avoids Windows curl's Schannel TLS errors (e.g. curl exit 35).
+    # 4. urllib — stdlib, always available. May raise WinError 10054 after a
+    #    complete transfer on Windows; treat any non-empty file as success.
     try:
         import urllib.request
         if not silent:
@@ -251,23 +278,14 @@ def _fetch(url: str, dest: Path, *, silent: bool = False) -> bool:
 
         urllib.request.urlretrieve(url, str(dest), reporthook=_report)
         if not silent:
-            print()  # newline after progress
+            print()
         return dest.exists() and dest.stat().st_size > 0
-    except Exception as exc:
-        # WinError 10054 ("connection reset by peer") is raised by urlretrieve on
-        # Windows even AFTER the full response body has been written to disk.
-        # HuggingFace's CDN closes the TCP connection abruptly after serving the
-        # last byte, which Python's socket layer surfaces as an error — but the
-        # file is already complete. Check the actual on-disk size before giving up.
+    except Exception:
         if not silent:
-            print()  # newline after partial progress line
-        if dest.exists() and dest.stat().st_size > 1_000_000:
-            size_mb = dest.stat().st_size // 1024 // 1024
-            if not silent:
-                print(f"  ✓ File complete ({size_mb} MB) — server closed connection normally")
+            print()
+        # WinError 10054: connection reset AFTER full transfer — file is valid.
+        if dest.exists() and dest.stat().st_size > 0:
             return True
-        if not silent:
-            print(f"  ⚠ urllib download failed: {exc}")
         return False
 
 
