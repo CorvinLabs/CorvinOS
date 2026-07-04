@@ -301,20 +301,51 @@ def ensure_system_tools(info: PlatformInfo, interactive: bool = True) -> None:
 
 # ── Python packages ────────────────────────────────────────────────────────
 
+def _ensure_pip_available(python_exe: str) -> None:
+    """Ensure pip is available, bootstrap with ensurepip if needed.
+
+    Critical on uv-installed Python where pip might not be included.
+    This is best-effort — failures are non-blocking since we fall back to venv.
+    """
+    result = subprocess.run(
+        [python_exe, "-m", "pip", "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return  # pip is already available
+
+    # pip is missing — try ensurepip
+    result = subprocess.run(
+        [python_exe, "-m", "ensurepip", "--upgrade"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        # ensurepip failed — log but don't crash, we'll fall back to venv
+        pass
+
+
 def pip_install(*packages: str, venv_python: Path | None = None) -> bool:
     """Install Python packages with virtualenv + PEP 668 awareness.
 
     Order:
-    1. Inside a virtualenv → plain pip install (no flags needed)
-    2. --user (standard system Python)
-    3. --break-system-packages (PEP 668 hosts)
-    4. dedicated venv at ~/.config/corvin-voice/venv (last resort)
+    1. Ensure pip is available (ensurepip if needed)
+    2. Inside a virtualenv → plain pip install (no flags needed)
+    3. --user (standard system Python)
+    4. --break-system-packages (PEP 668 hosts)
+    5. dedicated venv at ~/.config/corvin-voice/venv (last resort)
 
     Returns True when install succeeds.
     """
     import os
     python = str(venv_python) if venv_python else sys.executable
     pkg_list = list(packages)
+
+    # Ensure pip is available (critical on uv-installed Python)
+    _ensure_pip_available(python)
 
     # Inside a virtualenv: plain install, no --user (not allowed in venvs)
     in_venv = (
@@ -376,7 +407,8 @@ def pip_install(*packages: str, venv_python: Path | None = None) -> bool:
         print("  On Debian/Ubuntu try: sudo apt install python3-venv")
         return False
 
-    venv_pip = venv_dir / "bin" / "pip"
+    # Windows uses Scripts\pip.exe, Unix uses bin/pip
+    venv_pip = venv_dir / ("Scripts" if sys.platform == "win32" else "bin") / ("pip.exe" if sys.platform == "win32" else "pip")
     result3 = subprocess.run(
         [str(venv_pip), "install", "--quiet"] + pkg_list,
         check=False,

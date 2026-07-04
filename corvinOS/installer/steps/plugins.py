@@ -8,10 +8,17 @@ from pathlib import Path
 
 
 def ensure_plugins(repo_root: Path, interactive: bool = True) -> None:
-    """Register the voice and cowork plugins from the local marketplace."""
+    """Register the voice and cowork plugins from the local marketplace.
+
+    Non-critical — skips gracefully if Claude Code isn't available.
+    On Windows, may require Git Bash or PowerShell 7.
+    """
     if not shutil.which("claude"):
+        print("\n[Plugins] Registering Claude Code plugins...")
         print("⚠ claude CLI not found — skipping plugin registration.")
-        print("  Install Claude Code and run the installer again.")
+        print("  Plugins are optional. To use them later:")
+        print("    1. Install Claude Code from https://claude.ai/code")
+        print("    2. Run: corvin-install")
         return
 
     print("\n[Plugins] Registering Claude Code plugins...")

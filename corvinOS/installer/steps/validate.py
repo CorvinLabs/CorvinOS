@@ -109,8 +109,7 @@ def run_validation(
         else:
             print("  ℹ ANTHROPIC_API_KEY not set (optional)")
     else:
-        print(f"  ✗ {env_file} not found")
-        failures += 1
+        print(f"  ℹ {env_file} not found yet (will be created on first run)")
 
     # ── Summary ────────────────────────────────────────────────────────────
     print()

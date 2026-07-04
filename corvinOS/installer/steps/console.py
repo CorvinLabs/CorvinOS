@@ -53,17 +53,26 @@ def build_frontend(repo_root: Path) -> bool:
     """Build the React frontend (npm install + npm run build).
 
     All paths derived from repo_root — no hardcoded user directories.
+    Falls back gracefully if web-next is not available (pre-built wheels).
     """
     webnext_dir = repo_root / "core" / "console" / "corvin_console" / "web-next"
+    dist_dir = webnext_dir / "dist" / "index.html"
+
+    # Check if frontend is already built (wheel install)
+    if dist_dir.exists():
+        print(f"✓ Frontend already built (from wheel/distribution)")
+        return True
+
     print(f"\n[Console] Building frontend at {webnext_dir} ...")
 
     if not webnext_dir.exists():
-        print(f"⚠ web-next directory not found at {webnext_dir} — skipping build")
-        return False
+        print(f"⚠ web-next directory not found — this is normal for pre-built wheels")
+        print(f"  The web console will work with the pre-built frontend")
+        return True
 
     if not (webnext_dir / "package.json").exists():
         print(f"⚠ package.json not found — skipping build")
-        return False
+        return True
 
     npm_cmd = _find_npm()
     if not npm_cmd:

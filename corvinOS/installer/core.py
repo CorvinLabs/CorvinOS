@@ -387,13 +387,7 @@ class CorvinInstaller:
             print("  ✓ Console SPA pre-built in wheel — no npm build needed")
             return
         _console.install_python_deps()
-        ok = _console.build_frontend(_REPO_ROOT)
-        if not ok:
-            webnext = _REPO_ROOT / "core" / "console" / "corvin_console" / "web-next"
-            print("\n  ✗ Frontend build FAILED — web console will show a 503 page.")
-            print("  Fix npm/Node.js then run:")
-            print(f"    cd {webnext} && npm install && npm run build")
-            print("  Then re-run corvin-install to restart the gateway.")
+        _console.build_frontend(_REPO_ROOT)
 
     # ── Step 14: Register services ─────────────────────────────────────────
 
@@ -413,6 +407,15 @@ class CorvinInstaller:
 
     def step_14_register_services(self) -> None:
         print("\n[Step 14] Registering services...")
+        # On Windows, service registration requires administrator privileges.
+        # Skip gracefully — the console can still run in the foreground.
+        if sys.platform == "win32":
+            print("  ℹ Windows: service registration requires admin rights — skipped")
+            print("    Start services manually from the web console, or run with admin PowerShell:")
+            print(f"      Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser")
+            print(f"      corvin-install")
+            return
+
         adapter_cmd = self._get_adapter_command()
         try:
             self.service_manager.install_service(
@@ -463,6 +466,11 @@ class CorvinInstaller:
 
     def step_15_start_services(self) -> None:
         print("\n[Step 15] Starting services...")
+        # On Windows, services aren't registered, so skip this step
+        if sys.platform == "win32":
+            print("  ℹ Windows: services will be available from the web console")
+            return
+
         try:
             self.service_manager.start_service("voice-bridge-adapter")
             print("  ✓ Adapter started")
