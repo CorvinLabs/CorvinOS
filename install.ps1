@@ -14,12 +14,27 @@ param(
 # `irm | iex` uses no shell operators, so it works in PowerShell 5.1 AND 7 alike.
 
 $ErrorActionPreference = "Stop"
+
+# Keep the window open on success AND on error so the user can read the output.
+# This matters when PowerShell was launched via the Run dialog or a shortcut —
+# those sessions close the window the moment the script exits.
+function Pause-AndExit {
+    param([int]$Code = 0)
+    Write-Host ""
+    if ($Code -ne 0) {
+        Write-Host "  Installation failed. See the error above." -ForegroundColor Red
+    }
+    Write-Host "  Press Enter to close this window." -ForegroundColor DarkGray
+    $null = Read-Host
+    exit $Code
+}
+# Intercept Write-Fail so it pauses before exiting.
 $Package = if ($env:CORVIN_PKG) { $env:CORVIN_PKG } else { "corvinos" }
 
 function Write-Step { param($m) Write-Host "  $m" }
 function Write-Ok   { param($m) Write-Host "  $m" -ForegroundColor Green }
 function Write-Warn { param($m) Write-Host "  $m" -ForegroundColor Yellow }
-function Write-Fail { param($m) Write-Host "`n  Error: $m" -ForegroundColor Red; exit 1 }
+function Write-Fail { param($m) Write-Host "`n  Error: $m" -ForegroundColor Red; Pause-AndExit 1 }
 function Write-Head { param($m) Write-Host $m -ForegroundColor Cyan }
 function Write-Cmd  { param($m) Write-Host "    $m" -ForegroundColor White }
 function Write-Hint { param($m) Write-Host "    $m" -ForegroundColor DarkGray }
@@ -137,10 +152,14 @@ $ConsoleURL = "http://localhost:8765/console/"
 $MaxRetries = 30
 $RetryCount = 0
 
-# Start server in background
-Start-Job -ScriptBlock {
-    corvinos-serve
-} | Out-Null
+# Start server as a detached process so it keeps running after this installer
+# window is closed.  Start-Job would be killed when the PS session ends.
+$serverProc = $null
+try {
+    $serverProc = Start-Process -FilePath "corvinos-serve" -PassThru -WindowStyle Minimized -ErrorAction Stop
+} catch {
+    Write-Warn "Could not start server automatically. Run manually: corvinos-serve"
+}
 
 # Wait for server to be ready
 while ($RetryCount -lt $MaxRetries) {
@@ -191,3 +210,4 @@ Write-Host "   corvin-a2a         " -NoNewline -ForegroundColor White; Write-Hos
 Write-Host ""
 Write-Cmd  "ollama pull qwen3:8b   # optional local model (offline /engine hermes)"
 Write-Host ""
+Pause-AndExit 0
