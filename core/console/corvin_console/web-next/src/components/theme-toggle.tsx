@@ -52,6 +52,8 @@ export function useTheme(): [Theme, (t: Theme) => void] {
 export function ThemeToggle({ className }: { className?: string }) {
   const [theme, setTheme] = useTheme();
   const next: Record<Theme, Theme> = { auto: "dark", dark: "light", light: "auto" };
+  // Mark that the user has explicitly toggled — future one-time migrations won't reset their choice.
+  const handleToggle = () => { try { localStorage.setItem("corvin-dark-default-v1", "1"); } catch {} setTheme(next[theme]); };
   const label: Record<Theme, string> = {
     auto: "System theme",
     dark: "Dark theme",
@@ -64,7 +66,7 @@ export function ThemeToggle({ className }: { className?: string }) {
       size="icon"
       aria-label={`Theme: ${label[theme]} (click to switch)`}
       title={label[theme]}
-      onClick={() => setTheme(next[theme])}
+      onClick={handleToggle}
       className={cn("text-muted-foreground hover:text-foreground", className)}
     >
       <Icon className="h-4 w-4" />

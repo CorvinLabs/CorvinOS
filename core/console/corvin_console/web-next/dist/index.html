@@ -27,7 +27,19 @@
     <script>
       (function () {
         try {
-          var stored = localStorage.getItem("corvin-theme") || "dark";
+          var stored = localStorage.getItem("corvin-theme");
+          // One-time migration (v0.9.92): switch users who have the old "light"
+          // default to "dark". Only runs once per browser profile (marker key).
+          // Users who explicitly chose light via the toggle are not affected —
+          // they will have "corvin-theme-user-set" = "1" in localStorage.
+          if (!localStorage.getItem("corvin-dark-default-v1")) {
+            localStorage.setItem("corvin-dark-default-v1", "1");
+            if (!stored || stored === "light") {
+              stored = "dark";
+              localStorage.setItem("corvin-theme", "dark");
+            }
+          }
+          stored = stored || "dark";
           var theme = stored;
           if (stored === "auto") {
             var mql = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)");
@@ -39,7 +51,7 @@
         }
       })();
     </script>
-    <script type="module" crossorigin src="/console/assets/index-Cv-g7cJC.js"></script>
+    <script type="module" crossorigin src="/console/assets/index-Dna_iejL.js"></script>
     <link rel="modulepreload" crossorigin href="/console/assets/tanstack-B-jDpbmx.js">
     <link rel="modulepreload" crossorigin href="/console/assets/radix-CfDk86er.js">
     <link rel="modulepreload" crossorigin href="/console/assets/icons-D69QZuur.js">

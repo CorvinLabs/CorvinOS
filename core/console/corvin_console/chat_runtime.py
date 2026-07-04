@@ -650,7 +650,11 @@ def _effective_os_engine(tenant_id: str) -> str:
         return engine
     binary = _claude_binary()
     claude_missing = shutil.which(binary) is None and not os.path.isabs(binary)
-    if claude_missing and _HermesEngine is not None:
+    if claude_missing:
+        # Always fall back to hermes — even if _HermesEngine failed to import
+        # (vendored path issue on wheel installs). The hermes dispatch path will
+        # surface a clearer "Ollama not running" error if needed, which is far
+        # more actionable than "claude binary not found".
         return "hermes"
     return engine
 
