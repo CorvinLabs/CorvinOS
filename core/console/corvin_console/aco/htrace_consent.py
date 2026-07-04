@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import sys
+import urllib.request
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -22,6 +23,8 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _CONSENT_VERSION = "htrace/1.1"
+_TOKEN_ENDPOINT = "https://api.corvin-labs.com/v1/telemetry/token"
+_TOKEN_TIMEOUT_S = 15
 _CONSENT_TEXT_FILE = Path(__file__).parent / "consent_texts" / "htrace-1.0.txt"
 
 # SHA-256 of the exact consent text shipped in htrace-1.0.txt, pinned at
@@ -82,6 +85,13 @@ class ConsentAct:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(self.to_dict(), ensure_ascii=False), encoding="utf-8")
         p.chmod(0o600)
+        # Provision the stateless HMAC upload tokens now that consent exists.
+        # Fail-soft: a network error must not undo the consent that was saved.
+        try:
+            instance_id = load_or_create_instance_id(home)
+            provision_telemetry_tokens(home, instance_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("htrace: token provisioning skipped (non-fatal)")
 
     @property
     def is_current_version(self) -> bool:
@@ -94,6 +104,79 @@ class ConsentAct:
 
 def _consent_act_path(home: Path) -> Path:
     return home / "aco" / "telemetry" / "htrace-consent-act.json"
+
+
+# ── Instance identity + stateless token provisioning (ADR-0180 M4) ────────────
+
+def _instance_id_path(home: Path) -> Path:
+    return home / "instance_id"
+
+
+def _instance_token_path(home: Path) -> Path:
+    return home / "aco" / "telemetry" / "htrace-token.txt"
+
+
+def _telemetry_token_path(home: Path) -> Path:
+    return home / "aco" / "telemetry" / ".telemetry_token"
+
+
+def load_or_create_instance_id(home: Path) -> str:
+    """Return the persistent UUID4 instance id, creating ~/.corvin/instance_id if absent."""
+    p = _instance_id_path(home)
+    try:
+        existing = p.read_text(encoding="utf-8").strip()
+        parsed = uuid.UUID(existing)
+        if parsed.version == 4 and str(parsed) == existing.lower():
+            return existing
+    except (OSError, ValueError):
+        pass
+    new_id = str(uuid.uuid4())
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(new_id, encoding="utf-8")
+    return new_id
+
+
+def provision_telemetry_tokens(home: Path, instance_id: str) -> bool:
+    """Fetch and persist the healing-trace HMAC tokens; return False on network failure.
+
+    POSTs the instance_id to the Corvin-Features token endpoint, then writes the
+    returned instance_token and telemetry_token to disk with 0o600 permissions.
+    Fail-soft: any network / HTTP error returns False without raising.
+    """
+    payload = json.dumps({"instance_id": instance_id}).encode("utf-8")
+    req = urllib.request.Request(
+        _TOKEN_ENDPOINT,
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_TOKEN_TIMEOUT_S) as resp:
+            if not (200 <= resp.getcode() < 300):
+                return False
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("htrace: token endpoint unreachable (non-fatal): %s", e)
+        return False
+
+    instance_token = str(data.get("instance_token", ""))
+    telemetry_token = str(data.get("telemetry_token", ""))
+    if not instance_token or not telemetry_token:
+        logger.debug("htrace: token endpoint returned incomplete payload")
+        return False
+
+    try:
+        inst_p = _instance_token_path(home)
+        tel_p = _telemetry_token_path(home)
+        inst_p.parent.mkdir(parents=True, exist_ok=True)
+        inst_p.write_text(instance_token, encoding="utf-8")
+        inst_p.chmod(0o600)
+        tel_p.write_text(telemetry_token, encoding="utf-8")
+        tel_p.chmod(0o600)
+    except OSError as e:
+        logger.debug("htrace: token persistence failed (non-fatal): %s", e)
+        return False
+    return True
 
 
 # ── Consent gate (double gate: YAML flag + ConsentAct) ────────────────────────

@@ -44,7 +44,11 @@ from .htrace import (
     htrace_dir,
     _today_utc,
 )
-from .htrace_consent import healing_traces_enabled, load_consent_act_id
+from .htrace_consent import (
+    healing_traces_enabled,
+    load_consent_act_id,
+    load_or_create_instance_id,
+)
 from .nerve import NerveFiber, NerveSignal, SEVERITY_OK, SEVERITY_LOW, SEVERITY_MEDIUM
 
 logger = logging.getLogger(__name__)
@@ -184,6 +188,7 @@ def _post_bundle(
     upload_url: str,
     bearer_token: str,
     instance_token: str,
+    instance_id: str,
     consent_act_id: str,
 ) -> bool:
     """POST the bundle. Returns True on 2xx, False on error."""
@@ -201,6 +206,7 @@ def _post_bundle(
                 "Authorization": f"Bearer {bearer_token}",
                 "X-HTTrace-Schema": "htrace/1",
                 "X-HTTrace-Instance-Token": instance_token,
+                "X-HTrace-Instance-Id": instance_id,
                 "X-HTTrace-Consent-Act-Id": consent_act_id,
             },
         )
@@ -344,6 +350,7 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
 
         bearer = _load_telemetry_token(home)
         inst_token = _load_instance_token(home)
+        instance_id = load_or_create_instance_id(home)
         consent_act_id = load_consent_act_id(home)
         url = _upload_url(home)
 
@@ -360,6 +367,7 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
                 upload_url=url,
                 bearer_token=bearer,
                 instance_token=inst_token,
+                instance_id=instance_id,
                 consent_act_id=consent_act_id,
             )
 
