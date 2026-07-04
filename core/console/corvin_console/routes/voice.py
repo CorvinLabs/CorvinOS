@@ -196,7 +196,7 @@ async def voice_transcribe(
                 reason="provider-error",
             )
             _log.warning("STT error", exc_info=True)
-            raise HTTPException(http_status.HTTP_502_BAD_GATEWAY, "upstream error")
+            raise HTTPException(http_status.HTTP_502_BAD_GATEWAY, f"upstream error: {e}")
     finally:
         try:
             path.unlink()
