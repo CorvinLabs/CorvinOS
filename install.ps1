@@ -77,7 +77,7 @@ if ($EditablePath -ne "") {
     uv tool install --force --editable $EditablePath
 } else {
     Write-Step "Installing $Package (first run can take a minute) ..."
-    uv tool install --force --upgrade $Package
+    uv tool install --force --upgrade --refresh-package $Package $Package
 }
 if ($LASTEXITCODE -ne 0) { Write-Fail "install failed — see the error above" }
 $prevErrorAction = $ErrorActionPreference
