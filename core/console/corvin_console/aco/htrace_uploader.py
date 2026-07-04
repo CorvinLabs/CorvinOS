@@ -54,8 +54,15 @@ from .nerve import NerveFiber, NerveSignal, SEVERITY_OK, SEVERITY_LOW, SEVERITY_
 
 logger = logging.getLogger(__name__)
 
-_UPLOAD_URL_DEFAULT = "https://api.corvin-labs.com/v1/telemetry/healing-traces"
-_PING_URL_DEFAULT = "https://api.corvin-labs.com/v1/telemetry/ping"
+# Base URL for all telemetry endpoints. Overridable via CORVIN_TELEMETRY_BASE_URL
+# so an operator can redirect to a self-hosted / staging proxy (e.g. Railway)
+# without a code change. Default: the production Corvin-Labs gateway. A per-tenant
+# spec.telemetry.upload_url still wins over this default (see _upload_url()).
+_TELEMETRY_BASE = os.environ.get(
+    "CORVIN_TELEMETRY_BASE_URL", "https://api.corvin-labs.com"
+).rstrip("/")
+_UPLOAD_URL_DEFAULT = f"{_TELEMETRY_BASE}/v1/telemetry/healing-traces"
+_PING_URL_DEFAULT = f"{_TELEMETRY_BASE}/v1/telemetry/ping"
 _UPLOAD_TIMEOUT_S = 30
 _PING_TIMEOUT_S = 8
 _PING_INTERVAL_S = 24 * 3600  # once per 24h
@@ -184,7 +191,14 @@ def _upload_url(home: Path) -> str:
         cfg_path = _tenant_cfg_path(home)
         if cfg_path.exists():
             data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-            return data.get("telemetry", {}).get("upload_url", _UPLOAD_URL_DEFAULT)
+            # tenant.corvin.yaml is a k8s-style manifest — settings live under
+            # spec:. Reading data.get("telemetry") at the top level was always
+            # None, so a per-tenant upload_url override was silently ignored.
+            spec = data.get("spec", data)
+            if isinstance(spec, dict):
+                tele = spec.get("telemetry", {})
+                if isinstance(tele, dict):
+                    return tele.get("upload_url", _UPLOAD_URL_DEFAULT)
     except Exception:  # noqa: BLE001
         pass
     return _UPLOAD_URL_DEFAULT

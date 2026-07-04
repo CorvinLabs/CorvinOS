@@ -17,8 +17,14 @@ tenant.corvin.yaml`` — so a toggle here is immediately visible in the raw YAML
 card, and the ACO runtime (``aco/repair_actions.py``) + telemetry consent gate
 (``aco/htrace_consent.py``) read the same keys back.
 
+``tenant.corvin.yaml`` is a k8s-style manifest (apiVersion/kind/metadata/spec);
+the runtime settings live under the ``spec:`` wrapper. Reads and writes therefore
+resolve through ``spec`` (falling back to the top-level document for a legacy flat
+file, mirroring the ``data.get("spec", data)`` shape used by the consent gate and
+the ACO repair loop).
+
 Writes are a MERGE, never a full replace: only the three keys above are
-patched; every other key in the document is preserved.
+patched under ``spec``; every other key in the document is preserved.
 """
 from __future__ import annotations
 
@@ -64,8 +70,11 @@ def _read_config(tenant_id: str) -> dict[str, Any]:
 def _read_flags(tenant_id: str) -> dict[str, bool]:
     """Resolve the three flags with their defaults (deny-by-default for risky)."""
     cfg = _read_config(tenant_id)
-    telemetry = cfg.get("telemetry") if isinstance(cfg.get("telemetry"), dict) else {}
-    aco = cfg.get("aco") if isinstance(cfg.get("aco"), dict) else {}
+    # tenant.corvin.yaml is a k8s-style manifest — settings live under spec:.
+    # Fall back to the top-level document when no spec wrapper is present.
+    spec = cfg.get("spec") if isinstance(cfg.get("spec"), dict) else cfg
+    telemetry = spec.get("telemetry") if isinstance(spec.get("telemetry"), dict) else {}
+    aco = spec.get("aco") if isinstance(spec.get("aco"), dict) else {}
     return {
         "telemetry_enabled": bool(telemetry.get("healing_traces", True)),
         "healing_enabled":   bool(aco.get("l5_enabled", True)),
@@ -74,25 +83,37 @@ def _read_flags(tenant_id: str) -> dict[str, bool]:
 
 
 def _write_flags(tenant_id: str, patch: dict[str, bool]) -> None:
-    """Merge the changed flags into tenant.corvin.yaml, preserving every other key."""
+    """Merge the changed flags into tenant.corvin.yaml, preserving every other key.
+
+    Settings live under the ``spec:`` wrapper of the k8s-style manifest. When a
+    spec wrapper is present the flags are merged under ``spec.telemetry`` /
+    ``spec.aco`` (the location the consent gate + ACO loop read back); a legacy
+    flat document with no spec is patched at the top level so the same-shaped
+    ``data.get("spec", data)`` readers still resolve them. Every other key —
+    including the whole manifest header — is preserved. The write is atomic
+    (tmp file + os.replace).
+    """
     if _yaml is None:
         raise RuntimeError("pyyaml unavailable")
     path = _config_path(tenant_id)
     cfg = _read_config(tenant_id)
 
+    # Mirror the reader: write into spec: when the manifest has one, else top-level.
+    # `target` is a live reference into `cfg`, so mutating it mutates the document
+    # that is dumped below — the full manifest structure is preserved.
+    target = cfg["spec"] if isinstance(cfg.get("spec"), dict) else cfg
+
     if "telemetry_enabled" in patch:
-        cfg.setdefault("telemetry", {})
-        if not isinstance(cfg["telemetry"], dict):
-            cfg["telemetry"] = {}
-        cfg["telemetry"]["healing_traces"] = patch["telemetry_enabled"]
+        if not isinstance(target.get("telemetry"), dict):
+            target["telemetry"] = {}
+        target["telemetry"]["healing_traces"] = patch["telemetry_enabled"]
     if "healing_enabled" in patch or "risky_enabled" in patch:
-        cfg.setdefault("aco", {})
-        if not isinstance(cfg["aco"], dict):
-            cfg["aco"] = {}
+        if not isinstance(target.get("aco"), dict):
+            target["aco"] = {}
         if "healing_enabled" in patch:
-            cfg["aco"]["l5_enabled"] = patch["healing_enabled"]
+            target["aco"]["l5_enabled"] = patch["healing_enabled"]
         if "risky_enabled" in patch:
-            cfg["aco"]["l5_risky"] = patch["risky_enabled"]
+            target["aco"]["l5_risky"] = patch["risky_enabled"]
 
     path.parent.mkdir(parents=True, exist_ok=True)
     body = _yaml.dump(cfg, default_flow_style=False, sort_keys=False)

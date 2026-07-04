@@ -24,7 +24,13 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _CONSENT_VERSION = "htrace/1.1"
-_TOKEN_ENDPOINT = "https://api.corvin-labs.com/v1/telemetry/token"
+# Base URL for all telemetry endpoints. Overridable via CORVIN_TELEMETRY_BASE_URL
+# so an operator can redirect to a self-hosted / staging proxy (e.g. Railway)
+# without a code change. Default: the production Corvin-Labs gateway.
+_TELEMETRY_BASE = os.environ.get(
+    "CORVIN_TELEMETRY_BASE_URL", "https://api.corvin-labs.com"
+).rstrip("/")
+_TOKEN_ENDPOINT = f"{_TELEMETRY_BASE}/v1/telemetry/token"
 _TOKEN_TIMEOUT_S = 15
 _CONSENT_TEXT_FILE = Path(__file__).parent / "consent_texts" / "htrace-1.0.txt"
 

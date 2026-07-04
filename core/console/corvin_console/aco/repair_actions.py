@@ -180,6 +180,64 @@ def _audit(ctx: RepairContext, event: str, **fields: Any) -> None:
         pass
 
 
+# ── Healing-trace production (ADR-0180 B5) ────────────────────────────────────
+
+def _instance_token(home: Path) -> str:
+    """Read the pre-provisioned HMAC instance token; '' if missing (fail-soft).
+
+    Mirrors htrace_uploader._load_instance_token — the token is provisioned at
+    consent time and lives at ``<home>/aco/telemetry/htrace-token.txt``.
+    """
+    try:
+        p = home / "aco" / "telemetry" / "htrace-token.txt"
+        return p.read_text(encoding="utf-8").strip()[:64]
+    except OSError:
+        return ""
+
+
+# Map a RepairOutcome.status to the (heal_outcome, event_sequence) pair recorded
+# in the ADR-0180 healing trace. Only allowlisted heal_outcome values
+# ({success, failure, skipped}) and EVENT_SEQ_ALLOWLIST event names are used, so
+# every emitted record passes _assert_safe_htrace (client) and validate_record
+# (server) unchanged. "reverted" = no progress → rolled back = net no-change.
+_HTRACE_STATUS_MAP: dict[str, tuple[str, list[str]]] = {
+    "applied":  ("success", ["heal.triggered", "heal.action", "heal.success"]),
+    "reverted": ("skipped", ["heal.triggered", "heal.action", "heal.skipped"]),
+    "failed":   ("failure", ["heal.triggered", "heal.action", "heal.failure"]),
+}
+
+
+def _emit_htrace(ctx: RepairContext, action: "RepairAction", status: str) -> None:
+    """Emit one scrubbed ADR-0180 healing trace for a completed repair attempt.
+
+    Double-gated + fail-soft: ``write_trace`` only persists when consent is
+    active (``healing_traces_enabled``); otherwise it is a no-op. Any error here
+    is swallowed — telemetry must never break or slow a repair.
+    """
+    try:
+        from .htrace import HealingTrace, write_trace  # noqa: PLC0415
+        from .htrace_consent import (  # noqa: PLC0415
+            healing_traces_enabled,
+            load_consent_act_id,
+        )
+
+        outcome, events = _HTRACE_STATUS_MAP.get(
+            status, ("skipped", ["heal.triggered", "heal.action", "heal.skipped"])
+        )
+        home = ctx.corvin_home
+        trace = HealingTrace(
+            event_sequence=events,
+            heal_action=action.action_id,
+            heal_outcome=outcome,
+            tenant_shape="multi" if ctx.tenant_id not in ("_default", "") else "single",
+            consent_act_id=load_consent_act_id(home),
+            instance_token=_instance_token(home),
+        )
+        write_trace(trace, home, consent_active=healing_traces_enabled(home))
+    except Exception:  # noqa: BLE001 — telemetry is best-effort, never load-bearing
+        pass
+
+
 # ── Executor ──────────────────────────────────────────────────────────────────
 
 def run_local_repairs(ctx: RepairContext, *, dry_run: bool = False) -> list[RepairOutcome]:
@@ -225,16 +283,19 @@ def run_local_repairs(ctx: RepairContext, *, dry_run: bool = False) -> list[Repa
                        reason="no_progress", status="reverted")
                 out.append(RepairOutcome(action.action_id, "reverted",
                                          "no progress → rolled back"))
+                _emit_htrace(ctx, action, "reverted")
             else:
                 _audit(ctx, "repair.applied", action_id=action.action_id,
                        status="applied", fixed=fixed)
                 out.append(RepairOutcome(action.action_id, "applied",
                                          f"cleared {n_before - len(remaining)} fault(s)",
                                          fixed=fixed))
+                _emit_htrace(ctx, action, "applied")
         except RepairScopeError as exc:
             _audit(ctx, "repair.blocked", action_id=action.action_id, reason=str(exc),
                    status="failed")
             out.append(RepairOutcome(action.action_id, "failed", f"scope: {exc}"))
+            _emit_htrace(ctx, action, "failed")
         except Exception as exc:  # noqa: BLE001
             try:
                 action.undo(ctx)
@@ -243,6 +304,7 @@ def run_local_repairs(ctx: RepairContext, *, dry_run: bool = False) -> list[Repa
             _audit(ctx, "repair.failed", action_id=action.action_id, reason=str(exc)[:200],
                    status="failed")
             out.append(RepairOutcome(action.action_id, "failed", str(exc)[:200]))
+            _emit_htrace(ctx, action, "failed")
     return out
 
 
