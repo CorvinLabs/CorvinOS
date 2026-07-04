@@ -3,8 +3,24 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+
+def _run_claude(args: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """Run 'claude <args>', handling the .cmd wrapper on Windows.
+
+    On Windows, shutil.which("claude") finds claude.cmd, but subprocess.run
+    with a list raises WinError 2 for .cmd files without shell=True.
+    """
+    claude_bin = shutil.which("claude") or "claude"
+    if sys.platform == "win32":
+        parts = [f'"{claude_bin}"'] + [
+            f'"{a}"' if (" " in str(a) or str(a) == "") else str(a) for a in args
+        ]
+        return subprocess.run(" ".join(parts), shell=True, **kwargs)
+    return subprocess.run([claude_bin] + args, **kwargs)
 
 
 def ensure_plugins(repo_root: Path, interactive: bool = True) -> None:
@@ -46,13 +62,13 @@ def ensure_plugins(repo_root: Path, interactive: bool = True) -> None:
 
 def _sync_marketplace(repo_root: Path) -> None:
     """Register and update the local plugin marketplace (idempotent)."""
-    subprocess.run(
-        ["claude", "plugin", "marketplace", "add", str(repo_root)],
+    _run_claude(
+        ["plugin", "marketplace", "add", str(repo_root)],
         capture_output=True,
         check=False,
     )
-    subprocess.run(
-        ["claude", "plugin", "marketplace", "update", "corvin-voice-local"],
+    _run_claude(
+        ["plugin", "marketplace", "update", "corvin-voice-local"],
         capture_output=True,
         check=False,
     )
@@ -61,8 +77,8 @@ def _sync_marketplace(repo_root: Path) -> None:
 def _ensure_plugin(plugin_id: str, label: str) -> bool:
     """Install a plugin if not already present. Returns True on success."""
     # Check if already installed
-    list_result = subprocess.run(
-        ["claude", "plugin", "list"],
+    list_result = _run_claude(
+        ["plugin", "list"],
         capture_output=True,
         text=True,
         check=False,
@@ -75,8 +91,8 @@ def _ensure_plugin(plugin_id: str, label: str) -> bool:
     with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as tmp:
         log_path = tmp.name
 
-    result = subprocess.run(
-        ["claude", "plugin", "install", plugin_id],
+    result = _run_claude(
+        ["plugin", "install", plugin_id],
         capture_output=True,
         text=True,
         check=False,
@@ -84,8 +100,8 @@ def _ensure_plugin(plugin_id: str, label: str) -> bool:
     Path(log_path).write_text(result.stdout + result.stderr)
 
     # Verify it actually appears in plugin list
-    list_result = subprocess.run(
-        ["claude", "plugin", "list"],
+    list_result = _run_claude(
+        ["plugin", "list"],
         capture_output=True,
         text=True,
         check=False,
