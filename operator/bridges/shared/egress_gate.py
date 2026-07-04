@@ -784,6 +784,17 @@ def check_engine_egress(engine_id: str, tenant_id: str, *,
     if gate is None:
         return None
     host = DEFAULT_ENGINE_HOSTS.get(engine_id, "unknown")
+    # ADR-0181 M3 — a per-tenant provider assignment redirects the engine's egress
+    # to the provider (or its proxy) host; validate THAT host, not the engine
+    # default. Else e.g. hermes→ollama_cloud would be checked against "localhost"
+    # and slip past a deny policy.
+    try:
+        from engine_models import resolve_engine_egress_host  # type: ignore
+        _phost = resolve_engine_egress_host(tenant_id, engine_id)
+        if _phost:
+            host = _phost
+    except Exception:  # noqa: BLE001
+        pass
     try:
         decision = gate.validate(host, persona=persona, channel=channel, chat_key=chat_key)
     except Exception as _gate_exc:  # noqa: BLE001

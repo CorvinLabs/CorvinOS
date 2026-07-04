@@ -42,13 +42,20 @@ class EngineModelEntry:
 @dataclass
 class ProviderSpec:
     """A model source + how to reach it (ADR-0181). ``credential_env`` is the env
-    var NAME holding the API key (value lives in the L16 vault, never here)."""
+    var NAME holding the API key (value lives in the L16 vault, never here).
+
+    ``proxy_base_url`` (ADR-0181 M3) is the Anthropic-Messages-compatible endpoint
+    used when routing an Anthropic-native engine (Claude Code) TO this provider.
+    Empty ⇒ ``base_url`` is assumed Anthropic-compatible; a non-Anthropic provider
+    (OpenAI/OpenRouter OpenAI-format) needs the operator to point this at a
+    translating proxy (e.g. LiteLLM). Egress goes to the proxy host when set."""
     id: str
     label: str
     base_url: str = ""
     model_source: str = "static"     # static | ollama | openrouter
     credential_env: str = ""
     kind: str = "cloud"              # local | cloud
+    proxy_base_url: str = ""         # Anthropic-compatible endpoint for CC→provider routing
 
 
 @dataclass
@@ -128,6 +135,7 @@ def _parse_raw(raw: dict[str, Any]) -> "tuple[dict[str, ProviderSpec], dict[str,
                 model_source=str(p.get("model_source") or "static"),
                 credential_env=str(p.get("credential_env") or ""),
                 kind=str(p.get("kind") or "cloud"),
+                proxy_base_url=str(p.get("proxy_base_url") or ""),
             )
 
     def _parse_models(raw_list: Any) -> list[EngineModelEntry]:
@@ -211,6 +219,7 @@ def providers_as_dict(force_reload: bool = False) -> dict[str, Any]:
         pid: {
             "label": p.label, "base_url": p.base_url, "model_source": p.model_source,
             "credential_env": p.credential_env, "kind": p.kind,
+            "proxy_base_url": p.proxy_base_url,
         }
         for pid, p in load_providers(force_reload=force_reload).items()
     }
@@ -259,3 +268,33 @@ def get_tenant_engine_model(
     if isinstance(val, str) and val.strip():
         return val.strip()
     return None
+
+
+def get_tenant_engine_provider(tenant_id: str, engine_id: str) -> str | None:
+    """ADR-0181 — the provider assigned to <engine_id> for this tenant, or None."""
+    spec = _load_tenant_spec(tenant_id)
+    per_engine = (spec.get("engine_models") or {}).get(engine_id) or {}
+    val = per_engine.get("provider")
+    return val.strip() if isinstance(val, str) and val.strip() else None
+
+
+def resolve_engine_egress(tenant_id: str, engine_id: str) -> "ProviderSpec | None":
+    """ADR-0181 M3 — the effective provider an engine egresses to for this tenant
+    (or None to fall back to the engine's default host). The single source of
+    truth for both the L35 egress-host check and the spawn env injection, so they
+    can never disagree about where the engine actually sends inference."""
+    pid = get_tenant_engine_provider(tenant_id, engine_id)
+    if not pid:
+        return None
+    spec = load_providers().get(pid)
+    return spec if (spec and spec.base_url) else None
+
+
+def resolve_engine_egress_host(tenant_id: str, engine_id: str) -> str | None:
+    """The host an engine actually egresses to when a provider is assigned (the
+    proxy host if configured, else the provider host). None → use the default."""
+    spec = resolve_engine_egress(tenant_id, engine_id)
+    if spec is None:
+        return None
+    from urllib.parse import urlparse
+    return urlparse(spec.proxy_base_url or spec.base_url).hostname or None

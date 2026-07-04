@@ -114,6 +114,35 @@ def test_fetch_skips_nondict_items_without_discarding_list(monkeypatch):
     assert r["reachable"] and [m["id"] for m in r["models"]] == ["ok"]
 
 
+# ── M3: provider egress resolution ───────────────────────────────────────────────
+
+def test_resolve_engine_egress_host_from_provider(monkeypatch):
+    """A per-tenant provider assignment resolves the egress host to the provider
+    (the L35 fix: hermes→ollama_cloud must resolve to ollama.com, not localhost)."""
+    monkeypatch.setattr(EM, "_load_tenant_spec",
+                        lambda tid: {"engine_models": {"hermes": {"provider": "ollama_cloud"}}})
+    host = EM.resolve_engine_egress_host("_default", "hermes")
+    assert host == "ollama.com"
+
+
+def test_resolve_egress_host_prefers_proxy(monkeypatch):
+    monkeypatch.setattr(EM, "_load_tenant_spec",
+                        lambda tid: {"engine_models": {"claude_code": {"provider": "openrouter"}}})
+    # provider with a proxy endpoint → egress goes to the proxy host
+    provs = dict(EM.load_providers(force_reload=True))
+    provs["openrouter"] = EM.ProviderSpec(
+        id="openrouter", label="OpenRouter", base_url="https://openrouter.ai/api/v1",
+        model_source="openrouter", credential_env="OPENROUTER_API_KEY", kind="cloud",
+        proxy_base_url="https://proxy.internal/anthropic")
+    monkeypatch.setattr(EM, "load_providers", lambda force_reload=False: provs)
+    assert EM.resolve_engine_egress_host("_default", "claude_code") == "proxy.internal"
+
+
+def test_resolve_egress_none_without_provider(monkeypatch):
+    monkeypatch.setattr(EM, "_load_tenant_spec", lambda tid: {"engine_models": {}})
+    assert EM.resolve_engine_egress_host("_default", "claude_code") is None
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-q"]))

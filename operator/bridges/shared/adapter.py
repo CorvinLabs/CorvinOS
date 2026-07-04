@@ -3428,7 +3428,7 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
     for _cc_local_var in (
         "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL", "CORVIN_CC_LOCAL_MODE",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL", "CORVIN_CC_LOCAL_MODE", "CORVIN_CC_PROVIDER",
     ):
         env.pop(_cc_local_var, None)
     if engine_id == "claude_code":
@@ -3449,6 +3449,32 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
                 if _tier_val:
                     env[_tier_var] = _tier_val
             env["CORVIN_CC_LOCAL_MODE"] = "1"
+        else:
+            # ADR-0181 M3 — provider-based routing for Claude Code. When a
+            # provider is assigned to claude_code for this tenant (and it is not
+            # native anthropic), redirect Claude Code to it via ANTHROPIC_BASE_URL
+            # + the vault-injected key. The endpoint MUST speak the Anthropic
+            # Messages API: set the provider's ``proxy_base_url`` to an
+            # Anthropic-compatible proxy (e.g. LiteLLM) for OpenAI-format providers
+            # like OpenRouter; ``base_url`` is used directly only when it is
+            # already Anthropic-native. Egress goes to that host (L35 resolves it
+            # via resolve_engine_egress_host — same source of truth).
+            try:
+                from engine_models import (  # type: ignore
+                    get_tenant_engine_provider, load_providers)
+                _prov = get_tenant_engine_provider(_tid, "claude_code")
+                if _prov and _prov != "anthropic":
+                    _ps = load_providers().get(_prov)
+                    _base = (_ps.proxy_base_url or _ps.base_url) if _ps else ""
+                    if _base:
+                        _key = (os.environ.get(_ps.credential_env, "")
+                                if _ps.credential_env else "")
+                        env["ANTHROPIC_BASE_URL"] = _base
+                        env["ANTHROPIC_API_KEY"] = _key or "provider"
+                        env["ANTHROPIC_AUTH_TOKEN"] = _key or "provider"
+                        env["CORVIN_CC_PROVIDER"] = _prov
+            except Exception:  # noqa: BLE001 — routing is best-effort, never fatal
+                pass
     return env
 
 

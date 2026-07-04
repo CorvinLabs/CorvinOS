@@ -523,6 +523,16 @@ def check_l35(
     try:
         from egress_gate import DEFAULT_ENGINE_HOSTS  # type: ignore
         host = DEFAULT_ENGINE_HOSTS.get(engine_id, "unknown")
+        # ADR-0181 M3 — provider assignment redirects egress to the provider/proxy
+        # host; validate that, not the engine default (else a cloud provider on a
+        # localhost-default engine would bypass the deny policy).
+        try:
+            from engine_models import resolve_engine_egress_host  # type: ignore
+            _phost = resolve_engine_egress_host(tenant, engine_id)
+            if _phost:
+                host = _phost
+        except Exception:  # noqa: BLE001
+            pass
         decision = gate.validate(
             host,
             engine_id=engine_id,
