@@ -1034,16 +1034,21 @@ function ChatPane({
     if (!el || !messages.length) return;
     if (isInitialLoad.current) {
       isInitialLoad.current = false;
-      // Defer one frame so the DOM has rendered all message nodes.
       requestAnimationFrame(() => {
         if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
       });
       return;
     }
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (atBottom) {
-      el.scrollTop = el.scrollHeight;
-    }
+    // Defer to next animation frame so the browser has painted the new node
+    // before we read scrollHeight — avoids a forced synchronous layout on every
+    // streaming token (which was causing jank during fast streaming).
+    const raf = requestAnimationFrame(() => {
+      const container = scrollRef.current;
+      if (!container) return;
+      const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+      if (atBottom) container.scrollTop = container.scrollHeight;
+    });
+    return () => cancelAnimationFrame(raf);
   }, [messages]);
 
   // ── Upload files when selected ────────────────────────────────────────────
@@ -1821,7 +1826,7 @@ function SpeakingPulse() {
   );
 }
 
-function MessageBubble({ m }: { m: ChatMessage }) {
+const MessageBubble = React.memo(function MessageBubble({ m }: { m: ChatMessage }) {
   const isUser = m.role === "user";
   return (
     <div className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
@@ -1875,7 +1880,7 @@ function MessageBubble({ m }: { m: ChatMessage }) {
       )}
     </div>
   );
-}
+});
 
 function ArtifactCard({ artifact }: { artifact: Extract<MessagePart, { kind: "artifact" }> }) {
   const filePath = artifact.path || artifact.name;

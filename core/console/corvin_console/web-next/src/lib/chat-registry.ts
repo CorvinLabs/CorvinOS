@@ -68,6 +68,10 @@ export interface SessionState {
 // Read via chatDebugLog(sid) for the in-browser debug panel.
 const MAX_DBG_EVENTS = 500;
 const _dbgBuffers = new Map<string, object[]>();
+// Debounced sessionStorage flush: batch writes to max 1 per 300 ms per session.
+// Without this, every streaming delta caused a synchronous JSON.stringify(100 events)
+// + sessionStorage.setItem on the main thread — a constant I/O bottleneck.
+const _dbgFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function _dbg(sid: string, event: string, fields: Record<string, unknown> = {}): void {
   const rec = { ts: new Date().toISOString(), event, sid, ...fields };
@@ -83,13 +87,16 @@ function _dbg(sid: string, event: string, fields: Record<string, unknown> = {}):
   if (!buf) { buf = []; _dbgBuffers.set(sid, buf); }
   buf.push(rec);
   if (buf.length > MAX_DBG_EVENTS) buf.splice(0, buf.length - MAX_DBG_EVENTS);
-  // sessionStorage snapshot (survives page reload, helps post-mortem)
-  try {
-    sessionStorage.setItem(
-      `corvin_dbg_${sid}`,
-      JSON.stringify(buf.slice(-100)),  // keep last 100 in storage
-    );
-  } catch { /* storage quota — ignore */ }
+  // Debounced sessionStorage write — flush at most once per 300 ms.
+  const existing = _dbgFlushTimers.get(sid);
+  if (existing) clearTimeout(existing);
+  _dbgFlushTimers.set(sid, setTimeout(() => {
+    _dbgFlushTimers.delete(sid);
+    try {
+      const b = _dbgBuffers.get(sid);
+      if (b) sessionStorage.setItem(`corvin_dbg_${sid}`, JSON.stringify(b.slice(-100)));
+    } catch { /* storage quota — ignore */ }
+  }, 300));
 }
 
 /** Return the in-memory debug log for a session (for the Debug panel). */
@@ -202,14 +209,22 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
     case "delta": {
       const aid = entry.currentAssistantId;
       if (!aid || !evt.text) return;
-      entry.messages = entry.messages.map((m) => {
-        if (m.id !== aid) return m;
-        const last = m.parts[m.parts.length - 1];
-        if (last?.kind === "text") {
-          return { ...m, parts: [...m.parts.slice(0, -1), { kind: "text", text: last.text + evt.text! }] };
-        }
-        return { ...m, parts: [...m.parts, { kind: "text", text: evt.text! }] };
-      });
+      // Find the streaming assistant message by scanning from the end (it's
+      // almost always the last message). Avoids a full array.map() on every
+      // token, which was O(n) over ALL messages including history.
+      const msgs = entry.messages;
+      let idx = msgs.length - 1;
+      while (idx >= 0 && msgs[idx].id !== aid) idx--;
+      if (idx < 0) return;
+      const msg = msgs[idx];
+      const last = msg.parts[msg.parts.length - 1];
+      const newParts = last?.kind === "text"
+        ? [...msg.parts.slice(0, -1), { kind: "text" as const, text: last.text + evt.text }]
+        : [...msg.parts, { kind: "text" as const, text: evt.text }];
+      // Splice only the changed message into the array copy.
+      const next = msgs.slice();
+      next[idx] = { ...msg, parts: newParts };
+      entry.messages = next;
       return;
     }
 
