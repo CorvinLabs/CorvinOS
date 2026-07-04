@@ -1,14 +1,13 @@
 name: Sync installers to Corvin-Website
 
 # Runs on every push to main that touches either installer script.
-# Copies install.ps1 and install.sh into the CorvinLabs/Corvin-Website repo
-# so that irm corvin-labs.com/install.ps1 | iex always serves the latest
-# version without a manual wrangler deploy.
+# 1. Copies install.ps1 / install.sh into CorvinLabs/Corvin-Website.
+# 2. Deploys the whole site to Cloudflare Pages (wrangler).
 #
-# Required secret: CORVIN_WEBSITE_PAT
-#   A GitHub fine-grained PAT (or classic PAT) with Contents: write access
-#   to CorvinLabs/Corvin-Website.  Set it in:
-#   CorvinOS repo → Settings → Secrets → Actions → New repository secret.
+# Required secrets (CorvinOS repo → Settings → Secrets → Actions):
+#   CORVIN_WEBSITE_PAT    — fine-grained PAT, Contents:write on Corvin-Website
+#   CLOUDFLARE_API_TOKEN  — Cloudflare API token with Pages:Edit permission
+#   CLOUDFLARE_ACCOUNT_ID — your Cloudflare account ID
 
 on:
   push:
@@ -18,8 +17,8 @@ on:
       - install.sh
 
 jobs:
-  sync:
-    name: Push installers to Corvin-Website
+  sync-and-deploy:
+    name: Sync installers + deploy Corvin-Website
     runs-on: ubuntu-latest
 
     steps:
@@ -41,15 +40,26 @@ jobs:
           cp install.sh  corvin-website/install.sh
 
       - name: Commit + push (if changed)
+        id: git-push
         working-directory: corvin-website
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add install.ps1 install.sh
           if git diff --cached --quiet; then
-            echo "No installer changes — nothing to push."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No installer changes — skipping push."
           else
             COMMIT=$(git -C .. rev-parse --short HEAD)
             git commit -m "chore: sync installers from CorvinOS@${COMMIT}"
             git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Deploy to Cloudflare Pages
+        if: steps.git-push.outputs.changed == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy corvin-website --project-name=corvin-labs-website
