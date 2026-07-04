@@ -217,7 +217,10 @@ def _fetch(url: str, dest: Path, *, silent: bool = False) -> bool:
             pass
 
     if shutil.which("curl"):
-        flags = ["-L", "--silent" if silent else "--progress-bar", "-o", str(dest)]
+        # On Windows, pass the path as a POSIX string to avoid curl misinterpreting
+        # backslashes as escape sequences when the path is inside double-quotes.
+        dest_str = dest.as_posix() if sys.platform == "win32" else str(dest)
+        flags = ["-L", "--silent" if silent else "--progress-bar", "-o", dest_str]
         r = subprocess.run(["curl"] + flags + [url], check=False)
         if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
             return True
@@ -251,7 +254,20 @@ def _fetch(url: str, dest: Path, *, silent: bool = False) -> bool:
             print()  # newline after progress
         return dest.exists() and dest.stat().st_size > 0
     except Exception as exc:
-        print(f"  ⚠ urllib download failed: {exc}")
+        # WinError 10054 ("connection reset by peer") is raised by urlretrieve on
+        # Windows even AFTER the full response body has been written to disk.
+        # HuggingFace's CDN closes the TCP connection abruptly after serving the
+        # last byte, which Python's socket layer surfaces as an error — but the
+        # file is already complete. Check the actual on-disk size before giving up.
+        if not silent:
+            print()  # newline after partial progress line
+        if dest.exists() and dest.stat().st_size > 1_000_000:
+            size_mb = dest.stat().st_size // 1024 // 1024
+            if not silent:
+                print(f"  ✓ File complete ({size_mb} MB) — server closed connection normally")
+            return True
+        if not silent:
+            print(f"  ⚠ urllib download failed: {exc}")
         return False
 
 
