@@ -10,7 +10,6 @@ import socket
 import subprocess
 import sys
 import time
-import webbrowser
 from pathlib import Path
 
 from corvinOS.shared.paths import corvin_home, voice_config_dir
@@ -545,10 +544,6 @@ class CorvinInstaller:
         url = "http://localhost:8765/console/"
         print(f"\n  Web Console  →  {url}")
         print("  Configure bridges and tokens: Settings → Bridges")
-        try:
-            webbrowser.open(url)
-        except Exception:
-            pass
 
     # ── Step 19: Validate installation ────────────────────────────────────
 

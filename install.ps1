@@ -187,13 +187,7 @@ while ($RetryCount -lt $MaxRetries) {
 if ($RetryCount -ge $MaxRetries) {
     Write-Warn "Server startup timeout. You can open manually: $ConsoleURL"
 } else {
-    # Server is ready, launch browser
-    Write-Step "Launching CorvinOS console in your browser ..."
-    try {
-        cmd /c start $ConsoleURL 2>$null
-    } catch {
-        Write-Warn "Could not auto-launch browser. Open manually: $ConsoleURL"
-    }
+    Write-Ok "Server is ready — browser opened automatically."
 }
 
 # ── done / cheat sheet ────────────────────────────────────────────────────────
