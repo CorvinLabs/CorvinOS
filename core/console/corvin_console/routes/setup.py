@@ -93,6 +93,7 @@ _ENGINE_KEYS: list[dict[str, Any]] = [
     {"id": "anthropic",     "label": "Anthropic API",       "kind": "api_key", "key": "ANTHROPIC_API_KEY",        "url": "https://console.anthropic.com/account/keys"},
     {"id": "openai",        "label": "OpenAI / Codex",      "kind": "api_key", "key": "OPENAI_API_KEY",           "url": "https://platform.openai.com/api-keys"},
     {"id": "stt_openai",   "label": "OpenAI Whisper (STT)", "kind": "api_key", "key": "CORVIN_STT_OPENAI_KEY",    "url": "https://platform.openai.com/api-keys"},
+    {"id": "tts_openai",   "label": "OpenAI TTS (Sprache)", "kind": "api_key", "key": "CORVIN_TTS_OPENAI_KEY",    "url": "https://platform.openai.com/api-keys"},
     {"id": "gemini",        "label": "Google Gemini",       "kind": "api_key", "key": "GEMINI_API_KEY",           "url": "https://aistudio.google.com/app/apikey"},
     {"id": "ollama",        "label": "Ollama (local)",      "kind": "url",     "key": "OLLAMA_BASE_URL",          "url": "https://ollama.com/download"},
     {"id": "openrouter",    "label": "OpenRouter",          "kind": "api_key", "key": "OPENROUTER_API_KEY",       "url": "https://openrouter.ai/keys"},

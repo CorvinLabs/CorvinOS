@@ -170,6 +170,15 @@ class CorvinInstaller:
             if sys.platform != "win32":
                 d.chmod(0o700)
             print(f"  ✓ {d}")
+        # Seed profile defaults on first run so learning + metaphors are on
+        # immediately without requiring a /profile set command first.
+        profile_file = self.voice_config / "profile.json"
+        if not profile_file.exists():
+            defaults = {"voice_audience_metaphors": "on", "voice_audience_learning": 3}
+            profile_file.write_text(json.dumps(defaults, indent=2))
+            if sys.platform != "win32":
+                profile_file.chmod(0o600)
+            print(f"  ✓ {profile_file} (defaults seeded)")
 
     # ── Step 3: System dependencies (Node.js, ffmpeg, espeak-ng …) ────────
 

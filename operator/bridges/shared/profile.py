@@ -101,6 +101,14 @@ _VOICE_AUDIENCE_CHAT_RENDER_FALSY = {"false", "0", "off", "no", "nein", ""}
 # OpenAI TTS voices for validation
 _VALID_TTS_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
 
+# Defaults applied when no profile.json exists (fresh install). Kept minimal
+# and universal — user-specific fields (background, domains, level) are left
+# absent so they don't override personal choices set during onboarding.
+_PROFILE_DEFAULTS: dict[str, Any] = {
+    "voice_audience_metaphors": "on",
+    "voice_audience_learning": 3,
+}
+
 
 def chat_render_enabled() -> bool:
     """True iff the layer-12 audience block should also land in the bridge's
@@ -141,9 +149,9 @@ def load(force: bool = False) -> dict[str, Any]:
         try:
             st = PROFILE_FILE.stat()
         except FileNotFoundError:
-            _cache = {}
+            _cache = dict(_PROFILE_DEFAULTS)
             _cache_mtime = 0.0
-            return {}
+            return dict(_PROFILE_DEFAULTS)
         if not force and _cache is not None and st.st_mtime == _cache_mtime:
             return _cache
         try:
