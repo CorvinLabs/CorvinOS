@@ -7,7 +7,7 @@
   "local_announce_outbound": "off",
   "routing": {
     "mode": "embedding",
-    "model": "claude-sonnet-4-6",
+    "model": "claude-sonnet-5",
     "fallback_persona": "assistant",
     "min_confidence": 0.5,
     "show_prefix": true

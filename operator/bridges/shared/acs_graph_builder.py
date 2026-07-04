@@ -254,7 +254,7 @@ def graph_to_awp_yaml(
                 "engine": "delegation_loop",
                 "delegation_loop": {
                     "manager": {
-                        "model": "claude-sonnet-4-6",
+                        "model": "claude-sonnet-5",
                         "prompt_template": "default",
                     },
                     "budget": {

@@ -62,7 +62,7 @@ except Exception:  # noqa: BLE001
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MODEL_MANAGER = "claude-sonnet-4-6"
+_DEFAULT_MODEL_MANAGER = "claude-sonnet-5"
 _DEFAULT_MODEL_WORKER = "claude-haiku-4-5-20251001"
 _MANAGER_OUTPUT_CAP = 65536   # 64 KB max manager JSON response
 _WORKER_OUTPUT_CAP = 131072   # 128 KB max worker response

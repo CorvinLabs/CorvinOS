@@ -30,8 +30,8 @@ engines:
         default: true
       - id: "claude-haiku-4-5-20251001"
         label: "Haiku 4.5 — fast, economical"
-      - id: "claude-sonnet-4-6"
-        label: "Sonnet 4.6 — balanced"
+      - id: "claude-sonnet-5"
+        label: "Sonnet 5 — balanced"
       - id: "claude-opus-4-8"
         label: "Opus 4.8 — max capability"
       - id: "claude-fable-5"
@@ -39,8 +39,8 @@ engines:
     worker_models:
       - id: "claude-haiku-4-5-20251001"
         label: "Haiku 4.5 — fast, economical"
-      - id: "claude-sonnet-4-6"
-        label: "Sonnet 4.6 — balanced"
+      - id: "claude-sonnet-5"
+        label: "Sonnet 5 — balanced"
       - id: "claude-opus-4-8"
         label: "Opus 4.8 — max capability (default)"
         default: true
@@ -56,8 +56,8 @@ engines:
       - id: ""
         label: "Provider default"
         default: true
-      - id: "anthropic/claude-sonnet-4-6"
-        label: "Claude Sonnet 4.6 (Anthropic)"
+      - id: "anthropic/claude-sonnet-5"
+        label: "Claude Sonnet 5 (Anthropic)"
       - id: "anthropic/claude-opus-4-8"
         label: "Claude Opus 4.8 (Anthropic)"
       - id: "ollama/qwen3:8b"
@@ -68,8 +68,8 @@ engines:
       - id: ""
         label: "Provider default"
         default: true
-      - id: "anthropic/claude-sonnet-4-6"
-        label: "Claude Sonnet 4.6 (Anthropic)"
+      - id: "anthropic/claude-sonnet-5"
+        label: "Claude Sonnet 5 (Anthropic)"
       - id: "anthropic/claude-haiku-4-5-20251001"
         label: "Claude Haiku 4.5 (Anthropic)"
       - id: "ollama/qwen3:8b"

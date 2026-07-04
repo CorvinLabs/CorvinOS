@@ -30,7 +30,7 @@ except Exception:  # pragma: no cover
     _mlog.addHandler(_logging.NullHandler())
 
 DEFAULT_LOW: Final[str] = "claude-haiku-4-5-20251001"
-DEFAULT_HIGH: Final[str] = "claude-sonnet-4-6"
+DEFAULT_HIGH: Final[str] = "claude-sonnet-5"
 DEFAULT_THRESHOLD_CHARS: Final[int] = 60_000
 _MIN_THRESHOLD: Final[int] = 20_000
 _MAX_THRESHOLD: Final[int] = 200_000
@@ -49,6 +49,7 @@ _CONTEXT_ERROR_PATTERNS: Final[tuple[str, ...]] = (
 _MODEL_RANK: Final[dict[str, int]] = {
     "claude-haiku-4-5-20251001": 1,
     "claude-haiku-4-5": 1,
+    "claude-sonnet-5": 2,
     "claude-sonnet-4-6": 2,
     "claude-opus-4-7": 3,
 }

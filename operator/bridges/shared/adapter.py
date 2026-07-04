@@ -7390,6 +7390,7 @@ def _move_inbox_with_attachments(inbox_file: Path, msg: dict | None) -> None:
 # ── /new ack helpers ─────────────────────────────────────────────────────────
 
 _MODEL_SHORT: dict[str, str] = {
+    "claude-sonnet-5":           "Sonnet 5",
     "claude-sonnet-4-6":         "Sonnet 4.6",
     "claude-haiku-4-5-20251001": "Haiku 4.5",
     "claude-haiku-4-5":          "Haiku 4.5",

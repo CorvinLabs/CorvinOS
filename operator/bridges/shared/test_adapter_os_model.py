@@ -28,7 +28,7 @@ sys.path.insert(0, str(SHARED))
 import adapter  # type: ignore  # noqa: E402
 
 HAIKU = "claude-haiku-4-5-20251001"
-SONNET = "claude-sonnet-4-6"
+SONNET = "claude-sonnet-5"
 OPUS = "claude-opus-4-7"
 
 

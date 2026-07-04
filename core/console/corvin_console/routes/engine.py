@@ -95,7 +95,7 @@ _ENGINE_METADATA: dict[str, dict] = {
         "local": False,
         "requires": "Provider key (Anthropic / OpenAI / Ollama…)",
         "model_placeholder": "ollama/qwen3:8b",
-        "model_examples": "ollama/qwen3:8b · ollama-cloud/qwen3-coder-next · anthropic/claude-sonnet-4-6",
+        "model_examples": "ollama/qwen3:8b · ollama-cloud/qwen3-coder-next · anthropic/claude-sonnet-5",
         "model_aliases": [],
         "os_capable": True,
     },
