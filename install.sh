@@ -61,8 +61,25 @@ if [ -n "$EDITABLE" ]; then
     echo "  Installing CorvinOS (editable) from $EDITABLE ..."
     uv tool install --force --editable "$EDITABLE"
 else
-    echo "  Installing $PKG (first run can take a minute) ..."
-    uv tool install --force --upgrade "$PKG"
+    # Query PyPI JSON API for the exact latest version so uv bypasses its
+    # local resolver cache (which can lag behind a freshly published release).
+    PINNED=""
+    if command -v curl >/dev/null 2>&1; then
+        PINNED=$(curl -fsSL --max-time 10 "https://pypi.org/pypi/${PKG}/json" 2>/dev/null \
+                 | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
+    fi
+    if [ -n "$PINNED" ]; then
+        echo "  Installing ${PKG}==${PINNED} ..."
+        uv tool install --force "${PKG}==${PINNED}" || {
+            # PyPI JSON reported the version but the simple index CDN may not
+            # have propagated it yet — fall back to whatever is available.
+            echo "  ⚠ ${PKG}==${PINNED} not yet on index — installing latest available ..."
+            uv tool install --force --upgrade "$PKG"
+        }
+    else
+        echo "  Installing $PKG (first run can take a minute) ..."
+        uv tool install --force --upgrade "$PKG"
+    fi
 fi
 uv tool update-shell >/dev/null 2>&1 || true   # persist ~/.local/bin on PATH
 

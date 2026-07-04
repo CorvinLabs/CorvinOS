@@ -90,6 +90,13 @@ if ($EditablePath -ne "") {
     if ($PinnedVersion -ne "") {
         Write-Step "Installing $Package==$PinnedVersion ..."
         uv tool install --force "$Package==$PinnedVersion"
+        if ($LASTEXITCODE -ne 0) {
+            # PyPI JSON API reported the version but the simple index hasn't
+            # propagated yet (CDN lag, typically < 60 s). Fall back to letting
+            # uv resolve whatever is currently available on the index.
+            Write-Warn "$Package==$PinnedVersion not yet on index — installing latest available instead ..."
+            uv tool install --force --upgrade --refresh-package $Package $Package
+        }
     } else {
         Write-Step "Installing $Package (latest available) ..."
         uv tool install --force --upgrade --refresh-package $Package $Package
