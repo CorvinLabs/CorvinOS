@@ -76,8 +76,24 @@ if ($EditablePath -ne "") {
     Write-Step "Installing CorvinOS (editable) from $EditablePath ..."
     uv tool install --force --editable $EditablePath
 } else {
-    Write-Step "Installing $Package (first run can take a minute) ..."
-    uv tool install --force --upgrade --refresh-package $Package $Package
+    # Fetch the latest published version from PyPI explicitly so the installer
+    # always picks up a fresh release — uv's local resolver cache can lag
+    # behind a newly pushed package by several minutes.
+    $PinnedVersion = ""
+    try {
+        $pypiInfo = Invoke-RestMethod -Uri "https://pypi.org/pypi/$Package/json" -TimeoutSec 10
+        $PinnedVersion = $pypiInfo.info.version
+    } catch {
+        Write-Warn "Could not reach PyPI — will let uv resolve the latest version."
+    }
+
+    if ($PinnedVersion -ne "") {
+        Write-Step "Installing $Package==$PinnedVersion ..."
+        uv tool install --force "$Package==$PinnedVersion"
+    } else {
+        Write-Step "Installing $Package (latest available) ..."
+        uv tool install --force --upgrade --refresh-package $Package $Package
+    }
 }
 if ($LASTEXITCODE -ne 0) { Write-Fail "install failed — see the error above" }
 $prevErrorAction = $ErrorActionPreference
