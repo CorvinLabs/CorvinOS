@@ -11,7 +11,7 @@
   <a href="docs/eu-ai-act/README.md"><img src="https://img.shields.io/badge/EU%20AI%20Act%202026-Enforced-3b82f6?style=flat-square&labelColor=161b22" alt="EU AI Act 2026 Enforced"/></a>
   <a href="docs/audit-and-compliance.md"><img src="https://img.shields.io/badge/GDPR-Art.%206%2C7%2C17%2C30%2C32-3b82f6?style=flat-square&labelColor=161b22" alt="GDPR Compliant"/></a>
   <img src="https://img.shields.io/badge/engines-Claude%20·%20Codex%20·%20OpenCode%20·%20Hermes%20·%20Copilot-a78bfa?style=flat-square&labelColor=161b22" alt="5 WorkerEngines"/>
-  <a href="https://api.corvin-labs.com/v1/stats/instances"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.corvin-labs.com%2Fv1%2Fstats%2Finstances&query=%24.active_7d&label=active%20instances%20%287d%29&style=flat-square&color=f97316&labelColor=161b22&cacheSeconds=3600" alt="Active Instances"/></a>
+  <a href="https://corvin-features-production.up.railway.app/v1/stats/instances"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcorvin-features-production.up.railway.app%2Fv1%2Fstats%2Finstances&query=%24.active_7d&label=active%20instances%20%287d%29&style=flat-square&color=f97316&labelColor=161b22&cacheSeconds=3600" alt="Active Instances"/></a>
 </p>
 
 <p align="center">
