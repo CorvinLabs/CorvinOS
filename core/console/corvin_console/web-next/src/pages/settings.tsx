@@ -5,7 +5,7 @@
  */
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Edit2, FileText, HeartPulse, Loader2, RefreshCw, Save, Upload, Wrench, X } from "lucide-react";
+import { Check, Edit2, FileText, HeartPulse, Loader2, RefreshCw, Save, Upload, Users, Wrench, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ReauthDialog } from "@/components/reauth-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/lib/auth";
-import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
+import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, getInstanceStats, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 
@@ -324,6 +324,56 @@ function TelemetryCard({ csrf }: { csrf: string }) {
   );
 }
 
+function InstanceStatsCard() {
+  const q = useQuery({
+    queryKey: ["instance-stats"],
+    queryFn: ({ signal }) => getInstanceStats(signal),
+    refetchInterval: 300_000,   // refresh every 5 min
+    retry: 1,
+  });
+
+  // If error or loading, show nothing (graceful degradation)
+  if (q.isError || (!q.data && !q.isLoading)) return null;
+
+  return (
+    <Card>
+      <CardContent className="pt-4 pb-3">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 min-w-0">
+            <Users className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <div>
+              <p className="text-sm font-medium">Active CorvinOS instances</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Anonymised count across all opted-in installations.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            {q.isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            ) : q.data ? (
+              <>
+                <div className="text-right">
+                  <p className="text-xs text-muted-foreground">7 days</p>
+                  <p className="text-lg font-mono font-semibold tabular-nums">
+                    ~{q.data.active_7d}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-muted-foreground">30 days</p>
+                  <p className="text-lg font-mono font-semibold tabular-nums text-muted-foreground">
+                    ~{q.data.active_30d}
+                  </p>
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function HealingCard({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
   const q = useQuery({
@@ -623,6 +673,7 @@ export function SettingsPage() {
         <h2 className="text-sm font-semibold text-foreground">Self-healing</h2>
         <HealingCard csrf={session!.csrf_token} />
         <TelemetryCard csrf={session!.csrf_token} />
+        <InstanceStatsCard />
       </div>
 
       <div className="space-y-2">

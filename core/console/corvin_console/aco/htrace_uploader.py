@@ -54,11 +54,15 @@ from .nerve import NerveFiber, NerveSignal, SEVERITY_OK, SEVERITY_LOW, SEVERITY_
 logger = logging.getLogger(__name__)
 
 _UPLOAD_URL_DEFAULT = "https://api.corvin-labs.com/v1/telemetry/healing-traces"
+_PING_URL_DEFAULT = "https://api.corvin-labs.com/v1/telemetry/ping"
 _UPLOAD_TIMEOUT_S = 30
+_PING_TIMEOUT_S = 8
+_PING_INTERVAL_S = 24 * 3600  # once per 24h
 _MAX_BUNDLE_BYTES = 5 * 1024 * 1024  # 5 MB compressed
 _MAX_BUNDLES_PER_DAY = 3
 _LOCK_FILENAME = ".upload.lock"
 _LAST_UPLOAD_FILENAME = ".last_upload"
+_LAST_PING_FILENAME = "last_ping"
 _CORVINLOGS_REPO = "CorvinLabs/CorvinLogs"
 
 
@@ -104,6 +108,73 @@ def _load_telemetry_token(home: Path) -> str:
 def _load_corvinlogs_token() -> str:
     """Fine-grained GitHub PAT with contents:write on CorvinLabs/CorvinLogs."""
     return os.environ.get("CORVINLOGS_GITHUB_TOKEN", "")
+
+
+def _last_ping_path(home: Path) -> Path:
+    return home / "aco" / "telemetry" / _LAST_PING_FILENAME
+
+
+def ping_if_due(home: Path) -> bool:
+    """Send a daily activity ping to api.corvin-labs.com/v1/telemetry/ping.
+
+    Returns True if the ping was sent (or already sent today), False on error.
+    Fail-soft: never raises, never blocks startup.
+    Gate: telemetry must be enabled (healing_traces_enabled(home)).
+    Rate: once per 24h, tracked by ~/.corvin/aco/telemetry/last_ping.
+    """
+    try:
+        # Gate: same double-gate as healing-trace uploads (YAML flag + ConsentAct).
+        if not healing_traces_enabled(home):
+            return False
+
+        # Rate-limit: skip if a ping was already sent within the last 24h.
+        stamp = _last_ping_path(home)
+        try:
+            if stamp.exists():
+                age = time.time() - stamp.stat().st_mtime
+                if age < _PING_INTERVAL_S:
+                    return True  # already done today
+        except OSError:
+            pass  # unreadable stamp — proceed to ping
+
+        telemetry_token = _load_telemetry_token(home)
+        instance_token = _load_instance_token(home)
+        instance_id = load_or_create_instance_id(home)
+
+        try:
+            from importlib.metadata import version as _pkg_version
+            corvin_version = _pkg_version("corvinos")
+        except Exception:  # noqa: BLE001
+            corvin_version = "unknown"
+
+        payload = json.dumps({"corvin_version": corvin_version}).encode("utf-8")
+        req = urllib.request.Request(
+            _PING_URL_DEFAULT,
+            data=payload,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {telemetry_token}",
+                "X-HTTrace-Instance-Token": instance_token,
+                "X-HTrace-Instance-Id": instance_id,
+            },
+        )
+        with urllib.request.urlopen(req, timeout=_PING_TIMEOUT_S) as resp:
+            status = resp.getcode()
+            if not (200 <= status < 300):
+                logger.debug("htrace: ping returned %d", status)
+                return False
+
+        # Record successful ping (touch the stamp with the current timestamp).
+        try:
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.write_text(str(int(time.time())), encoding="utf-8")
+        except OSError:
+            pass
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.debug("htrace: ping failed (non-fatal): %s", e)
+        return False
 
 
 def _upload_url(home: Path) -> str:
@@ -428,6 +499,11 @@ class HealingTraceUploaderFiber(NerveFiber):
 
         if not healing_traces_enabled(home):
             return []
+
+        # Daily activity ping (ADR-0180) — tells the server this instance is
+        # alive so global active-instance stats can be computed.  Rate-limited
+        # to once/24h internally; fail-soft, never blocks the upload cycle.
+        ping_if_due(home)
 
         if _already_uploaded_today(home):
             return []

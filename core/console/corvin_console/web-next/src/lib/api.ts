@@ -5283,3 +5283,16 @@ export async function repairSession(
     { method: "POST", body: { dry_run: dryRun }, signal },
   );
 }
+
+export interface InstanceStatsResponse {
+  active_7d: number;
+  active_30d: number;
+  updated_at: string;
+}
+
+export async function getInstanceStats(signal?: AbortSignal): Promise<InstanceStatsResponse> {
+  // Fetch from the PUBLIC endpoint — no auth needed.
+  const res = await fetch("https://api.corvin-labs.com/v1/stats/instances", { signal });
+  if (!res.ok) throw new Error(`stats fetch failed: ${res.status}`);
+  return res.json();
+}
