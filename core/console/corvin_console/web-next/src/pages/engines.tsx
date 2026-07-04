@@ -64,11 +64,13 @@ import {
   listEngines, updateEngineKey,
   getOsEngineSetting, setOsEngineSetting, getOsEngineHealth,
   getEngineCatalog, getLicenseInfo, getEngineModelRegistry,
+  getEngineProviders, getProviderModels,
   listCustomEngines, registerCustomEngine, removeCustomEngine, pingCustomEngine,
   detectEngines, bootstrapHermes,
   type EngineInfo, type EngineCatalogEntry, type EngineModelConfig,
   type CustomEngineManifest, type CustomEngineRegisterRequest,
   type EngineProbeResult, type CredentialSource,
+  type ProviderSpec, type ProviderModelsResponse,
 } from "@/lib/api";
 import { LicenseGate, isEngineAllowed } from "@/components/license-gate";
 import { cn } from "@/lib/utils";
@@ -998,9 +1000,31 @@ function PerEngineModelConfig({ csrf }: { csrf: string }) {
     staleTime: 3 * 60_000,
     refetchOnWindowFocus: false,
   });
+  // ADR-0181 — provider catalogue (for labels) + live-fetched model lists.
+  const providersQ = useQuery({
+    queryKey: ["engine-providers"],
+    queryFn: ({ signal }) => getEngineProviders(signal),
+    staleTime: 60_000,
+  });
+  const providers: Record<string, ProviderSpec> = providersQ.data ?? {};
 
   const [local, setLocal] = React.useState<Record<string, EngineModelConfig>>({});
   const [saved, setSaved] = React.useState(false);
+  // Live models fetched per provider (ADR-0181), keyed by provider id.
+  const [liveModels, setLiveModels] = React.useState<Record<string, ProviderModelsResponse>>({});
+  const [fetching, setFetching] = React.useState<string | null>(null);
+  const [warnings, setWarnings] = React.useState<string[]>([]);
+
+  const fetchModelsFor = async (provider: string) => {
+    if (!provider) return;
+    setFetching(provider);
+    try {
+      const res = await getProviderModels(provider);
+      setLiveModels((prev) => ({ ...prev, [provider]: res }));
+    } finally {
+      setFetching(null);
+    }
+  };
 
   React.useEffect(() => {
     if (settingQ.data) {
@@ -1017,8 +1041,9 @@ function PerEngineModelConfig({ csrf }: { csrf: string }) {
         default_worker_model: settingQ.data?.default_worker_model ?? null,
         engine_models: engineModels,
       }, csrf),
-    onSuccess: () => {
+    onSuccess: (data) => {
       setSaved(true);
+      setWarnings(data?.compliance_warnings ?? []);
       setTimeout(() => setSaved(false), 2500);
       qc.invalidateQueries({ queryKey: ["os-engine-setting"] });
     },
@@ -1042,6 +1067,7 @@ function PerEngineModelConfig({ csrf }: { csrf: string }) {
     role: "os_model" | "worker_model",
     value: string,
   ) => {
+    setWarnings([]);
     setLocal((prev) => ({
       ...prev,
       [engineId]: {
@@ -1053,9 +1079,42 @@ function PerEngineModelConfig({ csrf }: { csrf: string }) {
     }));
   };
 
+  const handleProviderChange = (engineId: string, provider: string) => {
+    setWarnings([]);
+    setLocal((prev) => ({
+      ...prev,
+      [engineId]: {
+        // Clear the models: a model belongs to a provider, so keeping an id from
+        // the previous provider would persist an invalid pair (review MEDIUM).
+        os_model: null,
+        worker_model: null,
+        provider: provider || null,
+      },
+    }));
+    if (provider) {
+      const src = providers[provider]?.model_source;
+      if (src && src !== "static" && !liveModels[provider]) void fetchModelsFor(provider);
+    }
+  };
+
   const handleSave = () => mutation.mutate(local);
 
-  const isDirty = JSON.stringify(local) !== JSON.stringify(settingQ.data?.engine_models ?? {});
+  // Canonical, null/empty-stripped, key-sorted serialization so that touching a
+  // dropdown and re-selecting the same value (or an explicit provider:null) does
+  // NOT flip isDirty (review MEDIUM).
+  const canonEm = (em: Record<string, EngineModelConfig> | undefined) => {
+    const norm: Record<string, Record<string, string>> = {};
+    for (const k of Object.keys(em ?? {}).sort()) {
+      const v = (em as Record<string, EngineModelConfig>)[k];
+      const e: Record<string, string> = {};
+      if (v?.os_model) e.os_model = v.os_model;
+      if (v?.worker_model) e.worker_model = v.worker_model;
+      if (v?.provider) e.provider = v.provider;
+      if (Object.keys(e).length) norm[k] = e;
+    }
+    return JSON.stringify(norm);
+  };
+  const isDirty = canonEm(local) !== canonEm(settingQ.data?.engine_models);
 
   // Only show engines that have configurable models AND are installed on this system.
   const detectedModelIds = detectQ.data?.results?.length
@@ -1065,7 +1124,8 @@ function PerEngineModelConfig({ csrf }: { csrf: string }) {
     ([engineId, spec]) => {
       const hasModels =
         (spec.os_models.length > 0 && spec.supports_os_turn) ||
-        spec.worker_models.length > 0;
+        spec.worker_models.length > 0 ||
+        (spec.supported_providers?.length ?? 0) > 0;  // provider-only engines still configurable
       if (!hasModels) return false;
       return !detectedModelIds || detectedModelIds.has(engineId);
     },
@@ -1105,7 +1165,19 @@ function PerEngineModelConfig({ csrf }: { csrf: string }) {
         {!isLoading && configurableEngines.length > 0 && (
           <div className="space-y-3">
             {configurableEngines.map(([engineId, spec]) => {
-              const current = local[engineId] ?? { os_model: null, worker_model: null };
+              const current: EngineModelConfig =
+                local[engineId] ?? { os_model: null, worker_model: null, provider: null };
+              const supProviders = spec.supported_providers ?? [];
+              const selectedProvider = current.provider ?? "";
+              const live = selectedProvider ? liveModels[selectedProvider] : undefined;
+              const mergeOpts = (curated: { id: string; label: string }[]) => {
+                const seen = new Set<string>();
+                const out: { id: string; label: string }[] = [];
+                for (const m of [...curated, ...(live?.models ?? [])]) {
+                  if (m.id && !seen.has(m.id)) { seen.add(m.id); out.push({ id: m.id, label: m.label }); }
+                }
+                return out;
+              };
               return (
                 <div
                   key={engineId}
@@ -1122,46 +1194,86 @@ function PerEngineModelConfig({ csrf }: { csrf: string }) {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {/* OS model */}
-                    {spec.supports_os_turn && spec.os_models.length > 0 && (
-                      <div className="space-y-1">
-                        <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">
-                          OS model
-                        </Label>
+                  {/* ADR-0181 — provider selector + live model fetch */}
+                  {supProviders.length > 0 && (
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">
+                        Provider
+                      </Label>
+                      <div className="flex flex-wrap items-center gap-2">
                         <select
-                          value={current.os_model ?? ""}
-                          onChange={(e) => handleModelChange(engineId, "os_model", e.target.value)}
-                          className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                          value={selectedProvider}
+                          onChange={(e) => handleProviderChange(engineId, e.target.value)}
+                          className="h-8 rounded-md border border-input bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-ring"
                         >
-                          {spec.os_models.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.label}
+                          <option value="">Native (default)</option>
+                          {supProviders.map((p) => (
+                            <option key={p.provider} value={p.provider}>
+                              {(providers[p.provider]?.label ?? p.provider) + (p.native ? "" : " (via proxy)")}
                             </option>
                           ))}
                         </select>
+                        {selectedProvider && providers[selectedProvider]?.model_source !== "static" && (
+                          <Button
+                            type="button" size="sm" variant="outline" className="h-8 text-[11px]"
+                            onClick={() => fetchModelsFor(selectedProvider)}
+                            disabled={fetching === selectedProvider}
+                          >
+                            {fetching === selectedProvider ? "Fetching…" : "Fetch models"}
+                          </Button>
+                        )}
+                        {live && (
+                          <span className="text-[10px] text-muted-foreground">
+                            {live.reachable ? `${live.count} models` : (live.error ?? "unreachable")}
+                          </span>
+                        )}
                       </div>
-                    )}
+                      {selectedProvider && providers[selectedProvider]?.kind === "cloud" && (
+                        <p className="text-[10px] text-amber-600">
+                          Cloud provider — turns egress data; L34/L35 apply. Set{" "}
+                          <code>{providers[selectedProvider]?.credential_env || "the API key"}</code> in the vault.
+                        </p>
+                      )}
+                      {(() => {
+                        const note = supProviders.find((p) => p.provider === selectedProvider)?.note;
+                        return note ? <p className="text-[10px] text-muted-foreground">{note}</p> : null;
+                      })()}
+                    </div>
+                  )}
 
-                    {/* Worker model */}
-                    {spec.supports_worker_turn && spec.worker_models.length > 0 && (
-                      <div className="space-y-1">
-                        <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">
-                          Worker model
-                        </Label>
-                        <select
-                          value={current.worker_model ?? ""}
-                          onChange={(e) => handleModelChange(engineId, "worker_model", e.target.value)}
-                          className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-ring"
-                        >
-                          {spec.worker_models.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {(["os_model", "worker_model"] as const).map((role) => {
+                      const supported = role === "os_model" ? spec.supports_os_turn : spec.supports_worker_turn;
+                      const curated = role === "os_model" ? spec.os_models : spec.worker_models;
+                      if (!supported || (curated.length === 0 && !selectedProvider)) return null;
+                      const opts = mergeOpts(curated);
+                      const value = current[role] ?? "";
+                      const inList = opts.some((m) => m.id === value);
+                      return (
+                        <div key={role} className="space-y-1">
+                          <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">
+                            {role === "os_model" ? "OS model" : "Worker model"}
+                          </Label>
+                          <select
+                            value={inList ? value : "__custom__"}
+                            onChange={(e) => e.target.value !== "__custom__" && handleModelChange(engineId, role, e.target.value)}
+                            className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                          >
+                            {opts.map((m) => (
+                              <option key={m.id} value={m.id}>{m.label}</option>
+                            ))}
+                            <option value="__custom__">— custom (type below) —</option>
+                          </select>
+                          <input
+                            type="text"
+                            value={value}
+                            onChange={(e) => handleModelChange(engineId, role, e.target.value)}
+                            placeholder="or type a model id"
+                            className="w-full h-7 rounded-md border border-input bg-background px-2 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-ring"
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -1195,6 +1307,17 @@ function PerEngineModelConfig({ csrf }: { csrf: string }) {
             <span className="ml-auto text-[10px] text-muted-foreground">
               Takes effect on next turn
             </span>
+          </div>
+        )}
+
+        {warnings.length > 0 && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 space-y-1">
+            <p className="text-[11px] font-semibold text-amber-700 flex items-center gap-1">
+              <AlertTriangle className="h-3 w-3" /> Compliance advisories (L34/L35)
+            </p>
+            {warnings.map((w, i) => (
+              <p key={i} className="text-[10px] text-amber-700/90">{w}</p>
+            ))}
           </div>
         )}
       </CardContent>

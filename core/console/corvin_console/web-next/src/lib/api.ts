@@ -1983,6 +1983,8 @@ export async function updateEngineKey(
 export interface EngineModelConfig {
   os_model: string | null;
   worker_model: string | null;
+  // ADR-0181 — model provider id (anthropic/openai/ollama_local/ollama_cloud/openrouter)
+  provider?: string | null;
 }
 
 export interface OsEngineSetting {
@@ -2000,6 +2002,8 @@ export interface OsEngineSetting {
   engine_models: Record<string, EngineModelConfig>;
   // Delegation flag — true when web_chat.delegation_enabled is set
   delegation_enabled: boolean;
+  // ADR-0181 — L34/L35 advisories raised when saving cloud-model assignments
+  compliance_warnings?: string[];
 }
 
 export interface OsEngineHealth {
@@ -2205,6 +2209,12 @@ export interface EngineModelEntry {
   default: boolean;
 }
 
+export interface EngineProviderSupport {
+  provider: string;
+  native: boolean;
+  note: string;
+}
+
 export interface EngineRegistryEntry {
   label: string;
   supports_os_turn: boolean;
@@ -2212,12 +2222,49 @@ export interface EngineRegistryEntry {
   supports_task_type_steering: boolean;
   os_models: EngineModelEntry[];
   worker_models: EngineModelEntry[];
+  // ADR-0181 — providers this engine can drive
+  supported_providers?: EngineProviderSupport[];
 }
 
 export async function getEngineModelRegistry(
   signal?: AbortSignal,
 ): Promise<Record<string, EngineRegistryEntry>> {
   return api<Record<string, EngineRegistryEntry>>("/settings/engine/registry", { signal });
+}
+
+// ── Model providers + live model fetch (ADR-0181) ─────────────────────
+
+export interface ProviderSpec {
+  label: string;
+  base_url: string;
+  model_source: string;   // static | ollama | openrouter
+  credential_env: string; // env-var NAME only, never a secret value
+  kind: string;           // local | cloud
+}
+
+export async function getEngineProviders(
+  signal?: AbortSignal,
+): Promise<Record<string, ProviderSpec>> {
+  return api<Record<string, ProviderSpec>>("/settings/engine/providers", { signal });
+}
+
+export interface ProviderModelsResponse {
+  provider: string;
+  reachable: boolean;
+  models: { id: string; label: string }[];
+  count: number;
+  error: string | null;
+  note?: string;
+}
+
+export async function getProviderModels(
+  provider: string,
+  signal?: AbortSignal,
+): Promise<ProviderModelsResponse> {
+  return api<ProviderModelsResponse>(
+    `/settings/engine/models?provider=${encodeURIComponent(provider)}`,
+    { signal },
+  );
 }
 
 // ── Per-chat engine preference (ADR-0067) ─────────────────────────

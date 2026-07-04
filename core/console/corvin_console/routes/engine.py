@@ -263,6 +263,9 @@ class EngineModelConfig(BaseModel):
     """Per-engine model configuration for OS-turn and worker-turn."""
     os_model: str | None = Field(None, description="OS-turn model override; null = adaptive default")
     worker_model: str | None = Field(None, description="Worker-turn model override; null = global default")
+    provider: str | None = Field(
+        None, description="ADR-0181 model provider id (anthropic/openai/ollama_local/"
+                          "ollama_cloud/openrouter); null = engine's native provider")
 
 
 class EngineSettingResponse(BaseModel):
@@ -302,6 +305,12 @@ class EngineSettingResponse(BaseModel):
     delegation_enabled: bool = Field(
         False,
         description="True when web_chat.delegation_enabled is set; enables the ACS Workflow Graph",
+    )
+    # ADR-0181 — compliance advisories raised while saving cloud-model assignments.
+    compliance_warnings: list[str] = Field(
+        default_factory=list,
+        description="L34/L35 advisories for cloud-model assignments (non-blocking; the "
+                    "spawn gate is the hard enforcement)",
     )
 
 
@@ -360,6 +369,7 @@ def get_engine_setting(
         eid: EngineModelConfig(
             os_model=cfg.get("os_model") or None,
             worker_model=cfg.get("worker_model") or None,
+            provider=cfg.get("provider") or None,
         )
         for eid, cfg in raw_em.items()
         if isinstance(cfg, dict)
@@ -472,13 +482,33 @@ def put_engine_setting(
 
     # Per-engine model config (ADR-0119) — only written when body provides the field
     if body.engine_models is not None:
+        # ADR-0181: validate any provider against the registry (+ the engine's
+        # supported_providers) so a garbage provider can't persist silently.
+        try:
+            from engine_models import load_providers, load_registry  # type: ignore[import]
+            _known_providers = load_providers()
+            _registry = load_registry()
+        except Exception:  # noqa: BLE001
+            _known_providers, _registry = {}, {}
         serialised: dict[str, Any] = {}
         for eid, cfg in body.engine_models.items():
+            if cfg.provider:
+                if cfg.provider not in _known_providers:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"unknown provider '{cfg.provider}' for engine '{eid}'")
+                _supported = {p.provider for p in getattr(_registry.get(eid), "supported_providers", [])}
+                if _supported and cfg.provider not in _supported:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"engine '{eid}' does not support provider '{cfg.provider}'")
             entry: dict[str, Any] = {}
             if cfg.os_model:
                 entry["os_model"] = cfg.os_model
             if cfg.worker_model:
                 entry["worker_model"] = cfg.worker_model
+            if cfg.provider:
+                entry["provider"] = cfg.provider
             if entry:
                 serialised[eid] = entry
         if serialised:
@@ -516,6 +546,7 @@ def put_engine_setting(
         eid: EngineModelConfig(
             os_model=cfg.get("os_model") or None,
             worker_model=cfg.get("worker_model") or None,
+            provider=cfg.get("provider") or None,
         )
         for eid, cfg in raw_em.items()
         if isinstance(cfg, dict)
@@ -533,6 +564,7 @@ def put_engine_setting(
         valid_worker_engines=[e["id"] for e in _engine_catalog()],
         engine_models=engine_models,
         delegation_enabled=bool(_saved_wc.get("delegation_enabled", False)),
+        compliance_warnings=_assess_model_compliance(engine_models, _rec.tenant_id),
     )
 
 
@@ -587,6 +619,95 @@ def get_engine_model_registry(
         return registry_as_dict(force_reload=True)
     except Exception:  # noqa: BLE001
         return {}
+
+
+def _egress_denied(base_url: str, tenant_id: str) -> str | None:
+    """L35: return a block message if the active egress policy denies this host,
+    else None (allow). Fail-OPEN on operational error / disabled policy — matches
+    the adapter's egress semantics — but honours an EXPLICIT policy denial."""
+    try:
+        from urllib.parse import urlparse
+        from egress_gate import load_egress_gate_for_tenant  # type: ignore[import]
+        host = urlparse(base_url).hostname or ""
+        gate = load_egress_gate_for_tenant(tenant_id or "_default")
+        if gate is None or not host:
+            return None
+        try:
+            gate.validate_or_raise(host)
+            return None
+        except Exception as e:  # noqa: BLE001 — explicit denial
+            return (f"Egress to '{host}' is blocked by the L35 policy — add it to "
+                    f"allowed_hosts to fetch this provider's models. ({str(e)[:120]})")
+    except Exception:  # noqa: BLE001 — gate unavailable → don't break the model list
+        return None
+
+
+def _assess_model_compliance(engine_models: dict, tenant_id: str) -> list[str]:
+    """ADR-0181 — non-blocking advisories when an engine is pointed at a CLOUD
+    provider. HONEST about the runtime: the ``provider`` field records the choice
+    and drives the model picker/live-fetch; actual cloud egress happens only when
+    the engine runs a cloud MODEL STRING at spawn (e.g. OpenCode's 'provider/model'
+    routing), where the pre-spawn L34/L35 gates apply. Cross-engine PROXY routing
+    (e.g. Claude Code → OpenRouter) is not yet runtime-wired (ADR-0181 M3)."""
+    warnings: list[str] = []
+    try:
+        from engine_models import load_providers  # type: ignore[import]
+        providers = load_providers()
+    except Exception:  # noqa: BLE001
+        return warnings
+    for eid, cfg in (engine_models or {}).items():
+        pid = getattr(cfg, "provider", None)
+        spec = providers.get(pid) if pid else None
+        if spec is None or spec.kind != "cloud":
+            continue
+        denied = _egress_denied(spec.base_url, tenant_id)
+        if denied:
+            warnings.append(f"{eid}: {denied}")
+        warnings.append(
+            f"{eid}: '{spec.label}' is a cloud provider. Store your API key under "
+            f"{spec.credential_env or 'the provider env var'} in the vault. Cloud egress "
+            f"occurs when the engine runs a cloud model at spawn, where L34/L35 apply; "
+            f"cross-engine proxy routing to this provider is not yet runtime-wired (M3).")
+    return warnings
+
+
+@router.get("/providers")
+def get_engine_providers(
+    _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict:
+    """ADR-0181 — model providers (Anthropic, OpenAI, Ollama local/cloud,
+    OpenRouter). ``credential_env`` is the env-var NAME only, never a secret."""
+    try:
+        from engine_models import providers_as_dict  # type: ignore[import]
+        return providers_as_dict(force_reload=True)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+@router.get("/models")
+def get_provider_models(
+    provider: str,
+    _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict:
+    """ADR-0181 — live-fetch the models a provider offers right now (Ollama
+    /api/tags, OpenRouter /models). Cloud providers are network egress: the host
+    must pass the L35 gate before we reach out to it."""
+    try:
+        from engine_models import load_providers  # type: ignore[import]
+        from engine_providers import fetch_models  # type: ignore[import]
+    except Exception as exc:  # noqa: BLE001
+        return {"provider": provider, "reachable": False, "models": [],
+                "error": f"module error: {exc}"}
+    spec = load_providers(force_reload=True).get(provider)
+    if spec is None:
+        return {"provider": provider, "reachable": False, "models": [],
+                "error": f"unknown provider '{provider}'"}
+    if spec.kind == "cloud" and spec.base_url:
+        denied = _egress_denied(spec.base_url, getattr(_rec, "tenant_id", "_default"))
+        if denied:
+            return {"provider": provider, "reachable": False, "models": [], "error": denied}
+    return fetch_models(provider, base_url=spec.base_url,
+                        model_source=spec.model_source, credential_env=spec.credential_env)
 
 
 @router.get("/detect")

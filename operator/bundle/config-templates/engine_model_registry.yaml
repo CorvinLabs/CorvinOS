@@ -17,6 +17,48 @@
 #
 # Empty os_models / worker_models → no model selection for that role.
 # Hermes models are Ollama aliases; actual model IDs can be set as free-text.
+#
+# ADR-0181 — Providers: a model source + how to reach it. Each engine lists the
+# providers it can drive (supported_providers); the console offers those, merges
+# the curated os_models/worker_models above with live-fetched + free-text models.
+#   base_url       — provider API base (must be on the L35 egress allowlist for cloud)
+#   model_source   — static | ollama | openrouter (how the live list is fetched)
+#   credential_env — env-var NAME for the API key (value lives in the L16 vault; never here)
+#   kind           — local | cloud (cloud = network egress → L34/L35 re-evaluated on assign)
+# supported_providers per engine: {provider, native, note}. native=false means the
+# engine reaches the provider via a proxy/redirect (labelled as such in the UI).
+
+providers:
+  anthropic:
+    label: "Anthropic (Claude)"
+    base_url: "https://api.anthropic.com"
+    model_source: "static"
+    credential_env: "ANTHROPIC_API_KEY"
+    kind: "cloud"
+  openai:
+    label: "OpenAI"
+    base_url: "https://api.openai.com/v1"
+    model_source: "static"
+    credential_env: "OPENAI_API_KEY"
+    kind: "cloud"
+  ollama_local:
+    label: "Ollama (local)"
+    base_url: "http://localhost:11434"
+    model_source: "ollama"
+    credential_env: ""
+    kind: "local"
+  ollama_cloud:
+    label: "Ollama Cloud"
+    base_url: "https://ollama.com"
+    model_source: "ollama"
+    credential_env: "OLLAMA_API_KEY"
+    kind: "cloud"
+  openrouter:
+    label: "OpenRouter"
+    base_url: "https://openrouter.ai/api/v1"
+    model_source: "openrouter"
+    credential_env: "OPENROUTER_API_KEY"
+    kind: "cloud"
 
 engines:
   claude_code:
@@ -24,6 +66,16 @@ engines:
     supports_os_turn: true
     supports_worker_turn: true
     supports_task_type_steering: false
+    supported_providers:
+      - provider: "anthropic"
+        native: true
+        note: ""
+      - provider: "ollama_local"
+        native: false
+        note: "via claude_code_local redirect (ANTHROPIC_BASE_URL → local proxy)"
+      - provider: "openrouter"
+        native: false
+        note: "via Anthropic-compatible base-URL proxy"
     os_models:
       - id: ""
         label: "Adaptive — Haiku ≤60K chars, Sonnet above (default)"
@@ -52,6 +104,22 @@ engines:
     supports_os_turn: true
     supports_worker_turn: true
     supports_task_type_steering: false
+    supported_providers:
+      - provider: "anthropic"
+        native: true
+        note: ""
+      - provider: "openai"
+        native: true
+        note: ""
+      - provider: "ollama_local"
+        native: true
+        note: ""
+      - provider: "ollama_cloud"
+        native: true
+        note: ""
+      - provider: "openrouter"
+        native: true
+        note: ""
     os_models:
       - id: ""
         label: "Provider default"
@@ -80,6 +148,13 @@ engines:
     supports_os_turn: true
     supports_worker_turn: true
     supports_task_type_steering: false
+    supported_providers:
+      - provider: "ollama_local"
+        native: true
+        note: ""
+      - provider: "ollama_cloud"
+        native: true
+        note: ""
     os_models:
       - id: "hermes-balanced"
         label: "hermes-balanced (default)"
@@ -106,6 +181,10 @@ engines:
     supports_os_turn: false
     supports_worker_turn: true
     supports_task_type_steering: false
+    supported_providers:
+      - provider: "openai"
+        native: true
+        note: ""
     os_models: []
     worker_models:
       - id: ""
@@ -117,6 +196,7 @@ engines:
     supports_os_turn: false
     supports_worker_turn: true
     supports_task_type_steering: true
+    supported_providers: []
     os_models: []
     worker_models:
       - id: ""

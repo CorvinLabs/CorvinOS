@@ -40,6 +40,26 @@ class EngineModelEntry:
 
 
 @dataclass
+class ProviderSpec:
+    """A model source + how to reach it (ADR-0181). ``credential_env`` is the env
+    var NAME holding the API key (value lives in the L16 vault, never here)."""
+    id: str
+    label: str
+    base_url: str = ""
+    model_source: str = "static"     # static | ollama | openrouter
+    credential_env: str = ""
+    kind: str = "cloud"              # local | cloud
+
+
+@dataclass
+class EngineProviderSupport:
+    """Which provider an engine can drive. ``native=False`` = via proxy/redirect."""
+    provider: str
+    native: bool = True
+    note: str = ""
+
+
+@dataclass
 class EngineModelSpec:
     engine_id: str
     label: str
@@ -48,6 +68,7 @@ class EngineModelSpec:
     supports_task_type_steering: bool
     os_models: list[EngineModelEntry] = field(default_factory=list)
     worker_models: list[EngineModelEntry] = field(default_factory=list)
+    supported_providers: list[EngineProviderSupport] = field(default_factory=list)
 
     def default_os_model(self) -> str | None:
         for m in self.os_models:
@@ -67,37 +88,74 @@ class EngineModelSpec:
 # ---------------------------------------------------------------------------
 
 _registry_cache: dict[str, EngineModelSpec] | None = None
+_providers_cache: dict[str, ProviderSpec] | None = None
 
 
-def load_registry(force_reload: bool = False) -> dict[str, EngineModelSpec]:
-    """Load the engine model registry from YAML. Cached after first load."""
-    global _registry_cache  # noqa: PLW0603
-    if _registry_cache is not None and not force_reload:
-        return _registry_cache
+def _load_raw(force_reload: bool) -> None:
+    """Parse the YAML once into both the engine registry + provider caches.
 
+    On ANY read/parse failure we do NOT clobber a previously-good cache (that
+    would let a transient unreadable-file window during a force-reload silently
+    wipe the registry for every other reader — review MEDIUM). We only fall back
+    to empty when nothing has ever loaded. Both caches are committed atomically
+    at the end, so a mid-parse error can never leave one populated + one None."""
+    global _registry_cache, _providers_cache  # noqa: PLW0603
+    if _registry_cache is not None and _providers_cache is not None and not force_reload:
+        return
     try:
         import yaml  # type: ignore[import-untyped]
         raw: dict[str, Any] = yaml.safe_load(_REGISTRY_FILE.read_text("utf-8")) or {}
+        providers, result = _parse_raw(raw)
     except Exception:
-        _registry_cache = {}
-        return _registry_cache
+        if _registry_cache is None:
+            _registry_cache = {}
+        if _providers_cache is None:
+            _providers_cache = {}
+        return
+    _providers_cache = providers
+    _registry_cache = result
+
+
+def _parse_raw(raw: dict[str, Any]) -> "tuple[dict[str, ProviderSpec], dict[str, EngineModelSpec]]":
+    # providers
+    providers: dict[str, ProviderSpec] = {}
+    for pid, p in (raw.get("providers") or {}).items():
+        if isinstance(p, dict):
+            providers[pid] = ProviderSpec(
+                id=pid,
+                label=str(p.get("label") or pid),
+                base_url=str(p.get("base_url") or ""),
+                model_source=str(p.get("model_source") or "static"),
+                credential_env=str(p.get("credential_env") or ""),
+                kind=str(p.get("kind") or "cloud"),
+            )
+
+    def _parse_models(raw_list: Any) -> list[EngineModelEntry]:
+        out = []
+        for item in (raw_list or []):
+            if isinstance(item, dict):
+                out.append(EngineModelEntry(
+                    id=str(item.get("id") or ""),
+                    label=str(item.get("label") or ""),
+                    default=bool(item.get("default", False)),
+                ))
+        return out
+
+    def _parse_providers(raw_list: Any) -> list[EngineProviderSupport]:
+        out = []
+        for item in (raw_list or []):
+            if isinstance(item, dict) and item.get("provider"):
+                out.append(EngineProviderSupport(
+                    provider=str(item["provider"]),
+                    native=bool(item.get("native", True)),
+                    note=str(item.get("note") or ""),
+                ))
+        return out
 
     result: dict[str, EngineModelSpec] = {}
     for engine_id, entry in (raw.get("engines") or {}).items():
         if not isinstance(entry, dict):
             continue
-
-        def _parse_models(raw_list: Any) -> list[EngineModelEntry]:
-            out = []
-            for item in (raw_list or []):
-                if isinstance(item, dict):
-                    out.append(EngineModelEntry(
-                        id=str(item.get("id") or ""),
-                        label=str(item.get("label") or ""),
-                        default=bool(item.get("default", False)),
-                    ))
-            return out
-
         result[engine_id] = EngineModelSpec(
             engine_id=engine_id,
             label=str(entry.get("label") or engine_id),
@@ -106,10 +164,21 @@ def load_registry(force_reload: bool = False) -> dict[str, EngineModelSpec]:
             supports_task_type_steering=bool(entry.get("supports_task_type_steering", False)),
             os_models=_parse_models(entry.get("os_models")),
             worker_models=_parse_models(entry.get("worker_models")),
+            supported_providers=_parse_providers(entry.get("supported_providers")),
         )
+    return providers, result
 
-    _registry_cache = result
-    return result
+
+def load_registry(force_reload: bool = False) -> dict[str, EngineModelSpec]:
+    """Load the engine model registry from YAML. Cached after first load."""
+    _load_raw(force_reload)
+    return _registry_cache or {}
+
+
+def load_providers(force_reload: bool = False) -> dict[str, ProviderSpec]:
+    """Load the provider registry from YAML (ADR-0181). Cached after first load."""
+    _load_raw(force_reload)
+    return _providers_cache or {}
 
 
 def registry_as_dict(force_reload: bool = False) -> dict[str, Any]:
@@ -127,8 +196,24 @@ def registry_as_dict(force_reload: bool = False) -> dict[str, Any]:
             "supports_task_type_steering": spec.supports_task_type_steering,
             "os_models": [{"id": m.id, "label": m.label, "default": m.default} for m in spec.os_models],
             "worker_models": [{"id": m.id, "label": m.label, "default": m.default} for m in spec.worker_models],
+            "supported_providers": [
+                {"provider": p.provider, "native": p.native, "note": p.note}
+                for p in spec.supported_providers
+            ],
         }
     return result
+
+
+def providers_as_dict(force_reload: bool = False) -> dict[str, Any]:
+    """Return the provider registry as JSON for the console API (ADR-0181).
+    ``credential_env`` is the env-var NAME only — never a secret value."""
+    return {
+        pid: {
+            "label": p.label, "base_url": p.base_url, "model_source": p.model_source,
+            "credential_env": p.credential_env, "kind": p.kind,
+        }
+        for pid, p in load_providers(force_reload=force_reload).items()
+    }
 
 
 # ---------------------------------------------------------------------------
