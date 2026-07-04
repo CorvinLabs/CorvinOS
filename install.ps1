@@ -58,10 +58,11 @@ if ($Editable -ne "") {
 # ── 1. ensure uv (brings its own Python → zero prerequisites) ─────────────────
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Step "Bootstrapping the uv runtime (brings its own Python) ..."
-    # Use [scriptblock]::Create instead of iex so that `exit` inside the uv
-    # installer only exits the scriptblock, not the parent PowerShell session.
-    # With irm|iex a nested iex that calls exit terminates the whole session.
-    & ([scriptblock]::Create((irm https://astral.sh/uv/install.ps1)))
+    # Run the uv installer in a child powershell.exe process.
+    # Any `exit` call inside the uv installer terminates the CHILD process,
+    # not our session.  [scriptblock]::Create and iex both propagate `exit`
+    # up to the parent session in PS 5.1 — only a real child process is safe.
+    powershell -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
     # uv installs to %USERPROFILE%\.local\bin — make it usable in THIS session.
     $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
 }
