@@ -640,9 +640,10 @@ export function VoicePage() {
                     <>
                       <Select
                         value={currentProvider}
-                        onChange={(e) =>
-                          updateAudience("tts_provider", e.target.value as TtsProvider || null)
-                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          updateAudience("tts_provider", (v === "auto" || !v) ? null : v as TtsProvider);
+                        }}
                       >
                         {TTS_PROVIDER_OPTIONS.map((opt) => (
                           <option key={opt.value} value={opt.value}>

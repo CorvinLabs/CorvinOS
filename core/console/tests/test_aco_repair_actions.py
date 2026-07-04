@@ -246,5 +246,92 @@ def test_stale_running_task_reset(tmp_path, monkeypatch):
     assert _j.loads(live.read_text())["status"] == "running"     # live pid → untouched
 
 
+# ── VoiceTtsPinnedProviderReset ───────────────────────────────────────────────
+
+def test_voice_tts_pinned_provider_reset_clears_unusable_provider(tmp_path, monkeypatch):
+    """When tts_provider is pinned to an unusable provider, the action resets it to None."""
+    import json as _j
+    import sys as _sys
+
+    # Build a minimal stub profile module pointing at tmp_path/profile.json.
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text('{"tts_provider": "openai"}', encoding="utf-8")
+
+    _cache: dict = {}
+
+    class _FakeProfileModule:
+        def load(self):
+            return _j.loads(profile_path.read_text())
+        def save(self, data):
+            profile_path.write_text(_j.dumps(data), encoding="utf-8")
+
+    fake_mod = _FakeProfileModule()
+
+    action = RA.VoiceTtsPinnedProviderReset()
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)  # ensure OpenAI is "broken"
+
+    # Patch _load_profile_module to return our fake module.
+    monkeypatch.setattr(action, "_load_profile_module", lambda ctx: fake_mod)
+
+    ctx = _ctx(tmp_path)
+    faults = action.precondition(ctx)
+    assert faults == ["openai"], "should detect unusable pinned OpenAI provider"
+
+    n = action.apply(ctx, faults)
+    assert n == 1
+    saved = _j.loads(profile_path.read_text())
+    assert saved.get("tts_provider") is None, "tts_provider should be cleared"
+
+    # undo restores the previous value
+    action.undo(ctx)
+    restored = _j.loads(profile_path.read_text())
+    assert restored.get("tts_provider") == "openai"
+
+
+def test_voice_tts_pinned_provider_reset_ignores_auto(tmp_path, monkeypatch):
+    """Action must not fire when tts_provider is 'auto' or absent."""
+    import json as _j
+
+    action = RA.VoiceTtsPinnedProviderReset()
+
+    for value in (None, "auto"):
+        profile_path = tmp_path / "profile.json"
+        data = {}
+        if value is not None:
+            data["tts_provider"] = value
+        profile_path.write_text(_j.dumps(data), encoding="utf-8")
+
+        class _FakeMod:
+            def load(self):
+                return _j.loads(profile_path.read_text())
+            def save(self, d):
+                profile_path.write_text(_j.dumps(d), encoding="utf-8")
+
+        monkeypatch.setattr(action, "_load_profile_module", lambda ctx, m=_FakeMod(): m)
+        ctx = _ctx(tmp_path)
+        faults = action.precondition(ctx)
+        assert faults == [], f"should not fire for tts_provider={value!r}"
+
+
+def test_voice_tts_pinned_provider_reset_skips_usable_provider(tmp_path, monkeypatch):
+    """Action must not fire when the pinned provider is actually usable (key present)."""
+    import json as _j
+
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text('{"tts_provider": "openai"}', encoding="utf-8")
+
+    class _FakeMod:
+        def load(self):
+            return _j.loads(profile_path.read_text())
+
+    action = RA.VoiceTtsPinnedProviderReset()
+    monkeypatch.setattr(action, "_load_profile_module", lambda ctx: _FakeMod())
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-key")  # provider appears usable
+
+    ctx = _ctx(tmp_path)
+    faults = action.precondition(ctx)
+    assert faults == [], "should not fire when OpenAI key is present"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

@@ -702,3 +702,97 @@ class StaleRunningTaskReset(RepairAction):
                 t.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
             except (OSError, json.JSONDecodeError):
                 pass
+
+
+@register_repair
+class VoiceTtsPinnedProviderReset(RepairAction):
+    """Detect when ``tts_provider`` is pinned to a provider that is not usable
+    (no API key for OpenAI, piper/edge-tts not installed) and reset it to None
+    (auto-chain) in the user profile so voice keeps working.
+
+    This is the safety net for the "voice went silent after profile save" class
+    of bugs: even if say.py's own fallback-chain kicks in for playback, this
+    repair removes the stale pin so the user doesn't have to open Settings to
+    fix it manually.
+
+    Uses profile.py's own save API directly — it handles atomic writes and
+    caching internally, so no ``_assert_within_home`` is needed here.
+
+    Risk: safe — only clears a field in the user's profile; does not touch any
+    system file, secret, or audit chain entry. Reversible via undo()."""
+    action_id = "voice_tts_pinned_provider_reset"
+    risk = RISK_SAFE
+    blast_radius = "home"
+
+    def _load_profile_module(self, ctx: RepairContext):
+        """Return the profile module, resolving both source-tree and wheel layouts."""
+        import sys as _sys
+        for candidate in (
+            ctx.corvin_home.parent.parent.parent / "operator" / "bridges" / "shared",
+            ctx.corvin_home.parent / "_vendor" / "operator" / "bridges" / "shared",
+        ):
+            if candidate.is_dir() and str(candidate) not in _sys.path:
+                _sys.path.insert(0, str(candidate))
+        try:
+            import profile as _p  # type: ignore  # noqa: PLC0415
+            return _p
+        except ImportError:
+            return None
+
+    def _provider_usable(self, provider: str) -> bool:
+        """Quick, offline check: is the given provider likely to work?"""
+        if provider == "openai":
+            return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+        if provider == "edge":
+            try:
+                import importlib
+                return importlib.util.find_spec("edge_tts") is not None
+            except Exception:  # noqa: BLE001
+                return False
+        if provider == "piper":
+            import shutil
+            return shutil.which("piper") is not None
+        return True  # unknown provider — don't touch it
+
+    def precondition(self, ctx: RepairContext) -> list[Any]:
+        """Return [provider_name] if tts_provider is pinned to an unusable provider."""
+        mod = self._load_profile_module(ctx)
+        if mod is None:
+            return []
+        try:
+            profile = mod.load()
+            provider = profile.get("tts_provider")
+            if not isinstance(provider, str) or not provider.strip() or provider.strip() == "auto":
+                return []
+            p = provider.strip()
+            if not self._provider_usable(p):
+                return [p]
+        except Exception:  # noqa: BLE001
+            pass
+        return []
+
+    def apply(self, ctx: RepairContext, faults: list[Any]) -> int:
+        mod = self._load_profile_module(ctx)
+        if mod is None:
+            return 0
+        try:
+            profile = mod.load()
+            self._prev_provider = profile.get("tts_provider")
+            profile["tts_provider"] = None
+            mod.save(profile)
+            logger.info("VoiceTtsPinnedProviderReset: cleared tts_provider (was %r)", self._prev_provider)
+            return 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("VoiceTtsPinnedProviderReset.apply failed: %s", exc)
+            return 0
+
+    def undo(self, ctx: RepairContext) -> None:
+        mod = self._load_profile_module(ctx)
+        if mod is None:
+            return
+        try:
+            profile = mod.load()
+            profile["tts_provider"] = getattr(self, "_prev_provider", None)
+            mod.save(profile)
+        except Exception:  # noqa: BLE001
+            pass

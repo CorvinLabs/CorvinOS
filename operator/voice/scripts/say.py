@@ -354,15 +354,15 @@ def main() -> int:
         return False
 
     if provider != "auto":
-        # Pinned — no fallback.
-        ok = _run(provider)
-        if ok:
+        # Preferred provider first; on failure fall through to the auto-chain so
+        # voice always works even if the configured provider is temporarily broken
+        # (e.g. missing API key, network outage, not installed).
+        if _run(provider):
             sys.stdout.write(str(out_path))
-        else:
-            sys.stderr.write(
-                f"say.py: pinned provider '{provider}' failed — no fallback\n"
-            )
-        return 0
+            return 0
+        sys.stderr.write(
+            f"say.py: preferred provider '{provider}' failed — falling back to auto-chain\n"
+        )
 
     # Auto chain: openai → edge → piper → silent.
     for name in _AUTO_CHAIN:

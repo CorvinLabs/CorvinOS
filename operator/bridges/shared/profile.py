@@ -70,6 +70,7 @@ KNOWN_KEYS = {
     "tts_voice",
     "tts_voice_de",
     "tts_voice_en",
+    "tts_provider",
 }
 
 # Keys we deliberately don't expose via the system prompt — private notes.
