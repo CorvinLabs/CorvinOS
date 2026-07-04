@@ -202,22 +202,41 @@ def _download_model(lang: str, rel_path: str, model_dir: Path, config_file: Path
 
 
 def _fetch(url: str, dest: Path, *, silent: bool = False) -> bool:
-    """Download url → dest. Tries curl, then wget, then urllib. Returns True on success."""
+    """Download url → dest. Tries curl, then wget, then urllib. Returns True on success.
+
+    Each tool falls through to the next on failure (not just on absence), so a
+    Windows curl TLS error (exit 35) does not block the urllib fallback.
+    """
+
+    def _cleanup() -> None:
+        """Remove a partial / zero-byte download before the next attempt."""
+        try:
+            if dest.exists() and dest.stat().st_size == 0:
+                dest.unlink()
+        except OSError:
+            pass
+
     if shutil.which("curl"):
         flags = ["-L", "--silent" if silent else "--progress-bar", "-o", str(dest)]
         r = subprocess.run(["curl"] + flags + [url], check=False)
-        return r.returncode == 0 and dest.exists() and dest.stat().st_size > 0
+        if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
+            return True
+        _cleanup()  # fall through to next tool
 
     if shutil.which("wget"):
         flags = ["-q" if silent else "--show-progress", "-O", str(dest)]
         r = subprocess.run(["wget"] + flags + [url], check=False)
-        return r.returncode == 0 and dest.exists() and dest.stat().st_size > 0
+        if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
+            return True
+        _cleanup()  # fall through to urllib
 
-    # Pure-Python fallback — always available, no external tools needed
+    # Pure-Python fallback — always available, no external tools needed.
+    # urllib handles TLS via the system's ssl module (Python's own CA bundle),
+    # which avoids Windows curl's Schannel TLS errors (e.g. curl exit 35).
     try:
         import urllib.request
         if not silent:
-            print("  (using urllib — no curl/wget found)")
+            print("  (retrying with urllib ...)")
 
         def _report(block: int, block_size: int, total: int) -> None:
             if silent or total <= 0:
