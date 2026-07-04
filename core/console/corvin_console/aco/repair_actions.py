@@ -109,12 +109,44 @@ def registered_actions() -> dict[str, RepairAction]:
 
 # ── Gating ────────────────────────────────────────────────────────────────────
 
+def _tenant_config() -> dict[str, Any]:
+    """Best-effort read of tenant.corvin.yaml — the SAME file the console
+    healing-config toggles write (routes/healing_config.py). Returns {} on any
+    error so config-reads can never crash the repair loop."""
+    try:
+        import yaml as _yaml  # noqa: PLC0415
+
+        from .. import _bootstrap as _bs  # noqa: PLC0415
+        cfg_path = _bs.forge_paths.tenant_global_dir() / "tenant.corvin.yaml"
+        if cfg_path.exists():
+            data = _yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
 def _kill_switch() -> bool:
-    return os.environ.get("CORVIN_ACO_L5_OFF", "").strip().lower() in ("1", "true", "yes")
+    # Env var takes precedence (operator-level kill switch).
+    if os.environ.get("CORVIN_ACO_L5_OFF", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    # Then fall back to the tenant config toggle (aco.l5_enabled: false → kill).
+    aco = _tenant_config().get("aco")
+    if isinstance(aco, dict):
+        return not aco.get("l5_enabled", True)
+    return False
 
 
 def _risky_enabled() -> bool:
-    return os.environ.get("CORVIN_ACO_L5_RISKY", "").strip().lower() in ("1", "true", "yes")
+    # Env var takes precedence (operator-level opt-in).
+    if os.environ.get("CORVIN_ACO_L5_RISKY", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    # Then fall back to the tenant config toggle (aco.l5_risky: true → enabled).
+    aco = _tenant_config().get("aco")
+    if isinstance(aco, dict):
+        return bool(aco.get("l5_risky", False))
+    return False
 
 
 # ── Audit (best-effort, never raises) ─────────────────────────────────────────

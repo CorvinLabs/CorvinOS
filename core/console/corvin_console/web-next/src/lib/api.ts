@@ -2415,6 +2415,25 @@ export function setDelegationBudget(
   return api("/settings/delegation-budget", { method: "PUT", csrf, body: values });
 }
 
+// ── Self-healing config (ACO L5 toggles + healing telemetry) ────────
+
+export interface HealingConfigResponse {
+  telemetry_enabled: boolean;
+  healing_enabled: boolean;
+  risky_enabled: boolean;
+}
+
+export function getHealingConfig(signal?: AbortSignal): Promise<HealingConfigResponse> {
+  return api("/healing-config", { signal });
+}
+
+export function setHealingConfig(
+  patch: Partial<HealingConfigResponse>,
+  csrf: string,
+): Promise<HealingConfigResponse> {
+  return api("/healing-config", { method: "PATCH", csrf, body: patch });
+}
+
 // ── Chat settings (cowork per-chat persona pinning) ─────────────────
 
 export interface ChatSettingsSummary {

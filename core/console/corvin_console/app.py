@@ -114,6 +114,8 @@ from .routes import (
     ulo as ulo_route,
     # ADR-0174 — Autonomous Chat Observatory (ACO)
     aco as aco_route,
+    # ADR-0178 / ADR-0180 — Self-healing config (ACO L5 toggles + healing telemetry)
+    healing_config as healing_config_route,
 )
 
 
@@ -226,6 +228,8 @@ router.include_router(activity_route.router, tags=["console-activity"])
 router.include_router(ulo_route.router, tags=["console-ulo"])
 # ADR-0174 — Autonomous Chat Observatory (ACO) — anomaly scan, diagnosis, replay
 router.include_router(aco_route.router, tags=["console-aco"])
+# ADR-0178 / ADR-0180 — Self-healing config (ACO L5 toggles + healing telemetry)
+router.include_router(healing_config_route.router, tags=["console-healing-config"])
 
 
 @router.get("/version")

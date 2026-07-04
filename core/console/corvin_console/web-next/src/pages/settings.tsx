@@ -5,7 +5,7 @@
  */
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Edit2, FileText, Loader2, RefreshCw, Save, X } from "lucide-react";
+import { Check, Edit2, FileText, HeartPulse, Loader2, RefreshCw, Save, Upload, Wrench, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ReauthDialog } from "@/components/reauth-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/lib/auth";
-import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getDelegationBudget, setDelegationBudget, type DelegationBudgetResponse } from "@/lib/api";
+import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 
@@ -264,6 +264,169 @@ function AutoUpdateCard({ csrf }: { csrf: string }) {
   );
 }
 
+function TelemetryCard({ csrf }: { csrf: string }) {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["healing-config"],
+    queryFn: ({ signal }) => getHealingConfig(signal),
+  });
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const toggle = async (next: boolean) => {
+    setError(null);
+    setSaving(true);
+    try {
+      await setHealingConfig({ telemetry_enabled: next }, csrf);
+      qc.invalidateQueries({ queryKey: ["healing-config"] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const enabled = q.data?.telemetry_enabled ?? true;
+
+  return (
+    <Card>
+      <CardContent className="pt-4 pb-3">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 min-w-0">
+            <Upload className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <span className="text-sm font-medium">Send healing telemetry</span>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Anonymised self-healing events are uploaded to CorvinLabs/CorvinLogs for
+                public transparency. No prompts, no message content, no PII.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {saving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+            {q.isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            ) : (
+              <Switch
+                checked={enabled}
+                onCheckedChange={toggle}
+                disabled={saving}
+                aria-label="Send healing telemetry"
+              />
+            )}
+          </div>
+        </div>
+        {error && (
+          <p className="mt-2 text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function HealingCard({ csrf }: { csrf: string }) {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["healing-config"],
+    queryFn: ({ signal }) => getHealingConfig(signal),
+  });
+  const [saving, setSaving] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const toggle = async (patch: Partial<HealingConfigResponse>, key: string) => {
+    setError(null);
+    setSaving(key);
+    try {
+      await setHealingConfig(patch, csrf);
+      qc.invalidateQueries({ queryKey: ["healing-config"] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const healingEnabled = q.data?.healing_enabled ?? true;
+  const riskyEnabled = q.data?.risky_enabled ?? false;
+
+  return (
+    <Card>
+      <CardContent className="pt-4 pb-3 space-y-4">
+        {/* Self-healing enabled */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 min-w-0">
+            <HeartPulse className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <span className="text-sm font-medium">Self-healing enabled</span>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Corvin automatically detects and repairs common runtime issues
+                (engine failures, config errors).
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {saving === "healing" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+            {q.isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            ) : (
+              <Switch
+                checked={healingEnabled}
+                onCheckedChange={(next) => toggle({ healing_enabled: next }, "healing")}
+                disabled={saving !== null}
+                aria-label="Self-healing enabled"
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="border-t border-border/60" />
+
+        {/* Allow code changes */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 min-w-0">
+            <Wrench className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium">Allow code changes</span>
+                {riskyEnabled ? (
+                  <Badge variant="outline" className="text-[10px] text-red-600 dark:text-red-400 border-red-500/40">
+                    risky
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-[10px] text-amber-600 dark:text-amber-400 border-amber-500/40">
+                    safe mode
+                  </Badge>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Permits the healing system to apply patches to Python source files.
+                Requires code to be writable.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {saving === "risky" && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+            {q.isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            ) : (
+              <Switch
+                checked={riskyEnabled}
+                onCheckedChange={(next) => toggle({ risky_enabled: next }, "risky")}
+                disabled={saving !== null}
+                aria-label="Allow code changes"
+              />
+            )}
+          </div>
+        </div>
+
+        {error && (
+          <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 const BUDGET_LABELS: Record<string, { label: string; unit: string; description: string }> = {
   timeout_seconds:   { label: "Worker timeout",     unit: "s",       description: "Max seconds a single worker subprocess may run." },
   max_worker_turns:  { label: "Max turns / worker", unit: "turns",   description: "Max tool-call turns per claude worker." },
@@ -454,6 +617,12 @@ export function SettingsPage() {
       <div className="space-y-2">
         <h2 className="text-sm font-semibold text-foreground">Updates</h2>
         <AutoUpdateCard csrf={session!.csrf_token} />
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-sm font-semibold text-foreground">Self-healing</h2>
+        <HealingCard csrf={session!.csrf_token} />
+        <TelemetryCard csrf={session!.csrf_token} />
       </div>
 
       <div className="space-y-2">

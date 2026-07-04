@@ -80,6 +80,32 @@ Once the timer is enabled (`bridge.sh up`), the system runs these checks every 5
 **Custom Ollama:**
 - `OLLAMA_BASE_URL=http://custom.host:11434` — point to a remote Ollama (advanced)
 
+### Config toggles (`tenant.corvin.yaml`) + console UI
+
+The env vars above are the operator-level override and always take precedence.
+As a persistent, per-tenant fallback the same two switches are read from
+`<corvin_home>/tenants/<tid>/global/tenant.corvin.yaml`:
+
+```yaml
+aco:
+  l5_enabled: true    # false → same effect as CORVIN_ACO_L5_OFF=1 (default: true)
+  l5_risky:   false   # true  → same effect as CORVIN_ACO_L5_RISKY=1 (default: false)
+telemetry:
+  healing_traces: true  # upload anonymised healing events (ADR-0180; default: true)
+```
+
+Resolution order for the two ACO flags: **env var wins, then the config value,
+then the built-in default**. `_kill_switch()` / `_risky_enabled()` in
+`aco/repair_actions.py` implement this.
+
+These three flags are also editable from the web console **Settings →
+Self-healing** section (cards *Self-healing configuration* + *Send healing
+telemetry*), backed by `GET`/`PATCH /v1/console/healing-config`
+(`routes/healing_config.py`). The PATCH is a key-level merge — it never rewrites
+unrelated keys in `tenant.corvin.yaml`. Note `telemetry.healing_traces` is only
+the operator-level gate; an upload additionally requires the per-user GDPR Art. 7
+`ConsentAct` (`aco/htrace_consent.py`).
+
 ### Integration with bridge services
 
 When `bridge.sh up` runs:
