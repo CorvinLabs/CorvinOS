@@ -15,20 +15,24 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Keep the window open on success AND on error so the user can read the output.
-# This matters when PowerShell was launched via the Run dialog or a shortcut —
-# those sessions close the window the moment the script exits.
+# Keep the window open on success AND on error.
+# cmd /c pause is used instead of Read-Host because Read-Host can silently
+# return in non-interactive PS contexts (e.g. -Command from Run dialog).
 function Pause-AndExit {
     param([int]$Code = 0)
     Write-Host ""
     if ($Code -ne 0) {
         Write-Host "  Installation failed. See the error above." -ForegroundColor Red
     }
-    Write-Host "  Press Enter to close this window." -ForegroundColor DarkGray
-    $null = Read-Host
+    try { cmd /c pause } catch { Start-Sleep 10 }
     exit $Code
 }
-# Intercept Write-Fail so it pauses before exiting.
+
+# Catch any unhandled exception so the window never closes silently.
+trap {
+    Write-Host "`n  Unexpected error: $_" -ForegroundColor Red
+    Pause-AndExit 1
+}
 $Package = if ($env:CORVIN_PKG) { $env:CORVIN_PKG } else { "corvinos" }
 
 function Write-Step { param($m) Write-Host "  $m" }
@@ -54,7 +58,10 @@ if ($Editable -ne "") {
 # ── 1. ensure uv (brings its own Python → zero prerequisites) ─────────────────
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Step "Bootstrapping the uv runtime (brings its own Python) ..."
-    irm https://astral.sh/uv/install.ps1 | iex
+    # Use [scriptblock]::Create instead of iex so that `exit` inside the uv
+    # installer only exits the scriptblock, not the parent PowerShell session.
+    # With irm|iex a nested iex that calls exit terminates the whole session.
+    & ([scriptblock]::Create((irm https://astral.sh/uv/install.ps1)))
     # uv installs to %USERPROFILE%\.local\bin — make it usable in THIS session.
     $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
 }
