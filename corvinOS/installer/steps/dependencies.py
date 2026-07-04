@@ -28,11 +28,27 @@ def find_claude_creds() -> Path | None:
 
 def ensure_claude_code(interactive: bool = True) -> bool:
     """Install Claude Code if missing. Returns True when available."""
-    if shutil.which("claude"):
-        version = subprocess.run(
-            ["claude", "--version"],
-            capture_output=True, text=True, check=False,
-        ).stdout.strip().splitlines()[0]
+    claude_bin = shutil.which("claude")
+    if claude_bin:
+        try:
+            # On Windows, .cmd wrappers need shell=True with a quoted string
+            # command; passing a list with shell=True or without shell=True
+            # both raise WinError 2 for .cmd files.
+            if sys.platform == "win32":
+                result = subprocess.run(
+                    f'"{claude_bin}" --version',
+                    capture_output=True, text=True, check=False,
+                    shell=True,
+                )
+            else:
+                result = subprocess.run(
+                    [claude_bin, "--version"],
+                    capture_output=True, text=True, check=False,
+                )
+            lines = result.stdout.strip().splitlines()
+            version = lines[0] if lines else "unknown"
+        except OSError:
+            version = "unknown"
         print(f"✓ Claude Code already installed: {version}")
         return True
 
