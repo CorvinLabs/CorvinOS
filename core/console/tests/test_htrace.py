@@ -462,6 +462,41 @@ class TestHealingTracesEnabled:
         cfg = {"telemetry": {"healing_traces": True}}
         assert healing_traces_enabled(tmpdir, cfg=cfg) is False
 
+    def test_enabled_via_ondisk_yaml_no_cfg_arg(self, tmpdir, monkeypatch):
+        """Regression (R1 Finding 1): with NO cfg= argument the YAML flag must be
+        read from tenants/_default/global/tenant.corvin.yaml (ADR-0007 layout).
+
+        The pre-fix path (home.parent.parent/"global") resolved to a directory
+        that never exists, so the fallback always returned False and silently
+        killed the whole telemetry pipeline.  Every other test in this class
+        passes cfg= explicitly and bypasses this path entirely."""
+        monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+        self._make_valid_act(tmpdir)
+        cfg_dir = tmpdir / "tenants" / "_default" / "global"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "tenant.corvin.yaml").write_text(
+            "telemetry:\n  healing_traces: true\n", encoding="utf-8"
+        )
+        # No cfg= → must resolve the real on-disk config path and return True.
+        assert healing_traces_enabled(tmpdir) is True
+
+    def test_disabled_via_ondisk_yaml_flag_false_no_cfg_arg(self, tmpdir, monkeypatch):
+        """Deny-by-default: on-disk flag false (no cfg= arg) → gate stays closed."""
+        monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+        self._make_valid_act(tmpdir)
+        cfg_dir = tmpdir / "tenants" / "_default" / "global"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "tenant.corvin.yaml").write_text(
+            "telemetry:\n  healing_traces: false\n", encoding="utf-8"
+        )
+        assert healing_traces_enabled(tmpdir) is False
+
+    def test_disabled_when_ondisk_yaml_absent_no_cfg_arg(self, tmpdir, monkeypatch):
+        """Deny-by-default: no config file at all (no cfg= arg) → gate stays closed."""
+        monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+        self._make_valid_act(tmpdir)
+        assert healing_traces_enabled(tmpdir) is False
+
     def test_disabled_on_text_hash_mismatch(self, tmpdir):
         """is_text_intact must block consent whose text_sha256 no longer matches the file."""
         from corvin_console.aco.htrace_consent import _CONSENT_VERSION

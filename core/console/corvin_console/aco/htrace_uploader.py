@@ -48,6 +48,7 @@ from .htrace_consent import (
     healing_traces_enabled,
     load_consent_act_id,
     load_or_create_instance_id,
+    _tenant_cfg_path,
 )
 from .nerve import NerveFiber, NerveSignal, SEVERITY_OK, SEVERITY_LOW, SEVERITY_MEDIUM
 
@@ -180,7 +181,7 @@ def ping_if_due(home: Path) -> bool:
 def _upload_url(home: Path) -> str:
     try:
         import yaml  # type: ignore[import]
-        cfg_path = home.parent.parent / "global" / "tenant.corvin.yaml"
+        cfg_path = _tenant_cfg_path(home)
         if cfg_path.exists():
             data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
             return data.get("telemetry", {}).get("upload_url", _UPLOAD_URL_DEFAULT)
@@ -219,14 +220,18 @@ def _record_upload(home: Path) -> None:
         pass
 
 
-def _validate_bundle(gz_path: Path) -> tuple[bool, int]:
-    """Validate all records in a .jsonl.gz bundle. Returns (ok, count).
+def _check_bundle_ok(gz_path: Path) -> tuple[bool, int]:
+    """Go/no-go check for a .jsonl.gz bundle. Returns (ok, valid_count).
 
-    Drops records that fail _assert_safe_htrace. Returns False if the bundle
-    cannot be read or is too large.
+    This is a GO/NO-GO gate only — it does NOT filter the bundle. It counts
+    how many records pass _assert_safe_htrace and returns ``ok=True`` when the
+    bundle is readable and within the size cap. The upload posts the bundle
+    as-is; any records that failed validation here are rejected authoritatively
+    by the identical server-side validator (Corvin-Features _validate.py), so
+    no invalid record is ever accepted downstream.
 
     stat() is inside the try block so that a FileNotFoundError (file deleted
-    between compress_for_upload and _validate_bundle) is caught and returns
+    between compress_for_upload and _check_bundle_ok) is caught and returns
     (False, 0) instead of propagating to the outer except in run_upload_cycle
     and incorrectly returning 'error'.
     """
@@ -406,7 +411,7 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
             _write_upload_audit_event("skipped", 0)
             return "no_bundle", 0
 
-        ok, count = _validate_bundle(gz)
+        ok, count = _check_bundle_ok(gz)
         if not ok or count == 0:
             # Move the invalid/empty bundle to sent/ so it is still subject to
             # the 14-day cap.  Ensure sent/ exists first — on a fresh install

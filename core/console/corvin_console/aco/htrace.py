@@ -436,7 +436,15 @@ def _enforce_caps(home: Path) -> None:
             else []
         )
         all_files = files + gz_files + sent_gz_files
-        total = sum(p.stat().st_size for p in all_files if p.exists())
+        # Exclude today's file(s) from the eviction budget: they are skipped
+        # for deletion below (via `continue`), so counting their size here
+        # inflated `total` and could trigger eviction of OTHER files that the
+        # dir would not actually exceed the cap without today's live file.
+        total = sum(
+            p.stat().st_size
+            for p in all_files
+            if p.exists() and not p.name.startswith(today_str)
+        )
         for p in all_files:
             if p.name.startswith(today_str):
                 continue

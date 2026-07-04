@@ -9,6 +9,7 @@ The ConsentAct is the user-level gate. BOTH must be present for uploads.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -99,11 +100,46 @@ class ConsentAct:
 
     @property
     def is_text_intact(self) -> bool:
-        return self.text_sha256 == _consent_text_sha256()
+        """True only if BOTH the live consent file AND the stored consent hash
+        match the pinned original.
+
+        - live file vs pinned   → detects tampering of the shipped consent text
+          (the intent of the pinning; the previous comparison was tautological —
+          it compared the pinned constant to itself and was always True).
+        - stored vs pinned       → detects a tampered / stale ConsentAct record.
+
+        Fail-closed: any read error on the consent file → False.
+        """
+        try:
+            live = hashlib.sha256(_consent_text().encode("utf-8")).hexdigest()
+        except Exception:  # noqa: BLE001
+            return False
+        return (
+            hmac.compare_digest(live, _CONSENT_TEXT_SHA256_PINNED)
+            and hmac.compare_digest(self.text_sha256, _CONSENT_TEXT_SHA256_PINNED)
+        )
 
 
 def _consent_act_path(home: Path) -> Path:
     return home / "aco" / "telemetry" / "htrace-consent-act.json"
+
+
+def _tenant_cfg_path(home: Path) -> Path:
+    """Resolve ``<corvin_home>/tenants/<tid>/global/tenant.corvin.yaml`` (ADR-0007).
+
+    The previous ``home.parent.parent / "global"`` derivation resolved to
+    ``/home/global/tenant.corvin.yaml`` — a path that never exists — which made
+    the YAML opt-in gate always fail and silently killed the whole telemetry
+    pipeline.  The tenant id comes from the canonical forge resolver (env-aware,
+    defaults to ``_default``); the path is built relative to the supplied
+    ``home`` so the same helper works under a test tmp-home.
+    """
+    try:
+        from forge.paths import _resolve_tenant_id  # noqa: PLC0415
+        tid = _resolve_tenant_id(None)
+    except Exception:  # noqa: BLE001
+        tid = "_default"
+    return home / "tenants" / tid / "global" / "tenant.corvin.yaml"
 
 
 # ── Instance identity + stateless token provisioning (ADR-0180 M4) ────────────
@@ -194,7 +230,7 @@ def healing_traces_enabled(home: Path, *, cfg: dict | None = None) -> bool:
         # Fall back to reading tenant.corvin.yaml if no cfg passed
         try:
             import yaml  # type: ignore[import]
-            cfg_path = home.parent.parent / "global" / "tenant.corvin.yaml"
+            cfg_path = _tenant_cfg_path(home)
             if cfg_path.exists():
                 data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
                 if not data.get("telemetry", {}).get("healing_traces", False):
