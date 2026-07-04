@@ -193,10 +193,29 @@ def _download_model(lang: str, rel_path: str, model_dir: Path, config_file: Path
         if not _fetch(f"{_HF_BASE}/{rel_path}.onnx", onnx_path):
             print("  ⚠ Download failed — try again later")
             return
-        if not _fetch(f"{_HF_BASE}/{rel_path}.onnx.json", json_path, silent=True):
-            print("  ⚠ Failed to fetch model config")
-            return
         print(f"  ✓ Downloaded {onnx_path.name}")
+
+    # Download the model config (.onnx.json) if missing or empty — this can
+    # happen on a partial install (ONNX downloaded, JSON fetch failed) or when
+    # re-running corvin-install on an existing ONNX. Retry up to 3 times with a
+    # short back-off; on Windows, CDN connections are sometimes reset for small
+    # files (WinError 10054) even after a successful ONNX transfer.
+    if not (json_path.exists() and json_path.stat().st_size > 0):
+        json_url = f"{_HF_BASE}/{rel_path}.onnx.json"
+        ok = False
+        for attempt in range(3):
+            if attempt > 0:
+                import time as _t
+                _t.sleep(2)
+                print(f"  (retry {attempt}/2 for model config...)")
+            ok = _fetch(json_url, json_path, silent=True)
+            if ok:
+                break
+        if not ok:
+            print("  ⚠ Failed to fetch model config — download it manually:")
+            print(f"    URL : {json_url}")
+            print(f"    Save: {json_path}")
+            return
 
     _save_model_config(config_file, lang, str(onnx_path))
 
