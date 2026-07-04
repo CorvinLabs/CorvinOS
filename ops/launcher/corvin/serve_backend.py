@@ -155,6 +155,30 @@ def _show_telemetry_notice_once() -> None:
         pass
 
 
+# ── Startup ping ──────────────────────────────────────────────────────────────
+
+
+def _fire_startup_ping() -> None:
+    """Send the opt-out activity ping in a daemon thread at serve startup.
+
+    corvin-serve uses corvin_console.standalone which has no FastAPI lifespan
+    and therefore never starts the boot-healer background task. Without this
+    direct call ping_if_due() would never run for pip-install deployments.
+    Fail-soft: any exception is silently swallowed — startup must never block.
+    """
+    def _ping() -> None:
+        try:
+            import time as _t                                    # noqa: PLC0415
+            _t.sleep(6)          # wait for uvicorn to finish binding
+            from corvin_console.aco.htrace_uploader import ping_if_due  # noqa: PLC0415
+            from forge import paths as _p                        # noqa: PLC0415
+            ping_if_due(_p.corvin_home())
+        except Exception:                                        # noqa: BLE001
+            pass
+
+    threading.Thread(target=_ping, daemon=True).start()
+
+
 # ── Start ─────────────────────────────────────────────────────────────────────
 
 
@@ -183,6 +207,7 @@ def start(
     """
     url = console_url(port)
     _show_telemetry_notice_once()
+    _fire_startup_ping()
 
     if open_browser:
         _schedule_browser_open(url.rstrip("/") + open_path, delay=1.6)
