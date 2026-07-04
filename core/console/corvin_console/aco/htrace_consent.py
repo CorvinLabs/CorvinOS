@@ -224,7 +224,9 @@ def healing_traces_enabled(home: Path, *, cfg: dict | None = None) -> bool:
     """
     # Gate 1: YAML flag
     if cfg is not None:
-        if not cfg.get("telemetry", {}).get("healing_traces", False):
+        # Callers may pass the full k8s-style manifest (with spec:) or a bare dict
+        spec_or_cfg = cfg.get("spec", cfg)
+        if not spec_or_cfg.get("telemetry", {}).get("healing_traces", False):
             return False
     else:
         # Fall back to reading tenant.corvin.yaml if no cfg passed
@@ -233,7 +235,9 @@ def healing_traces_enabled(home: Path, *, cfg: dict | None = None) -> bool:
             cfg_path = _tenant_cfg_path(home)
             if cfg_path.exists():
                 data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-                if not data.get("telemetry", {}).get("healing_traces", False):
+                # tenant.corvin.yaml is a k8s-style manifest — settings live under spec:
+                spec = data.get("spec", data)
+                if not spec.get("telemetry", {}).get("healing_traces", False):
                     return False
             else:
                 return False

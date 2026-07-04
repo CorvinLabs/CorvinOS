@@ -132,7 +132,9 @@ def _kill_switch() -> bool:
     if os.environ.get("CORVIN_ACO_L5_OFF", "").strip().lower() in ("1", "true", "yes"):
         return True
     # Then fall back to the tenant config toggle (aco.l5_enabled: false → kill).
-    aco = _tenant_config().get("aco")
+    data = _tenant_config()
+    spec = data.get("spec", data)  # manifest has spec: wrapper
+    aco = spec.get("aco")
     if isinstance(aco, dict):
         return not aco.get("l5_enabled", True)
     return False
@@ -143,7 +145,9 @@ def _risky_enabled() -> bool:
     if os.environ.get("CORVIN_ACO_L5_RISKY", "").strip().lower() in ("1", "true", "yes"):
         return True
     # Then fall back to the tenant config toggle (aco.l5_risky: true → enabled).
-    aco = _tenant_config().get("aco")
+    data = _tenant_config()
+    spec = data.get("spec", data)  # manifest has spec: wrapper
+    aco = spec.get("aco")
     if isinstance(aco, dict):
         return bool(aco.get("l5_risky", False))
     return False
