@@ -635,6 +635,26 @@ def _configured_os_engine(tenant_id: str) -> str:
     return "claude_code"
 
 
+def _effective_os_engine(tenant_id: str) -> str:
+    """Like _configured_os_engine but with automatic Hermes fallback.
+
+    When the tenant has claude_code configured (or defaulted) but the
+    claude binary is absent — typical on a fresh Windows install where
+    Claude Code was not installed — and the HermesEngine module is
+    available, we transparently route to Hermes instead of surfacing
+    a raw "claude binary not found" error.  The user gets a working
+    response; they can switch to Claude Code later via Settings → Engines.
+    """
+    engine = _configured_os_engine(tenant_id)
+    if engine != "claude_code":
+        return engine
+    binary = _claude_binary()
+    claude_missing = shutil.which(binary) is None and not os.path.isabs(binary)
+    if claude_missing and _HermesEngine is not None:
+        return "hermes"
+    return engine
+
+
 def _engine_unavailable_message(engine_id: str) -> str | None:
     """Up-front guard for the direct-subprocess path (#8).
 
@@ -704,7 +724,7 @@ def get_engine_unavailable_message(tenant_id: str) -> str | None:
     be driven by the web chat, else None.  Used by the WebSocket handler to guard
     the quota charge — no turn should be billed when the engine isn't even set up.
     """
-    return _engine_unavailable_message(_configured_os_engine(tenant_id))
+    return _engine_unavailable_message(_effective_os_engine(tenant_id))
 
 
 _WEB_CHAT_SYSTEM_PROMPT = (
@@ -1819,7 +1839,7 @@ async def stream_turn(
 
     # Resolve engine early so turn.start debug event can record it.
     # The full pre-spawn gate check (line ~1958) also uses this value.
-    _os_engine = _configured_os_engine(sess.tenant_id)
+    _os_engine = _effective_os_engine(sess.tenant_id)
 
     # ── DEBUG: turn.start ────────────────────────────────────────────────────
     _dbg_t0 = time.monotonic()
