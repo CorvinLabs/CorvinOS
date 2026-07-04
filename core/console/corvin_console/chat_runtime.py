@@ -649,7 +649,13 @@ def _effective_os_engine(tenant_id: str) -> str:
     if engine != "claude_code":
         return engine
     binary = _claude_binary()
-    claude_missing = shutil.which(binary) is None and not os.path.isabs(binary)
+    # For absolute paths (CORVIN_CLAUDE_BIN set explicitly) check file existence
+    # and executability — shutil.which only searches PATH and skips absolute paths,
+    # so a dangling absolute path would wrongly look "found".
+    if os.path.isabs(binary):
+        claude_missing = not (os.path.isfile(binary) and os.access(binary, os.X_OK))
+    else:
+        claude_missing = shutil.which(binary) is None
     if claude_missing:
         # Always fall back to hermes — even if _HermesEngine failed to import
         # (vendored path issue on wheel installs). The hermes dispatch path will
@@ -708,9 +714,13 @@ def _engine_unavailable_message(engine_id: str) -> str | None:
             f"engine to “Claude Code” or “Hermes” on the Settings → Engines "
             f"page, or use the delegation / Agentic Compute paths for {label}."
         )
-    # 3. claude selected but the binary is not on PATH → name it, point to setup.
+    # 3. claude selected but the binary is absent or not executable.
     binary = _claude_binary()
-    if shutil.which(binary) is None and not os.path.isabs(binary):
+    if os.path.isabs(binary):
+        _claude_bad = not (os.path.isfile(binary) and os.access(binary, os.X_OK))
+    else:
+        _claude_bad = shutil.which(binary) is None
+    if _claude_bad:
         return (
             f"Die Engine **Claude Code** ist ausgewählt, aber das `{binary}` "
             f"CLI wurde nicht gefunden. Installiere die Claude CLI (oder setze "
@@ -892,10 +902,22 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None)
     The --append-system-prompt ensures output files land in the session
     workdir (not the playground repo) so artifact detection works.
     """
-    args: list[str] = [_claude_binary(), "-p",
-                       "--output-format", "stream-json",
-                       "--verbose",
-                       "--append-system-prompt", _turn_system_prompt(sess)]
+    binary = _claude_binary()
+    # On Windows, shutil.which() may resolve the npm-installed claude to a
+    # .cmd shim (e.g. claude.cmd). asyncio.create_subprocess_exec cannot
+    # start .cmd files directly — they must be wrapped in `cmd /c`.
+    if sys.platform == "win32" and not os.path.isabs(binary):
+        resolved = shutil.which(binary)
+        if resolved and resolved.lower().endswith((".cmd", ".bat")):
+            args: list[str] = ["cmd", "/c", resolved]
+        else:
+            args = [resolved or binary]
+    else:
+        args = [binary]
+    args += ["-p",
+             "--output-format", "stream-json",
+             "--verbose",
+             "--append-system-prompt", _turn_system_prompt(sess)]
     if model:
         args.extend(["--model", model])
     if resume:
@@ -2627,11 +2649,14 @@ async def stream_turn(
         )
     except FileNotFoundError as e:
         binary = _claude_binary()
-        msg = (
-            f"workdir missing: {sess.workdir}"
-            if e.filename and str(e.filename) != binary and binary not in str(e.filename or "")
-            else f"claude binary not found ({binary!r})"
-        )
+        if e.filename and str(e.filename) != binary and binary not in str(e.filename or ""):
+            msg = f"workdir missing: {sess.workdir}"
+        else:
+            msg = (
+                f"Claude Code CLI not found ({binary!r}). "
+                "To fix: install it from https://claude.ai/code, then restart the server. "
+                "Or switch to Hermes (local, no API key needed) on Settings → Engines."
+            )
         yield {"type": "error", "message": msg}
         yield {"type": "done"}
         return

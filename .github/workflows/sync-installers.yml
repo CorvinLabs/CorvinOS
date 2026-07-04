@@ -62,4 +62,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy corvin-website --project-name=corvin-labs-website
+          command: pages deploy corvin-website --project-name=corvin-website
