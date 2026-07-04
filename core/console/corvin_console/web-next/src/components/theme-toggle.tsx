@@ -14,7 +14,7 @@ function readStored(): Theme {
   } catch {
     /* localStorage may be blocked */
   }
-  return "auto";
+  return "dark";
 }
 
 function applyTheme(t: Theme) {
