@@ -28,13 +28,13 @@
       (function () {
         try {
           var stored = localStorage.getItem("corvin-theme");
-          // One-time migration (v0.9.92): switch users who have the old "light"
-          // default to "dark". Only runs once per browser profile (marker key).
-          // Users who explicitly chose light via the toggle are not affected —
-          // they will have "corvin-theme-user-set" = "1" in localStorage.
-          if (!localStorage.getItem("corvin-dark-default-v1")) {
-            localStorage.setItem("corvin-dark-default-v1", "1");
-            if (!stored || stored === "light") {
+          // One-time migration (v0.9.91): switch users who have the old "light"
+          // or "auto" default to "dark". Only runs once per browser profile
+          // (marker key). Users who explicitly toggled their theme are not
+          // affected — handleToggle sets the same marker key before cycling.
+          if (!localStorage.getItem("corvin-dark-default-v2")) {
+            localStorage.setItem("corvin-dark-default-v2", "1");
+            if (!stored || stored === "light" || stored === "auto") {
               stored = "dark";
               localStorage.setItem("corvin-theme", "dark");
             }
@@ -51,7 +51,7 @@
         }
       })();
     </script>
-    <script type="module" crossorigin src="/console/assets/index-Dna_iejL.js"></script>
+    <script type="module" crossorigin src="/console/assets/index-BBhPOBY3.js"></script>
     <link rel="modulepreload" crossorigin href="/console/assets/tanstack-B-jDpbmx.js">
     <link rel="modulepreload" crossorigin href="/console/assets/radix-CfDk86er.js">
     <link rel="modulepreload" crossorigin href="/console/assets/icons-D69QZuur.js">

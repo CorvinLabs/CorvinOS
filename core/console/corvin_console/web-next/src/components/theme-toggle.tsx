@@ -53,7 +53,7 @@ export function ThemeToggle({ className }: { className?: string }) {
   const [theme, setTheme] = useTheme();
   const next: Record<Theme, Theme> = { auto: "dark", dark: "light", light: "auto" };
   // Mark that the user has explicitly toggled — future one-time migrations won't reset their choice.
-  const handleToggle = () => { try { localStorage.setItem("corvin-dark-default-v1", "1"); } catch {} setTheme(next[theme]); };
+  const handleToggle = () => { try { localStorage.setItem("corvin-dark-default-v2", "1"); } catch {} setTheme(next[theme]); };
   const label: Record<Theme, string> = {
     auto: "System theme",
     dark: "Dark theme",
