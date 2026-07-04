@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "corvinos"
-version = "0.9.66"
+version = "0.9.67"
 description = "CorvinOS — universal, self-contained, cross-platform AI assistant framework"
 readme = "README.md"
 license = { text = "Apache-2.0" }
