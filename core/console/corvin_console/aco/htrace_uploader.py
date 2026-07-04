@@ -56,12 +56,12 @@ from .nerve import NerveFiber, NerveSignal, SEVERITY_OK, SEVERITY_LOW, SEVERITY_
 
 logger = logging.getLogger(__name__)
 
-# Base URL for all telemetry endpoints. Overridable via CORVIN_TELEMETRY_BASE_URL
-# so an operator can redirect to a self-hosted / staging proxy (e.g. Railway)
-# without a code change. Default: the production Corvin-Labs gateway. A per-tenant
-# spec.telemetry.upload_url still wins over this default (see _upload_url()).
+# Base URL for all telemetry endpoints. Overridable via CORVIN_TELEMETRY_BASE_URL.
+# Default: Railway deployment (the only host with a valid DNS record for the
+# public API). A per-tenant spec.telemetry.upload_url still wins over this default
+# (see _upload_url()).
 _TELEMETRY_BASE = os.environ.get(
-    "CORVIN_TELEMETRY_BASE_URL", "https://api.corvin-labs.com"
+    "CORVIN_TELEMETRY_BASE_URL", "https://corvin-features-production.up.railway.app"
 ).rstrip("/")
 _UPLOAD_URL_DEFAULT = f"{_TELEMETRY_BASE}/v1/telemetry/healing-traces"
 _PING_URL_DEFAULT = f"{_TELEMETRY_BASE}/v1/telemetry/ping"

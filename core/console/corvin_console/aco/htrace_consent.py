@@ -24,11 +24,12 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _CONSENT_VERSION = "htrace/1.1"
-# Base URL for all telemetry endpoints. Overridable via CORVIN_TELEMETRY_BASE_URL
-# so an operator can redirect to a self-hosted / staging proxy (e.g. Railway)
-# without a code change. Default: the production Corvin-Labs gateway.
+# Base URL for all telemetry endpoints. Overridable via CORVIN_TELEMETRY_BASE_URL.
+# Default: Railway deployment (the only host with a valid DNS record for the
+# public API). api.corvin-labs.com has no CNAME yet; set CORVIN_TELEMETRY_BASE_URL
+# to that value once the Cloudflare record exists and Railway can be the backend.
 _TELEMETRY_BASE = os.environ.get(
-    "CORVIN_TELEMETRY_BASE_URL", "https://api.corvin-labs.com"
+    "CORVIN_TELEMETRY_BASE_URL", "https://corvin-features-production.up.railway.app"
 ).rstrip("/")
 _TOKEN_ENDPOINT = f"{_TELEMETRY_BASE}/v1/telemetry/token"
 _TOKEN_TIMEOUT_S = 15
