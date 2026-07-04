@@ -527,13 +527,15 @@ class HealingTraceUploaderFiber(NerveFiber):
         if home is None:
             return []
 
+        # Opt-out activity ping — runs regardless of healing_traces consent.
+        # ping_enabled() defaults True; no ConsentAct required (pseudonymous
+        # token + version only, GDPR Art. 6(1)(f)). Must run BEFORE the
+        # healing_traces gate so fresh installs without a ConsentAct are
+        # still counted in the active-instance stats.
+        ping_if_due(home)
+
         if not healing_traces_enabled(home):
             return []
-
-        # Daily activity ping (ADR-0180) — tells the server this instance is
-        # alive so global active-instance stats can be computed.  Rate-limited
-        # to once/24h internally; fail-soft, never blocks the upload cycle.
-        ping_if_due(home)
 
         if _already_uploaded_today(home):
             return []
