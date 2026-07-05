@@ -78,6 +78,53 @@ def _detect_browser_task(prompt: str) -> str | None:
     return None
 
 
+# Broad browsing-signal pre-gate — only messages matching this are worth the LLM
+# intent classification, so ordinary chat/coding turns never pay the extra call.
+_BROWSE_SIGNAL_RE = re.compile(
+    r"\b(öffne|besuche|geh\s+auf|schau\s+(dir|auf)|navigat|browse|open|go\s+to|visit|"
+    r"website|webseite|seite|klick|click|ausf[üu]llen|fill\s+(in|out|the)|log\s?in|"
+    r"einlogg|such[e]?\s+(auf|bei|on)|search\s+on|screenshot|warenkorb|checkout|"
+    r"\.com|\.de|\.org|\.io|\.net|\.ai)\b",
+    re.I | re.UNICODE,
+)
+
+
+async def _classify_browser_intent(prompt: str) -> str | None:
+    """LET THE AGENT DECIDE (ADR-0182): for a browsing-ish message with no bare URL,
+    ask the model whether it's a live-web-browsing request and, if so, distil the
+    task. Gated by ``_BROWSE_SIGNAL_RE`` so normal chat never triggers a spawn.
+    Returns the task string, or None (→ normal chat turn)."""
+    if not _BROWSE_SIGNAL_RE.search(prompt):
+        return None
+    import os
+    import shutil
+    import subprocess
+
+    def _spawn() -> str:
+        sysp = (
+            "Classify the user's message. If it is a request to browse or operate a "
+            "LIVE WEBSITE (open a site, navigate, search on a site, fill a form, click, "
+            "read a live page, check a cart/checkout), reply EXACTLY 'BROWSE: <one "
+            "concise task>'. Otherwise (normal conversation, coding, general questions) "
+            "reply EXACTLY 'NO'. Output only that one line.")
+        binp = (os.environ.get("CORVIN_CLAUDE_BIN", "").strip()
+                or shutil.which("claude") or "claude")
+        try:
+            r = subprocess.run(
+                [binp, "-p", "--max-turns", "1", "--tools", "", "--system-prompt", sysp, prompt],
+                capture_output=True, text=True, encoding="utf-8", timeout=30)
+            return (r.stdout or "").strip()
+        except Exception:  # noqa: BLE001
+            return ""
+
+    out = await asyncio.to_thread(_spawn)
+    m = re.match(r"\s*BROWSE:\s*(.+)", out, re.I | re.S)
+    if m:
+        task = m.group(1).strip()
+        return task or prompt.strip()
+    return None
+
+
 def _project(sess: chat_runtime.WebChatSession) -> dict[str, Any]:
     return {
         "sid":             sess.sid,
@@ -564,6 +611,13 @@ async def chat_stream(
                 # (a) message starts with https?:// — the user typed a raw URL, or
                 # (b) message starts with a navigate verb followed by a URL.
                 _auto_task = _detect_browser_task(prompt)
+                if _auto_task is None:
+                    # No bare URL — let the agent DECIDE from natural language
+                    # (gated by browsing-signal words so normal chat isn't slowed).
+                    try:
+                        _auto_task = await _classify_browser_intent(prompt)
+                    except Exception:  # noqa: BLE001
+                        _auto_task = None
                 if _auto_task:
                     await _handle_browser_command(websocket, rec, _auto_task)
                     continue

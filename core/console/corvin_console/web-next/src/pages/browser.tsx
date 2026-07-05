@@ -42,6 +42,15 @@ export function BrowserPage() {
     return "";
   }, [actions]);
 
+  // The browser is "active" once a real action has happened (it launches lazily
+  // on the first navigate/agent step). Before that we show a calm idle hint, not
+  // a spinner or a blank white preview.
+  const browserActive = React.useMemo(
+    () => frameOk || actions.some((a) =>
+      ["navigate", "agent_start", "agent_step", "observe", "click", "fill", "read", "scroll"]
+        .includes(String(a.action))),
+    [frameOk, actions]);
+
   const run = async (fn: () => Promise<unknown>) => {
     setError(null); setBusy(true);
     try { await fn(); } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
@@ -171,14 +180,20 @@ export function BrowserPage() {
             <img ref={frameRef} alt="live browser view"
               className={`max-w-full transition-opacity ${frameOk ? "opacity-100" : "opacity-0"}`}
               onLoad={() => setFrameOk(true)} onError={() => setFrameOk(false)} />
-            {!frameOk && (
+            {!frameOk && browserActive && (
+              /* something is actually happening → spinner + current action */
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
                 <div className="h-6 w-6 rounded-full border-2 border-slate-600 border-t-primary animate-spin" />
-                <span className="text-sm text-slate-200">
-                  {lastActionLabel || "Preparing the browser…"}
-                </span>
+                <span className="text-sm text-slate-200">{lastActionLabel || "Working…"}</span>
+              </div>
+            )}
+            {!frameOk && !browserActive && (
+              /* idle — the browser hasn't opened yet, so no white/blank preview */
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-8 text-center">
+                <span className="text-sm text-slate-300">No browser open yet</span>
                 <span className="text-[11px] text-slate-500">
-                  the live picture appears as soon as the browser renders its first frame
+                  Enter a URL and press Go, or type a task above. The browser opens
+                  on the first action — nothing runs until then.
                 </span>
               </div>
             )}
