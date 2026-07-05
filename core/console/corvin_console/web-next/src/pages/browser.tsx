@@ -25,8 +25,22 @@ export function BrowserPage() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [task, setTask] = React.useState("");
+  const [frameOk, setFrameOk] = React.useState(false);
   const sinceRef = React.useRef(0);
   const frameRef = React.useRef<HTMLImageElement | null>(null);
+
+  const lastActionLabel = React.useMemo(() => {
+    for (let i = actions.length - 1; i >= 0; i--) {
+      const a = actions[i];
+      const act = String(a.action ?? "");
+      if (act === "agent_step") return `${a.plan ?? ""} — ${a.reason ?? ""}`;
+      if (act === "navigate") return `Opening ${a.host ?? ""}…`;
+      if (["click", "fill", "observe", "read", "scroll"].includes(act))
+        return `${act}${a.host ? " · " + a.host : ""}`;
+      if (act === "agent_start") return "Agent is starting…";
+    }
+    return "";
+  }, [actions]);
 
   const run = async (fn: () => Promise<unknown>) => {
     setError(null); setBusy(true);
@@ -36,7 +50,7 @@ export function BrowserPage() {
 
   const start = () => run(async () => {
     const { session: s } = await browserCreateSession(csrf);
-    setSid(s); sinceRef.current = 0; setActions([]);
+    setSid(s); sinceRef.current = 0; setActions([]); setFrameOk(false);
   });
 
   const stop = () => run(async () => {
@@ -150,10 +164,24 @@ export function BrowserPage() {
 
       {sid && (
         <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-4">
-          {/* Live view */}
-          <div className="rounded border border-border bg-black/80 min-h-[420px] flex items-center justify-center overflow-hidden">
+          {/* Live view — a placeholder with the current status shows until the
+              first screencast frame arrives (no more blank white box). */}
+          <div className="relative rounded border border-border bg-slate-900 min-h-[420px] flex items-center justify-center overflow-hidden">
             {/* eslint-disable-next-line jsx-a11y/alt-text */}
-            <img ref={frameRef} className="max-w-full" alt="live browser view" />
+            <img ref={frameRef} alt="live browser view"
+              className={`max-w-full transition-opacity ${frameOk ? "opacity-100" : "opacity-0"}`}
+              onLoad={() => setFrameOk(true)} onError={() => setFrameOk(false)} />
+            {!frameOk && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center">
+                <div className="h-6 w-6 rounded-full border-2 border-slate-600 border-t-primary animate-spin" />
+                <span className="text-sm text-slate-200">
+                  {lastActionLabel || "Preparing the browser…"}
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  the live picture appears as soon as the browser renders its first frame
+                </span>
+              </div>
+            )}
           </div>
           {/* Elements + action log */}
           <div className="space-y-3">

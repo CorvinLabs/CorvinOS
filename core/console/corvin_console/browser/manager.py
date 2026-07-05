@@ -16,6 +16,7 @@ Everything is in-process and best-effort; a console restart drops live sessions
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections import deque
@@ -167,10 +168,14 @@ class BrowserSessionManager:
     def set_paused(self, tenant_id: str, sid: str, paused: bool) -> None:
         self.get(tenant_id, sid).session.paused = paused
 
-    def start_agent(self, tenant_id: str, sid: str, task: str, *, max_steps: int = 12) -> bool:
+    def start_agent(self, tenant_id: str, sid: str, task: str, *,
+                    max_steps: int = 12, auto_close: bool = False) -> bool:
         """Run a natural-language browser-agent loop in the background. Steps flow
         into the action log (live view); sensitive actions park confirms as usual.
-        Returns False if an agent is already running for this session."""
+        Returns False if an agent is already running for this session.
+
+        auto_close=True closes the session when the agent finishes — used for
+        chat-initiated (`/browser`) sessions so they can't leak / wedge the cap."""
         from .agent import BrowserAgent
         live = self.get(tenant_id, sid)
         if live.agent_task is not None and not live.agent_task.done():
@@ -183,8 +188,18 @@ class BrowserSessionManager:
             try:
                 result = await agent.run(task)
                 live.append({"action": "agent_finished", **result, "ts": self._now()})
+            except asyncio.CancelledError:
+                raise
             except Exception as e:  # noqa: BLE001
                 live.append({"action": "agent_error", "error": str(e), "ts": self._now()})
+            finally:
+                if auto_close:
+                    # Inline close — do NOT call self.close() here: it would cancel
+                    # THIS still-finishing agent task. Just drop the session + shut
+                    # the browser down.
+                    self._sessions.pop(self._key(tenant_id, sid), None)
+                    with contextlib.suppress(Exception):
+                        await live.session.close()
 
         live.agent_task = asyncio.ensure_future(_run())
         return True

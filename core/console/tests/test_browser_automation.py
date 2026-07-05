@@ -250,6 +250,33 @@ def test_agent_loop_drives_browser(server):
     asyncio.run(run())
 
 
+def test_agent_cross_host_navigate_requires_confirm(server):
+    """Injection defense: with no allowlist, the agent's cross-host navigate is
+    confirm-gated; a decline blocks it. Manual navigate (no flag) is never gated."""
+    async def run():
+        from corvin_console.browser import BrowserSession, BrowserActionError
+        home = Path(tempfile.mkdtemp())
+        declines = []
+
+        async def confirm(**kw):
+            declines.append(kw)
+            return False   # decline the cross-host jump
+
+        s = BrowserSession("xh", "_default", home=home, headless=True,
+                           allowlist=None, confirm_fn=confirm)
+        await s.start()
+        await s.navigate(server)                      # first load (no gate)
+        # a cross-host navigate via the agent flag → confirm asked → declined → blocked
+        with pytest.raises(BrowserActionError):
+            await s.navigate("https://example.com", confirm_cross_host=True)
+        assert declines and declines[0]["action"] == "navigate"
+        # manual navigate (no flag) is NOT gated
+        await s.navigate("https://example.com")       # should succeed (no confirm)
+        await s.close()
+
+    asyncio.run(run())
+
+
 def test_agent_action_parser():
     from corvin_console.browser.agent import _parse_action
     assert _parse_action('{"action":"click","index":3}')["action"] == "click"

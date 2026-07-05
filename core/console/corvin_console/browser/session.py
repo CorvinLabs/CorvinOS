@@ -152,7 +152,7 @@ class BrowserSession:
                 f"blocked: session is paused / under user take-over ({action})")
 
     # ── actions ──────────────────────────────────────────────────────────────
-    async def navigate(self, url: str) -> Observation:
+    async def navigate(self, url: str, *, confirm_cross_host: bool = False) -> Observation:
         self._guard_active("navigate")
         decision = _cmp.check_egress(url, allowlist=self._allowlist, forbidden=self._forbidden)
         if not decision.allowed:
@@ -161,6 +161,21 @@ class BrowserSession:
                               extra={"reason": decision.reason})
             self._emit("navigate", host=decision.host, ok=False, reason=decision.reason)
             raise BrowserActionError(f"egress denied for {decision.host}: {decision.reason}")
+        # Injection defense for the AUTONOMOUS agent: when no egress allowlist is
+        # configured, a cross-host navigation (the classic indirect-prompt-
+        # injection → beacon vector) requires human confirmation. Manual operator
+        # navigation (confirm_cross_host=False) is never gated.
+        if confirm_cross_host and self._allowlist is None and self._confirm is not None:
+            cur = _cmp._host(self._require_page().url)
+            if cur and decision.host and decision.host != cur:
+                approved = await self._confirm(action="navigate", host=decision.host,
+                                               role="navigation", name=url[:120])
+                if not approved:
+                    _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                                      action="navigate", host=decision.host, ok=False,
+                                      extra={"reason": "user_declined_cross_host"})
+                    self._emit("navigate", host=decision.host, ok=False, reason="cross-host declined")
+                    raise BrowserActionError(f"cross-host navigation to {decision.host} declined")
         async with self._page_lock:
             page = self._require_page()
             self._last_marks = []       # stamps from the old page are gone

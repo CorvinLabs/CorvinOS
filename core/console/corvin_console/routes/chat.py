@@ -320,6 +320,102 @@ async def upload_attachments(
     return JSONResponse({"attachments": results})
 
 
+async def _handle_browser_command(websocket, rec, task: str) -> None:
+    """ADR-0182 Part B — `/browser <task>` in the command-center chat: open a
+    visible browser, run the browser-agent loop, and stream its progress back as
+    chat deltas. Sensitive actions surface in the Browser page's confirm panel.
+    The agent keeps running in the background if the streaming window elapses."""
+    from . import browser as _br  # reuse the singleton manager + helpers
+    if not task:
+        await websocket.send_json({"type": "error", "message": "usage: /browser <task>"})
+        await websocket.send_json({"type": "done"})
+        return
+    # Same gates as a normal chat turn: (1) L44 acceptable-use on the task text
+    # (it drives an LLM + a browser), fail-closed; (2) charge the chat-turn quota
+    # so /browser can't be a metered-spawn bypass.
+    try:
+        _refusal = _spawn_gates.check_console_spawn_or_refusal(
+            task, tenant_id=rec.tenant_id, persona="assistant",
+            channel="chat", chat_key=f"browser:{rec.sid_fingerprint}",
+            engine_id="claude_code", classification="PUBLIC")
+    except Exception:  # noqa: BLE001
+        _refusal = None
+    if _refusal:
+        await websocket.send_json({"type": "delta", "text": _refusal})
+        await websocket.send_json({"type": "done"})
+        return
+    try:
+        from ._compute_license_gate import enforce_chat_turns  # noqa: PLC0415
+        enforce_chat_turns(rec.tenant_id, rec.sid_fingerprint,
+                           audit_action="chat.browser_command", channel="chat")
+    except HTTPException:
+        await websocket.send_json({"type": "error", "code": 402,
+            "message": "daily chat-turn limit reached (chat_turns_per_day)"})
+        await websocket.send_json({"type": "done"})
+        return
+    mgr = _br._mgr()
+    try:
+        sid = await mgr.create(rec.tenant_id, headless=_br._default_headless())
+    except Exception as e:  # noqa: BLE001 — cap reached / launch failure
+        await websocket.send_json({"type": "error", "message": f"could not start browser: {e}"})
+        await websocket.send_json({"type": "done"})
+        return
+    with contextlib.suppress(Exception):
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="chat.browser_command", target_kind="browser_session", target_id=sid)
+
+    await websocket.send_json({"type": "delta", "text":
+        f"🌐 Browser started — open **Browser** in the sidebar to watch live.\n"
+        f"**Task:** {task}\n\n"})
+    # auto_close: a chat-initiated session closes itself when the agent finishes,
+    # so it can never leak / wedge the per-tenant session cap.
+    if not mgr.start_agent(rec.tenant_id, sid, task, auto_close=True):
+        await websocket.send_json({"type": "delta", "text": "⚠️ an agent is already running.\n"})
+        await websocket.send_json({"type": "done"})
+        return
+
+    since = 0
+    max_wall = 180.0
+    waited = 0.0
+    try:
+        while True:
+            await asyncio.sleep(1.0)
+            waited += 1.0
+            try:
+                evs = mgr.actions(rec.tenant_id, sid, since=since)
+                since = mgr.next_seq(rec.tenant_id, sid)
+                running = mgr.agent_running(rec.tenant_id, sid)
+            except KeyError:
+                break     # session closed (e.g. auto_close after the agent finished)
+            for e in evs:
+                a = e.get("action", "")
+                if a == "agent_step":
+                    await websocket.send_json({"type": "delta",
+                        "text": f"• **{e.get('plan','')}** — {e.get('reason','')}\n"})
+                elif a == "confirm_request":
+                    await websocket.send_json({"type": "delta",
+                        "text": f"⚠️ needs your approval: “{e.get('name','')}” — approve it in the Browser page.\n"})
+                elif a in ("agent_finished",):
+                    await websocket.send_json({"type": "delta",
+                        "text": f"\n✅ **Done** — {e.get('summary') or e.get('reason','')}\n"})
+                elif a == "agent_error":
+                    await websocket.send_json({"type": "delta",
+                        "text": f"\n⚠️ {e.get('error','')}\n"})
+            if not running:
+                break
+            if waited >= max_wall:
+                await websocket.send_json({"type": "delta", "text":
+                    "\n⏳ Still working — keep watching in the **Browser** page; "
+                    "it continues in the background.\n"})
+                break
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            mgr.stop_agent(rec.tenant_id, sid)
+        raise
+    await websocket.send_json({"type": "done"})
+
+
 @router.websocket("/chat/sessions/{sid}/stream")
 async def chat_stream(
     websocket: WebSocket,
@@ -431,6 +527,14 @@ async def chat_stream(
                 prompt = str(msg.get("text") or "").strip()
                 if not prompt:
                     await websocket.send_json({"type": "error", "message": "empty user text"})
+                    continue
+                # Browser command (ADR-0182 Part B): drive the visible browser from
+                # the command-center chat. `/browser <task>` starts a browser-agent
+                # loop and streams its progress back as chat deltas. Handled here
+                # (async) rather than in the sync slash-dispatcher below.
+                if prompt.lower().startswith(("/browser ", "/browse ")):
+                    task = prompt.split(" ", 1)[1].strip()
+                    await _handle_browser_command(websocket, rec, task)
                     continue
                 # Slash-command dispatcher (command center): handle every console
                 # slash-command deterministically so it NEVER leaks to the LLM as a
