@@ -215,6 +215,12 @@ try:
     from corvin_console import app as _console_app  # type: ignore[import-not-found]
     app.include_router(_console_app.router, prefix="/v1/console")
     _console_app.mount_static(app)
+    # Local stats HTML dashboard — bare /local-stats (outside /console/ SPA prefix)
+    from fastapi.responses import HTMLResponse as _HTMLResponse
+    from corvin_console.standalone import _LOCAL_STATS_HTML as _ls_html  # type: ignore
+    @app.get("/local-stats", include_in_schema=False)
+    def _local_stats_page() -> _HTMLResponse:
+        return _HTMLResponse(content=_ls_html)
 except ImportError:
     pass
 except Exception as _plugin_exc:
