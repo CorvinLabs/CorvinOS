@@ -1,0 +1,12 @@
+[Unit]
+Description=Run corvin background-task wakeup monitor every minute
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=corvin-bg-monitor.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=corvin-voice background-task session wakeup monitor
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env python3 __BRIDGES_DIR__/bg_monitor.py
+StandardOutput=journal
+StandardError=journal

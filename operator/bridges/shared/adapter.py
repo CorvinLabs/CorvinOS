@@ -8890,6 +8890,21 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         except (OSError, FileNotFoundError) as e:
             log(f"local_announce_outbound failed: {e}")
 
+    # Background-task wakeup monitor: record that this session just had a
+    # real user turn so bg_monitor.py can inject a synthetic wakeup if the
+    # session goes idle for too long while background agents are still running.
+    # Skipped for synthetic wakeup messages (to prevent re-arm loops) and for
+    # observer/side-channel messages (no user intent behind them).
+    if not msg.get("_bg_wakeup") and not msg.get("_observer"):
+        try:
+            try:
+                from . import bg_monitor as _bgm  # type: ignore
+            except ImportError:
+                import bg_monitor as _bgm  # type: ignore[no-redef]
+            _bgm.touch(channel, sender, chat_id)
+        except Exception as _bgm_exc:  # noqa: BLE001
+            log(f"bg_watch touch failed (non-fatal): {_bgm_exc}")
+
     # Finalize: move the envelope AND any referenced attachment file
     # (.ogg/.jpg/.pdf/...) from INBOX to PROCESSED so the queue stays
     # bounded. See the helper's docstring for the historical orphan-

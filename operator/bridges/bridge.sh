@@ -94,6 +94,8 @@ UNIT_WATCHDOG_SVC="corvin-voice-bridge-watchdog.service"
 UNIT_WATCHDOG_TIMER="corvin-voice-bridge-watchdog.timer"
 UNIT_CORVIN_HERMES_HEALTH_SVC="corvin-hermes-health.service"
 UNIT_CORVIN_HERMES_HEALTH_TIMER="corvin-hermes-health.timer"
+UNIT_CORVIN_BG_MONITOR_SVC="corvin-bg-monitor.service"
+UNIT_CORVIN_BG_MONITOR_TIMER="corvin-bg-monitor.timer"
 ALL_UNITS=("$UNIT_ADAPTER" "$UNIT_WA" "$UNIT_TG" "$UNIT_DC" "$UNIT_SK" "$UNIT_EM" \
            "$UNIT_WATCHDOG_TIMER" "$UNIT_WATCHDOG_SVC" \
            "$UNIT_CORVIN_TIMEOUT_TIMER" "$UNIT_CORVIN_TIMEOUT_SVC" \
@@ -103,6 +105,7 @@ ALL_UNITS=("$UNIT_ADAPTER" "$UNIT_WA" "$UNIT_TG" "$UNIT_DC" "$UNIT_SK" "$UNIT_EM
            "$UNIT_CORVIN_SUPPLY_CHAIN_WEEKLY_TIMER" "$UNIT_CORVIN_SUPPLY_CHAIN_WEEKLY_SVC" \
            "$UNIT_CORVIN_SUPPLY_CHAIN_CRITICAL_TIMER" "$UNIT_CORVIN_SUPPLY_CHAIN_CRITICAL_SVC" \
            "$UNIT_CORVIN_HERMES_HEALTH_TIMER" "$UNIT_CORVIN_HERMES_HEALTH_SVC" \
+           "$UNIT_CORVIN_BG_MONITOR_TIMER" "$UNIT_CORVIN_BG_MONITOR_SVC" \
            "$UNIT_CORVIN_WEBUI")
 
 # Resolve absolute paths to node + python so systemd's empty PATH doesn't
@@ -238,6 +241,8 @@ install_units() {
   for unit in "$BRIDGES_DIR/shared/systemd/$UNIT_ADAPTER" \
               "$BRIDGES_DIR/shared/systemd/$UNIT_WATCHDOG_SVC" \
               "$BRIDGES_DIR/shared/systemd/$UNIT_WATCHDOG_TIMER" \
+              "$BRIDGES_DIR/shared/systemd/$UNIT_CORVIN_BG_MONITOR_SVC" \
+              "$BRIDGES_DIR/shared/systemd/$UNIT_CORVIN_BG_MONITOR_TIMER" \
               "$BRIDGES_DIR/whatsapp/systemd/$UNIT_WA" \
               "$BRIDGES_DIR/telegram/systemd/$UNIT_TG" \
               "$BRIDGES_DIR/discord/systemd/$UNIT_DC" \
