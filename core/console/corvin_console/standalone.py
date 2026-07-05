@@ -144,11 +144,25 @@ def create_app() -> FastAPI:
     Callable as a uvicorn ``--factory`` target:
     ``corvin_console.standalone:create_app``
     """
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _lifespan(application: FastAPI):  # noqa: ARG001
+        # Start presence heartbeat (best-effort — never blocks startup).
+        try:
+            from .aco.heartbeat import start_heartbeat_thread as _start_hb
+            import forge.paths as _fp  # type: ignore[import]
+            _start_hb(_fp.corvin_home())
+        except Exception:
+            pass
+        yield
+
     app = FastAPI(
         title="CorvinOS Console",
         version="1.0",
         docs_url=None,   # disable Swagger UI in production
         redoc_url=None,
+        lifespan=_lifespan,
     )
 
     # Allow the same-origin SPA to call the API in development.
