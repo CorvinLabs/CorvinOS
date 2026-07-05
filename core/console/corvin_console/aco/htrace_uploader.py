@@ -195,7 +195,12 @@ def ping_if_due(home: Path) -> bool:
             from importlib.metadata import version as _pkg_version
             corvin_version = _pkg_version("corvinos")
         except Exception:  # noqa: BLE001
-            corvin_version = "unknown"
+            try:
+                # Dev-mode fallback: read __version__ from the installed console package.
+                from corvin_console import __version__ as _cv  # type: ignore[attr-defined]
+                corvin_version = _cv
+            except Exception:  # noqa: BLE001
+                corvin_version = "unknown"
 
         import sys as _sys
         _python_minor = f"{_sys.version_info.major}.{_sys.version_info.minor}"
