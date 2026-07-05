@@ -116,6 +116,8 @@ from .routes import (
     aco as aco_route,
     # ADR-0178 / ADR-0180 — Self-healing config (ACO L5 toggles + healing telemetry)
     healing_config as healing_config_route,
+    # ADR-0182 — Browser automation (agent-driven browser + live view)
+    browser as browser_route,
 )
 
 
@@ -230,6 +232,7 @@ router.include_router(ulo_route.router, tags=["console-ulo"])
 router.include_router(aco_route.router, tags=["console-aco"])
 # ADR-0178 / ADR-0180 — Self-healing config (ACO L5 toggles + healing telemetry)
 router.include_router(healing_config_route.router, tags=["console-healing-config"])
+router.include_router(browser_route.router, tags=["console-browser"])
 
 
 @router.get("/version")

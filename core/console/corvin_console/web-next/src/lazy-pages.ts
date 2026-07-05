@@ -23,6 +23,10 @@ export const EnginesPage = React.lazy(() =>
   import("@/pages/engines").then((m) => ({ default: m.EnginesPage }))
 );
 
+export const BrowserPage = React.lazy(() =>
+  import("@/pages/browser").then((m) => ({ default: m.BrowserPage }))
+);
+
 export const EngineControlPage = React.lazy(() =>
   import("@/pages/engine-control").then((m) => ({ default: m.EngineControlPage }))
 );

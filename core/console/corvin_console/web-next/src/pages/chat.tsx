@@ -35,6 +35,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  ApiError,
   createChatSession,
   deleteChatSession,
   getChatTurns,
@@ -764,7 +765,7 @@ function ChatPane({
   sid: string;
   session?: ChatSessionSummary;
 }) {
-  const { session: auth } = useAuth();
+  const { session: auth, refresh: refreshAuth } = useAuth();
   const csrf = auth!.csrf_token;
   const qc = useQueryClient();
   // Messages and streaming state come from the persistent registry instead of
@@ -1254,7 +1255,13 @@ function ChatPane({
           const r = await transcribeAudio(blob, csrf);
           setInput((prev) => (prev ? `${prev} ${r.text}` : r.text));
         } catch (e) {
-          setError(e instanceof Error ? e.message : "transcription failed");
+          // 403 = stale CSRF token (e.g. console restart) — refresh session silently
+          if (e instanceof ApiError && e.status === 403) {
+            refreshAuth();
+            setError("Session abgelaufen — bitte nochmal sprechen.");
+          } else {
+            setError(e instanceof Error ? e.message : "Transkription fehlgeschlagen");
+          }
         }
       };
       mr.start();

@@ -5370,3 +5370,40 @@ export async function getInstanceStats(signal?: AbortSignal): Promise<InstanceSt
   if (!res.ok) throw new Error(`stats fetch failed: ${res.status}`);
   return res.json();
 }
+
+// ── Browser automation (ADR-0182) ───────────────────────────────────────────
+export interface BrowserMark { index: number; role: string; name: string; bbox: number[]; }
+export interface BrowserObservation { url: string; title: string; marks: BrowserMark[]; }
+export interface BrowserAction { action: string; ts?: number; [k: string]: unknown; }
+export interface BrowserPending { id: string; action: string; host: string; role: string; name: string; }
+
+export function browserCreateSession(csrf: string): Promise<{ session: string }> {
+  return api("/browser/session", { method: "POST", csrf });
+}
+export function browserClose(sid: string, csrf: string): Promise<{ closed: string }> {
+  return api(`/browser/${sid}/close`, { method: "POST", csrf });
+}
+export function browserNavigate(sid: string, url: string, csrf: string): Promise<BrowserObservation> {
+  return api(`/browser/${sid}/navigate`, { method: "POST", csrf, body: { url } });
+}
+export function browserObserve(sid: string, csrf: string): Promise<BrowserObservation> {
+  return api(`/browser/${sid}/observe`, { method: "POST", csrf });
+}
+export function browserClick(sid: string, index: number, csrf: string): Promise<{ ok: boolean }> {
+  return api(`/browser/${sid}/click`, { method: "POST", csrf, body: { index } });
+}
+export function browserFill(sid: string, index: number, text: string, csrf: string): Promise<{ ok: boolean }> {
+  return api(`/browser/${sid}/fill`, { method: "POST", csrf, body: { index, text } });
+}
+export function browserScroll(sid: string, direction: string, csrf: string): Promise<{ ok: boolean }> {
+  return api(`/browser/${sid}/scroll`, { method: "POST", csrf, body: { direction } });
+}
+export function browserActions(sid: string, since: number): Promise<{ actions: BrowserAction[]; pending: BrowserPending[]; next: number }> {
+  return api(`/browser/${sid}/actions?since=${since}`);
+}
+export function browserConfirm(sid: string, id: string, approved: boolean, csrf: string): Promise<{ resolved: boolean }> {
+  return api(`/browser/${sid}/confirm`, { method: "POST", csrf, body: { id, approved } });
+}
+export function browserPause(sid: string, paused: boolean, csrf: string): Promise<{ paused: boolean }> {
+  return api(`/browser/${sid}/pause`, { method: "POST", csrf, body: { paused } });
+}

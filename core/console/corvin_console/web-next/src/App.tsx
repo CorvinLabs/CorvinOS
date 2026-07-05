@@ -10,6 +10,7 @@ import {
   DashboardPage,
   SettingsPage,
   EnginesPage,
+  BrowserPage,
   ComputePage,
   PersonaDetailPage,
   PersonasListPage,
@@ -165,6 +166,7 @@ export default function App() {
             <Route path="compute" element={<ComputePage />} />
             <Route path="data-sources" element={<DataSourcesPage />} />
             <Route path="engines" element={<EnginesPage />} />
+            <Route path="browser" element={<BrowserPage />} />
             {/* Engine Control merged into the AI Engine page (Control tab). */}
             <Route path="engine-control" element={<Navigate to="/app/engines" replace />} />
             <Route path="api-keys" element={<ApiKeysPage />} />
