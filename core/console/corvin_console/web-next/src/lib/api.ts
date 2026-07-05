@@ -198,13 +198,20 @@ export async function listPersonas(signal?: AbortSignal): Promise<PersonaListRes
 export interface DashboardBridgeStatus {
   channel: string;
   configured: boolean;
+  has_token: boolean;
   source: "canonical" | "legacy" | null;
+}
+
+export interface DashboardEngineStatus {
+  installed: boolean;
+  has_credential: boolean;
 }
 
 export interface DashboardResponse {
   tenant_id: string;
   ts: number;
   engine_default: string;
+  engine_status: Record<string, DashboardEngineStatus>;
   stt: { mode: "pinned" | "chain"; providers: string[] };
   bridges: DashboardBridgeStatus[];
   audit_chain: {

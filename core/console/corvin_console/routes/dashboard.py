@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from typing import Annotated, Any
 
@@ -28,23 +29,125 @@ _REPO = _bootstrap._REPO
 router = APIRouter()
 
 
-_BRIDGES = ("telegram", "discord", "slack", "whatsapp", "email")
+# All seven channels the platform supports; signal/teams were absent before
+# (dashboard.py had only 5), causing the frontend to never render them even
+# though CHANNEL_LABEL in dashboard.tsx already included them.
+_BRIDGES = ("telegram", "discord", "slack", "whatsapp", "email", "signal", "teams")
+
+# Per-channel "proof of real configuration": at least one of these keys must
+# be present AND non-empty in settings.json.  An empty file ({}), a file with
+# only comment fields (_NOTE, _HINWEIS), or a file with only a whitelist but
+# no credential counts as "not configured" for dashboard purposes.
+_BRIDGE_TOKEN_KEYS: dict[str, tuple[str, ...]] = {
+    "telegram":  ("token", "telegram_token", "bot_token"),
+    "discord":   ("token", "discord_token",  "bot_token"),
+    "slack":     ("token", "slack_bot_token", "bot_token", "api_key"),
+    "whatsapp":  (),   # WhatsApp uses QR-auth — no token key; presence of the file is enough
+    "email":     ("imap_user", "smtp_user", "username", "user"),
+    "signal":    ("signal_phone", "phone", "number"),
+    "teams":     ("webhook_url", "teams_webhook", "token"),
+}
 
 
 def _bridge_status(channel: str) -> dict[str, Any]:
-    """Probe whether a channel is configured (settings.json present).
+    """Probe whether a channel is genuinely configured.
 
-    Mirror of the heuristic in ``bridges/shared/settings_view.py`` —
-    "operator configured this channel" is the structurally honest
-    signal. We do NOT probe pid files or systemd state (would cost
-    a fork per render and isn't reliable in non-systemd contexts).
+    Two-tier check:
+      1. File existence  — settings.json present at canonical or legacy path.
+      2. Token presence  — at least one credential key is non-empty.
+
+    ``configured`` = file found (a settings file was ever created).
+    ``has_token``  = a real credential exists (bridge can actually connect).
+
+    The dashboard uses ``has_token`` for the green-dot status so that an
+    empty or comment-only file does NOT mislead the user into thinking the
+    bridge is ready.
     """
-    home = _forge_paths.corvin_home()
-    canonical = home / "bridges" / channel / "settings.json"
-    legacy = _REPO / "operator" / "bridges" / channel / "settings.json"
-    configured = canonical.exists() or legacy.exists()
-    src = "canonical" if canonical.exists() else ("legacy" if legacy.exists() else None)
-    return {"channel": channel, "configured": configured, "source": src}
+    home = _forge_paths.corvin_home() if _forge_paths is not None else None
+    canonical = (home / "bridges" / channel / "settings.json") if home else None
+    legacy    = _REPO / "operator" / "bridges" / channel / "settings.json"
+
+    found_path: Any = None
+    if canonical is not None and canonical.exists():
+        found_path = canonical
+    elif legacy.exists():
+        found_path = legacy
+
+    configured = found_path is not None
+    has_token  = False
+    src = "canonical" if (canonical is not None and canonical.exists()) else \
+          ("legacy" if legacy.exists() else None)
+
+    if found_path is not None:
+        token_keys = _BRIDGE_TOKEN_KEYS.get(channel, ())
+        if not token_keys:
+            # Channels without a token (e.g. WhatsApp QR-auth): file presence = ready
+            has_token = True
+        else:
+            try:
+                data = json.loads(found_path.read_text(encoding="utf-8"))
+                has_token = any(
+                    bool(str(data.get(k, "")).strip())
+                    for k in token_keys
+                )
+            except (OSError, json.JSONDecodeError, ValueError):
+                has_token = False
+
+    return {"channel": channel, "configured": configured, "has_token": has_token, "source": src}
+
+
+def _engine_binary_status() -> dict[str, dict[str, bool]]:
+    """Quick binary/credential check for each engine — no subprocess, no I/O.
+
+    Returns {engine_id: {installed: bool, has_credential: bool}} so the
+    dashboard can show accurate green/amber/grey dots without calling the
+    heavyweight /detect endpoint (which costs up to 15 s).
+
+    Checks performed (all O(1)):
+      claude_code  — shutil.which("claude") AND (ANTHROPIC_API_KEY set OR
+                     Claude OAuth credential file present)
+      hermes       — Ollama reachable check is done separately by /health;
+                     here we just verify the binary is on PATH
+      opencode     — shutil.which("opencode")
+      codex_cli    — shutil.which("codex")
+      copilot      — shutil.which("gh") (Copilot uses the GitHub CLI)
+    """
+    def _claude_cred() -> bool:
+        if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+            return True
+        # OAuth credential file locations (ADR-0125 / engine_detection.py)
+        home = os.path.expanduser("~")
+        for candidate in (
+            os.path.join(home, ".claude", ".credentials.json"),
+            os.path.join(home, ".config", "claude", "credentials.json"),
+        ):
+            try:
+                if os.path.getsize(candidate) > 10:
+                    return True
+            except OSError:
+                pass
+        return False
+
+    results: dict[str, dict[str, bool]] = {}
+
+    binary_map = {
+        "claude_code": ("claude",),
+        "hermes":      ("ollama",),
+        "opencode":    ("opencode",),
+        "codex_cli":   ("codex",),
+        "copilot":     ("gh",),
+    }
+    for engine_id, binaries in binary_map.items():
+        installed = any(shutil.which(b) is not None for b in binaries)
+        if engine_id == "claude_code":
+            has_cred = installed and _claude_cred()
+        elif engine_id == "hermes":
+            has_cred = installed  # model presence checked by /health separately
+        else:
+            has_cred = installed  # for CLI tools, presence = usable
+        results[engine_id] = {"installed": installed, "has_credential": has_cred}
+
+    return results
 
 
 def _audit_chain_status(tenant_id: str) -> dict[str, Any]:
@@ -152,13 +255,14 @@ def dashboard(
     """Return the dashboard payload for the owner's tenant."""
     tid = rec.tenant_id
     return {
-        "tenant_id":      tid,
-        "ts":             time.time(),
-        "engine_default": _engine_default(),
-        "stt":            _stt_chain(),
-        "bridges":        [_bridge_status(b) for b in _BRIDGES],
-        "audit_chain":    _audit_chain_status(tid),
-        "today_counts":   _today_event_counts(tid),
-        "fingerprint":    rec.token_fingerprint,
-        "expires_at":     rec.expires_at,
+        "tenant_id":       tid,
+        "ts":              time.time(),
+        "engine_default":  _engine_default(),
+        "engine_status":   _engine_binary_status(),
+        "stt":             _stt_chain(),
+        "bridges":         [_bridge_status(b) for b in _BRIDGES],
+        "audit_chain":     _audit_chain_status(tid),
+        "today_counts":    _today_event_counts(tid),
+        "fingerprint":     rec.token_fingerprint,
+        "expires_at":      rec.expires_at,
     }

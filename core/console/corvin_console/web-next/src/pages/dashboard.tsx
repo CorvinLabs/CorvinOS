@@ -176,6 +176,8 @@ export function DashboardPage() {
   const workerEngine = engineSettings.data?.default_worker_engine ?? null;
   const ollamaOk = engineHealth.data?.ollama_reachable ?? false;
   const ollamaModels = engineHealth.data?.model_count ?? 0;
+  const engineStatus = dash.data?.engine_status ?? {};
+  const activeEngineInstalled = engineStatus[activeEngine]?.installed ?? true; // optimistic if no data yet
 
   return (
     <div className="mx-auto max-w-6xl space-y-8">
@@ -202,11 +204,13 @@ export function DashboardPage() {
           loading={engineSettings.isLoading}
           value={ENGINE_META[activeEngine]?.label ?? activeEngine}
           hint={
-            ollamaOk
+            !activeEngineInstalled && !dash.isLoading
+              ? "binary not found — using fallback"
+              : ollamaOk
               ? `Ollama reachable · ${ollamaModels} model${ollamaModels !== 1 ? "s" : ""}`
               : "cloud engine"
           }
-          status="ok"
+          status={!activeEngineInstalled && !dash.isLoading ? "warn" : "ok"}
         />
         <StatCard
           icon={Database}
@@ -297,6 +301,7 @@ export function DashboardPage() {
                 health={engineHealth.data}
                 activeOs={activeEngine}
                 activeWorker={workerEngine}
+                detectedStatus={engineStatus}
               />
             )}
           </CardContent>
@@ -362,13 +367,14 @@ export function DashboardPage() {
               <CardTitle className="text-base">Messaging channels</CardTitle>
             </div>
             <CardDescription>
-              Configured channels — settings.json present in bridge directory.
+              Ready channels have a valid credential. "Configured" means a settings file
+              exists but the token is missing.
             </CardDescription>
           </CardHeader>
           <CardContent>
             {dash.isLoading && (
               <div className="space-y-2">
-                {Array.from({ length: 5 }).map((_, i) => (
+                {Array.from({ length: 7 }).map((_, i) => (
                   <Skeleton key={i} className="h-8 w-full" />
                 ))}
               </div>
@@ -381,8 +387,10 @@ export function DashboardPage() {
                     className="flex items-center justify-between px-4 py-2.5 text-sm"
                   >
                     <div className="flex items-center gap-3">
-                      {b.configured ? (
+                      {b.has_token ? (
                         <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                      ) : b.configured ? (
+                        <AlertTriangle className="h-4 w-4 text-amber-400" />
                       ) : (
                         <XCircle className="h-4 w-4 text-muted-foreground/50" />
                       )}
@@ -390,8 +398,8 @@ export function DashboardPage() {
                         {CHANNEL_LABEL[b.channel] ?? b.channel}
                       </span>
                     </div>
-                    <Badge variant={b.configured ? "ok" : "outline"}>
-                      {b.configured ? "configured" : "not configured"}
+                    <Badge variant={b.has_token ? "ok" : b.configured ? "warn" : "outline"}>
+                      {b.has_token ? "ready" : b.configured ? "no token" : "not configured"}
                     </Badge>
                   </div>
                 ))}
@@ -536,11 +544,13 @@ function EngineGrid({
   health,
   activeOs,
   activeWorker,
+  detectedStatus,
 }: {
   settings: OsEngineSetting;
   health: OsEngineHealth | undefined;
   activeOs: string;
   activeWorker: string | null;
+  detectedStatus: Record<string, { installed: boolean; has_credential: boolean }>;
 }) {
   const allEngines = Array.from(
     new Set([...settings.valid_engines, ...settings.valid_worker_engines]),
@@ -562,11 +572,22 @@ function EngineGrid({
         const isHermes = id === "hermes";
         const ollamaOk = health?.ollama_reachable ?? false;
         const ollamaModels = health?.model_count ?? 0;
+        const detected = detectedStatus[id];
+        // If the backend hasn't returned detection data yet (first load),
+        // fall back to "assume capable" so the UI doesn't flicker grey.
+        const isInstalled = detected?.installed ?? true;
+        const hasCred = detected?.has_credential ?? true;
 
         let statusDot: "ok" | "warn" | "off" = "off";
-        if (isActiveOs || isActiveWorker) statusDot = "ok";
-        else if (isHermes && !ollamaOk) statusDot = "warn";
-        else if (isOsCapable || isWorkerCapable) statusDot = "ok";
+        if (!isInstalled) {
+          statusDot = "off";                          // binary absent → grey
+        } else if (isHermes) {
+          statusDot = ollamaOk ? "ok" : "warn";      // Ollama running check
+        } else if (!hasCred) {
+          statusDot = "warn";                         // installed but no credential
+        } else if (isActiveOs || isActiveWorker || isOsCapable || isWorkerCapable) {
+          statusDot = "ok";
+        }
 
         return (
           <div
@@ -599,8 +620,10 @@ function EngineGrid({
                 </div>
                 <p className="text-xs text-muted-foreground truncate">
                   {meta.role}
+                  {!isInstalled && " · binary not found"}
+                  {isInstalled && !isHermes && !hasCred && " · credential missing"}
                   {isHermes && ollamaOk && ` · ${ollamaModels} model${ollamaModels !== 1 ? "s" : ""} loaded`}
-                  {isHermes && !ollamaOk && " · Ollama not reachable"}
+                  {isHermes && !ollamaOk && isInstalled && " · Ollama not reachable"}
                 </p>
               </div>
             </div>
