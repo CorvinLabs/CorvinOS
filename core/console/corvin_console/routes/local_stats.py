@@ -36,7 +36,11 @@ def _active_engine(tenant_id: str) -> str:
             return "unknown"
         data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
         spec = data.get("spec", data)
-        return str(spec.get("worker_engine", spec.get("os_engine", "unknown")))
+        engine = (spec.get("worker_engine")
+                  or spec.get("default_worker_engine")
+                  or spec.get("os_engine")
+                  or "unknown")
+        return str(engine)
     except Exception:
         return "unknown"
 

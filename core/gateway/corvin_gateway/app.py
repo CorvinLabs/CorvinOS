@@ -161,6 +161,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         _healer_task = _start_healer()
     except Exception:
         pass  # console package absent or import error — gateway still starts
+
+    # Telemetry heartbeat — 5-min daemon thread, default-ON/opt-out (ADR-0180).
+    try:
+        from corvin_console.aco.heartbeat import start_heartbeat_thread as _start_hb
+        import forge.paths as _fp
+        _start_hb(_fp.corvin_home())
+    except Exception:
+        pass  # best-effort — never blocks startup
     try:
         yield
     finally:
