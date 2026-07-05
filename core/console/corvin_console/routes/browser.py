@@ -135,13 +135,35 @@ async def _act(coro):
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
 
+def _default_headless() -> bool:
+    """Open a VISIBLE window when a desktop display is available (so the operator
+    sees the browser on their screen); fall back to headless on a headless host
+    (the console live-view screencast still shows every action either way).
+    Override with CORVIN_BROWSER_HEADLESS=1 (force headless) / =0 (force visible)."""
+    import os
+    forced = os.environ.get("CORVIN_BROWSER_HEADLESS")
+    if forced in ("1", "true", "yes"):
+        return True
+    if forced in ("0", "false", "no"):
+        return False
+    has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return not has_display
+
+
+class CreateSessionReq(BaseModel):
+    headless: bool | None = None      # None → auto (visible if a display exists)
+    model_config = {"extra": "forbid"}
+
+
 # ── session lifecycle ─────────────────────────────────────────────────────────
 @router.post("/browser/session")
 async def create_session(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    body: CreateSessionReq | None = None,
 ) -> dict[str, Any]:
+    headless = body.headless if (body and body.headless is not None) else _default_headless()
     try:
-        sid = await _mgr().create(rec.tenant_id, headless=True)
+        sid = await _mgr().create(rec.tenant_id, headless=headless)
     except RuntimeError as e:   # session cap reached
         raise HTTPException(status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
                             detail=str(e)) from e
