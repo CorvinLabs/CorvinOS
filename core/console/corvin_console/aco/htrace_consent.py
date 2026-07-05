@@ -275,43 +275,41 @@ def load_consent_act_id(home: Path) -> str:
     return act.consent_act_id if act is not None else ""
 
 
-# ── Opt-in ping gate (deny-by-default per CLAUDE.md compliance red-line) ───────
+# ── Anonymous instance-count ping gate (default-ON, opt-out) ──────────────────
 
 def ping_enabled(home: Path) -> bool:
-    """Deny-by-default (opt-IN). The activity ping is OFF unless the operator
-    explicitly enabled it.
+    """Default-ON (opt-OUT). The anonymous activity ping is enabled unless the
+    operator explicitly disables it.
 
-    CLAUDE.md compliance baseline (absolute "Must NOT"): telemetry may never be
-    opt-out / default-on. So this returns True ONLY when one of two explicit
-    opt-in signals is present:
-      1. A recorded GDPR Art. 7 ConsentAct (the CLI consent flow), or
-      2. An explicit ``spec.telemetry.ping_enabled: true`` in
-         ``<corvin_home>/tenants/_default/global/tenant.corvin.yaml``.
+    Sanctioned exception to the general telemetry stance (CLAUDE.md): this is
+    ANONYMOUS INSTANCE COUNTING, not user telemetry. The ping sends only a random
+    uuid4 instance id + the installed version + an HMAC token — NO personal data,
+    no prompts, no PII (see htrace_uploader.ping_if_due). Legal basis: GDPR
+    Art. 6(1)(f) legitimate interest (counting how many installations exist).
+    Distinct from the healing-trace / error-signature channels, which remain
+    strictly opt-in / deny-by-default.
 
-    Absent both — the fresh-install default — the ping is OFF. It sends only a
-    pseudonymous HMAC token + version, but the red-line is unconditional:
-    nothing leaves the box on first run without an explicit opt-in.
-
-    To opt in: run ``corvin telemetry consent`` (records a ConsentAct) or set
-    ``spec.telemetry.ping_enabled: true`` (or ``corvin config set
-    telemetry.ping_enabled true``).
+    To opt out — the operator/user disables it — set
+    ``spec.telemetry.ping_enabled: false`` in
+    ``<corvin_home>/tenants/_default/global/tenant.corvin.yaml``. Disabled by an
+    explicit boolean ``false`` OR a false-like string (false/no/0/off); anything
+    else — including a missing key — keeps the ping ON.
     """
     try:
-        # 1) Explicit GDPR Art. 7 consent recorded → opted in.
-        if ConsentAct.load(home) is not None:
-            return True
-        # 2) Explicit config opt-in. Only a literal `true` enables; a missing
-        #    key, `false`, or any parse failure keeps the ping OFF (fail-closed).
         import yaml  # type: ignore[import]
         cfg_path = _tenant_cfg_path(home)
         if cfg_path.exists():
             data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
             spec = data.get("spec", data)
-            if spec.get("telemetry", {}).get("ping_enabled", False) is True:
-                return True
+            v = spec.get("telemetry", {}).get("ping_enabled", True)
+            if v is False:
+                return False
+            if isinstance(v, str) and v.strip().lower() in ("false", "no", "0", "off"):
+                return False
+            return True
     except Exception:  # noqa: BLE001
         pass
-    return False  # deny-by-default (opt-in)
+    return True  # default ON (opt-out) — no config / unreadable config → counted
 
 
 def ensure_ping_tokens(home: Path) -> bool:

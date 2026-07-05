@@ -581,9 +581,10 @@ class TestR1Fixes:
                 del sys.modules[m]
 
 
-class TestPingDenyByDefault:
-    """The activity ping (ADR-0180) must be OPT-IN — CLAUDE.md compliance
-    red-line: telemetry may never be opt-out / default-on."""
+class TestPingDefaultOnOptOut:
+    """The anonymous instance-count ping is default-ON (opt-out). It sends only a
+    random uuid4 instance id + version (no PII); legal basis GDPR Art. 6(1)(f)
+    legitimate interest. The operator/user can disable it explicitly."""
 
     def _write_cfg(self, home: Path, value) -> None:
         import yaml
@@ -592,36 +593,31 @@ class TestPingDenyByDefault:
         p.write_text(yaml.safe_dump({"spec": {"telemetry": {"ping_enabled": value}}}),
                      encoding="utf-8")
 
-    def test_fresh_install_ping_is_off(self, tmpdir):
+    def test_fresh_install_ping_is_on(self, tmpdir):
         from corvin_console.aco.htrace_consent import ping_enabled
-        # No ConsentAct, no config → deny-by-default.
-        assert ping_enabled(tmpdir) is False
+        # No config at all → counted by default (the goal: count instances).
+        assert ping_enabled(tmpdir) is True
 
-    def test_config_false_keeps_ping_off(self, tmpdir):
+    def test_config_false_opts_out(self, tmpdir):
         from corvin_console.aco.htrace_consent import ping_enabled
         self._write_cfg(tmpdir, False)
         assert ping_enabled(tmpdir) is False
 
-    def test_explicit_config_true_opts_in(self, tmpdir):
+    def test_config_true_stays_on(self, tmpdir):
         from corvin_console.aco.htrace_consent import ping_enabled
         self._write_cfg(tmpdir, True)
         assert ping_enabled(tmpdir) is True
 
-    def test_recorded_consent_opts_in(self, tmpdir):
-        from corvin_console.aco.htrace_consent import ping_enabled, ConsentAct
-        ConsentAct(
-            consent_act_id="test-act",
-            consent_version="htrace/1.1",
-            ts_utc="2026-07-05T00:00:00Z",
-            text_sha256="0" * 64,
-            method="cli",
-            corvin_version="0.0.0-test",
-        ).save(tmpdir)
-        assert ping_enabled(tmpdir) is True
-
-    def test_non_bool_truthy_config_does_not_opt_in(self, tmpdir):
-        # Only a literal `true` enables; a truthy-but-not-True value stays OFF
-        # (fail-closed — no accidental opt-in via "yes"/1/etc.).
+    def test_false_like_strings_opt_out(self, tmpdir):
+        # Manual editors may write a quoted string — honour common false-likes.
         from corvin_console.aco.htrace_consent import ping_enabled
-        self._write_cfg(tmpdir, "yes")
-        assert ping_enabled(tmpdir) is False
+        for s in ("false", "no", "0", "off", "OFF", " False "):
+            self._write_cfg(tmpdir, s)
+            assert ping_enabled(tmpdir) is False, s
+
+    def test_truthy_or_unknown_values_stay_on(self, tmpdir):
+        # Anything that is not an explicit false → stays ON (opt-out default).
+        from corvin_console.aco.htrace_consent import ping_enabled
+        for v in ("yes", "true", 1, "maybe"):
+            self._write_cfg(tmpdir, v)
+            assert ping_enabled(tmpdir) is True, v

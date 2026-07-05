@@ -30,6 +30,7 @@ Corvin is **structurally constrained** by EU AI Act 2026 + GDPR. Every feature m
 | Voice-transcribe audit (metadata only, never text) | GDPR Art. 5 | [Layer 23](docs/claude-ref/layer-23-stt.md) |
 | House-rules gate (acceptable-use, fail-closed) | EU AI Act Art. 5, 50 | [Layer 44](docs/claude-ref/layer-44-house-rules.md) |
 | Error telemetry (opt-in, scrubbed signatures only, deny-by-default) | GDPR Art. 5, 6, 7, 25 | ADR-0179 (`aco/telemetry.py`) |
+| Anonymous instance-count ping (default-ON, opt-out; random uuid4 + version only, no PII) | GDPR Art. 6(1)(f) legitimate interest | ADR-0180 (`aco/htrace_consent.py::ping_enabled`) |
 
 **Must NOT do (absolute):**
 - Don't weaken disclosure — AI-nature statement and opt-out (`/pass`, `/leave`) are locked.
@@ -39,9 +40,15 @@ Corvin is **structurally constrained** by EU AI Act 2026 + GDPR. Every feature m
 - Don't leak PII into labels, audit details, or log lines.
 - Don't add "compliance-off mode" via any env var.
 - Don't silence `voice-audit verify` exit-1.
-- Don't make telemetry opt-out/default-on, or send anything but scrubbed signatures (ADR-0179
-  `_assert_safe` is fail-closed); don't commit an auto-fix that didn't pass the red→green
-  reproduction gate (`aco/reproduction.py`).
+- Don't make **error/healing telemetry** (signatures, traces, heal events) opt-out/default-on,
+  or send anything but scrubbed signatures (ADR-0179 `_assert_safe` is fail-closed). EXCEPTION,
+  sanctioned by the maintainer: the **anonymous instance-count ping** (ADR-0180) is default-ON /
+  opt-out — it sends ONLY a random uuid4 instance id + version + HMAC token (no PII, no prompts,
+  no user data), legal basis GDPR Art. 6(1)(f) legitimate interest (counting installs). It must
+  stay strictly anonymous and keep a documented opt-out (`spec.telemetry.ping_enabled: false`).
+  Do NOT extend the ping to carry any personal data, and do NOT flip the error/healing channels
+  to default-on. Don't commit an auto-fix that didn't pass the red→green reproduction gate
+  (`aco/reproduction.py`).
 
 → Full reference: [compliance-baseline.md](docs/claude-ref/compliance-baseline.md)
 
