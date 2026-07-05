@@ -2,9 +2,11 @@
 
 Returns a snapshot of this CorvinOS instance's current state from purely
 local sources (no remote API calls).  Used by the /local-stats dashboard
-page served by standalone.py.
+page served by standalone.py / gateway app.py.
 
-Auth: requires a valid console session so the endpoint isn't world-readable.
+Auth: intentionally unauthenticated — data is non-sensitive (version,
+platform, uptime) and the endpoint is localhost-only.  Removing the
+session dependency lets the dashboard JS fetch without a prior login.
 """
 from __future__ import annotations
 
@@ -12,12 +14,10 @@ import importlib.metadata
 import sys
 import threading
 import time
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from .. import auth as session_auth
-from ..deps import require_session
 from .. import _bootstrap
 
 _forge_paths = _bootstrap.forge_paths
@@ -49,7 +49,7 @@ def _heartbeat_alive() -> bool:
     return any(t.name == "corvin-heartbeat" and t.is_alive() for t in threading.enumerate())
 
 
-def _instance_id(tenant_id: str) -> str:
+def _instance_id() -> str:
     try:
         from corvin_console.aco.htrace_consent import load_or_create_instance_id  # type: ignore
         home = _forge_paths.corvin_home()
@@ -59,7 +59,7 @@ def _instance_id(tenant_id: str) -> str:
         return "—"
 
 
-def _ping_enabled(tenant_id: str) -> bool:
+def _ping_enabled() -> bool:
     try:
         from corvin_console.aco.htrace_consent import ping_enabled  # type: ignore
         home = _forge_paths.corvin_home()
@@ -78,10 +78,9 @@ def _active_sessions() -> int:
 
 
 @router.get("/local-stats")
-def local_stats(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-) -> dict[str, Any]:
-    """Return a local instance snapshot — no remote API calls."""
+def local_stats() -> dict[str, Any]:
+    """Return a local instance snapshot — no remote API calls, no auth required."""
+    tenant_id = "_default"
     try:
         version = importlib.metadata.version("corvinos")
     except Exception:
@@ -95,9 +94,9 @@ def local_stats(
         "version":         version,
         "platform":        sys.platform,
         "python":          f"{sys.version_info.major}.{sys.version_info.minor}",
-        "engine":          _active_engine(rec.tenant_id),
-        "instance_id":     _instance_id(rec.tenant_id),
-        "ping_enabled":    _ping_enabled(rec.tenant_id),
+        "engine":          _active_engine(tenant_id),
+        "instance_id":     _instance_id(),
+        "ping_enabled":    _ping_enabled(),
         "heartbeat_alive": _heartbeat_alive(),
         "active_sessions": _active_sessions(),
         "uptime_seconds":  uptime_s,
