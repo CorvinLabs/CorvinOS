@@ -167,15 +167,20 @@ def run_once() -> int:
         if age < BGW_IDLE_GRACE:
             continue
 
-        # Already notified recently → skip until re-armed by touch()
-        if notified_at > 0 and (now - notified_at) < BGW_IDLE_GRACE:
+        # H3: once notified, never re-fire until touch() explicitly resets
+        # notified_at to 0 (i.e., a real user turn arrives). The old
+        # time-based re-arm caused spam every BGW_IDLE_GRACE seconds.
+        if notified_at > 0:
             continue
 
         channel = entry.get("channel", "discord")
         from_ = entry.get("from", "")
         chat_id = entry.get("chat_id")
 
-        msg_id = f"bgw_{secrets.token_hex(6)}"
+        # M1: "zz_bgw_" sorts after "mp*" filenames lexicographically so the
+        # adapter processes real user messages before wakeup injections in the
+        # same poll tick (adapter uses sorted(INBOX.glob("*.json"))).
+        msg_id = f"zz_bgw_{secrets.token_hex(6)}"
         envelope: dict = {
             "id": msg_id,
             "channel": channel,

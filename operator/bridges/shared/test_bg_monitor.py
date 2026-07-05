@@ -57,7 +57,7 @@ def test_no_injection_when_too_recent(tmp_path, monkeypatch):
     n = m.run_once()
     assert n == 0
     inbox = Path(tmp_path / "inbox")
-    assert list(inbox.glob("bgw_*.json")) == []
+    assert list(inbox.glob("zz_bgw_*.json")) == []
 
 
 def test_injection_when_idle(tmp_path, monkeypatch):
@@ -73,7 +73,7 @@ def test_injection_when_idle(tmp_path, monkeypatch):
     n = m.run_once()
     assert n == 1
     inbox = Path(tmp_path / "inbox")
-    files = list(inbox.glob("bgw_*.json"))
+    files = list(inbox.glob("zz_bgw_*.json"))
     assert len(files) == 1
     envelope = json.loads(files[0].read_text())
     assert envelope["channel"] == "discord"
@@ -144,7 +144,7 @@ def test_multiple_sessions(tmp_path, monkeypatch):
     n = m.run_once()
     assert n == 1
     inbox = Path(tmp_path / "inbox")
-    files = list(inbox.glob("bgw_*.json"))
+    files = list(inbox.glob("zz_bgw_*.json"))
     assert len(files) == 1
     envelope = json.loads(files[0].read_text())
     assert envelope["chat_id"] == "chat1"

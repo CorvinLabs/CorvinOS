@@ -7996,6 +7996,27 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     if msg.get("_btw"):
         chat_key = chat_id or sender
         btw_text = (msg.get("text") or "").strip()
+        # C1 — L44 house-rules gate: /btw text is user-submitted and must pass
+        # the same acceptable-use classifier as normal call_claude paths (fail-closed).
+        if btw_text:
+            _btw_hr = _check_house_rules_or_fail(
+                prompt=btw_text, persona=None, channel=channel, chat_key=chat_key,
+            )
+            if _btw_hr is not None:
+                _audit_event(
+                    "bridge.btw_inject",
+                    channel=channel, chat_key=str(chat_key), user=sender,
+                    details={"delivered": False, "text_len": len(btw_text), "blocked": "house_rules"},
+                )
+                _hr_ack = {"channel": channel, "to": sender, "text": _btw_hr}
+                if chat_id is not None:
+                    _hr_ack["chat_id"] = chat_id
+                (OUTBOX / f"{msg_id}_00.json").write_text(
+                    json.dumps(_hr_ack, ensure_ascii=False, indent=2)
+                )
+                PROCESSED.mkdir(exist_ok=True)
+                shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+                return
         delivered = inject_btw(chat_key, btw_text) if btw_text else False
         log(f"btw channel={channel} chat={chat_key} delivered={delivered} "
             f"len={len(btw_text)}")
@@ -8071,10 +8092,25 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                         f"now running in this chat)"
                     )
                 elif signal_name == "KILL":
-                    killed = _cancel_chat(target_chat)
-                    delivered = killed > 0
-                    if not delivered:
-                        reason = "no running subprocess for that chat"
+                    # C2 — cross-chat KILL authz: verify sender is whitelisted
+                    # for the target chat, not just their own originating chat.
+                    # (PLAN/SUMMARIZE cross-chat is intentional per design; KILL is not.)
+                    _sender_chat = str(chat_id) if chat_id else sender
+                    _cross_chat = target_chat and target_chat != _sender_chat
+                    if _cross_chat:
+                        _kill_authz, _ = _inbox_sender_authorized(channel, sender, target_chat)
+                    else:
+                        _kill_authz = True
+                    if not _kill_authz:
+                        reason = (
+                            "cross-chat KILL denied: sender not whitelisted "
+                            "for the target chat"
+                        )
+                    else:
+                        killed = _cancel_chat(target_chat)
+                        delivered = killed > 0
+                        if not delivered:
+                            reason = "no running subprocess for that chat"
                 elif signal_name in (
                     "PLAN", "SUMMARIZE", "CONTEXT_DROP", "QUIET", "RESUME"
                 ):

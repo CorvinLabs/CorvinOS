@@ -81,8 +81,9 @@ class TestModelAvailability:
         assert has_hermes_model(models) is False
 
     def test_has_hermes_model_empty_list(self):
-        """Return False for empty model list."""
-        assert has_hermes_model([]) is False
+        """Return False for empty model list (mock get_available_models so live Ollama can't contaminate)."""
+        with patch("hermes_healing.get_available_models", return_value=[]):
+            assert has_hermes_model([]) is False
 
 
 class TestHealthStatus:

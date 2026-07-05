@@ -30,6 +30,40 @@ def is_hermes_reachable(base_url: str = _OLLAMA_BASE_URL, timeout: float = 2.0) 
         return False
 
 
+def is_hermes_inference_ready(
+    base_url: str = _OLLAMA_BASE_URL,
+    timeout: float = 5.0,
+    models: list[str] | None = None,
+) -> bool:
+    """True if Ollama can serve inference — not just respond to /api/tags.
+
+    Sends a minimal 1-token generate request to detect the hung-but-alive
+    case where /api/tags returns 200 but the inference engine is blocked.
+    Uses the first available qwen3 model; falls back to False if none installed.
+    """
+    ms = models or get_available_models(base_url=base_url)
+    model = next((m for m in ms if "qwen3" in m), None)
+    if not model:
+        return False
+    try:
+        data = json.dumps({
+            "model": model,
+            "prompt": "hi",
+            "stream": False,
+            "options": {"num_predict": 1},
+        }).encode()
+        req = urllib.request.Request(
+            f"{base_url}/api/generate",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return getattr(resp, "status", 200) == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def get_available_models(base_url: str = _OLLAMA_BASE_URL, timeout: float = 2.0) -> list[str]:
     """List installed Ollama model names. Empty list if Ollama is not reachable."""
     try:
@@ -48,11 +82,13 @@ def has_hermes_model(models: Optional[list[str]] = None,
 
 
 def get_health_status() -> dict[str, bool]:
-    """Return a health dict: {reachable: bool, has_model: bool}."""
+    """Return a health dict: {reachable, inference_ok, has_model, models}."""
     reachable = is_hermes_reachable()
     models = get_available_models() if reachable else []
+    inference_ok = is_hermes_inference_ready(models=models) if reachable else False
     return {
         "reachable": reachable,
+        "inference_ok": inference_ok,
         "has_model": has_hermes_model(models),
         "model_count": len(models),
         "models": models,

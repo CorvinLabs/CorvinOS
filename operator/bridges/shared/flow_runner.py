@@ -211,6 +211,26 @@ class FlowRunner:
                 status="paused",
             )
             raise
+        except Exception as _run_exc:
+            # H5: write run_failed audit event for any non-pause exception
+            # (cycle errors, budget exhaustion, executor failures) so the
+            # L16 chain always has a terminal event — never a silent gap.
+            snap = self._budget.snapshot()
+            self._l16_write(
+                "mesh_flow.run_failed",
+                run_id=self._run_id,
+                steps_done=snap["steps_done"],
+                error=type(_run_exc).__name__,
+                status="failed",
+            )
+            self._manifest.append(
+                "mesh_flow.run_failed",
+                run_id=self._run_id,
+                **snap,
+                error=type(_run_exc).__name__,
+                status="failed",
+            )
+            raise
 
         snap = self._budget.snapshot()
         self._l16_write(

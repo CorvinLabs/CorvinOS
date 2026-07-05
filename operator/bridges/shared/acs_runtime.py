@@ -1449,11 +1449,18 @@ async def _dispatch_workers(
                         worker_id=wid, status="failed", result={},
                         error="L35 egress gate blocked this engine",
                     )
-            except Exception as _gate_exc:  # noqa: BLE001 — spawn_gates unavailable → fail-open
+            except Exception as _gate_exc:  # noqa: BLE001
+                # H1: L34/L35 import failure → fail-closed (CLAUDE.md load-bearing invariant).
+                # Spawning without gates would bypass GDPR Art. 32 data-flow controls.
                 _write_audit(ctx.tenant_id, "acs.worker_gates_unavailable", {
                     "run_id": ctx.run_id, "worker_id": wid, "engine": _engine_id,
                     "reason": type(_gate_exc).__name__,
                 })
+                return WorkerResult(
+                    worker_id=wid, status="failed", result={},
+                    error=f"L34/L35 spawn_gates unavailable ({type(_gate_exc).__name__}); "
+                          "refusing to spawn without security gates",
+                )
 
             # M4: workers with can_delegate at max_depth get it stripped
             can_delegate = bool(st.get("can_delegate")) and depth < ctx.budget.max_depth
@@ -1774,12 +1781,20 @@ async def _manager_loop(
                 iterations=ctx.iteration, workers_spawned=ctx.budget.workers_used,
                 run_dir=ctx.run_dir, elapsed_s=time.monotonic() - start,
             )
-    except Exception as _mgr_gate_exc:  # noqa: BLE001 — spawn_gates unavailable → fail-open
-        logger.debug("[acs] Manager gates import failed (fail-open): %s", type(_mgr_gate_exc).__name__)
+    except Exception as _mgr_gate_exc:  # noqa: BLE001
+        # H1+H2: fail-closed (not fail-open); use `log` (module-level logger).
+        log.debug("[acs] Manager gates import failed (fail-closed): %s", type(_mgr_gate_exc).__name__)
         _write_audit(ctx.tenant_id, "acs.manager_gates_unavailable", {
             "run_id": ctx.run_id, "engine": _mgr_engine,
             "reason": type(_mgr_gate_exc).__name__,
         })
+        return ACSResult(
+            run_id=ctx.run_id, workflow_id=ctx.workflow_id, status="failed",
+            error=f"L34/L35 spawn_gates unavailable ({type(_mgr_gate_exc).__name__}); "
+                  "refusing to run without security gates",
+            iterations=ctx.iteration, workers_spawned=ctx.budget.workers_used,
+            run_dir=ctx.run_dir, elapsed_s=time.monotonic() - start,
+        )
 
     while True:
         # Budget check
