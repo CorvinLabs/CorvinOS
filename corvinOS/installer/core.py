@@ -272,7 +272,10 @@ class CorvinInstaller:
     # ── Step 8: Text-to-Speech (Piper) ────────────────────────────────────
 
     def step_8_setup_piper(self) -> None:
-        print("\n[Step 8] Text-to-Speech (Piper)...")
+        print("\n[Step 8] Text-to-Speech (edge-tts + Piper)...")
+        # edge-tts is the keyless middle tier (OpenAI → edge → Piper); ensure it
+        # explicitly so the fallback order holds even on non-standard interpreters.
+        _piper.ensure_edge_tts()
         _piper.ensure_piper(self.voice_config, interactive=self.interactive)
 
     # ── Step 9: API keys ───────────────────────────────────────────────────

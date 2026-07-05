@@ -57,6 +57,7 @@ def run_validation(
     has_openai = _importable("openai")
     has_anthropic = _importable("anthropic")
     has_faster_whisper = _importable("faster_whisper")
+    has_edge_tts = _importable("edge_tts")
 
     if has_openai and has_anthropic and has_faster_whisper:
         print("✓ Python packages: openai + anthropic + faster-whisper")
@@ -67,6 +68,14 @@ def run_validation(
     else:
         print("✗ openai package missing")
         failures += 1
+
+    # edge-tts is the keyless middle TTS tier (OpenAI → edge → Piper). Without it
+    # the fallback chain skips straight to Piper, so surface its absence loudly.
+    if has_edge_tts:
+        print("✓ edge-tts installed (keyless TTS fallback)")
+    else:
+        print("⚠ edge-tts missing — keyless TTS fallback unavailable "
+              "(install: pip install edge-tts)")
 
     # ── Systemd bridge services ────────────────────────────────────────────
     if has_systemd:

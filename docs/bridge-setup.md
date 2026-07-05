@@ -226,7 +226,10 @@ brew install ffmpeg
 CorvinOS falls back automatically:
 `OpenAI TTS → edge-tts (free, Microsoft, internet) → Piper (fully local, offline)`
 
-No action needed — if `OPENAI_API_KEY` is absent, `edge-tts` (already installed) is used.
+No action needed — if `OPENAI_API_KEY` is absent, `edge-tts` is used. It is a base
+dependency and the installer's TTS step (`ensure_edge_tts`) reinstalls it explicitly,
+so the middle tier stays available even when the bridge runs on a separate/pre-existing
+Python interpreter that only had `openai`.
 To force fully offline TTS: `CORVIN_TTS_PROVIDER=piper` in `service.env`
 (requires a Piper model: run `corvin-install --piper-model` or download manually)
 

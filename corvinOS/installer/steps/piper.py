@@ -35,6 +35,33 @@ _MODELS: dict[str, tuple[str, str]] = {
 _HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0"
 
 
+def ensure_edge_tts() -> None:
+    """Guarantee edge-tts is importable — the keyless middle TTS tier.
+
+    edge-tts is declared as a base dependency in pyproject.toml, so a normal
+    ``pip install corvinos`` already ships it. But the voice bridge can be
+    pointed at a *separate* interpreter (e.g. a pre-existing conda/system
+    Python via ``PYTHON`` in service.env) that has ``openai`` but not
+    ``edge-tts`` — in which case the provider chain silently skips the middle
+    tier (OpenAI → [edge missing] → Piper) and a keyless install loses its
+    cloud fallback entirely. Installing it explicitly here — mirroring how
+    Piper and faster-whisper are ensured — makes the OpenAI → edge → Piper
+    order hold even on such non-standard interpreters.
+    """
+    try:
+        import edge_tts  # type: ignore[import-not-found]  # noqa: F401
+        print("  ✓ edge-tts already installed (keyless cloud TTS fallback)")
+        return
+    except ImportError:
+        pass
+
+    print("  Installing edge-tts (keyless cloud TTS fallback) via pip...")
+    if _pip_install("edge-tts>=6.1.8"):
+        print("  ✓ edge-tts installed")
+    else:
+        print("  ⚠ Could not install edge-tts — install manually: pip install edge-tts")
+
+
 def ensure_piper(voice_config_dir: Path, interactive: bool = True) -> None:
     """Install Piper TTS and optionally download a voice model."""
     _install_piper(interactive)
