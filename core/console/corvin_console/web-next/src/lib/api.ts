@@ -5112,6 +5112,23 @@ export async function uploadAttachments(
   return data.attachments;
 }
 
+export async function openSessionWorkdir(
+  sid: string,
+  csrf: string,
+  reveal = true,
+): Promise<{ ok: boolean; path: string; opened: boolean }> {
+  const params = new URLSearchParams({ reveal: reveal ? "true" : "false" });
+  const res = await fetch(
+    `${BASE}/chat/sessions/${encodeURIComponent(sid)}/workdir-path?${params}`,
+    { headers: { "X-CSRF-Token": csrf }, credentials: "include" },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => `HTTP ${res.status}`);
+    throw new ApiError(res.status, text);
+  }
+  return res.json() as Promise<{ ok: boolean; path: string; opened: boolean }>;
+}
+
 // ── ULO (ADR-0163 M4) — User-Defined Learning Objectives ─────────────────
 
 export interface UloObjective {

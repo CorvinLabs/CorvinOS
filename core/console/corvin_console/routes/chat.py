@@ -198,6 +198,38 @@ def get_workdir_file(
         content_disposition_type="inline",
     )
 
+@router.get("/chat/sessions/{sid}/workdir-path")
+def get_session_workdir_path(
+    sid: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    reveal: bool = Query(False),
+) -> dict[str, Any]:
+    """Return the session workdir path and optionally open it in the OS file manager.
+
+    ``?reveal=true`` triggers xdg-open / open / explorer.exe on the server.
+    For a local self-hosted install the server IS the user's machine, so this
+    opens the folder in their native file manager immediately.
+    """
+    sess = chat_runtime.get_session(rec.tenant_id, sid)
+    if sess is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
+    workdir = sess.workdir
+    workdir.mkdir(parents=True, exist_ok=True)
+    opened = False
+    if reveal:
+        try:
+            import subprocess  # noqa: PLC0415
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer.exe", str(workdir)], creationflags=getattr(subprocess, "DETACHED_PROCESS", 8))
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(workdir)])
+            else:
+                subprocess.Popen(["xdg-open", str(workdir)])
+            opened = True
+        except Exception:
+            pass
+    return {"ok": True, "path": str(workdir), "opened": opened}
+
 _ATTACH_MAX_BYTES = 20 * 1024 * 1024   # 20 MB per file
 _ATTACH_MAX_FILES = 10
 _ATTACH_ALLOWED_MIMES: frozenset[str] = frozenset({
@@ -317,6 +349,14 @@ async def chat_stream(
 
     await websocket.accept()
     await websocket.send_json({"type": "ready", "session": _project(sess)})
+    with contextlib.suppress(Exception):
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="chat.ws.connected",
+            target_kind="chat",
+            target_id=sid,
+        )
 
     # _stream_task holds the asyncio.Task running stream_turn while a turn is
     # in flight.  A cancel message (or a WebSocket disconnect) cancels the task,
@@ -345,6 +385,15 @@ async def chat_stream(
             logger.exception("chat turn failed (sid=%s)", sid)
             _exc_type = type(_exc).__name__
             _exc_msg = str(_exc)
+            with contextlib.suppress(Exception):
+                console_audit.action_failed(
+                    tenant_id=rec.tenant_id,
+                    sid_fingerprint=rec.sid_fingerprint,
+                    action="chat.turn.failed",
+                    target_kind="chat",
+                    target_id=sid,
+                    reason=f"{_exc_type}: {_exc_msg[:200]}",
+                )
             # LimitOverrunError (or its ValueError re-raise) means a single JSON line from
             # the subprocess exceeded the StreamReader buffer — typically a very large tool result.
             if isinstance(_exc, (ValueError, asyncio.LimitOverrunError)) and (
@@ -469,6 +518,14 @@ async def chat_stream(
                                 with contextlib.suppress(asyncio.CancelledError):
                                     await _stream_task
                                 await websocket.send_json({"type": "done"})
+                                with contextlib.suppress(Exception):
+                                    console_audit.action_performed(
+                                        tenant_id=rec.tenant_id,
+                                        sid_fingerprint=rec.sid_fingerprint,
+                                        action="chat.turn.cancelled",
+                                        target_kind="chat",
+                                        target_id=sid,
+                                    )
                                 break
                             if side_msg.get("type") == "ping":
                                 # Answer client heartbeats DURING a turn too.
@@ -504,6 +561,14 @@ async def chat_stream(
             _stream_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await _stream_task
+        with contextlib.suppress(Exception):
+            console_audit.action_performed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="chat.ws.disconnected",
+                target_kind="chat",
+                target_id=sid,
+            )
         return
 
 # ── Task API (ADR-0080 M1) ──────────────────────────────────────────────

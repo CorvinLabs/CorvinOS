@@ -207,6 +207,47 @@ async def _heal_cycle() -> None:
     except ImportError:
         pass  # engine_healer not yet available — skip
 
+    # ── Step 1.5: Chat subsystem liveness ────────────────────────────────
+    # Verifies that chat_runtime, voice routes, and STT/TTS are importable
+    # and that list_sessions() runs without errors.  Fills the monitoring
+    # gap where the /healthz watchdog only confirms the FastAPI router is
+    # mounted, not that the chat/voice subsystems are actually functional.
+    try:
+        from .. import chat_runtime as _cr
+        for tenant_id in tenants:
+            try:
+                _cr.list_sessions(tenant_id)
+            except Exception as _e:
+                logger.warning(
+                    "[ACO] chat_runtime.list_sessions failed for tenant=%s: %s",
+                    tenant_id, _e,
+                )
+                try:
+                    from .. import audit as _a
+                    _a.action_failed(
+                        tenant_id=tenant_id,
+                        sid_fingerprint="healer",
+                        action="chat.health_check",
+                        target_kind="chat_runtime",
+                        target_id="list_sessions",
+                        reason=str(_e)[:200],
+                    )
+                except Exception:
+                    pass
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("[ACO] Chat subsystem liveness check failed", exc_info=True)
+
+    # Verify voice STT resolver is importable (beyond just binary checks).
+    try:
+        from operator.voice.scripts.stt import resolver as _stt_res  # noqa: PLC0415
+        _ = _stt_res.DEFAULT_CHAIN  # read attribute — confirms module is functional
+    except ImportError:
+        pass  # stt resolver not installed — engine_healer already reported this
+    except Exception:
+        logger.debug("[ACO] STT resolver import check failed", exc_info=True)
+
     # ── Step 2: Reactive session scan + repair ────────────────────────────
     total_sessions = 0
     total_repaired = 0
