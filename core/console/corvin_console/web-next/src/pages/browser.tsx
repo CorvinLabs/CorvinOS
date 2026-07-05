@@ -23,6 +23,12 @@ export function BrowserPage() {
   const { session } = useAuth();
   const csrf = session?.csrf_token ?? "";
 
+  // Always-fresh CSRF ref — useCallback/useEffect closures read this
+  // instead of capturing the value at creation time, so token refreshes
+  // never leave a stale credential in the TTS/STT queue.
+  const csrfRef = React.useRef(csrf);
+  React.useEffect(() => { csrfRef.current = csrf; }, [csrf]);
+
   const [sid, setSid] = React.useState<string | null>(null);
   const [url, setUrl] = React.useState("https://example.com");
   const [obs, setObs] = React.useState<BrowserObservation | null>(null);
@@ -48,22 +54,24 @@ export function BrowserPage() {
   const lang = "de"; // matches the session language
 
   // Speak text through TTS (queued — never overlaps).
+  // Reads csrfRef.current at call-time so token refreshes are always picked up.
   const speak = React.useCallback((text: string) => {
-    if (!voiceOut || !csrf) return;
+    const token = csrfRef.current;
+    if (!voiceOut || !token) return;
     ttsQueueRef.current = ttsQueueRef.current.then(async () => {
       try {
-        const blob = await ttsBlob(text, lang, csrf);
-        const url = URL.createObjectURL(blob);
+        const blob = await ttsBlob(text, lang, token);
+        const objUrl = URL.createObjectURL(blob);
         await new Promise<void>((res) => {
-          const a = new Audio(url);
+          const a = new Audio(objUrl);
           audioRef.current = a;
-          a.onended = () => { URL.revokeObjectURL(url); res(); };
-          a.onerror = () => { URL.revokeObjectURL(url); res(); };
+          a.onended = () => { URL.revokeObjectURL(objUrl); res(); };
+          a.onerror = () => { URL.revokeObjectURL(objUrl); res(); };
           void a.play();
         });
       } catch { /* TTS failure is non-fatal */ }
     });
-  }, [voiceOut, csrf, lang]);
+  }, [voiceOut, lang]); // csrfRef is a stable ref — no need in deps
 
   const stopSpeaking = React.useCallback(() => {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
@@ -72,6 +80,7 @@ export function BrowserPage() {
   }, []);
 
   // Record audio and return the transcribed text (or null on error).
+  // Reads csrfRef.current at call-time.
   const recordAndTranscribe = React.useCallback(async (): Promise<string | null> => {
     try {
       setRecording(true);
@@ -86,14 +95,14 @@ export function BrowserPage() {
       });
       stream.getTracks().forEach((t) => t.stop());
       const blob = new Blob(chunks, { type: "audio/webm" });
-      const result = await transcribeAudio(blob, csrf);
+      const result = await transcribeAudio(blob, csrfRef.current);
       return result.text?.trim() ?? null;
     } catch {
       return null;
     } finally {
       setRecording(false);
     }
-  }, [csrf]);
+  }, []); // csrfRef is a stable ref — no deps needed
 
   // ── Auto-TTS: agent steps ────────────────────────────────────────────────
   // Speak whenever a new agent_step enters the log (most recent one wins).
@@ -142,7 +151,7 @@ export function BrowserPage() {
       const approved = /\b(ja|yes|bestätig|ok|genehmig)\b/.test(lower);
       const declined = /\b(nein|no|ablehnen|ablehne|nicht)\b/.test(lower);
       if (approved || declined) {
-        await browserConfirm(sid!, first.id, approved, csrf).catch(() => null);
+        await browserConfirm(sid!, first.id, approved, csrfRef.current).catch(() => null);
         setPending((p) => p.filter((x) => x.id !== first.id));
         speak(approved ? "Bestätigt." : "Abgelehnt.");
       }
@@ -221,7 +230,7 @@ export function BrowserPage() {
   };
 
   const start = () => run(async () => {
-    const { session: s } = await browserCreateSession(csrf);
+    const { session: s } = await browserCreateSession(csrfRef.current);
     setSid(s); sinceRef.current = 0; setActions([]); setFrameOk(false);
     lastSpokenSeqRef.current = -1;
     speak("Browser-Session gestartet. Gib eine Aufgabe ein oder navigiere direkt.");
@@ -229,28 +238,28 @@ export function BrowserPage() {
 
   const stop = () => run(async () => {
     stopSpeaking();
-    if (sid) await browserClose(sid, csrf);
+    if (sid) await browserClose(sid, csrfRef.current);
     setSid(null); setObs(null); setActions([]); setPending([]);
   });
 
-  const go = () => sid && run(async () => setObs(await browserNavigate(sid, url, csrf)));
-  const observe = () => sid && run(async () => setObs(await browserObserve(sid, csrf)));
-  const click = (i: number) => sid && run(async () => { await browserClick(sid, i, csrf); setObs(await browserObserve(sid, csrf)); });
+  const go = () => sid && run(async () => setObs(await browserNavigate(sid, url, csrfRef.current)));
+  const observe = () => sid && run(async () => setObs(await browserObserve(sid, csrfRef.current)));
+  const click = (i: number) => sid && run(async () => { await browserClick(sid, i, csrfRef.current); setObs(await browserObserve(sid, csrfRef.current)); });
   const fill = (i: number) => {
     const text = window.prompt("Text to type into element " + i + ":");
-    if (text != null && sid) run(() => browserFill(sid, i, text, csrf));
+    if (text != null && sid) run(() => browserFill(sid, i, text, csrfRef.current));
   };
-  const scroll = (d: string) => sid && run(() => browserScroll(sid, d, csrf));
+  const scroll = (d: string) => sid && run(() => browserScroll(sid, d, csrfRef.current));
   const confirm = (id: string, approved: boolean) => sid && run(async () => {
-    await browserConfirm(sid, id, approved, csrf);
+    await browserConfirm(sid, id, approved, csrfRef.current);
     setPending((p) => p.filter((x) => x.id !== id));
   });
-  const togglePause = () => sid && run(async () => { await browserPause(sid, !paused, csrf); setPaused(!paused); });
+  const togglePause = () => sid && run(async () => { await browserPause(sid, !paused, csrfRef.current); setPaused(!paused); });
   const runAgent = () => sid && task.trim() && run(async () => {
     lastSpokenSeqRef.current = actions.length - 1; // don't re-speak old steps
-    await browserAgent(sid, task.trim(), csrf);
+    await browserAgent(sid, task.trim(), csrfRef.current);
   });
-  const stopAgent = () => sid && run(() => browserAgentStop(sid, csrf));
+  const stopAgent = () => sid && run(() => browserAgentStop(sid, csrfRef.current));
 
   // Manual voice-record for task (tap mic button).
   const handleMicClick = async () => {
