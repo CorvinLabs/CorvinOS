@@ -70,8 +70,8 @@ Full setup guide: [INSTALLATION.md](INSTALLATION.md)
 
 <picture>
   <source media="(prefers-color-scheme: dark)"  srcset="docs/assets/screenshot-chat-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screenshot-chat.png">
-  <img src="docs/assets/screenshot-chat-dark.png" alt="CorvinOS Chat — multi-turn conversation with voice, audit, and engine selector" width="100%">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screenshot-chat-dark.png">
+  <img src="docs/assets/screenshot-chat-dark.png" alt="CorvinOS console — the agent analyzes a Spotify streaming dataset and renders a chart inline in the chat (dark mode)" width="100%">
 </picture>
 
 ---
