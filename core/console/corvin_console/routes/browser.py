@@ -124,6 +124,11 @@ class PauseReq(BaseModel):
     paused: bool
     model_config = {"extra": "forbid"}
 
+class AgentReq(BaseModel):
+    task: str
+    max_steps: int = 12
+    model_config = {"extra": "forbid"}
+
 
 async def _act(coro):
     from ..browser import BrowserActionError
@@ -277,3 +282,33 @@ async def pause(sid: str, body: PauseReq,
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"paused": body.paused}
+
+
+# ── agent loop (natural-language "give it a note", ADR-0182 Part A) ────────────
+@router.post("/browser/{sid}/agent")
+async def run_agent(sid: str, body: AgentReq,
+                    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    task = (body.task or "").strip()
+    if not task:
+        raise HTTPException(status_code=400, detail="empty task")
+    try:
+        started = _mgr().start_agent(rec.tenant_id, sid, task,
+                                     max_steps=max(1, min(body.max_steps, 30)))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    if not started:
+        raise HTTPException(status_code=http_status.HTTP_409_CONFLICT,
+                            detail="an agent is already running for this session")
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+        action="browser.agent.start", target_kind="browser_session", target_id=sid)
+    return {"started": True}
+
+
+@router.post("/browser/{sid}/agent/stop")
+async def stop_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    try:
+        _mgr().stop_agent(rec.tenant_id, sid)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return {"stopped": True}

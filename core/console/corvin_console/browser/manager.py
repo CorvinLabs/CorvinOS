@@ -51,6 +51,7 @@ class _Live:
     pending: dict[str, _Pending] = field(default_factory=dict)
     created: float = field(default_factory=lambda: 0.0)
     emitted: int = 0          # monotonic total events ever appended (survives deque rollover)
+    agent_task: "asyncio.Task | None" = None
 
     def append(self, rec: dict) -> None:
         self.emitted += 1
@@ -166,6 +167,38 @@ class BrowserSessionManager:
     def set_paused(self, tenant_id: str, sid: str, paused: bool) -> None:
         self.get(tenant_id, sid).session.paused = paused
 
+    def start_agent(self, tenant_id: str, sid: str, task: str, *, max_steps: int = 12) -> bool:
+        """Run a natural-language browser-agent loop in the background. Steps flow
+        into the action log (live view); sensitive actions park confirms as usual.
+        Returns False if an agent is already running for this session."""
+        from .agent import BrowserAgent
+        live = self.get(tenant_id, sid)
+        if live.agent_task is not None and not live.agent_task.done():
+            return False
+
+        agent = BrowserAgent(live.session, max_steps=max_steps,
+                             on_step=lambda rec: live.append({**rec, "ts": self._now()}))
+
+        async def _run() -> None:
+            try:
+                result = await agent.run(task)
+                live.append({"action": "agent_finished", **result, "ts": self._now()})
+            except Exception as e:  # noqa: BLE001
+                live.append({"action": "agent_error", "error": str(e), "ts": self._now()})
+
+        live.agent_task = asyncio.ensure_future(_run())
+        return True
+
+    def agent_running(self, tenant_id: str, sid: str) -> bool:
+        live = self.get(tenant_id, sid)
+        return live.agent_task is not None and not live.agent_task.done()
+
+    def stop_agent(self, tenant_id: str, sid: str) -> None:
+        live = self.get(tenant_id, sid)
+        if live.agent_task is not None and not live.agent_task.done():
+            live.agent_task.cancel()
+            live.append({"action": "agent_stopped", "ts": self._now()})
+
     def actions(self, tenant_id: str, sid: str, since: int = 0) -> list[dict]:
         """Return actions with absolute sequence >= ``since``. ``since`` is a
         monotonic emission counter (NOT a buffer index), so this keeps delivering
@@ -191,6 +224,8 @@ class BrowserSessionManager:
     async def close(self, tenant_id: str, sid: str) -> None:
         key = self._key(tenant_id, sid)
         live = self._sessions.pop(key, None)
+        if live and live.agent_task is not None and not live.agent_task.done():
+            live.agent_task.cancel()
         if live and live.session:
             await live.session.close()
 

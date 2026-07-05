@@ -5407,3 +5407,10 @@ export function browserConfirm(sid: string, id: string, approved: boolean, csrf:
 export function browserPause(sid: string, paused: boolean, csrf: string): Promise<{ paused: boolean }> {
   return api(`/browser/${sid}/pause`, { method: "POST", csrf, body: { paused } });
 }
+
+export function browserAgent(sid: string, task: string, csrf: string): Promise<{ started: boolean }> {
+  return api(`/browser/${sid}/agent`, { method: "POST", csrf, body: { task } });
+}
+export function browserAgentStop(sid: string, csrf: string): Promise<{ stopped: boolean }> {
+  return api(`/browser/${sid}/agent/stop`, { method: "POST", csrf });
+}

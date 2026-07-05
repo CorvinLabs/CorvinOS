@@ -3,7 +3,7 @@ import { useAuth } from "@/lib/auth";
 import {
   browserCreateSession, browserClose, browserNavigate, browserObserve,
   browserClick, browserFill, browserScroll, browserActions, browserConfirm,
-  browserPause,
+  browserPause, browserAgent, browserAgentStop,
   type BrowserObservation, type BrowserAction, type BrowserPending,
 } from "@/lib/api";
 
@@ -24,6 +24,7 @@ export function BrowserPage() {
   const [paused, setPaused] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [task, setTask] = React.useState("");
   const sinceRef = React.useRef(0);
   const frameRef = React.useRef<HTMLImageElement | null>(null);
 
@@ -53,6 +54,8 @@ export function BrowserPage() {
   const scroll = (d: string) => sid && run(() => browserScroll(sid, d, csrf));
   const confirm = (id: string, approved: boolean) => sid && run(() => browserConfirm(sid, id, approved, csrf));
   const togglePause = () => sid && run(async () => { await browserPause(sid, !paused, csrf); setPaused(!paused); });
+  const runAgent = () => sid && task.trim() && run(async () => { await browserAgent(sid, task.trim(), csrf); });
+  const stopAgent = () => sid && run(() => browserAgentStop(sid, csrf));
 
   // Poll the live frame (screencast) + the action log while a session is open.
   React.useEffect(() => {
@@ -109,6 +112,26 @@ export function BrowserPage() {
       )}
 
       {error && <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>}
+
+      {sid && (
+        <div className="rounded border border-primary/40 bg-primary/5 p-3 space-y-2">
+          <p className="text-sm font-medium">Give the browser a task</p>
+          <p className="text-[11px] text-muted-foreground">
+            Type a note in plain language — the agent drives the browser step by step
+            (you watch the window + log). Sensitive actions ask you first.
+          </p>
+          <div className="flex gap-2">
+            <input value={task} onChange={(e) => setTask(e.target.value)}
+              className="flex-1 rounded border border-border bg-background px-2 py-1 text-sm"
+              placeholder='e.g. "go to news.ycombinator.com and read the top story title"'
+              onKeyDown={(e) => e.key === "Enter" && runAgent()} />
+            <button onClick={runAgent} disabled={busy || !task.trim()}
+              className="rounded bg-primary text-primary-foreground text-sm px-3 py-1.5">Run</button>
+            <button onClick={stopAgent} disabled={busy}
+              className="rounded border border-border text-sm px-2 py-1.5">Stop</button>
+          </div>
+        </div>
+      )}
 
       {pending.length > 0 && (
         <div className="rounded border border-amber-500 bg-amber-500/10 p-3 space-y-2">

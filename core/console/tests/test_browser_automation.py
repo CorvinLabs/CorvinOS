@@ -223,6 +223,41 @@ def test_action_log_survives_deque_rollover():
     assert mgr.next_seq("_default", "s") == 500
 
 
+def test_agent_loop_drives_browser(server):
+    """The browser-agent loop executes a planner's actions end-to-end and stops
+    on 'done'. Uses a deterministic planner (no LLM) so it's fast + hermetic."""
+    async def run():
+        from corvin_console.browser import BrowserSession
+        from corvin_console.browser.agent import BrowserAgent
+        s = BrowserSession("ag", "_default", home=Path(tempfile.mkdtemp()), headless=True)
+        await s.start()
+        await s.navigate(server)
+        events = []
+        script = iter([
+            {"action": "fill", "index": 0, "text": "hello", "reason": "type"},
+            {"action": "done", "reason": "typed the query"},
+        ])
+
+        async def planner(task, obs, transcript):
+            return next(script)
+
+        agent = BrowserAgent(s, planner=planner, on_step=lambda r: events.append(r["action"]))
+        result = await agent.run("type hello into the search box")
+        await s.close()
+        assert result["status"] == "done"
+        assert "agent_start" in events and "agent_done" in events
+
+    asyncio.run(run())
+
+
+def test_agent_action_parser():
+    from corvin_console.browser.agent import _parse_action
+    assert _parse_action('{"action":"click","index":3}')["action"] == "click"
+    assert _parse_action('reasoning... {"action":"done","reason":"ok"} trailing')["action"] == "done"
+    assert _parse_action("not json at all")["action"] == "done"   # fail-safe
+    assert _parse_action("")["action"] == "done"
+
+
 def test_declined_sensitive_click_is_blocked(server):
     async def run():
         from corvin_console.browser import BrowserSessionManager, BrowserActionError
