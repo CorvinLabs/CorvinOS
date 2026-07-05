@@ -2472,9 +2472,11 @@ export function setDelegationBudget(
 // ── Self-healing config (ACO L5 toggles + healing telemetry) ────────
 
 export interface HealingConfigResponse {
-  telemetry_enabled: boolean;
-  healing_enabled: boolean;
-  risky_enabled: boolean;
+  telemetry_enabled: boolean;   // healing traces (spec.telemetry.healing_traces)
+  ping_enabled: boolean;        // anonymous instance ping (spec.telemetry.ping_enabled)
+  error_enabled: boolean;       // error diagnostics (spec.telemetry.error_traces)
+  healing_enabled: boolean;     // ACO L5 self-healing (spec.aco.l5_enabled)
+  risky_enabled: boolean;       // risky repair tier (spec.aco.l5_risky)
 }
 
 export function getHealingConfig(signal?: AbortSignal): Promise<HealingConfigResponse> {

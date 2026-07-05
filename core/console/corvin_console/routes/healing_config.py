@@ -75,8 +75,19 @@ def _read_flags(tenant_id: str) -> dict[str, bool]:
     spec = cfg.get("spec") if isinstance(cfg.get("spec"), dict) else cfg
     telemetry = spec.get("telemetry") if isinstance(spec.get("telemetry"), dict) else {}
     aco = spec.get("aco") if isinstance(spec.get("aco"), dict) else {}
+
+    def _optout(v: Any) -> bool:
+        # opt-out flags default ON; disabled only by explicit false / false-like.
+        if v is False:
+            return False
+        if isinstance(v, str) and v.strip().lower() in ("false", "no", "0", "off"):
+            return False
+        return True
+
     return {
-        "telemetry_enabled": bool(telemetry.get("healing_traces", True)),
+        "telemetry_enabled": _optout(telemetry.get("healing_traces", True)),
+        "ping_enabled":      _optout(telemetry.get("ping_enabled", True)),
+        "error_enabled":     _optout(telemetry.get("error_traces", True)),
         "healing_enabled":   bool(aco.get("l5_enabled", True)),
         "risky_enabled":     bool(aco.get("l5_risky", False)),
     }
@@ -103,10 +114,15 @@ def _write_flags(tenant_id: str, patch: dict[str, bool]) -> None:
     # that is dumped below — the full manifest structure is preserved.
     target = cfg["spec"] if isinstance(cfg.get("spec"), dict) else cfg
 
-    if "telemetry_enabled" in patch:
+    if any(k in patch for k in ("telemetry_enabled", "ping_enabled", "error_enabled")):
         if not isinstance(target.get("telemetry"), dict):
             target["telemetry"] = {}
-        target["telemetry"]["healing_traces"] = patch["telemetry_enabled"]
+        if "telemetry_enabled" in patch:
+            target["telemetry"]["healing_traces"] = patch["telemetry_enabled"]
+        if "ping_enabled" in patch:
+            target["telemetry"]["ping_enabled"] = patch["ping_enabled"]
+        if "error_enabled" in patch:
+            target["telemetry"]["error_traces"] = patch["error_enabled"]
     if "healing_enabled" in patch or "risky_enabled" in patch:
         if not isinstance(target.get("aco"), dict):
             target["aco"] = {}
@@ -127,9 +143,11 @@ def _write_flags(tenant_id: str, patch: dict[str, bool]) -> None:
 
 
 class HealingConfigRequest(BaseModel):
-    telemetry_enabled: bool | None = None
-    healing_enabled:   bool | None = None
-    risky_enabled:     bool | None = None
+    telemetry_enabled: bool | None = None   # spec.telemetry.healing_traces
+    ping_enabled:      bool | None = None   # spec.telemetry.ping_enabled
+    error_enabled:     bool | None = None   # spec.telemetry.error_traces
+    healing_enabled:   bool | None = None   # spec.aco.l5_enabled
+    risky_enabled:     bool | None = None   # spec.aco.l5_risky
     model_config = {"extra": "forbid"}
 
 

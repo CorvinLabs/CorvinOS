@@ -62,11 +62,35 @@ def consent_granted(home: str | Path) -> bool:
         return True
     if env in _FALSE:
         return False
+    # YAML opt-out flag (the console Settings toggle writes spec.telemetry.error_traces).
+    if _yaml_error_optout(Path(home)):
+        return False
     p = consent_path(Path(home))
     try:
         return json.loads(p.read_text(encoding="utf-8")).get("opted_in") is not False
     except (OSError, json.JSONDecodeError):
         return True  # no consent file → default ON (opt-out)
+
+
+def _yaml_error_optout(home: Path) -> bool:
+    """True when spec.telemetry.error_traces is an explicit false / false-like in
+    tenant.corvin.yaml — the console Settings opt-out for the error channel."""
+    try:
+        from .htrace_consent import _tenant_cfg_path  # shared resolver (ADR-0007)
+        import yaml  # type: ignore[import]
+        cfg_path = _tenant_cfg_path(home)
+        if not cfg_path.exists():
+            return False
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        spec = data.get("spec", data)
+        v = spec.get("telemetry", {}).get("error_traces", True)
+        if v is False:
+            return True
+        if isinstance(v, str) and v.strip().lower() in ("false", "no", "0", "off"):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
 
 
 def grant_consent(home: str | Path, *, pseudonym: str = "anon") -> Path:

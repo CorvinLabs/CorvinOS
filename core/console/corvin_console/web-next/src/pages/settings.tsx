@@ -270,52 +270,86 @@ function TelemetryCard({ csrf }: { csrf: string }) {
     queryKey: ["healing-config"],
     queryFn: ({ signal }) => getHealingConfig(signal),
   });
-  const [saving, setSaving] = React.useState(false);
+  const [saving, setSaving] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
-  const toggle = async (next: boolean) => {
+  const toggle = async (patch: Partial<HealingConfigResponse>, key: string) => {
     setError(null);
-    setSaving(true);
+    setSaving(key);
     try {
-      await setHealingConfig({ telemetry_enabled: next }, csrf);
+      await setHealingConfig(patch, csrf);
       qc.invalidateQueries({ queryKey: ["healing-config"] });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setSaving(false);
+      setSaving(null);
     }
   };
 
-  const enabled = q.data?.telemetry_enabled ?? true;
+  // All three channels are default-ON (opt-out). Everything transmitted is
+  // strictly anonymous / content-free — no prompts, no message content, no PII.
+  const rows: {
+    key: keyof HealingConfigResponse; label: string; desc: string;
+    patchKey: string;
+  }[] = [
+    {
+      key: "ping_enabled", patchKey: "ping",
+      label: "Anonymous instance ping",
+      desc: "A random installation id + version, once a day — lets us count how " +
+            "many CorvinOS instances exist. Nothing else, no PII.",
+    },
+    {
+      key: "error_enabled", patchKey: "error",
+      label: "Error diagnostics",
+      desc: "Scrubbed, content-free crash signatures (error type, code file, " +
+            "function) so bugs get fixed. Never prompts or user data.",
+    },
+    {
+      key: "telemetry_enabled", patchKey: "healing",
+      label: "Self-healing traces",
+      desc: "Anonymised self-healing events uploaded to CorvinLabs/CorvinLogs for " +
+            "public transparency. No prompts, no message content, no PII.",
+    },
+  ];
 
   return (
     <Card>
-      <CardContent className="pt-4 pb-3">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 min-w-0">
-            <Upload className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <div className="min-w-0">
-              <span className="text-sm font-medium">Send healing telemetry</span>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                Anonymised self-healing events are uploaded to CorvinLabs/CorvinLogs for
-                public transparency. No prompts, no message content, no PII.
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {saving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-            {q.isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            ) : (
-              <Switch
-                checked={enabled}
-                onCheckedChange={toggle}
-                disabled={saving}
-                aria-label="Send healing telemetry"
-              />
-            )}
-          </div>
+      <CardContent className="pt-4 pb-3 space-y-3">
+        <div>
+          <span className="text-sm font-semibold">Telemetry &amp; privacy</span>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            On by default so the project sees real usage and can fix bugs. Everything
+            sent is anonymous and content-free (GDPR Art. 6(1)(f) legitimate interest).
+            Turn any channel off here at any time.
+          </p>
         </div>
+        {rows.map((row) => {
+          const enabled = (q.data?.[row.key] as boolean | undefined) ?? true;
+          return (
+            <div key={row.patchKey} className="flex items-center justify-between gap-4 border-t border-border/60 pt-3 first:border-t-0 first:pt-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Upload className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0">
+                  <span className="text-sm font-medium">{row.label}</span>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">{row.desc}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {saving === row.patchKey && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                {q.isLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                ) : (
+                  <Switch
+                    checked={enabled}
+                    onCheckedChange={(next) => toggle({ [row.key]: next }, row.patchKey)}
+                    disabled={saving !== null}
+                    aria-label={row.label}
+                  />
+                )}
+              </div>
+            </div>
+          );
+        })}
         {error && (
           <p className="mt-2 text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>
         )}
