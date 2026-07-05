@@ -1211,23 +1211,42 @@ function ChatPane({
 
     if (SpeechRecognitionImpl) {
       try {
+        // Capture the text present before the hold, and reset the accumulator.
+        pttBaseRef.current = inputRef.current;
+        sttAccumRef.current = "";
+        sttStoppingRef.current = false;
+
         const recognition = new SpeechRecognitionImpl();
-        recognition.continuous = false;
+        recognition.continuous = true;        // don't stop on a speech pause
         recognition.interimResults = false;
         recognition.lang = navigator.language || "de-DE";
         recognition.onresult = (event: any) => {
-          const transcript = Array.from(event.results as any[])
-            .map((r: any) => r[0].transcript)
-            .join(" ");
-          if (transcript.trim()) {
-            setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+          // Append only the NEW final results (event.resultIndex forward) so the
+          // accumulator survives the auto-restarts below without duplicating.
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const res = event.results[i];
+            if (res.isFinal && res[0]?.transcript) {
+              sttAccumRef.current += res[0].transcript + " ";
+            }
+          }
+          const base = pttBaseRef.current;
+          const acc = sttAccumRef.current.trim();
+          setInputRef.current(base ? `${base} ${acc}` : acc);
+        };
+        recognition.onerror = (ev: any) => {
+          // A permissions/service error is terminal; a 'no-speech'/'aborted' during
+          // the hold is not — let onend decide whether to restart.
+          if (ev?.error === "not-allowed" || ev?.error === "service-not-allowed") {
+            sttStoppingRef.current = true;
           }
         };
-        recognition.onerror = () => {
-          recognitionRef.current = null;
-          setRecording(false);
-        };
         recognition.onend = () => {
+          // Push-to-talk: Chrome ends recognition on silence, but the user is still
+          // holding Space — restart and keep listening until they release (which
+          // sets sttStoppingRef via stopRecording()).
+          if (!sttStoppingRef.current) {
+            try { recognition.start(); return; } catch (_e) { /* fall through */ }
+          }
           recognitionRef.current = null;
           setRecording(false);
         };
@@ -1274,6 +1293,8 @@ function ChatPane({
 
   const stopRecording = () => {
     if (recognitionRef.current) {
+      // Signal the release FIRST so onend finalizes instead of auto-restarting.
+      sttStoppingRef.current = true;
       try { recognitionRef.current.stop(); } catch (_e) {}
       recognitionRef.current = null;
     } else {
@@ -1291,6 +1312,11 @@ function ChatPane({
   // Buttons, links, <select>, and contentEditable own Space natively
   // (click / scroll / activation) and are never intercepted.
   const recordingRef = React.useRef(false);
+  // Push-to-talk speech accumulation across Web-Speech auto-restarts: the browser
+  // recognizer ends on a pause, but we must keep listening until Space is released.
+  const sttAccumRef = React.useRef("");       // final transcript so far this hold
+  const pttBaseRef = React.useRef("");        // input text before the hold started
+  const sttStoppingRef = React.useRef(false); // true once the user released the key
   // pttPendingRef is set synchronously in the hold-timer callback before the
   // async startRecording() call.  onKeyUp checks it so that a keyUp arriving
   // before React commits the recording state still stops the recording.
