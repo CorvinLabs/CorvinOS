@@ -792,16 +792,42 @@ def _build_wdat_graph(
         if d.get("spawn_nonce"):
             nonce_to_iter[d["spawn_nonce"]] = int(d.get("iteration", 0))
 
-    # Manager decision nodes — one column per iteration, row at y=0
-    iter_x: dict[int, float] = {}
+    # ── Layout constants: vertical-first (iterations stack top → bottom) ──────
+    # Mirror the layout used by ComputeGraphView.tsx so both graph surfaces
+    # read the same way: iter column at x=0, workers fan right per row.
+    ITER_X      =   0    # x-centre of all manager-decision (iteration) nodes
+    W_START     = 210    # x-offset from ITER_X to the first worker column
+    X_WORKER    = 170    # horizontal gap between workers in the same depth row
+    DEPTH_ROW_H = 150    # extra y per sub-worker depth level within one iteration
+    Y_ROW_MIN   = 210    # minimum row height (worker + engine + tools + gap)
+
+    # Pre-group workers by iteration so row heights can be calculated up-front.
+    workers = report.get("workers") or []
+    workers_by_iter: dict[int, list[dict]] = {}
+    for w in workers:
+        it = nonce_to_iter.get(w.get("spawn_nonce") or "", 0)
+        workers_by_iter.setdefault(it, []).append(w)
+
+    # Sorted iteration numbers and per-iteration Y positions (accumulated).
+    sorted_iters = sorted({int(d.get("iteration", 0)) for d in manager_decisions})
+    iter_y: dict[int, float] = {}
+    current_y = 0.0
+    for it in sorted_iters:
+        iter_y[it] = current_y
+        wlist = workers_by_iter.get(it, [])
+        max_depth = max((int(w.get("depth") or 0) for w in wlist), default=0)
+        has_tools  = any(w["worker_id"] in tool_calls_by_worker for w in wlist)
+        row_h = Y_ROW_MIN + max_depth * DEPTH_ROW_H + (60 if has_tools else 0)
+        current_y += row_h
+
+    # Manager decision nodes — one per iteration, stacked vertically
     for d in sorted(manager_decisions, key=lambda x: int(x.get("iteration", 0))):
         it = int(d.get("iteration", 0))
-        x = 80.0 + it * 280.0
-        iter_x[it] = x
+        iy = iter_y.get(it, 0.0)
         nodes.append({
             "id":       f"mgr_{it}",
             "type":     "wdat_manager",
-            "position": {"x": x, "y": 0.0},
+            "position": {"x": float(ITER_X), "y": iy},
             "data": {
                 "label":         f"Iter {it}\n{d.get('decision_type', '?')}",
                 "iteration":     it,
@@ -813,47 +839,48 @@ def _build_wdat_graph(
             },
         })
 
-    # Group workers by their iteration (via spawn_nonce)
-    workers = report.get("workers") or []
-    workers_by_iter: dict[int, list[dict]] = {}
-    for w in workers:
-        it = nonce_to_iter.get(w.get("spawn_nonce") or "", 0)
-        workers_by_iter.setdefault(it, []).append(w)
-
-    # Track worker positions for tool-node placement
+    # Worker nodes — horizontal fan right of their iteration row, grouped by depth.
+    # depth=0 workers sit at iter_y; depth-N workers sit depth*DEPTH_ROW_H lower.
     worker_positions: dict[str, tuple[float, float]] = {}
 
     for it, wlist in workers_by_iter.items():
-        base_x = iter_x.get(it, 80.0 + it * 280.0)
-        n = len(wlist)
-        for j, w in enumerate(wlist):
-            depth = int(w.get("depth") or 0)
-            x = base_x - (n - 1) * 75.0 + j * 150.0
-            y = 160.0 + depth * 150.0
-            status = w.get("status")
-            color = STATUS_COLORS.get(status or "", "#6e7681")
-            engine = (w.get("engine") or "?")[:16]
-            wid = w["worker_id"]
-            worker_positions[wid] = (x, y)
-            nodes.append({
-                "id":       f"worker_{wid}",
-                "type":     "wdat_worker",
-                "position": {"x": x, "y": y},
-                "data": {
-                    "label":            f"{engine}\n{status or '?'}",
-                    "worker_id":        wid,
-                    "depth":            depth,
-                    "parent_worker_id": w.get("parent_worker_id"),
-                    "status":           status,
-                    "confidence":       w.get("confidence"),
-                    "color":            color,
-                    "instruction_hash": (w.get("instruction_hash") or "")[:16],
-                    "output_hash":      (w.get("output_hash") or "")[:16],
-                    "duration_ms":      w.get("duration_ms"),
-                    "tokens_used":      w.get("tokens_used"),
-                    "engine_attestation": w.get("engine_attestation") or {},
-                },
-            })
+        base_y = iter_y.get(it, 0.0)
+        # Group workers by depth so each depth level gets its own horizontal row.
+        depth_groups: dict[int, list[dict]] = {}
+        for w in wlist:
+            d_lv = int(w.get("depth") or 0)
+            depth_groups.setdefault(d_lv, []).append(w)
+
+        for depth, dlist in sorted(depth_groups.items()):
+            for j, w in enumerate(dlist):
+                x = float(ITER_X + W_START + j * X_WORKER)
+                y = base_y + depth * DEPTH_ROW_H
+                status = w.get("status")
+                color  = STATUS_COLORS.get(status or "", "#6e7681")
+                engine = (w.get("engine") or "?")[:16]
+                wid    = w["worker_id"]
+                tool_n = len(tool_calls_by_worker.get(wid, []))
+                worker_positions[wid] = (x, y)
+                nodes.append({
+                    "id":       f"worker_{wid}",
+                    "type":     "wdat_worker",
+                    "position": {"x": x, "y": y},
+                    "data": {
+                        "label":            f"{engine}\n{status or '?'}",
+                        "worker_id":        wid,
+                        "depth":            depth,
+                        "parent_worker_id": w.get("parent_worker_id"),
+                        "status":           status,
+                        "confidence":       w.get("confidence"),
+                        "color":            color,
+                        "instruction_hash": (w.get("instruction_hash") or "")[:16],
+                        "output_hash":      (w.get("output_hash") or "")[:16],
+                        "duration_ms":      w.get("duration_ms"),
+                        "tokens_used":      w.get("tokens_used"),
+                        "tool_count":       tool_n,
+                        "engine_attestation": w.get("engine_attestation") or {},
+                    },
+                })
 
     # Edges: manager → top-level workers
     for it, wlist in workers_by_iter.items():
@@ -944,7 +971,7 @@ def _build_wdat_graph(
     # ── Tool-call nodes (wdat_tool) ────────────────────────────────────────────
     # Hang below the engine node, laid out in a horizontal row.
     TOOL_COLORS = {"allow": "#00E676", "deny": "#FF1744"}
-    TOOL_W   = 52   # node width  (matches WdatToolNode CSS)
+    TOOL_W   = 80   # node width  (matches WdatToolNode CSS)
     TOOL_GAP = 8    # horizontal gap between nodes
     TOOL_Y_OFFSET = 50  # px below engine node top → tool row
 

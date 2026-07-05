@@ -100,12 +100,13 @@ function WdatManagerNode({ data, selected }: NodeProps) {
   );
 }
 
-// ── Worker node (pill, colour by status) ──────────────────────────────────────
+// ── Worker node (pill, colour by status, tool-count badge) ───────────────────
 function WdatWorkerNode({ data, selected }: NodeProps) {
   const [l1 = "?", l2 = ""] = String(data.label ?? "?").split("\n");
   const color: string = data.color ?? "#6e7681";
   const conf: number | null = data.confidence ?? null;
   const isNew: boolean = data._isNew ?? false;
+  const toolCount: number = (data as { tool_count?: number }).tool_count ?? 0;
   const isDark = useIsDark();
   const subtitleColor = isDark ? "#8b949e" : "#4b5563";
   return (
@@ -126,6 +127,16 @@ function WdatWorkerNode({ data, selected }: NodeProps) {
       <Handle type="target" position={Position.Top} style={H} />
       <div style={{ fontSize: 10, fontWeight: 700, color, lineHeight: 1 }}>{l1}</div>
       {l2 && <div style={{ fontSize: 9, color: subtitleColor, lineHeight: 1 }}>{l2}</div>}
+      {toolCount > 0 && (
+        <div style={{
+          position: "absolute", top: 4, right: 8,
+          background: `${color}33`, border: `1px solid ${color}88`,
+          borderRadius: 8, padding: "0 4px",
+          fontSize: 7, fontWeight: 700, color, lineHeight: "12px",
+        }}>
+          {toolCount} tools
+        </div>
+      )}
       {conf != null && (
         <div style={{
           position: "absolute", bottom: 0, left: 0,
@@ -192,26 +203,33 @@ function WdatEngineNode({ data, selected }: NodeProps) {
   );
 }
 
-// ── Tool-call node (small pill, green=allow / red=deny) ───────────────────────
+// ── Tool-call node (wider pill — seq# + tool name, green=allow / red=deny) ──────
 function WdatToolNode({ data, selected }: NodeProps) {
-  const isDeny = data.decision === "deny";
-  const color  = isDeny ? "#FF1744" : "#00E676";
+  const isDeny  = data.decision === "deny";
+  const color   = isDeny ? "#FF1744" : "#00E676";
+  const seq     = data.seq != null ? String(data.seq) : null;
+  const toolStr = String(data.label ?? "?").slice(0, 10);
   return (
     <div style={{
-      width: 52, height: 22,
+      width: 80, height: 28,
       background: `${color}18`,
       border: `1.5px solid ${selected ? color : color + "66"}`,
-      borderRadius: 11,
-      display: "flex", alignItems: "center", justifyContent: "center",
-      fontFamily: "monospace",
+      borderRadius: 14,
+      display: "flex", alignItems: "center", justifyContent: "center", gap: 3,
+      fontFamily: "monospace", padding: "0 6px",
       boxShadow: selected ? `0 0 8px ${color}55` : "none",
       transition: "box-shadow 0.15s",
       cursor: "pointer",
     }}>
       <Handle type="target" position={Position.Top} style={H} />
-      <span style={{ fontSize: 8, color, fontWeight: 600, letterSpacing: "0.02em", lineHeight: 1 }}>
-        {isDeny ? "✕ " : "✓ "}
-        {String(data.label ?? "?").slice(0, 6)}
+      {seq && (
+        <span style={{ fontSize: 7, color: `${color}99`, fontWeight: 700, flexShrink: 0 }}>
+          {seq}.
+        </span>
+      )}
+      <span style={{ fontSize: 8, color, fontWeight: 600, letterSpacing: "0.02em", lineHeight: 1,
+                     overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {isDeny ? "✕ " : "✓ "}{toolStr}
       </span>
       <Handle type="source" position={Position.Bottom} style={H} />
     </div>
@@ -256,6 +274,8 @@ function NodeDetail({ data }: { data: WdatNodeData }) {
   if (data.depth       != null) rows.push(["Depth",           String(data.depth)]);
   if (data.duration_ms != null) rows.push(["Duration",        `${data.duration_ms} ms`]);
   if (data.tokens_used != null) rows.push(["Tokens",          String(data.tokens_used)]);
+  if ((data as { tool_count?: number }).tool_count != null)
+                                rows.push(["Tool calls",       String((data as { tool_count?: number }).tool_count)]);
   if (data.instruction_hash)    rows.push(["Instr. hash",     data.instruction_hash + "…"]);
   if (data.output_hash)         rows.push(["Output hash",     data.output_hash + "…"]);
   const att = data.engine_attestation;
@@ -509,7 +529,44 @@ function WdatGraphInner({
   );
 }
 
-// ── Run selector ──────────────────────────────────────────────────────────────
+// ── Task navigation — chips (2–3 runs) or collapsible rail (4+ runs) ─────────
+function RunChip({
+  run, isSelected, onSelect,
+}: { run: WdatRunSummary; isSelected: boolean; onSelect: () => void }) {
+  const statusColor =
+    run.status === "success" ? "#00E676"
+    : run.status === "failed" ? "#FF1744"
+    : run.is_active ? "#FFD600"
+    : "#6e7681";
+  return (
+    <button
+      onClick={onSelect}
+      title={`${run.run_id} — ${run.workflow_id || "unnamed"} [${run.status}]`}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 4,
+        padding: "2px 8px",
+        background: isSelected ? `${statusColor}22` : "transparent",
+        border: `1.5px solid ${isSelected ? statusColor : statusColor + "55"}`,
+        borderRadius: 14,
+        fontFamily: "monospace", fontSize: 10,
+        color: isSelected ? statusColor : `${statusColor}aa`,
+        cursor: "pointer",
+        transition: "all 0.15s",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {run.is_active && <span style={{ fontSize: 8 }}>▶</span>}
+      <span style={{ fontWeight: 700 }}>{run.run_id.slice(0, 8)}</span>
+      {run.total_workers > 0 && (
+        <span style={{ opacity: 0.7 }}>{run.total_workers}w</span>
+      )}
+      {run.duration_s != null && run.duration_s > 0 && (
+        <span style={{ opacity: 0.7 }}>{run.duration_s.toFixed(1)}s</span>
+      )}
+    </button>
+  );
+}
+
 function RunSelector({
   runs,
   selected,
@@ -519,24 +576,49 @@ function RunSelector({
   selected: string | null;
   onSelect: (id: string) => void;
 }) {
+  const [railOpen, setRailOpen] = React.useState(false);
   if (runs.length === 0) return null;
-  return (
-    <div className="flex items-center gap-2 border-b border-border bg-background/90 px-3 py-2 shrink-0">
-      <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-      <select
-        className="flex-1 bg-transparent text-[12px] font-mono text-foreground outline-none cursor-pointer"
-        value={selected ?? ""}
-        onChange={(e) => onSelect(e.target.value)}
-      >
+
+  // ≤3 runs: inline chips — always visible, no scrolling needed
+  if (runs.length <= 3) {
+    return (
+      <div className="flex items-center gap-2 border-b border-border bg-background/90 px-3 py-2 shrink-0 flex-wrap">
+        <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         {runs.map((r) => (
-          <option key={r.run_id} value={r.run_id}>
-            {r.is_active ? "▶ " : ""}
-            {r.run_id.slice(0, 8)} — {r.workflow_id || "unnamed"} [{r.status}]
-            {r.duration_s ? ` · ${r.duration_s.toFixed(1)}s` : ""}
-            {r.total_workers ? ` · ${r.total_workers}w` : ""}
-          </option>
+          <RunChip key={r.run_id} run={r} isSelected={r.run_id === selected} onSelect={() => onSelect(r.run_id)} />
         ))}
-      </select>
+      </div>
+    );
+  }
+
+  // ≥4 runs: collapsible rail — header shows selected run + toggle
+  const selectedRun = runs.find((r) => r.run_id === selected);
+  return (
+    <div className="border-b border-border bg-background/90 shrink-0">
+      <div
+        className="flex items-center gap-2 px-3 py-2 cursor-pointer select-none"
+        onClick={() => setRailOpen((o) => !o)}
+      >
+        <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        {selectedRun ? (
+          <RunChip run={selectedRun} isSelected={true} onSelect={() => {}} />
+        ) : (
+          <span className="text-[11px] font-mono text-muted-foreground">Select run…</span>
+        )}
+        <span className="ml-auto text-[10px] text-muted-foreground font-mono">
+          {runs.length} runs {railOpen ? "▲" : "▼"}
+        </span>
+      </div>
+      {railOpen && (
+        <div className="flex flex-wrap gap-2 px-3 pb-2">
+          {runs.map((r) => (
+            <RunChip
+              key={r.run_id} run={r} isSelected={r.run_id === selected}
+              onSelect={() => { onSelect(r.run_id); setRailOpen(false); }}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

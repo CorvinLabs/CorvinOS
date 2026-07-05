@@ -868,6 +868,7 @@ export interface WdatNodeData {
   output_hash?: string;
   duration_ms?: number | null;
   tokens_used?: number | null;
+  tool_count?: number;
   engine_attestation?: {
     engine_id?: string;
     model_id?: string;
