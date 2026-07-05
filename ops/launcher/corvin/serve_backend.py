@@ -179,6 +179,18 @@ def _fire_startup_ping() -> None:
     threading.Thread(target=_ping, daemon=True).start()
 
 
+def _start_heartbeat() -> None:
+    """Start the 5-minute presence heartbeat in a daemon thread."""
+    def _hb() -> None:
+        try:
+            from forge import paths as _p  # type: ignore[import]
+            from corvin_console.aco.heartbeat import start_heartbeat_thread
+            start_heartbeat_thread(_p.corvin_home())
+        except Exception:                                        # noqa: BLE001
+            pass
+    threading.Thread(target=_hb, daemon=True).start()
+
+
 # ── Start ─────────────────────────────────────────────────────────────────────
 
 
@@ -208,6 +220,7 @@ def start(
     url = console_url(port)
     _show_telemetry_notice_once()
     _fire_startup_ping()
+    _start_heartbeat()
 
     if open_browser:
         _schedule_browser_open(url.rstrip("/") + open_path, delay=1.6)
