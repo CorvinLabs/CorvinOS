@@ -30,6 +30,7 @@ from .error_signature import parse_tracebacks, scrub
 
 _SCHEMA = "aco.telemetry/1"
 _TRUE = {"1", "true", "yes", "on"}
+_FALSE = {"0", "false", "no", "off"}
 
 
 def _tele_root(home: Path) -> Path:
@@ -41,14 +42,31 @@ def consent_path(home: Path) -> Path:
 
 
 def consent_granted(home: str | Path) -> bool:
-    """Deny-by-default. True only on explicit opt-in (env OR consent file)."""
-    if os.environ.get("CORVIN_TELEMETRY_OPTIN", "").strip().lower() in _TRUE:
+    """Default-ON (opt-OUT). Healing/error telemetry is enabled unless explicitly
+    disabled. Maintainer decision — the aggregation backend (Corvin-Logs) needs
+    real crash data by default to fix bugs across installs.
+
+    Safety: this channel ships ONLY scrubbed, CONTENT-FREE error signatures. The
+    payload is projected by ``_content_free`` (code-level fields: signature hash,
+    exc_type, repo file, func, allowlisted stack namespaces — never prompts or
+    user data) and re-checked by the FAIL-CLOSED ``_assert_safe`` backstop, which
+    DROPS any record carrying a PII/secret shape rather than sending it. So
+    default-ON transmits only anonymous code diagnostics. Legal basis: GDPR
+    Art. 6(1)(f) legitimate interest.
+
+    Opt out: env ``CORVIN_TELEMETRY_OPTIN=false`` OR a consent file with
+    ``{"opted_in": false}``. Any other state (incl. no file) → ON.
+    """
+    env = os.environ.get("CORVIN_TELEMETRY_OPTIN", "").strip().lower()
+    if env in _TRUE:
         return True
+    if env in _FALSE:
+        return False
     p = consent_path(Path(home))
     try:
-        return bool(json.loads(p.read_text(encoding="utf-8")).get("opted_in") is True)
+        return json.loads(p.read_text(encoding="utf-8")).get("opted_in") is not False
     except (OSError, json.JSONDecodeError):
-        return False
+        return True  # no consent file → default ON (opt-out)
 
 
 def grant_consent(home: str | Path, *, pseudonym: str = "anon") -> Path:
@@ -95,7 +113,13 @@ _LEAK = re.compile(
     r"\beyJ[A-Za-z0-9_-]{6,}\.|"                              # JWT
     r"\b(?:sk|pk|rk|ghp|gho|ghs|xox[baprs]|AKIA|ASIA)[_-]|"   # token prefixes
     r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b|"              # MAC
+    r"\b\d{1,3}(?:\.\d{1,3}){3}\b|"                           # IPv4 dotted quad
+    r"\b[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){2,}\b|::\b|"    # IPv6 (incl. compressed)
     r"\b[0-9a-fA-F]{16,}\b|\b\d{12,}\b")                      # long hex / id
+# NOTE: this is a FAIL-CLOSED backstop — a match DROPS the record (never sends),
+# so over-matching (e.g. an IPv6-shaped hash) is safe: worst case a benign record
+# is withheld, never a leak. Airtight enough to make the default-ON telemetry
+# (opt-out) transmit only content-free crash diagnostics.
 
 
 _HEX16 = re.compile(r"^[0-9a-f]{16}$")

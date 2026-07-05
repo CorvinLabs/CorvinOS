@@ -200,8 +200,13 @@ def test_synth_ingests_telemetry_counts(tmp_path):
 
 # ── telemetry channel ────────────────────────────────────────────────────────────
 
-def test_telemetry_deny_by_default(tmp_path):
+def test_telemetry_default_on_opt_out(tmp_path, monkeypatch):
     home = tmp_path / "home"
+    # Default-ON (opt-out, maintainer decision): granted unless explicitly disabled.
+    monkeypatch.delenv("CORVIN_TELEMETRY_OPTIN", raising=False)
+    assert TEL.consent_granted(home) is True
+    # Explicit opt-out via env → off, and nothing is collected / submitted.
+    monkeypatch.setenv("CORVIN_TELEMETRY_OPTIN", "false")
     assert TEL.consent_granted(home) is False
     assert TEL.collect_local(home) is None
     assert TEL.submit(home)["sent"] == 0

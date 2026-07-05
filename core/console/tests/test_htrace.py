@@ -420,70 +420,43 @@ class TestConsentAct:
 # ── healing_traces_enabled (double gate) ─────────────────────────────────────
 
 class TestHealingTracesEnabled:
-    def _make_valid_act(self, tmpdir):
-        """Store a valid ConsentAct with the current version."""
-        from corvin_console.aco.htrace_consent import _CONSENT_VERSION, _consent_text_sha256
-        act = ConsentAct(
-            consent_act_id=str(uuid.uuid4()),
-            consent_version=_CONSENT_VERSION,
-            ts_utc="2026-07-03T12:00:00Z",
-            text_sha256=_consent_text_sha256(),
-            method="cli",
-            corvin_version="0.9.60",
-        )
-        act.save(tmpdir)
-        return act
+    """Healing traces are default-ON / opt-out (maintainer decision). No ConsentAct
+    is required; safety comes from the content-free projection + the fail-closed
+    _assert_safe_htrace backstop. Disabled only by an explicit false flag."""
 
-    def test_disabled_without_yaml_flag(self, tmpdir):
-        self._make_valid_act(tmpdir)
-        cfg = {"telemetry": {"healing_traces": False}}
-        assert healing_traces_enabled(tmpdir, cfg=cfg) is False
+    def test_default_on_without_config(self, tmpdir, monkeypatch):
+        # No config, no consent → ON (the aggregation backend gets data).
+        monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
+        assert healing_traces_enabled(tmpdir) is True
 
-    def test_disabled_without_consent_act(self, tmpdir):
-        cfg = {"telemetry": {"healing_traces": True}}
-        assert healing_traces_enabled(tmpdir, cfg=cfg) is False
-
-    def test_enabled_with_both_gates(self, tmpdir):
-        self._make_valid_act(tmpdir)
+    def test_default_on_without_consent_act(self, tmpdir):
+        # No ConsentAct is needed anymore.
         cfg = {"telemetry": {"healing_traces": True}}
         assert healing_traces_enabled(tmpdir, cfg=cfg) is True
 
-    def test_disabled_on_version_mismatch(self, tmpdir):
-        from corvin_console.aco.htrace_consent import _consent_text_sha256
-        act = ConsentAct(
-            consent_act_id=str(uuid.uuid4()),
-            consent_version="htrace/0.9",   # wrong version
-            ts_utc="2026-07-03T12:00:00Z",
-            text_sha256=_consent_text_sha256(),
-            method="cli",
-            corvin_version="0.9.60",
-        )
-        act.save(tmpdir)
-        cfg = {"telemetry": {"healing_traces": True}}
+    def test_disabled_by_explicit_false_flag(self, tmpdir):
+        cfg = {"telemetry": {"healing_traces": False}}
         assert healing_traces_enabled(tmpdir, cfg=cfg) is False
+
+    def test_disabled_by_false_like_string(self, tmpdir):
+        for s in ("false", "no", "0", "off"):
+            cfg = {"telemetry": {"healing_traces": s}}
+            assert healing_traces_enabled(tmpdir, cfg=cfg) is False, s
 
     def test_enabled_via_ondisk_yaml_no_cfg_arg(self, tmpdir, monkeypatch):
         """Regression (R1 Finding 1): with NO cfg= argument the YAML flag must be
-        read from tenants/_default/global/tenant.corvin.yaml (ADR-0007 layout).
-
-        The pre-fix path (home.parent.parent/"global") resolved to a directory
-        that never exists, so the fallback always returned False and silently
-        killed the whole telemetry pipeline.  Every other test in this class
-        passes cfg= explicitly and bypasses this path entirely."""
+        read from tenants/_default/global/tenant.corvin.yaml (ADR-0007 layout)."""
         monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
-        self._make_valid_act(tmpdir)
         cfg_dir = tmpdir / "tenants" / "_default" / "global"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / "tenant.corvin.yaml").write_text(
             "telemetry:\n  healing_traces: true\n", encoding="utf-8"
         )
-        # No cfg= → must resolve the real on-disk config path and return True.
         assert healing_traces_enabled(tmpdir) is True
 
     def test_disabled_via_ondisk_yaml_flag_false_no_cfg_arg(self, tmpdir, monkeypatch):
-        """Deny-by-default: on-disk flag false (no cfg= arg) → gate stays closed."""
+        """Opt-out: on-disk flag false (no cfg= arg) → gate closed."""
         monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
-        self._make_valid_act(tmpdir)
         cfg_dir = tmpdir / "tenants" / "_default" / "global"
         cfg_dir.mkdir(parents=True, exist_ok=True)
         (cfg_dir / "tenant.corvin.yaml").write_text(
@@ -491,26 +464,10 @@ class TestHealingTracesEnabled:
         )
         assert healing_traces_enabled(tmpdir) is False
 
-    def test_disabled_when_ondisk_yaml_absent_no_cfg_arg(self, tmpdir, monkeypatch):
-        """Deny-by-default: no config file at all (no cfg= arg) → gate stays closed."""
+    def test_enabled_when_ondisk_yaml_absent_no_cfg_arg(self, tmpdir, monkeypatch):
+        """Default-on: no config file at all (no cfg= arg) → ON."""
         monkeypatch.delenv("CORVIN_TENANT_ID", raising=False)
-        self._make_valid_act(tmpdir)
-        assert healing_traces_enabled(tmpdir) is False
-
-    def test_disabled_on_text_hash_mismatch(self, tmpdir):
-        """is_text_intact must block consent whose text_sha256 no longer matches the file."""
-        from corvin_console.aco.htrace_consent import _CONSENT_VERSION
-        act = ConsentAct(
-            consent_act_id=str(uuid.uuid4()),
-            consent_version=_CONSENT_VERSION,   # version is correct …
-            ts_utc="2026-07-03T12:00:00Z",
-            text_sha256="a" * 64,               # … but hash is wrong
-            method="cli",
-            corvin_version="0.9.60",
-        )
-        act.save(tmpdir)
-        cfg = {"telemetry": {"healing_traces": True}}
-        assert healing_traces_enabled(tmpdir, cfg=cfg) is False
+        assert healing_traces_enabled(tmpdir) is True
 
 
 # ── Fix regression tests (R1 findings) ────────────────────────────────────────

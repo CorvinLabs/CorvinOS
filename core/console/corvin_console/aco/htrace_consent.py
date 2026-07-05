@@ -222,51 +222,49 @@ def provision_telemetry_tokens(home: Path, instance_id: str) -> bool:
     return True
 
 
-# ── Consent gate (double gate: YAML flag + ConsentAct) ────────────────────────
+# ── Healing-trace gate (default-ON, opt-out) ──────────────────────────────────
 
-def healing_traces_enabled(home: Path, *, cfg: dict | None = None) -> bool:
-    """True only when BOTH the YAML opt-in flag AND a valid ConsentAct are present.
-
-    deny-by-default — any missing piece → False.
-    """
-    # Gate 1: YAML flag
-    if cfg is not None:
-        # Callers may pass the full k8s-style manifest (with spec:) or a bare dict
-        spec_or_cfg = cfg.get("spec", cfg)
-        if not spec_or_cfg.get("telemetry", {}).get("healing_traces", False):
-            return False
-    else:
-        # Fall back to reading tenant.corvin.yaml if no cfg passed
-        try:
-            import yaml  # type: ignore[import]
-            cfg_path = _tenant_cfg_path(home)
-            if cfg_path.exists():
-                data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-                # tenant.corvin.yaml is a k8s-style manifest — settings live under spec:
-                spec = data.get("spec", data)
-                if not spec.get("telemetry", {}).get("healing_traces", False):
-                    return False
-            else:
-                return False
-        except Exception:  # noqa: BLE001
-            return False
-
-    # Gate 2: ConsentAct
-    act = ConsentAct.load(home)
-    if act is None:
+def _healing_flag_on(spec: dict) -> bool:
+    """Read spec.telemetry.healing_traces with opt-out semantics: ON unless an
+    explicit boolean ``false`` or a false-like string (false/no/0/off)."""
+    v = spec.get("telemetry", {}).get("healing_traces", True)
+    if v is False:
         return False
-    if not act.is_current_version:
-        logger.info("htrace: consent version mismatch (%s vs %s) — paused",
-                    act.consent_version, _CONSENT_VERSION)
-        return False
-    # Gate 3: text integrity — a modified consent text without a version bump
-    # must also block uploads (GDPR Art. 7 specificity: consent must cover the
-    # exact text shown to the user).  is_text_intact compares the stored
-    # text_sha256 against the current file hash.
-    if not act.is_text_intact:
-        logger.info("htrace: consent text SHA-256 mismatch — paused (re-consent required)")
+    if isinstance(v, str) and v.strip().lower() in ("false", "no", "0", "off"):
         return False
     return True
+
+
+def healing_traces_enabled(home: Path, *, cfg: dict | None = None) -> bool:
+    """Default-ON (opt-OUT). Healing traces (ADR-0180) are enabled unless the
+    operator/user explicitly disables them. Maintainer decision — the aggregation
+    backend (Corvin-Logs) needs real healing data by default.
+
+    Safety: a HealingTrace carries ONLY content-free fields — allowlisted stack
+    namespaces, exc_type, code paths — with ``message_template`` and any free text
+    excluded, and the FAIL-CLOSED ``_assert_safe_htrace`` backstop DROPS any record
+    that still carries a PII/secret shape rather than uploading it. So default-ON
+    transmits only anonymous code diagnostics. Legal basis: GDPR Art. 6(1)(f)
+    legitimate interest. (A recorded ConsentAct is no longer *required* — it is
+    kept only as an audit artefact when a user explicitly consents; the gate here
+    is the opt-out flag.)
+
+    Opt out: set ``spec.telemetry.healing_traces: false`` in
+    ``<corvin_home>/tenants/_default/global/tenant.corvin.yaml`` (false-like
+    strings false/no/0/off also disable). Any other state → ON.
+    """
+    if cfg is not None:
+        # Callers may pass the full k8s-style manifest (with spec:) or a bare dict
+        return _healing_flag_on(cfg.get("spec", cfg))
+    try:
+        import yaml  # type: ignore[import]
+        cfg_path = _tenant_cfg_path(home)
+        if cfg_path.exists():
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            return _healing_flag_on(data.get("spec", data))
+    except Exception:  # noqa: BLE001
+        pass
+    return True  # no config → default ON (opt-out)
 
 
 def load_consent_act_id(home: Path) -> str:
