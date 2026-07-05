@@ -816,14 +816,19 @@ def _build_wdat_graph(
         iter_y[it] = current_y
         wlist = workers_by_iter.get(it, [])
         max_depth = max((int(w.get("depth") or 0) for w in wlist), default=0)
-        has_tools  = any(w["worker_id"] in tool_calls_by_worker for w in wlist)
+        has_tools  = any(w.get("worker_id", "") in tool_calls_by_worker for w in wlist)
         row_h = Y_ROW_MIN + max_depth * DEPTH_ROW_H + (60 if has_tools else 0)
         current_y += row_h
+
+    # Track which manager-decision node IDs exist so edge generation can guard
+    # against dangling edges for workers with unmatched spawn_nonce (fallback it=0).
+    mgr_node_ids: set[int] = set()
 
     # Manager decision nodes — one per iteration, stacked vertically
     for d in sorted(manager_decisions, key=lambda x: int(x.get("iteration", 0))):
         it = int(d.get("iteration", 0))
         iy = iter_y.get(it, 0.0)
+        mgr_node_ids.add(it)
         nodes.append({
             "id":       f"mgr_{it}",
             "type":     "wdat_manager",
@@ -882,14 +887,16 @@ def _build_wdat_graph(
                     },
                 })
 
-    # Edges: manager → top-level workers
+    # Edges: manager → top-level workers (guard: skip if mgr node doesn't exist)
     for it, wlist in workers_by_iter.items():
+        if it not in mgr_node_ids:
+            continue
         for w in wlist:
             if not w.get("parent_worker_id"):
                 edges.append({
-                    "id":       f"e_mgr{it}_{w['worker_id']}",
+                    "id":       f"e_mgr{it}_{w.get('worker_id', 'unknown')}",
                     "source":   f"mgr_{it}",
-                    "target":   f"worker_{w['worker_id']}",
+                    "target":   f"worker_{w.get('worker_id', 'unknown')}",
                     "style":    {"stroke": "#555", "strokeWidth": 1},
                     "markerEnd": {"type": "arrowclosed", "color": "#555"},
                 })
