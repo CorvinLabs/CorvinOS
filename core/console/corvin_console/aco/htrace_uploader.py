@@ -124,6 +124,37 @@ def _last_ping_path(home: Path) -> Path:
     return home / "aco" / "telemetry" / _LAST_PING_FILENAME
 
 
+_ALLOWED_ENGINES = frozenset(
+    {"claude_code", "hermes", "opencode", "codex_cli", "copilot"}
+)
+
+
+def _detect_active_engine(home: Path) -> str:
+    """Return the configured OS engine id, anonymised to a known set.
+
+    Reads CORVIN_WORKER_ENGINE / CORVIN_OS_ENGINE env vars (set by the bridge
+    adapter) and falls back to the tenant YAML.  Unknown values → "unknown".
+    Fail-soft: never raises; returns "unknown" on any error.
+    """
+    try:
+        for env_key in ("CORVIN_WORKER_ENGINE", "CORVIN_OS_ENGINE"):
+            val = os.environ.get(env_key, "").strip().lower()
+            if val in _ALLOWED_ENGINES:
+                return val
+        # Fallback: try tenant YAML
+        cfg_path = _tenant_cfg_path(home)
+        if cfg_path.exists():
+            import re as _re
+            text = cfg_path.read_text(encoding="utf-8", errors="replace")
+            m = _re.search(r"worker_engine\s*:\s*(\S+)", text)
+            if m:
+                val = m.group(1).strip().lower()
+                return val if val in _ALLOWED_ENGINES else "unknown"
+    except Exception:  # noqa: BLE001
+        pass
+    return "unknown"
+
+
 def ping_if_due(home: Path) -> bool:
     """Send a daily activity ping to api.corvin-labs.com/v1/telemetry/ping.
 
@@ -166,7 +197,17 @@ def ping_if_due(home: Path) -> bool:
         except Exception:  # noqa: BLE001
             corvin_version = "unknown"
 
-        payload = json.dumps({"corvin_version": corvin_version}).encode("utf-8")
+        import sys as _sys
+        _python_minor = f"{_sys.version_info.major}.{_sys.version_info.minor}"
+        _platform = _sys.platform
+        _active_engine = _detect_active_engine(home)
+
+        payload = json.dumps({
+            "corvin_version": corvin_version,
+            "platform":       _platform,
+            "python_minor":   _python_minor,
+            "active_engine":  _active_engine,
+        }).encode("utf-8")
         req = urllib.request.Request(
             _PING_URL_DEFAULT,
             data=payload,
