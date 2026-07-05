@@ -129,19 +129,14 @@ class BrowserSessionManager:
             confirm_fn=_confirm, on_action=_on_action, headless=headless,
         )
         live.session = session
-        try:
-            await session.start()
-
-            def _on_frame(png: bytes) -> None:
-                live.frame = png
-            await session.start_screencast(_on_frame)
-        except Exception:
-            # never orphan a launched Chromium if wiring after start() fails
-            try:
-                await session.close()
-            except Exception:  # noqa: BLE001
-                pass
-            raise
+        # Lazy start: register the screencast callback but do NOT launch Chromium yet.
+        # Chromium is launched on the first action (navigate/observe/click/…) via
+        # BrowserSession._ensure_started(), which also wires _pending_on_frame at
+        # that point.  This prevents a blank about:blank window from opening whenever
+        # a session object is created before any task is given.
+        def _on_frame(png: bytes) -> None:
+            live.frame = png
+        session._pending_on_frame = _on_frame
 
         self._sessions[self._key(tenant_id, sid)] = live
         return sid

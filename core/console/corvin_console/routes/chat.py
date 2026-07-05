@@ -55,6 +55,29 @@ router = APIRouter()
 
 logger = logging.getLogger(__name__)
 
+# Auto-browser detection — used to route bare URLs and explicit navigate-intent
+# messages to the browser agent without requiring the /browser prefix.
+_URL_START_RE = re.compile(r'^https?://\S', re.I)
+_BROWSE_INTENT_RE = re.compile(
+    r'^(?:öffne|besuche|geh\s+auf|schau\s+auf|navigate\s+to|browse\s+to|open)\s+https?://\S',
+    re.I | re.UNICODE,
+)
+
+
+def _detect_browser_task(prompt: str) -> str | None:
+    """Return the task string when the message should auto-trigger the browser.
+
+    Conservative — only fires on:
+    (a) A message that starts with an http(s) URL (user typed a bare link), or
+    (b) A message that starts with a German/English navigate-verb followed by a URL.
+    Returns None for everything else to avoid false-positives in normal chat.
+    """
+    stripped = prompt.strip()
+    if _URL_START_RE.match(stripped) or _BROWSE_INTENT_RE.match(stripped):
+        return stripped
+    return None
+
+
 def _project(sess: chat_runtime.WebChatSession) -> dict[str, Any]:
     return {
         "sid":             sess.sid,
@@ -535,6 +558,14 @@ async def chat_stream(
                 if prompt.lower().startswith(("/browser ", "/browse ")):
                     task = prompt.split(" ", 1)[1].strip()
                     await _handle_browser_command(websocket, rec, task)
+                    continue
+                # Auto-browser: bare URL or explicit navigate-intent → browser agent
+                # without requiring the /browser prefix.  Conservative heuristic:
+                # (a) message starts with https?:// — the user typed a raw URL, or
+                # (b) message starts with a navigate verb followed by a URL.
+                _auto_task = _detect_browser_task(prompt)
+                if _auto_task:
+                    await _handle_browser_command(websocket, rec, _auto_task)
                     continue
                 # Slash-command dispatcher (command center): handle every console
                 # slash-command deterministically so it NEVER leaks to the LLM as a

@@ -82,8 +82,25 @@ class BrowserSession:
         # methods acquire it; internal helpers (``*_locked``) assume it is held to
         # avoid re-entrant deadlock (navigate → observe).
         self._page_lock = asyncio.Lock()
+        # Lazy-start: Chromium is not launched at construction time — only when the
+        # first action (typically navigate) is called.  _pending_on_frame is set by
+        # the manager and consumed by _ensure_started() to wire the screencast after
+        # the browser is up.
+        self._start_lock = asyncio.Lock()
+        self._pending_on_frame: "OnFrame | None" = None
 
     # ── lifecycle ────────────────────────────────────────────────────────────
+    async def _ensure_started(self) -> None:
+        """Lazily launch Chromium on the first action — double-checked lock."""
+        if self._pw is not None:
+            return
+        async with self._start_lock:
+            if self._pw is None:
+                await self.start()
+                if self._pending_on_frame is not None:
+                    await self.start_screencast(self._pending_on_frame)
+                    self._pending_on_frame = None
+
     async def start(self) -> None:
         import os
         from playwright.async_api import async_playwright
@@ -154,6 +171,7 @@ class BrowserSession:
     # ── actions ──────────────────────────────────────────────────────────────
     async def navigate(self, url: str, *, confirm_cross_host: bool = False) -> Observation:
         self._guard_active("navigate")
+        await self._ensure_started()
         decision = _cmp.check_egress(url, allowlist=self._allowlist, forbidden=self._forbidden)
         if not decision.allowed:
             _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
@@ -204,6 +222,7 @@ class BrowserSession:
 
     async def observe(self) -> Observation:
         self._guard_active("observe")
+        await self._ensure_started()
         async with self._page_lock:
             return await self._observe_locked()
 
@@ -235,6 +254,7 @@ class BrowserSession:
 
     async def click(self, index: int) -> None:
         self._guard_active("click")
+        await self._ensure_started()
         mark = self._mark(index)
         role = mark.role if mark else ""
         name = mark.name if mark else ""
@@ -289,6 +309,7 @@ class BrowserSession:
     async def fill(self, index: int, text: str) -> None:
         """Type a value into a field. The value is NEVER audited or logged."""
         self._guard_active("fill")
+        await self._ensure_started()
         mark = self._mark(index)
         role = mark.role if mark else ""
         async with self._page_lock:
@@ -304,6 +325,7 @@ class BrowserSession:
         """Type a secret resolved from the vault. The value never enters the model
         context, the action log, or the audit trail — only the vault key name."""
         self._guard_active("fill_secret")
+        await self._ensure_started()
         if self._vault is None:
             raise BrowserActionError("no vault resolver configured")
         value = self._vault(vault_key)
@@ -321,6 +343,7 @@ class BrowserSession:
 
     async def read(self, index: int | None = None, *, max_chars: int = 4000) -> str:
         self._guard_active("read")
+        await self._ensure_started()
         async with self._page_lock:
             page = self._require_page()
             host = _cmp._host(page.url)
@@ -338,13 +361,15 @@ class BrowserSession:
 
     async def scroll(self, direction: str = "down") -> None:
         self._guard_active("scroll")
-        dy = {"down": 600, "up": -600, "top": -100000, "bottom": 100000}.get(direction, 600)
+        await self._ensure_started()
+        dy ={"down": 600, "up": -600, "top": -100000, "bottom": 100000}.get(direction, 600)
         async with self._page_lock:
             await self._require_page().evaluate("(dy) => window.scrollBy(0, dy)", dy)
         self._emit("scroll", direction=direction)
 
     async def back(self) -> Observation:
         self._guard_active("back")
+        await self._ensure_started()
         async with self._page_lock:
             page = self._require_page()
             self._last_marks = []
@@ -353,6 +378,7 @@ class BrowserSession:
             return await self._observe_locked()
 
     async def screenshot(self, *, marks: bool = True) -> bytes:
+        await self._ensure_started()
         async with self._page_lock:
             return await self._screenshot_locked(marks=marks)
 
