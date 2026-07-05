@@ -1261,50 +1261,81 @@ function ChatPane({
     setRecording(false);
   };
 
-  // ── Push-to-talk: hold Space to record ───────────────────────────
-  // - Skips when focus is in any text input / textarea / contenteditable
-  //   so typing a space in the chat box never starts a recording.
-  // - keydown.repeat is ignored so a held key fires startRecording once.
-  // - Refs avoid stale closures and let the listener attach exactly
-  //   once for the lifetime of the chat pane.
+  // ── Push-to-talk: hold Space (≥400 ms) to record ────────────────
+  // Works even when the chat textarea has focus — a short tap types a
+  // normal space, a held press (≥400 ms) starts speech-to-text.
+  // When PTT activates from the textarea the stray space that landed
+  // during the hold is trimmed from the input before recording starts.
+  // Buttons, links, <select>, and contentEditable own Space natively
+  // (click / scroll / activation) and are never intercepted.
   const recordingRef = React.useRef(false);
   const streamingRef = React.useRef(streaming);
   const startRecRef = React.useRef(startRecording);
   const stopRecRef = React.useRef(stopRecording);
+  const inputRef = React.useRef(input);
+  const setInputRef = React.useRef(setInput);
   React.useEffect(() => { recordingRef.current = recording; }, [recording]);
   React.useEffect(() => { streamingRef.current = streaming; }, [streaming]);
   React.useEffect(() => { startRecRef.current = startRecording; });
   React.useEffect(() => { stopRecRef.current = stopRecording; });
+  React.useEffect(() => { inputRef.current = input; }, [input]);
+  React.useEffect(() => { setInputRef.current = setInput; }, [setInput]);
 
   React.useEffect(() => {
-    const isTypingTarget = (el: EventTarget | null): boolean => {
+    // Elements where Space has a native role we must not override.
+    const isNativeSpaceTarget = (el: EventTarget | null): boolean => {
       if (!(el instanceof HTMLElement)) return false;
       const tag = el.tagName.toLowerCase();
-      if (tag === "input" || tag === "textarea" || tag === "select") return true;
+      if (tag === "input" || tag === "select") return true;
       if (el.isContentEditable) return true;
-      // Buttons and links also consume Space natively (click / scroll-page).
-      // Let the browser handle those so we don't hijack activation keys.
       if (tag === "button" || tag === "a") return true;
       return false;
     };
+    const isTextarea = (el: EventTarget | null): boolean =>
+      el instanceof HTMLElement && el.tagName.toLowerCase() === "textarea";
+
+    let holdTimer: ReturnType<typeof setTimeout> | null = null;
+
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code !== "Space" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (isTypingTarget(e.target)) return;
+      if (isNativeSpaceTarget(e.target)) return;
       if (recordingRef.current || streamingRef.current) return;
-      e.preventDefault();
-      void startRecRef.current();
+
+      // Outside textarea → prevent default immediately (no character typed).
+      // Inside textarea → let the space land; trim it if hold completes.
+      const inTextarea = isTextarea(e.target);
+      if (!inTextarea) e.preventDefault();
+
+      holdTimer = setTimeout(() => {
+        holdTimer = null;
+        if (recordingRef.current || streamingRef.current) return;
+        if (inTextarea) {
+          const cur = inputRef.current;
+          if (cur.endsWith(" ")) setInputRef.current(cur.slice(0, -1));
+        }
+        void startRecRef.current();
+      }, 400);
     };
+
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code !== "Space") return;
+      if (holdTimer !== null) {
+        // Short press — timer never fired, recording never started; nothing to do.
+        clearTimeout(holdTimer);
+        holdTimer = null;
+        return;
+      }
       if (!recordingRef.current) return;
       e.preventDefault();
       stopRecRef.current();
     };
+
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      if (holdTimer !== null) clearTimeout(holdTimer);
     };
   }, []);
 
@@ -1623,7 +1654,7 @@ function ChatPane({
                     sendUser(input);
                   }
                 }}
-                placeholder={recording ? "Listening — speak now" : "Message Corvin…"}
+                placeholder={recording ? "Listening — release Space to send" : "Message Corvin… (hold Space to speak)"}
                 disabled={streaming || recording}
                 className="min-h-[10rem] resize-y font-sans text-sm leading-relaxed"
                 rows={5}
@@ -1648,7 +1679,7 @@ function ChatPane({
                 size="icon"
                 onClick={recording ? stopRecording : startRecording}
                 disabled={streaming}
-                title={recording ? "Stop recording" : "Start recording"}
+                title={recording ? "Stop recording (or release Space)" : "Start recording (or hold Space)"}
               >
                 {recording ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
               </Button>
