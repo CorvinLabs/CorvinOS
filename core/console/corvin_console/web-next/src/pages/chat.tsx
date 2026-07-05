@@ -1284,12 +1284,19 @@ function ChatPane({
   // Buttons, links, <select>, and contentEditable own Space natively
   // (click / scroll / activation) and are never intercepted.
   const recordingRef = React.useRef(false);
+  // pttPendingRef is set synchronously in the hold-timer callback before the
+  // async startRecording() call.  onKeyUp checks it so that a keyUp arriving
+  // before React commits the recording state still stops the recording.
+  const pttPendingRef = React.useRef(false);
   const streamingRef = React.useRef(streaming);
   const startRecRef = React.useRef(startRecording);
   const stopRecRef = React.useRef(stopRecording);
   const inputRef = React.useRef(input);
   const setInputRef = React.useRef(setInput);
-  React.useEffect(() => { recordingRef.current = recording; }, [recording]);
+  React.useEffect(() => {
+    recordingRef.current = recording;
+    if (recording) pttPendingRef.current = false; // recording confirmed — clear pending
+  }, [recording]);
   React.useEffect(() => { streamingRef.current = streaming; }, [streaming]);
   React.useEffect(() => { startRecRef.current = startRecording; });
   React.useEffect(() => { stopRecRef.current = stopRecording; });
@@ -1328,6 +1335,7 @@ function ChatPane({
           const cur = inputRef.current;
           if (cur.endsWith(" ")) setInputRef.current(cur.slice(0, -1));
         }
+        pttPendingRef.current = true; // mark pending synchronously before async call
         void startRecRef.current();
       }, 400);
     };
@@ -1340,7 +1348,10 @@ function ChatPane({
         holdTimer = null;
         return;
       }
-      if (!recordingRef.current) return;
+      // Check both: recordingRef (committed state) and pttPendingRef (async gap
+      // where startRecording() was called but React hasn't committed yet).
+      if (!recordingRef.current && !pttPendingRef.current) return;
+      pttPendingRef.current = false;
       e.preventDefault();
       stopRecRef.current();
     };

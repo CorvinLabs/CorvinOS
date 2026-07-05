@@ -323,8 +323,10 @@ voice_detect_engine() {
   else
     voice_log "detect_engine: no OPENAI_API_KEY found in any candidate — falling through"
   fi
-  if python3 -c "import edge_tts" 2>/dev/null; then
-    voice_log "detect_engine: chose edge-tts (no openai, edge-tts available)"
+  # edge-tts connects to tts.microsoft.com — skip on deployments that enforce
+  # local-only egress (EU_PRODUCTION / CORVIN_TTS_LOCAL_ONLY=1).
+  if [[ "${CORVIN_TTS_LOCAL_ONLY:-0}" != "1" ]] && python3 -c "import edge_tts" 2>/dev/null; then
+    voice_log "detect_engine: chose edge-tts (no openai, edge-tts available; cloud egress to tts.microsoft.com)"
     printf 'edge-tts'
     return
   fi

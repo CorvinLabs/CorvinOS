@@ -260,6 +260,38 @@ Added to `operator/bridges/shared/self_test.py`:
 
 ---
 
+## REST endpoints — session workdir access
+
+These console routes expose the session's working directory to the web UI.
+
+### `GET /v1/console/chat/sessions/{sid}/workdir/{filepath:path}`
+
+Serves a file from the session workdir.  Authentication: `require_session`
+(session cookie, `SameSite=Strict`).  All MIME types are served; the
+`Content-Disposition` header enables browser download for binary types.
+
+### `GET /v1/console/chat/sessions/{sid}/workdir-path`
+
+Returns the server-side filesystem path of the session workdir and optionally
+opens it in the OS file manager.
+
+| Query param | Type | Default | Description |
+|---|---|---|---|
+| `reveal` | bool | `false` | If `true`, launches `xdg-open` / `open` / `explorer.exe` on the server |
+
+Response (JSON):
+```json
+{"ok": true, "path": "/home/…/.corvin/tenants/_default/sessions/web:abc/", "opened": true}
+```
+
+**Important:** `reveal=true` opens the file manager on the **server machine**,
+not the user's browser.  On a cloud/remote deploy the call is harmless (no
+useful window opens) but `opened` will still be `true` if the subprocess
+launch succeeds.  Set `CORVIN_REVEAL_WORKDIR=0` to disable the OS-open
+behaviour entirely.
+
+---
+
 ## Anti-patterns
 
 - **Reading the manifest as a list of records to display in a UI.** The

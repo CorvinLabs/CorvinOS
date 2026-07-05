@@ -86,7 +86,7 @@ try_openai_tts() {
   local text="$1" voice="$2" model="$3" speed="$4" outfile="$5"
   local err_output
 
-  err_output=$(mktemp --suffix=.err)
+  err_output=$(mktemp "${TMPDIR:-/tmp}/corvin.XXXXXX.err")
   trap 'rm -f "$err_output"' RETURN
 
   if OPENAI_TTS_TEXT="$text" \
@@ -133,7 +133,7 @@ try_edge_tts() {
   fi
 
   local tmp_mp3
-  tmp_mp3="$(mktemp --suffix=.mp3)"
+  tmp_mp3="$(mktemp "${TMPDIR:-/tmp}/corvin.XXXXXX.mp3")"
 
   local voice
   case "$lang" in
@@ -176,7 +176,7 @@ PY
     play -q "$tmp_mp3" || rc=$?
   elif command -v ffmpeg >/dev/null 2>&1; then
     local tmp_wav
-    tmp_wav="$(mktemp --suffix=.wav)"
+    tmp_wav="$(mktemp "${TMPDIR:-/tmp}/corvin.XXXXXX.wav")"
     if ffmpeg -y -loglevel quiet -i "$tmp_mp3" "$tmp_wav" 2>/dev/null; then
       case "$player" in
         aplay)  aplay -q "$tmp_wav" || rc=$? ;;
@@ -205,7 +205,7 @@ try_piper_tts() {
   fi
 
   local tmp_wav
-  tmp_wav="$(mktemp --suffix=.wav)"
+  tmp_wav="$(mktemp "${TMPDIR:-/tmp}/corvin.XXXXXX.wav")"
   trap 'rm -f "$tmp_wav"' RETURN
 
   if ! printf '%s' "$text" | piper --model "$model" --output_file "$tmp_wav" >/dev/null 2>&1; then

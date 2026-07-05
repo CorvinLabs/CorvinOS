@@ -201,6 +201,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(json.dumps(out, indent=2 if args.format == "json" else None))
         return 0
 
+    # Purge the bg-monitor's personal-data store (bg_watch.json) before the
+    # orchestrator runs — this file is outside the session dir and not covered
+    # by the handler chain's path-based sweep.  Best-effort, never blocks erasure.
+    try:
+        from bg_monitor import purge_user as _bg_purge  # type: ignore
+        removed = _bg_purge(req.subject_id)
+        if removed:
+            print(f"bg_monitor: purged {removed} wakeup entry/entries for {req.subject_id}")
+    except Exception:
+        pass
+
     result = orch.execute(req)
 
     if args.format == "json":

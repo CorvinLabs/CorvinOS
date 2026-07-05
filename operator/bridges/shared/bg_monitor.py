@@ -128,6 +128,25 @@ def touch(channel: str, from_: str, chat_id: str | None) -> None:
     _save_state(state)
 
 
+def purge_user(uid: str) -> int:
+    """Remove all bg_watch.json entries whose 'from' field matches *uid*.
+
+    Called by the GDPR Art. 17 erasure path to honour Right-to-Erasure for
+    the bg-monitor's personal-data store (Discord UIDs / chat routing keys).
+    Returns the number of entries removed.
+    """
+    state = _load_state()
+    to_remove = [k for k, v in state.items() if v.get("from") == uid]
+    for k in to_remove:
+        del state[k]
+    if to_remove:
+        try:
+            _save_state(state)
+        except OSError as e:
+            print(f"bg_monitor: purge_user save failed: {e}", file=sys.stderr)
+    return len(to_remove)
+
+
 def run_once() -> int:
     """Check all sessions and inject wakeups for idle ones.
 
@@ -207,7 +226,10 @@ def run_once() -> int:
         del state[key]
 
     if changed:
-        _save_state(state)
+        try:
+            _save_state(state)
+        except OSError as e:
+            print(f"bg_monitor: state save failed (notified_at not persisted): {e}", file=sys.stderr)
 
     return injected
 
