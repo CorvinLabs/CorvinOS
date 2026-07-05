@@ -323,8 +323,13 @@ voice_detect_engine() {
   else
     voice_log "detect_engine: no OPENAI_API_KEY found in any candidate — falling through"
   fi
+  if python3 -c "import edge_tts" 2>/dev/null; then
+    voice_log "detect_engine: chose edge-tts (no openai, edge-tts available)"
+    printf 'edge-tts'
+    return
+  fi
   if command -v piper >/dev/null 2>&1; then
-    voice_log "detect_engine: chose piper (no openai)"
+    voice_log "detect_engine: chose piper (no openai/edge-tts)"
     printf 'piper'
     return
   fi

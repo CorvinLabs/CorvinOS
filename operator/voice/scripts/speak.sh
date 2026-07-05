@@ -69,7 +69,8 @@ voice_log "speak: engine=$ENGINE lang=$LANG chars=${#TEXT}"
 # Build fallback chain: start with chosen engine, then try others if it fails
 FALLBACK_CHAIN=("$ENGINE")
 case "$ENGINE" in
-  openai)   FALLBACK_CHAIN+=("piper" "espeak-ng" "say") ;;
+  openai)   FALLBACK_CHAIN+=("edge-tts" "piper" "espeak-ng" "say") ;;
+  edge-tts) FALLBACK_CHAIN+=("piper" "espeak-ng" "say") ;;
   piper)    FALLBACK_CHAIN+=("espeak-ng" "say") ;;
   espeak-ng) FALLBACK_CHAIN+=("say") ;;
 esac
@@ -121,6 +122,78 @@ PY
       return 1
     fi
   fi
+}
+
+try_edge_tts() {
+  local text="$1" lang="$2" player="$3"
+
+  if ! python3 -c "import edge_tts" 2>/dev/null; then
+    voice_log "speak: edge-tts package not installed"
+    return 1
+  fi
+
+  local tmp_mp3
+  tmp_mp3="$(mktemp --suffix=.mp3)"
+
+  local voice
+  case "$lang" in
+    de) voice="de-DE-KatjaNeural" ;;
+    en) voice="en-US-AriaNeural" ;;
+    *)  voice="en-US-AriaNeural" ;;
+  esac
+
+  if ! EDGE_TTS_TEXT="$text" EDGE_TTS_VOICE="$voice" EDGE_TTS_OUTFILE="$tmp_mp3" \
+       python3 - 2>/dev/null <<'PY'
+import asyncio, edge_tts, os
+async def main():
+    tts = edge_tts.Communicate(os.environ["EDGE_TTS_TEXT"], os.environ["EDGE_TTS_VOICE"])
+    await tts.save(os.environ["EDGE_TTS_OUTFILE"])
+asyncio.run(main())
+PY
+  then
+    rm -f "$tmp_mp3"
+    voice_log "speak: edge-tts synthesis failed"
+    return 1
+  fi
+
+  if [[ ! -s "$tmp_mp3" ]]; then
+    rm -f "$tmp_mp3"
+    voice_log "speak: edge-tts produced empty output"
+    return 1
+  fi
+
+  # edge-tts outputs MP3 — try players that handle MP3 directly; fall back to
+  # ffmpeg→WAV conversion for aplay/paplay environments.
+  voice_duck_begin
+  local rc=0
+  if command -v ffplay >/dev/null 2>&1; then
+    ffplay -nodisp -autoexit -loglevel quiet "$tmp_mp3" || rc=$?
+  elif command -v mpv >/dev/null 2>&1; then
+    mpv --really-quiet --no-video "$tmp_mp3" || rc=$?
+  elif command -v mpg123 >/dev/null 2>&1; then
+    mpg123 -q "$tmp_mp3" || rc=$?
+  elif command -v play >/dev/null 2>&1; then
+    play -q "$tmp_mp3" || rc=$?
+  elif command -v ffmpeg >/dev/null 2>&1; then
+    local tmp_wav
+    tmp_wav="$(mktemp --suffix=.wav)"
+    if ffmpeg -y -loglevel quiet -i "$tmp_mp3" "$tmp_wav" 2>/dev/null; then
+      case "$player" in
+        aplay)  aplay -q "$tmp_wav" || rc=$? ;;
+        paplay) paplay "$tmp_wav" || rc=$? ;;
+        *)      aplay -q "$tmp_wav" 2>/dev/null || paplay "$tmp_wav" || rc=$? ;;
+      esac
+    else
+      rc=1
+    fi
+    rm -f "$tmp_wav"
+  else
+    voice_log "speak: edge-tts: no MP3-capable player found (ffplay/mpv/mpg123/play)"
+    rc=1
+  fi
+  voice_duck_end
+  rm -f "$tmp_mp3"
+  return $rc
 }
 
 try_piper_tts() {
@@ -296,6 +369,13 @@ for engine in "${FALLBACK_CHAIN[@]}"; do
         rm -f "$AUDIO_FILE"
         # If quota error (rc=2), try fallback; otherwise try next engine
         [[ $rc -eq 2 ]] && continue || continue
+      fi
+      ;;
+
+    edge-tts)
+      voice_log "speak: trying Edge TTS"
+      if try_edge_tts "$TEXT" "$LANG" "$PLAYER"; then
+        exit 0
       fi
       ;;
 
