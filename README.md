@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-f0b429?style=flat-square&labelColor=161b22" alt="Apache 2.0"/></a>
   <a href="docs/eu-ai-act/README.md"><img src="https://img.shields.io/badge/EU%20AI%20Act%202026-Enforced-3b82f6?style=flat-square&labelColor=161b22" alt="EU AI Act 2026 Enforced"/></a>
   <a href="docs/audit-and-compliance.md"><img src="https://img.shields.io/badge/GDPR-Art.%206%2C7%2C17%2C30%2C32-3b82f6?style=flat-square&labelColor=161b22" alt="GDPR Compliant"/></a>
-  <img src="https://img.shields.io/badge/engines-Claude%20·%20Codex%20·%20OpenCode%20·%20Hermes%20·%20Copilot-a78bfa?style=flat-square&labelColor=161b22" alt="5 WorkerEngines"/>
+  <img src="https://img.shields.io/badge/engines-Claude%20·%20Codex%20·%20OpenCode%20·%20Hermes%20·%20Copilot-a78bfa?style=flat-square&labelColor=161b22" alt="Pluggable WorkerEngines"/>
   <a href="https://corvin-labs.com/stats"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcorvin-features-production.up.railway.app%2Fv1%2Fstats%2Finstances&query=%24.active_7d&label=active%20%287d%29&style=flat-square&color=f97316&labelColor=161b22&cacheSeconds=300" alt="Active Instances 7d"/></a>
   <a href="https://corvin-labs.com/stats"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcorvin-features-production.up.railway.app%2Fv1%2Fstats%2Finstances&query=%24.active_30d&label=active%20%2830d%29&style=flat-square&color=ea580c&labelColor=161b22&cacheSeconds=300" alt="Active Instances 30d"/></a>
 </p>
@@ -23,17 +23,17 @@
   <a href="docs/engine-layer.md">Engine Layer</a> ·
   <a href="docs/security.md">Security</a> ·
   <a href="docs/eu-ai-act/README.md">EU AI Act</a> ·
-  <a href="docs/ulo-learning-objectives.md">Learning Objectives</a>
+  <a href="docs/for-organizations.md">For Organizations</a>
 </p>
 
 ---
 
-**One install. Seven bridges. Any LLM.**
+**One install. Any bridge. Any LLM.**
 
-CorvinOS is a self-hosted agentic OS that connects **Claude Code, Codex, Hermes, Ollama and any OpenRouter model** to **Discord, Telegram, WhatsApp, Slack, Email, Teams, and Signal** — through a single pip package.
+CorvinOS is a self-hosted agentic OS that connects **Claude Code, Codex, Hermes, Ollama and any OpenRouter model** to **Discord, Telegram, WhatsApp, Slack, Email, Teams, Signal and more** — through a single pip package.
 
 - **Local-first** — run 100 % offline with Ollama and `--engine hermes`. No API key needed.
-- **Agentic** — generates sandboxed tools and new skills at runtime; delegates subtasks across five AI engines.
+- **Agentic** — generates sandboxed tools and new skills at runtime; delegates subtasks across any number of AI engines.
 - **Compliance by architecture** — EU AI Act 2026 + GDPR enforced in code, not policy documents.
 - **Multi-tenant** — one instance, multiple users, personas, and teams, all isolated.
 
@@ -68,44 +68,63 @@ Full setup guide: [INSTALLATION.md](INSTALLATION.md)
 
 ---
 
-![CorvinOS Chat — multi-turn conversation with voice, audit, and engine selector](docs/assets/screenshot-chat.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)"  srcset="docs/assets/screenshot-chat-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/screenshot-chat.png">
+  <img src="docs/assets/screenshot-chat-dark.png" alt="CorvinOS Chat — multi-turn conversation with voice, audit, and engine selector" width="100%">
+</picture>
 
 ---
 
 ## Features
 
-### [Seven Messenger Bridges](docs/overview.md#bridges)
-Connect Discord, Telegram, WhatsApp, Slack, Email, Microsoft Teams, and Signal through one shared runtime. Each bridge shares the same session state, audit chain, and persona configuration.
+### [Messenger Bridges](docs/bridge-setup.md)
+Connect Discord, Telegram, WhatsApp, Slack, Email, Microsoft Teams, and Signal — all through one shared runtime. Each bridge shares the same session state, audit chain, and persona configuration. Add custom bridges via the plugin system.
 
-### [Five AI Engines — swap without touching compliance](docs/engine-layer.md)
-Claude Code, Codex CLI, OpenCode, Hermes (local Ollama), and GitHub Copilot plug in via the WorkerEngine abstraction. Switch engines per chat or per tenant; the audit chain, path-gate, and skills follow automatically.
+### [Pluggable AI Engines](docs/engine-layer.md)
+Claude Code, Codex CLI, OpenCode, Hermes (local Ollama), and GitHub Copilot plug in via the WorkerEngine protocol. Switch engines per chat or per tenant; the audit chain, path-gate, and skill system follow automatically. New engines can be registered without touching the compliance stack.
 
-### [Web Console](docs/overview.md#console)
-Full control plane at `http://localhost:8765` — manage sessions, personas, forge tools, skill library, and audit logs. Built-in voice (STT/TTS), session workdir browser, and browser automation panel.
+### [Web Console](docs/console.md)
+Full control plane at `http://localhost:8765` — manage sessions, personas, forge tools, skill library, RAG providers, and audit logs from a single dashboard. Built-in voice (STT/TTS), session workdir browser, browser automation panel, and full REST API at `/v1/console/`.
 
-### [Voice — push-to-talk and always-on](docs/claude-ref/layer-23-stt.md)
-Hold the mic key to speak; CorvinOS transcribes, replies, and reads the answer aloud. Works in the web console and all messenger bridges. Local Piper TTS + faster-whisper for zero-egress deployments.
+### [Voice — push-to-talk and always-on](docs/handbook/03-voice-profile.md)
+Hold the mic key to speak; CorvinOS transcribes, replies, and reads the answer aloud. Works in the web console and all messenger bridges. Local Piper TTS + faster-whisper for zero-egress deployments; Microsoft Edge TTS and OpenAI Whisper available as cloud alternatives.
 
-### [Forge — runtime tool generation](docs/claude-ref/layer-6-forge.md)
-The agent generates sandboxed, bwrap-isolated tools on demand and calls them immediately — without a deploy step. Tools are schema-validated, path-gated, and registered in the session artifact memory.
+### [Forge — runtime tool generation](docs/forge.md)
+The agent generates sandboxed, bwrap-isolated tools on demand and calls them immediately — without a deploy step. Tools are schema-validated, path-gated, and registered in the session artifact memory. New tools are available in the same turn they are generated.
 
-### [SkillForge — runtime skill creation](docs/claude-ref/layer-7-skillforge.md)
-New workflows and domain knowledge distilled into reusable skills at runtime. Skills are graded, promoted, and injected into future sessions automatically — the assistant learns your patterns.
+### [SkillForge — runtime skill creation](docs/skills.md)
+New workflows and domain knowledge distilled into reusable skills at runtime. Skills are graded, promoted, and auto-injected into future sessions — the assistant learns your patterns without any manual configuration.
+
+### [Agentic Compute + Data](docs/data-and-compute.md)
+Large datasets (CSV, databases, external APIs) are handled by a sandboxed compute worker so raw data never enters the LLM context. The agent submits one job and retrieves one result; iteration, sampling, and aggregation run in the worker at zero token cost. Supports PostgreSQL, MySQL, SQLite, DuckDB, and CSV out of the box.
+
+### [Workflows + AWPKG](docs/awpkg.md)
+CorvinFlow lets you build multi-step automations as declarative DAGs — chain AI calls, forge tools, RAG queries, and data transforms. Package and share workflows as `.awpkg` bundles (ZIP archives with tools, skills, personas, and workflow YAML) installable in one command. See also: [Handbook: Workflows](docs/handbook/15-workflows.md).
+
+### [RAG / Knowledge Providers](docs/handbook/12-rag-providers.md)
+Connect vector databases and document stores as RAG providers. The agent queries your knowledge base before answering, grounding responses in your own data. Supports Chroma, Qdrant, Weaviate, pgvector, and custom connectors via the [RAG Hub](docs/handbook/13-rag-hub.md).
+
+### [Memory + Conversation Recall](docs/memory-model.md)
+Three persistent memory layers — user profile (skills, preferences, history), session artifacts, and pinned project knowledge — survive session resets and follow the user across bridges. PII is redacted before indexing; recall is scoped per tenant.
+
+### [Browser Automation](docs/browser-automation.md)
+The agent navigates websites, fills forms, and clicks UI elements via Playwright — with live step-by-step narration over voice and human-in-the-loop confirmation before any destructive action. Watch the driven browser live in the console and take over at any time.
 
 ### [Agent-to-Agent Network (A2A)](docs/agent-communication.md)
 Multiple CorvinOS instances form a decentralised agent mesh. Every cross-instance call carries cryptographic attestation, nonce replay protection, and an audit-first envelope — the record is written before any response is sent.
 
-### [Data Classification + Egress Control](docs/claude-ref/layer-35-egress.md)
-Four-stage classification (PUBLIC / INTERNAL / CONFIDENTIAL / SECRET) gates every engine spawn. EU_PRODUCTION egress preset blocks all hosts not on the explicit allowlist — no data leaves without operator permission.
+### [Organizations + Multi-Tenant](docs/for-organizations.md)
+One instance handles multiple users, teams, and projects in full isolation. Per-tenant engine allowlists, data residency rules, persona sets, and quota limits in a single `tenant.corvin.yaml`. See the [organizational deployment guide](docs/for-organizations.md) for SSO, role management, and enterprise integration patterns.
+
+### [Data Classification + Egress Control](docs/claude-ref/layer-34-data-classification.md)
+Four-stage classification (PUBLIC / INTERNAL / CONFIDENTIAL / SECRET) gates every engine spawn. EU_PRODUCTION egress preset blocks all hosts not on the explicit allowlist. Raw data rows never enter the LLM context — only schema, aggregate stats, and anonymised samples.
 
 ### [GDPR Art. 17 Erasure](docs/claude-ref/layer-36-erasure.md)
 One command erases a user across sessions, audit records, recall DB, and all registered artifacts — cross-layer, pseudonymised, and audit-trailed. The hash chain is de-linked, not deleted.
 
-### [Multi-Tenant Isolation](docs/overview.md#multi-tenant)
-One instance handles multiple users, teams, and projects in full isolation. Per-tenant engine allowlists, data residency rules, persona sets, and quota limits — all in a single `tenant.corvin.yaml`.
-
-### [Browser Automation](docs/claude-ref/layer-adr-0182.md)
-The agent navigates websites, fills forms, and clicks UI elements via Playwright — with live step-by-step narration over voice and human-in-the-loop confirmation before any destructive action.
+### [Custom Layers + Extensions](docs/extending.md)
+Add new compliance layers, bridge connectors, and engine adapters via the [Custom Layer System](docs/claude-ref/layer-cls.md). Extensions are licensed (Tier-A/B/C) and gated — the core compliance stack cannot be overridden by an extension.
 
 ---
 
@@ -135,9 +154,9 @@ Full reference: [docs/eu-ai-act/README.md](docs/eu-ai-act/README.md) · [docs/au
 
 <img src="docs/assets/arch.svg" alt="CorvinOS architecture — channels → Bridge Adapter → WorkerEngine" width="100%"/>
 
-Seven bridge daemons funnel messages into a shared inbox. The Bridge Adapter enforces ACL, routes to the right persona, runs the TTS pipeline, and grades skills — per-chat-sequential, cross-chat-parallel. The WorkerEngine abstraction swaps the LLM backend without touching the compliance stack.
+Bridge daemons funnel messages into a shared inbox. The Bridge Adapter enforces ACL, routes to the right persona, runs the TTS pipeline, and grades skills — per-chat-sequential, cross-chat-parallel. The WorkerEngine abstraction swaps the LLM backend without touching the compliance stack.
 
-Full breakdown: [docs/layer-model.md](docs/layer-model.md) · Diagrams: [docs/diagrams/](docs/diagrams/)
+Full breakdown: [docs/layer-model.md](docs/layer-model.md) · Diagrams: [docs/diagrams/](docs/diagrams/) · Full documentation: [docs/overview.md](docs/overview.md)
 
 ---
 
