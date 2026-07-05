@@ -170,6 +170,11 @@ _CANARY_UNCOMPUTABLE: object = object()
 # Prevents rapid-cycle reload attacks via the console /license/apply endpoint.
 _LAST_RELOAD_AT: float = 0.0
 _MIN_RELOAD_INTERVAL_SECONDS: float = 5.0
+# Log the placeholder-operator-key state ONCE per process — it's a stable Free-tier
+# config state, and logging it CRITICAL on every operator-token verification spammed
+# the log (1500+ CRITICAL lines observed on a running instance) and drowned the real
+# integrity signal. The fail-closed behaviour (return None) is unchanged.
+_PLACEHOLDER_KEY_WARNED: bool = False
 
 # ── Revocation fingerprint cache (ADR-0102 individual-token revocation) ──────
 # Per-token revocation is checked against Corvin-Features /v1/licenses/revoked.
@@ -499,11 +504,14 @@ def _verify_ed25519(token: str) -> dict[str, Any] | None:
     # FND-22: refuse a placeholder operator key — a build that shipped it
     # unchanged must not accept operator tokens (potential forgery vector).
     if _is_placeholder_key(pub_key_b64):
-        log.critical(
-            "license: operator public key is the SHIPPED PLACEHOLDER — refusing "
-            "to verify operator tokens (Free tier). Set CORVIN_PUBLIC_KEY_B64 to "
-            "the real CorvinLabs key."
-        )
+        global _PLACEHOLDER_KEY_WARNED  # noqa: PLW0603
+        if not _PLACEHOLDER_KEY_WARNED:
+            log.critical(
+                "license: operator public key is the SHIPPED PLACEHOLDER — refusing "
+                "to verify operator tokens (Free tier). Set CORVIN_PUBLIC_KEY_B64 to "
+                "the real CorvinLabs key. (logged once per process)"
+            )
+            _PLACEHOLDER_KEY_WARNED = True
         return None
 
     try:

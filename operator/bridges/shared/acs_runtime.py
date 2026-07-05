@@ -1027,6 +1027,36 @@ def _assert_engine_licensed(engine_id: str) -> None:
         raise RuntimeError(f"license-gate-error (fail-closed): {type(_exc).__name__}") from _exc
 
 
+def _apply_provider_redirect(env: dict, tenant_id: str) -> None:
+    """ADR-0181 M3 (review finding #6) — mirror the OS-turn provider redirect for
+    claude_code WORKER spawns. When a non-anthropic provider is assigned to
+    claude_code for this tenant, point the worker CLI at the provider/proxy via
+    ANTHROPIC_BASE_URL + the vault-injected credential, exactly like the OS turn
+    in adapter._build_spawn_env.
+
+    Without this the worker egressed to the DEFAULT anthropic host while
+    spawn_gates.check_l35 validated the PROVIDER host — enforcement and actual
+    egress disagreed. Call AFTER stripping the real Anthropic creds; in the
+    default (no-provider) case this is a no-op. Best-effort, never fatal."""
+    try:
+        from engine_models import (  # type: ignore
+            get_tenant_engine_provider, load_providers)
+        prov = get_tenant_engine_provider(tenant_id, "claude_code")
+        if not prov or prov == "anthropic":
+            return
+        ps = load_providers().get(prov)
+        base = (ps.proxy_base_url or ps.base_url) if ps else ""
+        if not base:
+            return
+        key = os.environ.get(ps.credential_env, "") if ps.credential_env else ""
+        env["ANTHROPIC_BASE_URL"] = base
+        env["ANTHROPIC_API_KEY"] = key or "provider"
+        env["ANTHROPIC_AUTH_TOKEN"] = key or "provider"
+        env["CORVIN_CC_PROVIDER"] = prov
+    except Exception:  # noqa: BLE001 — routing is best-effort, never fatal
+        return
+
+
 def _call_manager_sync(prompt: str, model: str, tenant_id: str = "_default") -> tuple[str, int]:
     """Call the manager engine for a decision. Returns (stdout, tokens_estimate).
 
@@ -1048,6 +1078,7 @@ def _call_manager_sync(prompt: str, model: str, tenant_id: str = "_default") -> 
     env["VOICE_HOOK_RECURSION"] = "1"
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
     result = subprocess.run(
         [
             binary, "-p", prompt,
@@ -1163,6 +1194,7 @@ def _call_worker_sync(
     # ADR-0109 M6: propagate ACS worker context for engine-trace hooks
     if extra_env is not None:
         env.update(extra_env)
+    _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
     timeout = min(int(budget.get("timeout_seconds", _DEFAULT_BUDGET_TIMEOUT)), _WORKER_TIMEOUT)
     # max-turns: 20 gives workers enough headroom for multi-file explore/implement
     # tasks. 5 was too tight — workers hit the limit mid-tool-use and returned

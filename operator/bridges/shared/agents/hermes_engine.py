@@ -116,6 +116,13 @@ def ensure_hermes_ready(base_url: str, model: str, timeout: float = 120.0) -> tu
          the one-time cold model load (which takes 20-60 s for a multi-GB model).
 
     Cheap when already warm (keep_alive holds the model loaded). Returns (ok, detail).
+
+    Timeout budget: this warm-up runs synchronously BEFORE the first StreamEvent,
+    so its total silent window must stay under the adapter's stream-idle watchdog
+    (``stream_idle_to`` = 300 s). We bound it: server-start wait ≤ 30 s + warm-read
+    ≤ 200 s = 240 s worst case, leaving a 60 s margin so a genuinely cold load does
+    NOT trip the idle timeout and error the turn. This bound also caps the window
+    in which a mid-warm-up cancel() is unresponsive (self._response is still None).
     """
     if not _ping_ollama(base_url, 3.0):
         starter = _import_ensure_ollama_running()
@@ -136,7 +143,8 @@ def ensure_hermes_ready(base_url: str, model: str, timeout: float = 120.0) -> tu
         req = urllib.request.Request(
             f"{base_url}/api/generate", data=warm,
             headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=max(60.0, min(timeout, 300.0))) as r:
+        # Ceiling 200 s (not caller's inf): keep total warm-up < 300 s idle watchdog.
+        with urllib.request.urlopen(req, timeout=max(60.0, min(timeout, 200.0))) as r:
             r.read()
         return True, "ready"
     except urllib.error.HTTPError as e:  # model likely not pulled

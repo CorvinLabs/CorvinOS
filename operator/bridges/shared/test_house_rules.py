@@ -179,18 +179,20 @@ def test_nonfinite_confidence_on_flagged_clear_escalates():
         assert d.action == "escalate", bad
 
 
-def test_low_confidence_clear_allows_without_tier0_hit():
-    # Operator decision 2026-06-25 (less-blocking): a low-confidence clear with
-    # NO Tier-0 keyword hit is the dominant false-positive (a benign data/CSV/
-    # analysis task the classifier merely rated below the floor). It now falls
-    # through to the policy default_action (allow) instead of escalating — the
-    # gate was over-blocking benign requests. The classifier named NO violation
-    # and no restricted keyword was present, so the task is treated as benign.
+def test_very_low_confidence_clear_escalates_without_tier0_hit():
+    # Reconciled 2026-07-05: a VERY-low-confidence clear (<0.50) escalates even
+    # with NO Tier-0 hit. The later operator decision 2026-06-30 (classify() line
+    # "confidence < 0.50 → escalate") supersedes the earlier 2026-06-25 allow-all
+    # policy and aligns with this module's fail-CLOSED header contract
+    # ("classifier-uncertainty → escalate, never silent allow") and the CLAUDE.md
+    # L44 red-line. A 0.0-confidence clear is MAXIMUM uncertainty — allowing it
+    # would be a fail-open. Benign tasks are meant to clear with HIGH confidence
+    # (>0.85 → allow); only a genuinely-uncertain classifier output escalates.
     def cls(task, rules, auth):
-        return ("", 0.0, "unsure")   # low-confidence clear, no rule named
+        return ("", 0.0, "unsure")   # maximum-uncertainty clear, no rule named
     g = H.HouseRulesGate(policy=_policy(), classifier=cls)
     d = g.classify("a very long benign-looking task with no keyword")  # tier0_hits == 0
-    assert d.action == "allow" and d.allowed
+    assert d.action == "escalate" and not d.allowed
 
 
 def test_low_confidence_clear_still_escalates_with_tier0_hit():
@@ -211,19 +213,21 @@ def test_confident_clear_allows_on_default_allow():
     assert g.classify("write a poem about spring").action == "allow"
 
 
-def test_benign_csv_analysis_allows_even_if_low_confidence_clear():
-    # Operator decision 2026-06-25 extension: benign data/CSV analysis with low
-    # confidence clear (e.g. model hesitant on a 0.4 confidence report) and NO
-    # Tier-0 keyword hit should ALLOW, not escalate. This is the dominant source
-    # of false-positives: "analyse logs.csv for anomalies" gets flagged as unsure
-    # by the classifier but has no security keywords. Now it allows.
+def test_benign_csv_analysis_escalates_when_classifier_very_unsure():
+    # Reconciled 2026-07-05 (supersedes the 2026-06-25 allow-all expectation):
+    # a 0.4-confidence clear is below the 0.50 floor → escalate (fail-closed),
+    # per operator decision 2026-06-30 + the module's "uncertainty → escalate"
+    # contract. The friction fix is NOT to fail-open the gate on an uncertain
+    # clear, but to have the classifier return HIGH confidence on genuinely
+    # benign work — a well-tuned classifier clears "analyse logs.csv" at >0.85,
+    # which allows (see test_confident_clear_allows_on_default_allow). Only a
+    # hesitant/low-quality clear escalates to human review.
     def cls(task, rules, auth):
         return ("", 0.4, "seems fine but uncertain")
     g = H.HouseRulesGate(policy=_policy(), classifier=cls)
     d = g.classify("analyse the malware logs.csv file for patterns and generate a report")
-    # No Tier-0 match ("logs.csv" ≠ Tier-0 keyword) + low-confidence clear → ALLOW
-    # (even though "malware" is in the text, it's part of the file description)
-    assert d.action == "allow" and d.allowed
+    # No Tier-0 match but confidence 0.4 < 0.50 floor → escalate (fail-closed).
+    assert d.action == "escalate" and not d.allowed
 
 
 def test_clear_honours_deny_by_default_tenant():

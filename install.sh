@@ -161,9 +161,17 @@ CONSOLE_URL="http://localhost:8765/console/"
 MAX_RETRIES=30
 RETRY_COUNT=0
 
-# Start server in background
-nohup corvinos-serve >/dev/null 2>&1 &
-SERVER_PID=$!
+# The setup wizard (corvin-install, step "start console") may already have
+# started and health-waited the console. Only launch a fresh server if nothing
+# is answering on 8765 — a second `corvinos-serve` would collide on the port,
+# fail to bind silently, and leave a dead SERVER_PID in the cheat sheet.
+if curl -s -m 2 http://localhost:8765/api/health >/dev/null 2>&1; then
+    printf '  %s Console already running (started by the setup wizard).\n' "$(_green '✓')"
+    SERVER_PID="$(pgrep -f corvinos-serve 2>/dev/null | head -1 || true)"
+else
+    nohup corvinos-serve >/dev/null 2>&1 &
+    SERVER_PID=$!
+fi
 
 # Wait for server to be ready
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do

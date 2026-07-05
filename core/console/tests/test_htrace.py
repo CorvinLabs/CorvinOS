@@ -579,3 +579,49 @@ class TestR1Fixes:
             builtins.__import__ = real_import
             for m in [k for k in sys.modules if "htrace_uploader" in k]:
                 del sys.modules[m]
+
+
+class TestPingDenyByDefault:
+    """The activity ping (ADR-0180) must be OPT-IN — CLAUDE.md compliance
+    red-line: telemetry may never be opt-out / default-on."""
+
+    def _write_cfg(self, home: Path, value) -> None:
+        import yaml
+        p = (home / "tenants" / "_default" / "global" / "tenant.corvin.yaml")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(yaml.safe_dump({"spec": {"telemetry": {"ping_enabled": value}}}),
+                     encoding="utf-8")
+
+    def test_fresh_install_ping_is_off(self, tmpdir):
+        from corvin_console.aco.htrace_consent import ping_enabled
+        # No ConsentAct, no config → deny-by-default.
+        assert ping_enabled(tmpdir) is False
+
+    def test_config_false_keeps_ping_off(self, tmpdir):
+        from corvin_console.aco.htrace_consent import ping_enabled
+        self._write_cfg(tmpdir, False)
+        assert ping_enabled(tmpdir) is False
+
+    def test_explicit_config_true_opts_in(self, tmpdir):
+        from corvin_console.aco.htrace_consent import ping_enabled
+        self._write_cfg(tmpdir, True)
+        assert ping_enabled(tmpdir) is True
+
+    def test_recorded_consent_opts_in(self, tmpdir):
+        from corvin_console.aco.htrace_consent import ping_enabled, ConsentAct
+        ConsentAct(
+            consent_act_id="test-act",
+            consent_version="htrace/1.1",
+            ts_utc="2026-07-05T00:00:00Z",
+            text_sha256="0" * 64,
+            method="cli",
+            corvin_version="0.0.0-test",
+        ).save(tmpdir)
+        assert ping_enabled(tmpdir) is True
+
+    def test_non_bool_truthy_config_does_not_opt_in(self, tmpdir):
+        # Only a literal `true` enables; a truthy-but-not-True value stays OFF
+        # (fail-closed — no accidental opt-in via "yes"/1/etc.).
+        from corvin_console.aco.htrace_consent import ping_enabled
+        self._write_cfg(tmpdir, "yes")
+        assert ping_enabled(tmpdir) is False

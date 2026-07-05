@@ -287,7 +287,12 @@ def resolve_engine_egress(tenant_id: str, engine_id: str) -> "ProviderSpec | Non
     if not pid:
         return None
     spec = load_providers().get(pid)
-    return spec if (spec and spec.base_url) else None
+    # The effective egress target is `proxy_base_url or base_url` (see
+    # resolve_engine_egress_host). Gate on the SAME expression so a proxy-only
+    # provider (proxy_base_url set, base_url empty) still resolves — otherwise
+    # L35 would validate the engine's default host while the adapter redirects
+    # egress to the proxy host, silently bypassing the deny/forbid policy.
+    return spec if (spec and (spec.proxy_base_url or spec.base_url)) else None
 
 
 def resolve_engine_egress_host(tenant_id: str, engine_id: str) -> str | None:

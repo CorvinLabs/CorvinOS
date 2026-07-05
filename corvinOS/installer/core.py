@@ -38,7 +38,10 @@ def _robust_rmtree(path) -> list[str]:
                 try:
                     os.chmod(p, _stat.S_IWRITE)  # clear read-only (WinError 5)
                     parent = os.path.dirname(p)  # unlink needs a writable parent
-                    if parent:
+                    # Only relax perms on dirs INSIDE the tree being removed —
+                    # never chmod the tree's external parent (e.g. ~ when
+                    # deleting ~/.corvin), which would force it to 0700.
+                    if parent and (Path(parent) == path or path in Path(parent).parents):
                         os.chmod(parent, _stat.S_IRWXU)
                 except OSError:
                     pass
@@ -852,8 +855,13 @@ class CorvinInstaller:
                 ) / (1024 * 1024)
                 print(f"  Path: {plugin_cache}  ({cache_size_mb:.1f} MB)")
                 if purge or input("  Delete plugin cache? [Y/n]: ").strip().lower() != "n":
-                    _robust_rmtree(plugin_cache)
-                    print("  ✓ Removed plugin cache")
+                    leftover = _robust_rmtree(plugin_cache)
+                    if not leftover:
+                        print("  ✓ Removed plugin cache")
+                    else:
+                        print(f"  ⚠ Could not fully remove plugin cache — "
+                              f"{len(leftover)} item(s) locked; delete "
+                              f"{plugin_cache} manually.")
                 else:
                     print("  ⚠ Kept plugin cache")
             except Exception as e:
@@ -888,8 +896,12 @@ class CorvinInstaller:
             for artifact_dir in (webnext / "dist", webnext / "node_modules"):
                 if artifact_dir.exists():
                     try:
-                        _robust_rmtree(artifact_dir)
-                        print(f"  ✓ Removed: {artifact_dir}")
+                        leftover = _robust_rmtree(artifact_dir)
+                        if not leftover:
+                            print(f"  ✓ Removed: {artifact_dir}")
+                        else:
+                            print(f"  ⚠ Could not fully remove {artifact_dir} — "
+                                  f"{len(leftover)} item(s) locked")
                     except Exception as e:
                         print(f"  ⚠ Could not remove {artifact_dir}: {e}")
                 else:
@@ -908,8 +920,12 @@ class CorvinInstaller:
             for venv_dir in bridges_root.glob("*/venv"):
                 if venv_dir.is_dir():
                     try:
-                        _robust_rmtree(venv_dir)
-                        print(f"  ✓ Removed orphaned venv: {venv_dir}")
+                        leftover = _robust_rmtree(venv_dir)
+                        if not leftover:
+                            print(f"  ✓ Removed orphaned venv: {venv_dir}")
+                        else:
+                            print(f"  ⚠ Could not fully remove {venv_dir} — "
+                                  f"{len(leftover)} item(s) locked")
                     except Exception as e:
                         print(f"  ⚠ {e}")
 
@@ -932,8 +948,21 @@ class CorvinInstaller:
                 input("  Delete voice config (API keys, secrets)? [y/N]: ").strip().lower() == "y"
             )
             if confirmed:
-                _robust_rmtree(self.voice_config)
-                print(f"  ✓ Removed {self.voice_config}")
+                leftover = _robust_rmtree(self.voice_config)
+                if not leftover:
+                    print(f"  ✓ Removed {self.voice_config}")
+                else:
+                    # Security-relevant: never claim the secrets are gone when
+                    # they are not. A running process holding a handle (common on
+                    # Windows) leaves API keys / service.env on disk.
+                    print(f"  ⚠ Could NOT fully remove {self.voice_config} — "
+                          f"{len(leftover)} item(s), which may include API keys / "
+                          f"service.env, are locked and REMAIN ON DISK.")
+                    print("     Close any running CorvinOS process (web console, "
+                          "voice bridge, `corvinos-serve`) and re-run "
+                          "`corvin-uninstall`,")
+                    print(f"     or delete {self.voice_config} manually to remove "
+                          f"the secrets.")
             else:
                 print(f"  ⚠ Kept {self.voice_config}")
                 print(f"     Run `rm -rf {self.voice_config}` manually to finish.")
@@ -984,8 +1013,12 @@ class CorvinInstaller:
                 input("  Delete in-repo Corvin directory? [y/N]: ").strip().lower() == "y"
             )
             if confirmed:
-                _robust_rmtree(repo_corvin)
-                print(f"  ✓ Removed {repo_corvin}")
+                leftover = _robust_rmtree(repo_corvin)
+                if not leftover:
+                    print(f"  ✓ Removed {repo_corvin}")
+                else:
+                    print(f"  ⚠ Could not fully remove {repo_corvin} — "
+                          f"{len(leftover)} item(s) locked; delete manually.")
             else:
                 print(f"  ⚠ Kept {repo_corvin}")
                 print(f"     Run `rm -rf {repo_corvin}` manually to finish.")

@@ -3469,6 +3469,16 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
                     if _base:
                         _key = (os.environ.get(_ps.credential_env, "")
                                 if _ps.credential_env else "")
+                        if _ps.credential_env and not _key:
+                            # A credential env-var is declared but not present in
+                            # this process — CC would be redirected to the provider
+                            # with a placeholder key and fail auth. Surface the
+                            # misconfig instead of failing silently. (Name only —
+                            # never the value — per the audit/PII red-line.)
+                            log(f"[provider] {_prov}: credential env "
+                                f"'{_ps.credential_env}' is not set — Claude Code "
+                                f"will fail to authenticate against {_base}. "
+                                f"Load the vault key into the bridge environment.")
                         env["ANTHROPIC_BASE_URL"] = _base
                         env["ANTHROPIC_API_KEY"] = _key or "provider"
                         env["ANTHROPIC_AUTH_TOKEN"] = _key or "provider"
@@ -3951,10 +3961,19 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         env.pop("ANTHROPIC_BASE_URL", None)
         env.pop("CORVIN_CC_LOCAL_MODE", None)
     # Always remove real API credentials from subprocess env to prevent leaks
-    # — claude CLI must authenticate via claude.ai Connectors instead
-    env.pop("ANTHROPIC_API_KEY", None)
-    env.pop("ANTHROPIC_AUTH_TOKEN", None)
-    env.pop("ANTHROPIC_API_BASE", None)
+    # — claude CLI must authenticate via claude.ai Connectors instead.
+    # EXCEPTION (ADR-0181 M3): when a non-anthropic provider is assigned to
+    # claude_code, _build_spawn_env deliberately injected ANTHROPIC_BASE_URL +
+    # the provider credential + CORVIN_CC_PROVIDER so the CLI talks to the
+    # provider/proxy. Stripping the key here (while leaving BASE_URL in place)
+    # would point the CLI at the provider host with NO credential → guaranteed
+    # auth failure, silently killing M3 on the voice/Discord/messaging path
+    # (call_claude_streaming never stripped, so web-chat worked — a split we
+    # close here). In provider mode the credential is required, not a leak.
+    if not env.get("CORVIN_CC_PROVIDER"):
+        env.pop("ANTHROPIC_API_KEY", None)
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        env.pop("ANTHROPIC_API_BASE", None)
 
     base_args = _build_claude_args(prompt, mode, profile, add_dir, channel=channel, chat_key=chat_key)
 

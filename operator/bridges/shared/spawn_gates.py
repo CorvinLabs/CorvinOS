@@ -230,27 +230,22 @@ def _load_l44_overlay(tenant_id: str, corvin_home: "Path | None"):
 
 
 def _safe_classify(task: str, rules: dict, auth: dict, _hr, audit_write_fn, tenant_id: str):
-    """Robust classifier wrapper that degrades gracefully on errors.
+    """Classifier wrapper — a thin passthrough that PROPAGATES errors.
 
-    Returns a decision-like object or falls back to conservative allow.
+    It must NOT swallow a classifier failure into a conservative *allow*: the L44
+    acceptable-use gate is fail-CLOSED (CLAUDE.md compliance red-line + the
+    check_l44 docstring — "ANY gate / classifier error all REFUSE the turn").
+    Returning allowed=True here previously defeated that contract: gate.classify
+    got a benign decision, so check_l44's classify-error handler never fired and
+    the turn was waved through unchecked.
+
+    By re-raising, the exception reaches check_l44's Step-5 handler, which emits
+    house_rules.escalated(reason=classifier_error) and returns the neutral
+    "couldn't be safety-checked" escalate message — blocking the turn.
     """
-    try:
-        return _hr._house_rules_classifier(
-            task, rules, auth, audit_write=audit_write_fn, tenant_id=tenant_id
-        )
-    except Exception as _classify_inner_exc:  # noqa: BLE001
-        _log.warning("[house-rules] _house_rules_classifier failed (%s) — returning conservative allow",
-                    type(_classify_inner_exc).__name__)
-        # Return a minimal decision-like object that allows the request
-        # This is safer than crashing the entire gate
-        class ConservativeDecision:
-            allowed = True
-            action = "allow"
-            reason = "classifier_error"
-            confidence = 0.0
-            rule_id = None
-
-        return ConservativeDecision()
+    return _hr._house_rules_classifier(
+        task, rules, auth, audit_write=audit_write_fn, tenant_id=tenant_id
+    )
 
 
 def check_l44(
@@ -541,15 +536,22 @@ def check_l35(
             chat_key=chat_key or None,
         )
     except Exception as exc:  # noqa: BLE001
-        _log.warning("spawn_gates.check_l35: validate failed (%r) — fail-open", exc)
-        return None
+        # Fail CLOSED (ADR-0043): a broken egress gate must not wave a spawn
+        # through unchecked. This matches egress_gate.check_engine_egress, which
+        # also refuses on validate error — the two L35 checks now agree.
+        _log.warning("spawn_gates.check_l35: validate failed (%r) — fail-closed", exc)
+        return (
+            f"[egress] Spawn rejected: engine '{engine_id}' egress could not be "
+            f"validated (gate error). Fail-closed per tenant egress policy. "
+            f"Operator: check tenant.corvin.yaml::spec.egress."
+        )
 
     if decision.allowed:
         return None
 
     _log.info(
         "[spawn-gate/L35] denied engine=%s host=%s reason=%s channel=%s chat=%s",
-        engine_id, "unknown", decision.reason, channel, chat_key,
+        engine_id, host, decision.reason, channel, chat_key,
     )
     return (
         f"[egress] Spawn rejected: Engine '{engine_id}' is not allowed to reach "

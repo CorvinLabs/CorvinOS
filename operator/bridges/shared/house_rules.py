@@ -385,13 +385,20 @@ class HouseRulesGate:
         # Tier-1 semantic classification over the WHOLE ruleset (one pass).
         try:
             rid, confidence, _detail = self.classifier(task_text, self.policy.rules, auth)
-        except Exception:  # noqa: BLE001 — classifier error → graceful fallback to allow
-            # If the classifier is unavailable (e.g., API-key not configured), fall through
-            # to the policy default (allow) rather than blocking all requests. The Tier-0
-            # gate is still in effect for obvious violations. Operator decision 2026-06-30:
-            # prevent user friction when deployment environment is incomplete (test/dev).
+        except Exception:  # noqa: BLE001 — classifier error → fail-CLOSED escalate
+            # L44 is fail-CLOSED (CLAUDE.md compliance red-line "don't fail-open
+            # the L44 gate" + this module's header contract "classifier-
+            # uncertainty → escalate, never silent allow"). A classifier failure
+            # must NOT fall through to the policy default ALLOW — that waved
+            # unchecked tasks through whenever the classifier backend was down,
+            # which is exactly the acceptable-use guarantee the gate exists to
+            # provide. Escalate to human review instead. Friction is bounded by
+            # the classifier-availability guarantees (Hermes always-available
+            # healing + ADR-0157 M4 retry/degradation window + the neutral
+            # "couldn't be safety-checked, try again" wording), NOT by fail-
+            # opening the gate. Tier-0 obvious-violation blocking still applies.
             return self._decide(
-                HouseRulesDecision(self.policy.default_action, "", _REASON_CLASSIFIER_ERROR, 0.0),
+                HouseRulesDecision("escalate", "", _REASON_CLASSIFIER_ERROR, 0.0),
                 persona, channel, chat_key, engine_id, tier0_hits)
 
         # Defense-in-depth: a non-finite confidence (NaN/+Inf) would make the

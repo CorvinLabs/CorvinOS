@@ -275,29 +275,43 @@ def load_consent_act_id(home: Path) -> str:
     return act.consent_act_id if act is not None else ""
 
 
-# ── Opt-out ping gate (no ConsentAct required) ────────────────────────────────
+# ── Opt-in ping gate (deny-by-default per CLAUDE.md compliance red-line) ───────
 
 def ping_enabled(home: Path) -> bool:
-    """Return True unless the operator explicitly opted out.
+    """Deny-by-default (opt-IN). The activity ping is OFF unless the operator
+    explicitly enabled it.
 
-    The activity ping is opt-out (default ON).  It sends only a pseudonymous
-    HMAC token + the installed version — no personal data.  Legal basis:
-    GDPR Art. 6(1)(f) legitimate interests (anonymous instance counting).
+    CLAUDE.md compliance baseline (absolute "Must NOT"): telemetry may never be
+    opt-out / default-on. So this returns True ONLY when one of two explicit
+    opt-in signals is present:
+      1. A recorded GDPR Art. 7 ConsentAct (the CLI consent flow), or
+      2. An explicit ``spec.telemetry.ping_enabled: true`` in
+         ``<corvin_home>/tenants/_default/global/tenant.corvin.yaml``.
 
-    To opt out, set ``spec.telemetry.ping_enabled: false`` in
-    ``<corvin_home>/tenants/_default/global/tenant.corvin.yaml``
-    or run: corvin config set telemetry.ping_enabled false
+    Absent both — the fresh-install default — the ping is OFF. It sends only a
+    pseudonymous HMAC token + version, but the red-line is unconditional:
+    nothing leaves the box on first run without an explicit opt-in.
+
+    To opt in: run ``corvin telemetry consent`` (records a ConsentAct) or set
+    ``spec.telemetry.ping_enabled: true`` (or ``corvin config set
+    telemetry.ping_enabled true``).
     """
     try:
+        # 1) Explicit GDPR Art. 7 consent recorded → opted in.
+        if ConsentAct.load(home) is not None:
+            return True
+        # 2) Explicit config opt-in. Only a literal `true` enables; a missing
+        #    key, `false`, or any parse failure keeps the ping OFF (fail-closed).
         import yaml  # type: ignore[import]
         cfg_path = _tenant_cfg_path(home)
         if cfg_path.exists():
             data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
             spec = data.get("spec", data)
-            return bool(spec.get("telemetry", {}).get("ping_enabled", True))
+            if spec.get("telemetry", {}).get("ping_enabled", False) is True:
+                return True
     except Exception:  # noqa: BLE001
         pass
-    return True  # default ON
+    return False  # deny-by-default (opt-in)
 
 
 def ensure_ping_tokens(home: Path) -> bool:

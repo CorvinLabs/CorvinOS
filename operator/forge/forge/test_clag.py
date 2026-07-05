@@ -39,6 +39,8 @@ from clag import (  # type: ignore[import]
     verify_cit,
     verify_last_k,
     write_epoch_anchor,
+    write_chain_anchor,
+    verify_chain_anchor,
     _derive_cit_key,
     _layer_cits,
     _cit_lock,
@@ -505,3 +507,34 @@ def test_verify_skips_hashless_meta_event(audit_path: Path) -> None:
     assert verify_last_k(audit_path, VERIFY_K_DEFAULT) == []
     cit = gate(audit_path, "L22.engine_spawn.gaptest")
     assert isinstance(cit, ChainIntegrityToken)
+
+
+# ── Anchor staleness (crash-loop) vs. real tampering ──────────────────────────
+
+def test_stale_anchor_benign_growth_is_ok_not_critical(audit_path: Path, tmp_path: Path) -> None:
+    """Crash-loop: the chain GROWS past a stale anchor. The anchored tail is a
+    proven ancestor → verify returns 'ok' (audit.chain_anchor_stale), NOT a
+    false CRITICAL tail_mismatch."""
+    seed = derive_seed_free()
+    anchor_path = tmp_path / "chain_anchor.json"
+    _seed_chain(audit_path, n=3)
+    write_chain_anchor(audit_path, anchor_path, dna_seed=seed)
+    # More events arrive after the (now stale) anchor — pure append growth.
+    _seed_chain(audit_path, n=4)
+    status, detail = verify_chain_anchor(audit_path, anchor_path, dna_seed=seed, emit=False)
+    assert status == "ok", detail
+
+
+def test_forked_history_still_fails_closed(audit_path: Path, tmp_path: Path) -> None:
+    """A non-ancestor tail (pre-anchor history rewritten/replaced) must STAY a
+    CRITICAL failure even though the event count did not shrink."""
+    seed = derive_seed_free()
+    anchor_path = tmp_path / "chain_anchor.json"
+    _seed_chain(audit_path, n=3)
+    write_chain_anchor(audit_path, anchor_path, dna_seed=seed)
+    # Replace the whole chain with a DIFFERENT 6-event chain: count 6 >= 3 but
+    # the tail at position 3 no longer equals the anchored tail → not an ancestor.
+    audit_path.unlink()
+    _seed_chain(audit_path, n=6)
+    status, _ = verify_chain_anchor(audit_path, anchor_path, dna_seed=seed, emit=False)
+    assert status == "failed"

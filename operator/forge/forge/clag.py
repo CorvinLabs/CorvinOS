@@ -738,6 +738,39 @@ def _read_chain_tail_and_count(path: Path) -> tuple[str, int]:
     return tail, count
 
 
+def _tail_hash_at_count(path: Path, n: int) -> str:
+    """Return the chain tail hash as it stood after the first ``n`` events — the
+    last hash-bearing line at or before non-empty line ``n`` (same line-counting
+    as _read_chain_tail_and_count, so it aligns with an anchor's event_count).
+
+    Used to PROVE the anchored tail is a genuine ANCESTOR (prefix) of the current
+    chain — i.e. the chain only grew after a stale anchor — versus a fork or a
+    rewrite of pre-anchor history. Best-effort: returns '' on error or n <= 0,
+    which callers treat as "cannot prove ancestry" → stays fail-closed."""
+    if n <= 0:
+        return ""
+    tail = ""
+    seen = 0
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for ln in fh:
+                stripped = ln.strip()
+                if not stripped:
+                    continue
+                seen += 1
+                if seen > n:
+                    break
+                try:
+                    h = json.loads(stripped).get("hash", "")
+                    if h:
+                        tail = h
+                except json.JSONDecodeError:
+                    pass
+    except OSError:
+        pass
+    return tail
+
+
 def write_chain_anchor(
     audit_path: Path,
     anchor_path: Path,
@@ -813,7 +846,10 @@ def verify_chain_anchor(
     Emits one of three audit events (best-effort) and returns
     ``(status, detail)`` where *status* is one of:
       "absent"  — no anchor file; first boot or legitimate reset (→ WARNING).
-      "ok"      — anchor verified; chain is continuous (→ INFO).
+      "ok"      — anchor verified; chain is continuous (→ INFO). Also returned
+                  when the anchor is stale (unclean shutdown) but the anchored
+                  tail is a PROVEN ancestor of the current, only-grown chain —
+                  emits audit.chain_anchor_stale (INFO), not a CRITICAL break.
       "failed"  — anchor present but HMAC or tail/count mismatch (→ CRITICAL).
 
     Pass ``emit=False`` when calling from the self-test to avoid writing audit
@@ -880,6 +916,30 @@ def verify_chain_anchor(
     current_tail = current_tail[:16]
 
     if current_tail != stored_tail:
+        # A differing tail is NOT automatically tampering. The anchor is written
+        # only on clean shutdown; on an unclean kill (crash-loop) it goes stale
+        # and the chain simply GROWS past the anchored tail. Before crying
+        # CRITICAL, PROVE ancestry: if the chain didn't shrink AND the tail as it
+        # stood at the anchored event_count still equals the anchored tail, then
+        # the anchored state is a verified prefix of the current chain — benign
+        # append-only growth, not truncation/replacement. This is rigorously
+        # fail-closed: any rewrite of pre-anchor history changes the tail at
+        # stored_count → mismatch → stays CRITICAL; any shrink → count_dropped
+        # below → stays CRITICAL; an unreadable/empty ancestor tail → stays
+        # CRITICAL. Only pure post-anchor growth is downgraded.
+        if (
+            stored_tail
+            and current_count >= stored_count
+            and _tail_hash_at_count(audit_path, int(stored_count)) == stored_tail
+        ):
+            _emit("audit.chain_anchor_stale",
+                  anchored_tail=stored_tail, current_tail=current_tail,
+                  anchored_count=stored_count, current_count=current_count)
+            return "ok", (
+                f"chain grew past a stale anchor (unclean shutdown): anchored tail "
+                f"{stored_tail!r} is a verified ancestor of current {current_tail!r}; "
+                f"events {stored_count}→{current_count}"
+            )
         detail = (
             f"chain tail mismatch: anchored={stored_tail!r} current={current_tail!r} — "
             "chain may have been truncated or replaced"

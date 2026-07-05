@@ -210,7 +210,9 @@ while ($RetryCount -lt $MaxRetries) {
 if ($RetryCount -ge $MaxRetries) {
     Write-Warn "Server startup timeout. You can open manually: $ConsoleURL"
 } else {
-    Write-Ok "Server is ready — browser opened automatically."
+    # Actually open the console (the POSIX installer does the same via xdg-open).
+    try { Start-Process $ConsoleURL -ErrorAction Stop; Write-Ok "Server is ready — opening the console in your browser ..." }
+    catch { Write-Ok "Server is ready — open it in your browser: $ConsoleURL" }
 }
 
 # ── done / cheat sheet ────────────────────────────────────────────────────────

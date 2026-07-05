@@ -193,13 +193,17 @@ class TestCheckL35(unittest.TestCase):
         self.assertIn("egress", result)
         self.assertIn("openai", result)
 
-    def test_validate_exception_returns_none_fail_open(self):
+    def test_validate_exception_returns_refusal_fail_closed(self):
+        # ADR-0043 / review finding #3: a broken egress gate must FAIL CLOSED
+        # (refuse the spawn), matching egress_gate.check_engine_egress — not
+        # wave the spawn through. Previously this returned None (fail-open).
         gate = MagicMock()
         gate.validate.side_effect = RuntimeError("boom")
         with patch.object(spawn_gates, "_load_l35_gate", return_value=gate):
             with patch("egress_gate.DEFAULT_ENGINE_HOSTS", {}):
                 result = spawn_gates.check_l35("hermes", "_default")
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
+        self.assertIn("egress", result.lower())
 
     def test_persona_forwarded_to_validate(self):
         gate = MagicMock()
