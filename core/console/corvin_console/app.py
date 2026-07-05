@@ -118,6 +118,8 @@ from .routes import (
     healing_config as healing_config_route,
     # ADR-0182 — Browser automation (agent-driven browser + live view)
     browser as browser_route,
+    # Local instance stats (no remote API)
+    local_stats as local_stats_route,
 )
 
 
@@ -233,6 +235,7 @@ router.include_router(aco_route.router, tags=["console-aco"])
 # ADR-0178 / ADR-0180 — Self-healing config (ACO L5 toggles + healing telemetry)
 router.include_router(healing_config_route.router, tags=["console-healing-config"])
 router.include_router(browser_route.router, tags=["console-browser"])
+router.include_router(local_stats_route.router, tags=["console-local-stats"])
 
 
 @router.get("/version")
