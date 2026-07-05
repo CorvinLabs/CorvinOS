@@ -75,7 +75,7 @@ Liegt in `~/.config/corvin-voice/config.json`. Wichtige Felder:
 | `summarize_threshold` | `2000` | Zeichen-Schwelle für Summarize |
 | `summarize_max_chars` | `10000` | Ziel-Länge der Zusammenfassung (Soft-Limit) |
 | `voice_mode` | `auto` | `auto` (threshold-basiert), `full` (immer komplett), `summary` (immer zusammenfassen) |
-| `voice_de` / `voice_en` | `alloy` | OpenAI-Voice-Name |
+| `voice_de` / `voice_en` | *(unset → female)* | OpenAI-Voice-Name; leer ⇒ Default ist eine weibliche Stimme (`nova` für de, sonst `shimmer`). Zum Ändern z.B. `echo`/`onyx`/`fable` (männlich) setzen. |
 | `speed` | `1.0` | Sprechgeschwindigkeit (OpenAI) |
 | `openai_model` | `tts-1` | `tts-1` oder `tts-1-hd` |
 | `anthropic_model` | `claude-haiku-4-5` | Modell für Summarizer |

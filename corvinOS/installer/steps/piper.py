@@ -13,14 +13,18 @@ from .dependencies import pip_install as _pip_install
 
 
 # Supported languages and their HuggingFace model paths (relative to v1.0.0 root)
+# Default to FEMALE voices (project default — the user can change the voice any
+# time). edge-tts (the keyless cloud fallback) is already all-female; these Piper
+# picks keep the LOCAL default female too. Male defaults (Thorsten/Riccardo/
+# Darkman) were swapped for verified female voices (Kerstin/Paola/Gosia).
 _MODELS: dict[str, tuple[str, str]] = {
-    "de": ("Deutsch     — Thorsten medium",    "de/de_DE/thorsten/medium/de_DE-thorsten-medium"),
-    "en": ("English     — Lessac medium",      "en/en_US/lessac/medium/en_US-lessac-medium"),
+    "de": ("Deutsch     — Kerstin (female)",   "de/de_DE/kerstin/low/de_DE-kerstin-low"),
+    "en": ("English     — Lessac (female)",    "en/en_US/lessac/medium/en_US-lessac-medium"),
     "es": ("Español     — Sharvard medium",    "es/es_ES/sharvard/medium/es_ES-sharvard-medium"),
-    "fr": ("Français    — SIWIS medium",       "fr/fr_FR/siwis/medium/fr_FR-siwis-medium"),
-    "it": ("Italiano    — Riccardo x_low",     "it/it_IT/riccardo/x_low/it_IT-riccardo-x_low"),
+    "fr": ("Français    — SIWIS (female)",     "fr/fr_FR/siwis/medium/fr_FR-siwis-medium"),
+    "it": ("Italiano    — Paola (female)",     "it/it_IT/paola/medium/it_IT-paola-medium"),
     "nl": ("Nederlands  — MLS medium",         "nl/nl_NL/mls/medium/nl_NL-mls-medium"),
-    "pl": ("Polski      — Darkman medium",     "pl/pl_PL/darkman/medium/pl_PL-darkman-medium"),
+    "pl": ("Polski      — Gosia (female)",     "pl/pl_PL/gosia/medium/pl_PL-gosia-medium"),
     "pt": ("Português   — Faber medium (BR)",  "pt/pt_BR/faber/medium/pt_BR-faber-medium"),
     "ru": ("Русский     — Irina medium",       "ru/ru_RU/irina/medium/ru_RU-irina-medium"),
     "tr": ("Türkçe      — DFKI medium",        "tr/tr_TR/dfki/medium/tr_TR-dfki-medium"),

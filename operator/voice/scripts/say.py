@@ -81,11 +81,16 @@ def _openai_voice_for(lang: str, voice: str | None = None) -> str:
     if voice:
         return voice
     lc = lang.lower()
+    # Default to a FEMALE OpenAI voice for every language (nova/shimmer are the
+    # two female presets). "alloy" — the old catch-all — is a neutral voice, so
+    # a fresh keyed install would have spoken English (and every other lang) in
+    # a non-female voice by default. Fall back to "shimmer" instead. The user
+    # can still override any of this via tts_voice in the console settings.
     if lc.startswith("de"):
         return "nova"
     if lc.startswith(("zh", "ja", "ko")):
         return "shimmer"
-    return "alloy"
+    return "shimmer"
 
 
 def _try_openai(out_path: Path, text: str, lang: str, voice: str | None) -> bool:
