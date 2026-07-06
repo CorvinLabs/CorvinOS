@@ -6,6 +6,30 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.13] — 2026-07-06
+
+### Fixed
+- **License reload throttle silently swallowed the "Apply Key" reload
+  ("Key applied — tier: free" even with a valid, correctly-signed key).**
+  `reload_from_disk()`'s 5s rate limiter throttled ALL calls uniformly, but
+  `reload_from_disk()` is also invoked on every authenticated console session
+  op (`auth.py::_compute_lic_proof`, "cheap to call per session op"). In real
+  browser usage that per-request call fires moments before the user submits
+  "Apply Key", so the apply endpoint's own reload almost always landed inside
+  the cooldown window opened by that incidental prior call and got silently
+  dropped — the key was written to disk correctly, but the reload no-op'd and
+  the stale (free) tier is what got reported back, with no error anywhere.
+  Verified end-to-end with an actual reported key: signature and claims
+  validation both passed; the bug was purely in the throttle/reload
+  interaction. Fix: track a hash of the last-loaded token content — the
+  throttle now only applies to redundant re-reads of *unchanged* content; a
+  reload that would pick up genuinely new on-disk content always goes
+  through, regardless of timing. Also: `routes/license.py`'s apply-key
+  endpoint now resolves `corvin_home` via the canonical `forge_paths.
+  corvin_home()` (matches every other reader/writer) instead of an ad-hoc
+  `Path.home()`-only computation that could diverge from where
+  `reload_from_disk()` actually looks in a source-checkout run.
+
 ## [0.10.12] — 2026-07-06
 
 ### Fixed
