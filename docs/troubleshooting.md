@@ -15,7 +15,7 @@ After the table, a section on reading bridge.sh tail output is provided.
 | 4 | WhatsApp QR code expired before scanning | Session timed out (30-second window) | Re-run: `bash operator/voice/scripts/whatsapp_cli.sh pair`. Scan the new QR code before it expires. |
 | 5 | Discord bot online but not responding to messages | MESSAGE CONTENT INTENT not enabled | Go to [discord.com/developers/applications](https://discord.com/developers/applications) → your app → Bot → scroll to **Privileged Gateway Intents** → enable **Message Content Intent** → Save Changes. Restart the Discord daemon: `bash operator/bridges/bridge.sh restart`. |
 | 6 | Reply contains `[rate limited]` or similar | OPENAI_API_KEY exhausted or missing | Check [platform.openai.com/usage](https://platform.openai.com/usage) for your quota. Ensure `OPENAI_API_KEY` is set in `~/.config/corvin-voice/service.env`. Restart the adapter after editing that file. |
-| 7 | No TTS voice attachment — bot replies in text only | `ffmpeg` not installed | Linux: `sudo apt install ffmpeg`. macOS: `brew install ffmpeg`. Then restart: `bash operator/bridges/bridge.sh restart`. |
+| 7 | No TTS voice attachment — bot replies in text only | `ffmpeg` not found (rare — a bundled `imageio-ffmpeg` binary is used automatically when no system ffmpeg is on PATH) | Usually self-resolves via the bundled fallback. If it still fails: Linux: `sudo apt install ffmpeg`. macOS: `brew install ffmpeg`. Windows: `winget install ffmpeg`. Then restart: `bash operator/bridges/bridge.sh restart` (or `.\bridge.ps1 restart` on Windows). |
 | 8 | Systemd service fails to start after moving the repo | WorkingDirectory in the unit file points to the old path | Run `bash operator/bridges/bridge.sh up` — it regenerates unit files with the current path. Then: `systemctl --user daemon-reload && systemctl --user restart corvin-voice-bridge-adapter.service`. |
 | 9 | `bridge.sh status` shows all components as red / stopped | `npm install` was never completed | Run `bash operator/bridges/bridge.sh up` — this always runs `npm install` before starting daemons. |
 | 10 | `voice-audit verify` fails with "chain broken at event N" | `audit.jsonl` was manually edited or truncated | Never edit `audit.jsonl` by hand. If this is a fresh install with no real data, you can delete the file and let Corvin create a new chain. If this is a production system, restore from backup. The break point is logged — events before it are still valid. |
@@ -131,7 +131,11 @@ Fix: see row 10 in the symptom table above.
 ```
 [adapter]   WARNING  ffmpeg not found — TTS output will be sent as text fallback
 ```
-Fix: install ffmpeg (row 7 above).
+This should be rare: `_resolve_ffmpeg_bin()` falls back to the bundled
+`imageio-ffmpeg` static binary automatically when no system ffmpeg is on
+PATH, so edge-tts/Piper work out of the box on every platform (including a
+fresh Windows install, where the installer intentionally skips installing
+system ffmpeg). If you still see this warning, see row 7 above.
 
 ### Filtering logs to a specific component
 

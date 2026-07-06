@@ -851,6 +851,17 @@ provider is the wrong default.
 | `is_available() -> bool` | Cheap probe; no paid API call; checks env + import + local resources |
 | `transcribe(audio_path, *, lang=None, timeout_s=None) -> TranscriptResult` | The real work |
 
+`OpenAIWhisperProvider._resolve_api_key()` checks `CORVIN_STT_OPENAI_KEY`
+/ `OPENAI_API_KEY` in `os.environ` first, then falls back to reading
+`~/.config/corvin-voice/.env` or `service.env` directly (mirrors
+`say.py`'s TTS key resolution). This matters because `bridge.sh` /
+`voice_lib.sh` export the key into the shell before Python starts on
+Linux/macOS, but `bridge.ps1` on Windows launches the console/daemon
+directly with no equivalent `.env`-loading step — without the file
+fallback, `os.environ` is empty there even when the key is configured,
+and STT fails with `no STT provider available` (2026-07-06 Windows-10
+incident).
+
 `TranscriptResult` carries `text` (the only PII-bearing field),
 `provider`, `lang`, `duration_s`, and a derived `chars`. The audit-
 event emission uses only the metadata fields, **never** `text`.

@@ -85,7 +85,12 @@ class _FakeAudioClient:
 def _drive_synth(monkey_quota: bool = True) -> Path | None:
     """Call synthesize_voice_note with a faked OpenAI client.
 
-    monkey_quota=True → client always raises 429.
+    monkey_quota=True → client always raises 429. edge-tts/Piper are also
+    forced to "unavailable" here — this test is about the OpenAI-quota
+    short-circuit specifically, not about whether other engines happen to
+    be reachable on the test machine (edge-tts works fine since the
+    2026-07-06 asyncio-import + imageio-ffmpeg-fallback fix, and would
+    otherwise mask the quota path we're trying to exercise).
     monkey_quota=False → client succeeds.
     """
     import tempfile
@@ -95,7 +100,9 @@ def _drive_synth(monkey_quota: bool = True) -> Path | None:
 
     if monkey_quota:
         with patch.object(adapter, "ROOT", new=fake_root), \
-             patch("openai.OpenAI", _FakeAudioClient):
+             patch("openai.OpenAI", _FakeAudioClient), \
+             patch.object(adapter, "_try_edge_tts", return_value=None), \
+             patch.object(adapter, "_try_piper_tts", return_value=None):
             return adapter.synthesize_voice_note("hallo welt", lang="de")
     else:
         # Successful path — fake OpenAI returns bytes-like via duck typing.
@@ -150,7 +157,9 @@ def main() -> int:
             raise AssertionError("synth must NOT hit the API while in quota backoff")
 
     with patch.object(adapter, "ROOT", new=Path("/tmp")), \
-         patch("openai.OpenAI", _Detonator):
+         patch("openai.OpenAI", _Detonator), \
+         patch.object(adapter, "_try_edge_tts", return_value=None), \
+         patch.object(adapter, "_try_piper_tts", return_value=None):
         result2 = adapter.synthesize_voice_note("hallo welt", lang="de")
 
     t("second synth (within backoff) returns None",
@@ -178,7 +187,9 @@ def main() -> int:
         # Ensure no .env file is present in any of the candidate
         # locations — the function falls back to walking up to repo-root.
         # We just patch _load_env_value to always return None.
-        with patch.object(adapter, "_load_env_value", return_value=None):
+        with patch.object(adapter, "_load_env_value", return_value=None), \
+             patch.object(adapter, "_try_edge_tts", return_value=None), \
+             patch.object(adapter, "_try_piper_tts", return_value=None):
             result4 = adapter.synthesize_voice_note("hallo welt", lang="de")
         t("missing-key path returns None",
           result4 is None)

@@ -132,6 +132,59 @@ def _tmp_audio() -> Path:
 # ── Protocol contract ────────────────────────────────────────────────
 
 
+class OpenAIKeyEnvFileFallbackTests(unittest.TestCase):
+    """Windows regression: bridge.ps1 launches the console/daemon directly,
+    without the .env-into-shell-env step voice_lib.sh does on Linux/macOS.
+    _resolve_api_key() must therefore also check the canonical .env file
+    directly so STT doesn't depend on how the process was launched.
+    """
+
+    def setUp(self):
+        self._saved_env = {
+            k: os.environ.get(k)
+            for k in ("CORVIN_STT_OPENAI_KEY", "OPENAI_API_KEY", "VOICE_CONFIG_DIR")
+        }
+        for k in self._saved_env:
+            os.environ.pop(k, None)
+        self._tmpdir = tempfile.mkdtemp(prefix="stt-envfile-test-")
+        os.environ["VOICE_CONFIG_DIR"] = self._tmpdir
+
+        import importlib
+        from stt import openai_whisper as _oaw
+        importlib.reload(_oaw)
+        self._oaw = _oaw
+
+    def tearDown(self):
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        import importlib
+        from stt import openai_whisper as _oaw
+        importlib.reload(_oaw)  # restore module-level VOICE_CONFIG_DIR
+
+    def test_key_read_from_env_file_when_env_var_absent(self):
+        env_path = Path(self._tmpdir) / ".env"
+        env_path.write_text('OPENAI_API_KEY="sk-from-file-test"\n', encoding="utf-8")
+        self.assertEqual(self._oaw._resolve_api_key(), "sk-from-file-test")
+
+    def test_env_var_takes_priority_over_file(self):
+        env_path = Path(self._tmpdir) / ".env"
+        env_path.write_text("OPENAI_API_KEY=sk-from-file\n", encoding="utf-8")
+        os.environ["OPENAI_API_KEY"] = "sk-from-env-var"
+        self.assertEqual(self._oaw._resolve_api_key(), "sk-from-env-var")
+
+    def test_no_key_anywhere_returns_none(self):
+        self.assertIsNone(self._oaw._resolve_api_key())
+
+    def test_service_env_file_used_when_dotenv_missing(self):
+        (Path(self._tmpdir) / "service.env").write_text(
+            "CORVIN_STT_OPENAI_KEY=sk-service-env\n", encoding="utf-8",
+        )
+        self.assertEqual(self._oaw._resolve_api_key(), "sk-service-env")
+
+
 class ProtocolContractTests(unittest.TestCase):
     def test_transcript_result_chars_matches_len(self):
         r = TranscriptResult(text="hello", provider="stub", lang="en")

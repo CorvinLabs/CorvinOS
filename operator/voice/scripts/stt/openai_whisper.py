@@ -12,6 +12,7 @@ disable this and pin ``local`` instead (``CORVIN_STT_PROVIDER=local``).
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 
@@ -27,6 +28,51 @@ from .base import (
 _DEFAULT_TIMEOUT_S = 60.0
 _DEFAULT_MODEL = "gpt-4o-mini-transcribe"
 
+def _resolve_voice_config_dir() -> Path:
+    """SSOT for the corvin-voice config dir — byte-identical to
+    forge.paths.voice_config_dir(): VOICE_CONFIG_DIR → XDG_CONFIG_HOME → ~/.config,
+    uniform on every platform. Guard: tests/test_voice_config_ssot.py.
+    """
+    override = os.environ.get("VOICE_CONFIG_DIR", "").strip()
+    if override:
+        return Path(os.path.expanduser(os.path.expandvars(override)))
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    base = Path(os.path.expanduser(xdg)) if xdg else (Path.home() / ".config")
+    return base / "corvin-voice"
+
+
+_VOICE_CONFIG_DIR = _resolve_voice_config_dir()
+
+_ENV_LINE_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+
+
+def _load_env_value(key: str, env_path: Path) -> str | None:
+    """Read a single value out of a .env-style file (mirrors say.py /
+    adapter.py::_load_env_value). Tolerant of comments, blank lines,
+    `export KEY=...`, and quoted values.
+    """
+    if not env_path.exists():
+        return None
+    try:
+        text = env_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for raw in text.splitlines():
+        line = raw.lstrip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):]
+        m = _ENV_LINE_RE.match(line)
+        if not m or m.group(1) != key:
+            continue
+        value = m.group(2).strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if value:
+            return value
+    return None
+
 
 def _resolve_api_key() -> str | None:
     """Return the OpenAI API key, checking STT-specific var first.
@@ -35,12 +81,28 @@ def _resolve_api_key() -> str | None:
       1. CORVIN_STT_OPENAI_KEY  — dedicated STT key (preferred; not counted
          as an engine credential by the console engines page)
       2. OPENAI_API_KEY         — general OpenAI key (legacy fallback)
+      3. ~/.config/corvin-voice/.env or service.env — file fallback.
+
+    The file fallback matters because process env vars aren't always
+    populated: bridge.sh/voice_lib.sh export OPENAI_API_KEY into the shell
+    before Python starts on Linux/macOS, but bridge.ps1 on Windows launches
+    the console/daemon directly with no equivalent .env-loading step, so
+    os.environ is empty there even when the key is configured. Reading the
+    file directly (same as say.py's TTS key resolution) makes STT work the
+    same way regardless of how the process was launched.
     """
-    return (
+    key = (
         os.environ.get("CORVIN_STT_OPENAI_KEY")
         or os.environ.get("OPENAI_API_KEY")
-        or None
     )
+    if key:
+        return key
+    for env_file in (_VOICE_CONFIG_DIR / ".env", _VOICE_CONFIG_DIR / "service.env"):
+        for env_key in ("CORVIN_STT_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY"):
+            key = _load_env_value(env_key, env_file)
+            if key:
+                return key
+    return None
 
 
 class OpenAIWhisperProvider:

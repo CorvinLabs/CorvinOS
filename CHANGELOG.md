@@ -6,6 +6,34 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.18] — 2026-07-06
+
+### Fixed
+- **Windows: STT and TTS voice notes didn't work at all.** Reported via a
+  fresh Windows 10 console install (`no STT provider available;
+  chain=('local', 'openai'); failures=['local: not available', 'openai:
+  not available']`, plus no TTS audio).
+  - **STT:** `OpenAIWhisperProvider._resolve_api_key()` only checked
+    `os.environ`. `bridge.sh`/`voice_lib.sh` export `OPENAI_API_KEY` into
+    the shell before Python starts on Linux/macOS, but `bridge.ps1` on
+    Windows launches the console/daemon directly with no equivalent
+    `.env`-loading step, so the key was never visible to the process even
+    when configured. It now also falls back to reading
+    `~/.config/corvin-voice/.env` / `service.env` directly, mirroring
+    `say.py`'s existing TTS key resolution.
+  - **TTS, root cause:** `adapter.py` never imported `asyncio` at module
+    level even though `_try_edge_tts` calls `asyncio.run`/`asyncio.wait_for`
+    — every edge-tts call (the API-key-free fallback engine, a base
+    dependency on every platform) raised a silent `NameError`, logged but
+    swallowed, on **every** platform, not just Windows. Fixed by adding the
+    missing `import asyncio`.
+  - **TTS, Windows-specific:** edge-tts and Piper both need `ffmpeg` to
+    convert their MP3/WAV output to OGG-Opus, but the installer explicitly
+    skips installing system tools on Windows. Added `imageio-ffmpeg` (a
+    pure-Python dependency bundling static ffmpeg binaries for
+    Windows/Linux/macOS) as a base dependency and a `_resolve_ffmpeg_bin()`
+    fallback used by both engines when no system ffmpeg is on PATH.
+
 ## [0.10.17] — 2026-07-06
 
 ### Added

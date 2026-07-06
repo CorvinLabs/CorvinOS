@@ -213,13 +213,19 @@ The bridge package (npm / pip) is NOT uninstalled — run `corvin-uninstall` for
 4. Restart the bridge: `bridge.sh restart discord`
 
 ### Voice notes not being sent
-Voice notes require ffmpeg:
+edge-tts and Piper need ffmpeg to convert their output to OGG-Opus. A
+bundled `imageio-ffmpeg` binary is used automatically when no system
+ffmpeg is found on PATH (or `FFMPEG_BIN`), so this works out of the box on
+every platform — including a fresh Windows install, where the installer
+intentionally skips installing system ffmpeg. If you still want a system
+ffmpeg (e.g. for other tools):
 ```bash
 # Linux / WSL:
 sudo apt install ffmpeg
 # macOS:
 brew install ffmpeg
-# Windows: download from https://ffmpeg.org/download.html and add to PATH
+# Windows:
+winget install ffmpeg
 ```
 
 ### TTS without an OpenAI API key

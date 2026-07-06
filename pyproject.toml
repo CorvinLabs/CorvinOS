@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "corvinos"
-version = "0.10.17"
+version = "0.10.18"
 description = "CorvinOS — universal, self-contained, cross-platform AI assistant framework"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -54,6 +54,13 @@ dependencies = [
     # reached. They now live in the optional `voice` extra; cloud/edge TTS + STT
     # (via edge-tts + the OpenAI SDK below) work out of the box.
     "edge-tts >= 6.1.8",
+    # Bundled static ffmpeg binary (pure-Python wheel, prebuilt for
+    # Windows/Linux/macOS) — edge-tts/Piper need ffmpeg to convert their
+    # MP3/WAV output to OGG-Opus, but the installer explicitly skips
+    # installing system ffmpeg on Windows (installer/steps/dependencies.py).
+    # This makes TTS work out of the box there too; system ffmpeg (PATH or
+    # FFMPEG_BIN) still takes priority when present.
+    "imageio-ffmpeg >= 0.5.1",
     # Local STT — faster-whisper on Linux/macOS; Windows lacks av wheels for cp312+.
     # On Windows, STT falls back to OpenAI Whisper (openai SDK already a base dep).
     "faster-whisper >= 1.0.0; sys_platform != 'win32'",

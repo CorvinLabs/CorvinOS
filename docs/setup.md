@@ -55,7 +55,7 @@ The installer handles these automatically, but it is useful to know what is need
 |---|---|
 | `node` ≥ 20, `npm` | Bridge daemons (Telegram, Discord, WhatsApp, etc.) |
 | `python3` ≥ 3.11, `pip3` | Adapter, forge MCP server |
-| `ffmpeg` | Audio conversion for voice notes |
+| `ffmpeg` | Audio conversion for voice notes (optional — a bundled `imageio-ffmpeg` binary is used automatically if no system ffmpeg is found, so this is not a hard requirement on any platform, including Windows) |
 | `git` | Repository cloning and updates |
 | `jq` | JSON processing in shell scripts |
 | `systemd` (Linux) | Service management (optional on macOS/WSL2) |

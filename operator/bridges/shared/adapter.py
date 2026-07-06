@@ -16,6 +16,7 @@ voice_cli.sh (whatsapp on/off subcommand).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
@@ -6992,10 +6993,23 @@ def voice_skip_reason() -> str | None:
 # the voice-note (observed 2026-05-08 01:17 on the discord bridge).
 _OPENAI_TTS_HARD_CAP = 4000
 
-_VOICE_CONFIG_DIR: Path = Path(
-    os.environ.get("VOICE_CONFIG_DIR")
-    or (Path.home() / ".config" / "corvin-voice")
-)
+def _resolve_voice_config_dir() -> Path:
+    """SSOT for the corvin-voice config dir — byte-identical to
+    forge.paths.voice_config_dir(): VOICE_CONFIG_DIR → XDG_CONFIG_HOME → ~/.config,
+    uniform on every platform. Honoring XDG here (it was previously ~/.config only)
+    keeps the in-process TTS/STT key lookup on the same dir the console + installer
+    write to under a custom XDG_CONFIG_HOME (path-audit 2026-07-06).
+    Guard: tests/test_voice_config_ssot.py.
+    """
+    override = os.environ.get("VOICE_CONFIG_DIR", "").strip()
+    if override:
+        return Path(os.path.expanduser(os.path.expandvars(override)))
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    base = Path(os.path.expanduser(xdg)) if xdg else (Path.home() / ".config")
+    return base / "corvin-voice"
+
+
+_VOICE_CONFIG_DIR: Path = _resolve_voice_config_dir()
 
 
 def _cap_for_openai_tts(text: str, cap: int = _OPENAI_TTS_HARD_CAP) -> str:
@@ -7018,6 +7032,28 @@ def _cap_for_openai_tts(text: str, cap: int = _OPENAI_TTS_HARD_CAP) -> str:
     if sp >= cap // 2:
         return cut[:sp]
     return cut
+
+
+def _resolve_ffmpeg_bin() -> str | None:
+    """Locate an ffmpeg binary, falling back to the bundled static build.
+
+    System ffmpeg (FFMPEG_BIN env override, then PATH) wins when present.
+    Otherwise falls back to `imageio-ffmpeg`'s bundled static binary — a
+    pure-Python dependency that ships prebuilt ffmpeg executables for
+    Windows/Linux/macOS as part of its wheel. This matters because the
+    installer explicitly skips installing system ffmpeg on Windows
+    (installer/steps/dependencies.py), which otherwise leaves edge-tts and
+    Piper unable to produce OGG-Opus output on a fresh Windows install.
+    """
+    import shutil as _shutil
+    ffmpeg_bin = os.environ.get("FFMPEG_BIN") or _shutil.which("ffmpeg")
+    if ffmpeg_bin:
+        return ffmpeg_bin
+    try:
+        import imageio_ffmpeg  # noqa: PLC0415
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 _EDGE_TTS_VOICES: dict[str, str] = {
@@ -7056,7 +7092,9 @@ def _try_edge_tts(text: str, lang: str = "de") -> Path | None:
     """Attempt edge-tts (Microsoft Neural TTS, HTTPS, no API key) → OGG-Opus.
 
     edge-tts is a base dependency on all platforms. Requires ffmpeg for
-    MP3 → OGG-Opus conversion. Returns OGG path on success, None otherwise.
+    MP3 → OGG-Opus conversion — see `_resolve_ffmpeg_bin()`, which falls
+    back to the bundled `imageio-ffmpeg` binary when no system ffmpeg is
+    on PATH. Returns OGG path on success, None otherwise.
     """
     try:
         import edge_tts as _edge_tts_mod  # noqa: PLC0415
@@ -7064,10 +7102,9 @@ def _try_edge_tts(text: str, lang: str = "de") -> Path | None:
         log("edge TTS: edge-tts not installed")
         return None
 
-    import shutil as _shutil
-    ffmpeg_bin = os.environ.get("FFMPEG_BIN") or _shutil.which("ffmpeg")
+    ffmpeg_bin = _resolve_ffmpeg_bin()
     if not ffmpeg_bin:
-        log("edge TTS: ffmpeg not found — cannot convert MP3 to OGG")
+        log("edge TTS: ffmpeg not found (system PATH or imageio-ffmpeg) — cannot convert MP3 to OGG")
         return None
 
     voice = _edge_voice_for(lang)
@@ -7215,9 +7252,9 @@ def _try_piper_tts(text: str, lang: str = "de") -> Path | None:
     if not piper_bin or not os.path.isfile(piper_bin):
         log("piper TTS: binary not found — install piper-tts or set PIPER_BIN in service.env")
         return None
-    ffmpeg_bin = os.environ.get("FFMPEG_BIN") or _shutil.which("ffmpeg")
+    ffmpeg_bin = _resolve_ffmpeg_bin()
     if not ffmpeg_bin:
-        log("piper TTS: ffmpeg not found — cannot convert WAV to OGG")
+        log("piper TTS: ffmpeg not found (system PATH or imageio-ffmpeg) — cannot convert WAV to OGG")
         return None
 
     model = (

@@ -288,7 +288,11 @@ _MACOS_TOOLS: list[tuple[str, str]] = [
 def ensure_system_tools(info: PlatformInfo, interactive: bool = True) -> None:
     """Check and install required system tools."""
     if info.os_kind == OS.WINDOWS:
-        print("  ℹ Skipping system tools on Windows — install ffmpeg/jq manually if needed.")
+        print(
+            "  ℹ Skipping system tools on Windows — ffmpeg is bundled "
+            "automatically (imageio-ffmpeg) for TTS/voice-note conversion; "
+            "install jq manually only if you need it for shell scripts."
+        )
         return
 
     pairs = _LINUX_TOOLS if info.os_kind in (OS.LINUX, OS.WSL) else _MACOS_TOOLS
@@ -431,7 +435,15 @@ def pip_install(*packages: str, venv_python: Path | None = None) -> bool:
     )
     if result3.returncode == 0:
         print(f"✓ Installed via venv at {venv_dir}")
-        _persist_venv_python(venv_dir / "bin" / "python3")
+        # Windows venvs put the interpreter at Scripts\python.exe, not bin/python3
+        # (path-audit 2026-07-06 F7) — persisting the POSIX path left PY_BIN
+        # pointing at a nonexistent file on Windows.
+        venv_python = (
+            venv_dir / "Scripts" / "python.exe"
+            if sys.platform == "win32"
+            else venv_dir / "bin" / "python3"
+        )
+        _persist_venv_python(venv_python)
         return True
 
     print("✗ All pip install strategies failed.")
@@ -440,7 +452,8 @@ def pip_install(*packages: str, venv_python: Path | None = None) -> bool:
 
 def _persist_venv_python(venv_python: Path) -> None:
     """Write PY_BIN to service.env so the adapter uses the venv."""
-    env_file = Path.home() / ".config" / "corvin-voice" / "service.env"
+    from corvinOS.shared.paths import voice_config_dir  # SSOT (path-audit 2026-07-06)
+    env_file = voice_config_dir() / "service.env"
     env_file.parent.mkdir(parents=True, exist_ok=True)
     env_file.touch()
 
