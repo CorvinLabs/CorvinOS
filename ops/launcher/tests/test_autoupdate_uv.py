@@ -81,5 +81,53 @@ class UpgradeCommandTests(unittest.TestCase):
             sb.sys.prefix = orig_prefix
 
 
+class WindowsLiveUpgradeSkipTests(unittest.TestCase):
+    """A running process's own interpreter/extension files are locked on
+    Windows, so a live in-process self-upgrade reliably fails there (unlike
+    POSIX). maybe_pypi_autoupdate() must skip the doomed subprocess attempt
+    on Windows and print the manual command instead of trying and failing."""
+
+    def setUp(self) -> None:
+        self._orig_platform = sb.sys.platform
+        self._orig_run = sb.subprocess.run
+        self._orig_pick = sb._pick_upgrade_command
+
+    def tearDown(self) -> None:
+        sb.sys.platform = self._orig_platform
+        sb.subprocess.run = self._orig_run
+        sb._pick_upgrade_command = self._orig_pick
+
+    def test_skips_live_subprocess_on_windows(self) -> None:
+        sb.sys.platform = "win32"
+        sb._pick_upgrade_command = lambda latest: (
+            ["uv", "tool", "upgrade", "corvinos"],
+            "uv tool upgrade corvinos",
+        )
+        called = []
+        sb.subprocess.run = lambda *a, **k: called.append((a, k)) or (_ for _ in ()).throw(
+            AssertionError("subprocess.run must not be called on Windows")
+        )
+
+        import importlib.metadata as _meta
+        import json as _json
+        import urllib.request as _ur
+
+        class _FakeResp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return _json.dumps({"info": {"version": "9.9.9"}}).encode()
+
+        orig_version = _meta.version
+        orig_urlopen = _ur.urlopen
+        _meta.version = lambda _pkg: "0.10.6"
+        _ur.urlopen = lambda *a, **k: _FakeResp()
+        try:
+            sb.maybe_pypi_autoupdate()
+        finally:
+            _meta.version = orig_version
+            _ur.urlopen = orig_urlopen
+        self.assertEqual(called, [])
+
+
 if __name__ == "__main__":
     unittest.main()
