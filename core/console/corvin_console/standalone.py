@@ -148,6 +148,17 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(application: FastAPI):  # noqa: ARG001
+        # Activate the installed license in THIS process. The adapter loads it
+        # at boot (adapter.py), but the standalone console process did not — so
+        # a valid <corvin_home>/global/license.key (or CORVIN_LICENSE_KEY) was
+        # ignored and the console reported `free` regardless of the customer's
+        # tier (paid features stayed gated). load_license_from_env() is
+        # idempotent + best-effort (absence simply leaves the free-tier fallback).
+        try:
+            from license.validator import load_license_from_env as _lic_load
+            _lic_load()
+        except Exception:
+            pass
         # Start presence heartbeat (best-effort — never blocks startup).
         try:
             from .aco.heartbeat import start_heartbeat_thread as _start_hb
