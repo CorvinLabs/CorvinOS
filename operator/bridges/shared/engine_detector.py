@@ -56,14 +56,31 @@ _OLLAMA_PROBE_TIMEOUT = 2.0
 
 # ── Individual probes ──────────────────────────────────────────────────────
 
-def _probe_executable(name: str) -> tuple[bool, str]:
-    """Return (found, version_or_detail). Uses --version with a 5 s timeout."""
+def windows_wrap(cmd: list[str]) -> list[str]:
+    """Wrap a ``.cmd``/``.bat`` shim so Windows can actually launch it.
+
+    Windows' ``CreateProcess`` cannot start a ``.cmd``/``.bat`` file directly
+    when Python passes it as a bare argv list (no ``shell=True``) — it raises
+    ``OSError: [WinError 193] %1 is not a valid Win32 application``. npm's
+    global-install shims for Node CLIs (``claude``, ``codex``, ``copilot``,
+    …) are exactly such ``.cmd`` files, so every probe that resolves a binary
+    via ``shutil.which`` and then spawns it needs this wrap — otherwise the
+    probe raises on Windows even though the CLI is genuinely installed.
+    """
+    exe = cmd[0]
+    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+        return ["cmd", "/c", *cmd]
+    return cmd
+
+
+def _probe_executable(name: str, *, timeout: float = 8.0) -> tuple[bool, str]:
+    """Return (found, version_or_detail). Uses --version with an 8 s timeout."""
     exe = shutil.which(name)
     if exe is None:
         return False, f"{name} not on PATH"
     try:
         r = subprocess.run(
-            [exe, "--version"], capture_output=True, text=True, timeout=5,
+            windows_wrap([exe, "--version"]), capture_output=True, text=True, timeout=timeout,
         )
         if r.returncode != 0:
             return False, f"{name} --version rc={r.returncode}"
@@ -71,7 +88,11 @@ def _probe_executable(name: str) -> tuple[bool, str]:
         version = lines[0] if lines else "found"
         return True, version
     except subprocess.TimeoutExpired:
-        return False, f"{name} --version timeout"
+        return False, (
+            f"{name} --version timed out after {timeout:.0f}s "
+            "(often antivirus scanning a freshly spawned shell — try running "
+            f"`{name} --version` in a terminal to confirm)"
+        )
     except Exception as e:  # noqa: BLE001
         return False, f"{type(e).__name__}: {e}"
 

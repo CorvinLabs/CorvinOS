@@ -365,19 +365,31 @@ def _check_vault() -> list[CheckResult]:
 
 
 def _probe_executable(name: str) -> tuple[bool, str]:
-    """Return ``(ok, detail)``. Uses ``--version`` with a 5 s timeout."""
+    """Return ``(ok, detail)``. Uses ``--version`` with an 8 s timeout.
+
+    Wraps ``.cmd``/``.bat`` shims (npm global installs on Windows) via
+    ``cmd /c`` — see ``engine_detector.windows_wrap`` for why a bare
+    ``subprocess.run`` raises ``WinError 193`` on those without it.
+    """
     exe = shutil.which(name)
     if exe is None:
         return False, f"{name} not on PATH"
     try:
-        r = subprocess.run([exe, "--version"], capture_output=True,
-                           text=True, timeout=5)
+        from engine_detector import windows_wrap  # noqa: PLC0415 - lazy, sibling module
+        cmd = windows_wrap([exe, "--version"])
+    except ImportError:
+        cmd = [exe, "--version"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
         if r.returncode != 0:
             return False, f"{name} --version rc={r.returncode}"
         version = (r.stdout or r.stderr).strip().splitlines()[:1]
         return True, f"{exe} {version[0] if version else ''}".strip()
     except subprocess.TimeoutExpired:
-        return False, f"{name} --version timeout"
+        return False, (
+            f"{name} --version timed out after 8s (often antivirus scanning a "
+            f"freshly spawned shell — try running `{name} --version` in a terminal)"
+        )
     except Exception as e:  # noqa: BLE001
         return False, f"{name}: {type(e).__name__}: {e}"
 

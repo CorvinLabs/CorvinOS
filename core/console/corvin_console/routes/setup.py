@@ -1005,7 +1005,6 @@ def test_engine(
 ) -> dict[str, Any]:
     """Quick connectivity test for an engine (triggers subprocess/network — CSRF required)."""
     if body.engine_id == "claude_code":
-        import os as _os
         import shutil as _shutil
         # Resolve via PATH (same as the engine-detection badge). shutil.which
         # honours Windows PATHEXT, so it finds the npm `claude.cmd` shim that a
@@ -1015,11 +1014,12 @@ def test_engine(
         if claude_bin is None:
             return {"ok": False, "detail": "claude CLI not found — install Claude Code first"}
         # Windows cannot CreateProcess a .cmd/.bat shim directly — run it via the
-        # command processor (list-form, not shell=True → no injection).
-        if _os.name == "nt" and claude_bin.lower().endswith((".cmd", ".bat")):
-            cmd = ["cmd", "/c", claude_bin, "--version"]
-        else:
-            cmd = [claude_bin, "--version"]
+        # command processor (list-form, not shell=True → no injection). Shared
+        # with engine_detector's onboarding-badge probe so both agree.
+        if str(_SHARED) not in sys.path:
+            sys.path.insert(0, str(_SHARED))
+        from engine_detector import windows_wrap as _windows_wrap  # noqa: PLC0415
+        cmd = _windows_wrap([claude_bin, "--version"])
         try:
             r = subprocess.run(cmd, capture_output=True, timeout=8)
             if r.returncode == 0:
@@ -1028,7 +1028,16 @@ def test_engine(
             return {"ok": False, "detail": "claude --version returned non-zero"}
         except FileNotFoundError:
             return {"ok": False, "detail": "claude CLI not found — install Claude Code first"}
-        except Exception as exc:
+        except subprocess.TimeoutExpired:
+            return {
+                "ok": False,
+                "detail": (
+                    "claude --version timed out after 8s — often antivirus scanning "
+                    "a freshly spawned shell; try running `claude --version` in a "
+                    "terminal to confirm it responds"
+                ),
+            }
+        except Exception:
             import logging
             logging.getLogger(__name__).error("Claude CLI test failed", exc_info=True)
             return {"ok": False, "detail": "Claude CLI test failed"}

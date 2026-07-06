@@ -6,6 +6,208 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.17] — 2026-07-06
+
+### Added
+- **Browser automation hardening + tool-surface expansion (ADR-0183 S1/S2):**
+  builds on the ADR-0182 managed-browser layer.
+  - **S1 hardening:** stale-mark self-healing (an accessible-name/role
+    fingerprint taken at `observe()` is re-checked before every `click`/`fill`;
+    a mismatch forces a re-observe instead of acting on a possibly-wrong
+    element after an in-place DOM re-render); a decoupled confirm channel
+    (`/browser confirm <sid> <yes|no>` in chat) so the human approving a
+    sensitive action no longer has to be the same authenticated tab as the
+    live view; sensitivity model v2 (URL-path signals like `/checkout`,
+    `/delete`, `/settings/security` plus form-context signals such as a
+    password/card-number field on the same form, additive to the existing
+    keyword heuristic).
+  - **S2 tool-surface expansion:** `hover`/`key`/`select_option`/
+    `upload_file`/`drag` added to the existing Set-of-Marks action model;
+    multi-tab awareness (`target="_blank"`/`window.open` popups are now
+    tracked and switchable); same-origin and cross-origin iframe traversal
+    (marks get a globally-unique index across every frame on the page);
+    structured extraction (`extract_table`, `extract_form_schema`) returning
+    JSON instead of flat text.
+  - Stage 3 (macro cache, warm context pool, batched planning) and Stage 6
+    (session replay, regression eval suite) from ADR-0183 are **not** part of
+    this release — scoped for a follow-up.
+
+### Fixed
+- **Windows: engine CLI probes could report "not found" for real npm global
+  installs.** `shutil.which()` resolves the npm shim (`claude.cmd`,
+  `codex.cmd`, `copilot.cmd`, …) via `PATHEXT`, but `subprocess.run([name,
+  "--version"])` without `shell=True` cannot launch a bare `.cmd`/`.bat` file
+  on Windows (`WinError 193`) — every probe that resolved a binary this way
+  then failed to actually run it. Added a shared `windows_wrap()` helper
+  (`operator/bridges/shared/engine_detector.py`, mirrored in
+  `engine_detection.py`) that runs such shims via `cmd /c`, applied to every
+  probe site (`engine_detection.py`, `engine_detector.py`, `self_test.py`,
+  `routes/setup.py`'s connectivity test). Also bumped the probe timeout from
+  5s to 8s with a clearer "often antivirus scanning a freshly spawned shell"
+  message — the previous timeout was tight enough to misreport a slow-but-
+  present CLI as absent.
+
+## [0.10.16] — 2026-07-06
+
+### Fixed
+Adversarial review of the anonymous instance-count ping (ADR-0180 §3 — the
+metric behind the README active_7d/active_30d badges).
+
+- **The documented opt-out command was a complete no-op.** The one-time
+  telemetry notice tells the user to run `corvin config set
+  telemetry.ping_enabled false` — but that wrote into
+  `~/.config/corvin-launcher/config.json` (the file used for
+  `ollama_url`/`model`/`bridge`/`image`), while the actual gate reads
+  exclusively from `<corvin_home>/tenants/_default/global/tenant.corvin.yaml`
+  (`spec.telemetry.ping_enabled`). Two disjoint files — running the exact
+  command the software prints had zero effect. `telemetry.*` keys now
+  correctly read/edit/atomically write the YAML path the gate actually
+  consults.
+- **The daily ping never re-fired for pip/uv standalone installs** — the
+  primary distribution path. It was sent exactly once at boot in a
+  fire-and-forget thread (`corvin_console.standalone` has no lifespan to run
+  the recurring cycle the gateway path relies on), so a long-running
+  `corvin-serve` process was counted on day 1 and then silently dropped out
+  of `active_7d`/`active_30d` for the rest of its uptime — the opposite of
+  an accurate active-install count. Added an hourly recheck loop (the ping
+  itself still self-throttles to once/24h) that also re-evaluates the
+  opt-out on every iteration, so a mid-lifetime opt-out takes effect within
+  the hour instead of requiring a restart.
+- **TOCTOU race could double-count a single instance-day**: the "already
+  pinged today?" check and the stamp write bracketed the network call with
+  no locking, unlike the healing-trace uploader in the same file (which
+  already uses a file lock for exactly this reason). Two processes sharing
+  one `CORVIN_HOME` booting close together could both pass the gate and
+  both send a same-day ping. Now locked with the same pattern.
+
+Verified end-to-end against a real temp install directory, not just
+unit-mocked. 125 tests green (102 existing + 23 launcher), including 9 new
+regression tests.
+
+## [0.10.15] — 2026-07-06
+
+### Fixed
+Four parallel adversarial code-review passes over ACS, web-chat, licensing,
+and Windows install/paths/permissions. 3 CRITICAL + 7 HIGH confirmed
+findings fixed, all backed by new regression tests.
+
+**CRITICAL**
+- **ACS `budget_override` bypassed workflow validation entirely** — applied
+  via blind `setattr()` *after* `validate_workflow_dict()` had already run,
+  so it never got the `max_depth` ceiling (R31/R32) at all, and had no field
+  allow-list, letting a caller overwrite internal accounting state
+  (`start_time`, `loops_used`, ...) through the same HTTP field. Now merged
+  into the spec's own budget dict, restricted to an explicit allow-list,
+  *before* validation.
+- **License revocation was never checked on reload** — only at process
+  boot. A cancelled subscription's token kept re-activating on every
+  authenticated console request until the whole process restarted.
+- **Windows self-update PowerShell injection** — `_ps_quote()` didn't escape
+  `$`, so a CLI arg (e.g. `--host`) containing `$(...)` was arbitrary command
+  execution in the generated self-update script.
+
+**HIGH**
+- ACS: `max_loops`/`max_total_workers` set to 0 or negative (via YAML or
+  `budget_override`) silently disabled that specific cap instead of falling
+  back to a sane default — now clamped to `[1, ceiling]`.
+- ACS: a cancelled run could leave a live `claude -p` worker subprocess
+  running (burning CPU/tokens/API cost) for up to 30 more minutes, since
+  `asyncio.to_thread()` doesn't interrupt a blocking call already running in
+  the executor thread — the process is now tracked and killed on cancel.
+- License: a permissive-mode `global/license.key` was only warned about and
+  still trusted (despite a comment claiming parity with `session.key`,
+  which actually rejects) — now rejects, matching `session.key`.
+- License: `apply_license_key` wrote via `O_CREAT|O_TRUNC`, which only
+  applies its mode argument on *new* file creation — a once-permissive
+  `license.key` never self-healed on repeated "Apply Key". Switched to the
+  same `tempfile.mkstemp`+`chmod`+`os.replace` pattern used elsewhere (also
+  closes a symlink-follow risk).
+- Windows self-update: `Log "..."` lines spliced raw command text into the
+  generated PowerShell source with zero quoting — a stray `"` there aborts
+  the whole script at parse time, and the caller had already exited (no
+  relaunch, self-inflicted outage).
+- Windows self-update: the relaunch command was a bare name relying on the
+  detached script's inherited PATH — now resolved via `shutil.which()` in
+  this process's own environment first.
+- Chat: `/browser <task>` referenced `_spawn_gates` without ever importing
+  it — every call raised `NameError`, silently caught and reported as
+  "safety check failed"; the acceptable-use gate never actually ran and the
+  feature was entirely non-functional (failed closed, but dead).
+- Chat: the ACS-run exception handler referenced an undefined `logger`,
+  masking every real ACS delegation crash behind a second `NameError`.
+- Chat WebSocket: a syntactically-valid non-object JSON message (e.g. the
+  bare text `"42"`) crashed the handler with an `AttributeError`, dropping
+  the connection (two call sites fixed).
+
+**Also**: `secret_vault.py`'s Windows permission-check bypass now logs a
+one-time warning instead of being completely silent.
+
+Several additional findings were confirmed but deferred as lower-severity
+or requiring deeper structural work / real Windows hardware to verify —
+see the commit message for the full list.
+
+## [0.10.14] — 2026-07-06
+
+### Added
+- **Real automatic self-update on Windows** (was: manual command only, since
+  0.10.12). `corvin-serve` now hands off to a detached PowerShell helper that
+  waits for the current process to fully exit (unlocking its own interpreter
+  / extension files), runs the upgrade, and relaunches `corvin-serve` with
+  the same arguments — the update actually applies without the user running
+  anything by hand. Falls back to the old manual-command message if the
+  handoff itself can't be spawned. Logs every step to
+  `%TEMP%\corvin-self-update.log` for diagnosability, since nothing is
+  attached to a console by the time most of the script runs. The
+  Task-Scheduler autostart path (`install.ps1`) is unchanged — it already
+  upgrades before launching `corvin-serve` as a separate step.
+  **Note:** the PID-wait/relaunch sequence could only be verified for
+  correct script generation and Python-side control flow here (no Windows
+  machine available) — needs a real-machine check.
+
+## [0.10.13] — 2026-07-06
+
+### Fixed
+- **License reload throttle silently swallowed the "Apply Key" reload
+  ("Key applied — tier: free" even with a valid, correctly-signed key).**
+  `reload_from_disk()`'s 5s rate limiter throttled ALL calls uniformly, but
+  `reload_from_disk()` is also invoked on every authenticated console session
+  op (`auth.py::_compute_lic_proof`, "cheap to call per session op"). In real
+  browser usage that per-request call fires moments before the user submits
+  "Apply Key", so the apply endpoint's own reload almost always landed inside
+  the cooldown window opened by that incidental prior call and got silently
+  dropped — the key was written to disk correctly, but the reload no-op'd and
+  the stale (free) tier is what got reported back, with no error anywhere.
+  Verified end-to-end with an actual reported key: signature and claims
+  validation both passed; the bug was purely in the throttle/reload
+  interaction. Fix: track a hash of the last-loaded token content — the
+  throttle now only applies to redundant re-reads of *unchanged* content; a
+  reload that would pick up genuinely new on-disk content always goes
+  through, regardless of timing. Also: `routes/license.py`'s apply-key
+  endpoint now resolves `corvin_home` via the canonical `forge_paths.
+  corvin_home()` (matches every other reader/writer) instead of an ad-hoc
+  `Path.home()`-only computation that could diverge from where
+  `reload_from_disk()` actually looks in a source-checkout run.
+
+## [0.10.12] — 2026-07-06
+
+### Fixed
+- **Windows: `corvin-serve` auto-update always failed with no diagnostic
+  ("auto-upgrade failed. Run manually: ...").** `maybe_pypi_autoupdate()` runs
+  *inside* the already-running `corvin-serve` process and tried to overwrite
+  that exact process's own interpreter/extension files in place — Windows
+  keeps those files locked for the process's lifetime (unlike POSIX, where a
+  running executable's inode can be replaced), so the upgrade subprocess
+  reliably failed with an inscrutable, swallowed error. Auto-update now skips
+  the doomed live attempt on Windows and shows a clear message + the exact
+  manual command instead; on other platforms, upgrade failures now surface
+  the actual subprocess stderr instead of a bare "failed". The Windows
+  autostart (Task Scheduler) path is unaffected — `install.ps1`'s supervisor
+  already runs the upgrade as a separate step *before* launching
+  `corvin-serve`, so it never hits this lock.
+
+## [0.10.11] — 2026-07-06
+
+>>>>>>> origin/main
 ### Fixed
 - **Windows: license keys silently fell back to Free tier ("mode too permissive"
   false positives, 7 files):** NTFS has no POSIX group/other permission bits, so

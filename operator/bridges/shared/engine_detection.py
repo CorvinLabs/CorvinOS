@@ -73,10 +73,25 @@ def _find_binary(name: str) -> str | None:
     return shutil.which(name)
 
 
+def _windows_wrap(cmd: list[str]) -> list[str]:
+    """Wrap a ``.cmd``/``.bat`` shim so Windows can actually launch it.
+
+    Windows' ``CreateProcess`` cannot start a ``.cmd``/``.bat`` file directly
+    when Python passes it as a bare argv list (no ``shell=True``) — it raises
+    ``OSError: [WinError 193] %1 is not a valid Win32 application``. npm's
+    global-install shims for Node CLIs (``claude``, ``codex``, ``copilot``,
+    …) are exactly such ``.cmd`` files.
+    """
+    exe = cmd[0]
+    if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+        return ["cmd", "/c", *cmd]
+    return cmd
+
+
 def _run(cmd: list[str], timeout: float = _PROBE_TIMEOUT) -> tuple[int, str, str]:
     """Run subprocess; return (returncode, stdout, stderr). Never raises."""
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(_windows_wrap(cmd), capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout.strip(), r.stderr.strip()
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return -1, "", ""
@@ -93,7 +108,12 @@ def probe_claude_code() -> EngineProbeResult:
         binary = _find_binary(candidate)
         if binary:
             binary_name = candidate
-            rc, stdout, _ = _run([candidate, "--version"])
+            # Spawn the already-resolved full path, not the bare name: on
+            # Windows a bare "claude" only gets an implicit ".exe" tried by
+            # CreateProcess, so it never finds the npm "claude.cmd" shim that
+            # _find_binary() (shutil.which, PATHEXT-aware) just located —
+            # that mismatch made "installed" and "version probe" disagree.
+            rc, stdout, _ = _run([binary, "--version"])
             version = stdout.split("\n")[0] if rc == 0 and stdout else None
             _log.debug(f"claude_code probe: found {binary_name} at {binary}, version={version}")
             break
@@ -148,7 +168,7 @@ def probe_copilot() -> EngineProbeResult:
         )
 
     _log.debug(f"copilot probe: found at {binary}")
-    rc, stdout, _ = _run(["copilot", "--version"])
+    rc, stdout, _ = _run([binary, "--version"])
     version = stdout.split("\n")[0] if rc == 0 and stdout else None
 
     # Copilot config file (subscription session).
@@ -224,7 +244,7 @@ def probe_hermes() -> EngineProbeResult:
 
     version: Optional[str] = None
     if binary:
-        rc, stdout, _ = _run(["ollama", "--version"])
+        rc, stdout, _ = _run([binary, "--version"])
         version = stdout.split("\n")[0] if rc == 0 and stdout else None
 
     if running and models:
@@ -260,7 +280,7 @@ def probe_opencode() -> EngineProbeResult:
         )
 
     _log.debug(f"opencode probe: found at {binary}")
-    rc, stdout, _ = _run(["opencode", "--version"])
+    rc, stdout, _ = _run([binary, "--version"])
     version = stdout.split("\n")[0] if rc == 0 and stdout else None
 
     # OpenCode supports many providers — check common API keys in priority order.
@@ -308,7 +328,7 @@ def probe_codex_cli() -> EngineProbeResult:
             detail="codex binary not found",
         )
 
-    rc, stdout, _ = _run(["codex", "--version"])
+    rc, stdout, _ = _run([binary, "--version"])
     version = stdout.split("\n")[0] if rc == 0 and stdout else None
 
     if os.environ.get("OPENAI_API_KEY"):
@@ -364,9 +384,10 @@ def _discover_extra_engines() -> list[EngineProbeResult]:
     for binary, label in _DISCOVERY_CANDIDATES:
         if binary in _REGISTERED_IDS:
             continue  # already covered by a registered probe
-        if not _find_binary(binary):
+        resolved = _find_binary(binary)
+        if not resolved:
             continue
-        rc, stdout, _ = _run([binary, "--version"], timeout=3.0)
+        rc, stdout, _ = _run([resolved, "--version"], timeout=3.0)
         version = stdout.split("\n")[0].strip() if rc == 0 and stdout else None
         results.append(EngineProbeResult(
             engine_id=binary,
