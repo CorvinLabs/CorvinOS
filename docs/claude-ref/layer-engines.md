@@ -23,6 +23,29 @@ subprocesses through a unified contract. AWP-integration roadmap
 | `test_opencode_cli.py` | 30-case per-subtask E2E for OpenCodeEngine: protocol + capability-key-parity with Claude/Codex (4) + BuildArgs golden snapshots (12) + event normalisation incl. nested-error extraction (8) + fake-binary smoke (3) + opt-in live test against real `opencode` talking to a local Ollama daemon (1, gated on `CORVIN_OPENCODE_LIVE=1` AND `ollama` reachable AND `~/.config/opencode/opencode.json` declaring an `ollama` provider) |
 | `test_hermes_engine.py` | 21-case test suite: 12 protocol-contract unit tests (always run) + 7 live tests against local Ollama (gated on Ollama reachable AND model pulled). Live model via `CORVIN_HERMES_TEST_MODEL` (default `qwen3:1.7b`). |
 
+### Web-chat OS-turn spawn (separate from the engine layer)
+
+The console web-chat OS-turn does **not** go through `ClaudeCodeEngine`; it
+hand-rolls its own `claude -p` subprocess in
+`core/console/corvin_console/chat_runtime.py::_build_args`. Because the web
+console has **no interactive permission-prompt UI**, that argv must not run in
+the CLI's default (interactive) permission mode — otherwise every tool call
+that needs approval hangs under `-p`, even for files inside the session's own
+cwd (the fresh-install permission-hang bug). `_build_args` therefore:
+
+- emits `--dangerously-skip-permissions` by default (parity with the
+  `ClaudeCodeEngine` `None` default and `task_worker_pool`'s
+  `permission_mode="bypassPermissions"`),
+- always adds `--add-dir <session workdir>` so the Bash/PowerShell working-dir
+  sandbox agrees with the file-tool layer, and
+- honours two tenant opt-ins in `tenant.corvin.yaml::spec.web_chat`:
+  `permission_mode` (`default`/`plan`/`acceptEdits`/`bypassPermissions`) for a
+  stricter mode, and `workspace_roots` (a list of paths, alias
+  `additional_dirs`) that each become an extra `--add-dir` so a configured
+  project root (e.g. `C:\Users\<user>\projects`) is reachable in this and every
+  future session. The structural sandbox boundary remains **Layer 10
+  path-gate**, not the SDK permission mode.
+
 ### Phase 2 status — adapter-engine migration
 
 Phase 2 of ADR-0002 has shipped sub-phases 2.1–2.4:

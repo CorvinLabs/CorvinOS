@@ -894,13 +894,65 @@ def _turn_system_prompt(sess: WebChatSession) -> str:
     )
 
 
+_VALID_WEB_PERMISSION_MODES = {"default", "plan", "acceptEdits", "bypassPermissions"}
+
+
+def _web_permission_mode(tenant_id: str) -> str | None:
+    """Resolve the web-chat OS-turn permission mode.
+
+    Deny-by-default is the *wrong* default here: the web console has no
+    interactive permission-prompt UI, so a real ``--permission-mode`` (default/
+    plan/acceptEdits) leaves headless ``-p`` tool-permission requests with
+    nothing to answer them and they hang — even for files inside the session's
+    own cwd. Mirror the rest of the system (ClaudeCodeEngine's ``None`` default
+    and task_worker_pool's ``permission_mode="bypassPermissions"``): skip prompts
+    unless a tenant explicitly opts into a stricter mode via
+    ``spec.web_chat.permission_mode``. corvinOS's real guardrails are the L10
+    path-gate, L34/L35 flow/egress guards and the L44 house-rules — not the SDK
+    prompt.
+    """
+    wc = _tenant_spec(tenant_id).get("web_chat") or {}
+    mode = wc.get("permission_mode")
+    if isinstance(mode, str) and mode in _VALID_WEB_PERMISSION_MODES:
+        return mode
+    return None  # → --dangerously-skip-permissions
+
+
+def _web_workspace_roots(tenant_id: str) -> list[str]:
+    """Extra directories the web-chat agent may touch, beyond the session cwd.
+
+    Fix direction A from the permission bug report: configure a workspace root
+    (or several) ONCE per tenant via ``spec.web_chat.workspace_roots`` and every
+    new session inherits it as an allowed ``--add-dir`` — so access to e.g.
+    ``C:\\Users\\<user>\\projects`` works reliably in this and future sessions
+    without any interactive grant.
+    """
+    wc = _tenant_spec(tenant_id).get("web_chat") or {}
+    roots = wc.get("workspace_roots") or wc.get("additional_dirs") or []
+    if isinstance(roots, str):
+        roots = [roots]
+    out: list[str] = []
+    for r in roots:
+        if isinstance(r, str) and r.strip():
+            out.append(os.path.expanduser(r.strip()))
+    return out
+
+
 def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None) -> list[str]:
-    """Build a minimal ``claude -p`` invocation for this turn.
+    """Build a ``claude -p`` invocation for this turn.
 
     Resume mode uses ``--continue`` so the per-workdir session state
     carries across turns. First turn falls back to a fresh subprocess.
     The --append-system-prompt ensures output files land in the session
     workdir (not the playground repo) so artifact detection works.
+
+    Permission handling (the fresh-install hang fix): the web console has no
+    interactive permission-prompt UI, so we must NOT run in the CLI's default
+    (interactive) permission mode under ``-p``. We mirror the bridge/task-worker
+    default — skip prompts unless the tenant opts into a stricter mode — and
+    always register the session workdir (plus any configured workspace roots) as
+    allowed ``--add-dir`` directories so the Bash/PowerShell working-directory
+    sandbox agrees with the file-tool layer.
     """
     binary = _claude_binary()
     # On Windows, shutil.which() may resolve the npm-installed claude to a
@@ -918,6 +970,20 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None)
              "--output-format", "stream-json",
              "--verbose",
              "--append-system-prompt", _turn_system_prompt(sess)]
+
+    # Permission mode: None → skip prompts (default); else a real mode.
+    perm_mode = _web_permission_mode(sess.tenant_id)
+    if perm_mode is None or perm_mode == "bypassPermissions":
+        args.append("--dangerously-skip-permissions")
+    else:
+        args += ["--permission-mode", perm_mode]
+
+    # Always allow the session's own working directory, plus any tenant-
+    # configured workspace roots, for both the file-tool and Bash sandbox layers.
+    args += ["--add-dir", str(sess.workdir)]
+    for d in _web_workspace_roots(sess.tenant_id):
+        args += ["--add-dir", d]
+
     if model:
         args.extend(["--model", model])
     if resume:
