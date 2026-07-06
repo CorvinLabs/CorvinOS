@@ -1000,7 +1000,10 @@ _DELEGATE_PREFIX = "/delegate"
 
 _DELEGATION_BUDGET_DEFAULTS = {
     "max_loops": 500,         # 3 was too tight: 1 worker-timeout burn + 2 parse-error burns = budget gone
-    "max_depth": 200,
+    "max_depth": 4,           # recursive worker-delegation depth (M4) — NOT a loop counter like the
+                              # other fields; 200 was an accidental blanket-scale-up in a47c6d3 that
+                              # broke every delegation (acs_validator R32 caps this at 10). 4 matches
+                              # the ACS runtime's own built-in default for recursive delegation depth.
     "max_total_workers": 400,
     "max_wall_time": 360000,
     "timeout_seconds": 360000,  # 100 h — allows complex multi-file tasks to complete
