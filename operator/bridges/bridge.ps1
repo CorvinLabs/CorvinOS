@@ -2,7 +2,8 @@
 # bridge.ps1 — CorvinOS bridge launcher for Windows (ADR-0159 M4).
 #
 # Equivalent to bridge.sh on Linux/macOS. Activates the venv and dispatches
-# subcommands: up, down, doctor, restart, status, console.
+# subcommands: up, down, doctor, restart, status, console,
+# install-autostart, uninstall-autostart, autostart-status.
 #
 # Usage:
 #   .\bridge.ps1 up             # Start Discord (default) bridge
@@ -11,7 +12,16 @@
 #   .\bridge.ps1 status         # Show running bridge processes
 #   .\bridge.ps1 down           # Stop bridge(s)
 #   .\bridge.ps1 restart        # Restart bridge(s)
-#   .\bridge.ps1 console        # Start web console (background)
+#   .\bridge.ps1 console        # Start web console (background, once, this login only)
+#
+#   .\bridge.ps1 install-autostart      # Console + Discord bridge survive crashes
+#                                       # AND reboots (Task Scheduler, no systemd
+#                                       # equivalent on Windows otherwise — this is
+#                                       # what keeps the ADR-0180 presence heartbeat
+#                                       # reporting "online" continuously)
+#   .\bridge.ps1 install-autostart telegram   # same, for a non-default bridge
+#   .\bridge.ps1 autostart-status      # Show registered autostart tasks + state
+#   .\bridge.ps1 uninstall-autostart   # Remove the autostart tasks
 #
 # Prerequisites (set up by install.ps1):
 #   - Python 3.11+ in PATH or %USERPROFILE%\.corvinos\Scripts\python.exe
@@ -133,13 +143,95 @@ else:
 
     "console" {
         Write-Host "Starting CorvinOS web console..." -ForegroundColor Cyan
-        $ConsoleScript = Join-Path $ScriptDir "shared\corvin_gateway.py"
-        Start-Process -FilePath $Python -ArgumentList $ConsoleScript -WindowStyle Hidden
+        # NOTE: this used to point at "shared\corvin_gateway.py", a script that
+        # does not exist anywhere in the repo — the command silently failed
+        # (Start-Process -WindowStyle Hidden swallows the "file not found"
+        # error from the hidden Python process), so the console — and with it
+        # the ADR-0180 presence heartbeat thread — never actually started on
+        # Windows via this path. `python -m corvinOS serve` is the real,
+        # PATH-independent entry point (see corvinOS/__main__.py) and is what
+        # install.ps1 already tells users to run day-to-day; it wires up the
+        # console AND the heartbeat thread (ops/launcher/corvin/serve_backend.py).
+        Start-Process -FilePath $Python -ArgumentList "-m", "corvinOS", "serve", "--no-browser" -WindowStyle Hidden
         Write-Host "  Console started in background. Check http://localhost:8765" -ForegroundColor Green
+    }
+
+    # ── autostart (Windows equivalent of `bridge.sh up`'s systemd Restart=always) ──
+    # Linux's corvin-webui.service (+ the bridge units enabled by `bridge.sh up`)
+    # survive crashes and reboots unattended. Windows has no default persistent
+    # background-service story, so a Windows instance silently goes dark (and
+    # drops off the ADR-0180 "online now" count) the moment its terminal window
+    # is closed or the machine restarts — until a human notices and re-runs
+    # `bridge.ps1 console` / `bridge.ps1 up` by hand. These two Scheduled Tasks
+    # close that gap: registered once, they relaunch the console and the bridge
+    # at every logon AND keep relaunching them forever via
+    # shared\corvin-supervisor.ps1 if either one ever exits.
+    "install-autostart" {
+        Write-Host "Installing CorvinOS autostart (Windows Task Scheduler)..." -ForegroundColor Cyan
+        $Supervisor = Join-Path $ScriptDir "shared\corvin-supervisor.ps1"
+        if (-not (Test-Path $Supervisor)) {
+            Write-Error "Supervisor script not found: $Supervisor"
+            exit 1
+        }
+
+        function Install-AutostartTask {
+            param([string]$TaskName, [string]$TargetArg, [string]$BridgeArg)
+
+            $ArgString = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Supervisor`" -Target $TargetArg"
+            if ($BridgeArg) { $ArgString += " -Bridge $BridgeArg" }
+
+            $Action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $ArgString
+            $Trigger  = New-ScheduledTaskTrigger -AtLogOn
+            $Settings = New-ScheduledTaskSettingsSet `
+                -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+                -ExecutionTimeLimit ([TimeSpan]::Zero) `
+                -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
+                -MultipleInstances IgnoreNew
+
+            # Idempotent: replace a stale registration instead of erroring on re-run.
+            Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+            Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger `
+                -Settings $Settings -RunLevel Limited `
+                -Description "CorvinOS $TargetArg — auto-restarts on crash/reboot (ADR-0180 presence heartbeat)" `
+                | Out-Null
+            # Start it now too — don't make the user log off/on to see it take effect.
+            Start-ScheduledTask -TaskName $TaskName
+            Write-Host "  Registered + started: $TaskName" -ForegroundColor Green
+        }
+
+        Install-AutostartTask -TaskName "CorvinOS-Console" -TargetArg "console"
+        Install-AutostartTask -TaskName "CorvinOS-Bridge-$Bridge" -TargetArg "bridge" -BridgeArg $Bridge
+
+        Write-Host ""
+        Write-Host "Autostart installed. The console + $Bridge bridge now restart automatically" -ForegroundColor Green
+        Write-Host "on crash and at every logon. Logs: %USERPROFILE%\.corvin\logs\*-supervisor.log" -ForegroundColor DarkGray
+        Write-Host "Undo with: .\bridge.ps1 uninstall-autostart" -ForegroundColor DarkGray
+    }
+
+    "uninstall-autostart" {
+        Write-Host "Removing CorvinOS autostart tasks..." -ForegroundColor Cyan
+        foreach ($name in @("CorvinOS-Console", "CorvinOS-Bridge-$Bridge")) {
+            if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
+                Unregister-ScheduledTask -TaskName $name -Confirm:$false
+                Write-Host "  Removed: $name" -ForegroundColor Green
+            } else {
+                Write-Host "  Not installed: $name" -ForegroundColor DarkGray
+            }
+        }
+        Write-Host "  Note: this stops FUTURE auto-restarts; any already-running" -ForegroundColor DarkGray
+        Write-Host "  console/bridge process keeps running until you 'bridge.ps1 down' it." -ForegroundColor DarkGray
+    }
+
+    "autostart-status" {
+        Write-Host "CorvinOS autostart tasks:" -ForegroundColor Cyan
+        Get-ScheduledTask | Where-Object { $_.TaskName -like "CorvinOS-*" } |
+            Select-Object TaskName, State |
+            Format-Table -AutoSize
     }
 
     default {
         Write-Host "Usage: .\bridge.ps1 <up|down|restart|doctor|status|console> [bridge]" -ForegroundColor Yellow
+        Write-Host "       .\bridge.ps1 <install-autostart|uninstall-autostart|autostart-status> [bridge]" -ForegroundColor Yellow
         exit 1
     }
 }
