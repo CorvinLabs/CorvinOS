@@ -13,9 +13,12 @@ Commands:
   corvin status
 """
 import argparse
+import contextlib
+import os
 import sys
+import tempfile
 import textwrap
-from typing import Optional
+from typing import Any, Optional
 
 from . import config as cfg
 from . import docker_backend
@@ -393,7 +396,67 @@ def cmd_gateway_setup(args: argparse.Namespace) -> int:
 
 # ── config ────────────────────────────────────────────────────────────────────
 
+def _set_telemetry_config(key: str, value: str) -> int:
+    """``telemetry.*`` keys (e.g. ``telemetry.ping_enabled``) live in
+    ``<corvin_home>/tenants/_default/global/tenant.corvin.yaml``
+    (``spec.telemetry.<subkey>``) -- a completely different file from the
+    corvin-launcher config.json that every OTHER ``corvin config set`` key
+    writes to. Before this fix, ``corvin config set telemetry.ping_enabled
+    false`` -- the exact command the software itself prints as "how to opt
+    out" (serve_backend.py's telemetry notice) -- silently wrote a
+    "telemetry.ping_enabled" key into config.json, which htrace_consent.py's
+    ping_enabled() never reads. The documented opt-out was a complete no-op
+    (adversarial review finding).
+    """
+    subkey = key.split(".", 1)[1]
+    if not subkey:
+        print(f"  invalid telemetry key: {key!r}")
+        return 1
+    try:
+        import yaml  # type: ignore[import]
+        from forge.paths import corvin_home  # noqa: PLC0415
+        from corvin_console.aco.htrace_consent import _tenant_cfg_path  # noqa: PLC0415
+    except ImportError as exc:
+        print(f"  telemetry config requires the console extras: {exc}")
+        return 1
+
+    cfg_path = _tenant_cfg_path(corvin_home())
+    data: dict = {}
+    if cfg_path.exists():
+        try:
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            print(f"  could not parse {cfg_path}: {exc}")
+            return 1
+    spec = data.setdefault("spec", {})
+    telemetry = spec.setdefault("telemetry", {})
+
+    lowered = value.strip().lower()
+    if lowered in ("true", "yes", "1", "on"):
+        parsed: Any = True
+    elif lowered in ("false", "no", "0", "off"):
+        parsed = False
+    else:
+        parsed = value  # pass unrecognised values through as-is
+    telemetry[subkey] = parsed
+
+    cfg_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, tmp = tempfile.mkstemp(dir=cfg_path.parent, prefix=".tenant.corvin.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(data, fh, sort_keys=False)
+        os.replace(tmp, cfg_path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    print(f"  spec.telemetry.{subkey} = {parsed}  ({cfg_path})")
+    return 0
+
+
 def cmd_config_set(args: argparse.Namespace) -> int:
+    if args.key.startswith("telemetry."):
+        return _set_telemetry_config(args.key, args.value)
     key_map = {
         "ollama-url": "ollama_url",
         "model":      "model",

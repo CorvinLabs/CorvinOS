@@ -16,10 +16,12 @@ On network failure: leave file, retry on next trigger (14-day cap).
 """
 from __future__ import annotations
 
+import contextlib as _contextlib
 import gzip
 import json
 import logging
 import os
+import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -71,6 +73,12 @@ _PING_INTERVAL_S = 24 * 3600  # once per 24h
 _MAX_BUNDLE_BYTES = 5 * 1024 * 1024  # 5 MB compressed
 _MAX_BUNDLES_PER_DAY = 3
 _LOCK_FILENAME = ".upload.lock"
+_PING_LOCK_FILENAME = ".ping.lock"
+# Recheck interval for the recurring ping loop (start_ping_thread). ping_if_due()
+# self-throttles to once per _PING_INTERVAL_S (24h) via its own stamp file, so
+# rechecking hourly is cheap and just makes sure a long-running process doesn't
+# miss its daily window (e.g. after a missed check due to a transient error).
+_PING_LOOP_INTERVAL_S = 3600
 _LAST_UPLOAD_FILENAME = ".last_upload"
 _LAST_PING_FILENAME = "last_ping"
 _CORVINLOGS_REPO = "CorvinLabs/CorvinLogs"
@@ -177,69 +185,145 @@ def ping_if_due(home: Path) -> bool:
             logger.debug("htrace: ping skipped — token provisioning not yet complete")
             return False
 
-        # Rate-limit: skip if a ping was already sent within the last 24h.
-        stamp = _last_ping_path(home)
+        # Lock the check-then-send-then-stamp sequence below (same pattern as
+        # run_upload_cycle's _LOCK_FILENAME) — without it, two processes
+        # sharing one CORVIN_HOME (e.g. a bridge daemon and the web console
+        # both booting around the same time) could both pass the "already
+        # pinged today?" check before either writes the stamp, sending two
+        # ping events for what the server should count as one instance-day
+        # (adversarial review finding). _HAS_FLOCK is False on Windows —
+        # single-instance installs there are unaffected either way.
+        lock_path = htrace_dir(home) / _PING_LOCK_FILENAME
+        lf = None
         try:
-            if stamp.exists():
-                age = time.time() - stamp.stat().st_mtime
-                if age < _PING_INTERVAL_S:
-                    return True  # already done today
-        except OSError:
-            pass  # unreadable stamp — proceed to ping
-
-        telemetry_token = _load_telemetry_token(home)
-        instance_token = _load_instance_token(home)
-        instance_id = load_or_create_instance_id(home)
+            htrace_dir(home).mkdir(parents=True, exist_ok=True)
+            lf = lock_path.open("w")
+            if _HAS_FLOCK:
+                _fcntl.flock(lf, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except (OSError, BlockingIOError):
+            logger.debug("htrace: ping already in progress elsewhere (lock held)")
+            if lf is not None:
+                with _contextlib.suppress(Exception):
+                    lf.close()
+            return True  # not an error — another process is handling it
 
         try:
-            from importlib.metadata import version as _pkg_version
-            corvin_version = _pkg_version("corvinos")
-        except Exception:  # noqa: BLE001
+            # Rate-limit: skip if a ping was already sent within the last 24h.
+            stamp = _last_ping_path(home)
             try:
-                # Dev-mode fallback: read __version__ from the installed console package.
-                from corvin_console import __version__ as _cv  # type: ignore[attr-defined]
-                corvin_version = _cv
+                if stamp.exists():
+                    age = time.time() - stamp.stat().st_mtime
+                    if age < _PING_INTERVAL_S:
+                        return True  # already done today
+            except OSError:
+                pass  # unreadable stamp — proceed to ping
+
+            telemetry_token = _load_telemetry_token(home)
+            instance_token = _load_instance_token(home)
+            instance_id = load_or_create_instance_id(home)
+
+            try:
+                from importlib.metadata import version as _pkg_version
+                corvin_version = _pkg_version("corvinos")
             except Exception:  # noqa: BLE001
-                corvin_version = "unknown"
+                try:
+                    # Dev-mode fallback: read __version__ from the installed console package.
+                    from corvin_console import __version__ as _cv  # type: ignore[attr-defined]
+                    corvin_version = _cv
+                except Exception:  # noqa: BLE001
+                    corvin_version = "unknown"
 
-        import sys as _sys
-        _python_minor = f"{_sys.version_info.major}.{_sys.version_info.minor}"
-        _platform = _sys.platform
-        _active_engine = _detect_active_engine(home)
+            import sys as _sys
+            _python_minor = f"{_sys.version_info.major}.{_sys.version_info.minor}"
+            _platform = _sys.platform
+            _active_engine = _detect_active_engine(home)
 
-        payload = json.dumps({
-            "corvin_version": corvin_version,
-            "platform":       _platform,
-            "python_minor":   _python_minor,
-            "active_engine":  _active_engine,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            _PING_URL_DEFAULT,
-            data=payload,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {telemetry_token}",
-                "X-HTTrace-Instance-Token": instance_token,
-                "X-HTrace-Instance-Id": instance_id,
-            },
-        )
-        with urllib.request.urlopen(req, timeout=_PING_TIMEOUT_S) as resp:
-            status = resp.getcode()
-            if not (200 <= status < 300):
-                logger.debug("htrace: ping returned %d", status)
-                return False
+            payload = json.dumps({
+                "corvin_version": corvin_version,
+                "platform":       _platform,
+                "python_minor":   _python_minor,
+                "active_engine":  _active_engine,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                _PING_URL_DEFAULT,
+                data=payload,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {telemetry_token}",
+                    "X-HTTrace-Instance-Token": instance_token,
+                    "X-HTrace-Instance-Id": instance_id,
+                },
+            )
+            with urllib.request.urlopen(req, timeout=_PING_TIMEOUT_S) as resp:
+                status = resp.getcode()
+                if not (200 <= status < 300):
+                    logger.debug("htrace: ping returned %d", status)
+                    return False
 
-        # Record successful ping (touch the stamp with the current timestamp).
-        try:
-            stamp.parent.mkdir(parents=True, exist_ok=True)
-            stamp.write_text(str(int(time.time())), encoding="utf-8")
-        except OSError:
-            pass
-        return True
+            # Record successful ping (touch the stamp with the current timestamp).
+            try:
+                stamp.parent.mkdir(parents=True, exist_ok=True)
+                stamp.write_text(str(int(time.time())), encoding="utf-8")
+            except OSError:
+                pass
+            return True
+        finally:
+            with _contextlib.suppress(Exception):
+                if lf is not None:
+                    if _HAS_FLOCK:
+                        _fcntl.flock(lf, _fcntl.LOCK_UN)
+                    lf.close()
+                lock_path.unlink(missing_ok=True)
     except Exception as e:  # noqa: BLE001
         logger.debug("htrace: ping failed (non-fatal): %s", e)
         return False
+
+
+def ping_loop(home: Path) -> None:
+    """Run forever: call ping_if_due() every hour.
+
+    ping_if_due() self-throttles to once per 24h via its own stamp file, so
+    this just makes sure a long-running process keeps checking. Without this
+    loop, a process that never restarts (corvin-serve, the primary pip/uv
+    install path) sent the daily ping exactly ONCE at boot and then never
+    again for the rest of its uptime — silently dropping out of
+    active_7d/active_30d after the first day despite staying up and in active
+    use (adversarial review finding: _fire_startup_ping was a one-shot call
+    because corvin_console.standalone has no FastAPI lifespan to run the
+    recurring boot-healer cycle that normally re-invokes ping_if_due every
+    5 minutes for the gateway/systemd deployment path).
+    """
+    while True:
+        try:
+            ping_if_due(home)
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(_PING_LOOP_INTERVAL_S)
+
+
+_ping_thread_started = False
+_ping_thread_lock = threading.Lock()
+
+
+def start_ping_thread(home: Path) -> None:
+    """Start the recurring ping-check daemon thread (idempotent per process).
+
+    Unlike start_heartbeat_thread(), this does NOT gate on ping_enabled(home)
+    at start time — ping_if_due() already re-checks ping_enabled() on every
+    single call, so an opt-out set mid-process-lifetime takes effect on the
+    very next hourly check instead of requiring a restart.
+    """
+    global _ping_thread_started
+    with _ping_thread_lock:
+        if _ping_thread_started:
+            return
+        t = threading.Thread(
+            target=ping_loop, args=(home,), daemon=True, name="corvin-ping",
+        )
+        t.start()
+        _ping_thread_started = True
+        logger.debug("htrace: recurring ping thread started")
 
 
 def _upload_url(home: Path) -> str:
