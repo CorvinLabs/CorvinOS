@@ -6,6 +6,43 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.16] — 2026-07-06
+
+### Fixed
+Adversarial review of the anonymous instance-count ping (ADR-0180 §3 — the
+metric behind the README active_7d/active_30d badges).
+
+- **The documented opt-out command was a complete no-op.** The one-time
+  telemetry notice tells the user to run `corvin config set
+  telemetry.ping_enabled false` — but that wrote into
+  `~/.config/corvin-launcher/config.json` (the file used for
+  `ollama_url`/`model`/`bridge`/`image`), while the actual gate reads
+  exclusively from `<corvin_home>/tenants/_default/global/tenant.corvin.yaml`
+  (`spec.telemetry.ping_enabled`). Two disjoint files — running the exact
+  command the software prints had zero effect. `telemetry.*` keys now
+  correctly read/edit/atomically write the YAML path the gate actually
+  consults.
+- **The daily ping never re-fired for pip/uv standalone installs** — the
+  primary distribution path. It was sent exactly once at boot in a
+  fire-and-forget thread (`corvin_console.standalone` has no lifespan to run
+  the recurring cycle the gateway path relies on), so a long-running
+  `corvin-serve` process was counted on day 1 and then silently dropped out
+  of `active_7d`/`active_30d` for the rest of its uptime — the opposite of
+  an accurate active-install count. Added an hourly recheck loop (the ping
+  itself still self-throttles to once/24h) that also re-evaluates the
+  opt-out on every iteration, so a mid-lifetime opt-out takes effect within
+  the hour instead of requiring a restart.
+- **TOCTOU race could double-count a single instance-day**: the "already
+  pinged today?" check and the stamp write bracketed the network call with
+  no locking, unlike the healing-trace uploader in the same file (which
+  already uses a file lock for exactly this reason). Two processes sharing
+  one `CORVIN_HOME` booting close together could both pass the gate and
+  both send a same-day ping. Now locked with the same pattern.
+
+Verified end-to-end against a real temp install directory, not just
+unit-mocked. 125 tests green (102 existing + 23 launcher), including 9 new
+regression tests.
+
 ## [0.10.15] — 2026-07-06
 
 ### Fixed
