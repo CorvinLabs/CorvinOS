@@ -62,9 +62,14 @@ def test_audit_canonicalizes_legacy_tier(tmp_path, monkeypatch):
 
 
 def test_find_token_permissive_key_does_not_nameerror(tmp_path, monkeypatch):
-    """review MEDIUM: the permissive-mode warn branch used `_log` (undefined) ->
-    NameError aborted license load on a chmod-644 global/license.key. Must warn
-    and still return the token."""
+    """review MEDIUM (original regression): the permissive-mode branch used
+    `_log` (undefined) -> NameError aborted license load on a chmod-644
+    global/license.key. Must not crash.
+
+    Adversarial review follow-up: a permissive global/license.key must now be
+    REJECTED (mode parity with session.key — a warn-but-still-trust token is
+    a readable-by-anyone-local credential that never self-heals). Confirms
+    both _find_token() and _find_token_disk_only() agree."""
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     monkeypatch.delenv("CORVIN_LICENSE_KEY", raising=False)
     # Isolate the config dir so _find_token doesn't pick up the host's real
@@ -74,8 +79,8 @@ def test_find_token_permissive_key_does_not_nameerror(tmp_path, monkeypatch):
     gk = tmp_path / "global" / "license.key"
     gk.parent.mkdir(parents=True, exist_ok=True)
     gk.write_text("dummy.token.sig")
-    os.chmod(gk, 0o644)  # too permissive -> triggers the warn branch
+    os.chmod(gk, 0o644)  # too permissive -> triggers the reject branch
 
     token = V._find_token()            # must NOT raise NameError (the regression)
-    assert token == "dummy.token.sig"
-    V._find_token_disk_only()          # same branch on the disk-only path
+    assert token is None, "a permissive global/license.key must be rejected, not trusted"
+    assert V._find_token_disk_only() is None  # same branch on the disk-only path

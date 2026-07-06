@@ -2424,7 +2424,7 @@ async def stream_turn(
                 error_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
                 tb_lines = traceback.format_exc().split('\n')[-4:-1]  # Last 3 lines of traceback
                 error_detail = " | ".join(line.strip() for line in tb_lines if line.strip())
-                logger.exception("[delegation] Unexpected error in ACS run: %s", error_msg)
+                _log.exception("[delegation] Unexpected error in ACS run: %s", error_msg)
                 res = _acs.ACSResult(
                     run_id=run_id, workflow_id="unknown", status="failed",
                     error=error_msg, summary=f"Unexpected error: {error_detail}",

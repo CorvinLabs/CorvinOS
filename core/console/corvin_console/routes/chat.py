@@ -454,6 +454,12 @@ async def _handle_browser_command(websocket, rec, task: str) -> None:
     # (it drives an LLM + a browser), fail-closed; (2) charge the chat-turn quota
     # so /browser can't be a metered-spawn bypass.
     try:
+        from .. import _spawn_gates  # noqa: PLC0415 — _spawn_gates.py lives in
+        # corvin_console/, one level above routes/ — was never imported in this
+        # module at all: every call below raised NameError, silently caught by
+        # the broad except and reported as "safety check failed" — the L44 gate
+        # never actually ran for /browser (fails closed, but the feature was
+        # entirely non-functional; adversarial review finding).
         _refusal = _spawn_gates.check_console_spawn_or_refusal(
             task, tenant_id=rec.tenant_id, persona="assistant",
             channel="chat", chat_key=f"browser:{rec.sid_fingerprint}",
@@ -648,6 +654,13 @@ async def chat_stream(
             except json.JSONDecodeError:
                 await websocket.send_json({"type": "error", "message": "invalid json"})
                 continue
+            if not isinstance(msg, dict):
+                # A syntactically-valid but non-object JSON message (e.g. the
+                # bare text "42" or "[1,2]") parses fine but has no .get() —
+                # would otherwise crash the whole connection with an
+                # uncaught AttributeError (adversarial review finding).
+                await websocket.send_json({"type": "error", "message": "expected a JSON object"})
+                continue
             mtype = msg.get("type")
             if mtype == "user":
                 prompt = str(msg.get("text") or "").strip()
@@ -756,6 +769,8 @@ async def chat_stream(
                                 return
                             try:
                                 side_msg = json.loads(side_raw)
+                                if not isinstance(side_msg, dict):
+                                    side_msg = {}
                             except json.JSONDecodeError:
                                 side_msg = {}
                             if side_msg.get("type") == "cancel":

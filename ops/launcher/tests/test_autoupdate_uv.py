@@ -152,6 +152,22 @@ class PsQuoteTests(unittest.TestCase):
     def test_escapes_quotes_and_backticks(self) -> None:
         self.assertEqual(sb._ps_quote('a"b`c'), '"a`"b``c"')
 
+    def test_escapes_dollar_sign_to_prevent_subexpression_injection(self) -> None:
+        # Adversarial review finding: inside a PowerShell double-quoted
+        # string, $(...) is a live subexpression evaluated at parse time
+        # regardless of which cmdlet consumes the resulting string. A CLI
+        # arg like --host='$(Start-Process calc)' must NOT survive as a
+        # LIVE (non-backtick-escaped) subexpression in the generated script.
+        out = sb._ps_quote("$(Start-Process calc)")
+        self.assertEqual(out, '"`$(Start-Process calc)"')
+        # No raw, un-escaped "$(" (i.e. not preceded by a backtick) remains.
+        self.assertNotIn("m$(", out)  # would be the tail of an un-escaped run
+        self.assertTrue(out.count("`$(") == 1 and out.count("$(") == 1)
+
+    def test_array_literal_also_escapes_dollar_sign(self) -> None:
+        out = sb._ps_array_literal(["--host=$(evil)"])
+        self.assertIn("`$(evil)", out)
+
 
 class WindowsSelfUpdateHandoffTests(unittest.TestCase):
     """With a relaunch_argv provided, Windows must hand off to the detached
@@ -242,6 +258,73 @@ class WindowsSelfUpdateHandoffTests(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertEqual(spawn_calls, [])
+
+
+class SpawnWindowsSelfUpdaterScriptGenTests(unittest.TestCase):
+    """Exercises the real script-generation path (not mocked out), reading
+    back the actual .ps1 written to disk -- catches injection/quoting bugs
+    that a fully-mocked test would hide."""
+
+    def setUp(self) -> None:
+        self._orig_popen = sb.subprocess.Popen
+        self._orig_which = sb.shutil.which
+        self._written_scripts: list[str] = []
+
+    def tearDown(self) -> None:
+        sb.subprocess.Popen = self._orig_popen
+        sb.shutil.which = self._orig_which
+        import glob
+        import os as _os
+        for p in glob.glob("/tmp/corvin-self-update-*.ps1") if sys.platform != "win32" else []:
+            try:
+                _os.remove(p)
+            except OSError:
+                pass
+
+    def test_malicious_host_arg_cannot_inject_subexpression(self) -> None:
+        """The exact PoC from the adversarial review: a --host value
+        containing $(...) must never appear un-escaped in the generated
+        script, in EITHER the Start-Process call or the Log lines."""
+        sb.subprocess.Popen = lambda *a, **k: None
+        sb.shutil.which = lambda _name: None  # force fallback to bare name
+
+        evil = "$(Start-Process calc)"
+        sb._spawn_windows_self_updater(
+            ["uv", "tool", "upgrade", "corvinos"],
+            ["corvin-serve", f"--host={evil}"],
+        )
+
+        import glob
+        matches = glob.glob(f"{__import__('tempfile').gettempdir()}/corvin-self-update-*.ps1")
+        self.assertTrue(matches, "script was not written")
+        content = matches[-1]
+        with open(content, encoding="utf-8") as fh:
+            script = fh.read()
+        # The un-escaped injection (no backtick before the $) must not
+        # appear anywhere -- that would be a live PowerShell subexpression.
+        self.assertNotIn("--host=$(Start-Process calc)", script)
+        # The escaped form (backtick before $) must be present instead.
+        self.assertIn("--host=`$(Start-Process calc)", script)
+
+    def test_relaunch_exe_resolved_to_absolute_path_via_which(self) -> None:
+        """relaunch_argv[0] must be resolved through shutil.which() in THIS
+        process's environment before being embedded, not left as a bare
+        command name relying on the detached script's inherited PATH."""
+        sb.subprocess.Popen = lambda *a, **k: None
+        resolved = "C:\\Users\\test\\.local\\bin\\corvin-serve.exe"
+        sb.shutil.which = lambda name: resolved if name == "corvin-serve" else None
+
+        sb._spawn_windows_self_updater(
+            ["uv", "tool", "upgrade", "corvinos"],
+            ["corvin-serve", "--port=8765"],
+        )
+
+        import glob
+        matches = glob.glob(f"{__import__('tempfile').gettempdir()}/corvin-self-update-*.ps1")
+        with open(matches[-1], encoding="utf-8") as fh:
+            script = fh.read()
+        self.assertIn(resolved, script)
+        self.assertNotIn('-FilePath "corvin-serve"', script)
 
 
 if __name__ == "__main__":

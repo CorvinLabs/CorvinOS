@@ -819,14 +819,19 @@ def _find_token() -> str | None:
         corvin_home = _CORVIN_HOME_SNAPSHOT or _corvin_home_resolved()
         global_key = corvin_home / "global" / "license.key"
         if global_key.exists():
-            try:  # F-02 (ADR-0144): mode parity with session.key/instance_id.json
+            try:  # F-02 (ADR-0144): mode parity with session.key/instance_id.json —
+                # this must actually REJECT on a permissive mode, not just warn.
+                # A once-permissive license.key (bad umask, backup restore) that
+                # is merely warned-about but still trusted stays a live, readable
+                # credential for any co-resident local user indefinitely.
                 _gk_mode = global_key.stat().st_mode & 0o777  # single stat call
                 if not sys.platform.startswith("win") and _gk_mode & 0o077:
                     log.warning(
-                        "license: global/license.key mode 0o%03o too permissive "
-                        "(expected 0600)",
+                        "license: global/license.key is group/world readable — "
+                        "rejecting (mode 0%03o)",
                         _gk_mode,
                     )
+                    return None
             except OSError:
                 pass
             t = global_key.read_text().strip()
@@ -871,14 +876,16 @@ def _find_token_disk_only() -> str | None:
         corvin_home = _CORVIN_HOME_SNAPSHOT if _CORVIN_HOME_SNAPSHOT is not None else _corvin_home_resolved()
         global_key = corvin_home / "global" / "license.key"
         if global_key.exists():
-            try:  # F-02 (ADR-0144): mode parity with session.key/instance_id.json
+            try:  # F-02 (ADR-0144): mode parity with session.key/instance_id.json —
+                # this must actually REJECT on a permissive mode, not just warn.
                 _gk_mode = global_key.stat().st_mode & 0o777  # single stat call
                 if not sys.platform.startswith("win") and _gk_mode & 0o077:
                     log.warning(
-                        "license: global/license.key mode 0o%03o too permissive "
-                        "(expected 0600)",
+                        "license: global/license.key is group/world readable — "
+                        "rejecting (mode 0%03o)",
                         _gk_mode,
                     )
+                    return None
             except OSError:
                 pass
             t = global_key.read_text().strip()
@@ -1254,6 +1261,20 @@ def reload_from_disk() -> None:
     if claims is None:
         log.warning("license: reload — signature invalid, reverting to Free tier")
         _audit("license.invalid_token")
+        _set_active_license(None)
+        _LICENSE_LOADED_AT = time.time()
+        _init_instance_seed()
+        return
+
+    # ADR-0102: per-token fingerprint revocation check against Corvin-Features.
+    # This was checked at boot (load_license_from_env()) but NOT here — meaning
+    # a cancelled subscription's token kept re-activating on every reload (every
+    # authenticated console session op calls reload_from_disk() via
+    # auth.py::_compute_lic_proof) until the process was fully restarted. Mirror
+    # the boot-path check so revocation actually takes effect without a restart.
+    if _is_token_fp_revoked(token):
+        log.warning("license: reload — token is individually revoked, reverting to Free tier")
+        _audit("license.revoked")
         _set_active_license(None)
         _LICENSE_LOADED_AT = time.time()
         _init_instance_seed()

@@ -262,10 +262,90 @@ def test_reload_rate_limiter_bypassed_when_content_changed():
         session_file = Path(tmpdir) / "global" / "license.key"
         session_file.parent.mkdir(parents=True, exist_ok=True)
         session_file.write_text("CORVIN-INVALID.INVALID.INVALID")
+        # Mode 0600, matching the real write path (routes/license.py writes
+        # via tempfile.mkstemp+chmod+replace) — a permissive mode is now
+        # REJECTED outright by _find_token_disk_only (mode parity with
+        # session.key), which would make this reload find nothing rather
+        # than bypass the throttle, and is not what this test is exercising.
+        os.chmod(session_file, 0o600)
         v.reload_from_disk()
         assert v._LAST_RELOAD_AT > first_ts, (
             "reload with new content must bypass the throttle"
         )
+
+
+def test_reload_from_disk_checks_revocation():
+    """ADR-0102 per-token revocation: load_license_from_env() (boot) checks
+    _is_token_fp_revoked(), but reload_from_disk() never did -- so a token
+    revoked (subscription cancelled) after boot kept re-activating on every
+    authenticated console session op (auth.py calls reload_from_disk() per
+    request) until the whole process was restarted. Adversarial-review find."""
+    v = _fresh_validator()
+    import hashlib
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        v._LICENSE_INITIALIZED = True
+        v._CORVIN_HOME_SNAPSHOT = Path(tmpdir)
+        v._CONFIG_DIR_SNAPSHOT = Path(tmpdir)
+        v._AUDIT_PATH_SNAPSHOT = None
+        v._LAST_RELOAD_AT = 0.0
+
+        token = "CORVIN-fake.token.value"
+        fp = hashlib.sha256(token.encode()).hexdigest()[:32]
+
+        key_path = Path(tmpdir) / "global" / "license.key"
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.write_text(token)
+        os.chmod(key_path, 0o600)
+
+        # Signature check passes (mocked) and claims look like a valid,
+        # non-expired member license -- the ONLY reason this should fail to
+        # activate is the revocation check.
+        v._verify_ed25519 = lambda _t: {
+            "iss": "corvinlabs.io", "type": "license", "tier": "member",
+            "exp": time.time() + 999_999, "iat": time.time(), "jti": "abc123",
+        }
+        # Revocation list (as if freshly fetched from Corvin-Features) contains
+        # exactly this token's fingerprint.
+        v._fetch_revoked_fps = lambda: [fp]
+
+        v.reload_from_disk()
+
+        assert v._ACTIVE_LICENSE is None, (
+            "a revoked token must not activate on reload, even though its "
+            "signature and claims are otherwise valid"
+        )
+
+
+def test_reload_from_disk_accepts_non_revoked_token():
+    """Sanity counterpart: a token whose fingerprint is NOT on the revocation
+    list must still activate normally on reload (the new check must not
+    fail-closed on everything)."""
+    v = _fresh_validator()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        v._LICENSE_INITIALIZED = True
+        v._CORVIN_HOME_SNAPSHOT = Path(tmpdir)
+        v._CONFIG_DIR_SNAPSHOT = Path(tmpdir)
+        v._AUDIT_PATH_SNAPSHOT = None
+        v._LAST_RELOAD_AT = 0.0
+
+        token = "CORVIN-fake.token.value"
+        key_path = Path(tmpdir) / "global" / "license.key"
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.write_text(token)
+        os.chmod(key_path, 0o600)
+
+        v._verify_ed25519 = lambda _t: {
+            "iss": "corvinlabs.io", "type": "license", "tier": "member",
+            "exp": time.time() + 999_999, "iat": time.time(), "jti": "abc123",
+        }
+        v._fetch_revoked_fps = lambda: []  # empty revocation list
+
+        v.reload_from_disk()
+
+        assert v._ACTIVE_LICENSE is not None
+        assert v._ACTIVE_LICENSE["tier"] == "member"
 
         # A subsequent incidental reload with the SAME (still-invalid) token
         # must be throttled again (content unchanged from the last load).
