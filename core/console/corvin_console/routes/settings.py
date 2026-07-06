@@ -299,7 +299,9 @@ _BUDGET_KEYS = {
     "max_loops":        {"type": int, "min": 1,     "max": 2000,    "default": 500},
     "max_wall_time":    {"type": int, "min": 60,    "max": 8640000, "default": 360000},
     "max_total_workers":{"type": int, "min": 1,     "max": 1600,    "default": 400},
-    "max_depth":        {"type": int, "min": 1,     "max": 2000,    "default": 200},
+    # Recursive delegation depth (M4), not a loop counter — acs_validator R32
+    # hard-caps this at 10, so max must match or every save >10 fails validation.
+    "max_depth":        {"type": int, "min": 1,     "max": 10,      "default": 4},
 }
 
 

@@ -6,6 +6,22 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.10] — 2026-07-06
+
+### Fixed
+- **Web-chat delegation completely broken since 0.9.x (`max_depth` regression):**
+  a prior "increase delegation budgets" commit (a47c6d3) blanket-scaled every
+  `_DELEGATION_BUDGET_DEFAULTS` field by ~100×, including `max_depth` (2→200).
+  Unlike the other fields (plain iteration/worker counters), `max_depth`
+  bounds *recursive* worker delegation (M4) and is hard-capped at 10 by
+  `acs_validator` R32 — so every delegated web-chat turn since that commit
+  failed validation with `workflow validation failed: R32 ... exceeds ceiling
+  of 10`. Reset `max_depth` to `4` (matching the ACS runtime's own built-in
+  recursive-depth default) in `chat_runtime.py`; the R32 safety ceiling
+  itself is unchanged. Also tightened the Settings UI's `max_depth` bound
+  (`routes/settings.py`) from `max: 2000` to `max: 10` so a user can no
+  longer configure a value that always fails validation.
+
 ## [0.9.48] — 2026-06-28
 
 ### Fixed
