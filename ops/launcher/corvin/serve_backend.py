@@ -359,20 +359,26 @@ def _show_telemetry_notice_once() -> None:
 
 
 def _fire_startup_ping() -> None:
-    """Send the opt-out activity ping in a daemon thread at serve startup.
+    """Start the recurring opt-out activity ping check in a daemon thread.
 
-    corvin-serve uses corvin_console.standalone which has no FastAPI lifespan
-    and therefore never starts the boot-healer background task. Without this
-    direct call ping_if_due() would never run for pip-install deployments.
+    corvin-serve uses corvin_console.standalone, which has no FastAPI lifespan
+    and therefore never starts the boot-healer background task that normally
+    re-invokes ping_if_due() every 5 minutes for the gateway/systemd path.
+    Previously this called ping_if_due() exactly ONCE, so a long-running
+    corvin-serve process (the primary pip/uv install path) sent the daily
+    ping on day 1 and then never again — silently dropping out of
+    active_7d/active_30d for the rest of its uptime despite staying up and
+    in active use (adversarial review finding). start_ping_thread() re-checks
+    hourly instead (ping_if_due itself still self-throttles to once/24h).
     Fail-soft: any exception is silently swallowed — startup must never block.
     """
     def _ping() -> None:
         try:
             import time as _t                                    # noqa: PLC0415
             _t.sleep(6)          # wait for uvicorn to finish binding
-            from corvin_console.aco.htrace_uploader import ping_if_due  # noqa: PLC0415
+            from corvin_console.aco.htrace_uploader import start_ping_thread  # noqa: PLC0415
             from forge import paths as _p                        # noqa: PLC0415
-            ping_if_due(_p.corvin_home())
+            start_ping_thread(_p.corvin_home())
         except Exception:                                        # noqa: BLE001
             pass
 
