@@ -120,13 +120,97 @@ def _pick_upgrade_command(latest: str) -> tuple[list[str] | None, str]:
     )
 
 
-def maybe_pypi_autoupdate() -> None:
+def _ps_quote(s: str) -> str:
+    """Quote a single string for embedding in PowerShell source, e.g. -FilePath
+    (which binds to [string], NOT [string[]] — an array literal there either
+    fails to bind or coerces unpredictably depending on PowerShell version)."""
+    return '"' + s.replace("`", "``").replace('"', '`"') + '"'
+
+
+def _ps_array_literal(items: list[str]) -> str:
+    """Render a PowerShell array literal, e.g. @("a","b") — used for
+    -ArgumentList so each arg survives as its own token (no shell re-splitting).
+    """
+    return "@(" + ",".join(_ps_quote(i) for i in items) + ")"
+
+
+def _spawn_windows_self_updater(cmd: list[str], relaunch_argv: list[str]) -> bool:
+    """Hand off the upgrade to a detached PowerShell script and return True.
+
+    We cannot upgrade our own running venv in place (Windows locks this
+    process's own interpreter/extension files for its lifetime), but a
+    SEPARATE, short-lived process can: wait for this PID to fully exit, run
+    the upgrade, then relaunch corvin-serve — so the update actually applies
+    automatically instead of requiring the user to run a command by hand.
+
+    The script is detached (CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS) so it
+    keeps running after this process exits, and it logs every step to a file
+    in %TEMP% since nothing will be attached to a console by the time most of
+    it runs. Caller must exit promptly after this returns True so the target
+    files actually become unlocked.
+    """
+    import tempfile
+    import textwrap
+
+    try:
+        pid = os.getpid()
+        log_path = Path(tempfile.gettempdir()) / "corvin-self-update.log"
+        script_path = Path(tempfile.gettempdir()) / f"corvin-self-update-{pid}.ps1"
+        script = textwrap.dedent(f"""
+            $ErrorActionPreference = "Continue"
+            $log = "{log_path}"
+            function Log($m) {{ Add-Content -Path $log -Value "$(Get-Date -Format o) $m" }}
+            Log "waiting for corvin-serve (pid {pid}) to exit"
+            while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{
+                Start-Sleep -Milliseconds 400
+            }}
+            Log "pid {pid} exited -- running upgrade: {' '.join(cmd)}"
+            $p = Start-Process -FilePath {_ps_quote(cmd[0])} `
+                -ArgumentList {_ps_array_literal(cmd[1:])} `
+                -NoNewWindow -Wait -PassThru
+            if ($p.ExitCode -ne 0) {{
+                Log "upgrade FAILED (exit $($p.ExitCode)) -- corvin-serve NOT relaunched. Run manually: {' '.join(cmd)}"
+                exit 1
+            }}
+            Log "upgrade ok -- relaunching: {' '.join(relaunch_argv)}"
+            Start-Process -FilePath {_ps_quote(relaunch_argv[0])} `
+                -ArgumentList {_ps_array_literal(relaunch_argv[1:])}
+            Log "relaunch dispatched"
+        """).strip()
+        script_path.write_text(script, encoding="utf-8")
+
+        powershell = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
+        creationflags = (
+            getattr(subprocess, "DETACHED_PROCESS", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        )
+        subprocess.Popen(
+            [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+            creationflags=creationflags,
+            close_fds=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print(f"(log: {log_path})")
+        return True
+    except Exception as exc:  # noqa: BLE001 — never block startup over this
+        print(f"(self-update handoff failed: {exc} — continuing without update)")
+        return False
+
+
+def maybe_pypi_autoupdate(relaunch_argv: list[str] | None = None) -> bool:
     """Upgrade corvinos to the latest PyPI release if auto_update is enabled.
 
     Best-effort — never blocks or fails startup. Reads
     ~/.config/corvin-launcher/config.json for the auto_update flag. Uses
     ``uv tool upgrade`` for uv-managed installs (the Windows default) and
     ``pip install`` for pip installs.
+
+    Returns True when the caller must exit IMMEDIATELY (without starting the
+    server) because a Windows self-update handoff was just spawned — the
+    detached updater needs this process's files to become unlocked. Returns
+    False in every other case (nothing to do, or a live upgrade already ran).
     """
     import json as _json  # noqa: PLC0415
     config_path = Path.home() / ".config" / "corvin-launcher" / "config.json"
@@ -139,7 +223,7 @@ def maybe_pypi_autoupdate() -> None:
         pass
 
     if not enabled:
-        return
+        return False
 
     print("  Checking for updates …", end=" ", flush=True)
     try:
@@ -153,32 +237,44 @@ def maybe_pypi_autoupdate() -> None:
             latest = __import__("json").loads(_r.read())["info"]["version"]
         if latest == current:
             print(f"up to date ({current})")
-            return
+            return False
         # Step 2: a newer version exists — attempt upgrade with the command that
         # matches this install flavour (uv tool vs pip).
         print(f"upgrading {current} → {latest} …", end=" ", flush=True)
         cmd, manual = _pick_upgrade_command(latest)
         if cmd is None:
             print(f"\n  ⚠ auto-upgrade needs uv. Run manually:\n    {manual}")
-            return
+            return False
 
         if sys.platform.startswith("win"):
             # A live self-upgrade would try to overwrite this exact process's own
             # interpreter/extension files (python.exe, compiled .pyd deps) from
             # inside the still-running process — Windows keeps those files locked
             # for the process's lifetime (unlike POSIX, where an open file's inode
-            # can be replaced while it's running), so the upgrade would reliably
-            # fail with an "Access is denied" / "used by another process" error.
-            # Skip the doomed attempt and go straight to the manual hint. The
-            # Task-Scheduler autostart path is unaffected: install.ps1 runs the
-            # upgrade BEFORE launching corvin-serve, as a separate process.
+            # can be replaced while it's running), so an in-place attempt would
+            # reliably fail with an "Access is denied" / "used by another process"
+            # error. Instead, hand off to a detached helper that waits for THIS
+            # process to exit, runs the upgrade, then relaunches corvin-serve —
+            # so the update actually applies without manual intervention. Falls
+            # back to the manual-command hint only if the handoff itself fails,
+            # or if the caller didn't provide a relaunch command.
+            if relaunch_argv is None:
+                print(
+                    f"\n  ⚠ a newer version ({latest}) is available, but auto-update "
+                    "while running isn't supported on Windows (this process's own "
+                    "files are locked). Stop this server (Ctrl-C) and run:\n"
+                    f"    {manual}"
+                )
+                return False
+            print("handing off to background updater …", end=" ", flush=True)
+            if _spawn_windows_self_updater(cmd, relaunch_argv):
+                print(f"\n  ⏳ upgrading to {latest} in the background — restarting shortly …")
+                return True
             print(
-                f"\n  ⚠ a newer version ({latest}) is available, but auto-update "
-                "while running isn't supported on Windows (this process's own "
-                "files are locked). Stop this server (Ctrl-C) and run:\n"
+                f"\n  ⚠ background handoff failed. Stop this server (Ctrl-C) and run:\n"
                 f"    {manual}"
             )
-            return
+            return False
 
         result = subprocess.run(
             cmd,
@@ -197,10 +293,13 @@ def maybe_pypi_autoupdate() -> None:
             print(
                 f"\n  ⚠ auto-upgrade failed ({detail_line}). Run manually:\n    {manual}"
             )
+        return False
     except subprocess.TimeoutExpired:
         print("(timed out — continuing)")
+        return False
     except Exception:
         print("(update check skipped)")
+        return False
 
 
 # ── Telemetry notice (one-time, opt-out) ──────────────────────────────────────
