@@ -6,6 +6,23 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.12] — 2026-07-06
+
+### Fixed
+- **Windows: `corvin-serve` auto-update always failed with no diagnostic
+  ("auto-upgrade failed. Run manually: ...").** `maybe_pypi_autoupdate()` runs
+  *inside* the already-running `corvin-serve` process and tried to overwrite
+  that exact process's own interpreter/extension files in place — Windows
+  keeps those files locked for the process's lifetime (unlike POSIX, where a
+  running executable's inode can be replaced), so the upgrade subprocess
+  reliably failed with an inscrutable, swallowed error. Auto-update now skips
+  the doomed live attempt on Windows and shows a clear message + the exact
+  manual command instead; on other platforms, upgrade failures now surface
+  the actual subprocess stderr instead of a bare "failed". The Windows
+  autostart (Task Scheduler) path is unaffected — `install.ps1`'s supervisor
+  already runs the upgrade as a separate step *before* launching
+  `corvin-serve`, so it never hits this lock.
+
 ## [0.10.11] — 2026-07-06
 
 ### Fixed
