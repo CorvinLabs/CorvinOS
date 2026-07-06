@@ -44,7 +44,13 @@ def main() -> None:
         print("  Then re-run corvin-serve.")
         sys.exit(1)
 
-    serve_backend.maybe_pypi_autoupdate()
+    relaunch_argv = [
+        "corvin-serve", f"--port={args.port}", f"--host={args.host}",
+    ] + (["--no-browser"] if args.no_browser else [])
+    if serve_backend.maybe_pypi_autoupdate(relaunch_argv=relaunch_argv):
+        # Windows self-update handoff in progress: a detached updater is
+        # waiting for THIS process to exit before it can upgrade + relaunch.
+        sys.exit(0)
 
     print(f"\n  CorvinOS Console")
     print(f"  Starting on http://localhost:{args.port}/console/ …")

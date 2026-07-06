@@ -163,7 +163,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
     port: int = getattr(args, "port", 8765)
     no_browser: bool = getattr(args, "no_browser", False)
 
-    serve_backend.maybe_pypi_autoupdate()
+    relaunch_argv = ["corvin", "serve", f"--port={port}"] + (["--no-browser"] if no_browser else [])
+    if serve_backend.maybe_pypi_autoupdate(relaunch_argv=relaunch_argv):
+        # Windows self-update handoff in progress: a detached updater is
+        # waiting for THIS process to exit before it can upgrade + relaunch.
+        return 0
 
     if not serve_backend.is_available():
         reason, detail = serve_backend.unavailable_reason()

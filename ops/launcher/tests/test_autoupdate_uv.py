@@ -129,5 +129,120 @@ class WindowsLiveUpgradeSkipTests(unittest.TestCase):
         self.assertEqual(called, [])
 
 
+class PsArrayLiteralTests(unittest.TestCase):
+    def test_simple_args(self) -> None:
+        self.assertEqual(sb._ps_array_literal(["a", "b"]), '@("a","b")')
+
+    def test_empty_list(self) -> None:
+        self.assertEqual(sb._ps_array_literal([]), "@()")
+
+    def test_escapes_quotes_and_backticks(self) -> None:
+        out = sb._ps_array_literal(['say "hi"', "back`tick"])
+        self.assertEqual(out, '@("say `"hi`"","back``tick")')
+
+
+class PsQuoteTests(unittest.TestCase):
+    """-FilePath binds to [string], not [string[]] -- it must get a plain
+    quoted string, never an @(...) array literal (which PowerShell's
+    Start-Process parameter binder rejects/coerces unpredictably)."""
+
+    def test_simple_string(self) -> None:
+        self.assertEqual(sb._ps_quote("uv"), '"uv"')
+
+    def test_escapes_quotes_and_backticks(self) -> None:
+        self.assertEqual(sb._ps_quote('a"b`c'), '"a`"b``c"')
+
+
+class WindowsSelfUpdateHandoffTests(unittest.TestCase):
+    """With a relaunch_argv provided, Windows must hand off to the detached
+    self-updater (and never attempt the doomed live subprocess upgrade)."""
+
+    def setUp(self) -> None:
+        self._orig_platform = sb.sys.platform
+        self._orig_run = sb.subprocess.run
+        self._orig_pick = sb._pick_upgrade_command
+        self._orig_spawn = sb._spawn_windows_self_updater
+
+    def tearDown(self) -> None:
+        sb.sys.platform = self._orig_platform
+        sb.subprocess.run = self._orig_run
+        sb._pick_upgrade_command = self._orig_pick
+        sb._spawn_windows_self_updater = self._orig_spawn
+
+    def _fake_pypi(self, current: str, latest: str):
+        import importlib.metadata as _meta
+        import json as _json
+        import urllib.request as _ur
+
+        class _FakeResp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return _json.dumps({"info": {"version": latest}}).encode()
+
+        orig_version = _meta.version
+        orig_urlopen = _ur.urlopen
+        _meta.version = lambda _pkg: current
+        _ur.urlopen = lambda *a, **k: _FakeResp()
+        return orig_version, orig_urlopen, _meta, _ur
+
+    def test_successful_handoff_returns_true_and_skips_live_upgrade(self) -> None:
+        sb.sys.platform = "win32"
+        sb._pick_upgrade_command = lambda latest: (
+            ["uv", "tool", "upgrade", "corvinos"], "uv tool upgrade corvinos",
+        )
+        sb.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("subprocess.run must not be called when handing off")
+        )
+        spawn_calls = []
+        sb._spawn_windows_self_updater = lambda cmd, relaunch_argv: (
+            spawn_calls.append((cmd, relaunch_argv)) or True
+        )
+
+        orig_version, orig_urlopen, _meta, _ur = self._fake_pypi("0.10.6", "9.9.9")
+        try:
+            result = sb.maybe_pypi_autoupdate(relaunch_argv=["corvin-serve", "--port=8765"])
+        finally:
+            _meta.version = orig_version
+            _ur.urlopen = orig_urlopen
+
+        self.assertTrue(result)
+        self.assertEqual(len(spawn_calls), 1)
+        self.assertEqual(spawn_calls[0][1], ["corvin-serve", "--port=8765"])
+
+    def test_failed_handoff_returns_false_with_manual_hint(self) -> None:
+        sb.sys.platform = "win32"
+        sb._pick_upgrade_command = lambda latest: (
+            ["uv", "tool", "upgrade", "corvinos"], "uv tool upgrade corvinos",
+        )
+        sb._spawn_windows_self_updater = lambda cmd, relaunch_argv: False
+
+        orig_version, orig_urlopen, _meta, _ur = self._fake_pypi("0.10.6", "9.9.9")
+        try:
+            result = sb.maybe_pypi_autoupdate(relaunch_argv=["corvin-serve"])
+        finally:
+            _meta.version = orig_version
+            _ur.urlopen = orig_urlopen
+
+        self.assertFalse(result)
+
+    def test_no_relaunch_argv_falls_back_to_manual_message(self) -> None:
+        sb.sys.platform = "win32"
+        sb._pick_upgrade_command = lambda latest: (
+            ["uv", "tool", "upgrade", "corvinos"], "uv tool upgrade corvinos",
+        )
+        spawn_calls = []
+        sb._spawn_windows_self_updater = lambda *a, **k: spawn_calls.append(1) or True
+
+        orig_version, orig_urlopen, _meta, _ur = self._fake_pypi("0.10.6", "9.9.9")
+        try:
+            result = sb.maybe_pypi_autoupdate()  # no relaunch_argv
+        finally:
+            _meta.version = orig_version
+            _ur.urlopen = orig_urlopen
+
+        self.assertFalse(result)
+        self.assertEqual(spawn_calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
