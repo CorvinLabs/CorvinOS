@@ -117,8 +117,18 @@ def load_sync_cache() -> SyncCache:
         # Windows: NTFS has no POSIX group/other bits, so st_mode always looks
         # permissive there regardless of real ACLs — skip the check.
         if not sys.platform.startswith("win") and mode & 0o077:
-            log.warning("sync_cache: file mode 0o%o is too permissive — ignoring", mode)
-            return SyncCache()
+            # Log a warning but still read the data — discarding the cache
+            # here (returning a fresh SyncCache()) would silently drop a
+            # legitimately-cached is_revoked=True record, letting a local
+            # attacker un-revoke a cancelled/revoked license on every status
+            # check just by `chmod`-ing this file to a permissive mode
+            # (adversarial review finding — mirrors the exact bypass
+            # compute_quota.py's _load() already guards against; the mode
+            # is corrected on the next save_sync_cache() write).
+            log.warning(
+                "sync_cache: file mode 0o%o too permissive (expected 0600) — "
+                "mode will be corrected on next write", mode,
+            )
         return SyncCache.from_dict(json.loads(path.read_text(encoding="utf-8")))
     except Exception as exc:
         log.warning("sync_cache: load failed (%s) — ignoring", exc)

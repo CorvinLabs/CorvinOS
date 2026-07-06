@@ -42,6 +42,7 @@ from .delegation import (
     DelegateError,
     DelegateResult,
     run_delegate,
+    sweep_stale_hermetic_tempdirs,
 )
 
 
@@ -529,6 +530,13 @@ class DelegateServer:
 
 
 def main(argv: list[str] | None = None) -> int:  # noqa: ARG001
+    # Best-effort: clear any hermetic tempdir orphaned by a hard-killed
+    # delegation from a previous, now-dead server process (adversarial
+    # review finding — no reaper existed for these anywhere).
+    try:
+        sweep_stale_hermetic_tempdirs()
+    except Exception:  # noqa: BLE001
+        pass
     server = DelegateServer()
     return server.serve()
 

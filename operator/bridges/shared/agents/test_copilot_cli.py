@@ -178,6 +178,31 @@ class ProtocolContractTests(unittest.TestCase):
         if started:
             self.assertEqual(started[0].raw.get("task_type"), "git")
 
+    def test_working_dir_is_passed_through_as_subprocess_cwd(self) -> None:
+        """Adversarial review finding: `working_dir` was a recognised
+        parameter but was never passed to subprocess.Popen — delegation.py's
+        hermetic 0700 tempdir promise silently never reached this engine."""
+        engine = CopilotCliEngine()
+        fake_proc = MagicMock()
+        fake_proc.stdout.readline.return_value = b""
+        fake_proc.stderr.read.return_value = b""
+        fake_proc.wait.return_value = 0
+        fake_proc.returncode = 0
+        with patch("agents.copilot_cli.subprocess.Popen", return_value=fake_proc) as popen:
+            list(engine.spawn("test", working_dir=Path("/tmp/some-hermetic-dir")))
+        self.assertEqual(popen.call_args.kwargs.get("cwd"), "/tmp/some-hermetic-dir")
+
+    def test_no_working_dir_passes_cwd_none(self) -> None:
+        engine = CopilotCliEngine()
+        fake_proc = MagicMock()
+        fake_proc.stdout.readline.return_value = b""
+        fake_proc.stderr.read.return_value = b""
+        fake_proc.wait.return_value = 0
+        fake_proc.returncode = 0
+        with patch("agents.copilot_cli.subprocess.Popen", return_value=fake_proc) as popen:
+            list(engine.spawn("test"))
+        self.assertIsNone(popen.call_args.kwargs.get("cwd"))
+
 
 class FooterStrippingTests(unittest.TestCase):
 

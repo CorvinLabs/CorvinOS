@@ -74,12 +74,20 @@ def send_heartbeat(home: Path) -> bool:
 
 
 def _heartbeat_loop(home: Path) -> None:
-    """Run forever: wait one interval, then heartbeat every 5 minutes."""
+    """Run forever: wait one interval, then heartbeat every 5 minutes.
+
+    Re-checks ``ping_enabled(home)`` on EVERY iteration (adversarial review
+    finding: this previously only checked opt-out once, at thread start —
+    a user opting out mid-session on a long-running server kept getting
+    heartbeats sent for the rest of the process lifetime, sometimes weeks.
+    Mirrors ``ping_if_due``'s own per-call re-check).
+    """
     # Wait one interval before first heartbeat (daily ping already ran at boot)
     time.sleep(_INTERVAL + random.randint(-_JITTER, _JITTER))
     while True:
         try:
-            send_heartbeat(home)
+            if ping_enabled(home):
+                send_heartbeat(home)
         except Exception:  # noqa: BLE001
             pass
         time.sleep(_INTERVAL + random.randint(-_JITTER, _JITTER))

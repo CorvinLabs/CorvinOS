@@ -6174,6 +6174,24 @@ def call_claude_streaming(
                         "Install claude CLI or set CORVIN_OS_ENGINE to override."
                     )
 
+    # Persist the resolved OS engine for anonymous instance-count attribution.
+    # The activity ping (ADR-0180) fires from the out-of-process corvin-serve
+    # console, whose environment never inherits the engine ladder resolved just
+    # above; without this, that ping reported active_engine="unknown" for nearly
+    # every install (only the rare in-bridge ping saw the env var). Writing the
+    # effective engine — the same ``default_engine or "claude_code"`` expression
+    # the OS-turn dispatch uses below — to a shared state file lets the ping read
+    # the real engine. Allow-list validated + fail-soft inside record_active_engine.
+    try:
+        _eff_engine = (profile or {}).get("default_engine") or "claude_code"
+        from corvin_console.aco.htrace_uploader import (  # noqa: PLC0415
+            record_active_engine as _record_active_engine,
+        )
+        from forge.paths import corvin_home as _rae_home  # noqa: PLC0415
+        _record_active_engine(_rae_home(), _eff_engine)
+    except Exception:  # noqa: BLE001 — telemetry attribution is best-effort
+        pass
+
     # ADR-0150 LIC-BRIDGE-ENGINE-CHATTURN-01: charge chat_turns_per_day ONCE here,
     # at the engine-AGNOSTIC dispatch point, so EVERY bridge OS-turn (claude_code,
     # codex_cli, opencode, hermes) is metered — not just the claude path. (R8 placed
@@ -7600,6 +7618,49 @@ def _new_session_model_summary(channel: str, chat_key: str) -> str:
     return f"OS: {os_label}  ·  Worker: {worker_label}"
 
 
+# Media artifact extensions eligible for the artifacts→outputs mirror. Only
+# renderable media is mirrored; raw Python/JSON data stays in artifacts/ only.
+_MIRROR_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
+                ".pdf", ".html", ".csv", ".mp4", ".webm"}
+
+
+def _mirror_new_artifacts(
+    artifacts_dir: Path, outputs_dir: Path, pre_artifacts: dict[str, float],
+) -> list[str]:
+    """Copy Forge/ACS artifact media (images/plots/PDFs) created or regenerated
+    this turn into the per-chat outputs/ dir so the messenger attachment scan
+    picks them up. Works for ALL engines because the adapter is the common
+    layer — no engine-specific PostToolUse hook needed.
+
+    ``pre_artifacts`` is the {name: mtime} snapshot taken before the turn; a
+    file is "new this turn" when it is absent from the snapshot or its mtime
+    advanced. A file is (re-)mirrored when the destination is missing OR the
+    source is newer than the existing destination — an exists()-only guard
+    (the previous behaviour) silently dropped a same-named artifact regenerated
+    in a later turn, leaving the chat showing the stale copy. Returns the list
+    of mirrored file names.
+    """
+    import shutil as _shutil  # noqa: PLC0415
+    mirrored: list[str] = []
+    for _ap in artifacts_dir.iterdir():
+        if not _ap.is_file():
+            continue
+        if _ap.suffix.lower() not in _MIRROR_EXTS:
+            continue
+        if _ap.name in pre_artifacts and _ap.stat().st_mtime <= pre_artifacts[_ap.name]:
+            continue  # not new this turn
+        _dest = outputs_dir / _ap.name
+        if _dest.exists() and _ap.stat().st_mtime <= _dest.stat().st_mtime:
+            continue  # outputs/ already holds this (or a newer) copy
+        try:
+            _shutil.copy2(_ap, _dest)
+            mirrored.append(_ap.name)
+            log(f"artifact→outputs mirror: {_ap.name}")
+        except OSError as _e:
+            log(f"artifact→outputs mirror failed for {_ap.name}: {_e}")
+    return mirrored
+
+
 def process_one(inbox_file: Path, settings: dict) -> None:
     try:
         msg = json.loads(inbox_file.read_text())
@@ -8547,29 +8608,10 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         log(f"html-guard: intercepted raw HTML page ({_label!r}) — replacing with error message")
         answer = f"⚠️ Der Server hat eine Fehlerseite zurückgegeben ({_label}). Bitte versuche es in einem Moment erneut."
 
-    # Mirror new Forge/ACS artifact files (images/plots/PDFs) to outputs/ so
-    # they are picked up as chat attachments. Works for ALL engines because the
-    # adapter is the common layer — no engine-specific PostToolUse hook needed.
-    # Only image/chart/document types are mirrored; raw Python/JSON data stays
-    # in artifacts/ only. Files already in outputs/ (written directly by the
-    # engine or a CC hook) are NOT overwritten.
-    _MIRROR_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
-                    ".pdf", ".html", ".csv", ".mp4", ".webm"}
-    import shutil as _shutil
-    for _ap in artifacts_dir.iterdir():
-        if not _ap.is_file():
-            continue
-        if _ap.suffix.lower() not in _MIRROR_EXTS:
-            continue
-        if _ap.name in pre_artifacts and _ap.stat().st_mtime <= pre_artifacts[_ap.name]:
-            continue  # not new this turn
-        _dest = outputs_dir / _ap.name
-        if not _dest.exists():
-            try:
-                _shutil.copy2(_ap, _dest)
-                log(f"artifact→outputs mirror: {_ap.name}")
-            except OSError as _e:
-                log(f"artifact→outputs mirror failed for {_ap.name}: {_e}")
+    # Mirror new/regenerated Forge/ACS artifact media into outputs/ so they are
+    # picked up as chat attachments (see _mirror_new_artifacts for the mtime-
+    # aware re-mirror semantics).
+    _mirror_new_artifacts(artifacts_dir, outputs_dir, pre_artifacts)
 
     # Diff: which files in outputs/ are new or changed since snapshot.
     new_files = []

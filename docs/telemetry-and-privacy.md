@@ -14,7 +14,7 @@ secret shape (emails, home paths, IPs, tokens, long ids) rather than sending it.
 
 | Channel | What is sent | Turn off |
 |---|---|---|
-| **Anonymous instance ping** | A random installation id (`uuid4`) + the CorvinOS version + an HMAC token, once per 24 h. Lets us count how many instances exist. | `spec.telemetry.ping_enabled: false` |
+| **Anonymous instance ping** | A random installation id (`uuid4`) + an HMAC token, once per 24 h, plus a few coarse, allow-listed labels: CorvinOS version, platform (`linux`/`win32`/`darwin`), Python minor version, and the active OS engine (`claude_code`/`hermes`/`opencode`/`codex_cli`/`copilot`, else `unknown`). Lets us count how many instances exist and on what. | `spec.telemetry.ping_enabled: false` |
 | **Error diagnostics** | Scrubbed, content-free crash signatures: error type (e.g. `ValueError`), the repo file + function where it happened, allow-listed stack-frame namespaces. Never prompts or user data. | env `CORVIN_TELEMETRY_OPTIN=false` **or** `spec.telemetry.error_traces: false` |
 | **Self-healing traces** | Anonymised self-healing events (which repair ran, on which code layer, success/failure). No prompts, no message content. | `spec.telemetry.healing_traces: false` |
 
@@ -53,6 +53,12 @@ process (highest precedence).
 ## Where the code lives
 
 - Ping gate: `aco/htrace_consent.py::ping_enabled`
+- Ping sender + engine attribution: `aco/htrace_uploader.py::ping_if_due`,
+  `_detect_active_engine`. The `active_engine` label is resolved out-of-process:
+  the bridge adapter runs the full engine ladder and persists the result via
+  `record_active_engine` to `<corvin_home>/aco/telemetry/active_engine`; the ping
+  (a separate `corvin-serve` process that never inherits the bridge's env) reads
+  that file. Without it the label falls back to `unknown` for nearly every install.
 - Error gate: `aco/telemetry.py::consent_granted`
 - Healing gate: `aco/htrace_consent.py::healing_traces_enabled`
 - Scrubber (fail-closed backstop): `aco/telemetry.py::_assert_safe` + `_LEAK`,

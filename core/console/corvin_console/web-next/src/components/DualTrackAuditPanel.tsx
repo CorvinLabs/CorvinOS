@@ -186,9 +186,10 @@ function EventBlock({ ev, last }: EventBlockProps) {
 interface DelegationRowProps {
   grp: ChainDelegationGroup;
   index: number;
+  chainVerified: boolean;
 }
 
-function DelegationRow({ grp, index }: DelegationRowProps) {
+function DelegationRow({ grp, index, chainVerified }: DelegationRowProps) {
   // Audit trails must read as complete: only collapse genuinely long worker
   // lanes, and still show a generous prefix (8) rather than a token 2.
   const COLLAPSE_OVER = 12;
@@ -225,7 +226,12 @@ function DelegationRow({ grp, index }: DelegationRowProps) {
         </Badge>
         <NbacIcon size={11} className={cn("flex-shrink-0 ml-auto", nbacClass)} />
         {grp.genesis_match === true && (
-          <span className="text-[8px] text-amber-600 flex-shrink-0">chain DNA ✓</span>
+          <span
+            className="text-[8px] text-amber-600 flex-shrink-0"
+            title={!chainVerified ? "Hash-chain verification failed — this reading is not trustworthy" : undefined}
+          >
+            chain DNA {chainVerified ? "✓" : "✓ (unverified chain)"}
+          </span>
         )}
         {grp.genesis_match === false && (
           <span className="text-[8px] text-red-500 flex-shrink-0">chain DNA ✗</span>
@@ -380,6 +386,22 @@ export function DualTrackAuditPanel({ sid }: DualTrackAuditPanelProps) {
             {data.delegations.length} delegation{data.delegations.length !== 1 ? "s" : ""}
           </Badge>
         )}
+        <Badge
+          variant="outline"
+          className={cn(
+            "text-[9px] px-1.5 font-mono",
+            data.chain_verified
+              ? "border-green-700 text-green-500"
+              : "border-red-700 text-red-500",
+          )}
+          title={
+            data.chain_verified
+              ? "Hash-chain verified — genesis DNA readings below are trustworthy"
+              : "Hash-chain verification FAILED — genesis DNA readings below cannot be trusted"
+          }
+        >
+          Chain: {data.chain_verified ? "verified" : "broken"}
+        </Badge>
         <span className="ml-auto text-[9px] text-muted-foreground/40 font-mono">Dual-Track</span>
       </div>
 
@@ -403,7 +425,7 @@ export function DualTrackAuditPanel({ sid }: DualTrackAuditPanelProps) {
         {/* delegation groups */}
         {hasDelegations ? (
           data.delegations.map((grp, i) => (
-            <DelegationRow key={grp.delegation_id} grp={grp} index={i} />
+            <DelegationRow key={grp.delegation_id} grp={grp} index={i} chainVerified={data.chain_verified} />
           ))
         ) : (
           <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground/50">

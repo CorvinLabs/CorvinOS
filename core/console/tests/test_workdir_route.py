@@ -87,6 +87,28 @@ class WorkdirRouteTests(unittest.TestCase):
             self._serve("nope.png")
         self.assertEqual(ctx.exception.status_code, 404)
 
+    def test_html_artifact_gets_csp_sandbox_header(self) -> None:
+        """Adversarial review finding: a direct top-level navigation to an
+        HTML artifact (copy-link, open-in-new-tab) previously loaded it
+        same-origin and unsandboxed, executing any embedded script with
+        full access to the real console origin — the iframe sandbox the
+        frontend uses for in-chat rendering only applied when the frontend
+        actually rendered it via the iframe, not to the raw URL itself."""
+        (self.workdir / "report.html").write_bytes(b"<html><script>1</script></html>")
+        resp = self._serve("report.html")
+        self.assertEqual(resp.headers.get("content-security-policy"), "sandbox")
+        self.assertIn("inline", resp.headers["content-disposition"])
+
+    def test_svg_artifact_gets_csp_sandbox_header(self) -> None:
+        (self.workdir / "diagram.svg").write_bytes(b"<svg xmlns='http://www.w3.org/2000/svg'></svg>")
+        resp = self._serve("diagram.svg")
+        self.assertEqual(resp.headers.get("content-security-policy"), "sandbox")
+
+    def test_non_html_artifacts_get_no_csp_header(self) -> None:
+        (self.workdir / "chart.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        resp = self._serve("chart.png")
+        self.assertNotIn("content-security-policy", resp.headers)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -394,12 +394,27 @@ async def upload_license(
     try:
         dest = _verifier.license_file_path()
         dest.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-        # Atomic write with mode 0600 from the start — avoids TOCTOU between
-        # write_text and chmod where another local user could read the token.
-        # Parent dir created with 0700 to block symlink staging by group members.
-        fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with open(fd, "w", encoding="utf-8") as _fh:
-            _fh.write(token)
+        # tempfile.mkstemp + os.replace, not os.open(dest, O_CREAT|O_TRUNC):
+        # the O_TRUNC form only applies its mode argument when the file is
+        # newly CREATED — if dest already exists (e.g. left permissive by a
+        # historical bug, bad umask, or backup restore), O_TRUNC opens and
+        # truncates the EXISTING file in place without ever correcting its
+        # mode, and (unlike mkstemp+replace) follows a symlink planted at
+        # dest instead of atomically swapping it out (adversarial review
+        # finding — this reintroduced the exact bug already fixed for the
+        # sibling apply_license_key endpoint below).
+        _fd, _tmp = tempfile.mkstemp(dir=dest.parent, prefix=".license.", suffix=".tmp")
+        try:
+            with os.fdopen(_fd, "w", encoding="utf-8") as _fh:
+                _fh.write(token)
+            os.chmod(_tmp, 0o600)
+            os.replace(_tmp, dest)
+        except Exception:
+            try:
+                os.unlink(_tmp)
+            except OSError:
+                pass
+            raise
 
         # Update grace state with new expiry
         _grace.remember_valid_license(

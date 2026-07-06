@@ -1942,7 +1942,13 @@ async def stream_turn(
          sid=sess.sid, chat_key=sess.chat_key,
          tenant=sess.tenant_id,
          prompt_len=len(prompt),
-         prompt_preview=prompt[:120],
+         # No prompt_preview here — this project's own compliance baseline
+         # requires audit/debug details stay metadata-only (a raw prompt
+         # fragment routinely contains a user's name, email, or the start of
+         # a pasted secret within 120 chars). chat_debug.jsonl also sits
+         # outside the L16 hash-chain and outside the L36 erasure
+         # orchestrator's coverage, so this was PII persisting with no
+         # retention/erasure guarantee (adversarial review finding).
          force_delegate=_force_delegate,
          resume=resume,
          os_engine=_os_engine,
@@ -2271,7 +2277,9 @@ async def stream_turn(
             run_dir = sess.workdir / "acs" / "runs" / run_id
             spec_dict = _build_delegation_spec(task_text, _delegation_budget(sess.tenant_id))
             _dbg(sess.workdir, "acs.run.start",
-                 run_id=run_id, task_len=len(task_text), task_preview=task_text[:120],
+                 run_id=run_id, task_len=len(task_text),
+                 # No task_preview — see the matching comment on turn.start
+                 # above (adversarial review finding, PII in debug log).
                  budget=_delegation_budget(sess.tenant_id))
             rt_kwargs: dict[str, Any] = {
                 "tenant_id": sess.tenant_id, "bridge": CHANNEL, "chat": sess.sid,

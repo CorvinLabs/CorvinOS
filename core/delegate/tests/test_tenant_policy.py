@@ -74,6 +74,21 @@ class ResolveEngineZoneTests(unittest.TestCase):
             "us",
         )
 
+    def test_hermes_resolves_to_local_not_unknown(self):
+        # Adversarial review finding: hermes was previously absent from
+        # _DEFAULT_ENGINE_ZONES, so it fell through to "unknown" — and
+        # is_zone_compatible() denies "unknown" whenever a tenant has ANY
+        # zone constraint set, silently blocking the one engine this
+        # project explicitly recommends for CONFIDENTIAL/local-only data.
+        self.assertEqual(tp.resolve_engine_zone("hermes"), "local")
+
+    def test_hermes_is_zone_compatible_with_a_local_only_tenant(self):
+        ok, _ = tp.is_zone_compatible("local", tp.resolve_engine_zone("hermes"))
+        self.assertTrue(ok)
+
+    def test_copilot_resolves_to_us_not_unknown(self):
+        self.assertEqual(tp.resolve_engine_zone("copilot"), "us")
+
     def test_unknown_engine_returns_unknown(self):
         self.assertEqual(tp.resolve_engine_zone("not_an_engine"), "unknown")
 

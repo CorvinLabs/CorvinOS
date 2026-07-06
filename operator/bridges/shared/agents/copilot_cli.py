@@ -189,7 +189,7 @@ class CopilotCliEngine:
         *,
         system: str | None = None,         # not used; copilot has no system-prompt param
         model: str | None = None,           # maps to task_type: "shell"|"git"|"gh"|None
-        working_dir: Path | None = None,    # not used; copilot is stateless per turn
+        working_dir: Path | None = None,    # used as subprocess cwd when supplied
         timeout: float = 120.0,
         extra_args: list[str] | None = None,  # not used
         env: dict[str, str] | None = None,
@@ -249,6 +249,15 @@ class CopilotCliEngine:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=spawn_env,
+                # Honour the caller's hermetic 0700 tempdir when one is
+                # supplied (delegation.py's _hermetic_tempdir default). This
+                # was previously silently dropped — `working_dir` is a
+                # recognised parameter but was never passed through to the
+                # subprocess, so every copilot delegation ran in whatever
+                # cwd the delegate MCP-server process happened to have,
+                # never the isolated sandbox the docstring promises
+                # (adversarial review finding).
+                cwd=str(working_dir) if working_dir is not None else None,
             )
         except FileNotFoundError:
             yield StreamEvent(

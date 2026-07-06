@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 _SHARED = Path(__file__).resolve().parent
 if str(_SHARED) not in sys.path:
@@ -236,8 +239,29 @@ def run_acs_workflow(
                 "max_total_workers", "max_rejected_completions", "max_depth",
             }
             for k, v in budget_override.items():
-                if hasattr(_be, k):
+                if not hasattr(_be, k):
+                    continue
+                try:
                     setattr(_be, k, int(v) if k in _int_fields else v)
+                except (TypeError, ValueError):
+                    # This is a SECOND, display-only re-parse of
+                    # budget_override — the real workflow run above (line
+                    # ~187) already applied the properly-validated merge
+                    # inside ACSRuntime.run() and has ALREADY EXECUTED
+                    # (workers spawned, quota charged) by the time this
+                    # code runs. A non-numeric value here previously raised
+                    # uncaught, propagating out of this function entirely —
+                    # so the run's manifest/result.json (written just below)
+                    # never got persisted, even though the run genuinely
+                    # happened and its audit events exist: a dangling audit
+                    # trail with no corresponding run-list entry
+                    # (adversarial review finding). Skip the malformed
+                    # field for display purposes rather than crash after
+                    # the real work is already done.
+                    log.warning(
+                        "acs_engine_adapter: ignoring non-numeric budget_override "
+                        "display field %r=%r for manifest", k, v,
+                    )
 
         manifest = {
             "run_id": result.run_id,

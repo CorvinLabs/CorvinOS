@@ -568,7 +568,17 @@ def _build_parser() -> argparse.ArgumentParser:
     co = sub.add_parser("config", help="Read and write configuration")
     co_sub = co.add_subparsers(dest="config_cmd", metavar="subcommand")
     cs = co_sub.add_parser("set", help="Set a config value")
-    cs.add_argument("key",   choices=["ollama-url", "model", "bridge", "image"])
+    # No `choices=` restriction here (was: ["ollama-url", "model", "bridge",
+    # "image"]) — that rejected `telemetry.*` keys with argparse's own usage
+    # error BEFORE cmd_config_set ever ran, so the exact opt-out command this
+    # software prints to users ("corvin config set telemetry.ping_enabled
+    # false") failed outright (adversarial review finding). cmd_config_set
+    # already validates/dispatches unknown keys safely.
+    cs.add_argument(
+        "key", metavar="KEY",
+        help="ollama-url | model | bridge | image | telemetry.<subkey> "
+             "(e.g. telemetry.ping_enabled)",
+    )
     cs.add_argument("value", metavar="VALUE")
     co_sub.add_parser("show", help="Print current configuration")
 

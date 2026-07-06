@@ -685,6 +685,7 @@ def _inject_delegate_capability(merged: dict, persona_name: str) -> dict:
             "PYTHONPATH": (
                 "{{REPO_ROOT}}/core/delegate"
                 ":{{REPO_ROOT}}/operator/forge"
+                ":{{REPO_ROOT}}/operator/bridges/shared"
             ),
             "CORVIN_CALLER_PERSONA": persona_name,
         }

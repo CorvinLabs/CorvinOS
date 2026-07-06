@@ -55,6 +55,31 @@ router = APIRouter()
 
 logger = logging.getLogger(__name__)
 
+# Per-(tenant, sid) turn lock (adversarial review finding): a chat session
+# has no server-side concurrency control — two browser tabs open on the
+# same session both load their own in-memory WebChatSession copy and, if
+# both send a first message concurrently, both compute resume=False and
+# spawn independent, non-`--continue` engine subprocesses in the SAME
+# workdir. On each tab's next message `--continue` then resumes whichever
+# transcript for that cwd has the most recent mtime — possibly the OTHER
+# tab's — a genuine cross-tab conversation-bleed, not just a cosmetic
+# turn-count race. The before/after workdir snapshot used for artifact
+# detection can also cross-attribute a file from one tab's turn to the
+# other's persisted history. An in-process lock serializes turns for the
+# dominant single-operator-process deployment this project targets; it does
+# not cover a multi-worker/multi-process deployment (that would need a
+# workdir-scoped fcntl flock, used elsewhere in this codebase).
+_SESSION_TURN_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+def _session_turn_lock(tenant_id: str, sid: str) -> asyncio.Lock:
+    key = (tenant_id, sid)
+    lock = _SESSION_TURN_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _SESSION_TURN_LOCKS[key] = lock
+    return lock
+
 # Auto-browser detection — used to route bare URLs and explicit navigate-intent
 # messages to the browser agent without requiring the /browser prefix.
 _URL_START_RE = re.compile(r'^https?://\S', re.I)
@@ -89,15 +114,42 @@ _BROWSE_SIGNAL_RE = re.compile(
 )
 
 
-async def _classify_browser_intent(prompt: str) -> str | None:
+async def _classify_browser_intent(
+    prompt: str, *, tenant_id: str, sid_fingerprint: str,
+) -> str | None:
     """LET THE AGENT DECIDE (ADR-0182): for a browsing-ish message with no bare URL,
     ask the model whether it's a live-web-browsing request and, if so, distil the
     task. Gated by ``_BROWSE_SIGNAL_RE`` so normal chat never triggers a spawn.
-    Returns the task string, or None (→ normal chat turn)."""
+    Returns the task string, or None (→ normal chat turn).
+
+    Adversarial review finding: this classifier used to fire an ungated LLM
+    spawn (hardcoded to the cloud `claude` binary) on ANY message matching the
+    broad browsing-signal regex, with no L44/L34/L35 pre-spawn gate, no
+    chat-turn quota charge, and no audit event — invisible to the L16 chain
+    and capable of leaking prompt text to api.anthropic.com even for tenants
+    explicitly configured to use a local-only engine. It is now gated exactly
+    like every other engine spawn, and only runs at all when the tenant's
+    effective OS engine is claude_code (a tenant on Hermes/other engines
+    simply skips natural-language auto-browse-detection — bare-URL detection
+    and the explicit /browser command still work regardless of engine)."""
     if not _BROWSE_SIGNAL_RE.search(prompt):
         return None
-    import os
-    import shutil
+    _engine_id = chat_runtime._effective_os_engine(tenant_id)
+    if _engine_id != "claude_code":
+        return None
+    try:
+        from .. import _spawn_gates  # noqa: PLC0415
+        _refusal = _spawn_gates.check_console_spawn_or_refusal(
+            prompt, tenant_id=tenant_id, persona="assistant",
+            channel="chat", chat_key=f"browser-intent:{sid_fingerprint}",
+            engine_id=_engine_id, classification="PUBLIC")
+    except Exception:  # noqa: BLE001
+        # Fail-closed for the auto-browse decision only: never auto-spawn on a
+        # gate error. The message still flows through to the normal chat turn
+        # below, which re-runs its own gate before that (already-billed) spawn.
+        return None
+    if _refusal:
+        return None
     import subprocess
 
     def _spawn() -> str:
@@ -107,11 +159,11 @@ async def _classify_browser_intent(prompt: str) -> str | None:
             "read a live page, check a cart/checkout), reply EXACTLY 'BROWSE: <one "
             "concise task>'. Otherwise (normal conversation, coding, general questions) "
             "reply EXACTLY 'NO'. Output only that one line.")
-        binp = (os.environ.get("CORVIN_CLAUDE_BIN", "").strip()
-                or shutil.which("claude") or "claude")
+        binp = chat_runtime._claude_binary()
         try:
             r = subprocess.run(
-                [binp, "-p", "--max-turns", "1", "--tools", "", "--system-prompt", sysp, prompt],
+                [binp, "-p", "--max-turns", "1", "--disallowedTools", "*",
+                 "--system-prompt", sysp, prompt],
                 capture_output=True, text=True, encoding="utf-8", timeout=30)
             return (r.stdout or "").strip()
         except Exception:  # noqa: BLE001
@@ -261,11 +313,26 @@ def get_workdir_file(
     # use the HTML `download` attribute, which still triggers a Save for
     # same-origin URLs regardless of the inline disposition, so downloads keep
     # working. We still advertise the filename so a manual save uses a sane name.
+    #
+    # The frontend renders HTML artifacts in a `sandbox="allow-scripts"`
+    # (no allow-same-origin) <iframe> and SVGs via <img> — both safe against
+    # embedded script. But that's purely a frontend convention: a direct
+    # top-level navigation to this same URL (copy-link, "open in new tab")
+    # loads HTML/SVG same-origin, unsandboxed, executing any embedded script
+    # with full access to the real console origin (adversarial review
+    # finding). A CSP sandbox header makes the browser enforce the same
+    # restriction regardless of how the URL was reached — a JS-disabling,
+    # same-origin-denying sandbox with no exceptions, matching the iframe's
+    # own attribute.
+    headers: dict[str, str] | None = None
+    if mime in ("text/html", "image/svg+xml"):
+        headers = {"Content-Security-Policy": "sandbox"}
     return FileResponse(
         path=str(fpath),
         media_type=mime or "application/octet-stream",
         filename=filename,
         content_disposition_type="inline",
+        headers=headers,
     )
 
 @router.get("/chat/sessions/{sid}/workdir-path")
@@ -602,11 +669,12 @@ async def chat_stream(
         # open for the next turn. Only CancelledError (genuine cancel /
         # client disconnect) propagates to the outer handler for cleanup.
         try:
-            async with contextlib.aclosing(
-                chat_runtime.stream_turn(sess, prompt)
-            ) as gen:
-                async for event in gen:
-                    await websocket.send_json(event)
+            async with _session_turn_lock(rec.tenant_id, sid):
+                async with contextlib.aclosing(
+                    chat_runtime.stream_turn(sess, prompt)
+                ) as gen:
+                    async for event in gen:
+                        await websocket.send_json(event)
         except asyncio.CancelledError:
             raise
         except Exception as _exc:  # noqa: BLE001 — never let a turn kill the socket
@@ -684,7 +752,9 @@ async def chat_stream(
                     # No bare URL — let the agent DECIDE from natural language
                     # (gated by browsing-signal words so normal chat isn't slowed).
                     try:
-                        _auto_task = await _classify_browser_intent(prompt)
+                        _auto_task = await _classify_browser_intent(
+                            prompt, tenant_id=rec.tenant_id,
+                            sid_fingerprint=rec.sid_fingerprint)
                     except Exception:  # noqa: BLE001
                         _auto_task = None
                 if _auto_task:

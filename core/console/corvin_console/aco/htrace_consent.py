@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import urllib.request
 import uuid
 from dataclasses import asdict, dataclass
@@ -212,14 +213,37 @@ def provision_telemetry_tokens(home: Path, instance_id: str) -> bool:
         inst_p = _instance_token_path(home)
         tel_p = _telemetry_token_path(home)
         inst_p.parent.mkdir(parents=True, exist_ok=True)
-        inst_p.write_text(instance_token, encoding="utf-8")
-        inst_p.chmod(0o600)
-        tel_p.write_text(telemetry_token, encoding="utf-8")
-        tel_p.chmod(0o600)
+        # Atomic, paired write: both tokens land via tempfile+os.replace at
+        # 0600 from creation (not write_text-then-chmod, which has a brief
+        # permissive window and no atomicity). Writing the pair atomically
+        # also closes a race with a concurrent provisioning call from
+        # another process (e.g. a bridge daemon booting alongside the web
+        # console): without this, two unlocked plain write_text() calls
+        # could interleave two different token-endpoint responses into a
+        # mismatched instance/telemetry-token pair that ensure_ping_tokens()'s
+        # existence-only check can never detect or self-heal (adversarial
+        # review finding).
+        _atomic_write_token(inst_p, instance_token)
+        _atomic_write_token(tel_p, telemetry_token)
     except OSError as e:
         logger.debug("htrace: token persistence failed (non-fatal): %s", e)
         return False
     return True
+
+
+def _atomic_write_token(path: Path, value: str) -> None:
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(value)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ── Healing-trace gate (default-ON, opt-out) ──────────────────────────────────
@@ -292,10 +316,50 @@ def ping_enabled(home: Path) -> bool:
     ``<corvin_home>/tenants/_default/global/tenant.corvin.yaml``. Disabled by an
     explicit boolean ``false`` OR a false-like string (false/no/0/off); anything
     else — including a missing key — keeps the ping ON.
+
+    Multi-tenant note: the ping identity (instance_id, last_ping stamp) is
+    ONE per CORVIN_HOME, shared across every tenant on this install — but
+    each tenant can independently set ``spec.telemetry.ping_enabled``. This
+    used to only ever consult the single env-resolved tenant
+    (``CORVIN_TENANT_ID``, default ``_default``), so a non-default tenant's
+    explicit opt-out was silently ignored for the shared ping (adversarial
+    review finding). Fail-closed fix: if ANY known tenant on this install
+    has explicitly opted out, the shared ping is suppressed for all of them.
     """
+    if not _tenant_ping_flag(home, None):
+        return False
+    try:
+        for tid in _discover_tenants_under(home):
+            if not _tenant_ping_flag(home, tid):
+                return False
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+def _discover_tenants_under(home: Path) -> list[str]:
+    """Known tenant_ids under THIS specific ``home`` (mirrors
+    ``boot_healer._discover_tenants()``'s logic, but parameterized by the
+    caller's own ``home`` rather than the global ``forge.paths.corvin_home()``
+    — needed so this stays correct under a test tmp-home / non-default
+    CORVIN_HOME, not just the process-global one)."""
+    tenants_root = home / "tenants"
+    if not tenants_root.is_dir():
+        return []
+    return [
+        d.name for d in tenants_root.iterdir()
+        if d.is_dir() and not d.name.startswith(".")
+    ]
+
+
+def _tenant_ping_flag(home: Path, tid: str | None) -> bool:
+    """``ping_enabled`` for one specific tenant id (``None`` = env-resolved
+    default tenant, matching the pre-existing single-tenant behaviour)."""
     try:
         import yaml  # type: ignore[import]
-        cfg_path = _tenant_cfg_path(home)
+        cfg_path = _tenant_cfg_path(home) if tid is None else (
+            home / "tenants" / tid / "global" / "tenant.corvin.yaml"
+        )
         if cfg_path.exists():
             data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
             spec = data.get("spec", data)

@@ -192,6 +192,14 @@ if (Get-Command corvin-install -ErrorAction SilentlyContinue) {
 # dev-checkout equivalent, bridge.ps1 install-autostart, does instead).
 function Install-CorvinAutostart {
     $CorvinHome = if ($env:CORVIN_HOME) { $env:CORVIN_HOME } else { Join-Path $env:USERPROFILE ".corvin" }
+    # CORVIN_HOME is a documented user-overridable env var, not a validated
+    # path — its value is interpolated into the generated supervisor script
+    # below as literal text. Escape backtick/`$`/`"` (in that order) before
+    # any such interpolation so a crafted CORVIN_HOME value can't break out
+    # of the double-quoted string it lands in (same injection class already
+    # fixed in serve_backend.py::_ps_quote this session — adversarial review
+    # finding).
+    $CorvinHomeEscaped = $CorvinHome.Replace('`', '``').Replace('$', '`$').Replace('"', '`"')
     $BinDir = Join-Path $CorvinHome "bin"
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     $Supervisor = Join-Path $BinDir "corvin-supervisor.ps1"
@@ -205,7 +213,7 @@ function Install-CorvinAutostart {
 # Not meant to be run by hand. Re-run install.ps1 (or bridge.ps1 install-autostart
 # from a repo checkout) to regenerate. Logs: `$CorvinHome\logs\console-supervisor.log
 `$ErrorActionPreference = "Continue"
-`$LogDir = Join-Path "$CorvinHome" "logs"
+`$LogDir = Join-Path "$CorvinHomeEscaped" "logs"
 New-Item -ItemType Directory -Force -Path `$LogDir | Out-Null
 `$LogFile = Join-Path `$LogDir "console-supervisor.log"
 function Write-Log(`$m) {

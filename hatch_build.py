@@ -140,7 +140,12 @@ def _is_runtime_path(name: str) -> bool:
 def _is_test_path(rel: Path) -> bool:
     """True for test files / test dirs / dev-only files we never want in the wheel."""
     parts = rel.parts
-    if any(p in ("tests", "test", "__pycache__") for p in parts):
+    # .pytest_cache/.ldd are CI/dev-only state dirs that exist in real
+    # checkouts today (operator/bridges/.pytest_cache, .ldd/heartbeat) but
+    # used a different literal string than "tests"/"test"/"__pycache__", so
+    # they were never matched here and could ship inside a force-included
+    # vendored subtree's wheel copy (adversarial review finding).
+    if any(p in ("tests", "test", "__pycache__", ".pytest_cache", ".ldd") for p in parts):
         return True
     if any(p in _BRIDGE_RUNTIME_SKIP for p in parts):
         return True

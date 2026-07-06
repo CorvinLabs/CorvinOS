@@ -225,6 +225,31 @@ def _load_trace(
     return None
 
 
+def _real_chain_integrity(audit_path: Path, run_event_count: int) -> str:
+    """Real hash-chain verification for the "Chain: ..." indicator.
+
+    Returns one of:
+      "verified"    — chain walk found no problems, and this run has events
+      "empty"       — chain walk found no problems, but this run has none
+      "broken"      — verify_chain found ≥1 tampered/broken-link entry
+      "unavailable" — the verifier itself could not be reached/run
+
+    A broken/tampered result is reported regardless of ``run_event_count``:
+    a corrupted audit file is a whole-file problem, not scoped to one run.
+    """
+    try:
+        if _FORGE_PATH not in sys.path:
+            sys.path.insert(0, _FORGE_PATH)
+        from forge import security_events as _sec  # type: ignore[import-untyped]
+        ok, problems = _sec.verify_chain(audit_path)
+    except Exception:
+        log.warning("wdat_report: chain verification unavailable", exc_info=True)
+        return "unavailable"
+    if not ok:
+        return "broken"
+    return "verified" if run_event_count > 0 else "empty"
+
+
 def _emit_access_audit(tenant_id: str, run_id: str, wid: str, audit_path: Path) -> None:
     """Write audit.wdat_content_accessed (WARNING) before decrypting any trace."""
     try:
@@ -326,9 +351,17 @@ def generate_report(
         else:
             top_level.append(w["worker_id"])
 
-    # Chain integrity indicator — only verified when this run has recorded events
+    # Chain integrity indicator. This used to be COSMETIC — "verified" meant
+    # only "this run has ≥1 recorded event", never an actual hash-chain walk;
+    # a tampered/broken audit.jsonl still showed a permanent green
+    # "Chain: verified" badge in the chat UI, since the badge was never
+    # wired to the real verifier (security_events.verify_chain / audit.
+    # verify_audit) that this codebase already has and already runs
+    # elsewhere (the ACO integrity monitor) — just never for this endpoint
+    # (adversarial review finding). Now performs a real walk of the audit
+    # file every time this report is generated.
     run_event_count = len(tree["manager_decisions"]) + len(tree["workers"])
-    chain_integrity = "verified" if run_event_count > 0 else "empty"
+    chain_integrity = _real_chain_integrity(audit_path_obj, run_event_count)
 
     return {
         "run_id": run_id,

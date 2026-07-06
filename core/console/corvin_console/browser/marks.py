@@ -22,8 +22,21 @@ MAX_MARKS = 120
 # accessible role + name, and a bounding box. Also stamps ``data-corvin-mark`` on
 # each element so a later action can resolve an index back to the exact node
 # without a second heuristic pass (avoids index drift between observe and click).
+#
+# ADR-0183 S2 iframe traversal: this same pass runs once per FRAME (main
+# document + every same-page iframe, same-origin or cross-origin — Playwright's
+# ``Frame.evaluate`` has privileged access regardless of origin). Each frame's
+# marks must still land on a single, globally-unique index across the whole
+# observation, so the caller passes an ``offset`` (the running count of marks
+# already collected in earlier frames) and this pass numbers its own marks
+# starting there instead of always at 0. The ``data-corvin-mark`` attribute
+# value written into that frame's DOM is therefore already the GLOBAL index —
+# ``session.py`` only needs to remember which frame owns which index
+# (``BrowserSession._mark_frame``) to resolve it back correctly later.
 _COLLECT_JS = r"""
-(maxMarks) => {
+(opts) => {
+  const maxMarks = (opts && opts.maxMarks) || 0;
+  const offset = (opts && opts.offset) || 0;
   const INTERACTIVE = new Set([
     'a','button','input','select','textarea','summary','option','label'
   ]);
@@ -91,7 +104,7 @@ _COLLECT_JS = r"""
 
   const all = Array.from(document.querySelectorAll('*'));
   const out = [];
-  let idx = 0;
+  let idx = offset;
   for (const el of all) {
     if (out.length >= maxMarks) break;
     if (!interactive(el)) continue;
@@ -181,6 +194,88 @@ _FORM_SENSITIVE_JS = r"""
     if (pattern.test(label)) return true;
   }
   return false;
+}
+"""
+
+# Structured extraction (ADR-0183 S2): turn a <table> (or an ARIA role="table"/
+# "grid" container that wraps one, or is one itself) into {headers, rows} —
+# NEVER reaching into form-field *values* (there are none in a table's own
+# markup) so this stays inside the same "text/labels only" compliance model as
+# the rest of Set-of-Marks. Runs via ``ElementHandle.evaluate`` on an already
+# ``_resolve()``-d element, so it inherits the same stale-mark protection as
+# every other action. Bounded to ``maxRows`` (session.py caps this at 200) so a
+# huge table can't blow the model's context.
+_EXTRACT_TABLE_JS = r"""
+(el, maxRows) => {
+  function cellText(c) { return (c.innerText || c.textContent || '').trim(); }
+  let table = el;
+  if (!el.tagName || el.tagName.toLowerCase() !== 'table') {
+    const inner = el.querySelector('table');
+    if (inner) table = inner;
+  }
+  let rows = Array.from(table.querySelectorAll(':scope > thead > tr, :scope > tbody > tr, :scope > tr'));
+  if (rows.length === 0) {
+    rows = Array.from(table.querySelectorAll('[role="row"]'));
+  }
+  let headers = [];
+  let bodyRows = rows;
+  if (rows.length > 0) {
+    const headCells = rows[0].querySelectorAll('th, [role="columnheader"]');
+    if (headCells.length > 0) {
+      headers = Array.from(headCells).map(cellText);
+      bodyRows = rows.slice(1);
+    }
+  }
+  const out = [];
+  for (const r of bodyRows) {
+    if (out.length >= maxRows) break;
+    const cells = Array.from(
+      r.querySelectorAll('td, th, [role="cell"], [role="gridcell"], [role="columnheader"]'));
+    out.push(cells.map(cellText));
+  }
+  return { headers, rows: out };
+}
+"""
+
+# Structured extraction (ADR-0183 S2): walk every <form> on the CURRENT
+# top-level document (does not descend into iframes — use extract_table or a
+# per-frame observe() for iframe-embedded forms) and describe its shape —
+# action/method + one entry per field (name/type/required/label). SECURITY:
+# reads only static attributes and the associated <label>; NEVER ``f.value``,
+# so an in-progress password/PII entry can never leak through this path.
+# Hidden inputs are skipped (usually CSRF tokens / internal state, not
+# something the model needs to reason about). Bounded to 50 forms / 100
+# fields per form so a pathological page can't blow the response.
+_EXTRACT_FORMS_JS = r"""
+() => {
+  function fieldInfo(f) {
+    const tag = f.tagName.toLowerCase();
+    let type = (f.getAttribute('type') ||
+                (tag === 'select' ? 'select' : tag === 'textarea' ? 'textarea' : 'text')).toLowerCase();
+    let label = (f.getAttribute('aria-label') || f.getAttribute('placeholder') || '').trim();
+    if (!label && f.labels && f.labels.length > 0) {
+      label = (f.labels[0].innerText || f.labels[0].textContent || '').trim();
+    }
+    if (!label) label = (f.getAttribute('name') || '').trim();
+    return {
+      name: f.getAttribute('name') || '',
+      type,
+      required: f.hasAttribute('required'),
+      label,
+    };
+  }
+  const forms = Array.from(document.querySelectorAll('form'));
+  return forms.slice(0, 50).map(form => {
+    const fields = Array.from(form.querySelectorAll('input, select, textarea'))
+      .filter(f => (f.getAttribute('type') || '').toLowerCase() !== 'hidden')
+      .slice(0, 100)
+      .map(fieldInfo);
+    return {
+      action: form.getAttribute('action') || '',
+      method: (form.getAttribute('method') || 'get').toLowerCase(),
+      fields,
+    };
+  });
 }
 """
 
