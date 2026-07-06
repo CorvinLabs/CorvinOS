@@ -161,6 +161,25 @@ def maybe_pypi_autoupdate() -> None:
         if cmd is None:
             print(f"\n  ⚠ auto-upgrade needs uv. Run manually:\n    {manual}")
             return
+
+        if sys.platform.startswith("win"):
+            # A live self-upgrade would try to overwrite this exact process's own
+            # interpreter/extension files (python.exe, compiled .pyd deps) from
+            # inside the still-running process — Windows keeps those files locked
+            # for the process's lifetime (unlike POSIX, where an open file's inode
+            # can be replaced while it's running), so the upgrade would reliably
+            # fail with an "Access is denied" / "used by another process" error.
+            # Skip the doomed attempt and go straight to the manual hint. The
+            # Task-Scheduler autostart path is unaffected: install.ps1 runs the
+            # upgrade BEFORE launching corvin-serve, as a separate process.
+            print(
+                f"\n  ⚠ a newer version ({latest}) is available, but auto-update "
+                "while running isn't supported on Windows (this process's own "
+                "files are locked). Stop this server (Ctrl-C) and run:\n"
+                f"    {manual}"
+            )
+            return
+
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -170,10 +189,13 @@ def maybe_pypi_autoupdate() -> None:
         if result.returncode == 0:
             print("done — restart corvin-serve to apply")
         else:
-            # upgrade failed (UAC, network, read-only env, …) — tell the user the
-            # exact command rather than silently continuing.
+            # upgrade failed (UAC, network, read-only env, …) — show the actual
+            # error so failures are diagnosable instead of a bare "failed", and
+            # tell the user the exact command to run instead of silently continuing.
+            detail = (result.stderr or result.stdout or "").strip().splitlines()
+            detail_line = detail[-1] if detail else "no output captured"
             print(
-                f"\n  ⚠ auto-upgrade failed. Run manually:\n    {manual}"
+                f"\n  ⚠ auto-upgrade failed ({detail_line}). Run manually:\n    {manual}"
             )
     except subprocess.TimeoutExpired:
         print("(timed out — continuing)")
