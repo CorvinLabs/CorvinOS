@@ -40,11 +40,15 @@ Non-goals:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import stat
 import sys
 from pathlib import Path
+
+log = logging.getLogger(__name__)
+_WIN_MODE_CHECK_SKIPPED_WARNED = False
 
 # Strict env-var-style key — uppercase, digits, underscores, must start
 # with a letter or underscore. Same convention as POSIX env vars. Rejects
@@ -130,8 +134,23 @@ def _check_mode(path: Path) -> None:
     # Allow 0o600, 0o400. Anything with group/other bits set is rejected.
     # Windows: NTFS has no POSIX group/other bits, so st_mode always looks
     # permissive there regardless of real ACLs — skip the check (this would
-    # otherwise break the vault on every Windows install).
-    if not sys.platform.startswith("win") and mode & 0o077:
+    # otherwise break the vault on every Windows install). Unlike POSIX, this
+    # is now an unconditional bypass with no NTFS-ACL-equivalent check behind
+    # it (adversarial review finding) — log once per process so a genuinely
+    # shared/multi-user Windows box at least has an operator-visible signal
+    # that this hardening layer is inactive there.
+    if sys.platform.startswith("win"):
+        global _WIN_MODE_CHECK_SKIPPED_WARNED
+        if not _WIN_MODE_CHECK_SKIPPED_WARNED:
+            log.warning(
+                "secret_vault: file-permission hardening is inactive on Windows "
+                "(NTFS has no POSIX mode bits) — on a shared/multi-user machine, "
+                "restrict access to %s via NTFS ACLs (icacls) yourself.",
+                path,
+            )
+            _WIN_MODE_CHECK_SKIPPED_WARNED = True
+        return
+    if mode & 0o077:
         raise VaultError(
             f"vault {path} mode {oct(mode)} too permissive "
             f"(must be 0600 or 0400). Run: chmod 600 {path}"

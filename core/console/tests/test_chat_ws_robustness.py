@@ -134,6 +134,70 @@ class ChatWsRobustnessTests(unittest.TestCase):
                 ws.send_json({"type": "user", "text": "two"})
                 self.assertEqual(ws.receive_json()["type"], "delta")
 
+    def test_non_object_json_does_not_drop_socket(self) -> None:
+        """Adversarial review finding: a syntactically-valid, non-object JSON
+        message (e.g. the bare text "42") parses fine but msg.get("type")
+        raised an uncaught AttributeError, dropping the connection -- direct
+        contradiction of this file's own documented "never drop the socket"
+        contract. Must come back as an in-band error and keep the socket open."""
+        with (
+            patch.object(chat_routes.session_auth, "load_session", return_value=self.rec),
+            patch.object(chat_routes.chat_runtime, "get_session", return_value=self.sess),
+        ):
+            c = self._client()
+            with c.websocket_connect("/v1/console/chat/sessions/s4/stream") as ws:
+                self.assertEqual(ws.receive_json()["type"], "ready")
+                ws.send_text("42")
+                self.assertEqual(ws.receive_json()["type"], "error")
+                # Socket MUST still be open afterwards.
+                ws.send_json({"type": "ping"})
+                self.assertEqual(ws.receive_json()["type"], "pong")
+
+    def test_browser_command_gate_import_does_not_nameerror(self) -> None:
+        """Adversarial review finding: routes/chat.py referenced `_spawn_gates`
+        in `/browser <task>` handling without ever importing it -- every call
+        raised NameError, silently caught by the broad except and reported as
+        "safety check failed", so the L44 gate never actually ran and the
+        feature was entirely non-functional. Mock the gate itself (returning
+        "permit") and the browser manager (raising an unrelated, expected
+        failure) to prove the gate import resolves and actually executes,
+        rather than the NameError short-circuit."""
+        from corvin_console import _spawn_gates
+
+        gate_calls = []
+
+        def _fake_gate(*a, **k):
+            gate_calls.append((a, k))
+            return None  # permitted
+
+        with (
+            patch.object(chat_routes.session_auth, "load_session", return_value=self.rec),
+            patch.object(chat_routes.chat_runtime, "get_session", return_value=self.sess),
+            patch.object(_spawn_gates, "check_console_spawn_or_refusal", _fake_gate),
+            patch(
+                "corvin_console.routes._compute_license_gate.enforce_chat_turns",
+                lambda *a, **k: None,
+            ),
+        ):
+            # browser._mgr() launches a real Playwright session -- stub it to
+            # fail with an unrelated, expected error so this test stays fast
+            # and hermetic while still proving we got PAST the gate.
+            import corvin_console.routes.browser as browser_mod
+            fake_mgr = MagicMock()
+            fake_mgr.create = MagicMock(side_effect=RuntimeError("no browser in test env"))
+            with patch.object(browser_mod, "_mgr", return_value=fake_mgr):
+                c = self._client()
+                with c.websocket_connect("/v1/console/chat/sessions/s5/stream") as ws:
+                    self.assertEqual(ws.receive_json()["type"], "ready")
+                    ws.send_json({"type": "user", "text": "/browser go to example.com"})
+                    resp = ws.receive_json()
+
+        self.assertEqual(len(gate_calls), 1, "the L44 gate must actually run, not NameError")
+        # Must be the browser-launch failure message, NOT the NameError
+        # fallback's "safety check failed" text.
+        self.assertIn("could not start browser", resp.get("message", ""))
+        self.assertNotIn("safety check failed", resp.get("message", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

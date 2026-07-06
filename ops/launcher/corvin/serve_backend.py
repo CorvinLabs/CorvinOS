@@ -123,8 +123,15 @@ def _pick_upgrade_command(latest: str) -> tuple[list[str] | None, str]:
 def _ps_quote(s: str) -> str:
     """Quote a single string for embedding in PowerShell source, e.g. -FilePath
     (which binds to [string], NOT [string[]] — an array literal there either
-    fails to bind or coerces unpredictably depending on PowerShell version)."""
-    return '"' + s.replace("`", "``").replace('"', '`"') + '"'
+    fails to bind or coerces unpredictably depending on PowerShell version).
+
+    Backtick MUST be escaped first (it's the escape char itself), then `"`.
+    `$` is ALSO escaped: inside a PowerShell double-quoted string, `$(...)` /
+    `$env:...` / `$variable` are live subexpressions that PowerShell evaluates
+    at parse time regardless of which cmdlet consumes the resulting string —
+    without this, a CLI arg (e.g. --host) containing `$(...)` is arbitrary
+    PowerShell code execution in the generated self-update script."""
+    return '"' + s.replace("`", "``").replace('"', '`"').replace("$", "`$") + '"'
 
 
 def _ps_array_literal(items: list[str]) -> str:
@@ -154,27 +161,46 @@ def _spawn_windows_self_updater(cmd: list[str], relaunch_argv: list[str]) -> boo
 
     try:
         pid = os.getpid()
+
+        # Resolve the relaunch executable to an absolute path NOW, in this
+        # process's own environment/PATH — the detached PowerShell script may
+        # inherit a different (e.g. Task-Scheduler-stripped) PATH by the time
+        # it actually runs, and a bare "corvin-serve" would then fail to
+        # resolve, silently leaving the server down after a successful
+        # upgrade. Falls back to the bare name if resolution fails (matches
+        # the previous behaviour rather than aborting the handoff).
+        relaunch_exe = shutil.which(relaunch_argv[0]) or relaunch_argv[0]
+        relaunch_argv = [relaunch_exe, *relaunch_argv[1:]]
+
+        # Every piece of dynamic text — including inside Log "..." calls —
+        # MUST go through _ps_quote(). Splicing raw text into the script
+        # source is a parse-time (a stray `"`) or execution-time (a `$(...)`)
+        # injection risk, and either one can corrupt or hijack this script.
         log_path = Path(tempfile.gettempdir()) / "corvin-self-update.log"
         script_path = Path(tempfile.gettempdir()) / f"corvin-self-update-{pid}.ps1"
+        cmd_str = " ".join(cmd)
+        relaunch_str = " ".join(relaunch_argv)
         script = textwrap.dedent(f"""
             $ErrorActionPreference = "Continue"
-            $log = "{log_path}"
+            $log = {_ps_quote(str(log_path))}
             function Log($m) {{ Add-Content -Path $log -Value "$(Get-Date -Format o) $m" }}
-            Log "waiting for corvin-serve (pid {pid}) to exit"
+            Log {_ps_quote(f"waiting for corvin-serve (pid {pid}) to exit")}
             while (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{
                 Start-Sleep -Milliseconds 400
             }}
-            Log "pid {pid} exited -- running upgrade: {' '.join(cmd)}"
+            Log {_ps_quote(f"pid {pid} exited -- running upgrade: {cmd_str}")}
             $p = Start-Process -FilePath {_ps_quote(cmd[0])} `
                 -ArgumentList {_ps_array_literal(cmd[1:])} `
                 -NoNewWindow -Wait -PassThru
             if ($p.ExitCode -ne 0) {{
-                Log "upgrade FAILED (exit $($p.ExitCode)) -- corvin-serve NOT relaunched. Run manually: {' '.join(cmd)}"
+                Log {_ps_quote(f"upgrade FAILED (exit code below) -- corvin-serve NOT relaunched. Run manually: {cmd_str}")}
+                Log "exit code: $($p.ExitCode)"
                 exit 1
             }}
-            Log "upgrade ok -- relaunching: {' '.join(relaunch_argv)}"
+            Log {_ps_quote(f"upgrade ok -- relaunching: {relaunch_str}")}
             Start-Process -FilePath {_ps_quote(relaunch_argv[0])} `
-                -ArgumentList {_ps_array_literal(relaunch_argv[1:])}
+                -ArgumentList {_ps_array_literal(relaunch_argv[1:])} `
+                -WindowStyle Hidden
             Log "relaunch dispatched"
         """).strip()
         script_path.write_text(script, encoding="utf-8")

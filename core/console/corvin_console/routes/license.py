@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Annotated, Any
@@ -734,6 +735,33 @@ async def apply_license_key(
             detail="Invalid license key — signature verification failed",
         )
 
+    # Pre-check revocation (ADR-0102) before writing — a cancelled/revoked token
+    # must be rejected here, not merely left to eventually degrade to Free tier
+    # on some later reload. Fails open only if both the network AND local cache
+    # are unavailable (see _is_token_fp_revoked docstring) — never blocks a
+    # legitimate apply over a transient outage.
+    try:
+        if _lv._is_token_fp_revoked(token):
+            try:
+                console_audit.action_failed(
+                    tenant_id=rec.tenant_id,
+                    sid_fingerprint=rec.sid_fingerprint,
+                    action="license.key_apply",
+                    target_kind="license",
+                    target_id=(str(claims.get("jti", ""))[:8] or "unknown"),
+                    reason="revoked",
+                )
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail="License key has been revoked",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # unexpected check failure — let load_license_from_env() handle it
+
     # Pre-check device_fp binding before writing — prevents ok=True/loaded=False confusion
     # when a member-tier key is issued for a different device (ADR-0098).
     try:
@@ -770,12 +798,28 @@ async def apply_license_key(
         corvin_home = _forge_paths.corvin_home()
         key_path = corvin_home / "global" / "license.key"
         key_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-        # Atomic write with mode 0600 from the start — avoids TOCTOU between
-        # write_text and chmod where another local user could read the token.
-        # Parent dir created with 0700 to block symlink staging by group members.
-        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with open(fd, "w", encoding="utf-8") as _fh:
-            _fh.write(token + "\n")
+        # tempfile.mkstemp + os.replace, not os.open(key_path, O_CREAT|O_TRUNC):
+        # the O_TRUNC form only applies its mode argument when the file is
+        # newly CREATED — if key_path already exists (e.g. left permissive by
+        # a historical bug, bad umask, or backup restore), O_TRUNC opens and
+        # truncates the EXISTING file in place without ever correcting its
+        # mode, so a once-permissive license.key stays permissive on every
+        # subsequent "Apply Key" forever. mkstemp always creates a fresh file
+        # at 0600, and os.replace() atomically swaps it in — this also closes
+        # the symlink-follow risk of writing directly to key_path (replace()
+        # unlinks/replaces whatever is at that path rather than following it).
+        _fd, _tmp = tempfile.mkstemp(dir=key_path.parent, prefix=".license.", suffix=".tmp")
+        try:
+            with os.fdopen(_fd, "w", encoding="utf-8") as _fh:
+                _fh.write(token + "\n")
+            os.chmod(_tmp, 0o600)
+            os.replace(_tmp, key_path)
+        except Exception:
+            try:
+                os.unlink(_tmp)
+            except OSError:
+                pass
+            raise
     except Exception as exc:
         try:
             console_audit.action_failed(

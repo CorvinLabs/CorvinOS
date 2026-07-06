@@ -30,6 +30,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -146,6 +147,19 @@ JSON schema as the top-level manager, but honour your sub-budget strictly.
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
+
+# The only BudgetEnvelope fields a caller (HTTP budget_override, workflow YAML)
+# may ever set. Deliberately excludes the accumulated/internal-state fields
+# (loops_used, tokens_used, workers_used, tool_calls_used,
+# rejected_completions, start_time) — those are runtime bookkeeping, not caps,
+# and letting a caller set e.g. start_time in the future would permanently
+# defeat the max_wall_time check (adversarial review finding).
+_BUDGET_OVERRIDE_ALLOWED_FIELDS = frozenset({
+    "max_loops", "max_total_tokens", "max_wall_time", "max_total_workers",
+    "max_tool_calls", "max_depth", "max_workers_per_iteration",
+    "max_rejected_completions",
+})
+
 
 @dataclass
 class BudgetEnvelope:
@@ -477,6 +491,18 @@ def _wdat_record_completion(
         log.debug("acs: wdat content store write failed for %s: %s", wid, _exc)
 
 
+def _clamp_positive_cap(value: int, default: int, ceiling: int) -> int:
+    """Clamp a budget cap to [1, ceiling]. BudgetEnvelope.check() treats any
+    value <= 0 as "unbounded" for max_loops/max_total_workers (`if self.max_X
+    > 0 and ...`) — a workflow YAML or budget_override setting either to 0 or
+    negative silently disables that specific enforcement, not "uses the
+    default" (adversarial review finding). Values above ceiling are clamped,
+    not rejected, so a legitimately large workflow still runs — just bounded."""
+    if value <= 0:
+        return default
+    return min(value, ceiling)
+
+
 def _budget_from_spec(spec: dict) -> BudgetEnvelope:
     b = (
         spec.get("orchestration", {})
@@ -484,10 +510,10 @@ def _budget_from_spec(spec: dict) -> BudgetEnvelope:
         .get("budget", {})
     ) or {}
     return BudgetEnvelope(
-        max_loops=int(b.get("max_loops") or 100),
+        max_loops=_clamp_positive_cap(int(b.get("max_loops") or 100), 100, 5000),
         max_total_tokens=int(b.get("max_total_tokens") or 0),
         max_wall_time=int(b.get("max_wall_time") or 3600),
-        max_total_workers=int(b.get("max_total_workers") or 500),
+        max_total_workers=_clamp_positive_cap(int(b.get("max_total_workers") or 500), 500, 5000),
         max_tool_calls=int(b.get("max_tool_calls") or 0),
         max_depth=int(b.get("max_depth") or 4),
         max_workers_per_iteration=int(b.get("max_workers_per_iteration") or 6),
@@ -1157,6 +1183,31 @@ def _worker_mcp_config(ctx: RunContext) -> list[dict]:
     return servers
 
 
+class _WorkerProcessHolder:
+    """Mutable holder so the async caller can kill the subprocess spawned
+    inside _call_worker_sync's executor thread if the awaiting Task is
+    cancelled. asyncio.to_thread() does NOT itself interrupt a blocking
+    subprocess.run()/Popen.communicate() call running in the thread pool —
+    cancelling the awaiting coroutine only stops waiting for it, the thread
+    (and the `claude -p` child it spawned) keeps running to completion
+    regardless (adversarial review finding: a cancelled ACS run could leave
+    a live worker subprocess consuming CPU/tokens/API cost for up to
+    _WORKER_TIMEOUT more seconds after the run already returned a result)."""
+
+    def __init__(self) -> None:
+        self.popen: "subprocess.Popen | None" = None
+        self.lock = threading.Lock()
+
+    def kill(self) -> None:
+        with self.lock:
+            proc = self.popen
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001 — best-effort, never raise from cleanup
+                pass
+
+
 def _call_worker_sync(
     prompt: str,
     system: str,
@@ -1164,6 +1215,7 @@ def _call_worker_sync(
     budget: dict,
     extra_env: "dict[str, str] | None" = None,
     tenant_id: str = "_default",
+    proc_holder: "_WorkerProcessHolder | None" = None,
 ) -> tuple[str, int, dict]:
     """Call claude -p for worker execution.
 
@@ -1202,7 +1254,11 @@ def _call_worker_sync(
     # status="partial", confidence=0.0, causing every delegated web-console
     # turn to fail with "Delegation fehlgeschlagen: unknown error".
     worker_max_turns = str(budget.get("max_worker_turns", 20))
-    result = subprocess.run(
+    # subprocess.Popen (not .run()) so proc_holder can expose a live handle:
+    # if the awaiting asyncio Task gets cancelled while this call is blocked
+    # in the executor thread, the caller kills THIS exact process via
+    # proc_holder.kill() instead of leaving it running to completion.
+    proc = subprocess.Popen(
         [
             binary, "-p", prompt,
             "--append-system-prompt", system,
@@ -1210,10 +1266,20 @@ def _call_worker_sync(
             "--max-turns", worker_max_turns,
             "--output-format", "json",
         ],
-        capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL,
-        timeout=timeout, check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        stdin=subprocess.DEVNULL,
     )
-    raw = result.stdout.strip()
+    if proc_holder is not None:
+        with proc_holder.lock:
+            proc_holder.popen = proc
+    try:
+        stdout, _stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Mirror subprocess.run()'s own timeout handling: kill, drain, re-raise.
+        proc.kill()
+        proc.communicate()
+        raise
+    raw = stdout.strip()
     attestation: dict = {
         "engine_id": "claude_code",
         "model_id": model,   # configured model as fallback
@@ -1517,10 +1583,23 @@ async def _dispatch_workers(
                 }
                 if _engine_id == "claude_code" and ctx.datasource_env:
                     _worker_env.update(ctx.datasource_env)
-                text, tok, attestation = await asyncio.to_thread(
-                    _call_worker_sync, prompt, system, worker_model, budget_alloc,
-                    _worker_env, ctx.tenant_id,
-                )
+                _proc_holder = _WorkerProcessHolder()
+                try:
+                    text, tok, attestation = await asyncio.to_thread(
+                        _call_worker_sync, prompt, system, worker_model, budget_alloc,
+                        _worker_env, ctx.tenant_id, _proc_holder,
+                    )
+                except asyncio.CancelledError:
+                    # asyncio.to_thread() does NOT interrupt a blocking call
+                    # already running in the executor thread — cancelling this
+                    # await only stops WAITING for it; the claude -p subprocess
+                    # spawned inside _call_worker_sync kept running to
+                    # completion regardless (adversarial review finding: a
+                    # cancelled ACS run could leave a live worker consuming
+                    # CPU/tokens/API cost for up to _WORKER_TIMEOUT more
+                    # seconds). Kill the actual process before re-raising.
+                    _proc_holder.kill()
+                    raise
             except asyncio.CancelledError:
                 # ADR-0171 — cancellation (budget abort, run timeout, parent
                 # cancel, client disconnect) does NOT reach `except Exception`
@@ -2232,6 +2311,28 @@ class ACSRuntime:
 
         workflow_id = spec.get("workflow", {}).get("name") or "unnamed"
 
+        # Adversarial-review CRITICAL fix: budget_override used to be applied
+        # via blind setattr(budget, k, ...) AFTER validation (step 3, below) —
+        # so it (a) never passed through validate_workflow_dict's R31/R32
+        # max_depth ceiling at all, reintroducing the exact unbounded-recursion
+        # bug this codebase already fixed once, and (b) had no field allow-list,
+        # so hasattr(budget, k) let a caller overwrite internal accounting state
+        # (start_time, loops_used, workers_used, ...) via the same HTTP field —
+        # e.g. a future-dated start_time permanently defeats the max_wall_time
+        # check. Fix: merge ONLY the legitimate cap fields into the spec's own
+        # budget dict BEFORE validation, so the override gets exactly the same
+        # ceiling enforcement as a hand-authored workflow YAML would.
+        if budget_override:
+            _orch = spec.setdefault("orchestration", {})
+            _dloop = _orch.setdefault("delegation_loop", {})
+            _bdict = _dloop.setdefault("budget", {})
+            for _k in _BUDGET_OVERRIDE_ALLOWED_FIELDS:
+                if _k in budget_override:
+                    try:
+                        _bdict[_k] = int(budget_override[_k])
+                    except (TypeError, ValueError):
+                        pass  # non-numeric override value — ignored, not crashed on
+
         # 2. Validate
         val_result = validate_workflow_dict(spec)
         if not val_result.ok:
@@ -2292,12 +2393,9 @@ class ACSRuntime:
                     error=_l44_refusal,
                 )
 
-        # 3. Build budget
+        # 3. Build budget — budget_override was already merged into spec (and
+        # validated) above; _budget_from_spec reads the effective values.
         budget = _budget_from_spec(spec)
-        if budget_override:
-            for k, v in budget_override.items():
-                if hasattr(budget, k):
-                    setattr(budget, k, int(v))
 
         # 4. Build run context
         rid = run_id or f"acs-{int(time.time())}-{secrets.token_hex(4)}"
