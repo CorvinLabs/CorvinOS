@@ -578,37 +578,13 @@ def run_delegate(
                 ),
             )
 
-        # ADR-0150 LIC-DELEGATE-MCP-COMPUTE-01: each delegate_* call spawns a paid
-        # worker engine (the orchestrator persona fans out N per OS-turn). Charge
-        # compute_units_per_day fail-closed here — symmetric to the web-chat ACS
-        # delegation branch — so the per-turn chat_turns charge does not become an
-        # unbounded-compute bypass. Reuses the dual-env bypass already checked above.
-        _dlg_cq_err: "type | None" = None
-        try:
-            from license.compute_quota import increment_and_check as _dlg_cq  # type: ignore
-            from license.limits import LicenseLimitError as _dlg_cq_err  # type: ignore
-            from license.validator import load_license_from_env as _dlg_load_lic  # type: ignore
-            # Ensure the license is loaded before quota enforcement so the correct
-            # tier limits are applied. The MCP server process does not call
-            # load_license_from_env() at startup; without this call _ACTIVE_LICENSE
-            # is None and get_limit() falls back to FREE_TIER (1/day).
-            # load_license_from_env() is idempotent (_LICENSE_INITIALIZED guard).
-            _dlg_load_lic()
-            _dlg_home = Path(os.environ.get("CORVIN_HOME", "").strip() or (Path.home() / ".corvin"))
-        except ImportError:
-            return DelegateResult(
-                ok=False, engine=engine, duration_ms=0, model=model,
-                error="compute quota enforcement unavailable (fail-closed)",
-            )
-        try:
-            _dlg_cq(_dlg_home, channel="delegate", chat_key=f"delegate:{engine}")
-        except Exception as _dlg_exc:  # noqa: BLE001
-            if _dlg_cq_err is not None and isinstance(_dlg_exc, _dlg_cq_err):
-                return DelegateResult(
-                    ok=False, engine=engine, duration_ms=0, model=model,
-                    error="daily compute limit reached (compute_units_per_day)",
-                )
-            # operational error already swallowed by increment_and_check (fail-open)
+        # ADR-0150 LIC-DELEGATE-MCP-COMPUTE-01 (superseded, 2026-07-06): this used
+        # to charge compute_units_per_day here too, symmetric to the web-chat ACS
+        # branch. Maintainer decision: normal engine delegation (this path) is not
+        # a metered "big data / heavy compute" feature and must keep working even
+        # when the ACS daily compute quota is exhausted — only ACS (chat_runtime.py
+        # web-chat branch + acs_engine_adapter.run_acs_workflow) is quota-gated.
+        # engines_allowed (above) remains the gate for this path.
 
     factory = engine_factory or _default_engine_factory
     persona_tag = (persona or os.environ.get("CORVIN_CALLER_PERSONA") or "").strip()
