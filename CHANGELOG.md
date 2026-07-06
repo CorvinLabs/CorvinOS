@@ -6,6 +6,24 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.14] — 2026-07-06
+
+### Added
+- **Real automatic self-update on Windows** (was: manual command only, since
+  0.10.12). `corvin-serve` now hands off to a detached PowerShell helper that
+  waits for the current process to fully exit (unlocking its own interpreter
+  / extension files), runs the upgrade, and relaunches `corvin-serve` with
+  the same arguments — the update actually applies without the user running
+  anything by hand. Falls back to the old manual-command message if the
+  handoff itself can't be spawned. Logs every step to
+  `%TEMP%\corvin-self-update.log` for diagnosability, since nothing is
+  attached to a console by the time most of the script runs. The
+  Task-Scheduler autostart path (`install.ps1`) is unchanged — it already
+  upgrades before launching `corvin-serve` as a separate step.
+  **Note:** the PID-wait/relaunch sequence could only be verified for
+  correct script generation and Python-side control flow here (no Windows
+  machine available) — needs a real-machine check.
+
 ## [0.10.13] — 2026-07-06
 
 ### Fixed
