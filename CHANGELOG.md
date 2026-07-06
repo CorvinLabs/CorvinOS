@@ -6,6 +6,18 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Normal engine delegation no longer shares the ACS daily compute quota
+  (supersedes ADR-0150 LIC-DELEGATE-MCP-COMPUTE-01):** `delegate_claude_code` /
+  `delegate_codex` / `delegate_opencode` / `delegate_hermes` / `delegate_copilot`
+  (`core/delegate/corvin_delegate/delegation.py::run_delegate`) previously
+  charged the same `compute_units_per_day` pool as ACS (Free tier: 1/day),
+  so exhausting either one blocked both. Maintainer decision: plain
+  engine-to-engine delegation is not a metered "big data / heavy compute"
+  feature and should keep working once the ACS quota is spent — only ACS
+  (`chat_runtime.py` web-chat branch + `acs_engine_adapter.run_acs_workflow`)
+  remains quota-gated. `engines_allowed` still gates `run_delegate` unchanged.
+
 ## [0.10.10] — 2026-07-06
 
 ### Fixed
