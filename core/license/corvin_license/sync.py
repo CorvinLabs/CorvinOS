@@ -114,7 +114,9 @@ def load_sync_cache() -> SyncCache:
         return SyncCache()
     try:
         mode = path.stat().st_mode & 0o777
-        if mode & 0o077:
+        # Windows: NTFS has no POSIX group/other bits, so st_mode always looks
+        # permissive there regardless of real ACLs — skip the check.
+        if not sys.platform.startswith("win") and mode & 0o077:
             log.warning("sync_cache: file mode 0o%o is too permissive — ignoring", mode)
             return SyncCache()
         return SyncCache.from_dict(json.loads(path.read_text(encoding="utf-8")))

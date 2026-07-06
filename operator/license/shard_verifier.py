@@ -117,7 +117,9 @@ def _check_shard_b(corvin_home: Path) -> dict[str, str]:
         return _result("B", "instance_id", WARN, "instance_id.json absent (run corvin-instance-id show)")
     try:
         mode = iid_file.stat().st_mode & 0o777
-        if mode & 0o077:
+        # Windows: NTFS has no POSIX group/other bits, so st_mode always looks
+        # permissive there regardless of real ACLs — skip the check.
+        if not sys.platform.startswith("win") and mode & 0o077:
             return _result("B", "instance_id", FAIL, f"instance_id.json mode 0o{mode:o} too permissive (want 0600)")
         import json
 
