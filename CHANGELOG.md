@@ -6,6 +6,68 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.15] — 2026-07-06
+
+### Fixed
+Four parallel adversarial code-review passes over ACS, web-chat, licensing,
+and Windows install/paths/permissions. 3 CRITICAL + 7 HIGH confirmed
+findings fixed, all backed by new regression tests.
+
+**CRITICAL**
+- **ACS `budget_override` bypassed workflow validation entirely** — applied
+  via blind `setattr()` *after* `validate_workflow_dict()` had already run,
+  so it never got the `max_depth` ceiling (R31/R32) at all, and had no field
+  allow-list, letting a caller overwrite internal accounting state
+  (`start_time`, `loops_used`, ...) through the same HTTP field. Now merged
+  into the spec's own budget dict, restricted to an explicit allow-list,
+  *before* validation.
+- **License revocation was never checked on reload** — only at process
+  boot. A cancelled subscription's token kept re-activating on every
+  authenticated console request until the whole process restarted.
+- **Windows self-update PowerShell injection** — `_ps_quote()` didn't escape
+  `$`, so a CLI arg (e.g. `--host`) containing `$(...)` was arbitrary command
+  execution in the generated self-update script.
+
+**HIGH**
+- ACS: `max_loops`/`max_total_workers` set to 0 or negative (via YAML or
+  `budget_override`) silently disabled that specific cap instead of falling
+  back to a sane default — now clamped to `[1, ceiling]`.
+- ACS: a cancelled run could leave a live `claude -p` worker subprocess
+  running (burning CPU/tokens/API cost) for up to 30 more minutes, since
+  `asyncio.to_thread()` doesn't interrupt a blocking call already running in
+  the executor thread — the process is now tracked and killed on cancel.
+- License: a permissive-mode `global/license.key` was only warned about and
+  still trusted (despite a comment claiming parity with `session.key`,
+  which actually rejects) — now rejects, matching `session.key`.
+- License: `apply_license_key` wrote via `O_CREAT|O_TRUNC`, which only
+  applies its mode argument on *new* file creation — a once-permissive
+  `license.key` never self-healed on repeated "Apply Key". Switched to the
+  same `tempfile.mkstemp`+`chmod`+`os.replace` pattern used elsewhere (also
+  closes a symlink-follow risk).
+- Windows self-update: `Log "..."` lines spliced raw command text into the
+  generated PowerShell source with zero quoting — a stray `"` there aborts
+  the whole script at parse time, and the caller had already exited (no
+  relaunch, self-inflicted outage).
+- Windows self-update: the relaunch command was a bare name relying on the
+  detached script's inherited PATH — now resolved via `shutil.which()` in
+  this process's own environment first.
+- Chat: `/browser <task>` referenced `_spawn_gates` without ever importing
+  it — every call raised `NameError`, silently caught and reported as
+  "safety check failed"; the acceptable-use gate never actually ran and the
+  feature was entirely non-functional (failed closed, but dead).
+- Chat: the ACS-run exception handler referenced an undefined `logger`,
+  masking every real ACS delegation crash behind a second `NameError`.
+- Chat WebSocket: a syntactically-valid non-object JSON message (e.g. the
+  bare text `"42"`) crashed the handler with an `AttributeError`, dropping
+  the connection (two call sites fixed).
+
+**Also**: `secret_vault.py`'s Windows permission-check bypass now logs a
+one-time warning instead of being completely silent.
+
+Several additional findings were confirmed but deferred as lower-severity
+or requiring deeper structural work / real Windows hardware to verify —
+see the commit message for the full list.
+
 ## [0.10.14] — 2026-07-06
 
 ### Added
