@@ -551,8 +551,11 @@ def _check_instance_id_bound(claims: dict[str, Any]) -> bool:
             return False  # no instance_id on record → reject binding
         # ADR-0138 M3 D1: world/group-readable instance_id.json indicates possible
         # tampering — reject binding check rather than trusting a potentially
-        # attacker-controlled UUID.
-        if iid_file.stat().st_mode & 0o077:
+        # attacker-controlled UUID. Skipped on Windows: NTFS has no POSIX
+        # group/other bits, so st_mode reports a permissive-looking value there
+        # regardless of the file's real ACLs — this would reject every bound
+        # licence on every Windows install.
+        if not sys.platform.startswith("win") and iid_file.stat().st_mode & 0o077:
             log.warning("license: instance_id.json has permissive mode — possible tamper, rejecting binding")
             _audit("license.instance_id_mode_error")
             return False
@@ -780,11 +783,17 @@ def _find_token() -> str | None:
         return env
 
     # 2. Session key file written by refresh daemon (XDG-aware path — LIC-006)
+    # Windows note: the mode check below is skipped on Windows — NTFS has no
+    # POSIX group/other bits, so os.stat().st_mode reports a permissive-looking
+    # value there regardless of the file's real ACLs. Without this guard, a
+    # perfectly valid session.key would be rejected on every Windows install,
+    # short-circuiting this function with `return None` and never falling
+    # through to check global/license.key below.
     session_file = _config_dir() / "session.key"
     if session_file.exists():
         try:
             st = session_file.stat()
-            if st.st_mode & 0o077:
+            if not sys.platform.startswith("win") and st.st_mode & 0o077:
                 log.warning(
                     "license: session.key is group/world readable — rejecting (mode 0%03o)",
                     st.st_mode & 0o777,
@@ -803,7 +812,7 @@ def _find_token() -> str | None:
         if global_key.exists():
             try:  # F-02 (ADR-0144): mode parity with session.key/instance_id.json
                 _gk_mode = global_key.stat().st_mode & 0o777  # single stat call
-                if _gk_mode & 0o077:
+                if not sys.platform.startswith("win") and _gk_mode & 0o077:
                     log.warning(
                         "license: global/license.key mode 0o%03o too permissive "
                         "(expected 0600)",
@@ -828,11 +837,12 @@ def _find_token_disk_only() -> str | None:
     path is intentionally absent here; it only applies at boot via _find_token().
     """
     # 1. Session key file written by refresh daemon (XDG-aware path — LIC-006)
+    # See the matching comment in _find_token() re: the Windows mode-check guard.
     session_file = _config_dir() / "session.key"
     if session_file.exists():
         try:
             st = session_file.stat()
-            if st.st_mode & 0o077:
+            if not sys.platform.startswith("win") and st.st_mode & 0o077:
                 log.warning(
                     "license: session.key is group/world readable — rejecting (mode 0%03o)",
                     st.st_mode & 0o777,
@@ -854,7 +864,7 @@ def _find_token_disk_only() -> str | None:
         if global_key.exists():
             try:  # F-02 (ADR-0144): mode parity with session.key/instance_id.json
                 _gk_mode = global_key.stat().st_mode & 0o777  # single stat call
-                if _gk_mode & 0o077:
+                if not sys.platform.startswith("win") and _gk_mode & 0o077:
                     log.warning(
                         "license: global/license.key mode 0o%03o too permissive "
                         "(expected 0600)",

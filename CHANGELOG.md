@@ -6,6 +6,26 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Windows: license keys silently fell back to Free tier ("mode too permissive"
+  false positives, 7 files):** NTFS has no POSIX group/other permission bits, so
+  `os.stat().st_mode` reports a permissive-looking value on Windows regardless
+  of a file's real ACLs, and `os.chmod(0o600)` cannot narrow it — every
+  "reject if group/other-readable" security check in the licence/identity
+  stack therefore ALWAYS tripped on Windows. Worst offender:
+  `operator/license/validator.py::_find_token()` / `_find_token_disk_only()`
+  rejected `session.key` on sight and `return`ed before ever checking
+  `global/license.key` — so a freshly pasted "Apply License Key" was silently
+  ignored and the console reported `tier: free` with no error. Also broke
+  `operator/forge/forge/secret_vault.py` (hard `VaultError`, not just a
+  warning) and spammed false "too permissive" warnings every few minutes from
+  `operator/bridges/shared/instance_identity.py` (`instance_id.json`,
+  `instance_key.pem`). Added a `sys.platform.startswith("win")` guard to all
+  10 call sites across `operator/license/{validator,sync,compute_quota,
+  session_refresh,shard_verifier}.py`, `operator/bridges/shared/
+  instance_identity.py`, and `operator/forge/forge/secret_vault.py`. POSIX
+  behaviour is unchanged (298 + 24 existing tests still green).
+
 ### Changed
 - **Normal engine delegation no longer shares the ACS daily compute quota
   (supersedes ADR-0150 LIC-DELEGATE-MCP-COMPUTE-01):** `delegate_claude_code` /

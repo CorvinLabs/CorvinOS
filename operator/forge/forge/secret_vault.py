@@ -43,6 +43,7 @@ import json
 import os
 import re
 import stat
+import sys
 from pathlib import Path
 
 # Strict env-var-style key — uppercase, digits, underscores, must start
@@ -127,7 +128,10 @@ def _check_mode(path: Path) -> None:
         raise VaultError(f"vault stat failed: {exc}") from exc
     mode = stat.S_IMODE(st.st_mode)
     # Allow 0o600, 0o400. Anything with group/other bits set is rejected.
-    if mode & 0o077:
+    # Windows: NTFS has no POSIX group/other bits, so st_mode always looks
+    # permissive there regardless of real ACLs — skip the check (this would
+    # otherwise break the vault on every Windows install).
+    if not sys.platform.startswith("win") and mode & 0o077:
         raise VaultError(
             f"vault {path} mode {oct(mode)} too permissive "
             f"(must be 0600 or 0400). Run: chmod 600 {path}"

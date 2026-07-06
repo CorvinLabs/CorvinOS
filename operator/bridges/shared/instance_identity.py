@@ -119,7 +119,16 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
 
 def _validate_mode_strict(path: Path) -> None:
     """Raise on world-readable identity file. Identity is non-secret but
-    the file may live next to keys later; cheap to enforce now."""
+    the file may live next to keys later; cheap to enforce now.
+
+    No-op on Windows: NTFS has no POSIX group/other bits, so os.stat().st_mode
+    always reports a permissive-looking value there regardless of the file's
+    real ACLs, and the os.chmod(0o600) self-heal below cannot narrow it either
+    (Windows os.chmod only toggles the read-only attribute) — the check would
+    otherwise "self-heal" every single read forever without ever succeeding.
+    """
+    if sys.platform.startswith("win"):
+        return
     file_stat = path.stat()
     if file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
         # Self-heal: tighten the mode rather than crash. The contents
@@ -348,17 +357,20 @@ def ensure_instance_key() -> Path:
             # detection. Re-assert 0600 + WARN so drift is corrected at first use
             # (boot self-test adds the CRITICAL gate). Mirrors the strict-mode
             # treatment of instance_seed.key / actor_keypair.json.
-            try:
-                _mode = key_path.stat().st_mode
-                if _mode & 0o077:
-                    os.chmod(key_path, 0o600)
-                    import logging as _lg
-                    _lg.getLogger("corvin.instance").warning(
-                        "instance_key.pem mode 0o%03o too permissive — reset to 0600",
-                        _mode & 0o777,
-                    )
-            except OSError:
-                pass
+            # No-op on Windows — see _validate_mode_strict for why st_mode/chmod
+            # cannot express POSIX group/other bits on NTFS.
+            if not sys.platform.startswith("win"):
+                try:
+                    _mode = key_path.stat().st_mode
+                    if _mode & 0o077:
+                        os.chmod(key_path, 0o600)
+                        import logging as _lg
+                        _lg.getLogger("corvin.instance").warning(
+                            "instance_key.pem mode 0o%03o too permissive — reset to 0600",
+                            _mode & 0o777,
+                        )
+                except OSError:
+                    pass
             return key_path
         key_path.parent.mkdir(parents=True, exist_ok=True)
         privkey = Ed25519PrivateKey.generate()

@@ -49,7 +49,9 @@ def _load(path: Path) -> dict[str, int]:
         return {}
     try:
         mode = path.stat().st_mode & 0o777
-        if mode & 0o077:
+        # Windows: NTFS has no POSIX group/other bits, so st_mode always looks
+        # permissive there regardless of real ACLs — skip the check.
+        if not sys.platform.startswith("win") and mode & 0o077:
             # Log a warning but still read the data — returning {} would reset
             # the counter to 0 and allow an attacker with chmod access to bypass
             # the quota by repeatedly making the file world-readable.

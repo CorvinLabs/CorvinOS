@@ -27,6 +27,7 @@ import hmac
 import json
 import logging
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -142,7 +143,10 @@ def load_features() -> dict[str, Any] | None:
         return None
     try:
         mode = path.stat().st_mode & 0o777
-        if mode & 0o077:
+        # Windows: NTFS has no POSIX group/other bits, so st_mode always looks
+        # permissive there regardless of real ACLs — skip the check (chmod
+        # cannot narrow it either, so this would otherwise fire on every read).
+        if not sys.platform.startswith("win") and mode & 0o077:
             _log.warning("features.json mode 0o%o too permissive — correcting", mode)
             path.chmod(0o600)
         return json.loads(path.read_text(encoding="utf-8"))
