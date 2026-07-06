@@ -404,10 +404,36 @@ bash operator/bridges/bridge.sh fg
 
 | Platform | Notes |
 |---|---|
-| **Linux** | Full support. Systemd user services are created by `bridge.sh up`. Services survive logout if you run `loginctl enable-linger $USER`. |
-| **macOS** | Full support except voice output (TTS playback) from within Claude — messenger voice notes are still generated and sent. Use `bridge.sh fg` or create launchd agents manually. Homebrew must be installed for system dependencies. |
+| **Linux** | Full support. Systemd user services are created automatically by `corvin-install` (and by `bridge.sh up` for dev checkouts), which also runs `loginctl enable-linger $USER` for you so the service survives a reboot even without logging back in — no manual step needed. |
+| **macOS** | Full support except voice output (TTS playback) from within Claude — messenger voice notes are still generated and sent. `corvin-install` automatically creates and loads a launchd `LaunchAgent` (`~/Library/LaunchAgents/com.corvin.*.plist`), so services start at login and restart on crash with no manual setup; use `bridge.sh fg` only if you want to run in the foreground instead. Homebrew must be installed for system dependencies. |
 | **WSL2** | Systemd is optional (requires `systemd=true` in `/etc/wsl.conf`). Without systemd, use `bridge.sh fg`. Run `wsl --update` if you encounter WSL2 kernel version warnings. |
-| **Windows native** | `pip install corvinOS` → open a new PowerShell → `corvin serve`. The installer auto-adds the Scripts directory to PATH. Voice works via edge-tts (no API key needed). |
+| **Windows native** | `pip install corvinOS` → open a new PowerShell → `corvin serve`. The installer auto-adds the Scripts directory to PATH. Voice works via edge-tts (no API key needed). The `install.ps1` one-liner also registers a per-user Scheduled Task (no admin required) so the console starts automatically at login and restarts itself on crash/reboot. |
+
+### Autostart: "start at login" vs. "always-on, no login ever" (ADR-0184)
+
+Every install (Linux/macOS/Windows) already starts CorvinOS automatically the
+moment you log in, and restarts it on crash or reboot — no manual step
+needed. This covers the normal desktop/laptop case.
+
+For a headless box you never log into (a home server, a mini-PC), that's
+not enough: a user-level autostart mechanism only fires once someone logs
+in. For that case, opt into the **always-on** mode, which registers a real
+system-level service (still runs as your own user account, never as
+root/SYSTEM):
+
+```bash
+sudo corvin-service install     # Linux / macOS — needs sudo
+corvin-service install          # Windows — run from an elevated PowerShell
+corvin-service status           # check whether it's active
+corvin-service uninstall        # remove it again
+```
+
+The piped installers also accept `--autostart` (registers the normal
+start-at-login setup even when piped, e.g. `curl ... | sh -s -- --autostart`)
+and `--always-on` (also runs `corvin-service install` for you, Linux/macOS
+only for now — pass it in the same one-liner, e.g.
+`curl ... | sh -s -- --always-on`). Neither is on by default: a piped
+install intentionally stays lightweight unless you ask for more.
 
 ---
 

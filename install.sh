@@ -12,6 +12,14 @@ set -eu
 PKG="${CORVIN_PKG:-corvinos}"
 EDITABLE=""
 SKIP_HERMES="${CORVIN_SKIP_HERMES:-0}"
+# ADR-0184: Stufe 1 (start-at-login) already runs by default on an
+# interactive terminal via corvin-install below; --autostart forces that
+# same step even when piped (curl | sh has no TTY, see step 3). --always-on
+# additionally opts into Stufe 2 (survives a reboot with NO login at all) —
+# a real security-posture change (needs sudo), so it is never implied by
+# --autostart and never the default.
+FORCE_AUTOSTART=0
+ALWAYS_ON=0
 
 _bold()  { printf '\033[1m%s\033[0m' "$*"; }
 _green() { printf '\033[32m%s\033[0m' "$*"; }
@@ -28,9 +36,13 @@ while [ $# -gt 0 ]; do
             EDITABLE="$2"; shift 2 ;;
         --no-hermes)
             SKIP_HERMES=1; shift ;;
+        --autostart)
+            FORCE_AUTOSTART=1; shift ;;
+        --always-on)
+            FORCE_AUTOSTART=1; ALWAYS_ON=1; shift ;;
         *)
             die "Unknown argument: $1
-Usage: $0 [--editable|-e <path>] [--no-hermes]" ;;
+Usage: $0 [--editable|-e <path>] [--no-hermes] [--autostart] [--always-on]" ;;
     esac
 done
 if [ -n "$EDITABLE" ]; then
@@ -142,14 +154,35 @@ if [ "$SKIP_HERMES" != "1" ]; then
     fi
 fi
 
-# ── 3. setup wizard (only on an interactive terminal, not when piped) ─────────
+# ── 3. setup wizard (interactive terminal, or --autostart/--always-on) ───────
 if command -v corvin-install >/dev/null 2>&1; then
-    if [ -t 0 ]; then
+    if [ -t 0 ] || [ "$FORCE_AUTOSTART" = "1" ]; then
         echo "  Launching setup wizard ..."; echo ""
         corvin-install || true
     else
-        printf '\n  %s Piped install detected — run the wizard once your terminal is ready:\n\n    %s\n' \
-            "$(_yellow 'Note:')" "$(_bold 'corvin-install')"
+        printf '\n  %s Piped install detected — this skips autostart setup by default.\n    Run the wizard once your terminal is ready: %s\n    Or re-run this installer with: %s\n' \
+            "$(_yellow 'Note:')" "$(_bold 'corvin-install')" \
+            "$(_bold 'curl ... | sh -s -- --autostart')"
+    fi
+fi
+
+# ── 3b. always-on (ADR-0184 Stufe 2, opt-in, needs sudo) ─────────────────────
+# Deliberately separate from Stufe 1 above: this registers a system-level
+# service that survives a reboot even if nobody ever logs in. Never runs
+# silently — only when the user explicitly passed --always-on.
+if [ "$ALWAYS_ON" = "1" ]; then
+    echo ""
+    echo "  Setting up always-on mode (survives reboot with no login) ..."
+    if command -v sudo >/dev/null 2>&1; then
+        if sudo corvin-service install; then
+            printf '  %s Always-on mode active.\n' "$(_green '✓')"
+        else
+            printf '  %s Could not enable always-on mode automatically.\n    Run manually: %s\n' \
+                "$(_yellow '⚠')" "$(_bold 'sudo corvin-service install')"
+        fi
+    else
+        printf '  %s sudo not found — run as root manually: %s\n' \
+            "$(_yellow '⚠')" "$(_bold 'corvin-service install')"
     fi
 fi
 

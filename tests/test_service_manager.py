@@ -72,6 +72,68 @@ class TestLinuxServiceManager:
             mode = unit_file.stat().st_mode
             assert (mode & 0o644) == 0o644
 
+    def test_install_service_has_bounded_restart(self):
+        """ADR-0184 Stufe-1: a unit must not restart-loop forever."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = LinuxServiceManager()
+            mgr.systemd_user_dir = Path(tmpdir)
+
+            mgr.install_service(
+                name="test", command="/usr/bin/true", auto_start=False,
+            )
+
+            content = (Path(tmpdir) / "corvin-test.service").read_text()
+            assert "StartLimitIntervalSec=300" in content
+            assert "StartLimitBurst=5" in content
+
+
+class TestLinger:
+    """ADR-0184 Stufe-1: systemd --user units must survive a headless
+    reboot (no login ever), which requires `loginctl enable-linger`."""
+
+    def test_enable_linger_calls_loginctl_when_not_already_enabled(self):
+        mgr = LinuxServiceManager()
+        with mock.patch.dict("os.environ", {"USER": "testuser"}), \
+             mock.patch("subprocess.run") as run:
+            run.side_effect = [
+                mock.Mock(returncode=0, stdout="Linger=no\n"),  # show-user
+                mock.Mock(returncode=0),  # enable-linger
+            ]
+            mgr._enable_linger()
+            calls = [c.args[0] for c in run.call_args_list]
+            assert ["loginctl", "show-user", "testuser"] in calls
+            assert ["loginctl", "enable-linger", "testuser"] in calls
+
+    def test_enable_linger_skips_when_already_enabled(self):
+        mgr = LinuxServiceManager()
+        with mock.patch.dict("os.environ", {"USER": "testuser"}), \
+             mock.patch("subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout="Linger=yes\n")
+            mgr._enable_linger()
+            calls = [c.args[0] for c in run.call_args_list]
+            assert ["loginctl", "enable-linger", "testuser"] not in calls
+
+    def test_enable_linger_never_raises_when_loginctl_missing(self):
+        """Best-effort: no systemd-logind (containers, minimal distros)
+        must not break the install — a missing `loginctl` binary must not
+        propagate and abort install_service() for every other caller."""
+        mgr = LinuxServiceManager()
+        with mock.patch.dict("os.environ", {"USER": "testuser"}), \
+             mock.patch("subprocess.run", side_effect=FileNotFoundError()):
+            mgr._enable_linger()  # must not raise
+
+    def test_install_service_with_autostart_enables_linger(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = LinuxServiceManager()
+            mgr.systemd_user_dir = Path(tmpdir)
+            with mock.patch.object(mgr, "_enable_linger") as linger, \
+                 mock.patch.object(mgr, "enable_autostart"), \
+                 mock.patch.object(mgr, "_run_systemctl"):
+                mgr.install_service(
+                    name="test", command="/usr/bin/true", auto_start=True,
+                )
+                linger.assert_called_once()
+
 
 class TestServiceNameContract:
     """Regression: the installer must register systemd units under the SAME

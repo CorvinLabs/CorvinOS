@@ -175,6 +175,8 @@ corvin-id = "ops.launcher.corvin_id_entry:main"
 corvin-license-debug = "ops.launcher.license_debug_entry:main"
 # ADR-0178: Tier-CONTRIBUTOR maintainer CLI (keygen/issue/verify/run the L6 loop).
 corvin-maintainer = "ops.launcher.maintainer_entry:main"
+# ADR-0184 Stufe 2: opt-in always-on system-service registration (admin/root).
+corvin-service = "ops.launcher.service_entry:main"
 
 [tool.hatch.build.targets.sdist.force-include]
 # Ship the PRE-BUILT SPA in the sdist so a wheel built FROM the sdist (the

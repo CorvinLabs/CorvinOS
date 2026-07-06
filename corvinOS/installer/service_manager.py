@@ -89,6 +89,39 @@ class LinuxServiceManager(ServiceManager):
         # Reload after unit changes
         subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
 
+    def _enable_linger(self) -> None:
+        """Enable systemd-logind linger for the current user.
+
+        Without linger, a `systemctl --user` unit only (re)starts once the
+        user logs back in after a reboot — the Scheduled-Task/LaunchAgent
+        equivalents on Windows/macOS don't have this gap, so a fresh Linux
+        install would otherwise be the one platform that silently doesn't
+        survive a headless reboot (ADR-0184 Stufe-1 fix). Idempotent and
+        best-effort: some restricted/container environments have no
+        systemd-logind at all, so a failure here must not abort the install
+        — the unit still works normally whenever the user IS logged in.
+        """
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        if not user:
+            return
+        try:
+            check = subprocess.run(
+                ["loginctl", "show-user", user],
+                capture_output=True, text=True,
+            )
+            if check.returncode == 0 and "Linger=yes" in check.stdout:
+                return  # already enabled
+            subprocess.run(
+                ["loginctl", "enable-linger", user],
+                capture_output=True, text=True,
+            )
+        except OSError:
+            # `loginctl` doesn't exist at all (no systemd-logind — minimal
+            # containers, some non-systemd distros, WSL1). Best-effort: the
+            # unit still works correctly whenever the user is logged in, so
+            # this must not break service registration.
+            pass
+
     def install_service(
         self,
         name: str,
@@ -117,6 +150,13 @@ class LinuxServiceManager(ServiceManager):
             "[Unit]",
             f"Description={description or f'Corvin {name} service'}",
             "After=network-online.target",
+            # Bounded restart (ADR-0184 Stufe-1): without a start-limit, a unit
+            # stuck in a crash loop restarts every RestartSec forever. Cap it
+            # at 5 restarts per 5-minute window — after that systemd stops
+            # trying and the failure is visible in `systemctl --user status`
+            # instead of spinning silently.
+            "StartLimitIntervalSec=300",
+            "StartLimitBurst=5",
             "",
             "[Service]",
             *service_lines,
@@ -130,6 +170,7 @@ class LinuxServiceManager(ServiceManager):
 
         self._run_systemctl("daemon-reload")
         if auto_start:
+            self._enable_linger()
             self.enable_autostart(name)
 
     def start_service(self, name: str) -> None:
@@ -216,6 +257,8 @@ class DarwinServiceManager(ServiceManager):
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
     <key>StandardOutPath</key>
     <string>{Path.home() / '.corvin/logs/launchd'}/{name}.out</string>
     <key>StandardErrorPath</key>

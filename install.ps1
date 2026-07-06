@@ -260,7 +260,25 @@ if (Get-CorvinAutoUpdate) {
     }
 }
 
+# Rolling window of recent restart timestamps — bounded crash-loop guard
+# (ADR-0184 Stufe-1): 5 restarts per 5-minute window, then stop instead of
+# spinning forever. Mirrors the systemd StartLimitBurst=5/
+# StartLimitIntervalSec=300 pair used for the Linux user unit
+# (corvinOS/installer/service_manager.py) and the dev-checkout supervisor
+# (operator/bridges/shared/corvin-supervisor.ps1) — keep this logic
+# IDENTICAL across all three; test_windows_supervisor_parity.py checks it.
+`$MaxRestarts = 5
+`$RestartWindowSec = 300
+`$RestartTimestamps = @()
+
 while (`$true) {
+    `$Now = Get-Date
+    `$RestartTimestamps = @(`$RestartTimestamps | Where-Object { (`$Now - `$_).TotalSeconds -le `$RestartWindowSec })
+    if (`$RestartTimestamps.Count -ge `$MaxRestarts) {
+        Write-Log "CRITICAL: `$MaxRestarts restarts within `${RestartWindowSec}s — stopping supervisor to avoid a crash loop. Check the log above, fix the underlying issue, then restart with: Start-ScheduledTask CorvinOS-Console"
+        break
+    }
+    `$RestartTimestamps += `$Now
     try {
         Write-Log "launching corvinos-serve"
         `$proc = Start-Process -FilePath "$ServeCmd" -ArgumentList "--no-browser" -NoNewWindow -PassThru -Wait
