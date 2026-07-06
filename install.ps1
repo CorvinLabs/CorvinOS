@@ -213,6 +213,45 @@ function Write-Log(`$m) {
     try { Add-Content -Path `$LogFile -Value "`$ts [console] `$m" -ErrorAction SilentlyContinue } catch {}
 }
 Write-Log "supervisor starting: $ServeCmd --no-browser"
+
+# ── One-time auto-update per logon/boot ─────────────────────────────────────
+# The Windows install is `uv tool install`d, so upgrade with `uv tool upgrade`
+# (that venv has no pip). Runs ONCE here — before the restart loop — so a crash
+# loop never hammers PyPI. Honours the console's auto_update toggle and never
+# blocks startup: any failure/timeout/offline just logs and continues.
+function Get-CorvinAutoUpdate {
+    `$cfg = Join-Path `$env:USERPROFILE ".config\corvin-launcher\config.json"
+    try {
+        if (Test-Path `$cfg) {
+            `$j = Get-Content -Raw -Path `$cfg | ConvertFrom-Json
+            if (`$null -ne `$j.auto_update) { return [bool]`$j.auto_update }
+        }
+    } catch {}
+    return `$true
+}
+if (Get-CorvinAutoUpdate) {
+    `$uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
+    if (-not `$uv) {
+        `$cand = Join-Path `$env:USERPROFILE ".local\bin\uv.exe"
+        if (Test-Path `$cand) { `$uv = `$cand }
+    }
+    if (`$uv) {
+        Write-Log "auto-update: uv tool upgrade corvinos"
+        try {
+            `$job = Start-Job -ScriptBlock { param(`$u) & `$u tool upgrade corvinos 2>&1 } -ArgumentList `$uv
+            if (Wait-Job `$job -Timeout 120) {
+                Write-Log ("auto-update result: " + ((Receive-Job `$job) -join ' '))
+            } else {
+                Write-Log "auto-update timed out (120s) — continuing"
+                Stop-Job `$job -ErrorAction SilentlyContinue
+            }
+            Remove-Job `$job -Force -ErrorAction SilentlyContinue
+        } catch { Write-Log "auto-update failed: `$_ — continuing" }
+    } else {
+        Write-Log "auto-update skipped: uv not found on PATH"
+    }
+}
+
 while (`$true) {
     try {
         Write-Log "launching corvinos-serve"

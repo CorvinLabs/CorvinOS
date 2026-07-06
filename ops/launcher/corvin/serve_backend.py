@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -73,11 +74,59 @@ def console_url(port: int = _DEFAULT_PORT) -> str:
 # ── Auto-update ───────────────────────────────────────────────────────────────
 
 
+def _is_uv_tool_install() -> bool:
+    """True when corvinos runs from a ``uv tool install`` managed venv.
+
+    uv installs each tool into ``…/uv/tools/<name>/`` and — crucially — that
+    venv has **no pip**, so ``python -m pip install`` (the historical upgrade
+    path) fails there. The Windows one-line installer uses ``uv tool install``,
+    so on Windows this is the common case and the reason autostart upgrades were
+    silently no-op'ing.
+    """
+    probe = str(Path(sys.prefix)).replace("\\", "/").lower()
+    return "/uv/tools/" in probe or probe.rstrip("/").endswith("/tools/corvinos")
+
+
+def _pip_available() -> bool:
+    return importlib.util.find_spec("pip") is not None
+
+
+def _pick_upgrade_command(latest: str) -> tuple[list[str] | None, str]:
+    """Choose the right upgrade command for this install flavour.
+
+    Returns ``(argv, manual_hint)``. ``argv`` is None when we know the flavour
+    but cannot find the tool to run it (so the caller prints the manual hint
+    instead of running a broken command).
+    """
+    uv = shutil.which("uv")
+    # Windows %USERPROFILE%\.local\bin is often not on the Task-Scheduler PATH.
+    if not uv:
+        for cand in (Path.home() / ".local" / "bin" / ("uv.exe" if os.name == "nt" else "uv"),
+                     Path.home() / ".cargo" / "bin" / ("uv.exe" if os.name == "nt" else "uv")):
+            if cand.is_file():
+                uv = str(cand)
+                break
+
+    if _is_uv_tool_install() or (uv and not _pip_available()):
+        if uv:
+            # `uv tool upgrade` pulls the latest compatible release (we already
+            # confirmed a newer one exists), and reuses the tool's own venv.
+            return [uv, "tool", "upgrade", "corvinos"], "uv tool upgrade corvinos"
+        return None, "uv tool upgrade corvinos"  # uv-managed but uv not found
+
+    return (
+        [sys.executable, "-m", "pip", "install", f"corvinos=={latest}", "--quiet"],
+        f"pip install corvinos=={latest}",
+    )
+
+
 def maybe_pypi_autoupdate() -> None:
-    """Run pip install --upgrade corvinos if auto_update is enabled (default on).
+    """Upgrade corvinos to the latest PyPI release if auto_update is enabled.
 
     Best-effort — never blocks or fails startup. Reads
-    ~/.config/corvin-launcher/config.json for the auto_update flag.
+    ~/.config/corvin-launcher/config.json for the auto_update flag. Uses
+    ``uv tool upgrade`` for uv-managed installs (the Windows default) and
+    ``pip install`` for pip installs.
     """
     import json as _json  # noqa: PLC0415
     config_path = Path.home() / ".config" / "corvin-launcher" / "config.json"
@@ -105,10 +154,15 @@ def maybe_pypi_autoupdate() -> None:
         if latest == current:
             print(f"up to date ({current})")
             return
-        # Step 2: a newer version exists — attempt upgrade.
+        # Step 2: a newer version exists — attempt upgrade with the command that
+        # matches this install flavour (uv tool vs pip).
         print(f"upgrading {current} → {latest} …", end=" ", flush=True)
+        cmd, manual = _pick_upgrade_command(latest)
+        if cmd is None:
+            print(f"\n  ⚠ auto-upgrade needs uv. Run manually:\n    {manual}")
+            return
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", f"corvinos=={latest}", "--quiet"],
+            cmd,
             capture_output=True,
             timeout=120,
             text=True,
@@ -116,11 +170,10 @@ def maybe_pypi_autoupdate() -> None:
         if result.returncode == 0:
             print("done — restart corvin-serve to apply")
         else:
-            # pip failed (UAC, network, read-only env, …) — tell the user the
+            # upgrade failed (UAC, network, read-only env, …) — tell the user the
             # exact command rather than silently continuing.
             print(
-                f"\n  ⚠ auto-upgrade failed. Run manually:\n"
-                f"    pip install corvinos=={latest}"
+                f"\n  ⚠ auto-upgrade failed. Run manually:\n    {manual}"
             )
     except subprocess.TimeoutExpired:
         print("(timed out — continuing)")

@@ -249,9 +249,15 @@ the chat interface.
 ### Settings
 
 Account settings: your active tokens (IDs and expiry dates), consent history, and
-role assignments. Operator settings: **auto-update toggle** (enable/disable automatic
-`pip install --upgrade corvinos` at every startup — default on, stored in
-`~/.config/corvin-launcher/config.json`), tenant config
+role assignments. Operator settings: **auto-update toggle** (enable/disable the
+automatic upgrade to the latest PyPI release at every startup — default on, stored
+in `~/.config/corvin-launcher/config.json`). The updater is install-flavour aware:
+a `uv tool install` (the Windows one-line installer default) upgrades via
+`uv tool upgrade corvinos`, a `pip install` upgrades via `pip install`. On Windows
+the autostart supervisor (Scheduled Task `CorvinOS-Console`) also runs this upgrade
+once per logon/boot **before** launching the console, so an always-on machine still
+lands on the newest version; it is best-effort and never blocks startup (offline /
+timeout / missing `uv` just logs and continues). Also here: tenant config
 (`tenant.corvin.yaml` viewer), and the `bridge.sh doctor` output on demand.
 Token revocation is available here.
 
