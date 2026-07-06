@@ -178,9 +178,9 @@ def _resolve_helper_model_args() -> list[str]:
                 / "helper_model.py"
             )
         # Repo-walk from this file: core/delegate/corvin_delegate/
-        # → up 2 = plugins/ → + voice/bridges/shared/helper_model.py
+        # → up 3 = repo root → + operator/bridges/shared/helper_model.py
         candidates.append(
-            Path(__file__).resolve().parents[2] / "voice" / "bridges"
+            Path(__file__).resolve().parents[3] / "operator" / "bridges"
             / "shared" / "helper_model.py"
         )
         for candidate in candidates:
@@ -214,7 +214,7 @@ def _real_judge_runner(prompt: str, timeout_s: float) -> tuple[bool, str]:
     model_args = _resolve_helper_model_args()
     try:
         proc = subprocess.run(
-            [binary, "-p", "--max-turns", "1", "--tools", "", *model_args, prompt],
+            [binary, "-p", "--max-turns", "1", "--disallowedTools", "*", *model_args, prompt],
             capture_output=True,
             text=True,
             timeout=timeout_s,

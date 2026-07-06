@@ -137,24 +137,92 @@ _ALLOWED_ENGINES = frozenset(
 )
 
 
+def _active_engine_path(home: Path) -> Path:
+    """State file holding the bridge-resolved OS engine (one per CORVIN_HOME)."""
+    return home / "aco" / "telemetry" / "active_engine"
+
+
+def record_active_engine(home: Path, engine: str) -> None:
+    """Persist the bridge-resolved OS engine so the out-of-process activity ping
+    can attribute this install to its REAL engine instead of "unknown".
+
+    The bridge adapter is the only component that runs the full engine ladder
+    (CORVIN_OS_ENGINE env → hardened claude-CLI probe → hermes). That result
+    lives only in the bridge process's memory; the ping fires from a SEPARATE
+    process (corvin-serve) whose environment never inherits it, so the ping
+    previously fell through to "unknown" for almost every install. Writing the
+    resolved engine to a shared file bridges that process boundary.
+
+    Allow-list validated (no attacker-controlled / free-form value is stored),
+    atomic (temp file + os.replace so the concurrent ping never reads a torn
+    write), write-only-if-changed (this runs on the per-turn hot path; after the
+    first write it is a cheap no-op), and fail-soft (never raises).
+    """
+    try:
+        eng = (engine or "").strip().lower()
+        if eng not in _ALLOWED_ENGINES:
+            return  # never persist an unknown / spoofed value
+        p = _active_engine_path(home)
+        try:
+            if p.exists() and p.read_text(encoding="utf-8").strip() == eng:
+                return  # unchanged — skip the write entirely
+        except OSError:
+            pass
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(f".{p.name}.{os.getpid()}.tmp")
+        try:
+            tmp.write_text(eng, encoding="utf-8")
+            os.replace(tmp, p)
+        except OSError:
+            with _contextlib.suppress(OSError):
+                tmp.unlink()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _detect_active_engine(home: Path) -> str:
     """Return the configured OS engine id, anonymised to a known set.
 
-    Reads CORVIN_WORKER_ENGINE / CORVIN_OS_ENGINE env vars (set by the bridge
-    adapter) and falls back to the tenant YAML.  Unknown values → "unknown".
-    Fail-soft: never raises; returns "unknown" on any error.
+    Resolution order (first hit wins):
+      1. CORVIN_WORKER_ENGINE / CORVIN_OS_ENGINE env vars — present only when the
+         ping happens to run inside the bridge process itself.
+      2. The active_engine state file written by the bridge adapter
+         (record_active_engine) — the cross-process bridge that makes the real
+         engine visible to the out-of-process corvin-serve ping.
+      3. The tenant YAML engine key, for installs that pin it explicitly but have
+         never launched a bridge OS-turn.
+    Unknown / unreadable → "unknown". Fail-soft: never raises.
     """
     try:
         for env_key in ("CORVIN_WORKER_ENGINE", "CORVIN_OS_ENGINE"):
             val = os.environ.get(env_key, "").strip().lower()
             if val in _ALLOWED_ENGINES:
                 return val
-        # Fallback: try tenant YAML
+
+        # State file written by the bridge adapter (see record_active_engine).
+        try:
+            state_p = _active_engine_path(home)
+            if state_p.exists():
+                val = state_p.read_text(encoding="utf-8").strip().lower()
+                if val in _ALLOWED_ENGINES:
+                    return val
+        except OSError:
+            pass
+
+        # Fallback: tenant YAML. The canonical keys are ``default_engine``
+        # (persona/tenant default, ADR-0159) and ``default_worker_engine``
+        # (console selection); the legacy ``worker_engine`` is matched too.
+        # The previous ``worker_engine`` regex missed ``default_engine`` — the
+        # key the tenant template actually ships — so this fallback never fired.
         cfg_path = _tenant_cfg_path(home)
         if cfg_path.exists():
             import re as _re
             text = cfg_path.read_text(encoding="utf-8", errors="replace")
-            m = _re.search(r"worker_engine\s*:\s*(\S+)", text)
+            m = _re.search(
+                r"(?:default_worker_engine|default_engine|worker_engine)\s*:\s*"
+                r"[\"']?([A-Za-z0-9_]+)",
+                text,
+            )
             if m:
                 val = m.group(1).strip().lower()
                 return val if val in _ALLOWED_ENGINES else "unknown"
@@ -180,19 +248,22 @@ def ping_if_due(home: Path) -> bool:
         if not ping_enabled(home):
             return False
 
-        # Auto-provision tokens on first boot; fail-soft if unreachable.
-        if not ensure_ping_tokens(home):
-            logger.debug("htrace: ping skipped — token provisioning not yet complete")
-            return False
-
-        # Lock the check-then-send-then-stamp sequence below (same pattern as
-        # run_upload_cycle's _LOCK_FILENAME) — without it, two processes
-        # sharing one CORVIN_HOME (e.g. a bridge daemon and the web console
-        # both booting around the same time) could both pass the "already
-        # pinged today?" check before either writes the stamp, sending two
-        # ping events for what the server should count as one instance-day
-        # (adversarial review finding). _HAS_FLOCK is False on Windows —
-        # single-instance installs there are unaffected either way.
+        # Lock the check-then-provision-then-send-then-stamp sequence below
+        # (same pattern as run_upload_cycle's _LOCK_FILENAME) — without it,
+        # two processes sharing one CORVIN_HOME (e.g. a bridge daemon and the
+        # web console both booting around the same time) could both pass the
+        # "already pinged today?" check before either writes the stamp,
+        # sending two ping events for what the server should count as one
+        # instance-day (adversarial review finding). _HAS_FLOCK is False on
+        # Windows — single-instance installs there are unaffected either way.
+        #
+        # ensure_ping_tokens() is deliberately called INSIDE this locked
+        # section (it used to run before the lock was acquired) — two
+        # processes racing to provision tokens for the first time could
+        # otherwise both call provision_telemetry_tokens() concurrently and
+        # interleave two different token-endpoint responses into a
+        # mismatched instance/telemetry-token pair that never self-heals
+        # (adversarial review finding).
         lock_path = htrace_dir(home) / _PING_LOCK_FILENAME
         lf = None
         try:
@@ -208,12 +279,23 @@ def ping_if_due(home: Path) -> bool:
             return True  # not an error — another process is handling it
 
         try:
+            # Auto-provision tokens on first boot; fail-soft if unreachable.
+            if not ensure_ping_tokens(home):
+                logger.debug("htrace: ping skipped — token provisioning not yet complete")
+                return False
+
             # Rate-limit: skip if a ping was already sent within the last 24h.
             stamp = _last_ping_path(home)
             try:
                 if stamp.exists():
                     age = time.time() - stamp.stat().st_mtime
-                    if age < _PING_INTERVAL_S:
+                    # A backward clock jump (NTP correction, VM/container clock
+                    # skew on boot) makes `age` negative — always < interval,
+                    # which previously suppressed the ping indefinitely
+                    # (adversarial review finding). Only an actually-elapsed,
+                    # non-negative age within the window counts as "already
+                    # sent"; a negative age falls through and pings for real.
+                    if 0 <= age < _PING_INTERVAL_S:
                         return True  # already done today
             except OSError:
                 pass  # unreadable stamp — proceed to ping

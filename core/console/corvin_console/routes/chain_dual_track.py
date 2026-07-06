@@ -162,6 +162,52 @@ def _read_all_events(tid: str) -> list[dict[str, Any]]:
     return result
 
 
+def _verify_all_chains(tid: str) -> bool:
+    """Real hash-chain verification across the same audit files
+    ``_read_all_events`` reads from.
+
+    The "chain DNA ✓ / chain DNA ✗" badge this endpoint feeds was previously
+    inferred purely by scanning for an ``A2A.chain_dna_verified`` /
+    ``A2A.chain_dna_mismatch`` event-type STRING already present in the raw
+    JSONL — a linear scan of file content, not a signature/hash
+    recomputation. Anyone able to write a line into ``audit.jsonl`` (or
+    delete the mismatch line) could forge that badge (adversarial review
+    finding). This performs the real, independent hash-chain walk
+    (``security_events.verify_chain``) the codebase already has, so the
+    route can additionally report whether the underlying chain itself is
+    intact — a genesis_match reading pulled from a broken/tampered chain is
+    not trustworthy regardless of which event-type string happens to be in it.
+    """
+    try:
+        from forge import security_events as _sec  # type: ignore[import-untyped]
+    except Exception:
+        return False
+    paths = [
+        _forge_paths.corvin_home() / "global" / "forge" / "audit.jsonl",
+        _forge_paths.tenant_global_dir(tid) / "forge" / "audit.jsonl",
+        _forge_paths.tenant_global_dir(tid) / "audit.jsonl",
+    ]
+    seen_inodes: set[int] = set()
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            st = path.stat()
+            inode = (st.st_dev, st.st_ino)
+        except OSError:
+            continue
+        if inode in seen_inodes:
+            continue
+        seen_inodes.add(inode)
+        try:
+            ok, _problems = _sec.verify_chain(path)
+        except Exception:
+            return False
+        if not ok:
+            return False
+    return True
+
+
 def _delegation_key(ev: dict[str, Any]) -> str | None:
     """Return the delegation/task key for an event, or None."""
     details = ev.get("details") or {}
@@ -191,6 +237,7 @@ def get_chain_dual_track(
               "genesis_match":  true | null,
           }, ...],
           "os_only_events": [{...}, ...],
+          "chain_verified": true | false,
           "ts": float,
         }
     """
@@ -324,5 +371,10 @@ def get_chain_dual_track(
         "genesis":       genesis,
         "delegations":   delegations,
         "os_only_events": [_project(e) for e in sorted(os_only, key=lambda e: e.get("ts") or 0.0)],
+        # Real hash-chain verification (see _verify_all_chains docstring) —
+        # qualifies every delegation's genesis_match reading above: a
+        # genesis_match pulled from a broken/tampered chain is not
+        # trustworthy regardless of which event-type string is in it.
+        "chain_verified": _verify_all_chains(tid),
         "ts":            time.time(),
     }

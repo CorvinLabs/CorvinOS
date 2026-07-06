@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import getpass
+import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 ENV_FILE = Path.home() / ".config" / "corvin-voice" / "service.env"
@@ -93,8 +95,10 @@ def save_keys(
     extra: dict[str, str] | None = None,
     repo_root: Path | None = None,
 ) -> None:
-    """Write keys to service.env (mode 0600). Optionally also to repo .env."""
+    """Write keys to service.env (mode 0600 from the moment of creation —
+    never transiently world/group-readable). Optionally also to repo .env."""
     ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_restrictive_mode(ENV_FILE)
     _upsert(ENV_FILE, "OPENAI_API_KEY", openai_key)
     if anthropic_key:
         _upsert(ENV_FILE, "ANTHROPIC_API_KEY", anthropic_key)
@@ -114,6 +118,7 @@ def save_keys(
             if not repo_env.exists() and example.exists():
                 shutil.copy(example, repo_env)
             if repo_env.exists():
+                _ensure_restrictive_mode(repo_env)
                 _upsert(repo_env, "OPENAI_API_KEY", openai_key)
                 if anthropic_key:
                     _upsert(repo_env, "ANTHROPIC_API_KEY", anthropic_key)
@@ -153,9 +158,28 @@ def _is_printable_ascii(s: str) -> bool:
     return bool(re.match(r"^[\x20-\x7E]+$", s))
 
 
+def _ensure_restrictive_mode(path: Path) -> None:
+    """Create `path` at 0600 if absent, or narrow an existing file's mode to
+    0600, BEFORE any secret content is written into it.
+
+    Previously the file was created via a bare `path.touch()` (inheriting
+    the process's default umask — often world/group-readable) and only
+    chmod'd 0600 AFTER the full multi-key write sequence completed, leaving
+    plaintext API keys on disk at a permissive mode for the entire prompt/
+    validate/write duration (adversarial review finding).
+    """
+    if sys.platform == "win32":
+        return  # no POSIX mode bits on NTFS; nothing meaningful to narrow here
+    if not path.exists():
+        fd = os.open(str(path), os.O_CREAT | os.O_WRONLY, 0o600)
+        os.close(fd)
+    else:
+        path.chmod(0o600)
+
+
 def _upsert(path: Path, key: str, value: str) -> None:
     """Set or replace KEY=VALUE in an env file, atomically."""
-    path.touch()
+    _ensure_restrictive_mode(path)
     existing = [l for l in path.read_text().splitlines() if not l.startswith(f"{key}=")]
     existing.append(f"{key}={value}")
     path.write_text("\n".join(existing) + "\n")

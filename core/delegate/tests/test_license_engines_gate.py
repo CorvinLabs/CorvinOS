@@ -55,6 +55,31 @@ class TestEnginesAllowedGate(unittest.TestCase):
         res = run_delegate(engine="codex_cli", prompt="hello", audit=False, budget_s=1)
         self.assertNotIn("engine-not-allowed-by-license", res.error or "")
 
+    def test_non_license_limit_error_in_gate_still_emits_an_audit_event(self):
+        """Adversarial review finding: the engines_allowed gate's except
+        branch only got an audit event for the LicenseLimitError case
+        (emitted internally by validator.assert_limit itself) — any OTHER
+        exception (e.g. license.validator failing in some unexpected way)
+        denied the delegation with ZERO corresponding L16 event, a gap
+        given the project's own audit-first invariant."""
+        from unittest.mock import patch
+        from corvin_delegate.delegation import _emit_audit_failed as _real_marker  # noqa: F401
+
+        emitted = []
+
+        def _fake_emit_audit_failed(**fields):
+            emitted.append(fields)
+
+        with patch("license.validator.assert_limit", side_effect=RuntimeError("boom")), \
+             patch("corvin_delegate.delegation._emit_audit_failed", _fake_emit_audit_failed):
+            res = run_delegate(engine="codex_cli", prompt="hello", audit=True)
+
+        self.assertFalse(res.ok)
+        self.assertIn("license-gate-error", res.error or "")
+        self.assertEqual(len(emitted), 1, "expected exactly one delegate.failed audit event")
+        self.assertEqual(emitted[0]["engine"], "codex_cli")
+        self.assertIn("license-gate-error", emitted[0]["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

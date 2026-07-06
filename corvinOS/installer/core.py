@@ -755,7 +755,7 @@ class CorvinInstaller:
         # ── Step 2: Remove remaining systemd unit files ────────────────────
         # Covers units installed by bridge.sh / corvin-install that may
         # not be tracked by the service manager (timers, watchdog, etc.).
-        print("\n[2/10] Removing systemd unit files...")
+        print("\n[2/10] Removing autostart entries (systemd units / Scheduled Task)...")
         if sys.platform != "win32":
             systemd_user = Path.home() / ".config" / "systemd" / "user"
             bridge_units = [
@@ -821,8 +821,42 @@ class CorvinInstaller:
                 )
             except Exception:
                 pass
+        elif sys.platform == "win32":
+            # install.ps1 (the standalone one-liner installer) registers a
+            # persistent, infinite-restart, AtLogOn Scheduled Task named
+            # "CorvinOS-Console" that self-upgrades on every boot. Nothing
+            # here removed it (WindowsServiceManager's own task-name scheme,
+            # "CorvinOS\\{name}", is a completely different naming convention
+            # and its Windows service registration is skipped entirely — see
+            # step 1 above), so "uninstalled" CorvinOS kept auto-restarting
+            # and auto-updating forever (adversarial review finding).
+            print("  Removing Windows Scheduled Task autostart...")
+            for _task in ("CorvinOS-Console",):
+                try:
+                    query = subprocess.run(
+                        ["schtasks", "/query", "/tn", _task],
+                        capture_output=True, text=True, check=False,
+                    )
+                    if query.returncode != 0:
+                        print(f"  ℹ Scheduled Task not found: {_task}")
+                        continue
+                    subprocess.run(
+                        ["schtasks", "/end", "/tn", _task],
+                        capture_output=True, check=False,
+                    )
+                    delete = subprocess.run(
+                        ["schtasks", "/delete", "/tn", _task, "/f"],
+                        capture_output=True, text=True, check=False,
+                    )
+                    if delete.returncode == 0:
+                        print(f"  ✓ Removed Scheduled Task: {_task}")
+                    else:
+                        print(f"  ⚠ Could not remove Scheduled Task {_task}: "
+                              f"{delete.stderr.strip()}")
+                except Exception as e:
+                    print(f"  ⚠ Could not remove Scheduled Task {_task}: {e}")
         else:
-            print("  ℹ Not on Linux — skipping systemd cleanup")
+            print("  ℹ Not on Linux or Windows — skipping autostart cleanup")
 
         # ── Step 3: Unregister Claude Code plugins ─────────────────────────
         print("\n[3/10] Unregistering Claude Code plugins...")

@@ -255,6 +255,25 @@ class RunContext:
     m4_base_workers: int = 0                               # original max_workers_per_iteration — ADR-0105 M4
     worker_attributions: list = field(default_factory=list)  # list[dict] per-iteration — ADR-0105 M4
     datasource_env: dict = field(default_factory=dict)     # ADR-0127 — DSI conn env for ClaudeCode workers
+    # Adversarial review finding: BudgetEnvelope.check() was called ONLY at
+    # the top-level manager loop, against the ROOT budget. Recursive
+    # delegation (_dispatch_workers → _run_one → DELEGATE → _dispatch_workers
+    # again) gives each sub-tree its OWN independent budget via .fraction(),
+    # whose workers_used/tokens_used counters are incremented but NEVER
+    # checked against anything — so the real aggregate worker count across
+    # the whole recursion tree could vastly exceed the operator-configured
+    # max_total_workers (a genuine resource-exhaustion / DoS surface, not
+    # just an accounting quirk). root_budget always points at the SAME
+    # BudgetEnvelope object as the run's top-level ctx.budget (dataclasses
+    # .replace() preserves it verbatim through every .fraction() descent,
+    # since only `budget=` is overridden there) — giving every branch, at
+    # any depth, a shared handle to check and increment the true root
+    # ceilings alongside its own local, fractioned budget.
+    root_budget: "BudgetEnvelope | None" = None
+
+    def __post_init__(self) -> None:
+        if self.root_budget is None:
+            self.root_budget = self.budget
 
 
 # ---------------------------------------------------------------------------
@@ -516,7 +535,15 @@ def _budget_from_spec(spec: dict) -> BudgetEnvelope:
         max_total_workers=_clamp_positive_cap(int(b.get("max_total_workers") or 500), 500, 5000),
         max_tool_calls=int(b.get("max_tool_calls") or 0),
         max_depth=int(b.get("max_depth") or 4),
-        max_workers_per_iteration=int(b.get("max_workers_per_iteration") or 6),
+        # Unlike max_loops/max_total_workers above, this had NO clamp and NO
+        # validator rule at all (only max_depth gets an R31/R32 ceiling) —
+        # and it is also in the caller-controllable budget_override
+        # allow-list, so an HTTP/CLI caller could set it to an arbitrary
+        # integer with zero validation, fanning out that many CONCURRENT
+        # worker subprocesses in a single iteration at any recursion depth
+        # (adversarial review finding).
+        max_workers_per_iteration=_clamp_positive_cap(
+            int(b.get("max_workers_per_iteration") or 6), 6, 100),
         max_rejected_completions=int(b.get("max_rejected_completions") or 2),
     )
 
@@ -743,6 +770,16 @@ def _build_manager_prompt(ctx: RunContext) -> str:
 
     lines += ["Return your Manager Decision as JSON now."]
     return "\n".join(lines)
+
+
+def _is_valid_subtask_list(subtasks: Any) -> bool:
+    """True iff `subtasks` is a `list` of `dict`s — the only shape
+    `_dispatch_workers`/the subtask-persistence code can safely handle.
+    A manager decision's "subtasks" field is only prose-documented (not
+    schema-validated), so a hallucinated non-list shape (e.g. a JSON
+    object) is a plausible LLM output — this must be rejected explicitly
+    rather than let a dict-shaped value pass a bare truthiness check."""
+    return isinstance(subtasks, list) and all(isinstance(st, dict) for st in subtasks)
 
 
 def _parse_manager_decision(text: str) -> dict | None:
@@ -1083,12 +1120,25 @@ def _apply_provider_redirect(env: dict, tenant_id: str) -> None:
         return
 
 
-def _call_manager_sync(prompt: str, model: str, tenant_id: str = "_default") -> tuple[str, int]:
+def _call_manager_sync(
+    prompt: str, model: str, tenant_id: str = "_default",
+    proc_holder: "_WorkerProcessHolder | None" = None,
+) -> tuple[str, int]:
     """Call the manager engine for a decision. Returns (stdout, tokens_estimate).
 
     Routes to Ollama when ``model`` resolves to Hermes (ADR-0127), else the
     claude CLI. The manager must emit a single JSON decision — small local
-    models may be less reliable here than Claude."""
+    models may be less reliable here than Claude.
+
+    ``proc_holder`` (same class the worker call site uses) lets an awaiting
+    caller kill the actual subprocess if the enclosing asyncio Task is
+    cancelled — asyncio.to_thread() does not itself interrupt a blocking
+    call already running in the executor thread. Previously this function
+    used plain subprocess.run() with no such handle, so a cancelled ACS run
+    (client disconnect, budget abort) left the manager's claude -p process
+    running for up to _MANAGER_TIMEOUT more seconds — the same bug class
+    already fixed for _call_worker_sync (adversarial review finding).
+    """
     engine_id, resolved = _resolve_worker_engine(model, tenant_id)
     _assert_engine_licensed(engine_id)
     if engine_id == "hermes":
@@ -1105,7 +1155,7 @@ def _call_manager_sync(prompt: str, model: str, tenant_id: str = "_default") -> 
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_AUTH_TOKEN", None)
     _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
-    result = subprocess.run(
+    proc = subprocess.Popen(
         [
             binary, "-p", prompt,
             "--append-system-prompt", _MANAGER_SYSTEM,
@@ -1114,10 +1164,20 @@ def _call_manager_sync(prompt: str, model: str, tenant_id: str = "_default") -> 
             "--max-turns", "1",
             "--output-format", "json",  # extract text from envelope so parse never sees CLI wrapper
         ],
-        capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL,
-        timeout=_MANAGER_TIMEOUT, check=False,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        stdin=subprocess.DEVNULL,
     )
-    raw = result.stdout.strip()
+    if proc_holder is not None:
+        with proc_holder.lock:
+            proc_holder.popen = proc
+    try:
+        stdout, _stderr = proc.communicate(timeout=_MANAGER_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # Mirror subprocess.run()'s own timeout handling: kill, drain, re-raise.
+        proc.kill()
+        proc.communicate()
+        raise
+    raw = stdout.strip()
     output = raw  # fallback: pass through if not a JSON envelope
     if raw.startswith("{"):
         try:
@@ -1475,6 +1535,21 @@ async def _dispatch_workers(
     spawn_nonce: str | None = None,        # ADR-0109: causality link from manager_decided event
 ) -> list[WorkerResult]:
     """Dispatch subtasks in parallel, up to max_workers_per_iteration."""
+    # Global-ceiling check (adversarial review finding): a per-branch,
+    # fractioned budget's own .check() only ever compares against ITS OWN
+    # (already-shrunk) caps — it can never detect that the AGGREGATE usage
+    # across every branch of the recursion tree has exceeded the operator's
+    # real, top-level max_total_workers/max_total_tokens/max_tool_calls.
+    # root_budget is the one BudgetEnvelope object shared by the whole tree
+    # (see RunContext docstring); breaching it here refuses to dispatch this
+    # batch at all, at ANY depth — the ceiling that actually matters.
+    _root_breach = ctx.root_budget.check() if ctx.root_budget else None
+    if _root_breach:
+        _write_audit(ctx.tenant_id, "acs.budget_breach", {
+            "run_id": ctx.run_id, "depth": depth, "reason": _root_breach,
+            "scope": "root_aggregate",
+        })
+        return []
     capped = subtasks[: ctx.budget.max_workers_per_iteration]
     results: list[WorkerResult] = []
     semaphore = asyncio.Semaphore(ctx.budget.max_workers_per_iteration)
@@ -1616,6 +1691,7 @@ async def _dispatch_workers(
                                      run_id=ctx.run_id, status="error",
                                      duration_ms=int((time.monotonic() - _spawn_start) * 1000)))
                 _write_audit(ctx.tenant_id, "acs.worker_traced", {
+                    "run_id": ctx.run_id,
                     "worker_id": wid, "status": "failed", "confidence": 0.0,
                     "output_hash": _sha256("cancelled"),
                     "duration_ms": int((time.monotonic() - _spawn_start) * 1000),
@@ -1648,6 +1724,7 @@ async def _dispatch_workers(
                 })
                 # ADR-0109 M1+M3: error-path bookend — every worker_spawned gets a worker_traced
                 _write_audit(ctx.tenant_id, "acs.worker_traced", {
+                    "run_id": ctx.run_id,
                     "worker_id": wid, "status": "failed", "confidence": 0.0,
                     "output_hash": _sha256(str(exc)),
                     "duration_ms": int((time.monotonic() - _spawn_start) * 1000),
@@ -1664,6 +1741,8 @@ async def _dispatch_workers(
                 )
 
             ctx.budget.tokens_used += tok
+            if ctx.root_budget is not None and ctx.root_budget is not ctx.budget:
+                ctx.root_budget.tokens_used += tok
 
             # Engine-level completion — pairs with acs.engine_started above.
             # Records actual model/locality from API attestation + measured timing.
@@ -1692,6 +1771,14 @@ async def _dispatch_workers(
                             ctx.run_id, wid, _worker_span_id, ctx.run_dir)
                 except Exception:  # noqa: BLE001 — trace is additive, never block
                     pass
+            # `max_tool_calls` was permanently dead configuration: nothing
+            # ever incremented tool_calls_used, so any operator-configured
+            # cap could never fire (adversarial review finding). The post-run
+            # trace extraction above is the one place a per-worker tool-call
+            # count already exists — use it.
+            ctx.budget.tool_calls_used += _trace_count
+            if ctx.root_budget is not None and ctx.root_budget is not ctx.budget:
+                ctx.root_budget.tool_calls_used += _trace_count
             # ADR-0171 — engine-span end (ok), API-attested engine/model.
             if _espan is not None:
                 _write_audit(ctx.tenant_id, _espan.ENGINE_SPAN_END,
@@ -1764,6 +1851,8 @@ async def _dispatch_workers(
                         spawn_nonce, attestation,
                     )
                     ctx.budget.workers_used += 1
+                    if ctx.root_budget is not None and ctx.root_budget is not ctx.budget:
+                        ctx.root_budget.workers_used += 1
                     return wr  # sub-manager's directory IS its disk record — no flat file
 
             # ADR-0108 M2: regular sub-workers go into their parent sub-manager's directory.
@@ -1791,6 +1880,8 @@ async def _dispatch_workers(
                 spawn_nonce, attestation,
             )
             ctx.budget.workers_used += 1
+            if ctx.root_budget is not None and ctx.root_budget is not ctx.budget:
+                ctx.root_budget.workers_used += 1
             return wr
 
     tasks = [asyncio.create_task(_run_one(st)) for st in capped]
@@ -1901,10 +1992,21 @@ async def _manager_loop(
             "run_id": ctx.run_id, "iteration": ctx.iteration,
         })
 
+        _mgr_proc_holder = _WorkerProcessHolder()
         try:
-            mgr_text, tok = await asyncio.to_thread(
-                _call_manager_sync, prompt, manager_model, ctx.tenant_id
-            )
+            try:
+                mgr_text, tok = await asyncio.to_thread(
+                    _call_manager_sync, prompt, manager_model, ctx.tenant_id,
+                    _mgr_proc_holder,
+                )
+            except asyncio.CancelledError:
+                # Same bug class already fixed for _call_worker_sync: cancelling
+                # this await only stops WAITING for the executor thread — the
+                # manager's claude -p subprocess kept running to completion
+                # regardless. Kill it before re-raising (adversarial review
+                # finding).
+                _mgr_proc_holder.kill()
+                raise
         except (subprocess.TimeoutExpired, RuntimeError) as exc:
             _write_audit(ctx.tenant_id, "acs.manager_error", {
                 "run_id": ctx.run_id, "reason": str(exc)[:300],
@@ -1954,6 +2056,29 @@ async def _manager_loop(
         # --- DELEGATE ---
         if decision_type == "DELEGATE":
             subtasks = decision.get("subtasks") or []
+            # A hallucinated/malformed manager decision could return
+            # "subtasks" as a non-list (e.g. a JSON object) — a plausible
+            # LLM output shape since the schema is only prose-documented.
+            # `not subtasks` alone doesn't catch this (a non-empty dict is
+            # truthy), so `enumerate(subtasks)` a few lines below would
+            # iterate DICT KEYS (plain strings) instead of subtask dicts,
+            # crashing with AttributeError on the first `st.get(...)` call —
+            # and _dispatch_workers's own `subtasks[:N]` slice raises
+            # TypeError on a dict too. Both aborted the ENTIRE run via the
+            # broad top-level except in ACSRuntime.run(), instead of just
+            # retrying the iteration the way empty-subtasks/parse-error
+            # cases already do (adversarial review finding).
+            if not _is_valid_subtask_list(subtasks):
+                log.warning(
+                    "acs: DELEGATE with malformed subtasks (expected list[dict], got %s) "
+                    "at iteration %d", type(subtasks).__name__, ctx.iteration,
+                )
+                _write_audit(ctx.tenant_id, "acs.manager_error", {
+                    "run_id": ctx.run_id, "iteration": ctx.iteration,
+                    "reason": f"malformed_subtasks_shape: {type(subtasks).__name__}",
+                })
+                ctx.iteration += 1
+                continue
             if not subtasks:
                 log.warning("acs: DELEGATE with no subtasks at iteration %d", ctx.iteration)
                 ctx.iteration += 1

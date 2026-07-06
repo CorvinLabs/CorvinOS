@@ -111,6 +111,81 @@ def test_ping_loop_reinvokes_ping_if_due_repeatedly():
     assert len(calls) == 3
 
 
+def test_ping_if_due_still_sends_after_a_backward_clock_jump(tmp_path):
+    """A negative `age` (backward clock jump — NTP correction, VM/container
+    clock skew on boot) must NOT be treated as "already sent today". Before
+    the fix, `age < _PING_INTERVAL_S` was true for ANY negative age, so a
+    clock that jumps backward on every boot suppressed the ping forever."""
+    home = _make_home(tmp_path)
+    stamp = tmp_path / "last_ping"
+    stamp.write_text("x", encoding="utf-8")
+    # Backdate the stamp's mtime into the FUTURE relative to "now" so
+    # time.time() - mtime is negative, simulating a backward clock jump.
+    future = hu.time.time() + 10_000
+    import os as _os
+    _os.utime(stamp, (future, future))
+
+    mock_resp = type("R", (), {"getcode": lambda self: 200})()
+    mock_ctx = type("Ctx", (), {
+        "__enter__": lambda self: mock_resp,
+        "__exit__": lambda self, *a: False,
+    })()
+
+    with (
+        patch.object(hu, "ping_enabled", return_value=True),
+        patch.object(hu, "ensure_ping_tokens", return_value=True),
+        patch.object(hu, "_last_ping_path", return_value=stamp),
+        patch.object(hu, "_load_telemetry_token", return_value="tok"),
+        patch.object(hu, "_load_instance_token", return_value="itok"),
+        patch.object(hu, "load_or_create_instance_id", return_value="iid"),
+        patch.object(hu, "_detect_active_engine", return_value="claude_code"),
+        patch("urllib.request.urlopen", return_value=mock_ctx) as mock_urlopen,
+    ):
+        result = hu.ping_if_due(home)
+
+    assert result is True
+    mock_urlopen.assert_called_once(), (
+        "a backward clock jump must not suppress the ping indefinitely"
+    )
+
+
+def test_ping_if_due_provisions_tokens_inside_the_lock_not_before(tmp_path):
+    """ensure_ping_tokens() must run AFTER the flock is acquired — calling it
+    before the lock (the pre-fix ordering) let two racing processes both
+    provision tokens concurrently, risking a mismatched instance/telemetry
+    token pair. Verified by asserting ensure_ping_tokens is only invoked
+    while the lock file is actually held."""
+    if not hu._HAS_FLOCK:
+        pytest.skip("flock not available on this platform")
+    import fcntl as _fcntl
+
+    home = _make_home(tmp_path)
+    observed_locked_during_provision = []
+
+    def _fake_ensure_tokens(_home):
+        lock_path = hu.htrace_dir(home) / hu._PING_LOCK_FILENAME
+        probe = lock_path.open("w")
+        try:
+            _fcntl.flock(probe, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            observed_locked_during_provision.append(False)  # we got it — not locked
+            _fcntl.flock(probe, _fcntl.LOCK_UN)
+        except (OSError, BlockingIOError):
+            observed_locked_during_provision.append(True)  # someone else holds it
+        finally:
+            probe.close()
+        return False  # stop here — no need to actually send a ping
+
+    with (
+        patch.object(hu, "ping_enabled", return_value=True),
+        patch.object(hu, "ensure_ping_tokens", side_effect=_fake_ensure_tokens),
+    ):
+        hu.ping_if_due(home)
+
+    assert observed_locked_during_provision == [True], (
+        "ensure_ping_tokens() must run while ping_if_due's own lock is held"
+    )
+
+
 def test_start_ping_thread_is_idempotent():
     """Calling start_ping_thread() twice must only ever start ONE thread —
     matches the pattern already used by start_heartbeat_thread()."""

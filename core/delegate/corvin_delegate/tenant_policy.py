@@ -205,6 +205,18 @@ _DEFAULT_ENGINE_ZONES: dict[str, str] = {
     "opencode":    "us",   # provider-agnostic; cloud default is US,
                            # local/cloud distinction handled by model
                            # prefix detection below.
+    # hermes and copilot were previously ABSENT here, so
+    # resolve_engine_zone() fell through to "unknown" for both — and
+    # is_zone_compatible() denies "unknown" whenever a tenant has any zone
+    # constraint set. hermes is the fully-local, zero-egress engine this
+    # project explicitly recommends for CONFIDENTIAL-classified data (see
+    # mcp_server.py's own marketing text) — treating it as an unrecognised/
+    # foreign zone silently blocked it for any tenant with a residency
+    # policy, unless the operator remembered CORVIN_DELEGATE_HERMES_ZONE=
+    # local manually (adversarial review finding). copilot is genuinely
+    # cloud (GitHub Copilot API), given its own explicit default here.
+    "hermes":      "local",
+    "copilot":     "us",
 }
 
 

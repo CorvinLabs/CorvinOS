@@ -25,7 +25,8 @@ from typing import Any, Awaitable, Callable, Optional
 
 from . import compliance as _cmp
 from .marks import (
-    _COLLECT_JS, _FINGERPRINT_JS, _FORM_SENSITIVE_JS, _PAINT_JS, _UNPAINT_JS,
+    _COLLECT_JS, _EXTRACT_FORMS_JS, _EXTRACT_TABLE_JS, _FINGERPRINT_JS,
+    _FORM_SENSITIVE_JS, _PAINT_JS, _UNPAINT_JS,
     MAX_MARKS, Mark, Observation,
 )
 
@@ -37,6 +38,23 @@ VaultResolve = Callable[[str], Optional[str]]           # vault_key -> secret va
 ConfirmFn = Callable[..., Awaitable[bool]]              # (action, host, role, name) -> approved?
 OnAction = Callable[[dict], None]                        # live action-log sink
 OnFrame = Callable[[bytes], None]                        # screencast JPEG sink
+
+# key() allowlist (ADR-0183 S2): only well-known, harmless navigation/editing
+# keys may be pressed by name. Deliberately excludes modifier combinations
+# (Ctrl/Alt/Meta/Shift+X) — those can trigger OS/browser-level shortcuts
+# (devtools, paste-from-clipboard, "select all" on an unrelated field) that
+# were never vetted for this action surface. Reject anything not on this list
+# rather than passing an arbitrary string straight to Playwright's keyboard.
+ALLOWED_KEYS = frozenset({
+    "Enter", "Tab", "Escape", "Backspace", "Delete", "Space",
+    "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight",
+    "Home", "End", "PageUp", "PageDown",
+    "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+})
+
+# Structured extraction bounds (ADR-0183 S2) — keep the model's context bounded
+# regardless of how large the live page's table/forms are.
+_MAX_EXTRACT_ROWS = 200
 
 
 class BrowserActionError(RuntimeError):
@@ -86,6 +104,12 @@ class BrowserSession:
         self._context = None
         self._page = None
         self._last_marks: list[Mark] = []
+        # ADR-0183 S2 iframe traversal: which Frame (or Page, for the main
+        # document) a given global mark index was collected from, so
+        # ``_resolve()`` queries the CORRECT frame instead of always the
+        # top-level page. Absent entries default to the current page (fully
+        # backward compatible with pre-S2 single-frame pages).
+        self._mark_frame: dict[int, Any] = {}
         self._screencast_task: asyncio.Task | None = None
         self.paused = False          # take-over: agent actions are refused while paused
         # Playwright Page is NOT safe for concurrent operations. This lock
@@ -146,6 +170,58 @@ class BrowserSession:
             raise
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         self._page.set_default_timeout(self._nav_timeout)
+        # Multi-tab awareness (ADR-0183 S2): a target="_blank" click or a
+        # window.open() creates a brand-new Page OUTSIDE the normal
+        # navigate()/click() control flow — without this hook it could reach
+        # an off-allowlist host without ever going through check_egress().
+        # Wired once, at the context level, so it covers every tab for the
+        # life of the session (registered after context.pages[0] already
+        # exists, which is fine: that first tab is only ever driven through
+        # our own navigate(), which already egress-checks explicitly).
+        self._context.on("page", self._on_new_page)
+
+    def _on_new_page(self, new_page) -> None:
+        """Sync 'page' event callback (Playwright fires this synchronously) —
+        just schedules the actual async egress check/audit."""
+        asyncio.ensure_future(self._guard_new_page(new_page))
+
+    async def _guard_new_page(self, new_page) -> None:
+        """Fail-closed egress gate for a newly-opened tab/popup.
+
+        Best-effort: waits for the tab's first load so ``new_page.url``
+        reflects its real destination (covers the common target="_blank" /
+        window.open(url) case); a script that opens a blank tab and navigates
+        it later via a timer is a known limitation of this one-shot check —
+        the same fail-closed re-check that ``navigate()``/``click()`` already
+        do for the PRIMARY tab does not yet run repeatedly on secondary tabs.
+        Any error here (including the egress check itself) closes the tab
+        rather than leaving an unchecked page open.
+        """
+        host = ""
+        try:
+            with contextlib.suppress(Exception):
+                await new_page.wait_for_load_state("load", timeout=self._nav_timeout)
+            new_page.set_default_timeout(self._nav_timeout)
+            url = new_page.url
+            decision = _cmp.check_egress(url, allowlist=self._allowlist, forbidden=self._forbidden)
+            host = decision.host
+            if not decision.allowed and url not in ("about:blank", ""):
+                with contextlib.suppress(Exception):
+                    await new_page.close()
+                _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                                  action="new_tab", host=host, ok=False,
+                                  extra={"reason": decision.reason})
+                self._emit("new_tab", host=host, ok=False, reason=decision.reason)
+                return
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                              action="new_tab", host=host, ok=True)
+            self._emit("new_tab", host=host, ok=True)
+        except Exception:  # noqa: BLE001 — a hook failure must never crash the session;
+            # fail-closed: an unexpected error means we could NOT confirm the new
+            # tab is safe, so close it rather than leave it open unchecked.
+            with contextlib.suppress(Exception):
+                await new_page.close()
+            logger.debug("new-tab egress guard failed for %s", host, exc_info=True)
 
     async def close(self) -> None:
         if self._screencast_task:
@@ -221,6 +297,7 @@ class BrowserSession:
         async with self._page_lock:
             page = self._require_page()
             self._last_marks = []       # stamps from the old page are gone
+            self._mark_frame = {}       # old frames are gone/detached too
             await page.goto(url, wait_until="domcontentloaded")
             # Redirect guard: the server may 3xx to another host. Re-check the
             # FINAL landing url against the same policy; a denied redirect is
@@ -251,11 +328,47 @@ class BrowserSession:
             return await self._observe_locked()
 
     async def _observe_locked(self) -> Observation:
+        """Collect Set-of-Marks from the main document AND every same-page
+        iframe (ADR-0183 S2) — same-origin or cross-origin: Playwright's
+        ``Frame.evaluate`` reaches iframe content regardless of origin, which
+        is exactly what makes a payment widget (Stripe/PayPal) visible to the
+        agent instead of an invisible black box. All frames share ONE global,
+        MAX_MARKS-bounded index space; ``self._mark_frame`` remembers which
+        frame produced which index so ``_resolve()`` can query the right one.
+        Backward compatible: a page with no iframes collects exactly as
+        before (single frame, offset 0).
+        """
         page = self._require_page()
-        data = await page.evaluate(_COLLECT_JS, MAX_MARKS)
-        marks = [Mark(**m) for m in data.get("marks", [])]
+        main = page.main_frame
+        try:
+            frames = list(page.frames)
+        except Exception:  # noqa: BLE001
+            frames = [main]
+        ordered = [main] + [f for f in frames if f is not main]
+
+        marks: list[Mark] = []
+        mark_frame: dict[int, Any] = {}
+        url = page.url
+        title = ""
+        for frame in ordered:
+            remaining = MAX_MARKS - len(marks)
+            if remaining <= 0:
+                break
+            try:
+                data = await frame.evaluate(_COLLECT_JS, {"maxMarks": remaining, "offset": len(marks)})
+            except Exception:  # noqa: BLE001 — detached/navigating/restricted frame: skip it
+                continue
+            if frame is main:
+                url = data.get("url", url)
+                title = data.get("title", "")
+            for m in data.get("marks", []):
+                mark = Mark(**m)
+                marks.append(mark)
+                mark_frame[mark.index] = frame
+
         self._last_marks = marks
-        obs = Observation(url=data.get("url", ""), title=data.get("title", ""), marks=marks)
+        self._mark_frame = mark_frame
+        obs = Observation(url=url, title=title, marks=marks)
         host = _cmp._host(obs.url)
         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                           action="observe", host=host, ok=True, extra={"count": len(marks)})
@@ -274,9 +387,17 @@ class BrowserSession:
         control) — raise ``StaleMarkError`` instead of silently acting on a
         possibly-wrong element. The check only fires when BOTH names are
         non-empty (an empty name carries no signal either way).
+
+        ADR-0183 S2 iframe traversal: resolves against the FRAME that
+        actually produced this index (``self._mark_frame``), not always the
+        top-level page — a Playwright ``Frame`` exposes the same
+        ``query_selector``/``evaluate`` surface as ``Page``, so this stays a
+        drop-in. Indices with no recorded frame (pages with no iframes,
+        pre-S2 behavior) fall back to the current page.
         """
         page = self._require_page()
-        el = await page.query_selector(f'[data-corvin-mark="{index}"]')
+        frame = self._mark_frame.get(index, page)
+        el = await frame.query_selector(f'[data-corvin-mark="{index}"]')
         if el is None:
             raise BrowserActionError(
                 f"mark [{index}] not found — the page changed; call observe() again")
@@ -305,7 +426,8 @@ class BrowserSession:
         try:
             async with self._page_lock:
                 page = self._require_page()
-                el = await page.query_selector(f'[data-corvin-mark="{index}"]')
+                frame = self._mark_frame.get(index, page)
+                el = await frame.query_selector(f'[data-corvin-mark="{index}"]')
                 if el is None:
                     return False
                 return bool(await el.evaluate(_FORM_SENSITIVE_JS))
@@ -359,6 +481,7 @@ class BrowserSession:
             el = await self._resolve(index)
             await el.click(timeout=self._nav_timeout)
             self._last_marks = []      # a click may have navigated — force re-observe
+            self._mark_frame = {}      # old frames (if any) are gone/detached too
             # C1 egress guard: a click can navigate anywhere (e.g. an <a href> to an
             # off-allowlist host). Re-validate the LANDING host, fail-closed —
             # a denied destination is parked on about:blank and the click refused.
@@ -456,9 +579,236 @@ class BrowserSession:
         async with self._page_lock:
             page = self._require_page()
             self._last_marks = []
+            self._mark_frame = {}
             await page.go_back(wait_until="domcontentloaded")
             self._emit("back")
             return await self._observe_locked()
+
+    # ── ADR-0183 S2: expanded action surface ────────────────────────────────
+    async def hover(self, index: int) -> None:
+        """Hover the element at ``index`` (e.g. to reveal a hover-only menu)
+        without clicking it. Goes through the same stale-mark ``_resolve()``
+        check as every other action."""
+        self._guard_active("hover")
+        await self._ensure_started()
+        mark = self._mark(index)
+        role = mark.role if mark else ""
+        async with self._page_lock:
+            host = _cmp._host(self._require_page().url)
+            el = await self._resolve(index)
+            await el.hover(timeout=self._nav_timeout)
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                          action="hover", host=host, role=role, index=index, ok=True)
+        self._emit("hover", index=index, role=role, ok=True)
+
+    async def key(self, key: str) -> None:
+        """Press a single named key (Enter/Tab/Escape/Arrow*/…) on the page.
+
+        SECURITY: ``key`` must be on ``ALLOWED_KEYS`` — an arbitrary string
+        (or a modifier combo like "Control+A") is rejected rather than passed
+        straight to Playwright's keyboard, since some combos trigger browser/
+        OS-level behavior (devtools, paste, select-all) never vetted for this
+        surface. Fail-closed: an unknown key raises, nothing is pressed.
+        """
+        self._guard_active("key")
+        await self._ensure_started()
+        if key not in ALLOWED_KEYS:
+            raise BrowserActionError(
+                f"key '{key}' is not in the allowed key set ({sorted(ALLOWED_KEYS)})")
+        async with self._page_lock:
+            page = self._require_page()
+            host = _cmp._host(page.url)
+            await page.keyboard.press(key)
+        # The key NAME itself ("Enter") is not sensitive content — it is
+        # metadata about the action, not typed text — so it is safe to audit,
+        # unlike a fill() value.
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                          action="key", host=host, ok=True, extra={"key": key})
+        self._emit("key", key=key, ok=True)
+
+    async def select_option(self, index: int, value: str) -> None:
+        """Choose an option (by its ``value`` attribute) in the <select> at
+        ``index``. Like ``fill()``, the chosen value is never audited/logged
+        — only its length — since a selected option can itself carry
+        sensitive context (e.g. a country/insurance-plan choice)."""
+        self._guard_active("select_option")
+        await self._ensure_started()
+        mark = self._mark(index)
+        role = mark.role if mark else ""
+        async with self._page_lock:
+            host = _cmp._host(self._require_page().url)
+            el = await self._resolve(index)
+            await el.select_option(value=value)
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                          action="select_option", host=host, role=role, index=index, ok=True,
+                          extra={"chars": len(value)})   # length only, never the value
+        self._emit("select_option", index=index, role=role, ok=True)
+
+    async def upload_file(self, index: int, filename: str) -> None:
+        """Attach a file to the file-input at ``index``.
+
+        SECURITY: ``filename`` is NOT an arbitrary host path. Accepting one
+        would let an untrusted page/agent read arbitrary files off the
+        operator's disk (path traversal / LFI) via a file-input's
+        ``set_input_files``. Instead, a file may only be attached if it
+        ALREADY exists under this session's dedicated uploads directory —
+        ``<tenant browser home>/sessions/<session_id>/uploads/`` — created
+        lazily on first use. Any ``..`` path component or an absolute path is
+        rejected outright; the final resolved path is then re-verified to
+        still be inside the uploads dir before Playwright ever touches it
+        (fail-closed against normalization/symlink tricks). An operator (or a
+        prior, explicitly-approved step) must place the file there first —
+        this method never fetches or writes file content itself.
+        """
+        self._guard_active("upload_file")
+        await self._ensure_started()
+        uploads_dir = self._home / "sessions" / self.session_id / "uploads"
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        raw = (filename or "").strip()
+        if not raw or Path(raw).is_absolute() or ".." in Path(raw).parts:
+            raise BrowserActionError(f"invalid upload filename: {filename!r}")
+        uploads_resolved = uploads_dir.resolve()
+        candidate = (uploads_dir / raw).resolve()
+        if candidate != uploads_resolved and uploads_resolved not in candidate.parents:
+            raise BrowserActionError(f"upload path escapes the session uploads dir: {filename!r}")
+        if not candidate.is_file():
+            raise BrowserActionError(
+                f"upload file not found: {filename!r} (place it under {uploads_dir})")
+        mark = self._mark(index)
+        role = mark.role if mark else ""
+        async with self._page_lock:
+            host = _cmp._host(self._require_page().url)
+            el = await self._resolve(index)
+            await el.set_input_files(str(candidate))
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                          action="upload_file", host=host, role=role, index=index, ok=True,
+                          extra={"filename": raw})   # filename only — never file content
+        self._emit("upload_file", index=index, role=role, ok=True, filename=raw)
+
+    async def drag(self, from_index: int, to_index: int) -> None:
+        """Drag the element at ``from_index`` onto the element at
+        ``to_index`` via a manual hover + mouse down/move/up sequence (more
+        reliable than selector-string ``page.drag_and_drop`` for elements
+        resolved through Set-of-Marks / possibly inside an iframe — an
+        ElementHandle's ``bounding_box()`` is always reported relative to the
+        main frame's viewport, so ``page.mouse`` coordinates work regardless
+        of which frame either endpoint lives in). Both endpoints go through
+        the normal stale-mark ``_resolve()`` check first.
+        """
+        self._guard_active("drag")
+        await self._ensure_started()
+        async with self._page_lock:
+            page = self._require_page()
+            host = _cmp._host(page.url)
+            src = await self._resolve(from_index)
+            dst = await self._resolve(to_index)
+            src_box = await src.bounding_box()
+            dst_box = await dst.bounding_box()
+            if src_box is None or dst_box is None:
+                raise BrowserActionError(
+                    f"drag: source [{from_index}] or target [{to_index}] has no bounding box "
+                    "(not visible)")
+            sx = src_box["x"] + src_box["width"] / 2
+            sy = src_box["y"] + src_box["height"] / 2
+            tx = dst_box["x"] + dst_box["width"] / 2
+            ty = dst_box["y"] + dst_box["height"] / 2
+            await page.mouse.move(sx, sy)
+            await page.mouse.down()
+            await page.mouse.move(tx, ty, steps=10)
+            await page.mouse.up()
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                          action="drag", host=host, ok=True,
+                          extra={"from_index": from_index, "to_index": to_index})
+        self._emit("drag", from_index=from_index, to_index=to_index, ok=True)
+
+    # ── multi-tab awareness (ADR-0183 S2) ───────────────────────────────────
+    async def tabs(self) -> list[dict[str, Any]]:
+        """List every open tab/page in this session's browser context —
+        including ones opened by a target="_blank" click or window.open()
+        that the agent has not yet switched to."""
+        self._guard_active("tabs")
+        await self._ensure_started()
+        async with self._page_lock:
+            pages = list(self._context.pages) if self._context else []
+            out = []
+            for i, pg in enumerate(pages):
+                try:
+                    title = await pg.title()
+                except Exception:  # noqa: BLE001
+                    title = ""
+                out.append({"index": i, "url": pg.url, "title": title})
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                          action="tabs", ok=True, extra={"count": len(out)})
+        self._emit("tabs", count=len(out))
+        return out
+
+    async def switch_tab(self, index: int) -> Observation:
+        """Make tab ``index`` (as reported by ``tabs()``) the active page for
+        all subsequent actions, and return a fresh Set-of-Marks observation
+        of it. The context-level egress guard (wired once in ``start()``,
+        see ``_guard_new_page``) already covers every tab for the life of the
+        session, so switching does not need to re-wire anything per-page —
+        it only needs to make sure the newly-active page has the same
+        default timeout as the rest of the session.
+        """
+        self._guard_active("switch_tab")
+        await self._ensure_started()
+        async with self._page_lock:
+            pages = list(self._context.pages) if self._context else []
+            if index < 0 or index >= len(pages):
+                raise BrowserActionError(f"no tab at index {index}")
+            self._page = pages[index]
+            self._page.set_default_timeout(self._nav_timeout)
+            self._last_marks = []
+            self._mark_frame = {}
+            obs = await self._observe_locked()
+        host = _cmp._host(obs.url)
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                          action="switch_tab", host=host, ok=True, extra={"tab_index": index})
+        self._emit("switch_tab", tab_index=index, host=host, ok=True)
+        return obs
+
+    # ── structured extraction (ADR-0183 S2) ─────────────────────────────────
+    async def extract_table(self, index: int) -> dict[str, Any]:
+        """Parse the element at ``index`` — a <table>, or a container that
+        wraps/represents one (role="table"/"grid") — into
+        ``{"headers": [...], "rows": [[...], ...]}``. Bounded at
+        ``_MAX_EXTRACT_ROWS`` rows so a huge table can't blow the model's
+        context. Goes through the normal stale-mark ``_resolve()`` first."""
+        self._guard_active("extract_table")
+        await self._ensure_started()
+        async with self._page_lock:
+            host = _cmp._host(self._require_page().url)
+            el = await self._resolve(index)
+            data = await el.evaluate(_EXTRACT_TABLE_JS, _MAX_EXTRACT_ROWS)
+        headers = data.get("headers", []) if isinstance(data, dict) else []
+        rows = data.get("rows", []) if isinstance(data, dict) else []
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                          action="extract_table", host=host, index=index, ok=True,
+                          extra={"count": len(rows)})
+        self._emit("extract_table", index=index, count=len(rows), ok=True)
+        return {"headers": headers, "rows": rows}
+
+    async def extract_form_schema(self) -> list[dict[str, Any]]:
+        """Describe every <form> on the CURRENT top-level document — action,
+        method, and one entry per field (name/type/required/label). NEVER
+        includes a field's current value (only its static label/attributes),
+        so an in-progress password/PII entry can never leak through this
+        path. Scoped to the top-level document only (does not descend into
+        iframes — use ``extract_table`` or a per-frame ``observe()`` for
+        iframe-embedded forms)."""
+        self._guard_active("extract_form_schema")
+        await self._ensure_started()
+        async with self._page_lock:
+            page = self._require_page()
+            host = _cmp._host(page.url)
+            forms = await page.evaluate(_EXTRACT_FORMS_JS)
+        forms = forms if isinstance(forms, list) else []
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                          action="extract_form_schema", host=host, ok=True,
+                          extra={"count": len(forms)})
+        self._emit("extract_form_schema", count=len(forms), ok=True)
+        return forms
 
     async def screenshot(self, *, marks: bool = True) -> bytes:
         await self._ensure_started()

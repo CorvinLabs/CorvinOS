@@ -15,7 +15,6 @@ Fail-open contract:
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
@@ -24,6 +23,25 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # Windows — no fcntl module.
+    # This module is reachable from adapter.py/chat_runtime.py/dispatcher.py/
+    # routes/compute*.py via lazy, function-local imports with no guaranteed
+    # ordering against operator/forge's or corvin_console's own _wincompat
+    # shim install — a bare top-level `import fcntl` here crashed the first
+    # Windows caller to reach it with ModuleNotFoundError (adversarial review
+    # finding; same bug class as the 17-module Windows sweep, this file was
+    # missed). The lock is single-host advisory-only and quota writes are
+    # already atomic via temp-file + os.replace, so a no-op is correctness-
+    # preserving within one Windows process.
+    import types as _types
+
+    fcntl = _types.ModuleType("fcntl")  # type: ignore[assignment]
+    fcntl.LOCK_EX = 2  # type: ignore[attr-defined]
+    fcntl.LOCK_UN = 8  # type: ignore[attr-defined]
+    fcntl.flock = lambda *_a, **_k: 0  # type: ignore[attr-defined]
 
 _log = logging.getLogger("corvin.license.compute_quota")
 

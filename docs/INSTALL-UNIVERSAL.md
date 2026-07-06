@@ -142,6 +142,14 @@ schtasks /run /tn "CorvinOS\adapter"
 Get-WinEvent -LogName Application | Where-Object { $_.ProviderName -like "*Corvin*" }
 ```
 
+> **Note:** the standalone one-liner installer (`install.ps1`, `irm
+> https://corvin-labs.com/install.ps1 | iex`) registers a *different*,
+> flat-named autostart task, `CorvinOS-Console` (not the `CorvinOS\*` folder
+> scheme above, which belongs to the `corvin-install` Python installer flow).
+> `corvin-uninstall` removes both: the `CorvinOS\*` folder-scoped tasks via
+> the service manager, and `CorvinOS-Console` directly. To remove it manually
+> without uninstalling: `Unregister-ScheduledTask CorvinOS-Console`.
+
 ## Configuration
 
 Configuration is stored in:

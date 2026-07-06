@@ -903,7 +903,10 @@ export interface WdatGraphEdge {
 
 export interface WdatGraphMeta {
   run_id: string;
-  chain_integrity: "verified" | "empty";
+  // Real hash-chain verification (security_events.verify_chain) — "broken"
+  // when the walk finds tampered/broken-link entries, "unavailable" when
+  // the verifier itself could not be reached/run.
+  chain_integrity: "verified" | "empty" | "broken" | "unavailable";
   total_workers: number;
   total_manager_decisions: number;
   eu_ai_act: {
@@ -981,6 +984,11 @@ export interface ChainDualTrackPayload {
   genesis:       { hash_prefix: string; network_id: string; instance_id: string; network_pubkey_fp: string } | null;
   delegations:   ChainDelegationGroup[];
   os_only_events: ChainAuditEvent[];
+  // Real hash-chain verification (security_events.verify_chain) across the
+  // underlying audit.jsonl file(s) — qualifies every delegation's
+  // genesis_match reading: a genesis_match pulled from a broken/tampered
+  // chain is not trustworthy regardless of which event-type string is in it.
+  chain_verified: boolean;
   ts:            number;
 }
 

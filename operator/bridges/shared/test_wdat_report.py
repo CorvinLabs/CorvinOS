@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +14,9 @@ try:
     from . import wdat_report as _wr
 except ImportError:
     import wdat_report as _wr  # type: ignore[no-redef]
+
+if _wr._FORGE_PATH not in sys.path:
+    sys.path.insert(0, _wr._FORGE_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +165,84 @@ def test_decrypt_wrong_key_returns_none():
 def test_decrypt_too_short_returns_none():
     result = _wr._decrypt_trace(b"short", os.urandom(32))
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _real_chain_integrity — adversarial review finding: this used to be
+# cosmetic ("verified" meant only "this run has >=1 event", never an actual
+# hash-chain walk). Now performs a real verify_chain() call.
+# ---------------------------------------------------------------------------
+
+def test_chain_integrity_verified_for_a_real_intact_chain():
+    from forge import security_events as _sec  # type: ignore[import-untyped]
+
+    with tempfile.TemporaryDirectory() as td:
+        audit_path = Path(td) / "audit.jsonl"
+        _sec.write_event(audit_path, "acs.manager_decided", run_id="r1", details={"run_id": "r1"})
+        _sec.write_event(audit_path, "acs.worker_spawned", run_id="r1", details={"run_id": "r1", "worker_id": "w1"})
+        assert _wr._real_chain_integrity(audit_path, run_event_count=2) == "verified"
+
+
+def test_chain_integrity_empty_when_no_events_for_this_run():
+    from forge import security_events as _sec  # type: ignore[import-untyped]
+
+    with tempfile.TemporaryDirectory() as td:
+        audit_path = Path(td) / "audit.jsonl"
+        _sec.write_event(audit_path, "acs.manager_decided", run_id="other-run", details={"run_id": "other-run"})
+        # Chain itself is intact, but THIS run has 0 matching events.
+        assert _wr._real_chain_integrity(audit_path, run_event_count=0) == "empty"
+
+
+def test_chain_integrity_broken_when_chain_is_tampered():
+    """The core regression: a tampered audit file must show "broken", not a
+    permanent cosmetic "verified" just because the run had events."""
+    from forge import security_events as _sec  # type: ignore[import-untyped]
+
+    with tempfile.TemporaryDirectory() as td:
+        audit_path = Path(td) / "audit.jsonl"
+        _sec.write_event(audit_path, "acs.manager_decided", run_id="r1", details={"run_id": "r1"})
+        _sec.write_event(audit_path, "acs.worker_spawned", run_id="r1", details={"run_id": "r1", "worker_id": "w1"})
+
+        # Tamper: flip a character in the first record's details, invalidating
+        # its stored hash without touching the hash field itself.
+        lines = audit_path.read_text(encoding="utf-8").splitlines()
+        rec = json.loads(lines[0])
+        rec["details"]["run_id"] = "TAMPERED"
+        lines[0] = json.dumps(rec)
+        audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        # Even though this run has events (run_event_count > 0), a broken
+        # chain must never report "verified".
+        assert _wr._real_chain_integrity(audit_path, run_event_count=2) == "broken"
+
+
+def test_chain_integrity_unavailable_when_verifier_cannot_be_reached():
+    with tempfile.TemporaryDirectory() as td:
+        audit_path = Path(td) / "audit.jsonl"
+        audit_path.write_text("{}\n")
+        with patch.object(_wr, "_FORGE_PATH", "/nonexistent/path/that/breaks/import"), \
+             patch("builtins.__import__", side_effect=ImportError("boom")):
+            assert _wr._real_chain_integrity(audit_path, run_event_count=1) == "unavailable"
+
+
+def test_generate_report_reflects_broken_chain_end_to_end():
+    from forge import security_events as _sec  # type: ignore[import-untyped]
+
+    with tempfile.TemporaryDirectory() as td:
+        audit_path = Path(td) / "audit.jsonl"
+        for ev in _mock_events("run-001"):
+            _sec.write_event(
+                audit_path, ev["event_type"], run_id="run-001", details=ev.get("details", {}),
+            )
+        lines = audit_path.read_text(encoding="utf-8").splitlines()
+        rec = json.loads(lines[0])
+        rec["details"] = {**rec.get("details", {}), "tampered": True}
+        lines[0] = json.dumps(rec)
+        audit_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        with patch.object(_wr, "_audit_path", return_value=audit_path):
+            report = _wr.generate_report("run-001", tenant_id="_test")
+    assert report["chain_integrity"] == "broken"
 
 
 # ---------------------------------------------------------------------------

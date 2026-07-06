@@ -95,6 +95,38 @@ def test_call_worker_sync_populates_proc_holder():
     assert holder.popen is not None
 
 
+def test_call_manager_sync_populates_proc_holder():
+    """Adversarial review finding: _call_manager_sync used plain
+    subprocess.run() with no way for a cancelling caller to kill the actual
+    process — the same bug class already fixed for _call_worker_sync. This
+    proves the manager call site now exposes a live Popen handle the same way."""
+    holder = _rt._WorkerProcessHolder()
+    with (
+        patch.object(_rt, "_resolve_worker_engine", return_value=("claude_code", "test-model")),
+        patch.object(_rt, "_assert_engine_licensed", return_value=None),
+        patch.object(_rt, "_claude_binary", return_value="echo"),
+        patch.object(_rt, "_apply_provider_redirect", return_value=None),
+        patch.object(_rt.shutil, "which", return_value="/bin/echo"),
+    ):
+        _rt._call_manager_sync("prompt", "test-model", proc_holder=holder)
+    assert holder.popen is not None
+
+
+def test_call_manager_sync_still_works_without_a_proc_holder():
+    # proc_holder is optional (backward compatible with any caller that
+    # doesn't need cancellation-kill support).
+    with (
+        patch.object(_rt, "_resolve_worker_engine", return_value=("claude_code", "test-model")),
+        patch.object(_rt, "_assert_engine_licensed", return_value=None),
+        patch.object(_rt, "_claude_binary", return_value="echo"),
+        patch.object(_rt, "_apply_provider_redirect", return_value=None),
+        patch.object(_rt.shutil, "which", return_value="/bin/echo"),
+    ):
+        out, tok = _rt._call_manager_sync("prompt", "test-model")
+    assert isinstance(out, str)
+    assert tok > 0
+
+
 # ---------------------------------------------------------------------------
 # BudgetEnvelope tests
 # ---------------------------------------------------------------------------
@@ -120,6 +152,20 @@ def test_budget_tokens_breach():
     breach = b.check()
     assert breach is not None
     assert "max_total_tokens" in breach
+
+
+def test_budget_tool_calls_breach_fires_once_incremented():
+    # Adversarial review finding: tool_calls_used was NEVER incremented
+    # anywhere in the file, so a configured max_tool_calls could never
+    # fire — this is a basic sanity check that the mechanism itself works
+    # once something actually increments the counter (now done in
+    # _run_one from the post-run trace-extraction tool-call count).
+    b = _rt.BudgetEnvelope(max_tool_calls=5)
+    assert b.check() is None
+    b.tool_calls_used = 5
+    breach = b.check()
+    assert breach is not None
+    assert "max_tool_calls" in breach
 
 
 def test_budget_fraction():
@@ -180,6 +226,38 @@ def test_build_manager_prompt_with_worker_results():
         prompt = _rt._build_manager_prompt(ctx)
         assert "worker_1" in prompt
         assert "0.90" in prompt
+
+
+# ---------------------------------------------------------------------------
+# _is_valid_subtask_list — adversarial review finding: a hallucinated
+# manager decision returning "subtasks" as a non-list (e.g. a JSON object)
+# passed the old bare `if not subtasks:` check (a non-empty dict is
+# truthy), then crashed the WHOLE run with AttributeError/TypeError deeper
+# in enumerate()/list-slicing, instead of just retrying the iteration.
+# ---------------------------------------------------------------------------
+
+def test_is_valid_subtask_list_accepts_a_real_list_of_dicts():
+    assert _rt._is_valid_subtask_list([{"id": "t1"}, {"id": "t2"}]) is True
+
+
+def test_is_valid_subtask_list_accepts_empty_list():
+    assert _rt._is_valid_subtask_list([]) is True
+
+
+def test_is_valid_subtask_list_rejects_a_dict():
+    assert _rt._is_valid_subtask_list({"id": "t1"}) is False
+
+
+def test_is_valid_subtask_list_rejects_a_list_of_strings():
+    assert _rt._is_valid_subtask_list(["t1", "t2"]) is False
+
+
+def test_is_valid_subtask_list_rejects_a_string():
+    assert _rt._is_valid_subtask_list("not-a-list") is False
+
+
+def test_is_valid_subtask_list_rejects_none():
+    assert _rt._is_valid_subtask_list(None) is False
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +439,127 @@ def test_budget_from_spec_clamps_zero_max_loops_and_workers():
     budget = _rt._budget_from_spec(spec)
     assert budget.max_loops == 100      # fell back to default, not 0
     assert budget.max_total_workers == 500  # fell back to default, not -5
+
+
+def test_budget_from_spec_clamps_max_workers_per_iteration_ceiling():
+    # Adversarial review finding: unlike max_loops/max_total_workers, this
+    # field had NO clamp at all — a workflow YAML (or budget_override, which
+    # merges into this same spec dict before _budget_from_spec runs) could
+    # set it to an arbitrary integer, fanning out that many CONCURRENT
+    # worker subprocesses in a single iteration at any recursion depth.
+    spec = {"orchestration": {"delegation_loop": {"budget": {
+        "max_workers_per_iteration": 999_999,
+    }}}}
+    budget = _rt._budget_from_spec(spec)
+    assert budget.max_workers_per_iteration == 100
+
+
+def test_budget_from_spec_max_workers_per_iteration_zero_falls_back_to_default():
+    spec = {"orchestration": {"delegation_loop": {"budget": {
+        "max_workers_per_iteration": 0,
+    }}}}
+    budget = _rt._budget_from_spec(spec)
+    assert budget.max_workers_per_iteration == 6
+
+
+# ---------------------------------------------------------------------------
+# RunContext.root_budget — adversarial review CRITICAL fix
+# ---------------------------------------------------------------------------
+# BudgetEnvelope.check() was called ONLY at the top-level manager loop
+# against the ROOT budget. Recursive delegation gives each sub-tree its OWN
+# independent budget via .fraction(), whose workers_used/tokens_used
+# counters were incremented but never checked against anything, so the real
+# aggregate usage across the whole recursion tree could vastly exceed
+# max_total_workers/max_total_tokens. root_budget threads the SAME
+# BudgetEnvelope object through every level so the true aggregate can be
+# checked and incremented at any depth.
+
+def test_root_budget_defaults_to_self_when_unset():
+    spec = _minimal_spec()
+    budget = _rt._budget_from_spec(spec)
+    with tempfile.TemporaryDirectory() as td:
+        ctx = _rt.RunContext(
+            run_id="r1", workflow_id="w1", workflow_spec=spec,
+            budget=budget, run_dir=Path(td),
+        )
+        assert ctx.root_budget is ctx.budget
+
+
+def test_root_budget_survives_dataclasses_replace_with_a_new_fractioned_budget():
+    import dataclasses as _dc
+
+    spec = _minimal_spec()
+    root_budget = _rt._budget_from_spec(spec)
+    with tempfile.TemporaryDirectory() as td:
+        ctx = _rt.RunContext(
+            run_id="r1", workflow_id="w1", workflow_spec=spec,
+            budget=root_budget, run_dir=Path(td),
+        )
+        sub_ctx = _dc.replace(ctx, budget=ctx.budget.fraction(0.5))
+        # The sub-context's LOCAL budget is a new, smaller object...
+        assert sub_ctx.budget is not root_budget
+        # ...but root_budget still points at the ORIGINAL root object, at
+        # any recursion depth — this is what makes global-ceiling
+        # enforcement possible at all.
+        assert sub_ctx.root_budget is root_budget
+
+        # A second level of recursion must still resolve to the same root.
+        sub_sub_ctx = _dc.replace(sub_ctx, budget=sub_ctx.budget.fraction(0.5))
+        assert sub_sub_ctx.root_budget is root_budget
+        assert sub_sub_ctx.budget is not sub_ctx.budget
+
+
+@pytest.mark.asyncio
+async def test_dispatch_workers_refuses_when_root_budget_already_breached():
+    """The core fix: even though the LOCAL (fractioned) branch budget has
+    plenty of room, _dispatch_workers must refuse to spawn anything once the
+    GLOBAL root ceiling has been breached by usage anywhere else in the tree."""
+    spec = _minimal_spec()
+    root_budget = _rt._budget_from_spec(spec)
+    root_budget.max_total_workers = 5
+    root_budget.workers_used = 5  # already at the global ceiling
+
+    local_budget = root_budget.fraction(1.0)  # a fresh, unbroken LOCAL budget
+    assert local_budget.check() is None, "sanity: the local branch budget itself has room"
+
+    with tempfile.TemporaryDirectory() as td:
+        ctx = _rt.RunContext(
+            run_id="r1", workflow_id="w1", workflow_spec=spec,
+            budget=local_budget, run_dir=Path(td), root_budget=root_budget,
+        )
+        results = await _rt._dispatch_workers(
+            [{"id": "t1", "instructions": "x"}], ctx, depth=1,
+            manager_model="m", worker_model="w",
+        )
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_dispatch_workers_proceeds_when_root_budget_has_room():
+    """Sanity counterpart: dispatch must not be blocked when the global
+    ceiling has NOT been breached (verifies the check isn't just always-deny)."""
+    spec = _minimal_spec()
+    root_budget = _rt._budget_from_spec(spec)
+    root_budget.max_total_workers = 500
+    root_budget.workers_used = 0
+
+    local_budget = root_budget.fraction(1.0)
+
+    with tempfile.TemporaryDirectory() as td:
+        ctx = _rt.RunContext(
+            run_id="r1", workflow_id="w1", workflow_spec=spec,
+            budget=local_budget, run_dir=Path(td), root_budget=root_budget,
+        )
+        with patch.object(_rt, "_write_audit") as mock_audit:
+            results = await _rt._dispatch_workers(
+                [], ctx, depth=1, manager_model="m", worker_model="w",
+            )
+    assert results == []
+    # Distinguishes this from the breach short-circuit: no breach audit
+    # event fired, proving the early-return path was not taken merely
+    # because subtasks happened to be empty.
+    breach_calls = [c for c in mock_audit.call_args_list if c.args[1] == "acs.budget_breach"]
+    assert breach_calls == []
 
 
 # ---------------------------------------------------------------------------

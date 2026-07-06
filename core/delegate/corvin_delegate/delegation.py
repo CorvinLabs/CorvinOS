@@ -48,12 +48,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-# The WorkerEngine layer lives in the voice plugin's shared/agents/ tree.
-# We resolve it lazily so this package stays importable even when the
-# voice plugin is absent (e.g. CI runs that only need the delegation
-# library or its MCP-server surface).
-_PLUGIN_ROOT = Path(__file__).resolve().parents[2]
-_AGENTS_DIR = _PLUGIN_ROOT / "voice" / "bridges" / "shared"
+# The WorkerEngine layer lives in operator/bridges/shared/agents/. We
+# resolve it lazily so this package stays importable even when that tree
+# is absent (e.g. CI runs that only need the delegation library or its
+# MCP-server surface).
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_AGENTS_DIR = _REPO_ROOT / "operator" / "bridges" / "shared"
 
 
 BUDGET_DEFAULT_S = 60
@@ -74,17 +74,40 @@ OUTPUT_TRUNCATED_MARKER = "\n\n[…output truncated by corvin-delegate at {n} ch
 # Layer 29.1c — prompt-injection marker scan on worker output. When ANY
 # marker matches, the framing-block in mcp_server.py wraps the worker's
 # text so Claude OS treats it as ambient data, not as a directive.
+#
+# KNOWN, DOCUMENTED LIMITATION (adversarial review finding): this is a
+# structural, keyword-anchored scan — it does not and cannot catch every
+# injection phrasing (non-English wording beyond the German patterns added
+# below, unicode homoglyphs, zero-width-char-split keywords, HTML-comment-
+# hidden text, base64-encoded directives a downstream LLM might still
+# decode-and-follow). False positives are acceptable (the framing-block
+# downstream is non-disruptive); false negatives are the residual risk this
+# scan reduces but does not eliminate. The patterns map to the well-known
+# attack families documented in OWASP LLM01.
 _INJECTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # "ignore" / "disregard" — allow up to 3 filler words between the verb
     # and the target (covers "ignore the previous", "disregard all earlier").
     ("ignore_previous",      re.compile(r"\bignore\b(?:\W+\w+){0,3}\W+(?:previous|prior|earlier|above|instructions|rules|commands|directives|everything)\b", re.IGNORECASE)),
     ("disregard",            re.compile(r"\bdisregard\b(?:\W+\w+){0,3}\W+(?:previous|prior|earlier|above|instructions|rules|commands|directives|everything)\b", re.IGNORECASE)),
     ("system_tag_inject",    re.compile(r"<\s*/?\s*(?:SYSTEM|sys|system_prompt)\s*>", re.IGNORECASE)),
+    ("html_comment_hidden",  re.compile(r"<!--.*?(?:ignore|instructions?|system|forget).*?-->", re.IGNORECASE | re.DOTALL)),
     ("role_switch",          re.compile(r"^\s*(?:assistant|user|system)\s*:", re.IGNORECASE | re.MULTILINE)),
-    ("new_instructions",     re.compile(r"\b(?:new|updated|revised)\s+instructions?\s*:", re.IGNORECASE)),
+    ("new_instructions",     re.compile(r"\b(?:new|updated|revised|real|actual)\s+instructions?\s*(?:is|are|now)?\s*:", re.IGNORECASE)),
     ("forget_everything",    re.compile(r"\bforget\b(?:\W+\w+){0,3}\W+(?:everything|all|previous|prior|instructions)\b", re.IGNORECASE)),
+    ("indirect_authority",   re.compile(r"\b(?:the\s+user'?s?|your)\s+(?:real|actual|true)\s+instructions?\s+(?:is|are|now)\b", re.IGNORECASE)),
+    # German equivalents of the two most common English patterns above —
+    # the injection-scan literature notes non-English phrasing is one of
+    # the most common evasions of English-only keyword scans.
+    ("ignore_previous_de",   re.compile(r"\bignorier(?:e|en)\b(?:\W+\w+){0,3}\W+(?:vorherige[nr]?|vorig[e]?|obige[nr]?|bisherige[nr]?|anweisungen|regeln|befehle|alles)\b", re.IGNORECASE)),
+    ("forget_everything_de", re.compile(r"\bvergiss\b(?:\W+\w+){0,3}\W+(?:alles|alle|vorherige[nr]?|anweisungen)\b", re.IGNORECASE)),
 )
-_INJECTION_SCAN_HEAD_CHARS = 8_192  # only scan first chunk; tail rarely carries injections
+# Scan the FULL (already output-cap-bounded, max 512 KB) text rather than
+# only a head slice. The head-only scan was a trivial evasion: placing the
+# injection payload after the cutoff (well within the 64 KB default output
+# cap) reached Claude OS byte-identically, unframed (adversarial review
+# finding). A regex pass over up to 512 KB is still sub-millisecond-to-low-
+# millisecond — the original "cost" rationale does not hold at this size.
+_INJECTION_SCAN_HEAD_CHARS = OUTPUT_CAP_MAX_CHARS
 
 AVAILABLE_ENGINES: tuple[str, ...] = ("claude_code", "codex_cli", "opencode", "hermes", "copilot")
 
@@ -218,7 +241,16 @@ def _safe_spawn_kwargs(engine_id: str, allow_write: bool) -> dict[str, Any]:
         return {"permission_mode": "plan"}
     if engine_id == "codex_cli":
         if allow_write:
-            return {"extra_args": ["--sandbox", "workspace-write"]}
+            # codex_cli.py resolves --sandbox from `permission_mode` FIRST
+            # (defaulting to "read-only" whenever permission_mode is None),
+            # then strips any --sandbox pair already present in `extra_args`
+            # so its own resolution "wins" — so passing the widened sandbox
+            # only via extra_args (the previous form here) was silently
+            # discarded, and allow_write=True was a complete no-op for this
+            # engine: it stayed read-only regardless of caller intent
+            # (adversarial review finding). "acceptEdits" is the
+            # permission_mode _SANDBOX_MAP key that maps to workspace-write.
+            return {"permission_mode": "acceptEdits"}
         return {}
     if engine_id == "hermes":
         # HermesEngine drives Ollama HTTP — no subprocess permission modes
@@ -335,9 +367,41 @@ _ENGINE_ENV_ADDITIONS: dict[str, frozenset[str]] = {
 }
 
 
-def _env_allowlist_for(engine_id: str) -> frozenset[str]:
-    """Compose the env-var allowlist for a given engine."""
-    return _BASE_ENV_ALLOWLIST | _ENGINE_ENV_ADDITIONS.get(engine_id, frozenset())
+_OPENCODE_PROVIDER_ENV: dict[str, str] = {
+    "ollama":    "OLLAMA_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai":    "OPENAI_API_KEY",
+}
+
+
+def _env_allowlist_for(engine_id: str, model: str | None = None) -> frozenset[str]:
+    """Compose the env-var allowlist for a given engine.
+
+    ``model`` narrows the OpenCode allowlist to only the API key its
+    ``"provider/model"`` string actually implies (e.g. ``"ollama/qwen3:8b"``
+    -> only ``OLLAMA_API_KEY``) instead of unconditionally handing every
+    OpenCode delegation ALL THREE providers' keys regardless of which one
+    the task actually targets (adversarial review finding) — a fully-local
+    ``"ollama/..."`` call has no legitimate need for
+    ``ANTHROPIC_API_KEY``/``OPENAI_API_KEY``, and a curious or
+    successfully-injected worker with shell/file tools has a plausible path
+    to read and exfiltrate credentials it was never supposed to need for
+    its assigned task. A missing/unrecognised model falls back to the full
+    set (unchanged, conservative default) since the caller may rely on
+    OpenCode's own default-model resolution.
+    """
+    additions = _ENGINE_ENV_ADDITIONS.get(engine_id, frozenset())
+    if engine_id == "opencode" and model:
+        provider = model.split("/", 1)[0].strip().lower()
+        scoped = _OPENCODE_PROVIDER_ENV.get(provider)
+        if scoped is not None:
+            additions = frozenset({scoped})
+        # Unrecognised provider (e.g. a custom OpenRouter model) -> no
+        # implicit key at all; per the module's own convention such
+        # providers pass their key via env_extra.
+        elif provider not in ("", None):
+            additions = frozenset()
+    return _BASE_ENV_ALLOWLIST | additions
 
 
 @contextlib.contextmanager
@@ -378,6 +442,40 @@ def _hermetic_tempdir(prefix: str = "corvin-delegate-") -> Iterator[Path]:
         yield path
     finally:
         shutil.rmtree(path, ignore_errors=True)
+
+
+def sweep_stale_hermetic_tempdirs(
+    max_age_s: float = 3600, prefix: str = "corvin-delegate-",
+) -> int:
+    """Best-effort reaper for orphaned hermetic tempdirs.
+
+    ``_hermetic_tempdir``'s try/finally only guarantees ``rmtree`` on normal
+    Python-level exit (exception or completion) — a hard process kill
+    (SIGKILL, OOM-killer, systemd hard-restart, host crash) during an active
+    delegation leaves the 0o700 tempdir under the system tempdir permanently,
+    potentially containing partial/sensitive intermediate worker output. No
+    sweep existed anywhere for these directories (adversarial review
+    finding), unlike the analogous stale-running-task reaper for a different
+    subsystem. Called best-effort at MCP-server startup; fail-soft, never
+    raises. Returns the number of directories removed.
+    """
+    removed = 0
+    try:
+        base = Path(tempfile.gettempdir())
+        now = time.time()
+        for entry in base.glob(f"{prefix}*"):
+            try:
+                if not entry.is_dir():
+                    continue
+                age = now - entry.stat().st_mtime
+                if age > max_age_s:
+                    shutil.rmtree(entry, ignore_errors=True)
+                    removed += 1
+            except OSError:
+                continue
+    except Exception:  # noqa: BLE001
+        pass
+    return removed
 
 
 def _scan_injection_markers(text: str) -> list[str]:
@@ -570,6 +668,22 @@ def run_delegate(
             _eng_assert("engines_allowed", engine)
         except Exception as _eng_exc:  # noqa: BLE001 — fail-CLOSED on any license error
             _denied = _eng_lic_err is not None and isinstance(_eng_exc, _eng_lic_err)
+            # A genuine LicenseLimitError already gets its own L16 event from
+            # inside validator.assert_limit() (license.limit_exceeded) before
+            # it raises. But any OTHER exception here (e.g. the `license.*`
+            # import itself failing, or a corrupted/unverifiable token making
+            # _verified_license() raise) denies the delegation with NO
+            # corresponding audit event at all — a real gap given this
+            # project's own load-bearing requirement that every enforcement
+            # decision hash-chain into the audit log (adversarial review
+            # finding). Emit one explicitly for exactly that non-denied case.
+            if audit and not _denied:
+                _emit_audit_failed(
+                    engine=engine,
+                    persona=(persona or os.environ.get("CORVIN_CALLER_PERSONA") or "").strip(),
+                    reason=f"license-gate-error: {type(_eng_exc).__name__}",
+                    duration_ms=0,
+                )
             return DelegateResult(
                 ok=False, engine=engine, duration_ms=0, model=model,
                 error=(
@@ -785,7 +899,7 @@ def run_delegate(
     if env_passthrough:
         env_cm = contextlib.nullcontext()
     else:
-        env_cm = _scrubbed_environ(_env_allowlist_for(engine))
+        env_cm = _scrubbed_environ(_env_allowlist_for(engine, model))
 
     if hermetic_active:
         tempdir_cm = _hermetic_tempdir()
@@ -1583,7 +1697,7 @@ def _emit_worker_session_audit_delegate(event_type: str, **fields: Any) -> None:
         _ensure_agents_on_path()
         import sys as _sys
         import os as _os
-        _bridge_shared = Path(__file__).resolve().parents[2] / "voice" / "bridges" / "shared"
+        _bridge_shared = _AGENTS_DIR
         _bp = str(_bridge_shared)
         if _bp not in _sys.path:
             _sys.path.insert(0, _bp)

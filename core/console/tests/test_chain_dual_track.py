@@ -155,5 +155,65 @@ class ChainDualTrackTests(unittest.TestCase):
         self.assertIn("tool_name", d)
 
 
+class ChainVerifiedFieldTests(unittest.TestCase):
+    """Adversarial review finding: the "chain DNA ✓/✗" badge was previously
+    inferred purely by scanning for an event-type STRING already present in
+    the raw JSONL — not a real hash-chain re-verification. Anyone able to
+    write/edit a line into audit.jsonl could forge the badge. `chain_verified`
+    now performs a real `security_events.verify_chain` walk."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="test-dual-track-verify-"))
+        self.forge_dir = self.tmp / "global" / "forge"
+        self.forge_dir.mkdir(parents=True)
+        self.audit = self.forge_dir / "audit.jsonl"
+        self.sid = "sess-abc"
+
+    def _call(self) -> dict:
+        empty = self.tmp / "tenant-empty"
+        empty.mkdir(exist_ok=True)
+        with (
+            patch.object(dt._forge_paths, "corvin_home", return_value=self.tmp),
+            patch.object(dt._forge_paths, "tenant_global_dir", return_value=empty),
+        ):
+            return dt.get_chain_dual_track(sid=self.sid, rec=_auth())
+
+    def test_intact_real_hash_chain_reports_verified(self) -> None:
+        from forge import security_events as _sec
+
+        _sec.write_event(self.audit, "os_turn.started", details={"turn_id": "t1", "chat_key": "web:sess-abc"})
+        _sec.write_event(self.audit, "os_turn.completed", details={"turn_id": "t1", "chat_key": "web:sess-abc"})
+        res = self._call()
+        self.assertTrue(res["chain_verified"])
+
+    def test_tampered_hash_chain_reports_not_verified(self) -> None:
+        from forge import security_events as _sec
+
+        _sec.write_event(self.audit, "os_turn.started", details={"turn_id": "t1", "chat_key": "web:sess-abc"})
+        _sec.write_event(self.audit, "os_turn.completed", details={"turn_id": "t1", "chat_key": "web:sess-abc"})
+        lines = self.audit.read_text(encoding="utf-8").splitlines()
+        rec = json.loads(lines[0])
+        rec["details"]["turn_id"] = "TAMPERED"
+        lines[0] = json.dumps(rec)
+        self.audit.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        res = self._call()
+        self.assertFalse(res["chain_verified"], (
+            "a tampered audit.jsonl must not report chain_verified=True — "
+            "genesis_match readings pulled from it are not trustworthy"
+        ))
+
+    def test_no_hash_field_events_are_not_falsely_marked_broken(self) -> None:
+        # Pre-chain-style events (no `hash` field) are legitimate per
+        # verify_chain's own contract (hash_chain=False writes) and must not
+        # be reported as a broken chain.
+        self.audit.write_text(json.dumps({
+            "event_type": "os_turn.started", "ts": time.time(),
+            "details": {"turn_id": "t1", "chat_key": "web:sess-abc"},
+        }) + "\n", encoding="utf-8")
+        res = self._call()
+        self.assertTrue(res["chain_verified"])
+
+
 if __name__ == "__main__":
     unittest.main()

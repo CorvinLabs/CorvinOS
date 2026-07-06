@@ -475,8 +475,19 @@ function WdatGraphInner({
             "font-mono text-[10px]",
             meta.chain_integrity === "verified"
               ? "border-green-700 text-green-400"
-              : "border-zinc-600 text-zinc-400",
+              : meta.chain_integrity === "broken"
+                ? "border-red-700 text-red-400"
+                : meta.chain_integrity === "unavailable"
+                  ? "border-amber-700 text-amber-400"
+                  : "border-zinc-600 text-zinc-400",
           )}
+          title={
+            meta.chain_integrity === "broken"
+              ? "Hash-chain verification found tampered or broken entries in the audit log"
+              : meta.chain_integrity === "unavailable"
+                ? "Hash-chain verification could not be performed"
+                : undefined
+          }
         >
           Chain: {meta.chain_integrity}
         </Badge>
