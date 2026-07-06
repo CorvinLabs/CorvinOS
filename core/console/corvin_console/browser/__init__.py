@@ -14,12 +14,13 @@ from __future__ import annotations
 from .compliance import EgressDecision, check_egress, is_sensitive
 from .manager import BrowserSessionManager
 from .marks import Mark, Observation
-from .session import BrowserActionError, BrowserSession
+from .session import BrowserActionError, BrowserSession, StaleMarkError
 
 __all__ = [
     "BrowserSession",
     "BrowserSessionManager",
     "BrowserActionError",
+    "StaleMarkError",
     "Observation",
     "Mark",
     "EgressDecision",

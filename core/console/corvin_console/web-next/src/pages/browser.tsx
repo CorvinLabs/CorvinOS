@@ -127,8 +127,13 @@ export function BrowserPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actions, voiceOut]);
 
-  // ── Auto-TTS + auto-listen: confirmations ────────────────────────────────
-  // When a new pending confirmation appears, speak it aloud and start listening.
+  // ── Auto-TTS: confirmations ──────────────────────────────────────────────
+  // When a new pending confirmation appears, speak it aloud — but do NOT
+  // auto-arm the microphone afterward. A sensitive action (buy/delete/log in)
+  // must never be approvable by ambient noise or an unrelated "ja"/"yes" said
+  // in the room during an auto-opened listening window; the user must
+  // deliberately press the "Sprechen" mic button (or the Ja/Nein buttons)
+  // below to respond.
   React.useEffect(() => {
     if (!voiceOut || pending.length === 0) return;
     const first = pending[0];
@@ -140,22 +145,6 @@ export function BrowserPage() {
       `Sage "Ja" zum Bestätigen oder "Nein" zum Ablehnen.`;
     stopSpeaking();
     speak(question);
-
-    // After speaking, listen for yes/no.
-    ttsQueueRef.current = ttsQueueRef.current.then(async () => {
-      setVoiceStatus("Warte auf Antwort…");
-      const text = await recordAndTranscribe();
-      setVoiceStatus(null);
-      if (!text) return;
-      const lower = text.toLowerCase();
-      const approved = /\b(ja|yes|bestätig|ok|genehmig)\b/.test(lower);
-      const declined = /\b(nein|no|ablehnen|ablehne|nicht)\b/.test(lower);
-      if (approved || declined) {
-        await browserConfirm(sid!, first.id, approved, csrfRef.current).catch(() => null);
-        setPending((p) => p.filter((x) => x.id !== first.id));
-        speak(approved ? "Bestätigt." : "Abgelehnt.");
-      }
-    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, voiceOut]);
 

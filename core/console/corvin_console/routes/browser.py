@@ -55,22 +55,22 @@ def _vault_resolver(tenant_id: str, key: str):
 
 def _allowlist_resolver(tenant_id: str):
     """(allowlist, forbidden) from spec.browser in tenant.corvin.yaml.
-    None allowlist → all hosts allowed (still audited)."""
-    try:
-        import yaml  # type: ignore
-        cfg = _forge_paths.tenant_global_dir(tenant_id) / "tenant.corvin.yaml"
-        if not cfg.exists():
-            return (None, None)
-        data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
-        spec = data.get("spec", data)
-        br = spec.get("browser", {}) if isinstance(spec.get("browser"), dict) else {}
-        allow = br.get("allowed_hosts")
-        forbid = br.get("forbidden_hosts")
-        allow = allow if isinstance(allow, list) and allow else None
-        forbid = forbid if isinstance(forbid, list) and forbid else None
-        return (allow, forbid)
-    except Exception:  # noqa: BLE001
+    None allowlist → all hosts allowed (still audited).
+    Raises on config parse errors — callers must treat this as fail-closed
+    (a broken tenant.corvin.yaml must block session creation, not silently
+    fall back to unrestricted egress)."""
+    import yaml  # type: ignore  # raised, not swallowed
+    cfg = _forge_paths.tenant_global_dir(tenant_id) / "tenant.corvin.yaml"
+    if not cfg.exists():
         return (None, None)
+    data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+    spec = data.get("spec", data)
+    br = spec.get("browser", {}) if isinstance(spec.get("browser"), dict) else {}
+    allow = br.get("allowed_hosts")
+    forbid = br.get("forbidden_hosts")
+    allow = allow if isinstance(allow, list) and allow else None
+    forbid = forbid if isinstance(forbid, list) and forbid else None
+    return (allow, forbid)
 
 
 _manager = None
@@ -168,8 +168,9 @@ async def create_session(
 ) -> dict[str, Any]:
     headless = body.headless if (body and body.headless is not None) else _default_headless()
     try:
-        sid = await _mgr().create(rec.tenant_id, headless=headless)
-    except RuntimeError as e:   # session cap reached
+        sid = await _mgr().create(rec.tenant_id, headless=headless,
+                                   owner_fingerprint=rec.sid_fingerprint)
+    except RuntimeError as e:   # session cap reached or allowlist config error
         raise HTTPException(status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
                             detail=str(e)) from e
     console_audit.action_performed(
@@ -182,62 +183,68 @@ async def create_session(
 async def close_session(
     sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
-    await _act(_mgr().close(rec.tenant_id, sid))
+    await _act(_mgr().close(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint))
     return {"closed": sid}
 
 
 # ── actions (tool surface) ────────────────────────────────────────────────────
+def _owned_session(rec: session_auth.SessionRecord, sid: str):
+    """Look up a browser session, verifying the caller owns it — prevents one
+    console user from driving or observing another user's browser session."""
+    return _mgr().session(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint)
+
+
 @router.post("/browser/{sid}/navigate")
 async def navigate(sid: str, body: NavigateReq,
                    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
-    s = _mgr().session(rec.tenant_id, sid)
+    s = _owned_session(rec, sid)
     obs = await _act(s.navigate(body.url))
     return obs.to_dict()
 
 @router.post("/browser/{sid}/observe")
 async def observe(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
-    s = _mgr().session(rec.tenant_id, sid)
+    s = _owned_session(rec, sid)
     obs = await _act(s.observe())
     return obs.to_dict()
 
 @router.post("/browser/{sid}/click")
 async def click(sid: str, body: IndexReq,
                 rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
-    s = _mgr().session(rec.tenant_id, sid)
+    s = _owned_session(rec, sid)
     await _act(s.click(body.index))
     return {"ok": True}
 
 @router.post("/browser/{sid}/fill")
 async def fill(sid: str, body: FillReq,
                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
-    s = _mgr().session(rec.tenant_id, sid)
+    s = _owned_session(rec, sid)
     await _act(s.fill(body.index, body.text))
     return {"ok": True}
 
 @router.post("/browser/{sid}/fill_secret")
 async def fill_secret(sid: str, body: FillSecretReq,
                       rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
-    s = _mgr().session(rec.tenant_id, sid)
+    s = _owned_session(rec, sid)
     await _act(s.fill_secret(body.index, body.vault_key))
     return {"ok": True}
 
 @router.post("/browser/{sid}/read")
 async def read(sid: str, body: ReadReq,
                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
-    s = _mgr().session(rec.tenant_id, sid)
+    s = _owned_session(rec, sid)
     txt = await _act(s.read(body.index))
     return {"text": txt}
 
 @router.post("/browser/{sid}/scroll")
 async def scroll(sid: str, body: ScrollReq,
                  rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
-    s = _mgr().session(rec.tenant_id, sid)
+    s = _owned_session(rec, sid)
     await _act(s.scroll(body.direction))
     return {"ok": True}
 
 @router.post("/browser/{sid}/back")
 async def back(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
-    s = _mgr().session(rec.tenant_id, sid)
+    s = _owned_session(rec, sid)
     obs = await _act(s.back())
     return obs.to_dict()
 
@@ -246,7 +253,7 @@ async def back(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(requ
 @router.get("/browser/{sid}/frame.jpg")
 async def frame(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_session)]):
     try:
-        png = _mgr().frame(rec.tenant_id, sid)
+        png = _mgr().frame(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     if png is None:
@@ -258,9 +265,10 @@ async def frame(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(req
 async def actions(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
                   since: int = Query(0, ge=0)):
     try:
-        items = _mgr().actions(rec.tenant_id, sid, since=since)
-        pending = _mgr().pending(rec.tenant_id, sid)
-        nxt = _mgr().next_seq(rec.tenant_id, sid)
+        items = _mgr().actions(rec.tenant_id, sid, since=since,
+                               owner_fingerprint=rec.sid_fingerprint)
+        pending = _mgr().pending(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint)
+        nxt = _mgr().next_seq(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"actions": items, "pending": pending, "next": nxt}
@@ -269,7 +277,8 @@ async def actions(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(r
 async def confirm(sid: str, body: ConfirmReq,
                   rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
     try:
-        ok = _mgr().resolve_confirm(rec.tenant_id, sid, body.id, body.approved)
+        ok = _mgr().resolve_confirm(rec.tenant_id, sid, body.id, body.approved,
+                                    owner_fingerprint=rec.sid_fingerprint)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"resolved": ok}
@@ -278,7 +287,8 @@ async def confirm(sid: str, body: ConfirmReq,
 async def pause(sid: str, body: PauseReq,
                 rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
     try:
-        _mgr().set_paused(rec.tenant_id, sid, body.paused)
+        _mgr().set_paused(rec.tenant_id, sid, body.paused,
+                          owner_fingerprint=rec.sid_fingerprint)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"paused": body.paused}
@@ -293,7 +303,8 @@ async def run_agent(sid: str, body: AgentReq,
         raise HTTPException(status_code=400, detail="empty task")
     try:
         started = _mgr().start_agent(rec.tenant_id, sid, task,
-                                     max_steps=max(1, min(body.max_steps, 30)))
+                                     max_steps=max(1, min(body.max_steps, 30)),
+                                     owner_fingerprint=rec.sid_fingerprint)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     if not started:
@@ -308,7 +319,7 @@ async def run_agent(sid: str, body: AgentReq,
 @router.post("/browser/{sid}/agent/stop")
 async def stop_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
     try:
-        _mgr().stop_agent(rec.tenant_id, sid)
+        _mgr().stop_agent(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"stopped": True}

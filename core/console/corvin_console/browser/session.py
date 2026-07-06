@@ -18,13 +18,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from . import compliance as _cmp
 from .marks import (
-    _COLLECT_JS, _PAINT_JS, _UNPAINT_JS, MAX_MARKS, Mark, Observation,
+    _COLLECT_JS, _FINGERPRINT_JS, _FORM_SENSITIVE_JS, _PAINT_JS, _UNPAINT_JS,
+    MAX_MARKS, Mark, Observation,
 )
 
 logger = logging.getLogger("corvin.browser.session")
@@ -39,6 +41,16 @@ OnFrame = Callable[[bytes], None]                        # screencast JPEG sink
 
 class BrowserActionError(RuntimeError):
     """Raised when an action cannot be completed (bad index, blocked, timeout)."""
+
+
+class StaleMarkError(BrowserActionError):
+    """Raised when the live element at ``[index]`` no longer matches the
+    ``Mark`` captured at the last ``observe()`` (ADR-0183 S1 stale-mark
+    self-healing) — an in-place SPA re-render changed the element under the
+    index between observe() and the act. Distinguishable from the plain
+    "mark not found" case (element removed entirely) so a caller (e.g. the
+    agent loop) can specifically prompt a re-observe instead of retrying
+    blindly or surfacing a generic error."""
 
 
 class BrowserSession:
@@ -92,10 +104,10 @@ class BrowserSession:
     # ── lifecycle ────────────────────────────────────────────────────────────
     async def _ensure_started(self) -> None:
         """Lazily launch Chromium on the first action — double-checked lock."""
-        if self._pw is not None:
+        if self._pw is not None and self._context is not None:
             return
         async with self._start_lock:
-            if self._pw is None:
+            if self._pw is None or self._context is None:
                 await self.start()
                 if self._pending_on_frame is not None:
                     await self.start_screencast(self._pending_on_frame)
@@ -116,13 +128,22 @@ class BrowserSession:
         if os.environ.get("CORVIN_BROWSER_NO_SANDBOX") == "1":
             args.append("--no-sandbox")
             logger.warning("browser: renderer sandbox DISABLED (CORVIN_BROWSER_NO_SANDBOX=1)")
-        self._context = await self._pw.chromium.launch_persistent_context(
-            user_data_dir=str(user_data),
-            headless=self._headless,
-            accept_downloads=False,     # downloads gated separately (L10) — off by default
-            args=args,
-            viewport={"width": 1280, "height": 800},
-        )
+        try:
+            self._context = await self._pw.chromium.launch_persistent_context(
+                user_data_dir=str(user_data),
+                headless=self._headless,
+                accept_downloads=False,     # downloads gated separately (L10) — off by default
+                args=args,
+                viewport={"width": 1280, "height": 800},
+            )
+        except Exception:
+            # A failed launch must not leak the Playwright driver subprocess nor
+            # leave _pw truthy — that would make _ensure_started() think the
+            # session is already up on the next call, permanently wedging it.
+            with contextlib.suppress(Exception):
+                await self._pw.stop()
+            self._pw = None
+            raise
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         self._page.set_default_timeout(self._nav_timeout)
 
@@ -185,7 +206,10 @@ class BrowserSession:
         # navigation (confirm_cross_host=False) is never gated.
         if confirm_cross_host and self._allowlist is None and self._confirm is not None:
             cur = _cmp._host(self._require_page().url)
-            if cur and decision.host and decision.host != cur:
+            # A falsy `cur` (fresh session on about:blank, no host yet) must NOT
+            # skip the confirm — that would let the agent's very FIRST hop of a
+            # session go unconfirmed regardless of destination.
+            if decision.host and (not cur or decision.host != cur):
                 approved = await self._confirm(action="navigate", host=decision.host,
                                                role="navigation", name=url[:120])
                 if not approved:
@@ -238,13 +262,55 @@ class BrowserSession:
         self._emit("observe", host=host, count=len(marks))    # host only, not full url
         return obs
 
-    async def _resolve(self, index: int):
+    async def _resolve(self, index: int, *, verify_fresh: bool = True):
+        """Resolve mark ``index`` to a live element handle.
+
+        ADR-0183 S1 stale-mark self-healing: before handing the element back
+        to an actor (click/fill/fill_secret/read), re-derive its accessible-name
+        fingerprint (same priority order as ``accName()`` in marks.py, never
+        ``el.value``) and compare it against the ``Mark.name`` captured at the
+        last ``observe()``. A mismatch means the page re-rendered in place
+        since the last observe (the index now points at a DIFFERENT logical
+        control) — raise ``StaleMarkError`` instead of silently acting on a
+        possibly-wrong element. The check only fires when BOTH names are
+        non-empty (an empty name carries no signal either way).
+        """
         page = self._require_page()
         el = await page.query_selector(f'[data-corvin-mark="{index}"]')
         if el is None:
             raise BrowserActionError(
                 f"mark [{index}] not found — the page changed; call observe() again")
+        if verify_fresh:
+            mark = self._mark(index)
+            if mark is not None and mark.name:
+                try:
+                    live_name = await el.evaluate(_FINGERPRINT_JS)
+                except Exception:  # noqa: BLE001 — resolution hiccup, not proof of staleness
+                    live_name = None
+                if isinstance(live_name, str) and live_name.strip() and live_name.strip() != mark.name:
+                    raise StaleMarkError(
+                        f"stale mark [{index}]: page changed since last observe() — "
+                        f"call observe() again")
         return el
+
+    async def _form_sensitive_hint(self, index: int) -> bool:
+        """Best-effort: does the <form> enclosing mark ``index`` contain a
+        password or card-number field? (Sensitivity model v2, ADR-0183 S1.)
+
+        Never raises — any resolution/eval failure defaults to False. This is
+        only a RECALL-raising hint for ``is_sensitive()``; it never replaces
+        the fail-closed backstop in ``_resolve()`` (missing/stale mark) that
+        runs on the actual action right before it executes.
+        """
+        try:
+            async with self._page_lock:
+                page = self._require_page()
+                el = await page.query_selector(f'[data-corvin-mark="{index}"]')
+                if el is None:
+                    return False
+                return bool(await el.evaluate(_FORM_SENSITIVE_JS))
+        except Exception:  # noqa: BLE001
+            return False
 
     def _mark(self, index: int) -> Mark | None:
         for m in self._last_marks:
@@ -258,10 +324,18 @@ class BrowserSession:
         mark = self._mark(index)
         role = mark.role if mark else ""
         name = mark.name if mark else ""
-        host = _cmp._host(self._require_page().url)
+        url = self._require_page().url
+        host = _cmp._host(url)
+        # Sensitivity model v2 (ADR-0183 S1): URL-path + form-context signals,
+        # additive to the v1 name-keyword match. Best-effort — a resolution
+        # failure here defaults form_has_sensitive_field=False rather than
+        # raising; the later _resolve() staleness/missing-mark check remains
+        # the fail-closed backstop for the actual click.
+        form_sensitive = await self._form_sensitive_hint(index)
         # Human-in-the-loop confirmation happens OUTSIDE the page lock so the live
         # screencast keeps updating while the user decides.
-        if _cmp.is_sensitive("click", role=role, name=name):
+        if _cmp.is_sensitive("click", role=role, name=name, url=url,
+                             form_has_sensitive_field=form_sensitive):
             # Fail-CLOSED: a sensitive click with NO confirm broker wired is blocked,
             # never auto-approved.
             if self._confirm is None:
@@ -312,13 +386,22 @@ class BrowserSession:
         await self._ensure_started()
         mark = self._mark(index)
         role = mark.role if mark else ""
+        # Sensitivity model v2 (ADR-0183 S1): fill itself stays never-auto-
+        # sensitive (typing is reversible — is_sensitive() short-circuits for
+        # action="fill" regardless of these signals; see compliance.py), but
+        # the form-context hint is still computed and recorded as metadata so
+        # a fill into a password/card-number-bearing form is visible in the
+        # audit trail even though the confirm gate only fires on the eventual
+        # submit/click that commits it.
+        form_sensitive = await self._form_sensitive_hint(index)
         async with self._page_lock:
             host = _cmp._host(self._require_page().url)
             el = await self._resolve(index)
             await el.fill(text)
         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                           action="fill", host=host, role=role, index=index, ok=True,
-                          extra={"chars": len(text)})   # length only, never the value
+                          extra={"chars": len(text),          # length only, never the value
+                                 "form_sensitive_context": form_sensitive})
         self._emit("fill", index=index, role=role, ok=True, chars=len(text))
 
     async def fill_secret(self, index: int, vault_key: str) -> None:

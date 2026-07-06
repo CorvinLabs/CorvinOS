@@ -390,15 +390,65 @@ async def upload_attachments(
     return JSONResponse({"attachments": results})
 
 
+# Decoupled confirm channel (ADR-0183 S1): "/browser confirm <sid> <yes|no>"
+# resolves the OLDEST pending human-in-the-loop confirmation for that browser
+# session from the main chat, without needing the live-view browser tab (which
+# shares the tenant CSRF session with the tool driver). Additive — the
+# live-view Approve/Decline buttons keep working exactly as before.
+_BROWSER_CONFIRM_CMD_RE = re.compile(
+    r"^confirm\s+(\S+)\s+(yes|no|y|n|approve|deny|decline)\s*$", re.IGNORECASE)
+
+
+async def _handle_browser_confirm_command(websocket, rec, match: "re.Match") -> None:
+    """Resolve the oldest pending confirm for a browser session from chat.
+
+    Fail-closed: an unknown/foreign session id or a session with nothing
+    pending is reported as a clear, distinct error — never silently ignored,
+    never guessed at.
+    """
+    from . import browser as _br  # reuse the singleton manager
+    sid = match.group(1)
+    approved = match.group(2).lower() in ("yes", "y", "approve")
+    mgr = _br._mgr()
+    try:
+        resolved = mgr.resolve_oldest_pending(rec.tenant_id, sid, approved)
+    except KeyError:
+        await websocket.send_json({"type": "error",
+            "message": f"no browser session '{sid}' for this tenant."})
+        await websocket.send_json({"type": "done"})
+        return
+    if not resolved:
+        await websocket.send_json({"type": "error",
+            "message": f"no pending confirmation for browser session '{sid}'."})
+        await websocket.send_json({"type": "done"})
+        return
+    with contextlib.suppress(Exception):
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="chat.browser_confirm", target_kind="browser_session", target_id=sid)
+    verb = "approved" if approved else "declined"
+    await websocket.send_json({"type": "delta",
+        "text": f"{'✅' if approved else '❌'} {verb} the pending action for browser session `{sid}`.\n"})
+    await websocket.send_json({"type": "done"})
+
+
 async def _handle_browser_command(websocket, rec, task: str) -> None:
     """ADR-0182 Part B — `/browser <task>` in the command-center chat: open a
     visible browser, run the browser-agent loop, and stream its progress back as
     chat deltas. Sensitive actions surface in the Browser page's confirm panel.
-    The agent keeps running in the background if the streaming window elapses."""
+    The agent keeps running in the background if the streaming window elapses.
+
+    ADR-0183 S1 additive sub-command — `/browser confirm <sid> <yes|no>` —
+    resolves a pending confirm from chat instead of starting a new agent task;
+    see ``_handle_browser_confirm_command``."""
     from . import browser as _br  # reuse the singleton manager + helpers
     if not task:
         await websocket.send_json({"type": "error", "message": "usage: /browser <task>"})
         await websocket.send_json({"type": "done"})
+        return
+    _confirm_match = _BROWSER_CONFIRM_CMD_RE.match(task)
+    if _confirm_match:
+        await _handle_browser_confirm_command(websocket, rec, _confirm_match)
         return
     # Same gates as a normal chat turn: (1) L44 acceptable-use on the task text
     # (it drives an LLM + a browser), fail-closed; (2) charge the chat-turn quota
@@ -409,7 +459,12 @@ async def _handle_browser_command(websocket, rec, task: str) -> None:
             channel="chat", chat_key=f"browser:{rec.sid_fingerprint}",
             engine_id="claude_code", classification="PUBLIC")
     except Exception:  # noqa: BLE001
-        _refusal = None
+        # L44 fail-closed: a classifier error must refuse the command, never
+        # silently auto-approve it (this drives an LLM + a live browser).
+        await websocket.send_json({"type": "error",
+            "message": "Browser command temporarily unavailable (safety check failed)."})
+        await websocket.send_json({"type": "done"})
+        return
     if _refusal:
         await websocket.send_json({"type": "delta", "text": _refusal})
         await websocket.send_json({"type": "done"})
@@ -425,7 +480,8 @@ async def _handle_browser_command(websocket, rec, task: str) -> None:
         return
     mgr = _br._mgr()
     try:
-        sid = await mgr.create(rec.tenant_id, headless=_br._default_headless())
+        sid = await mgr.create(rec.tenant_id, headless=_br._default_headless(),
+                               owner_fingerprint=rec.sid_fingerprint)
     except Exception as e:  # noqa: BLE001 — cap reached / launch failure
         await websocket.send_json({"type": "error", "message": f"could not start browser: {e}"})
         await websocket.send_json({"type": "done"})

@@ -40,6 +40,100 @@ def test_sensitive_action_classification():
     assert not is_sensitive("fill", role="textbox", name="Buy now")   # typing is never sensitive
 
 
+# ── Sensitivity model v2 (ADR-0183 S1) ───────────────────────────────────────
+
+def test_sensitive_v2_url_path_signal():
+    """An ambiguously-labelled commit button ("Continue") is now sensitive when
+    the CURRENT page is on a checkout/payment/delete/security/billing path,
+    even though its own accessible name matches no v1 keyword."""
+    assert is_sensitive("click", role="button", name="Continue",
+                        url="https://shop.example.com/checkout")
+    assert is_sensitive("click", role="button", name="OK",
+                        url="https://example.com/settings/security")
+    assert is_sensitive("click", role="button", name="Confirm",
+                        url="https://example.com/billing/invoice/42")
+    # no url signal, no keyword match → still not sensitive (unchanged v1 behavior)
+    assert not is_sensitive("click", role="button", name="Continue",
+                            url="https://example.com/help")
+    assert not is_sensitive("click", role="button", name="Continue")  # url defaults to ""
+
+
+def test_sensitive_v2_form_context_signal():
+    """Any click/submit inside a form that itself contains a password/card
+    field is sensitive regardless of the clicked element's own label."""
+    assert is_sensitive("click", role="button", name="Continue",
+                        form_has_sensitive_field=True)
+    assert is_sensitive("submit", role="button", name="OK",
+                        form_has_sensitive_field=True)
+    # fill is still NEVER auto-sensitive, even with the form-context hint True —
+    # typing is reversible; it is the eventual click/submit that commits.
+    assert not is_sensitive("fill", role="textbox", name="anything",
+                            form_has_sensitive_field=True)
+
+
+def test_sensitive_v2_signature_backward_compatible():
+    """Existing call sites that only pass action/role/name keep working —
+    the new url/form_has_sensitive_field kwargs are optional and default to
+    a no-signal state."""
+    assert is_sensitive("click", role="button", name="Buy now")
+    assert not is_sensitive("click", role="button", name="Read more")
+
+
+def test_sensitive_v2_checkout_e2e():
+    """E2E: a real page with an ambiguously-labelled 'Continue' button served
+    at a /checkout path is classified sensitive by the session's own click()
+    wiring (url signal), and a decline blocks the click."""
+    import http.server as _h
+    import socketserver as _s
+    import threading as _t
+
+    html = (b"<!doctype html><html><body>"
+            b'<button id="c">Continue</button></body></html>')
+
+    class _H(_h.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(html)
+
+        def log_message(self, *a):
+            pass
+
+    _s.TCPServer.allow_reuse_address = True
+    httpd = _s.TCPServer(("127.0.0.1", 0), _H)
+    port = httpd.server_address[1]
+    _t.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        async def run():
+            from corvin_console.browser import BrowserSessionManager, BrowserActionError
+            home = Path(tempfile.mkdtemp())
+            mgr = BrowserSessionManager(home_resolver=lambda t: home / t,
+                                        allowlist_resolver=lambda t: (None, None))
+            sid = await mgr.create("_default", headless=True)
+            s = mgr.session("_default", sid)
+            obs = await s.navigate(f"http://127.0.0.1:{port}/checkout")
+            continue_btn = next(m.index for m in obs.marks if m.name == "Continue")
+
+            async def decline():
+                for _ in range(60):
+                    p = mgr.pending("_default", sid)
+                    if p:
+                        mgr.resolve_confirm("_default", sid, p[0]["id"], False)
+                        return
+                    await asyncio.sleep(0.05)
+
+            task = asyncio.ensure_future(s.click(continue_btn))
+            await decline()
+            with pytest.raises(BrowserActionError):
+                await task   # blocked: /checkout path made the ambiguous button sensitive
+            await mgr.close("_default", sid)
+
+        asyncio.run(run())
+    finally:
+        httpd.shutdown()
+
+
 # ── live E2E with a real browser ─────────────────────────────────────────────
 
 def _has_chromium() -> bool:
@@ -311,3 +405,156 @@ def test_declined_sensitive_click_is_blocked(server):
         await mgr.close("_default", sid)
 
     asyncio.run(run())
+
+
+# ── Stale-mark self-healing (ADR-0183 S1) ────────────────────────────────────
+
+def test_click_on_unchanged_mark_still_works(server):
+    """Baseline: a click on a valid, unchanged mark works exactly as before —
+    the freshness check must not false-positive on a stable page."""
+    async def run():
+        from corvin_console.browser import BrowserSession
+        s = BrowserSession("fresh", "_default", home=Path(tempfile.mkdtemp()), headless=True)
+        await s.start()
+        obs = await s.navigate(server)
+        help_btn = next(m.index for m in obs.marks if m.name.lower() == "read more")
+        await s.click(help_btn)   # must not raise
+        await s.close()
+
+    asyncio.run(run())
+
+
+def test_stale_mark_after_dom_mutation_raises(server):
+    """Core S1 regression: if the DOM changes in place between observe() and
+    the act (e.g. an SPA re-renders the same index under a different control),
+    the action must raise StaleMarkError instead of silently acting on the
+    now-wrong element."""
+    async def run():
+        from corvin_console.browser import BrowserSession
+        from corvin_console.browser.session import StaleMarkError
+        s = BrowserSession("stale", "_default", home=Path(tempfile.mkdtemp()), headless=True)
+        await s.start()
+        obs = await s.navigate(server)
+        # "Read more" is NOT sensitive (unlike "Buy now") — isolates the
+        # stale-mark check from the separate sensitive-click confirm gate.
+        help_btn = next(m.index for m in obs.marks if m.name.lower() == "read more")
+
+        # Mutate the DOM in place: swap the button's accessible name (its
+        # aria-label) WITHOUT calling observe() again — simulates an SPA
+        # in-place re-render that leaves the same data-corvin-mark index
+        # pointing at what is now logically a different control.
+        await s._require_page().evaluate(
+            "(i) => document.querySelector(`[data-corvin-mark=\"${i}\"]`)"
+            ".setAttribute('aria-label', 'Something completely different')",
+            help_btn,
+        )
+        with pytest.raises(StaleMarkError):
+            await s.click(help_btn)
+        await s.close()
+
+    asyncio.run(run())
+
+
+def test_stale_mark_error_is_a_browser_action_error(server):
+    """StaleMarkError must remain catchable by existing BrowserActionError
+    handlers (routes/browser.py's ``_act`` maps it to HTTP 409) — it is a
+    subtype, not a parallel/incompatible exception hierarchy."""
+    from corvin_console.browser import BrowserActionError, StaleMarkError
+    assert issubclass(StaleMarkError, BrowserActionError)
+
+
+def test_mark_not_found_still_raised_for_removed_element(server):
+    """The pre-existing 'mark not found' case (element removed entirely, not
+    just relabelled) must still raise plain BrowserActionError, not
+    StaleMarkError — the two failure modes stay distinguishable."""
+    async def run():
+        from corvin_console.browser import BrowserSession, BrowserActionError
+        from corvin_console.browser.session import StaleMarkError
+        s = BrowserSession("removed", "_default", home=Path(tempfile.mkdtemp()), headless=True)
+        await s.start()
+        obs = await s.navigate(server)
+        help_btn = next(m.index for m in obs.marks if m.name.lower() == "read more")
+        await s._require_page().evaluate(
+            "(i) => document.querySelector(`[data-corvin-mark=\"${i}\"]`)?.remove()", help_btn)
+        try:
+            await s.click(help_btn)
+            assert False, "expected BrowserActionError"
+        except StaleMarkError:
+            assert False, "removed element must raise plain BrowserActionError, not StaleMarkError"
+        except BrowserActionError:
+            pass
+        await s.close()
+
+    asyncio.run(run())
+
+
+# ── Decoupled confirm channel (ADR-0183 S1) ──────────────────────────────────
+
+def test_decoupled_confirm_channel_resolves_pending_click(server):
+    """A sensitive click parks a pending confirm; resolving it via the NEW
+    manager-level ``resolve_oldest_pending`` (the chat-command path, no
+    live-view browser tab / pending-id knowledge required) lets the action
+    proceed — proving the second approval channel actually unblocks the tool
+    driver, not just that the API exists."""
+    async def run():
+        from corvin_console.browser import BrowserSessionManager
+        home = Path(tempfile.mkdtemp())
+        mgr = BrowserSessionManager(home_resolver=lambda t: home / t,
+                                    allowlist_resolver=lambda t: (None, None))
+        sid = await mgr.create("_default", headless=True)
+        s = mgr.session("_default", sid)
+        obs = await s.navigate(server)
+        buy = next(m.index for m in obs.marks if m.name.lower() == "buy now")
+
+        async def approve_via_chat_channel():
+            for _ in range(60):
+                if mgr.pending("_default", sid):
+                    return mgr.resolve_oldest_pending("_default", sid, True)
+                await asyncio.sleep(0.05)
+            return False
+
+        click_task = asyncio.ensure_future(s.click(buy))
+        assert await approve_via_chat_channel()
+        await click_task   # must NOT raise — the chat-channel approval unblocked it
+        await mgr.close("_default", sid)
+
+    asyncio.run(run())
+
+
+def test_decoupled_confirm_channel_fails_closed_when_nothing_pending():
+    """No pending confirm for a known session → resolve_oldest_pending returns
+    False (never guesses / auto-approves)."""
+    async def run():
+        from corvin_console.browser import BrowserSessionManager
+        home = Path(tempfile.mkdtemp())
+        mgr = BrowserSessionManager(home_resolver=lambda t: home / t,
+                                    allowlist_resolver=lambda t: (None, None))
+        sid = await mgr.create("_default", headless=True)
+        assert mgr.resolve_oldest_pending("_default", sid, True) is False
+        await mgr.close("_default", sid)
+
+    asyncio.run(run())
+
+
+def test_decoupled_confirm_channel_fails_closed_for_foreign_session():
+    """An unknown/foreign session id raises KeyError (fail-closed) — the chat
+    command handler turns this into a clear user-facing error, never a guess
+    at which session/tenant was meant."""
+    from corvin_console.browser import BrowserSessionManager
+    mgr = BrowserSessionManager(home_resolver=lambda t: Path("/tmp"))
+    with pytest.raises(KeyError):
+        mgr.resolve_oldest_pending("_default", "does-not-exist", True)
+
+
+def test_chat_browser_confirm_command_regex_and_wiring():
+    """Grep-level + import-level proof the chat command wires cleanly:
+    `/browser confirm <sid> yes|no` is recognized and dispatches to the new
+    handler without touching the existing task-agent path."""
+    from corvin_console.routes import chat as chat_routes
+    m = chat_routes._BROWSER_CONFIRM_CMD_RE.match("confirm b12-3456 yes")
+    assert m and m.group(1) == "b12-3456" and m.group(2).lower() == "yes"
+    m2 = chat_routes._BROWSER_CONFIRM_CMD_RE.match("confirm b12-3456 no")
+    assert m2 and m2.group(2).lower() == "no"
+    # a normal free-text task must NOT be mistaken for the confirm sub-command
+    assert chat_routes._BROWSER_CONFIRM_CMD_RE.match("book a flight to Berlin") is None
+    assert callable(chat_routes._handle_browser_confirm_command)

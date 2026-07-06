@@ -26,6 +26,24 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger("corvin.browser.compliance")
 
+# Cloud instance-metadata endpoints — the classic SSRF exfiltration target
+# (IAM credentials). Blocked UNCONDITIONALLY, even if a tenant allowlist
+# explicitly names one: there is no legitimate browser-automation task that
+# needs them, unlike a plain RFC-1918/loopback address (local dev servers,
+# home-network admin panels), which stays governed by the normal
+# allowlist/no-allowlist-configured policy below.
+_METADATA_HOSTS = frozenset({
+    "169.254.169.254",             # AWS / Azure / GCP IMDS (IPv4)
+    "metadata.google.internal",    # GCP metadata DNS alias
+    "metadata",                    # short-form alias used by some SDKs
+    "fd00:ec2::254",                # AWS IMDSv2 (IPv6)
+})
+
+
+def _is_cloud_metadata(host: str) -> bool:
+    return host in _METADATA_HOSTS
+
+
 # Actions whose element name/role suggests an irreversible or outward-facing
 # effect → require explicit user confirmation before executing.
 _SENSITIVE_NAME = re.compile(
@@ -36,6 +54,15 @@ _SENSITIVE_NAME = re.compile(
     re.IGNORECASE,
 )
 _SENSITIVE_ROLE = {"button", "link"}
+
+# Sensitivity model v2 (ADR-0183 S1): a click/submit on a page whose CURRENT
+# path looks like checkout/payment/delete/security-settings/billing is
+# sensitive even when the element's own accessible name is ambiguous ("Continue",
+# "OK", icon-only). Path-only substring match — the query string (which may
+# carry tokens) is never inspected or logged.
+_SENSITIVE_URL_PATH = re.compile(
+    r"(/checkout|/payment|/delete|/settings/security|/billing)", re.IGNORECASE,
+)
 
 
 @dataclass
@@ -74,6 +101,9 @@ def check_egress(
     if scheme not in ("http", "https"):
         return EgressDecision(False, host, f"scheme '{scheme}' not allowed")
 
+    if _is_cloud_metadata(host):
+        return EgressDecision(False, host, "cloud metadata endpoint blocked (SSRF guard)")
+
     def _match(patterns: list[str]) -> bool:
         for p in patterns:
             p = p.strip().lower().lstrip("*.")
@@ -85,28 +115,50 @@ def check_egress(
 
     if forbidden and _match(forbidden):
         return EgressDecision(False, host, "host is on the forbidden list")
-    if allowlist:
+    # allowlist is not None → explicit policy set (even [] means deny-all).
+    # allowlist is None    → no policy configured → allow (still audited).
+    if allowlist is not None:
         if _match(allowlist):
             return EgressDecision(True, host, "host on allowlist")
         return EgressDecision(False, host, "host not on the egress allowlist (deny-by-default)")
     return EgressDecision(True, host, "no allowlist configured")
 
 
-def is_sensitive(action: str, *, role: str = "", name: str = "") -> bool:
+def is_sensitive(
+    action: str, *, role: str = "", name: str = "",
+    url: str = "", form_has_sensitive_field: bool = False,
+) -> bool:
     """True when an action should require explicit human confirmation.
 
     Fill actions are never auto-sensitive (typing is reversible); it is the
     *click/submit* that commits. A click on an element whose accessible name
-    matches a money / identity / destructive verb → sensitive.
+    matches a money / identity / destructive verb → sensitive (v1 signal).
 
-    Known limitation: this is name-based, so an icon-only / generically-labelled
-    control ("Continue", "OK") that commits is NOT auto-flagged. The egress guard,
-    the audit trail, and the user watching the live view remain the backstops; a
-    future revision may add form-submit detection.
+    Sensitivity model v2 (ADR-0183 S1) adds two ADDITIONAL, additive signals —
+    both still gated to click/submit, never fill:
+      * ``url`` — the current page path matches a known sensitive route
+        (/checkout, /payment, /delete, /settings/security, /billing).
+      * ``form_has_sensitive_field`` — caller-supplied hint: the enclosing
+        <form> of the clicked element contains a password or card-number
+        field, so ANY click/submit in that form is sensitive regardless of
+        the button's own label.
+    Either v1 or v2 signal firing is sufficient — this only RAISES recall, it
+    never suppresses the v1 keyword match.
+
+    Known limitation: an icon-only / generically-labelled control ("Continue",
+    "OK") that commits and is on a plain-looking URL with no password/card
+    field in its form is still NOT auto-flagged. The egress guard, the audit
+    trail, and the user watching the live view remain the backstops.
     """
     if action not in ("click", "submit"):
         return False
-    return bool(_SENSITIVE_NAME.search(name or ""))
+    if form_has_sensitive_field:
+        return True
+    if _SENSITIVE_NAME.search(name or ""):
+        return True
+    if url and _SENSITIVE_URL_PATH.search(url):
+        return True
+    return False
 
 
 def audit_action(

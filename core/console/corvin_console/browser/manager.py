@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import secrets
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -47,6 +48,7 @@ class _Pending:
 @dataclass
 class _Live:
     session: BrowserSession
+    owner_fingerprint: str = ""   # sid_fingerprint of the creating console session
     actions: deque = field(default_factory=lambda: deque(maxlen=_ACTION_LOG_CAP))
     frame: bytes | None = None
     pending: dict[str, _Pending] = field(default_factory=dict)
@@ -75,28 +77,33 @@ class BrowserSessionManager:
         self._allowlist_resolver = allowlist_resolver
         self._now = now or time.time
         self._sessions: dict[str, _Live] = {}
-        self._counter = 0
 
     def _key(self, tenant_id: str, sid: str) -> str:
         return f"{tenant_id}:{sid}"
 
-    async def create(self, tenant_id: str, *, headless: bool = True) -> str:
+    async def create(self, tenant_id: str, *, headless: bool = True,
+                     owner_fingerprint: str = "") -> str:
         # Bound concurrent browsers per tenant → no Chromium/PID exhaustion (DoS).
         live_count = sum(1 for k in self._sessions if k.startswith(f"{tenant_id}:"))
         if live_count >= _MAX_SESSIONS_PER_TENANT:
             raise RuntimeError(
                 f"browser session limit reached ({_MAX_SESSIONS_PER_TENANT}); close one first")
 
-        self._counter += 1
-        sid = f"b{self._counter}-{int(self._now())}"
+        # Cryptographically random SID — not guessable from a counter/timestamp,
+        # which would let one tenant user enumerate and hijack another's session.
+        sid = secrets.token_urlsafe(16)
         allowlist, forbidden = (None, None)
         if self._allowlist_resolver is not None:
             try:
                 allowlist, forbidden = self._allowlist_resolver(tenant_id)
-            except Exception:  # noqa: BLE001
-                allowlist, forbidden = (None, None)
+            except Exception as e:  # noqa: BLE001
+                # Fail-closed: a broken/misconfigured L35 policy source must block
+                # session creation, never silently fall back to "no policy" (which
+                # would mean unrestricted egress).
+                raise RuntimeError(f"browser egress policy unavailable: {e}") from e
 
-        live: _Live = _Live(session=None, created=self._now())  # type: ignore[arg-type]
+        live: _Live = _Live(session=None, owner_fingerprint=owner_fingerprint,  # type: ignore[arg-type]
+                            created=self._now())
         pid_seq = 0
 
         def _on_action(rec: dict) -> None:
@@ -141,17 +148,24 @@ class BrowserSessionManager:
         self._sessions[self._key(tenant_id, sid)] = live
         return sid
 
-    def get(self, tenant_id: str, sid: str) -> _Live:
+    def get(self, tenant_id: str, sid: str, *, owner_fingerprint: str = "") -> _Live:
         live = self._sessions.get(self._key(tenant_id, sid))
         if live is None:
             raise KeyError(f"no browser session {sid} for tenant {tenant_id}")
+        # Verify ownership when a fingerprint is provided — prevents one console
+        # user from reading or controlling another user's browser session even
+        # within the same tenant. Raises the SAME KeyError as "not found" so a
+        # caller can't distinguish "wrong owner" from "doesn't exist" (no oracle).
+        if owner_fingerprint and live.owner_fingerprint and live.owner_fingerprint != owner_fingerprint:
+            raise KeyError(f"no browser session {sid} for tenant {tenant_id}")
         return live
 
-    def session(self, tenant_id: str, sid: str) -> BrowserSession:
-        return self.get(tenant_id, sid).session
+    def session(self, tenant_id: str, sid: str, *, owner_fingerprint: str = "") -> BrowserSession:
+        return self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint).session
 
-    def resolve_confirm(self, tenant_id: str, sid: str, pid: str, approved: bool) -> bool:
-        live = self.get(tenant_id, sid)
+    def resolve_confirm(self, tenant_id: str, sid: str, pid: str, approved: bool, *,
+                        owner_fingerprint: str = "") -> bool:
+        live = self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint)
         p = live.pending.get(pid)
         if p is None or p.future.done():
             return False
@@ -160,11 +174,39 @@ class BrowserSessionManager:
                      "approved": approved, "ts": self._now()})
         return True
 
-    def set_paused(self, tenant_id: str, sid: str, paused: bool) -> None:
-        self.get(tenant_id, sid).session.paused = paused
+    def resolve_oldest_pending(self, tenant_id: str, sid: str, approved: bool) -> bool:
+        """Resolve the OLDEST pending human-in-the-loop confirm for (tenant_id,
+        sid) — the manager-level entry point for the decoupled confirm channel
+        (ADR-0183 S1). The live-view browser tab resolves a specific pending id
+        via ``resolve_confirm``; a second approver watching the main console
+        chat (a different tab, not sharing that tab's tenant CSRF session)
+        does not know the pending id, only the session id it is watching, so
+        it resolves "whichever confirm is oldest" instead.
+
+        This is ADDITIVE to (not a replacement for) the live-view confirm path
+        — both read/write the same ``live.pending`` dict, so whichever
+        approver acts first wins; the other's later call on the same pending
+        id is a no-op (``resolve_confirm`` returns False once ``future.done()``).
+
+        Fail-closed: ``self.get()`` raises ``KeyError`` for an unknown/foreign
+        session id (never guesses which tenant it belongs to); returns False
+        (not an error) when the session is known but has no pending confirm —
+        callers should surface both cases as a clear, distinct error rather
+        than silently approving/declining nothing.
+        """
+        live = self.get(tenant_id, sid)
+        if not live.pending:
+            return False
+        oldest_pid = next(iter(live.pending))   # dict preserves insertion order
+        return self.resolve_confirm(tenant_id, sid, oldest_pid, approved)
+
+    def set_paused(self, tenant_id: str, sid: str, paused: bool, *,
+                   owner_fingerprint: str = "") -> None:
+        self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint).session.paused = paused
 
     def start_agent(self, tenant_id: str, sid: str, task: str, *,
-                    max_steps: int = 12, auto_close: bool = False) -> bool:
+                    max_steps: int = 12, auto_close: bool = False,
+                    owner_fingerprint: str = "") -> bool:
         """Run a natural-language browser-agent loop in the background. Steps flow
         into the action log (live view); sensitive actions park confirms as usual.
         Returns False if an agent is already running for this session.
@@ -172,7 +214,7 @@ class BrowserSessionManager:
         auto_close=True closes the session when the agent finishes — used for
         chat-initiated (`/browser`) sessions so they can't leak / wedge the cap."""
         from .agent import BrowserAgent
-        live = self.get(tenant_id, sid)
+        live = self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint)
         if live.agent_task is not None and not live.agent_task.done():
             return False
 
@@ -203,35 +245,39 @@ class BrowserSessionManager:
         live = self.get(tenant_id, sid)
         return live.agent_task is not None and not live.agent_task.done()
 
-    def stop_agent(self, tenant_id: str, sid: str) -> None:
-        live = self.get(tenant_id, sid)
+    def stop_agent(self, tenant_id: str, sid: str, *, owner_fingerprint: str = "") -> None:
+        live = self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint)
         if live.agent_task is not None and not live.agent_task.done():
             live.agent_task.cancel()
             live.append({"action": "agent_stopped", "ts": self._now()})
 
-    def actions(self, tenant_id: str, sid: str, since: int = 0) -> list[dict]:
+    def actions(self, tenant_id: str, sid: str, since: int = 0, *,
+               owner_fingerprint: str = "") -> list[dict]:
         """Return actions with absolute sequence >= ``since``. ``since`` is a
         monotonic emission counter (NOT a buffer index), so this keeps delivering
         new events correctly after the 200-event deque rolls over.
         Pair with next_seq() for the cursor."""
-        live = self.get(tenant_id, sid)
+        live = self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint)
         items = list(live.actions)
         base = live.emitted - len(items)      # absolute seq of items[0]
         offset = max(0, since - base)
         return items[offset:]
 
-    def next_seq(self, tenant_id: str, sid: str) -> int:
-        return self.get(tenant_id, sid).emitted
+    def next_seq(self, tenant_id: str, sid: str, *, owner_fingerprint: str = "") -> int:
+        return self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint).emitted
 
-    def frame(self, tenant_id: str, sid: str) -> bytes | None:
-        return self.get(tenant_id, sid).frame
+    def frame(self, tenant_id: str, sid: str, *, owner_fingerprint: str = "") -> bytes | None:
+        return self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint).frame
 
-    def pending(self, tenant_id: str, sid: str) -> list[dict[str, Any]]:
-        live = self.get(tenant_id, sid)
+    def pending(self, tenant_id: str, sid: str, *, owner_fingerprint: str = "") -> list[dict[str, Any]]:
+        live = self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint)
         return [{"id": p.id, "action": p.action, "host": p.host, "role": p.role,
                  "name": p.name} for p in live.pending.values()]
 
-    async def close(self, tenant_id: str, sid: str) -> None:
+    async def close(self, tenant_id: str, sid: str, *, owner_fingerprint: str = "") -> None:
+        # Verify ownership BEFORE popping — a foreign caller must not be able to
+        # tear down (or even detect the existence of) another user's session.
+        self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint)
         key = self._key(tenant_id, sid)
         live = self._sessions.pop(key, None)
         if live and live.agent_task is not None and not live.agent_task.done():

@@ -137,6 +137,53 @@ _PAINT_JS = r"""
 
 _UNPAINT_JS = "() => document.getElementById('corvin-marks-overlay')?.remove()"
 
+# Stale-mark self-healing (ADR-0183 S1): re-derive the SAME accessible-name
+# fingerprint `accName()` computes above, but as a standalone snippet evaluated
+# directly on an already-resolved element handle (``el.evaluate(...)``) rather
+# than during the full-page collection pass. Session.py compares this live
+# value against the ``Mark.name`` captured at the last observe() before acting
+# on an index, to detect an in-place DOM re-render (SPA index drift).
+# SECURITY: mirrors accName() exactly — never reads el.value, so a fingerprint
+# check can never leak a typed secret back into the comparison / model context.
+_FINGERPRINT_JS = r"""
+(el) => {
+  const aria = el.getAttribute('aria-label');
+  if (aria && aria.trim()) return aria.trim();
+  if (el.getAttribute('placeholder')) return el.getAttribute('placeholder').trim();
+  if (el.getAttribute('name')) return el.getAttribute('name').trim();
+  if (el.getAttribute('title')) return el.getAttribute('title').trim();
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || el.isContentEditable) {
+    return (el.getAttribute('type') || 'text') + ' field';   // never el.value
+  }
+  const t = (el.innerText || el.textContent || '').trim();
+  return t.slice(0, 80);
+}
+"""
+
+# Sensitivity model v2 (ADR-0183 S1): does the <form> enclosing this element
+# contain a password field or a card-number-labelled field? Used as an
+# additional, best-effort signal so an ambiguously-labelled commit button
+# ("Continue", "OK") inside a payment/credential form is still flagged
+# sensitive even though its own accessible name matches no keyword. Scoped to
+# the enclosing form only (not the whole page) to avoid over-flagging every
+# click on a page that merely CONTAINS a login form elsewhere.
+_FORM_SENSITIVE_JS = r"""
+(el) => {
+  const form = el.closest ? el.closest('form') : null;
+  if (!form) return false;
+  if (form.querySelector('input[type="password"]')) return true;
+  const pattern = /card.?number|cvv|cvc|card.?code|kreditkarte|kartennummer/i;
+  const fields = form.querySelectorAll('input, select, textarea');
+  for (const f of fields) {
+    const label = (f.getAttribute('aria-label') || f.getAttribute('placeholder') ||
+                   f.getAttribute('name') || f.getAttribute('id') || '');
+    if (pattern.test(label)) return true;
+  }
+  return false;
+}
+"""
+
 
 @dataclass
 class Mark:
