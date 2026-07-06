@@ -30,7 +30,10 @@ from pydantic import BaseModel, Field
 
 from .. import auth as session_auth
 from .. import audit as console_audit
+from .. import _bootstrap
 from ..deps import require_csrf, require_session
+
+_forge_paths = _bootstrap.forge_paths
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
@@ -755,11 +758,16 @@ async def apply_license_key(
     except Exception:
         pass  # unexpected check failure — let load_license_from_env() handle it
 
-    # Write to corvin_home/global/license.key (slot 3 in _find_token)
+    # Write to corvin_home/global/license.key — validator._find_token() and
+    # _find_token_disk_only() read from this exact path.
     try:
-        corvin_home = Path(
-            os.environ.get("CORVIN_HOME", "") or (Path.home() / ".corvin")
-        )
+        # Use the canonical resolver (same as every other reader/writer in the
+        # process, including the validator's own _CORVIN_HOME_SNAPSHOT) instead
+        # of an ad-hoc Path.home()-only computation — a source-checkout run
+        # with no CORVIN_HOME env var resolves to <repo>/.corvin here too,
+        # rather than diverging to ~/.corvin and silently writing the key
+        # where reload_from_disk() will never look for it.
+        corvin_home = _forge_paths.corvin_home()
         key_path = corvin_home / "global" / "license.key"
         key_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         # Atomic write with mode 0600 from the start — avoids TOCTOU between

@@ -170,6 +170,15 @@ _CANARY_UNCOMPUTABLE: object = object()
 # Prevents rapid-cycle reload attacks via the console /license/apply endpoint.
 _LAST_RELOAD_AT: float = 0.0
 _MIN_RELOAD_INTERVAL_SECONDS: float = 5.0
+# Hash of the on-disk token content as of the last successful (non-throttled)
+# reload. The throttle above only makes sense for redundant re-reads of the
+# SAME content — reload_from_disk() is also called on every authenticated
+# session op (auth.py::_compute_lic_proof "cheap to call per session op"), so
+# throttling unconditionally silently swallows the one reload that actually
+# matters: the explicit console "Apply Key" reload immediately after writing
+# a NEW token, which in real usage almost always lands inside the cooldown
+# window opened by an incidental per-request call moments earlier.
+_LAST_LOADED_TOKEN_HASH: str | None = None
 # Log the placeholder-operator-key state ONCE per process — it's a stable Free-tier
 # config state, and logging it CRITICAL on every operator-token verification spammed
 # the log (1500+ CRITICAL lines observed on a running instance) and drowned the real
@@ -1189,9 +1198,11 @@ def reload_from_disk() -> None:
     Env-var isolation: unlike load_license_from_env(), this function uses
     _find_token_disk_only() so post-boot mutations of CORVIN_LICENSE_KEY cannot
     influence a UI-triggered reload (closes the two-step env-var+reload attack).
-    Rate-limited: min _MIN_RELOAD_INTERVAL_SECONDS between calls (DoS prevention).
+    Rate-limited: min _MIN_RELOAD_INTERVAL_SECONDS between calls, but ONLY for
+    redundant re-reads of unchanged content — a reload that would pick up a
+    genuinely NEW on-disk token always goes through, regardless of timing.
     """
-    global _LICENSE_LOADED_AT, _LAST_RELOAD_AT
+    global _LICENSE_LOADED_AT, _LAST_RELOAD_AT, _LAST_LOADED_TOKEN_HASH
 
     if not _LICENSE_INITIALIZED or _CORVIN_HOME_SNAPSHOT is None:
         raise RuntimeError(
@@ -1199,9 +1210,23 @@ def reload_from_disk() -> None:
             "call load_license_from_env() at adapter boot first."
         )
 
-    # Rate limiter: ignore rapid reload bursts to prevent DoS via the console UI.
+    # Disk-only: never read CORVIN_LICENSE_KEY env var here (two-step attack vector).
+    # Read once, up front, so the throttle-bypass check and the actual load below
+    # use the exact same content (no re-read / TOCTOU gap).
+    token = _find_token_disk_only()
+    token_hash = _hashlib.sha256(token.encode("utf-8")).hexdigest() if token else None
+    content_changed = token_hash != _LAST_LOADED_TOKEN_HASH
+
+    # Rate limiter: ignore rapid reload bursts to prevent DoS via the console UI —
+    # but only when the on-disk content is unchanged from the last successful
+    # load. reload_from_disk() is also called on every authenticated session op
+    # (auth.py::_compute_lic_proof), so an unconditional throttle silently
+    # swallowed the one reload that actually matters: the explicit "Apply Key"
+    # reload immediately after writing a NEW token, which in real usage almost
+    # always lands inside the cooldown window opened by an incidental
+    # per-request call moments earlier.
     _now = time.time()
-    if _LAST_RELOAD_AT > 0 and (_now - _LAST_RELOAD_AT) < _MIN_RELOAD_INTERVAL_SECONDS:
+    if not content_changed and _LAST_RELOAD_AT > 0 and (_now - _LAST_RELOAD_AT) < _MIN_RELOAD_INTERVAL_SECONDS:
         _remaining = _MIN_RELOAD_INTERVAL_SECONDS - (_now - _LAST_RELOAD_AT)
         log.warning(
             "license: reload_from_disk() called too soon (%.1fs ago, min %.1fs) — "
@@ -1211,13 +1236,12 @@ def reload_from_disk() -> None:
         _audit("license.reload_throttled")
         return
     _LAST_RELOAD_AT = _now
+    _LAST_LOADED_TOKEN_HASH = token_hash
 
     # ADR-0154 M1/M3/M5: reset the OTA root key to free before re-resolving (after
     # the throttle guard, so a throttled reload keeps the current paid root).
     _set_feature_root_key(None)
 
-    # Disk-only: never read CORVIN_LICENSE_KEY env var here (two-step attack vector).
-    token = _find_token_disk_only()
     if not token:
         log.info("license: reload — no key found on disk, reverting to Free tier")
         _audit("license.free_tier")
