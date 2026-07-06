@@ -207,7 +207,6 @@ see the commit message for the full list.
 
 ## [0.10.11] — 2026-07-06
 
->>>>>>> origin/main
 ### Fixed
 - **Windows: license keys silently fell back to Free tier ("mode too permissive"
   false positives, 7 files):** NTFS has no POSIX group/other permission bits, so
