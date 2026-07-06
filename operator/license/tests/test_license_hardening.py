@@ -226,6 +226,54 @@ def test_reload_rate_limiter_allows_after_interval():
         assert v._LAST_RELOAD_AT > before
 
 
+def test_reload_rate_limiter_bypassed_when_content_changed():
+    """A reload picking up genuinely NEW on-disk content must never be
+    throttled, even milliseconds after a prior reload.
+
+    reload_from_disk() is also called on every authenticated console session
+    op (auth.py::_compute_lic_proof), so an unconditional throttle silently
+    swallowed the one reload that actually matters: the console "Apply Key"
+    reload immediately after writing a NEW token, almost always inside the
+    cooldown window opened by an incidental per-request call moments earlier.
+    """
+    v = _fresh_validator()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        v._LICENSE_INITIALIZED = True
+        v._CORVIN_HOME_SNAPSHOT = Path(tmpdir)
+        v._CONFIG_DIR_SNAPSHOT = Path(tmpdir)
+        v._AUDIT_PATH_SNAPSHOT = None
+
+        # Simulate an incidental per-request reload having just fired (no
+        # token on disk yet) — this opens the throttle cooldown window.
+        v._LAST_RELOAD_AT = 0.0
+        v.reload_from_disk()
+        first_ts = v._LAST_RELOAD_AT
+        assert v._ACTIVE_LICENSE is None
+
+        # A second incidental reload with STILL no token must be throttled
+        # (content unchanged: None == None).
+        v.reload_from_disk()
+        assert v._LAST_RELOAD_AT == first_ts
+
+        # Now, immediately (well within the throttle window), the user applies
+        # a key via the console — a NEW token appears on disk. This reload
+        # must go through despite the hot cooldown window.
+        session_file = Path(tmpdir) / "global" / "license.key"
+        session_file.parent.mkdir(parents=True, exist_ok=True)
+        session_file.write_text("CORVIN-INVALID.INVALID.INVALID")
+        v.reload_from_disk()
+        assert v._LAST_RELOAD_AT > first_ts, (
+            "reload with new content must bypass the throttle"
+        )
+
+        # A subsequent incidental reload with the SAME (still-invalid) token
+        # must be throttled again (content unchanged from the last load).
+        applied_ts = v._LAST_RELOAD_AT
+        v.reload_from_disk()
+        assert v._LAST_RELOAD_AT == applied_ts
+
+
 # ── reload_from_disk() requires prior boot ────────────────────────────────────
 
 def test_reload_before_boot_raises():
