@@ -141,20 +141,61 @@ def test_learning_3_passes_audience_arg() -> None:
         print(f"  OK — argv passed --audience ({len(block)} chars)")
 
 
-def test_no_audience_field_omits_arg() -> None:
-    _section("empty profile → --audience NOT passed (backward-compat)")
+def test_fresh_install_no_profile_file_seeds_defaults() -> None:
+    """profile.py commit 4708dfa (2026-07-04) intentionally changed this: when
+    profile.json is entirely ABSENT (fresh install), load() now seeds
+    _PROFILE_DEFAULTS (voice_audience_learning=3, metaphors=on) instead of
+    returning {}, so a new user's very first message is already armed with
+    the LERN-ZUGABE / METAPHER-BRÜCKE blocks instead of a silent default.
+    --audience is therefore now PRESENT on a fresh install, not absent —
+    the inverse of what this test asserted before that commit."""
+    _section("no profile.json at all (fresh install) → --audience seeded from defaults")
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         profile_dir = td_path / "voice-config"
         profile_dir.mkdir()
-        os.environ["VOICE_CONFIG_DIR"] = str(profile_dir)
-        for m in ("profile",):
+        os.environ["XDG_CONFIG_HOME"] = str(profile_dir)
+        for m in ("profile", "adapter"):
             sys.modules.pop(m, None)
 
         scripts_dir, argv_dump = _install_fake_summarizer(td_path)
         adapter = _fresh_adapter_with_scripts_dir(scripts_dir)
-        # Don't set any audience fields — load() returns {} → for_tts_audience
-        # returns "".
+        # No profile.json written at all — load() hits FileNotFoundError and
+        # returns _PROFILE_DEFAULTS.
+
+        result = adapter.build_voice_summary("Das ist ein langer Test. " * 80,
+                                              max_chars=400)
+        assert result, "build_voice_summary returned empty"
+
+        argv = json.loads(argv_dump.read_text())
+        assert "--audience" in argv, (
+            f"--audience should be present, seeded from fresh-install defaults: {argv}"
+        )
+        block = argv[argv.index("--audience") + 1]
+        assert "Lern-Modus 3/3" in block, (
+            f"fresh-install default learning=3 not reflected in block: {block!r}"
+        )
+        print("  OK — fresh-install defaults seed --audience")
+
+
+def test_explicit_empty_profile_file_omits_arg() -> None:
+    """The real backward-compat guarantee post-4708dfa: defaults are only
+    seeded when profile.json is ABSENT. A user who has an actual profile.json
+    on disk that clears every audience field still gets no --audience at
+    all (not even an explicit metaphors=off/learning=0 block) —
+    load() does not merge _PROFILE_DEFAULTS on top of an existing file."""
+    _section("profile.json exists but is empty → --audience NOT passed")
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        profile_dir = td_path / "voice-config"
+        (profile_dir / "corvin-voice").mkdir(parents=True)
+        (profile_dir / "corvin-voice" / "profile.json").write_text("{}")
+        os.environ["XDG_CONFIG_HOME"] = str(profile_dir)
+        for m in ("profile", "adapter"):
+            sys.modules.pop(m, None)
+
+        scripts_dir, argv_dump = _install_fake_summarizer(td_path)
+        adapter = _fresh_adapter_with_scripts_dir(scripts_dir)
 
         result = adapter.build_voice_summary("Das ist ein langer Test. " * 80,
                                               max_chars=400)
@@ -162,9 +203,9 @@ def test_no_audience_field_omits_arg() -> None:
 
         argv = json.loads(argv_dump.read_text())
         assert "--audience" not in argv, (
-            f"--audience should NOT be present when profile is empty: {argv}"
+            f"--audience should NOT be present for an explicit empty profile.json: {argv}"
         )
-        print("  OK — no --audience when profile is empty")
+        print("  OK — no --audience for an explicit empty profile.json")
 
 
 def test_profile_module_missing_graceful() -> None:
@@ -191,7 +232,8 @@ def test_profile_module_missing_graceful() -> None:
 
 def main() -> int:
     test_learning_3_passes_audience_arg()
-    test_no_audience_field_omits_arg()
+    test_fresh_install_no_profile_file_seeds_defaults()
+    test_explicit_empty_profile_file_omits_arg()
     test_profile_module_missing_graceful()
     print("\nAll voice-audience adapter tests passed.")
     return 0
