@@ -82,7 +82,12 @@ def _audit_ibc(event_type: str, severity: str, details: dict) -> None:
 
 _INSTANCE_ID_FILE = "instance_id.json"
 _GLOBAL_DIR = "global"
-_lock = threading.Lock()
+# RLock, not Lock: instance_id_metadata(create_if_missing=False) can, while
+# holding this lock, call _emit_missing_audit() -> forge.security_events.write_event()
+# -> get_instance_id() -> instance_id_metadata() again on the SAME thread (per-event
+# instance_id attestation, ADR-0153 M3). A plain Lock self-deadlocks on that re-entry —
+# the fail-closed missing-identity path would hang forever instead of raising.
+_lock = threading.RLock()
 
 _INSTANCE_KEY_FILE = "instance_key.pem"
 _INSTANCE_PUBKEY_FILE = "instance_pubkey.pem"
