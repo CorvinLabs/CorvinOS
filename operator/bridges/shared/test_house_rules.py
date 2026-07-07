@@ -349,3 +349,38 @@ def test_capability_registered_after_import():
     sc.bootstrap_core_capabilities()
     assert sc.CAP_HOUSE_RULES in sc.MANDATORY_CAPABILITIES
     sc.assert_capabilities_present([sc.CAP_HOUSE_RULES])  # must not raise
+
+
+def test_no_json_retry_reinforces_prompt_and_recovers(monkeypatch):
+    # Regression: a benign task must not surface the user-facing "couldn't be
+    # safety-checked" escalate message just because the cloud classifier's
+    # FIRST reply was prose instead of bare JSON (a known Haiku formatting
+    # slip, cause=no_json) -- the retry should reinforce the format
+    # instruction and recover instead of burning all attempts on identical
+    # prompts and failing closed on a harmless message.
+    calls = []
+
+    class _Proc:
+        def __init__(self, stdout):
+            self.stdout = stdout
+            self.stderr = ""
+
+    def _fake_run(cmd, capture_output, text, timeout):
+        prompt = cmd[-1]
+        calls.append(prompt)
+        if len(calls) == 1:
+            # First attempt: model replies with prose, no JSON object at all.
+            return _Proc('{"result": "Sure, this task looks clean to me."}')
+        # Second attempt (strict retry): well-formed verdict.
+        return _Proc('{"result": "{\\"violated_rule_id\\": \\"\\", \\"confidence\\": 0.97, \\"reason\\": \\"clean\\"}"}')
+
+    monkeypatch.setattr(H.subprocess, "run", _fake_run)
+    monkeypatch.setattr(H, "_resolve_helper_claude_bin", lambda: "claude")
+    monkeypatch.setattr(H, "_HOUSE_RULES_RETRY_BACKOFF_S", 0.0)
+
+    rid, conf, detail = H._house_rules_classify_chunk("wie geil ist corvin erkläre es mir", "rules", "")
+
+    assert rid == "" and conf == 0.97
+    assert len(calls) == 2, "must recover on the second attempt, not exhaust all retries"
+    assert "REMINDER" not in calls[0], "first attempt must use the plain prompt"
+    assert "REMINDER" in calls[1], "retry after no_json must reinforce the JSON-only instruction"
