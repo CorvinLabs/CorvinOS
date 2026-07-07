@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from typing import Any, Awaitable, Callable, Optional
 
 from .marks import Observation
@@ -83,10 +84,24 @@ def _parse_action(text: str) -> dict:
         return {"action": "done", "reason": "unparseable action JSON"}
 
 
+def _claude_argv() -> list[str]:
+    """Resolve the ``claude`` invocation, wrapping the npm ``.cmd``/``.bat`` shim
+    on Windows — ``subprocess.run`` with a list and no ``shell=True`` cannot exec
+    those directly (WinError 2). Same fix as ``chat_runtime._build_args`` and
+    ``installer.steps.plugins._run_claude`` for the identical binary."""
+    binary = _resolve_claude_bin()
+    if sys.platform == "win32" and not os.path.isabs(binary):
+        resolved = shutil.which(binary)
+        if resolved and resolved.lower().endswith((".cmd", ".bat")):
+            return ["cmd", "/c", resolved]
+        binary = resolved or binary
+    return [binary]
+
+
 def _spawn_claude(prompt: str, *, timeout: int = 60) -> str:
     try:
         r = subprocess.run(
-            [_resolve_claude_bin(), "-p", "--max-turns", "1", "--tools", "",
+            [*_claude_argv(), "-p", "--max-turns", "1", "--tools", "",
              "--system-prompt", _SYSTEM, prompt],
             capture_output=True, text=True, encoding="utf-8", timeout=timeout,
         )
