@@ -205,6 +205,13 @@ def test_streaming_recursion_counter() -> None:
 
     tmp = Path(tempfile.mkdtemp(prefix="recursion-"))
     try:
+        # This test mocks adapter.subprocess.Popen and counts calls to verify
+        # the ClaudeCode retry-bounding logic. Without a real `claude` CLI on
+        # PATH (any CI runner), ADR-0159 engine auto-detect silently falls
+        # back to hermes instead — a different code path that never touches
+        # subprocess.Popen the same way, so the mock sees 0 calls instead of
+        # the expected 2. Pin the engine so auto-detect is bypassed.
+        os.environ["CORVIN_OS_ENGINE"] = "claude_code"
         # _session_dir braucht XDG_CACHE_HOME, otherwise fasst es ~/.cache an.
         os.environ["XDG_CACHE_HOME"] = str(tmp)
         # Wichtig: modulee-constant muss nachgezogen werden.
@@ -281,6 +288,7 @@ def test_streaming_recursion_counter() -> None:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         os.environ.pop("XDG_CACHE_HOME", None)
+        os.environ.pop("CORVIN_OS_ENGINE", None)
 
 
 def main() -> int:
