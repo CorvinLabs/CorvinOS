@@ -42,7 +42,11 @@ _REQ_LINE_RE = re.compile(
 
 
 def _parse_requirements(req_path: Path) -> list[dict[str, str]]:
-    """Parse requirements.txt and return list of {name, version_spec} dicts."""
+    """Parse requirements.txt (or, since the project dropped requirements.txt in
+    favor of pyproject.toml, the ``[project] dependencies`` array) and return a
+    list of {name, version_spec} dicts."""
+    if req_path.name == "pyproject.toml":
+        return _parse_pyproject_dependencies(req_path)
     packages: list[dict[str, str]] = []
     for raw_line in req_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -54,6 +58,25 @@ def _parse_requirements(req_path: Path) -> list[dict[str, str]]:
         name = m.group(1)
         spec = (m.group(2) or "").strip()
         packages.append({"name": name, "version_spec": spec})
+    return packages
+
+
+def _parse_pyproject_dependencies(pyproject_path: Path) -> list[dict[str, str]]:
+    """Extract the base ``[project] dependencies`` array without a TOML parser
+    dependency (tomllib is 3.11+ only; this project supports 3.10+). Each entry
+    looks exactly like a requirements.txt line (e.g. ``"fastapi >= 0.110"``), so
+    once unquoted it reuses the same _REQ_LINE_RE."""
+    text = pyproject_path.read_text(encoding="utf-8")
+    m = re.search(r"(?m)^dependencies\s*=\s*\[(.*?)^\]", text, re.DOTALL)
+    if not m:
+        return []
+    packages: list[dict[str, str]] = []
+    for entry_match in re.finditer(r'"([^"]+)"', m.group(1)):
+        line = entry_match.group(1).strip()
+        rm = _REQ_LINE_RE.match(line)
+        if not rm:
+            continue
+        packages.append({"name": rm.group(1), "version_spec": (rm.group(2) or "").strip()})
     return packages
 
 
@@ -240,14 +263,21 @@ def main(argv: list[str]) -> int:
     import argparse
 
     ap = argparse.ArgumentParser(description="CycloneDX SBOM generator (ADR-0073 G-008)")
-    ap.add_argument("--req", default="requirements.txt", help="Path to requirements.txt")
+    ap.add_argument("--req", default=None,
+                     help="Path to requirements.txt or pyproject.toml "
+                          "(default: requirements.txt if present, else pyproject.toml)")
     ap.add_argument("--out", default="sbom.cdx.json", help="Output SBOM path")
     ap.add_argument("--hash-only", action="store_true", help="Generate requirements.hash.txt only")
     ap.add_argument("--check", action="store_true", help="Check freshness of existing SBOM")
     ap.add_argument("--max-age-days", type=int, default=90, help="Max SBOM age for --check")
     args = ap.parse_args(argv)
 
-    req_path = Path(args.req)
+    if args.req is not None:
+        req_path = Path(args.req)
+    else:
+        req_path = Path("requirements.txt")
+        if not req_path.exists():
+            req_path = Path("pyproject.toml")
     if not req_path.exists():
         print(f"ERROR: requirements file not found: {req_path}", file=sys.stderr)
         return 1

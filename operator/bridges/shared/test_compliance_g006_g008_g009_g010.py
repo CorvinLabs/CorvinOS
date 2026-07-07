@@ -112,8 +112,11 @@ def test_g008_sbom() -> None:
     print("\n── G-008: SBOM generation (CycloneDX 1.5) ──")
     from sbom_generator import build_sbom, check_freshness, _parse_requirements
 
-    req_path = REPO / "requirements.txt"
-    t("requirements.txt exists", req_path.exists())
+    # The project dropped requirements.txt for pyproject.toml; sbom_generator
+    # parses the [project] dependencies array directly from it (see
+    # _parse_pyproject_dependencies).
+    req_path = REPO / "pyproject.toml"
+    t("pyproject.toml exists", req_path.exists())
 
     packages = _parse_requirements(req_path)
     t("parses ≥1 packages", len(packages) >= 1,
