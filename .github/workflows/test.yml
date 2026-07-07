@@ -46,6 +46,39 @@ jobs:
         if: failure()
         run: grep -E "FAIL|failed|ERROR" /tmp/test-output.log | grep -v "^2026\|fail-open\|fail-closed\|_failed\|FakeProc\|write failed\|register failed\|streaming returned\|falling back" || true
 
+  browser-cross-platform:
+    name: Browser automation (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CorvinOS (dev + browser extras)
+        shell: bash
+        run: pip install -e ".[dev,browser]"
+      - name: Install Playwright Chromium (+ system deps on Linux)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            playwright install --with-deps chromium
+          else
+            playwright install chromium
+          fi
+      - name: Run browser automation tests
+        shell: bash
+        run: |
+          # Each file runs as its own pytest invocation — running them together
+          # pollutes a shared asyncio event-loop fixture across the two files
+          # (pre-existing test-isolation issue, unrelated to platform).
+          python -m pytest core/console/tests/test_browser_automation.py -v
+          python -m pytest core/console/tests/test_classify_browser_intent_gating.py -v
+
   e2e:
     runs-on: ubuntu-latest
     strategy:
