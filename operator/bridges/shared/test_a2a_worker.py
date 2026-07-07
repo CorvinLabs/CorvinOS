@@ -5,6 +5,7 @@ import json
 import sys
 import unicodedata
 import unittest
+import unittest.mock as mock
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +23,15 @@ sys.modules.update({
 })
 
 import a2a_worker as w  # noqa: E402
+
+# L44 house-rules is MANDATORY + fail-closed (ADR-0143): spawn_gates.check_l44
+# tries to spawn the real `claude` CLI to classify the task. Without it (CI,
+# or any box without the CLI installed) the spawn fails (spawn_missing) and
+# the gate fail-closed-escalates every spawn to status="rejected" before the
+# engine factory is invoked — these tests are about a2a_worker mechanics, not
+# L44 compliance, so permit-by-default here like the compute-quota gate above.
+import spawn_gates  # noqa: E402
+mock.patch.object(spawn_gates, "check_l44", lambda *a, **kw: None).start()
 
 
 # ── Sanitization ──────────────────────────────────────────────────────────

@@ -51,6 +51,16 @@ import remote_trigger_receiver as rtr  # noqa: E402
 import remote_trigger_sender as rts  # noqa: E402
 import a2a_http_server  # noqa: E402
 
+# L44 house-rules is MANDATORY + fail-closed (ADR-0143): spawn_gates.check_l44
+# tries to spawn the real `claude` CLI to classify the task. Without it (CI,
+# or any box without the CLI installed) the spawn fails (spawn_missing) and
+# the gate fail-closed-escalates every spawn to status="rejected" before the
+# engine factory is invoked — these tests are about A2A wire-protocol
+# mechanics, not L44 compliance, so permit-by-default here like the
+# compute-quota gate above.
+import spawn_gates  # noqa: E402
+mock.patch.object(spawn_gates, "check_l44", lambda *a, **kw: None).start()
+
 
 _emitted_events: list[dict] = []
 

@@ -35,6 +35,17 @@ sys.modules.update({
 import remote_trigger_receiver as rtr  # noqa: E402
 import a2a_worker as w  # noqa: E402
 
+# L44 house-rules is MANDATORY + fail-closed (ADR-0143): spawn_gates.check_l44
+# tries to spawn the real `claude` CLI to classify the task. On a machine
+# without it (CI, or any dev box that hasn't installed the CLI), the spawn
+# fails with spawn_missing and the gate fail-closed-escalates every single
+# spawn to status="rejected" before the engine factory is ever invoked —
+# these tests are about RemoteTriggerReceiver/a2a_worker mechanics, not L44
+# compliance, so permit-by-default here the same way the compute-quota gate
+# above is poisoned to absent.
+import spawn_gates  # noqa: E402
+mock.patch.object(spawn_gates, "check_l44", lambda *a, **kw: None).start()
+
 
 HMAC_KEY = "f" * 64
 RECV_KEY = "e" * 64
