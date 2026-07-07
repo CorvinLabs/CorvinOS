@@ -189,19 +189,31 @@ def _spawn_windows_self_updater(cmd: list[str], relaunch_argv: list[str]) -> boo
                 Start-Sleep -Milliseconds 400
             }}
             Log {_ps_quote(f"pid {pid} exited -- running upgrade: {cmd_str}")}
-            $p = Start-Process -FilePath {_ps_quote(cmd[0])} `
-                -ArgumentList {_ps_array_literal(cmd[1:])} `
-                -NoNewWindow -Wait -PassThru
+            try {{
+                $p = Start-Process -FilePath {_ps_quote(cmd[0])} `
+                    -ArgumentList {_ps_array_literal(cmd[1:])} `
+                    -WindowStyle Hidden -Wait -PassThru
+            }} catch {{
+                Log {_ps_quote(f"upgrade FAILED to launch (exception below) -- corvin-serve NOT relaunched. Run manually: {cmd_str}")}
+                Log "exception: $_"
+                exit 1
+            }}
             if ($p.ExitCode -ne 0) {{
                 Log {_ps_quote(f"upgrade FAILED (exit code below) -- corvin-serve NOT relaunched. Run manually: {cmd_str}")}
                 Log "exit code: $($p.ExitCode)"
                 exit 1
             }}
             Log {_ps_quote(f"upgrade ok -- relaunching: {relaunch_str}")}
-            Start-Process -FilePath {_ps_quote(relaunch_argv[0])} `
-                -ArgumentList {_ps_array_literal(relaunch_argv[1:])} `
-                -WindowStyle Hidden
-            Log "relaunch dispatched"
+            try {{
+                Start-Process -FilePath {_ps_quote(relaunch_argv[0])} `
+                    -ArgumentList {_ps_array_literal(relaunch_argv[1:])} `
+                    -WindowStyle Hidden
+                Log "relaunch dispatched"
+            }} catch {{
+                Log {_ps_quote(f"relaunch FAILED (exception below) -- run manually: {relaunch_str}")}
+                Log "exception: $_"
+                exit 1
+            }}
         """).strip()
         script_path.write_text(script, encoding="utf-8")
 

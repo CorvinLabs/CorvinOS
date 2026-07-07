@@ -306,6 +306,35 @@ class SpawnWindowsSelfUpdaterScriptGenTests(unittest.TestCase):
         # The escaped form (backtick before $) must be present instead.
         self.assertIn("--host=`$(Start-Process calc)", script)
 
+    def test_upgrade_start_process_avoids_console_less_no_new_window(self) -> None:
+        """Regression: the detached PowerShell host has no console (it is
+        launched with DETACHED_PROCESS), so `Start-Process -NoNewWindow`
+        throws ("This command cannot be run due to the error: The parameter
+        is incorrect") because there is no parent console to attach to. That
+        exception is terminating and was previously uncaught, silently
+        killing the updater right after logging "running upgrade: ..." --
+        no relaunch, no error surfaced, matching the observed symptom of
+        corvin-serve just returning to an empty prompt after "restarting
+        shortly ...". The fix uses -WindowStyle Hidden (like the relaunch
+        call already did) and wraps both Start-Process calls in try/catch
+        so any future failure is logged instead of dying silently."""
+        sb.subprocess.Popen = lambda *a, **k: None
+        sb.shutil.which = lambda _name: None
+
+        sb._spawn_windows_self_updater(
+            ["uv", "tool", "upgrade", "corvinos"],
+            ["corvin-serve"],
+        )
+
+        import glob
+        matches = glob.glob(f"{__import__('tempfile').gettempdir()}/corvin-self-update-*.ps1")
+        with open(matches[-1], encoding="utf-8") as fh:
+            script = fh.read()
+        self.assertNotIn("-NoNewWindow", script)
+        self.assertIn("-WindowStyle Hidden -Wait -PassThru", script)
+        self.assertEqual(script.count("try {"), 2)
+        self.assertEqual(script.count("} catch {"), 2)
+
     def test_relaunch_exe_resolved_to_absolute_path_via_which(self) -> None:
         """relaunch_argv[0] must be resolved through shutil.which() in THIS
         process's environment before being embedded, not left as a bare
