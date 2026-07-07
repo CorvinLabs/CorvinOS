@@ -26,10 +26,37 @@ import os
 import shutil
 import sys
 import tempfile
+import unittest.mock as mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+
+# L44 house-rules is MANDATORY + fail-closed (ADR-0143): adapter._check_house_
+# rules_or_fail spawns the real `claude` CLI to classify every dispatched
+# task, including these opencode/engine-switch dispatches. Without the CLI
+# (CI, or any box that hasn't installed it) the spawn fails (spawn_missing)
+# and the gate fail-closed-escalates, replacing the expected echoed
+# final_text with an operator-approval message. These tests are about the
+# L22 engine-switch dispatch path, not L44 compliance, so stub the gate to a
+# fixed "allow" verdict — the sanctioned classifier test-double (see
+# test_adapter_house_rules_binary.py::_run_escalate_message for the same
+# pattern with an escalate verdict).
+import house_rules as _hr  # type: ignore  # noqa: E402
+
+_allow = _hr.HouseRulesDecision("allow", "", "clear", 1.0)
+
+
+class _AllowGate:
+    @classmethod
+    def from_repo(cls, **kw):
+        return cls()
+
+    def classify(self, *a, **kw):
+        return _allow
+
+
+mock.patch.object(_hr, "HouseRulesGate", _AllowGate).start()
 
 
 def _section(title: str) -> None:
