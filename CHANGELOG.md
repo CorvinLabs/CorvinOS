@@ -6,6 +6,23 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.20] — 2026-07-07
+
+### Fixed
+- **Windows self-update silently died mid-upgrade, leaving `corvin-serve`
+  stuck at an empty prompt.** The detached PowerShell helper that performs
+  the actual upgrade (Windows locks a running process's own interpreter
+  files, so the upgrade is handed off to a separate process that waits for
+  `corvin-serve` to exit) launched the upgrade command with
+  `Start-Process -NoNewWindow`, which requires an attached parent console —
+  but the helper itself has none (`DETACHED_PROCESS`). The resulting
+  exception was uncaught, killing the updater right after logging
+  `running upgrade: ...`, before it could run the upgrade or relaunch the
+  server. Fixed by using `-WindowStyle Hidden` (already used correctly for
+  the relaunch step) and wrapping both `Start-Process` calls in try/catch so
+  any future failure is logged to `corvin-self-update.log` instead of dying
+  silently.
+
 ## [0.10.19] — 2026-07-07
 
 Security- and compliance-hardening release from a multi-round adversarial
