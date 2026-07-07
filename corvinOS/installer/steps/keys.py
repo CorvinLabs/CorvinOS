@@ -8,7 +8,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-ENV_FILE = Path.home() / ".config" / "corvin-voice" / "service.env"
+from corvinOS.shared.paths import voice_config_dir
+
+# SSOT: resolve through voice_config_dir() so the installer writes keys to the
+# exact dir the console engines page + bridge_manager + voice STT/TTS scripts
+# read from (VOICE_CONFIG_DIR → XDG_CONFIG_HOME → ~/.config). A prior hardcoded
+# Path.home()/".config" diverged from the console's APPDATA/XDG resolver on
+# Windows and under a custom XDG_CONFIG_HOME (path-audit 2026-07-06).
+ENV_FILE = voice_config_dir() / "service.env"
 
 
 # ── Public API ─────────────────────────────────────────────────────────────
@@ -135,7 +142,11 @@ def _validate_openai_key(key: str) -> int:
     try:
         result = subprocess.run(
             [
-                "curl", "-sSo", "/dev/null", "-w", "%{http_code}",
+                # os.devnull → NUL on Windows, /dev/null on POSIX. A hardcoded
+                # /dev/null made curl fail to open the output path on Windows, so
+                # _validate_openai_key always returned 2 (network error) and a
+                # wrong key was silently "accepted as-is" (path-audit 2026-07-06 F8).
+                "curl", "-sSo", os.devnull, "-w", "%{http_code}",
                 "--max-time", "8",
                 "-H", f"Authorization: Bearer {key}",
                 "https://api.openai.com/v1/models",

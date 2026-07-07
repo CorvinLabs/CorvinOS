@@ -281,10 +281,13 @@ def is_protected_path(path: str | Path) -> bool:
                 return True
 
     # Layer-16 v3 — secret vault at ~/.config/corvin-voice/secrets.json
-    # (or wherever CORVIN_SECRET_VAULT points). Operator-only file:
-    # the LLM must never write to it (would let a forged tool plant a
-    # rogue key) and reading it via Bash (cat / less / grep) defeats
-    # the whole capability-style design.
+    # (or wherever CORVIN_SECRET_VAULT points). Operator-only file: the LLM must
+    # never WRITE to it (would let a forged tool plant a rogue key). NOTE: this
+    # gate is a WRITE-protection boundary (L10) — it does NOT block *reads*
+    # (`cat`/`less`/`grep` extract no write target and are allowed). Read-side
+    # confinement of the vault is out of scope here and belongs to the sandbox /
+    # tool-allowlist layer, not this path-gate (corrected round-3: the prior
+    # comment overclaimed read-denial that this function never enforced).
     vault = _vault_path()
     vault_str = str(vault)
     if abs_str == vault_str:
@@ -619,6 +622,226 @@ def _all_nonflag(tokens: list[str]) -> list[str]:
     return [t for t in tokens if not t.startswith("-")]
 
 
+# Command wrappers that simply EXEC the command following them. The gate keyed
+# every per-command check on toks[0]; a wrapper in toks[0] (`env rm -rf ~/.corvin`,
+# `busybox rm …`, `nice`/`timeout`/`sudo`/`setsid`/`nohup`/`stdbuf`/`ionice`/`time`)
+# put the wrapper — not `rm` — in cmd_name and slipped past ALL of them, including
+# the leaf-name guard (round-4, empirically confirmed: `env rm audit.jsonl` was
+# ALLOW while `rm audit.jsonl` was DENY). We unwrap to the real command first.
+_CMD_WRAPPERS = {
+    "env", "command", "builtin", "exec", "nice", "ionice", "nohup", "setsid",
+    "stdbuf", "time", "timeout", "sudo", "doas", "busybox", "unbuffer",
+}
+# wrapper → set of option flags that consume a following value (so we skip both)
+_WRAPPER_ARG_OPTS = {
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "timeout": {"-s", "--signal", "-k", "--kill-after"},
+    "nice": {"-n", "--adjustment"},
+    "ionice": {"-c", "--class", "-n", "--classdata", "-p", "--pid", "-t"},
+    "sudo": {"-u", "--user", "-g", "--group", "-C", "-p", "--prompt", "-U", "-h",
+             "-R", "-D", "--chdir"},
+    "doas": {"-u", "-C", "--chdir"},
+}
+
+
+def _strip_cmd_wrappers(toks: list[str], _depth: int = 0) -> list[str]:
+    """Return the token list starting at the REAL command, peeling leading exec
+    wrappers and their own args. Conservative: only wrappers with a parseable arg
+    grammar are peeled; an unrecognized structure stops the peel (fail-closed
+    downstream — the destructive-verb + corvin-tree backstop still fires)."""
+    if _depth > 8 or not toks:
+        return toks
+    head = toks[0].rsplit("/", 1)[-1]
+    if head not in _CMD_WRAPPERS:
+        return toks
+    rest = toks[1:]
+    if head == "env":
+        i = 0
+        while i < len(rest):
+            t = rest[i]
+            if "=" in t and not t.startswith("-"):
+                i += 1  # VAR=VAL assignment
+            elif t in _WRAPPER_ARG_OPTS["env"]:
+                i += 2
+            elif t.startswith("-"):
+                i += 1
+            else:
+                break
+        return _strip_cmd_wrappers(rest[i:], _depth + 1)
+    if head == "busybox":
+        # `busybox <applet> …` — the applet is the real command.
+        return _strip_cmd_wrappers(rest, _depth + 1)
+    arg_opts = _WRAPPER_ARG_OPTS.get(head, set())
+    i = 0
+    while i < len(rest) and rest[i].startswith("-"):
+        i += (2 if rest[i] in arg_opts else 1)
+    # timeout takes a mandatory DURATION positional before the command.
+    if head == "timeout" and i < len(rest):
+        i += 1
+    return _strip_cmd_wrappers(rest[i:], _depth + 1)
+
+
+# Archive extractors — none were in any command set, so `tar -C ~/.corvin -xf
+# evil.tar` / `unzip -o evil.zip -d ~/.corvin` could OVERWRITE the hash-chained
+# audit.jsonl (round-4). Reading the tree INTO an archive is a read (not gated);
+# only EXTRACTION whose destination touches the corvin tree fails closed.
+_ARCHIVE_CMDS = ("tar", "gtar", "bsdtar", "unzip", "cpio", "pax",
+                 "7z", "7za", "7zr")
+
+
+def _dir_at_or_under_corvin_home(d: str) -> bool:
+    """chdir-context test: is dir *d* the corvin home or INSIDE it? Unlike
+    _touches_corvin_tree this EXCLUDES ancestors of home — after `cd <ancestor>`
+    a relative destructive target (`rm -rf build`) descends AWAY from the tree, so
+    flagging ancestors over-blocked common workflows like `cd ~ && rm -rf
+    Downloads/x` and `cd <repo> && rm -rf dist` (round-5 over-block fix)."""
+    try:
+        abs_d = _abs(d)
+    except Exception:  # noqa: BLE001
+        return False
+    if is_protected_path(abs_d):
+        return True
+    sep = os.sep
+    abs_str = str(abs_d).rstrip(sep) or sep
+    try:
+        home = str(_corvin_home()).rstrip(sep)
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(home) and (abs_str == home or abs_str.startswith(home + sep))
+
+
+def _seg_chdirs_into_tree(seg: str) -> bool:
+    """True when a segment changes the working directory INTO (at/under) the corvin
+    tree via `cd`, `pushd`, or a wrapper chdir flag (`env -C/--chdir`,
+    `sudo -D/--chdir`, `doas -C`) — after which a relative destructive target
+    (`rm -rf tenants`) lands inside the protected tree at run time even though the
+    hook resolved it against its own cwd (round-4/round-5)."""
+    try:
+        raw = shlex.split(seg, posix=True)
+    except ValueError:
+        return False
+    if not raw:
+        return False
+    hit = _dir_at_or_under_corvin_home
+    head = raw[0].rsplit("/", 1)[-1]
+    if head in ("cd", "pushd") and len(raw) > 1 and hit(raw[1]):
+        return True
+    # wrapper chdir flags — env/sudo/doas can chdir before exec'ing the command.
+    if head in ("env", "sudo", "doas"):
+        _chdir_flags = ("-C", "--chdir") if head != "sudo" else ("-C", "-D", "--chdir")
+        for i, t in enumerate(raw):
+            if t in _chdir_flags and i + 1 < len(raw) and hit(raw[i + 1]):
+                return True
+            if t.startswith("--chdir=") and hit(t.split("=", 1)[1]):
+                return True
+            if t.startswith(("-C", "-D")) and len(t) > 2 and hit(t[2:]):
+                return True
+    return False
+
+
+def _archive_dest_dirs(cmd_name: str, arg_toks: list[str]) -> list[str]:
+    """Extraction-destination dirs for an archive command (tar -C, unzip -d,
+    cpio -D, 7z -o<dir>)."""
+    dests: list[str] = []
+    for idx, t in enumerate(arg_toks):
+        if cmd_name in ("tar", "gtar", "bsdtar", "cpio", "pax"):
+            if t in ("-C", "--directory", "-D", "--directory=") and idx + 1 < len(arg_toks):
+                dests.append(arg_toks[idx + 1])
+            elif t.startswith("--directory="):
+                dests.append(t.split("=", 1)[1])
+            elif t.startswith("-C") and len(t) > 2:
+                dests.append(t[2:])
+        elif cmd_name == "unzip":
+            if t == "-d" and idx + 1 < len(arg_toks):
+                dests.append(arg_toks[idx + 1])
+        elif cmd_name in ("7z", "7za", "7zr"):
+            if t.startswith("-o") and len(t) > 2:
+                dests.append(t[2:])
+    return dests
+
+
+# `find` mutating actions — these WRITE (delete, rewrite, or run an opaque
+# command on) the matched files, so a find rooted at / matching a protected
+# path is a write vector. Same bypass class as the previously-patched
+# truncate/rm/ln vectors: `find <home> -name audit.jsonl -delete` extracted no
+# target and was allowed, deleting the hash-chained audit log (path-audit
+# 2026-07-06, empirically confirmed).
+_FIND_MUTATING = ("-delete", "-exec", "-execdir", "-ok", "-okdir",
+                  "-fprint", "-fprint0", "-fprintf", "-fls")
+# `find` and its common aliases (GNU coreutils `gfind` on macOS/Homebrew,
+# BSD `bfind`). Matching only the literal "find" let `gfind ... -delete` skip
+# the whole branch (path-audit 2026-07-07 round-2).
+_FIND_CMDS = ("find", "gfind", "bfind")
+
+
+def _touches_corvin_tree(target: str) -> bool:
+    """True when a recursive / forcible / glob operation on *target* could reach
+    a protected file inside the corvin runtime tree.
+
+    Covers every direction that is_protected_path (which only flags specific leaf
+    names / subdir tokens) misses, all empirically proven bypasses:
+      * target IS a protected leaf/subdir (is_protected_path), OR
+      * target == the corvin home root — `rm -rf ~/.corvin` wipes every
+        hash-chained audit.jsonl, OR
+      * target is UNDER the home — `rm -rf ~/.corvin/tenants`,
+        `rm ~/.corvin/*.jsonl` (glob), `chmod -R ~/.corvin/global`, OR
+      * target is an ANCESTOR of the home — `find ~ -name '*.jsonl' -delete`,
+        `rm -rf ~`.
+    Applies to both `find` mutating roots and the recursive/glob destructive
+    commands (rm/mv/chmod/...). Fail closed — audit-chain integrity is a
+    CLAUDE.md load-bearing red-line (path-audit 2026-07-06/07)."""
+    try:
+        abs_t = _abs(target)
+    except Exception:  # noqa: BLE001 — unresolvable → fail closed
+        return True
+    if is_protected_path(abs_t):
+        return True
+    sep = os.sep
+    abs_str = str(abs_t).rstrip(sep) or sep
+    try:
+        home = str(_corvin_home()).rstrip(sep)
+    except Exception:  # noqa: BLE001
+        return False
+    if not home:
+        return False
+    # target == home, target under home, or target an ancestor of home
+    return (abs_str == home
+            or abs_str.startswith(home + sep)
+            or home.startswith(abs_str + sep))
+
+
+def _find_root_touches_protected(root: str) -> bool:
+    """A `find` search root touches the corvin tree — see _touches_corvin_tree."""
+    return _touches_corvin_tree(root)
+    return False
+
+
+def _find_roots(arg_toks: list[str]) -> list[str]:
+    """Return the search-root path args of a `find` invocation.
+
+    Layout: ``find [-H|-L|-P|-D x|-O n] [path...] [expression]``. The roots are
+    the leading non-flag tokens after any global options, up to the first
+    expression predicate (which starts with ``-``, ``(``, ``!`` or ``,``)."""
+    roots: list[str] = []
+    i = 0
+    while i < len(arg_toks):
+        t = arg_toks[i]
+        if t in ("-H", "-L", "-P"):
+            i += 1
+            continue
+        if t in ("-D", "-O") and i + 1 < len(arg_toks):  # -D debugopts / -O level
+            i += 2
+            continue
+        break
+    while i < len(arg_toks):
+        t = arg_toks[i]
+        if t.startswith("-") or t in ("(", "!", ","):
+            break
+        roots.append(t)
+        i += 1
+    return roots
+
+
 def _target_dir_flag(arg_toks: list[str]) -> str | None:
     """Resolve a -t <dir> / -t<dir> / --target-directory=<dir> destination, if any.
 
@@ -705,8 +928,21 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
 
     # xargs — replacement {} is filled at runtime; we cannot resolve the
     # actual write target.
-    if _XARGS_RE.search(cmd) and _looks_protected(cmd):
-        return [], True
+    if _XARGS_RE.search(cmd):
+        if _looks_protected(cmd):
+            return [], True
+        # `find <corvin-tree> -name '*.jsonl' | xargs rm` — the find is read-only
+        # (no -delete) so the find branch never fires, and a glob carries no
+        # literal protected hint, yet xargs feeds the matched audit logs to rm.
+        # Catch the pipe-to-destructive form: any bare path token that touches the
+        # corvin tree, when a destructive verb is present (round-3).
+        _XARGS_DESTRUCTIVE = ("rm", "rmdir", "unlink", "shred", "truncate",
+                              "chmod", "chown", "chgrp", "mv", "ln")
+        _cmd_toks = re.split(r"\s+", cmd)
+        if any(v in _cmd_toks for v in _XARGS_DESTRUCTIVE):
+            for _tk in _cmd_toks:
+                if _tk and not _tk.startswith("-") and _touches_corvin_tree(_tk):
+                    return [], True
 
     # awk -i inplace — rewrites the positional file arg in place. The
     # positional arg can drift across pipes and substitutions; fail-closed
@@ -724,8 +960,29 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
     for m in _PY_OPEN_RE.finditer(cmd):
         targets.append(m.group(1))
 
+    segs = _split_segments(cmd)
+
+    # cd-into-tree backstop (round-4): the hook runs in its own subprocess and
+    # cannot observe a `cd`, so `cd ~/.corvin && rm -rf tenants` resolved the
+    # relative `tenants` against the hook's cwd and passed. If ANY segment cd's
+    # into the corvin tree AND ANY segment runs a destructive command, fail
+    # closed — the relative target would land inside the protected tree at run
+    # time. (cd into an unrelated dir, or cd-into-tree + a read like cat/ls, is
+    # not blocked.)
+    _cd_into_tree = any(_seg_chdirs_into_tree(_seg) for _seg in segs)
+    if _cd_into_tree:
+        _DESTRUCTIVE_ALL = (_TARGET_ALL_CMDS + _DEST_LAST_CMDS + _FIND_CMDS
+                            + _ARCHIVE_CMDS + ("dd",))
+        for _seg in segs:
+            try:
+                _st = _strip_cmd_wrappers(shlex.split(_seg, posix=True))
+            except ValueError:
+                return [], True
+            if _st and _st[0].rsplit("/", 1)[-1] in _DESTRUCTIVE_ALL:
+                return [], True
+
     # sed -i takes its target as the last positional arg of the segment.
-    for seg in _split_segments(cmd):
+    for seg in segs:
         try:
             toks = shlex.split(seg, posix=True)
         except ValueError:
@@ -734,8 +991,23 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
             continue
         if not toks:
             continue
+        # Peel leading exec wrappers (`env`/`sudo`/`nice`/`timeout`/`busybox`/…)
+        # so cmd_name is the REAL command, not the wrapper (round-4 CRITICAL).
+        toks = _strip_cmd_wrappers(toks)
+        if not toks:
+            continue
         cmd_name = toks[0].rsplit("/", 1)[-1]
-        if cmd_name == "sed" and any(t == "-i" or t.startswith("-i") for t in toks[1:]):
+        if cmd_name in _ARCHIVE_CMDS:
+            # Archive EXTRACTION whose destination touches the corvin tree can
+            # overwrite audit.jsonl. Fail closed on an explicit -C/-d/-D/-o dest
+            # under/at/ancestor-of the home; also on any bare token touching the
+            # tree (belt-and-suspenders for odd flag forms). Reading the tree into
+            # an archive is a read and stays allowed (round-4).
+            arg_toks = toks[1:]
+            for d in _archive_dest_dirs(cmd_name, arg_toks):
+                if _touches_corvin_tree(d):
+                    return [], True
+        elif cmd_name == "sed" and any(t == "-i" or t.startswith("-i") for t in toks[1:]):
             t = _last_nonflag(toks[1:])
             if t:
                 targets.append(t)
@@ -766,16 +1038,55 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
             # present (GNU — for ALL four, not just install), else the last
             # non-flag arg (standard `cp src dest` form).
             arg_toks = toks[1:]
+            # A mv/cp/rsync that MOVES a protected SOURCE away (or over the corvin
+            # tree recursively/by glob) is destructive — `mv ~/.corvin/tenants
+            # /tmp/x` relocates the audit trees but only the (unprotected) dest was
+            # checked before. Fail closed on ANY arg touching the corvin tree
+            # (round-3).
+            for a in _all_nonflag(arg_toks):
+                if _touches_corvin_tree(a):
+                    return [], True
             dest = _target_dir_flag(arg_toks) or _last_nonflag(arg_toks)
             if dest:
                 targets.append(dest)
+        elif cmd_name in _FIND_CMDS:
+            # find (and gfind/bfind aliases) with a mutating action (-delete /
+            # -exec rm / -fprintf ...) is a write vector. It fails closed when
+            # ANY search root touches a protected tree — in EITHER direction:
+            # a root under protection, OR a root that is an ANCESTOR of the
+            # corvin home (find recurses down into it). The ancestor case is the
+            # glob bypass: `find ~ -name '*.jsonl' -delete` never names the
+            # protected file literally and its root isn't itself protected, yet
+            # it deletes ~/.corvin/audit.jsonl (path-audit 2026-07-07 round-2).
+            # Read-only finds (no mutating action) are untouched. The literal
+            # protected-hint check and -fprint*/-fls target capture stay as
+            # belt-and-suspenders.
+            arg_toks = toks[1:]
+            if any(t in _FIND_MUTATING for t in arg_toks):
+                roots = _find_roots(arg_toks) or ["."]  # no explicit root → cwd
+                if any(_find_root_touches_protected(r) for r in roots):
+                    return [], True  # fail-closed: mutating find over a protected tree
+                for idx, t in enumerate(arg_toks):
+                    if t in ("-fprint", "-fprint0", "-fprintf", "-fls") and idx + 1 < len(arg_toks):
+                        targets.append(arg_toks[idx + 1])
+                if _looks_protected(seg):
+                    return [], True  # fail-closed: mutating find touching a protected hint
         elif cmd_name in _TARGET_ALL_CMDS:
-            # truncate/ln/chmod/chown/chattr/rm/shred/...: EVERY non-flag arg is
-            # a candidate path that can wipe / truncate / perm-downgrade /
-            # symlink-replace / delete a protected file. is_protected_path()
-            # filters non-path args (a mode, a size). For `ln` this captures both
-            # the link source and the (protected) link target.
-            targets.extend(_all_nonflag(toks[1:]))
+            # truncate/ln/chmod/chown/chattr/rm/rmdir/unlink/shred/...: EVERY
+            # non-flag arg is a candidate path that can wipe / truncate /
+            # perm-downgrade / symlink-replace / delete a protected file.
+            nonflag = _all_nonflag(toks[1:])
+            # Recursive / glob / root destructive op over the corvin tree fails
+            # closed: `rm -rf ~/.corvin`, `rm ~/.corvin/*.jsonl`, `chmod -R
+            # ~/.corvin/tenants`, `rm -rf ~/.corvin/global` all reach hash-chained
+            # audit logs but name no protected leaf literally, so is_protected_path
+            # alone missed them (round-3, empirically confirmed).
+            for a in nonflag:
+                if _touches_corvin_tree(a):
+                    return [], True
+            # is_protected_path() still filters non-path args (a mode, a size);
+            # for `ln` this captures both the link source and the protected target.
+            targets.extend(nonflag)
         elif cmd_name in _SCRIPTED_EDITORS or (
             cmd_name in ("vi", "vim", "nvim")
             and any(t == "-es" or t == "-e" or t == "-s" or t.startswith("-es") for t in toks[1:])

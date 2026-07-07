@@ -83,6 +83,21 @@ class BuildMcpSpecsTests(unittest.TestCase):
         )
         self.assertEqual(specs[0].env["FORGE_PERSONA"], "delegate")
 
+    def test_spec_command_is_running_interpreter(self):
+        # Regression: the MCP server must spawn under the SAME interpreter
+        # that runs this process (sys.executable), never a bare-PATH
+        # "python3" — which is absent on Windows and may lack CorvinOS deps
+        # even on Linux.
+        specs = mcb.build_mcp_specs(
+            persona="coder",
+            forge_enabled=True,
+            skill_forge_enabled=True,
+        )
+        for spec in specs:
+            self.assertEqual(spec.command, sys.executable)
+        # And the dataclass default likewise.
+        self.assertEqual(mcb.McpServerSpec(name="x").command, sys.executable)
+
 
 # ---------------------------------------------------------------------------
 # Asymmetric resolve_capability
@@ -217,8 +232,10 @@ class MaterialiseCodexTests(unittest.TestCase):
             # Sections present for both servers.
             self.assertIn("[mcp_servers.forge]", text)
             self.assertIn("[mcp_servers.skill_forge]", text)
-            # Command + args land as TOML literals.
-            self.assertIn('command = "python3"', text)
+            # Command + args land as TOML literals. The command is the
+            # running interpreter (sys.executable), not a bare "python3"
+            # (Windows has no python3 on PATH; see mcp_config_builder).
+            self.assertIn(f'command = "{mcb.sys.executable}"', text)
             self.assertIn("args = [", text)
             # Env entries land in inline-table form.
             self.assertIn('FORGE_PERSONA = "codex_persona"', text)
@@ -268,8 +285,9 @@ class MaterialiseOpenCodeTests(unittest.TestCase):
             self.assertEqual(forge["enabled"], True)
             self.assertIn("environment", forge)
             self.assertIsInstance(forge["command"], list)
-            # Command is binary + args list.
-            self.assertEqual(forge["command"][0], "python3")
+            # Command is interpreter + args list; interpreter is the running
+            # sys.executable (cross-platform), not a literal "python3".
+            self.assertEqual(forge["command"][0], sys.executable)
 
     def test_empty_specs_writes_no_file(self):
         with tempfile.TemporaryDirectory() as tmp:

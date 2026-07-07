@@ -170,17 +170,18 @@ def _norm_event_sequence(events: list) -> list:
     return result
 
 
-def _safe_template(raw_msg: str) -> str:
-    """Convert an exception message to a PII-free structural template."""
-    s = str(raw_msg)[:500]
-    s = re.sub(r"(?:[A-Za-z]:[\\/]|/)[^\s'\",;]{3,}", "[path]", s)
-    s = re.sub(r"'[^']{0,120}'", "'{}'", s)
-    s = re.sub(r'"[^"]{0,120}"', '"{}"', s)
-    s = re.sub(r"\b[0-9a-fA-F]{8,}\b", "{}", s)
-    s = re.sub(r"\b\d{4,}\b", "{}", s)
-    if _PII.search(s):
-        return "[message.redacted]"
-    return s[:200]
+# NOTE: The free-text exception message is NO LONGER shipped in the healing
+# trace.  A structural template (the former _safe_template) only collapsed
+# *shaped* tokens (paths, quotes, long hex/digits) and let unquoted
+# natural-language text through verbatim — e.g. "user alice not allowed to
+# read secret_plan".  This mirrors the ERROR channel's deliberate decision in
+# telemetry._content_free, which drops message_template as "the one free-text
+# field that could carry PII/secrets".  The healing channel now carries only
+# the content-free code-level signature (exc_type, repo file, func, allowlisted
+# namespaces + the structural fingerprint); no natural-language message leaves
+# the machine.  error_template remains in HTRACE_FIELD_ALLOWLIST /
+# _assert_safe_htrace as a fail-closed backstop for any legacy or hand-crafted
+# record, but the emission path (from_heal_event) never produces it.
 
 
 # ── _assert_safe_htrace — allow-list based ────────────────────────────────────
@@ -265,7 +266,6 @@ class HealingTrace:
     error_module_ns: str = ""
     error_function: str = ""
     error_line: int = 0
-    error_template: str = ""
     stack_frames: list = field(default_factory=list)
     event_sequence: list = field(default_factory=list)
     heal_action: str = ""
@@ -323,7 +323,9 @@ class HealingTrace:
 
         exc_type = type(exc).__name__
         fp = make_fingerprint(exc_type, top_ns, top_fn)
-        template = _safe_template(str(exc))
+        # No free-text message is carried — see the _safe_template removal note.
+        # Only the content-free code-level signature (exc_type + fingerprint +
+        # allowlisted namespaces) is emitted.
 
         return cls(
             error_fingerprint=fp,
@@ -331,7 +333,6 @@ class HealingTrace:
             error_module_ns=top_ns,
             error_function=top_fn,
             error_line=top_ln,
-            error_template=template,
             stack_frames=norm_frames[:_MAX_STACK_DEPTH],
             event_sequence=_norm_event_sequence(event_sequence)[-_MAX_EVENT_SEQ:],
             heal_action=_safe_str(heal_action, 80),

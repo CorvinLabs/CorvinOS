@@ -327,8 +327,9 @@ def get_mcp_config(
 ) -> dict[str, Any]:
     """Generate the MCP server config dict for a comma-separated list of connector IDs."""
     id_list = [c.strip() for c in cids.split(",") if c.strip()]
-    enabled_cfg = _read_enabled(rec.tenant_id)
-    vault = _read_vault(rec.tenant_id)
+    # NOTE: the vault / enabled config is deliberately NOT read here — this
+    # endpoint returns MASKED config (placeholders intact), so no secret source
+    # is consulted on the client-facing path (see the api_key_mcp branch below).
     servers: dict[str, Any] = {}
 
     for cid in id_list:
@@ -342,23 +343,15 @@ def get_mcp_config(
                 "url": f"https://{_MCP_URLS.get(cid, '')}",
             }
         elif entry["kind"] == "api_key_mcp":
-            cfg = dict(entry.get("mcp_config", {}))
-            # Resolve env vars from vault or environment
-            if cfg.get("env"):
-                resolved: dict[str, str] = {}
-                for k, v in cfg["env"].items():
-                    if isinstance(v, str) and v.startswith("${") and v.endswith("}"):
-                        env_name = v[2:-1]
-                        resolved[k] = vault.get(env_name) or os.environ.get(env_name) or ""
-                    else:
-                        resolved[k] = str(v)
-                cfg["env"] = resolved
-            if cfg.get("args"):
-                cfg["args"] = [
-                    (vault.get(a[2:-1]) or os.environ.get(a[2:-1]) or a) if a.startswith("${") and a.endswith("}") else a
-                    for a in cfg["args"]
-                ]
-            servers[cid] = cfg
+            # SECURITY (masking): this endpoint is CLIENT-FACING (require_session
+            # only). It MUST NOT resolve ${ENV} placeholders to concrete secret
+            # values — that would hand any authenticated session (or an XSS
+            # reading the response body) the resolved vault + console-process-env
+            # secrets, including the console's own ${OPENAI_API_KEY}. Return the
+            # config with the ${...} placeholders left UNEXPANDED (masked).
+            # Secret resolution for actual spawning happens strictly server-side
+            # in build_mcp_config_for_node(); it never crosses the wire here.
+            servers[cid] = dict(entry.get("mcp_config", {}))
 
     return {"mcpServers": servers, "connector_ids": id_list}
 

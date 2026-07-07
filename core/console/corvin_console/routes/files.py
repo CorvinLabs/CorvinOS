@@ -73,11 +73,17 @@ _IMAGE_EXTS: frozenset[str] = frozenset({
 
 def _access(rel_path: str) -> Literal["full", "read", "none"]:
     parts = Path(rel_path).parts if rel_path else ()
-    for part in parts:
-        if part in _NO_ACCESS:
-            return "none"
-        if part in _READ_ONLY:
-            return "read"
+    # NO_ACCESS must WIN over READ_ONLY regardless of component order. The
+    # hash-chained audit log lives at global/forge/audit.jsonl, so the old
+    # first-match loop hit "forge" (→ read) and never reached "audit.jsonl"
+    # (→ none), making the GDPR L16 audit chain + any secrets.json/.env/vault
+    # under a forge/ or skill-forge/ subtree downloadable via /files/download by
+    # any authenticated session (round-2 HIGH). Scan ALL parts for a NO_ACCESS
+    # component first, THEN decide read/full.
+    if any(part in _NO_ACCESS for part in parts):
+        return "none"
+    if any(part in _READ_ONLY for part in parts):
+        return "read"
     return "full"
 
 

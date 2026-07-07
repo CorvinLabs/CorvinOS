@@ -24,7 +24,6 @@ import pytest
 from corvin_console.aco.htrace import (
     HealingTrace,
     _assert_safe_htrace,
-    _safe_template,
     make_fingerprint,
     config_profile_hash,
     write_trace,
@@ -163,30 +162,40 @@ class TestPIIInjection:
             _assert_safe_htrace(minimal_record)
 
 
-# ── _safe_template ────────────────────────────────────────────────────────────
+# ── No free-text message is shipped (compliance fix) ──────────────────────────
 
-class TestSafeTemplate:
-    def test_replaces_quoted_strings(self):
-        t = _safe_template("object 'my_var' has no attribute 'foo'")
-        assert "my_var" not in t
-        assert "{}" in t
+class TestNoFreeTextMessage:
+    """The healing trace must NOT carry the exception's free-text message.
 
-    def test_replaces_paths(self):
-        t = _safe_template("cannot open /home/silvio/file.txt")
-        assert "/home/silvio" not in t
-        assert "[path]" in t
+    The former _safe_template only collapsed *shaped* tokens (paths, quotes,
+    long hex/digits) and let unquoted natural-language text through verbatim.
+    Matches telemetry._content_free, which drops message_template as the one
+    free-text field that could carry PII/secrets.
+    """
 
-    def test_keeps_structural_words(self):
-        t = _safe_template("expected int, got str at position 3")
-        assert "expected" in t or "int" in t  # safe structural words preserved
+    def test_from_heal_event_emits_no_error_template(self):
+        try:
+            raise PermissionError("user alice not allowed to read secret_plan")
+        except PermissionError as e:
+            trace = HealingTrace.from_heal_event(
+                e,
+                event_sequence=["heal.triggered"],
+                heal_action="restart_service",
+                heal_outcome="success",
+            )
+        record = trace.validated()
+        # The free-text field is gone entirely from the emitted record …
+        assert "error_template" not in record
+        # … and the natural-language message text appears nowhere in the payload.
+        blob = json.dumps(record)
+        assert "alice" not in blob
+        assert "secret_plan" not in blob
+        # The content-free code-level signature is still present.
+        assert record["error_type"] == "PermissionError"
+        assert len(record["error_fingerprint"]) == 64
 
-    def test_caps_length(self):
-        t = _safe_template("x" * 1000)
-        assert len(t) <= 200
-
-    def test_pii_falls_back_to_redacted(self):
-        t = _safe_template("error at user@example.com address")
-        assert t == "[message.redacted]"
+    def test_dataclass_has_no_error_template_attribute(self):
+        assert "error_template" not in HealingTrace().__dict__
 
 
 # ── Fingerprint ───────────────────────────────────────────────────────────────
@@ -330,7 +339,7 @@ class TestWriteTrace:
 
     def test_invalid_record_increments_dropped(self, tmpdir):
         trace = HealingTrace()
-        trace.error_template = "leak: user@example.com"  # will fail _assert_safe_htrace
+        trace.heal_action = "leak: user@example.com"  # will fail _assert_safe_htrace
         result = write_trace(trace, tmpdir, consent_active=True)
         assert result is False
         dropped_p = htrace_dir(tmpdir) / "dropped.count"

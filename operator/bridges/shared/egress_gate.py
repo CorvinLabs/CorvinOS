@@ -118,6 +118,7 @@ DEFAULT_ENGINE_HOSTS: dict[str, str] = {
     "claude_code_local": "localhost",        # Local ClaudeCode variant (L34: locality=local, egress=none)
     "copilot":           "github.com",       # GitHub Copilot CLI (not wired in adapter, defensive)
     "acs_worker":        "api.anthropic.com",  # ACS background worker — mirrors claude_code egress
+    "acs":               "api.anthropic.com",  # delegation fan-out alias (DELEGATION_ENGINE_ID) — L35 sibling of the dd2b569 L34 fix; without it delegated web-chat turns resolve host "unknown" → default_deny
     "anthropic_batch":   "api.anthropic.com",  # Anthropic batch API — named host for audit trail
 }
 

@@ -206,6 +206,29 @@ _LICENSE_INITIALIZED: bool = False  # ADR-0138 M1 F2: idempotency guard
 # post-boot os.environ mutations cannot satisfy the force=True escape-hatch guard.
 _INTEGRATION_TEST_SNAP: bool = bool(os.environ.get("CORVIN_INTEGRATION_TEST"))
 
+# ADR-0144 Fix B1 (validator parity): snapshot CORVIN_FEATURES_URL + CORVIN_TEST_MODE
+# at import time and honour the env override ONLY under CORVIN_TEST_MODE=1. The
+# revocation endpoint (_fetch_revoked_fps) is an enforcement path: a post-boot
+# CORVIN_FEATURES_URL mutation must NOT be able to redirect it to a dead/mock host
+# and nullify ADR-0102 per-token revocation (the sole server-side kill switch for a
+# cancelled/charged-back subscription's still-unexpired token). Mirrors the hardening
+# already applied in session_refresh._features_server / mcp_server / corvin_a2a.
+_TEST_MODE_SNAPSHOT: str = os.environ.get("CORVIN_TEST_MODE", "")
+_FEATURES_URL_SNAPSHOT: str = os.environ.get("CORVIN_FEATURES_URL", _FEATURES_BASE_URL_DEFAULT)
+
+
+def _features_base_url() -> str:
+    """Return the Corvin-Features base URL (trailing slash stripped).
+
+    The CORVIN_FEATURES_URL override is accepted ONLY under CORVIN_TEST_MODE=1
+    (both snapshotted at import); in production the hardcoded default is used so
+    a post-boot env mutation cannot redirect an enforcement fetch to an
+    attacker-controlled endpoint. Parity with session_refresh._features_server().
+    """
+    if _TEST_MODE_SNAPSHOT == "1":
+        return _FEATURES_URL_SNAPSHOT.rstrip("/")
+    return _FEATURES_BASE_URL_DEFAULT.rstrip("/")
+
 
 def _corvin_home_resolved() -> "Path":
     """Resolve the runtime home: CORVIN_HOME env → repo marker (<repo>/.corvin)
@@ -668,8 +691,10 @@ def _fetch_revoked_fps() -> list[str] | None:
     except Exception:
         pass
 
-    # Fetch a fresh list from Corvin-Features.
-    base_url = os.environ.get("CORVIN_FEATURES_URL", _FEATURES_BASE_URL_DEFAULT).rstrip("/")
+    # Fetch a fresh list from Corvin-Features. Enforcement path: the base URL is
+    # test-mode-gated + import-snapshotted (see _features_base_url) so a post-boot
+    # CORVIN_FEATURES_URL mutation cannot redirect revocation to a mock/dead host.
+    base_url = _features_base_url()
     url = f"{base_url}/v1/licenses/revoked"
     try:
         with _urllib_req.urlopen(url, timeout=5) as resp:  # noqa: S310 (http allowed for internal endpoint)

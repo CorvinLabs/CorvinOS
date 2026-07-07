@@ -236,6 +236,173 @@ def main() -> int:
         blocked=False,
     )
 
+    # 9f. path-audit 2026-07-06 — `find` mutating actions were a live audit-log
+    # deletion bypass (empirically confirmed): `find` matched no target-extraction
+    # branch, so a destructive find under a protected path was ALLOWED. Same class
+    # as the truncate/rm/ln bypasses. All of these must now DENY.
+    expect(
+        "Bash find -delete audit.jsonl → DENY",
+        {"tool_name": "Bash",
+         "tool_input": {"command": f"find {HOME} -name audit.jsonl -delete"}},
+        blocked=True,
+    )
+    expect(
+        "Bash find -exec rm on forge tools → DENY",
+        {"tool_name": "Bash",
+         "tool_input": {"command": f"find {HOME}/global/forge -name '*.py' -exec rm {{}} +"}},
+        blocked=True,
+    )
+    expect(
+        "Bash find -exec truncate audit.jsonl → DENY",
+        {"tool_name": "Bash",
+         "tool_input": {"command": f"find {HOME} -name audit.jsonl -exec truncate -s0 {{}} +"}},
+        blocked=True,
+    )
+    expect(
+        "Bash find -fprintf into protected forge → DENY",
+        {"tool_name": "Bash",
+         "tool_input": {"command": f"find /etc -type f -fprintf {HOME}/global/forge/x 'y'"}},
+        blocked=True,
+    )
+    # 9g. round-2 — glob/pattern bypass: a mutating find whose root is an
+    # ANCESTOR of the corvin home recurses down into it, so `-name '*.jsonl'`
+    # deletes audit.jsonl without ever naming it literally. Must DENY regardless
+    # of the pattern text. Also the gfind/bfind aliases must not skip the branch.
+    _ANC = str(Path(HOME).parent)  # ancestor of CORVIN_HOME
+    expect(
+        "Bash find glob '*.jsonl' -delete over ancestor → DENY",
+        {"tool_name": "Bash",
+         "tool_input": {"command": f"find {_ANC} -name '*.jsonl' -delete"}},
+        blocked=True,
+    )
+    expect(
+        "Bash find glob '*.jsonl' -exec rm over ancestor → DENY",
+        {"tool_name": "Bash",
+         "tool_input": {"command": f"find {_ANC} -name '*.jsonl' -exec rm {{}} +"}},
+        blocked=True,
+    )
+    expect(
+        "Bash gfind alias -delete over protected home → DENY",
+        {"tool_name": "Bash",
+         "tool_input": {"command": f"gfind {HOME} -name audit.jsonl -delete"}},
+        blocked=True,
+    )
+    # 9h. Regression guard — read-only find and mutating find on a genuinely
+    # unrelated root (neither under nor an ancestor of corvin_home) must ALLOW.
+    expect(
+        "Bash read-only find under protected home → ALLOW",
+        {"tool_name": "Bash",
+         "tool_input": {"command": f"find {HOME} -name '*.py' -print"}},
+        blocked=False,
+    )
+    expect(
+        "Bash find -delete on unrelated dir → ALLOW",
+        {"tool_name": "Bash",
+         "tool_input": {"command": "find /var/spool/unrelated-xyz -name foo -delete"}},
+        blocked=False,
+    )
+
+    # 9i. round-3 — recursive / glob / root destructive ops over the corvin tree.
+    # is_protected_path only flags specific leaf names/subdirs, so `rm -rf ~/.corvin`,
+    # a glob, or a move of a protected tree named no protected leaf and passed the
+    # gate — wiping hash-chained audit logs. All must DENY.
+    for _label, _cmd in [
+        ("rm -rf corvin home root",        f"rm -rf {HOME}"),
+        ("rm -rf tenants tree",            f"rm -rf {HOME}/tenants"),
+        ("rm glob *.jsonl under home",     f"rm {HOME}/*.jsonl"),
+        ("chmod -R over tenants",          f"chmod -R 000 {HOME}/tenants"),
+        ("mv protected tree away",         f"mv {HOME}/tenants /tmp/x"),
+        ("find tree -delete under home",   f"find {HOME}/tenants -name x -delete"),
+        ("find glob | xargs rm",           f"find {str(Path(HOME).parent)} -name '*.jsonl' | xargs rm"),
+        ("find -print0 | xargs -0 rm",     f"find {str(Path(HOME).parent)} -name '*.jsonl' -print0 | xargs -0 rm"),
+    ]:
+        expect(f"Bash {_label} → DENY", {"tool_name": "Bash",
+                "tool_input": {"command": _cmd}}, blocked=True)
+    # 9j. Regression — destructive ops on UNRELATED paths and reads must ALLOW.
+    for _label, _cmd, _blk in [
+        ("rm -rf unrelated /tmp",  "rm -rf /var/spool/unrelated-xyz", False),
+        ("mv between /tmp paths",  "mv /tmp/a /tmp/b", False),
+        ("echo | xargs echo",      "echo hi | xargs echo", False),
+    ]:
+        expect(f"Bash {_label} → ALLOW", {"tool_name": "Bash",
+                "tool_input": {"command": _cmd}}, blocked=_blk)
+
+    # 9k. round-4 — exec-wrapper prefix must not defeat the gate. `env rm -rf
+    # ~/.corvin` etc. put the wrapper in cmd_name and slipped past every check.
+    for _label, _cmd in [
+        ("env rm",        f"env rm -rf {HOME}"),
+        ("command rm",    f"command rm -rf {HOME}"),
+        ("busybox rm",    f"busybox rm -rf {HOME}"),
+        ("nice -n rm",    f"nice -n 10 rm -rf {HOME}"),
+        ("timeout rm",    f"timeout 5 rm -rf {HOME}"),
+        ("sudo rm",       f"sudo rm -rf {HOME}"),
+        ("setsid rm",     f"setsid rm -rf {HOME}"),
+        ("env FOO=1 rm",  f"env FOO=1 rm -rf {HOME}"),
+        ("env leaf",      f"env rm {HOME}/audit.jsonl"),
+        ("busybox trunc", f"busybox truncate -s0 {HOME}/audit.jsonl"),
+    ]:
+        expect(f"Bash wrapper {_label} → DENY", {"tool_name": "Bash",
+                "tool_input": {"command": _cmd}}, blocked=True)
+    # 9l. round-4 — archive extraction into the corvin tree overwrites audit.jsonl.
+    for _label, _cmd in [
+        ("tar -C home",   f"tar -C {HOME} -xf evil.tar"),
+        ("tar dir= home", f"tar --directory={HOME} -xf evil.tar"),
+        ("unzip -d home", f"unzip -o evil.zip -d {HOME}"),
+        ("cpio -D home",  f"cpio -idmv -D {HOME}"),
+        ("7z -o home",    f"7z x evil.7z -o{HOME}"),
+    ]:
+        expect(f"Bash archive {_label} → DENY", {"tool_name": "Bash",
+                "tool_input": {"command": _cmd}}, blocked=True)
+    # 9m. round-4 — `cd <tree> && <destructive>` (hook can't see the cd).
+    for _label, _cmd in [
+        ("cd&&rm -rf",    f"cd {HOME} && rm -rf tenants"),
+        ("cd;rm leaf",    f"cd {HOME}; rm audit.jsonl"),
+        ("cd&&truncate",  f"cd {HOME} && truncate -s0 audit.jsonl"),
+    ]:
+        expect(f"Bash {_label} → DENY", {"tool_name": "Bash",
+                "tool_input": {"command": _cmd}}, blocked=True)
+    # 9n. round-4 regression — wrappers/archive/cd on UNRELATED paths still ALLOW.
+    for _label, _cmd in [
+        ("env rm /tmp",        "env rm -rf /tmp/junk"),
+        ("sudo rm /var/tmp",   "sudo rm -rf /var/tmp/y"),
+        # NOTE: the test harness roots CORVIN_HOME under /tmp, so /tmp is an
+        # ancestor of the home here — use a genuinely-unrelated dir to assert
+        # non-over-block (matches the round-2 /var/spool convention).
+        ("tar -C unrelated",   "tar -C /var/spool/unrelated-xyz -xf e.tar"),
+        ("cd unrelated && rm", "cd /var/spool/unrelated-xyz && rm -rf x"),
+        ("cd tree && cat",     f"cd {HOME} && cat audit.jsonl"),
+        ("tar read tree",      f"tar czf /tmp/b.tar {HOME}"),
+    ]:
+        expect(f"Bash {_label} → ALLOW", {"tool_name": "Bash",
+                "tool_input": {"command": _cmd}}, blocked=False)
+
+    # 9o. round-5 — chdir-via-wrapper (env -C / sudo -D / doas / pushd) reaches the
+    # tree with a relative target; must DENY like the literal `cd` form.
+    for _label, _cmd in [
+        ("env -C",       f"env -C {HOME} rm -rf tenants"),
+        ("env --chdir=",  f"env --chdir={HOME} rm -rf tenants"),
+        ("sudo -D",      f"sudo -D {HOME} rm -rf tenants"),
+        ("sudo --chdir",  f"sudo --chdir {HOME} rm -rf tenants"),
+        ("doas -C",      f"doas -C {HOME} rm -rf tenants"),
+        ("pushd",        f"pushd {HOME} && rm -rf tenants"),
+    ]:
+        expect(f"Bash chdir {_label} → DENY", {"tool_name": "Bash",
+                "tool_input": {"command": _cmd}}, blocked=True)
+    # 9p. round-5 OVER-BLOCK regression — `cd <ANCESTOR-of-home> && rm -rf <rel>`
+    # descends AWAY from the tree and MUST ALLOW (the ancestor arm of
+    # _touches_corvin_tree must not fire in the chdir context). These broke normal
+    # shell use before the fix.
+    _parent = str(Path(HOME).parent)          # ancestor of the corvin home
+    _gparent = str(Path(HOME).parent.parent)  # deeper ancestor
+    for _label, _cmd in [
+        ("cd parent && rm build",  f"cd {_parent} && rm -rf build"),
+        ("cd gparent && rm x",     f"cd {_gparent} && rm -rf some-unrelated-dir"),
+        ("env -C /tmp make",       "env -C /tmp/build make"),
+        ("sudo -D /var rm",        "sudo -D /var/www rm -rf cache"),
+    ]:
+        expect(f"Bash overblock {_label} → ALLOW", {"tool_name": "Bash",
+                "tool_input": {"command": _cmd}}, blocked=False)
+
     # 10. sed -i on protected policy → DENY
     expect(
         "sed -i on policy.json",

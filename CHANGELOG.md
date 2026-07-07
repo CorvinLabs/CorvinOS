@@ -6,6 +6,108 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.19] — 2026-07-07
+
+Security- and compliance-hardening release from a multi-round adversarial
+review (four rounds, real-LLM/real-data E2E). Every change is fail-closed or a
+tightened default; no compliance guarantee was weakened.
+
+### Security — path-gate (L10)
+- **CRITICAL: recursive / glob / root destructive commands over the corvin
+  runtime tree were allowed.** `is_protected_path()` only flags specific leaf
+  names / subdir tokens, so `rm -rf ~/.corvin`, `rm ~/.corvin/*.jsonl` (glob),
+  `rm -rf ~/.corvin/tenants`, `chmod -R ~/.corvin/global`, `mv ~/.corvin/tenants
+  /tmp/x`, and `find ~ -name '*.jsonl' | xargs rm` all passed the gate and could
+  erase the hash-chained `audit.jsonl`. New `_touches_corvin_tree()` helper
+  fails closed whenever a destructive target IS / is UNDER / is an ANCESTOR of
+  the corvin home; wired into the `find` mutating branch, `_TARGET_ALL_CMDS`
+  (rm/rmdir/unlink/shred/truncate/chmod/chown/chgrp/chattr/ln), `_DEST_LAST_CMDS`
+  (mv/cp/install/rsync — now checks the source, not just the dest), and the
+  `xargs`-pipe form. Reads and unrelated-path destructive ops are unaffected.
+- **`find` alias + ancestor-root bypass** (`gfind`/`bfind`, `find ~ … -delete`,
+  `find ~/.corvin/tenants -delete`) fixed by the same helper.
+- Corrected an overclaiming comment: the path-gate is a WRITE boundary and does
+  not gate reads (`cat`/`less`/`grep` of the vault) — read confinement belongs
+  to the sandbox / tool-allowlist layer.
+
+### Security — console & gateway
+- **SSRF + credential-exfiltration in the HTTP-datasource ping**
+  (`routes/datasources_http.py`): a paid-tier console user could point
+  `base_url` at `169.254.169.254`/`localhost`/RFC-1918 and attach any
+  `os.environ` var. Now: `http(s)`-only scheme allowlist, private/loopback/
+  link-local/IMDS IP block with full `getaddrinfo` resolution (incl. IPv4-mapped
+  IPv6 and decimal/hex/octal encodings), no-redirect opener, `auth_env`
+  restricted to a `^CORVIN_DS_[A-Z0-9_]+$` allowlist, and connectivity refused
+  unless `network_egress` is explicitly declared (default `none` ⇒ refused).
+- **Audit chain / secrets were downloadable via the file API**
+  (`routes/files.py`): `_access()` returned on the first path-component match, so
+  `global/forge/audit.jsonl` resolved to the READ_ONLY `forge` before reaching
+  the NO_ACCESS `audit.jsonl`. It now scans all components — NO_ACCESS
+  (audit.jsonl, policy.json, secrets.json, recall.db, .env, instance_id.json,
+  vault) wins over READ_ONLY.
+- **`get_mcp_config` leaked resolved secrets** (`routes/connectors.py`): the
+  client endpoint returned vault/`os.environ`-resolved token values. It now
+  returns the config with `${…}` placeholders unexpanded; resolution stays
+  server-side in `build_mcp_config_for_node`.
+- **Gateway EXECUTE path enforced only L44** (`gateway/dispatcher.py`): it now
+  also runs the shared L34 residency + L35 egress gates (SSOT with
+  console/adapter/a2a), before the compute meter. The CancelledError path now
+  cancels the engine and sets a terminal `failed` state instead of stranding a
+  `running` run and orphaning the `claude -p` subprocess.
+
+### Security — spawn gates & ACS
+- **Gate construction / classification now fail closed**
+  (`spawn_gates.py`, `egress_gate.py`): an L44 gate-construction error, an L34
+  `classify_task` crash, and an L35 validate error each return a refusal instead
+  of falling open; transient L34 errors are no longer cached as allow.
+- **Worker secret-env strip extended** (`acs_runtime.py`): the worker/manager
+  spawn env now strips the full credential set — added `CORVIN_WDAT_KEY` (WDAT
+  at-rest key, ADR-0109 M4) and `PGPASSWORD` alongside the Anthropic/OpenAI/
+  Google/Ollama/Gmail/Hetzner/license keys — applied after the extra-env merge at
+  both spawn sites.
+
+### Compliance / telemetry
+- Healing-trace upload dropped its free-text `error_template`; the instance-count
+  ping is trimmed to `{corvin_version}` only with an `_assert_ping_safe`
+  content-free backstop (CONTENT-FREE invariant tightened, still default-ON /
+  opt-out per the maintainer decision).
+- **Voice-audit `verify --all`** now runs the per-chain segment-manifest check
+  and exits non-zero on any tamper (was verifying only the primary chain).
+- **Compute-fabric residency + revocation fail closed** (`datasources/`,
+  `license_gate.py`): residency is enforced via a single `_residency_gate`
+  helper, `IN`/`NOT IN` bind each element as a placeholder, and a corrupt
+  revocation cache denies rather than allows.
+
+### Security — licensing
+- **Revocation-check host could be overridden outside test mode**
+  (`license/validator.py`): the features base URL now ignores the test-only
+  override unless `CORVIN_TEST_MODE=1`, closing a revocation-bypass vector at
+  forks.
+
+### Cross-platform paths & SSOT
+- **Voice-config directory unified to one resolver** across all six call sites
+  (forge/paths, shared/paths, adapter, say, whisper STT, bridge_manager):
+  `VOICE_CONFIG_DIR → XDG_CONFIG_HOME → ~/.config/corvin-voice`, identical on
+  every platform (the divergent Windows `%APPDATA%\Local` branch is gone). A
+  guard test pins all six resolvers to the SSOT.
+- **`python3` hardcodes replaced with `sys.executable`** (MCP-config builder,
+  cowork resolver, chat-runtime/workflows voice-summary, summary_provider) so
+  worker/tool spawns use the interpreter that actually has the deps on Windows.
+- Windows import-crash hardening: `fcntl` guarded in workflows; `/tmp` checkpoint
+  paths moved to `tempfile.gettempdir()` with a per-PID name.
+
+### Hermes install
+- `setup-hermes-pib.sh` / the systemd unit render `__PYTHON_BIN__`/`__REPO_ROOT__`
+  at install time (no `User=%u`), use an `EnvironmentFile`, and gate on RAM with a
+  locale-independent `awk` (`LC_ALL=C`) so the health timer installs correctly on
+  a non-C locale host.
+
+### Deferred (documented, not shipped)
+- Pre-existing items tracked for follow-up: `query.py` identifier quoting
+  (needs expression-aware validation), `conversation_recall` raw `chat_key`
+  (GDPR backlog), webhook optional-HMAC, and the L44 low-confidence clear-branch
+  (a deliberate 2026-06-30 friction-reduction decision — left as-is).
+
 ## [0.10.18] — 2026-07-06
 
 ### Fixed

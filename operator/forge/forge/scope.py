@@ -25,7 +25,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from .paths import corvin_home
+from .paths import corvin_home, fs_safe_component
 
 VALID_SCOPES = ("task", "session", "project", "user")
 
@@ -84,7 +84,14 @@ def scope_root(scope: str, *, channel_id: str | None = None,
             or os.environ.get("CORVIN_CHANNEL_ID")
             or "default"
         )
-        return corvin_home() / "sessions" / cid / "forge"
+        # CORVIN_CHANNEL_ID is "<bridge>:<chat_key>" — the ':' is legal in a
+        # POSIX path component but ILLEGAL in a Windows one (drive separator), so
+        # mkdir(parents=True) on this root raised NotADirectoryError [WinError 267]
+        # on the first session-scoped Forge tool creation (the 0.9.49 WinError-267
+        # class). fs_safe_component neutralises ':' → '_' on Windows and is a
+        # byte-for-byte no-op on POSIX (only '/' and NUL), so existing Linux/macOS
+        # session workdirs stay identical — mirrors _workdir / session_artifacts_dir.
+        return corvin_home() / "sessions" / fs_safe_component(cid) / "forge"
     if scope == "project":
         if project_root is not None:
             return _resolve_repo_workspace(project_root) / "forge"

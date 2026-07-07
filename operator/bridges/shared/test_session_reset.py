@@ -146,7 +146,11 @@ def _slot_dir(slot: Path, name: str) -> Path:
 
 def _forge_chan(channel: str, chat_id: str) -> str:
     import re as _re
-    return f"{channel}:{_re.sub(r'[/\\\\]', '_', chat_id)}"
+    # NB: a backslash in an f-string EXPRESSION is a SyntaxError on Python < 3.12,
+    # and pyproject declares requires-python >=3.10 — keep the sub() out of the
+    # f-string so this module imports on 3.10/3.11 (path-audit 2026-07-07).
+    safe_chat = _re.sub(r'[/\\\\]', '_', chat_id)
+    return f"{channel}:{safe_chat}"
 
 
 def _voice_state_dir(home: Path, channel: str, chat_id: str) -> Path:

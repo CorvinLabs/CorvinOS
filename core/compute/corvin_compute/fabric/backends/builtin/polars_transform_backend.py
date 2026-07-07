@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import os
 import pickle
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -39,7 +41,12 @@ except ImportError:
 class _PolarsSession(BackendSession):
     lazy_frame: Any = None          # polars.LazyFrame or None
     transform_steps: list = dataclasses.field(default_factory=list)
-    checkpoint_path: Path = dataclasses.field(default_factory=lambda: Path("/tmp/polars_ckpt"))
+    # Cross-platform temp dir (no ``/tmp`` on Windows) + a per-process suffix so
+    # concurrent sessions/tenants don't collide on one fixed shared path.
+    # Still overridable by assigning a different Path after construction.
+    checkpoint_path: Path = dataclasses.field(
+        default_factory=lambda: Path(tempfile.gettempdir()) / f"polars_ckpt_{os.getpid()}"
+    )
     row_count: int = 0
     collected_df: Any = None        # polars.DataFrame after collect()
 

@@ -35,10 +35,14 @@ esac
 
 # Inline key functions from hermes_bootstrap.py for portability
 get_available_ram_gb() {
+  # LC_ALL=C forces awk to emit a period decimal separator. Under a comma-decimal
+  # locale (e.g. de_DE.UTF-8 — the maintainer's own) awk prints "15,2588", which
+  # the downstream string-compare in select_model_for_ram then mis-orders
+  # ("15,2588" < "6" lexically) → capable boxes silently downgraded (round-2).
   if [[ -f /proc/meminfo ]]; then
-    grep "MemTotal:" /proc/meminfo | awk '{print $2 / 1024 / 1024}' || echo 4.0
+    grep "MemTotal:" /proc/meminfo | LC_ALL=C awk '{print $2 / 1024 / 1024}' || echo 4.0
   elif command -v sysctl >/dev/null 2>&1; then
-    sysctl -n hw.memsize 2>/dev/null | awk '{print $1 / 1024^3}' || echo 4.0
+    sysctl -n hw.memsize 2>/dev/null | LC_ALL=C awk '{print $1 / 1024^3}' || echo 4.0
   else
     echo 4.0
   fi
@@ -46,7 +50,14 @@ get_available_ram_gb() {
 
 select_model_for_ram() {
   local ram="$1"
-  if (( $(echo "$ram < 6.0" | bc -l) )); then
+  # SSOT: mirror hermes_bootstrap.py::select_model_for_ram exactly
+  #   < 6 GB → qwen3:1.7b ("hermes-fast")   ≥ 6 GB → qwen3:8b ("hermes-balanced").
+  # Use awk (already required by get_available_ram_gb, and present on Git-Bash /
+  # minimal containers) instead of `bc`, which is absent on Git-Bash — the only
+  # way to run this on Windows — and on minimal images. With bc missing the old
+  # `$(echo … | bc -l)` was empty, `(( ))` evaluated false, and a 4 GB box wrongly
+  # picked qwen3:8b (~5 GB) that Ollama then couldn't serve → dead fallback.
+  if LC_ALL=C awk -v r="$ram" 'BEGIN { exit !(r < 6.0) }'; then
     echo "qwen3:1.7b"
   else
     echo "qwen3:8b"
@@ -132,9 +143,13 @@ ensure_ollama_running() {
   fi
   case "$OSTYPE" in
     msys|cygwin|win32)
-      # Windows: prefer desktop app, fall back to serve
-      if [[ -x "~/AppData/Local/Programs/Ollama/ollama app.exe" ]]; then
-        start "~/AppData/Local/Programs/Ollama/ollama app.exe" >/dev/null 2>&1 &
+      # Windows: prefer desktop app, fall back to serve.
+      # Use $HOME, not ~: a tilde inside double quotes is NOT expanded by bash,
+      # so "~/AppData/…" was tested/launched as a literal path that never exists.
+      # `start "" "<path>"` — the empty first arg is the window title, so a path
+      # containing spaces isn't misread as the title.
+      if [[ -x "$HOME/AppData/Local/Programs/Ollama/ollama app.exe" ]]; then
+        start "" "$HOME/AppData/Local/Programs/Ollama/ollama app.exe" >/dev/null 2>&1 &
       fi
       "$ollama_bin" serve >/dev/null 2>&1 &
       ;;

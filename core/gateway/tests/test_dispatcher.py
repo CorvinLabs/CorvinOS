@@ -25,9 +25,11 @@ end-to-end without spending API credits.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import contextmanager
@@ -381,6 +383,168 @@ class DrainTests(unittest.TestCase):
             from corvin_gateway.runs import RunRegistry
             record = RunRegistry().get("acme", run_id)
             self.assertIn(record.status, ("completed", "failed", "budget_exceeded"))
+
+
+# ── Regression: CancelledError must not strand the run / orphan the engine ──
+
+
+class _BlockingEngine(_StubBase):
+    """Blocks inside spawn() until released, so the dispatch task can be
+    cancelled mid-flight (models drain/shutdown cancelling an in-flight run)."""
+    name = "test-blocking"
+    capabilities = {"stream_json": True}
+    cancel_called = False
+    spawned = threading.Event()
+    release = threading.Event()
+
+    def cancel(self) -> None:
+        # Record the call AND unblock the worker thread so the test exits
+        # promptly (the real engine.cancel() kills the claude -p subprocess).
+        type(self).cancel_called = True
+        type(self).release.set()
+
+    def spawn(self, prompt: str, *, env=None) -> Iterator[StreamEvent]:
+        type(self).spawned.set()
+        type(self).release.wait(timeout=30)
+        yield StreamEvent(type="turn_completed", text="late")
+
+
+class CancelledErrorTests(unittest.TestCase):
+    """Fix #1 — the CancelledError handler must engine.cancel() + move the run
+    to a terminal state before re-raising, or the run is stranded at
+    status='running' forever and the engine subprocess leaks."""
+
+    def test_cancel_sets_terminal_and_cancels_engine(self):
+        _BlockingEngine.cancel_called = False
+        _BlockingEngine.spawned.clear()
+        _BlockingEngine.release.clear()
+
+        async def _drive():
+            from corvin_gateway.dispatcher import RunDispatcher
+            from corvin_gateway.runs import RunRequest
+            disp = RunDispatcher(engine_factory=_BlockingEngine,
+                                 default_budget_s=60)
+            req = RunRequest.model_validate(
+                _good_run_body(persona="docs", input_text="hello"))
+            rec = disp._registry.create("acme", req)
+            task = asyncio.create_task(disp._run_one("acme", rec.run_id))
+            # Wait until the engine is spawned (task is inside wait_for()).
+            for _ in range(300):
+                if _BlockingEngine.spawned.is_set():
+                    break
+                await asyncio.sleep(0.02)
+            self.assertTrue(_BlockingEngine.spawned.is_set(),
+                            "engine never spawned — cannot exercise cancel path")
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+            return disp, rec.run_id
+
+        with sandbox(("acme",)):
+            disp, run_id = asyncio.run(_drive())
+            # Engine was told to abandon work (no orphaned subprocess).
+            self.assertTrue(_BlockingEngine.cancel_called,
+                            "CancelledError path must call engine.cancel()")
+            # Run reached a terminal state (not stranded at 'running').
+            record = disp._registry.get("acme", run_id)
+            self.assertIn(record.status, ("completed", "failed", "budget_exceeded"))
+            self.assertEqual(record.status, "failed", record.status)
+            self.assertIn("cancelled", (record.error or "").lower())
+
+
+# ── Regression: gateway EXECUTE path must enforce L34 (data-classification) ──
+
+
+class _BenignEngine(_StubBase):
+    """Completes immediately — used to prove a gate BLOCKED the spawn (if the
+    gate did not fire, the run would reach 'completed')."""
+    name = "test-benign"
+    capabilities = {"stream_json": True}
+
+    def spawn(self, prompt: str, *, env=None) -> Iterator[StreamEvent]:
+        yield StreamEvent(type="turn_completed", text="ok")
+
+
+class GatewayL34GateTests(unittest.TestCase):
+    """Fix #2 — the gateway spawn path (_run_one) must invoke the shared
+    spawn_gates.check_l34 and fail-closed on its refusal, exactly like the
+    console / adapter / a2a_worker do. A CONFIDENTIAL-classified run must be
+    denied before any spawn."""
+
+    def test_l34_refusal_denies_run(self):
+        import corvin_gateway.dispatcher as _disp
+        calls: dict[str, Any] = {}
+
+        def _spy_l34(engine_id, tenant_id, *, prompt=None, persona=None,
+                     channel="", chat_key="", **kw):
+            calls["engine_id"] = engine_id
+            calls["prompt"] = prompt
+            calls["channel"] = channel
+            return ("[data-flow] Spawn rejected: Classification CONFIDENTIAL is "
+                    "not allowed with engine 'test-benign'.")
+
+        orig_l34 = _disp._check_l34
+        _disp._check_l34 = _spy_l34
+
+        async def _drive():
+            disp = _disp.RunDispatcher(engine_factory=_BenignEngine,
+                                       default_budget_s=60)
+            from corvin_gateway.runs import RunRequest
+            req = RunRequest.model_validate(
+                _good_run_body(persona="docs", input_text="secret dossier"))
+            rec = disp._registry.create("acme", req)
+            await disp._run_one("acme", rec.run_id)
+            return disp, rec.run_id
+
+        try:
+            # NOTE: assert INSIDE the sandbox — sandbox() pops CORVIN_HOME on
+            # exit, so registry.get() must run while it is still set.
+            with sandbox(("acme",)):
+                disp, run_id = asyncio.run(_drive())
+                # The gate was invoked on the gateway path with the run's prompt.
+                self.assertEqual(calls.get("prompt"), "secret dossier")
+                self.assertEqual(calls.get("channel"), "gateway")
+                # Fail-closed: the run was denied (never reached the engine).
+                record = disp._registry.get("acme", run_id)
+                self.assertEqual(record.status, "failed", record.status)
+                self.assertIn("data-flow", record.error or "")
+        finally:
+            _disp._check_l34 = orig_l34
+
+    def test_l34_none_allows_run_through(self):
+        """Control: when check_l34 returns None (pass/fail-open) the run is not
+        blocked by L34 — proving the gate is a real gate, not a hard-deny."""
+        import corvin_gateway.dispatcher as _disp
+        orig_l34 = _disp._check_l34
+        _disp._check_l34 = lambda *a, **k: None
+
+        async def _drive():
+            from corvin_gateway.runs import RunRequest
+            disp = _disp.RunDispatcher(engine_factory=_BenignEngine,
+                                       default_budget_s=60)
+            req = RunRequest.model_validate(
+                _good_run_body(persona="docs", input_text="hello"))
+            rec = disp._registry.create("acme", req)
+            await disp._run_one("acme", rec.run_id)
+            return disp, rec.run_id
+
+        # Give this control an unlimited license so compute-quota (a DIFFERENT
+        # gate) doesn't fail the run and mask the L34 result.
+        _s = sys
+        _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "operator"))
+        import license.validator as _v
+        _orig, _orig_can = _v._ACTIVE_LICENSE, _v._ACTIVE_LICENSE_CANARY
+        _v._set_active_license({"tier": "enterprise",
+                                "limits": {"compute_units_per_day": None}})
+        try:
+            with sandbox(("acme",)):
+                disp, run_id = asyncio.run(_drive())
+                record = disp._registry.get("acme", run_id)
+                # L34 did not block; the run completed via the benign engine.
+                self.assertEqual(record.status, "completed", record.error)
+        finally:
+            _v._ACTIVE_LICENSE, _v._ACTIVE_LICENSE_CANARY = _orig, _orig_can
+            _disp._check_l34 = orig_l34
 
 
 if __name__ == "__main__":

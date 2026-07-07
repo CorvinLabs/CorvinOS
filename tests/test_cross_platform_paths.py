@@ -108,28 +108,33 @@ class TestForgeVoiceConfigDir:
                 result = forge_paths.voice_config_dir()
                 assert result == tmp_path / ".config" / "corvin-voice"
 
-    def test_windows_uses_appdata_env(self, tmp_path):
-        appdata = tmp_path / "AppData" / "Roaming"
-        with mock.patch("platform.system", return_value="Windows"):
-            with mock.patch.dict(os.environ, {"APPDATA": str(appdata)}):
-                result = forge_paths.voice_config_dir()
-                assert result == appdata / "Local" / "corvin-voice"
-
-    def test_windows_fallback_without_appdata(self, tmp_path):
-        env = {k: v for k, v in os.environ.items() if k != "APPDATA"}
+    def test_windows_uniform_dotconfig(self, tmp_path):
+        """SSOT (path-audit 2026-07-06): Windows uses the SAME ~/.config/corvin-voice
+        as every other platform — the former %APPDATA%\\Local branch made the console
+        write a dir the installer + voice scripts never read (reader≠writer)."""
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("APPDATA", "VOICE_CONFIG_DIR", "XDG_CONFIG_HOME")}
         with mock.patch("platform.system", return_value="Windows"):
             with mock.patch.dict(os.environ, env, clear=True):
                 with _FakeHome(tmp_path):
                     result = forge_paths.voice_config_dir()
-                    assert result == tmp_path / "AppData" / "Local" / "corvin-voice"
+                    assert result == tmp_path / ".config" / "corvin-voice"
 
-    def test_windows_path_is_not_dotconfig(self, tmp_path):
-        """On Windows, the path must NOT contain .config — that's Unix-only."""
-        appdata = tmp_path / "AppData" / "Roaming"
-        with mock.patch("platform.system", return_value="Windows"):
-            with mock.patch.dict(os.environ, {"APPDATA": str(appdata)}):
-                result = forge_paths.voice_config_dir()
-                assert ".config" not in str(result)
+    def test_voice_config_dir_env_override(self, tmp_path):
+        """VOICE_CONFIG_DIR override wins on every platform."""
+        override = tmp_path / "pinned" / "corvin-voice"
+        for plat in ("Linux", "Darwin", "Windows"):
+            with mock.patch("platform.system", return_value=plat):
+                with mock.patch.dict(os.environ, {"VOICE_CONFIG_DIR": str(override)}):
+                    assert forge_paths.voice_config_dir() == override
+
+    def test_voice_config_dir_honors_xdg(self, tmp_path):
+        """XDG_CONFIG_HOME is honored (no VOICE_CONFIG_DIR set)."""
+        xdg = tmp_path / "xdgcfg"
+        env = {k: v for k, v in os.environ.items() if k != "VOICE_CONFIG_DIR"}
+        env["XDG_CONFIG_HOME"] = str(xdg)
+        with mock.patch.dict(os.environ, env, clear=True):
+            assert forge_paths.voice_config_dir() == xdg / "corvin-voice"
 
 
 # ── corvinOS/shared/paths.py — same guarantees ───────────────────────────
@@ -156,19 +161,15 @@ class TestSharedPathsVoiceConfigDir:
                 result = shared_paths.voice_config_dir()
                 assert result == tmp_path / ".config" / "corvin-voice"
 
-    def test_windows_uses_appdata(self, tmp_path):
-        appdata = tmp_path / "AppData" / "Roaming"
+    def test_windows_uniform_dotconfig(self, tmp_path):
+        """SSOT: shared/paths matches forge/paths — uniform ~/.config on Windows too."""
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("APPDATA", "VOICE_CONFIG_DIR", "XDG_CONFIG_HOME")}
         with mock.patch("platform.system", return_value="Windows"):
-            with mock.patch.dict(os.environ, {"APPDATA": str(appdata)}):
-                result = shared_paths.voice_config_dir()
-                assert result == appdata / "Local" / "corvin-voice"
-
-    def test_windows_no_dotconfig(self, tmp_path):
-        appdata = tmp_path / "AppData"
-        with mock.patch("platform.system", return_value="Windows"):
-            with mock.patch.dict(os.environ, {"APPDATA": str(appdata)}):
-                result = shared_paths.voice_config_dir()
-                assert ".config" not in str(result)
+            with mock.patch.dict(os.environ, env, clear=True):
+                with _FakeHome(tmp_path):
+                    result = shared_paths.voice_config_dir()
+                    assert result == tmp_path / ".config" / "corvin-voice"
 
 
 # ── Path consistency: forge and shared agree ─────────────────────────────
@@ -178,10 +179,10 @@ class TestPathConsistency:
 
     @pytest.mark.parametrize("platform_name", ["Linux", "Darwin", "Windows"])
     def test_voice_config_dir_consistent(self, tmp_path, platform_name):
-        appdata = tmp_path / "AppData" / "Roaming"
-        env_patch = {"APPDATA": str(appdata)} if platform_name == "Windows" else {}
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("APPDATA", "VOICE_CONFIG_DIR", "XDG_CONFIG_HOME")}
         with mock.patch("platform.system", return_value=platform_name):
-            with mock.patch.dict(os.environ, env_patch):
+            with mock.patch.dict(os.environ, env, clear=True):
                 with _FakeHome(tmp_path):
                     forge_result = forge_paths.voice_config_dir()
                     shared_result = shared_paths.voice_config_dir()

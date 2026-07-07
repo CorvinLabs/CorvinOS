@@ -77,8 +77,9 @@ def main() -> int:
 
     if "corvin_delegate" in mcp:
         cfg = mcp["corvin_delegate"]
-        expect(cfg.get("command") == "python3",
-               "corvin_delegate command is python3")
+        expect(cfg.get("command") == sys.executable,
+               "corvin_delegate command is the running interpreter (sys.executable)",
+               f"command={cfg.get('command')}")
         args = cfg.get("args") or []
         expect("corvin_delegate.mcp_server" in args,
                "corvin_delegate args run -m corvin_delegate.mcp_server",

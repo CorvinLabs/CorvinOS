@@ -32,7 +32,27 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import fcntl
+
+try:
+    import fcntl
+except ModuleNotFoundError:  # Windows: no stdlib fcntl.
+    # This route is normally imported after ``from forge import paths`` has
+    # run forge/__init__ → _wincompat.install() (which seeds a no-op fcntl
+    # stub into sys.modules). But when this module is imported in ISOLATION
+    # on Windows, that hasn't happened yet — so seed the SAME stub here,
+    # using the same mechanism, before the flock() call sites below.
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    # parents[4] == repo root (this file is core/console/corvin_console/routes/…);
+    # mirrors the _REPO = _THIS_DIR.parents[3] resolution used below.
+    _forge_pkg = _Path(__file__).resolve().parents[4] / "operator" / "forge"
+    if str(_forge_pkg) not in _sys.path:
+        _sys.path.insert(0, str(_forge_pkg))
+    from forge import _wincompat as _wc
+
+    _wc.install()
+    import fcntl  # now resolves to the seeded no-op stub (flock/LOCK_* are inert)
 import io
 import json
 import logging

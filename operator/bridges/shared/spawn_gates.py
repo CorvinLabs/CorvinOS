@@ -79,16 +79,23 @@ def _load_l34_guard(tenant_id: str, corvin_home: Path | None):
             return cached.get("guard")
 
     guard = None
+    load_error = False
     if mtime > 0.0:
         try:
             from data_classification import load_guard_for_tenant  # type: ignore
             guard = load_guard_for_tenant(tenant_id, corvin_home=home)
         except Exception as exc:  # noqa: BLE001
-            _log.warning("spawn_gates: L34 guard load failed (%r) — fail-open", exc)
+            _log.warning("spawn_gates: L34 guard load failed (%r) — re-evaluate next call", exc)
             guard = None
+            load_error = True
 
-    with _l34_cache_lock:
-        _l34_cache[cache_key] = {"mtime": mtime, "guard": guard}
+    # Only cache a DEFINITIVE result. A transient load error (config present but
+    # the loader raised) must NOT be cached as a permanent None-allow — otherwise
+    # a single flaky read fails-open for every subsequent spawn until the yaml
+    # mtime changes. Leave the cache untouched so the next call re-evaluates.
+    if not load_error:
+        with _l34_cache_lock:
+            _l34_cache[cache_key] = {"mtime": mtime, "guard": guard}
     return guard
 
 
@@ -144,8 +151,19 @@ def check_l34(
             from data_classification import classify_task  # type: ignore
             cls_val = classify_task(prompt or "", persona=persona)
         except Exception as exc:  # noqa: BLE001
-            _log.warning("spawn_gates.check_l34: classify_task failed (%r) — fail-open", exc)
-            return None
+            # Fail CLOSED (round-2): a tenant policy IS present (guard is not
+            # None) but the task could not be classified — we cannot prove it is
+            # allowed against the residency matrix, so deny rather than wave it
+            # through. Consistent with the validate handler below and check_l35.
+            # (The legitimate no-policy opt-in case is the guard-is-None early
+            # return above, which stays fail-open by design.)
+            _log.warning("spawn_gates.check_l34: classify_task failed (%r) — fail-closed", exc)
+            return (
+                "[data-flow] Spawn rejected: task classification failed for engine "
+                f"'{engine_id}' (gate error) — fail-closed per tenant data-"
+                "classification policy. Operator: check the classifier / "
+                "tenant.corvin.yaml::spec.data_classification."
+            )
     else:
         cls_val = classification
 
@@ -158,8 +176,17 @@ def check_l34(
             chat_key=chat_key or None,
         )
     except Exception as exc:  # noqa: BLE001
-        _log.warning("spawn_gates.check_l34: validate failed (%r) — fail-open", exc)
-        return None
+        # Fail CLOSED (M8): a broken data-flow guard must not wave a spawn through
+        # unchecked. This now matches the sibling check_l35 validate handler
+        # (~538-547), which also refuses on a validate error — the two gates agree.
+        _log.warning("spawn_gates.check_l34: validate failed (%r) — fail-closed", exc)
+        cls_name = getattr(cls_val, "name", str(cls_val))
+        return (
+            f"[data-flow] Spawn rejected: classification {cls_name} could not be "
+            f"validated for engine '{engine_id}' (gate error). Fail-closed per "
+            f"tenant data-classification policy. "
+            f"Operator: check tenant.corvin.yaml::spec.data_classification."
+        )
 
     if decision.allowed:
         return None
@@ -342,10 +369,25 @@ def check_l44(
                 tenant_overlay=overlay,
             )
         except Exception as _gate_create_exc:  # noqa: BLE001 — gate creation failed
-            _log.warning("[house-rules] gate creation failed (%s) — using conservative allow",
-                        type(_gate_create_exc).__name__)
-            # Degrade to conservative allow (user can try again, no false blocks)
-            return None
+            # FAIL-CLOSED (ADR-0143 + CLAUDE.md red-line): the acceptable-use gate
+            # is MANDATORY. If it cannot be constructed we have NO classification —
+            # returning None here (the old "conservative allow") waved the turn
+            # through unchecked, defeating the module's fail-closed contract
+            # (lines 15-18). DENY the spawn, mirroring the shape of a normal L44
+            # policy denial, and emit a metadata-only audit event first.
+            _log.error("[house-rules] gate creation failed (%s) — fail-closed deny",
+                       type(_gate_create_exc).__name__)
+            try:
+                _hr_classifier_audit("house_rules.denied", {
+                    "reason": "gate_construction_error",
+                    "error_type": type(_gate_create_exc).__name__,
+                })
+            except Exception:  # noqa: BLE001 — audit is best-effort, never blocks the deny
+                pass
+            return (
+                "[house-rules] Acceptable-use gate unavailable — request blocked "
+                "(fail-closed). Contact the operator."
+            )
 
         # Step 5: Classify (with degradation fallback)
         try:

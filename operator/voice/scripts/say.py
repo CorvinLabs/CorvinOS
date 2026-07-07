@@ -32,10 +32,20 @@ import os
 import sys
 from pathlib import Path
 
-VOICE_CONFIG_DIR = Path(
-    os.environ.get("VOICE_CONFIG_DIR")
-    or (Path.home() / ".config" / "corvin-voice")
-)
+def _resolve_voice_config_dir() -> Path:
+    """SSOT for the corvin-voice config dir — byte-identical to
+    forge.paths.voice_config_dir(): VOICE_CONFIG_DIR → XDG_CONFIG_HOME → ~/.config,
+    uniform on every platform. Guard: tests/test_voice_config_ssot.py.
+    """
+    override = os.environ.get("VOICE_CONFIG_DIR", "").strip()
+    if override:
+        return Path(os.path.expanduser(os.path.expandvars(override)))
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    base = Path(os.path.expanduser(xdg)) if xdg else (Path.home() / ".config")
+    return base / "corvin-voice"
+
+
+VOICE_CONFIG_DIR = _resolve_voice_config_dir()
 
 # Per-provider wall-clock cap. Network providers (OpenAI, edge-tts) can otherwise
 # block indefinitely — e.g. edge-tts hanging on its Microsoft websocket on a
@@ -57,6 +67,12 @@ def _load_key_from_env_files() -> str | None:
                 line = line.strip()
                 if line.startswith("#") or "=" not in line:
                     continue
+                # Handle shell-style `export KEY=value` lines (bridge.sh /
+                # voice_lib.sh write these); without stripping the prefix the key
+                # became "export OPENAI_API_KEY" and never matched, so a shell
+                # service.env silently yielded no TTS key (path-audit 2026-07-06).
+                if line.startswith("export "):
+                    line = line[len("export "):].lstrip()
                 k, _, v = line.partition("=")
                 k = k.strip()
                 if k in ("OPENAI_API_KEY", "OPENAI_APIKEY", "CORVIN_TTS_OPENAI_KEY"):

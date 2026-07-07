@@ -182,11 +182,69 @@ def test_consecutive_identical_text_still_deduped() -> None:
         shutil.rmtree(inbox.parent, ignore_errors=True)
 
 
+def test_progress_off_still_routes_through_gated_dispatcher() -> None:
+    """C1 regression (path-audit 2026-07-06): progress_updates=false must NOT
+    bypass the pre-spawn gates. The non-progress branch used to call the ungated
+    legacy call_claude(); it must now go through the engine-agnostic
+    call_claude_streaming() dispatcher (which runs L34/L35/CLAG/capability/L44 +
+    charges the turn), with progress suppressed (on_status=None)."""
+    _section("progress_updates=false → gated call_claude_streaming, not call_claude")
+    inbox, outbox, processed = _setup_sandbox()
+    try:
+        adapter = _fresh_adapter({
+            "ADAPTER_INBOX":     str(inbox),
+            "ADAPTER_OUTBOX":    str(outbox),
+            "ADAPTER_PROCESSED": str(processed),
+            "ADAPTER_FAKE_CLAUDE": "0",
+            "ADAPTER_ROUTING_MODE": "off",
+        })
+        seen = {"streaming": 0, "legacy": 0, "on_status_none": None}
+
+        def fake_streaming(prompt, channel, chat_key, mode="unrestricted",
+                           add_dir=None, on_status=None, status_mode="compact",
+                           profile=None, _retry_count=0, **media_kwargs):
+            seen["streaming"] += 1
+            seen["on_status_none"] = on_status is None
+            return "fertig."
+
+        def fake_legacy(prompt, channel="whatsapp", chat_key="anon", **kwargs):
+            seen["legacy"] += 1
+            return "LEGACY-UNGATED"
+
+        adapter.call_claude_streaming = fake_streaming
+        adapter.call_claude = fake_legacy
+        # C1 is a routing decision at the dispatch site; stub the downstream
+        # voice-summary builder (it shells out to a real summariser subprocess,
+        # unrelated to this assertion) so the test stays fast and hermetic.
+        adapter.build_voice_summary = lambda text, *a, **k: text
+
+        _run_one_text_message(
+            adapter, (inbox, outbox, processed),
+            settings_overrides={"progress_updates": False},
+        )
+
+        assert seen["streaming"] == 1, (
+            "progress_updates=false did NOT route through the gated "
+            f"call_claude_streaming dispatcher (calls={seen['streaming']})"
+        )
+        assert seen["legacy"] == 0, (
+            "progress_updates=false still called the ungated legacy call_claude "
+            "— C1 gate-bypass regressed"
+        )
+        assert seen["on_status_none"] is True, (
+            "non-progress path must pass on_status=None (progress suppressed)"
+        )
+        print("PASS: progress off routes through gated dispatcher, legacy path unused")
+    finally:
+        shutil.rmtree(inbox.parent, ignore_errors=True)
+
+
 def main() -> int:
     tests = [
         test_default_dedupes_todowrite_to_one_status,
         test_opt_in_progress_plan_repeat_restores_old_behaviour,
         test_consecutive_identical_text_still_deduped,
+        test_progress_off_still_routes_through_gated_dispatcher,
     ]
     failed = 0
     for t in tests:

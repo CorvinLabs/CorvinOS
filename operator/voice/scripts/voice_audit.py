@@ -279,6 +279,30 @@ def cmd_verify_all(args) -> int:
             print(f"  IO-ERROR  {chain}: {e}", file=sys.stderr)
             io_errors.append(chain)
             continue
+        # FND-16: run the SAME signed segment-manifest continuity check that
+        # cmd_verify runs, per chain, so the nightly `verify --all` timer
+        # (which routes here) actually catches a deleted/swapped L37-sealed
+        # segment. The live chain resets to a fresh, internally-valid segment
+        # on rotation and verifies clean, so verify_audit() alone would pass
+        # while sealed history is orphaned — exactly the gap this closes. The
+        # manifest failure feeds the SAME `broken`/`ok` aggregation below, so a
+        # tampered manifest forces the process exit code non-zero. Fail-closed
+        # on the check's own error, mirroring cmd_verify (an integrity verifier
+        # must never treat its own crash as "pass").
+        try:
+            man_ok, man_problems, man_warnings = _verify_segment_manifest(
+                chain.parent, _first_prev_hash(chain))
+            for w in man_warnings:
+                print(f"  manifest  {chain}: {w}", file=sys.stderr)
+            if not man_ok:
+                ok = False
+                problems = list(problems) + man_problems
+        except Exception as e:  # noqa: BLE001
+            print(f"  manifest  {chain}: segment-manifest check ERRORED — "
+                  f"failing closed: {e}", file=sys.stderr)
+            ok = False
+            problems = list(problems) + [{"issue": "manifest_check_errored",
+                                          "detail": type(e).__name__}]
         if ok:
             n_ok += 1
             print(f"  OK        {chain}")

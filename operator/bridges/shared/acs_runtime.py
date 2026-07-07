@@ -477,7 +477,10 @@ def _wdat_record_completion(
         "engine_attestation": {
             "engine_id": attestation.get("engine_id", "claude_code"),
             "model_id": attestation.get("model_id", "unknown"),
-            "locality": attestation.get("locality", "eu_cloud"),
+            "locality": attestation.get(
+                "locality",
+                _engine_locality(attestation.get("engine_id", "claude_code")),
+            ),  # M9: default matches engine_id (claude_code → us_cloud)
         },
     })
     # Tier 2: content store — best-effort, never raises
@@ -849,6 +852,29 @@ _OLLAMA_ALIASES = {
 }
 
 
+def _engine_locality(engine_id: str) -> str:
+    """Compliance locality ("local" | "eu_cloud" | "us_cloud") for a resolved
+    worker engine_id — used in the GDPR Art. 30 audit trail + engine attestation.
+
+    M9: claude_code executes against api.anthropic.com (US jurisdiction), so its
+    locality is ``us_cloud`` — NOT ``eu_cloud``. The prior hardcoded ``eu_cloud``
+    default systematically mislabelled US-cloud processing as EU in the audit log.
+
+    Canonical source is data_classification.DEFAULT_ENGINE_COMPLIANCE (the L34
+    compliance registry / SSOT). Fallback for an unknown cloud engine is the
+    conservative/safe direction ``us_cloud`` — never under-claim US processing as
+    EU. ``hermes`` maps to ``local``.
+    """
+    try:
+        from data_classification import DEFAULT_ENGINE_COMPLIANCE  # type: ignore
+        prof = DEFAULT_ENGINE_COMPLIANCE.get(engine_id)
+        if prof is not None and getattr(prof, "locality", None):
+            return prof.locality
+    except Exception:  # noqa: BLE001 — never let audit locality resolution crash a run
+        pass
+    return "local" if engine_id == "hermes" else "us_cloud"
+
+
 def _resolve_worker_engine(model: str, tenant_id: str | None = None) -> tuple[str, str]:
     """Map a worker/manager model string to (engine_id, resolved_model).
 
@@ -1090,6 +1116,66 @@ def _assert_engine_licensed(engine_id: str) -> None:
         raise RuntimeError(f"license-gate-error (fail-closed): {type(_exc).__name__}") from _exc
 
 
+# Secrets/PII that must NOT reach an ACS worker/manager subprocess. Workers run
+# with full tools + --max-turns 20, so a prompt-injected subtask could exfiltrate
+# any of these via Bash (round-2: the 2-var ANTHROPIC-only strip missed OPENAI /
+# provider / messaging / license creds that operators demonstrably have in env —
+# router.py/adapter embeddings+TTS use OPENAI_API_KEY). Mirrors a2a_worker._ENV_CLEAR
+# but drops the feature-config vars (FORGE_ROOT/TEST_MODE/FEATURES_URL) so ACS
+# worker behaviour is unchanged. ANTHROPIC_* is stripped here and re-set by
+# _apply_provider_redirect ONLY in explicit provider mode.
+_WORKER_SECRET_ENV_STRIP = (
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
+    "OPENAI_API_KEY", "OPENAI_APIKEY", "CORVIN_STT_OPENAI_KEY",
+    "CORVIN_TTS_OPENAI_KEY", "GOOGLE_API_KEY", "OLLAMA_API_KEY",
+    "GMAIL_APP_PASSWORD", "GMAIL_USER", "HETZNER_API_TOKEN",
+    "CORVIN_LICENSE_KEY",
+    # round-3: two more real credentials this module itself references and that
+    # os.environ.copy() would otherwise inherit into a tool-capable worker —
+    # CORVIN_WDAT_KEY is the AES-256 key for the WDAT worker-trace store (ADR-0109
+    # M4 at-rest encryption), PGPASSWORD is a DB credential (datasource_env
+    # deliberately withholds it, yet the env copy leaked it).
+    "CORVIN_WDAT_KEY", "PGPASSWORD",
+)
+
+
+# A denylist can never enumerate every secret an operator exports (GITHUB_TOKEN,
+# PYPI_TOKEN, CORVIN_AUDIT_ANCHOR_KEY — the audit-chain MAC key — and so on), so
+# round-4 adds a NAME-pattern catch-all on top of the explicit list: any var whose
+# name looks like a credential is stripped unless it is known-safe public material
+# or a location pointer. Fail-closed for anything secret-shaped.
+_SECRET_NAME_RE = re.compile(
+    r"(SECRET|PASSWORD|PASSWD|_TOKEN$|^TOKEN$|_APIKEY$|_API_KEY$|_KEY$|"
+    r"_CREDENTIAL|_CREDS?$|AUTH_TOKEN|ACCESS_KEY|PRIVATE_KEY)",
+    re.IGNORECASE,
+)
+# Secret-shaped NAMES that are NOT secrets — public keys / verification material.
+# Kept so the worker still functions (public keys are safe to inherit).
+_WORKER_SECRET_NAME_ALLOW = {
+    "CORVIN_CA_PUBKEY", "CORVIN_CA_PUBKEY_PATH", "CORVIN_IBC_PUBKEY_PEM",
+    "CORVIN_MAINTAINER_PUBKEY", "CORVIN_MAINTAINER_PUBKEY_PATH",
+    "CORVIN_LICENSE_PUBKEY",
+}
+
+
+def _strip_worker_secrets(env: dict) -> None:
+    """Remove every real credential/PII var from a worker/manager spawn env
+    BEFORE _apply_provider_redirect (which re-injects only the provider cred in
+    provider mode). Fail-closed against credential exfiltration by a tool-capable
+    subprocess (path-audit 2026-07-07 round-2/round-4)."""
+    for _k in _WORKER_SECRET_ENV_STRIP:
+        env.pop(_k, None)
+    # Pattern catch-all for operator-set secrets the explicit list can't enumerate.
+    for _k in list(env.keys()):
+        ku = _k.upper()
+        if ku in _WORKER_SECRET_NAME_ALLOW or "PUBKEY" in ku or "PUBLIC_KEY" in ku:
+            continue
+        if ku.endswith(("_PATH", "_DIR", "_URL", "_HOME", "_FILE")):
+            continue  # location pointer, not the secret itself
+        if _SECRET_NAME_RE.search(_k):
+            env.pop(_k, None)
+
+
 def _apply_provider_redirect(env: dict, tenant_id: str) -> None:
     """ADR-0181 M3 (review finding #6) — mirror the OS-turn provider redirect for
     claude_code WORKER spawns. When a non-anthropic provider is assigned to
@@ -1152,8 +1238,7 @@ def _call_manager_sync(
         )
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
-    env.pop("ANTHROPIC_API_KEY", None)
-    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    _strip_worker_secrets(env)  # full secret/PII strip (round-2)
     _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
     proc = subprocess.Popen(
         [
@@ -1306,6 +1391,16 @@ def _call_worker_sync(
     # ADR-0109 M6: propagate ACS worker context for engine-trace hooks
     if extra_env is not None:
         env.update(extra_env)
+    # H2: strip the operator's real Anthropic credentials before the worker
+    # subprocess is spawned — mirrors the manager path (_call_manager_sync).
+    # Workers run with full tools and --max-turns 20, so a prompt-injected
+    # subtask could otherwise exfiltrate the live key via Bash. Must happen
+    # BEFORE _apply_provider_redirect (see its docstring: "Call AFTER stripping
+    # the real Anthropic creds"); done after the extra_env merge so nothing can
+    # re-inject a live cred into the spawn env. Full secret/PII set (round-2):
+    # the old 2-var ANTHROPIC-only strip left OPENAI/provider/messaging/license
+    # creds exfiltrable by a prompt-injected tool-capable subtask.
+    _strip_worker_secrets(env)
     _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
     timeout = min(int(budget.get("timeout_seconds", _DEFAULT_BUDGET_TIMEOUT)), _WORKER_TIMEOUT)
     # max-turns: 20 gives workers enough headroom for multi-file explore/implement
@@ -1344,7 +1439,7 @@ def _call_worker_sync(
         "engine_id": "claude_code",
         "model_id": model,   # configured model as fallback
         "attested": False,   # True only when API response confirms model
-        "locality": "eu_cloud",
+        "locality": _engine_locality(engine_id),  # M9: claude_code → us_cloud
     }
     output_text = raw
     tokens_used = max(len(prompt.split()) + len(raw.split()), 50)
@@ -1566,7 +1661,7 @@ async def _dispatch_workers(
             # for this worker; pass THAT to the L34 gate (not the raw model
             # string) and reflect it in audit + attestation.
             _engine_id, _ = _resolve_worker_engine(worker_model, ctx.tenant_id)
-            _locality = "local" if _engine_id == "hermes" else "eu_cloud"
+            _locality = _engine_locality(_engine_id)  # M9: claude_code → us_cloud
 
             # L34/L35 gates (ADR-0158 M2: canonical spawn_gates SSOT)
             _cls = _workflow_classification(ctx.workflow_spec)
@@ -1751,7 +1846,10 @@ async def _dispatch_workers(
                 "worker_id":   wid,
                 "engine_id":   attestation.get("engine_id", "claude_code"),
                 "model_id":    attestation.get("model_id", worker_model),
-                "locality":    attestation.get("locality", "eu_cloud"),
+                "locality":    attestation.get(
+                    "locality",
+                    _engine_locality(attestation.get("engine_id", "claude_code")),
+                ),  # M9: default matches engine_id (claude_code → us_cloud)
                 "duration_ms": int((time.monotonic() - _spawn_start) * 1000),
                 "tokens_used": tok,
                 "exit_code":   0,

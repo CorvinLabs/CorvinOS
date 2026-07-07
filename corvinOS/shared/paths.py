@@ -1,7 +1,7 @@
 """Corvin path resolver — single root for all generated user-data (cross-platform).
 
 Canonical home: CORVIN_HOME env var, else ~/.corvin/ (or <repo>/.corvin/ if in a repo).
-Voice config: ~/.config/corvin-voice/ (Linux/macOS) or %APPDATA%\\Local\\corvin-voice\\ (Windows).
+Voice config: ~/.config/corvin-voice/ (uniform on every platform; VOICE_CONFIG_DIR / XDG_CONFIG_HOME honored).
 
 Resolution order for CORVIN_HOME:
   1. CORVIN_HOME env var (canonical override)
@@ -70,18 +70,24 @@ def _platform_name() -> str:
 
 
 def voice_config_dir() -> Path:
-    """Return voice config directory (cross-platform).
+    """Return voice config directory — SSOT, byte-identical to
+    forge.paths.voice_config_dir() and the voice-script mirrors.
 
-    Linux/macOS: ~/.config/corvin-voice/
-    Windows: %APPDATA%\\Local\\corvin-voice\\
+    Resolution (uniform on every platform, like ~/.corvin):
+        1. VOICE_CONFIG_DIR env override
+        2. XDG_CONFIG_HOME/corvin-voice
+        3. ~/.config/corvin-voice
+
+    The former Windows %APPDATA%\\Local branch made the console write a dir the
+    installer + voice scripts never read (reader≠writer, path-audit 2026-07-06).
+    Guard: tests/test_voice_config_ssot.py.
     """
-    if _platform_name() == "windows":
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            return Path(appdata) / "Local" / "corvin-voice"
-        return Path.home() / "AppData" / "Local" / "corvin-voice"
-    else:
-        return Path.home() / ".config" / "corvin-voice"
+    override = os.environ.get("VOICE_CONFIG_DIR", "").strip()
+    if override:
+        return Path(os.path.expanduser(os.path.expandvars(override)))
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    base = Path(os.path.expanduser(xdg)) if xdg else (Path.home() / ".config")
+    return base / "corvin-voice"
 
 
 def voice_dir(tenant_id: str | None = None) -> Path:

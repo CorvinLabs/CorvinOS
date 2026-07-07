@@ -83,6 +83,27 @@ _LAST_UPLOAD_FILENAME = ".last_upload"
 _LAST_PING_FILENAME = "last_ping"
 _CORVINLOGS_REPO = "CorvinLabs/CorvinLogs"
 
+# ── Ping-body fail-closed backstop ────────────────────────────────────────────
+# CLAUDE.md invariant for the anonymous instance-count ping: "random uuid4 +
+# version only, no PII"; the ping_enabled docstring likewise promises
+# "uuid4 + version + HMAC, NO personal data". The uuid4 (instance_id) and the
+# HMAC pseudonym (instance_token) travel in request HEADERS; the JSON body must
+# carry ONLY the corvin_version. Any additional key (platform, python_minor,
+# active_engine, …) is fingerprinting surface beyond the mandated set. This
+# backstop mirrors telemetry._assert_safe / htrace._assert_safe_htrace: it is
+# fail-closed, so a body that over-ships is DROPPED (ValueError → ping_if_due
+# returns False, no network call) rather than transmitted.
+_PING_BODY_ALLOWED_KEYS = frozenset({"corvin_version"})
+
+
+def _assert_ping_safe(body: dict) -> None:
+    """Raise if the ping body carries any non-allowlisted key. Fail-closed."""
+    extra = set(body.keys()) - _PING_BODY_ALLOWED_KEYS
+    if extra:
+        raise ValueError(
+            f"ping body carries non-allowlisted keys {sorted(extra)!r}"
+        )
+
 
 def _home() -> Optional[Path]:
     try:
@@ -315,17 +336,14 @@ def ping_if_due(home: Path) -> bool:
                 except Exception:  # noqa: BLE001
                     corvin_version = "unknown"
 
-            import sys as _sys
-            _python_minor = f"{_sys.version_info.major}.{_sys.version_info.minor}"
-            _platform = _sys.platform
-            _active_engine = _detect_active_engine(home)
-
-            payload = json.dumps({
-                "corvin_version": corvin_version,
-                "platform":       _platform,
-                "python_minor":   _python_minor,
-                "active_engine":  _active_engine,
-            }).encode("utf-8")
+            # Body carries ONLY the version — the uuid4 (instance_id) and the
+            # HMAC pseudonym (instance_token) go in the headers below. platform,
+            # python_minor and active_engine were fingerprinting surface beyond
+            # the mandated "uuid4 + version only" set and are no longer sent.
+            # _assert_ping_safe is a fail-closed backstop (see its definition).
+            ping_body = {"corvin_version": corvin_version}
+            _assert_ping_safe(ping_body)
+            payload = json.dumps(ping_body).encode("utf-8")
             req = urllib.request.Request(
                 _PING_URL_DEFAULT,
                 data=payload,

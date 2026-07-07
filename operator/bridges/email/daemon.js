@@ -170,9 +170,17 @@ async function handleParsed(parsed, uid) {
       lang: 'en',
     });
     if (card) {
-      try { await sendReply(fromAddr, subject, card, []); } catch {}
-      inChatCmds.disclosureMarkSeen({ channel: CHANNEL, chatKey: fromAddr, uid: fromAddr, action: 'pending' });
-      log(`disclosure shown addr=${fromAddr}`);
+      // EU AI Act Art. 50: mark the disclosure "seen" ONLY after the card has
+      // actually been sent. A transient send failure must NOT persist
+      // has_seen=true — otherwise the card would never be re-shown and the
+      // sender would never be disclosed to (fails toward NON-disclosure).
+      try {
+        await sendReply(fromAddr, subject, card, []);
+        inChatCmds.disclosureMarkSeen({ channel: CHANNEL, chatKey: fromAddr, uid: fromAddr, action: 'pending' });
+        log(`disclosure shown addr=${fromAddr}`);
+      } catch (e) {
+        log(`disclosure send failed addr=${fromAddr}: ${e && e.message || e} (not marking seen; will retry next turn)`);
+      }
     }
   }
   if (!rateAllow(fromAddr, currentSettings().rate_limit_per_hour || 30)) {

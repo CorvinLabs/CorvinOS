@@ -76,6 +76,22 @@ from forge import security_events as _security_events  # noqa: E402
 # fail the run on a non-None refusal string.
 from spawn_gates import check_l44 as _check_l44  # noqa: E402
 
+# L34 data-classification + L35 network-egress pre-spawn gates — ADR-0042 /
+# ADR-0043. Same shared ``spawn_gates`` SSOT the console, bridge adapter and
+# a2a_worker use. Unlike L44 (fail-CLOSED on module-absence), L34/L35 fail-OPEN
+# only when the module itself is absent (adapter/a2a parity); an EVALUATION
+# error inside the gate fails CLOSED (the gate returns a refusal string). If the
+# import fails entirely we degrade to None → the gate is skipped (module-absence
+# = fail-open), matching how the other surfaces treat a missing gate module.
+try:
+    from spawn_gates import (  # noqa: E402
+        check_l34 as _check_l34,
+        check_l35 as _check_l35,
+    )
+except Exception:  # noqa: BLE001 — L34/L35 module-absence fails OPEN (parity)
+    _check_l34 = None  # type: ignore[assignment]
+    _check_l35 = None  # type: ignore[assignment]
+
 # ADR-0171 — universal engine span. operator/bridges/shared is on sys.path
 # (spawn_gates above). Guarded: a missing module degrades to gateway.* events only.
 try:
@@ -462,6 +478,57 @@ class RunDispatcher:
                 )
                 return
 
+        # L34 data-classification + L35 network-egress gates — ADR-0042 / ADR-0043,
+        # fail-CLOSED on evaluation error. The gateway EXECUTE path (REST POST
+        # /v1/tenants/{tid}/runs AND gRPC SubmitRun funnel through _run_one) is a
+        # peer of the console (check_console_spawn_or_refusal), the bridge adapter
+        # and a2a_worker — all of which run L34 + L35 + L44 before a spawn. Without
+        # these two the gateway would spawn a cloud engine on a CONFIDENTIAL/SECRET
+        # prompt without consulting the tenant residency matrix (L34) or the egress
+        # policy (L35). check_l34/check_l35 are the shared spawn_gates SSOT: they
+        # fail-OPEN only on genuine no-policy / module-absence and fail-CLOSED
+        # (refusal string) on any evaluation error, and each emits its own
+        # data_flow.{approved,blocked} / egress L16 audit event before returning.
+        # Run BEFORE the compute meter so a blocked request is never charged.
+        _gw_engine_id = engine_name or getattr(engine, "name", "claude_code")
+        if _check_l34 is not None:
+            try:
+                _l34_refusal = _check_l34(
+                    _gw_engine_id, tenant_id,
+                    prompt=prompt, persona=persona,
+                    channel="gateway", chat_key=f"gateway:{run_id}",
+                )
+            except Exception as exc:  # noqa: BLE001 — eval error → FAIL-CLOSED
+                self._set_terminal(
+                    tenant_id, run_id, "failed",
+                    error=f"data-classification-gate-error: {type(exc).__name__}",
+                )
+                return
+            if _l34_refusal is not None:
+                # DataFlowGuard.validate already emitted data_flow.blocked.
+                self._set_terminal(
+                    tenant_id, run_id, "failed", error=_l34_refusal[:2000],
+                )
+                return
+        if _check_l35 is not None:
+            try:
+                _l35_refusal = _check_l35(
+                    _gw_engine_id, tenant_id,
+                    persona=persona,
+                    channel="gateway", chat_key=f"gateway:{run_id}",
+                )
+            except Exception as exc:  # noqa: BLE001 — eval error → FAIL-CLOSED
+                self._set_terminal(
+                    tenant_id, run_id, "failed",
+                    error=f"egress-gate-error: {type(exc).__name__}",
+                )
+                return
+            if _l35_refusal is not None:
+                self._set_terminal(
+                    tenant_id, run_id, "failed", error=_l35_refusal[:2000],
+                )
+                return
+
         # L44 acceptable-use (house-rules) gate — ADR-0143, MANDATORY, fail-CLOSED.
         # The gateway run-dispatch (REST POST /v1/tenants/{tid}/runs AND gRPC
         # SubmitRun both funnel through _run_one) spawns a claude OS-turn on a
@@ -567,13 +634,35 @@ class RunDispatcher:
             )
             return
         except asyncio.CancelledError:
-            # ADR-0171 — dispatcher shutdown cancels the run task (stop() →
-            # t.cancel()). CancelledError is BaseException so it bypasses the
-            # `except Exception` below; pair the span (status=error) before it
-            # propagates so the gateway engine.span.start is never orphaned.
+            # ADR-0171 — dispatcher drain/shutdown cancels the in-flight run task
+            # (drain() → t.cancel()). CancelledError is BaseException so it
+            # bypasses the `except Exception` below. Mirror the TimeoutError path
+            # above: abandon the engine subprocess (engine.cancel()) AND move the
+            # run to a terminal state BEFORE re-raising. Without both, the run is
+            # stranded at status="running" forever (recover_pending re-dispatches
+            # it but _run_one skips any non-"accepted" record → never finalized,
+            # clients hang) and the worker thread + spawned `claude -p`
+            # subprocess keep running (leak).
+            duration = time.time() - start
+            try:
+                engine.cancel()
+            except Exception:
+                pass
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,
                                    engine_id=engine_name, status="error",
-                                   duration_ms=int((time.time() - start) * 1000))
+                                   duration_ms=int(duration * 1000))
+            # No "cancelled" state exists in the run state-machine
+            # (runs.ALL_STATES = accepted/running/completed/failed/
+            # budget_exceeded); set_status would reject it → ValueError →
+            # _set_terminal no-ops and the run would stay "running". Use "failed"
+            # with a cancellation diagnostic so the terminal transition sticks.
+            # (_set_terminal is idempotent per terminal state; the span is emitted
+            # exactly once here, not inside _set_terminal.)
+            self._set_terminal(
+                tenant_id, run_id, "failed",
+                error="cancelled: dispatcher drain/shutdown",
+            )
+            # CancelledError MUST propagate for cooperative cancellation.
             raise
         except Exception as exc:  # engine crash, import error, etc.
             self._emit_engine_span("end", tenant_id=tenant_id, run_id=run_id,

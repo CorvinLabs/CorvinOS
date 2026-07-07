@@ -39,8 +39,25 @@ def _ph(dialect: str, idx: int) -> str:
 # Op → SQL fragment builder
 # ---------------------------------------------------------------------------
 
-def _op_fragment(col: str, op: str, dialect: str, param_idx: int) -> tuple[str, int]:
-    """Return (sql_fragment, next_param_idx).
+_SCALAR_OP_SQL: dict[str, str] = {
+    "=": "=",
+    "!=": "!=",
+    "<": "<",
+    "<=": "<=",
+    ">": ">",
+    ">=": ">=",
+    "like": "LIKE",
+}
+
+
+def _op_fragment(
+    col: str, op: str, dialect: str, param_idx: int, value: Any,
+) -> tuple[str, int, list[Any]]:
+    """Return (sql_fragment, next_param_idx, bind_params).
+
+    bind_params is the ordered list of values this fragment consumes. Values
+    are NEVER interpolated into the SQL — one placeholder is emitted per bound
+    value (structural SQL-injection defence).
 
     Raises ValueError for unknown op (already validated in FilterExpr, but
     safe_to_sql may receive raw dicts from untrusted callers).
@@ -50,32 +67,34 @@ def _op_fragment(col: str, op: str, dialect: str, param_idx: int) -> tuple[str, 
             f"Unknown FilterExpr op {op!r}. Valid ops: {sorted(_VALID_OPS)}"
         )
 
-    ph = _ph(dialect, param_idx)
-
-    if op == "=":
-        return f"{col} = {ph}", param_idx + 1
-    if op == "!=":
-        return f"{col} != {ph}", param_idx + 1
-    if op == "<":
-        return f"{col} < {ph}", param_idx + 1
-    if op == "<=":
-        return f"{col} <= {ph}", param_idx + 1
-    if op == ">":
-        return f"{col} > {ph}", param_idx + 1
-    if op == ">=":
-        return f"{col} >= {ph}", param_idx + 1
-    if op == "like":
-        return f"{col} LIKE {ph}", param_idx + 1
     if op == "is_null":
         # is_null: no parameter consumed
-        return f"{col} IS NULL", param_idx
-    if op == "in":
-        # Value must be a list/tuple; each element gets its own placeholder.
-        # We use a sentinel list-of-one for the schema; actual expansion
-        # happens at call time — caller must pass list values.
-        return f"{col} = {ph}", param_idx + 1  # simplified: single-value form
-    if op == "not_in":
-        return f"{col} != {ph}", param_idx + 1  # simplified: single-value form
+        return f"{col} IS NULL", param_idx, []
+
+    if op in ("in", "not_in"):
+        # Membership: one placeholder per list element, each bound separately.
+        # A non-list scalar is treated as a single-element set.
+        if isinstance(value, (list, tuple, set)):
+            values = list(value)
+        else:
+            values = [value]
+        keyword = "IN" if op == "in" else "NOT IN"
+        if not values:
+            # IN () / NOT IN () is invalid SQL. Collapse to a constant predicate:
+            #   x IN ()     → never matches  → always-false (1 = 0)
+            #   x NOT IN () → matches all    → always-true  (1 = 1)
+            const = "1 = 0" if op == "in" else "1 = 1"
+            return const, param_idx, []
+        placeholders = []
+        for _ in values:
+            placeholders.append(_ph(dialect, param_idx))
+            param_idx += 1
+        frag = f"{col} {keyword} ({', '.join(placeholders)})"
+        return frag, param_idx, values
+
+    if op in _SCALAR_OP_SQL:
+        ph = _ph(dialect, param_idx)
+        return f"{col} {_SCALAR_OP_SQL[op]} {ph}", param_idx + 1, [value]
 
     raise ValueError(f"Unhandled op {op!r}")  # unreachable but satisfies type checkers
 
@@ -120,10 +139,11 @@ def safe_to_sql(
     # WHERE clause
     where_fragments: list[str] = []
     for fexpr in query.filters:
-        frag, param_idx = _op_fragment(fexpr.col, fexpr.op, dialect, param_idx)
+        frag, param_idx, bind_params = _op_fragment(
+            fexpr.col, fexpr.op, dialect, param_idx, fexpr.value,
+        )
         where_fragments.append(frag)
-        if fexpr.op != "is_null":
-            params.append(fexpr.value)
+        params.extend(bind_params)
 
     if where_fragments:
         parts.append("WHERE " + " AND ".join(where_fragments))

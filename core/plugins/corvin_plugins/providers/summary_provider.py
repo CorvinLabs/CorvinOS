@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 import threading
 from typing import TYPE_CHECKING
 
@@ -55,7 +56,10 @@ class ClaudeCliSummaryProvider:
             return text[:max_chars]
         try:
             result = subprocess.run(
-                ["python3", script, "--lang", lang, "--max-chars", str(max_chars)],
+                # sys.executable, not "python3": the latter is absent on Windows
+                # and can be a different interpreter than the one with the deps
+                # (path-audit 2026-07-07 round-2).
+                [sys.executable, script, "--lang", lang, "--max-chars", str(max_chars)],
                 input=text,
                 capture_output=True,
                 text=True,

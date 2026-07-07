@@ -20,9 +20,9 @@ def ollama_corvin_home() -> Path:
 
 
 def ollama_voice_config_dir() -> Path:
-    """Return voice config for Ollama context."""
-    # Standard location works for Ollama
-    return Path.home() / ".config" / "corvin-voice"
+    """Return voice config for Ollama context (SSOT — path-audit 2026-07-06)."""
+    from corvinOS.shared.paths import voice_config_dir
+    return voice_config_dir()
 
 
 def warn_ollama_limits() -> None:

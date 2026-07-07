@@ -546,7 +546,11 @@ def _inject_forge_capability(merged: dict, persona_name: str) -> dict:
         if default_scope:
             env["CORVIN_DEFAULT_SCOPE"] = default_scope
         mcp["forge"] = {
-            "command": "python3",
+            # sys.executable, not literal "python3": Windows usually has no
+            # ``python3`` on PATH, and this must be the interpreter that can
+            # import forge (the venv/wheel Python running the bridge), not an
+            # arbitrary bare-PATH one. Mirror of mcp_config_builder.py.
+            "command": sys.executable,
             "args": ["{{REPO_ROOT}}/operator/forge/forge.py",
                      "mcp", "--permission-mode", "yes"],
             "env": env,
@@ -606,7 +610,9 @@ def _inject_skill_forge_capability(merged: dict, persona_name: str) -> dict:
                            ":{{REPO_ROOT}}/operator/forge"),
         }
         mcp["skill_forge"] = {
-            "command": "python3",
+            # sys.executable — see the forge branch above. Same interpreter
+            # that can import skill_forge / forge.policy.
+            "command": sys.executable,
             "args": ["-m", "skill_forge.mcp_server"],
             "env": env,
         }
@@ -722,7 +728,9 @@ def _inject_delegate_capability(merged: dict, persona_name: str) -> dict:
         if isinstance(wsp, bool) and wsp:
             env["CORVIN_DELEGATE_WORKER_SESSION_PINNED"] = "1"
         mcp["corvin_delegate"] = {
-            "command": "python3",
+            # sys.executable — see the forge branch above. Same interpreter
+            # that can import corvin_delegate.mcp_server.
+            "command": sys.executable,
             "args": ["-m", "corvin_delegate.mcp_server"],
             "env": env,
         }

@@ -11,6 +11,7 @@ Verifies:
 """
 from __future__ import annotations
 
+import json
 import tempfile
 import threading
 from pathlib import Path
@@ -88,6 +89,60 @@ def test_ping_if_due_sends_when_lock_is_free(tmp_path):
 
     assert result is True
     mock_urlopen.assert_called_once()
+
+
+def test_ping_body_carries_only_version_no_fingerprinting(tmp_path):
+    """CLAUDE.md invariant: the anonymous instance-count ping carries only
+    "random uuid4 + version". The uuid4 (instance_id) and HMAC (instance_token)
+    travel in HEADERS; the JSON body must carry ONLY corvin_version. platform,
+    python_minor and active_engine (fingerprinting surface) must be gone."""
+    home = _make_home(tmp_path)
+    captured: dict = {}
+
+    mock_resp = type("R", (), {"getcode": lambda self: 200})()
+    mock_ctx = type("Ctx", (), {
+        "__enter__": lambda self: mock_resp,
+        "__exit__": lambda self, *a: False,
+    })()
+
+    def _capture(req, *a, **k):
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        return mock_ctx
+
+    with (
+        patch.object(hu, "ping_enabled", return_value=True),
+        patch.object(hu, "ensure_ping_tokens", return_value=True),
+        patch.object(hu, "_last_ping_path", return_value=tmp_path / "last_ping"),
+        patch.object(hu, "_load_telemetry_token", return_value="tok"),
+        patch.object(hu, "_load_instance_token", return_value="itok-hmac"),
+        patch.object(hu, "load_or_create_instance_id", return_value="uuid4-iid"),
+        patch("urllib.request.urlopen", side_effect=_capture) as mock_urlopen,
+    ):
+        result = hu.ping_if_due(home)
+
+    assert result is True
+    mock_urlopen.assert_called_once()
+    # Body: version only — no fingerprinting fields.
+    assert set(captured["body"].keys()) == {"corvin_version"}
+    for banned in ("platform", "python_minor", "active_engine"):
+        assert banned not in captured["body"]
+    # uuid4 + HMAC are in headers, never the body.
+    assert "uuid4-iid" not in json.dumps(captured["body"])
+    assert "itok-hmac" not in json.dumps(captured["body"])
+    assert captured["headers"].get("x-htrace-instance-id") == "uuid4-iid"
+    assert captured["headers"].get("x-httrace-instance-token") == "itok-hmac"
+
+
+def test_assert_ping_safe_is_fail_closed():
+    """_assert_ping_safe accepts a version-only body and rejects any extra key
+    (fail-closed backstop mirroring telemetry._assert_safe)."""
+    hu._assert_ping_safe({"corvin_version": "0.10.17"})  # must not raise
+    for extra in ({"platform": "linux"}, {"python_minor": "3.12"},
+                  {"active_engine": "claude_code"}):
+        body = {"corvin_version": "0.10.17", **extra}
+        with pytest.raises(ValueError, match="non-allowlisted"):
+            hu._assert_ping_safe(body)
 
 
 def test_ping_loop_reinvokes_ping_if_due_repeatedly():

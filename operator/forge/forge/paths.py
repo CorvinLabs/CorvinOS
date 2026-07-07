@@ -48,24 +48,29 @@ def corvin_home() -> Path:
 
 
 def voice_config_dir() -> Path:
-    """Return the voice config directory — platform-aware.
+    """Return the voice config directory (service.env / .env API keys, setup marker).
 
-    Linux / macOS : ~/.config/corvin-voice/
-    Windows       : %APPDATA%\\Local\\corvin-voice\\  (falls back to AppData\\Local)
+    SSOT resolution — IDENTICAL across every reader/writer (installer key step,
+    console engines page, bridge_manager, and the voice STT/TTS scripts) and every
+    platform:
+        1. VOICE_CONFIG_DIR env override (explicit; lets a launcher pin the dir)
+        2. XDG_CONFIG_HOME/corvin-voice
+        3. ~/.config/corvin-voice
 
-    Console routes that reference service.env, .env, secrets.json, or
-    .corvin_setup_complete MUST call this instead of hard-coding
-    Path.home() / ".config" so that Windows installs resolve correctly.
+    Uniform on Windows too — exactly like ``~/.corvin`` is cross-platform-uniform.
+    A prior ``%APPDATA%\\Local`` Windows branch made the console write a directory
+    the installer key step and the voice scripts never read (reader≠writer;
+    also ``%APPDATA%`` is Roaming, so ``\\Local`` was a nonstandard dir). The STT
+    file-key fallback (openai_whisper.py) therefore never saw console-configured
+    keys on Windows. Collapsing to one rule closes that split (path-audit 2026-07-06).
+
+    Console routes and voice scripts MUST resolve through this rule (or the
+    byte-identical mirrors in corvinOS/shared/paths.py + the voice scripts) — never
+    hard-code Path.home()/".config". Guard: tests/test_voice_config_ssot.py.
     """
-    if platform.system() == "Windows":
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            return Path(appdata) / "Local" / "corvin-voice"
-        return Path.home() / "AppData" / "Local" / "corvin-voice"
-    # Honor XDG_CONFIG_HOME (default $HOME/.config) so this matches the
-    # secret-vault / profile / memory resolvers in the same corvin-voice tree —
-    # they all key off XDG, and a split contract made console-learning land in a
-    # different dir than the reader (path-audit 2026-06-25 #MEDIUM12).
+    override = os.environ.get("VOICE_CONFIG_DIR", "").strip()
+    if override:
+        return Path(os.path.expanduser(os.path.expandvars(override)))
     xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
     base = Path(os.path.expanduser(xdg)) if xdg else (Path.home() / ".config")
     return base / "corvin-voice"

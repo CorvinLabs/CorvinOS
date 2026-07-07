@@ -12,15 +12,18 @@ Routes:
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import socket
 import tempfile
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, status as http_status
 from pydantic import BaseModel, Field
@@ -121,13 +124,148 @@ def _hash_url(url: str) -> str:
     return hashlib.sha256(url.encode()).hexdigest()[:16]
 
 
+# ── SSRF / egress hardening (CON-DS-V2-02 security fix) ─────────────────────────
+#
+# ``ping_http_adapter`` fetches a fully user-supplied ``base_url`` server-side and
+# reflects the response, and can attach a bearer/api-key credential read from the
+# process environment. Without the guards below an authenticated (paid-tier)
+# console user could:
+#   * SSRF the server into internal / cloud-metadata endpoints
+#     (``http://169.254.169.254/…``, ``http://localhost:<port>/``) and read the
+#     reflected ``name``/``version`` fields, or
+#   * exfiltrate ANY process env var — provider API keys, cross-tenant secrets —
+#     by naming it as ``auth_env`` and pointing ``base_url`` at an attacker host.
+#
+# All checks fail CLOSED: on any ambiguity (unparseable URL, no DNS resolution,
+# resolver error) the target is refused rather than fetched.
+
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
+
+# Adapter credentials MUST live in env vars matching this convention. Restricting
+# ``auth_env`` to it stops a caller naming an arbitrary process env var (e.g.
+# ``ANTHROPIC_API_KEY``) and having it sent to a remote host. Documented in
+# ``docs/claude-ref/`` and the field description below.
+_AUTH_ENV_RE = re.compile(r"^CORVIN_DS_[A-Z0-9_]{1,100}$")
+
+# Hostnames that always resolve to loopback / a metadata service, regardless of
+# what the local resolver returns.
+_BLOCKED_HOSTNAMES = frozenset({
+    "localhost", "ip6-localhost", "ip6-loopback",
+    "metadata", "metadata.google.internal",
+})
+
+# Cloud-IMDS endpoints not caught by the structural ``is_private`` /
+# ``is_link_local`` checks: Oracle (192.0.0.192), Alibaba (100.100.100.200),
+# AWS IMDSv2 IPv6 (fd00:ec2::254 unique-local, fe80::a9fe:a9fe link-local-form).
+_IMDS_EXTRA = frozenset({
+    "192.0.0.192", "100.100.100.200", "fd00:ec2::254", "fe80::a9fe:a9fe",
+})
+
+
+class _UnsafeUrl(Exception):
+    """base_url failed the SSRF / egress guard (fail-closed)."""
+
+
+def _as_ip(text: str) -> "ipaddress._BaseAddress | None":
+    """Parse a host string as an IP, normalising the kernel-equivalent encodings
+    (decimal ``2130706433``, hex ``0x7f000001``, octal, short-dotted ``127.1``)
+    that slip a naive ``127.``/``::1`` prefix check. Returns None for a real
+    hostname."""
+    try:
+        return ipaddress.ip_address(text)
+    except ValueError:
+        pass
+    try:
+        return ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(text)))
+    except (OSError, ValueError):
+        return None
+
+
+def _ip_is_blocked(ip: "ipaddress._BaseAddress") -> bool:
+    """True for any address that is not a public, routable destination."""
+    if (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+        return True
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None and _ip_is_blocked(mapped):
+        return True
+    return str(ip) in _IMDS_EXTRA
+
+
+def _assert_scheme_and_static_host(base_url: str) -> tuple[str, str]:
+    """Cheap, liveness-independent checks usable at registration time: scheme
+    allowlist + blocked hostname + literal private/metadata IP. Does NOT resolve
+    DNS (so a temporarily-down service can still be registered). Returns
+    (scheme, host). Raises :class:`_UnsafeUrl`."""
+    try:
+        parts = urlsplit(base_url)
+    except ValueError as exc:  # malformed authority, bad IPv6 literal, …
+        raise _UnsafeUrl("base_url is unparseable") from exc
+    scheme = (parts.scheme or "").lower()
+    if scheme not in _ALLOWED_SCHEMES:
+        raise _UnsafeUrl(f"scheme {scheme!r} not allowed (http/https only)")
+    try:
+        host = (parts.hostname or "").strip().lower()
+    except ValueError as exc:
+        raise _UnsafeUrl("base_url has an invalid host") from exc
+    if not host:
+        raise _UnsafeUrl("base_url has no host")
+    if host in _BLOCKED_HOSTNAMES:
+        raise _UnsafeUrl("host is a blocked loopback/metadata name")
+    lit = _as_ip(host)
+    if lit is not None and _ip_is_blocked(lit):
+        raise _UnsafeUrl("target IP is private/loopback/link-local/reserved/metadata")
+    return scheme, host
+
+
+def _assert_base_url_safe(base_url: str) -> None:
+    """Full pre-fetch guard: static checks PLUS resolve the hostname to EVERY
+    address and reject if any is non-public or if it resolves to nothing.
+    Defends against hostnames that (re)bind to a private range. Fail-closed.
+
+    Residual (documented): a rebind that flips between this lookup and urllib's
+    own connect is not closed in-process — the perimeter (netns/nftables) is the
+    true closure, mirroring the L35 honest-scope note in ``egress_gate.py``."""
+    scheme, host = _assert_scheme_and_static_host(base_url)
+    if _as_ip(host) is not None:
+        return  # literal IP already validated above; no DNS to resolve
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise _UnsafeUrl("host does not resolve") from exc
+    addrs = [info[4][0] for info in infos if info and len(info) > 4 and info[4]]
+    if not addrs:
+        raise _UnsafeUrl("host resolves to no address")
+    for addr in addrs:
+        ip = _as_ip(str(addr))
+        if ip is None or _ip_is_blocked(ip):
+            raise _UnsafeUrl("host resolves to a non-public address")
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse ALL HTTP redirects. A public base_url that 302s to
+    169.254.169.254 (or any host that would bypass the pre-fetch check) must not
+    be followed — fail-closed."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        raise _UnsafeUrl(f"redirect (HTTP {code}) blocked")
+
+
+def _build_no_redirect_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(_NoRedirectHandler())
+
+
 # ── Models ────────────────────────────────────────────────────────────────────
 
 class HttpAdapterRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=100)
     base_url: str = Field(..., min_length=1, max_length=500)
     auth_type: str = Field("none", description="none | bearer | api_key")
-    auth_env: str | None = Field(None, description="Vault env-var name for credentials")
+    auth_env: str | None = Field(
+        None,
+        description="Credential env-var name; MUST match CORVIN_DS_[A-Z0-9_]+ "
+                    "(arbitrary env vars are refused to prevent secret exfiltration)",
+    )
     auth_header: str | None = Field(None, description="Custom header name (for api_key)")
     locality: str = Field("local")
     network_egress: str = Field("none")
@@ -161,6 +299,26 @@ def register_http_adapter(
             http_status.HTTP_400_BAD_REQUEST,
             f"auth_type must be one of {sorted(_VALID_AUTH)}",
         )
+    # SSRF/exfil fix: a bearer/api_key adapter reads os.environ[auth_env] and
+    # sends it to base_url on ping. Restrict auth_env to the adapter-credential
+    # convention so a caller cannot name (and exfiltrate) an arbitrary env var.
+    if body.auth_type in ("bearer", "api_key"):
+        if not body.auth_env or not _AUTH_ENV_RE.match(body.auth_env):
+            raise HTTPException(
+                http_status.HTTP_400_BAD_REQUEST,
+                "auth_env must name an adapter-credential env var matching "
+                "CORVIN_DS_[A-Z0-9_]+ (arbitrary env vars are refused)",
+            )
+    # SSRF fix: reject non-http(s) schemes and literal private/loopback/metadata
+    # targets at registration (cheap, liveness-independent). The full resolve-all
+    # -addresses check runs again at ping time where the fetch actually happens.
+    try:
+        _assert_scheme_and_static_host(body.base_url)
+    except _UnsafeUrl as exc:
+        raise HTTPException(
+            http_status.HTTP_400_BAD_REQUEST,
+            f"base_url rejected: {exc}",
+        ) from exc
     if body.locality not in _VALID_LOCALITIES:
         raise HTTPException(
             http_status.HTTP_400_BAD_REQUEST,
@@ -278,23 +436,59 @@ def ping_http_adapter(
         )
 
     base_url = manifest.get("_base_url", "")
+
+    # Egress fix #5: respect a declared no-egress. An adapter that declares
+    # network_egress="none" must not make outbound calls — refuse the ping and
+    # tell the operator to declare restricted/full to enable connectivity tests.
+    if manifest.get("network_egress", "none") == "none":
+        return {
+            "ok": False,
+            "adapter_id": adapter_id,
+            "reachable": False,
+            "error": "egress_not_declared",
+        }
+
+    # SSRF fix: validate scheme + resolve every address before fetching.
+    try:
+        _assert_base_url_safe(base_url)
+    except _UnsafeUrl:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="datasource.http_adapter_pinged",
+            target_kind="http_adapter",
+            target_id=adapter_id,
+            reason="egress_blocked",
+        )
+        return {
+            "ok": False,
+            "adapter_id": adapter_id,
+            "reachable": False,
+            "error": "egress_blocked",
+        }
+
     ping_url = base_url.rstrip("/") + "/ping"
 
     try:
         req = urllib.request.Request(ping_url, method="GET")
         auth_type = manifest.get("auth_type", "none")
         auth_env = manifest.get("auth_env")
-        if auth_type == "bearer" and auth_env:
+        # Exfil fix: only read env vars matching the adapter-credential
+        # convention, even for a manifest written before this gate existed
+        # (defense-in-depth against a legacy arbitrary auth_env). Fail-closed:
+        # an invalid auth_env means no credential is attached, never os.environ
+        # of an arbitrary name.
+        if auth_type in ("bearer", "api_key") and auth_env and _AUTH_ENV_RE.match(auth_env):
             token = os.environ.get(auth_env, "")
-            if token:
+            if token and auth_type == "bearer":
                 req.add_header("Authorization", f"Bearer {token}")
-        elif auth_type == "api_key" and auth_env:
-            header = manifest.get("auth_header", "X-API-Key")
-            token = os.environ.get(auth_env, "")
-            if token:
+            elif token and auth_type == "api_key":
+                header = manifest.get("auth_header", "X-API-Key")
                 req.add_header(header, token)
 
-        with urllib.request.urlopen(req, timeout=5.0) as resp:
+        # No-redirect opener: a 3xx to a private/metadata host must not be followed.
+        opener = _build_no_redirect_opener()
+        with opener.open(req, timeout=5.0) as resp:
             body = json.loads(resp.read())
 
         console_audit.action_performed(
@@ -311,6 +505,17 @@ def ping_http_adapter(
             "name": body.get("name", ""),
             "version": body.get("version", ""),
         }
+    except _UnsafeUrl:
+        # Blocked redirect (3xx to a private/metadata host). Fail-closed.
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="datasource.http_adapter_pinged",
+            target_kind="http_adapter",
+            target_id=adapter_id,
+            reason="egress_blocked",
+        )
+        return {"ok": False, "adapter_id": adapter_id, "reachable": False, "error": "egress_blocked"}
     except urllib.error.HTTPError as exc:
         return {
             "ok": False,

@@ -316,5 +316,129 @@ class TestDatasourceUnregister(unittest.TestCase):
         self.assertEqual(result["error"], "UnknownTool")
 
 
+class TestResidencyFailClosed(unittest.TestCase):
+    """Regression: the residency gate must fail CLOSED for schema + preview.
+
+    Previously an unexpected exception during the residency check (e.g.
+    manifest.source is None → AttributeError) was swallowed and execution fell
+    through to RETURN the PII-tagged data with a clean success audit.
+    """
+
+    def _manifest_that_breaks_residency(self):
+        # tenant_config with a data_residency zone forces validate_residency to
+        # read manifest.source.region; source=None → AttributeError.
+        m = MagicMock()
+        m.name = "ds-broken"
+        m.adapter = "postgresql"
+        m.source = None  # → AttributeError inside validate_residency
+        m.schema_hint = {
+            "columns": [{"name": "email", "dtype": "string", "pii_tagged": True}],
+        }
+        return m
+
+    _STRICT_TENANT = {"fabric_enabled": True, "data_residency": "eu"}
+
+    def test_schema_denies_on_unexpected_residency_error(self):
+        reg = _make_registry()
+        reg.load_manifest.return_value = self._manifest_that_breaks_residency()
+        events = []
+        result = call_datasource_tool(
+            "datasource_schema", {"name": "ds-broken"}, reg,
+            lambda e, d: events.append((e, d)),
+            tenant_config=self._STRICT_TENANT,
+        )
+        # DENIED — no data returned
+        self.assertEqual(result["error"], "ResidencyCheckError")
+        self.assertNotIn("columns", result)
+        self.assertNotIn("pii_tagged_columns", result)
+        # No clean success audit; a check-error audit was emitted
+        emitted = [e for e, _ in events]
+        self.assertNotIn("datasource.schema_refreshed", emitted)
+        self.assertIn("datasource.residency_check_error", emitted)
+
+    def test_preview_denies_on_unexpected_residency_error(self):
+        reg = _make_registry()
+        reg.load_manifest.return_value = self._manifest_that_breaks_residency()
+        events = []
+        result = call_datasource_tool(
+            "datasource_preview", {"name": "ds-broken", "n_rows": 5}, reg,
+            lambda e, d: events.append((e, d)),
+            tenant_config=self._STRICT_TENANT,
+        )
+        self.assertEqual(result["error"], "ResidencyCheckError")
+        self.assertNotIn("rows", result)
+        self.assertNotIn("pii_columns_redacted", result)
+        emitted = [e for e, _ in events]
+        self.assertNotIn("datasource.preview_generated", emitted)
+        self.assertIn("datasource.residency_check_error", emitted)
+
+    def test_schema_still_denies_on_real_violation(self):
+        # us-east-1 is outside the eu zone → DataResidencyViolation (fail-closed).
+        reg = _make_registry()
+        m = MagicMock()
+        m.name = "ds-us"
+        m.adapter = "postgresql"
+        m.source.region = "us-east-1"
+        m.schema_hint = {"columns": []}
+        reg.load_manifest.return_value = m
+        result = call_datasource_tool(
+            "datasource_schema", {"name": "ds-us"}, reg, _noop_audit,
+            tenant_config=self._STRICT_TENANT,
+        )
+        self.assertEqual(result["error"], "DataResidencyViolation")
+
+    def test_schema_allows_when_region_in_zone(self):
+        # eu-central-1 is in the eu zone → success path unaffected.
+        reg = _make_registry()
+        m = MagicMock()
+        m.name = "ds-eu"
+        m.adapter = "postgresql"
+        m.source.region = "eu-central-1"
+        m.schema_hint = {
+            "columns": [{"name": "email", "dtype": "string", "pii_tagged": True}],
+        }
+        reg.load_manifest.return_value = m
+        events = []
+        result = call_datasource_tool(
+            "datasource_schema", {"name": "ds-eu"}, reg,
+            lambda e, d: events.append((e, d)),
+            tenant_config=self._STRICT_TENANT,
+        )
+        self.assertNotIn("error", result)
+        self.assertIn("email", result["pii_tagged_columns"])
+        self.assertIn("datasource.schema_refreshed", [e for e, _ in events])
+
+    def test_register_denies_on_missing_residency_module(self):
+        # ImportError on the residency module must DENY (fail-closed), not
+        # silently skip the check.
+        reg = _make_registry()
+        manifest_raw = {
+            "name": "ds-imp",
+            "adapter": "postgresql",
+            "source": {"region": "eu-central-1"},
+            "auth": {"method": "vault", "secret_keys": ["PG_USER"]},
+            "pii_handling": "redact",
+        }
+        real_import = __import__
+
+        def _blocked_import(name, *a, **k):
+            if name.endswith("residency") or name == "residency":
+                raise ImportError("residency module unavailable")
+            return real_import(name, *a, **k)
+
+        events = []
+        with patch("builtins.__import__", side_effect=_blocked_import):
+            result = call_datasource_tool(
+                "datasource_register", {"manifest": manifest_raw}, reg,
+                lambda e, d: events.append((e, d)),
+                tenant_config={"fabric_enabled": True, "data_residency": "eu"},
+            )
+        self.assertEqual(result["error"], "ResidencyCheckError")
+        self.assertNotIn("handle", result)
+        emitted = [e for e, _ in events]
+        self.assertNotIn("datasource.registered", emitted)
+        self.assertIn("datasource.residency_check_error", emitted)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

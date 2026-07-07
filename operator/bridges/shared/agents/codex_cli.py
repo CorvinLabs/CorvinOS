@@ -35,11 +35,19 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Iterator
 
 from . import StreamEvent, parse_jsonl_line
+
+
+# Stderr tail buffer cap (chars). Mirrors ClaudeCodeEngine: large enough
+# to hold a typical provider error body, small enough that a runaway log
+# line can't grow the engine's RSS without bound. See claude_code.py.
+_STDERR_TAIL_CHARS = 4096
 
 
 # Path resolution: try $CODEX_BIN, then the canonical nvm location
@@ -75,6 +83,13 @@ class CodexCliEngine:
     def __init__(self, *, binary: str | None = None) -> None:
         self.binary = binary or _resolve_codex_binary()
         self._proc: subprocess.Popen[bytes] | None = None
+        # Stderr ring buffer, drained concurrently with stdout so a child
+        # writing >64KiB to stderr mid-run can never deadlock (H9). Mirror
+        # of ClaudeCodeEngine's mechanism.
+        self._stderr_buf: deque[str] = deque()
+        self._stderr_buf_chars: int = 0
+        self._stderr_guard = threading.Lock()
+        self._stderr_thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -165,6 +180,11 @@ class CodexCliEngine:
                 stderr=subprocess.PIPE,
                 cwd=cwd,
                 env=spawn_env,
+                # H1: own session/process-group so adapter._cancel_chat's
+                # os.killpg(getpgid(pid)) targets ONLY this turn's process
+                # tree — not the bridge's own group. On Windows this kwarg
+                # is a no-op (ignored), matching ClaudeCodeEngine.
+                start_new_session=True,
             )
         except FileNotFoundError:
             yield StreamEvent(
@@ -172,6 +192,11 @@ class CodexCliEngine:
                 error=f"codex binary not found: {self.binary!r}",
             )
             return
+
+        # H9: drain stderr concurrently so the pipe buffer can't fill and
+        # stall the child mid-stream. The tail is consulted on the
+        # no-turn.completed error path below.
+        self._start_stderr_drain()
 
         try:
             yield from self._iter_stream(start_time, timeout)
@@ -191,12 +216,82 @@ class CodexCliEngine:
                     proc.kill()
                 except Exception:
                     pass
+        # Stderr-drain thread exits on EOF once the proc dies; join with a
+        # small deadline so it can't outlive the caller.
+        t = self._stderr_thread
+        if t is not None and t.is_alive():
+            try:
+                t.join(timeout=2)
+            except Exception:
+                pass
         for fh in (proc.stdout, proc.stderr):
             if fh is not None:
                 try:
                     fh.close()
                 except Exception:
                     pass
+
+    # ------------------------------------------------------------------
+    # Stderr drain (concurrent, deadlock-safe) — mirror of ClaudeCodeEngine
+    # ------------------------------------------------------------------
+
+    def _start_stderr_drain(self) -> None:
+        """Spawn a daemon thread that drains proc.stderr into a ring buffer.
+
+        Keeps at most ``_STDERR_TAIL_CHARS`` of the most recent stderr.
+        Best-effort: a read error silently terminates the thread; the
+        engine still functions, just without a stderr tail.
+        """
+        with self._stderr_guard:
+            self._stderr_buf.clear()
+            self._stderr_buf_chars = 0
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return
+        t = threading.Thread(
+            target=self._stderr_drain_loop,
+            name="codex-stderr-drain",
+            daemon=True,
+        )
+        self._stderr_thread = t
+        t.start()
+
+    def _stderr_drain_loop(self) -> None:
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return
+        try:
+            while True:
+                chunk = proc.stderr.readline()
+                if not chunk:
+                    return
+                if isinstance(chunk, bytes):
+                    chunk = chunk.decode("utf-8", errors="replace")
+                self._push_stderr(chunk)
+        except Exception:
+            return
+
+    def _push_stderr(self, chunk: str) -> None:
+        if not chunk:
+            return
+        with self._stderr_guard:
+            self._stderr_buf.append(chunk)
+            self._stderr_buf_chars += len(chunk)
+            while (
+                self._stderr_buf
+                and self._stderr_buf_chars > _STDERR_TAIL_CHARS
+            ):
+                popped = self._stderr_buf.popleft()
+                self._stderr_buf_chars -= len(popped)
+
+    def stderr_tail(self, *, max_chars: int = 500) -> str:
+        """Return the last ``max_chars`` characters of stderr seen so far."""
+        with self._stderr_guard:
+            joined = "".join(self._stderr_buf)
+        joined = joined.strip()
+        if len(joined) > max_chars:
+            joined = joined[-max_chars:]
+        return joined
 
     def cancel(self) -> None:
         if self._proc and self._proc.poll() is None:
@@ -250,13 +345,10 @@ class CodexCliEngine:
                 break
 
         if not completed:
-            stderr = b""
-            try:
-                if proc.stderr:
-                    stderr = proc.stderr.read() or b""
-            except Exception:
-                pass
-            err = stderr.decode("utf-8", errors="replace").strip() or (
+            # The drain thread owns proc.stderr; read the buffered tail
+            # instead of racing a direct proc.stderr.read() (which would
+            # return empty because the thread already consumed it).
+            err = self.stderr_tail(max_chars=1000) or (
                 f"codex exited without turn.completed (exit_code={proc.poll()})"
             )
             yield StreamEvent(type="error", error=err)

@@ -174,6 +174,68 @@ def call_datasource_tool(
 # Tool implementations
 # ---------------------------------------------------------------------------
 
+def _residency_gate(
+    manifest: Any,
+    tenant_config: Optional[dict],
+    audit_fn: Callable,
+    op_name: str,
+) -> Optional[dict]:
+    """FAIL-CLOSED data-residency gate.
+
+    Returns None when the datasource is allowed, or an error dict when it must
+    be DENIED. Callers MUST return the error dict unchanged (never fall through
+    to PII-tagged schema/preview data).
+
+    Denial cases (all fail-closed):
+      - DataResidencyViolation  → the residency validator already emitted the
+        violation audit event before raising; we surface it as an error.
+      - residency module unavailable (ImportError) → deny; a compliance gate
+        that cannot load must not silently allow.
+      - ANY other unexpected exception (e.g. manifest.source is None →
+        AttributeError, malformed tenant_config) → deny + emit a check-error
+        audit. Previously such errors were swallowed and execution fell through
+        to RETURN the data with a clean success audit.
+    """
+    try:
+        from .residency import validate_residency, DataResidencyViolation
+    except ImportError:
+        audit_fn(
+            "datasource.residency_check_error",
+            {
+                "op": op_name,
+                "name": getattr(manifest, "name", None),
+                "reason": "residency_module_unavailable",
+            },
+        )
+        return {
+            "error": "ResidencyCheckError",
+            "message": "Residency module unavailable — denying (fail-closed).",
+        }
+
+    try:
+        validate_residency(manifest, tenant_config, audit_fn)
+    except DataResidencyViolation as _drv:
+        return {"error": "DataResidencyViolation", "message": str(_drv)}
+    except Exception as _exc:  # fail-CLOSED: any unexpected error denies
+        audit_fn(
+            "datasource.residency_check_error",
+            {
+                "op": op_name,
+                "name": getattr(manifest, "name", None),
+                "reason": type(_exc).__name__,
+            },
+        )
+        return {
+            "error": "ResidencyCheckError",
+            "message": (
+                f"Residency check failed ({type(_exc).__name__}) — "
+                "denying (fail-closed)."
+            ),
+        }
+
+    return None
+
+
 def _tool_list(
     args: dict,
     registry: DataSourceRegistry,
@@ -212,16 +274,11 @@ def _tool_register(
     except PolicyError as exc:
         return {"error": "PolicyError", "message": str(exc)}
 
-    # Data-residency gate — audit-first before raise (validate_residency
-    # emits the audit event internally before raising DataResidencyViolation).
-    try:
-        from .residency import validate_residency, DataResidencyViolation
-        try:
-            validate_residency(manifest, tenant_config, audit_fn)
-        except DataResidencyViolation as _drv:
-            return {"error": "DataResidencyViolation", "message": str(_drv)}
-    except ImportError:
-        pass  # residency module unavailable → skip check
+    # Data-residency gate — FAIL-CLOSED (audit-first before raise; validate_residency
+    # emits the violation audit event internally before raising).
+    _resd = _residency_gate(manifest, tenant_config, audit_fn, "register")
+    if _resd is not None:
+        return _resd
 
     # Emit audit event — secret key NAMES only, never values.
     audit_fn(
@@ -257,13 +314,12 @@ def _tool_schema(
     except FileNotFoundError as exc:
         return {"error": "NotFound", "message": str(exc)}
 
-    try:
-        from .residency import validate_residency, DataResidencyViolation
-        validate_residency(manifest, tenant_config, audit_fn)
-    except Exception as _res_exc:
-        from .residency import DataResidencyViolation
-        if isinstance(_res_exc, DataResidencyViolation):
-            return {"error": "DataResidencyViolation", "message": str(_res_exc)}
+    # FAIL-CLOSED residency gate: on ANY error (violation, unexpected, or
+    # missing residency module) DENY — never fall through to the PII-tagged
+    # schema with a clean success audit.
+    _resd = _residency_gate(manifest, tenant_config, audit_fn, "schema")
+    if _resd is not None:
+        return _resd
 
     # Schema is returned from manifest hint or empty
     schema_hint = manifest.schema_hint or {}
@@ -388,13 +444,12 @@ def _tool_preview(
     except FileNotFoundError as exc:
         return {"error": "NotFound", "message": str(exc)}
 
-    try:
-        from .residency import validate_residency, DataResidencyViolation
-        validate_residency(manifest, tenant_config, audit_fn)
-    except Exception as _res_exc:
-        from .residency import DataResidencyViolation
-        if isinstance(_res_exc, DataResidencyViolation):
-            return {"error": "DataResidencyViolation", "message": str(_res_exc)}
+    # FAIL-CLOSED residency gate: on ANY error (violation, unexpected, or
+    # missing residency module) DENY — never fall through to preview data with
+    # a clean success audit.
+    _resd = _residency_gate(manifest, tenant_config, audit_fn, "preview")
+    if _resd is not None:
+        return _resd
 
     # PII column identification from schema_hint
     schema_hint = manifest.schema_hint or {}

@@ -90,12 +90,17 @@ class TestCheckL34ExplicitClassification(unittest.TestCase):
         call_kwargs = guard.validate.call_args.kwargs
         self.assertEqual(call_kwargs["classification"], "public")
 
-    def test_validate_exception_returns_none(self):
+    def test_validate_exception_fails_closed(self):
+        # A validate() crash must FAIL CLOSED (return a refusal string), never
+        # fail-open to None — L34 is a compliance gate and an unclassified spawn
+        # must be denied, not silently allowed (round-2 hardening 2026-07-07).
         guard = MagicMock()
         guard.validate.side_effect = RuntimeError("unexpected")
         with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
             result = spawn_gates.check_l34("hermes", "_default", classification="internal")
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
+        self.assertIn("Spawn rejected", result)
+        self.assertIn("fail-closed", result.lower())
 
 
 class TestCheckL34PromptClassification(unittest.TestCase):
@@ -115,12 +120,15 @@ class TestCheckL34PromptClassification(unittest.TestCase):
         call_kwargs = guard.validate.call_args.kwargs
         self.assertIs(call_kwargs["classification"], cls_val)
 
-    def test_classify_task_failure_returns_none(self):
+    def test_classify_task_failure_fails_closed(self):
+        # classify_task() failure must FAIL CLOSED, not fall through to an
+        # unclassified allow (round-2 hardening 2026-07-07).
         guard = _mock_guard(_allowed_decision())
         with patch.object(spawn_gates, "_load_l34_guard", return_value=guard):
             with patch("data_classification.classify_task", side_effect=ImportError("no module")):
                 result = spawn_gates.check_l34("hermes", "_default", prompt="something")
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
+        self.assertIn("Spawn rejected", result)
 
 
 class TestCheckL34CCLocalMode(unittest.TestCase):

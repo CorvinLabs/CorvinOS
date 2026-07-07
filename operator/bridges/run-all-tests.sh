@@ -99,6 +99,7 @@ run "Python: roles (L18)"        python3 shared/test_roles.py >/dev/null || fail
 run "Python: disclosure (L19)"   python3 shared/test_disclosure.py >/dev/null || fails=$((fails+1))
 run "Python: consent store hardening (ADR-0072 V-016)" python3 shared/test_consent.py >/dev/null || fails=$((fails+1))
 run "Python: path-gate bash patterns (ADR-0072 V-007/V-013)" python3 shared/test_path_gate.py >/dev/null || fails=$((fails+1))
+run "Bash: hermes-pib RAM gate (bc-free, SSOT)" bash test_setup_hermes_pib.sh >/dev/null || fails=$((fails+1))
 run "Python: observer injection guard (ADR-0072 V-005)" python3 shared/test_adapter_observer.py >/dev/null || fails=$((fails+1))
 run "Python: quota+audit (L20)"  python3 shared/test_quota.py >/dev/null || fails=$((fails+1))
 run "Python: proposal (L21)"     python3 shared/test_proposal.py >/dev/null || fails=$((fails+1))

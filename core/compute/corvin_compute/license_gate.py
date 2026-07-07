@@ -286,12 +286,37 @@ def _is_license_revoked() -> bool:
     compute_fabric until the JWT's own exp passes. Guarded so the Apache-only
     build (no corvin_license) is unaffected — a missing plugin/cache simply means
     there is no revocation channel to honor (returns False).
+
+    Fail-CLOSED on a CORRUPT cache: three cases are distinguished explicitly —
+      • no plugin / unresolvable path  -> no revocation channel        -> False
+      • cache file absent (first-run)  -> nothing revoked yet           -> False
+      • cache file PRESENT but unparseable/unreadable -> fail CLOSED    -> True
+    Only the present-but-corrupt case flips to fail-closed, so a fresh compute
+    user (no cache yet) is never locked out, while a revoked token cannot regain
+    compute by clobbering sync_cache.json into unparseable garbage (load_sync_cache
+    would mask that into a non-revoked default — we parse the file ourselves).
     """
     try:
         from corvin_license import sync as _sync  # type: ignore[import]
-        return bool(_sync.load_sync_cache().is_revoked)
-    except Exception:  # noqa: BLE001 — no plugin / no cache -> not revoked
+    except Exception:  # noqa: BLE001 — no enterprise plugin -> no revocation channel
         return False
+    try:
+        cache_path = _sync._cache_path()
+    except Exception:  # noqa: BLE001 — cannot even resolve the path -> no channel
+        return False
+    if not cache_path.exists():
+        # Legitimate no-cache / first-run: there is no propagated revocation yet,
+        # so do NOT fail-closed here (that would lock out every fresh compute user).
+        return False
+    # Cache file EXISTS -> it MUST parse cleanly. Read + parse directly (do NOT go
+    # through load_sync_cache, which swallows corruption into a non-revoked default)
+    # so a present-but-corrupt/unreadable sync_cache.json fails CLOSED: a revoked
+    # token must not regain compute just because its cache got truncated/clobbered.
+    try:
+        raw = json.loads(cache_path.read_text(encoding="utf-8"))
+        return bool(_sync.SyncCache.from_dict(raw).is_revoked)
+    except Exception:  # noqa: BLE001 — present-but-corrupt cache -> fail CLOSED
+        return True
 
 
 def check_compute_access(

@@ -2,10 +2,10 @@
   "cookies": [
     {
       "name": "corvin_console_sid",
-      "value": "PLACEHOLDER_REGENERATED_BY_E2E_SETUP",
+      "value": "LErGkhPilbS6_bbAokhzrsPtWLFQnegy5ZnKImT3OU0",
       "domain": "localhost",
       "path": "/",
-      "expires": 1782711083.178033,
+      "expires": 1783409792.896156,
       "httpOnly": true,
       "secure": false,
       "sameSite": "Strict"
@@ -16,8 +16,16 @@
       "origin": "http://localhost:5173",
       "localStorage": [
         {
+          "name": "corvin-dark-default-v2",
+          "value": "1"
+        },
+        {
           "name": "corvin-theme",
-          "value": "auto"
+          "value": "dark"
+        },
+        {
+          "name": "corvin_setup_complete",
+          "value": "1"
         }
       ]
     }

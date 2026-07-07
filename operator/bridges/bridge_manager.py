@@ -89,13 +89,17 @@ def _node_home() -> Path:
 
 
 def _voice_config_dir() -> Path:
-    """Platform-aware voice config dir (matches forge.paths.voice_config_dir):
-    Windows %APPDATA%/Local/corvin-voice, else $XDG_CONFIG_HOME/corvin-voice
-    (default ~/.config/corvin-voice). Honouring XDG here keeps the service.env
-    reader aligned with the rest of the corvin-voice tree (path-audit #LOW9/11)."""
-    if platform.system() == "Windows":
-        appdata = os.environ.get("APPDATA")
-        return (Path(appdata) / "Local" if appdata else Path.home() / "AppData" / "Local") / "corvin-voice"
+    """Voice config dir — SSOT, byte-identical to forge.paths.voice_config_dir():
+    VOICE_CONFIG_DIR → XDG_CONFIG_HOME → ~/.config/corvin-voice, uniform on every
+    platform. bridge_manager merges this service.env into every spawned daemon's
+    env, so it MUST resolve the same dir the installer + console write to. The
+    former %APPDATA%/Local Windows branch (and the missing VOICE_CONFIG_DIR
+    override) left the bridge reading a dir nothing wrote on Windows / under a
+    custom XDG, re-opening the reader≠writer STT/TTS split for the bridge path
+    (path-audit 2026-07-07 round-2). Guard: tests/test_voice_config_ssot.py."""
+    override = os.environ.get("VOICE_CONFIG_DIR", "").strip()
+    if override:
+        return Path(os.path.expanduser(os.path.expandvars(override)))
     xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
     base = Path(os.path.expanduser(xdg)) if xdg else (Path.home() / ".config")
     return base / "corvin-voice"

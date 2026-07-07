@@ -338,7 +338,7 @@ async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
             _in = annotated
             out = await asyncio.to_thread(
                 lambda: subprocess.run(
-                    ["python3", str(summarizer), "--lang", "de", "--appendix-mode"],
+                    [sys.executable, str(summarizer), "--lang", "de", "--appendix-mode"],
                     input=_in, capture_output=True, text=True,
                     env=env, timeout=60, check=True,
                 )
@@ -355,7 +355,7 @@ async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
                 _in = annotated
                 out = await asyncio.to_thread(
                     lambda: subprocess.run(
-                        ["python3", str(summarizer), "--lang", "de", "--metapher-mode"],
+                        [sys.executable, str(summarizer), "--lang", "de", "--metapher-mode"],
                         input=_in, capture_output=True, text=True,
                         env=env, timeout=60, check=True,
                     )

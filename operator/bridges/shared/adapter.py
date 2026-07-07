@@ -8626,8 +8626,24 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 **media_kwargs,
             )
         else:
-            answer = call_claude(prompt, channel=channel, chat_key=chat_key,
-                                 profile=profile, **media_kwargs)
+            # C1 fix (path-audit 2026-07-06): the non-progress branch previously
+            # called the legacy call_claude(), which spawns claude -p directly
+            # with NONE of the pre-spawn gates (engine-trust, L34 data-flow, L35
+            # egress, CLAG chain-integrity, capability presence, L44 acceptable-
+            # use) and no chat_turns_per_day charge — all of which live only in
+            # the engine-agnostic streaming dispatcher. That turned
+            # progress_updates:false / BRIDGE_PROGRESS_UPDATES=0 into a de-facto
+            # gate + metering kill-switch, violating the CLAUDE.md red-line that
+            # no env var may disable L44. Route through the SAME gated dispatcher
+            # with progress suppressed (on_status=None) so gating + charging
+            # always run; only the live status emission is turned off.
+            answer = call_claude_streaming(
+                prompt, channel=channel, chat_key=chat_key,
+                on_status=None, status_mode=status_mode,
+                profile=profile,
+                msg_id=str(msg_id),
+                **media_kwargs,
+            )
     finally:
         hb_stop.set()
 

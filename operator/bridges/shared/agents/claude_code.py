@@ -66,6 +66,27 @@ except Exception:  # pragma: no cover
 
 CLAUDE_BIN = os.environ.get("CLAUDE_BIN", "claude")
 
+
+def _configured_claude_bin() -> str:
+    """Canonical source for the claude binary name/path, resolved fresh.
+
+    Priority order (highest first):
+      1. ``CORVIN_CLAUDE_BIN`` — the canonical pin that ``bridge.sh``
+         resolves + exports and that the adapter / guard-tests treat as
+         authoritative (see [Engine-Autodetect Stripped-PATH]).
+      2. ``CLAUDE_BIN`` — legacy override, kept for back-compat.
+      3. ``"claude"`` — bare name, left to PATH / fallback resolution.
+
+    Read fresh (not the import-time ``CLAUDE_BIN`` constant) so a pin
+    exported after import — or set by a test before constructing the
+    engine — is honoured. Empty-string env values are treated as unset.
+    """
+    return (
+        os.environ.get("CORVIN_CLAUDE_BIN")
+        or os.environ.get("CLAUDE_BIN")
+        or "claude"
+    )
+
 # Fallback locations searched when the configured binary name is bare
 # (no path separator) AND ``shutil.which()`` cannot find it on the
 # current PATH. This protects against the dominant failure mode
@@ -208,7 +229,7 @@ class ClaudeCodeEngine:
         # Resolve the binary once at construction time so subsequent
         # spawns reuse the same absolute path even if the operator's
         # PATH changes between turns (rare, but cheap to harden against).
-        self.binary = _resolve_claude_bin(binary or CLAUDE_BIN)
+        self.binary = _resolve_claude_bin(binary or _configured_claude_bin())
         self._proc: subprocess.Popen | None = None
         self._stdin: IO | None = None
         self._stdin_guard = threading.Lock()

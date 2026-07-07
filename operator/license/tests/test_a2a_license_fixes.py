@@ -320,6 +320,46 @@ def test_a2a_worker_snapshot_ignores_post_import_env_change():
             os.environ["CORVIN_HOME"] = original_home
 
 
+# ── B1 parity: validator revocation URL is test-mode-gated ───────────────
+
+def _fresh_validator(env: dict[str, str | None]):
+    """Re-import operator.license.validator with a controlled env so its
+    import-time CORVIN_FEATURES_URL / CORVIN_TEST_MODE snapshots are captured
+    from `env` (keys mapped to None are removed)."""
+    import importlib
+    _clear_mod("license.validator", "validator")
+    overrides = {k: v for k, v in env.items() if v is not None}
+    removes = [k for k, v in env.items() if v is None]
+    with mock.patch.dict(os.environ, overrides, clear=False):
+        for k in removes:
+            os.environ.pop(k, None)
+        return importlib.import_module("validator")
+
+
+def test_validator_features_url_ignored_without_test_mode():
+    """Revocation endpoint (_fetch_revoked_fps) must ignore a post-boot / attacker
+    CORVIN_FEATURES_URL in production so ADR-0102 per-token revocation cannot be
+    nullified by redirecting the fetch to a dead/mock host (ADR-0144 B1 parity)."""
+    v = _fresh_validator({
+        "CORVIN_TEST_MODE": None,
+        "CORVIN_FEATURES_URL": "http://127.0.0.1:9/",
+    })
+    assert v._features_base_url() == "https://corvin-features-production.up.railway.app", (
+        "CORVIN_FEATURES_URL override leaked into the revocation fetch without "
+        "CORVIN_TEST_MODE=1 — revocation bypass reopened."
+    )
+
+
+def test_validator_features_url_honoured_under_test_mode():
+    """Under CORVIN_TEST_MODE=1 the override is honoured so the test suite can
+    point revocation at a mock features server."""
+    v = _fresh_validator({
+        "CORVIN_TEST_MODE": "1",
+        "CORVIN_FEATURES_URL": "http://127.0.0.1:9/",
+    })
+    assert v._features_base_url() == "http://127.0.0.1:9"
+
+
 # ── A4: negative-floor clamp in compute_quota ────────────────────────────
 
 def test_compute_quota_negative_value_clamped_to_zero():

@@ -6,21 +6,30 @@ After=corvin-voice-bridge-adapter.service
 
 [Service]
 Type=oneshot
-User=%u
+# NOTE: This is a `systemctl --user` unit — it already runs as the invoking
+# user. Do NOT add a `User=` / `Group=` directive: they are rejected in a
+# --user unit and make systemd fail the job with status=216/GROUP (setgid
+# denied), which silently disabled this healing cycle on every Linux box.
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=corvin-hermes-health
 
-# Resolve CORVIN_HOME; must match bridge.sh logic
-Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=/bin/bash -c ' \
-  REPO_ROOT="$$(find ~ -maxdepth 5 -name ".corvin_repo" -exec dirname {} \\;)"; \
-  if [[ -z "$$REPO_ROOT" ]]; then REPO_ROOT="$$HOME/.corvin"; fi; \
-  export CORVIN_HOME="$$REPO_ROOT/.corvin"; \
-  export CORVIN_ACO_L5_RISKY=1; \
-  cd "$$REPO_ROOT" && \
-  python3 -c "from corvin_console.aco import repair_actions; repair_actions.run_default()" \
-'
+# CORVIN_HOME (and any other runtime pins) come from the same service.env the
+# bridge adapter reads, so reader == writer. The `-` prefix makes it optional
+# so a box without the file still runs (the console falls back to its own
+# CORVIN_HOME resolver).
+EnvironmentFile=-%h/.config/corvin-voice/service.env
+Environment="CORVIN_ACO_L5_RISKY=1"
+Environment="PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# The interpreter and working-directory placeholders below are replaced at
+# install time by bridge.sh install_units() with the absolute python + repo
+# paths it resolved. Using the resolved interpreter (not a bare `python3`)
+# means the console package is importable even on a fresh
+# `uv tool install corvinos` box, where no editable/user-site install exists
+# on the default python3.
+WorkingDirectory=__REPO_ROOT__
+ExecStart=__PYTHON_BIN__ -c "from corvin_console.aco import repair_actions; repair_actions.run_default()"
 
 # Restart on transient failures (network hiccup, Ollama momentarily down)
 # but not on permanent issues (e.g. no ollama binary at all).

@@ -267,6 +267,65 @@ class TestSafeToSQL(unittest.TestCase):
         with self.assertRaises(ValueError):
             safe_to_sql(q, "t", "oracle_unknown")
 
+    # --- Regression: IN / NOT IN multi-value membership -------------------
+    # Previously collapsed to single-value `col = ?` / `col != ?`, binding the
+    # whole list to ONE placeholder → wrong rows or driver error.
+    def test_in_multi_value_expands_placeholders(self):
+        q = SourceQuery(filters=[FilterExpr(col="status", op="in",
+                                            value=["a", "b", "c"])])
+        sql, params = safe_to_sql(q, "t", "psycopg2")
+        # One placeholder per element inside IN ( … )
+        self.assertIn("status IN (%s, %s, %s)", sql)
+        self.assertEqual(params, ["a", "b", "c"])
+        # Must NOT collapse to equality
+        self.assertNotIn("status = ", sql)
+
+    def test_not_in_multi_value_expands_placeholders(self):
+        q = SourceQuery(filters=[FilterExpr(col="status", op="not_in",
+                                            value=["x", "y"])])
+        sql, params = safe_to_sql(q, "t", "psycopg2")
+        self.assertIn("status NOT IN (%s, %s)", sql)
+        self.assertEqual(params, ["x", "y"])
+        self.assertNotIn("status != ", sql)
+
+    def test_in_sqlite_question_mark_expansion(self):
+        q = SourceQuery(filters=[FilterExpr(col="id", op="in", value=[1, 2, 3])])
+        sql, params = safe_to_sql(q, "t", "sqlite")
+        self.assertIn("id IN (?, ?, ?)", sql)
+        self.assertEqual(params, [1, 2, 3])
+
+    def test_in_bigquery_positional_params_unique(self):
+        q = SourceQuery(filters=[FilterExpr(col="id", op="in", value=[1, 2])])
+        sql, params = safe_to_sql(q, "t", "bigquery")
+        # BigQuery positional params must be uniquely numbered
+        self.assertIn("id IN (@p0, @p1)", sql)
+        self.assertEqual(params, [1, 2])
+
+    def test_in_empty_list_is_always_false(self):
+        q = SourceQuery(filters=[FilterExpr(col="status", op="in", value=[])])
+        sql, params = safe_to_sql(q, "t", "psycopg2")
+        self.assertIn("1 = 0", sql)  # IN () → never matches
+        self.assertEqual(params, [])
+
+    def test_not_in_empty_list_is_always_true(self):
+        q = SourceQuery(filters=[FilterExpr(col="status", op="not_in", value=[])])
+        sql, params = safe_to_sql(q, "t", "psycopg2")
+        self.assertIn("1 = 1", sql)  # NOT IN () → matches all
+        self.assertEqual(params, [])
+
+    def test_in_combined_with_scalar_filter_param_order(self):
+        q = SourceQuery(filters=[
+            FilterExpr(col="age", op=">", value=18),
+            FilterExpr(col="status", op="in", value=["a", "b"]),
+            FilterExpr(col="deleted_at", op="is_null"),
+        ])
+        sql, params = safe_to_sql(q, "t", "psycopg2")
+        # Params flatten in filter order; is_null consumes none.
+        self.assertEqual(params, [18, "a", "b"])
+        # No raw values leak into the SQL text
+        for v in ("18", "'a'", "'b'"):
+            self.assertNotIn(v, sql)
+
 
 class TestManifestValidation(unittest.TestCase):
     def _valid_raw(self, **overrides):

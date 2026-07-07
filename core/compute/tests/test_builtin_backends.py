@@ -326,6 +326,18 @@ class TestPolarsTransformBackend:
         session = self.backend.create_session(self.spec, self.cursor)
         assert session.backend_name == "polars_transform"
 
+    def test_default_checkpoint_path_under_gettempdir(self):
+        # Cross-platform: default checkpoint must live under the OS temp
+        # dir (no hardcoded /tmp on Windows) and carry a per-process suffix
+        # so concurrent sessions/tenants don't collide on one shared path.
+        import os
+        import tempfile
+
+        session = self.backend.create_session(self.spec, self.cursor)
+        ckpt = session.checkpoint_path
+        assert str(ckpt).startswith(tempfile.gettempdir())
+        assert str(os.getpid()) in ckpt.name
+
     def test_train_epoch_returns_metrics(self):
         session = self.backend.create_session(self.spec, self.cursor)
         m = self.backend.train_epoch(session)

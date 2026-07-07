@@ -97,6 +97,50 @@ def test_scope_root_session():
     _clean_env()
 
 
+def test_scope_root_session_windows_no_colon(monkeypatch):
+    print("\n[scope_root session — ':' sanitised on Windows (WinError-267 class)]")
+    _clean_env()
+    # Simulate a Windows host by forcing fs_safe_component's Windows branch via its
+    # `windows=` kwarg (patching os.name would also break pathlib process-wide).
+    from forge import paths as _paths
+    monkeypatch.setattr(
+        scope_mod, "fs_safe_component",
+        lambda n: _paths.fs_safe_component(n, windows=True),
+    )
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CORVIN_HOME", td)
+        p = scope_mod.scope_root("session", channel_id="discord:12345")
+        # The channel-id path component must contain NO ':' (illegal on Windows).
+        rel = p.relative_to(Path(td))
+        component = rel.parts[1]  # sessions/<component>/forge
+        t("channel-id component has no ':'", ":" not in component,
+          detail=f"component={component!r}")
+        t("':' replaced with '_'", component == "discord_12345",
+          detail=f"got {component!r}")
+        t("full path has no ':' below CORVIN_HOME", ":" not in str(rel),
+          detail=f"got {rel}")
+        t("ends with /forge", p.name == "forge")
+    _clean_env()
+
+
+def test_scope_root_session_posix_noop(monkeypatch):
+    print("\n[scope_root session — ':' preserved byte-identical on POSIX]")
+    _clean_env()
+    from forge import paths as _paths
+    monkeypatch.setattr(
+        scope_mod, "fs_safe_component",
+        lambda n: _paths.fs_safe_component(n, windows=False),
+    )
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setenv("CORVIN_HOME", td)
+        p = scope_mod.scope_root("session", channel_id="discord:99")
+        # POSIX no-op: the original ':' name is preserved (no migration/drift).
+        t("POSIX keeps 'discord:99' unchanged",
+          str(p).startswith(str(Path(td) / "sessions" / "discord:99")),
+          detail=f"got {p}")
+    _clean_env()
+
+
 def test_scope_root_user():
     print("\n[scope_root user — CORVIN_HOME ignored, use CORVIN_HOME]")
     _clean_env()

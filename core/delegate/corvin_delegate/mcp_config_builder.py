@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -72,7 +73,13 @@ class McpServerSpec:
     three engine-specific materialisers consume this same shape.
     """
     name: str
-    command: str = "python3"
+    # Default to the running interpreter (sys.executable) rather than the
+    # literal "python3": on Windows there is usually no ``python3`` on PATH,
+    # and even on Linux a bare-PATH ``python3`` may differ from the venv/wheel
+    # interpreter that actually has the CorvinOS deps. sys.executable is the
+    # SAME interpreter running this process — the one that can import forge /
+    # skill_forge. See resolver.py for the mirror of this on the cowork side.
+    command: str = sys.executable
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
 
@@ -81,7 +88,7 @@ def _forge_spec(persona: str, repo_root: Path) -> McpServerSpec:
     """Spec for the forge MCP server. Mirrors the cowork resolver."""
     return McpServerSpec(
         name=SERVER_FORGE,
-        command="python3",
+        command=sys.executable,
         args=[
             str(repo_root / "operator" / "forge" / "forge.py"),
             "mcp",
@@ -108,7 +115,7 @@ def _skill_forge_spec(persona: str, repo_root: Path) -> McpServerSpec:
     """Spec for the skill-forge MCP server. Mirrors the cowork resolver."""
     return McpServerSpec(
         name=SERVER_SKILL_FORGE,
-        command="python3",
+        command=sys.executable,
         args=["-m", "skill_forge.mcp_server"],
         env={
             "SKILL_FORGE_PERSONA": persona,
