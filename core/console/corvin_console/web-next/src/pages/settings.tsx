@@ -5,7 +5,7 @@
  */
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Edit2, FileText, HeartPulse, Loader2, RefreshCw, Save, Upload, Users, Wrench, X } from "lucide-react";
+import { Check, Edit2, FileText, HeartPulse, Loader2, RefreshCw, Save, Server, Upload, Users, Wrench, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ReauthDialog } from "@/components/reauth-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/lib/auth";
-import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, getInstanceStats, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
+import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, getInstanceStats, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 
@@ -260,6 +260,109 @@ function AutoUpdateCard({ csrf }: { csrf: string }) {
           <p className="mt-2 text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>
         )}
       </CardContent>
+    </Card>
+  );
+}
+
+function ServiceTierCard({ csrf }: { csrf: string }) {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["service-tier"],
+    queryFn: ({ signal }) => getServiceTier(signal),
+  });
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const [manualCommand, setManualCommand] = React.useState<string | null>(null);
+  const [reauthOpen, setReauthOpen] = React.useState(false);
+
+  const apply = async (next: boolean) => {
+    setError(null);
+    setManualCommand(null);
+    setSaving(true);
+    try {
+      const res = await setServiceTier(next, csrf);
+      if (!res.applied && res.manual_command) {
+        setManualCommand(res.manual_command);
+      }
+      qc.invalidateQueries({ queryKey: ["service-tier"] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      throw e;
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggle = (next: boolean) => {
+    if (next) {
+      // Registering a boot-time service is the more consequential
+      // direction (needs admin/root, keeps running unattended) — confirm
+      // first. Turning it back off just removes that registration.
+      setReauthOpen(true);
+    } else {
+      void apply(false);
+    }
+  };
+
+  const alwaysOn = q.data?.always_on ?? false;
+  const available = q.data?.available ?? true;
+
+  return (
+    <Card>
+      <CardContent className="pt-4 pb-3">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 min-w-0">
+            <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium">Always-on (survives reboot without login)</span>
+                <Badge variant={alwaysOn ? "default" : "secondary"} className="text-[10px]">
+                  {alwaysOn ? "Stufe 2" : "Stufe 1"}
+                </Badge>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Off (default): CorvinOS starts automatically when you log in. On: it also
+                starts at boot, before anyone logs in — needs admin/root once to enable.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {saving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+            {q.isLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            ) : (
+              <Switch
+                checked={alwaysOn}
+                onCheckedChange={toggle}
+                disabled={saving || !available}
+                aria-label="Always-on system service"
+              />
+            )}
+          </div>
+        </div>
+        {!available && (
+          <p className="mt-2 text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
+            Not available on this install.
+          </p>
+        )}
+        {manualCommand && (
+          <p className="mt-2 text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
+            Needs administrator/root privileges — run this once, then toggle again:{" "}
+            <code className="font-mono">{manualCommand}</code>
+          </p>
+        )}
+        {error && (
+          <p className="mt-2 text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>
+        )}
+      </CardContent>
+
+      <ReauthDialog
+        open={reauthOpen}
+        onOpenChange={setReauthOpen}
+        title="Enable always-on mode"
+        description="CorvinOS registers itself as a system service that starts at boot, even before anyone logs in. This may prompt for administrator/root privileges."
+        onConfirm={() => apply(true)}
+      />
     </Card>
   );
 }
@@ -701,6 +804,11 @@ export function SettingsPage() {
       <div className="space-y-2">
         <h2 className="text-sm font-semibold text-foreground">Updates</h2>
         <AutoUpdateCard csrf={session!.csrf_token} />
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-sm font-semibold text-foreground">Autostart</h2>
+        <ServiceTierCard csrf={session!.csrf_token} />
       </div>
 
       <div className="space-y-2">

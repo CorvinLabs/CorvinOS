@@ -261,6 +261,18 @@ timeout / missing `uv` just logs and continues). Also here: tenant config
 (`tenant.corvin.yaml` viewer), and the `bridge.sh doctor` output on demand.
 Token revocation is available here.
 
+**Autostart tier toggle (ADR-0184):** every install already starts CorvinOS
+automatically at login (Stufe 1, no admin/root needed). The Settings page adds a
+switch to also register CorvinOS as an **always-on system service** (Stufe 2 —
+systemd system unit / macOS LaunchDaemon / Windows boot Scheduled Task), which
+starts at boot even before anyone logs in. This is the same opt-in path as running
+`corvin-service install`/`uninstall` from a terminal — the console never
+self-elevates and never silently defaults to Stufe 2. Without admin/root the
+toggle does not error; it reports back the exact manual command to run once
+(`sudo corvin-service install` on Linux/macOS, an elevated PowerShell on
+Windows), then the switch reflects the real state on the next check
+(`GET /settings/service-tier`).
+
 ### Chat
 
 A lightweight web-based chat interface that connects to the adapter as if it were a

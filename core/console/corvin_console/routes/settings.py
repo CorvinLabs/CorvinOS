@@ -22,6 +22,7 @@ these files larger than that is structurally suspicious anyway.
 from __future__ import annotations
 
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Annotated, Any
@@ -288,6 +289,133 @@ def put_auto_update(
         target_id="corvin-launcher.json",
     )
     return {"enabled": body.enabled, "ok": True}
+
+
+# ── Always-on system service tier (ADR-0184 Stufe 2) ──────────────────────
+#
+# Stufe 1 (login autostart) is on by default for every install and has no
+# toggle here. Stufe 2 (always-on system service, survives a headless
+# reboot with nobody ever logging in) stays opt-in exactly like the
+# `corvin-service` CLI it wraps: this route never self-elevates and never
+# silently defaults to Stufe 2 (ADR-0184 Decisions 2/3) — without admin/root
+# it reports back the same manual command the CLI itself would print.
+
+class ServiceTierRequest(BaseModel):
+    enabled: bool
+    model_config = {"extra": "forbid"}
+
+
+_SERVICE_TIER_NAME = "webui"
+
+
+def _read_service_tier_status() -> dict[str, Any]:
+    """Live OS state for Stufe 2 -- there is no local config flag to read,
+    the installed systemd unit / LaunchDaemon / Scheduled Task IS the source
+    of truth. Falls back to unavailable rather than a 500 if the installer
+    package isn't present in this venv (e.g. a console-only checkout)."""
+    try:
+        from corvinOS.installer.system_service_manager import get_system_service_manager
+    except Exception:
+        return {"available": False, "always_on": False, "raw_status": None}
+    raw = get_system_service_manager().status(_SERVICE_TIER_NAME)
+    return {
+        "available": True,
+        "always_on": raw not in ("not_found", "inactive", "failed"),
+        "raw_status": raw,
+    }
+
+
+@router.get("/settings/service-tier")
+def get_service_tier(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Report ADR-0184 Stufe 2 (opt-in always-on system service) status."""
+    return _read_service_tier_status()
+
+
+@router.put("/settings/service-tier")
+def put_service_tier(
+    body: ServiceTierRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Enable/disable ADR-0184 Stufe 2 from the console -- the same opt-in
+    path as running `corvin-service install`/`uninstall` by hand. Without
+    admin/root this returns ``applied: false`` plus the manual command
+    instead of erroring, since "you need to run this yourself" is the
+    expected, common outcome here, not a failure."""
+    action_name = "install" if body.enabled else "uninstall"
+    manual_command = (
+        f"corvin-service {action_name}  (run from an elevated/administrator PowerShell)"
+        if sys.platform == "win32" else f"sudo corvin-service {action_name}"
+    )
+
+    try:
+        from corvinOS.installer.system_service_manager import (
+            ElevationRequired, get_system_service_manager, is_elevated,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+            detail="always-on service tier is not available on this install",
+        ) from exc
+
+    def _denied(reason: str, detail: str) -> dict[str, Any]:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="settings.service_tier",
+            target_kind="system_service",
+            target_id=_SERVICE_TIER_NAME,
+            reason=reason,
+        )
+        return {
+            "applied": False,
+            **_read_service_tier_status(),
+            "manual_command": manual_command,
+            "detail": detail,
+        }
+
+    if not is_elevated():
+        return _denied(
+            "elevation-required",
+            "This needs administrator/root privileges. Nothing was changed.",
+        )
+
+    manager = get_system_service_manager()
+    try:
+        if body.enabled:
+            from ops.launcher.service_entry import _webui_command
+            manager.install_service(
+                name=_SERVICE_TIER_NAME,
+                command=_webui_command(),
+                description="CorvinOS WebUI — always-on (ADR-0184 Stufe 2)",
+            )
+        else:
+            manager.uninstall_service(_SERVICE_TIER_NAME)
+    except ElevationRequired as exc:
+        return _denied("elevation-required", str(exc))
+    except Exception as exc:  # noqa: BLE001
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="settings.service_tier",
+            target_kind="system_service",
+            target_id=_SERVICE_TIER_NAME,
+            reason="service-manager-error",
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="service_tier_change_failed",
+        ) from exc
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="settings.service_tier",
+        target_kind="system_service",
+        target_id=_SERVICE_TIER_NAME,
+    )
+    return {"applied": True, **_read_service_tier_status(), "manual_command": None, "detail": None}
 
 
 # ── Delegation budget (structured endpoint, no YAML round-trip risk) ──────────
