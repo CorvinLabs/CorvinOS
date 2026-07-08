@@ -87,6 +87,18 @@ def test_worker_end_to_end() -> None:
 
 
 def _fresh_adapter(env_overrides: dict):
+    # voice_audience_learning defaults to 3 on a fresh profile (profile.py
+    # _PROFILE_DEFAULTS, 2026-07-04), so build_voice_summary now also spawns
+    # a second subprocess for the LERN-ZUGABE appendix. These tests only
+    # monkeypatch adapter.subprocess.Popen for the ONE spawn they're
+    # asserting on, so that second, unrelated spawn crashes against the same
+    # mock. An explicit empty profile.json (not just an absent one) is the
+    # one path profile.load() never seeds defaults for.
+    xdg = Path(tempfile.mkdtemp(prefix="bgtask-xdg-"))
+    (xdg / "corvin-voice").mkdir(parents=True)
+    (xdg / "corvin-voice" / "profile.json").write_text("{}")
+    os.environ["XDG_CONFIG_HOME"] = str(xdg)
+    sys.modules.pop("profile", None)
     for k, v in env_overrides.items():
         os.environ[k] = v
     sys.modules.pop("adapter", None)
