@@ -25,6 +25,13 @@ HERE = Path(__file__).resolve().parent
 WORKER = HERE / "bg_task_worker.py"
 _BASE_PATH = "/usr/bin:/bin:/usr/local/bin:" + os.path.expanduser("~/.local/bin")
 
+# adapter.subprocess IS the stdlib subprocess module (a process-wide singleton,
+# not reloaded when "adapter" is popped from sys.modules) — a test that does
+# `adapter.subprocess.Popen = _FakePopen` without restoring it permanently
+# corrupts subprocess.Popen for every later test in this file. Restore it in
+# a finally block after each test that mocks it.
+_REAL_POPEN = subprocess.Popen
+
 
 # ── Level 1: the detached worker actually produces a delivered completion ──
 
@@ -176,6 +183,7 @@ def test_task_command_registers_and_spawns() -> None:
         assert rec["state"] == "pending"
         print("PASS: /task registers origin + spawns detached worker + ACKs")
     finally:
+        adapter.subprocess.Popen = _REAL_POPEN
         shutil.rmtree(base, ignore_errors=True)
 
 
@@ -265,6 +273,7 @@ def test_task_command_concurrency_cap() -> None:
         assert len(list((home / "pending_notifications").glob("*.json"))) == 2
         print("PASS: /task concurrency cap blocks the 3rd task for a user")
     finally:
+        adapter.subprocess.Popen = _REAL_POPEN
         shutil.rmtree(base, ignore_errors=True)
 
 
