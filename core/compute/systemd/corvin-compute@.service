@@ -8,16 +8,16 @@ Type=simple
 # %h expands to the user's home directory; %i is the tenant id (template arg).
 # WorkingDirectory + PYTHONPATH so the `corvin_compute` package is import-
 # able without `pip install -e .` (the package ships as plain source).
-WorkingDirectory=%h/projects/corvinOS/core/compute
+WorkingDirectory=%h/projects/CorvinOS/core/compute
 # PYTHONPATH includes the forge plugin so cli._build_runner_fn() can
 # wire `forge.runner.run_tool()` as the real iteration backend (instead
 # of falling back to the refuse-every-call stub).
-Environment=PYTHONPATH=%h/projects/corvinOS/core/compute:%h/projects/corvinOS/operator/forge
+Environment=PYTHONPATH=%h/projects/CorvinOS/core/compute:%h/projects/CorvinOS/operator/forge
 # CORVIN_HOME pins forge.scope.corvin_home() to the same tree the
 # worker's --corvin-home flag points at; without it the walk-up resolver
 # may pick a repo-local .corvin and diverge from compute/runs/.
 Environment=CORVIN_HOME=%h/.corvin
-ExecStart=%h/projects/corvinOS/core/compute/.venv/bin/python -m corvin_compute --corvin-home %h/.corvin serve --tenant %i
+ExecStart=%h/projects/CorvinOS/core/compute/.venv/bin/python -m corvin_compute --corvin-home %h/.corvin serve --tenant %i
 Restart=on-failure
 RestartSec=5s
 PrivateTmp=yes
