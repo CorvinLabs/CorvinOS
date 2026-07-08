@@ -4093,7 +4093,17 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
             except subprocess.CalledProcessError as e:
                 log(f"claude --continue failed, retrying fresh: {e.stderr[:200]}")
         out = _run(base_args)
-        (workdir / ".session_started").touch()
+        # Never lose the completed answer to session-marker bookkeeping: if
+        # the session tree vanished mid-turn (external wipe), heal and go on.
+        try:
+            (workdir / ".session_started").touch()
+        except FileNotFoundError:
+            log(f"session dir vanished mid-turn — recreating: {workdir}")
+            try:
+                workdir.mkdir(parents=True, exist_ok=True)
+                (workdir / ".session_started").touch()
+            except OSError as _e:
+                log(f"session dir recreate failed: {_e}")
         return out.stdout.strip()
     except subprocess.CalledProcessError as e:
         log(f"claude failed (rc={e.returncode}): {e.stderr[:500]}")
@@ -4705,7 +4715,18 @@ def _call_claude_streaming_via_engine(
             )
 
         if not has_session:
-            (workdir / ".session_started").touch()
+            # Same mid-turn-wipe guard as call_claude's legacy path: the
+            # engine's answer exists at this point; a vanished session dir
+            # must heal, never raise the finished turn into poison.
+            try:
+                (workdir / ".session_started").touch()
+            except FileNotFoundError:
+                log(f"session dir vanished mid-turn — recreating: {workdir}")
+                try:
+                    workdir.mkdir(parents=True, exist_ok=True)
+                    (workdir / ".session_started").touch()
+                except OSError as _e:
+                    log(f"session dir recreate failed: {_e}")
 
         # ADR-0050 §1 — persist Claude's session_id for --resume on next turn.
         # Written only on a non-error turn so stale IDs don't accumulate.
@@ -7782,7 +7803,26 @@ def _mirror_new_artifacts(
     """
     import shutil as _shutil  # noqa: PLC0415
     mirrored: list[str] = []
-    for _ap in artifacts_dir.iterdir():
+    # Post-turn bookkeeping must never destroy a completed answer: if the
+    # session tree vanished mid-turn (external wipe of CORVIN_HOME), heal the
+    # dirs and deliver the reply without attachments instead of raising —
+    # an unguarded iterdir() here once quarantined six finished turns as
+    # poison while their answers were already computed.
+    try:
+        _entries = list(artifacts_dir.iterdir())
+    except FileNotFoundError:
+        log(f"artifacts dir vanished mid-turn — recreating: {artifacts_dir}")
+        try:
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as _e:
+            log(f"artifacts dir recreate failed: {_e}")
+        return mirrored
+    try:
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as _e:
+        log(f"outputs dir recreate failed: {_e}")
+        return mirrored
+    for _ap in _entries:
         if not _ap.is_file():
             continue
         if _ap.suffix.lower() not in _MIRROR_EXTS:
@@ -8703,14 +8743,16 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     chat_key = chat_id or sender
     workdir = _session_dir(channel, chat_key)
     outputs_dir = workdir / "outputs"
-    outputs_dir.mkdir(exist_ok=True)
+    # parents=True: self-heal when the whole session tree was wiped between
+    # _session_dir()'s exists() check and this call.
+    outputs_dir.mkdir(parents=True, exist_ok=True)
     pre_files = {p.name: p.stat().st_mtime for p in outputs_dir.iterdir() if p.is_file()}
     # Also snapshot L33 artifacts/ so we can mirror new plot/image files to
     # outputs/ after the turn. Works for ALL engines (not only ClaudeCodeEngine
     # with PostToolUse hooks) — the adapter is the one common layer that sees
     # every engine's completed turn before the reply goes out.
     artifacts_dir = workdir / "artifacts"
-    artifacts_dir.mkdir(exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
     pre_artifacts = {p.name: p.stat().st_mtime for p in artifacts_dir.iterdir() if p.is_file()}
 
     # Per-Chat-Profil frisch aus bridges/<channel>/settings.json read, so that
@@ -8925,8 +8967,19 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     _mirror_new_artifacts(artifacts_dir, outputs_dir, pre_artifacts)
 
     # Diff: which files in outputs/ are new or changed since snapshot.
+    # Same mid-turn-wipe guard as _mirror_new_artifacts: a vanished outputs/
+    # means "no attachments this turn", never a lost answer.
     new_files = []
-    for p in outputs_dir.iterdir():
+    try:
+        _out_entries = list(outputs_dir.iterdir())
+    except FileNotFoundError:
+        log(f"outputs dir vanished mid-turn — recreating: {outputs_dir}")
+        try:
+            outputs_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as _e:
+            log(f"outputs dir recreate failed: {_e}")
+        _out_entries = []
+    for p in _out_entries:
         if not p.is_file():
             continue
         if p.name not in pre_files or p.stat().st_mtime > pre_files[p.name]:

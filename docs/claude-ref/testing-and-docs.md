@@ -19,6 +19,32 @@ This runs:
 
 → Full test reference: [tests.md](tests.md)
 
+## Test Isolation (load-bearing)
+
+**Tests must never touch live operator state.** This class of bug has struck three
+times (bridge settings.json contamination, console env pollution, and the
+2026-07-08 wipe: `tests/test_uninstall_windows_autostart.py` ran
+`uninstall(purge=True)` with only `corvin_home`/`voice_config` isolated, so the
+module-global `_REPO_ROOT / ".corvin"` step deleted the RUNNING bridge's session
+state, budgets, and hash-chained audit log — plus the user's
+`~/.config/systemd/user/corvin-*.service` units and the Claude Code plugin
+cache — on every green test run).
+
+Two structural guards exist; keep both intact:
+
+1. **Injectable destructive roots.** `CorvinInstaller` exposes every root its
+   uninstall path deletes from as instance state: `repo_root` (constructor
+   param), `corvin_home`, `voice_config`, `systemd_user_dir`,
+   `claude_plugins_dir`. Any test that executes installer/uninstaller code MUST
+   point ALL of them into a sandbox tmpdir. Never rely on mocking a single
+   path helper — audit every `rmtree`/`unlink` the code path can reach.
+
+2. **Repo-root tripwire** (`conftest.py` at repo root). An autouse fixture
+   snapshots the protected live roots before each test and FAILS the test if
+   any of them disappeared. Detection-only — it never redirects paths, so it
+   cannot break legitimate tests. Do not remove or weaken it; extend its
+   protected-paths list when new live state locations appear.
+
 ## Docs + Diagram Sync (load-bearing)
 
 **Every feature change** — code, config, behavior, API, protocol, CLI, error message —

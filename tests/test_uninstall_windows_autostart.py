@@ -19,14 +19,23 @@ from corvinOS.installer.core import CorvinInstaller
 
 
 def _make_installer(tmpdir: Path) -> CorvinInstaller:
-    installer = CorvinInstaller(interactive=False)
+    # Isolate EVERY root uninstall() deletes from. Regression: an earlier
+    # version of this helper isolated only corvin_home/voice_config, so
+    # uninstall(purge=True) deleted the LIVE dev checkout's in-repo .corvin
+    # (running-bridge session state, audit chain), the user's systemd
+    # corvin-*.service units, and the Claude Code plugin cache/marketplace
+    # on every test run.
+    installer = CorvinInstaller(interactive=False, repo_root=tmpdir / "repo")
     installer.corvin_home = tmpdir / "corvin_home"
     installer.voice_config = tmpdir / "voice_config"
+    installer.systemd_user_dir = tmpdir / "systemd_user"
+    installer.claude_plugins_dir = tmpdir / "claude_plugins"
     installer.corvin_home.mkdir(parents=True, exist_ok=True)
     installer.voice_config.mkdir(parents=True, exist_ok=True)
     # Neutralise the real service manager so uninstall() doesn't touch any
     # actual OS service state on the machine running this test.
     installer.service_manager = mock.MagicMock()
+    installer.bridge_manager = mock.MagicMock()
     return installer
 
 
@@ -101,6 +110,53 @@ class TestWindowsAutostartUninstall:
             assert not any(c and c[0] == "schtasks" for c in calls)
 
 
+class TestUninstallTouchesOnlyInjectedRoots:
+    """uninstall(purge=True) must operate exclusively on the installer's
+    injected roots — never on the module-global _REPO_ROOT or Path.home().
+
+    Regression for the live-state wipe: uninstall's Step 10 deleted
+    ``_REPO_ROOT / ".corvin"`` regardless of the corvin_home isolation the
+    tests above set up, destroying the running bridge's session state,
+    budgets, and hash-chained audit log on every pytest run.
+    """
+
+    def test_purge_deletes_injected_repo_corvin_but_not_real_one(self) -> None:
+        import corvinOS.installer.core as core_mod
+
+        real_repo_corvin = core_mod._REPO_ROOT / ".corvin"
+        existed_before = real_repo_corvin.exists()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            installer = _make_installer(Path(tmp))
+            sandbox_corvin = installer.repo_root / ".corvin"
+            sandbox_corvin.mkdir(parents=True)
+            (sandbox_corvin / "sentinel").write_text("x")
+            (installer.systemd_user_dir / "default.target.wants").mkdir(parents=True)
+            sandbox_unit = installer.systemd_user_dir / "corvin-sandbox.service"
+            sandbox_unit.write_text("[Unit]\n")
+
+            def fake_run(cmd, **kwargs):  # noqa: ANN001
+                result = mock.MagicMock()
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+                return result
+
+            with mock.patch("corvinOS.installer.core.sys.platform", "linux"), \
+                 mock.patch("corvinOS.installer.core.shutil.which", return_value=None), \
+                 mock.patch("corvinOS.installer.core.subprocess.run", side_effect=fake_run), \
+                 mock.patch("builtins.input", return_value="n"):
+                installer.uninstall(purge=True)
+
+            assert not sandbox_corvin.exists(), "purge must delete the injected repo .corvin"
+            assert not sandbox_unit.exists(), "purge must sweep injected systemd units"
+
+        assert real_repo_corvin.exists() == existed_before, (
+            "uninstall(purge=True) touched the REAL repo .corvin — "
+            "live bridge state would have been destroyed"
+        )
+
+
 if __name__ == "__main__":
     import sys as _sys
 
@@ -108,5 +164,6 @@ if __name__ == "__main__":
     t.test_uninstall_removes_corvinos_console_scheduled_task_on_windows()
     t.test_uninstall_reports_no_task_found_without_erroring()
     t.test_uninstall_on_linux_does_not_attempt_schtasks()
+    TestUninstallTouchesOnlyInjectedRoots().test_purge_deletes_injected_repo_corvin_but_not_real_one()
     print("all tests passed")
     _sys.exit(0)

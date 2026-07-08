@@ -129,10 +129,19 @@ class CorvinInstaller:
 
     BRIDGES = ["discord", "whatsapp", "telegram", "slack", "email"]
 
-    def __init__(self, interactive: bool = True):
+    def __init__(self, interactive: bool = True, repo_root: "Path | None" = None):
         self.interactive = interactive
+        # Injectable so tests can point destructive uninstall steps (in-repo
+        # .corvin, web-next build artifacts) at a sandbox instead of the live
+        # dev checkout — a real test run once wiped the production .corvin of
+        # the running bridge through the module-global _REPO_ROOT.
+        self.repo_root = Path(repo_root) if repo_root is not None else _REPO_ROOT
         self.corvin_home = corvin_home()
         self.voice_config = voice_config_dir()
+        # Same injectability for the other roots uninstall() deletes from:
+        # user systemd units and the Claude Code plugin cache/marketplace.
+        self.systemd_user_dir = Path.home() / ".config" / "systemd" / "user"
+        self.claude_plugins_dir = Path.home() / ".claude" / "plugins"
         self.service_manager = get_service_manager()
         self.bridge_manager = BridgeManager()
         self.selected_bridges: list[str] = []
@@ -683,7 +692,7 @@ class CorvinInstaller:
         if _IS_WHEEL_INSTALL:
             print("  ✓ Console SPA pre-built in wheel — no rebuild needed")
         else:
-            webnext = _REPO_ROOT / "core" / "console" / "corvin_console" / "web-next"
+            webnext = self.repo_root / "core" / "console" / "corvin_console" / "web-next"
             dist_dir = webnext / "dist"
             if dist_dir.exists():
                 try:
@@ -692,7 +701,7 @@ class CorvinInstaller:
                 except Exception as e:
                     print(f"  ⚠ Could not remove dist/: {e}")
 
-            ok = _console.build_frontend(_REPO_ROOT)
+            ok = _console.build_frontend(self.repo_root)
             if not ok:
                 print("\n  ✗ Frontend build FAILED.")
                 print(f"    cd {webnext} && npm install && npm run build")
@@ -772,7 +781,7 @@ class CorvinInstaller:
         # not be tracked by the service manager (timers, watchdog, etc.).
         print("\n[2/10] Removing autostart entries (systemd units / Scheduled Task)...")
         if sys.platform != "win32":
-            systemd_user = Path.home() / ".config" / "systemd" / "user"
+            systemd_user = self.systemd_user_dir
             bridge_units = [
                 f"corvin-voice-bridge-{b}.service" for b in self.selected_bridges
             ]
@@ -939,7 +948,7 @@ class CorvinInstaller:
 
         # ── Step 4: Remove Claude Code plugin cache ────────────────────────
         print("\n[4/10] Removing Claude Code plugin cache...")
-        plugin_cache = Path.home() / ".claude" / "plugins" / "cache" / "corvin-voice-local"
+        plugin_cache = self.claude_plugins_dir / "cache" / "corvin-voice-local"
         if plugin_cache.exists():
             try:
                 cache_size_mb = sum(
@@ -963,7 +972,7 @@ class CorvinInstaller:
 
         # ── Step 5: Remove Claude Code marketplace registration ────────────
         print("\n[5/10] Removing Claude Code marketplace registration...")
-        known_marketplaces = Path.home() / ".claude" / "plugins" / "known_marketplaces.json"
+        known_marketplaces = self.claude_plugins_dir / "known_marketplaces.json"
         if known_marketplaces.exists():
             try:
                 marketplaces = json.loads(known_marketplaces.read_text())
@@ -984,7 +993,7 @@ class CorvinInstaller:
             print("  ℹ pip-wheel install — SPA is inside the wheel, not a build artifact to remove")
             print("  ℹ To remove the package:  pip uninstall corvinos")
         else:
-            webnext = _REPO_ROOT / "core" / "console" / "corvin_console" / "web-next"
+            webnext = self.repo_root / "core" / "console" / "corvin_console" / "web-next"
             for artifact_dir in (webnext / "dist", webnext / "node_modules"):
                 if artifact_dir.exists():
                     try:
@@ -1098,7 +1107,7 @@ class CorvinInstaller:
 
         # ── Step 10: Remove in-repo .corvin/ ──────────────────────────────
         print("\n[10/10] Removing in-repo Corvin directory...")
-        repo_corvin = _REPO_ROOT / ".corvin"
+        repo_corvin = self.repo_root / ".corvin"
         if repo_corvin.exists():
             print(f"  Path: {repo_corvin}")
             confirmed = purge or (
@@ -1124,7 +1133,7 @@ class CorvinInstaller:
         print("  pip uninstall corvinOS -y")
         print()
         print("Optional — delete the repo directory:")
-        print(f"  rm -rf {_REPO_ROOT}")
+        print(f"  rm -rf {self.repo_root}")
         print()
 
     # ── private helpers ────────────────────────────────────────────────────

@@ -106,6 +106,33 @@ class ArtifactMirrorTests(unittest.TestCase):
         self.assertEqual(mirrored, [])
         self.assertFalse((self.outputs_dir / "data.json").exists())
 
+    def test_vanished_artifacts_dir_heals_instead_of_raising(self) -> None:
+        """Regression (2026-07-08 live-state wipe): the whole session tree was
+        deleted mid-turn by an external actor; the unguarded iterdir() raised
+        FileNotFoundError AFTER the engine had produced its answer, so the
+        finished turn was quarantined as poison and the user never got the
+        reply. A vanished dir must mean "nothing to mirror", never a lost
+        answer — and the dir must be recreated for the next turn."""
+        import shutil
+        pre = self._pre_snapshot()
+        shutil.rmtree(self.artifacts_dir)
+        mirrored = self.adapter._mirror_new_artifacts(
+            self.artifacts_dir, self.outputs_dir, pre)
+        self.assertEqual(mirrored, [])
+        self.assertTrue(self.artifacts_dir.is_dir(),
+                        "artifacts dir must be recreated (self-heal)")
+
+    def test_vanished_outputs_dir_heals_instead_of_raising(self) -> None:
+        import shutil
+        pre = self._pre_snapshot()
+        (self.artifacts_dir / "plot.png").write_bytes(b"v1")
+        shutil.rmtree(self.outputs_dir)
+        mirrored = self.adapter._mirror_new_artifacts(
+            self.artifacts_dir, self.outputs_dir, pre)
+        self.assertEqual(mirrored, ["plot.png"],
+                         "mirror must recreate outputs/ and still deliver")
+        self.assertEqual((self.outputs_dir / "plot.png").read_bytes(), b"v1")
+
 
 if __name__ == "__main__":
     unittest.main()
