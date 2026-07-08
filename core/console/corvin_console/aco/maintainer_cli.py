@@ -98,10 +98,21 @@ def cmd_verify(args) -> int:
     return 0 if v.allowed else 1
 
 
+def _reject_unsafe_relpath(rel: str) -> None:
+    """SH-3: refuse absolute paths and ``..`` traversal in a patch spec before it
+    is turned into a PatchEdit. Fail-closed (raises ValueError)."""
+    r = str(rel).replace("\\", "/")
+    if not r or r.startswith("/") or Path(rel).is_absolute() or ".." in Path(r).parts:
+        raise ValueError(f"unsafe patch path in spec: {rel!r}")
+
+
 def _file_patch_source(patch_path: str):
     def src(diag: dict):
         spec = json.loads(Path(patch_path).read_text(encoding="utf-8"))
-        edits = [ML.PatchEdit(e["path"], e["new_content"]) for e in spec.get("edits", [])]
+        edits = []
+        for e in spec.get("edits", []):
+            _reject_unsafe_relpath(e["path"])   # SH-3: containment before write
+            edits.append(ML.PatchEdit(e["path"], e["new_content"]))
         if not edits:
             return None
         return ML.Patch(
@@ -126,6 +137,13 @@ def cmd_run(args) -> int:
         diag = json.loads(Path(args.diagnosis).read_text(encoding="utf-8"))
     test_cmd = (args.test_cmd.split() if args.test_cmd
                 else [sys.executable, "-m", "pytest", "core/console/tests", "-q"])
+    # SH-2: wire the reproduction proof gate (ADR-0179) exactly like the nightly
+    # path — direct-to-main can only ever fire behind a proven red→green fix.
+    # Stage C (regression) MUST run a BROAD suite; default to the gate test_cmd.
+    from .reproduction import build_repro_runner
+    repro_full_cmd = (args.repro_full_cmd.split() if getattr(args, "repro_full_cmd", None)
+                      else test_cmd)
+    repro_runner = build_repro_runner(args.repo, full_cmd=repro_full_cmd)
     if args.auto:
         # Fully-automatic: the engine generates the patch from the diagnosis.
         # Engine-generated patches are ALWAYS ack-gated (never auto-merged) — so
@@ -147,6 +165,7 @@ def cmd_run(args) -> int:
         patch_source=patch_source,
         capability_token=None,                      # from CORVIN_MAINTAINER_CAP env
         gate_runner=_pytest_gate(test_cmd, args.repo),
+        repro_runner=repro_runner,                   # SH-2: red→green proof required
         enable_direct_main=bool(args.direct_main),
         enable_push=bool(args.push),
     )
@@ -194,6 +213,25 @@ def cmd_bundle(args) -> int:
                       "hint": "send this .zip to the maintainer — it contains logs"
                               " + metadata only, no secrets"}, indent=2))
     return 0
+
+
+def _append_rotating(path: Path, line: str, *, cap_bytes: int = 4 * 1024 * 1024) -> None:
+    """Append a line to a jsonl log, rotating to ``<name>.1`` when it exceeds
+    ``cap_bytes`` (SH-9: keep one backup so nightly.log can't grow unbounded)."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size > cap_bytes:
+            backup = path.with_suffix(path.suffix + ".1")
+            try:
+                if backup.exists():
+                    backup.unlink()
+            except OSError:
+                pass
+            path.replace(backup)   # current → .1, start a fresh file
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(line if line.endswith("\n") else line + "\n")
+    except OSError:
+        pass
 
 
 def _git_q(repo, *args: str) -> tuple[int, str]:
@@ -386,6 +424,7 @@ def cmd_nightly(args) -> int:
                      else _paths.corvin_home() / "aco" / "telemetry" / "inbox")
             tsigs = TEL.ingest_inbox(inbox)
             synth = DS.synthesize(_paths.corvin_home(), telemetry_sigs=tsigs,
+                                  repo_root=repo,   # SH-8: validate top_repo_file
                                   min_occurrences=int(args.min_occurrences))
         except Exception as exc:  # noqa: BLE001 — synthesis is best-effort
             synth = {"error": str(exc)[:160]}
@@ -471,11 +510,7 @@ def cmd_nightly(args) -> int:
     if getattr(args, "release", False):
         out["release"] = _release(repo, dry_run=bool(args.dry_run))
     print(json.dumps(out, indent=2))
-    try:
-        with (qroot / "nightly.log").open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(out) + "\n")
-    except OSError:
-        pass
+    _append_rotating(qroot / "nightly.log", json.dumps(out))   # SH-9: size-capped
     return 0
 
 
@@ -596,8 +631,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--model", help="engine model for --auto")
     r.add_argument("--diagnosis", help="diagnosis JSON (required for --auto)")
     r.add_argument("--test-cmd", help="override the gate test command")
+    r.add_argument("--repro-full-cmd",
+                   help="broad suite for the repro stage-C regression check "
+                        "(default: the gate test command)")
     r.add_argument("--direct-main", action="store_true",
-                   help="allow ff-merge to main for low-risk+green (default: PR only)")
+                   help="allow ff-merge to main for low-risk+green+PROVEN "
+                        "(default: PR only; requires a red→green reproduction)")
     r.add_argument("--push", action="store_true", help="push origin main (implies risk)")
     r.set_defaults(fn=cmd_run)
 

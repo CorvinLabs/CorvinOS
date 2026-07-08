@@ -117,6 +117,32 @@ def _make_operator_key_fn() -> "tuple[Any, Any]":
 
 _get_operator_pubkey_b64, _is_placeholder_key = _make_operator_key_fn()
 
+# LIC-4: known shipped PLACEHOLDER / test session pubkeys. _is_placeholder_key
+# guards ONLY the operator-key branches (kid absent / non-sess-lic); the
+# sess-*/lic-* branches verify against SESSION_SERVER_KEY_RING with no such
+# guard — so a build that ever shipped a placeholder/test key in the ring would
+# grant the member tier to anyone holding the (public) test private half.
+# Mirror the operator guard for the session branch. The current real sess-v1
+# key is intentionally NOT listed here (it is a production key). The known
+# shipped operator placeholder value is listed defensively: its private half is
+# a well-known/test key, so it must never verify a session token either.
+_PLACEHOLDER_SESSION_PUBKEYS: frozenset = frozenset({
+    "MCowBQYDK2VwAyEARuefomX8OXo0fiWeu1iPqqCaKgz2B5eg/mOYXY0iEUs=",
+})
+
+
+def _make_session_placeholder_fn() -> "Any":
+    """Closure-capture the placeholder session set (parity with the operator fn)."""
+    _placeholders = _PLACEHOLDER_SESSION_PUBKEYS
+
+    def _is_placeholder_session(k: "str | None") -> bool:
+        return k is not None and k in _placeholders
+
+    return _is_placeholder_session
+
+
+_is_placeholder_session_key = _make_session_placeholder_fn()
+
 # Server-issued session-permit signing key ring (ADR-0098 P3).
 #
 # Maps kid → DER-encoded Ed25519 public key (standard base64).
@@ -489,10 +515,26 @@ def _verify_ed25519(token: str) -> dict[str, Any] | None:
         if pub_key_b64 is None:
             log.warning("license: unknown session key kid=%r — key ring may need update", kid)
             return None
+        # LIC-4: refuse a placeholder/test session key — mirrors the operator guard.
+        if _is_placeholder_session_key(pub_key_b64):
+            log.critical(
+                "license: session key kid=%r is a SHIPPED PLACEHOLDER/test key — "
+                "refusing to verify session tokens (Free tier).", kid,
+            )
+            _audit("license.invalid_token", reason="placeholder_session_key")
+            return None
     elif kid.startswith("lic-"):
         pub_key_b64 = SESSION_SERVER_KEY_RING.get(kid) or SESSION_SERVER_KEY_RING.get("sess-v1")
         if pub_key_b64 is None:
             log.warning("license: lic-* token but session key ring is empty — key ring may need update")
+            return None
+        # LIC-4: refuse a placeholder/test session key — mirrors the operator guard.
+        if _is_placeholder_session_key(pub_key_b64):
+            log.critical(
+                "license: lic-* token resolved to a SHIPPED PLACEHOLDER/test session "
+                "key (kid=%r) — refusing to verify (Free tier).", kid,
+            )
+            _audit("license.invalid_token", reason="placeholder_session_key")
             return None
         # ADR-0138 review: if lic-* fell back to sess-v1, track both so the
         # revocation check below also tests the resolved key identity.

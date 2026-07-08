@@ -175,6 +175,21 @@ For Gmail: enable IMAP in Gmail settings and create an **App Password** (require
 ### 2. Save the config
 Console: **Settings → Bridges → Email → fill in the form → Save**
 
+### 3. Sender authentication (important)
+The `From` header alone is forgeable, so inbound email is trusted only when the
+receiving provider's **top `Authentication-Results` line shows DMARC (or aligned
+DKIM) pass**. Consequences:
+
+- An **empty whitelist denies every sender** — claim ownership with the PIN
+  `/auth <pin>` flow (set `pin` in the email settings) instead of listing
+  addresses up front.
+- On **Gmail / iCloud / Outlook / Yahoo** and other well-known providers this
+  works out of the box (their authserv-id is recognised).
+- On a **self-hosted / non-stamping IMAP** provider you must set
+  `auth_results_authserv_id` to your receiver's authserv-id, otherwise inbound
+  messages fail closed and senders fall back to the PIN flow.
+- `dev_mode: true` restores the legacy open behaviour **for local testing only**.
+
 ---
 
 ## Adding a second bridge
@@ -242,6 +257,10 @@ To force fully offline TTS: `CORVIN_TTS_PROVIDER=piper` in `service.env`
 `corvin-install` to fetch it if it was skipped due to no network at install
 time, or set `piper_model_<lang>` in `~/.config/corvin-voice/config.json`
 manually.)
+Setting `CORVIN_SAY_NO_FALLBACK=1` makes a *pinned* provider hard-fail instead of
+falling through to the auto-chain — a strict/isolation switch (default off) used by
+`test_say.sh` to prove a specific tier actually produced the audio rather than being
+masked by a later tier. It is not needed for normal runtime.
 
 ### Windows — "corvin is not recognized as a command"
 The `pip install corvinOS` PATH auto-fix runs on every Python start.

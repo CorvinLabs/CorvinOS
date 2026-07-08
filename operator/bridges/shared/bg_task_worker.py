@@ -71,6 +71,15 @@ def main() -> int:
                          ok=False)
         return 2
 
+    # Claim the record with THIS process's pid so the completion queue can reap
+    # it into a failed notification if we are hard-killed (SIGKILL/OOM/reboot)
+    # before reaching mark_done — otherwise the pending record would wedge the
+    # user's /task concurrency slot for days.
+    try:
+        cn.claim(task_id)
+    except Exception:  # noqa: BLE001 — claim is best-effort
+        pass
+
     ok = True
     text = ""
     try:

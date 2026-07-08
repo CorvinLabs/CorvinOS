@@ -166,7 +166,7 @@ class BudgetEnvelope:
     max_loops: int = 100
     max_total_tokens: int = 0        # 0 = unbounded
     max_wall_time: int = 3600        # seconds
-    max_total_workers: int = 500
+    max_total_workers: int = 8       # aligned with the delegation-budget default
     max_tool_calls: int = 0          # 0 = unbounded
     max_depth: int = 4
     max_workers_per_iteration: int = 6
@@ -535,7 +535,7 @@ def _budget_from_spec(spec: dict) -> BudgetEnvelope:
         max_loops=_clamp_positive_cap(int(b.get("max_loops") or 100), 100, 5000),
         max_total_tokens=int(b.get("max_total_tokens") or 0),
         max_wall_time=int(b.get("max_wall_time") or 3600),
-        max_total_workers=_clamp_positive_cap(int(b.get("max_total_workers") or 500), 500, 5000),
+        max_total_workers=_clamp_positive_cap(int(b.get("max_total_workers") or 8), 8, 64),
         max_tool_calls=int(b.get("max_tool_calls") or 0),
         max_depth=int(b.get("max_depth") or 4),
         # Unlike max_loops/max_total_workers above, this had NO clamp and NO

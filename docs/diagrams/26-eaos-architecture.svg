@@ -45,7 +45,7 @@
   <text x="395" y="86" text-anchor="middle" font-size="12" font-weight="700" fill="#4c1d95">CodexCliEngine</text>
   <text x="395" y="102" text-anchor="middle" font-size="9" fill="#6d28d9">opt-in  ·  spawn via subprocess</text>
   <line x1="296" y1="110" x2="494" y2="110" stroke="#7c3aed" stroke-width="0.8"/>
-  <text x="296" y="124" font-size="9" font-family="'Courier New', monospace" fill="#4c1d95">/btw   → None (explicit error)</text>
+  <text x="296" y="124" font-size="9" font-family="'Courier New', monospace" fill="#4c1d95">/btw   → queued → next turn</text>
   <text x="296" y="138" font-size="9" font-family="'Courier New', monospace" fill="#4c1d95">hooks  → TEB (ADR-0069)</text>
   <text x="296" y="152" font-size="9" font-family="'Courier New', monospace" fill="#4c1d95">MCP    → native</text>
   <text x="296" y="166" font-size="9" font-family="'Courier New', monospace" fill="#4c1d95">plan   → ✗  compact → ✗</text>
@@ -55,7 +55,7 @@
   <text x="655" y="86" text-anchor="middle" font-size="12" font-weight="700" fill="#064e3b">OpenCodeEngine</text>
   <text x="655" y="102" text-anchor="middle" font-size="9" fill="#047857">provider-agnostic  ·  subprocess</text>
   <line x1="556" y1="110" x2="754" y2="110" stroke="#059669" stroke-width="0.8"/>
-  <text x="556" y="124" font-size="9" font-family="'Courier New', monospace" fill="#064e3b">/btw   → None (explicit error)</text>
+  <text x="556" y="124" font-size="9" font-family="'Courier New', monospace" fill="#064e3b">/btw   → queued → next turn</text>
   <text x="556" y="138" font-size="9" font-family="'Courier New', monospace" fill="#064e3b">hooks  → TEB (ADR-0069)</text>
   <text x="556" y="152" font-size="9" font-family="'Courier New', monospace" fill="#064e3b">MCP    → native</text>
   <text x="556" y="166" font-size="9" font-family="'Courier New', monospace" fill="#064e3b">/e:model → _override_model</text>

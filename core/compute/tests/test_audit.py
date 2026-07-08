@@ -223,7 +223,11 @@ class TenantConfigTests(unittest.TestCase):
 
     def test_compute_block_defaults(self) -> None:
         cc = self.ComputeConfig()
-        self.assertFalse(cc.enabled)
+        # ADR-0013: the strategy-loop master switch is enabled by default per
+        # tenant (matches tenant_config.ComputeConfig + fabric_config.FabricConfig,
+        # both `enabled: bool = True`). The data-access switches
+        # (fabric_enabled/datasource_enabled/oracle_enabled) stay False-gated.
+        self.assertTrue(cc.enabled)
         self.assertEqual(cc.max_parallel_iterations, 4)
         self.assertEqual(cc.max_concurrent_runs, 2)
         self.assertEqual(cc.max_iterations_per_run, 200)

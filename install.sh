@@ -73,25 +73,25 @@ if [ -n "$EDITABLE" ]; then
     echo "  Installing CorvinOS (editable) from $EDITABLE ..."
     uv tool install --force --editable "$EDITABLE"
 else
-    # Query PyPI JSON API for the exact latest version so uv bypasses its
-    # local resolver cache (which can lag behind a freshly published release).
-    PINNED=""
+    # INST-1: install UNPINNED. A `uv tool install corvinos==<ver>` writes that
+    # exact pin into the uv receipt, after which `uv tool upgrade corvinos`
+    # (the auto-update path in serve_backend.py / the install.ps1 supervisor)
+    # respects the pin forever and exits 0 with "Nothing to upgrade" — silently
+    # freezing auto-update. Installing unpinned keeps the receipt upgradeable.
+    # The PyPI JSON query below is now used ONLY for a friendly log line.
+    LATEST=""
     if command -v curl >/dev/null 2>&1; then
-        PINNED=$(curl -fsSL --max-time 10 "https://pypi.org/pypi/${PKG}/json" 2>/dev/null \
+        LATEST=$(curl -fsSL --max-time 10 "https://pypi.org/pypi/${PKG}/json" 2>/dev/null \
                  | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)
     fi
-    if [ -n "$PINNED" ]; then
-        echo "  Installing ${PKG}==${PINNED} ..."
-        uv tool install --force "${PKG}==${PINNED}" || {
-            # PyPI JSON reported the version but the simple index CDN may not
-            # have propagated it yet — fall back to whatever is available.
-            echo "  ⚠ ${PKG}==${PINNED} not yet on index — installing latest available ..."
-            uv tool install --force --upgrade "$PKG"
-        }
+    if [ -n "$LATEST" ]; then
+        echo "  Installing ${PKG} (latest on PyPI: ${LATEST}) ..."
     else
         echo "  Installing $PKG (first run can take a minute) ..."
-        uv tool install --force --upgrade "$PKG"
     fi
+    # --refresh bypasses uv's local index cache so a freshly published release
+    # is picked up immediately, without pinning the version into the receipt.
+    uv tool install --force --refresh "$PKG"
 fi
 uv tool update-shell >/dev/null 2>&1 || true   # persist ~/.local/bin on PATH
 
@@ -173,16 +173,22 @@ fi
 if [ "$ALWAYS_ON" = "1" ]; then
     echo ""
     echo "  Setting up always-on mode (survives reboot with no login) ..."
+    # INST-5: corvin-service lives in ~/.local/bin, which is NOT on root's
+    # sudo secure_path — a bare `sudo corvin-service` fails "command not
+    # found". Resolve the absolute path in the user's PATH and hand THAT to
+    # sudo (which also preserves SUDO_USER so current_user() won't pick root).
+    CORVIN_SERVICE_BIN="$(command -v corvin-service 2>/dev/null || true)"
+    [ -n "$CORVIN_SERVICE_BIN" ] || CORVIN_SERVICE_BIN="corvin-service"
     if command -v sudo >/dev/null 2>&1; then
-        if sudo corvin-service install; then
+        if sudo "$CORVIN_SERVICE_BIN" install; then
             printf '  %s Always-on mode active.\n' "$(_green '✓')"
         else
             printf '  %s Could not enable always-on mode automatically.\n    Run manually: %s\n' \
-                "$(_yellow '⚠')" "$(_bold 'sudo corvin-service install')"
+                "$(_yellow '⚠')" "$(_bold "sudo $CORVIN_SERVICE_BIN install")"
         fi
     else
         printf '  %s sudo not found — run as root manually: %s\n' \
-            "$(_yellow '⚠')" "$(_bold 'corvin-service install')"
+            "$(_yellow '⚠')" "$(_bold "$CORVIN_SERVICE_BIN install")"
     fi
 fi
 

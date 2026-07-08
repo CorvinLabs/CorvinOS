@@ -109,8 +109,15 @@ class WebhookSpec(BaseModel):
     @field_validator("url")
     @classmethod
     def _url_must_be_https(cls, v: str) -> str:
-        if not isinstance(v, str) or not v.startswith(("https://", "http://")):
-            raise ValueError("webhook.url must be http(s)")
+        # PENTEST-6(a): reject plaintext ``http://`` (and every non-https
+        # scheme) at validation time. The docs have always said "HTTPS
+        # callback URL", but the old check accepted ``http://`` too — which
+        # let a caller aim the gateway's outbound POST at an internal plaintext
+        # service. HTTPS is required so the callback is confidentiality- and
+        # integrity-protected in transit; the resolve-and-reject SSRF guard in
+        # ``webhooks.py`` is the second gate applied just before the POST.
+        if not isinstance(v, str) or not v.lower().startswith("https://"):
+            raise ValueError("webhook.url must be an https:// URL")
         return v
 
 

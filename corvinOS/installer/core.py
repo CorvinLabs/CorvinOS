@@ -318,8 +318,12 @@ class CorvinInstaller:
         }
 
         if not self.interactive:
-            self.selected_bridges = self.BRIDGES.copy()
-            print("  Non-interactive: all bridges selected")
+            # Default to NO bridges on a non-interactive install. Selecting all
+            # of them registered + started five token-less messenger services
+            # that crash-loop until StartLimitBurst on a fresh box. Bridges are
+            # configured later from the console once tokens exist.
+            self.selected_bridges = []
+            print("  Non-interactive: no bridges selected (configure later in console)")
             return
 
         # Ask if user wants to set up a bridge now
@@ -431,19 +435,26 @@ class CorvinInstaller:
             return
 
         adapter_cmd = self._get_adapter_command()
-        try:
-            self.service_manager.install_service(
-                # Canonical unit name must match bridge.sh / validate.py, which
-                # control `corvin-voice-bridge-adapter.service`. service_manager
-                # prefixes `corvin-`, so the name passed here is voice-bridge-*.
-                name="voice-bridge-adapter",
-                command=adapter_cmd,
-                description="CorvinOS central adapter",
-                auto_start=True,
-            )
-            print("  ✓ Adapter service registered")
-        except Exception as e:
-            print(f"  ⚠ Could not register adapter service: {e}")
+        if not adapter_cmd:
+            # INST-7: wheel install with no runnable adapter source — skip
+            # rather than register a `-m operator...` command that collides with
+            # the stdlib `operator` module and can never start.
+            print("  ℹ Adapter source not found (wheel install) — skipping "
+                  "adapter service registration")
+        else:
+            try:
+                self.service_manager.install_service(
+                    # Canonical unit name must match bridge.sh / validate.py, which
+                    # control `corvin-voice-bridge-adapter.service`. service_manager
+                    # prefixes `corvin-`, so the name passed here is voice-bridge-*.
+                    name="voice-bridge-adapter",
+                    command=adapter_cmd,
+                    description="CorvinOS central adapter",
+                    auto_start=True,
+                )
+                print("  ✓ Adapter service registered")
+            except Exception as e:
+                print(f"  ⚠ Could not register adapter service: {e}")
 
         for bridge in self.selected_bridges:
             try:
@@ -461,8 +472,12 @@ class CorvinInstaller:
         # Uses sys.executable (the pip venv Python) so this works for both
         # pip installs and source-tree installs that ran corvin-install.
         try:
+            # WA-5/M1: quote the interpreter path so a user profile containing a
+            # space (e.g. C:\Users\John Doe\...\python.exe) survives as ONE token
+            # when the service managers re-tokenize this command
+            # (shlex.split(..., posix=False)); an unquoted path tears at the space.
             webui_cmd = (
-                f"{sys.executable} -m uvicorn corvin_gateway.app:app"
+                f'"{sys.executable}" -m uvicorn corvin_gateway.app:app'
                 " --host 127.0.0.1 --port 8765 --log-level info"
             )
             self.service_manager.install_service(
@@ -855,6 +870,46 @@ class CorvinInstaller:
                               f"{delete.stderr.strip()}")
                 except Exception as e:
                     print(f"  ⚠ Could not remove Scheduled Task {_task}: {e}")
+
+            # WA-7: also sweep any per-bridge Scheduled Tasks left behind so a
+            # bridge doesn't keep auto-launching after "uninstall".
+            for _bridge in ("discord", "telegram", "slack", "whatsapp", "email"):
+                _bt = f"CorvinOS-Bridge-{_bridge}"
+                try:
+                    q = subprocess.run(
+                        ["schtasks", "/query", "/tn", _bt],
+                        capture_output=True, text=True, check=False,
+                    )
+                    if q.returncode != 0:
+                        continue
+                    subprocess.run(
+                        ["schtasks", "/end", "/tn", _bt],
+                        capture_output=True, check=False,
+                    )
+                    d = subprocess.run(
+                        ["schtasks", "/delete", "/tn", _bt, "/f"],
+                        capture_output=True, text=True, check=False,
+                    )
+                    if d.returncode == 0:
+                        print(f"  ✓ Removed Scheduled Task: {_bt}")
+                except Exception as e:
+                    print(f"  ⚠ Could not remove Scheduled Task {_bt}: {e}")
+
+            # WA-7: an opt-in Stufe-2 always-on service (ADR-0184) is registered
+            # under an ELEVATED session and is not removable from this
+            # unelevated uninstall — detect it and tell the user to run
+            # `corvin-service uninstall` from an admin PowerShell first, else
+            # CorvinOS keeps running after "uninstall".
+            try:
+                from corvinOS.installer.system_service_manager import (  # noqa: PLC0415
+                    get_system_service_manager,
+                )
+                if get_system_service_manager().status("webui") == "registered":
+                    print("  ⚠ An always-on (Stufe 2) service is still registered. "
+                          "It runs elevated and cannot be removed here — first run "
+                          "from an ADMIN PowerShell:  corvin-service uninstall")
+            except Exception:
+                pass
         else:
             print("  ℹ Not on Linux or Windows — skipping autostart cleanup")
 
@@ -1074,16 +1129,40 @@ class CorvinInstaller:
 
     # ── private helpers ────────────────────────────────────────────────────
 
-    def _get_adapter_command(self) -> str:
+    def _get_adapter_command(self) -> "str | None":
+        # Source-tree install: adapter.py lives in the repo checkout.
         adapter = _REPO_ROOT / "operator" / "bridges" / "shared" / "adapter.py"
         if adapter.exists():
-            return f"{sys.executable} {adapter}"
-        return f"{sys.executable} -m operator.bridges.shared.adapter"
+            # M1: quote both path components so a spaced install/repo path
+            # (e.g. C:\Users\John Doe\...) survives re-tokenization intact.
+            return f'"{sys.executable}" "{adapter}"'
+        # Wheel install: `operator` is NOT importable as a package (it shadows
+        # the stdlib `operator` module), so the old fallback
+        # `-m operator.bridges.shared.adapter` could never start (INST-7). The
+        # build hook (hatch_build.py) vendors the subtree into
+        # corvin_console/_vendor/operator/…; resolve that real file instead.
+        try:
+            import importlib.util as _ilu  # noqa: PLC0415
+            spec = _ilu.find_spec("corvin_console")
+            if spec and spec.origin:
+                vendored = (
+                    Path(spec.origin).parent / "_vendor" / "operator"
+                    / "bridges" / "shared" / "adapter.py"
+                )
+                if vendored.exists():
+                    return f'"{sys.executable}" "{vendored}"'
+        except Exception:
+            pass
+        # No runnable adapter found — signal the caller to SKIP registration
+        # rather than register a command that can never start.
+        return None
 
     def _get_bridge_command(self, bridge: str) -> str:
         daemon = _REPO_ROOT / "operator" / "bridges" / bridge / "daemon.js"
         if daemon.exists():
             node = shutil.which("node")
             if node:
-                return f"{node} {daemon}"
-        return f"npm --prefix {self.corvin_home / 'bridges' / bridge} start"
+                # M1: quote both path components (node.exe and the daemon path)
+                # so a spaced install path survives re-tokenization intact.
+                return f'"{node}" "{daemon}"'
+        return f'npm --prefix "{self.corvin_home / "bridges" / bridge}" start'

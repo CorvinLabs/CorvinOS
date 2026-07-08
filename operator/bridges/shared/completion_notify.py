@@ -50,6 +50,58 @@ CN_PENDING_MAX_AGE = float(os.environ.get("CN_PENDING_MAX_AGE", str(7 * 24 * 360
 # A per-record delivery lock older than this belonged to a poller that crashed
 # mid-delivery; steal it so the record is not wedged forever.
 CN_LOCK_STALE = float(os.environ.get("CN_LOCK_STALE", "600"))
+# A pending record whose producer (the detached bg_task_worker) died WITHOUT
+# calling mark_done — SIGKILL/OOM/reboot, which no except: can catch — is reaped
+# into a failed completion after this grace so (a) the user is still told the
+# task stopped and (b) it stops counting against the /task concurrency cap. Far
+# shorter than CN_PENDING_MAX_AGE (7d) which used to leave a hard-killed worker's
+# record wedged for a week, locking the user out of /task.
+CN_PENDING_REAP = float(os.environ.get("CN_PENDING_REAP", str(30 * 60)))
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort, NON-DESTRUCTIVE liveness of a producer pid on THIS host.
+
+    CRITICAL: `os.kill(pid, 0)` is NOT a probe on Windows — CPython maps it to
+    TerminateProcess, so it would KILL the very worker we are checking. Use the
+    platform-appropriate non-destructive check.
+    """
+    if not pid or pid <= 0:
+        return False
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes  # noqa: PLC0415
+            k32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            h = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            if not h:
+                return False  # no such process (or access denied → treat as gone)
+            exit_code = ctypes.c_ulong(0)
+            ok = k32.GetExitCodeProcess(h, ctypes.byref(exit_code))
+            k32.CloseHandle(h)
+            STILL_ACTIVE = 259
+            return bool(ok) and exit_code.value == STILL_ACTIVE
+        except Exception:  # noqa: BLE001 — unknown → assume alive (don't reap)
+            return True
+    try:
+        os.kill(pid, 0)  # POSIX signal 0 = existence check, genuinely a no-op
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by another user
+    except OSError:
+        return True  # unknown → assume alive (conservative: don't reap)
+
+
+def _host_boot_id() -> str:
+    """Best-effort host boot identifier so a reused pid after a reboot is not
+    mistaken for a live producer. Empty string when unavailable (Windows/mac):
+    the pid check + grace still bound the lockout."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return ""
 
 _STATE_PENDING = "pending"
 _STATE_READY = "ready"
@@ -95,6 +147,13 @@ def _atomic_write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp{secrets.token_hex(4)}")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    # Records carry routing PII (sender uid, chat_id, instruction label). Lock
+    # them to owner-only, matching the 0600 the /task spec file gets — otherwise
+    # they land world-readable (umask-default 0644) on a shared host.
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
     tmp.replace(path)  # atomic on POSIX + Windows
 
 
@@ -139,9 +198,27 @@ def register(
         "created_at": time.time(),
         "ready_at": None,
         "delivered_at": None,
+        # Set by the worker via claim() once it starts, so a hard-killed worker
+        # can be reaped (see CN_PENDING_REAP / deliver_ready).
+        "producer_pid": None,
+        "producer_boot": None,
     }
     _atomic_write(_record_path(tid), rec)
     return tid
+
+
+def claim(task_id: str) -> bool:
+    """Stamp the calling process as the producer of *task_id* (the detached
+    worker calls this at startup). Enables dead-producer reaping. No-op if the
+    record is gone or already done."""
+    path = _record_path(task_id)
+    rec = _read(path)
+    if rec is None or rec.get("state") != _STATE_PENDING:
+        return False
+    rec["producer_pid"] = os.getpid()
+    rec["producer_boot"] = _host_boot_id()
+    _atomic_write(path, rec)
+    return True
 
 
 def count_active(sender: str | None = None) -> int:
@@ -271,8 +348,39 @@ def deliver_ready(outbox_dir: str | Path, *, now: float | None = None) -> int:
             continue
         if state == _STATE_PENDING:
             ca = rec.get("created_at") or 0
-            if now - float(ca or 0) > CN_PENDING_MAX_AGE:
+            age = now - float(ca or 0)
+            if age > CN_PENDING_MAX_AGE:
                 path.unlink(missing_ok=True)
+                continue
+            # Dead-producer reap: after a grace, if the worker that owned this
+            # record is provably gone (host rebooted since claim, or the claimed
+            # pid is no longer alive, or it never claimed at all), convert it to
+            # a failed completion so the user is notified and the /task cap frees
+            # — instead of leaving it wedged for CN_PENDING_MAX_AGE (7d).
+            if age > CN_PENDING_REAP:
+                pid = rec.get("producer_pid")
+                boot = rec.get("producer_boot")
+                # ONLY reap a record whose producer actually CLAIMED it (stamped
+                # its pid). A record with pid=None is one whose producer never
+                # claims — e.g. the compute worker for a legitimately long
+                # (>30min) L24/L25 job. Reaping those by "no pid" produced a
+                # false "worker stopped" AND dropped the real result when the job
+                # later finished (mark_done found it DELIVERED). Unclaimed records
+                # are left to the CN_PENDING_MAX_AGE prune instead. A claimed
+                # record is reaped only when its host rebooted or its pid is dead.
+                producer_gone = bool(pid) and (
+                    (boot and boot != _host_boot_id())
+                    or not _pid_alive(int(pid))
+                )
+                if producer_gone:
+                    rec["state"] = _STATE_READY
+                    rec["ok"] = False
+                    rec["text"] = ("the background worker stopped without "
+                                   "reporting a result (it was killed or the "
+                                   "host restarted).")
+                    rec["ready_at"] = now
+                    _atomic_write(path, rec)
+                    # fall through into the ready-delivery path below this poll
             continue
         if state != _STATE_READY:
             continue
@@ -289,11 +397,21 @@ def deliver_ready(outbox_dir: str | Path, *, now: float | None = None) -> int:
             continue
 
         # Recover an orphaned lock: if it is older than CN_LOCK_STALE the poller
-        # that held it died mid-delivery — steal it (at-least-once: a record that
-        # crashed AFTER its outbox write may be re-sent once, never lost).
+        # that held it died mid-delivery — steal it ATOMICALLY. A plain unlink
+        # here was racy: poller B (having already stat'd the stale lock) could
+        # unlink poller A's FRESH lock created a microsecond earlier, so both
+        # entered the critical section → double delivery. Renaming is atomic:
+        # exactly one poller moves the stale file away; the other's rename fails
+        # (source gone) and it falls through to the O_EXCL claim below, which is
+        # the real single mutex. (at-least-once on crash-after-outbox-write.)
         try:
             if now - lock.stat().st_mtime > CN_LOCK_STALE:
-                lock.unlink(missing_ok=True)
+                steal = str(lock) + f".steal{secrets.token_hex(4)}"
+                try:
+                    os.rename(str(lock), steal)
+                    os.unlink(steal)
+                except OSError:
+                    pass  # another poller stole it first
         except OSError:
             pass
 
@@ -315,12 +433,23 @@ def deliver_ready(outbox_dir: str | Path, *, now: float | None = None) -> int:
             out_file = outbox / f"cn_{rec.get('id')}_{secrets.token_hex(4)}.json"
             tmp = out_file.with_suffix(out_file.suffix + ".tmp")
             tmp.write_text(json.dumps(env, ensure_ascii=False), encoding="utf-8")
+            try:
+                os.chmod(tmp, 0o600)  # envelope carries the same routing PII
+            except OSError:
+                pass
             tmp.replace(out_file)
+            # GDPR: a concurrent purge_user may have unlinked this record between
+            # the re-read above and here; don't resurrect it with PII if so.
+            if not path.exists():
+                continue
             rec["state"] = _STATE_DELIVERED
             rec["delivered_at"] = now
             _atomic_write(path, rec)
             delivered += 1
-        except OSError as e:
+        except Exception as e:  # noqa: BLE001 — per-record isolation: one poisoned
+            # record (e.g. an unexpected data shape, or a provenance import error
+            # in _envelope_for) must not abort the loop and starve every record
+            # sorted after it. Log and skip, as the docstring promises.
             print(
                 f"completion_notify: deliver failed {path.name}: {e}",
                 file=sys.stderr,

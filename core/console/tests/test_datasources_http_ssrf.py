@@ -156,6 +156,48 @@ class TestSsrfGuardPrimitives(unittest.TestCase):
         with self.assertRaises(m._UnsafeUrl):
             h.redirect_request(None, None, 302, "Found", {}, "http://169.254.169.254/")
 
+    # ── PENTEST-7: DNS-rebind TOCTOU is closed by IP-pinning ──────────────────
+
+    def test_validated_pinned_ip_returns_first_validated_address(self):
+        """The guard resolves ONCE and returns the address to pin the connect to."""
+        m = self._mod()
+        with patch.object(m.socket, "getaddrinfo", return_value=_addrinfo("93.184.216.34")):
+            self.assertEqual(
+                m._validated_pinned_ip("https://example.com/"), "93.184.216.34",
+            )
+
+    def test_pinned_connection_connects_to_pinned_ip_not_reresolved_host(self):
+        """A pinned connection connects to the validated IP and keeps the
+        original hostname (Host header / SNI) — so a ~0-TTL rebind at connect
+        time can never redirect the fetch to a private/metadata address."""
+        m = self._mod()
+        conn = m._PinnedHTTPConnection("rebind.example.com", port=80)
+        conn._pinned_ip = "93.184.216.34"
+        captured: dict = {}
+
+        def _fake_create_connection(addr, *a, **k):
+            captured["addr"] = addr
+            raise ConnectionError("stop-before-send")
+
+        with patch.object(m.socket, "create_connection", _fake_create_connection):
+            with self.assertRaises(ConnectionError):
+                conn.connect()
+        # Connected to the pinned IP, NOT a re-resolution of the hostname.
+        self.assertEqual(captured["addr"], ("93.184.216.34", 80))
+        # Host header / cert identity stays the original hostname.
+        self.assertEqual(conn.host, "rebind.example.com")
+
+    def test_pinned_opener_wires_pinned_handlers(self):
+        m = self._mod()
+        opener = m._build_no_redirect_opener("93.184.216.34")
+        # A no-redirect handler plus at least the pinned HTTP handler are wired.
+        self.assertTrue(
+            any(isinstance(h, m._PinnedHTTPHandler) for h in opener.handlers)
+        )
+        self.assertTrue(
+            any(isinstance(h, m._NoRedirectHandler) for h in opener.handlers)
+        )
+
 
 # ── Registration-time rejection (HTTP, via TestClient) ─────────────────────────
 

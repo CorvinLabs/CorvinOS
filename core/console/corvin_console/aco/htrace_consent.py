@@ -8,6 +8,7 @@ The ConsentAct is the user-level gate. BOTH must be present for uploads.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -22,7 +23,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+# fcntl is POSIX-only (absent on Windows). Conditional import keeps this module
+# importable everywhere; file locking is skipped when absent (single-instance
+# Windows installs are not affected by the cross-process token-pair race).
+try:
+    import fcntl as _fcntl
+    _HAS_FLOCK = True
+except ImportError:  # pragma: no cover — Windows path
+    _HAS_FLOCK = False
+
 logger = logging.getLogger(__name__)
+
+# Must match htrace_uploader._PING_LOCK_FILENAME — the same on-disk lock file is
+# shared so ping_if_due()'s lock and a direct token provision serialize together.
+_PING_LOCK_FILENAME = ".ping.lock"
+
+# False-like string forms accepted for every telemetry opt-out flag.
+_FALSE_LIKE = ("false", "no", "0", "off")
 
 _CONSENT_VERSION = "htrace/1.1"
 # Base URL for all telemetry endpoints. Overridable via CORVIN_TELEMETRY_BASE_URL.
@@ -150,6 +167,71 @@ def _tenant_cfg_path(home: Path) -> Path:
     return home / "tenants" / tid / "global" / "tenant.corvin.yaml"
 
 
+# ── Shared HTTP hardening + config parsing helpers ────────────────────────────
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Don't follow 3xx — a redirect could bounce an authenticated telemetry POST
+    (its Authorization + instance-token headers) to an unintended host."""
+
+    def redirect_request(self, *a, **k):  # noqa: D401
+        return None
+
+
+def _open_no_redirect(req: urllib.request.Request, timeout: float):
+    """urlopen with a non-redirecting opener + https-only guard. Raises
+    ValueError if the target URL is not ``https://`` so credentials are never
+    forwarded over plaintext or across a cross-host redirect (F8)."""
+    url = str(req.full_url)
+    if not url.lower().startswith("https://"):
+        raise ValueError("telemetry URL must be https://")
+    opener = urllib.request.build_opener(_NoRedirect)
+    return opener.open(req, timeout=timeout)
+
+
+def _ping_lock_path(home: Path) -> Path:
+    from .htrace import htrace_dir  # local import avoids a circular dependency
+    return htrace_dir(home) / _PING_LOCK_FILENAME
+
+
+def _read_telemetry_flag(cfg_path: Path, key: str) -> Optional[bool]:
+    """Read ``spec.telemetry.<key>`` from tenant.corvin.yaml with FAIL-CLOSED
+    parsing.
+
+    Returns:
+      * ``None``  — config file ABSENT (caller applies default-ON / opt-out).
+      * ``False`` — flag is an explicit ``false`` / false-like string → opted OUT.
+      * ``True``  — flag is truthy, the key is missing, or unset → opted IN.
+      * ``False`` — config file EXISTS but is unreadable / unparseable / not a
+        mapping. Default-ON applies ONLY to an ABSENT config, never a BROKEN one
+        (F4): a config we cannot trust fails toward the privacy-preserving state.
+    """
+    if not cfg_path.exists():
+        return None
+    try:
+        text = cfg_path.read_text(encoding="utf-8")
+    except OSError:
+        return False  # exists but unreadable → fail toward privacy (opted OUT)
+    try:
+        import yaml  # type: ignore[import]
+        data = yaml.safe_load(text)
+    except Exception:  # noqa: BLE001
+        return False  # broken YAML → fail toward privacy (opted OUT)
+    if not isinstance(data, dict):
+        return False
+    spec = data.get("spec", data)
+    if not isinstance(spec, dict):
+        return False
+    tele = spec.get("telemetry", {})
+    if not isinstance(tele, dict):
+        return False
+    v = tele.get(key, True)
+    if v is False:
+        return False
+    if isinstance(v, str) and v.strip().lower() in _FALSE_LIKE:
+        return False
+    return True
+
+
 # ── Instance identity + stateless token provisioning (ADR-0180 M4) ────────────
 
 def _instance_id_path(home: Path) -> Path:
@@ -176,16 +258,31 @@ def load_or_create_instance_id(home: Path) -> str:
         pass
     new_id = str(uuid.uuid4())
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(new_id, encoding="utf-8")
+    # Atomic write (tempfile + os.replace): a concurrent reader never observes a
+    # half-written / empty instance_id, and two racing creators converge on one
+    # file rather than interleaving bytes (F12).
+    _atomic_write_token(p, new_id)
     return new_id
 
 
-def provision_telemetry_tokens(home: Path, instance_id: str) -> bool:
+def provision_telemetry_tokens(
+    home: Path, instance_id: str, *, _outer_locked: bool = False
+) -> bool:
     """Fetch and persist the healing-trace HMAC tokens; return False on network failure.
 
-    POSTs the instance_id to the Corvin-Features token endpoint, then writes the
-    returned instance_token and telemetry_token to disk with 0o600 permissions.
-    Fail-soft: any network / HTTP error returns False without raising.
+    POSTs the instance_id to the Corvin-Features token endpoint (https-only, no
+    redirects — F8), then writes the returned instance_token and telemetry_token
+    to disk with 0o600 permissions. Fail-soft: any network / HTTP error returns
+    False without raising.
+
+    Concurrency (F6): the two token files are ONE logical pair — if two server
+    responses interleave, the on-disk instance_token can end up from response A
+    while the telemetry_token is from response B, a mismatch ensure_ping_tokens()'s
+    existence-only check can never detect or self-heal. Both writes therefore run
+    under the shared ``.ping.lock``. ``_outer_locked=True`` is passed by
+    ``ensure_ping_tokens`` — which only ever runs while ``ping_if_due`` already
+    holds that same lock — so the lock is NOT re-acquired there (a second flock on
+    a fresh fd for the same file would deadlock this process against itself).
     """
     payload = json.dumps({"instance_id": instance_id}).encode("utf-8")
     req = urllib.request.Request(
@@ -194,41 +291,57 @@ def provision_telemetry_tokens(home: Path, instance_id: str) -> bool:
         method="POST",
         headers={"Content-Type": "application/json"},
     )
-    try:
-        with urllib.request.urlopen(req, timeout=_TOKEN_TIMEOUT_S) as resp:
-            if not (200 <= resp.getcode() < 300):
-                return False
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:  # noqa: BLE001
-        logger.debug("htrace: token endpoint unreachable (non-fatal): %s", e)
-        return False
 
-    instance_token = str(data.get("instance_token", ""))
-    telemetry_token = str(data.get("telemetry_token", ""))
-    if not instance_token or not telemetry_token:
-        logger.debug("htrace: token endpoint returned incomplete payload")
-        return False
+    lf = None
+    if not _outer_locked:
+        try:
+            lock_path = _ping_lock_path(home)
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lf = lock_path.open("w")
+            if _HAS_FLOCK:
+                _fcntl.flock(lf, _fcntl.LOCK_EX)  # blocking — serialize the pair write
+        except OSError:
+            if lf is not None:
+                with contextlib.suppress(Exception):
+                    lf.close()
+            lf = None  # best-effort — proceed even if the lock cannot be taken
 
     try:
-        inst_p = _instance_token_path(home)
-        tel_p = _telemetry_token_path(home)
-        inst_p.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic, paired write: both tokens land via tempfile+os.replace at
-        # 0600 from creation (not write_text-then-chmod, which has a brief
-        # permissive window and no atomicity). Writing the pair atomically
-        # also closes a race with a concurrent provisioning call from
-        # another process (e.g. a bridge daemon booting alongside the web
-        # console): without this, two unlocked plain write_text() calls
-        # could interleave two different token-endpoint responses into a
-        # mismatched instance/telemetry-token pair that ensure_ping_tokens()'s
-        # existence-only check can never detect or self-heal (adversarial
-        # review finding).
-        _atomic_write_token(inst_p, instance_token)
-        _atomic_write_token(tel_p, telemetry_token)
-    except OSError as e:
-        logger.debug("htrace: token persistence failed (non-fatal): %s", e)
-        return False
-    return True
+        try:
+            with _open_no_redirect(req, _TOKEN_TIMEOUT_S) as resp:
+                if not (200 <= resp.getcode() < 300):
+                    return False
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("htrace: token endpoint unreachable (non-fatal): %s", e)
+            return False
+
+        instance_token = str(data.get("instance_token", ""))
+        telemetry_token = str(data.get("telemetry_token", ""))
+        if not instance_token or not telemetry_token:
+            logger.debug("htrace: token endpoint returned incomplete payload")
+            return False
+
+        try:
+            inst_p = _instance_token_path(home)
+            tel_p = _telemetry_token_path(home)
+            inst_p.parent.mkdir(parents=True, exist_ok=True)
+            # Atomic, paired write: both tokens land via tempfile+os.replace at
+            # 0600 from creation (not write_text-then-chmod, which has a brief
+            # permissive window and no atomicity). The surrounding lock keeps the
+            # pair consistent across processes.
+            _atomic_write_token(inst_p, instance_token)
+            _atomic_write_token(tel_p, telemetry_token)
+        except OSError as e:
+            logger.debug("htrace: token persistence failed (non-fatal): %s", e)
+            return False
+        return True
+    finally:
+        if lf is not None:
+            with contextlib.suppress(Exception):
+                if _HAS_FLOCK:
+                    _fcntl.flock(lf, _fcntl.LOCK_UN)
+                lf.close()
 
 
 def _atomic_write_token(path: Path, value: str) -> None:
@@ -280,15 +393,10 @@ def healing_traces_enabled(home: Path, *, cfg: dict | None = None) -> bool:
     if cfg is not None:
         # Callers may pass the full k8s-style manifest (with spec:) or a bare dict
         return _healing_flag_on(cfg.get("spec", cfg))
-    try:
-        import yaml  # type: ignore[import]
-        cfg_path = _tenant_cfg_path(home)
-        if cfg_path.exists():
-            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-            return _healing_flag_on(data.get("spec", data))
-    except Exception:  # noqa: BLE001
-        pass
-    return True  # no config → default ON (opt-out)
+    # On-disk read with FAIL-CLOSED parsing: absent config → default ON;
+    # a config that EXISTS but is broken → opted OUT, never default-ON (F4).
+    flag = _read_telemetry_flag(_tenant_cfg_path(home), "healing_traces")
+    return True if flag is None else flag
 
 
 def load_consent_act_id(home: Path) -> str:
@@ -354,24 +462,16 @@ def _discover_tenants_under(home: Path) -> list[str]:
 
 def _tenant_ping_flag(home: Path, tid: str | None) -> bool:
     """``ping_enabled`` for one specific tenant id (``None`` = env-resolved
-    default tenant, matching the pre-existing single-tenant behaviour)."""
-    try:
-        import yaml  # type: ignore[import]
-        cfg_path = _tenant_cfg_path(home) if tid is None else (
-            home / "tenants" / tid / "global" / "tenant.corvin.yaml"
-        )
-        if cfg_path.exists():
-            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-            spec = data.get("spec", data)
-            v = spec.get("telemetry", {}).get("ping_enabled", True)
-            if v is False:
-                return False
-            if isinstance(v, str) and v.strip().lower() in ("false", "no", "0", "off"):
-                return False
-            return True
-    except Exception:  # noqa: BLE001
-        pass
-    return True  # default ON (opt-out) — no config / unreadable config → counted
+    default tenant, matching the pre-existing single-tenant behaviour).
+
+    Fail-closed parsing (F4): an ABSENT config counts by default (opt-out), but a
+    config that EXISTS and is broken/unparseable is treated as opted OUT — a
+    config we cannot trust must never fall through to default-ON."""
+    cfg_path = _tenant_cfg_path(home) if tid is None else (
+        home / "tenants" / tid / "global" / "tenant.corvin.yaml"
+    )
+    flag = _read_telemetry_flag(cfg_path, "ping_enabled")
+    return True if flag is None else flag
 
 
 def ensure_ping_tokens(home: Path) -> bool:
@@ -386,7 +486,10 @@ def ensure_ping_tokens(home: Path) -> bool:
     if inst_p.exists() and tel_p.exists():
         return True  # already provisioned
     instance_id = load_or_create_instance_id(home)
-    return provision_telemetry_tokens(home, instance_id)
+    # ensure_ping_tokens() is only ever called from ping_if_due(), which already
+    # holds the shared .ping.lock — so provision must NOT re-acquire it here or it
+    # would deadlock the process against its own lock (F6).
+    return provision_telemetry_tokens(home, instance_id, _outer_locked=True)
 
 
 # ── CLI consent flow ──────────────────────────────────────────────────────────

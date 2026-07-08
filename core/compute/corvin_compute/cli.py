@@ -201,6 +201,15 @@ def _build_runner_fn(tenant_id: str = "_default", corvin_home_path: Path | None 
 
 async def _cmd_serve(args: argparse.Namespace) -> int:
     home = Path(args.corvin_home)
+    # Pin CORVIN_HOME to the resolved --corvin-home so every home-derived
+    # resolver inside this process agrees with the flag — in particular the
+    # background-completion queue (completion_notify resolves its
+    # pending_notifications/ dir from CORVIN_HOME, taking no home argument). A
+    # plain-CLI launch that passed only --corvin-home would otherwise write the
+    # notify record under ~/.corvin while RunStore/socket used the flag's tree
+    # → the record is orphaned where the bridge poller never reads it. The
+    # bridge poller MUST share this same CORVIN_HOME for delivery to work.
+    os.environ["CORVIN_HOME"] = str(home)
     socket_path = Path(args.socket) if args.socket \
         else _default_socket_path(home, args.tenant)
     runner_fn = _build_runner_fn(tenant_id=args.tenant, corvin_home_path=home)

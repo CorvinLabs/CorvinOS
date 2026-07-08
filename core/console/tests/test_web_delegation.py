@@ -106,3 +106,37 @@ def test_delegation_spec_passes_acs_validator() -> None:
     result = validate_workflow_dict(spec)
     blocking = [i for i in result.issues if i.severity.upper() in ("ERROR", "CRITICAL")]
     assert not blocking, f"ACS validator rejected the web delegation spec: {blocking}"
+
+
+# ── ACS-1: delegation budget siblings must stay at sane bounds ────────────────
+
+def test_acs1_budget_defaults_are_sane() -> None:
+    """The a47c6d3 blanket 100x scale-up (max_total_workers=400,
+    max_wall_time=360000, max_loops=500, max_worker_turns=10000) was a
+    quota-defeat. The siblings must be restored to sane pre-inflation bounds so
+    one metered compute unit cannot authorize 400 workers for 100 h."""
+    d = cr._DELEGATION_BUDGET_DEFAULTS
+    assert 1 <= d["max_total_workers"] <= 16, d["max_total_workers"]
+    assert d["max_wall_time"] <= 3600, d["max_wall_time"]
+    assert d["timeout_seconds"] <= 3600, d["timeout_seconds"]
+    assert 1 <= d["max_loops"] <= 50, d["max_loops"]
+    assert 1 <= d["max_worker_turns"] <= 200, d["max_worker_turns"]
+    assert 1 <= d["max_depth"] <= 10, d["max_depth"]
+
+
+def test_acs1_inflated_budget_would_be_rejected_by_validator() -> None:
+    """Backstop: had the inflated siblings NOT been reverted, the acs_validator
+    R35/R36 ceilings would now reject the spec loudly."""
+    shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    sys.path.insert(0, str(shared))
+    try:
+        from acs_validator import validate_workflow_dict  # type: ignore
+    except ImportError:
+        pytest.skip("acs_validator not importable in this environment")
+    inflated = dict(cr._DELEGATION_BUDGET_DEFAULTS)
+    inflated["max_total_workers"] = 400
+    inflated["max_wall_time"] = 360000
+    spec = cr._build_delegation_spec("two-step task", inflated)
+    result = validate_workflow_dict(spec)
+    rule_ids = {i.rule_id for i in result.errors}
+    assert "R35" in rule_ids and "R36" in rule_ids, rule_ids

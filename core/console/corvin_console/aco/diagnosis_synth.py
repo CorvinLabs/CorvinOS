@@ -35,6 +35,33 @@ def _diag_root(home: Path) -> Path:
     return Path(home) / "aco" / "diagnoses"
 
 
+def _safe_repo_relfile(trf: Any, repo_root: Optional[Path] = None) -> Optional[str]:
+    """SH-8: sanitise an ATTACKER-SUPPLIED ``top_repo_file`` from foreign telemetry
+    before it becomes a diagnosis target. Rejects (→ None, i.e. NOT localizable, so
+    it can never become a code patch) anything absolute, containing ``..`` or a
+    colon, or — when ``repo_root`` is known — not an existing repo-relative file
+    inside the maintainer checkout. A trusted, own-log signature never passes
+    through here."""
+    if not trf or not isinstance(trf, str):
+        return None
+    s = trf.replace("\\", "/")
+    if s.startswith("/") or ":" in s or ".." in Path(s).parts:
+        return None
+    if Path(trf).is_absolute():
+        return None
+    if repo_root is not None:
+        try:
+            root = Path(repo_root).resolve()
+            full = (root / s).resolve()
+            if full != root and root not in full.parents:
+                return None
+            if not full.is_file():
+                return None
+        except OSError:
+            return None
+    return trf
+
+
 def _log_sources(home: Path) -> list[tuple[str, str]]:
     """(label, text) for every readable corvin.log across local + mirrored remotes."""
     home = Path(home)
@@ -73,7 +100,8 @@ def _existing_ids(home: Path) -> set[str]:
 
 
 def aggregate(sources: Iterable[tuple[str, str]],
-              telemetry_sigs: Optional[list[dict]] = None) -> dict[str, dict]:
+              telemetry_sigs: Optional[list[dict]] = None,
+              repo_root: Optional[Path] = None) -> dict[str, dict]:
     """signature → {sig: ErrorSignature, count: int, sources: set, localized: bool}."""
     agg: dict[str, dict] = {}
 
@@ -97,11 +125,14 @@ def aggregate(sources: Iterable[tuple[str, str]],
             n = int(t.get("count", 1))
         except (TypeError, ValueError):
             n = 1                              # malformed count → 1, don't drop the signal
+        # SH-8: sanitise the attacker-controlled top_repo_file. An unsafe or
+        # non-existent path is dropped → not localizable → report-only, never a patch.
+        safe_trf = _safe_repo_relfile(t.get("top_repo_file"), repo_root=repo_root)
         sig = ErrorSignature(
             signature=str(t["signature"]), exc_type=str(t.get("exc_type", "?")),
             message_template=str(t.get("message_template", "")),
-            top_repo_file=t.get("top_repo_file"), func=str(t.get("func", "?")),
-            frames=list(t.get("frames", []) or []), localized=bool(t.get("top_repo_file")))
+            top_repo_file=safe_trf, func=str(t.get("func", "?")),
+            frames=list(t.get("frames", []) or []), localized=bool(safe_trf))
         _add(sig, f"telemetry:{t.get('instance', 'anon')}", n)
     return agg
 
@@ -130,6 +161,7 @@ def _build_diagnosis(slot: dict, *, now: int) -> dict:
 
 def synthesize(home: str | Path, *, min_occurrences: int = 3,
                telemetry_sigs: Optional[list[dict]] = None,
+               repo_root: Optional[str | Path] = None,
                now: Optional[int] = None) -> dict:
     """Fuse all sources → write qualifying diagnoses to pending/, the rest to
     reports/. Returns a summary. Idempotent: skips already-known signatures."""
@@ -152,7 +184,8 @@ def synthesize(home: str | Path, *, min_occurrences: int = 3,
     tsigs = [t for t in (telemetry_sigs or [])
              if not (isinstance(t, dict) and t.get("instance") in mirrored)]
 
-    agg = aggregate(_log_sources(home), tsigs)
+    agg = aggregate(_log_sources(home), tsigs,
+                    repo_root=Path(repo_root) if repo_root else None)
     known = _existing_ids(home)
     queued, reported, skipped = [], [], 0
 

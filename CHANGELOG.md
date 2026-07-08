@@ -6,6 +6,69 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.21] — 2026-07-08
+
+### Security
+- **Iterative adversarial hardening sweep (multi-round review).** Closed a
+  batch of residual issues found by a full-repo penetration re-review:
+  - **L10 path-gate**: four confirmed write-bypasses closed — newline/CR
+    command separators, quoted redirect targets, inline-interpreter writes
+    (`python -c`/`perl -e`), and `cd`-into-tree relative redirects/`tee`; the
+    voice config dir (`~/.config/corvin-voice`, holding the BYOK secret vault)
+    is now a protected root against direct `rm`/`mv`/`chmod` as well as
+    file-level writes.
+  - **Webhook SSRF (DNS-rebind TOCTOU)**: the gateway webhook dispatcher now
+    pins the validated IP into the httpx connection (connect-to-pinned-IP with
+    SNI/cert kept on the real hostname, `follow_redirects=False`), matching the
+    datasource-ping resolver — a hostname that rebinds to a link-local/internal
+    address between validation and connect can no longer reach it.
+  - **Email inbound-auth**: DMARC/DKIM-alignment gate hardened — a forged
+    `Authentication-Results` line from a non-stamping IMAP provider is rejected
+    unless its authserv-id matches the operator-pinned `auth_results_authserv_id`
+    or a built-in well-known-provider allowlist; empty whitelist stays
+    deny-by-default (owner via PIN `/auth`).
+  - **SQL identifier gate**: anchored with `\Z` (not `$`) so a trailing newline
+    can no longer slip through the identifier/ORDER BY allowlist.
+  - **Self-heal**: the reproduction subprocess env now also strips
+    `SSH_AUTH_SOCK` (no forwarded ssh-agent for pre-review test code); the
+    maintenance loop treats a non-`ReproResult` as NOT proven (fail-closed).
+  - Telemetry public-mirror bundle is filtered through the fail-closed
+    `_assert_safe_htrace` backstop before send; browser-automation prompt moved
+    off argv (Windows `cmd` RCE); local-stats endpoint gated to the real TCP
+    loopback peer (not spoofable via `X-Forwarded-For`).
+
+### Fixed
+- **Background-completion notify — dead-worker reaper**: a long-running
+  (>30 min) compute job is no longer falsely reported as "worker stopped" and
+  its real result is no longer dropped — the reaper now acts only on records
+  whose producer actually claimed them, and its liveness probe is
+  non-destructive on Windows (`OpenProcess`/`GetExitCodeProcess` instead of
+  `os.kill(pid, 0)`, which would terminate the very worker it checks).
+- **Windows autostart**: service commands with a spaced or metacharacter
+  program path (`C:\Users\John Doe\...`, `C:\Users\A&B\...`) no longer tear or
+  shell-inject — the Task Scheduler command is registered via list-form
+  `schtasks` (no `shell=True`); `enable_autostart`/`disable_autostart` now use
+  `/change /enable`|`/disable` instead of `/tr "onstart"`, which previously
+  clobbered the task's run-command and broke the boot task; the Windows
+  self-update convergence marker gained a TTL so a transient upgrade failure
+  self-heals instead of freezing auto-update.
+- **Voice**: `test_say.sh` Piper isolation can no longer false-pass via the
+  edge-tts fallback (new opt-in `CORVIN_SAY_NO_FALLBACK=1` strict mode);
+  runtime TTS model names reconciled with the installer across all 12 languages.
+- **CI/CD**: the compliance gate no longer skips its PR annotation on a critical
+  finding (stays fail-closed at the decision step); publish is gated behind the
+  test job with a tag↔version assertion; coverage/e2e-nightly/compliance steps
+  no longer fail-open.
+- **Delegation budget**: the runtime `BudgetEnvelope` default worker ceiling is
+  realigned (8, not 500) with the delegation-budget defaults and validator —
+  both the dataclass default and the spec-driven `_budget_from_spec` path
+  (default 8, ceiling 64) so a workflow spec can no longer silently default to a
+  500-worker fan-out.
+- **Test isolation**: the skill-inject adapter test no longer writes its
+  `settings.json` into the repo tree (`operator/bridges/skillinject/`) — it uses
+  a private tmp bridges dir via `ADAPTER_BRIDGES_DIR`, closing a
+  test-vs-real-config contamination class.
+
 ### Added
 - **Console Settings toggle for ADR-0184 Stufe 2 (always-on system service).**
   Previously only reachable via the `corvin-service install`/`uninstall` CLI;

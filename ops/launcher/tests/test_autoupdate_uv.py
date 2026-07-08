@@ -8,6 +8,7 @@ failed there and the autostart never updated. ``_pick_upgrade_command`` must pic
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -178,12 +179,14 @@ class WindowsSelfUpdateHandoffTests(unittest.TestCase):
         self._orig_run = sb.subprocess.run
         self._orig_pick = sb._pick_upgrade_command
         self._orig_spawn = sb._spawn_windows_self_updater
+        sb._clear_update_convergence_marker()  # INST-1b: isolate the temp marker
 
     def tearDown(self) -> None:
         sb.sys.platform = self._orig_platform
         sb.subprocess.run = self._orig_run
         sb._pick_upgrade_command = self._orig_pick
         sb._spawn_windows_self_updater = self._orig_spawn
+        sb._clear_update_convergence_marker()
 
     def _fake_pypi(self, current: str, latest: str):
         import importlib.metadata as _meta
@@ -258,6 +261,123 @@ class WindowsSelfUpdateHandoffTests(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertEqual(spawn_calls, [])
+
+
+class SupervisedSkipTests(unittest.TestCase):
+    """INST-2 / WA-2 / WA-3: when launched by the install.ps1 supervisor
+    (CORVIN_SUPERVISED=1), the in-process auto-update must be skipped entirely —
+    the supervisor already runs `uv tool upgrade` once per logon, and an
+    in-process handoff would fight its 5-per-300s restart budget."""
+
+    def test_supervised_env_skips_autoupdate_before_any_pypi_check(self) -> None:
+        import os as _os
+        # A network/PyPI touch would prove the skip didn't happen early enough.
+        import urllib.request as _ur
+        orig_urlopen = _ur.urlopen
+
+        def _boom(*a, **k):
+            raise AssertionError("must not touch PyPI when CORVIN_SUPERVISED=1")
+
+        _ur.urlopen = _boom
+        _prev = _os.environ.get("CORVIN_SUPERVISED")
+        _os.environ["CORVIN_SUPERVISED"] = "1"
+        try:
+            self.assertFalse(sb.maybe_pypi_autoupdate(relaunch_argv=["corvin-serve"]))
+        finally:
+            _ur.urlopen = orig_urlopen
+            if _prev is None:
+                _os.environ.pop("CORVIN_SUPERVISED", None)
+            else:
+                _os.environ["CORVIN_SUPERVISED"] = _prev
+
+
+class ConvergenceGuardTests(unittest.TestCase):
+    """INST-1b: the Windows self-update handoff must not loop forever when an
+    upgrade fails to advance the installed version — a second handoff for the
+    SAME target version is refused."""
+
+    def setUp(self) -> None:
+        sb._clear_update_convergence_marker()
+
+    def tearDown(self) -> None:
+        sb._clear_update_convergence_marker()
+
+    def test_first_target_allowed_second_same_target_refused(self) -> None:
+        # M3: _update_convergence_ok is now read-only; the marker is armed by
+        # _record_update_attempt AFTER a successful spawn.
+        self.assertTrue(sb._update_convergence_ok("1.2.3"))   # first handoff ok
+        sb._record_update_attempt("1.2.3")                    # armed post-spawn
+        self.assertFalse(sb._update_convergence_ok("1.2.3"))  # loop → refused
+
+    def test_new_target_after_refusal_is_allowed(self) -> None:
+        self.assertTrue(sb._update_convergence_ok("1.2.3"))
+        sb._record_update_attempt("1.2.3")
+        self.assertFalse(sb._update_convergence_ok("1.2.3"))
+        # A genuinely newer release must not be blocked by the stale marker.
+        self.assertTrue(sb._update_convergence_ok("1.2.4"))
+
+    def test_failed_spawn_leaves_no_marker_so_retry_allowed(self) -> None:
+        # M3: a spawn that never started must NOT arm the guard — no
+        # _record_update_attempt call means the same target is retried.
+        self.assertTrue(sb._update_convergence_ok("1.2.3"))
+        # (no _record_update_attempt — simulates a failed handoff)
+        self.assertTrue(sb._update_convergence_ok("1.2.3"))
+
+    def test_marker_ttl_expiry_allows_retry(self) -> None:
+        # M3: a non-converging attempt self-heals once the marker ages past the
+        # TTL — auto-update no longer freezes until a newer release ships.
+        import os as _os
+        sb._record_update_attempt("1.2.3")
+        self.assertFalse(sb._update_convergence_ok("1.2.3"))  # within TTL → refused
+        marker = sb._update_marker_path()
+        stale = time.time() - (sb._UPDATE_MARKER_TTL_SECONDS + 60)
+        _os.utime(marker, (stale, stale))
+        self.assertTrue(sb._update_convergence_ok("1.2.3"))   # aged out → retry
+
+    def test_marker_cleared_on_converged_up_to_date(self) -> None:
+        sb._record_update_attempt("1.2.3")
+        sb._clear_update_convergence_marker()
+        # After clearing (what the "up to date" branch does), the same target
+        # is allowed again.
+        self.assertTrue(sb._update_convergence_ok("1.2.3"))
+
+    def test_second_handoff_for_same_target_refused_end_to_end(self) -> None:
+        orig_platform = sb.sys.platform
+        orig_pick = sb._pick_upgrade_command
+        orig_spawn = sb._spawn_windows_self_updater
+        sb.sys.platform = "win32"
+        sb._pick_upgrade_command = lambda latest: (
+            ["uv", "tool", "upgrade", "corvinos"], "uv tool upgrade corvinos",
+        )
+        spawn_calls = []
+        sb._spawn_windows_self_updater = lambda cmd, argv: spawn_calls.append(1) or True
+
+        import importlib.metadata as _meta
+        import json as _json
+        import urllib.request as _ur
+
+        class _FakeResp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return _json.dumps({"info": {"version": "9.9.9"}}).encode()
+
+        orig_version = _meta.version
+        orig_urlopen = _ur.urlopen
+        _meta.version = lambda _pkg: "0.10.6"  # never advances (simulated no-op)
+        _ur.urlopen = lambda *a, **k: _FakeResp()
+        try:
+            first = sb.maybe_pypi_autoupdate(relaunch_argv=["corvin-serve"])
+            second = sb.maybe_pypi_autoupdate(relaunch_argv=["corvin-serve"])
+        finally:
+            _meta.version = orig_version
+            _ur.urlopen = orig_urlopen
+            sb.sys.platform = orig_platform
+            sb._pick_upgrade_command = orig_pick
+            sb._spawn_windows_self_updater = orig_spawn
+
+        self.assertTrue(first)             # first handoff proceeds
+        self.assertFalse(second)           # second (same target) refuses → no loop
+        self.assertEqual(len(spawn_calls), 1)
 
 
 class SpawnWindowsSelfUpdaterScriptGenTests(unittest.TestCase):

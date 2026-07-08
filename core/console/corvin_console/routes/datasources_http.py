@@ -12,6 +12,7 @@ Routes:
 from __future__ import annotations
 
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -218,17 +219,19 @@ def _assert_scheme_and_static_host(base_url: str) -> tuple[str, str]:
     return scheme, host
 
 
-def _assert_base_url_safe(base_url: str) -> None:
-    """Full pre-fetch guard: static checks PLUS resolve the hostname to EVERY
-    address and reject if any is non-public or if it resolves to nothing.
-    Defends against hostnames that (re)bind to a private range. Fail-closed.
+def _validated_pinned_ip(base_url: str) -> str:
+    """Full pre-fetch guard that ALSO returns the single validated IP to pin.
 
-    Residual (documented): a rebind that flips between this lookup and urllib's
-    own connect is not closed in-process — the perimeter (netns/nftables) is the
-    true closure, mirroring the L35 honest-scope note in ``egress_gate.py``."""
+    Static checks PLUS resolve the hostname to EVERY address and reject if any
+    is non-public or if it resolves to nothing. Returns the first validated
+    address so the caller can CONNECT to exactly that IP (defeating a
+    DNS-rebind TOCTOU — PENTEST-7 — where a ~0-TTL record hands a public IP to
+    this guard and 169.254.169.254 to urllib's own resolve at connect time).
+    Fail-closed: any ambiguity raises :class:`_UnsafeUrl`."""
     scheme, host = _assert_scheme_and_static_host(base_url)
-    if _as_ip(host) is not None:
-        return  # literal IP already validated above; no DNS to resolve
+    lit = _as_ip(host)
+    if lit is not None:
+        return str(lit)  # literal IP already validated above; no DNS to resolve
     try:
         infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     except (OSError, ValueError, UnicodeError) as exc:
@@ -236,10 +239,23 @@ def _assert_base_url_safe(base_url: str) -> None:
     addrs = [info[4][0] for info in infos if info and len(info) > 4 and info[4]]
     if not addrs:
         raise _UnsafeUrl("host resolves to no address")
+    pinned: str | None = None
     for addr in addrs:
         ip = _as_ip(str(addr))
         if ip is None or _ip_is_blocked(ip):
             raise _UnsafeUrl("host resolves to a non-public address")
+        if pinned is None:
+            pinned = str(ip)
+    if pinned is None:  # unreachable (addrs non-empty) — belt-and-suspenders
+        raise _UnsafeUrl("host resolves to no usable address")
+    return pinned
+
+
+def _assert_base_url_safe(base_url: str) -> None:
+    """Validate ``base_url`` (scheme + resolve-all-addresses). Fail-closed.
+    Thin wrapper over :func:`_validated_pinned_ip` that discards the pin — kept
+    for callers/tests that only need the pass/raise decision."""
+    _validated_pinned_ip(base_url)
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -251,8 +267,89 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         raise _UnsafeUrl(f"redirect (HTTP {code}) blocked")
 
 
-def _build_no_redirect_opener() -> urllib.request.OpenerDirector:
-    return urllib.request.build_opener(_NoRedirectHandler())
+# ── IP-pinned connections (PENTEST-7: close the resolve→connect TOCTOU) ─────────
+#
+# urllib re-resolves the hostname when it opens the connection, so a validated
+# public IP at guard time can flip to 169.254.169.254 at connect time (~0-TTL
+# DNS rebinding). These connection subclasses connect to the ONE IP the guard
+# validated while keeping the original hostname for the Host header and TLS
+# SNI/cert validation — so the fetch can only ever land on the vetted address.
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    _pinned_ip: str | None = None
+
+    def connect(self) -> None:  # noqa: D401
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port), self.timeout, self.source_address,
+        )
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if self._tunnel_host:
+            self._tunnel()
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    _pinned_ip: str | None = None
+
+    def connect(self) -> None:  # noqa: D401
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port), self.timeout, self.source_address,
+        )
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        if self._tunnel_host:
+            self._tunnel()
+            server_hostname = self._tunnel_host
+        else:
+            server_hostname = self.host  # SNI + cert validated vs the HOSTNAME
+        self.sock = self._context.wrap_socket(
+            self.sock, server_hostname=server_hostname,
+        )
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, pinned_ip: str) -> None:
+        super().__init__()
+        self._pinned_ip = pinned_ip
+
+    def http_open(self, req):  # noqa: D401
+        pinned = self._pinned_ip
+
+        def factory(host, **kw):
+            conn = _PinnedHTTPConnection(host, **kw)
+            conn._pinned_ip = pinned
+            return conn
+
+        return self.do_open(factory, req)
+
+
+if hasattr(urllib.request, "HTTPSHandler"):
+    class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+        def __init__(self, pinned_ip: str) -> None:
+            super().__init__()
+            self._pinned_ip = pinned_ip
+
+        def https_open(self, req):  # noqa: D401
+            pinned = self._pinned_ip
+
+            def factory(host, **kw):
+                conn = _PinnedHTTPSConnection(host, **kw)
+                conn._pinned_ip = pinned
+                return conn
+
+            return self.do_open(factory, req, context=self._context)
+else:  # pragma: no cover — ssl-less build
+    _PinnedHTTPSHandler = None  # type: ignore[assignment]
+
+
+def _build_no_redirect_opener(pinned_ip: str) -> urllib.request.OpenerDirector:
+    """No-redirect opener whose HTTP(S) connections are pinned to *pinned_ip*
+    (the address the SSRF guard validated) — a connect-time re-resolution can
+    no longer redirect the fetch to a private/metadata host."""
+    handlers: list[urllib.request.BaseHandler] = [
+        _NoRedirectHandler(), _PinnedHTTPHandler(pinned_ip),
+    ]
+    if _PinnedHTTPSHandler is not None:
+        handlers.append(_PinnedHTTPSHandler(pinned_ip))
+    return urllib.request.build_opener(*handlers)
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -448,9 +545,12 @@ def ping_http_adapter(
             "error": "egress_not_declared",
         }
 
-    # SSRF fix: validate scheme + resolve every address before fetching.
+    # SSRF fix: validate scheme + resolve every address before fetching, and
+    # PIN the validated IP so the connect below cannot be rebound to a
+    # private/metadata host between this check and the socket connect
+    # (PENTEST-7 DNS-rebind TOCTOU).
     try:
-        _assert_base_url_safe(base_url)
+        pinned_ip = _validated_pinned_ip(base_url)
     except _UnsafeUrl:
         console_audit.action_failed(
             tenant_id=rec.tenant_id,
@@ -486,8 +586,9 @@ def ping_http_adapter(
                 header = manifest.get("auth_header", "X-API-Key")
                 req.add_header(header, token)
 
-        # No-redirect opener: a 3xx to a private/metadata host must not be followed.
-        opener = _build_no_redirect_opener()
+        # No-redirect + IP-pinned opener: a 3xx to a private/metadata host must
+        # not be followed, and the connect is pinned to the validated IP.
+        opener = _build_no_redirect_opener(pinned_ip)
         with opener.open(req, timeout=5.0) as resp:
             body = json.loads(resp.read())
 

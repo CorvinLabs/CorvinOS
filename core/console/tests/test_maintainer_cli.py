@@ -83,7 +83,22 @@ def test_run_denied_without_capability(tmp_path):
     assert rc == 1   # no pinned key / token → denied
 
 
+def _buggy_repo(tmp_path):
+    """A repo whose add() is buggy (returns a-b) with an existing sub() guard test."""
+    repo = tmp_path / "repo"; (repo / "tests").mkdir(parents=True)
+    def g(*a): subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True)
+    g("init", "-b", "main"); g("config", "user.email", "t@t"); g("config", "user.name", "t")
+    (repo / "app.py").write_text("def add(a, b):\n    return a - b\n\n"
+                                 "def sub(a, b):\n    return a - b\n", encoding="utf-8")
+    (repo / "tests" / "test_sub.py").write_text(
+        "from app import sub\n\ndef test_sub():\n    assert sub(5, 2) == 3\n", encoding="utf-8")
+    g("add", "-A"); g("commit", "-m", "init")
+    return repo
+
+
 def test_run_merges_low_risk_with_capability(tmp_path, capsys, monkeypatch):
+    # SH-2 end-to-end: --direct-main now goes through the reproduction gate; only a
+    # PROVEN red→green fix reaches main. Supply a real regression test + fix.
     from cryptography.hazmat.primitives import serialization as S
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     sk = Ed25519PrivateKey.generate()
@@ -95,18 +110,48 @@ def test_run_merges_low_risk_with_capability(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("CORVIN_MAINTAINER_CAP",
                        MC.issue(priv, instance_id="inst-9", subject="shumway"))
 
-    repo = _git_repo(tmp_path)
+    repo = _buggy_repo(tmp_path)
+    good_test = "from app import add\n\ndef test_add():\n    assert add(2, 3) == 5\n"
+    fix = "def add(a, b):\n    return a + b\n\ndef sub(a, b):\n    return a - b\n"
     patch = tmp_path / "p.json"
-    patch.write_text(json.dumps({"summary": "platform path fix",
-                                 "risk_class": "platform_path",
-                                 "edits": [{"path": "app.py", "new_content": "x = 42\n"}]}))
+    patch.write_text(json.dumps({"summary": "fix add", "risk_class": "platform_path",
+                                 "edits": [{"path": "tests/test_add.py", "new_content": good_test},
+                                           {"path": "app.py", "new_content": fix}]}))
     rc = CLI.main(["run", "--repo", str(repo), "--patch", str(patch),
-                   "--test-cmd", "true", "--direct-main"])
+                   "--test-cmd", "true",       # gate green on unpatched worktree
+                   "--repro-full-cmd", f"{sys.executable} -m pytest . -q",
+                   "--direct-main"])
     res = json.loads(capsys.readouterr().out)
     assert rc == 0 and res["status"] == "merged", res
     head = subprocess.run(["git", "-C", str(repo), "show", "main:app.py"],
                           capture_output=True, text=True).stdout
-    assert "x = 42" in head
+    assert "return a + b" in head
+
+
+def test_run_direct_main_testless_patch_blocked_by_repro(tmp_path, capsys, monkeypatch):
+    # SH-2: a file patch WITHOUT a regression test can no longer be direct-mained —
+    # the reproduction gate rejects it (no red→green proof).
+    from cryptography.hazmat.primitives import serialization as S
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    import base64
+    sk = Ed25519PrivateKey.generate()
+    priv = sk.private_bytes(S.Encoding.Raw, S.PrivateFormat.Raw, S.NoEncryption())
+    pub = sk.public_key().public_bytes(S.Encoding.Raw, S.PublicFormat.Raw)
+    monkeypatch.setenv("CORVIN_INSTANCE_ID", "inst-9")
+    monkeypatch.setenv("CORVIN_MAINTAINER_PUBKEY", base64.b64encode(pub).decode())
+    monkeypatch.setenv("CORVIN_MAINTAINER_CAP",
+                       MC.issue(priv, instance_id="inst-9", subject="shumway"))
+    repo = _git_repo(tmp_path)
+    patch = tmp_path / "p.json"
+    patch.write_text(json.dumps({"summary": "no-test fix", "risk_class": "platform_path",
+                                 "edits": [{"path": "app.py", "new_content": "x = 42\n"}]}))
+    rc = CLI.main(["run", "--repo", str(repo), "--patch", str(patch),
+                   "--test-cmd", "true", "--direct-main"])
+    res = json.loads(capsys.readouterr().out)
+    assert rc == 1 and res["status"] == "repro_failed", res
+    head = subprocess.run(["git", "-C", str(repo), "show", "main:app.py"],
+                          capture_output=True, text=True).stdout
+    assert "x = 42" not in head
 
 
 def test_nightly_noop_without_capability(tmp_path, capsys, monkeypatch):

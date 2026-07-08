@@ -27,12 +27,15 @@ thread bound to an ephemeral port. Tests assert against a per-server
 """
 from __future__ import annotations
 
+import asyncio
 import http.server
 import io
+import ipaddress
 import json
 import os
 import socket
 import socketserver
+import ssl
 import stat
 import sys
 import tempfile
@@ -48,12 +51,14 @@ _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO / "core" / "gateway"))
 sys.path.insert(0, str(_REPO / "operator" / "forge"))
 sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "core" / "console"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
 from corvin_gateway import cli, webhooks  # noqa: E402
 from corvin_gateway.app import app  # noqa: E402
 from corvin_gateway.dispatcher import RunDispatcher  # noqa: E402
+from corvin_gateway.runs import RunRecord  # noqa: E402
 from corvin_gateway.webhooks import (  # noqa: E402
     SIGNATURE_HEADER,
     WebhookDispatcher,
@@ -63,6 +68,54 @@ from corvin_gateway.webhooks import (  # noqa: E402
     verify_signature,
 )
 from forge import security_events as _security_events  # noqa: E402
+
+
+# ── Self-signed TLS cert for the loopback stub ───────────────────────
+#
+# PENTEST-6 requires webhook.url to be https:// (rejected at POST otherwise),
+# so the delivery stub must speak TLS. We mint a self-signed cert for
+# 127.0.0.1 once per test run; the WebhookDispatcher VERIFIES against it
+# (verify=<cert path>) — verification stays ON, just pinned to this test CA.
+
+def _make_selfsigned(dirpath: Path) -> tuple[str, str]:
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import datetime
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    san = x509.SubjectAlternativeName([
+        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+        x509.DNSName("localhost"),
+    ])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name).issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=3650))
+        .add_extension(san, critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    cert_path = dirpath / "cert.pem"
+    key_path = dirpath / "key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ))
+    return str(cert_path), str(key_path)
+
+
+_TLS_DIR = Path(tempfile.mkdtemp(prefix="gw-wh-tls-"))
+_TLS_CERT, _TLS_KEY = _make_selfsigned(_TLS_DIR)
+# Client-side SSL context that trusts the stub's self-signed cert (verify ON).
+_TLS_VERIFY_CTX = ssl.create_default_context(cafile=_TLS_CERT)
 
 
 # ── Common fixtures ──────────────────────────────────────────────────
@@ -142,8 +195,14 @@ class _StubServer:
 
         # 127.0.0.1 + port 0 → ephemeral port assigned by kernel
         self._server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+        # PENTEST-6: webhook.url must be https, so the stub serves TLS.
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(_TLS_CERT, _TLS_KEY)
+        self._server.socket = ctx.wrap_socket(self._server.socket, server_side=True)
+        # Suppress handshake-error tracebacks (readiness probe below is bare TCP).
+        self._server.handle_error = lambda *a, **k: None  # type: ignore[assignment]
         self.port = self._server.server_address[1]
-        self.url = f"http://127.0.0.1:{self.port}/callback"
+        self.url = f"https://127.0.0.1:{self.port}/callback"
         self._thread = threading.Thread(
             target=self._server.serve_forever,
             daemon=True,
@@ -151,7 +210,7 @@ class _StubServer:
 
     def __enter__(self) -> "_StubServer":
         self._thread.start()
-        # Brief wait for socket to be ready
+        # Brief wait for socket to be ready (bare TCP connect; no TLS handshake).
         for _ in range(20):
             try:
                 s = socket.create_connection(("127.0.0.1", self.port), 0.1)
@@ -200,19 +259,39 @@ def gateway_client(
     max_retries: int = 2,
     backoff_s: tuple[float, ...] = (0.05, 0.05, 0.05),
     timeout_s: float = 5.0,
+    guard_bypass: bool = True,
 ):
-    """Engage lifespan with a fast-backoff webhook dispatcher."""
+    """Engage lifespan with a fast-backoff webhook dispatcher.
+
+    ``verify=_TLS_CERT`` makes the dispatcher trust the loopback stub's
+    self-signed cert (verification stays ON). ``guard_bypass`` patches the
+    SSRF/L35 guard to a no-op so the delivery tests can reach the 127.0.0.1
+    stub — the guard itself is exercised separately in the rejection tests.
+    """
     app.state.dispatcher = RunDispatcher(
         webhook_dispatcher=WebhookDispatcher(
             max_retries=max_retries,
             backoff_s=backoff_s,
             timeout_s=timeout_s,
+            verify=_TLS_VERIFY_CTX,
         ),
     )
+    patcher = (
+        # The guard now RETURNS the pinned IP the dispatcher connects to
+        # (PENTEST-7). The loopback stub always binds 127.0.0.1, so the bypass
+        # pins there — cert SAN includes IPAddress 127.0.0.1, so TLS stays ON.
+        patch("corvin_gateway.webhooks._assert_webhook_url_safe",
+              lambda url, tenant_id: "127.0.0.1")
+        if guard_bypass else None
+    )
+    if patcher is not None:
+        patcher.start()
     try:
         with TestClient(app) as client:
             yield client
     finally:
+        if patcher is not None:
+            patcher.stop()
         if hasattr(app.state, "dispatcher"):
             app.state.dispatcher = None
 
@@ -501,6 +580,84 @@ class NoWebhookTests(unittest.TestCase):
                 if e["event_type"].startswith("gateway.webhook_")
             ]
             self.assertEqual(webhook_events, [])
+
+
+# ── PENTEST-6: SSRF / scheme rejection ───────────────────────────────
+
+
+def _completed_record(tenant_id: str) -> RunRecord:
+    now = time.time()
+    return RunRecord(
+        run_id="run_pentest6ssrf000000001",
+        tenant_id=tenant_id,
+        status="completed",
+        created_at=now,
+        updated_at=now,
+        request={"spec": {"persona": "docs", "input": "x"}},
+        result={"final_text": "x"},
+        error=None,
+    )
+
+
+class WebhookSchemeRejectionTests(unittest.TestCase):
+    def test_http_webhook_url_rejected_at_post(self):
+        """PENTEST-6(a): plaintext http:// webhook.url is refused at validation."""
+        with sandbox(("acme",)):
+            with gateway_client() as client:
+                r = client.post(
+                    "/v1/tenants/acme/runs",
+                    json=_good_run_body_with_webhook("http://acme.example.com/cb"),
+                    headers=_hdr(),
+                )
+            self.assertEqual(r.status_code, 422, r.text)
+
+    def test_non_https_scheme_rejected_at_post(self):
+        with sandbox(("acme",)):
+            with gateway_client() as client:
+                r = client.post(
+                    "/v1/tenants/acme/runs",
+                    json=_good_run_body_with_webhook("ftp://acme.example.com/cb"),
+                    headers=_hdr(),
+                )
+            self.assertEqual(r.status_code, 422, r.text)
+
+
+class WebhookSsrfBlockTests(unittest.TestCase):
+    """PENTEST-6(b/c): the pre-POST guard rejects loopback / IMDS targets and
+    audits a ``gateway.webhook_blocked`` event WITHOUT making any HTTP call."""
+
+    def _assert_blocked(self, home: Path, url: str) -> None:
+        WebhookSecretStore().set_secret("acme", "wh1", "s")
+        rec = _completed_record("acme")
+        disp = WebhookDispatcher(max_retries=0, backoff_s=(0.0,))
+        out = asyncio.run(
+            disp.dispatch_for_record(rec, url=url, secret_ref="wh1")
+        )
+        self.assertFalse(out.delivered)
+        self.assertEqual(out.attempts, 0)
+        self.assertEqual(out.last_error, "ssrf-blocked")
+        chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
+        lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
+        blocked = [e for e in lines if e["event_type"] == "gateway.webhook_blocked"]
+        self.assertEqual(len(blocked), 1, lines)
+        # No delivery / secret-lookup events for a blocked URL.
+        self.assertFalse(
+            [e for e in lines if e["event_type"] == "gateway.webhook_dispatched"]
+        )
+
+    def test_loopback_url_blocked(self):
+        with sandbox(("acme",)) as home:
+            self._assert_blocked(home, "https://127.0.0.1:9/callback")
+
+    def test_imds_url_blocked(self):
+        with sandbox(("acme",)) as home:
+            self._assert_blocked(home, "https://169.254.169.254/latest/meta-data/")
+
+    def test_http_scheme_blocked_at_dispatch_defense_in_depth(self):
+        """A legacy on-disk record with an http:// URL is still refused at the
+        dispatch guard even though it bypassed the runs.py POST validator."""
+        with sandbox(("acme",)) as home:
+            self._assert_blocked(home, "http://127.0.0.1:9/callback")
 
 
 # ── CLI round-trip ───────────────────────────────────────────────────

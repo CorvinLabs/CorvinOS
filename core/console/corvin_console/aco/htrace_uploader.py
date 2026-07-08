@@ -374,7 +374,12 @@ def ping_if_due(home: Path) -> bool:
                     if _HAS_FLOCK:
                         _fcntl.flock(lf, _fcntl.LOCK_UN)
                     lf.close()
-                lock_path.unlink(missing_ok=True)
+                # Do NOT unlink the lock file: another process may be blocked on
+                # this inode's flock (provision_telemetry_tokens). Unlinking it
+                # lets the next opener create a fresh inode whose lock is
+                # uncontended, defeating the shared lock and re-opening the
+                # mismatched-token-pair race. Leave the file; the lock is the
+                # inode, not the record.
     except Exception as e:  # noqa: BLE001
         logger.debug("htrace: ping failed (non-fatal): %s", e)
         return False
@@ -476,26 +481,32 @@ def _record_upload(home: Path) -> None:
 
 
 def _check_bundle_ok(gz_path: Path) -> tuple[bool, int]:
-    """Go/no-go check for a .jsonl.gz bundle. Returns (ok, valid_count).
+    """Validate AND FILTER a .jsonl.gz bundle in place. Returns (ok, valid_count).
 
-    This is a GO/NO-GO gate only — it does NOT filter the bundle. It counts
-    how many records pass _assert_safe_htrace and returns ``ok=True`` when the
-    bundle is readable and within the size cap. The upload posts the bundle
-    as-is; any records that failed validation here are rejected authoritatively
-    by the identical server-side validator (Corvin-Features _validate.py), so
-    no invalid record is ever accepted downstream.
+    The fail-closed drop-semantics MUST hold at the send boundary, not only the
+    write boundary: the CLAUDE.md telemetry invariant is that a record carrying
+    a PII/secret shape is DROPPED *rather than sent*. Transmission itself is the
+    GDPR event, and the bundle is additionally mirrored to a PUBLIC repo — so
+    relying on the server-side validator to reject bad records after they have
+    already left the machine is not sufficient.
+
+    This therefore REWRITES the gz to contain only records that pass
+    ``_assert_safe_htrace``; any failing record is dropped from what gets sent.
+    Returns ``ok=True`` only if at least one safe record remains and the bundle
+    is within the size cap.
 
     stat() is inside the try block so that a FileNotFoundError (file deleted
     between compress_for_upload and _check_bundle_ok) is caught and returns
     (False, 0) instead of propagating to the outer except in run_upload_cycle
     and incorrectly returning 'error'.
     """
-    count = 0
     try:
         size = gz_path.stat().st_size
         if size > _MAX_BUNDLE_BYTES:
             logger.warning("htrace: bundle too large (%d bytes) — skipping", size)
             return False, 0
+        safe_lines: list[str] = []
+        dropped = 0
         with gzip.open(gz_path, "rt", encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
@@ -504,10 +515,23 @@ def _check_bundle_ok(gz_path: Path) -> tuple[bool, int]:
                 try:
                     record = json.loads(line)
                     _assert_safe_htrace(record)
-                    count += 1
+                    safe_lines.append(json.dumps(record, ensure_ascii=False))
                 except (json.JSONDecodeError, ValueError) as e:
-                    logger.debug("htrace: invalid record dropped during validation: %s", e)
-        return True, count
+                    dropped += 1
+                    logger.debug("htrace: unsafe record DROPPED before send: %s", e)
+        if dropped:
+            logger.warning("htrace: dropped %d unsafe record(s) from bundle before upload",
+                           dropped)
+        if not safe_lines:
+            return False, 0
+        # Rewrite the bundle atomically with only the passing records, so the
+        # posted (and mirrored) bytes contain nothing that failed the validator.
+        if dropped:
+            tmp = gz_path.with_suffix(gz_path.suffix + ".filtered")
+            with gzip.open(tmp, "wt", encoding="utf-8") as out:
+                out.write("\n".join(safe_lines) + "\n")
+            tmp.replace(gz_path)
+        return True, len(safe_lines)
     except Exception as e:  # noqa: BLE001
         logger.warning("htrace: bundle validation error: %s", e)
         return False, 0

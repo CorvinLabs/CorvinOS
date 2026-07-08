@@ -121,9 +121,12 @@ class TestWindowsSystemServiceManager:
             with pytest.raises(ElevationRequired):
                 mgr.install_service(name="webui", command="C:\\corvin.exe")
 
-    def test_install_uses_np_s4u_logon_never_a_password_flag(self):
-        """Regression: must never pass /rp (a password flag) — /np (S4U, no
-        password) is the whole point of this design (ADR-0184)."""
+    def test_install_uses_s4u_logon_never_a_password_and_bounded_restart(self):
+        """WA-4/WA-5/WA-6 + ADR-0184: registered via PowerShell
+        Register-ScheduledTask with an S4U principal (no password, never
+        SYSTEM), RunLevel Limited (unelevated runtime), and a BOUNDED
+        restart-on-failure policy (the systemd Restart=on-failure equivalent
+        the old bare `schtasks /sc onstart` lacked)."""
         mgr = WindowsSystemServiceManager()
         with mock.patch(
             "corvinOS.installer.system_service_manager.is_elevated",
@@ -132,16 +135,44 @@ class TestWindowsSystemServiceManager:
             "corvinOS.installer.system_service_manager.current_user",
             return_value="silvio",
         ), mock.patch("subprocess.run") as run:
-            run.return_value = mock.Mock(returncode=0, stderr="")
-            mgr.install_service(name="webui", command="C:\\corvin.exe")
+            run.return_value = mock.Mock(returncode=0, stderr="", stdout="")
+            mgr.install_service(name="webui", command="C:\\corvin.exe -m uvicorn app")
 
-        cmd = run.call_args.args[0]
-        assert "/np" in cmd
-        assert "/rp" not in cmd
-        assert "/ru" in cmd and "silvio" in cmd
-        assert "/sc" in cmd and "onstart" in cmd
-        # Never runs as SYSTEM.
-        assert "SYSTEM" not in cmd
+        argv = run.call_args.args[0]
+        assert argv[0] == "powershell"
+        ps = argv[-1]
+        # S4U logon — no password ever, and the invoking user (not SYSTEM).
+        assert "-LogonType S4U" in ps
+        assert "-UserId 'silvio'" in ps
+        assert "-Password" not in ps
+        assert "SYSTEM" not in ps
+        # WA-6: unelevated runtime.
+        assert "-RunLevel Limited" in ps
+        assert "-RunLevel Highest" not in ps
+        # WA-4: bounded restart-on-failure.
+        assert "-RestartCount 5" in ps
+        assert "-RestartInterval (New-TimeSpan -Minutes 1)" in ps
+        assert "-AtStartup" in ps
+        # WA-5: the executable is its own quoted -Execute token (not torn apart
+        # from its args), and args are carried separately.
+        assert "-Execute 'C:\\corvin.exe'" in ps
+        assert "-Argument '-m uvicorn app'" in ps
+
+    def test_install_refuses_to_register_as_root_via_current_user(self):
+        """WA-1: current_user() refuses root, so an install run directly as
+        root (no SUDO_USER) never writes a root-owned always-on task."""
+        import os as _os
+        mgr = WindowsSystemServiceManager()
+        # Simulate POSIX-root with no sudo context reaching current_user().
+        with mock.patch(
+            "corvinOS.installer.system_service_manager.is_elevated",
+            return_value=True,
+        ), mock.patch("os.geteuid", return_value=0, create=True), \
+             mock.patch.dict(_os.environ, {"SUDO_USER": "", "PKEXEC_USER": ""}, clear=False), \
+             mock.patch("subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=0, stderr="", stdout="")
+            with pytest.raises(RuntimeError):
+                mgr.install_service(name="webui", command="C:\\corvin.exe")
 
     def test_install_raises_runtime_error_on_schtasks_failure(self):
         mgr = WindowsSystemServiceManager()
@@ -163,6 +194,38 @@ class TestFactory:
 
     def test_current_user_is_non_empty(self):
         assert current_user()
+
+
+class TestCurrentUserRootHandling:
+    """WA-1: never resolve the service account to root under sudo."""
+
+    def test_recovers_invoking_user_from_sudo_user_when_root(self):
+        with mock.patch("os.geteuid", return_value=0, create=True), \
+             mock.patch.dict("os.environ", {"SUDO_USER": "silvio"}, clear=False):
+            assert current_user() == "silvio"
+
+    def test_recovers_from_pkexec_user_when_root(self):
+        with mock.patch("os.geteuid", return_value=0, create=True), \
+             mock.patch.dict(
+                 "os.environ", {"SUDO_USER": "", "PKEXEC_USER": "silvio"}, clear=False
+             ):
+            assert current_user() == "silvio"
+
+    def test_refuses_when_root_with_no_invoking_user(self):
+        with mock.patch("os.geteuid", return_value=0, create=True), \
+             mock.patch.dict(
+                 "os.environ", {"SUDO_USER": "", "PKEXEC_USER": ""}, clear=False
+             ):
+            with pytest.raises(RuntimeError):
+                current_user()
+
+    def test_refuses_when_sudo_user_itself_is_root(self):
+        with mock.patch("os.geteuid", return_value=0, create=True), \
+             mock.patch.dict(
+                 "os.environ", {"SUDO_USER": "root", "PKEXEC_USER": ""}, clear=False
+             ):
+            with pytest.raises(RuntimeError):
+                current_user()
 
 
 if __name__ == "__main__":

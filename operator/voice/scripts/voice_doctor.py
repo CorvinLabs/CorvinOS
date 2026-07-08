@@ -128,17 +128,23 @@ def _tts_provider_rows() -> list[tuple[str, bool, str]]:
             edge_ok, edge_reason = False, "ffmpeg not found (system PATH or bundled imageio-ffmpeg)"
     rows.append(("edge-tts", edge_ok, edge_reason))
 
-    import shutil as _shutil
-    piper_bin = os.environ.get("PIPER_BIN") or _shutil.which("piper")
-    if not piper_bin:
+    # Piper row: read say.py's own provider_status() — which checks BOTH the
+    # package/binary AND model_present on disk — instead of the old
+    # binary-presence-only probe that green-lit a modelless Piper (VOICE-5).
+    # Mirrors how _stt_provider_rows() reuses resolver.provider_status() so the
+    # two subsystems can never silently disagree.
+    try:
+        import say  # standalone TTS helper — the SSOT for the Piper tier
+        piper_info = say.provider_status().get("piper", {})
+        rows.append((
+            "piper (local TTS)",
+            bool(piper_info.get("ready")),
+            str(piper_info.get("detail", "")),
+        ))
+    except Exception as exc:  # noqa: BLE001 — diagnostics must never crash
         rows.append((
             "piper (local TTS)", False,
-            "binary not found (install piper-tts or set PIPER_BIN)",
-        ))
-    else:
-        rows.append((
-            "piper (local TTS)", True,
-            "binary found (model presence is checked at call time)",
+            f"status probe failed ({exc.__class__.__name__})",
         ))
 
     return rows
@@ -176,6 +182,62 @@ def _check_tts(text: str) -> tuple[bool, str, Path | None]:
     return True, f"{out_path} ({size} bytes)", out_path
 
 
+def _check_tts_piper() -> tuple[str, str]:
+    """Real round-trip through say.py's OFFLINE Piper tier specifically.
+
+    The adapter round-trip in ``_check_tts`` is satisfied by *any* tier
+    (OpenAI → edge → Piper), so on a networked machine it never actually
+    exercises Piper — which is exactly how the dead-Piper regression hid
+    (VOICE-1: piper-tts's renamed WAV writer wrote zero frames, so every
+    Piper synth silently produced an unusable file, but edge-tts masked it).
+    This check forces the Piper code path via ``say._try_piper`` and asserts
+    it really produces audio — the offline/air-gapped guarantee this whole
+    tier exists for.
+
+    Three-state (Piper needs a downloaded model, so "no model" is *not* a
+    failure — it's an unprovisioned environment):
+      "PASS" — Piper synthesized non-empty audio.
+      "FAIL" — a Piper model IS present but synthesis produced nothing/errored.
+      "SKIP" — Piper isn't installed, or no model is on disk yet (run
+               corvin-install). Not counted against the overall result.
+    """
+    try:
+        import say  # standalone TTS helper — the SSOT for the Piper tier
+    except Exception as exc:  # noqa: BLE001
+        return "FAIL", f"could not import say.py: {exc}"
+
+    status = say.provider_status().get("piper", {})
+    if not status.get("package_installed"):
+        return "SKIP", "piper not installed — nothing to exercise"
+
+    # Pick a language that actually has a resolvable model on disk so we test
+    # the SYNTH path, not the (already covered) missing-model path. This also
+    # avoids a spurious FAIL when only a non-English model is provisioned.
+    usable_lang = next(
+        (lang for lang in say._PIPER_MODELS if say._piper_model_for(lang) is not None),
+        None,
+    )
+    if usable_lang is None:
+        return "SKIP", "no Piper voice model on disk — run corvin-install"
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "piper_probe.ogg"
+        try:
+            ok = say._try_piper(out, _DOCTOR_TTS_TEXT, usable_lang)
+        except Exception as exc:  # noqa: BLE001
+            return "FAIL", f"Piper synth raised ({usable_lang}): {exc}"
+        if not ok:
+            return "FAIL", f"Piper synth returned failure ({usable_lang}); see stderr above"
+        try:
+            size = out.stat().st_size
+        except OSError as exc:
+            return "FAIL", f"Piper produced no file ({usable_lang}): {exc}"
+        if size <= 0:
+            return "FAIL", f"Piper produced a zero-byte file ({usable_lang})"
+        return "PASS", f"Piper[{usable_lang}] synthesized {size} bytes"
+
+
 def _print_rows(rows: list[tuple[str, bool, str]]) -> None:
     for name, ok, reason in rows:
         mark = "ready  " if ok else "MISSING"
@@ -210,7 +272,16 @@ def run_doctor(stt_timeout: float = _DEFAULT_STT_TIMEOUT_S) -> int:
         except OSError:
             pass  # best-effort cleanup of the doctor's own test artifact
 
-    overall_ok = stt_ok and tts_ok
+    # Dedicated OFFLINE-tier round-trip: forces the Piper code path even when a
+    # cloud/edge tier would otherwise satisfy _check_tts (VOICE-2/VOICE-5).
+    print("\n[TTS] Piper offline-tier round-trip (forces say.py's local Piper path)")
+    t0 = time.monotonic()
+    piper_state, piper_msg = _check_tts_piper()
+    dt = time.monotonic() - t0
+    print(f"    [{piper_state}] ({dt:.1f}s) {piper_msg}")
+    piper_fail = piper_state == "FAIL"
+
+    overall_ok = stt_ok and tts_ok and not piper_fail
     print("\n" + "=" * 72)
     print(f"OVERALL: {'PASS' if overall_ok else 'FAIL'}")
     if not overall_ok:

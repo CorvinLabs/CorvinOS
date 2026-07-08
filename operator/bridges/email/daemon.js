@@ -60,8 +60,14 @@ const HTTP_PORT = parseInt(process.env.EMAIL_HTTP_PORT || '7895', 10);
 const log = makeLogger('email');
 const { loadSettings, currentSettings } = makeSettingsAccessor(SETTINGS_FILE, log);
 const settings = loadSettings();
-const { rateAllow, authOk } = makeAuth({
+const { rateAllow, authOk, classify } = makeAuth({
   settingsFile: SETTINGS_FILE, currentSettings, loadSettings, logger: log,
+  channel: CHANNEL,
+  // PENTEST-3c: email is a *public* address. An empty whitelist must NOT make
+  // the entire internet an owner — fail closed. The owner still claims access
+  // via `/auth <pin>`; `dev_mode: true` in settings.json re-opens the legacy
+  // behaviour for local testing only.
+  denyOnEmptyWhitelist: true,
 });
 const announce = makeAnnouncer({
   pluginRoot: PLUGIN_ROOT, channelLabel: 'Email', currentSettings, logger: log,
@@ -102,6 +108,124 @@ function classifyAttachment(filename, contentType) {
 
 function normalizeAddress(a) {
   return (a || '').toLowerCase().trim();
+}
+
+// ─── Inbound message authentication (PENTEST-3a) ────────────────────────────
+// The RFC5322 `From:` header is trivially forgeable, yet the daemon derives
+// identity, routing key AND authorization from it. An attacker who emails
+// `From: owner@victim.tld` (a whitelisted address) would otherwise inherit the
+// owner's session / memory / consent / quota.
+//
+// Defence: before trusting `From`, require that the *receiving* MTA/IMAP
+// provider (Gmail, iCloud, Outlook, …) stamped an `Authentication-Results`
+// header proving the message passed DMARC — or passed DKIM with the signing
+// `d=` domain aligned to the From domain. This is fail-CLOSED: if the header
+// is absent or shows no aligned pass, the sender is treated as unauthenticated
+// and the message is dropped.
+//
+// Anti-forgery: an attacker can *inject* their own `Authentication-Results`
+// line into the raw message. The receiving provider prepends its own line at
+// the very top and strips inbound lines bearing its own authserv-id, so ONLY
+// the first (top-most) Authentication-Results header — the one added by our
+// provider — is trusted. Any attacker-appended lines sit below it and are
+// ignored.
+//
+// Non-stamping-provider gap: the "top line is the provider's" guarantee holds
+// ONLY when the receiving IMAP provider actually stamps its own AR line. A
+// self-hosted / non-stamping provider stamps NONE, so an attacker who injects a
+// single `Authentication-Results: x; dmarc=pass` line makes it the sole (hence
+// top) line and inbound-auth would wrongly pass. Defence (fail-closed): the top
+// line's authserv-id must be provably the receiver's — it must equal the
+// operator-pinned `auth_results_authserv_id`, or (when unset) match a built-in
+// allowlist of well-known provider authserv-ids. An unrecognised authserv-id is
+// NOT trusted (sender must use the PIN /auth flow). `dev_mode:true` restores the
+// legacy open behaviour for local testing.
+
+function domainOf(addr) {
+  const s = String(addr || '').toLowerCase().replace(/[>\s]+$/, '').trim();
+  const at = s.lastIndexOf('@');
+  return at >= 0 ? s.slice(at + 1).trim() : '';
+}
+
+// Relaxed DMARC-style alignment without a public-suffix list: exact match, or
+// one domain is a sub-domain of the other (covers sub-domain DKIM signers).
+function domainsAligned(a, b) {
+  a = (a || '').toLowerCase(); b = (b || '').toLowerCase();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return a.endsWith('.' + b) || b.endsWith('.' + a);
+}
+
+// The top-most Authentication-Results line (provider-added). headerLines keeps
+// every occurrence in wire order; the receiving provider's line is first.
+function topAuthResultsLine(parsed) {
+  for (const h of (parsed.headerLines || [])) {
+    if (h && String(h.key).toLowerCase() === 'authentication-results') {
+      return String(h.line || '');
+    }
+  }
+  return null;
+}
+
+function inboundAuthPasses(parsed, fromAddr) {
+  const fromDomain = domainOf(fromAddr);
+  if (!fromDomain) return { ok: false, reason: 'no-from-domain' };
+
+  const raw = topAuthResultsLine(parsed);
+  if (!raw) return { ok: false, reason: 'no-authentication-results' };
+  const line = raw.toLowerCase();
+
+  // Invariant: trust the top AR line ONLY if its authserv-id is provably the
+  // receiver's — otherwise a non-stamping IMAP provider lets an attacker inject
+  // the sole AR line and forge dmarc=pass. authserv-id is the first token after
+  // "authentication-results:".
+  const m = line.match(/^authentication-results:\s*([^;\s]+)/);
+  const authservId = m ? m[1] : '';
+  const cs = currentSettings();
+  const pinned = (cs.auth_results_authserv_id || '').toString().toLowerCase().trim();
+  if (pinned) {
+    if (authservId !== pinned) {
+      return { ok: false, reason: `authserv-id ${authservId || '(none)'} != pinned ${pinned}` };
+    }
+  } else if (cs.dev_mode !== true) {
+    // No operator pin: fall back to a built-in allowlist of well-known
+    // receiving-provider authserv-ids (match = exact host or sub-domain). An
+    // authserv-id outside it is NOT a provable receiver → fail-closed.
+    const KNOWN_RECEIVERS = [
+      'google.com', 'gmail.com',
+      'icloud.com', 'me.com', 'apple.com',
+      'outlook.com', 'protection.outlook.com', 'hotmail.com', 'office365.com',
+      'yahoo.com', 'yahoodns.net',
+      'mimecast.com', 'proofpoint.com', 'pphosted.com',
+    ];
+    const idOk = !!authservId
+      && KNOWN_RECEIVERS.some((d) => authservId === d || authservId.endsWith('.' + d));
+    if (!idOk) {
+      return {
+        ok: false,
+        reason: `authserv-id ${authservId || '(none)'} not a known receiver `
+              + `(set auth_results_authserv_id to your provider's id)`,
+      };
+    }
+  }
+
+  // DMARC already enforces From-identifier alignment, so dmarc=pass is enough.
+  if (/\bdmarc\s*=\s*pass\b/.test(line)) return { ok: true, reason: 'dmarc=pass' };
+
+  // Fallback: dkim=pass with a signing domain aligned to the From domain.
+  if (/\bdkim\s*=\s*pass\b/.test(line)) {
+    const cands = [];
+    for (const m of line.matchAll(/header\.d\s*=\s*([a-z0-9._-]+)/g)) cands.push(m[1]);
+    for (const m of line.matchAll(/header\.i\s*=\s*@?([a-z0-9._-]+)/g)) cands.push(m[1]);
+    for (const d of cands) {
+      if (domainsAligned(fromDomain, d)) {
+        return { ok: true, reason: `dkim=pass d=${d}` };
+      }
+    }
+    return { ok: false, reason: 'dkim=pass but d= not aligned to From' };
+  }
+
+  return { ok: false, reason: 'no-aligned-pass' };
 }
 
 // ─── IMAP inbound ───────────────────────────────────────────────────────────
@@ -148,12 +272,35 @@ async function handleParsed(parsed, uid) {
     return;
   }
 
+  // PENTEST-3a: never trust a bare `From` header. Require provider-stamped
+  // DMARC/DKIM alignment before this address may act as an authenticated
+  // principal (owner / whitelist / PIN claim). Fail-closed: drop spoofable mail.
+  const inboundAuth = inboundAuthPasses(parsed, fromAddr);
+  if (!inboundAuth.ok) {
+    log(`auth: inbound authentication failed for ${fromAddr} (${inboundAuth.reason}); dropping unverified From (possible spoof)`);
+    await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+    return;
+  }
+
   const subject = (parsed.subject || '').trim();
   const bodyText = (parsed.text || '').trim()
     || (parsed.html ? parsed.html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '');
   const text = subject
     ? (bodyText ? `${subject}\n\n${bodyText}` : subject)
     : bodyText;
+
+  // PENTEST-3b: throttle FAILED auth attempts BEFORE the PIN compare so a
+  // brute-force of `/auth <pin>` cannot run unlimited. A sender who is not yet
+  // an owner (unknown, or attempting a PIN claim) consumes rate budget up-front,
+  // keyed by the DMARC-verified source address. Established owners are unaffected
+  // and keep their normal post-auth budget below.
+  if (classify(fromAddr, fromAddr) !== 'owner') {
+    if (!rateAllow(fromAddr, currentSettings().rate_limit_per_hour || 30)) {
+      log(`rate: blocked pre-auth ${fromAddr} (throttling brute-force)`);
+      await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+      return;
+    }
+  }
 
   if (!authOk(fromAddr, text, fromAddr)) {
     log(`auth: rejected ${fromAddr}`);

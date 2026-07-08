@@ -212,6 +212,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     except Exception:
         pass
 
+    # Purge the durable completion-notification queue (pending_notifications/)
+    # for the same reason: its records live at the CORVIN_HOME root, outside the
+    # session dir and per-tenant sweep, and carry routing PII (sender uid +
+    # chat_id). Best-effort, never blocks erasure.
+    try:
+        from completion_notify import purge_user as _cn_purge  # type: ignore
+        cn_removed = _cn_purge(req.subject_id)
+        if cn_removed:
+            print(f"completion_notify: purged {cn_removed} record(s) for {req.subject_id}")
+    except Exception:
+        pass
+
     result = orch.execute(req)
 
     if args.format == "json":

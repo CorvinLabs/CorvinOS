@@ -163,6 +163,78 @@ def test_task_engine_producer_shape() -> None:
         print("PASS: task-engine producer shape → messenger, console task no-op")
 
 
+def _age_record(cn, tid: str, seconds: float) -> None:
+    p = cn._record_path(tid)
+    r = cn._read(p)
+    r["created_at"] = r.get("created_at", 0) - seconds
+    cn._atomic_write(p, r)
+
+
+def test_unclaimed_long_job_not_reaped_result_delivers() -> None:
+    """H3-reaper regression: an UNCLAIMED record (e.g. a compute worker that
+    never calls claim()) running past CN_PENDING_REAP must NOT be reaped — else
+    a legitimately long (>30min) L24/L25 job got a false 'worker stopped' AND
+    its real result was dropped when it finally finished."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        cn.CN_PENDING_REAP = 0.0  # any age qualifies for a reap check
+        tid = cn.register(channel="discord", chat_id="1", sender="u1",
+                          tenant_id="acme", label="compute")
+        _age_record(cn, tid, 100)
+        cn.deliver_ready(outbox)
+        assert cn._read(cn._record_path(tid))["state"] == "pending", \
+            "unclaimed long job was wrongly reaped"
+        # the real result must still deliver
+        assert cn.mark_done(tid, text="REAL RESULT", ok=True) is True
+        assert cn.deliver_ready(outbox) == 1
+        print("PASS: unclaimed >reap-age job not reaped, real result delivered")
+
+
+def test_claimed_dead_producer_reaped() -> None:
+    """A CLAIMED record whose producer pid is dead must be reaped to failed."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        cn.CN_PENDING_REAP = 0.0
+        tid = cn.register(channel="discord", chat_id="2", sender="u2",
+                          tenant_id="acme", label="task")
+        p = cn._record_path(tid)
+        r = cn._read(p)
+        r["producer_pid"] = 999999  # not alive
+        r["producer_boot"] = cn._host_boot_id()
+        cn._atomic_write(p, r)
+        _age_record(cn, tid, 100)
+        cn.deliver_ready(outbox)
+        rec = cn._read(p)
+        assert rec["state"] == "ready" and rec.get("ok") is False, \
+            "claimed dead-producer record was not reaped"
+        print("PASS: claimed dead-producer record reaped to failed")
+
+
+def test_claimed_live_producer_not_reaped() -> None:
+    """A CLAIMED record whose producer is THIS (live) process must NOT be
+    reaped. Also asserts _pid_alive is a non-destructive probe."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        cn.CN_PENDING_REAP = 0.0
+        assert cn._pid_alive(os.getpid()) is True
+        assert cn._pid_alive(999999) is False
+        tid = cn.register(channel="discord", chat_id="3", sender="u3",
+                          tenant_id="acme", label="task")
+        p = cn._record_path(tid)
+        r = cn._read(p)
+        r["producer_pid"] = os.getpid()
+        r["producer_boot"] = cn._host_boot_id()
+        cn._atomic_write(p, r)
+        _age_record(cn, tid, 100)
+        cn.deliver_ready(outbox)
+        assert cn._read(p)["state"] == "pending", \
+            "claimed live-producer record was wrongly reaped"
+        print("PASS: claimed live-producer record not reaped")
+
+
 def main() -> int:
     tests = [
         test_register_done_deliver_roundtrip,
@@ -173,6 +245,9 @@ def main() -> int:
         test_whatsapp_routes_on_to,
         test_purge_user,
         test_prune_delivered_and_abandoned,
+        test_unclaimed_long_job_not_reaped_result_delivers,
+        test_claimed_dead_producer_reaped,
+        test_claimed_live_producer_not_reaped,
     ]
     failed = 0
     for t in tests:

@@ -156,6 +156,38 @@ def test_repro_gate_requires_a_test(tmp_path):
     assert not res.proven and "no regression test" in res.detail
 
 
+def test_repro_gate_rejects_absolute_path(tmp_path):
+    # SH-3: an absolute edit path must be refused before any write; proven=False.
+    repo = _repo_with_bug(tmp_path)
+    evil = tmp_path / "pwned"
+    patch = Patch("dabs", "x", "engine_generated",
+                  edits=[PatchEdit("tests/test_add.py", _GOOD_TEST),
+                         PatchEdit(str(evil), "PWNED\n")])
+    tr, fr = _runner(repo)
+    res = RP.reproduction_gate(repo, patch, test_runner=tr, full_runner=fr)
+    assert not res.proven and "unsafe patch path" in res.detail
+    assert not evil.exists()
+
+
+def test_repro_gate_rejects_dotdot_traversal(tmp_path):
+    # SH-3: a `..` traversal must be refused, even resolving under a temp parent.
+    repo = _repo_with_bug(tmp_path)
+    patch = Patch("ddd", "x", "engine_generated",
+                  edits=[PatchEdit("tests/test_add.py", _GOOD_TEST),
+                         PatchEdit("../escape.txt", "PWNED\n")])
+    tr, fr = _runner(repo)
+    res = RP.reproduction_gate(repo, patch, test_runner=tr, full_runner=fr)
+    assert not res.proven and "unsafe patch path" in res.detail
+    assert not (repo.parent / "escape.txt").exists()
+
+
+def test_apply_helper_raises_on_absolute(tmp_path):
+    # SH-3: the low-level _apply containment assert rejects an absolute path.
+    repo = tmp_path / "repo"; repo.mkdir()
+    with pytest.raises(ValueError):
+        RP._apply(repo, [PatchEdit("/etc/evil", "x")])
+
+
 # ── diagnosis synthesizer ───────────────────────────────────────────────────────
 
 def _tb(file_pkg="corvin_console/aco/foo.py", exc="ValueError", func="do_it", val=1):
@@ -196,6 +228,41 @@ def test_synth_ingests_telemetry_counts(tmp_path):
     tsig = {**sig.to_dict(), "count": 5, "instance": "userX"}  # foreign users saw it 5×
     res = DS.synthesize(home, min_occurrences=3, telemetry_sigs=[tsig])
     assert len(res["queued"]) == 1                  # 1 local + 5 telemetry ≥ 3
+
+
+def test_synth_rejects_malicious_telemetry_top_repo_file(tmp_path):
+    # SH-8: an attacker-supplied top_repo_file that is absolute / has `..` / a colon
+    # must NOT become a code-patch target — it is dropped to non-localizable, so the
+    # signature can only ever be report-only, never queued for a patch.
+    home = tmp_path / "home"; (home / "logs").mkdir(parents=True)
+    for i, evil in enumerate(("/etc/passwd", "../../etc/shadow", "C:\\Windows\\system32")):
+        sigid = f"sig_evil_{i}"
+        tsig = {"signature": sigid, "exc_type": "ValueError",
+                "message_template": "boom", "func": "f",
+                "top_repo_file": evil, "count": 99, "instance": "attacker"}
+        res = DS.synthesize(home, min_occurrences=3, telemetry_sigs=[tsig])
+        assert sigid not in res["queued"]
+    # no attacker path was written into a pending diagnosis
+    pend = list((home / "aco" / "diagnoses" / "pending").glob("*.json"))
+    assert pend == []
+
+
+def test_synth_rejects_nonexistent_file_under_checkout(tmp_path):
+    # SH-8: with a known repo_root, a top_repo_file that doesn't exist in the
+    # checkout is dropped (can't localize a diagnosis onto a file that isn't there).
+    home = tmp_path / "home"; (home / "logs").mkdir(parents=True)
+    repo = tmp_path / "checkout"; repo.mkdir()
+    tsig = {"signature": "sig::ghost", "exc_type": "ValueError",
+            "message_template": "boom", "func": "f",
+            "top_repo_file": "corvin_console/does_not_exist.py",
+            "count": 99, "instance": "u"}
+    res = DS.synthesize(home, min_occurrences=3, telemetry_sigs=[tsig], repo_root=repo)
+    assert res["queued"] == []
+    # but an existing repo file passes the check and is queued
+    (repo / "real.py").write_text("x = 1\n", encoding="utf-8")
+    tsig2 = {**tsig, "signature": "sig::real", "top_repo_file": "real.py"}
+    res2 = DS.synthesize(home, min_occurrences=3, telemetry_sigs=[tsig2], repo_root=repo)
+    assert "sig::real" in res2["queued"]
 
 
 # ── telemetry channel ────────────────────────────────────────────────────────────

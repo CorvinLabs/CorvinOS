@@ -500,6 +500,85 @@ def _r31_r32_max_depth(data: dict, res: ValidationResult) -> None:
         )
 
 
+def _r35_r36_worker_budget_ceilings(data: dict, res: ValidationResult) -> None:
+    """R35–R36: delegation_loop.budget worker/wall-time ceilings.
+
+    ACS-1 backstop: max_depth is guarded by R31/R32 (that guard already caught
+    an accidental 100x inflation, a47c6d3). The sibling budget fields
+    (max_total_workers, max_wall_time) had NO validator ceiling, so a silent
+    inflation of those defeated compute quota (one metered unit → up to 400
+    worker subprocesses for 100 h) without ever failing validation. These rules
+    make a future inflation fail LOUDLY the same way R32 does for max_depth.
+
+    Ceilings are deliberately generous relative to the sane defaults
+    (max_total_workers=8, max_wall_time=3600) — they exist to block gross
+    inflation, not to second-guess a legitimately large budget.
+    """
+    budget = _get(data, "orchestration", "delegation_loop", "budget")
+    if budget is None:
+        return
+
+    # R35: max_total_workers ceiling.
+    mtw = budget.get("max_total_workers")
+    if mtw is not None:
+        try:
+            n = int(mtw)
+            if n < 0:
+                res.add_error(
+                    "R35",
+                    f"delegation_loop.budget.max_total_workers must be >= 0, got {n}",
+                    "orchestration.delegation_loop.budget.max_total_workers",
+                )
+            elif n > 64:
+                res.add_error(
+                    "R35",
+                    f"delegation_loop.budget.max_total_workers={n} exceeds ceiling of 64",
+                    "orchestration.delegation_loop.budget.max_total_workers",
+                )
+            elif n > 16:
+                res.add_warning(
+                    "R35",
+                    f"delegation_loop.budget.max_total_workers={n} > 16: many concurrent workers, review carefully",
+                    "orchestration.delegation_loop.budget.max_total_workers",
+                )
+        except (TypeError, ValueError):
+            res.add_error(
+                "R35",
+                f"delegation_loop.budget.max_total_workers must be an integer, got {mtw!r}",
+                "orchestration.delegation_loop.budget.max_total_workers",
+            )
+
+    # R36: max_wall_time ceiling (seconds). 86400 = 24 h.
+    mwt = budget.get("max_wall_time")
+    if mwt is not None:
+        try:
+            w = int(mwt)
+            if w < 0:
+                res.add_error(
+                    "R36",
+                    f"delegation_loop.budget.max_wall_time must be >= 0, got {w}",
+                    "orchestration.delegation_loop.budget.max_wall_time",
+                )
+            elif w > 86400:
+                res.add_error(
+                    "R36",
+                    f"delegation_loop.budget.max_wall_time={w}s exceeds ceiling of 86400s (24 h)",
+                    "orchestration.delegation_loop.budget.max_wall_time",
+                )
+            elif w > 14400:
+                res.add_warning(
+                    "R36",
+                    f"delegation_loop.budget.max_wall_time={w}s > 14400s (4 h): long-running loop, review carefully",
+                    "orchestration.delegation_loop.budget.max_wall_time",
+                )
+        except (TypeError, ValueError):
+            res.add_error(
+                "R36",
+                f"delegation_loop.budget.max_wall_time must be an integer, got {mwt!r}",
+                "orchestration.delegation_loop.budget.max_wall_time",
+            )
+
+
 def _r33_deterministic_phases(data: dict, res: ValidationResult) -> None:
     """R33: [RUNTIME] deterministic phases must not invoke LLM. Info annotation."""
     graph = _get(data, "orchestration", "graph") or []
@@ -565,6 +644,7 @@ def validate_workflow_dict(
     _r13_r14_state_fields(data, res)
     _r27_r30_evaluation(data, res)
     _r31_r32_max_depth(data, res)
+    _r35_r36_worker_budget_ceilings(data, res)
     _r33_deterministic_phases(data, res)
     _r34_l0_contract_declaration(data, res)
 

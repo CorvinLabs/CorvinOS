@@ -120,6 +120,78 @@ def _pick_upgrade_command(latest: str) -> tuple[list[str] | None, str]:
     )
 
 
+def _update_marker_path() -> Path:
+    """Temp marker recording the version the Windows self-updater last handed
+    off for — used by the convergence guard (INST-1b)."""
+    import tempfile  # noqa: PLC0415
+    return Path(tempfile.gettempdir()) / "corvin-self-update-target.txt"
+
+
+def _clear_update_convergence_marker() -> None:
+    try:
+        _update_marker_path().unlink()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# M3: bounded no-retry window. A non-converging handoff (marker == target)
+# refuses further attempts, but only for this long — after the TTL a transient
+# failure (PyPI/network hiccup, uv upgrade that never completed) self-heals and
+# the same target may be retried, instead of freezing auto-update until a NEWER
+# release happens to ship.
+_UPDATE_MARKER_TTL_SECONDS = 6 * 3600  # 6 hours
+
+
+def _update_convergence_ok(target: str) -> bool:
+    """Convergence guard for the Windows self-update handoff (INST-1b).
+
+    Checks the temp marker recording the version a previous handoff was made
+    for. If the marker already names this exact target AND is still within the
+    TTL window, a previous handoff relaunched us but the installed version did
+    NOT advance to it (a non-converging upgrade — e.g. a pinned uv receipt
+    freezing ``uv tool upgrade`` to a no-op, or a PyPI/uv hiccup). Refuse a
+    second handoff for the same target so the relaunch cycle can't spin forever;
+    the server just keeps running the current version.
+
+    The marker is mtime-TTL'd (``_UPDATE_MARKER_TTL_SECONDS``): once it ages out,
+    a transient failure self-heals and the same target may be retried.
+
+    This function only READS state — the marker is written by
+    ``_record_update_attempt`` AFTER a successful handoff, so a spawn that never
+    got off the ground doesn't arm the guard.
+
+    Returns True when a handoff for *target* is allowed, False when it must be
+    refused (already attempted within the TTL, didn't converge).
+    """
+    marker = _update_marker_path()
+    try:
+        already = marker.read_text(encoding="utf-8").strip()
+    except Exception:  # noqa: BLE001
+        already = ""
+    if already != target:
+        return True
+    # Same target already handed off for — honour the refusal only within the
+    # TTL window so a transient, non-converging attempt eventually retries.
+    try:
+        age = time.time() - marker.stat().st_mtime
+    except Exception:  # noqa: BLE001
+        age = 0.0
+    if age > _UPDATE_MARKER_TTL_SECONDS:
+        return True
+    return False
+
+
+def _record_update_attempt(target: str) -> None:
+    """Persist that a handoff for *target* was made. Call this only AFTER
+    ``_spawn_windows_self_updater`` returns success, so the convergence guard is
+    armed only once a relaunch is actually inbound (a failed spawn leaves no
+    marker and is freely retried on the next start)."""
+    try:
+        _update_marker_path().write_text(target, encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _ps_quote(s: str) -> str:
     """Quote a single string for embedding in PowerShell source, e.g. -FilePath
     (which binds to [string], NOT [string[]] — an array literal there either
@@ -263,6 +335,16 @@ def maybe_pypi_autoupdate(relaunch_argv: list[str] | None = None) -> bool:
     if not enabled:
         return False
 
+    # INST-2 / WA-2 / WA-3: when launched by the install.ps1 supervisor, that
+    # supervisor already runs `uv tool upgrade` ONCE per logon, before its
+    # restart loop. An in-process self-update handoff here would fight it: the
+    # supervisor relaunches serve 5s after any exit and counts that exit against
+    # its 5-per-300s crash budget, but the detached updater cannot replace the
+    # locked venv within 5s — so the handoff merely burns restart budget and can
+    # loop. Defer entirely to the supervisor's single per-logon upgrade.
+    if os.environ.get("CORVIN_SUPERVISED") == "1":
+        return False
+
     print("  Checking for updates …", end=" ", flush=True)
     try:
         # Step 1: check PyPI for the latest version (no install yet).
@@ -274,6 +356,9 @@ def maybe_pypi_autoupdate(relaunch_argv: list[str] | None = None) -> bool:
         ) as _r:
             latest = __import__("json").loads(_r.read())["info"]["version"]
         if latest == current:
+            # Converged (installed == latest) — clear the handoff guard so a
+            # future, genuinely-newer release isn't mistaken for a loop.
+            _clear_update_convergence_marker()
             print(f"up to date ({current})")
             return False
         # Step 2: a newer version exists — attempt upgrade with the command that
@@ -304,8 +389,24 @@ def maybe_pypi_autoupdate(relaunch_argv: list[str] | None = None) -> bool:
                     f"    {manual}"
                 )
                 return False
+            # INST-1b convergence guard: refuse a SECOND handoff for the same
+            # target version. If we already handed off for `latest` and the
+            # relaunched process is STILL on `current`, the upgrade didn't take
+            # — handing off again would relaunch → see `latest` → hand off →
+            # loop forever. Fail safe: keep running the current version.
+            if not _update_convergence_ok(latest):
+                print(
+                    f"\n  ⚠ already attempted an update to {latest} but still on "
+                    f"{current} — not retrying to avoid a relaunch loop. "
+                    f"Run manually:\n    {manual}"
+                )
+                return False
             print("handing off to background updater …", end=" ", flush=True)
             if _spawn_windows_self_updater(cmd, relaunch_argv):
+                # M3: arm the convergence guard only NOW — after the handoff
+                # actually started. A spawn that failed below leaves no marker
+                # and is retried on the next start.
+                _record_update_attempt(latest)
                 print(f"\n  ⏳ upgrading to {latest} in the background — restarting shortly …")
                 return True
             print(
@@ -346,20 +447,26 @@ _TELEMETRY_NOTICE_FILE = Path.home() / ".corvin" / "aco" / "telemetry" / ".notic
 
 
 def _show_telemetry_notice_once() -> None:
-    """Print a one-time disclosure about the anonymous activity ping.
+    """Print a one-time disclosure about the anonymous activity telemetry.
 
-    The ping is opt-out (default ON): it sends only a pseudonymous instance
-    token + the installed version to count how many instances are active.
-    No personal data is transmitted. This message is shown exactly once per
-    installation; it will not appear again after the user has seen it.
+    Two channels count how many instances are active, both opt-out (default ON):
+      * a daily ping — installed version + a pseudonymous instance ID, and
+      * a lightweight presence heartbeat every 5 minutes while the server runs,
+        with an EMPTY body (no data beyond the same pseudonymous auth headers).
+    Neither transmits personal data. A single opt-out
+    (``telemetry.ping_enabled false``) disables BOTH — the heartbeat re-checks
+    ``ping_enabled`` on every send. Shown exactly once per installation.
     """
     try:
         if _TELEMETRY_NOTICE_FILE.exists():
             return
         print(
-            "\n  CorvinOS sends a daily anonymous ping (version + pseudonymous ID)\n"
-            "  to count active instances. No personal data is included.\n"
-            "  To opt out: corvin config set telemetry.ping_enabled false\n"
+            "\n  CorvinOS sends anonymous telemetry to count active instances:\n"
+            "    - a daily ping (installed version + a pseudonymous instance ID), and\n"
+            "    - a lightweight presence heartbeat (empty body) every 5 minutes\n"
+            "      while the server is running.\n"
+            "  No personal data is included in either.\n"
+            "  To opt out of both: corvin config set telemetry.ping_enabled false\n"
         )
         _TELEMETRY_NOTICE_FILE.parent.mkdir(parents=True, exist_ok=True)
         _TELEMETRY_NOTICE_FILE.touch()

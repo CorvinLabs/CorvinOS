@@ -36,9 +36,30 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-# hooks/ → voice/ → plugins/ → repo-root
-PLUGIN_DIR = ROOT.parent
-SHARED_OUTBOX = PLUGIN_DIR / "bridges" / "shared" / "outbox"
+
+
+def _shared_outbox() -> Path:
+    """Resolve the outbox directory the messenger daemons actually poll.
+
+    THE bug this fixes: the daemons poll ``operator/bridges/shared/outbox``
+    (``discord/daemon.js`` etc.: ``SHARED = resolve(__dirname,'..','shared')``).
+    This hook lives in ``operator/voice/hooks/``, so the polled outbox is TWO
+    levels up + ``bridges/shared/outbox`` — ``ROOT.parent.parent``. The previous
+    ``ROOT.parent`` pointed at ``operator/voice/bridges/shared/outbox``, a real
+    but orphan directory no daemon reads, so every relayed notification was
+    silently dropped (fire-and-forget with no acknowledgement).
+
+    ``ADAPTER_OUTBOX`` env override wins (tests / channel-agnostic single-dir
+    deployments), mirroring scheduler.py / adapter.py.
+    """
+    env = os.environ.get("ADAPTER_OUTBOX")
+    if env:
+        return Path(os.path.expanduser(os.path.expandvars(env)))
+    # operator/voice/hooks → operator/voice → operator → operator/bridges/shared/outbox
+    return ROOT.parent.parent / "bridges" / "shared" / "outbox"
+
+
+SHARED_OUTBOX = _shared_outbox()
 
 
 def _voice_dir() -> Path:
@@ -152,26 +173,40 @@ def build_message(payload: dict, cfg: dict) -> str | None:
     return None
 
 
-def write_outbox(channel: str, to: str, text: str) -> bool:
-    """Schreibt Outbox-Envelope für den Daemon. Liefert True bei Erfolg."""
-    if not SHARED_OUTBOX.exists():
-        log(f"outbox dir missing: {SHARED_OUTBOX}")
+def write_outbox(channel: str, to: str, text: str,
+                 chat_id: "str | int | None" = None) -> bool:
+    """Schreibt Outbox-Envelope für den Daemon. Liefert True bei Erfolg.
+
+    Routing keys per channel (see the daemons): discord/telegram/slack/signal/
+    email route on ``chat_id``; whatsapp routes on ``to`` (JID). We therefore
+    ALWAYS stamp both — ``to`` (for whatsapp) and a resolved ``chat_id`` (for the
+    rest). ``chat_id`` comes from the explicit config value when set, else falls
+    back to ``to``. Previously chat_id was derived only for telegram/discord and
+    only from ``to``, so slack/signal relays were dropped for a missing key and
+    an explicit chat_id in relay.json was ignored.
+    """
+    # Ensure the outbox exists rather than dropping the notification when the
+    # bridge simply hasn't created it yet (fresh install / first relay).
+    try:
+        SHARED_OUTBOX.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log(f"outbox dir uncreatable: {SHARED_OUTBOX}: {e}")
         return False
-    msg_id = f"relay_{int(time.time()*1000)}"
+    # Random suffix: two hook events in the same millisecond would otherwise
+    # write the same relay_<ms>.json and one notification would be lost.
+    msg_id = f"relay_{int(time.time()*1000)}_{os.urandom(3).hex()}"
+    resolved = chat_id if chat_id not in (None, "") else to
+    # Keep chat_id a STRING — never int-coerce. Discord channel snowflakes are
+    # 19 digits (> 2^53); emitting one as a JSON number loses precision when the
+    # daemon re-parses with JSON.parse (float64) and the message is misrouted.
+    # discord.js/telegram/slack/signal daemons all accept string ids.
     envelope: dict = {
         "channel": channel,
         "to": to,
+        "chat_id": str(resolved),
         "text": text,
         "_relay": True,
     }
-    # Telegram/Discord routen über chat_id; WhatsApp/Slack über `to` (JID/UID).
-    # Wenn `to` numerisch ist, doppeln wir es als chat_id, damit das Telegram-
-    # Daemon es als Chat-Ziel akzeptiert.
-    if channel in ("telegram", "discord"):
-        try:
-            envelope["chat_id"] = int(to) if str(to).lstrip("-").isdigit() else to
-        except (ValueError, TypeError):
-            envelope["chat_id"] = to
     out_file = SHARED_OUTBOX / f"{msg_id}.json"
     try:
         out_file.write_text(json.dumps(envelope, ensure_ascii=False))
@@ -202,7 +237,7 @@ def main() -> int:
     if not text:
         return 0
 
-    write_outbox(cfg["channel"], str(cfg["to"]), text)
+    write_outbox(cfg["channel"], str(cfg["to"]), text, chat_id=cfg.get("chat_id"))
     return 0
 
 

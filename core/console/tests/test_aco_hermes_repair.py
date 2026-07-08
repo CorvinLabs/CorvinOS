@@ -76,7 +76,11 @@ class TestHermesHealthRepairApply:
     def test_apply_server_startup_success(self, repair_context):
         """Successful server startup increments fixed count."""
         action = HermesHealthRepair()
-        with patch("hermes_healing.repair_hermes") as mock_repair:
+        # The loss-gate re-checks reachability with a FRESH get_health_status, so
+        # mock it healthy too (deterministic regardless of a real local Ollama).
+        with patch("hermes_healing.repair_hermes") as mock_repair, \
+             patch("hermes_healing.get_health_status",
+                   return_value={"reachable": True, "has_model": True}):
             mock_repair.return_value = {
                 "server_started": True,
                 "model_pulled": False,
@@ -89,7 +93,9 @@ class TestHermesHealthRepairApply:
     def test_apply_model_pull_success(self, repair_context):
         """Successful model pull increments fixed count."""
         action = HermesHealthRepair()
-        with patch("hermes_healing.repair_hermes") as mock_repair:
+        with patch("hermes_healing.repair_hermes") as mock_repair, \
+             patch("hermes_healing.get_health_status",
+                   return_value={"reachable": True, "has_model": True}):
             mock_repair.return_value = {
                 "server_started": False,
                 "model_pulled": True,
@@ -100,9 +106,11 @@ class TestHermesHealthRepairApply:
             assert fixed >= 1
 
     def test_apply_repair_fails(self, repair_context):
-        """Repair returns 0 when all repairs fail."""
+        """Repair returns 0 when the loss-gate recheck stays unreachable."""
         action = HermesHealthRepair()
-        with patch("hermes_healing.repair_hermes") as mock_repair:
+        with patch("hermes_healing.repair_hermes") as mock_repair, \
+             patch("hermes_healing.get_health_status",
+                   return_value={"reachable": False, "has_model": False}):
             mock_repair.return_value = {
                 "server_started": False,
                 "model_pulled": False,
@@ -158,6 +166,28 @@ class TestHermesHealthIntegration:
             fixed = action.apply(repair_context, faults)
             # Loss-gate: no progress, so fixed=0 (will be rolled back)
             assert fixed == 0
+
+
+class TestHermesHealingImport:
+    """SH-7: the shared dir must resolve from the PACKAGE location (Path(__file__)),
+    NOT from corvin_home — otherwise a pinned CORVIN_HOME=<repo>/.corvin walks two
+    levels too high and this L5 repair becomes a dead no-op."""
+
+    def test_import_resolves_from_package_not_corvin_home(self):
+        action = HermesHealthRepair()
+        # A bogus corvin_home must NOT affect resolution (the old bug read the
+        # shared dir off corvin_home.parent.parent.parent).
+        ctx = RepairContext(corvin_home=Path("/nonexistent/pinned/home"))
+        mod = action._import_hermes_healing(ctx)
+        assert mod is not None, "hermes_healing must import from the package location"
+        assert hasattr(mod, "get_health_status")
+        assert hasattr(mod, "repair_hermes")
+
+    def test_shared_dirs_are_package_relative(self):
+        dirs = HermesHealthRepair._shared_dirs()
+        # None of the candidates are derived from a runtime CORVIN_HOME.
+        assert any(d.name == "shared" for d in dirs)
+        assert all("shared" in str(d) for d in dirs)
 
 
 class TestHermesRepairRegistry:

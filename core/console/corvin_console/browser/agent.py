@@ -99,10 +99,24 @@ def _claude_argv() -> list[str]:
 
 
 def _spawn_claude(prompt: str, *, timeout: int = 60) -> str:
+    # SECURITY (PENTEST-2 — Windows cmd.exe argument injection → RCE, the
+    # BatBadBut / CVE-2024-1874 class): `prompt` embeds `obs.as_text()`, i.e.
+    # attacker-controlled web-page element names/text. On Windows the `claude`
+    # binary resolves to the npm `claude.cmd` shim, so `_claude_argv()` wraps the
+    # call as `cmd /c <shim> …`. subprocess quotes argv via `list2cmdline`, which
+    # QUOTES but does NOT escape cmd.exe metacharacters (`&`, `|`, `<`, `>`, and
+    # quote-toggling), so a page element named `" & calc.exe & "` would execute.
+    # Fix: NEVER place the untrusted prompt on argv. `claude -p` reads the prompt
+    # from stdin when it is not supplied as a positional, so feed it via `input=`
+    # (POSIX reads stdin identically — no regression). `--system-prompt _SYSTEM`
+    # stays on argv because it is a trusted module constant, never attacker-
+    # derived; if it ever carried untrusted data it would have to move to stdin
+    # too.
     try:
         r = subprocess.run(
             [*_claude_argv(), "-p", "--max-turns", "1", "--tools", "",
-             "--system-prompt", _SYSTEM, prompt],
+             "--system-prompt", _SYSTEM],
+            input=prompt,
             capture_output=True, text=True, encoding="utf-8", timeout=timeout,
         )
         return (r.stdout or "").strip()

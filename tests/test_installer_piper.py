@@ -137,7 +137,7 @@ def test_ensure_piper_downloads_model_unconditionally_when_binary_present(tmp_pa
     voice_config_dir.mkdir()
 
     with mock.patch.object(piper_mod, "_install_piper") as m_install, \
-         mock.patch.object(piper_mod.shutil, "which", return_value="/usr/bin/piper"), \
+         mock.patch.object(piper_mod, "_piper_binary", return_value="/usr/bin/piper"), \
          mock.patch.object(piper_mod, "_setup_model") as m_setup, \
          mock.patch.object(piper_mod, "_write_bin_env") as m_write_env:
         piper_mod.ensure_piper(voice_config_dir, interactive=False)
@@ -145,6 +145,42 @@ def test_ensure_piper_downloads_model_unconditionally_when_binary_present(tmp_pa
     m_install.assert_called_once_with(False)
     m_setup.assert_called_once_with(voice_config_dir, False)
     m_write_env.assert_called_once_with(voice_config_dir, "/usr/bin/piper")
+
+
+def test_ensure_piper_downloads_model_when_only_python_package_present(tmp_path: Path) -> None:
+    """INST-3/VOICE-4: a `uv tool install` never exposes the piper console
+    script on PATH, but the runtime TTS path uses the piper PYTHON API. When
+    the package imports (even with NO binary), the model must still download —
+    only PIPER_BIN/service.env wiring is skipped."""
+    voice_config_dir = tmp_path / "voice_config"
+    voice_config_dir.mkdir()
+
+    with mock.patch.object(piper_mod, "_install_piper"), \
+         mock.patch.object(piper_mod, "_piper_binary", return_value=None), \
+         mock.patch.object(piper_mod, "_piper_python_available", return_value=True), \
+         mock.patch.object(piper_mod, "_setup_model") as m_setup, \
+         mock.patch.object(piper_mod, "_write_bin_env") as m_write_env:
+        piper_mod.ensure_piper(voice_config_dir, interactive=False)
+
+    m_setup.assert_called_once_with(voice_config_dir, False)
+    m_write_env.assert_not_called()
+
+
+def test_ensure_piper_skips_model_when_neither_binary_nor_package(tmp_path: Path) -> None:
+    """Negative control: with neither the binary nor the Python package
+    available, there is nothing to run against — skip the model download."""
+    voice_config_dir = tmp_path / "voice_config"
+    voice_config_dir.mkdir()
+
+    with mock.patch.object(piper_mod, "_install_piper"), \
+         mock.patch.object(piper_mod, "_piper_binary", return_value=None), \
+         mock.patch.object(piper_mod, "_piper_python_available", return_value=False), \
+         mock.patch.object(piper_mod, "_setup_model") as m_setup, \
+         mock.patch.object(piper_mod, "_write_bin_env") as m_write_env:
+        piper_mod.ensure_piper(voice_config_dir, interactive=False)
+
+    m_setup.assert_not_called()
+    m_write_env.assert_not_called()
 
 
 # ── Cross-file consistency: installer output must resolve via say.py ───────

@@ -13,6 +13,11 @@ Provider chain (first available wins, unless pinned):
 Pin a provider via CORVIN_TTS_PROVIDER=openai|edge|piper (operator env)
 or via the tts_provider field in the user profile (console settings).
 
+Set CORVIN_SAY_NO_FALLBACK=1 to make a PINNED provider hard-fail (no
+auto-chain fallback) when it can't produce audio — a strict/isolation mode
+used by tests to prove a specific tier actually works instead of being masked
+by a later tier (VOICE-1). Default (unset) keeps the fall-through behaviour.
+
 Usage:
     say.py <out_path> <text> [<lang> [<voice> [<provider>]]]
 
@@ -224,30 +229,31 @@ def _try_edge(out_path: Path, text: str, lang: str) -> bool:
 
 # ── Piper helpers ─────────────────────────────────────────────────────
 
-# BCP-47 prefix → Piper model stem (quality "medium" unless noted).
-# Models must be placed in PIPER_MODEL_DIR as <stem>.onnx + <stem>.onnx.json.
+# BCP-47 prefix → Piper model stem. This is the fallback table used only for
+# manual/pre-ADR-0185 setups (config.json + env override are consulted first in
+# _piper_model_for); a model file is expected at PIPER_MODEL_DIR/<stem>.onnx
+# (+ <stem>.onnx.json).
+#
+# SSOT INVARIANT (VOICE-6): these stems must stay byte-identical to the names
+# corvin-install actually downloads — the last path segment of each entry in
+# installer/steps/piper.py::_MODELS. They previously disagreed for 8/12
+# languages (de: thorsten vs kerstin; en: amy vs lessac; es/fr/it/nl/pl/zh),
+# so corvin-install reported a successful download that say.py's fallback could
+# then never find. Keep this table == installer _MODELS for all 12 languages.
+# Guard: test_say.sh + tests/test_installer_piper.py.
 _PIPER_MODELS: dict[str, str] = {
-    "de":  "de_DE-thorsten-medium",
-    "en":  "en_US-amy-medium",
-    "zh":  "zh_CN-huayan-medium",
-    "ja":  "ja_JP-kokoro-medium",
-    "ko":  "ko_KR-navi-x_low",
-    "fr":  "fr_FR-mls_1840-low",
-    "es":  "es_ES-mls_9972-low",
-    "it":  "it_IT-riccardo-x_low",
+    "de":  "de_DE-kerstin-low",
+    "en":  "en_US-lessac-medium",
+    "es":  "es_ES-sharvard-medium",
+    "fr":  "fr_FR-siwis-medium",
+    "it":  "it_IT-paola-medium",
+    "nl":  "nl_NL-mls-medium",
+    "pl":  "pl_PL-gosia-medium",
     "pt":  "pt_BR-faber-medium",
-    "nl":  "nl_BE-nathalie-x_low",
-    "pl":  "pl_PL-mls_6892-low",
     "ru":  "ru_RU-irina-medium",
-    "sv":  "sv_SE-nst-medium",
-    "cs":  "cs_CZ-jirka-medium",
-    "fi":  "fi_FI-harri-medium",
-    "hu":  "hu_HU-anna-medium",
-    "ro":  "ro_RO-mihai-medium",
-    "uk":  "uk_UA-lada-x_low",
-    "sk":  "sk_SK-lili-medium",
     "tr":  "tr_TR-dfki-medium",
-    "vi":  "vi_VN-vivos-x_low",
+    "uk":  "uk_UA-lada-x_low",
+    "zh":  "zh_CN-huayan-x_low",
 }
 
 _PIPER_MODEL_DIR = Path(
@@ -333,15 +339,26 @@ def _try_piper(out_path: Path, text: str, lang: str) -> bool:
 
         voice = PiperVoice.load(str(model_path), config_path=str(model_path) + ".json")
         wav_path = out_path.with_suffix(".wav")
+        # piper-tts >= 1.4.1 renamed the WAV writer: synthesize() is now a
+        # generator yielding AudioChunks and its 2nd positional arg is a
+        # SynthesisConfig, NOT the wave file. Passing the wave handle there wrote
+        # zero frames → wave close raised "# channels not specified". Use the
+        # dedicated WAV writer, which the pinned versions expose.
         with wave.open(str(wav_path), "wb") as wav_file:
-            voice.synthesize(text, wav_file)
-        wav_path.rename(out_path)
+            voice.synthesize_wav(text, wav_file)
+        wav_path.replace(out_path)  # replace (not rename): overwrite-safe on Windows
         return True
     except ImportError:
         pass  # fall through to binary
     except Exception as e:  # noqa: BLE001
-        sys.stderr.write(f"say.py: piper-tts Python failed: {e}\n")
-        return False
+        # Don't give up on Piper here — the binary tier below is an independent
+        # code path (older/newer API surface) and is the whole point of the
+        # offline fallback. Drop the stray partial WAV and fall through.
+        sys.stderr.write(f"say.py: piper-tts Python API failed ({e}) — trying piper binary\n")
+        try:
+            out_path.with_suffix(".wav").unlink(missing_ok=True)
+        except OSError:
+            pass
 
     # ── Try piper binary ──────────────────────────────────────────────
     import shutil
@@ -354,12 +371,18 @@ def _try_piper(out_path: Path, text: str, lang: str) -> bool:
 
     wav_path = out_path.with_suffix(".wav")
     try:
+        # VOICE-10: keep this UNDER the caller's outer TTS budget
+        # (routes/voice.py::_TTS_TIMEOUT_S == 25s). A 120s inner cap meant the
+        # outer timeout fired first and killed a slow first Piper run
+        # inconsistently (orphaned subprocess, no clean fallback). 20s is
+        # comfortably below 25s yet ample for a local Piper synth once the
+        # model is loaded.
         result = _sp.run(
             [piper_bin, "--model", str(model_path), "--output_file", str(wav_path)],
             input=text,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=20,
         )
         if result.returncode != 0:
             sys.stderr.write(f"say.py: piper binary failed: {result.stderr.strip()[:200]}\n")
@@ -523,12 +546,26 @@ def main() -> int:
             return _try_piper(out_path, text, lang)
         return False
 
+    strict = os.environ.get("CORVIN_SAY_NO_FALLBACK", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
     if provider != "auto":
         # Preferred provider first; on failure fall through to the auto-chain so
         # voice always works even if the configured provider is temporarily broken
         # (e.g. missing API key, network outage, not installed).
         if _run(provider):
             sys.stdout.write(str(out_path))
+            return 0
+        if strict:
+            # No-fallback (VOICE-1 isolation): a pinned provider must hard-fail
+            # instead of masking a dead tier behind the auto-chain. Silent skip
+            # (exit 0 + empty stdout) — the caller/test sees "no audio from the
+            # pinned tier", never a phantom success written by a different tier.
+            sys.stderr.write(
+                f"say.py: pinned provider '{provider}' failed and "
+                "CORVIN_SAY_NO_FALLBACK is set — not falling back\n"
+            )
             return 0
         sys.stderr.write(
             f"say.py: preferred provider '{provider}' failed — falling back to auto-chain\n"

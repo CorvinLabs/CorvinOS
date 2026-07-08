@@ -176,12 +176,17 @@ def _call_haiku(prompt: str) -> dict:
 def main() -> int:
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
+        # CI-5: also emit the error on STDOUT as structured JSON (not only
+        # stderr) so the workflow's Parse step sees an "error" key and fails
+        # CLOSED. A silent stderr-only message left the gate green.
         print("ERROR: ANTHROPIC_API_KEY not set", file=sys.stderr)
+        print(json.dumps({"error": "ANTHROPIC_API_KEY not set", "findings": []}))
         return 2
 
     diff = os.environ.get("PR_DIFF", "")
     if not diff:
         print("ERROR: PR_DIFF not set", file=sys.stderr)
+        print(json.dumps({"error": "PR_DIFF not set", "findings": []}))
         return 2
 
     changed_raw = os.environ.get("CHANGED_FILES", "")

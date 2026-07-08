@@ -24,8 +24,14 @@ from pathlib import Path
 
 ROOT     = Path(__file__).resolve().parent
 RELAY    = ROOT / "notification_relay.py"
-PLUGIN   = ROOT.parent
-OUTBOX   = PLUGIN / "bridges" / "shared" / "outbox"
+# The REAL outbox the messenger daemons poll (operator/bridges/shared/outbox).
+# This is the regression anchor for the orphan-path bug: the relay MUST target
+# this, not operator/voice/bridges/shared/outbox.
+REAL_OUTBOX = ROOT.parent.parent / "bridges" / "shared" / "outbox"
+# Each run points the relay at a temp dir via ADAPTER_OUTBOX so the test asserts
+# against a controlled directory without polluting the repo tree — and, crucially,
+# proves the relay honours the same override the daemons/adapter use.
+OUTBOX: Path = REAL_OUTBOX  # rebound per-run in main()
 
 
 def run_hook(payload: dict, config: dict | None,
@@ -38,11 +44,13 @@ def run_hook(payload: dict, config: dict | None,
     else:
         relay_cfg.write_text(json.dumps(config))
 
+    OUTBOX.mkdir(parents=True, exist_ok=True)
     # Outbox vor dem Lauf säubern (nur unsere relay_*-Files).
     pre = {p.name for p in OUTBOX.glob("relay_*.json")}
 
     env = os.environ.copy()
     env["VOICE_CONFIG_DIR"] = str(config_dir)
+    env["ADAPTER_OUTBOX"] = str(OUTBOX)
     res = subprocess.run(
         ["python3", str(RELAY)],
         input=json.dumps(payload), text=True, capture_output=True, env=env,
@@ -57,11 +65,35 @@ def cleanup(files: list[Path]) -> None:
 
 
 def main() -> int:
+    global OUTBOX
     failures: list[str] = []
-    OUTBOX.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
+        OUTBOX = tmp / "real_outbox"  # controlled dir, injected via ADAPTER_OUTBOX
+        OUTBOX.mkdir(parents=True, exist_ok=True)
+
+        # --- 0. REGRESSION: default outbox path = the daemon-polled dir ---
+        # Guards the orphan-path bug: with no override, the relay must resolve
+        # to operator/bridges/shared/outbox, NOT operator/voice/bridges/...
+        probe = subprocess.run(
+            ["python3", "-c",
+             "import os,importlib.util as u;"
+             "os.environ.pop('ADAPTER_OUTBOX',None);"
+             f"s=u.spec_from_file_location('nr',r'{RELAY}');"
+             "m=u.module_from_spec(s);s.loader.exec_module(m);"
+             "print(m._shared_outbox())"],
+            capture_output=True, text=True,
+            env={k: v for k, v in os.environ.items() if k != "ADAPTER_OUTBOX"},
+        )
+        default_path = Path(probe.stdout.strip())
+        if default_path != REAL_OUTBOX:
+            failures.append(
+                f"default outbox path regressed: {default_path} != {REAL_OUTBOX}")
+        elif "voice/bridges" in str(default_path):
+            failures.append(f"default outbox still orphan: {default_path}")
+        else:
+            print(f"PASS: default outbox = daemon-polled dir ({default_path.name}/)")
 
         # --- 1. Kein relay.json → No-Op ----------------------------------
         rc, files = run_hook(
@@ -99,7 +131,7 @@ def main() -> int:
         else:
             env = json.loads(files[0].read_text())
             if (env.get("channel") != "telegram"
-                    or env.get("chat_id") != 999
+                    or env.get("chat_id") != "999"
                     or "Tool needs approval" not in env.get("text", "")
                     or not env["text"].startswith("🔔")):
                 failures.append(f"notification envelope shape: {env}")
@@ -150,6 +182,26 @@ def main() -> int:
             failures.append(f"event-filter: rc={rc} files={files}")
         else:
             print("PASS: events-filter blocks Stop event")
+        cleanup(files)
+
+        # --- 7. Slack with explicit chat_id → envelope carries chat_id ----
+        # Slack/Signal daemons route on chat_id; the old code only set it for
+        # telegram/discord, so slack relays were dropped. Also proves an
+        # explicit config chat_id (≠ to) is honoured, not overwritten by `to`.
+        rc, files = run_hook(
+            {"hook_event_name": "Notification", "message": "task done"},
+            config={"enabled": True, "channel": "slack", "to": "UUSER123",
+                    "chat_id": "C0CHANNEL9", "events": ["Notification"]},
+            config_dir=tmp / "slack",
+        )
+        if rc != 0 or len(files) != 1:
+            failures.append(f"slack: rc={rc} files={files}")
+        else:
+            env = json.loads(files[0].read_text())
+            if env.get("channel") != "slack" or env.get("chat_id") != "C0CHANNEL9":
+                failures.append(f"slack chat_id not honoured: {env}")
+            else:
+                print("PASS: slack → envelope carries explicit chat_id")
         cleanup(files)
 
     if failures:

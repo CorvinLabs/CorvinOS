@@ -5,12 +5,76 @@ Values are NEVER interpolated — %s / ? / @param placeholders only.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .protocol import FilterExpr, SourceQuery, _VALID_OPS
 
 # Re-export for convenience
-__all__ = ["SourceQuery", "FilterExpr", "safe_to_sql"]
+__all__ = [
+    "SourceQuery",
+    "FilterExpr",
+    "safe_to_sql",
+    "_validate_identifier",
+    "_validate_order_by",
+]
+
+# ---------------------------------------------------------------------------
+# Identifier validation (structural SQL-identifier-injection defence)
+# ---------------------------------------------------------------------------
+#
+# Values are always bound via placeholders (see below), but IDENTIFIERS
+# (column names, table names, ORDER BY targets) are structural and cannot be
+# parameterized in standard SQL. Any identifier that reaches an f-string MUST
+# first pass this strict allowlist: a leading letter/underscore followed by
+# letters, digits, underscores, and dots (dots permit schema.table /
+# table.column qualification). This rejects whitespace, quotes, semicolons,
+# parentheses, comment markers, and every SQL operator — closing the
+# identifier-injection vector.
+# \Z (end of STRING), not $ (which also matches just before a trailing \n) —
+# else `col\n` would pass and leak a newline into the emitted SQL.
+_IDENT_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_.]*\Z")
+
+# ORDER BY additionally allows an optional trailing direction keyword.
+_ORDER_BY_RE = re.compile(
+    r"\A\s*(?P<col>[A-Za-z_][A-Za-z0-9_.]*)\s*(?P<dir>ASC|DESC)?\s*\Z",
+    re.IGNORECASE,
+)
+
+
+def _validate_identifier(name: Any, *, kind: str = "identifier") -> str:
+    """Validate a SQL identifier against a strict allowlist.
+
+    Permits letters, digits, underscore, and dots (for schema.table /
+    table.column). Raises ValueError on anything else so a malicious column /
+    table name can never break out of its identifier position.
+    """
+    if not isinstance(name, str) or not _IDENT_RE.match(name):
+        raise ValueError(
+            f"Invalid SQL {kind} {name!r}: must match {_IDENT_RE.pattern} "
+            "(letters, digits, underscore, and dots only)."
+        )
+    return name
+
+
+def _validate_order_by(order_by: Any, *, kind: str = "order_by") -> str:
+    """Validate an ORDER BY clause: a single identifier plus optional ASC/DESC.
+
+    Returns the normalized clause (direction upper-cased). Raises ValueError for
+    anything that is not ``<identifier>[ ASC|DESC]``.
+    """
+    if not isinstance(order_by, str):
+        raise ValueError(f"Invalid SQL {kind} {order_by!r}: must be a string.")
+    m = _ORDER_BY_RE.match(order_by)
+    if not m:
+        raise ValueError(
+            f"Invalid SQL {kind} {order_by!r}: expected "
+            "'<column>' optionally followed by ASC or DESC."
+        )
+    col = _validate_identifier(m.group("col"), kind=f"{kind} column")
+    direction = m.group("dir")
+    return f"{col} {direction.upper()}" if direction else col
+
 
 # ---------------------------------------------------------------------------
 # Dialect-specific placeholder and LIKE escape
@@ -66,6 +130,9 @@ def _op_fragment(
         raise ValueError(
             f"Unknown FilterExpr op {op!r}. Valid ops: {sorted(_VALID_OPS)}"
         )
+
+    # The filter column is an identifier (structural, cannot be parameterized).
+    col = _validate_identifier(col, kind="filter column")
 
     if op == "is_null":
         # is_null: no parameter consumed
@@ -126,9 +193,14 @@ def safe_to_sql(
             f"Unknown SQL dialect {dialect!r}. Valid: {sorted(_VALID_DIALECTS)}"
         )
 
+    # Table + column list are identifiers — validate before interpolation.
+    table = _validate_identifier(table, kind="table")
+
     # Column list
     if query.columns:
-        col_list = ", ".join(query.columns)
+        col_list = ", ".join(
+            _validate_identifier(c, kind="column") for c in query.columns
+        )
     else:
         col_list = "*"
 
@@ -148,9 +220,9 @@ def safe_to_sql(
     if where_fragments:
         parts.append("WHERE " + " AND ".join(where_fragments))
 
-    # ORDER BY
+    # ORDER BY — validated identifier plus optional ASC/DESC.
     if query.order_by:
-        parts.append(f"ORDER BY {query.order_by}")
+        parts.append(f"ORDER BY {_validate_order_by(query.order_by)}")
 
     # LIMIT
     if query.limit is not None:

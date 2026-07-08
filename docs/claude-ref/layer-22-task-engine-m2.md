@@ -1,5 +1,12 @@
 # Layer 22 — Task Engine M2: Background Task Execution (ADR-0081, ADR-0082)
 
+> **Messenger notify-on-completion:** the worker's terminal branches call
+> `_notify_task_done()` → `completion_notify.mark_done()`, so a task whose
+> producer registered a messenger origin gets a delivered Discord/WhatsApp/…
+> notification when it finishes. See
+> [background-completion-notify.md](background-completion-notify.md).
+
+
 **Status (0.9.0):** Backend modules present (`task_queue.py`, `task_worker_pool.py`,
 `task_pubsub.py`, `routes/tasks.py`) and unit-tested, but **NOT wired into the
 console**: `routes/tasks.py` is never registered in `app.py`, the

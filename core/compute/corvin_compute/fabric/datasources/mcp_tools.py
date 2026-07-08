@@ -9,10 +9,22 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Optional
 
+from .manifest import _NAME_RE
 from .registry import DataSourceRegistry
 
 # Hard cap for preview — structural constraint.
 _PREVIEW_MAX_ROWS = 20
+
+# Tools that take a datasource ``name`` and resolve it to an on-disk path
+# (``<conn_dir>/<name>.json``). Their ``name`` MUST pass _NAME_RE before use,
+# otherwise ``..`` / slashes escape the tenant's connection directory
+# (arbitrary .json read/delete + cross-tenant traversal).
+_NAME_REQUIRED_TOOLS = frozenset({
+    "datasource_schema",
+    "datasource_test",
+    "datasource_unregister",
+    "datasource_preview",
+})
 
 # ---------------------------------------------------------------------------
 # Tool definition helpers (JSON schema for MCP)
@@ -32,7 +44,6 @@ def datasource_register_tool_def() -> dict:
                     "type": "object",
                     "description": "ConnectionManifest dict",
                 },
-                "tenant_id": {"type": "string", "default": "_default"},
             },
             "required": ["manifest"],
         },
@@ -45,9 +56,7 @@ def datasource_list_tool_def() -> dict:
         "description": "List all registered DataSource connections for a tenant.",
         "inputSchema": {
             "type": "object",
-            "properties": {
-                "tenant_id": {"type": "string", "default": "_default"},
-            },
+            "properties": {},
         },
     }
 
@@ -63,7 +72,6 @@ def datasource_schema_tool_def() -> dict:
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
-                "tenant_id": {"type": "string", "default": "_default"},
             },
             "required": ["name"],
         },
@@ -78,7 +86,6 @@ def datasource_test_tool_def() -> dict:
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
-                "tenant_id": {"type": "string", "default": "_default"},
             },
             "required": ["name"],
         },
@@ -93,7 +100,6 @@ def datasource_unregister_tool_def() -> dict:
             "type": "object",
             "properties": {
                 "name": {"type": "string"},
-                "tenant_id": {"type": "string", "default": "_default"},
             },
             "required": ["name"],
         },
@@ -118,7 +124,6 @@ def datasource_preview_tool_def() -> dict:
                     "maximum": 20,
                     "description": "Max rows to return (hard cap: 20)",
                 },
-                "tenant_id": {"type": "string", "default": "_default"},
             },
             "required": ["name"],
         },
@@ -135,6 +140,8 @@ def call_datasource_tool(
     registry: DataSourceRegistry,
     audit_fn: Callable[[str, dict], None],
     tenant_config: Optional[dict] = None,
+    *,
+    tenant_id: str = "_default",
 ) -> dict:
     """Dispatch a datasource_* MCP tool call.
 
@@ -145,6 +152,11 @@ def call_datasource_tool(
         audit_fn: Callable(event_name, details) for audit chain.
         tenant_config: Optional tenant config dict. If fabric_enabled is False,
                        returns FabricNotEnabled error.
+        tenant_id: Tenant scope for this call. MUST be supplied by the caller
+                   from the AUTHENTICATED session context — it is NEVER read
+                   from ``args`` (a tool-argument tenant_id would let a caller
+                   route into another tenant's connection store). Defaults to
+                   ``_default`` only when no authenticated context is threaded.
 
     Returns:
         Result dict suitable for MCP tool response.
@@ -152,7 +164,18 @@ def call_datasource_tool(
     if tenant_config and not tenant_config.get("fabric_enabled", True):
         return {"error": "FabricNotEnabled", "message": "Compute Fabric is disabled for this tenant."}
 
-    tenant_id = args.get("tenant_id", "_default")
+    # Path-traversal / cross-tenant defence: any datasource name that becomes
+    # part of an on-disk path must be a strict slug (no ``..``, ``/``, dots).
+    if name in _NAME_REQUIRED_TOOLS:
+        ds_name = args.get("name", "")
+        if not isinstance(ds_name, str) or not _NAME_RE.match(ds_name):
+            return {
+                "error": "InvalidName",
+                "message": (
+                    f"Datasource name {ds_name!r} is invalid — must match "
+                    f"{_NAME_RE.pattern} (no path separators or '..')."
+                ),
+            }
 
     if name == "datasource_list":
         return _tool_list(args, registry, tenant_id, audit_fn)

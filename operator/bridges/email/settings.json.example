@@ -18,5 +18,8 @@
   "subject_prefix": "[Claude] ",
   "whitelist": [],
   "rate_limit_per_hour": 30,
-  "pin": null
+  "pin": null,
+  "_NOTE_security": "Inbound email is authenticated by DMARC/DKIM alignment (the From header alone is forgeable). A message is only trusted when the receiving provider's top Authentication-Results line shows dmarc=pass (or aligned dkim=pass) AND that line's authserv-id is provably the receiver's. With a well-known provider (Gmail/iCloud/Outlook/Yahoo/Mimecast/Proofpoint) it is auto-recognised; for a self-hosted / non-stamping IMAP provider you MUST set auth_results_authserv_id to your provider's authserv-id, otherwise an attacker could inject a forged Authentication-Results line. An empty whitelist DENIES all senders (use the PIN /auth flow to claim owner). Set dev_mode:true ONLY for local testing to restore legacy open behaviour.",
+  "dev_mode": false,
+  "auth_results_authserv_id": null
 }

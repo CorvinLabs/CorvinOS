@@ -181,9 +181,13 @@ def test_process_one_btw_no_running() -> None:
     inbox, outbox, processed = _setup_sandbox()
     try:
         adapter = _fresh_adapter({
-            "ADAPTER_INBOX":     str(inbox),
-            "ADAPTER_OUTBOX":    str(outbox),
-            "ADAPTER_PROCESSED": str(processed),
+            "ADAPTER_INBOX":       str(inbox),
+            "ADAPTER_OUTBOX":      str(outbox),
+            "ADAPTER_PROCESSED":   str(processed),
+            # Isolate channel-settings resolution from the dev machine's real
+            # operator config (bridges/discord/settings.json), whose privacy
+            # policy otherwise dropped these discord test messages as private.
+            "ADAPTER_BRIDGES_DIR": str(inbox.parent),
         })
         env = {
             "id": "msg-btw-1",
@@ -217,9 +221,13 @@ def test_process_one_btw_empty_text() -> None:
     inbox, outbox, processed = _setup_sandbox()
     try:
         adapter = _fresh_adapter({
-            "ADAPTER_INBOX":     str(inbox),
-            "ADAPTER_OUTBOX":    str(outbox),
-            "ADAPTER_PROCESSED": str(processed),
+            "ADAPTER_INBOX":       str(inbox),
+            "ADAPTER_OUTBOX":      str(outbox),
+            "ADAPTER_PROCESSED":   str(processed),
+            # Isolate channel-settings resolution from the dev machine's real
+            # operator config (bridges/discord/settings.json), whose privacy
+            # policy otherwise dropped these discord test messages as private.
+            "ADAPTER_BRIDGES_DIR": str(inbox.parent),
         })
         # Use a sandbox channel name with no on-disk settings.json so the
         # Layer 16 inbox-revalidation hits "no-settings" → fail-open.
@@ -255,9 +263,13 @@ def test_process_one_btw_with_running() -> None:
     proc = None
     try:
         adapter = _fresh_adapter({
-            "ADAPTER_INBOX":     str(inbox),
-            "ADAPTER_OUTBOX":    str(outbox),
-            "ADAPTER_PROCESSED": str(processed),
+            "ADAPTER_INBOX":       str(inbox),
+            "ADAPTER_OUTBOX":      str(outbox),
+            "ADAPTER_PROCESSED":   str(processed),
+            # Isolate channel-settings resolution from the dev machine's real
+            # operator config (bridges/discord/settings.json), whose privacy
+            # policy otherwise dropped these discord test messages as private.
+            "ADAPTER_BRIDGES_DIR": str(inbox.parent),
         })
         proc = subprocess.Popen(
             ["cat"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -423,6 +435,86 @@ def test_e2e_call_claude_streaming_with_btw() -> None:
         shutil.rmtree(work, ignore_errors=True)
 
 
+# ---------------------------------------------------------------------------
+# 6. Engine-agnostic turn marker + queue fallback for non-Claude engines
+# ---------------------------------------------------------------------------
+
+
+def test_turn_marker_refcount() -> None:
+    _section("_mark_turn_active/_mark_turn_done refcount + _turn_active")
+    adapter = _fresh_adapter()
+    assert adapter._turn_active("cm") is False
+    adapter._mark_turn_active("cm")
+    assert adapter._turn_active("cm") is True
+    # Nested dispatch on the same chat must stay active until BOTH release.
+    adapter._mark_turn_active("cm")
+    adapter._mark_turn_done("cm")
+    assert adapter._turn_active("cm") is True, "still one dispatch outstanding"
+    adapter._mark_turn_done("cm")
+    assert adapter._turn_active("cm") is False
+    # Over-release is idempotent, never goes negative.
+    adapter._mark_turn_done("cm")
+    assert adapter._turn_active("cm") is False
+    # Falsy keys are a no-op, never registered.
+    adapter._mark_turn_active("")
+    assert adapter._turn_active("") is False
+    print("PASS: refcount active/done/nested/over-release all correct")
+
+
+def test_process_one_btw_running_non_claude_queues() -> None:
+    _section("process_one with _btw, running non-Claude engine — queues note")
+    inbox, outbox, processed = _setup_sandbox()
+    try:
+        adapter = _fresh_adapter({
+            "ADAPTER_INBOX":       str(inbox),
+            "ADAPTER_OUTBOX":      str(outbox),
+            "ADAPTER_PROCESSED":   str(processed),
+            # Isolate channel-settings resolution from the dev machine's real
+            # operator config (bridges/discord/settings.json), whose privacy
+            # policy otherwise dropped these discord test messages as private.
+            "ADAPTER_BRIDGES_DIR": str(inbox.parent),
+        })
+        # Simulate a Hermes/OpenCode/Codex turn: a task IS running (marker set)
+        # but NO stdin / engine is registered, so inject_btw cannot deliver live.
+        # Before the fix this surfaced the misleading "No task is running" ACK
+        # and dropped the note. Now it must QUEUE the note and say so.
+        chat_key = "chat-hermes"
+        adapter._mark_turn_active(chat_key)
+
+        # Sandbox channel with no on-disk settings.json so the Layer 16 inbox
+        # authz re-validation fails-open (same pattern as the empty-text test);
+        # keeps this test independent of the discord fixture.
+        env = {
+            "id": "msg-btw-nc",
+            "channel": "sandbox-btw-nc",
+            "from": "u222",
+            "chat_id": chat_key,
+            "_btw": True,
+            "text": "und auch die logs anschauen",
+            "ts": time.time(),
+        }
+        in_file = inbox / "msg-btw-nc.json"
+        in_file.write_text(json.dumps(env))
+
+        adapter.process_one(in_file, settings={"whitelist": ["u222"]})
+
+        out_files = list(outbox.glob("msg-btw-nc_*.json"))
+        assert len(out_files) == 1
+        ack = json.loads(out_files[0].read_text())
+        # Honest ACK: NOT the misleading "no task running" line.
+        assert "No task is running" not in ack["text"], f"regressed: {ack['text']!r}"
+        assert "queued" in ack["text"].lower(), f"unexpected ack: {ack['text']!r}"
+
+        # The note is buffered and drain_btw_buffer would prepend it next spawn.
+        drained = adapter.drain_btw_buffer(chat_key)
+        assert drained is not None and "und auch die logs anschauen" in drained
+        assert "[btw:" in drained
+        print(f"PASS: queued ack + drainable buffer — {ack['text']!r}")
+    finally:
+        adapter._mark_turn_done("chat-hermes")
+        shutil.rmtree(inbox.parent, ignore_errors=True)
+
+
 def main() -> int:
     tests = [
         test_inject_btw_roundtrip,
@@ -433,6 +525,8 @@ def main() -> int:
         test_process_one_btw_no_running,
         test_process_one_btw_empty_text,
         test_process_one_btw_with_running,
+        test_turn_marker_refcount,
+        test_process_one_btw_running_non_claude_queues,
         test_e2e_call_claude_streaming_with_btw,
     ]
     failed = 0

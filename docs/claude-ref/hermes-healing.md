@@ -68,8 +68,23 @@ Once the timer is enabled (`bridge.sh up`), the system runs these checks every 5
 2. **Apply (if faults found):**
    - Start Ollama server (if down)
    - Pull qwen3 model (if missing)
-3. **Loss gate:** Re-check reachability. If still unhealthy, roll back (revert is a no-op for Ollama; we want it to stay running).
-4. **Audit:** Log to `~/.corvin/aco_repair.jsonl` + L16 hash chain
+3. **Loss gate:** Re-check reachability with a FRESH `get_health_status()` — never
+   trust `repair_hermes`'s own report. If still unhealthy, roll back (revert is a
+   no-op for Ollama; we want it to stay running).
+4. **Audit:** Log to `<corvin_home>/aco_repair.jsonl` + L16 hash chain. The journal
+   is size-capped (rotates to `aco_repair.jsonl.1` past ~4 MB) so a repeatedly-firing
+   action can't grow it without bound.
+5. **Failure circuit-breaker:** each action carries a PERSISTED consecutive-failure
+   counter under `<corvin_home>/aco/repair_failcount.json`. After
+   `_ACTION_FAIL_K_MAX` (5) failed/reverted cycles in a row the action is skipped
+   (circuit open) with a single `repair.escalated` audit event, instead of re-running
+   (and, for Hermes, re-forking Ollama) every 5-minute cycle. A later successful
+   cycle resets the counter (circuit closes).
+
+> **Note (implementation):** `HermesHealthRepair` resolves the `hermes_healing`
+> module from the **installed package location** (`Path(__file__)`), not from
+> `CORVIN_HOME` — a pinned `CORVIN_HOME=<repo>/.corvin` otherwise walked two levels
+> too high and left this repair a silent no-op.
 
 ### Environment variables
 

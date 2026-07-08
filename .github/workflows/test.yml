@@ -20,7 +20,12 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install Python deps
-        run: pip install openai anthropic pytest cryptography pyyaml fastapi matplotlib httpx itsdangerous python-multipart "PyJWT[crypto]"
+        # CI-10: install the package with its real base deps + dev extra instead
+        # of a hand-maintained pip list that drifted (it hardcoded matplotlib/
+        # itsdangerous but omitted base deps jsonschema/uvicorn/edge-tts/
+        # pywhispercpp/qrcode). matplotlib (compute E2E) and itsdangerous
+        # (Starlette session middleware) are not in [dev], so add them explicitly.
+        run: pip install -e ".[dev]" matplotlib itsdangerous
       - name: Install Node deps (all bridges)
         run: |
           for d in operator/bridges/*/; do
@@ -150,7 +155,10 @@ jobs:
               --project=chromium \
               --project=firefox
           else
-            echo "Test suite ${{ matrix.test-suite }}.spec.ts not found, skipping"
+            # CI-9: a missing spec is a matrix/rename bug, not a pass. The old
+            # "skipping" branch let a renamed/deleted suite go silently green.
+            echo "::error::E2E spec tests/e2e/${{ matrix.test-suite }}.spec.ts not found"
+            exit 1
           fi
         working-directory: core/console/corvin_console/web-next
         timeout-minutes: 30
@@ -168,8 +176,11 @@ jobs:
     steps:
       - name: Check E2E test status
         run: |
-          if [ "${{ needs.e2e.result }}" == "failure" ]; then
-            echo "❌ Some E2E tests failed"
+          # CI-12: gate on "not success" — a cancelled/timed-out/errored e2e job
+          # has result 'cancelled'/'skipped', which the old '== failure' check
+          # treated as a pass. Anything other than success blocks.
+          if [ "${{ needs.e2e.result }}" != "success" ]; then
+            echo "❌ E2E job did not succeed (result: ${{ needs.e2e.result }})"
             exit 1
           else
             echo "✅ All E2E tests passed"

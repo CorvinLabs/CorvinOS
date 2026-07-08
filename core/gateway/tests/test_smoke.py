@@ -21,10 +21,12 @@ Hermetic via ``ADAPTER_FAKE_CLAUDE=1`` so no API credits are spent.
 from __future__ import annotations
 
 import http.server
+import ipaddress
 import json
 import os
 import socket
 import socketserver
+import ssl
 import sys
 import tempfile
 import threading
@@ -33,11 +35,13 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 _REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO / "core" / "gateway"))
 sys.path.insert(0, str(_REPO / "operator" / "forge"))
 sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
+sys.path.insert(0, str(_REPO / "core" / "console"))
 
 import httpx  # noqa: E402
 import uvicorn  # noqa: E402
@@ -52,6 +56,48 @@ from corvin_gateway.webhooks import (  # noqa: E402
     verify_signature,
 )
 from forge import security_events as _security_events  # noqa: E402
+
+
+# ── Self-signed TLS for the loopback webhook stub (PENTEST-6: https-only) ─────
+
+def _make_selfsigned(dirpath: Path) -> tuple[str, str]:
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import datetime
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
+    san = x509.SubjectAlternativeName([
+        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+        x509.DNSName("localhost"),
+    ])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name).issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=3650))
+        .add_extension(san, critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    cert_path = dirpath / "cert.pem"
+    key_path = dirpath / "key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ))
+    return str(cert_path), str(key_path)
+
+
+_TLS_DIR = Path(tempfile.mkdtemp(prefix="gw-smoke-tls-"))
+_TLS_CERT, _TLS_KEY = _make_selfsigned(_TLS_DIR)
+_TLS_VERIFY_CTX = ssl.create_default_context(cafile=_TLS_CERT)
 
 
 # ── Sandbox + uvicorn bootstrap ──────────────────────────────────────
@@ -91,6 +137,7 @@ def uvicorn_server(fast_webhook: bool = True):
                 max_retries=1,
                 backoff_s=(0.05,),
                 timeout_s=2.0,
+                verify=_TLS_VERIFY_CTX,  # trust the loopback stub's self-signed cert
             ),
         )
 
@@ -132,9 +179,18 @@ def uvicorn_server(fast_webhook: bool = True):
         t.join(timeout=2)
         raise RuntimeError("uvicorn failed to start within 5 s")
 
+    # The webhook stub runs on 127.0.0.1 (loopback), which the PENTEST-6 SSRF
+    # guard would (correctly) reject. Bypass the guard for the in-process stub;
+    # its enforcement is covered directly in test_webhooks.py.
+    guard_patch = patch(
+        "corvin_gateway.webhooks._assert_webhook_url_safe",
+        lambda url, tenant_id: None,
+    )
+    guard_patch.start()
     try:
         yield url
     finally:
+        guard_patch.stop()
         server.should_exit = True
         t.join(timeout=10)
         # Reset module-level state for the next test
@@ -168,8 +224,13 @@ class _StubServer:
                 return
 
         self._server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+        # PENTEST-6: webhook.url must be https, so the stub serves TLS.
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(_TLS_CERT, _TLS_KEY)
+        self._server.socket = ctx.wrap_socket(self._server.socket, server_side=True)
+        self._server.handle_error = lambda *a, **k: None  # type: ignore[assignment]
         self.port = self._server.server_address[1]
-        self.url = f"http://127.0.0.1:{self.port}/callback"
+        self.url = f"https://127.0.0.1:{self.port}/callback"
         self._thread = threading.Thread(
             target=self._server.serve_forever, daemon=True,
         )

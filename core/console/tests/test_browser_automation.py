@@ -371,6 +371,39 @@ def test_agent_cross_host_navigate_requires_confirm(server):
     asyncio.run(run())
 
 
+def test_spawn_claude_untrusted_prompt_goes_via_stdin_not_argv():
+    """PENTEST-2 regression (Windows cmd.exe arg-injection → RCE, BatBadBut /
+    CVE-2024-1874 class): the planner prompt embeds attacker-controlled page
+    text (obs.as_text()). On Windows `claude` is a `.cmd` shim run via
+    `cmd /c …`, where subprocess.list2cmdline QUOTES but does not ESCAPE cmd.exe
+    metacharacters. So the untrusted prompt must NEVER appear as an argv element
+    — it must be fed to `claude -p` on stdin instead."""
+    from unittest.mock import patch
+    from corvin_console.browser.agent import _spawn_claude
+
+    payload = 'element " & calc.exe & " name'
+
+    class _Fake:
+        stdout = '{"action":"done","reason":"ok"}'
+
+    with patch("corvin_console.browser.agent.subprocess.run",
+               return_value=_Fake()) as run:
+        _spawn_claude(payload)
+
+    assert run.call_count == 1
+    argv = run.call_args[0][0]
+    kwargs = run.call_args[1]
+    # the malicious payload is NOT anywhere on the command line …
+    assert all(payload not in str(a) for a in argv), argv
+    assert "calc.exe" not in " ".join(str(a) for a in argv)
+    # … it was routed through stdin instead
+    assert kwargs.get("input") == payload
+    # a positional prompt must not sneak back in: `-p` is the last meaningful
+    # flag before its trusted `--system-prompt` value; no untrusted trailer.
+    assert argv[-2] == "--system-prompt"
+    assert payload not in argv[-1]
+
+
 def test_agent_action_parser():
     from corvin_console.browser.agent import _parse_action
     assert _parse_action('{"action":"click","index":3}')["action"] == "click"

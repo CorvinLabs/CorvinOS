@@ -105,6 +105,38 @@ class ComputeCompletionNotifyTests(unittest.TestCase):
             h.stop()
             os.environ.pop("CORVIN_HOME", None)
 
+    def test_notify_with_empty_sender_is_not_registered(self):
+        # PENTEST-8: an empty sender would leave an un-erasable record
+        # (purge_user matches on sender). Such a notify must be skipped.
+        h = _WorkerHarness(runner=_identity_runner())
+        os.environ["CORVIN_HOME"] = str(h.corvin_home)
+        os.environ.pop("CORVIN_CHANNEL_ID", None)
+        client = h.start()
+        try:
+            import completion_notify as cn  # noqa: PLC0415
+            import importlib
+            importlib.reload(cn)
+            sub = client.submit_run(
+                tenant_id="_default", tool_name="echo",
+                param_grid={"x": [0.1]}, loss_metric="loss",
+                strategy="grid", budget={"max_iterations": 5, "max_wall_clock_s": 5},
+                notify={"channel": "discord", "chat_id": "555000111",
+                        "sender": ""},  # empty sender → must be skipped
+            )
+            handle = sub["compute_handle"]
+            # No record registered despite a notify block, because sender empty.
+            self.assertIsNone(cn._read(cn._record_path(handle)))
+            for _ in range(60):
+                if client.get_status(handle)["state"] in (
+                        "converged", "stalled", "budget_exhausted", "failed", "aborted"):
+                    break
+                time.sleep(0.1)
+            time.sleep(0.2)
+            self.assertEqual(cn.deliver_ready(h.corvin_home / "outbox"), 0)
+        finally:
+            h.stop()
+            os.environ.pop("CORVIN_HOME", None)
+
     def test_run_without_notify_is_poll_only(self):
         h = _WorkerHarness(runner=_identity_runner())
         os.environ["CORVIN_HOME"] = str(h.corvin_home)

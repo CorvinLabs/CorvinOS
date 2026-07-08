@@ -55,42 +55,62 @@ def consent_granted(home: str | Path) -> bool:
     Art. 6(1)(f) legitimate interest.
 
     Opt out: env ``CORVIN_TELEMETRY_OPTIN=false`` OR a consent file with
-    ``{"opted_in": false}``. Any other state (incl. no file) → ON.
+    ``{"opted_in": false}`` OR ``spec.telemetry.error_traces: false``. An explicit
+    opt-out ALWAYS wins — including over a legacy ``CORVIN_TELEMETRY_OPTIN=1``
+    env opt-in (F3). Any other state (incl. no file) → ON.
     """
+    home_p = Path(home)
     env = os.environ.get("CORVIN_TELEMETRY_OPTIN", "").strip().lower()
-    if env in _TRUE:
-        return True
+
+    # 1) Explicit opt-out artifacts take precedence over EVERYTHING — including a
+    #    stale/legacy CORVIN_TELEMETRY_OPTIN=1 env opt-in (F3). An opt-out the user
+    #    or operator set must never be silently overridden by an env var.
+    if _yaml_error_optout(home_p):  # spec.telemetry.error_traces: false (Settings toggle)
+        return False
+    if _consent_file_opted_in(home_p) is False:  # consent.json {"opted_in": false}
+        return False
+
+    # 2) Env var: opt-out or opt-in (opt-in is only reachable here because no
+    #    explicit artifact opted out above).
     if env in _FALSE:
         return False
-    # YAML opt-out flag (the console Settings toggle writes spec.telemetry.error_traces).
-    if _yaml_error_optout(Path(home)):
-        return False
-    p = consent_path(Path(home))
+    if env in _TRUE:
+        return True
+
+    # 3) Default-ON (opt-out): nothing said otherwise.
+    return True
+
+
+def _consent_file_opted_in(home: Path) -> Optional[bool]:
+    """Read consent.json's ``opted_in`` flag.
+
+    Returns ``None`` if no consent file exists, ``True`` if opted in (or the flag
+    is absent but the file parses), ``False`` if the flag is an explicit false OR
+    the file exists but cannot be parsed (fail toward opt-OUT — a broken consent
+    artifact must not resume transmission)."""
+    p = consent_path(home)
+    if not p.exists():
+        return None
     try:
         return json.loads(p.read_text(encoding="utf-8")).get("opted_in") is not False
     except (OSError, json.JSONDecodeError):
-        return True  # no consent file → default ON (opt-out)
+        return False  # exists but broken → treat as opted OUT (fail-closed)
 
 
 def _yaml_error_optout(home: Path) -> bool:
     """True when spec.telemetry.error_traces is an explicit false / false-like in
-    tenant.corvin.yaml — the console Settings opt-out for the error channel."""
+    tenant.corvin.yaml — the console Settings opt-out for the error channel.
+
+    A config that EXISTS but is unreadable/unparseable is treated as an opt-out
+    (fail toward privacy): default-ON applies only to an ABSENT config, never a
+    BROKEN one (F4). Delegates to the shared fail-closed parser."""
     try:
-        from .htrace_consent import _tenant_cfg_path  # shared resolver (ADR-0007)
-        import yaml  # type: ignore[import]
-        cfg_path = _tenant_cfg_path(home)
-        if not cfg_path.exists():
-            return False
-        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-        spec = data.get("spec", data)
-        v = spec.get("telemetry", {}).get("error_traces", True)
-        if v is False:
-            return True
-        if isinstance(v, str) and v.strip().lower() in ("false", "no", "0", "off"):
-            return True
+        # Shared resolver + fail-closed parser (ADR-0007 / F4).
+        from .htrace_consent import _tenant_cfg_path, _read_telemetry_flag
+        flag = _read_telemetry_flag(_tenant_cfg_path(home), "error_traces")
     except Exception:  # noqa: BLE001
-        pass
-    return False
+        return False
+    return flag is False
 
 
 def grant_consent(home: str | Path, *, pseudonym: str = "anon") -> Path:

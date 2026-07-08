@@ -69,6 +69,25 @@ def _emit_task_engine_span(kind, audit_path, *, task_id, status="ok", duration_m
     except Exception:  # noqa: BLE001
         pass
 
+
+def _notify_task_done(task_id: str, *, ok: bool, summary: str) -> None:
+    """Signal the durable completion queue that this task finished.
+
+    No-op unless a producer registered a notification for this task_id (via
+    completion_notify.register at task-creation, where the ORIGINATING messenger
+    channel/chat_id was captured). This keeps routing PII OUT of the task JSONL
+    log (ADR-0101 M3 / GDPR): the worker only passes task_id + a metadata
+    summary; completion_notify holds the routing context under CORVIN_HOME and
+    the adapter/bg_monitor pollers deliver it to the messenger. Best-effort:
+    any failure is swallowed so it never affects task execution.
+    """
+    try:
+        import completion_notify as _cn  # type: ignore  # shared dir on sys.path
+        _cn.mark_done(task_id, text=summary, ok=ok)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("completion_notify mark_done skipped for %s: %s", task_id, e)
+
+
 # Runtime-home resolver — MUST match the enqueue WRITER (routes/tasks_impl.py uses
 # forge.paths.tenant_global_dir). A bare Path.home()/.corvin here ignored
 # CORVIN_HOME → the worker polled ~/.corvin while the console enqueued under the
@@ -432,6 +451,7 @@ class TaskWorkerPool:
 
                 # Stream output
                 event_count = 0
+                result_text = ""  # captured for the completion notification
                 async for line in self._stream_lines(proc.stdout):
                     try:
                         event = json.loads(line)
@@ -441,6 +461,12 @@ class TaskWorkerPool:
                             await self.pubsub_factory().publish(
                                 task.tenant_id, task.task_id, event,
                             )
+                        # Capture the final result text so the messenger
+                        # notification carries the actual outcome, not just
+                        # "completed in N ms" metadata.
+                        if (event.get("type") == "result"
+                                and isinstance(event.get("result"), str)):
+                            result_text = event["result"]
                         event_count += 1
                     except json.JSONDecodeError:
                         pass
@@ -463,6 +489,11 @@ class TaskWorkerPool:
                     )
                     _emit_task_engine_span("end", audit_path, task_id=task.task_id,
                                            status="ok", duration_ms=duration_ms)
+                    _notify_task_done(
+                        task.task_id, ok=True,
+                        summary=(result_text.strip()[:1500]
+                                 or f"completed in {duration_ms} ms "
+                                    f"({event_count} events)."))
                     logger.info("Task %s completed (%dms)", task.task_id, duration_ms)
                 else:
                     state = "cancelled" if rc == -15 else "failed"
@@ -482,11 +513,14 @@ class TaskWorkerPool:
                     )
                     _emit_task_engine_span("end", audit_path, task_id=task.task_id,
                                            status="error", duration_ms=duration_ms)
+                    _notify_task_done(task.task_id, ok=False,
+                                      summary=f"{state} (exit code {rc}).")
                     logger.warning("Task %s %s (rc=%d)", task.task_id, state, rc)
 
             except asyncio.CancelledError:
                 logger.info("Task %s asyncio-cancelled", task.task_id)
                 self.task_queue.update_status(task.task_id, TaskStatus.CANCELLED)
+                _notify_task_done(task.task_id, ok=False, summary="was cancelled.")
                 _task_audit_emit(
                     "task.spawn_terminal", audit_path,
                     task_id=task.task_id, tenant_id=task.tenant_id,
@@ -501,6 +535,8 @@ class TaskWorkerPool:
             except Exception:
                 logger.exception("Task %s error", task.task_id)
                 self.task_queue.update_status(task.task_id, TaskStatus.FAILED, exit_code=1)
+                _notify_task_done(task.task_id, ok=False,
+                                  summary="failed with an internal error.")
                 _task_audit_emit(
                     "task.spawn_terminal", audit_path,
                     task_id=task.task_id, tenant_id=task.tenant_id,

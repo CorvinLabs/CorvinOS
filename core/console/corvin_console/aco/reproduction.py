@@ -21,9 +21,23 @@ Then this gate runs three stages on a CLEAN repo worktree, reverting between eac
 
 Only A-red ∧ B-green ∧ C-green ⇒ proven. Anything else ⇒ not proven ⇒ no commit,
 no PR. The gate leaves the worktree exactly as it found it (clean at HEAD).
+
+SECURITY (SH-1): stages A/B/C EXECUTE the ENGINE-AUTHORED regression test and fix
+*before any human review*. That code runs with the maintainer's own OS user, so
+the pytest subprocess is spawned with a SCRUBBED env (``_scrubbed_env``) — the
+maintainer secrets (PYPI_TOKEN, CORVIN_MAINTAINER_PRIV, ANTHROPIC_API_KEY, git
+askpass creds, any ``*_TOKEN``/``*_SECRET``/``*_KEY``/``*_PASSWORD``) are stripped
+so untrusted test code cannot exfiltrate or use them. A full sandbox / uid-drop is
+out of scope; the env-scrub is the required minimum.
+
+SECURITY (SH-3): every edit path is containment-checked (``_within_repo_or_raise``)
+before it is written — absolute paths, ``..`` traversal, and any resolved location
+outside the worktree are rejected, so a malicious patch cannot write outside the
+repo even though this gate runs BEFORE maintenance_loop's own ``_within_repo`` pass.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,9 +83,25 @@ def _git(repo: Path, *args: str) -> tuple[int, str]:
         return 1, str(exc)
 
 
+def _within_repo_or_raise(repo: Path, rel: str) -> Path:
+    """Containment check (SH-3): reject absolute paths, ``..`` traversal, and any
+    path whose resolved location falls outside ``repo``. Returns the resolved
+    target on success; raises ``ValueError`` otherwise. Fail-closed."""
+    r = str(rel).replace("\\", "/")
+    if not r or r.startswith("/") or Path(rel).is_absolute() or ".." in Path(r).parts:
+        raise ValueError(f"unsafe patch path: {rel!r}")
+    repo_r = repo.resolve()
+    t = (repo_r / rel).resolve()
+    if t != repo_r and repo_r not in t.parents:
+        raise ValueError(f"patch path escapes repo: {rel!r}")
+    return t
+
+
 def _apply(repo: Path, edits) -> None:
     for e in edits:
-        t = (repo / e.path)
+        # SH-3: containment assert at the top — never write outside the worktree,
+        # even though this runs before maintenance_loop's own _within_repo pass.
+        t = _within_repo_or_raise(repo, e.path)
         t.parent.mkdir(parents=True, exist_ok=True)
         t.write_text(e.new_content, encoding="utf-8")
 
@@ -104,6 +134,14 @@ def reproduction_gate(
         return ReproResult(False, "no regression test in patch — cannot prove the bug")
     if not fixes:
         return ReproResult(False, "no fix edit in patch — nothing to verify")
+
+    # SH-3: reject any unsafe edit path BEFORE touching the worktree, so the gate
+    # returns proven=False (deny-by-default) instead of raising mid-stage.
+    for e in patch.edits:
+        try:
+            _within_repo_or_raise(repo, e.path)
+        except ValueError as exc:
+            return ReproResult(False, f"unsafe patch path refused: {exc}")
 
     rc, porcelain = _git(repo, "status", "--porcelain")
     if rc != 0 or porcelain.strip():
@@ -155,6 +193,41 @@ def reproduction_gate(
         _revert(repo)  # belt-and-suspenders: never leave the tree dirty
 
 
+# Secrets that must NEVER be visible to the engine-authored test code the gate
+# executes pre-review (SH-1). Exact names + suffix families.
+_SCRUB_EXACT = frozenset({
+    "PYPI_TOKEN", "TWINE_PASSWORD", "TWINE_USERNAME",
+    "CORVIN_MAINTAINER_PRIV", "CORVIN_MAINTAINER_CAP", "CORVIN_MAINTAINER_PUBKEY",
+    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY",
+    "GH_TOKEN", "GITHUB_TOKEN", "HF_TOKEN",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+    "GIT_ASKPASS", "SSH_ASKPASS",
+    # A forwarded ssh-agent would let untrusted pre-review test code authenticate
+    # (e.g. `git push` over ssh) as the maintainer — strip the socket too.
+    "SSH_AUTH_SOCK",
+})
+_SCRUB_SUFFIXES = ("_TOKEN", "_SECRET", "_KEY", "_PASSWORD", "_PASSWD",
+                   "_CREDENTIAL", "_CREDENTIALS", "_APIKEY", "_PRIV")
+
+
+def _scrubbed_env() -> dict:
+    """A minimal env for running ENGINE-AUTHORED (untrusted, pre-review) test code
+    (SH-1). Strips maintainer secrets so the repro pytest subprocess cannot read
+    PYPI_TOKEN / CORVIN_MAINTAINER_PRIV / ANTHROPIC_API_KEY / git askpass creds /
+    any ``*_TOKEN``/``*_SECRET``/``*_KEY``/``*_PASSWORD`` var. PATH/PYTHONPATH/HOME
+    stay so pytest still runs; credential prompting is disabled."""
+    env: dict[str, str] = {}
+    for k, v in os.environ.items():
+        ku = k.upper()
+        if ku in _SCRUB_EXACT or ku.endswith(_SCRUB_SUFFIXES):
+            continue
+        env[k] = v
+    # Never let a subprocess `git` interactively fetch stored credentials.
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_ASKPASS"] = ""
+    return env
+
+
 def build_repro_runner(repo: str | Path, *, full_cmd: list[str],
                        python: Optional[str] = None):
     """Bind ``reproduction_gate`` to a worktree + pytest. Returns a
@@ -173,9 +246,12 @@ def build_repro_runner(repo: str | Path, *, full_cmd: list[str],
     repo = Path(repo)
     py = python or _sys.executable
 
+    scrubbed = _scrubbed_env()  # SH-1: build once; untrusted test code runs here
+
     def _run(cmd: list[str]) -> tuple[int, str]:
         try:
-            p = subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True, timeout=1800)
+            p = subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True,
+                               timeout=1800, env=scrubbed)
             return p.returncode, (p.stdout + p.stderr)[-400:]
         except Exception as exc:  # noqa: BLE001
             return -1, str(exc)[:200]

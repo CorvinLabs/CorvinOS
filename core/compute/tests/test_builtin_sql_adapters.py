@@ -305,5 +305,72 @@ class TestSafeToSQLIntegration(unittest.TestCase):
         self.assertIn("%s", sql)
 
 
+# ---------------------------------------------------------------------------
+# F4 — SQL identifier-injection defence
+# ---------------------------------------------------------------------------
+
+class TestIdentifierValidation(unittest.TestCase):
+    """Identifiers (columns, table, order_by, filter col) must be gated by a
+    strict allowlist regex — values are bound as params but identifiers cannot
+    be, so an attacker-controlled identifier must never break out."""
+
+    def test_malicious_table_rejected(self):
+        from corvin_compute.fabric.datasources.query import safe_to_sql
+        q = SourceQuery()
+        with self.assertRaises(ValueError):
+            safe_to_sql(q, "users; DROP TABLE users; --", "psycopg2")
+
+    def test_malicious_column_rejected(self):
+        from corvin_compute.fabric.datasources.query import safe_to_sql
+        q = SourceQuery(columns=["id", "(SELECT password FROM secrets)"])
+        with self.assertRaises(ValueError):
+            safe_to_sql(q, "t", "psycopg2")
+
+    def test_malicious_filter_col_rejected(self):
+        from corvin_compute.fabric.datasources.query import safe_to_sql
+        q = SourceQuery(filters=[FilterExpr(col="1=1 OR x", op="=", value=1)])
+        with self.assertRaises(ValueError):
+            safe_to_sql(q, "t", "psycopg2")
+
+    def test_malicious_order_by_rejected(self):
+        from corvin_compute.fabric.datasources.query import safe_to_sql
+        q = SourceQuery(order_by="created_at; DROP TABLE t")
+        with self.assertRaises(ValueError):
+            safe_to_sql(q, "t", "psycopg2")
+
+    def test_order_by_injection_via_subquery_rejected(self):
+        from corvin_compute.fabric.datasources.query import safe_to_sql
+        q = SourceQuery(order_by="(CASE WHEN 1=1 THEN 1 ELSE 2 END)")
+        with self.assertRaises(ValueError):
+            safe_to_sql(q, "t", "psycopg2")
+
+    def test_valid_schema_qualified_table_accepted(self):
+        from corvin_compute.fabric.datasources.query import safe_to_sql
+        q = SourceQuery(columns=["public.users.id"])
+        sql, _ = safe_to_sql(q, "public.users", "psycopg2")
+        self.assertIn("FROM public.users", sql)
+        self.assertIn("public.users.id", sql)
+
+    def test_order_by_direction_allowlisted(self):
+        from corvin_compute.fabric.datasources.query import safe_to_sql
+        sql_asc, _ = safe_to_sql(SourceQuery(order_by="created_at ASC"), "t", "psycopg2")
+        self.assertIn("ORDER BY created_at ASC", sql_asc)
+        sql_desc, _ = safe_to_sql(SourceQuery(order_by="ts desc"), "t", "psycopg2")
+        # direction normalized to upper-case, column preserved
+        self.assertIn("ORDER BY ts DESC", sql_desc)
+
+    def test_order_by_bogus_direction_rejected(self):
+        from corvin_compute.fabric.datasources.query import safe_to_sql
+        with self.assertRaises(ValueError):
+            safe_to_sql(SourceQuery(order_by="col SIDEWAYS"), "t", "psycopg2")
+
+    def test_validate_identifier_helper(self):
+        from corvin_compute.fabric.datasources.query import _validate_identifier
+        self.assertEqual(_validate_identifier("a.b_c1"), "a.b_c1")
+        for bad in ["", "1col", "a b", "a;b", "a'b", "a)b", "*", "a--b", None]:
+            with self.assertRaises(ValueError):
+                _validate_identifier(bad)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

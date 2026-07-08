@@ -69,10 +69,18 @@ def _ask_choice(prompt: str, choices: list[str], default: str = "") -> str:
 # ── serve (native, no Docker) ─────────────────────────────────────────────────
 
 def _onboarding_complete() -> bool:
-    """Return True iff ~/.corvin/tenants/_default/global/onboarding.json marks complete."""
+    """Return True iff <corvin_home>/tenants/_default/global/onboarding.json marks complete."""
     import json as _json
     from pathlib import Path as _Path
-    onboarding_path = _Path.home() / ".corvin" / "tenants" / "_default" / "global" / "onboarding.json"
+    # Resolve the real Corvin home (honours CORVIN_HOME / in-repo .corvin /
+    # XDG) rather than hardcoding ~/.corvin — otherwise a pinned or in-repo
+    # home makes onboarding always look incomplete and re-opens the wizard.
+    try:
+        from forge.paths import corvin_home as _corvin_home  # noqa: PLC0415
+        base = _corvin_home()
+    except Exception:
+        base = _Path.home() / ".corvin"
+    onboarding_path = base / "tenants" / "_default" / "global" / "onboarding.json"
     try:
         return bool(_json.loads(onboarding_path.read_text()).get("complete"))
     except Exception:
@@ -150,8 +158,11 @@ def _print_hermes_status() -> None:
             model = select_model_for_ram(get_available_ram_gb())
             print(f"  {_green('●')} Hermes (Ollama) ready  — engine: hermes  model: {_bold(model)}")
         else:
+            # NB: f-prefix is load-bearing here — without it {_bold(...)} would
+            # print literally. `corvin setup --hermes` was never a real command
+            # (setup has no --hermes flag); point at the actual Ollama install.
             print(f"  {_yellow('○')} Hermes (Ollama) not found  — "
-                  "run {_bold('corvin setup --hermes')} to install")
+                  f"install Ollama from {_bold('https://ollama.com/download')} to enable it")
     except Exception:
         pass  # Hermes status is informational; never block console start
 
@@ -165,8 +176,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
     """
     port: int = getattr(args, "port", 8765)
     no_browser: bool = getattr(args, "no_browser", False)
+    host: str = getattr(args, "host", "127.0.0.1")
 
-    relaunch_argv = ["corvin", "serve", f"--port={port}"] + (["--no-browser"] if no_browser else [])
+    relaunch_argv = (
+        ["corvin", "serve", f"--port={port}", f"--host={host}"]
+        + (["--no-browser"] if no_browser else [])
+    )
     if serve_backend.maybe_pypi_autoupdate(relaunch_argv=relaunch_argv):
         # Windows self-update handoff in progress: a detached updater is
         # waiting for THIS process to exit before it can upgrade + relaunch.
@@ -192,7 +207,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     _print_hermes_status()
     print(f"  Press Ctrl-C to stop.\n")
 
-    return serve_backend.start(port=port, open_browser=not no_browser, open_path=open_path)
+    return serve_backend.start(port=port, open_browser=not no_browser, open_path=open_path, host=host)
 
 
 # ── start (smart one-shot) ────────────────────────────────────────────────────

@@ -40,11 +40,17 @@ class TestCorvinInstallerIntegration:
                     assert (tmpdir_path / "tenants" / "_default" / "global").exists()
 
     def test_installer_bridge_selection(self):
-        """Test that installer selects bridges correctly."""
+        """A non-interactive install selects NO bridges by default.
+
+        Auto-selecting all five registered + started token-less messenger
+        services that crash-loop on a fresh box; bridges are configured later
+        from the console once tokens exist. Any selected value must still be a
+        known bridge.
+        """
         installer = CorvinInstaller(interactive=False)
         installer.step_10_select_bridges()
 
-        assert len(installer.selected_bridges) > 0
+        assert installer.selected_bridges == []
         assert all(b in CorvinInstaller.BRIDGES for b in installer.selected_bridges)
 
     def test_installer_saves_config(self):

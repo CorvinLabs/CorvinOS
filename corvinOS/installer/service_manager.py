@@ -11,6 +11,7 @@ All services run in user-space (no sudo/elevation required).
 import json
 import os
 import platform
+import shlex
 import subprocess
 import sys
 from abc import ABC, abstractmethod
@@ -227,7 +228,8 @@ class DarwinServiceManager(ServiceManager):
         env_vars: Optional[dict] = None,
     ) -> str:
         """Generate launchd plist XML."""
-        parts = command.split()
+        # WA-5: shlex.split so a program path with spaces stays one token.
+        parts = shlex.split(command)
         program = parts[0]
         arguments = parts[1:] if len(parts) > 1 else []
 
@@ -345,6 +347,19 @@ class DarwinServiceManager(ServiceManager):
         return f"com.corvin.{name}" in result.stdout
 
 
+def _dequote(token: str) -> str:
+    """Strip one layer of surrounding double quotes from a token.
+
+    M1: commands are built with the executable/path components double-quoted
+    (e.g. ``"C:\\Users\\John Doe\\python.exe" -m uvicorn``) so a spaced path
+    survives ``shlex.split(..., posix=False)`` as ONE token — but posix=False
+    RETAINS those quotes. Strip them off the program token before it's re-quoted
+    for the schtasks ``/tr`` string, so the /tr program is the clean path."""
+    if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+        return token[1:-1]
+    return token
+
+
 class WindowsServiceManager(ServiceManager):
     """Windows Task Scheduler service manager."""
 
@@ -374,16 +389,27 @@ class WindowsServiceManager(ServiceManager):
         subprocess.run(
             ["schtasks", "/create", "/tn", "CorvinOS", "/f"],
             capture_output=True,
-            shell=True,
         )
 
-        # Create task
-        trigger = "/sc onstart" if auto_start else "/sc ondemand"
-        cmd = (
-            f'schtasks /create /tn "{task_name}" /tr "{command}" '
-            f'{trigger} /f /rl highest'
+        # Create task.
+        # WA-5/M1: quote the executable (first token) inside the /tr value so a
+        # program path with spaces (e.g. C:\Program Files\...\python.exe) isn't
+        # torn apart by Task Scheduler. Argument tokens keep their own double
+        # quotes (a spaced script/adapter path stays one arg).
+        # The command is passed as a LIST (shell=False): the double quotes are
+        # LITERAL characters in the /tr argv element that schtasks stores, so
+        # cmd.exe never parses them — a path containing a cmd metacharacter
+        # (`&`, `|`, `(`, `)`, `^`) can no longer break out or inject. (An
+        # f-string under shell=True mixed `\"`-toggling with cmd metachars.)
+        parts = shlex.split(command, posix=False) or [command]
+        program = _dequote(parts[0])
+        tr_value = " ".join([f'"{program}"'] + list(parts[1:]))
+        trigger = "onstart" if auto_start else "ondemand"
+        subprocess.run(
+            ["schtasks", "/create", "/tn", task_name, "/tr", tr_value,
+             "/sc", trigger, "/f", "/rl", "highest"],
+            check=True, capture_output=True,
         )
-        subprocess.run(cmd, shell=True, check=True, capture_output=True)
 
     def start_service(self, name: str) -> None:
         """Start a Task Scheduler task."""
@@ -405,21 +431,22 @@ class WindowsServiceManager(ServiceManager):
         )
 
     def enable_autostart(self, name: str) -> None:
-        """Set task to auto-start on system boot."""
+        """Enable the boot task (it already carries the /sc onstart trigger from
+        install_service). Use /change /enable — NOT /tr "onstart": /tr sets the
+        task's RUN COMMAND, so passing "onstart" there would clobber the program
+        with a bogus command and break the task entirely."""
         task_name = self._task_name(name)
-        # Re-create with /sc onstart trigger
         subprocess.run(
-            ["schtasks", "/change", "/tn", task_name, "/tr", "onstart"],
-            shell=True,
+            ["schtasks", "/change", "/tn", task_name, "/enable"],
             capture_output=True,
         )
 
     def disable_autostart(self, name: str) -> None:
-        """Disable auto-start for a task."""
+        """Disable the boot task without deleting it (keeps its onstart trigger
+        for a later re-enable). /disable, NOT /tr "ondemand" (see enable_autostart)."""
         task_name = self._task_name(name)
         subprocess.run(
-            ["schtasks", "/change", "/tn", task_name, "/tr", "ondemand"],
-            shell=True,
+            ["schtasks", "/change", "/tn", task_name, "/disable"],
             capture_output=True,
         )
 
@@ -429,7 +456,6 @@ class WindowsServiceManager(ServiceManager):
         self.stop_service(name)
         subprocess.run(
             ["schtasks", "/delete", "/tn", task_name, "/f"],
-            shell=True,
             capture_output=True,
         )
 

@@ -76,14 +76,50 @@ def ensure_piper(voice_config_dir: Path, interactive: bool = True) -> None:
     zero-config fallback beneath edge-tts.
     """
     _install_piper(interactive)
-    piper_bin = shutil.which("piper")
-    if piper_bin:
+    piper_bin = _piper_binary()
+    # The RUNTIME TTS path uses the piper PYTHON API (say.py), which needs no
+    # `piper` binary on PATH at all — and a `uv tool install` never exposes a
+    # dependency's console script on PATH. So download the voice model whenever
+    # EITHER the piper package imports OR the binary exists (INST-3/VOICE-4);
+    # gating the model download on `which("piper")` left Piper a permanently-
+    # skipped fallback tier for every uv-tool install. Only PIPER_BIN/service.env
+    # wiring genuinely needs the binary, so that stays gated on it.
+    if piper_bin or _piper_python_available():
         _setup_model(voice_config_dir, interactive)
+    if piper_bin:
         _write_bin_env(voice_config_dir, piper_bin)
     else:
-        print("  ⚠ 'piper' binary not found on PATH after install — "
-              "voice model download skipped. Re-run corvin-install after "
-              "opening a new shell, or set PIPER_BIN manually.")
+        print("  ⚠ 'piper' binary not found on PATH — PIPER_BIN not written to "
+              "service.env (the runtime Python API path still works). Set "
+              "PIPER_BIN manually only if you rely on the piper CLI.")
+
+
+def _piper_binary() -> str | None:
+    """Locate the `piper` executable, probing the interpreter's own bin/Scripts
+    dir BEFORE PATH.
+
+    A ``uv tool install`` / venv install places console scripts next to
+    ``sys.executable`` but does not necessarily put them on the ambient PATH,
+    so a bare ``shutil.which("piper")`` misses them (INST-3/VOICE-4).
+    """
+    exe = "piper.exe" if sys.platform == "win32" else "piper"
+    cand = Path(sys.executable).parent / exe
+    if cand.is_file():
+        return str(cand)
+    return shutil.which("piper")
+
+
+def _piper_python_available() -> bool:
+    """True when the ``piper`` Python package is importable.
+
+    The runtime TTS path uses the Python API, which needs no binary on PATH —
+    so its presence alone is enough to justify downloading the voice model.
+    """
+    import importlib.util  # noqa: PLC0415
+    try:
+        return importlib.util.find_spec("piper") is not None
+    except (ImportError, ValueError):
+        return False
 
 
 # ── Install ────────────────────────────────────────────────────────────────

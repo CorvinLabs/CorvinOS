@@ -4,19 +4,24 @@ Returns a snapshot of this CorvinOS instance's current state from purely
 local sources (no remote API calls).  Used by the /local-stats dashboard
 page served by standalone.py / gateway app.py.
 
-Auth: intentionally unauthenticated — data is non-sensitive (version,
-platform, uptime) and the endpoint is localhost-only.  Removing the
-session dependency lets the dashboard JS fetch without a prior login.
+Auth: unauthenticated but LOOPBACK-ONLY (enforced).  The data is low-value
+(version, platform, uptime, instance-id prefix, session count) yet still
+useful for remote recon, and the standalone server binds 0.0.0.0 — so the
+docstring's old "localhost-only" claim was aspirational, not enforced
+(PENTEST-10).  We now reject any request whose client address is not a
+loopback address, which keeps the local dashboard JS working without a
+login while denying remote unauthenticated callers.
 """
 from __future__ import annotations
 
 import importlib.metadata
+import ipaddress
 import sys
 import threading
 import time
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
 
 from .. import _bootstrap
 
@@ -77,9 +82,36 @@ def _active_sessions() -> int:
         return -1
 
 
+def _client_is_loopback(request: Request) -> bool:
+    """True only when the request's peer address is a loopback address.
+
+    Fail-closed: a missing/unparseable client address is treated as NON-loopback
+    (rejected). The bare string ``"localhost"`` is accepted for the rare
+    transports that report a hostname instead of an IP."""
+    client = request.client
+    if client is None:
+        return False
+    host = (client.host or "").strip()
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 @router.get("/local-stats")
-def local_stats() -> dict[str, Any]:
-    """Return a local instance snapshot — no remote API calls, no auth required."""
+def local_stats(request: Request) -> dict[str, Any]:
+    """Return a local instance snapshot — no remote API calls, loopback-only.
+
+    PENTEST-10: reject non-loopback callers so a remote unauthenticated client
+    cannot read version / platform / engine / instance-id-prefix / session-count
+    for reconnaissance. Local dashboards (browser on 127.0.0.1 / ::1) still work
+    without a login."""
+    if not _client_is_loopback(request):
+        raise HTTPException(status_code=403, detail="local-stats is loopback-only")
     tenant_id = "_default"
     try:
         version = importlib.metadata.version("corvinos")

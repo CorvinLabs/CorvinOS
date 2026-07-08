@@ -510,6 +510,14 @@ UNPARSEABLE = "<unparseable>"
 _REDIRECT_RE  = re.compile(r"\d*(?:>{1,2}|>\||&>|>&)\s*([^\s;&|<>]+)")
 _PY_OPEN_RE   = re.compile(
     r"""open\(\s*['"]([^'"]+)['"]\s*,\s*['"][rwax+b]*[wax]+[rwax+b]*['"]""")
+# Inline interpreter one-liners (`python -c '...'`, `perl -e`, `ruby -e`, node
+# `-e`) can write via any of open(mode="w") / os.open / pathlib.write_text /
+# fs.writeFileSync — forms _PY_OPEN_RE cannot enumerate. When such a one-liner
+# also mentions a protected hint, the write target is opaque, so fail closed
+# (mirrors the `bash -c` / eval treatment). Absolute non-protected writes are
+# unaffected because _looks_protected gates the fail-closed.
+_INLINE_INTERP_RE = re.compile(
+    r"\b(?:python[0-9.]*|perl|ruby|node|deno|php|osascript)\b[^|;&]*\s-(?:c|e)\b")
 
 # Layer-16 v2 — additional Bash vectors. fail-closed on any of these when
 # the surrounding command contains a protected hint, because the actual
@@ -602,10 +610,15 @@ def _looks_protected(s: str) -> bool:
 
 
 def _split_segments(cmd: str) -> list[str]:
-    """Split a bash command on top-level separators (; & | && ||).
+    """Split a bash command on top-level separators (; & | && || and newlines).
     Naive: does not account for quoting. Adequate as a first pass — the
-    individual segments still go through shlex below."""
-    return [s.strip() for s in re.split(r"\|\||&&|[;&|]", cmd) if s.strip()]
+    individual segments still go through shlex below.
+
+    Newlines/CR are genuine command separators in bash: without them a payload
+    like ``echo ok\\nrm -f ~/.corvin/.../audit.jsonl`` was split into a single
+    benign ``echo`` segment and the destructive second line was never inspected
+    (fail-open). Treating \\n\\r as separators is purely additive strictness."""
+    return [s.strip() for s in re.split(r"\|\||&&|[;&|\n\r]", cmd) if s.strip()]
 
 
 def _last_nonflag(tokens: list[str]) -> str | None:
@@ -703,11 +716,20 @@ def _dir_at_or_under_corvin_home(d: str) -> bool:
         return True
     sep = os.sep
     abs_str = str(abs_d).rstrip(sep) or sep
-    try:
-        home = str(_corvin_home()).rstrip(sep)
-    except Exception:  # noqa: BLE001
-        return False
-    return bool(home) and (abs_str == home or abs_str.startswith(home + sep))
+    # Protected tree roots for cd-context: the corvin runtime home AND the
+    # voice config dir (~/.config/corvin-voice), which holds the secret vault +
+    # BYOK token. Without the voice dir here, `cd ~/.config/corvin-voice && :
+    # > secrets.json` was not recognised as a cd-into-tree (bypass A) because
+    # that dir is not under CORVIN_HOME.
+    roots: list[str] = []
+    for _resolver in (_corvin_home, lambda: _vault_path().parent):
+        try:
+            r = str(_resolver()).rstrip(sep)
+            if r:
+                roots.append(r)
+        except Exception:  # noqa: BLE001
+            pass
+    return any(abs_str == r or abs_str.startswith(r + sep) for r in roots)
 
 
 def _seg_chdirs_into_tree(seg: str) -> bool:
@@ -798,16 +820,25 @@ def _touches_corvin_tree(target: str) -> bool:
         return True
     sep = os.sep
     abs_str = str(abs_t).rstrip(sep) or sep
-    try:
-        home = str(_corvin_home()).rstrip(sep)
-    except Exception:  # noqa: BLE001
-        return False
-    if not home:
-        return False
-    # target == home, target under home, or target an ancestor of home
-    return (abs_str == home
-            or abs_str.startswith(home + sep)
-            or home.startswith(abs_str + sep))
+    # Protected roots: the corvin runtime home AND the voice config dir
+    # (~/.config/corvin-voice, which holds the BYOK secret vault + profile).
+    # BOTH must be covered here or a direct `rm -rf ~/.config/corvin-voice`,
+    # `mv`, or `tar -czf` of that dir escaped the gate — deleting or EXFILTRATING
+    # the secret vault — even though the file-level is_protected_path flags
+    # secrets.json. Mirror the cd-context roots in _dir_at_or_under_corvin_home.
+    roots: list[str] = []
+    for _resolver in (_corvin_home, lambda: _vault_path().parent):
+        try:
+            r = str(_resolver()).rstrip(sep)
+            if r:
+                roots.append(r)
+        except Exception:  # noqa: BLE001
+            pass
+    # target == root, target under root, or target an ancestor of root
+    return any(abs_str == r
+               or abs_str.startswith(r + sep)
+               or r.startswith(abs_str + sep)
+               for r in roots)
 
 
 def _find_root_touches_protected(root: str) -> bool:
@@ -955,8 +986,17 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
     if _HEREDOC_RE.search(cmd) and _looks_protected(cmd):
         return [], True
 
+    # Inline interpreter one-liner touching a protected hint → opaque write, fail
+    # closed (open(mode="w") / os.open / write_text / fs.writeFileSync evade the
+    # positional-open regex below).
+    if _INLINE_INTERP_RE.search(cmd) and _looks_protected(cmd):
+        return [], True
+
     for m in _REDIRECT_RE.finditer(cmd):
-        targets.append(m.group(1))
+        # Strip surrounding quotes: `> "$HOME/.corvin/audit.jsonl"` captured the
+        # quotes as literal path chars, so _abs treated the leading `"` as a
+        # non-absolute token that never matched the protected tree (bypass C).
+        targets.append(m.group(1).strip("'\""))
     for m in _PY_OPEN_RE.finditer(cmd):
         targets.append(m.group(1))
 
@@ -972,7 +1012,7 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
     _cd_into_tree = any(_seg_chdirs_into_tree(_seg) for _seg in segs)
     if _cd_into_tree:
         _DESTRUCTIVE_ALL = (_TARGET_ALL_CMDS + _DEST_LAST_CMDS + _FIND_CMDS
-                            + _ARCHIVE_CMDS + ("dd",))
+                            + _ARCHIVE_CMDS + ("dd", "tee"))
         for _seg in segs:
             try:
                 _st = _strip_cmd_wrappers(shlex.split(_seg, posix=True))
@@ -980,6 +1020,16 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
                 return [], True
             if _st and _st[0].rsplit("/", 1)[-1] in _DESTRUCTIVE_ALL:
                 return [], True
+            # A write-redirect with a RELATIVE target after a cd into the tree
+            # lands inside the protected tree at run time (bypass A): `: >
+            # audit.jsonl`, `printf {} > secrets.json` use builtins not in
+            # _DESTRUCTIVE_ALL, so cover the redirect vector itself. Absolute
+            # targets are resolvable and handled by the normal target path, so
+            # only relative ones fail closed here.
+            for _rm in _REDIRECT_RE.finditer(_seg):
+                _rt = _rm.group(1).strip("'\"")
+                if _rt and not _rt.startswith(("/", "~", "$")):
+                    return [], True
 
     # sed -i takes its target as the last positional arg of the segment.
     for seg in segs:

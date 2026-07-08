@@ -43,9 +43,20 @@ _HARD_BLOCK = ("LICENSE", "NOTICE", "CLA.md", "CLA-SIGNATORIES.md", "CCLA.md",
                "CONTRIBUTING.md", "audit.jsonl", "policy.json")
 _HARD_BLOCK_SUFFIX = (".key", ".pem")
 # Path fragments that force human ack (compliance/security/protocol surfaces).
+# SH-6: the ACO self-improvement modules are themselves the gate — a patch that
+# edits them could weaken its own guard-rails, so they can NEVER auto-merge on
+# tests-green alone; touching any of them forces a human ack (and, being non-low-
+# risk-classed edits, they are never direct-mained either).
 _ACK_FRAGMENTS = ("disclosure", "consent", "house_rules", "house-rules", "audit",
                   "egress", "license", "security_events", "path_gate", "a2a",
-                  "protocol", "compliance", "erasure")
+                  "protocol", "compliance", "erasure",
+                  # ACO self-improvement code (aco/…) + bare basenames:
+                  "aco/maintainer_capability", "aco/maintenance_loop",
+                  "aco/reproduction", "aco/patch_generator", "aco/repair_actions",
+                  "aco/maintainer_cli", "aco/diagnosis_synth",
+                  "maintainer_capability", "maintenance_loop", "reproduction",
+                  "patch_generator", "repair_actions", "maintainer_cli",
+                  "diagnosis_synth")
 # Low-risk classes eligible for direct-to-main (still need a fully-green gate).
 _LOW_RISK_CLASSES = frozenset({"platform_path", "null_guard", "typo", "test_only",
                                "docstring", "log_message"})
@@ -177,6 +188,17 @@ def run_maintenance_loop(
     diag_id = str(diagnosis.get("id") or diagnosis.get("diagnosis_id") or "diag")
     tele: dict[str, Any] = {"diagnosis_id": diag_id, "ts": int(now or time.time())}
 
+    # 0) SH-2 fail-closed: direct-to-main is ONLY ever permitted behind a
+    # reproduction proof (ADR-0179 / CLAUDE.md red-line: "don't commit an auto-fix
+    # that didn't pass the red→green reproduction gate"). A caller that enables
+    # direct-main without wiring a repro_runner is a misconfiguration — never
+    # silently merge/push an unproven fix. Downgrade to the safe default (branch +
+    # PR awaiting human ack) rather than reaching main.
+    if enable_direct_main and repro_runner is None:
+        enable_direct_main = False
+        enable_push = False
+        tele["direct_main_refused"] = "no_repro_runner"
+
     # 1) capability gate — the trust boundary. Deny-by-default.
     verdict = _cap.is_contributor(capability_token, now=now) if public_key_bytes is None else \
         _cap.verify(capability_token, instance_id=_cap.current_instance_id(),
@@ -217,7 +239,7 @@ def run_maintenance_loop(
                              requires_ack=gate.requires_ack, gate_reasons=gate.reasons,
                              telemetry=tele)
         tele["repro"] = repro.to_dict() if hasattr(repro, "to_dict") else {"proven": bool(repro)}
-        if not getattr(repro, "proven", bool(repro)):
+        if not getattr(repro, "proven", False):
             return LoopResult("repro_failed", getattr(repro, "detail", "not proven"),
                              requires_ack=gate.requires_ack, gate_reasons=gate.reasons,
                              telemetry=tele)

@@ -20,6 +20,7 @@ from __future__ import annotations
 import getpass
 import os
 import platform
+import shlex
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -42,7 +43,31 @@ def is_elevated() -> bool:
 
 
 def current_user() -> str:
-    """The installing user's login name — the account the service must run as."""
+    """The installing user's login name — the account the service must run as.
+
+    WA-1: under ``sudo corvin-service install`` the process EUID is 0, so a bare
+    ``getpass.getuser()`` resolves to ``root`` — which would write ``User=root``
+    / ``UserName=root`` into the unit, exactly the "run as root" outcome
+    ADR-0184 forbids. When elevated on POSIX, recover the *invoking* user from
+    ``SUDO_USER`` / ``PKEXEC_USER`` instead; if that still resolves to root
+    (e.g. a direct root login with no sudo context), REFUSE rather than silently
+    register a root-owned always-on service.
+    """
+    try:
+        euid = os.geteuid()
+    except AttributeError:
+        euid = None  # Windows: no EUID concept — getpass.getuser() is correct.
+    if euid == 0:
+        for var in ("SUDO_USER", "PKEXEC_USER"):
+            candidate = (os.environ.get(var) or "").strip()
+            if candidate and candidate != "root":
+                return candidate
+        raise RuntimeError(
+            "Refusing to register an always-on service as root (ADR-0184 forbids "
+            "running CorvinOS as root/SYSTEM). Run `corvin-service install` via "
+            "`sudo` from your normal user account so SUDO_USER is set — do not run "
+            "it directly as the root user."
+        )
     return getpass.getuser()
 
 
@@ -183,7 +208,9 @@ class DarwinSystemServiceManager(SystemServiceManager):
                 "Re-run with: sudo corvin-service install"
             )
         user = current_user()
-        parts = command.split()
+        # WA-5: shlex.split (not str.split) so a Program path containing spaces
+        # stays one token instead of being torn into bogus ProgramArguments.
+        parts = shlex.split(command)
         program = parts[0]
         arguments = parts[1:] if len(parts) > 1 else []
 
@@ -242,17 +269,40 @@ class DarwinSystemServiceManager(SystemServiceManager):
         return "loaded" if f"com.corvin.{name}.always-on" in result.stdout else "not_found"
 
 
-class WindowsSystemServiceManager(SystemServiceManager):
-    """Windows Scheduled Task at boot (`/sc onstart`), running as the
-    installing user via S4U logon (`/np` — "no password").
+def _ps_single_quote(s: str) -> str:
+    """Wrap *s* in a PowerShell single-quoted literal (doubling any embedded
+    single quotes). Single-quoted PS strings are fully literal — no `$`/backtick
+    interpolation — so this is the safe way to embed a path or arg that may
+    contain spaces or metacharacters (WA-5)."""
+    return "'" + s.replace("'", "''") + "'"
 
-    `/np` deliberately avoids the two bad options a naive implementation
-    would otherwise face: storing the user's password ourselves, or running
-    as SYSTEM (which ADR-0184 explicitly forbids). S4U grants the task
-    access to local resources under that user's identity without needing —
-    or ever seeing — a password, which is exactly what "start before any
-    interactive logon, as this specific user" needs. Registering an
-    onstart task requires an elevated (Run as Administrator) session.
+
+def _dequote(token: str) -> str:
+    """Strip one layer of surrounding double quotes from a token.
+
+    M1: commands are built with the executable/path components double-quoted
+    (e.g. ``"C:\\Users\\John Doe\\python.exe" -m uvicorn``) so a spaced path
+    survives ``shlex.split(..., posix=False)`` as ONE token — but posix=False
+    RETAINS those quotes in the token. Strip them here before the path is
+    re-quoted for PowerShell, so the ``-Execute`` value is the clean path (not
+    a path with literal quote characters baked in)."""
+    if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+        return token[1:-1]
+    return token
+
+
+class WindowsSystemServiceManager(SystemServiceManager):
+    """Windows boot-time Scheduled Task, registered via PowerShell
+    ``Register-ScheduledTask`` so it can carry a BOUNDED restart-on-failure
+    policy (``-RestartCount``/``-RestartInterval``) — the systemd
+    ``Restart=on-failure`` / launchd ``KeepAlive`` equivalent (WA-4). Plain
+    ``schtasks /create`` has no restart mechanism at all.
+
+    It runs as the installing user via an S4U principal
+    (``-LogonType S4U``) — never storing or seeing a password, and never as
+    SYSTEM (ADR-0184). ``-RunLevel Limited`` (not Highest) keeps the runtime
+    unelevated (WA-6): the task starts at boot but the CorvinOS process itself
+    holds no admin token. Registration still requires an elevated session.
     """
 
     def _task_name(self, name: str) -> str:
@@ -273,19 +323,54 @@ class WindowsSystemServiceManager(SystemServiceManager):
         # Windows Scheduled Task actions have no native per-task environment
         # variable mechanism (unlike systemd Environment= / launchd
         # EnvironmentVariables) — env_vars is accepted for interface parity
-        # with the other managers but not yet applied here. A future
-        # iteration could wrap `command` in a small generated .cmd/.ps1 that
-        # sets them before exec, mirroring corvin-supervisor.ps1's approach.
+        # with the other managers but not yet applied here (WA-9, deferred: a
+        # future iteration could wrap `command` in a generated .cmd that sets
+        # them before exec, mirroring corvin-supervisor.ps1's approach).
         user = current_user()
         task_name = self._task_name(name)
-        cmd = [
-            "schtasks", "/create", "/tn", task_name,
-            "/tr", command, "/sc", "onstart",
-            "/ru", user, "/np", "/rl", "highest", "/f",
-        ]
+
+        # WA-5/M1: split the command into [program, *args] so a program path
+        # containing spaces survives as ONE -Execute token, then re-quote each
+        # piece as a PS single-quoted literal. posix=False (this path is
+        # Windows-only) preserves backslashes in Windows paths regardless of the
+        # host OS actually running this code. The command is built with path
+        # components double-quoted so the split keeps them intact; posix=False
+        # RETAINS those quotes, so _dequote strips them off the program token
+        # before it's re-quoted for PowerShell. Argument tokens keep their own
+        # double quotes so a spaced script/adapter path is still one arg to the
+        # program's own command-line parser (inside the single-quoted -Argument).
+        parts = shlex.split(command, posix=False) or [command]
+        program = _dequote(parts[0])
+        arguments = parts[1:]
+        desc = description or f"CorvinOS {name} service (always-on)"
+
+        action_arg = ""
+        if arguments:
+            arg_str = " ".join(arguments)
+            action_arg = f" -Argument {_ps_single_quote(arg_str)}"
+
+        # WA-4: -RestartCount 5 / -RestartInterval 1min = bounded restart-on-
+        # failure (mirrors Linux Restart=on-failure + StartLimitBurst=5).
+        ps = (
+            f"$ErrorActionPreference='Stop';"
+            f"$Action=New-ScheduledTaskAction -Execute {_ps_single_quote(program)}{action_arg};"
+            f"$Trigger=New-ScheduledTaskTrigger -AtStartup;"
+            f"$Settings=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries "
+            f"-DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) "
+            f"-RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) "
+            f"-MultipleInstances IgnoreNew;"
+            f"$Principal=New-ScheduledTaskPrincipal -UserId {_ps_single_quote(user)} "
+            f"-LogonType S4U -RunLevel Limited;"
+            f"Register-ScheduledTask -TaskName {_ps_single_quote(task_name)} "
+            f"-Action $Action -Trigger $Trigger -Settings $Settings "
+            f"-Principal $Principal -Description {_ps_single_quote(desc)} -Force"
+        )
+        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            raise RuntimeError(f"schtasks failed: {result.stderr}")
+            raise RuntimeError(
+                f"Register-ScheduledTask failed: {result.stderr or result.stdout}"
+            )
 
     def uninstall_service(self, name: str) -> None:
         if not is_elevated():

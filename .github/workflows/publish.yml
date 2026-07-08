@@ -10,15 +10,57 @@ on:
     types: [published]
 
 jobs:
+  # ── 0. Test gate ────────────────────────────────────────────────────────────
+  # CI-1: publish must NOT ship an untested build. `build` (and therefore
+  # `publish-pypi`) depend on this job, so a red suite blocks the PyPI upload.
+  # Mirrors .github/workflows/test.yml's `test` job (same env + install line).
+  test:
+    name: Test gate (bridge suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python deps
+        # Mirror test.yml: base + dev deps, plus matplotlib (compute E2E) and
+        # itsdangerous (Starlette session middleware) which aren't in [dev].
+        run: pip install -e ".[dev]" matplotlib itsdangerous
+      - name: Install Node deps (all bridges)
+        run: |
+          for d in operator/bridges/*/; do
+            if [ -f "$d/package.json" ]; then
+              npm install --prefix "$d" --silent
+            fi
+          done
+      - name: Run test suite
+        run: |
+          bash operator/bridges/run-all-tests.sh 2>&1 | tee /tmp/test-output.log
+          exit ${PIPESTATUS[0]}
+        env:
+          CORVIN_AGENTS_SKIP_LIVE: "1"
+          CORVIN_INTEGRATION_TEST: "1"
+          CORVIN_SKIP_SLOW_TESTS: "1"
+
   # ── 1. Build wheel + sdist ──────────────────────────────────────────────────
   build:
     name: Build distribution
+    needs: [test]           # CI-1: no test gate → broken build ships. Now gated.
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # full history so hatchling can read version from git tag
+          # full history (harmless). NOTE: the version is STATIC in
+          # pyproject.toml ([project].version) — it is NOT derived from the git
+          # tag by hatchling. The tag↔version assert step below is what keeps
+          # the two in sync.
+          fetch-depth: 0
 
       # ── React SPA (required by force-include in pyproject.toml) ────────────
       - name: Set up Node.js 20
@@ -41,6 +83,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Assert release tag matches pyproject version
+        # CI-7: the version is static in pyproject.toml, so a release tag that
+        # disagrees with it would publish a mislabelled artifact. Fail hard.
+        run: |
+          PYPROJECT_VERSION="$(python -c 'import tomllib;print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          echo "pyproject version: ${PYPROJECT_VERSION}"
+          echo "release tag:       ${GITHUB_REF_NAME}"
+          test "v${PYPROJECT_VERSION}" = "${GITHUB_REF_NAME}"
 
       - name: Install build tools
         # hatchling is needed for the VendorOperatorHook (hatch_build.py)

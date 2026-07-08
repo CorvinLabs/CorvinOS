@@ -28,7 +28,13 @@ SKILL_FORGE_PKG = REPO / "operator" / "skill-forge"
 FORGE_PKG = REPO / "operator" / "forge"
 
 TEST_CHANNEL = "skillinject"
-TEST_CHANNEL_DIR = ROOT.parent / TEST_CHANNEL
+# Isolate the channel-settings dir under a private tmp bridges root (passed to
+# the adapter via ADAPTER_BRIDGES_DIR) instead of writing into the REPO tree at
+# operator/bridges/skillinject/ — that leaked a settings.json artifact into the
+# working tree whenever a run was interrupted before teardown, the same
+# test-vs-real-config contamination class fixed for the other bridge tests.
+_BRIDGES_DIR = Path(tempfile.mkdtemp(prefix="skillinject-bridges-"))
+TEST_CHANNEL_DIR = _BRIDGES_DIR / TEST_CHANNEL
 
 
 def _make_sandbox(prefix: str) -> Path:
@@ -100,6 +106,7 @@ def _adapter_env(sandbox: Path, *, corvin_home: Path, plugin_slot: Path,
     env["ADAPTER_FAKE_DELAY"] = "0.05"
     env["ADAPTER_FAKE_ARGS_DUMP"] = str(sandbox / "args.jsonl")
     env["ADAPTER_POLL_INTERVAL"] = "0.1"
+    env["ADAPTER_BRIDGES_DIR"] = str(_BRIDGES_DIR)  # read channel settings from tmp, not repo
     env["ADAPTER_DISABLE_VOICE"] = "1"
     env["BRIDGE_PROGRESS_UPDATES"] = "0"
     env["ADAPTER_ROUTING_MODE"] = "off"

@@ -34,6 +34,11 @@ _PKG_TO_REPO: dict[str, str] = {
 }
 # Segments that are already repo-relative roots (in-tree runs, not installed).
 _REPO_ROOTS = ("core/", "operator/", "shared/", "ops/")
+# Match a repo root ONLY at a path boundary (start-of-string or right after '/'),
+# so a substring like ".../encore/x.py" cannot false-match "core/" (F11).
+_REPO_ROOT_RE = re.compile(
+    r"(?:^|/)(" + "|".join(re.escape(r) for r in _REPO_ROOTS) + r")"
+)
 
 # ── PII / secret scrubbing ──────────────────────────────────────────────────────
 # Order matters: most-specific first. Every pattern collapses a value to a typed
@@ -81,11 +86,10 @@ def to_repo_path(raw_path: str) -> str | None:
     if not raw_path:
         return None
     norm = raw_path.replace("\\", "/")
-    # already repo-relative?
-    for root in _REPO_ROOTS:
-        idx = norm.find(root)
-        if idx != -1:
-            return norm[idx:]
+    # already repo-relative? (anchored at a '/' boundary — see _REPO_ROOT_RE)
+    m = _REPO_ROOT_RE.search(norm)
+    if m:
+        return norm[m.start(1):]
     # installed package → repo root
     segs = norm.split("/")
     for i, seg in enumerate(segs):

@@ -422,11 +422,16 @@ def put_service_tier(
 
 # Keys the UI is allowed to touch — a subset of _DELEGATION_BUDGET_DEFAULTS.
 _BUDGET_KEYS = {
-    "timeout_seconds":  {"type": int, "min": 30,    "max": 8640000, "default": 360000},
-    "max_worker_turns": {"type": int, "min": 1,     "max": 50000,   "default": 10000},
-    "max_loops":        {"type": int, "min": 1,     "max": 2000,    "default": 500},
-    "max_wall_time":    {"type": int, "min": 60,    "max": 8640000, "default": 360000},
-    "max_total_workers":{"type": int, "min": 1,     "max": 1600,    "default": 400},
+    # Defaults + ceilings aligned with chat_runtime._DELEGATION_BUDGET_DEFAULTS
+    # and the acs_validator R35/R36 ceilings (max_total_workers ≤ 64,
+    # max_wall_time ≤ 86400s). The old values were a partially-reverted 100×
+    # inflation (default 400 workers / 100h) that let one metered compute unit
+    # authorize a runaway fan-out; a save above these now fails validation loudly.
+    "timeout_seconds":  {"type": int, "min": 30,    "max": 86400,   "default": 3600},
+    "max_worker_turns": {"type": int, "min": 1,     "max": 5000,    "default": 100},
+    "max_loops":        {"type": int, "min": 1,     "max": 100,     "default": 5},
+    "max_wall_time":    {"type": int, "min": 60,    "max": 86400,   "default": 3600},
+    "max_total_workers":{"type": int, "min": 1,     "max": 64,      "default": 8},
     # Recursive delegation depth (M4), not a loop counter — acs_validator R32
     # hard-caps this at 10, so max must match or every save >10 fails validation.
     "max_depth":        {"type": int, "min": 1,     "max": 10,      "default": 4},

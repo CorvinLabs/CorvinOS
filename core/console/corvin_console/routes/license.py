@@ -866,6 +866,34 @@ async def apply_license_key(
     issued_to: str | None = claims.get("issued_to") or None
     expires_at: int | None = claims.get("exp") or None
 
+    # LIC-5: the signature/semantic pre-checks above can pass while enforcement
+    # still correctly declines to activate — e.g. a token valid but bound to a
+    # DIFFERENT installation (instance_id_bound), or one whose device_fp/binding
+    # only fails inside the full load path. Returning ok=True in that state is
+    # misleading (the UI shows success while the tier stays free), and the
+    # rejected key sits on disk. Reflect the REAL post-reload state: if nothing
+    # loaded, roll back the just-written key and report the failure honestly.
+    if not loaded:
+        try:
+            key_path.unlink()
+        except OSError:
+            pass
+        try:
+            console_audit.action_failed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="license.key_apply",
+                target_kind="license",
+                target_id=(str(claims.get("jti", ""))[:8] or "unknown"),
+                reason="not_valid_for_installation",
+            )
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="key not valid for this installation",
+        )
+
     try:
         console_audit.action_performed(
             tenant_id=rec.tenant_id,
@@ -878,7 +906,7 @@ async def apply_license_key(
         pass
 
     return LicenseKeyResponse(
-        ok=True,
+        ok=loaded,
         tier=tier,
         loaded=loaded,
         issued_to=issued_to,

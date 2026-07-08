@@ -33,11 +33,14 @@ jobs:
             --cov-report=html \
             --cov-fail-under=75 \
             -v
-        continue-on-error: true
 
       - name: Generate coverage badge
         run: |
-          coverage json --quiet
+          # CI-3: write to .coverage.json — the name every reader step below
+          # expects. `coverage json` defaults to coverage.json (no dot), so the
+          # badge/comment/threshold steps were all reading a file that never
+          # existed and silently fell into their except branches.
+          coverage json --quiet -o .coverage.json
           python3 << 'EOF'
           import json
           import sys
@@ -101,30 +104,27 @@ jobs:
           import json
           import sys
 
-          # Define critical modules and their thresholds
-          CRITICAL_THRESHOLDS = {
-            'path_gate': 90,
-            'audit': 90,
-            'data_classification': 85,
-            'egress': 85,
-            'erasure': 80,
-            'a2a': 80,
-          }
-
+          # CI-3: fail-closed. A missing/malformed coverage file (e.g. the old
+          # coverage.json/.coverage.json name mismatch) previously landed in a
+          # "Warning" branch that still exited 0, so this gate could never fail.
+          # It now exits non-zero on any error.
+          #
+          # NOTE: a per-module CRITICAL_THRESHOLDS map used to be defined here
+          # but was never wired to any check (dead code). Removed rather than
+          # left dangling; the enforced gate is the overall 75% floor below
+          # (which also matches --cov-fail-under=75 in the pytest step).
           try:
             with open('.coverage.json', 'r') as f:
               data = json.load(f)
-              overall = data.get('totals', {}).get('percent_covered', 0)
-
-              print(f"✓ Overall coverage: {overall:.1f}%")
-
-              # Check overall threshold (75%)
-              if overall < 75:
-                print(f"✗ Coverage below 75% threshold: {overall:.1f}%")
-                sys.exit(1)
-              else:
-                print(f"✓ Coverage meets 75% threshold")
-
+            overall = data.get('totals', {}).get('percent_covered', 0)
+            print(f"Overall coverage: {overall:.1f}%")
+            if overall < 75:
+              print(f"✗ Coverage below 75% threshold: {overall:.1f}%")
+              sys.exit(1)
+            print("✓ Coverage meets 75% threshold")
+          except SystemExit:
+            raise
           except Exception as e:
-            print(f"Warning: Could not validate thresholds: {e}")
+            print(f"✗ Could not validate coverage thresholds: {e}")
+            sys.exit(1)
           EOF

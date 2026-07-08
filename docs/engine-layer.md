@@ -99,7 +99,8 @@ and is what every persona that uses `forge_enabled` /
 
 Spawns `codex exec --json --skip-git-repo-check --ephemeral`.
 Capabilities: `mcp + stream_json + teb_hooks + command_manifest` — no
-skills_tool, no mid-stream-inject (ECI returns explicit error). L10
+skills_tool, no *live* mid-stream-inject (no live ECI transport; the adapter
+queues `/btw` notes to the next turn instead). L10
 path-gate, L16 audit, L33 artifacts delivered via TEB (M1).
 Useful when a persona genuinely needs Codex's
 behavior (e.g. specific code-completion patterns, ChatGPT account
@@ -316,16 +317,34 @@ load-bearing pattern:
 
 ```python
 if engine.capabilities.get("mid_stream_inject", False):
-    engine.inject(text)
+    engine.inject(text)          # live delivery (ClaudeCode stdin_json)
 else:
-    return False  # /btw fallback ack: "kein Task läuft"
+    return False                 # inject_btw: no LIVE delivery on this engine
 ```
+
+The `/btw` handler in `process_one` treats a `False` from `inject_btw` as
+"no live delivery", **not** "no task running". It then checks the
+engine-agnostic active-turn marker (`_turn_active(chat_key)`, set for every
+engine in `call_claude_streaming`):
+
+- **live delivered** → `📝 Note delivered to the running task.`
+- **turn active but no live inject** (Hermes / OpenCode / Codex) → the note is
+  **queued** into the `/btw` buffer and drained into the *next* spawn by
+  `drain_btw_buffer()`; ack: `📝 Got your note … queued … added on the next turn.`
+- **no turn active** → `No task is running right now …` (the true idle case).
+
+This closes a long-standing false-negative: on Discord the stripped-PATH →
+Hermes auto-downgrade (ADR-0159 M1) meant every `/btw` reported the misleading
+"No task is running" and **dropped** the note, even mid-turn. The buffer drain
+now runs in the Hermes/OpenCode/Codex spawn paths too — previously it lived only
+on the Claude path, so the "buffered" mode this table advertised never actually
+delivered.
 
 Effects of running a non-Claude engine in an existing chat:
 
 | Feature | Claude | Codex | OpenCode | Hermes |
 |---|---|---|---|---|
-| `/btw` mid-stream injection | ✓ live (stdin_json) | ✗ (explicit error, ECI) | ✗ (explicit error, ECI) | ✓ buffered (ECI) |
+| `/btw` mid-stream injection | ✓ live (stdin_json) | ○ queued → next turn | ○ queued → next turn | ○ queued → next turn |
 | PreToolUse path-gate | ✓ native hooks | ✓ via TEB | ✓ via TEB | ✓ via TEB |
 | L16 audit + L33 artifacts | ✓ native | ✓ via TEB | ✓ via TEB | ✓ via TEB |
 | skill_inject (system prompt) | ✓ via `--append-system-prompt` | `<SYSTEM>` block (SkillCompiler) | `<SYSTEM>` block (SkillCompiler) | `<SYSTEM>` block (SkillCompiler) |
@@ -404,9 +423,12 @@ compliance guarantees that were previously ClaudeCode-only are now universal.
 
 Each engine declares an `EngineCommandManifest` (`eci/manifest.py`) with two
 fields:
-- **`btw_transport`**: how `/btw` is delivered — `stdin_json` (ClaudeCode),
+- **`btw_transport`**: how `/btw` is delivered — `stdin_json` (ClaudeCode, live),
   `buffered` (Hermes, injected at next prompt boundary), or `None` (Codex /
-  OpenCode — adapter returns an explicit error rather than silently dropping).
+  OpenCode — no live ECI transport). For any non-`stdin_json` engine the adapter
+  never drops the note: while a turn is active it queues the text into the `/btw`
+  buffer and `drain_btw_buffer()` prepends it to the next spawn's system prompt
+  (wired into the Hermes/OpenCode/Codex spawn paths, not just ClaudeCode).
 - **`native_commands`**: engine-specific commands exposed under the `/e:` namespace
   (e.g. `/e:model-info` for Hermes). Routed by the adapter dispatcher to
   `engine.handle_command(cmd, args)`.

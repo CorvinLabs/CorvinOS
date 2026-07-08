@@ -48,7 +48,7 @@ def test_both_tokens_are_written_at_0600_atomically(tmp_path):
     (home / "aco" / "telemetry").mkdir(parents=True, exist_ok=True)
 
     payload = {"instance_token": "itok-abc", "telemetry_token": "ttok-xyz"}
-    with patch("urllib.request.urlopen", return_value=_FakeResponse(payload)):
+    with patch("urllib.request.OpenerDirector.open", return_value=_FakeResponse(payload)):
         ok = hc.provision_telemetry_tokens(home, "inst-1")
 
     assert ok is True
@@ -65,7 +65,7 @@ def test_no_temp_files_left_behind_on_success(tmp_path):
     (home / "aco" / "telemetry").mkdir(parents=True, exist_ok=True)
 
     payload = {"instance_token": "itok", "telemetry_token": "ttok"}
-    with patch("urllib.request.urlopen", return_value=_FakeResponse(payload)):
+    with patch("urllib.request.OpenerDirector.open", return_value=_FakeResponse(payload)):
         hc.provision_telemetry_tokens(home, "inst-1")
 
     leftovers = list(hc._instance_token_path(home).parent.glob(".*.tmp"))

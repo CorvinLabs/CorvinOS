@@ -282,6 +282,55 @@ def test_r32_valid_depth():
 
 
 # ---------------------------------------------------------------------------
+# R35-R36: ACS-1 worker/wall-time budget ceilings (silent-inflation backstop)
+# ---------------------------------------------------------------------------
+
+def test_r35_max_total_workers_exceeds_ceiling():
+    """The a47c6d3 inflation to 400 workers must now fail LOUDLY."""
+    d = _with_delegation(max_depth=3)
+    d["orchestration"]["delegation_loop"]["budget"]["max_total_workers"] = 400
+    r = _v.validate_workflow_dict(d)
+    assert any(i.rule_id == "R35" for i in r.errors)
+
+
+def test_r35_max_total_workers_negative():
+    d = _with_delegation(max_depth=3)
+    d["orchestration"]["delegation_loop"]["budget"]["max_total_workers"] = -1
+    r = _v.validate_workflow_dict(d)
+    assert any(i.rule_id == "R35" for i in r.errors)
+
+
+def test_r35_max_total_workers_warning_above_16():
+    d = _with_delegation(max_depth=3)
+    d["orchestration"]["delegation_loop"]["budget"]["max_total_workers"] = 32
+    r = _v.validate_workflow_dict(d)
+    assert any(i.rule_id == "R35" and i.severity == "WARNING" for i in r.issues)
+    assert not any(i.rule_id == "R35" for i in r.errors)
+
+
+def test_r35_sane_worker_count_ok():
+    d = _with_delegation(max_depth=3)
+    d["orchestration"]["delegation_loop"]["budget"]["max_total_workers"] = 8
+    r = _v.validate_workflow_dict(d)
+    assert not any(i.rule_id == "R35" for i in r.issues)
+
+
+def test_r36_max_wall_time_exceeds_ceiling():
+    """The a47c6d3 inflation to 360000s (100 h) must now fail LOUDLY."""
+    d = _with_delegation(max_depth=3)
+    d["orchestration"]["delegation_loop"]["budget"]["max_wall_time"] = 360000
+    r = _v.validate_workflow_dict(d)
+    assert any(i.rule_id == "R36" for i in r.errors)
+
+
+def test_r36_sane_wall_time_ok():
+    d = _with_delegation(max_depth=3)
+    d["orchestration"]["delegation_loop"]["budget"]["max_wall_time"] = 3600
+    r = _v.validate_workflow_dict(d)
+    assert not any(i.rule_id == "R36" for i in r.issues)
+
+
+# ---------------------------------------------------------------------------
 # R13: Reserved state keys
 # ---------------------------------------------------------------------------
 

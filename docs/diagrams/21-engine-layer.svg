@@ -70,7 +70,7 @@
   <text x="425" y="280" text-anchor="middle" font-size="10" fill="#6d28d9">opt-in via persona</text>
   <line x1="311" y1="290" x2="539" y2="290" stroke="#7c3aed" stroke-width="1"/>
   <g font-size="10" font-family="'Courier New', monospace" fill="#4c1d95">
-    <text x="311" y="308">mid_stream_inject: None  → explicit error</text>
+    <text x="311" y="308">mid_stream_inject: None  → queued next turn</text>
     <text x="311" y="323">hooks:             False (native)</text>
     <text x="311" y="338">skills_tool:       False</text>
     <text x="311" y="353">mcp:               True (native)</text>
@@ -84,7 +84,7 @@
   <text x="425" y="446" text-anchor="middle" font-size="10" fill="#5b21b6">L10 path-gate · L16 audit · L33 artifacts</text>
   <text x="425" y="462" text-anchor="middle" font-size="9" fill="#7c3aed">spawns codex exec --json --ephemeral</text>
   <text x="425" y="476" text-anchor="middle" font-size="9" fill="#7c3aed">ECI: command_manifest (mid_stream=None)</text>
-  <text x="425" y="490" text-anchor="middle" font-size="9" fill="#7c3aed">/btw → "not supported" (explicit error)</text>
+  <text x="425" y="490" text-anchor="middle" font-size="9" fill="#7c3aed">/btw queued → prepended next turn</text>
 
   <!-- ── OpenCodeEngine ─────────────────────────────────────────────── -->
   <rect x="570" y="240" width="260" height="260" rx="12" fill="#d1fae5" stroke="#059669" stroke-width="2"/>
@@ -92,7 +92,7 @@
   <text x="700" y="280" text-anchor="middle" font-size="10" fill="#047857">provider-agnostic (Claude / OpenAI / Ollama)</text>
   <line x1="586" y1="290" x2="814" y2="290" stroke="#059669" stroke-width="1"/>
   <g font-size="10" font-family="'Courier New', monospace" fill="#064e3b">
-    <text x="586" y="308">mid_stream_inject: None  → explicit error</text>
+    <text x="586" y="308">mid_stream_inject: None  → queued next turn</text>
     <text x="586" y="323">hooks:             False (native)</text>
     <text x="586" y="338">skills_tool:       False</text>
     <text x="586" y="353">mcp:               True (native)</text>
@@ -106,7 +106,7 @@
   <text x="700" y="446" text-anchor="middle" font-size="10" fill="#065f46">L10 path-gate · L16 audit · L33 artifacts</text>
   <text x="700" y="462" text-anchor="middle" font-size="9" fill="#059669">spawns opencode run --format json</text>
   <text x="700" y="476" text-anchor="middle" font-size="9" fill="#059669">ECI: command_manifest (/e:model → override)</text>
-  <text x="700" y="490" text-anchor="middle" font-size="9" fill="#059669">/btw → "not supported" (explicit error)</text>
+  <text x="700" y="490" text-anchor="middle" font-size="9" fill="#059669">/btw queued → prepended next turn</text>
 
   <!-- ── HermesEngine ───────────────────────────────────────────────── -->
   <rect x="845" y="240" width="240" height="260" rx="12" fill="#ffedd5" stroke="#ea580c" stroke-width="2"/>
@@ -190,8 +190,8 @@
   <text x="1110" y="700" text-anchor="middle" font-size="10" font-weight="600" fill="#831843">Copilot CLI</text>
 
   <text x="45" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: live stdin_json</text>
-  <text x="275" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: explicit error</text>
-  <text x="490" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: explicit error</text>
+  <text x="275" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: queued → next turn</text>
+  <text x="490" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: queued → next turn</text>
   <text x="720" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: buffered → next turn</text>
   <text x="1010" y="714" text-anchor="start" font-size="9" fill="#475569">/btw: None (worker-only)</text>
 

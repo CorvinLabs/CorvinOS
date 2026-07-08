@@ -316,6 +316,82 @@ class TestDatasourceUnregister(unittest.TestCase):
         self.assertEqual(result["error"], "UnknownTool")
 
 
+class TestNameValidationAndTenant(unittest.TestCase):
+    """F5 — path-traversal / cross-tenant hardening of the dispatcher."""
+
+    def test_unregister_path_traversal_rejected(self):
+        reg = _make_registry()
+        reg._home = Path("/tmp/fake_home_trav")
+        events = []
+        result = call_datasource_tool(
+            "datasource_unregister",
+            {"name": "../../../../etc/other_tenant/manifest"},
+            reg,
+            lambda e, d: events.append((e, d)),
+        )
+        self.assertEqual(result["error"], "InvalidName")
+        # No unregister audit / no filesystem action for a rejected name.
+        self.assertEqual(events, [])
+
+    def test_schema_traversal_rejected(self):
+        reg = _make_registry()
+        result = call_datasource_tool(
+            "datasource_schema", {"name": "../secret"}, reg, _noop_audit,
+        )
+        self.assertEqual(result["error"], "InvalidName")
+        reg.load_manifest.assert_not_called()
+
+    def test_preview_traversal_rejected(self):
+        reg = _make_registry()
+        result = call_datasource_tool(
+            "datasource_preview", {"name": "a/b"}, reg, _noop_audit,
+        )
+        self.assertEqual(result["error"], "InvalidName")
+        reg.load_manifest.assert_not_called()
+
+    def test_test_traversal_rejected(self):
+        reg = _make_registry()
+        result = call_datasource_tool(
+            "datasource_test", {"name": "x..y"}, reg, _noop_audit,
+        )
+        self.assertEqual(result["error"], "InvalidName")
+        reg.load_manifest.assert_not_called()
+
+    def test_tenant_id_taken_from_caller_not_args(self):
+        # A tenant_id smuggled through args must be IGNORED; the authenticated
+        # tenant passed by the caller is what routes the load.
+        reg = _make_registry()
+        mock_manifest = MagicMock()
+        mock_manifest.adapter = "postgresql"
+        mock_manifest.schema_hint = {"columns": []}
+        reg.load_manifest.return_value = mock_manifest
+        call_datasource_tool(
+            "datasource_schema",
+            {"name": "ds1", "tenant_id": "victim_tenant"},
+            reg,
+            _noop_audit,
+            tenant_id="auth_tenant",
+        )
+        # Registry was asked for the AUTHENTICATED tenant, never the args one.
+        _, kwargs = reg.load_manifest.call_args
+        called_tenant = kwargs.get("tenant_id")
+        if called_tenant is None:
+            called_tenant = reg.load_manifest.call_args[0][1]
+        self.assertEqual(called_tenant, "auth_tenant")
+        self.assertNotEqual(called_tenant, "victim_tenant")
+
+    def test_valid_name_passes(self):
+        reg = _make_registry()
+        mock_manifest = MagicMock()
+        mock_manifest.adapter = "postgresql"
+        mock_manifest.schema_hint = {"columns": []}
+        reg.load_manifest.return_value = mock_manifest
+        result = call_datasource_tool(
+            "datasource_schema", {"name": "valid-name_1"}, reg, _noop_audit,
+        )
+        self.assertNotIn("error", result)
+
+
 class TestResidencyFailClosed(unittest.TestCase):
     """Regression: the residency gate must fail CLOSED for schema + preview.
 

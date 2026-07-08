@@ -38,11 +38,32 @@ function audienceFor(settingsFile, chatKey) {
  * @param {function} [cfg.normalize]       — optionaler ID-Normalizer (WhatsApp-JID)
  * @param {string}   [cfg.channel]         — channel name for audit events
  *                                            (e.g. 'discord'); defaults to ''
+ * @param {boolean}  [cfg.denyOnEmptyWhitelist] — PENTEST-3c: fail-CLOSED when
+ *                                            the whitelist is empty. On public
+ *                                            channels (email) an empty
+ *                                            whitelist would otherwise make the
+ *                                            whole internet an owner. When set,
+ *                                            an empty whitelist denies everyone
+ *                                            (the owner still claims access via
+ *                                            the PIN `/auth <pin>` path, which
+ *                                            keeps working below). A `dev_mode:
+ *                                            true` setting re-opens the legacy
+ *                                            empty-whitelist=owner behaviour for
+ *                                            local testing only.
  */
-function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normalize, channel }) {
+function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normalize, channel, denyOnEmptyWhitelist }) {
   const nrm = normalize || ((x) => String(x));
   const rateMap = new Map();
   const ch = channel || '';
+  const denyEmpty = !!denyOnEmptyWhitelist;
+
+  // PENTEST-3c: is an empty whitelist allowed to mean "everyone is owner"?
+  // Legacy DEV/first-run behaviour keeps this true. Fail-closed channels flip
+  // it to false unless the operator explicitly opts into `dev_mode`.
+  function emptyWhitelistIsOwner(cs) {
+    if (!denyEmpty) return true;          // legacy channels: first-run claim
+    return cs && cs.dev_mode === true;    // fail-closed: only with explicit dev_mode
+  }
   // First-drop tracker per (chatKey, uid) — keeps the silent-drop loud only
   // once per daemon-life. Restarts re-arm the polite "🔒 read-only" ACK; that
   // is acceptable because daemon restarts are rare and the ACK is harmless.
@@ -64,7 +85,7 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
   function classify(uid, chatKey) {
     const cs = currentSettings();
     const wl = (cs.whitelist || []).map(nrm);
-    if (wl.length === 0) return 'owner';
+    if (wl.length === 0) return emptyWhitelistIsOwner(cs) ? 'owner' : 'unknown';
     const u = nrm(uid);
     if (wl.includes(u)) return 'owner';
     if (chatKey && audienceFor(settingsFile, chatKey) === 'all') return 'owner';
@@ -124,7 +145,11 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
   function authOk(uid, text, chatKey) {
     const cs = currentSettings();
     const wl = (cs.whitelist || []).map(nrm);
-    if (wl.length === 0) {
+    if (wl.length === 0 && emptyWhitelistIsOwner(cs)) {
+      // Legacy first-run / DEV: empty whitelist means "no owner claimed yet",
+      // so the first sender is trusted. Fail-closed channels (email) skip this
+      // and fall through — an empty whitelist there denies everyone except a
+      // valid PIN claim below.
       if (logger) logger(`auth: DEV mode, accepting ${uid}`);
       return true;
     }

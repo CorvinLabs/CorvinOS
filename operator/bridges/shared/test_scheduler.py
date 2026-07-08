@@ -166,5 +166,40 @@ class MaterialiseTests(unittest.TestCase):
         self.assertEqual(len(fired), 0)
 
 
+class WorkflowOutboxTargetTests(unittest.TestCase):
+    """Regression: scheduled workflow reports must land in the SHARED outbox
+    the daemons poll, not an orphan per-channel dir."""
+
+    def test_report_lands_in_shared_outbox_not_per_channel(self):
+        with tempfile.TemporaryDirectory() as td:
+            shared = Path(td) / "shared_outbox"
+            per_channel = Path(td) / "discord" / "outbox"
+            per_channel.mkdir(parents=True, exist_ok=True)
+            os.environ["ADAPTER_OUTBOX"] = str(shared)
+            try:
+                item = {
+                    "id": "wf1", "channel": "discord", "chat_id": "123456",
+                    "workflow_name": "nonexistent_wf", "workflow_inputs": {},
+                }
+                # The workflow subprocess will fail (unknown workflow), but the
+                # function still writes the report envelope with an error body.
+                ok = scheduler._run_workflow_to_outbox(item, now=1000.0)
+                self.assertTrue(ok)
+                reports = list(shared.glob("sched_wf_wf1_*.json"))
+                self.assertEqual(len(reports), 1,
+                                 f"report not in shared outbox: {list(shared.iterdir())}")
+                env = json.loads(reports[0].read_text())
+                self.assertEqual(env["channel"], "discord")
+                self.assertEqual(env["chat_id"], "123456")
+                # EU AI Act Art. 50 §4 — autonomous AI notification must be marked.
+                self.assertTrue(env.get("_final"))
+                self.assertTrue(env.get("provenance", {}).get("ai_generated"))
+                self.assertEqual(env["provenance"]["generator_id"], "corvin_os")
+                # Nothing must land in the orphan per-channel dir.
+                self.assertEqual(list(per_channel.glob("*.json")), [])
+            finally:
+                os.environ.pop("ADAPTER_OUTBOX", None)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

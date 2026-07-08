@@ -999,17 +999,24 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None)
 _DELEGATE_PREFIX = "/delegate"
 
 _DELEGATION_BUDGET_DEFAULTS = {
-    "max_loops": 500,         # 3 was too tight: 1 worker-timeout burn + 2 parse-error burns = budget gone
+    # ACS-1: the a47c6d3 "blanket 100x scale-up" was only PARTIALLY reverted
+    # (3e1e44b fixed max_depth 200→4 because R32 caught it, but left the other
+    # siblings inflated). Every metered compute unit thus authorized up to 400
+    # worker subprocesses for 100 h — a quota-defeat. The siblings are restored
+    # here to the pre-inflation sane bounds; acs_validator R35/R36 now guards
+    # max_total_workers + max_wall_time the way R32 guards max_depth, so any
+    # future silent re-inflation fails LOUDLY at workflow validation.
+    "max_loops": 5,           # 3 was too tight: 1 worker-timeout burn + 2 parse-error burns = budget gone
     "max_depth": 4,           # recursive worker-delegation depth (M4) — NOT a loop counter like the
                               # other fields; 200 was an accidental blanket-scale-up in a47c6d3 that
                               # broke every delegation (acs_validator R32 caps this at 10). 4 matches
                               # the ACS runtime's own built-in default for recursive delegation depth.
-    "max_total_workers": 400,
-    "max_wall_time": 360000,
-    "timeout_seconds": 360000,  # 100 h — allows complex multi-file tasks to complete
-    "max_worker_turns": 10000,  # acs_runtime default was 5 → workers hit max_turns mid-tool-use
-                                # on explore/implement tasks → error_max_turns → confidence=0.0
-                                # → "Delegation fehlgeschlagen: unknown error" in web console.
+    "max_total_workers": 8,   # concurrent worker subprocesses per delegated turn (pre-inflation was 4)
+    "max_wall_time": 3600,    # 1 h wall-clock ceiling for the whole delegation loop
+    "timeout_seconds": 3600,  # 1 h — allows complex multi-file tasks to complete
+    "max_worker_turns": 100,  # acs_runtime default was 5 → workers hit max_turns mid-tool-use
+                              # on explore/implement tasks → error_max_turns → confidence=0.0
+                              # → "Delegation fehlgeschlagen: unknown error" in web console.
 }
 
 # Triage heuristic vocabulary (deterministic, 0 ms, no API — same rationale
@@ -2077,7 +2084,20 @@ async def stream_turn(
     # against the right L34/L35 compliance row (hermes = locality=local /
     # egress=none; claude_code = us_cloud). Delegation fan-out is classified as
     # "acs"; otherwise the configured OS engine (claude_code | hermes | …).
+    # ACS-3: fold the Layer-5 repair throttle into the gate's engine
+    # classification. The real delegation decision below (`_del_will_delegate`)
+    # includes `not _del_throttled`; if the gate omits it, a throttled turn is
+    # classified as ACS (engine=DELEGATION_ENGINE_ID) at the gate but actually
+    # runs on the OS engine (claude_code / hermes), so the pre-spawn L34/L35
+    # gate checks the wrong compliance row. Compute the throttle once here and
+    # reuse it for the decision below so gate and runtime agree.
+    try:
+        from .aco.repair import is_acs_throttled as _is_acs_throttled
+        _del_throttled = _is_acs_throttled(sess.workdir)
+    except Exception:  # noqa: BLE001 — repair module unavailable → no throttle
+        _del_throttled = False
     _will_delegate = (_delegation_enabled(sess.tenant_id)
+                      and not _del_throttled
                       and (_force_delegate or _should_delegate(prompt)))
     # _os_engine already resolved above (before turn.start debug event)
     _gate_refusal = _spawn_gates.check_console_spawn_or_refusal(
@@ -2172,13 +2192,10 @@ async def stream_turn(
     # inherit the user/tenant model per ADR-0112); the OS side only manages.
     _del_enabled = _delegation_enabled(sess.tenant_id)
     _del_heuristic = _should_delegate(prompt)
-    # Layer 5 repair: check if ACS throttle is active (written by repair.py
-    # after an acs_error_rate anomaly — throttle expires after N turn.done events).
-    try:
-        from .aco.repair import is_acs_throttled as _is_acs_throttled
-        _del_throttled = _is_acs_throttled(sess.workdir)
-    except Exception:  # noqa: BLE001 — repair module unavailable → no throttle
-        _del_throttled = False
+    # Layer 5 repair throttle (acs_error_rate anomaly) was already resolved into
+    # `_del_throttled` above, where it also fed the pre-spawn gate's engine
+    # classification (ACS-3). Reuse that single value so the gate and the real
+    # decision cannot diverge.
     _del_will_delegate = _del_enabled and not _del_throttled and (_force_delegate or _del_heuristic)
     _dbg(sess.workdir, "delegation.decision",
          delegation_enabled=_del_enabled,

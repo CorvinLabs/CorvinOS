@@ -9,9 +9,14 @@ Storage:
 Format:
     {"2026-06-06": 7, "2026-06-07": 2}
 
-Fail-open contract:
-    I/O errors NEVER block compute — operational failures fall through.
-    Only LicenseLimitError is intentionally re-raised.
+Fail contract (LIC-2):
+    On a persistent I/O error (after one retry), the decision depends on the
+    limit shape:
+      * finite limit (free tier)   → fail CLOSED (deny) — the counter is
+        load-bearing; an unwritable counter must not grant unmetered access.
+      * None (unlimited tier)      → fail OPEN (allow) — no quota to enforce, so
+        an operational failure must never block.
+    LicenseLimitError is always re-raised (intentional limit signal).
 """
 from __future__ import annotations
 
@@ -20,9 +25,25 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+# LIC-1: the counter is a read-modify-write. On POSIX fcntl.flock gives
+# cross-process safety, but on Windows fcntl is a no-op stub (below), so the
+# only defence against the dominant race — the console threadpool servicing
+# concurrent POST /compute/runs in ONE process — is this module-level lock.
+# It serialises every read-modify-write so N concurrent requests cannot all
+# read current=0 and each write 1, blowing past a 1/day cap.
+_INCREMENT_LOCK = threading.Lock()
+
+_IS_WINDOWS = sys.platform.startswith("win")
+
+try:
+    import msvcrt  # type: ignore
+except ImportError:  # non-Windows — no msvcrt module.
+    msvcrt = None  # type: ignore[assignment]
 
 try:
     import fcntl
@@ -180,12 +201,45 @@ def increment_and_check(
             corvin_home, channel=channel, chat_key=chat_key,
             feature=feature, counter_file=counter_file,
         )
+        return
     except LicenseLimitError:
         raise  # intentional signal — always re-raise
     except Exception as exc:
-        _log.warning(
-            "compute_quota: gate error (%s) — allowing through (fail-open)", exc
-        )
+        # LIC-2: retry ONCE. A transient error (brief lock contention, a
+        # momentary FS hiccup) must not nuisance-block a legitimate free-tier
+        # user; but a PERSISTENT quota-write failure must NOT fall open on a
+        # finite limit (read-only license dir / inode exhaustion → unmetered
+        # paid compute).
+        try:
+            _do_increment_and_check(
+                corvin_home, channel=channel, chat_key=chat_key,
+                feature=feature, counter_file=counter_file,
+            )
+            return
+        except LicenseLimitError:
+            raise
+        except Exception as exc2:
+            exc = exc2
+
+        # Persistent failure. Decide fail-open vs fail-closed by the limit shape:
+        #   finite limit (free tier)  → fail CLOSED (deny) — the counter is
+        #                               load-bearing and we cannot prove we're
+        #                               under quota.
+        #   None (unlimited tier)     → fail OPEN (allow) — there is no quota to
+        #                               enforce, so an I/O error must not block.
+        # If the limit cannot be determined, treat it as finite (deny): the
+        # default free tier IS finite, so the conservative choice is to deny.
+        _limit_is_finite = True
+        _limit_val: Any = None
+        _tier = "free"
+        try:
+            from .validator import get_limit as _gl, active_tier as _at  # type: ignore
+            _limit_val = _gl(feature)
+            _limit_is_finite = _limit_val is not None
+            _tier = _at()
+        except Exception:
+            _limit_is_finite = True  # cannot determine → finite → deny
+
         # Emit audit event so operators know the quota gate is degraded.
         try:
             _repo = Path(__file__).resolve().parents[2]
@@ -196,9 +250,24 @@ def increment_and_check(
             # Reason CODE, not str(exc): an OSError message can embed a filesystem
             # path (PII/infra leak). The exception type is the metadata-only signal.
             audit_event("compute.quota_gate_degraded",
-                        severity="WARNING", details={"reason": type(exc).__name__})
+                        severity="WARNING",
+                        details={"reason": type(exc).__name__,
+                                 "decision": "deny" if _limit_is_finite else "allow"})
         except Exception:
             pass
+
+        if _limit_is_finite:
+            _log.error(
+                "compute_quota: gate error (%s) on a FINITE %s limit — denying "
+                "(fail-closed, LIC-2)", type(exc).__name__, feature,
+            )
+            raise LicenseLimitError(
+                feature, requested=None, limit=_limit_val, tier=_tier,
+            )
+        _log.warning(
+            "compute_quota: gate error (%s) on an UNLIMITED tier — allowing "
+            "through (fail-open)", type(exc).__name__,
+        )
 
 
 def _do_increment_and_check(
@@ -215,58 +284,93 @@ def _do_increment_and_check(
     path = _quota_path(corvin_home, counter_file)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    def _read_modify_write() -> None:
+        data = _load(path)
+        current = max(0, int(data.get(today, 0)))  # A4: floor clamp — negative file value ≠ bonus
+        limit = get_limit(feature)
+
+        if limit is not None:
+            try:
+                limit_int = int(limit)
+            except (TypeError, ValueError):
+                # Malformed limit in SesT (e.g. "unlimited" string instead of
+                # None or int) — fail-closed rather than allowing through.
+                # Without this, the ValueError propagates to the outer
+                # `except Exception` handler which fails open.
+                _log.warning(
+                    "compute_quota: %s limit %r is not "
+                    "numeric — treating as exceeded (fail-closed).", feature, limit
+                )
+                raise LicenseLimitError(
+                    feature,
+                    requested=current + 1,
+                    limit=limit,
+                    tier=active_tier(),
+                )
+
+            if (current + 1) > limit_int:
+                tier = active_tier()
+                _emit_quota_exceeded(
+                    channel=channel,
+                    chat_key=chat_key,
+                    requested=current + 1,
+                    limit=limit_int,
+                    tier=tier,
+                    feature=feature,
+                )
+                raise LicenseLimitError(
+                    feature,
+                    requested=current + 1,
+                    limit=limit_int,
+                    tier=tier,
+                )
+
+        data[today] = current + 1
+        # Prune entries older than 7 days (prevents unbounded growth)
+        cutoff = _cutoff_date()
+        data = {k: v for k, v in data.items() if k >= cutoff}
+        _save(path, data)
+
     lock_path = path.parent / f".{counter_file}.lock"
     lock_path.touch()
-    with open(lock_path) as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        try:
-            data = _load(path)
-            current = max(0, int(data.get(today, 0)))  # A4: floor clamp — negative file value ≠ bonus
-            limit = get_limit(feature)
 
-            if limit is not None:
+    # LIC-1: hold the module-level lock around the ENTIRE read-modify-write so
+    # concurrent threadpool requests in one process are strictly serialised —
+    # this is the only thing standing between the Windows no-op fcntl stub and a
+    # multi-write race that blows past the cap. On POSIX we ALSO take the
+    # advisory flock for cross-process safety (unchanged); on Windows we take an
+    # msvcrt.locking() range lock on the same lock file for cross-process safety.
+    with _INCREMENT_LOCK:
+        if _IS_WINDOWS and msvcrt is not None:
+            lf = open(lock_path, "a+")
+            try:
+                lf.seek(0)
+                _locked = False
                 try:
-                    limit_int = int(limit)
-                except (TypeError, ValueError):
-                    # Malformed limit in SesT (e.g. "unlimited" string instead of
-                    # None or int) — fail-closed rather than allowing through.
-                    # Without this, the ValueError propagates to the outer
-                    # `except Exception` handler which fails open.
-                    _log.warning(
-                        "compute_quota: %s limit %r is not "
-                        "numeric — treating as exceeded (fail-closed).", feature, limit
-                    )
-                    raise LicenseLimitError(
-                        feature,
-                        requested=current + 1,
-                        limit=limit,
-                        tier=active_tier(),
-                    )
-
-                if (current + 1) > limit_int:
-                    tier = active_tier()
-                    _emit_quota_exceeded(
-                        channel=channel,
-                        chat_key=chat_key,
-                        requested=current + 1,
-                        limit=limit_int,
-                        tier=tier,
-                        feature=feature,
-                    )
-                    raise LicenseLimitError(
-                        feature,
-                        requested=current + 1,
-                        limit=limit_int,
-                        tier=tier,
-                    )
-
-            data[today] = current + 1
-            # Prune entries older than 7 days (prevents unbounded growth)
-            cutoff = _cutoff_date()
-            data = {k: v for k, v in data.items() if k >= cutoff}
-            _save(path, data)
-        finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
+                    msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+                    _locked = True
+                except OSError:
+                    # Could not obtain the cross-process OS lock (contention
+                    # timeout / already held). The in-process _INCREMENT_LOCK
+                    # still guarantees single-process correctness — proceed
+                    # rather than fail the metered action.
+                    _log.warning("compute_quota: msvcrt lock unavailable — relying on in-process lock only")
+                _read_modify_write()
+            finally:
+                if _locked:
+                    try:
+                        lf.seek(0)
+                        msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+                    except OSError:
+                        pass
+                lf.close()
+        else:
+            with open(lock_path) as lf:
+                fcntl.flock(lf, fcntl.LOCK_EX)
+                try:
+                    _read_modify_write()
+                finally:
+                    fcntl.flock(lf, fcntl.LOCK_UN)
 
 
 __all__ = [

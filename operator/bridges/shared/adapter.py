@@ -755,6 +755,49 @@ _btw_buffers_guard = threading.Lock()
 _btw_feedback: dict[str, str] = {}
 _btw_feedback_guard = threading.Lock()
 
+# Engine-agnostic "an OS turn is actively streaming for this chat" refcount.
+# Registered by EVERY OS-engine dispatch (Claude, Hermes, OpenCode, Codex) in
+# call_claude_streaming and released in a finally, so /btw can distinguish a
+# genuinely-running task from an idle chat EVEN when the running engine cannot
+# accept a live mid-stream injection (Hermes/OpenCode/Codex have
+# mid_stream_inject=False and register neither `_running_engines` nor
+# `_running_stdins`). Without this, /btw reported the misleading "No task is
+# running right now" on every non-Claude Discord turn — most commonly the
+# stripped-PATH → Hermes auto-downgrade (ADR-0159 M1). A refcount (not a bool)
+# keeps the marker correct if a chat ever nests dispatches. Read on the /btw
+# side-channel thread, written on the main-turn thread — the guard makes that
+# cross-thread hand-off safe.
+_active_turns: dict[str, int] = {}
+_active_turns_guard = threading.Lock()
+
+
+def _mark_turn_active(chat_key: str) -> None:
+    """Increment the active-turn refcount for this chat. No-op for falsy keys."""
+    if not chat_key:
+        return
+    with _active_turns_guard:
+        _active_turns[chat_key] = _active_turns.get(chat_key, 0) + 1
+
+
+def _mark_turn_done(chat_key: str) -> None:
+    """Decrement the active-turn refcount; drop the entry at zero. Idempotent."""
+    if not chat_key:
+        return
+    with _active_turns_guard:
+        n = _active_turns.get(chat_key, 0) - 1
+        if n <= 0:
+            _active_turns.pop(chat_key, None)
+        else:
+            _active_turns[chat_key] = n
+
+
+def _turn_active(chat_key: str) -> bool:
+    """True while an OS turn is streaming for this chat (any engine)."""
+    if not chat_key:
+        return False
+    with _active_turns_guard:
+        return _active_turns.get(chat_key, 0) > 0
+
 
 def drain_btw_buffer(chat_key: str) -> str | None:
     """Pop all buffered /btw texts for this chat and return them as a single
@@ -1231,7 +1274,13 @@ def _load_channel_settings(channel: str) -> dict:
     Restart sofort greift. Fehler-tolerant — bei IO-Problemen leeres Dict."""
     if not channel or "/" in channel or ".." in channel:
         return {}
-    p = ROOT.parent / channel / "settings.json"
+    # ADAPTER_BRIDGES_DIR overrides the settings root (tests / isolated deploys)
+    # so a sandbox run never reads the real operator's bridges/<channel>/
+    # settings.json — the source of the test-vs-real-config contamination that
+    # made test_adapter_btw drop discord messages as private on a dev machine.
+    _bdir = os.environ.get("ADAPTER_BRIDGES_DIR")
+    base = Path(os.path.expanduser(_bdir)) if _bdir else ROOT.parent
+    p = base / channel / "settings.json"
     try:
         return json.loads(p.read_text())
     except (FileNotFoundError, json.JSONDecodeError, OSError):
@@ -3348,7 +3397,8 @@ def _safe_id(s: str) -> str:
 def _build_spawn_env(*, bridge: str, chat_key: str,
                      base: dict | None = None,
                      profile: dict | None = None,
-                     tenant_id: str | None = None) -> dict:
+                     tenant_id: str | None = None,
+                     sender: str | None = None) -> dict:
     """Build a fresh env dict for the claude-code spawn.
 
     Always sets CORVIN_CHANNEL_ID = '<bridge>:<sanitized chat_key>' so
@@ -3372,6 +3422,15 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
     safe = re.sub(r"[/\\]", "_", str(chat_key))
     channel_value = f"{bridge}:{safe}"
     env["CORVIN_CHANNEL_ID"] = channel_value
+    # Expose the originating sender UID so a detached background producer spawned
+    # from this turn (e.g. the L25 compute worker) stores the REAL uid on its
+    # completion-notify record — GDPR Art. 17 erasure matches on uid, so a record
+    # keyed by chat_id instead would be silently un-erasable. Strip a stale value
+    # when no sender is known so it can't leak from the parent process.
+    if sender:
+        env["CORVIN_ORIGIN_SENDER"] = str(sender)
+    else:
+        env.pop("CORVIN_ORIGIN_SENDER", None)
     if profile:
         caller = (
             profile.get("_auto_routed")
@@ -3905,7 +3964,7 @@ def _vault_inventory_block() -> str:
 
 def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
                 mode: str = "unrestricted", add_dir: str | None = None,
-                profile: dict | None = None) -> str:
+                profile: dict | None = None, sender: str = "") -> str:
     """Invoke the Claude CLI with conversation continuity per chat.
 
     Modes (Legacy für Image/Document):
@@ -3946,7 +4005,8 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         return f"[fake] {channel}:{chat_key} :: {prompt[:60]}"
 
     workdir = _session_dir(channel, chat_key)
-    env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile)
+    env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,
+                           sender=sender)
     env["VOICE_HOOK_RECURSION"] = "1"
     # ADR-0126 M2 — when claude_code_local mode sets ANTHROPIC_API_KEY='local',
     # remove it from the subprocess env so the claude CLI can authenticate via
@@ -4641,7 +4701,7 @@ def _call_claude_streaming_via_engine(
                 pass
             return call_claude(
                 prompt, channel=channel, chat_key=chat_key,
-                mode=mode, add_dir=add_dir, profile=profile,
+                mode=mode, add_dir=add_dir, profile=profile, sender=sender,
             )
 
         if not has_session:
@@ -5104,6 +5164,16 @@ def _call_codex_streaming_via_engine(
     if (ap := profile.get("append_system")):
         if isinstance(ap, str) and ap.strip():
             system_parts.append(ap.strip())
+    # ADR-0069 M4 — drain queued /btw notes for this engine. Engines without
+    # live mid_stream_inject (Hermes/OpenCode/Codex) buffer /btw text via
+    # inject_btw's fallback; it MUST be drained here or the note rots forever.
+    # Previously drain_btw_buffer() ran ONLY on the Claude path, so the buffered
+    # mode designed for these very engines never actually delivered. Prepend the
+    # note to the system prompt so THIS turn receives it.
+    if chat_key:
+        _btw_buffered = drain_btw_buffer(str(chat_key))
+        if _btw_buffered:
+            system_parts.append(_btw_buffered)
     system_prompt = "\n\n".join(system_parts) if system_parts else None
 
     _env_idle = os.environ.get("ADAPTER_STREAM_IDLE_TIMEOUT")
@@ -5370,6 +5440,16 @@ def _call_opencode_streaming_via_engine(
     if (ap := profile.get("append_system")):
         if isinstance(ap, str) and ap.strip():
             system_parts.append(ap.strip())
+    # ADR-0069 M4 — drain queued /btw notes for this engine. Engines without
+    # live mid_stream_inject (Hermes/OpenCode/Codex) buffer /btw text via
+    # inject_btw's fallback; it MUST be drained here or the note rots forever.
+    # Previously drain_btw_buffer() ran ONLY on the Claude path, so the buffered
+    # mode designed for these very engines never actually delivered. Prepend the
+    # note to the system prompt so THIS turn receives it.
+    if chat_key:
+        _btw_buffered = drain_btw_buffer(str(chat_key))
+        if _btw_buffered:
+            system_parts.append(_btw_buffered)
     system_prompt = "\n\n".join(system_parts) if system_parts else None
 
     _env_idle = os.environ.get("ADAPTER_STREAM_IDLE_TIMEOUT")
@@ -5726,6 +5806,16 @@ def _call_hermes_streaming_via_engine(
     if (ap := profile.get("append_system")):
         if isinstance(ap, str) and ap.strip():
             system_parts.append(ap.strip())
+    # ADR-0069 M4 — drain queued /btw notes for this engine. Engines without
+    # live mid_stream_inject (Hermes/OpenCode/Codex) buffer /btw text via
+    # inject_btw's fallback; it MUST be drained here or the note rots forever.
+    # Previously drain_btw_buffer() ran ONLY on the Claude path, so the buffered
+    # mode designed for these very engines never actually delivered. Prepend the
+    # note to the system prompt so THIS turn receives it.
+    if chat_key:
+        _btw_buffered = drain_btw_buffer(str(chat_key))
+        if _btw_buffered:
+            system_parts.append(_btw_buffered)
     system_prompt = "\n\n".join(system_parts) if system_parts else None
 
     _env_idle = os.environ.get("ADAPTER_STREAM_IDLE_TIMEOUT")
@@ -5942,6 +6032,7 @@ def call_claude_streaming(
     profile: dict | None = None,
     _retry_count: int = 0,
     msg_id: str | None = None,
+    sender: str = "",
 ) -> str:
     """Wie call_claude, aber via --output-format stream-json. Pro tool_use-
     Event wed on_status(text) called, so that der Messenger live sieht
@@ -5992,7 +6083,8 @@ def call_claude_streaming(
         return _fake_reply
 
     workdir = _session_dir(channel, chat_key)
-    env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile)
+    env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,
+                           sender=sender)
     env["VOICE_HOOK_RECURSION"] = "1"
 
     has_session = any(workdir.glob(".claude*")) or (workdir / ".session_started").exists()
@@ -6444,94 +6536,105 @@ def call_claude_streaming(
         except Exception:  # noqa: BLE001 — M7 bypass is best-effort
             pass
 
-    # Layer 22 — CodexCliEngine pre-dispatch (ADR-0123 M1). A persona that
-    # pins `default_engine: "codex_cli"` routes through a dedicated streaming
-    # function. CodexCliEngine wraps `codex exec --json` — no /btw, no hooks,
-    # no skills_tool (capability parity with OpenCodeEngine).
-    if (
-        profile
-        and profile.get("default_engine") == "codex_cli"
-        and _CodexCliEngine is not None
-    ):
-        return _call_codex_streaming_via_engine(
-            prompt, channel, chat_key, profile,
-            on_status, status_mode,
-            workdir, env,
-        )
-
-    # Layer 22 — OpenCode-Engine pre-dispatch. A persona / chat_profile
-    # that pins `default_engine: "opencode"` (currently only the bundled
-    # `local-coder` persona) routes through a dedicated streaming
-    # function that knows about OpenCode's capability gaps (no
-    # /btw / mid_stream_inject, no hooks, no skills_tool, no
-    # --append-system-prompt). Everything else stays on the
-    # Claude-Code-Engine path below.
-    if (
-        profile
-        and profile.get("default_engine") == "opencode"
-        and _OpenCodeEngine is not None
-    ):
-        return _call_opencode_streaming_via_engine(
-            prompt, channel, chat_key, profile,
-            on_status, status_mode,
-            workdir, env,
-        )
-
-    # Layer 22 — HermesEngine pre-dispatch (ADR-0066 M1). A persona /
-    # chat_profile that pins `default_engine: "hermes"` (the bundled
-    # `hermes-worker` persona) routes through a dedicated streaming
-    # function. HermesEngine drives Ollama HTTP — no subprocess, no
-    # /btw, no hooks, no path-gate, no session-pinning. Falls back
-    # gracefully if Ollama is unreachable.
-    if (
-        profile
-        and profile.get("default_engine") == "hermes"
-        and _HermesEngine is not None
-    ):
-        return _call_hermes_streaming_via_engine(
-            prompt, channel, chat_key, profile,
-            on_status, status_mode,
-            workdir, env,
-        )
-
-    # Layer 22 — worker-only engines must NEVER drive an OS turn. CopilotCliEngine
-    # (ADR-0071) lacks /btw, hooks, the Skill tool, and stream-json, so it is
-    # delegation/worker-only (CLAUDE.md L22: "use copilot as an OS engine —
-    # worker-only"). A persona/auto-route that pins one for the OS turn is a
-    # misconfiguration. Previously this fell through and SILENTLY ran ClaudeCode
-    # under the copilot label. Make it observable (audit + warn) before the
-    # fallback so the substitution is never silent.
-    if profile and profile.get("default_engine") in _WORKER_ONLY_ENGINES:
-        _wo_engine = profile.get("default_engine")
-        try:
-            _audit_event(
-                "engine.os_turn_engine_rejected",
-                chat_key=chat_key,
-                details={
-                    "engine_id": str(_wo_engine),
-                    "reason": "worker_only_engine_not_os_capable",
-                    "fallback": "claude_code",
-                },
-            )
-        except Exception:  # noqa: BLE001 — audit is best-effort, never block dispatch
-            pass
-        if _adapter_logger is not None:
-            _adapter_logger.warning(
-                "[engine] default_engine=%r is worker-only (not OS-capable); "
-                "falling back to ClaudeCode for the OS turn (ADR-0071).",
-                _wo_engine,
+    # Mark this chat as having a live OS turn for the entire dispatch, across
+    # EVERY engine branch below, so a concurrent /btw on the side-channel thread
+    # can tell a running task from an idle chat even when the chosen engine
+    # cannot accept a live mid-stream note (Hermes/OpenCode/Codex). Released in
+    # the finally so an engine exception, a gate-refusal string, or a normal
+    # return all clear the marker. `inject_btw` (live delivery) is orthogonal —
+    # this only powers the "is a task running?" question for the /btw ACK.
+    _mark_turn_active(chat_key)
+    try:
+        # Layer 22 — CodexCliEngine pre-dispatch (ADR-0123 M1). A persona that
+        # pins `default_engine: "codex_cli"` routes through a dedicated streaming
+        # function. CodexCliEngine wraps `codex exec --json` — no live /btw, no
+        # hooks, no skills_tool (capability parity with OpenCodeEngine).
+        if (
+            profile
+            and profile.get("default_engine") == "codex_cli"
+            and _CodexCliEngine is not None
+        ):
+            return _call_codex_streaming_via_engine(
+                prompt, channel, chat_key, profile,
+                on_status, status_mode,
+                workdir, env,
             )
 
-    # ADR-0002 Phase 2.5 — legacy direct-spawn path deleted (14-day soak complete).
-    # Engine layer is now the sole code path; CORVIN_USE_ENGINE_LAYER env var removed.
-    if _ClaudeCodeEngine is None:
-        return "[adapter] ClaudeCodeEngine not available — check claude CLI installation."
-    return _call_claude_streaming_via_engine(
-        prompt, channel, chat_key, mode, add_dir, profile,
-        on_status, status_mode, _retry_count,
-        workdir, env, has_session,
-        resume_session_id=_resume_id, msg_id=msg_id,
-    )
+        # Layer 22 — OpenCode-Engine pre-dispatch. A persona / chat_profile
+        # that pins `default_engine: "opencode"` (currently only the bundled
+        # `local-coder` persona) routes through a dedicated streaming
+        # function that knows about OpenCode's capability gaps (no live
+        # /btw / mid_stream_inject, no hooks, no skills_tool, no
+        # --append-system-prompt). Everything else stays on the
+        # Claude-Code-Engine path below.
+        if (
+            profile
+            and profile.get("default_engine") == "opencode"
+            and _OpenCodeEngine is not None
+        ):
+            return _call_opencode_streaming_via_engine(
+                prompt, channel, chat_key, profile,
+                on_status, status_mode,
+                workdir, env,
+            )
+
+        # Layer 22 — HermesEngine pre-dispatch (ADR-0066 M1). A persona /
+        # chat_profile that pins `default_engine: "hermes"` (the bundled
+        # `hermes-worker` persona) routes through a dedicated streaming
+        # function. HermesEngine drives Ollama HTTP — no subprocess, no live
+        # /btw, no hooks, no path-gate, no session-pinning. Falls back
+        # gracefully if Ollama is unreachable.
+        if (
+            profile
+            and profile.get("default_engine") == "hermes"
+            and _HermesEngine is not None
+        ):
+            return _call_hermes_streaming_via_engine(
+                prompt, channel, chat_key, profile,
+                on_status, status_mode,
+                workdir, env,
+            )
+
+        # Layer 22 — worker-only engines must NEVER drive an OS turn. CopilotCliEngine
+        # (ADR-0071) lacks /btw, hooks, the Skill tool, and stream-json, so it is
+        # delegation/worker-only (CLAUDE.md L22: "use copilot as an OS engine —
+        # worker-only"). A persona/auto-route that pins one for the OS turn is a
+        # misconfiguration. Previously this fell through and SILENTLY ran ClaudeCode
+        # under the copilot label. Make it observable (audit + warn) before the
+        # fallback so the substitution is never silent.
+        if profile and profile.get("default_engine") in _WORKER_ONLY_ENGINES:
+            _wo_engine = profile.get("default_engine")
+            try:
+                _audit_event(
+                    "engine.os_turn_engine_rejected",
+                    chat_key=chat_key,
+                    details={
+                        "engine_id": str(_wo_engine),
+                        "reason": "worker_only_engine_not_os_capable",
+                        "fallback": "claude_code",
+                    },
+                )
+            except Exception:  # noqa: BLE001 — audit is best-effort, never block dispatch
+                pass
+            if _adapter_logger is not None:
+                _adapter_logger.warning(
+                    "[engine] default_engine=%r is worker-only (not OS-capable); "
+                    "falling back to ClaudeCode for the OS turn (ADR-0071).",
+                    _wo_engine,
+                )
+
+        # ADR-0002 Phase 2.5 — legacy direct-spawn path deleted (14-day soak complete).
+        # Engine layer is now the sole code path; CORVIN_USE_ENGINE_LAYER env var removed.
+        if _ClaudeCodeEngine is None:
+            return "[adapter] ClaudeCodeEngine not available — check claude CLI installation."
+        return _call_claude_streaming_via_engine(
+            prompt, channel, chat_key, mode, add_dir, profile,
+            on_status, status_mode, _retry_count,
+            workdir, env, has_session,
+            resume_session_id=_resume_id, msg_id=msg_id,
+        )
+    finally:
+        _mark_turn_done(chat_key)
 
 _VOICE_TAG_RE = re.compile(r"<voice>\s*(.+?)\s*</voice>", re.DOTALL | re.IGNORECASE)
 
@@ -7713,6 +7816,14 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # outbox/. Default to 'whatsapp' for legacy items without the field.
     channel = msg.get("channel") or "whatsapp"
     chat_id = msg.get("chat_id")  # telegram/discord need this to route the reply
+    # Coerce to str at the source: Telegram's daemon writes chat_id as a JSON
+    # NUMBER, so `chat_key = chat_id or sender` became an int that then diverged
+    # from every `str(chat_key)` consumer — _btw_buffers keyed under 12345 but
+    # drained under "12345" (queued notes lost), and _safe_id()/iteration raised
+    # TypeError on an int. All daemons accept string ids; completion_notify and
+    # notification_relay already str-coerce, so normalising here is safe.
+    if chat_id is not None and not isinstance(chat_id, str):
+        chat_id = str(chat_id)
     chat_key_for_authz = str(chat_id) if chat_id is not None else sender
     # GDPR Art. 4(1): log only one-way fingerprints — never raw platform UIDs.
     # Audit events carry raw identifiers; the _audit_event wrapper fingerprints
@@ -8116,16 +8227,36 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
                 return
         delivered = inject_btw(chat_key, btw_text) if btw_text else False
+        # Robustness: /btw only injects LIVE on engines with mid_stream_inject
+        # (ClaudeCode). On Hermes/OpenCode/Codex — reached on Discord most often
+        # via the stripped-PATH → Hermes auto-downgrade (ADR-0159 M1) — inject
+        # returns False even though a task IS running, which used to surface the
+        # misleading "No task is running right now" and DROP the note. When a
+        # turn is genuinely active we instead queue the note into the /btw buffer
+        # so drain_btw_buffer() prepends it to the next spawn (ADR-0069 M4), and
+        # tell the user the truth. Only the "no live inject possible AND a turn
+        # is active" case queues — a successful live inject or a truly idle chat
+        # both skip it.
+        queued = False
+        if btw_text and not delivered and _turn_active(chat_key):
+            with _btw_buffers_guard:
+                _btw_buffers.setdefault(chat_key, []).append(btw_text)
+            queued = True
         log(f"btw channel={channel} chat={chat_key} delivered={delivered} "
-            f"len={len(btw_text)}")
+            f"queued={queued} len={len(btw_text)}")
         # GDPR Art. 5: record metadata only — text length is enough for forensics.
         _audit_event(
             "bridge.btw_inject",
             channel=channel, chat_key=str(chat_key), user=sender,
-            details={"delivered": delivered, "text_len": len(btw_text)},
+            details={"delivered": delivered, "queued": queued,
+                     "text_len": len(btw_text)},
         )
         if delivered:
             ack_text = "📝 Note delivered to the running task."
+        elif queued:
+            ack_text = ("📝 Got your note. This engine can't take live notes "
+                        "mid-run, so I've queued it — it'll be added when the "
+                        "task continues on the next turn.")
         elif not btw_text:
             ack_text = ("Empty /btw — write something like `/btw and also Y please`, "
                         "while Claude is working.")
@@ -8137,6 +8268,134 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             ack_envelope["chat_id"] = chat_id
         out_file = OUTBOX / f"{msg_id}_00.json"
         out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2))
+        PROCESSED.mkdir(exist_ok=True)
+        shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+        return
+
+    # /task <instruction> (alias /bg): run the instruction as a DETACHED, durable
+    # background job that OUTLIVES this turn's one-shot `claude -p` process, and
+    # message the user back HERE (same channel + chat_id) when it finishes. This
+    # is the messenger-origin producer for the background-completion backbone:
+    # register() captures the origin now → bg_task_worker runs it through the
+    # fully-gated engine path → mark_done → the main loop's completion_notify
+    # delivery pushes the result to the outbox → daemon → messenger.
+    _task_raw = (msg.get("text") or "").strip()
+    _task_head = _task_raw.split(None, 1)[0].lower() if _task_raw else ""
+    if _task_head in ("/task", "/bg"):
+        chat_key = chat_id or sender
+        instruction = _task_raw.split(None, 1)[1].strip() if " " in _task_raw else ""
+        ack_text: str
+        if not instruction:
+            ack_text = ("Usage: `/task <what to do>` — I'll run it in the "
+                        "background and message you here when it's done.")
+        else:
+            # L44 house-rules gate (fail-closed) — /task text is user-submitted
+            # and must pass the same acceptable-use classifier as a normal turn.
+            _task_hr = _check_house_rules_or_fail(
+                prompt=instruction, persona=None, channel=channel, chat_key=chat_key,
+            )
+            if _task_hr is not None:
+                ack_text = _task_hr
+                _audit_event(
+                    "bridge.bg_task_spawn", channel=channel, chat_key=str(chat_key),
+                    user=sender,
+                    details={"spawned": False, "blocked": "house_rules",
+                             "instruction_len": len(instruction)},
+                )
+            else:
+                try:
+                    from . import completion_notify as _cn  # type: ignore
+                except ImportError:
+                    import completion_notify as _cn  # type: ignore[no-redef]
+                # Concurrency cap: bound how many background tasks one user may
+                # have in flight so `/task` cannot fork-bomb the host. Default 3;
+                # override via CORVIN_BG_TASK_MAX.
+                try:
+                    _bg_max = int(os.environ.get("CORVIN_BG_TASK_MAX", "3"))
+                except ValueError:
+                    _bg_max = 3
+                if _cn.count_active(sender=sender) >= _bg_max:
+                    ack_text = (f"⚠ You already have {_bg_max} background task(s) "
+                                "running. Wait for one to finish before starting "
+                                "another.")
+                    _audit_event(
+                        "bridge.bg_task_spawn", channel=channel,
+                        chat_key=str(chat_key), user=sender,
+                        details={"spawned": False, "blocked": "concurrency_cap"},
+                    )
+                else:
+                    task_id = "bgt_" + secrets.token_hex(6)
+                    _spec_file = None
+                    try:
+                        # WhatsApp routes on `to` (the JID) and its inbox carries
+                        # no chat_id; without capturing `to` here the completion
+                        # record ends up chat_id=None/to=None → the envelope is
+                        # unroutable yet still marked delivered (result lost).
+                        # Stamp `to` whenever chat_id is absent so the JID-routed
+                        # channels still resolve a target.
+                        _cn.register(
+                            task_id, channel=channel, chat_id=chat_id, sender=sender,
+                            to=(sender if not chat_id else None),
+                            tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
+                            label=instruction[:60],
+                        )
+                        # Resolve the chat profile like a normal turn so the
+                        # background turn keeps the same persona/engine/model.
+                        try:
+                            _bg_profile = _resolve_chat_profile(channel, chat_key)
+                            json.dumps(_bg_profile)  # serialisability probe
+                        except Exception:  # noqa: BLE001
+                            _bg_profile = None
+                        _spec = {
+                            "task_id": task_id, "instruction": instruction,
+                            "channel": channel, "chat_key": chat_key,
+                            "sender": sender,
+                            "profile": _bg_profile, "msg_id": f"{msg_id}_bgt",
+                        }
+                        # Pass the spec via a 0600 temp FILE, not argv — argv is
+                        # world-readable in /proc/<pid>/cmdline and `ps`, which
+                        # would leak the instruction text + routing ids (PII).
+                        import tempfile as _tf
+                        _fd, _spec_file = _tf.mkstemp(prefix="bgspec_", suffix=".json")
+                        with os.fdopen(_fd, "w") as _sf:
+                            json.dump(_spec, _sf, ensure_ascii=False)
+                        try:
+                            os.chmod(_spec_file, 0o600)
+                        except OSError:
+                            pass
+                        _worker = str(ROOT / "bg_task_worker.py")
+                        subprocess.Popen(
+                            [sys.executable, _worker, _spec_file],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True,
+                        )
+                        ack_text = ("🛠️ Running in the background — I'll message "
+                                    f"you here when it's done. (task {task_id[-6:]})")
+                        _audit_event(
+                            "bridge.bg_task_spawn", channel=channel,
+                            chat_key=str(chat_key), user=sender,
+                            details={"spawned": True, "task_id": task_id[:12],
+                                     "instruction_len": len(instruction)},
+                        )
+                    except Exception as _bg_exc:  # noqa: BLE001
+                        log(f"bg_task spawn failed chat={chat_key}: {_bg_exc}")
+                        if _spec_file:
+                            try:
+                                os.unlink(_spec_file)
+                            except OSError:
+                                pass
+                        try:
+                            _cn.mark_done(task_id, text=f"failed to start: {_bg_exc}",
+                                          ok=False)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        ack_text = "⚠ Could not start the background task."
+        ack_envelope = {"channel": channel, "to": sender, "text": ack_text}
+        if chat_id is not None:
+            ack_envelope["chat_id"] = chat_id
+        (OUTBOX / f"{msg_id}_00.json").write_text(
+            json.dumps(ack_envelope, ensure_ascii=False, indent=2)
+        )
         PROCESSED.mkdir(exist_ok=True)
         shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
         return
@@ -8565,14 +8824,11 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     or profile.get("_auto_routed")
                     or ""
                 )
-            import datetime as _dt
-            e["provenance"] = {
-                "ai_generated": True,
-                "generator_id": "corvin_os",
-                "persona": persona_name,
-                "session_id": f"{channel}:{chat_key}",
-                "timestamp_utc": _dt.datetime.now(_dt.timezone.utc).isoformat(),
-            }
+            try:
+                from . import provenance as _prov  # type: ignore
+            except ImportError:
+                import provenance as _prov  # type: ignore[no-redef]
+            e["provenance"] = _prov.build_provenance(channel, chat_key, persona_name)
         e.update(extra)
         return e
 
@@ -8623,6 +8879,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 on_status=_emit_status, status_mode=status_mode,
                 profile=profile,
                 msg_id=str(msg_id),
+                sender=sender,
                 **media_kwargs,
             )
         else:
@@ -8642,6 +8899,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 on_status=None, status_mode=status_mode,
                 profile=profile,
                 msg_id=str(msg_id),
+                sender=sender,
                 **media_kwargs,
             )
     finally:
@@ -9032,7 +9290,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 from . import bg_monitor as _bgm  # type: ignore
             except ImportError:
                 import bg_monitor as _bgm  # type: ignore[no-redef]
-            _bgm.touch(channel, sender, chat_id)
+            _bgm.touch(channel, sender, chat_id,
+                       tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default")
         except Exception as _bgm_exc:  # noqa: BLE001
             log(f"bg_watch touch failed (non-fatal): {_bgm_exc}")
 
@@ -9603,6 +9862,7 @@ def main() -> int:
         except ImportError:
             _scheduler = None
     last_sched_poll = time.monotonic()
+    last_cn_poll = time.monotonic()
     SCHED_INTERVAL = 30.0  # seconds; one-minute cron resolution is fine.
 
     # ADR-0135 M2 — chain continuity anchor on clean shutdown.
@@ -9679,6 +9939,24 @@ def main() -> int:
                     except Exception as e:
                         log(f"scheduler tick failed: {e}")
                     last_sched_poll = time.monotonic()
+                # Deliver durable background-completion notifications into the
+                # shared outbox the daemons poll (exactly-once completion queue).
+                # This is what makes "I'll notify you when the background task is
+                # done" actually reach the messenger AFTER the originating turn's
+                # claude -p process has exited. Idempotent with the bg_monitor
+                # timer's own delivery (per-record O_EXCL lock).
+                if time.monotonic() - last_cn_poll > SCHED_INTERVAL:
+                    try:
+                        try:
+                            from . import completion_notify as _cn  # type: ignore
+                        except ImportError:
+                            import completion_notify as _cn  # type: ignore[no-redef]
+                        sent = _cn.deliver_ready(OUTBOX)
+                        if sent:
+                            log(f"completion_notify: delivered {sent} notification(s)")
+                    except Exception as e:
+                        log(f"completion_notify tick failed: {e}")
+                    last_cn_poll = time.monotonic()
                 if time.monotonic() - last_cleanup > CLEANUP_INTERVAL:
                     _cleanup_in_flight()
                     _cleanup_outbox_voice_files()

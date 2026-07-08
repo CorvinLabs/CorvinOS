@@ -553,13 +553,25 @@ class WorkerServer:
         chat_id = notify.get("chat_id")
         if channel not in _MESSENGER_CHANNELS or not chat_id:
             return
+        # A non-empty sender is REQUIRED. purge_user (GDPR Art. 17) matches
+        # records on sender, so an empty sender would leave an un-erasable
+        # notification record. The origin (channel/chat_id/sender) SHOULD be
+        # bound to the authenticated messenger principal by the caller — never
+        # trusted verbatim as a delivery target for another user.
+        sender = str(notify.get("sender") or "").strip()
+        if not sender:
+            log.debug(
+                "compute completion notify skipped: empty sender "
+                "(origin must be bound to an authenticated principal)"
+            )
+            return
         cn = _load_completion_notify()
         if cn is None:
             return
         try:
             cn.register(
                 run_id, channel=channel, chat_id=chat_id,
-                sender=str(notify.get("sender") or ""),
+                sender=sender,
                 tenant_id=self.tenant_id,
                 label=f"compute {tool_name}".strip(),
             )

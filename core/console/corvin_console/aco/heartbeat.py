@@ -26,6 +26,7 @@ from .htrace_uploader import (
 from .htrace_consent import (
     load_or_create_instance_id,
     ping_enabled,
+    _open_no_redirect,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,9 @@ def send_heartbeat(home: Path) -> bool:
                 "X-HTrace-Instance-Id": instance_id,
             },
         )
-        with urllib.request.urlopen(req, timeout=_HEARTBEAT_TIMEOUT_S) as resp:
+        # https-only + no-redirect opener (F8): never forward the Authorization /
+        # instance-token headers over plaintext or across a cross-host 3xx.
+        with _open_no_redirect(req, _HEARTBEAT_TIMEOUT_S) as resp:
             status = resp.getcode()
             if 200 <= status < 300:
                 return True

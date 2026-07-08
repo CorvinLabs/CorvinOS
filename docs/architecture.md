@@ -135,7 +135,10 @@ call based on `profile.default_engine`.
 receives L10 path-gate, L16 audit, and L33 artifact registration via
 the Tool Execution Broker (TEB) in the Forge MCP server. Engine Command
 Interface (ECI) adds `EngineCommandManifest` — `/btw` routes to live
-inject (CC), buffered (Hermes), or explicit error (Codex/OpenCode).
+inject (CC) or, on engines without live mid-stream inject (Hermes / Codex /
+OpenCode), queues into the `/btw` buffer and is drained into the next spawn.
+An engine-agnostic active-turn marker lets `/btw` tell a running task from a
+truly idle chat regardless of which engine serves the turn.
 MCP tool-calling reaches Hermes via the Function-Call Bridge (FCB).
 
 Crucially, this means **you can run the same chat against different

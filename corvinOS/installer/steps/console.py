@@ -130,7 +130,10 @@ def start_server(repo_root: Path) -> bool:
     proc = subprocess.Popen(
         [
             sys.executable, "-m", "uvicorn", "corvin_gateway.app:app",
-            "--host", "0.0.0.0",
+            # Loopback only — the wizard opens a local browser; every other
+            # launcher (corvin serve) binds 127.0.0.1 too. 0.0.0.0 exposed the
+            # unauthenticated setup console to the whole LAN on every install.
+            "--host", "127.0.0.1",
             "--port", str(_PORT),
             "--log-level", "warning",
         ],

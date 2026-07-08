@@ -26,7 +26,7 @@ from ..protocol import (
     SourceSchema,
     SourceSession,
 )
-from ..query import safe_to_sql
+from ..query import _validate_identifier, _validate_order_by, safe_to_sql
 
 
 class _BQSession(SourceSession):
@@ -101,11 +101,19 @@ class BigQueryAdapter(BaseDataSourceAdapter):
         config: SourceConfig,
         query: SourceQuery,
     ) -> DataCursor:
-        table_name = config.raw.get("table", "")
-        project = config.raw.get("project", "")
-        full_table = f"`{project}.{session.dataset}.{table_name}`"
+        # Identifiers are structural and cannot be parameterized — validate each
+        # component (project/dataset/table, columns, filter cols, order_by,
+        # primary_key) before it is interpolated into the SQL string.
+        table_name = _validate_identifier(config.raw.get("table", ""), kind="table")
+        project = _validate_identifier(config.raw.get("project", ""), kind="project")
+        dataset = _validate_identifier(session.dataset, kind="dataset")
+        full_table = f"`{project}.{dataset}.{table_name}`"
 
-        col_list = ", ".join(query.columns) if query.columns else "*"
+        col_list = (
+            ", ".join(_validate_identifier(c, kind="column") for c in query.columns)
+            if query.columns
+            else "*"
+        )
         parts = [f"SELECT {col_list} FROM {full_table}"]
         job_params: list[Any] = []
 
@@ -113,29 +121,32 @@ class BigQueryAdapter(BaseDataSourceAdapter):
         where_clauses: list[str] = []
         for i, fexpr in enumerate(query.filters):
             param_name = f"p{i}"
+            col = _validate_identifier(fexpr.col, kind="filter column")
             if fexpr.op == "=":
-                where_clauses.append(f"{fexpr.col} = @{param_name}")
+                where_clauses.append(f"{col} = @{param_name}")
             elif fexpr.op == "!=":
-                where_clauses.append(f"{fexpr.col} != @{param_name}")
+                where_clauses.append(f"{col} != @{param_name}")
             elif fexpr.op == ">":
-                where_clauses.append(f"{fexpr.col} > @{param_name}")
+                where_clauses.append(f"{col} > @{param_name}")
             elif fexpr.op == ">=":
-                where_clauses.append(f"{fexpr.col} >= @{param_name}")
+                where_clauses.append(f"{col} >= @{param_name}")
             elif fexpr.op == "<":
-                where_clauses.append(f"{fexpr.col} < @{param_name}")
+                where_clauses.append(f"{col} < @{param_name}")
             elif fexpr.op == "<=":
-                where_clauses.append(f"{fexpr.col} <= @{param_name}")
+                where_clauses.append(f"{col} <= @{param_name}")
             elif fexpr.op == "is_null":
-                where_clauses.append(f"{fexpr.col} IS NULL")
+                where_clauses.append(f"{col} IS NULL")
                 continue  # no parameter
             else:
-                where_clauses.append(f"{fexpr.col} = @{param_name}")
+                where_clauses.append(f"{col} = @{param_name}")
             job_params.append(
                 bigquery.ScalarQueryParameter(param_name, "STRING", str(fexpr.value))
             )
 
         # Shard pushdown — parameterized
-        primary_key = config.raw.get("primary_key", "id")
+        primary_key = _validate_identifier(
+            config.raw.get("primary_key", "id"), kind="primary_key"
+        )
         if query.n_shards > 1:
             shard_param_n = f"shard_n_{query.shard_index}"
             shard_param_s = f"shard_s_{query.shard_index}"
@@ -149,7 +160,7 @@ class BigQueryAdapter(BaseDataSourceAdapter):
             parts.append("WHERE " + " AND ".join(where_clauses))
 
         if query.order_by:
-            parts.append(f"ORDER BY {query.order_by}")
+            parts.append(f"ORDER BY {_validate_order_by(query.order_by)}")
 
         if query.limit is not None:
             parts.append(f"LIMIT {query.limit}")

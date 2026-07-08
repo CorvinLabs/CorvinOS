@@ -3,6 +3,10 @@ Description=Corvin Hermes Health Check & Repair
 Documentation=https://github.com/CorvinLabs/CorvinOS/docs/claude-ref
 PartOf=corvin-voice-bridge-adapter.service
 After=corvin-voice-bridge-adapter.service
+# StartLimit* MUST live in [Unit], not [Service] (systemd >= 229 rejects them in
+# [Service] and the rate-limit is silently ignored). Bound restart storms here.
+StartLimitInterval=300
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
@@ -32,8 +36,7 @@ WorkingDirectory=__REPO_ROOT__
 ExecStart=__PYTHON_BIN__ -c "from corvin_console.aco import repair_actions; repair_actions.run_default()"
 
 # Restart on transient failures (network hiccup, Ollama momentarily down)
-# but not on permanent issues (e.g. no ollama binary at all).
+# but not on permanent issues (e.g. no ollama binary at all). The restart
+# rate-limit (StartLimit*) is declared in [Unit] above, as systemd requires.
 Restart=on-failure
 RestartSec=10
-StartLimitInterval=300
-StartLimitBurst=3

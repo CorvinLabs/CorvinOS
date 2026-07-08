@@ -159,12 +159,27 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+# SH-9: cap the repair journal so a permanently-firing action can't grow it
+# without bound; rotate to a single ``.1`` backup when it crosses this size.
+_REPAIR_LOG_CAP_BYTES = 4 * 1024 * 1024
+
+
 def _audit(ctx: RepairContext, event: str, **fields: Any) -> None:
     rec = {"ts": _now_iso(), "event": event, **fields}
     # 1) durable, append-only repair journal under the home (always local).
     try:
         jp = _assert_within_home(ctx.corvin_home, ctx.corvin_home / "aco_repair.jsonl")
         jp.parent.mkdir(parents=True, exist_ok=True)
+        # SH-9: rotate when oversized (keep one backup) so the log stays bounded.
+        try:
+            if jp.exists() and jp.stat().st_size > _REPAIR_LOG_CAP_BYTES:
+                backup = _assert_within_home(ctx.corvin_home,
+                                             jp.with_suffix(".jsonl.1"))
+                if backup.exists():
+                    backup.unlink()
+                jp.replace(backup)
+        except OSError:
+            pass
         with jp.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:  # noqa: BLE001 — observability, never enforcement
@@ -238,6 +253,41 @@ def _emit_htrace(ctx: RepairContext, action: "RepairAction", status: str) -> Non
         pass
 
 
+# ── SH-5: per-action failure circuit-breaker (persisted under CORVIN_HOME) ─────
+# A permanently-failing action must not re-run (and, for HermesHealthRepair,
+# re-fork) every boot_healer (300 s) / systemd (5 min) cycle forever, spamming the
+# audit + htrace channels. After K consecutive failed cycles we OPEN the circuit
+# for that action: stop attempting it and emit exactly ONE escalation event. A
+# later successful cycle RESETS the counter (circuit closes).
+_ACTION_FAIL_K_MAX = 5
+
+
+def _failcount_path(home: Path) -> Path:
+    return home / "aco" / "repair_failcount.json"
+
+
+def _load_failcounts(home: Path) -> dict[str, int]:
+    try:
+        data = json.loads(_failcount_path(home).read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {str(k): int(v) for k, v in data.items()
+                    if isinstance(v, (int, float))}
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        pass
+    return {}
+
+
+def _save_failcounts(home: Path, counts: dict[str, int]) -> None:
+    try:
+        p = _assert_within_home(home, _failcount_path(home))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # prune zeros so the file doesn't accrete keys forever
+        live = {k: v for k, v in counts.items() if v}
+        p.write_text(json.dumps(live, ensure_ascii=False), encoding="utf-8")
+    except Exception:  # noqa: BLE001 — bookkeeping, never enforcement
+        pass
+
+
 # ── Executor ──────────────────────────────────────────────────────────────────
 
 def run_local_repairs(ctx: RepairContext, *, dry_run: bool = False) -> list[RepairOutcome]:
@@ -245,11 +295,17 @@ def run_local_repairs(ctx: RepairContext, *, dry_run: bool = False) -> list[Repa
 
     Returns one RepairOutcome per action that had work (or would, in dry_run).
     NEVER raises — a failing action is rolled back and recorded, the rest proceed.
+
+    SH-5: each action carries a PERSISTED consecutive-failure counter; once it hits
+    ``_ACTION_FAIL_K_MAX`` the action is skipped (circuit open) with a single
+    escalation event, instead of grinding on every cycle. Success resets it.
     """
     if _kill_switch():
         return []
     risky_ok = _risky_enabled()
     out: list[RepairOutcome] = []
+    failcounts = {} if dry_run else _load_failcounts(ctx.corvin_home)
+    dirty = False
 
     for action in _REGISTRY.values():
         if action.risk == RISK_RISKY and not risky_ok:
@@ -266,8 +322,17 @@ def run_local_repairs(ctx: RepairContext, *, dry_run: bool = False) -> list[Repa
                                      f"{len(faults)} fault(s)", fixed=0))
             continue
 
+        # SH-5: circuit-breaker — an action that has failed K_MAX cycles in a row is
+        # not retried (the escalation was already emitted when it reached K_MAX).
+        prior = int(failcounts.get(action.action_id, 0))
+        if prior >= _ACTION_FAIL_K_MAX:
+            out.append(RepairOutcome(action.action_id, "skipped",
+                                     f"circuit open after {prior} consecutive failures"))
+            continue
+
         _audit(ctx, "repair.attempt", action_id=action.action_id, risk=action.risk,
                count=len(faults))
+        attempt_failed = False
         try:
             n_before = len(faults)
             fixed = action.apply(ctx, faults)
@@ -284,6 +349,7 @@ def run_local_repairs(ctx: RepairContext, *, dry_run: bool = False) -> list[Repa
                 out.append(RepairOutcome(action.action_id, "reverted",
                                          "no progress → rolled back"))
                 _emit_htrace(ctx, action, "reverted")
+                attempt_failed = True   # no progress counts toward the circuit
             else:
                 _audit(ctx, "repair.applied", action_id=action.action_id,
                        status="applied", fixed=fixed)
@@ -296,6 +362,7 @@ def run_local_repairs(ctx: RepairContext, *, dry_run: bool = False) -> list[Repa
                    status="failed")
             out.append(RepairOutcome(action.action_id, "failed", f"scope: {exc}"))
             _emit_htrace(ctx, action, "failed")
+            attempt_failed = True
         except Exception as exc:  # noqa: BLE001
             try:
                 action.undo(ctx)
@@ -305,6 +372,23 @@ def run_local_repairs(ctx: RepairContext, *, dry_run: bool = False) -> list[Repa
                    status="failed")
             out.append(RepairOutcome(action.action_id, "failed", str(exc)[:200]))
             _emit_htrace(ctx, action, "failed")
+            attempt_failed = True
+
+        # SH-5 bookkeeping: update the persisted consecutive-failure counter.
+        if attempt_failed:
+            new = prior + 1
+            failcounts[action.action_id] = new
+            dirty = True
+            if new >= _ACTION_FAIL_K_MAX:
+                # Circuit just opened → ONE escalation event, then quiet next cycle.
+                _audit(ctx, "repair.escalated", action_id=action.action_id,
+                       reason="max_consecutive_failures", status="escalated", count=new)
+        elif failcounts.get(action.action_id):
+            failcounts[action.action_id] = 0   # success → close the circuit
+            dirty = True
+
+    if dirty and not dry_run:
+        _save_failcounts(ctx.corvin_home, failcounts)
     return out
 
 
@@ -494,37 +578,82 @@ class HermesHealthRepair(RepairAction):
     risk = RISK_RISKY
     blast_radius = "home"  # starts a process; affects the home's Ollama server
 
+    @staticmethod
+    def _shared_dirs() -> list[Path]:
+        """Candidate directories that hold ``hermes_healing.py``, resolved from the
+        installed PACKAGE location (SH-7). The previous code resolved the shared dir
+        from ``ctx.corvin_home`` — with a pinned ``CORVIN_HOME=<repo>/.corvin`` that
+        walked two levels too high, so the import always failed and this L5 repair
+        was a permanent no-op. Anchor on ``Path(__file__)`` instead, exactly like
+        ``patch_generator.default_llm``:
+          * source tree  → ``<repo>/operator/bridges/shared``   (parents[4])
+          * wheel install→ ``<corvin_console>/_vendor/operator/bridges/shared`` (parents[1])
+        """
+        here = Path(__file__).resolve()
+        return [
+            here.parents[4] / "operator" / "bridges" / "shared",
+            here.parents[1] / "_vendor" / "operator" / "bridges" / "shared",
+        ]
+
+    def _import_hermes_healing(self, ctx: RepairContext | None = None):
+        """Import and return the ``hermes_healing`` module, or None if unavailable."""
+        import sys as _sys
+        for d in self._shared_dirs():
+            try:
+                if d.is_dir() and str(d) not in _sys.path:
+                    _sys.path.insert(0, str(d))
+            except OSError:
+                continue
+        try:
+            import hermes_healing  # type: ignore  # noqa: PLC0415
+            return hermes_healing
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _hermes_available(self, ctx: RepairContext | None = None):
+        """Return ``get_health_status()`` dict, or None if the module can't load."""
+        mod = self._import_hermes_healing(ctx)
+        if mod is None:
+            return None
+        try:
+            return mod.get_health_status()
+        except Exception:  # noqa: BLE001
+            return None
+
     def precondition(self, ctx: RepairContext) -> list[Any]:
         """Return a list of missing components: [] if healthy, ['not_reachable']
         if Ollama is down, ['model_missing'] if the model is absent."""
-        try:
-            import sys
-            sys.path.insert(0, str(ctx.corvin_home.parent.parent.parent / "operator" / "bridges" / "shared"))
-            from hermes_healing import (  # type: ignore  # noqa: PLC0415
-                get_health_status,
-            )
-            status = get_health_status()
-            faults = []
-            if not status["reachable"]:
-                faults.append("not_reachable")
-            elif not status["has_model"]:
-                faults.append("model_missing")
-            return faults
-        except (ImportError, Exception):  # noqa: BLE001
-            return []  # module not available or error → nothing to repair
+        status = self._hermes_available(ctx)
+        if not isinstance(status, dict):
+            return []  # module unavailable OR already healthy → nothing to repair
+        faults: list[Any] = []
+        if not status.get("reachable"):
+            faults.append("not_reachable")
+        elif not status.get("has_model"):
+            faults.append("model_missing")
+        return faults
 
     def apply(self, ctx: RepairContext, faults: list[Any]) -> int:
-        try:
-            import sys
-            sys.path.insert(0, str(ctx.corvin_home.parent.parent.parent / "operator" / "bridges" / "shared"))
-            from hermes_healing import repair_hermes  # type: ignore  # noqa: PLC0415
-            result = repair_hermes(timeout_server=30.0, timeout_pull=600.0)
-            if result.get("reachable"):
-                count = (1 if result.get("server_started") else 0) + (1 if result.get("model_pulled") else 0)
-                return count if count > 0 else 1  # at least 1 to avoid rolling back
+        if not faults:
             return 0
+        mod = self._import_hermes_healing(ctx)
+        if mod is None:
+            return 0
+        try:
+            result = mod.repair_hermes(timeout_server=30.0, timeout_pull=600.0)
         except Exception:  # noqa: BLE001
             return 0
+        # Loss-gate: verify reachability with a FRESH health check — never trust
+        # repair_hermes's own optimistic report (SH-7 review). If it's still not
+        # reachable, no progress was made → 0 (the executor then rolls back).
+        status = self._hermes_available(ctx)
+        reachable = status.get("reachable") if isinstance(status, dict) \
+            else result.get("reachable")
+        if not reachable:
+            return 0
+        count = (1 if result.get("server_started") else 0) \
+            + (1 if result.get("model_pulled") else 0)
+        return count if count > 0 else 1  # at least 1 to avoid rolling back
 
     def undo(self, ctx: RepairContext) -> None:
         """No-op: we want Ollama to stay running once started. The system will

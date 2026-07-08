@@ -340,7 +340,20 @@ def _run_workflow_to_outbox(
     )
 
     channel = item["channel"]
-    outbox_dir = (bridges_root or _bridges_root()) / channel / "outbox"
+    # Write into the SHARED outbox the daemons actually poll, NOT a per-channel
+    # dir. Every messenger daemon polls operator/bridges/shared/outbox
+    # (SHARED=resolve(__dirname,'..','shared')); the per-channel
+    # bridges/<channel>/outbox dirs are never polled, so scheduled workflow
+    # reports written there were silently orphaned (13 unread sched_wf_*.json
+    # piled up in bridges/console/outbox). The envelope carries `channel`, which
+    # the shared poller uses to route to the right daemon.
+    _env_outbox = os.environ.get("ADAPTER_OUTBOX")
+    if _env_outbox:
+        # Channel-agnostic single outbox dir (tests / custom deploys) — the env
+        # IS the dir, matching adapter.py / notification_relay.py semantics.
+        outbox_dir = Path(os.path.expanduser(os.path.expandvars(_env_outbox)))
+    else:
+        outbox_dir = (bridges_root or _bridges_root()) / "shared" / "outbox"
     try:
         outbox_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -399,6 +412,14 @@ def _run_workflow_to_outbox(
         "ts": now,
         "exit_code": rc,
     }
+    # EU AI Act Art. 50 §4 — this report body is AI-generated content delivered
+    # out-of-band (an autonomous, system-initiated notification), so it carries
+    # the same provenance marking every normal AI reply gets (adapter._envelope /
+    # completion_notify). Without this the scheduler's autonomous push would be
+    # an unmarked AI message, inconsistent with the rest of the system.
+    from provenance import build_provenance  # type: ignore
+    payload["_final"] = True
+    payload["provenance"] = build_provenance(channel, item["chat_id"])
     out_path = outbox_dir / f"{msg_id}.json"
     tmp = out_path.with_suffix(out_path.suffix + ".tmp")
     try:

@@ -72,23 +72,47 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           PR_DIFF: ${{ '' }}         # passed via file below
           CHANGED_FILES: ${{ steps.diff.outputs.changed_files }}
+        # CI-5/M2: continue-on-error removed, but ci_review.py returns 1 on a
+        # critical finding — so this step must TOLERATE a non-zero rc (`|| rc=$?`)
+        # to keep the pipeline flowing to the parse + annotate + decision steps.
+        # Otherwise `set -eo pipefail` aborts this step on a critical finding,
+        # which (via the implicit success() guard on later steps) SKIPS the
+        # "Annotate PR with findings" step and drops the inline feedback.
+        # Fail-closed stays intact downstream: "Parse findings" fails closed on
+        # unreadable/error output, and "Fail on critical findings" fails the job
+        # on any critical — those two are the decision points, not this step.
         run: |
           export PR_DIFF="$(cat /tmp/pr.diff)"
-          python3 compliance/ci_review.py > /tmp/findings.json
-          echo "exit_code=$?" >> "$GITHUB_OUTPUT" || true
-        continue-on-error: true
+          rc=0
+          python3 compliance/ci_review.py > /tmp/findings.json || rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
 
       - name: Parse findings
         id: findings
+        # Always run so findings render even if the review step reported a
+        # non-zero code (annotation + fail-closed handling live here).
+        if: always()
         run: |
-          if [ ! -f /tmp/findings.json ]; then
-            echo '{"findings":[]}' > /tmp/findings.json
-          fi
           python3 - << 'EOF'
           import json, os, sys
 
-          with open("/tmp/findings.json") as f:
-              data = json.load(f)
+          # CI-5 fail-closed: a missing/empty/malformed report, or a report
+          # carrying an "error" key (ANTHROPIC_API_KEY unset, PR_DIFF unset,
+          # manifest missing, or the Haiku call raising), must BLOCK — never be
+          # silently treated as "no findings".
+          try:
+              with open("/tmp/findings.json") as f:
+                  raw = f.read().strip()
+              if not raw:
+                  raise ValueError("compliance review produced no output")
+              data = json.loads(raw)
+          except Exception as exc:
+              print(f"::error::Compliance review output unreadable ({exc}) — failing closed.")
+              sys.exit(1)
+
+          if data.get("error"):
+              print(f"::error::Compliance review errored: {data['error']} — failing closed.")
+              sys.exit(1)
 
           findings = data.get("findings", [])
           critical = [x for x in findings if x.get("severity") == "critical"]
@@ -162,14 +186,19 @@ jobs:
           if [ -f /tmp/findings.json ]; then
             python3 - << 'EOF'
           import json, os
-          with open("/tmp/findings.json") as f:
-              data = json.load(f)
+          try:
+              with open("/tmp/findings.json") as f:
+                  data = json.loads(f.read() or "{}")
+          except Exception as exc:
+              data = {"error": f"unreadable report ({exc})"}
+          summary_file = os.environ["GITHUB_STEP_SUMMARY"]
           findings = data.get("findings", [])
           critical = sum(1 for x in findings if x.get("severity") == "critical")
           warnings = sum(1 for x in findings if x.get("severity") == "warning")
-          summary_file = os.environ["GITHUB_STEP_SUMMARY"]
           with open(summary_file, "a") as s:
-              if not findings:
+              if data.get("error"):
+                  s.write(f"❌ Review errored: {data['error']} — failing closed.\n")
+              elif not findings:
                   s.write("✅ No compliance findings.\n")
               elif critical:
                   s.write(f"❌ {critical} critical, {warnings} warning(s) — merge blocked.\n")
