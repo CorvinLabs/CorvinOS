@@ -94,6 +94,30 @@ jobs:
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CorvinOS backend
+        run: pip install -e .
+      - name: Start isolated gateway backend
+        # The E2E global-setup logs in against http://localhost:5173/v1/console/auth/*,
+        # which vite proxies to 127.0.0.1:8765 (playwright.config.ts's default target).
+        # Nothing ever started that backend here, so every run failed at global-setup
+        # with ECONNREFUSED — the frontend-only steps below never had anything to talk
+        # to. A throwaway CORVIN_HOME is enough: local-login creates an owner session
+        # with no seed data required (verified locally).
+        run: |
+          export CORVIN_HOME="${RUNNER_TEMP}/corvin-e2e-home"
+          mkdir -p "$CORVIN_HOME"
+          nohup python -m uvicorn corvin_gateway.app:app --host 127.0.0.1 --port 8765 \
+            --log-level info > "${RUNNER_TEMP}/gateway.log" 2>&1 &
+          echo "GATEWAY_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8765/healthz > /dev/null && { echo "gateway up after ${i}s"; exit 0; }
+            sleep 1
+          done
+          echo "gateway did not become healthy in time"; cat "${RUNNER_TEMP}/gateway.log"; exit 1
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -132,6 +156,10 @@ jobs:
         timeout-minutes: 30
         env:
           CI: true
+
+      - name: Show gateway log on failure
+        if: failure()
+        run: cat "${RUNNER_TEMP}/gateway.log" || true
 
   e2e-summary:
     runs-on: ubuntu-latest
