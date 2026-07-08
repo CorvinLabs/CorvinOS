@@ -827,54 +827,33 @@ test.describe('Session Management Tests', () => {
       expect(content.length).toBeGreaterThan(100);
     });
 
-    test('local-login rate limit activates after 10 requests (429 on 11th)', async ({ browser }) => {
-      // This test exercises the real rate-limit enforcement on the
-      // GET /v1/console/auth/local-login endpoint (10 calls / 60 s per source IP).
-      //
-      // Strategy:
-      //  - Use a dedicated browser context so the rate-limit counter is fresh
-      //    and this test cannot affect or be affected by any other test.
-      //  - Issue 11 sequential requests and assert at least one is HTTP 429.
-      //  - Skip gracefully when the backend is not reachable (offline / CI with
-      //    no running server) — the rate-limit is server-side logic that cannot
-      //    be tested without a live backend.
+    test('local-login has no rate limit (removed in 0.9.6)', async ({ browser }) => {
+      // GET /v1/console/auth/local-login used to rate-limit at 10 calls/60s,
+      // but that cap was deliberately REMOVED in 0.9.6 (see auth_routes.py
+      // local_login()): local-login is localhost-only + credential-less, so
+      // every caller is already the legitimate local owner — a cap only ever
+      // locked the owner out ("too many login attempts") and drove a redirect
+      // loop (SPA's LoginPage navigates here, 429 leaves it with no session,
+      // it retries, rapidly exhausting any finite cap). This test guards
+      // against that regression reappearing: 11 sequential calls must all
+      // succeed (302), none may be 429.
 
       const LOCAL_LOGIN_URL = 'http://localhost:8765/v1/console/auth/local-login';
 
       // Fresh isolated context — own cookie jar and TCP peer identity.
       const isolatedContext = await browser.newContext();
       try {
-        // Probe: confirm the backend is up before burning 11 requests.
         const probe = await isolatedContext.request.get(LOCAL_LOGIN_URL, {
           maxRedirects: 0,
         }).catch(() => null);
 
         if (probe === null) {
           // Backend not reachable — skip silently (offline / no-server CI run).
-          test.skip(true, 'Backend not reachable — skipping rate-limit enforcement test');
+          test.skip(true, 'Backend not reachable — skipping local-login test');
           return;
         }
 
-        const probeStatus = probe.status();
-        // 302/303 = login succeeded; 429 = already rate-limited from other
-        // parallel test specs that also call local-login. In that case the
-        // bucket is already depleted — skip the first429Index assertion and
-        // only verify that 429 is correctly enforced (no crash, correct status).
-        if (![200, 302, 303, 429].includes(probeStatus)) {
-          test.skip(true, `local-login returned unexpected status ${probeStatus} — skipping`);
-          return;
-        }
-
-        if (probeStatus === 429) {
-          // Bucket already depleted by parallel specs — we can confirm 429 is
-          // returned and skip the "first 10 succeeded" assertion which requires
-          // a clean bucket.
-          test.skip(true, 'Rate-limit bucket pre-depleted by parallel test specs — 429 enforcement confirmed, first429Index assertion skipped');
-          return;
-        }
-
-        // Fire 11 sequential requests. The window allows 10; the 11th must be 429.
-        const statuses: number[] = [probeStatus]; // probe counts as call #1
+        const statuses: number[] = [probe.status()];
         for (let i = 1; i < 11; i++) {
           const resp = await isolatedContext.request.get(LOCAL_LOGIN_URL, {
             maxRedirects: 0,
@@ -882,18 +861,10 @@ test.describe('Session Management Tests', () => {
           statuses.push(resp.status());
         }
 
-        // At least one response across 11 calls must be 429.
         expect(
-          statuses.some(s => s === 429),
-          `Expected at least one HTTP 429 in ${statuses.length} calls to local-login; got: [${statuses.join(', ')}]`
+          statuses.every(s => s === 302 || s === 303),
+          `Expected all 11 calls to local-login to succeed (no rate limit); got: [${statuses.join(', ')}]`
         ).toBe(true);
-
-        // All 429 responses should come after the first 10 allowed calls.
-        const first429Index = statuses.indexOf(429);
-        expect(
-          first429Index,
-          `Rate limit triggered too early (call #${first429Index + 1}); limit should be 10`
-        ).toBeGreaterThanOrEqual(10);
       } finally {
         await isolatedContext.close();
       }
