@@ -1,0 +1,354 @@
+"""completion_notify.py — durable, acknowledged background-completion notifications.
+
+THE PROBLEM this solves
+-----------------------
+Background work that finishes AFTER the originating turn's ``claude -p``
+subprocess has already exited had no reliable way to reach the user's
+messenger:
+
+* The Claude Code SDK background-agent + ``bg_monitor`` idle-wakeup path cannot
+  carry a result across the per-turn process boundary — ``claude -p`` is a
+  one-shot subprocess that dies at turn end; a later ``--resume`` restores
+  conversation history, not a dead process's in-flight background agent.
+* The task-engine, scheduler-workflow and notification-relay paths each wrote
+  their "done" envelope into an outbox directory no messenger daemon polls.
+
+THE MECHANISM
+-------------
+A durable backbone with an acknowledgement (exactly-once) guarantee:
+
+1. A producer that starts long-running work calls :func:`register` with the
+   ORIGINATING channel + routing id + tenant, getting back a stable task id.
+2. When the work finishes (success OR failure) it calls :func:`mark_done` with
+   the result text.
+3. A poller — the adapter main loop AND the ``bg_monitor`` systemd timer, both
+   idempotent — calls :func:`deliver_ready`, which writes a correctly-routed
+   envelope into the SHARED outbox the daemons poll and then ACKNOWLEDGES the
+   record (marks it delivered) so it is sent exactly once, even with two
+   concurrent pollers (per-record ``O_EXCL`` lock).
+
+Records live in ``CORVIN_HOME/pending_notifications/<id>.json``. They carry
+routing PII (chat_id, sender uid), so :func:`purge_user` honours GDPR Art. 17,
+mirroring ``bg_monitor.purge_user``. Pure stdlib, no subprocess, no network —
+runs identically on Linux / macOS / Windows.
+"""
+from __future__ import annotations
+
+import json
+import os
+import secrets
+import sys
+import time
+from pathlib import Path
+
+# Delivered records are kept briefly for idempotency/forensics, then pruned.
+CN_DELIVERED_TTL = float(os.environ.get("CN_DELIVERED_TTL", str(24 * 3600)))
+# A pending record never marked done is pruned after this — a producer that
+# crashed without calling mark_done must not leak a record forever. Also caps
+# how long a wedged `ready` record may linger before it is force-pruned.
+CN_PENDING_MAX_AGE = float(os.environ.get("CN_PENDING_MAX_AGE", str(7 * 24 * 3600)))
+# A per-record delivery lock older than this belonged to a poller that crashed
+# mid-delivery; steal it so the record is not wedged forever.
+CN_LOCK_STALE = float(os.environ.get("CN_LOCK_STALE", "600"))
+
+_STATE_PENDING = "pending"
+_STATE_READY = "ready"
+_STATE_DELIVERED = "delivered"
+
+# Channels that route on chat_id vs. the whatsapp `to` (JID). Mirrors the
+# per-daemon routing keys documented in the delivery map.
+_CHAT_ID_CHANNELS = frozenset(
+    {"discord", "telegram", "slack", "signal", "email", "teams"}
+)
+
+
+# ─── paths ─────────────────────────────────────────────────────────────────
+
+
+def _corvin_home() -> Path:
+    v = os.environ.get("CORVIN_HOME")
+    if v:
+        return Path(os.path.expanduser(os.path.expandvars(v)))
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from paths import corvin_home as _ch  # type: ignore
+
+        return _ch()
+    except Exception:  # noqa: BLE001
+        return Path.home() / ".corvin"
+
+
+def _queue_dir() -> Path:
+    d = _corvin_home() / "pending_notifications"
+    return d
+
+
+def _record_path(task_id: str) -> Path:
+    # task_id is caller-supplied; keep the filename filesystem-safe.
+    safe = "".join(c for c in str(task_id) if c.isalnum() or c in "-_")[:80]
+    if not safe:
+        safe = secrets.token_hex(8)
+    return _queue_dir() / f"{safe}.json"
+
+
+def _atomic_write(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + f".tmp{secrets.token_hex(4)}")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    tmp.replace(path)  # atomic on POSIX + Windows
+
+
+def _read(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+# ─── producer API ──────────────────────────────────────────────────────────
+
+
+def register(
+    task_id: str | None = None,
+    *,
+    channel: str,
+    chat_id: str | int | None = None,
+    to: str | None = None,
+    sender: str = "",
+    tenant_id: str = "_default",
+    label: str = "",
+) -> str:
+    """Register a pending completion notification and return its task id.
+
+    Capture the originating routing context NOW, while it is still available in
+    the turn, so the later (out-of-band) completion can be routed. ``chat_id``
+    is required for chat_id-routed channels; ``to`` for whatsapp.
+    """
+    tid = str(task_id) if task_id else f"cn_{secrets.token_hex(8)}"
+    rec = {
+        "id": tid,
+        "channel": str(channel),
+        "chat_id": chat_id,
+        "to": to,
+        "sender": str(sender or ""),
+        "tenant_id": str(tenant_id or "_default"),
+        "label": str(label or ""),
+        "state": _STATE_PENDING,
+        "text": None,
+        "ok": None,
+        "created_at": time.time(),
+        "ready_at": None,
+        "delivered_at": None,
+    }
+    _atomic_write(_record_path(tid), rec)
+    return tid
+
+
+def count_active(sender: str | None = None) -> int:
+    """Count not-yet-delivered records (pending + ready), optionally for one
+    sender. Used to cap concurrent background tasks so `/task` can't fork-bomb.
+    """
+    qdir = _queue_dir()
+    if not qdir.exists():
+        return 0
+    n = 0
+    for path in qdir.glob("*.json"):
+        rec = _read(path)
+        if rec is None or rec.get("state") == _STATE_DELIVERED:
+            continue
+        if sender is not None and rec.get("sender") != sender:
+            continue
+        n += 1
+    return n
+
+
+def mark_done(task_id: str, *, text: str, ok: bool = True) -> bool:
+    """Mark a registered task's work as finished and ready to deliver.
+
+    Idempotent: a second call updates the text but never resurrects an
+    already-delivered record. Returns False if no such pending record exists
+    (e.g. the producer never called register).
+    """
+    path = _record_path(task_id)
+    rec = _read(path)
+    if rec is None:
+        return False
+    if rec.get("state") == _STATE_DELIVERED:
+        return False
+    rec["state"] = _STATE_READY
+    rec["text"] = str(text)
+    rec["ok"] = bool(ok)
+    rec["ready_at"] = time.time()
+    _atomic_write(path, rec)
+    return True
+
+
+# ─── delivery (poller) API ─────────────────────────────────────────────────
+
+
+def _envelope_for(rec: dict) -> dict:
+    """Build the outbox envelope with the correct per-channel routing key."""
+    channel = rec.get("channel") or "discord"
+    label = rec.get("label") or "background task"
+    ok = rec.get("ok")
+    status = "✅" if ok else "⚠️"
+    body = rec.get("text") or ""
+    text = f"{status} {label} finished.\n\n{body}".strip()
+    env: dict = {
+        "msg_id": f"cn_{rec.get('id')}",
+        "channel": channel,
+        "text": text,
+        "_completion_notify": True,
+        "ts": time.time(),
+    }
+    # Route: chat_id for most channels; `to` (JID) for whatsapp. Stamp both when
+    # available so a channel that reads either key still delivers.
+    #
+    # chat_id stays a STRING — never int-coerce. The daemons pass it straight to
+    # their client (discord.js channels.fetch, telegram sendMessage, …), all of
+    # which accept string ids. A Discord channel snowflake is 19 digits (> 2^53);
+    # emitting it as a JSON number loses precision when the daemon re-parses it
+    # with JSON.parse (float64) and the completion lands in the wrong/no channel.
+    chat_id = rec.get("chat_id")
+    if chat_id is not None and chat_id != "":
+        env["chat_id"] = str(chat_id)
+    to = rec.get("to")
+    if to:
+        env["to"] = to
+    elif channel == "whatsapp" and chat_id:
+        env["to"] = str(chat_id)
+    if rec.get("tenant_id"):
+        env["tenant_id"] = rec["tenant_id"]
+    # ADR-0057 / EU AI Act Art. 50 §4 — the body is AI-generated content (the
+    # engine's result), so it carries the same provenance marking + _final flag
+    # every normal final reply gets. Shared build_provenance keeps the marking
+    # contract identical across adapter / completion_notify / scheduler.
+    from provenance import build_provenance  # type: ignore
+    env["_final"] = True
+    env["provenance"] = build_provenance(channel, chat_id or to or "")
+    return env
+
+
+def deliver_ready(outbox_dir: str | Path, *, now: float | None = None) -> int:
+    """Deliver every ready notification to *outbox_dir* exactly once.
+
+    For each ready record: acquire a per-record ``O_EXCL`` lock (so the adapter
+    loop and the bg_monitor timer never double-send), write the outbox envelope,
+    then mark the record delivered (the acknowledgement). Also prunes delivered
+    records past ``CN_DELIVERED_TTL`` and abandoned pending records past
+    ``CN_PENDING_MAX_AGE``. Fail-safe: any per-record error is logged to stderr
+    and skipped; never raises. Returns the count delivered this call.
+    """
+    now = time.time() if now is None else now
+    qdir = _queue_dir()
+    if not qdir.exists():
+        return 0
+    outbox = Path(outbox_dir)
+    try:
+        outbox.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return 0
+
+    delivered = 0
+    for path in sorted(qdir.glob("*.json")):
+        rec = _read(path)
+        if rec is None:
+            # Malformed/partial record — prune when clearly stale so it is not
+            # re-scanned every poll forever.
+            try:
+                if now - path.stat().st_mtime > CN_PENDING_MAX_AGE:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            continue
+        state = rec.get("state")
+
+        # Prune terminal / abandoned records.
+        if state == _STATE_DELIVERED:
+            da = rec.get("delivered_at") or 0
+            if now - float(da or 0) > CN_DELIVERED_TTL:
+                path.unlink(missing_ok=True)
+            continue
+        if state == _STATE_PENDING:
+            ca = rec.get("created_at") or 0
+            if now - float(ca or 0) > CN_PENDING_MAX_AGE:
+                path.unlink(missing_ok=True)
+            continue
+        if state != _STATE_READY:
+            continue
+
+        lock = path.with_suffix(".json.lock")
+
+        # Force-prune a ready record stuck undelivered far too long (e.g. wedged
+        # by a crash between outbox-write and mark-delivered) so it neither leaks
+        # PII nor lingers forever.
+        ra = rec.get("ready_at") or rec.get("created_at") or 0
+        if now - float(ra or 0) > CN_PENDING_MAX_AGE:
+            path.unlink(missing_ok=True)
+            lock.unlink(missing_ok=True)
+            continue
+
+        # Recover an orphaned lock: if it is older than CN_LOCK_STALE the poller
+        # that held it died mid-delivery — steal it (at-least-once: a record that
+        # crashed AFTER its outbox write may be re-sent once, never lost).
+        try:
+            if now - lock.stat().st_mtime > CN_LOCK_STALE:
+                lock.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+        # Claim: O_EXCL create wins the race; the loser skips this record.
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            continue  # another poller is delivering it
+        except OSError as e:
+            print(f"completion_notify: lock failed {path.name}: {e}", file=sys.stderr)
+            continue
+        try:
+            os.close(fd)
+            # Re-read under lock in case it was delivered between list and claim.
+            rec = _read(path)
+            if rec is None or rec.get("state") != _STATE_READY:
+                continue
+            env = _envelope_for(rec)
+            out_file = outbox / f"cn_{rec.get('id')}_{secrets.token_hex(4)}.json"
+            tmp = out_file.with_suffix(out_file.suffix + ".tmp")
+            tmp.write_text(json.dumps(env, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(out_file)
+            rec["state"] = _STATE_DELIVERED
+            rec["delivered_at"] = now
+            _atomic_write(path, rec)
+            delivered += 1
+        except OSError as e:
+            print(
+                f"completion_notify: deliver failed {path.name}: {e}",
+                file=sys.stderr,
+            )
+        finally:
+            try:
+                os.unlink(str(lock))
+            except OSError:
+                pass
+    return delivered
+
+
+# ─── GDPR Art. 17 ──────────────────────────────────────────────────────────
+
+
+def purge_user(uid: str) -> int:
+    """Remove all pending-notification records whose sender matches *uid*.
+
+    Mirrors bg_monitor.purge_user for the Right-to-Erasure path — these records
+    hold routing PII (sender uid + chat_id). Returns the number removed.
+    """
+    qdir = _queue_dir()
+    if not qdir.exists():
+        return 0
+    removed = 0
+    for path in qdir.glob("*.json"):
+        rec = _read(path)
+        if rec is not None and rec.get("sender") == uid:
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
