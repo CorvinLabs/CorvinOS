@@ -6,8 +6,8 @@ Runs at every Boot-Healer cycle BEFORE the session scan.  Checks:
      not running, we start it (if the binary is present) without pulling models.
   2. TTS — is edge-tts importable?  If not, install it silently.  edge-tts
      requires no API key and no local model — it is the universal TTS fallback.
-  3. STT — is faster-whisper or the openai package available?  Log warning if
-     neither is present; no auto-install (faster-whisper has large binary deps).
+  3. STT — is pywhispercpp or the openai package available?  Log warning if
+     neither is present (pywhispercpp is a base dep on every platform, ADR-0185).
 
 Contract:
   * NEVER blocks for more than ~45 s (Ollama start timeout).
@@ -37,7 +37,7 @@ class EngineHealResult:
     tts_provider: str = ""          # "openai" | "edge" | "piper" | "none"
     tts_action: str = ""            # "none" | "installed_edge_tts"
     stt_ok: bool = False
-    stt_provider: str = ""          # "faster_whisper" | "openai_whisper" | "none"
+    stt_provider: str = ""          # "pywhispercpp" | "openai_whisper" | "none"
     warnings: list[str] = field(default_factory=list)
 
     def to_audit_details(self) -> dict:
@@ -264,10 +264,10 @@ def check_tts_readiness() -> tuple[bool, str, str]:
 
 # ── STT checks ────────────────────────────────────────────────────────────────
 
-def _faster_whisper_importable() -> bool:
+def _pywhispercpp_importable() -> bool:
     try:
         import importlib
-        return importlib.util.find_spec("faster_whisper") is not None
+        return importlib.util.find_spec("pywhispercpp") is not None
     except Exception:
         return False
 
@@ -275,11 +275,13 @@ def _faster_whisper_importable() -> bool:
 def check_stt_readiness() -> tuple[bool, str, str]:
     """Check STT availability. Returns (ok, provider, action).
 
-    We do NOT auto-install faster-whisper — it has large binary deps (~300MB)
-    and fails on Windows without pre-built wheels matching the exact Python version.
+    ADR-0185: pywhispercpp replaced faster-whisper as the local STT engine —
+    it is a base dependency on every platform (no `av`/torch/ctranslate2, no
+    Windows wheel gap), so we do NOT need faster-whisper's old "don't
+    auto-install, it's huge and Windows-hostile" carve-out here anymore.
     """
-    if _faster_whisper_importable():
-        return True, "faster_whisper", "none"
+    if _pywhispercpp_importable():
+        return True, "pywhispercpp", "none"
     if _openai_importable():
         return True, "openai_whisper", "none"
     return False, "none", "no_stt_available"
@@ -324,7 +326,7 @@ def run_readiness_check(tenant_id: str = "_default") -> EngineHealResult:
         if not result.stt_ok:
             result.warnings.append(
                 "No STT provider available — voice input disabled "
-                "(install faster-whisper or set OPENAI_API_KEY)"
+                "(install pywhispercpp or set OPENAI_API_KEY)"
             )
     except Exception as exc:
         result.warnings.append(f"STT check failed: {exc}")

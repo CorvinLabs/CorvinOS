@@ -6,6 +6,27 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Console Settings toggle for ADR-0184 Stufe 2 (always-on system service).**
+  Previously only reachable via the `corvin-service install`/`uninstall` CLI;
+  the Settings page now has an "Autostart" switch that calls the same
+  opt-in path (`GET`/`PUT /settings/service-tier`). Stufe 1 (login autostart)
+  remains the default for every install; the console never self-elevates and
+  never silently registers Stufe 2 — without admin/root it reports back the
+  exact manual command instead of failing.
+- **Zero-config voice on every platform (ADR-0185).** `pywhispercpp` replaces
+  `faster-whisper` as the base-dependency local STT engine — no more Windows
+  exclusion, no `av`/`torch`/`ctranslate2` dependency. `piper-tts` is now a
+  base dependency too, giving `edge-tts` a genuine offline fallback tier
+  instead of a permanently-skipped opt-in extra. `corvin-install` downloads
+  both models automatically with visible progress and degrades gracefully
+  with no network. New `corvin-voice doctor` command round-trips real
+  STT+TTS and reports pass/fail loudly; a new Voice settings panel in the
+  Console shows live per-provider status instead of a raw error dump in
+  chat. The `voice` extra is now opt-in-only `faster-whisper` (for operators
+  who want its accelerated inference and already have a working `av`
+  install) — never required.
+
 ## [0.10.20] — 2026-07-07
 
 ### Fixed

@@ -503,6 +503,25 @@ export async function testVoice(
   });
 }
 
+// ── Voice provider status (ADR-0185 M4) ──────────────────────────────
+
+export interface VoiceProviderStatus {
+  ready: boolean;
+  package_installed: boolean;
+  model_present: boolean | null;
+  key_configured: boolean | null;
+  detail: string;
+}
+
+export interface VoiceStatusResponse {
+  stt: Record<string, VoiceProviderStatus>;
+  tts: Record<string, VoiceProviderStatus>;
+}
+
+export async function getVoiceStatus(signal?: AbortSignal): Promise<VoiceStatusResponse> {
+  return api<VoiceStatusResponse>("/voice/status", { signal });
+}
+
 // ── Forge tools + SkillForge skills ────────────────────────────────
 
 export type PromoteTarget = "session" | "project" | "user";
@@ -2440,6 +2459,32 @@ export function getAutoUpdate(signal?: AbortSignal): Promise<AutoUpdateStatus> {
 
 export function setAutoUpdate(enabled: boolean, csrf: string): Promise<{ enabled: boolean; ok: boolean }> {
   return api("/settings/auto-update", {
+    method: "PUT",
+    csrf,
+    body: { enabled },
+  });
+}
+
+// ── Always-on service tier (ADR-0184 Stufe 2) ────────────────────────
+
+export interface ServiceTierStatus {
+  available: boolean;
+  always_on: boolean;
+  raw_status: string | null;
+}
+
+export interface ServiceTierChangeResult extends ServiceTierStatus {
+  applied: boolean;
+  manual_command: string | null;
+  detail: string | null;
+}
+
+export function getServiceTier(signal?: AbortSignal): Promise<ServiceTierStatus> {
+  return api("/settings/service-tier", { signal });
+}
+
+export function setServiceTier(enabled: boolean, csrf: string): Promise<ServiceTierChangeResult> {
+  return api("/settings/service-tier", {
     method: "PUT",
     csrf,
     body: { enabled },

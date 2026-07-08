@@ -263,10 +263,10 @@ class CorvinInstaller:
             print(f"  ⚠ Hermes bootstrap skipped: {exc}")
             print(f"  Manual: ollama pull <model>   (see https://ollama.ai)")
 
-    # ── Step 7: Speech-to-Text (faster-whisper) ───────────────────────────
+    # ── Step 7: Speech-to-Text (pywhispercpp) ─────────────────────────────
 
     def step_7_setup_stt(self) -> None:
-        print("\n[Step 7] Speech-to-Text (faster-whisper)...")
+        print("\n[Step 7] Speech-to-Text (pywhispercpp)...")
         _stt.ensure_stt(self.voice_config, interactive=self.interactive)
 
     # ── Step 8: Text-to-Speech (Piper) ────────────────────────────────────

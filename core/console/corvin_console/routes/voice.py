@@ -71,6 +71,16 @@ except Exception:  # pragma: no cover
     _STT_OK = False
 
 try:
+    # say.py's ``provider_status()`` (ADR-0185 M4) — imported as a module
+    # (not shelled out to, unlike the TTS synth path below) purely for the
+    # cheap, non-mocked status probe the Console status panel needs.
+    import say as _say_module  # noqa: E402 — voice/scripts/say.py
+    _SAY_STATUS_OK = True
+except Exception:  # pragma: no cover
+    _say_module = None  # type: ignore[assignment]
+    _SAY_STATUS_OK = False
+
+try:
     import profile as _profile_module  # noqa: E402 — bridges/shared/profile.py
     _PROFILE_OK = True
 except Exception:  # pragma: no cover
@@ -125,6 +135,134 @@ def _strip_mime_params(ct: str | None) -> str:
     if not ct:
         return ""
     return ct.split(";", 1)[0].strip().lower()
+
+
+def _stt_unavailable_message() -> str:
+    """Translate an STT-unavailable failure into a safe, actionable message.
+
+    ADR-0185 Decision 4 / Must-NOT: a resolver failure must never surface
+    as the raw ``{"detail": "no STT provider available; chain=...; "
+    "failures=..."}`` JSON it used to (that string embeds internal
+    provider names and failure reasons and is not something an end user
+    can act on). This calls the same ``provider_status()`` introspection
+    the Console's voice-status panel uses, so the reason shown here is
+    never out of sync with what that panel shows — and it never echoes
+    the resolver's own exception text.
+    """
+    local_ready = openai_ready = False
+    model_missing = package_missing = False
+    if _STT_OK:
+        try:
+            from stt import provider_status as _stt_provider_status  # noqa: PLC0415
+            status = _stt_provider_status()
+            local = status.get("local", {})
+            openai = status.get("openai", {})
+            local_ready = bool(local.get("ready"))
+            openai_ready = bool(openai.get("ready"))
+            package_missing = local.get("package_installed") is False
+            model_missing = (
+                local.get("package_installed") is True
+                and local.get("model_present") is False
+            )
+        except Exception:  # noqa: BLE001 — message must never raise
+            pass
+
+    if local_ready or openai_ready:
+        # Transient failure (provider was ready a moment ago, e.g. a
+        # revoked key or a mid-call crash) — don't claim total absence.
+        return (
+            "Speech-to-text failed unexpectedly. Please try again, or open "
+            "Settings → Voice to check provider status."
+        )
+    if model_missing:
+        return (
+            "Speech-to-text isn't ready yet — the local speech model hasn't "
+            "finished downloading, and no OpenAI API key is configured. "
+            "Open Settings → Voice to check status or retry the download."
+        )
+    if package_missing and not openai_ready:
+        return (
+            "Speech-to-text isn't set up yet — no local speech engine and no "
+            "API key configured. Open Settings → Voice to finish setup."
+        )
+    return (
+        "Speech-to-text isn't available right now. Open Settings → Voice to "
+        "check provider status and finish setup."
+    )
+
+
+# ── Status (ADR-0185 M4) ────────────────────────────────────────────────
+
+
+class ProviderStatus(BaseModel):
+    """Per-provider status row for the Console voice-status panel."""
+    ready: bool = Field(description="Usable right now")
+    package_installed: bool = Field(description="Underlying package/binary importable")
+    model_present: bool | None = Field(
+        None, description="Local model file present on disk; null if not applicable",
+    )
+    key_configured: bool | None = Field(
+        None, description="API key resolvable; null if not applicable",
+    )
+    detail: str = Field(description="Short, human-readable, non-leaky status line")
+
+
+class VoiceStatusResponse(BaseModel):
+    stt: dict[str, ProviderStatus] = Field(default_factory=dict)
+    tts: dict[str, ProviderStatus] = Field(default_factory=dict)
+
+
+def _safe_provider_status(name: str, info: dict) -> ProviderStatus:
+    """Build a ``ProviderStatus`` from a provider's raw status dict without
+    ever letting a schema mismatch (missing/extra/wrong-typed key) turn into
+    an uncaught ``ValidationError`` — and therefore a real 500 — for the
+    whole ``/voice/status`` response. A single malformed entry degrades to a
+    safe, honest "status unavailable" row instead of taking every other
+    provider's status down with it (ADR-0185 review finding: the same class
+    of two-call-sites-silently-disagree drift this repo has hit before).
+    """
+    try:
+        return ProviderStatus(**info)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("malformed status for provider %r", name, exc_info=True)
+        return ProviderStatus(
+            ready=False,
+            package_installed=False,
+            model_present=None,
+            key_configured=None,
+            detail=f"status unavailable ({exc.__class__.__name__})",
+        )
+
+
+@router.get("/voice/status", response_model=VoiceStatusResponse)
+def voice_status(
+    _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> VoiceStatusResponse:
+    """Per-provider STT/TTS readiness for the Voice settings page.
+
+    Cheap introspection only (package-import checks, model-file
+    existence, API-key presence) — never triggers a transcription or a
+    speech synthesis call.
+    """
+    stt_raw: dict[str, dict] = {}
+    if _STT_OK:
+        try:
+            from stt import provider_status as _stt_provider_status  # noqa: PLC0415
+            stt_raw = _stt_provider_status()
+        except Exception:  # noqa: BLE001
+            _log.warning("STT status probe failed", exc_info=True)
+
+    tts_raw: dict[str, dict] = {}
+    if _SAY_STATUS_OK and _say_module is not None:
+        try:
+            tts_raw = _say_module.provider_status()
+        except Exception:  # noqa: BLE001
+            _log.warning("TTS status probe failed", exc_info=True)
+
+    return VoiceStatusResponse(
+        stt={name: _safe_provider_status(name, info) for name, info in stt_raw.items()},
+        tts={name: _safe_provider_status(name, info) for name, info in tts_raw.items()},
+    )
 
 
 # ── STT ───────────────────────────────────────────────────────────────
@@ -196,7 +334,14 @@ async def voice_transcribe(
                 reason="provider-error",
             )
             _log.warning("STT error", exc_info=True)
-            raise HTTPException(http_status.HTTP_502_BAD_GATEWAY, f"upstream error: {e}")
+            # ADR-0185 Decision 4 / Must-NOT: never surface the resolver's raw
+            # "no STT provider available; chain=...; failures=..." exception
+            # text to the chat transcript — translate it to an actionable,
+            # non-leaky message instead. The full exception is already
+            # logged above (exc_info=True) for operators.
+            raise HTTPException(
+                http_status.HTTP_502_BAD_GATEWAY, _stt_unavailable_message(),
+            ) from e
     finally:
         try:
             path.unlink()

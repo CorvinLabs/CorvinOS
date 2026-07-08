@@ -88,6 +88,12 @@ run "Python: tts hard cap"       python3 shared/test_adapter_tts_cap.py >/dev/nu
 run "Python: voice audience"     python3 shared/test_adapter_voice_audience.py >/dev/null || fails=$((fails+1))
 run "Python: voice override"     python3 shared/test_adapter_voice_override.py >/dev/null || fails=$((fails+1))
 run "Python: progress dedup"     python3 shared/test_adapter_progress.py >/dev/null   || fails=$((fails+1))
+run "Python: completion notify (bg done→messenger)" python3 shared/test_completion_notify.py >/dev/null || fails=$((fails+1))
+run "Python: completion E2E (done→outbox→daemon send)" python3 shared/test_completion_e2e.py >/dev/null || fails=$((fails+1))
+run "Python: /task producer (detached bg worker)"   python3 shared/test_bg_task.py >/dev/null || fails=$((fails+1))
+run "Python: provenance marking (Art.50 §4 SSOT)"   python3 shared/test_provenance.py >/dev/null || fails=$((fails+1))
+run "Python: scheduler (cron/workflow outbox)"      python3 shared/test_scheduler.py >/dev/null 2>&1 || fails=$((fails+1))
+run "Python: bg_monitor (idle wakeup + delivery)"   bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_bg_monitor.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: security hardening" python3 shared/test_adapter_security_hardening.py >/dev/null || fails=$((fails+1))
 run "Python: HTTP-error reset (transient)"  python3 shared/test_adapter_http_reset.py >/dev/null || fails=$((fails+1))
 run "Python: boot self-test"     python3 shared/test_self_test.py >/dev/null || fails=$((fails+1))
@@ -125,6 +131,7 @@ run "Python: engine path (Phase 2.2)" python3 shared/test_adapter_engine_path.py
 run "Python: engine-binary stripped-PATH guard" python3 shared/test_engine_binary_resolution_guard.py >/dev/null || fails=$((fails+1))
 run "Python: voice_summary judge" python3 shared/test_dialectic_voice_summary.py >/dev/null || fails=$((fails+1))
 run "Python: STT provider chain (engine-agnostic)" python3 ../voice/scripts/test_stt.py >/dev/null || fails=$((fails+1))
+run "Python: corvin-voice doctor (ADR-0185 M5)" python3 ../voice/scripts/test_voice_doctor.py >/dev/null || fails=$((fails+1))
 run "Python: auth elevation"     python3 shared/test_auth_elevation.py >/dev/null         || fails=$((fails+1))
 run "Python: bridge audit API"   python3 shared/test_audit.py >/dev/null              || fails=$((fails+1))
 run "Python: adapter audit"      python3 shared/test_adapter_audit.py >/dev/null      || fails=$((fails+1))
@@ -411,6 +418,14 @@ run "Python: corvin-compute worker (ADR-0013 Phase 13.4)" bash -c '
     else
       python3 ../../core/compute/tests/test_worker.py >/dev/null
     fi
+  else
+    echo "(skip: corvin-compute plugin not present)"
+  fi
+' || fails=$((fails+1))
+run "Python: corvin-compute completion notify (L25→messenger)" bash -c '
+  if [ -d ../../core/compute ]; then
+    PY=python3; [ -x ../../core/compute/.venv/bin/python ] && PY=../../core/compute/.venv/bin/python
+    "$PY" ../../core/compute/tests/test_compute_notify.py >/dev/null
   else
     echo "(skip: corvin-compute plugin not present)"
   fi

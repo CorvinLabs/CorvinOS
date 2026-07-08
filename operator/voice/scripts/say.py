@@ -28,6 +28,7 @@ Exit codes:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -255,14 +256,50 @@ _PIPER_MODEL_DIR = Path(
 )
 
 
+def _piper_model_from_config(lang: str) -> Path | None:
+    """Read piper_model_<lang> from config.json — the SSOT `corvin-install`
+    (installer/steps/piper.py) actually writes to (ADR-0185 fix).
+
+    Without this, say.py fell back to its own hardcoded ``_PIPER_MODELS``
+    stem table below, which used DIFFERENT model names than the installer
+    downloads for 8 of 12 languages (including de/en) — corvin-install would
+    report a successful download that say.py could then never find at
+    runtime. Mirrors the already-correct lookup in
+    ``adapter.py::_try_piper_tts``.
+    """
+    try:
+        cfg = json.loads((VOICE_CONFIG_DIR / "config.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    lc = lang.lower()
+    path_str = (
+        cfg.get(f"piper_model_{lc}")
+        or cfg.get(f"piper_model_{cfg.get('lang_default', 'de')}")
+        or next((v for k, v in cfg.items() if k.startswith("piper_model_") and v), None)
+    )
+    if not path_str:
+        return None
+    p = Path(path_str)
+    return p if p.exists() else None
+
+
 def _piper_model_for(lang: str) -> Path | None:
-    """Return the .onnx model path for a BCP-47 code, or None if not found."""
+    """Return the .onnx model path for a BCP-47 code, or None if not found.
+
+    Resolution order: explicit env override, then config.json (what
+    corvin-install actually wrote), then the legacy hardcoded stem table
+    below (manual/pre-ADR-0185 setups that placed a model file by hand).
+    """
     lc = lang.lower()
     env_key = f"CORVIN_PIPER_MODEL_{lc.upper().replace('-', '_')}"
     env_path = os.environ.get(env_key)
     if env_path:
         p = Path(env_path)
         return p if p.exists() else None
+
+    from_config = _piper_model_from_config(lc)
+    if from_config is not None:
+        return from_config
 
     stem = (
         _PIPER_MODELS.get(lc)
@@ -336,6 +373,118 @@ def _try_piper(out_path: Path, text: str, lang: str) -> bool:
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"say.py: piper binary error: {e}\n")
         return False
+
+
+# ── Status introspection (ADR-0185 M4) ─────────────────────────────────
+
+
+def provider_status() -> dict[str, dict]:
+    """Structured per-engine status for the Console voice-status panel.
+
+    Cheap introspection only — NEVER synthesizes audio, NEVER raises.
+    Mirrors ``stt/resolver.py::provider_status()``'s shape so the Console
+    can render STT and TTS rows the same way:
+
+      ready:              bool       — usable right now
+      package_installed:  bool       — underlying package/binary present
+      model_present:      bool|None  — local voice model on disk (None: n/a)
+      key_configured:     bool|None  — API key resolvable (None: n/a)
+      detail:             str        — short, human-readable, non-leaky status
+    """
+    status: dict[str, dict] = {}
+
+    # -- openai -- (own try/except: a probe failure here must never wipe out
+    # the edge/piper rows below — each provider is isolated, matching
+    # stt/resolver.py::provider_status()'s pattern, ADR-0185 review finding)
+    try:
+        key = _resolve_key()
+        try:
+            import openai  # type: ignore[import-not-found]  # noqa: F401
+            package_installed = True
+        except ImportError:
+            package_installed = False
+        ready = bool(key) and package_installed
+        if ready:
+            detail = "ready"
+        elif not key:
+            detail = "no API key configured"
+        else:
+            detail = "openai package not installed"
+        status["openai"] = {
+            "ready": ready,
+            "package_installed": package_installed,
+            "model_present": None,
+            "key_configured": bool(key),
+            "detail": detail,
+        }
+    except Exception as exc:  # noqa: BLE001 — status probe must never crash
+        status["openai"] = {
+            "ready": False,
+            "package_installed": False,
+            "model_present": None,
+            "key_configured": None,
+            "detail": f"status probe failed ({exc.__class__.__name__})",
+        }
+
+    # -- edge-tts --
+    try:
+        try:
+            import edge_tts  # type: ignore[import-not-found]  # noqa: F401
+            edge_installed = True
+        except ImportError:
+            edge_installed = False
+        status["edge"] = {
+            "ready": edge_installed,
+            "package_installed": edge_installed,
+            "model_present": None,
+            "key_configured": None,
+            "detail": "ready (needs internet at synth time)" if edge_installed
+                      else "edge-tts not installed",
+        }
+    except Exception as exc:  # noqa: BLE001 — status probe must never crash
+        status["edge"] = {
+            "ready": False,
+            "package_installed": False,
+            "model_present": None,
+            "key_configured": None,
+            "detail": f"status probe failed ({exc.__class__.__name__})",
+        }
+
+    # -- piper --
+    try:
+        try:
+            import piper  # type: ignore[import-not-found]  # noqa: F401
+            piper_installed = True
+        except ImportError:
+            import shutil as _shutil
+            piper_installed = bool(_shutil.which("piper") or _shutil.which("piper-tts"))
+        model_present = any(
+            _piper_model_for(lang) is not None for lang in _PIPER_MODELS
+        )
+        ready = piper_installed and model_present
+        if ready:
+            detail = "ready"
+        elif not piper_installed:
+            detail = "piper not installed"
+        else:
+            detail = "no Piper voice model downloaded yet"
+        status["piper"] = {
+            "ready": ready,
+            "package_installed": piper_installed,
+            "model_present": model_present,
+            "key_configured": None,
+            "detail": detail,
+        }
+    except Exception as exc:  # noqa: BLE001 — status probe must never crash
+        status["piper"] = {
+            "ready": False,
+            "package_installed": False,
+            "model_present": None,
+            "key_configured": None,
+            "detail": f"status probe failed ({exc.__class__.__name__})",
+        }
+
+    return status
 
 
 # ── Entry point ───────────────────────────────────────────────────────

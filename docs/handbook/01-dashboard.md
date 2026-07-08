@@ -70,7 +70,7 @@ Shows which service credentials are stored in the encrypted vault:
 | **Anthropic (Claude)** | `ANTHROPIC_API_KEY` — required for Claude Code and Claude API engines |
 | **OpenAI** | `OPENAI_API_KEY` — required for OpenAI engines, DALL-E image generation |
 | **stt_openai_api_key** | OpenAI Whisper for speech-to-text transcription |
-| **stt_local_whisper_api_key** | Local Whisper fallback (faster-whisper) |
+| **stt_local_whisper_api_key** | Local Whisper fallback (pywhispercpp) |
 
 A **missing** badge means the key is not in the vault. The engine will fail when it tries to call that provider.
 

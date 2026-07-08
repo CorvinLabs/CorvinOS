@@ -1,13 +1,18 @@
 import * as React from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   Check,
+  CheckCircle2,
   Eraser,
   FileText,
+  KeyRound,
   Loader2,
   Sparkles,
   User,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -18,12 +23,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { ReauthDialog } from "@/components/reauth-dialog";
 import {
   getProfile,
+  getVoiceStatus,
   previewProfile,
   putProfile,
   resetProfile,
   testVoice,
   type AudienceFields,
   type IdentityFields,
+  type VoiceProviderStatus,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
@@ -290,6 +297,9 @@ export function VoicePage() {
           </Button>
         </div>
       </div>
+
+      {/* Provider status (ADR-0185 M4) */}
+      <VoiceStatusPanel />
 
       {/* Identity */}
       <Card>
@@ -752,6 +762,147 @@ export function VoicePage() {
           await resetMutation.mutateAsync();
         }}
       />
+    </div>
+  );
+}
+
+// ── Provider status panel (ADR-0185 M4) ─────────────────────────────────
+//
+// Shows REAL per-provider readiness (package importable, model file on
+// disk, API key configured) — not just "package installed" — so a fresh
+// install's "no STT provider available" failure is visible and actionable
+// here instead of only surfacing as a raw error in the chat transcript.
+
+const STT_LABELS: Record<string, string> = {
+  local: "Local STT (pywhispercpp)",
+  openai: "OpenAI Whisper",
+};
+const TTS_LABELS: Record<string, string> = {
+  openai: "OpenAI TTS",
+  edge: "edge-tts",
+  piper: "Piper (offline)",
+};
+
+export function VoiceStatusPanel() {
+  const statusQ = useQuery({
+    queryKey: ["voice-status"],
+    queryFn: ({ signal }) => getVoiceStatus(signal),
+    refetchInterval: 30_000,
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <CheckCircle2 className="h-4 w-4 text-accent" />
+          <CardTitle className="text-base">Voice provider status</CardTitle>
+          <HelpTooltip title="Voice provider status" side="right" width="md">
+            Real-time readiness for speech-to-text and text-to-speech engines —
+            whether the package is installed, the local model is downloaded, and
+            (for cloud providers) an API key is configured.
+          </HelpTooltip>
+        </div>
+        <CardDescription>
+          What Corvin will actually use for voice input/output on this install.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {statusQ.isLoading && (
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+          </div>
+        )}
+        {statusQ.isError && (
+          <p className="text-sm text-destructive">
+            Could not load provider status: {(statusQ.error as Error | undefined)?.message ?? "unknown"}
+          </p>
+        )}
+        {statusQ.data && (
+          <>
+            <ProviderStatusGroup title="Speech-to-text" labels={STT_LABELS} rows={statusQ.data.stt} />
+            <ProviderStatusGroup title="Text-to-speech" labels={TTS_LABELS} rows={statusQ.data.tts} />
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ProviderStatusGroup({
+  title,
+  labels,
+  rows,
+}: {
+  title: string;
+  labels: Record<string, string>;
+  rows: Record<string, VoiceProviderStatus>;
+}) {
+  const names = Object.keys(rows);
+  if (names.length === 0) {
+    return (
+      <div>
+        <h3 className="text-xs font-semibold text-muted-foreground mb-1.5">{title}</h3>
+        <p className="text-xs text-muted-foreground">Status unavailable.</p>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <h3 className="text-xs font-semibold text-muted-foreground mb-1.5">{title}</h3>
+      <div className="space-y-1.5">
+        {names.map((name) => (
+          <ProviderStatusRow key={name} label={labels[name] ?? name} status={rows[name]} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProviderStatusRow({
+  label,
+  status,
+}: {
+  label: string;
+  status: VoiceProviderStatus;
+}) {
+  // The one obvious next action per ADR-0185 M4: "Add key" when a key is
+  // missing, a concrete CLI hint when a model file hasn't been downloaded
+  // yet (model downloads are handled by `corvin-install`, not a live
+  // console action — no backend endpoint exists to trigger one on demand).
+  const needsKey = status.key_configured === false;
+  const needsModel = !status.ready && status.package_installed && status.model_present === false;
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2">
+      <div className="flex items-center gap-2 min-w-0">
+        {status.ready ? (
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+        ) : (
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+        )}
+        <span className="text-sm font-medium truncate">{label}</span>
+        <Badge variant={status.ready ? "ok" : "warn"} className="text-[10px] shrink-0">
+          {status.ready ? "ready" : "not configured"}
+        </Badge>
+      </div>
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-xs text-muted-foreground truncate" title={status.detail}>
+          {status.detail}
+        </span>
+        {needsKey && (
+          <Button asChild variant="outline" size="sm" className="h-7 shrink-0 gap-1 text-xs">
+            <Link to="/app/api-keys">
+              <KeyRound className="h-3 w-3" /> Add key
+            </Link>
+          </Button>
+        )}
+        {needsModel && (
+          <span className="text-[10px] text-muted-foreground font-mono shrink-0">
+            run corvin-install
+          </span>
+        )}
+      </div>
     </div>
   );
 }

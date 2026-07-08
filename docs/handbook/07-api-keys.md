@@ -29,7 +29,7 @@ These are pre-defined keys that CorvinOS knows about and uses automatically when
 | **Anthropic API Key** | `ANTHROPIC_API_KEY` | Claude Code engine, all Claude models |
 | **OpenAI API Key** | `OPENAI_API_KEY` | OpenAI GPT engines, DALL-E image generation |
 | **OpenAI STT Key** | `STT_OPENAI_API_KEY` | OpenAI Whisper for speech-to-text |
-| **Local Whisper Key** | `STT_LOCAL_WHISPER_API_KEY` | faster-whisper local STT provider |
+| **Local Whisper Key** | `STT_LOCAL_WHISPER_API_KEY` | pywhispercpp local STT provider |
 
 Each system key shows:
 - **Key name** and **env variable name**

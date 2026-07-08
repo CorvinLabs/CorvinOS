@@ -33,19 +33,16 @@ echo "[bootstrap] installing voice dependencies (TTS/STT, no API key required fo
 # openai + anthropic: SDK for cloud TTS/STT and Claude engine.
 "${VENV_DIR}/bin/pip" install --quiet "edge-tts>=6.1.8" "openai>=1.0" "anthropic>=0.25"
 
-# faster-whisper: local STT, no API key, works offline. Not available on
-# Windows with Python 3.12+ (missing `av` wheel). On Windows, STT falls
-# back to OpenAI Whisper (API key required) — set OPENAI_API_KEY in settings.
-if [[ "$(uname -s 2>/dev/null || echo Windows)" != "MINGW"* ]] \
-   && [[ "$(uname -s 2>/dev/null || echo Windows)" != "CYGWIN"* ]] \
-   && [[ "${OS:-}" != "Windows_NT" ]]; then
-  echo "[bootstrap] installing faster-whisper (local STT, Linux/macOS only)"
-  "${VENV_DIR}/bin/pip" install --quiet "faster-whisper>=1.0.0" \
-    && echo "[bootstrap]   → faster-whisper installed (offline voice input ready)" \
-    || echo "[bootstrap]   ! faster-whisper install failed — STT will use OpenAI Whisper (API key needed)"
-else
-  echo "[bootstrap] skipping faster-whisper on Windows — use OpenAI Whisper instead (set OPENAI_API_KEY)"
-fi
+# pywhispercpp: local STT (whisper.cpp binding), no API key, works offline.
+# ADR-0185 M1: replaces faster-whisper as the canonical local STT engine —
+# it ships genuine win32/win_amd64 wheels (no `av`/torch/ctranslate2 dep),
+# so this install step is IDENTICAL on Linux, macOS, and Windows now; no
+# more platform branch here (the previous faster-whisper-only branch
+# silently left Windows without a local STT fallback at all).
+echo "[bootstrap] installing pywhispercpp (local STT, all platforms)"
+"${VENV_DIR}/bin/pip" install --quiet "pywhispercpp>=1.5.0" \
+  && echo "[bootstrap]   → pywhispercpp installed (offline voice input ready)" \
+  || echo "[bootstrap]   ! pywhispercpp install failed — STT will use OpenAI Whisper (API key needed)"
 
 echo "[bootstrap] versions:"
 "${VENV_DIR}/bin/python" -c "
@@ -61,7 +58,7 @@ print(f'  cryptography  {cryptography.__version__}')
 "
 "${VENV_DIR}/bin/python" -c "
 import importlib.util
-for pkg, mod in [('edge-tts','edge_tts'),('openai','openai'),('faster-whisper','faster_whisper')]:
+for pkg, mod in [('edge-tts','edge_tts'),('openai','openai'),('pywhispercpp','pywhispercpp')]:
     found = importlib.util.find_spec(mod) is not None
     print(f'  {pkg:20s} {\"✓\" if found else \"✗ (not installed)\"}')
 "

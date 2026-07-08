@@ -552,7 +552,7 @@ class TestEngineHealer(unittest.TestCase):
         self.assertIsInstance(ok, bool)
         self.assertIsInstance(provider, str)
         if ok:
-            self.assertIn(provider, ("faster_whisper", "openai_whisper"))
+            self.assertIn(provider, ("pywhispercpp", "openai_whisper"))
 
     def test_run_readiness_check_does_not_raise(self):
         """run_readiness_check must complete without crashing, even on bad config."""

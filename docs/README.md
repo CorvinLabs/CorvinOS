@@ -31,7 +31,7 @@ Everything above this stack — data classification, egress lockdown, erasure, a
 ## What you can do
 
 ### Voice and messaging
-- Talk to the agent by voice across any configured channel. Speech is transcribed locally by default (faster-whisper), with fallback to OpenAI Whisper. Only metadata enters the audit log — transcript text never does.
+- Talk to the agent by voice across any configured channel. Speech is transcribed locally by default (pywhispercpp/whisper.cpp — cross-platform, incl. Windows), with fallback to OpenAI Whisper. Only metadata enters the audit log — transcript text never does.
 - Deploy the same agent across Discord, WhatsApp, Telegram, and the web console simultaneously. Each channel has independent configuration, rate limits, and whitelists that hot-reload without a restart.
 - Use `/btw <note>` to inject a side-channel remark into an active streaming response — the agent incorporates it mid-turn.
 

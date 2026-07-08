@@ -237,7 +237,11 @@ dependency and the installer's TTS step (`ensure_edge_tts`) reinstalls it explic
 so the middle tier stays available even when the bridge runs on a separate/pre-existing
 Python interpreter that only had `openai`.
 To force fully offline TTS: `CORVIN_TTS_PROVIDER=piper` in `service.env`
-(requires a Piper model: run `corvin-install --piper-model` or download manually)
+(requires a Piper voice model — downloaded automatically as part of a normal
+`corvin-install` run since ADR-0185 M2/M3; no separate flag needed. Re-run
+`corvin-install` to fetch it if it was skipped due to no network at install
+time, or set `piper_model_<lang>` in `~/.config/corvin-voice/config.json`
+manually.)
 
 ### Windows — "corvin is not recognized as a command"
 The `pip install corvinOS` PATH auto-fix runs on every Python start.

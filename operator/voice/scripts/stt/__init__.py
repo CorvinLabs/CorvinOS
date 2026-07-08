@@ -30,6 +30,7 @@ from .base import (
 from .resolver import (
     DEFAULT_CHAIN,
     available_providers,
+    provider_status,
     resolve,
     transcribe,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "TranscriptResult",
     "DEFAULT_CHAIN",
     "available_providers",
+    "provider_status",
     "resolve",
     "transcribe",
 ]

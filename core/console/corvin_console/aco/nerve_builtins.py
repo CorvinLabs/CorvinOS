@@ -210,11 +210,13 @@ class InstallFiber(NerveFiber):
         ("cryptography","cryptography",   None,    True),
         ("edge-tts",    "edge_tts",       None,    False),  # opt-in TTS
         ("openai",      "openai",         None,    False),  # opt-in STT/TTS
+        # ADR-0185: local STT/TTS engines, base deps on every platform now.
+        ("pywhispercpp","pywhispercpp",   None,    True),
+        ("piper-tts",   "piper",          None,    True),
     ]
 
     def scan(self) -> list[NerveSignal]:
         import importlib as _il
-        import sys
 
         signals: list[NerveSignal] = []
         for pkg_name, import_name, _, required in self._DEPS:
@@ -238,20 +240,6 @@ class InstallFiber(NerveFiber):
                     data={"package": pkg_name, "import_name": import_name},
                     repair_hint=f"pip install '{pkg_name}' für volle Funktionalität",
                     audit=False,  # Nicht jede fehlende Optional-Dep in Audit schreiben
-                ))
-
-        # Plattform-spezifische Prüfung: faster-whisper auf non-Windows
-        if sys.platform != "win32":
-            spec = _il.util.find_spec("faster_whisper")
-            if spec is None:
-                signals.append(NerveSignal(
-                    fiber_id=self.fiber_id,
-                    signal_type="install.missing_optional",
-                    severity=SEVERITY_HIGH,
-                    message="faster-whisper fehlt — lokale Spracheingabe deaktiviert",
-                    data={"package": "faster-whisper", "platform": sys.platform},
-                    repair_hint="pip install faster-whisper",
-                    audit=False,
                 ))
 
         return signals

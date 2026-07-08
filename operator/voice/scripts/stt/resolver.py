@@ -72,6 +72,111 @@ def available_providers() -> list[str]:
     return out
 
 
+def provider_status() -> dict[str, dict]:
+    """Structured per-provider status for the Console voice-status panel
+    (ADR-0185 M4, Decision 4).
+
+    Cheap introspection only — NEVER calls ``transcribe()``, NEVER raises.
+    Goes a bit further than ``is_available()`` so the UI can show *why* a
+    provider isn't ready (missing package vs. missing model file vs. no
+    API key) instead of a flat true/false. Each entry:
+
+      ready:              bool       — usable right now (mirrors is_available())
+      package_installed:  bool       — underlying package imports
+      model_present:      bool|None  — local model file on disk (None: n/a)
+      key_configured:     bool|None  — API key resolvable (None: n/a)
+      detail:             str        — short, human-readable, non-leaky status
+
+    Never includes raw exception text or internal chain/failure strings —
+    those must never reach the UI (ADR-0185 Must-NOT).
+    """
+    status: dict[str, dict] = {}
+
+    # -- local (pywhispercpp / opt-in faster-whisper) --
+    try:
+        from .local_whisper import (
+            _DEFAULT_MODEL,
+            _faster_whisper_importable,
+            _models_dir,
+            _prefer_faster_whisper,
+        )
+
+        if _prefer_faster_whisper() and _faster_whisper_importable():
+            status["local"] = {
+                "ready": True,
+                "package_installed": True,
+                "model_present": None,
+                "key_configured": None,
+                "detail": "faster-whisper engine active (CORVIN_STT_LOCAL_ENGINE override)",
+            }
+        else:
+            try:
+                import pywhispercpp.model  # noqa: F401
+                package_installed = True
+            except ImportError:
+                package_installed = False
+            model_name = os.environ.get("CORVIN_STT_LOCAL_MODEL", _DEFAULT_MODEL)
+            model_path = _models_dir() / f"ggml-{model_name}.bin"
+            model_present = model_path.exists() and model_path.stat().st_size > 0
+            ready = package_installed and model_present
+            if ready:
+                detail = f"ready (model {model_name!r})"
+            elif not package_installed:
+                detail = "pywhispercpp not installed"
+            else:
+                detail = f"model {model_name!r} not downloaded yet"
+            status["local"] = {
+                "ready": ready,
+                "package_installed": package_installed,
+                "model_present": model_present,
+                "key_configured": None,
+                "detail": detail,
+            }
+    except Exception as exc:  # noqa: BLE001 — status probe must never crash
+        status["local"] = {
+            "ready": False,
+            "package_installed": False,
+            "model_present": None,
+            "key_configured": None,
+            "detail": f"status probe failed ({exc.__class__.__name__})",
+        }
+
+    # -- openai --
+    try:
+        from .openai_whisper import _resolve_api_key
+
+        key_configured = bool(_resolve_api_key())
+        try:
+            import openai  # noqa: F401
+            package_installed = True
+        except ImportError:
+            package_installed = False
+        ready = key_configured and package_installed
+        if ready:
+            detail = "ready"
+        elif not key_configured:
+            detail = "no API key configured"
+        else:
+            detail = "openai package not installed"
+        status["openai"] = {
+            "ready": ready,
+            "package_installed": package_installed,
+            "model_present": None,
+            "key_configured": key_configured,
+            "detail": detail,
+        }
+    except Exception as exc:  # noqa: BLE001
+        status["openai"] = {
+            "ready": False,
+            "package_installed": False,
+            "model_present": None,
+            "key_configured": False,
+            "detail": f"status probe failed ({exc.__class__.__name__})",
+        }
+
+    return status
+
+
 def resolve(name: str | None = None) -> STTProvider:
     """Pick a provider, honouring env override + chain defaults.
 

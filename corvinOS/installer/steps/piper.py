@@ -63,50 +63,75 @@ def ensure_edge_tts() -> None:
 
 
 def ensure_piper(voice_config_dir: Path, interactive: bool = True) -> None:
-    """Install Piper TTS and optionally download a voice model."""
+    """Ensure Piper TTS (the offline fallback beneath edge-tts) is ready and
+    download its voice model — unconditionally, not opt-in (ADR-0185 M2/M3).
+
+    piper-tts is now a base dependency (pyproject.toml) with genuine
+    win32/macOS/Linux wheels (cp39-abi3 stable ABI — forward-compatible with
+    every supported Python, not just 3.9), so a plain ``pip install corvinos``
+    already provides the `piper` binary on every platform. Without the model
+    download also being unconditional, Piper would remain a permanently-
+    skipped fallback tier for most installs (nobody ever had a reason to run
+    the old opt-in `voice` extra), defeating the point of having it as a real
+    zero-config fallback beneath edge-tts.
+    """
     _install_piper(interactive)
     piper_bin = shutil.which("piper")
     if piper_bin:
         _setup_model(voice_config_dir, interactive)
         _write_bin_env(voice_config_dir, piper_bin)
+    else:
+        print("  ⚠ 'piper' binary not found on PATH after install — "
+              "voice model download skipped. Re-run corvin-install after "
+              "opening a new shell, or set PIPER_BIN manually.")
 
 
 # ── Install ────────────────────────────────────────────────────────────────
 
 def _install_piper(interactive: bool) -> None:
+    """Ensure the `piper` console-script is importable/on PATH.
+
+    piper-tts is a base dependency (see pyproject.toml — ADR-0185), with
+    genuine win32/macOS/Linux wheels, so this is normally a no-op: pip
+    already installed it alongside corvinos itself. This function is a
+    defensive fallback for the same edge case `ensure_edge_tts()` documents
+    above: a voice bridge pointed at a separate interpreter that has some
+    but not all base deps (e.g. via `pip install --no-deps` or a stale venv).
+    Not gated behind Windows or `interactive` — Piper is no longer optional.
+    """
     if shutil.which("piper"):
         print("  ✓ Piper TTS already installed")
         return
 
-    # piper-tts has no Windows wheel for Python 3.10+; skip silently and let the
-    # user use edge-tts (the cloud/edge TTS fallback that ships in the base install).
-    if sys.platform == "win32":
-        print("  ℹ Piper TTS not available on Windows (no wheel for Python 3.10+).")
-        print("    Edge TTS will be used instead — no setup required.")
-        return
-
-    print()
-    print("  Piper is a local text-to-speech engine.")
-    print("  It activates automatically when OpenAI TTS is unavailable.")
-
-    if not interactive:
-        print("  Skipping — run corvin-install in a terminal to set up Piper TTS.")
-        return
-
-    answer = input("  Install Piper TTS? [Y/n]: ").strip().lower() or "y"
-    if answer.startswith("n"):
-        return
-
-    print("  Installing piper-tts via pip...")
+    print("  Installing piper-tts (offline TTS fallback beneath edge-tts) via pip...")
     installed = _pip_install("piper-tts")
 
-    # Ensure pip --user bin dir is on PATH for this process
+    # Ensure pip's script dir is on PATH for this process — same PATH gotcha
+    # as ensure_edge_tts()/faster-whisper installs on Windows/Linux user installs.
     if sys.platform == "win32":
-        import os as _os
-        appdata = _os.environ.get("APPDATA", "")
-        scripts = str(Path(appdata) / "Python" / "Scripts") if appdata else ""
-        if scripts and scripts not in _os.environ.get("PATH", ""):
-            _os.environ["PATH"] = scripts + ";" + _os.environ.get("PATH", "")
+        appdata = os.environ.get("APPDATA", "")
+        candidates: list[str] = []
+        if appdata:
+            python_dir = Path(appdata) / "Python"
+            # The conventional `pip install --user` Scripts dir usually
+            # includes a PythonXY version segment (e.g.
+            # %APPDATA%\Python\Python311\Scripts) — a single hardcoded
+            # `Python\Scripts` guess (no version segment) previously missed
+            # this on every real Windows install (unverified-from-Linux
+            # review finding). Try every PythonXY dir actually present,
+            # plus the un-versioned form as a last-resort fallback.
+            try:
+                candidates.extend(
+                    str(p / "Scripts") for p in sorted(python_dir.glob("Python3*")) if p.is_dir()
+                )
+            except OSError:
+                pass
+            candidates.append(str(python_dir / "Scripts"))
+        current_path = os.environ.get("PATH", "")
+        for scripts in candidates:
+            if scripts and scripts not in current_path:
+                current_path = scripts + ";" + current_path
+        os.environ["PATH"] = current_path
     else:
         local_bin = str(Path.home() / ".local" / "bin")
         if local_bin not in os.environ.get("PATH", ""):
@@ -138,10 +163,15 @@ def _setup_model(voice_config_dir: Path, interactive: bool) -> None:
     print()
 
     if not interactive:
-        # Non-interactive mode: auto-download English model so Piper works out of the box
-        _, rel_path = _MODELS["en"]
-        print(f"  Non-interactive: downloading default English model...")
-        _download_model("en", rel_path, model_dir, config_file)
+        # Non-interactive mode: auto-download the model for the DETECTED system
+        # language, not a hardcoded English default — a German-locale user
+        # (LANG=de_DE.UTF-8 or Windows "de-DE") must get a usable German voice
+        # out of a non-interactive `corvin-install`, not silently fall back to
+        # English (ADR-0185 M2 — sys_lang is always a valid _MODELS key,
+        # _detect_language() itself defaults to "en" when unrecognized).
+        label, rel_path = _MODELS[sys_lang]
+        print(f"  Non-interactive: downloading {label.strip()} model...")
+        _download_model(sys_lang, rel_path, model_dir, config_file)
         return
 
     # Build ordered menu: detected language first, rest alphabetically
@@ -297,7 +327,14 @@ def _fetch(url: str, dest: Path, *, silent: bool = False) -> bool:
     #    on Windows to avoid backslash escape issues with curl's -o flag.
     if shutil.which("curl"):
         dest_str = dest.as_posix() if sys.platform == "win32" else str(dest)
-        flags = ["-L", "--silent" if silent else "--progress-bar", "-o", dest_str]
+        # -f/--fail is load-bearing: without it, curl writes the HTTP error
+        # body (e.g. HuggingFace's non-empty "Entry not found" 404 page) to
+        # dest_str and still exits 0 — the size>0 check below would then
+        # treat that error page as a successfully downloaded model forever
+        # (verified: HF's 404 body is non-empty, so it isn't even caught by
+        # a naive "empty file" check). --fail makes curl exit non-zero on
+        # HTTP 4xx/5xx instead, matching wget's default behavior below.
+        flags = ["-L", "-f", "--silent" if silent else "--progress-bar", "-o", dest_str]
         r = subprocess.run(["curl"] + flags + [url], check=False)
         if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
             return True

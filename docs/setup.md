@@ -35,7 +35,7 @@ Verify: `claude --version` must print a version string and exit 0. If you see
 
 | Key | Where | Required for |
 |---|---|---|
-| **OpenAI API key** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | TTS voice synthesis + STT fallback. STT uses free local faster-whisper by default; OpenAI key is a fallback. **Optional but recommended for voice output.** |
+| **OpenAI API key** | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) | TTS voice synthesis + STT fallback. STT uses free local pywhispercpp (whisper.cpp) by default on every platform, incl. Windows; OpenAI key is a fallback. **Optional but recommended for voice output.** |
 | Anthropic API key | [console.anthropic.com](https://console.anthropic.com) | Optional summarizer, dialectic judge. Claude Code's browser login is sufficient for the main agent — this key is only needed for background helper calls. |
 
 Store both in `~/.config/corvin-voice/service.env` (the installer creates this file):
@@ -179,6 +179,17 @@ If any component shows a red `✗`, check the logs:
 ```bash
 bash operator/bridges/bridge.sh tail
 ```
+
+To specifically verify voice (STT+TTS) is working — a real, non-mocked round-trip,
+not just "is the process up" — run:
+
+```bash
+corvin-voice doctor
+```
+
+This actually transcribes a bundled sample audio file and actually synthesizes a
+test voice note, printing a clear per-check PASS/FAIL and exiting non-zero if
+either fails (ADR-0185 M5).
 
 ---
 

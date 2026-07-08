@@ -16,9 +16,18 @@ Covers:
   * Adapter audit emission: voice.transcribed event lands in chain with
     provider + chars + wall_clock_s but NOT the transcript content.
 
-The tests do NOT call OpenAI or load faster-whisper. A StubProvider is
-registered into the resolver's _PROVIDERS map at test time and the env
-override pins the chain to it. All assertions stay hermetic.
+Most tests here do NOT call OpenAI or load a real local-whisper model. A
+StubProvider is registered into the resolver's _PROVIDERS map at test time
+and the env override pins the chain to it — those assertions stay hermetic.
+
+The ``LocalWhisperPywhispercppTests`` class below is the exception, by
+design (ADR-0185 M1 "must" requirement): it is a REAL, non-mocked
+round-trip through ``pywhispercpp`` — downloads the tiny quantized GGML
+model (~31 MB, cached under a fixed test dir so repeat local runs don't
+re-fetch it) and transcribes a real speech sample fixture
+(``fixtures/stt_sample.wav``). It requires network on first run and is
+skipped only when ``pywhispercpp`` itself isn't importable in the current
+environment — never faked, never mocked.
 """
 from __future__ import annotations
 
@@ -30,6 +39,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from unittest import mock
 
 _REPO = Path(__file__).resolve().parents[3]
 _SCRIPTS = _REPO / "operator" / "voice" / "scripts"
@@ -43,6 +53,7 @@ from stt import (  # noqa: E402
     STTTranscriptionFailed,
     TranscriptResult,
     available_providers,
+    provider_status,
     resolve,
     transcribe as stt_transcribe,
 )
@@ -202,6 +213,132 @@ class ProtocolContractTests(unittest.TestCase):
         self.assertIsInstance(LocalWhisperProvider(), STTProvider)
 
 
+# ── Local whisper (pywhispercpp) — REAL, non-mocked round-trip ──────
+#
+# ADR-0185 M1 explicitly requires a real (not mocked) STT round-trip test,
+# not deferred to a later milestone. This class downloads the tiny
+# quantized GGML model (~31 MB, first run only) into a fixed test-cache
+# directory under the OS temp dir and transcribes a real speech sample
+# checked into the repo (fixtures/stt_sample.wav, synthesized once via
+# edge-tts + ffmpeg — not regenerated at test time). Skipped only when
+# pywhispercpp itself isn't importable; a network failure during the
+# model download is a genuine, loud test failure — never silently skipped.
+
+
+class LocalWhisperPywhispercppTests(unittest.TestCase):
+    _FIXTURE = _SCRIPTS / "fixtures" / "stt_sample.wav"
+    _TEST_VOICE_CONFIG_DIR = str(Path(tempfile.gettempdir()) / "corvinos-stt-test-voice-config")
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import pywhispercpp.model  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("pywhispercpp not installed in this environment")
+        if not cls._FIXTURE.is_file():
+            raise unittest.SkipTest(f"missing test fixture: {cls._FIXTURE}")
+
+    def setUp(self):
+        self._saved_env = {
+            k: os.environ.get(k)
+            for k in ("VOICE_CONFIG_DIR", "CORVIN_STT_LOCAL_ENGINE", "CORVIN_STT_LOCAL_MODEL")
+        }
+        os.environ["VOICE_CONFIG_DIR"] = self._TEST_VOICE_CONFIG_DIR
+        os.environ.pop("CORVIN_STT_LOCAL_ENGINE", None)
+        os.environ.pop("CORVIN_STT_LOCAL_MODEL", None)
+
+    def tearDown(self):
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_is_available_true(self):
+        from stt.local_whisper import LocalWhisperProvider
+        self.assertTrue(LocalWhisperProvider().is_available())
+
+    def test_real_transcription_of_known_sample(self):
+        from stt.local_whisper import LocalWhisperProvider
+        result = LocalWhisperProvider().transcribe(self._FIXTURE)
+        self.assertEqual(result.provider, "local")
+        self.assertIn("testing local voice transcription", result.text.lower())
+        self.assertEqual(result.lang, "en")
+        self.assertEqual(result.chars, len(result.text))
+
+    def test_lang_hint_is_honoured(self):
+        from stt.local_whisper import LocalWhisperProvider
+        result = LocalWhisperProvider().transcribe(self._FIXTURE, lang="en")
+        self.assertIn("testing local voice transcription", result.text.lower())
+        self.assertEqual(result.lang, "en")
+
+    def test_missing_audio_file_raises_transcription_failed(self):
+        from stt.local_whisper import LocalWhisperProvider
+        with self.assertRaises(STTTranscriptionFailed):
+            LocalWhisperProvider().transcribe(Path("/nonexistent/audio-for-stt-test.wav"))
+
+    def test_timeout_raises_stt_timeout(self):
+        from stt.local_whisper import LocalWhisperProvider
+        with self.assertRaises(STTTimeout):
+            LocalWhisperProvider().transcribe(self._FIXTURE, timeout_s=0.0001)
+
+
+class LocalWhisperMissingPackageTests(unittest.TestCase):
+    """is_available()/transcribe() degrade to STTProviderUnavailable when
+    pywhispercpp is not importable — simulated via sys.modules patching so
+    this test runs regardless of whether pywhispercpp is actually
+    installed in the current environment, and resets the module-level
+    model cache so a real model loaded by another test class doesn't mask
+    the simulated missing-package condition.
+    """
+
+    def setUp(self):
+        from stt import local_whisper as lw
+        self._lw = lw
+        self._saved_cache = lw._loaded_model
+        lw._loaded_model = None
+
+    def tearDown(self):
+        self._lw._loaded_model = self._saved_cache
+
+    def test_is_available_false_without_package(self):
+        from stt.local_whisper import LocalWhisperProvider
+        with mock.patch.dict(sys.modules, {"pywhispercpp": None, "pywhispercpp.model": None}):
+            self.assertFalse(LocalWhisperProvider().is_available())
+
+    def test_transcribe_raises_provider_unavailable_without_package(self):
+        from stt.local_whisper import LocalWhisperProvider
+        with mock.patch.dict(sys.modules, {"pywhispercpp": None, "pywhispercpp.model": None}):
+            with self.assertRaises(STTProviderUnavailable):
+                LocalWhisperProvider().transcribe(_tmp_audio())
+
+
+class LocalWhisperEngineSelectionTests(unittest.TestCase):
+    """CORVIN_STT_LOCAL_ENGINE opt-in switch to the legacy faster-whisper
+    path — pure logic test, no model load (faster-whisper's own model
+    download is a heavy CTranslate2 fetch, out of scope for this gate).
+    """
+
+    def setUp(self):
+        self._saved = os.environ.get("CORVIN_STT_LOCAL_ENGINE")
+        os.environ.pop("CORVIN_STT_LOCAL_ENGINE", None)
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop("CORVIN_STT_LOCAL_ENGINE", None)
+        else:
+            os.environ["CORVIN_STT_LOCAL_ENGINE"] = self._saved
+
+    def test_default_prefers_pywhispercpp(self):
+        from stt import local_whisper as lw
+        self.assertFalse(lw._prefer_faster_whisper())
+
+    def test_opt_in_env_selects_faster_whisper(self):
+        from stt import local_whisper as lw
+        os.environ["CORVIN_STT_LOCAL_ENGINE"] = "faster-whisper"
+        self.assertTrue(lw._prefer_faster_whisper())
+
+
 # ── Resolver: env override pins one provider ─────────────────────────
 
 
@@ -298,6 +435,115 @@ class AvailableProbeTests(unittest.TestCase):
             # depending on the test machine; assert only our stubs.
             self.assertIn("stub_ok", avail)
             self.assertNotIn("stub_off", avail)
+
+
+# ── Provider status introspection (ADR-0185 M4) ──────────────────────
+#
+# provider_status() backs the Console's voice-status panel. It must never
+# raise and must never trigger a real transcription — these tests cover
+# package-missing / model-missing / key-missing / all-ready states via
+# monkeypatching, never a real model download.
+
+
+class ProviderStatusTests(unittest.TestCase):
+    def setUp(self):
+        self._saved_env = {
+            k: os.environ.get(k)
+            for k in ("VOICE_CONFIG_DIR", "CORVIN_STT_OPENAI_KEY",
+                      "OPENAI_API_KEY", "CORVIN_STT_LOCAL_MODEL")
+        }
+        for k in self._saved_env:
+            os.environ.pop(k, None)
+        self._tmpdir = tempfile.mkdtemp(prefix="stt-status-test-")
+        os.environ["VOICE_CONFIG_DIR"] = self._tmpdir
+
+        # openai_whisper.py caches _VOICE_CONFIG_DIR at import time (module
+        # level), so the developer machine's real ~/.config/corvin-voice/.env
+        # (if any) would otherwise leak through here — reload so
+        # _resolve_api_key() reads from this test's empty tmpdir instead
+        # (same fix OpenAIKeyEnvFileFallbackTests above already applies).
+        import importlib
+        from stt import openai_whisper as _oaw
+        importlib.reload(_oaw)
+
+    def tearDown(self):
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        import importlib
+        from stt import openai_whisper as _oaw
+        importlib.reload(_oaw)  # restore module-level VOICE_CONFIG_DIR
+
+    def test_shape_has_local_and_openai_keys(self):
+        status = provider_status()
+        self.assertIn("local", status)
+        self.assertIn("openai", status)
+        for entry in status.values():
+            for key in ("ready", "package_installed", "model_present",
+                        "key_configured", "detail"):
+                self.assertIn(key, entry)
+
+    def test_local_package_missing_reports_not_ready(self):
+        with mock.patch.dict(sys.modules, {"pywhispercpp": None, "pywhispercpp.model": None}):
+            status = provider_status()
+        self.assertFalse(status["local"]["ready"])
+        self.assertFalse(status["local"]["package_installed"])
+        self.assertIn("not installed", status["local"]["detail"])
+
+    def test_local_model_missing_reports_not_ready_but_package_ok(self):
+        # Simulate: package importable, but the GGML model file was never
+        # downloaded (e.g. no network at install time — ADR-0185 Decision 3).
+        fake_pywhispercpp = mock.MagicMock()
+        with mock.patch.dict(sys.modules, {
+            "pywhispercpp": fake_pywhispercpp,
+            "pywhispercpp.model": mock.MagicMock(),
+        }):
+            status = provider_status()
+        self.assertFalse(status["local"]["ready"])
+        self.assertTrue(status["local"]["package_installed"])
+        self.assertFalse(status["local"]["model_present"])
+        self.assertIn("not downloaded", status["local"]["detail"])
+
+    def test_local_ready_when_package_and_model_present(self):
+        model_dir = Path(self._tmpdir) / "whisper-models"
+        model_dir.mkdir(parents=True)
+        (model_dir / "ggml-tiny-q5_1.bin").write_bytes(b"fake-model-bytes")
+        fake_pywhispercpp = mock.MagicMock()
+        with mock.patch.dict(sys.modules, {
+            "pywhispercpp": fake_pywhispercpp,
+            "pywhispercpp.model": mock.MagicMock(),
+        }):
+            status = provider_status()
+        self.assertTrue(status["local"]["ready"])
+        self.assertTrue(status["local"]["model_present"])
+
+    def test_openai_key_missing_reports_not_ready(self):
+        status = provider_status()
+        self.assertFalse(status["openai"]["ready"])
+        self.assertFalse(status["openai"]["key_configured"])
+        self.assertIn("no API key", status["openai"]["detail"])
+
+    def test_openai_ready_when_key_and_package_present(self):
+        os.environ["OPENAI_API_KEY"] = "sk-test-key-for-status-probe"
+        fake_openai = mock.MagicMock()
+        with mock.patch.dict(sys.modules, {"openai": fake_openai}):
+            status = provider_status()
+        self.assertTrue(status["openai"]["key_configured"])
+        self.assertTrue(status["openai"]["ready"])
+
+    def test_never_raises_and_never_leaks_exception_text(self):
+        """Even if introspection blows up internally, provider_status()
+        degrades to a safe entry rather than propagating — the Console
+        status panel must never 500 because of this probe."""
+        with mock.patch(
+            "stt.local_whisper._models_dir",
+            side_effect=RuntimeError("disk exploded"),
+        ):
+            status = provider_status()  # must not raise
+        self.assertIn("local", status)
+        self.assertNotIn("disk exploded", status["local"]["detail"])
 
 
 # ── CLI surface ──────────────────────────────────────────────────────

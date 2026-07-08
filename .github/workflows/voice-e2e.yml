@@ -1,0 +1,71 @@
+name: Voice E2E (STT+TTS round-trip)
+
+# ADR-0185 M5: real, non-mocked STT+TTS round-trip self-test on every
+# platform CorvinOS ships on. This job runs `corvin-voice doctor` — the same
+# command a human runs locally — rather than diverging into CI-only logic,
+# which is exactly the class of drift this project has been bitten by
+# before (see windows-stt-tts-fix-0-10-18: a missing `import asyncio` broke
+# every edge-tts call on every platform, silently, for a long time).
+#
+# This inherently needs real network access (Whisper GGML model download on
+# first run, edge-tts's Microsoft endpoint) — the same accepted pattern
+# already used elsewhere in this repo's CI (e.g. `playwright install
+# --with-deps` in .github/workflows/test.yml / e2e-nightly.yml downloads
+# browser binaries over the network on every run).
+#
+# IMPORTANT (review finding, undocumented before this comment existed): this
+# job never runs `corvin-install`, so the Whisper model is NOT pre-fetched —
+# `corvin-voice doctor`'s only reason this doesn't fail on every fresh runner
+# is that `pywhispercpp.model.Model(...)` transparently falls back to its own
+# `download_model()` on first use when the file isn't already cached. If a
+# future pywhispercpp release changes/removes that fallback, this job starts
+# failing for a reason that looks like "voice subsystem broken" rather than
+# "CI never provisioned the model" — check that first before assuming a real
+# regression.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'operator/voice/**'
+      - 'operator/bridges/shared/adapter.py'
+      - 'ops/launcher/voice_entry.py'
+      - 'corvinOS/installer/steps/stt.py'
+      - 'corvinOS/installer/steps/piper.py'
+      - 'pyproject.toml'
+      - '.github/workflows/voice-e2e.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'operator/voice/**'
+      - 'operator/bridges/shared/adapter.py'
+      - 'ops/launcher/voice_entry.py'
+      - 'corvinOS/installer/steps/stt.py'
+      - 'corvinOS/installer/steps/piper.py'
+      - 'pyproject.toml'
+  workflow_dispatch: {}
+
+jobs:
+  voice-doctor:
+    name: corvin-voice doctor (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install CorvinOS (editable install, base deps — voice is not an extra)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: corvin-voice doctor — real STT+TTS round-trip (non-mocked)
+        run: corvin-voice doctor

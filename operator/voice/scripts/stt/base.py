@@ -22,7 +22,7 @@ class STTError(Exception):
 class STTProviderUnavailable(STTError):
     """Raised when the provider cannot be reached at all.
 
-    Examples: missing API key, missing dependency (faster-whisper not
+    Examples: missing API key, missing dependency (pywhispercpp not
     installed), no GPU when the local provider requires one. The
     resolver catches this and falls through to the next provider in
     the chain.

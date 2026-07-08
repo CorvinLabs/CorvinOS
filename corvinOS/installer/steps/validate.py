@@ -56,15 +56,15 @@ def run_validation(
 
     has_openai = _importable("openai")
     has_anthropic = _importable("anthropic")
-    has_faster_whisper = _importable("faster_whisper")
+    has_pywhispercpp = _importable("pywhispercpp")
     has_edge_tts = _importable("edge_tts")
 
-    if has_openai and has_anthropic and has_faster_whisper:
-        print("✓ Python packages: openai + anthropic + faster-whisper")
+    if has_openai and has_anthropic and has_pywhispercpp:
+        print("✓ Python packages: openai + anthropic + pywhispercpp")
     elif has_openai and has_anthropic:
-        print("⚠ faster-whisper missing (STT will need OpenAI fallback)")
+        print("⚠ pywhispercpp missing (STT will need OpenAI fallback)")
     elif has_openai:
-        print("⚠ anthropic + faster-whisper missing")
+        print("⚠ anthropic + pywhispercpp missing")
     else:
         print("✗ openai package missing")
         failures += 1

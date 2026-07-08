@@ -825,7 +825,9 @@ operator/voice/scripts/stt/
 ├── __init__.py
 ├── base.py            # STTProvider Protocol + TranscriptResult + STTError tree
 ├── openai_whisper.py  # OpenAI Whisper-1 (default, ~0.006 $/min)
-├── local_whisper.py   # faster-whisper (air-gap / EU-residency fallback)
+├── local_whisper.py   # pywhispercpp/whisper.cpp (air-gap / EU-residency fallback;
+│                       # ADR-0185 M1 — cross-platform, incl. Windows; faster-whisper
+│                       # kept as an opt-in CORVIN_STT_LOCAL_ENGINE=faster-whisper path)
 └── resolver.py        # chain selection + per-provider fallback
 ```
 
@@ -895,7 +897,8 @@ extended with `timeout`, `provider-error`, `package-unreachable`.
 |---|---|
 | `CORVIN_STT_PROVIDER` | Pin one provider (no fallback) |
 | `CORVIN_STT_CHAIN` | Override default chain, e.g. `local,openai` |
-| `CORVIN_STT_LOCAL_MODEL` | faster-whisper model size (`tiny` / `base` / `small` / `medium` / `large-v3`); default `base` |
+| `CORVIN_STT_LOCAL_MODEL` | pywhispercpp GGML model name (`tiny-q5_1` / `base` / `base-q5_1` / `small` / `medium` / `large-v3`, ...); default `tiny-q5_1` (~31 MB, Q5_1-quantized) |
+| `CORVIN_STT_LOCAL_ENGINE` | Opt-in: `faster-whisper` switches the `local` provider to the legacy CTranslate2 engine when it's installed (`corvinos[voice]` extra); never the default |
 | `BRIDGE_TRANSCRIBE_TIMEOUT` | Per-provider budget in seconds (unchanged from pre-Layer-23) |
 
 **Per-tenant policy hook** (future): `tenant.corvin.yaml` has the
@@ -904,7 +907,7 @@ X" enforcement, mirroring engine-policy (Phase 3.2) and zone-policy
 (Phase 3.3). Phase-6.x will wire that gate; today the operator
 expresses the same intent via the env var on the bridge process.
 
-**Test surface** (`operator/voice/scripts/test_stt.py`, 15 cases):
+**Test surface** (`operator/voice/scripts/test_stt.py`, 35 cases):
 - TranscriptResult chars math
 - Real providers satisfy the Protocol
 - Pinned provider used; pinned-but-unavailable raises (no fallback)
@@ -918,6 +921,21 @@ expresses the same intent via the env var on the bridge process.
 - No-PII contract enforced via structural source check on
   `_emit_transcribe_ok` — fails the test if a future edit
   reintroduces `result.text` into the audit details
+- **`LocalWhisperPywhispercppTests`** (ADR-0185 M1): a REAL, non-mocked
+  round trip — downloads the `tiny-q5_1` GGML model (~31 MB, cached under
+  a fixed OS-temp test dir) and transcribes a real speech fixture
+  (`operator/voice/scripts/fixtures/stt_sample.wav`), asserting the
+  actual recognized text, detected language, lang-hint honouring,
+  missing-file error, and timeout behavior. Skipped only when
+  `pywhispercpp` itself isn't importable — never mocked.
+- `LocalWhisperMissingPackageTests` / `LocalWhisperEngineSelectionTests`:
+  `STTProviderUnavailable` when `pywhispercpp` is unimportable (simulated
+  via `sys.modules` patching); `CORVIN_STT_LOCAL_ENGINE` opt-in switch
+  logic.
+
+Installer step tests: `tests/test_installer_stt.py` (hermetic, mocked
+network) — `ensure_stt()` package-presence branching + `_download_whisper_model()`'s
+already-present / success / network-failure / empty-result paths.
 
 ### What you, as Claude Code, must NOT do (Layer 23)
 

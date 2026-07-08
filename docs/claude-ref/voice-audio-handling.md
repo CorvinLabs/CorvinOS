@@ -53,8 +53,10 @@ Required operator actions:
 - Ensure a Data Processing Agreement with OpenAI covers Whisper API usage.
 - For EU_PRODUCTION deployments (`spec.egress.enabled: true`), ensure `api.openai.com`
   is in the tenant's `allowed_hosts` list if whisper is used.
-- For zero-egress deployments: set `CORVIN_STT_PROVIDER=local_whisper` and ensure
-  `local_whisper` is configured (faster-whisper package).
+- For zero-egress deployments: set `CORVIN_STT_PROVIDER=local` and ensure
+  the `local` provider is configured (`pywhispercpp` — ADR-0185 M1; the legacy
+  `faster-whisper` package remains available as an opt-in
+  `CORVIN_STT_LOCAL_ENGINE=faster-whisper` alternative).
 
 ---
 
@@ -87,3 +89,33 @@ The adapter boot self-test (L11) checks for orphaned audio files:
   older than 60 seconds.
 - Emits `WARNING` if any found (signals a cleanup failure in a previous run).
 - Does NOT delete them automatically (operator may need to investigate).
+
+---
+
+## Round-Trip Self-Test — `corvin-voice doctor` (ADR-0185 M5)
+
+Distinct from the L11 orphan-file scan above: `corvin-voice doctor` is a real,
+non-mocked functional check that the voice subsystem actually works end to end —
+not just that files are being cleaned up. It exists to close the class of bug
+that shipped silently for a long time before ADR-0185 (a missing `import asyncio`
+in `adapter.py` broke every `edge-tts` call on every platform, swallowed into a
+log line nobody read).
+
+What it does, in order:
+1. **STT provider table** — reports `local` (`pywhispercpp`) and `openai`
+   readiness with a human reason (missing package, missing API key, etc.).
+2. **STT round-trip** — actually transcribes `operator/voice/scripts/fixtures/stt_sample.wav`
+   through the real resolver chain and fails loudly if the returned text is empty.
+3. **TTS provider table** — reports `openai`, `edge-tts`, and `piper` readiness.
+4. **TTS round-trip** — actually calls `adapter.synthesize_voice_note(...)` and fails
+   loudly if no audio file (or a zero-byte file) comes back.
+
+```bash
+corvin-voice doctor
+```
+
+Exit code `0` only when both round-trips pass; `1` otherwise (per-check `PASS`/`FAIL`
+lines and an `OVERALL` summary are printed either way — no stack trace only). CI
+runs the same command, unmodified, on `ubuntu-latest` / `macos-latest` /
+`windows-latest` (`.github/workflows/voice-e2e.yml`) so a regression here is
+caught before release, not discovered by a user months later.

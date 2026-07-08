@@ -46,14 +46,15 @@ dependencies = [
     "cryptography >= 42",
     "anthropic >= 0.25",
     "python-multipart >= 0.0.6",
-    # Voice subsystem — pure-Python, cross-platform TTS fallback (Microsoft Edge).
-    # The HEAVY *local* voice models (piper-tts, faster-whisper) are NOT base
-    # deps: piper-tts ships a Windows wheel only for cp39 and faster-whisper pulls
-    # `av`, which has no cp312/cp313 Windows wheel — making them base deps broke
-    # `pip install corvinos` on Windows/Python>=3.10 before setup was ever
-    # reached. They now live in the optional `voice` extra; cloud/edge TTS + STT
-    # (via edge-tts + the OpenAI SDK below) work out of the box.
+    # Voice subsystem (ADR-0185): zero-config STT+TTS on every platform, no API
+    # key required. TTS Tier 0 = edge-tts (free, no key, needs internet); TTS
+    # Tier 0b = piper-tts, an automatic offline fallback when edge-tts is
+    # unreachable (no internet / blocked endpoint). Both are pure-Python wheels
+    # with genuine Windows/macOS/Linux coverage (piper-tts's cp39-abi3 wheel is
+    # forward-compatible with 3.9-3.14; it is NOT limited to Python 3.9 despite
+    # older comments in this file — verified via PyPI wheel metadata 2026-07-07).
     "edge-tts >= 6.1.8",
+    "piper-tts >= 1.4.1",
     # Bundled static ffmpeg binary (pure-Python wheel, prebuilt for
     # Windows/Linux/macOS) — edge-tts/Piper need ffmpeg to convert their
     # MP3/WAV output to OGG-Opus, but the installer explicitly skips
@@ -61,9 +62,13 @@ dependencies = [
     # This makes TTS work out of the box there too; system ffmpeg (PATH or
     # FFMPEG_BIN) still takes priority when present.
     "imageio-ffmpeg >= 0.5.1",
-    # Local STT — faster-whisper on Linux/macOS; Windows lacks av wheels for cp312+.
-    # On Windows, STT falls back to OpenAI Whisper (openai SDK already a base dep).
-    "faster-whisper >= 1.0.0; sys_platform != 'win32'",
+    # Local STT (ADR-0185 M1) — pywhispercpp (whisper.cpp binding) replaces
+    # faster-whisper as the canonical, cross-platform local STT engine. Unlike
+    # faster-whisper, it has NO dependency on `av`/PyAV (which historically
+    # lacked Windows wheels, and even now only covers Python >=3.11) and no
+    # `ctranslate2`/`torch`-adjacent footprint — same Whisper model family and
+    # accuracy class, genuine wheels for cp39-cp314 on win32/macOS/linux.
+    "pywhispercpp >= 1.5.0",
     # OpenAI SDK — TTS fallback, Whisper STT provider, and ImageGen MCP (standard
     # feature). Pure-Python; installs cleanly on every platform.
     "openai >= 1.0",
@@ -101,12 +106,11 @@ compute = [
 metrics = [
     "prometheus-client >= 0.19",
 ]
-# Local (offline) voice models — heavy, platform-sensitive. Cloud/edge voice
-# works without these (edge-tts + openai are base deps). piper-tts has a Windows
-# wheel only for cp39 and faster-whisper pulls `av` (no cp312/cp313 Windows
-# wheel), so these are opt-in to keep the base install Windows-friendly.
+# Optional, non-default accelerated local STT (ADR-0185 "Must NOT do" #1): for
+# power users who already have a working `av`/ctranslate2 install and want
+# faster-whisper's CTranslate2-accelerated inference instead of the
+# pywhispercpp base-dependency default. Never required — kept opt-in only.
 voice = [
-    "piper-tts >= 1.4.1",
     "faster-whisper >= 1.0.0",
 ]
 # Browser automation (ADR-0182): agent-driven browser. Playwright is imported
@@ -124,7 +128,6 @@ all = [
     "duckdb >= 0.9",
     "psycopg2-binary >= 2.9",
     "prometheus-client >= 0.19",
-    "piper-tts >= 1.4.1",
     "faster-whisper >= 1.0.0",
     "playwright >= 1.40",
 ]
@@ -179,6 +182,9 @@ corvin-license-debug = "ops.launcher.license_debug_entry:main"
 corvin-maintainer = "ops.launcher.maintainer_entry:main"
 # ADR-0184 Stufe 2: opt-in always-on system-service registration (admin/root).
 corvin-service = "ops.launcher.service_entry:main"
+# ADR-0185 M5: real, non-mocked STT+TTS round-trip self-test ("corvin-voice doctor").
+# Shim needed because operator/ shadows the Python stdlib 'operator' module.
+corvin-voice = "ops.launcher.voice_entry:main"
 
 [tool.hatch.build.targets.sdist.force-include]
 # Ship the PRE-BUILT SPA in the sdist so a wheel built FROM the sdist (the

@@ -46,6 +46,10 @@ jobs:
         run: |
           pytest tests/test_installer_integration.py -v --cov=corvinOS --cov-report=xml
 
+      - name: Run voice installer tests (ADR-0185)
+        run: |
+          pytest tests/test_installer_stt.py tests/test_installer_piper.py -v --cov=corvinOS --cov-report=xml
+
       - name: Upload coverage
         uses: codecov/codecov-action@v3
         with:
@@ -80,6 +84,10 @@ jobs:
         run: |
           pytest tests/test_installer_integration.py -v
 
+      - name: Run voice installer tests (ADR-0185)
+        run: |
+          pytest tests/test_installer_stt.py tests/test_installer_piper.py -v
+
   test-windows:
     name: Test on Windows
     runs-on: windows-latest
@@ -107,6 +115,10 @@ jobs:
       - name: Run integration tests
         run: |
           pytest tests/test_installer_integration.py -v
+
+      - name: Run voice installer tests (ADR-0185)
+        run: |
+          pytest tests/test_installer_stt.py tests/test_installer_piper.py -v
 
   lint:
     name: Lint & Type Check

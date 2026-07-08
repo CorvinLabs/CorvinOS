@@ -58,11 +58,15 @@ pip install corvinos
 python -m corvinOS        # web console at http://localhost:8765
 ```
 
-**With local voice models (offline TTS + STT):**
-
-```bash
-pip install "corvinos[voice]"
-```
+Offline-capable voice (Piper TTS + pywhispercpp/whisper.cpp STT) ships in the
+base install — no extra needed, on Linux, macOS, and Windows alike. STT
+self-heals on first use (pywhispercpp downloads its small model on demand
+even without running the installer), but Piper's offline TTS voice model is
+only fetched by `corvin-install` — running just `pip install corvinos` +
+`python -m corvinOS` gets you `edge-tts` (free, needs internet) for speech
+output until you run `corvin-install` once. The optional `corvinos[voice]`
+extra now only adds `faster-whisper` for power users who want its
+CTranslate2-accelerated STT and already have a working `av` install.
 
 Full setup guide: [INSTALLATION.md](INSTALLATION.md)
 
@@ -88,7 +92,7 @@ Claude Code, Codex CLI, OpenCode, Hermes (local Ollama), and GitHub Copilot plug
 Full control plane at `http://localhost:8765` — manage sessions, personas, forge tools, skill library, RAG providers, and audit logs from a single dashboard. Built-in voice (STT/TTS), session workdir browser, browser automation panel, and full REST API at `/v1/console/`.
 
 ### [Voice — push-to-talk and always-on](docs/handbook/03-voice-profile.md)
-Hold the mic key to speak; CorvinOS transcribes, replies, and reads the answer aloud. Works in the web console and all messenger bridges. Local Piper TTS + faster-whisper for zero-egress deployments; Microsoft Edge TTS and OpenAI Whisper available as cloud alternatives.
+Hold the mic key to speak; CorvinOS transcribes, replies, and reads the answer aloud. Works in the web console and all messenger bridges. Local Piper TTS + pywhispercpp (whisper.cpp) STT for zero-egress deployments on every platform, incl. Windows; Microsoft Edge TTS and OpenAI Whisper available as cloud alternatives.
 
 ### [Forge — runtime tool generation](docs/forge.md)
 The agent generates sandboxed, bwrap-isolated tools on demand and calls them immediately — without a deploy step. Tools are schema-validated, path-gated, and registered in the session artifact memory. New tools are available in the same turn they are generated.
