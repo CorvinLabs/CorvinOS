@@ -87,6 +87,12 @@ def test_worker_end_to_end() -> None:
 
 
 def _fresh_adapter(env_overrides: dict):
+    # These tests monkeypatch adapter.subprocess.Popen to capture/short-circuit
+    # the ClaudeCode spawn. Without a real `claude` CLI on PATH (every CI
+    # runner), ADR-0159 engine auto-detect falls back to hermes instead — a
+    # different path that tries to reach Ollama, times out after ~30s, and
+    # produces a generic fallback reply instead of what these tests assert on.
+    os.environ["CORVIN_OS_ENGINE"] = "claude_code"
     # voice_audience_learning defaults to 3 on a fresh profile (profile.py
     # _PROFILE_DEFAULTS, 2026-07-04), so build_voice_summary now also spawns
     # a second subprocess for the LERN-ZUGABE appendix. These tests only

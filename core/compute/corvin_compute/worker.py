@@ -15,6 +15,7 @@ import asyncio
 import dataclasses
 import logging
 import os
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -33,6 +34,31 @@ _MULTI_ENGINE_PREFIXES = (_PIPELINE_JOB_PREFIX, _HAC_JOB_PREFIX, _ABATCH_JOB_PRE
 
 
 log = logging.getLogger(__name__)
+
+
+# ── L25 → background-completion notification bridge ─────────────────────────
+# A compute run is detached and durable but poll-only; when the submit carried a
+# messenger origin (client injects it from CORVIN_CHANNEL_ID), notify the user on
+# completion via the shared completion_notify backbone. register() at submit
+# persists the origin to disk (survives a worker restart); mark_done() at the
+# terminal state is a no-op when nothing was registered, so poll-only runs are
+# unchanged.
+_MESSENGER_CHANNELS = frozenset(
+    {"discord", "telegram", "whatsapp", "slack", "signal", "email", "teams"}
+)
+
+
+def _load_completion_notify():
+    """Import the bridge-side completion_notify (best-effort). Adds the bridge
+    shared dir to sys.path — compute lives in core/, the backbone in operator/."""
+    try:
+        shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        if shared.exists() and str(shared) not in sys.path:
+            sys.path.insert(0, str(shared))
+        import completion_notify as _cn  # type: ignore
+        return _cn
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class WorkerError(RuntimeError):
@@ -337,6 +363,10 @@ class WorkerServer:
             else:
                 self._queue.append(run_id)
 
+        # If the submit carried a messenger origin, register a pending
+        # completion so the user is notified when this detached run finishes.
+        self._register_compute_notify(run_id, params, str(params.get("tool_name", "")))
+
         return {
             "compute_handle": run_id,
             "state": entry.state,
@@ -508,7 +538,57 @@ class WorkerServer:
             entry.state = "failed"
         finally:
             entry.result_event.set()
+            self._notify_compute_done(run_id, entry.state)
             await self._dequeue_next()
+
+    def _register_compute_notify(self, run_id: str, params: "Mapping[str, Any]",
+                                 tool_name: str) -> None:
+        """Register a pending completion notification if the submit carried a
+        messenger origin (``notify`` = {channel, chat_id, sender}). No-op
+        otherwise, so poll-only compute runs are unchanged."""
+        notify = params.get("notify")
+        if not isinstance(notify, dict):
+            return
+        channel = str(notify.get("channel") or "")
+        chat_id = notify.get("chat_id")
+        if channel not in _MESSENGER_CHANNELS or not chat_id:
+            return
+        cn = _load_completion_notify()
+        if cn is None:
+            return
+        try:
+            cn.register(
+                run_id, channel=channel, chat_id=chat_id,
+                sender=str(notify.get("sender") or ""),
+                tenant_id=self.tenant_id,
+                label=f"compute {tool_name}".strip(),
+            )
+        except Exception:  # noqa: BLE001
+            log.debug("compute completion register failed", exc_info=True)
+
+    def _notify_compute_done(self, run_id: str, state: str) -> None:
+        """Mark the run's completion ready to deliver. Unconditional +
+        idempotent: mark_done is a no-op when no notification was registered,
+        and reads the on-disk record (so it still fires after a worker restart
+        that lost the in-memory entry)."""
+        cn = _load_completion_notify()
+        if cn is None:
+            return
+        # Compute terminal states: converged/stalled/budget_exhausted are
+        # successful stops; failed/aborted are not.
+        ok = str(state) not in ("failed", "aborted", "error", "crashed")
+        text = f"Compute run `{run_id[:8]}` finished — state: {state}."
+        try:
+            summary = self._store.read_summary(run_id)
+            best = summary.get("best_loss", summary.get("best")) if isinstance(summary, dict) else None
+            if best is not None:
+                text += f" best_loss={best}"
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            cn.mark_done(run_id, text=text, ok=ok)
+        except Exception:  # noqa: BLE001
+            log.debug("compute completion mark_done failed", exc_info=True)
 
     async def _dequeue_next(self) -> None:
         async with self._runs_lock:
@@ -541,10 +621,15 @@ class WorkerServer:
         log.info("recovery: %d non-terminal runs found", len(resumable))
         for run_id in resumable:
             try:
-                _recovery.resume_run(
+                _state = _recovery.resume_run(
                     self.corvin_home, self.tenant_id, run_id,
                     runner_fn=self.runner_fn,
                 )
+                # A run interrupted by a restart resumes HERE, not via _exec_run,
+                # so fire the completion notification on this path too. Idempotent
+                # (no-op when no origin was registered or already delivered), so
+                # a restart-surviving compute run still reaches the user.
+                self._notify_compute_done(run_id, str(_state or "converged"))
             except Exception:  # noqa: BLE001
                 log.exception("recovery for run_id=%s failed", run_id)
 
