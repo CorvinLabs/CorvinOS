@@ -286,7 +286,11 @@ async def add_review(
 
         review = RAGHubReview(
             provider_id=req["provider_id"],
-            author=_session.user_id,
+            # SessionRecord has no per-user identity (single-tenant-owner
+            # model -- see auth.py) -- .user_id never existed, so this
+            # always 500'd before reaching add_review(). tier is the
+            # closest honest, available label ("owner").
+            author=_session.tier,
             rating=min(5, max(1, int(req["rating"]))),
             text=req["text"][:500],
         )

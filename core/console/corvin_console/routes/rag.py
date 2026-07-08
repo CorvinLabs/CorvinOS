@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 import time
 from typing import Annotated, Any
 
@@ -59,18 +58,25 @@ def _get_l34_gate(tenant_id: str):
 # fabricated mock providers/results).
 
 _ORCHESTRATORS: dict[str, Any] = {}  # tenant_id → RAGOrchestrator | None
-_ORCHESTRATORS_LOCK = threading.Lock()
+_ORCHESTRATORS_LOCK = asyncio.Lock()
 
 
-def _get_orchestrator(tenant_id: str) -> Any | None:
+async def _get_orchestrator(tenant_id: str) -> Any | None:
     """Return the Phase 3 RAG orchestrator for the given tenant, or None.
 
     Keyed by tenant_id from the authenticated session — never from env-var —
     so each tenant gets an isolated orchestrator pointing to its own registry.
     _ORCHESTRATORS_LOCK serialises the entire init path so concurrent first
     requests for the same tenant cannot double-init the orchestrator.
+
+    async, not sync-wrapping-asyncio.run(): every caller is itself an async
+    route handler already running on the event loop, and asyncio.run() raises
+    "cannot be called from a running event loop" in that context (the /query
+    route works around exactly this by hopping to a worker thread first via
+    asyncio.to_thread() — this function instead just awaits directly, since
+    it has no need for a separate thread).
     """
-    with _ORCHESTRATORS_LOCK:
+    async with _ORCHESTRATORS_LOCK:
         if tenant_id in _ORCHESTRATORS:
             return _ORCHESTRATORS[tenant_id]
 
@@ -81,6 +87,12 @@ def _get_orchestrator(tenant_id: str) -> Any | None:
             if registry_dir.exists():
                 auth_tokens: dict = {}  # Load from vault in production
                 orch = RAGOrchestrator(registry_dir=registry_dir, auth_tokens=auth_tokens)
+                # RAGOrchestrator.__init__ only sets up the (empty) engines dict —
+                # providers are loaded from registry.json/manifests/*.yaml by the
+                # async initialize() step, which nothing here was calling. Every
+                # registered provider therefore silently vanished from
+                # health_check_all() regardless of what was on disk.
+                await orch.initialize()
                 logger.info(f"RAG Orchestrator initialized for tenant={tenant_id} ({registry_dir})")
                 _ORCHESTRATORS[tenant_id] = orch
                 return orch
@@ -150,16 +162,21 @@ async def list_providers(
     licence-gate UI; the empty-state path returns no providers, so it can never
     inflate this count.
     """
-    # Count actual registered YAML manifests (the licence-gate source of truth)
+    # Count actual registered YAML manifests (the licence-gate source of truth).
+    # RAGOrchestrator.initialize() loads manifests from registry_dir/manifests/
+    # (see rag_orchestrator.py), not registry_dir itself -- glob the same place
+    # the loader reads, or this count silently stays 0 forever even with
+    # providers registered.
     tid = _session.tenant_id
     registry_dir = _forge_paths.tenant_global_dir(tid) / "rag"
-    registered_count = len(list(registry_dir.glob("*.yaml"))) if registry_dir.exists() else 0
+    manifests_dir = registry_dir / "manifests"
+    registered_count = len(list(manifests_dir.glob("*.yaml"))) if manifests_dir.exists() else 0
 
-    orch = _get_orchestrator(tid)
+    orch = await _get_orchestrator(tid)
     if orch is not None:
         try:
             # Get health status of all providers via orchestrator
-            health = asyncio.run(orch.health_check_all())
+            health = await orch.health_check_all()
             providers = []
 
             # Transform orchestrator output to API format
@@ -204,18 +221,32 @@ async def get_provider_health(
     Returns a "Provider not found" response when the provider is not registered
     — fabricated mock providers are never served.
     """
-    orch = _get_orchestrator(_session.tenant_id)
+    orch = await _get_orchestrator(_session.tenant_id)
     if orch is not None:
         try:
-            health = asyncio.run(orch.health_check_all())
+            health = await orch.health_check_all()
             status = health.get(provider_id)
             if status is not None:
+                latency_ms = status.get("latency_ms", 0)
                 return {
                     "id": provider_id,
                     "name": provider_id.replace("-", " ").title(),
                     "status": "active",
                     "health_status": status.get("circuit_state", "unknown"),
-                    "latency_ms": status.get("latency_ms", 0),
+                    "latency_ms": latency_ms,
+                    # ProviderCard reads query_stats.{total_queries,queries_today}
+                    # unconditionally (current = health || provider) -- omitting
+                    # this crashed the whole page with "Cannot read properties of
+                    # undefined (reading 'total_queries')" the moment a real
+                    # provider replaced the list-endpoint's RAGProvider default.
+                    # Per-provider query counting isn't implemented yet (see
+                    # RAGProvider.to_dict() above), so this is honestly zeroed,
+                    # not fabricated.
+                    "query_stats": {
+                        "total_queries": 0,
+                        "queries_today": 0,
+                        "average_latency_ms": latency_ms,
+                    },
                 }
         except Exception as e:
             logger.warning(f"Provider health check failed: {e}")
@@ -225,6 +256,7 @@ async def get_provider_health(
         "status": "inactive",
         "health_status": "unknown",
         "latency_ms": 0,
+        "query_stats": {"total_queries": 0, "queries_today": 0, "average_latency_ms": 0},
         "error": "Provider not found",
     }
 
@@ -318,7 +350,7 @@ async def execute_rag_query(
 
     # Execute via the Phase 3 orchestrator if one exists for this tenant.
     _query_tid = _session.tenant_id
-    orch = _get_orchestrator(_query_tid)
+    orch = await _get_orchestrator(_query_tid)
     if orch is not None:
         try:
             from shared.rag_query_engine import RAGQuery  # noqa: PLC0415
