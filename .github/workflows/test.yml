@@ -11,6 +11,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install ffmpeg
+        # run-all-tests.sh's "corvin-voice doctor (ADR-0185 M5)" suite runs a
+        # real, non-mocked TTS round-trip via edge-tts, which shells out to
+        # ffmpeg — without it that suite fails with "no audio produced" on
+        # every run regardless of network/API-key availability.
+        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

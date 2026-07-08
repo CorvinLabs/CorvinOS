@@ -182,7 +182,13 @@ else:
 
             $Action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $ArgString
             $Trigger  = New-ScheduledTaskTrigger -AtLogOn
+            # -Hidden mirrors install.ps1's Install-CorvinAutostart (keep both
+            # supervisor registrations IDENTICAL in this regard — a visible/
+            # closable window on one path while the other is hidden is exactly
+            # the drift that let a real "close the window, the app dies" bug
+            # reach users).
             $Settings = New-ScheduledTaskSettingsSet `
+                -Hidden `
                 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
                 -ExecutionTimeLimit ([TimeSpan]::Zero) `
                 -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `

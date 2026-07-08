@@ -22,6 +22,7 @@ existing one.
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -79,7 +80,12 @@ def test_setup_model_skips_download_when_a_model_already_exists(tmp_path: Path) 
     model_file = tmp_path / "existing-model.onnx"
     model_file.write_bytes(b"fake-onnx-bytes")
     config_file = voice_config_dir / "config.json"
-    config_file.write_text(f'{{"piper_model_de": "{model_file}"}}')
+    # json.dumps (not an f-string) — a raw f-string mis-escapes Windows paths:
+    # backslashes in `str(model_file)` (e.g. "C:\Users\...") aren't valid JSON
+    # escapes, so config_file.read_text() -> json.loads() raised
+    # JSONDecodeError on Windows CI, was swallowed by _find_existing_model's
+    # broad `except Exception: pass`, and _download_model got called anyway.
+    config_file.write_text(json.dumps({"piper_model_de": str(model_file)}))
 
     with mock.patch.object(piper_mod, "_download_model") as m_download:
         piper_mod._setup_model(voice_config_dir, interactive=False)

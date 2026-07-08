@@ -6,6 +6,50 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.22] — 2026-07-08
+
+### Fixed
+- **Windows install: console never opened (readiness-probe drift).** Both
+  installers polled `/api/health` after starting the console server — a route
+  the standalone app never serves (only `/v1/console/*`, `/console/*`,
+  `/local-stats`, `/`). On POSIX `curl -s` (without `-f`) silently treated the
+  resulting 404 as success, masking the bug; on Windows, PowerShell's
+  `Invoke-WebRequest` raises on any non-2xx status, so the readiness loop
+  always ran into its timeout and the browser-open step was never reached —
+  the console simply never appeared after a fresh Windows install. Both
+  installers now poll the real, mounted, unauthenticated `/v1/console/healthz`
+  route; a new drift-guard test (`test_installer_health_probe.py`) pins this
+  across both scripts and the app's own route table so it can't silently
+  regress again. Retry budget raised 30s→60s (cold Python import + AV/Defender
+  scan can legitimately take longer), and both installers now open the browser
+  regardless of whether the probe succeeded in time — the console is durable
+  via autostart either way, so a slow-but-eventually-ready server is better
+  served by "open and let it reload" than "never open at all."
+- **Windows autostart: a fallback path left a closable window.**
+  `install.ps1`'s `Install-CorvinAutostart` registers a per-user Scheduled
+  Task (login-triggered, `-RunLevel Limited`, no admin needed) that
+  auto-restarts the console forever. If that registration ever throws, the
+  code fell back to starting the console once with `-WindowStyle Minimized` —
+  which still creates a taskbar entry a user can click and close, silently
+  killing the "background" process exactly like closing a visible console
+  window would. The fallback now uses `-WindowStyle Hidden` (no window at
+  all), and both Scheduled Task registrations (the standalone `install.ps1`
+  path and the dev-checkout `bridge.ps1 install-autostart` path) now also mark
+  the task itself `-Hidden` in Task Scheduler. A new regression test
+  (`TestNoClosableWindow` in `test_windows_supervisor_parity.py`) asserts no
+  `-WindowStyle Minimized/Normal/Maximized` can reappear anywhere in either
+  installer script.
+- **CI**: the coverage workflow installed a hand-maintained `pip install`
+  list that had drifted — it silently omitted the package itself (breaking
+  every `corvin_console`/`corvin_license` import), the `limits` rate-limiting
+  library, the `hatchling` build backend, and `python-multipart`. It now
+  installs via `pip install -e ".[dev]"` plus the same three extras, so it
+  tracks the real dependency graph instead of a copy that can go stale. The
+  `test`/`voice-e2e` workflows now install `ffmpeg`, which `corvin-voice
+  doctor`'s real (non-mocked) edge-tts round-trip shells out to — without it
+  every TTS check failed with "no audio produced" regardless of network/API-key
+  availability.
+
 ## [0.10.21] — 2026-07-08
 
 ### Security

@@ -320,7 +320,12 @@ while (`$true) {
     $Action   = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$SupervisorEscaped`""
     $Trigger  = New-ScheduledTaskTrigger -AtLogOn
+    # -Hidden: belt-and-suspenders on top of the Action's own -WindowStyle
+    # Hidden — marks the TASK ITSELF as hidden in Task Scheduler's UI/API, so
+    # nothing about this background process is surfaced for a user to
+    # discover and terminate by hand.
     $Settings = New-ScheduledTaskSettingsSet `
+        -Hidden `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit ([TimeSpan]::Zero) `
         -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
@@ -341,8 +346,13 @@ Write-Host ""
 Write-Step "Starting CorvinOS console server ..."
 
 $ConsoleURL = "http://localhost:8765/console/"
-$MaxRetries = 30
+# Slow Windows boots (cold Python import + Defender scan) can take well over
+# 30s to answer healthz. The top-level goal is "the console opens in the
+# browser no matter what", so give the server generous headroom AND still open
+# the browser even if the probe times out (the server is durable via autostart).
+$MaxRetries = 60
 $RetryCount = 0
+$ServerReady = $false
 
 # Launched via the always-on Scheduled Task above so it's durable from the
 # first boot — not just a one-off process tied to this installer window.
@@ -350,16 +360,20 @@ try {
     Install-CorvinAutostart
     Write-Ok "Console will auto-start on login and auto-restart on crash/reboot."
 } catch {
-    Write-Warn "Could not set up auto-restart ($_) — starting once instead. Run manually: corvinos-serve"
-    try { Start-Process -FilePath "corvinos-serve" -ArgumentList "--no-browser" -WindowStyle Minimized -ErrorAction Stop } catch {}
+    Write-Warn "Could not set up auto-restart ($_) — starting once instead (won't survive logoff/reboot). Re-run install.ps1 later to retry autostart registration."
+    # -Hidden, not -Minimized: a minimized window still has a taskbar entry
+    # the user can click and close, killing this process exactly like closing
+    # a visible console would — Hidden has no window at all to close.
+    try { Start-Process -FilePath "corvinos-serve" -ArgumentList "--no-browser" -WindowStyle Hidden -ErrorAction Stop } catch {}
 }
 
 # Wait for server to be ready
 while ($RetryCount -lt $MaxRetries) {
     try {
-        $response = Invoke-WebRequest -Uri "http://localhost:8765/api/health" -TimeoutSec 2 -ErrorAction SilentlyContinue
-        if ($response.StatusCode -eq 200) {
+        $response = Invoke-WebRequest -Uri "http://localhost:8765/v1/console/healthz" -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
+        if ($response -and $response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
             Write-Ok "Server is ready!"
+            $ServerReady = $true
             break
         }
     } catch {
@@ -369,13 +383,14 @@ while ($RetryCount -lt $MaxRetries) {
     Start-Sleep -Seconds 1
 }
 
-if ($RetryCount -ge $MaxRetries) {
-    Write-Warn "Server startup timeout. You can open manually: $ConsoleURL"
-} else {
-    # Actually open the console (the POSIX installer does the same via xdg-open).
-    try { Start-Process $ConsoleURL -ErrorAction Stop; Write-Ok "Server is ready — opening the console in your browser ..." }
-    catch { Write-Ok "Server is ready — open it in your browser: $ConsoleURL" }
+# Open the console no matter what. If the probe timed out the server is still
+# coming up (autostart keeps it durable), so the browser tab will connect on
+# reload a few seconds later — far better than never opening it at all.
+if (-not $ServerReady) {
+    Write-Warn "Server is taking longer than expected to answer — opening the console anyway; reload the tab if it doesn't connect immediately: $ConsoleURL"
 }
+try { Start-Process $ConsoleURL -ErrorAction Stop; if ($ServerReady) { Write-Ok "Server is ready — opening the console in your browser ..." } }
+catch { Write-Ok "Open the console in your browser: $ConsoleURL" }
 
 # ── done / cheat sheet ────────────────────────────────────────────────────────
 Write-Host ""

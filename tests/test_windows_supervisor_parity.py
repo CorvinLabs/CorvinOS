@@ -100,6 +100,7 @@ class TestScheduledTaskSettingsParity:
 
     def test_both_use_the_same_settings_set_flags(self) -> None:
         expected = [
+            "-Hidden",
             "-AllowStartIfOnBatteries",
             "-DontStopIfGoingOnBatteries",
             "-ExecutionTimeLimit ([TimeSpan]::Zero)",
@@ -124,6 +125,39 @@ class TestScheduledTaskSettingsParity:
             )
 
 
+class TestNoClosableWindow:
+    """Regression for a real bug: install.ps1's Install-CorvinAutostart falls
+    back to a bare `Start-Process corvinos-serve` if Scheduled-Task
+    registration throws for any reason. That fallback used to pass
+    `-WindowStyle Minimized` — which still creates a taskbar entry the user
+    can click and close, silently killing the "background" process exactly
+    the way a visible console window would. Every process this installer
+    starts must be `-WindowStyle Hidden` (no window at all) or run via a
+    Scheduled Task with `-Hidden` — never Minimized/Normal/Maximized, which
+    all leave something on screen for a user to close."""
+
+    _NOT_ALLOWED = re.compile(r"-WindowStyle\s+(Minimized|Normal|Maximized)\b")
+
+    def test_no_closable_windowstyle_anywhere(self) -> None:
+        for label, path in (("install.ps1", _INSTALL_PS1), ("bridge.ps1", _BRIDGE_PS1)):
+            src = path.read_text(encoding="utf-8")
+            match = self._NOT_ALLOWED.search(src)
+            assert not match, (
+                f"{label}: found {match.group(0) if match else ''} — must be "
+                "-WindowStyle Hidden, not a style that leaves a closable window"
+            )
+
+    def test_install_ps1_fallback_start_uses_hidden(self) -> None:
+        src = _INSTALL_PS1.read_text(encoding="utf-8")
+        fallback_idx = src.index("Could not set up auto-restart")
+        window = src[fallback_idx:fallback_idx + 600]
+        assert "corvinos-serve" in window, "fallback Start-Process call not found where expected"
+        assert "-WindowStyle Hidden" in window, (
+            "install.ps1's no-autostart fallback must launch corvinos-serve with "
+            "-WindowStyle Hidden, not a visible/minimized window"
+        )
+
+
 if __name__ == "__main__":
     import sys
 
@@ -135,5 +169,8 @@ if __name__ == "__main__":
     t2.test_both_use_atlogon_trigger()
     t2.test_both_use_the_same_settings_set_flags()
     t2.test_both_register_with_limited_run_level()
+    t3 = TestNoClosableWindow()
+    t3.test_no_closable_windowstyle_anywhere()
+    t3.test_install_ps1_fallback_start_uses_hidden()
     print("all tests passed")
     sys.exit(0)

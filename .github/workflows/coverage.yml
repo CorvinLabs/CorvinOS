@@ -18,8 +18,15 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
+        # CI-10 (see test.yml): install the package with its real base deps +
+        # dev extra instead of a hand-maintained pip list — that list had
+        # drifted, silently omitting the package itself (breaking every
+        # corvin_console/corvin_license import), the `limits` rate-limiting
+        # lib (operator/license/validator.py imports it directly), the
+        # `hatchling` build backend (needed by tests/test_hatch_build_vendor_
+        # ignore.py), and `python-multipart` (FastAPI form-data test routes).
         run: |
-          pip install pytest pytest-cov cryptography pyyaml fastapi httpx openai anthropic
+          pip install -e ".[dev]" hatchling limits python-multipart
 
       - name: Run tests with coverage
         run: |

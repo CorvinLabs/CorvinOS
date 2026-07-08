@@ -57,6 +57,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install ffmpeg
+        # edge-tts (the keyless cloud TTS fallback `corvin-voice doctor` tries
+        # first) shells out to ffmpeg to produce the .ogg voice note — without
+        # it every TTS round-trip fails with "no audio produced" regardless of
+        # network/API-key availability, on all three OSes this job runs on.
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux)   sudo apt-get update -y && sudo apt-get install -y ffmpeg ;;
+            macOS)   brew install ffmpeg ;;
+            Windows) choco install ffmpeg -y ;;
+          esac
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

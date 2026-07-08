@@ -324,12 +324,26 @@ class TestComputeQuotaCounter(unittest.TestCase):
     def test_get_today_count_on_missing_file(self):
         self.assertEqual(_cq.get_today_count(self._home), 0)
 
-    def test_fail_open_on_io_error(self):
-        # Make the quota directory a file (causes mkdir to fail inside)
+    def test_fail_closed_on_io_error_with_finite_limit(self):
+        # Make the quota directory a file (causes mkdir to fail inside).
+        # LIC-2: a finite limit (paid tier with a cap, or free tier) must
+        # fail CLOSED on a persistent I/O error — the counter is load-bearing,
+        # so an unwritable counter must not grant unmetered access.
         broken = self._home / "global" / "license"
         broken.parent.mkdir(parents=True, exist_ok=True)
         broken.touch()  # file where directory would go
         self._set_limit(1)
+        with self.assertRaises(LicenseLimitError):
+            _cq.increment_and_check(self._home)
+
+    def test_fail_open_on_io_error_with_unlimited_tier(self):
+        # LIC-2: None (unlimited tier) must fail OPEN on a persistent I/O
+        # error — there is no quota to enforce, so an operational failure
+        # must never block.
+        broken = self._home / "global" / "license"
+        broken.parent.mkdir(parents=True, exist_ok=True)
+        broken.touch()  # file where directory would go
+        _v._set_active_license({"tier": "enterprise"})
         # Should not raise — fail-open
         _cq.increment_and_check(self._home)
 

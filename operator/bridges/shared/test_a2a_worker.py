@@ -13,15 +13,18 @@ _here = Path(__file__).resolve().parent
 if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
 
-# Poison the license compute-quota module so spawn_a2a_worker treats it as
-# absent (ImportError → fail-open). Without this the free-tier limit
-# (1 compute unit/day) rejects every spawn with status="rejected" before
-# the mock engine factory is even called.
-sys.modules.update({
-    "license.compute_quota": None,  # type: ignore[assignment]
-    "license.limits": None,         # type: ignore[assignment]
-})
-
+# NOTE: the license compute-quota module is poisoned in setUpModule()/
+# tearDownModule() below (test-execution time), not here at collection/
+# import time. a2a_worker.py only imports license.compute_quota/license.limits
+# lazily inside functions (not at its own module level), so poisoning at
+# collection time was never actually required for the `import a2a_worker`
+# below — and doing it here left "license.compute_quota"/"license.limits"
+# permanently set to None in sys.modules for the rest of the process. In a
+# combined session (`pytest tests/ operator/... core/...`, as CI's coverage
+# job runs), every later-collected file doing a real `import license.validator`
+# / `from license.limits import ...` then hit `ModuleNotFoundError: import of
+# license.limits halted; None in sys.modules` instead of importing the real
+# module.
 import a2a_worker as w  # noqa: E402
 
 # L44 house-rules is MANDATORY + fail-closed (ADR-0143): spawn_gates.check_l44
@@ -32,6 +35,26 @@ import a2a_worker as w  # noqa: E402
 # L44 compliance, so permit-by-default here like the compute-quota gate above.
 import spawn_gates  # noqa: E402
 mock.patch.object(spawn_gates, "check_l44", lambda *a, **kw: None).start()
+
+
+_SAVED_LICENSE_MODULES: dict[str, object | None] = {}
+
+
+def setUpModule() -> None:
+    """Poison the license compute-quota module so spawn_a2a_worker treats it
+    as absent (ImportError → fail-open) — see the note near the imports
+    above for why this must not happen at module-import/collection time."""
+    for name in ("license.compute_quota", "license.limits"):
+        _SAVED_LICENSE_MODULES[name] = sys.modules.get(name)
+        sys.modules[name] = None  # type: ignore[assignment]
+
+
+def tearDownModule() -> None:
+    for name, mod in _SAVED_LICENSE_MODULES.items():
+        if mod is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = mod
 
 
 # ── Sanitization ──────────────────────────────────────────────────────────

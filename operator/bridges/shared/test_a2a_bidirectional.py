@@ -36,14 +36,20 @@ _here = Path(__file__).resolve().parent
 if str(_here) not in sys.path:
     sys.path.insert(0, str(_here))
 
-# Poison the license compute-quota module so spawn_a2a_worker treats it as
-# absent (ImportError → fail-open). Without this the free-tier limit
-# (1 compute unit/day) rejects every spawn with status="rejected" before
-# the mock engine factory is even called.
-sys.modules.update({
-    "license.compute_quota": None,  # type: ignore[assignment]
-    "license.limits": None,         # type: ignore[assignment]
-})
+# The license compute-quota module is poisoned in setUpModule()/tearDownModule()
+# below (test-execution time only) rather than here at collection/import time.
+# Poisoning it here used to leave "license.compute_quota"/"license.limits"
+# permanently set to None in sys.modules for the rest of the process — in a
+# combined session (`pytest tests/ operator/... core/...`, as CI's coverage
+# job runs), every later-collected file doing a real `import license.validator`
+# / `from license.limits import ...` then hit `ModuleNotFoundError: import of
+# license.limits halted; None in sys.modules` instead of importing the real
+# module (confirmed: test_acs_engines_gate.py, test_engine_registry_license.py,
+# test_license.py, test_resource_quotas.py and others all failed collection
+# this way). remote_trigger_receiver/sender and a2a_http_server only import
+# license.validator/license.limits lazily inside functions (not at their own
+# module level), so poisoning at collection time was never actually required
+# for the imports right below.
 
 # Import modules first, THEN patch their module-level _forge_se references
 # (patching before import = no module attribute to patch yet).
@@ -60,6 +66,30 @@ import a2a_http_server  # noqa: E402
 # compute-quota gate above.
 import spawn_gates  # noqa: E402
 mock.patch.object(spawn_gates, "check_l44", lambda *a, **kw: None).start()
+
+
+_SAVED_LICENSE_MODULES: dict[str, object | None] = {}
+
+
+def setUpModule() -> None:
+    """Poison the license compute-quota module so spawn_a2a_worker treats it
+    as absent (ImportError → fail-open). Without this the free-tier limit
+    (1 compute unit/day) rejects every spawn with status="rejected" before
+    the mock engine factory is even called. Applied here (test-execution
+    time, after collection of every file in the session has finished) and
+    undone in tearDownModule() — see the note near the imports above for why
+    this must not happen at module-import/collection time."""
+    for name in ("license.compute_quota", "license.limits"):
+        _SAVED_LICENSE_MODULES[name] = sys.modules.get(name)
+        sys.modules[name] = None  # type: ignore[assignment]
+
+
+def tearDownModule() -> None:
+    for name, mod in _SAVED_LICENSE_MODULES.items():
+        if mod is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = mod
 
 
 _emitted_events: list[dict] = []

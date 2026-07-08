@@ -197,14 +197,18 @@ echo ""
 echo "  Starting CorvinOS console server ..."
 
 CONSOLE_URL="http://localhost:8765/console/"
-MAX_RETRIES=30
+# Generous headroom so a slow cold start still gets a "ready" before we stop
+# waiting; we open the browser regardless (see below) so the top-level goal
+# "the console opens in the browser" holds even on a slow machine.
+MAX_RETRIES=60
 RETRY_COUNT=0
+SERVER_READY=0
 
 # The setup wizard (corvin-install, step "start console") may already have
 # started and health-waited the console. Only launch a fresh server if nothing
 # is answering on 8765 — a second `corvinos-serve` would collide on the port,
 # fail to bind silently, and leave a dead SERVER_PID in the cheat sheet.
-if curl -s -m 2 http://localhost:8765/api/health >/dev/null 2>&1; then
+if curl -fs -m 2 http://localhost:8765/v1/console/healthz >/dev/null 2>&1; then
     printf '  %s Console already running (started by the setup wizard).\n' "$(_green '✓')"
     SERVER_PID="$(pgrep -f corvinos-serve 2>/dev/null | head -1 || true)"
 else
@@ -214,28 +218,30 @@ fi
 
 # Wait for server to be ready
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-    if curl -s -m 2 http://localhost:8765/api/health >/dev/null 2>&1; then
+    if curl -fs -m 2 http://localhost:8765/v1/console/healthz >/dev/null 2>&1; then
         printf '  %s Server is ready!\n' "$(_green '✓')"
+        SERVER_READY=1
         break
     fi
     RETRY_COUNT=$((RETRY_COUNT + 1))
     sleep 1
 done
 
-# Launch browser if server is ready
-if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-    if [ -t 1 ]; then
-        echo "  Launching CorvinOS console in your browser ..."
-        if command -v open >/dev/null 2>&1; then
-            open "$CONSOLE_URL" 2>/dev/null || true
-        elif command -v xdg-open >/dev/null 2>&1; then
-            xdg-open "$CONSOLE_URL" 2>/dev/null || true
-        elif command -v wslview >/dev/null 2>&1; then
-            wslview "$CONSOLE_URL" 2>/dev/null || true
-        fi
+# Open the console no matter what. If the probe timed out the server is still
+# coming up in the background, so the tab will connect on reload a few seconds
+# later — the goal is that the console always opens, not that it opens instantly.
+if [ "$SERVER_READY" -ne 1 ]; then
+    printf '  %s Server is taking longer than expected — opening the console anyway; reload the tab if it does not connect immediately: %s\n' "$(_yellow '⚠')" "$CONSOLE_URL"
+fi
+if [ -t 1 ]; then
+    [ "$SERVER_READY" -eq 1 ] && echo "  Launching CorvinOS console in your browser ..."
+    if command -v open >/dev/null 2>&1; then
+        open "$CONSOLE_URL" 2>/dev/null || true
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "$CONSOLE_URL" 2>/dev/null || true
+    elif command -v wslview >/dev/null 2>&1; then
+        wslview "$CONSOLE_URL" 2>/dev/null || true
     fi
-else
-    printf '  %s Server startup timeout. Open manually: %s\n' "$(_yellow '⚠')" "$CONSOLE_URL"
 fi
 
 # ── done / cheat sheet ────────────────────────────────────────────────────────
