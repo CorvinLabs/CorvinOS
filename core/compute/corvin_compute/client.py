@@ -11,11 +11,34 @@ require a second event-loop run per call. Sync sockets are simpler.
 """
 from __future__ import annotations
 
+import os
 import socket
 from pathlib import Path
 from typing import Any, Mapping
 
 from .transport import recv_frame_sync, send_frame_sync, TransportError
+
+# Messenger channels whose completions can be routed back to a chat. Kept in
+# sync with the worker's _MESSENGER_CHANNELS.
+_MESSENGER_CHANNELS = frozenset(
+    {"discord", "telegram", "whatsapp", "slack", "signal", "email", "teams"}
+)
+
+
+def _origin_from_env() -> "dict | None":
+    """Derive a messenger origin from the per-turn engine env so a detached
+    compute run can notify the user on completion. The adapter sets
+    CORVIN_CHANNEL_ID='<channel>:<chat_id>' on the engine spawn; MCP tool
+    handlers (which drive this client) inherit it. Returns None for non-messenger
+    origins (e.g. console 'web:sid') → compute stays poll-only there."""
+    raw = os.environ.get("CORVIN_CHANNEL_ID", "")
+    if ":" not in raw:
+        return None
+    channel, chat_id = raw.split(":", 1)
+    if channel not in _MESSENGER_CHANNELS or not chat_id:
+        return None
+    sender = os.environ.get("CORVIN_ORIGIN_SENDER", "").strip() or chat_id
+    return {"channel": channel, "chat_id": chat_id, "sender": sender}
 
 
 class WorkerClientError(RuntimeError):
@@ -57,6 +80,15 @@ class WorkerClient:
         return self._call("ping")
 
     def submit_run(self, **params: Any) -> dict:
+        # Auto-attach the messenger origin from the per-turn env so a detached
+        # compute run notifies on completion — unless the caller set it
+        # explicitly (or opted out with notify=None/False).
+        if "notify" not in params:
+            origin = _origin_from_env()
+            if origin:
+                params["notify"] = origin
+        elif not params.get("notify"):
+            params.pop("notify", None)  # explicit opt-out
         return self._call("submit_run", params)
 
     def get_status(self, compute_handle: str) -> dict:
