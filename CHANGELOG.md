@@ -6,6 +6,22 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Agentic Compute page always showed "0 completed" / empty Analytics no matter how many runs succeeded
+- The flat/l25 compute engine (`core/compute/corvin_compute/budget.py`
+  `RUN_STATE_*`) never produces a state literally named `"complete"` — its
+  real terminal states are `converged`, `stalled`, and `budget_exhausted`.
+  Every `r.state === "complete"` check across `compute.tsx` (the top KPI
+  strip's "Success Rate"/"Best Loss"/"Avg Convergence" tiles, every run
+  card's "done" styling, the Cross-Experiment ROI panel, and both Analytics
+  tables — Strategy Effectiveness, Tool Performance Ranking) compared
+  against a value that can never occur, so they always read as empty/zero
+  regardless of how many runs actually succeeded. Same bug, different
+  vocabulary, for pipelines and HAC (both only ever reach `"converged"` at
+  the top level). Added `isRunDone`/`isPipelineDone` helpers with the
+  correct state sets and replaced every affected check; pipeline *stage*
+  cards genuinely do use `"complete"` (per this session's earlier
+  `pipeline_detail` fallback) and were left unchanged.
+
 ### Fixed — Console "license lost" / scattered errors after a tier change
 - **Dashboard showed "Free" for an active Member subscription.** `GET
   /license/status` (`core/console/corvin_console/routes/license.py`,

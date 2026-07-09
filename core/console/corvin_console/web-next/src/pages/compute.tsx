@@ -66,6 +66,25 @@ function formatDuration(startTs: number | null, endTs?: number | null): string {
 }
 function pct(v: number) { return `${Math.round(v * 10) / 10}%`; }
 
+// WA-18: the worker's flat/l25 run engine never produces a state literally
+// named "complete" — its real terminal states (core/compute/corvin_compute/
+// budget.py RUN_STATE_*) are "converged", "stalled", and "budget_exhausted".
+// Every `r.state === "complete"` check across this page compared against a
+// value that can never occur, so the top KPI strip ("Success Rate", "Best
+// Loss"), every run-card "done" badge, and both Analytics tables (Strategy
+// Effectiveness, Tool Performance Ranking) always read as empty/zero no
+// matter how many runs actually succeeded.
+const RUN_DONE_STATES = new Set(["converged", "stalled", "budget_exhausted"]);
+export function isRunDone(state: string | null | undefined): boolean {
+  return !!state && RUN_DONE_STATES.has(state);
+}
+// Pipelines (as opposed to their individual stages, which genuinely do use
+// "complete" — see pipeline_detail's fallback in routes/compute.py) only
+// ever reach "converged" at the top level (PipelineCoordinator.run()).
+export function isPipelineDone(state: string | null | undefined): boolean {
+  return state === "converged";
+}
+
 const STRATEGY_COLORS: Record<string, string> = {
   bayesian: "#8b5cf6", grid: "#3b82f6", random: "#f97316",
 };
@@ -418,7 +437,7 @@ function KpiCard({ icon: Icon, label, value, sub, color = "text-foreground", tre
 function ComputeKpiStrip({ runs, pipelineCount, hacCount, hacRootLoss }: {
   runs: ComputeRun[]; pipelineCount: number; hacCount: number; hacRootLoss: number | null;
 }) {
-  const completed = runs.filter((r) => r.state === "complete");
+  const completed = runs.filter((r) => isRunDone(r.state));
   const active = runs.filter((r) => r.state === "running").length;
   const failed = runs.filter((r) => r.state === "failed").length;
   const successRate = completed.length + failed > 0
@@ -478,7 +497,7 @@ function WorkerStatusBar({ enabled, socketOk }: { enabled: boolean; socketOk: bo
 
 function BudgetBar({ used, total, state }: { used: number; total: number; state: string | null }) {
   const pctUsed = total > 0 ? Math.min(100, (used / total) * 100) : 0;
-  const isEfficient = pctUsed < 60 && state === "complete";
+  const isEfficient = pctUsed < 60 && isRunDone(state);
   const color = isEfficient ? "bg-emerald-500" : state === "running" ? "bg-amber-500" : "bg-blue-500";
   return (
     <div className="space-y-0.5">
@@ -548,7 +567,7 @@ function RunJobCard({ run, csrf, onDeleted }: { run: ComputeRun; csrf: string; o
   };
 
   const isRunning = run.state === "running";
-  const isComplete = run.state === "complete";
+  const isComplete = isRunDone(run.state);
   const isFailed = run.state === "failed";
   const budget = detailQ.data?.manifest?.budget;
   const maxIter = (budget?.max_iterations as number) ?? 20;
@@ -852,7 +871,7 @@ function ExperimentGroup({ group, csrf, onDeleted }: {
   const Icon = group.icon;
 
   const running  = group.runs.filter((r) => r.state === "running").length;
-  const complete = group.runs.filter((r) => r.state === "complete").length;
+  const complete = group.runs.filter((r) => isRunDone(r.state)).length;
   const failed   = group.runs.filter((r) => r.state === "failed").length;
 
   return (
@@ -1092,7 +1111,7 @@ function MultiRunChart({ runs }: { runs: RunDetail[] }) {
 }
 
 function StrategyTable({ runs }: { runs: RunDetail[] }) {
-  const completed = runs.filter((r) => r.state === "complete" && r.iterData.length > 0);
+  const completed = runs.filter((r) => isRunDone(r.state) && r.iterData.length > 0);
   const byStrategy: Record<string, RunDetail[]> = {};
   for (const r of completed) {
     const s = r.strategy ?? "unknown";
@@ -1157,7 +1176,7 @@ function StrategyTable({ runs }: { runs: RunDetail[] }) {
 }
 
 function ToolRankBars({ runs }: { runs: RunDetail[] }) {
-  const completed = runs.filter((r) => r.state === "complete" && r.best_loss != null);
+  const completed = runs.filter((r) => isRunDone(r.state) && r.best_loss != null);
   const byTool: Record<string, RunDetail[]> = {};
   for (const r of completed) {
     const t = r.tool_name ?? "unknown";
@@ -1202,7 +1221,7 @@ function ToolRankBars({ runs }: { runs: RunDetail[] }) {
 }
 
 function ConvergenceHeatmap({ runs }: { runs: RunDetail[] }) {
-  const completed = runs.filter((r) => r.state === "complete" && r.best_iter != null && r.maxIter > 0);
+  const completed = runs.filter((r) => isRunDone(r.state) && r.best_iter != null && r.maxIter > 0);
   const strategies = Array.from(new Set(completed.map((r) => r.strategy ?? "unknown")));
   const buckets = ["0–20%", "20–40%", "40–60%", "60–80%", "80–100%"];
 
@@ -1347,7 +1366,7 @@ function PipelineCard({ pipeline, csrf }: { pipeline: PipelineSummary; csrf: str
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 mt-1.5">
-          <Badge variant={isRunning ? "default" : pipeline.state === "complete" ? "ok" : "outline"}>{pipeline.state ?? "pending"}</Badge>
+          <Badge variant={isRunning ? "default" : isPipelineDone(pipeline.state) ? "ok" : "outline"}>{pipeline.state ?? "pending"}</Badge>
           {pipeline.submitted_by && <span className="text-xs text-muted-foreground">via {pipeline.submitted_by}</span>}
           {totalRows > 0 && <span className="text-xs text-muted-foreground">{(totalRows / 1_000_000).toFixed(1)}M rows processed</span>}
           {pipeline.steering_gate && <Badge variant="secondary" className="text-[10px]">steering gate</Badge>}
@@ -1414,7 +1433,7 @@ function PipelineCard({ pipeline, csrf }: { pipeline: PipelineSummary; csrf: str
                 <OpenDirButton onOpen={() => openPipelineDir(pipeline.pipeline_id, csrf)} />
                 <div className="flex items-center gap-1">
                   <PromoteChampionButton pipelineId={pipeline.pipeline_id} pipelineName={pipeline.name} csrf={csrf} />
-                  {pipeline.state === "complete" && (
+                  {isPipelineDone(pipeline.state) && (
                     <Button variant="ghost" size="sm" className="h-7 px-2 gap-1.5 text-xs"
                       onClick={() => setShowExportModal(true)}>
                       <Package className="h-3.5 w-3.5" />
@@ -1485,7 +1504,7 @@ function HacRoundChart({ lossHistory, currentRound }: { lossHistory: number[]; c
 function SubManagerCard({ manager, color, rank }: { manager: HacManagerDetail; color: string; rank: number }) {
   const stages = manager.stages ?? [];
   const activeStage = stages.find((s) => s.state === "running");
-  const doneCount = stages.filter((s) => s.state === "complete").length;
+  const doneCount = stages.filter((s) => isRunDone(s.state)).length;
   const currentLoss = manager.summary?.current_loss ?? manager.summary?.best_loss ?? null;
   const effScore = currentLoss != null && manager.budget_fraction > 0
     ? ((1 - currentLoss) / manager.budget_fraction).toFixed(2) : null;
@@ -1530,7 +1549,7 @@ function SubManagerCard({ manager, color, rank }: { manager: HacManagerDetail; c
         {/* Stage list */}
         <div className="space-y-0.5">
           {stages.map((s) => {
-            const isDone = s.state === "complete";
+            const isDone = isRunDone(s.state);
             const isAct = s.state === "running";
             return (
               <div key={s.stage_id} className={cn(
@@ -1595,7 +1614,7 @@ function HacCard({ run, csrf }: { run: HacSummary; csrf: string }) {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 mt-1.5">
-          <Badge variant={run.state === "running" ? "default" : run.state === "complete" ? "ok" : "outline"}>{run.state ?? "pending"}</Badge>
+          <Badge variant={run.state === "running" ? "default" : run.state === "converged" ? "ok" : "outline"}>{run.state ?? "pending"}</Badge>
           <Badge variant="secondary" className="font-mono text-xs">{run.aggregation_mode ?? "weighted_sum"}</Badge>
           {run.fluid_reallocation && <Badge variant="secondary" className="text-[10px]">fluid realloc</Badge>}
           {run.submitted_by && <span className="text-xs text-muted-foreground">via {run.submitted_by}</span>}
@@ -2125,7 +2144,7 @@ function WorldMap({ countries }: { countries: string[] }) {
 function ExperimentROIPanel({ experiments, runs }: { experiments: Experiment[]; runs: ComputeRun[] }) {
   if (!experiments.length) return null;
 
-  const completedRuns = runs.filter((r) => r.state === "complete" && r.best_loss != null);
+  const completedRuns = runs.filter((r) => isRunDone(r.state) && r.best_loss != null);
   const bestLoss = completedRuns.length ? Math.min(...completedRuns.map((r) => r.best_loss!)) : null;
   const worstLoss = completedRuns.length ? Math.max(...completedRuns.map((r) => r.best_loss!)) : null;
   const improvement = bestLoss != null && worstLoss != null && worstLoss > 0
@@ -2575,7 +2594,7 @@ function ExportHubTab({
     { icon: "📄", name: "HTML Report", desc: "Shareable, self-contained experiment report for stakeholders", ext: "Report" },
   ];
 
-  const completedPipelines = pipelines.filter((p) => p.state === "complete");
+  const completedPipelines = pipelines.filter((p) => isPipelineDone(p.state));
 
   return (
     <div className="space-y-6">
@@ -3308,7 +3327,7 @@ export function ComputePage() {
 
   const runs = statusQ.data?.runs ?? [];
   const activeRuns = runs.filter((r) => r.state === "running" || r.state === "pending");
-  const completedRuns = runs.filter((r) => r.state === "complete");
+  const completedRuns = runs.filter((r) => isRunDone(r.state));
   const pipelineCount = statusQ.data?.pipeline_count ?? 0;
   const hacCount = statusQ.data?.hac_count ?? 0;
   const hacRootLoss = hacQ.data?.runs[0]?.root_loss ?? null;
