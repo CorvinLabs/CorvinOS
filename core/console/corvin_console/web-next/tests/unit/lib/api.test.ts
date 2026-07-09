@@ -1,8 +1,46 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { api, ApiError, setOn401Handler } from '@/lib/api';
 
 describe('API Client', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe('401 handling (WA-17)', () => {
+    afterEach(() => {
+      setOn401Handler(null);
+      vi.unstubAllGlobals();
+    });
+
+    it('invokes the registered on401 handler when any request gets a 401', async () => {
+      // A 401 used to be treated as a plain per-request ApiError, so each
+      // page's own query rendered its own generic "Could not load X" error
+      // while the shared auth/whoami poll (every 5 minutes) hadn't yet
+      // noticed the session was gone and redirected to /login.
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        status: 401,
+        ok: false,
+        text: () => Promise.resolve(JSON.stringify({ detail: 'not authenticated' })),
+      }));
+      const handler = vi.fn();
+      setOn401Handler(handler);
+
+      await expect(api('/license/info')).rejects.toBeInstanceOf(ApiError);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not invoke the on401 handler for a successful response', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        text: () => Promise.resolve(JSON.stringify({ tier: 'member' })),
+      }));
+      const handler = vi.fn();
+      setOn401Handler(handler);
+
+      await api('/license/info');
+      expect(handler).not.toHaveBeenCalled();
+    });
   });
 
   describe('Request handling', () => {

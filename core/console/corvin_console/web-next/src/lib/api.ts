@@ -58,6 +58,21 @@ interface RequestOptions {
   timeoutMs?: number;
 }
 
+// A 401 from ANY endpoint means the session is gone — most commonly because
+// its ADR-0154 SDLP license-proof no longer matches after a tier change
+// (upgrading to Member invalidates outstanding sessions by design, so their
+// derived proof stops matching). Previously each page's own react-query call
+// just 401'd independently and rendered its own generic "Could not load X"
+// error, while the shared auth/whoami poll (every 5 minutes) hadn't yet
+// noticed and redirected to /login — several minutes of confusing,
+// page-scattered errors before the user was ever told to sign in again.
+// AuthProvider registers a handler here so a 401 anywhere immediately
+// invalidates the shared session cache instead of waiting on that poll.
+let _on401: (() => void) | null = null;
+export function setOn401Handler(fn: (() => void) | null): void {
+  _on401 = fn;
+}
+
 // Default wall-clock budget for a single console API call. Without this a
 // hung backend leaves react-query queries pending forever, which the UI
 // renders as a perpetual "Loading…" spinner. With it, a stalled request
@@ -139,6 +154,9 @@ export async function api<T = unknown>(path: string, opts: RequestOptions = {}):
   }
 
   if (!res.ok) {
+    if (res.status === 401) {
+      _on401?.();
+    }
     throw new ApiError(res.status, payload);
   }
   return payload as T;

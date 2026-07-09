@@ -6,6 +6,29 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Console "license lost" / scattered errors after a tier change
+- **Dashboard showed "Free" for an active Member subscription.** `GET
+  /license/status` (`core/console/corvin_console/routes/license.py`,
+  consumed by `dashboard.tsx`) had the identical bug already fixed on
+  `/compute/license`: it hardcoded `tier: "free"` whenever no Enterprise
+  on-prem `license.jwt` existed, even though `/license/info` (the dedicated
+  License page) correctly showed "member" for the exact same
+  `operator/license` `license.key` one function away. Two pages disagreeing
+  about the same customer's tier is exactly what reads as "the license
+  keeps disappearing." Falls back to `active_tier()` the same way.
+- **Root cause of the actual disappearing-session symptom:** ADR-0154's
+  session-derived license proof (SDLP) is a deliberate deterrent — a
+  license tier change invalidates outstanding sessions server-side, by
+  design, so a session cookie can't outlive a license swap. But the
+  frontend's `api()` client treated every 401 as a plain per-request error;
+  each page's own query 401'd independently and rendered its own generic
+  "Could not load X" message, while the shared `auth/whoami` poll (every 5
+  minutes) hadn't yet noticed and redirected to `/login` — several minutes
+  of confusing, page-scattered errors before the user was ever told to
+  sign in again. `api()` now calls a registered on-401 handler
+  immediately; `AuthProvider` wires it to invalidate the shared session
+  query right away instead of waiting on the next scheduled poll.
+
 ### Fixed — Agentic Compute run graph: every node except "completion" was an unstyled white box
 - `GET /compute/runs/{id}/graph` (flat/l25 mode) emits its own group
   vocabulary (`run`/`strategy`/`iteration`/`best_iter`) that is entirely

@@ -188,6 +188,25 @@ def test_compute_license_status_reflects_member_tier_without_enterprise_key(monk
     assert result["daily_limit"] is None
 
 
+def test_license_status_reflects_member_tier_without_enterprise_key(monkeypatch, tmp_path):
+    """WA-17 regression: GET /license/status (consumed by the Dashboard) had
+    the identical conflation bug as /compute/license — falling back to a
+    hardcoded tier="free" whenever no Enterprise on-prem license.jwt exists,
+    even though /license/info (the dedicated License page) correctly showed
+    "member" for the exact same operator/license license.key. Two pages
+    disagreeing about the same customer's tier is precisely what read as
+    "the license gets lost sometimes"."""
+    from corvin_console.routes import license as L
+
+    missing_path = tmp_path / "no-such-license.jwt"
+    monkeypatch.setattr(L._verifier, "license_file_path", lambda: missing_path)
+    monkeypatch.setattr(L, "_lic_active_tier", lambda: "member")
+
+    result = L._compute_license_status()
+    assert result.tier == "member"
+    assert result.mode == "active"
+
+
 def test_pipeline_detail_derives_stage_state_from_pipeline_summary(tmp_path):
     """WA-16 regression: PipelineCoordinator only ever writes the rolling
     pipeline_summary.json (per PipelineStore's own documented layout) — a

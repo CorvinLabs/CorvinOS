@@ -154,7 +154,21 @@ def _compute_license_status() -> LicenseStatus:
     try:
         lic_file = _verifier.license_file_path()
         if not lic_file.exists():
-            # No license installed
+            # No Enterprise (on-prem) license.jwt installed — the normal case
+            # for a Paddle/consumer subscriber, licensed instead through the
+            # separate operator/license system (license.key, checked above at
+            # import time). Falling back to a hardcoded "free" here shadowed
+            # an active Member subscription on the Dashboard (GET
+            # /license/status) even though /license/info correctly showed
+            # "member" for the very same license — same tier, two different
+            # pages disagreeing.
+            _op_tier = _lic_active_tier()
+            if _op_tier != "free":
+                return LicenseStatus(
+                    tier=_op_tier,
+                    mode="active",
+                    customer_fp=None,
+                )
             return LicenseStatus(
                 tier="free",
                 mode="free",

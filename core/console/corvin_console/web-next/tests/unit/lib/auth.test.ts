@@ -1,4 +1,50 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import * as React from 'react';
+import { render, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { AuthProvider } from '@/lib/auth';
+import { setOn401Handler } from '@/lib/api';
+
+describe('AuthProvider 401 wiring (WA-17)', () => {
+  afterEach(() => {
+    setOn401Handler(null);
+    vi.unstubAllGlobals();
+  });
+
+  it('invalidates the auth/whoami query immediately when any request 401s', async () => {
+    // Previously a 401 on some OTHER page's query (e.g. license info, after
+    // a tier change invalidates the session's ADR-0154 proof) was invisible
+    // to AuthProvider until its own 5-minute refetchInterval poll noticed —
+    // several minutes of the app still believing it was authenticated while
+    // every page's query failed independently.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      status: 401,
+      ok: false,
+      text: () => Promise.resolve(JSON.stringify({ detail: 'not authenticated' })),
+    }));
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
+
+    render(
+      React.createElement(
+        QueryClientProvider,
+        { client: qc },
+        React.createElement(AuthProvider, null, React.createElement('div', null, 'child')),
+      ),
+    );
+
+    // AuthProvider's own initial whoami query already exercises the 401
+    // path once; simulate a SECOND, unrelated page's request 401-ing to
+    // prove the handler reacts to failures outside its own query too.
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalled());
+    invalidateSpy.mockClear();
+
+    const { api } = await import('@/lib/api');
+    await expect(api('/license/info')).rejects.toThrow();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['auth'] });
+  });
+});
 
 describe('Auth Context', () => {
   describe('Authentication flow', () => {
