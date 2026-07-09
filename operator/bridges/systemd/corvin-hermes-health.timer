@@ -8,6 +8,10 @@ After=corvin-voice-bridge-adapter.service
 # to avoid thundering herd on multi-instance deployments.
 [Timer]
 OnBootSec=2min
+# OnActiveSec anchors the schedule to timer activation: without it a timer
+# (re)started mid-uptime never fires again — OnBootSec lies in the past and
+# OnUnitActiveSec has no anchor until the service ran at least once.
+OnActiveSec=5min
 OnUnitActiveSec=5min
 RandomizedDelaySec=30s
 Persistent=yes

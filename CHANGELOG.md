@@ -6,6 +6,79 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.24] — 2026-07-09
+
+### Security — Windows `cmd /c` argument-injection (host RCE) closed
+- **A user's messenger message could execute arbitrary commands on a Windows
+  host.** Worker-engine spawns (`claude`, `codex`, `opencode`, `copilot` — npm
+  `.cmd` shims) ran through `subprocess.Popen(["cmd", "/c", …])`. On Windows a
+  list is flattened by `list2cmdline` and **re-parsed by `cmd.exe`**, whose
+  `\"` quote-toggle semantics let a prompt like `a" & powershell … & "b` break
+  out and run the `&`-separated payload — outside the AI sandbox, bypassing the
+  house-rules/path-gate/audit layers. New `agents/_win_shim.py` builds a
+  cmd.exe-safe command **string** (each arg wrapped, inner `"` doubled as `""`,
+  trailing backslashes doubled) that keeps `cmd` in quoted mode end-to-end
+  while the target program still receives the argument verbatim. Applied at all
+  six spawn sites (`claude_code`, `codex_cli`, `opencode_cli`, `copilot_cli`,
+  and both `acs_runtime` manager/worker spawns). No-op on POSIX and for direct
+  `.exe` launches — Linux/macOS behaviour is byte-for-byte unchanged. Unit
+  tests in `agents/test_win_shim.py`. (Windows-VM end-to-end verification of
+  the quoting against a live `cmd.exe` is recommended before relying on it in a
+  regulated deployment.)
+
+### Fixed — running sessions crashed on every bridge restart (incident 2026-07-09)
+- **A `systemctl restart` of the bridge (including one triggered from within a
+  chat, e.g. "restart both services") SIGKILLed every in-flight engine run.**
+  The adapter's SIGTERM handler called `sys.exit(0)` immediately; interpreter
+  teardown then joined the non-daemon `ThreadPoolExecutor` workers, which keep
+  streaming their `claude` run, so the process hung until systemd's 20s
+  `TimeoutStopSec` fired a cgroup-wide SIGKILL — dropping all active sessions
+  with `exit_code=143`. Worse, a normal turn's inbox envelope is only moved to
+  `processed/` at end-of-turn, so a mid-turn SIGKILL left the file in place and
+  the restarted adapter **re-ran the same instruction** (observed: the
+  "restart both services" message executed twice). The SIGTERM handler now only
+  sets a `_shutdown_event`; the main loop stops accepting new inbox items and
+  **drains in-flight runs** (up to `ADAPTER_DRAIN_TIMEOUT`, default 90s) before
+  exiting, so a restart lets running turns finish (and move their inbox file)
+  instead of killing them. The unit's `TimeoutStopSec` is raised 20→120s and
+  `KillMode=mixed` sends SIGTERM to the main process only. New regression tests
+  in `test_adapter_cancel.py`.
+- **Five systemd timers stopped firing after any mid-uptime restart.** Timers
+  with `OnUnitActiveSec=` but no `OnActiveSec=` anchor never re-arm once
+  restarted while the machine is already up (watchdog + bg-monitor dead since
+  2026-06-30 / 07-06). Added `OnActiveSec=` to
+  `corvin-voice-bridge-watchdog`, `corvin-bg-monitor`, `corvin-hermes-health`,
+  `corvin-operator-ui-watchdog`, and `corvin-claude-creds-sync`.
+- **License reload throttle spammed the log** (2236 WARNING lines in ~19h). A
+  throttled `reload_from_disk()` is the expected, self-healing outcome of the
+  per-authenticated-op reload path — downgraded WARNING→DEBUG. The
+  `license.reload_throttled` audit event is unchanged.
+
+### Fixed — adversarial review of the 0.10.21–0.10.23 changes
+- **Always-on (Stufe-2) install baked `/root/.corvin` into the service under
+  sudo.** `_webui_env_vars()` resolved `CORVIN_HOME` in the elevated process,
+  so a wheel install under `sudo` wrote `/root/.corvin` into a unit running as
+  the invoking user → crash-loop until `StartLimitBurst`, leaving the machine
+  with no console. Now anchors to the invoking user's home via `current_user()`.
+- **STT (voice) fixes from the 453f026 chain-flip:** a blackholed OpenAI
+  endpoint no longer hard-kills transcription — a non-terminal timeout falls
+  through to the local provider (only a terminal-provider timeout re-raises);
+  the local model's language hint is reset to `auto` per call (a prior `de`
+  hint no longer sticks on the process-wide singleton); an offline install
+  whose configured default model isn't on disk falls back to any present model
+  instead of an in-band download that offline can't satisfy.
+- **`say.py` TTS key resolution** now prefers the dedicated
+  `CORVIN_TTS_OPENAI_KEY` over `OPENAI_API_KEY` (env and file) and strips
+  inline `# comment`s, matching the STT side (ADR-0193).
+- **Windows uninstall shortcut roots are now injectable.** `uninstall()` read
+  `os.environ["APPDATA"/"USERPROFILE"]` directly, so a win32-mocked test could
+  unlink a real Windows dev's Startup/Desktop `CorvinOS.lnk` — the 4th
+  incarnation of the live-state-wipe class. Roots resolve in `__init__`
+  (default env, sandbox under test) with a tripwire test.
+- **codex/opencode `/stop` in the register→spawn window** no longer false-ACKs
+  while the turn keeps running: `cancel()` latches `_cancel_requested`, and
+  `spawn()` honours it right after the process starts.
+
 ### Fixed — /stop falsely reported "No task was running"
 - **`/stop` (and `/cancel`/`/halt`/`/abbruch`) could silently do nothing and
   tell the user nothing was running, even while a task genuinely was.**

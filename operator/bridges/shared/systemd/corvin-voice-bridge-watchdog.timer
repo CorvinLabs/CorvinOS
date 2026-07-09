@@ -3,6 +3,10 @@ Description=Run corvin-voice bridge watchdog every minute
 
 [Timer]
 OnBootSec=2min
+# OnActiveSec anchors the schedule to timer activation: without it a timer
+# (re)started mid-uptime never fires again — OnBootSec lies in the past and
+# OnUnitActiveSec has no anchor until the service ran at least once.
+OnActiveSec=60s
 OnUnitActiveSec=60s
 AccuracySec=10s
 Unit=corvin-voice-bridge-watchdog.service

@@ -719,6 +719,19 @@ _chat_locks_guard = threading.Lock()
 _in_flight: dict[str, float] = {}
 _in_flight_guard = threading.Lock()
 
+# Graceful shutdown (systemd stop / SIGTERM). The old handler called
+# sys.exit(0) immediately — but ThreadPoolExecutor workers are non-daemon
+# and shutdown(wait=False) does NOT interrupt a running turn, so interpreter
+# teardown blocked joining the workers until systemd's TimeoutStopSec fired
+# and SIGKILLed the whole cgroup — killing every in-flight session hard
+# (observed 2026-06-25 and 2026-07-09). Instead the handler only sets this
+# event; the main loop stops accepting new inbox items and drains in-flight
+# runs for up to ADAPTER_DRAIN_TIMEOUT seconds before exiting. Keep the
+# drain budget below the unit's TimeoutStopSec (120s) so the clean path
+# always wins the race against SIGKILL.
+_shutdown_event = threading.Event()
+DRAIN_TIMEOUT = float(os.environ.get("ADAPTER_DRAIN_TIMEOUT", "90"))
+
 # /stop / /cancel support: chat_key → list of currently running claude
 # subprocess.Popen handles. Each Popen is spawned with start_new_session=True
 # so we can SIGTERM the whole process group (claude itself plus any tool-use
@@ -10122,18 +10135,62 @@ def main() -> int:
     _atexit_m2.register(_write_shutdown_anchor)
 
     def _sigterm_handler(_sig: int, _frame: object) -> None:
-        # Do NOT call _write_shutdown_anchor() here — _write_lock (threading.Lock,
-        # non-reentrant) may be held by the main thread inside write_event().
-        # sys.exit(0) raises SystemExit, which unwinds all with-blocks (releasing
-        # the lock), then atexit fires _write_shutdown_anchor() safely.
-        sys.exit(0)
+        # Only flag the request — no sys.exit() here. Raising SystemExit from
+        # the handler unwinds the main thread but interpreter teardown then
+        # JOINS the non-daemon executor workers, which keep streaming their
+        # current claude run; systemd's stop timeout then SIGKILLs the cgroup
+        # and every in-flight session dies without an answer. The main loop
+        # picks the flag up within one POLL_INTERVAL and drains instead.
+        _shutdown_event.set()
 
     signal.signal(signal.SIGTERM, _sigterm_handler)
+
+    def _drain_and_exit() -> int:
+        """Stop accepting work, let in-flight runs finish, then exit.
+
+        Clean path: all runs finish within DRAIN_TIMEOUT → return 0 (normal
+        interpreter exit; atexit writes the shutdown anchor). Timeout path:
+        SIGTERM the remaining claude process groups so they can flush, write
+        the anchor manually, and os._exit(0) — os._exit skips atexit AND the
+        worker-thread join that caused the historical stop-timeout hang.
+        """
+        with _in_flight_guard:
+            pending = len(_in_flight)
+        log(f"SIGTERM: draining — no new work accepted, "
+            f"{pending} run(s) in flight, budget {DRAIN_TIMEOUT:.0f}s")
+        deadline = time.monotonic() + DRAIN_TIMEOUT
+        while time.monotonic() < deadline:
+            with _in_flight_guard:
+                pending = len(_in_flight)
+            if pending == 0:
+                log("drain complete — all in-flight runs finished, exiting")
+                return 0
+            time.sleep(0.5)
+        # Budget exhausted: terminate remaining engine process groups so the
+        # engines see SIGTERM (they persist partial state) instead of the
+        # cgroup-wide SIGKILL they would otherwise get from systemd.
+        with _running_subprocs_guard:
+            leftover = [p for procs in _running_subprocs.values() for p in procs]
+        log(f"drain timeout — SIGTERM {len(leftover)} remaining engine process group(s)")
+        for proc in leftover:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        time.sleep(3.0)
+        _write_shutdown_anchor()
+        try:
+            logging.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+        os._exit(0)
 
     last_cleanup = time.monotonic()
     try:
         while True:
             try:
+                if _shutdown_event.is_set():
+                    return _drain_and_exit()
                 settings = load_settings()
                 files = sorted(INBOX.glob("*.json"))
                 for f in files:

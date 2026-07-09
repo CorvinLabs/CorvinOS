@@ -1249,12 +1249,12 @@ def _call_manager_sync(
         "--output-format", "json",  # extract text from envelope so parse never sees CLI wrapper
     ]
     # Windows: npm ships `claude` as a .cmd shim — CreateProcess can't launch
-    # it directly (WinError 193); route through cmd /c in list form (no
-    # shell=True). encoding pinned: claude emits UTF-8 JSON, locale-default
-    # cp1252 mojibakes umlauts or dies in UnicodeDecodeError mid-turn.
-    # Mirrors agents/claude_code.py.
-    if (os.name == "nt" and _argv[0].lower().endswith((".cmd", ".bat"))):
-        _argv = ["cmd", "/c", *_argv]
+    # it directly (WinError 193). windows_shim_command returns a cmd.exe-SAFE
+    # command string (a bare ["cmd","/c",*_argv] list lets a user-prompt
+    # metachar break out of the quotes → host RCE); no-op on POSIX. encoding
+    # pinned: claude emits UTF-8 JSON, cp1252 mojibakes umlauts mid-turn.
+    from agents._win_shim import windows_shim_command
+    _argv = windows_shim_command(_argv)
     proc = subprocess.Popen(
         _argv,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1429,10 +1429,11 @@ def _call_worker_sync(
         "--max-turns", worker_max_turns,
         "--output-format", "json",
     ]
-    # Windows .cmd-shim wrap + pinned UTF-8 decode — same rationale as the
-    # manager spawn above (WinError 193 / cp1252 mojibake).
-    if (os.name == "nt" and _argv[0].lower().endswith((".cmd", ".bat"))):
-        _argv = ["cmd", "/c", *_argv]
+    # Windows .cmd-shim: cmd.exe-safe command string + pinned UTF-8 decode —
+    # same rationale as the manager spawn above (WinError 193 / cp1252 mojibake
+    # / metachar-breakout RCE via a bare cmd /c list).
+    from agents._win_shim import windows_shim_command
+    _argv = windows_shim_command(_argv)
     proc = subprocess.Popen(
         _argv,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,

@@ -100,6 +100,11 @@ class OpenCodeEngine:
     def __init__(self, *, binary: str | None = None) -> None:
         self.binary = binary or _resolve_opencode_binary()
         self._proc: subprocess.Popen[bytes] | None = None
+        # /stop can arrive AFTER the adapter registered this engine but BEFORE
+        # spawn() creates _proc; without this latch cancel() no-ops on a None
+        # _proc while the adapter reports "aborted" and the turn runs anyway.
+        # spawn() checks it right after Popen to honour a pre-spawn cancel.
+        self._cancel_requested = False
         self._override_model: str | None = None  # set via /e:model ECI handler
         # Stderr ring buffer, drained concurrently with stdout so a child
         # writing >64KiB to stderr mid-run can never deadlock (H9). Mirror
@@ -220,12 +225,13 @@ class OpenCodeEngine:
         cwd = str(working_dir) if working_dir else None
         start_time = time.time()
 
+        from ._win_shim import windows_shim_command
         try:
             self._proc = subprocess.Popen(
-                # Windows .cmd-shim wrap — same rationale as agents/claude_code.py
-                # (WinError 193 on npm-installed CLIs).
-                (["cmd", "/c", *args] if (os.name == "nt" and args
-                    and str(args[0]).lower().endswith((".cmd", ".bat"))) else args),
+                # Windows .cmd-shim: cmd.exe-safe command string (a bare
+                # ["cmd","/c",*args] list lets a user-prompt metachar break out
+                # → RCE). No-op on POSIX. See agents/_win_shim.py.
+                windows_shim_command(args),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=cwd,
@@ -243,6 +249,12 @@ class OpenCodeEngine:
             )
             return
 
+        # Honour a /stop that arrived in the register→spawn window.
+        if self._cancel_requested:
+            self._cleanup_proc()
+            yield StreamEvent(type="error", error="cancelled")
+            return
+
         # H9: drain stderr concurrently so the pipe buffer can't fill and
         # stall the child mid-stream. The tail is consulted on the
         # process-died-non-zero error path below.
@@ -254,6 +266,8 @@ class OpenCodeEngine:
             self._cleanup_proc()
 
     def cancel(self) -> None:
+        # Latch first so a cancel racing ahead of spawn()'s Popen is not lost.
+        self._cancel_requested = True
         if self._proc and self._proc.poll() is None:
             try:
                 self._proc.terminate()

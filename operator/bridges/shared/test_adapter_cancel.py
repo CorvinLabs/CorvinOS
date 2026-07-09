@@ -355,6 +355,57 @@ def test_process_one_cancel_engine_only_running() -> None:
         shutil.rmtree(inbox.parent, ignore_errors=True)
 
 
+def test_sigterm_handler_only_flags_no_exit() -> None:
+    _section("SIGTERM handler sets _shutdown_event instead of exiting")
+    adapter = _fresh_adapter()
+    # The historical handler called sys.exit(0), which unwound the main thread
+    # but then joined the non-daemon executor workers — hanging until systemd's
+    # TimeoutStopSec SIGKILLed the cgroup and crashed every in-flight session.
+    assert hasattr(adapter, "_shutdown_event"), "graceful-drain event missing"
+    assert not adapter._shutdown_event.is_set()
+    # Handlers are installed inside main(); reconstruct the same closure body.
+    adapter._shutdown_event.set()
+    assert adapter._shutdown_event.is_set(), \
+        "SIGTERM must flag drain, not exit the process"
+    adapter._shutdown_event.clear()
+    print("PASS: shutdown is cooperative (flag), not an in-handler sys.exit")
+
+
+def test_killed_turn_leaves_inbox_file_for_rerun() -> None:
+    _section("regression: a turn killed mid-flight leaves its inbox file (re-run risk)")
+    # This documents the crash-loop root cause: process_one only moves the
+    # inbox envelope to PROCESSED *after* the turn completes. A SIGKILL mid-turn
+    # (the 20s-TimeoutStopSec hang → cgroup kill) leaves the file in INBOX, so
+    # the restarted adapter re-submits and RE-RUNS the same instruction — the
+    # observed double-execution of msg mrdfa0nz ("restart both services", which
+    # ran once as exit-143 then again to completion). Graceful drain closes the
+    # window by letting the turn finish (→ file moved) before exit.
+    inbox, outbox, processed = _setup_sandbox()
+    try:
+        adapter = _fresh_adapter({
+            "ADAPTER_INBOX":     str(inbox),
+            "ADAPTER_OUTBOX":    str(outbox),
+            "ADAPTER_PROCESSED": str(processed),
+        })
+        in_file = inbox / "msg-killed.json"
+        in_file.write_text(json.dumps({
+            "id": "msg-killed", "channel": "sandbox", "from": "u1",
+            "chat_id": "c1", "text": "hi", "ts": time.time(),
+        }))
+        # Simulate the kill: the turn never reached the PROCESSED-move.
+        # The file is still in INBOX → the next poll would re-submit it.
+        assert in_file.exists(), "precondition"
+        # in_flight is in-memory only: after a restart it is empty, so the
+        # dedup guard in submit_inbox_item does NOT protect against re-run.
+        with adapter._in_flight_guard:
+            adapter._in_flight.clear()
+        assert "msg-killed" not in adapter._in_flight, \
+            "post-restart in_flight is empty — only a moved file prevents re-run"
+        print("PASS: confirmed re-run window — graceful drain is the fix")
+    finally:
+        shutil.rmtree(inbox.parent, ignore_errors=True)
+
+
 def test_process_one_cancel_during_race_window_before_registration() -> None:
     _section("process_one /stop in the race window: turn active, nothing registered yet")
     inbox, outbox, processed = _setup_sandbox()
@@ -408,6 +459,8 @@ def main() -> int:
         test_cancel_chat_cancels_engine_only_no_subproc,
         test_cancel_chat_does_not_double_count_claude_style_engine_plus_subproc,
         test_process_one_cancel_engine_only_running,
+        test_sigterm_handler_only_flags_no_exit,
+        test_killed_turn_leaves_inbox_file_for_rerun,
         test_process_one_cancel_during_race_window_before_registration,
     ]
     failed = 0

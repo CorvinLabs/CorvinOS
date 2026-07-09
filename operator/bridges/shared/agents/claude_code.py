@@ -441,14 +441,13 @@ class ClaudeCodeEngine:
 
         # Windows: npm installs the `claude` CLI as a `claude.cmd` shim, and
         # CreateProcess cannot launch a .cmd/.bat directly (FileNotFoundError /
-        # WinError 193) — so the resolved binary must be run through the command
-        # processor. List-form `cmd /c <bin> <args…>` keeps every argument a
-        # separate argv element (NOT shell=True → no shell-metachar injection)
-        # and leaves _build_args' output unchanged (golden snapshots intact).
-        spawn_args = args
-        if (os.name == "nt" and args and isinstance(args[0], str)
-                and args[0].lower().endswith((".cmd", ".bat"))):
-            spawn_args = ["cmd", "/c", *args]
+        # WinError 193) — so it runs through cmd.exe. A LIST `["cmd","/c",...]`
+        # is NOT safe: Popen routes it through list2cmdline, cmd.exe re-parses,
+        # and a user-prompt metachar (`" & payload`) breaks out (host RCE).
+        # windows_shim_command builds a cmd.exe-safe command STRING instead; on
+        # POSIX / non-.cmd it returns `args` unchanged (snapshots intact).
+        from ._win_shim import windows_shim_command
+        spawn_args = windows_shim_command(args)
 
         try:
             self._proc = subprocess.Popen(

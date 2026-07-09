@@ -4,6 +4,10 @@ Documentation=https://github.com/anthropics/corvinos
 
 [Timer]
 OnBootSec=30s
+# OnActiveSec anchors the schedule to timer activation: without it a timer
+# (re)started mid-uptime never fires again — OnBootSec lies in the past and
+# OnUnitActiveSec has no anchor until the service ran at least once.
+OnActiveSec=60s
 OnUnitActiveSec=60s
 AccuracySec=5s
 Unit=corvin-operator-ui-watchdog.service

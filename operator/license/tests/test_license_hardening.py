@@ -196,9 +196,13 @@ def test_reload_rate_limiter_blocks_rapid_calls(caplog):
         v.reload_from_disk()
         first_reload_ts = v._LAST_RELOAD_AT
 
-        # Immediately call again — should be throttled
+        # Immediately call again — should be throttled. The throttle notice is
+        # logged at DEBUG (not WARNING): a throttled reload is the EXPECTED,
+        # self-healing outcome of the per-authenticated-op reload path, so
+        # logging it at WARNING made the throttle its own noise source (2236
+        # lines in ~19h, 2026-07-09). Capture at DEBUG accordingly.
         import logging
-        with caplog.at_level(logging.WARNING, logger="corvin.license"):
+        with caplog.at_level(logging.DEBUG, logger="corvin.license"):
             v.reload_from_disk()
 
         # _LAST_RELOAD_AT must NOT have advanced beyond first_reload_ts

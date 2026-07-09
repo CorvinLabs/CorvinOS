@@ -244,7 +244,7 @@ def transcribe(
     chain = _chain_from_env()
     failures: list[str] = []
     last_error: Optional[Exception] = None
-    for n in chain:
+    for idx, n in enumerate(chain):
         cls = _PROVIDERS.get(n)
         if cls is None:
             continue
@@ -261,10 +261,18 @@ def transcribe(
             return instance.transcribe(
                 audio_path, lang=lang, timeout_s=timeout_s,
             )
-        except STTTimeout:
-            # Timeout is structural — don't multiply user wait by
-            # falling through.
-            raise
+        except STTTimeout as exc:
+            # A timeout on the LAST provider is terminal — don't multiply the
+            # user's wait by falling through to nothing. But when a provider
+            # earlier in the chain times out (e.g. the default chain now leads
+            # with "openai", and a blackholed/slow endpoint burns the budget),
+            # we MUST still try the remaining local provider instead of hard-
+            # failing STT while a healthy on-box model sits unused.
+            failures.append(f"{n}: timeout")
+            last_error = exc
+            if idx == len(chain) - 1:
+                raise
+            continue
         except (STTProviderUnavailable, STTTranscriptionFailed) as exc:
             failures.append(f"{n}: {exc}")
             last_error = exc

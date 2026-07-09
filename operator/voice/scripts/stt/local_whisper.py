@@ -169,6 +169,61 @@ def _models_dir() -> Path:
     return _resolve_voice_config_dir() / "whisper-models"
 
 
+def _get_logger():
+    import logging  # noqa: PLC0415
+    return logging.getLogger("corvin.stt.local")
+
+
+def _explicit_model_env_set() -> bool:
+    """True when the operator pinned CORVIN_STT_LOCAL_MODEL explicitly.
+
+    A pinned model is honored verbatim (download it if missing) — the
+    offline fallback only applies to the shipped DEFAULT, whose value
+    changed across versions (tiny-q5_1 → base-q5_1) and must not strand
+    an install that only has the old default on disk.
+    """
+    return bool(os.environ.get("CORVIN_STT_LOCAL_MODEL", "").strip())
+
+
+def _model_file_present(size: str) -> bool:
+    """Whether the ggml file for ``size`` is already downloaded on disk.
+
+    pywhispercpp caches as ``ggml-<size>.bin``; a hand-placed
+    ``<size>.bin`` / ``<size>`` (resolve_model_path's preferred shapes)
+    also counts as present.
+    """
+    d = _models_dir()
+    for name in (f"ggml-{size}.bin", f"{size}.bin", size):
+        p = d / name
+        try:
+            if p.is_file() and p.stat().st_size > 0:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _first_present_model() -> "str | None":
+    """Name of any already-downloaded pywhispercpp model, or None.
+
+    Used as the offline-safe fallback when the configured default model
+    file is absent. Deterministic ordering (sorted) so the pick is stable.
+    """
+    d = _models_dir()
+    try:
+        entries = sorted(d.glob("ggml-*.bin"))
+    except OSError:
+        return None
+    for p in entries:
+        try:
+            if p.is_file() and p.stat().st_size > 0:
+                # ggml-<size>.bin → <size>
+                return p.name[len("ggml-"):-len(".bin")]
+        except OSError:
+            continue
+    return None
+
+
 def _prefer_faster_whisper() -> bool:
     """Opt-in escape hatch for operators who already have a working
     faster-whisper/av/CTranslate2 install and want its GPU-accelerated
@@ -264,6 +319,27 @@ class LocalWhisperProvider:
         """
         global _loaded_model
         size = os.environ.get("CORVIN_STT_LOCAL_MODEL", _DEFAULT_MODEL)
+        # Offline-safe model selection. When 453f026 raised the default from
+        # tiny-q5_1 to base-q5_1, an upgraded install that already has ONLY the
+        # old tiny model (autoupdate/pip don't run the model downloader) would,
+        # on the first voice note, try an in-band download of base-q5_1 — which
+        # never completes on an air-gapped/offline box, leaving previously-
+        # working voice input permanently dead. If the configured model file is
+        # absent but ANOTHER already-downloaded model is present, use that
+        # instead of forcing a download that offline cannot satisfy. Only the
+        # pywhispercpp engine caches ggml files this way; faster-whisper manages
+        # its own cache, so this fallback is scoped to the default engine below.
+        if not _explicit_model_env_set() and not _model_file_present(size):
+            _fallback = _first_present_model()
+            if _fallback is not None and _fallback != size:
+                log = _get_logger()
+                log.warning(
+                    "local STT: configured model %r not on disk; using "
+                    "already-present %r instead of an in-band download "
+                    "(offline-safe). Run `corvin-voice doctor` to fetch %r.",
+                    size, _fallback, size,
+                )
+                size = _fallback
         engine = (
             "faster-whisper"
             if (_prefer_faster_whisper() and _faster_whisper_importable())
@@ -529,15 +605,18 @@ class LocalWhisperProvider:
                     return True
                 return False
 
-            kwargs: dict = {}
-            if lang and lang != "auto":
-                kwargs["language"] = lang
-            # No hint: leave `language` unset. whisper.cpp auto-detects the
-            # language as part of the normal decode pass and still produces
-            # segments (confirmed empirically — passing `detect_language=True`
-            # instead makes whisper.cpp run a detect-only pass and return ZERO
-            # segments, silently dropping the transcript; do not set that flag
-            # here).
+            # Always pass `language` EXPLICITLY — the model is a process-wide
+            # singleton (_MODEL_CACHE) and pywhispercpp's `_set_params` persists
+            # every override "for future calls". Omitting the arg on a no-hint
+            # call leaves a PREVIOUS call's `language="de"` pinned, so a later
+            # English note force-decodes as German (and lang-id then reports the
+            # pinned language, masking it). "auto" resets the singleton to
+            # whisper.cpp's normal auto-detect decode pass. (Do NOT use the
+            # detect_language flag: it runs a detect-only pass and returns ZERO
+            # segments, silently dropping the transcript.)
+            kwargs: dict = {
+                "language": lang if (lang and lang != "auto") else "auto",
+            }
 
             try:
                 segments = model.transcribe(

@@ -844,9 +844,19 @@ operator/voice/scripts/stt/
    local-only with no key, so this needs no separate branch).
 
 The chain falls through on `STTProviderUnavailable` and
-`STTTranscriptionFailed`. It does **NOT** fall through on
-`STTTimeout` — multiplying user wait time by retrying a slow
-provider is the wrong default.
+`STTTranscriptionFailed`. On `STTTimeout` it falls through **only when a later
+provider remains** — a timeout on the *terminal* provider re-raises (retrying a
+slow provider with nothing left to try just multiplies user wait). This matters
+since the default chain now leads with `openai`: a blackholed/slow cloud
+endpoint that burns the budget must still fall through to the local model
+rather than hard-failing STT (fixed 2026-07-09).
+
+The **local** provider is additionally offline-safe: if the configured default
+model file (`base-q5_1` since 453f026) is absent but another model is already
+downloaded, it uses that instead of an in-band download that an offline/air-
+gapped box can never complete; and the per-call language hint is always passed
+explicitly (`auto` when no hint) so a previous call's `language=de` cannot stick
+on the process-wide model singleton.
 
 **Provider contract** (`STTProvider`):
 

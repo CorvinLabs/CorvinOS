@@ -241,13 +241,14 @@ class CopilotCliEngine:
             raw={"engine": "copilot", "task_type": effective_task_type or "chat"},
         )
 
+        from ._win_shim import windows_shim_command
         proc: subprocess.Popen[bytes] | None = None
         try:
             proc = subprocess.Popen(
-                # Windows .cmd-shim wrap — same rationale as agents/claude_code.py
-                # (WinError 193 on npm-installed CLIs).
-                (["cmd", "/c", *cmd] if (os.name == "nt" and cmd
-                    and str(cmd[0]).lower().endswith((".cmd", ".bat"))) else cmd),
+                # Windows .cmd-shim: cmd.exe-safe command string (a bare
+                # ["cmd","/c",*cmd] list lets a user-prompt metachar break out
+                # → RCE). No-op on POSIX. See agents/_win_shim.py.
+                windows_shim_command(cmd),
                 stdin=subprocess.DEVNULL,   # non-interactive: no TTY needed
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

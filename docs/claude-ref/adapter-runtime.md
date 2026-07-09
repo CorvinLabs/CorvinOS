@@ -225,10 +225,19 @@ so the next boot can detect chain truncation or replay:
 
 - **atexit handler** fires on normal exit (return from `main()`) and on
   `KeyboardInterrupt` / `sys.exit()` after `SystemExit` unwinds the stack.
-- **SIGTERM handler** calls only `sys.exit(0)` (raises `SystemExit`, releases
-  any held `_write_lock`, then atexit fires).  It does NOT call
-  `write_chain_anchor()` directly — `_write_lock` is non-reentrant and may
-  be held on the main thread.
+- **SIGTERM handler (graceful drain, 2026-07-09)** does NOT `sys.exit()`. It
+  only sets `_shutdown_event`; the main loop sees the flag within one
+  `POLL_INTERVAL`, stops accepting new inbox items, and **drains in-flight
+  runs** for up to `ADAPTER_DRAIN_TIMEOUT` (default 90s). If all runs finish it
+  returns 0 (atexit writes the anchor); if the budget is exhausted it SIGTERMs
+  the remaining engine process groups, writes the anchor manually, and
+  `os._exit(0)`. The old handler called `sys.exit(0)` directly, which joined
+  the non-daemon executor workers still streaming a `claude` run — the process
+  hung until systemd's `TimeoutStopSec` SIGKILLed the whole cgroup, crashing
+  every active session with `exit_code=143`. The unit now sets
+  `TimeoutStopSec=120` (> the 90s drain budget) and `KillMode=mixed`. The
+  handler still does NOT call `write_chain_anchor()` before the drain —
+  `_write_lock` is non-reentrant and may be held on the main thread.
 
 Path resolution (tenant-aware, mirrors `self_test.py`):
 

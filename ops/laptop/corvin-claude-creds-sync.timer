@@ -5,6 +5,10 @@ Documentation=https://github.com/veegee82/Corvin
 [Timer]
 # Run 2 minutes after boot, then every 30 minutes.
 OnBootSec=2min
+# OnActiveSec anchors the schedule to timer activation: without it a timer
+# (re)started mid-uptime never fires again — OnBootSec lies in the past and
+# OnUnitActiveSec has no anchor until the service ran at least once.
+OnActiveSec=30min
 OnUnitActiveSec=30min
 AccuracySec=30s
 Persistent=true

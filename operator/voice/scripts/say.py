@@ -63,7 +63,35 @@ _PROVIDER_TIMEOUT_S = float(os.environ.get("CORVIN_TTS_PROVIDER_TIMEOUT_S", "10"
 
 # ── OpenAI helpers ────────────────────────────────────────────────────
 
+def _clean_env_value(v: str) -> str:
+    """Normalise a dotenv value: strip an unquoted trailing ` # comment`,
+    then surrounding whitespace and matching quotes.
+
+    Mirrors stt/openai_whisper._load_env_value (hardened in 6ba0610) so the
+    TTS side no longer diverges: `OPENAI_API_KEY=sk-x # prod` yielded a
+    broken `sk-x # prod` key on the TTS path while STT read it correctly.
+    """
+    v = v.strip()
+    if v[:1] in ('"', "'"):
+        # Quoted value: a '#' inside quotes is literal — strip quotes only.
+        q = v[0]
+        end = v.find(q, 1)
+        if end != -1:
+            return v[1:end]
+        return v.strip(q)
+    # Unquoted: an inline comment starts at ` #`.
+    hash_idx = v.find(" #")
+    if hash_idx != -1:
+        v = v[:hash_idx]
+    return v.strip().strip('"').strip("'")
+
+
 def _load_key_from_env_files() -> str | None:
+    # Prefer the dedicated CORVIN_TTS_OPENAI_KEY over the general OPENAI_API_KEY
+    # (which the claude CLI also consumes) — same precedence as the STT side and
+    # as the env path below. Collect every candidate first, then pick, so a file
+    # that sets both keys returns the dedicated one regardless of line order.
+    found: dict[str, str] = {}
     for fname in (".env", "service.env"):
         f = VOICE_CONFIG_DIR / fname
         if not f.exists():
@@ -82,18 +110,25 @@ def _load_key_from_env_files() -> str | None:
                 k, _, v = line.partition("=")
                 k = k.strip()
                 if k in ("OPENAI_API_KEY", "OPENAI_APIKEY", "CORVIN_TTS_OPENAI_KEY"):
-                    v = v.strip().strip('"').strip("'")
-                    if v:
-                        return v
+                    cleaned = _clean_env_value(v)
+                    if cleaned and k not in found:
+                        found[k] = cleaned
+    # OSError on one file must not abort the other.
         except OSError:
             continue
+    for k in ("CORVIN_TTS_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY"):
+        if found.get(k):
+            return found[k]
     return None
 
 
 def _resolve_key() -> str | None:
+    # Dedicated TTS key first (env AND file) — service.env sets
+    # CORVIN_TTS_OPENAI_KEY specifically so a general OPENAI_API_KEY meant for
+    # the claude CLI can't shadow the TTS-scoped key (ADR-0193).
     return (
-        os.environ.get("OPENAI_API_KEY")
-        or os.environ.get("CORVIN_TTS_OPENAI_KEY")
+        os.environ.get("CORVIN_TTS_OPENAI_KEY")
+        or os.environ.get("OPENAI_API_KEY")
         or _load_key_from_env_files()
     )
 

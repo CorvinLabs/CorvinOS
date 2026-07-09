@@ -1302,7 +1302,12 @@ def reload_from_disk() -> None:
     _now = time.time()
     if not content_changed and _LAST_RELOAD_AT > 0 and (_now - _LAST_RELOAD_AT) < _MIN_RELOAD_INTERVAL_SECONDS:
         _remaining = _MIN_RELOAD_INTERVAL_SECONDS - (_now - _LAST_RELOAD_AT)
-        log.warning(
+        # DEBUG, not WARNING: a throttled reload is the EXPECTED, self-healing
+        # outcome of the per-authenticated-op reload path — every console poll
+        # and health probe legitimately triggers it. Logging it at WARNING made
+        # the throttle its own noise source (2236 lines in ~19h, 2026-07-09).
+        # The audit event below keeps the security-relevant record intact.
+        log.debug(
             "license: reload_from_disk() called too soon (%.1fs ago, min %.1fs) — "
             "ignoring. Wait %.1fs.",
             _now - _LAST_RELOAD_AT, _MIN_RELOAD_INTERVAL_SECONDS, _remaining,

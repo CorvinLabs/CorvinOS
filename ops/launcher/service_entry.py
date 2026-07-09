@@ -32,10 +32,35 @@ def _webui_env_vars() -> dict:
     the rest of the installation (reader≠writer class) and source-tree
     installs cannot import corvin_gateway at all.
     """
+    import os
+    from pathlib import Path
     env: dict = {}
     try:
-        from corvinOS.shared.paths import corvin_home
-        env["CORVIN_HOME"] = str(corvin_home())
+        # corvin_home() resolves in THIS process. `sudo corvin-service install`
+        # runs elevated with env_reset, so HOME=/root and no CORVIN_HOME env —
+        # a wheel install then resolves corvin_home() → /root/.corvin and bakes
+        # that into a unit that runs as User=<invoking user>, who cannot write
+        # /root → crash-loop until StartLimitBurst, leaving the box with no
+        # console (Stufe-1 was just quiesced). Anchor to the INVOKING user's
+        # home instead, exactly as current_user() recovers User= from SUDO_USER.
+        from corvinOS.shared.paths import corvin_home, _resolve_env
+        explicit = _resolve_env()
+        if explicit:
+            # An explicit CORVIN_HOME override is authoritative on every path.
+            env["CORVIN_HOME"] = str(corvin_home())
+        else:
+            _home = None
+            try:
+                if os.geteuid() == 0:  # POSIX elevated: recover invoking user's home.
+                    import pwd
+                    from corvinOS.installer.system_service_manager import current_user
+                    _home = pwd.getpwnam(current_user()).pw_dir
+            except Exception:  # noqa: BLE001  (AttributeError on Windows: no geteuid)
+                _home = None
+            if _home:
+                env["CORVIN_HOME"] = str(Path(_home) / ".corvin")
+            else:
+                env["CORVIN_HOME"] = str(corvin_home())
     except Exception:  # noqa: BLE001
         pass
     try:

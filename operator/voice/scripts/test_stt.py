@@ -503,15 +503,32 @@ class ChainSemanticsTests(unittest.TestCase):
             result = stt_transcribe(audio)
             self.assertEqual(result.provider, "stub_ok")
 
-    def test_timeout_does_not_fall_through(self):
+    def test_timeout_on_terminal_provider_reraises(self):
+        # A timeout on the LAST provider in the chain is terminal — there is
+        # nothing left to fall through to, so re-raise STTTimeout instead of
+        # multiplying the user's wait.
+        audio = _tmp_audio()
+        with _patched_registry({
+            "stub_ok":      _OkProvider,
+            "stub_timeout": _TimeoutProvider,
+        }):
+            os.environ["CORVIN_STT_CHAIN"] = "stub_timeout"
+            with self.assertRaises(STTTimeout):
+                stt_transcribe(audio)
+
+    def test_timeout_on_nonterminal_provider_falls_through(self):
+        # With the default chain now leading "openai,local", a blackholed
+        # cloud endpoint that burns the budget must NOT hard-kill STT while a
+        # healthy on-box provider sits unused — a non-terminal timeout falls
+        # through to the next provider (regression fix, 2026-07-09 review).
         audio = _tmp_audio()
         with _patched_registry({
             "stub_timeout": _TimeoutProvider,
             "stub_ok":      _OkProvider,
         }):
             os.environ["CORVIN_STT_CHAIN"] = "stub_timeout,stub_ok"
-            with self.assertRaises(STTTimeout):
-                stt_transcribe(audio)
+            result = stt_transcribe(audio)
+            self.assertEqual(result.provider, "stub_ok")
 
     def test_all_unavailable_raises(self):
         audio = _tmp_audio()

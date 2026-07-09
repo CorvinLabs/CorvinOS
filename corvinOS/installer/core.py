@@ -5,6 +5,7 @@ Delegates every concern to a focused steps/ module. No hardcoded paths.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -142,6 +143,21 @@ class CorvinInstaller:
         # user systemd units and the Claude Code plugin cache/marketplace.
         self.systemd_user_dir = Path.home() / ".config" / "systemd" / "user"
         self.claude_plugins_dir = Path.home() / ".claude" / "plugins"
+        # Windows autostart shortcut roots. ALSO injectable — uninstall()'s
+        # WA-9 shortcut sweep read os.environ["APPDATA"/"USERPROFILE"] directly,
+        # so a win32-mocked test with no env patch would unlink a Windows dev's
+        # REAL Startup/Desktop CorvinOS.lnk (4th incarnation of the live-state
+        # wipe class). Resolve from env at construction; tests point these at a
+        # sandbox. None → the corresponding shortcut is skipped.
+        _appdata = os.environ.get("APPDATA")
+        _userprofile = os.environ.get("USERPROFILE")
+        self.win_startup_dir = (
+            Path(_appdata) / "Microsoft/Windows/Start Menu/Programs/Startup"
+            if _appdata else None
+        )
+        self.win_desktop_dir = (
+            Path(_userprofile) / "Desktop" if _userprofile else None
+        )
         self.service_manager = get_service_manager()
         self.bridge_manager = BridgeManager()
         self.selected_bridges: list[str] = []
@@ -907,22 +923,17 @@ class CorvinInstaller:
             # Desktop shortcut regardless. Neither is touched by the
             # schtasks cleanup above — remove them here so uninstall doesn't
             # leave a shortcut that still launches CorvinOS at every login.
-            import os  # noqa: PLC0415 -- win32-only, mirrors _robust_rmtree's local import style
-            for _env_var, _subdir, _label in (
-                # Forward slashes, not backslashes: Path() only splits on "\\"
-                # under WindowsPath, so a literal "\\"-joined string becomes
-                # ONE bogus path component under PosixPath -- which is what
-                # this module actually runs as under pytest on Linux CI (only
-                # sys.platform is mocked to "win32", not the Path flavour).
-                # Forward slashes are accepted by both WindowsPath and
-                # PosixPath, so this resolves correctly in both.
-                ("APPDATA", "Microsoft/Windows/Start Menu/Programs/Startup", "Startup-folder shortcut"),
-                ("USERPROFILE", "Desktop", "Desktop shortcut"),
+            # Use the INJECTABLE shortcut roots resolved in __init__ (never
+            # os.environ here) so a win32-mocked test can't unlink a real dev's
+            # shortcuts — the roots default to APPDATA/USERPROFILE in production
+            # but point at a sandbox under test (live-state-wipe class guard).
+            for _root, _label in (
+                (self.win_startup_dir, "Startup-folder shortcut"),
+                (self.win_desktop_dir, "Desktop shortcut"),
             ):
-                _base = os.environ.get(_env_var)
-                if not _base:
+                if _root is None:
                     continue
-                _lnk = Path(_base) / _subdir / "CorvinOS.lnk"
+                _lnk = _root / "CorvinOS.lnk"
                 try:
                     if _lnk.exists():
                         _lnk.unlink()

@@ -83,6 +83,12 @@ class CodexCliEngine:
     def __init__(self, *, binary: str | None = None) -> None:
         self.binary = binary or _resolve_codex_binary()
         self._proc: subprocess.Popen[bytes] | None = None
+        # /stop can arrive AFTER the adapter registered this engine but BEFORE
+        # spawn() creates _proc. Without this latch, cancel() would no-op on a
+        # None _proc while the adapter reports "aborted", then the turn spawns
+        # and runs to completion (false-positive ACK + false-negative cancel).
+        # spawn() checks it right after Popen to honour a pre-spawn cancel.
+        self._cancel_requested = False
         # Stderr ring buffer, drained concurrently with stdout so a child
         # writing >64KiB to stderr mid-run can never deadlock (H9). Mirror
         # of ClaudeCodeEngine's mechanism.
@@ -173,14 +179,14 @@ class CodexCliEngine:
         cwd = str(working_dir) if working_dir else None
         start_time = time.time()
 
+        from ._win_shim import windows_shim_command
         try:
             self._proc = subprocess.Popen(
                 # Windows: npm ships this CLI as a .cmd shim — CreateProcess can't
-                # launch it directly (WinError 193, an OSError the except
-                # below doesn't map to a clean error event); route through
-                # cmd /c in list form. Mirrors agents/claude_code.py.
-                (["cmd", "/c", *args] if (os.name == "nt" and args
-                    and str(args[0]).lower().endswith((".cmd", ".bat"))) else args),
+                # launch it directly (WinError 193). windows_shim_command builds
+                # a cmd.exe-SAFE command string (a bare ["cmd","/c",*args] list
+                # lets a user-prompt metachar break out → RCE); no-op on POSIX.
+                windows_shim_command(args),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=cwd,
@@ -196,6 +202,14 @@ class CodexCliEngine:
                 type="error",
                 error=f"codex binary not found: {self.binary!r}",
             )
+            return
+
+        # Honour a /stop that arrived in the register→spawn window: _proc now
+        # exists, so terminate it and emit the same aborted signal a mid-stream
+        # cancel would, instead of streaming a turn the user already stopped.
+        if self._cancel_requested:
+            self._cleanup_proc()
+            yield StreamEvent(type="error", error="cancelled")
             return
 
         # H9: drain stderr concurrently so the pipe buffer can't fill and
@@ -299,6 +313,9 @@ class CodexCliEngine:
         return joined
 
     def cancel(self) -> None:
+        # Latch first so a cancel racing ahead of spawn()'s Popen is not lost —
+        # spawn() checks _cancel_requested right after creating _proc.
+        self._cancel_requested = True
         if self._proc and self._proc.poll() is None:
             try:
                 self._proc.terminate()
