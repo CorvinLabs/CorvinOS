@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480" width="480" height="480">
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4d089"></stop><stop offset="0.5" stop-color="#e9b667"></stop><stop offset="1" stop-color="#c9922f"></stop>
+    </linearGradient>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+  </defs>
+  <rect width="480" height="480" rx="24" fill="url(#bg)"></rect>
+  <path d="M0 -11 L2.7 -3.72 10.46 -3.4 4.37 1.42 6.47 8.9 0 4.6 -6.47 8.9 -4.37 1.42 -10.46 -3.4 -2.7 -3.72 Z" transform="translate(240,150) scale(11)" fill="url(#gold)"></path>
+  <text x="240" y="154" text-anchor="middle" style="font-family:&#39;Helvetica Neue&#39;,Helvetica,Arial,sans-serif;font-size:30px;font-weight:800;fill:#15336b;stroke:#ffffff;stroke-width:2.2px;paint-order:stroke;stroke-linejoin:round">22 / 36</text>
+
+  <text x="240" y="312" text-anchor="middle" style="font-family:&#39;Helvetica Neue&#39;,Helvetica,Arial,sans-serif;font-weight:900;letter-spacing:-1.5px">
+    <tspan font-size="49" fill="#ffffff">Agentic</tspan><tspan dx="9" dy="-16" font-size="24" font-weight="700" letter-spacing="-0.5" fill="#9aa6b4">.ai</tspan>
+  </text>
+
+  <path d="M0 -11 L2.7 -3.72 10.46 -3.4 4.37 1.42 6.47 8.9 0 4.6 -6.47 8.9 -4.37 1.42 -10.46 -3.4 -2.7 -3.72 Z" transform="translate(161,354) scale(0.8)" fill="none" stroke="#ee8a39" stroke-width="1.8" stroke-linejoin="round"></path>
+  <text x="177" y="360" text-anchor="start" style="font-family:&#39;Helvetica Neue&#39;,Helvetica,Arial,sans-serif;font-size:12.5px;font-weight:700;letter-spacing:2.5px" fill="#ee8a39">EDITORIAL GUIDE</text>
+
+  <text x="240" y="394" text-anchor="middle" style="font-family:&#39;Helvetica Neue&#39;,Helvetica,Arial,sans-serif;font-size:21px;font-weight:800;letter-spacing:-0.4px" fill="#ffffff">Best Agentic AI Platforms in 2026</text>
+</svg>

@@ -16,6 +16,12 @@
 </p>
 
 <p align="center">
+  <a href="https://agentic.ai/best/agentic-ai-platforms" target="_blank" rel="noopener noreferrer" title="Best Agentic AI Platforms 2026 — agentic.ai">
+    <img src="docs/assets/award-agentic-ai-2026.svg" alt="Best Agentic AI Platforms 2026 — agentic.ai" height="120">
+  </a>
+</p>
+
+<p align="center">
   <a href="docs/overview.md">Overview</a> ·
   <a href="docs/architecture.md">Architecture</a> ·
   <a href="docs/audit-and-compliance.md">Audit &amp; Compliance</a> ·
