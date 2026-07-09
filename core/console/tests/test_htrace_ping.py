@@ -91,11 +91,12 @@ def test_ping_if_due_sends_when_lock_is_free(tmp_path):
     mock_urlopen.assert_called_once()
 
 
-def test_ping_body_carries_only_version_no_fingerprinting(tmp_path):
-    """CLAUDE.md invariant: the anonymous instance-count ping carries only
-    "random uuid4 + version". The uuid4 (instance_id) and HMAC (instance_token)
-    travel in HEADERS; the JSON body must carry ONLY corvin_version. platform,
-    python_minor and active_engine (fingerprinting surface) must be gone."""
+def test_ping_body_carries_only_allowlisted_enum_fields(tmp_path):
+    """CLAUDE.md invariant (since 2026-07-10): the anonymous instance-count ping
+    carries "uuid4 + version + coarse allowlisted environment enums". The uuid4
+    (instance_id) and HMAC (instance_token) travel in HEADERS; the JSON body
+    carries exactly corvin_version + platform + python_minor + active_engine,
+    every value from a closed enum / pattern — never free-form strings."""
     home = _make_home(tmp_path)
     captured: dict = {}
 
@@ -117,16 +118,20 @@ def test_ping_body_carries_only_version_no_fingerprinting(tmp_path):
         patch.object(hu, "_load_telemetry_token", return_value="tok"),
         patch.object(hu, "_load_instance_token", return_value="itok-hmac"),
         patch.object(hu, "load_or_create_instance_id", return_value="uuid4-iid"),
+        patch.object(hu, "_detect_active_engine", return_value="claude_code"),
         patch("urllib.request.urlopen", side_effect=_capture) as mock_urlopen,
     ):
         result = hu.ping_if_due(home)
 
     assert result is True
     mock_urlopen.assert_called_once()
-    # Body: version only — no fingerprinting fields.
-    assert set(captured["body"].keys()) == {"corvin_version"}
-    for banned in ("platform", "python_minor", "active_engine"):
-        assert banned not in captured["body"]
+    # Body: exactly the four allowlisted keys, values from closed enums.
+    assert set(captured["body"].keys()) == {
+        "corvin_version", "platform", "python_minor", "active_engine",
+    }
+    assert captured["body"]["platform"] in hu._PING_ALLOWED_PLATFORMS
+    assert hu._RE_PING_PY_MINOR.match(captured["body"]["python_minor"])
+    assert captured["body"]["active_engine"] == "claude_code"
     # uuid4 + HMAC are in headers, never the body.
     assert "uuid4-iid" not in json.dumps(captured["body"])
     assert "itok-hmac" not in json.dumps(captured["body"])
@@ -135,12 +140,31 @@ def test_ping_body_carries_only_version_no_fingerprinting(tmp_path):
 
 
 def test_assert_ping_safe_is_fail_closed():
-    """_assert_ping_safe accepts a version-only body and rejects any extra key
-    (fail-closed backstop mirroring telemetry._assert_safe)."""
+    """_assert_ping_safe accepts the allowlisted enum body and rejects any
+    extra key AND any value outside its closed enum/pattern (fail-closed
+    backstop mirroring telemetry._assert_safe)."""
     hu._assert_ping_safe({"corvin_version": "0.10.17"})  # must not raise
-    for extra in ({"platform": "linux"}, {"python_minor": "3.12"},
-                  {"active_engine": "claude_code"}):
+    hu._assert_ping_safe({
+        "corvin_version": "0.10.17",
+        "platform": "linux",
+        "python_minor": "3.12",
+        "active_engine": "claude_code",
+    })  # full allowlisted body must not raise
+    # Unknown keys stay rejected.
+    for extra in ({"hostname": "x"}, {"user": "y"}, {"ip": "1.2.3.4"}):
         body = {"corvin_version": "0.10.17", **extra}
+        with pytest.raises(ValueError, match="non-allowlisted"):
+            hu._assert_ping_safe(body)
+    # Allowlisted keys with out-of-enum / free-form values stay rejected.
+    for bad in (
+        {"platform": "amiga"},
+        {"platform": "linux; rm -rf"},
+        {"python_minor": "3.12.4"},
+        {"active_engine": "custom-engine"},
+        {"corvin_version": "x" * 33},
+        {"active_engine": 7},
+    ):
+        body = {"corvin_version": "0.10.17", **bad}
         with pytest.raises(ValueError, match="non-allowlisted"):
             hu._assert_ping_safe(body)
 

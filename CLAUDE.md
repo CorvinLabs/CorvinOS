@@ -30,7 +30,7 @@ Corvin is **structurally constrained** by EU AI Act 2026 + GDPR. Every feature m
 | Voice-transcribe audit (metadata only, never text) | GDPR Art. 5 | [Layer 23](docs/claude-ref/layer-23-stt.md) |
 | House-rules gate (acceptable-use, fail-closed) | EU AI Act Art. 5, 50 | [Layer 44](docs/claude-ref/layer-44-house-rules.md) |
 | Error/healing telemetry (default-ON, opt-out; CONTENT-FREE scrubbed signatures only, fail-closed `_assert_safe`) | GDPR Art. 6(1)(f) legitimate interest | ADR-0179/0180 (`aco/telemetry.py::consent_granted`, `htrace_consent.py::healing_traces_enabled`) |
-| Anonymous instance-count ping (default-ON, opt-out; random uuid4 + version only, no PII) | GDPR Art. 6(1)(f) legitimate interest | ADR-0180 (`aco/htrace_consent.py::ping_enabled`) |
+| Anonymous instance-count ping (default-ON, opt-out; random uuid4 + version + coarse allowlisted environment enums [platform, python minor, engine id], no PII) | GDPR Art. 6(1)(f) legitimate interest | ADR-0180 (`aco/htrace_consent.py::ping_enabled`) |
 
 **Must NOT do (absolute):**
 - Don't weaken disclosure — AI-nature statement and opt-out (`/pass`, `/leave`) are locked.
@@ -47,7 +47,9 @@ Corvin is **structurally constrained** by EU AI Act 2026 + GDPR. Every feature m
   file `opted_in:false`), (c) healing traces (`healing_traces_enabled`, opt-out
   `spec.telemetry.healing_traces: false`). The **load-bearing safety invariant** is that
   everything transmitted stays strictly anonymous / CONTENT-FREE: the ping is a random uuid4 +
-  version only; the error/healing channels ship ONLY scrubbed code-level signatures (exc_type,
+  version + coarse allowlisted environment enums (platform, python minor, engine id — closed
+  enums validated fail-closed by `_assert_ping_safe`, never free-form strings; maintainer
+  decision 2026-07-10); the error/healing channels ship ONLY scrubbed code-level signatures (exc_type,
   repo file, func, allowlisted stack namespaces — never prompts, transcripts, or user data), and
   the FAIL-CLOSED `_assert_safe` / `_assert_safe_htrace` backstop DROPS any record carrying a
   PII/secret shape rather than sending it. Legal basis GDPR Art. 6(1)(f) legitimate interest.

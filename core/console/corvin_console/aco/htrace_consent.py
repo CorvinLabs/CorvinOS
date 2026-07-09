@@ -413,7 +413,8 @@ def ping_enabled(home: Path) -> bool:
 
     Sanctioned exception to the general telemetry stance (CLAUDE.md): this is
     ANONYMOUS INSTANCE COUNTING, not user telemetry. The ping sends only a random
-    uuid4 instance id + the installed version + an HMAC token — NO personal data,
+    uuid4 instance id + the installed version + coarse allowlisted environment
+    enums (platform, python minor, engine id) + an HMAC token — NO personal data,
     no prompts, no PII (see htrace_uploader.ping_if_due). Legal basis: GDPR
     Art. 6(1)(f) legitimate interest (counting how many installations exist).
     Distinct from the healing-trace / error-signature channels, which remain
