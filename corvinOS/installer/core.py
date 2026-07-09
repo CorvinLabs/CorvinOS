@@ -901,6 +901,35 @@ class CorvinInstaller:
                 except Exception as e:
                     print(f"  ⚠ Could not remove Scheduled Task {_task}: {e}")
 
+            # WA-9: install.ps1 falls back to a Startup-folder shortcut when
+            # Register-ScheduledTask is denied (non-admin accounts on
+            # managed/family/education Windows images), and always creates a
+            # Desktop shortcut regardless. Neither is touched by the
+            # schtasks cleanup above — remove them here so uninstall doesn't
+            # leave a shortcut that still launches CorvinOS at every login.
+            import os  # noqa: PLC0415 -- win32-only, mirrors _robust_rmtree's local import style
+            for _env_var, _subdir, _label in (
+                # Forward slashes, not backslashes: Path() only splits on "\\"
+                # under WindowsPath, so a literal "\\"-joined string becomes
+                # ONE bogus path component under PosixPath -- which is what
+                # this module actually runs as under pytest on Linux CI (only
+                # sys.platform is mocked to "win32", not the Path flavour).
+                # Forward slashes are accepted by both WindowsPath and
+                # PosixPath, so this resolves correctly in both.
+                ("APPDATA", "Microsoft/Windows/Start Menu/Programs/Startup", "Startup-folder shortcut"),
+                ("USERPROFILE", "Desktop", "Desktop shortcut"),
+            ):
+                _base = os.environ.get(_env_var)
+                if not _base:
+                    continue
+                _lnk = Path(_base) / _subdir / "CorvinOS.lnk"
+                try:
+                    if _lnk.exists():
+                        _lnk.unlink()
+                        print(f"  ✓ Removed {_label}: {_lnk}")
+                except Exception as e:
+                    print(f"  ⚠ Could not remove {_label} {_lnk}: {e}")
+
             # WA-7: also sweep any per-bridge Scheduled Tasks left behind so a
             # bridge doesn't keep auto-launching after "uninstall".
             for _bridge in ("discord", "telegram", "slack", "whatsapp", "email"):

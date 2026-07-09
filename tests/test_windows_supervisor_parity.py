@@ -149,7 +149,7 @@ class TestNoClosableWindow:
 
     def test_install_ps1_fallback_start_uses_hidden(self) -> None:
         src = _INSTALL_PS1.read_text(encoding="utf-8")
-        fallback_idx = src.index("Could not set up auto-restart")
+        fallback_idx = src.index("Could not set up any autostart")
         window = src[fallback_idx:fallback_idx + 600]
         assert "corvinos-serve" in window, "fallback Start-Process call not found where expected"
         assert "-WindowStyle Hidden" in window, (

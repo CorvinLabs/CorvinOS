@@ -6,6 +6,16 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Windows autostart on non-admin accounts
+- **Windows autostart silently failed with "Access is denied" on some
+  standard (non-admin) accounts** (managed/family/education Windows images
+  restrict the Task Scheduler store). `install.ps1` now falls back to a
+  Startup-folder shortcut (`CorvinOS.lnk`) when `Register-ScheduledTask` is
+  denied — no admin rights needed either way. `corvin-uninstall` removes this
+  shortcut too, alongside the Scheduled Task.
+- **Added a Desktop shortcut** (`CorvinOS.lnk`) so the console can be started
+  by hand, independent of autostart. Also removed on uninstall.
+
 ## [0.10.23] — 2026-07-09
 
 Multi-agent adversarial review of the last days' changes (installation,

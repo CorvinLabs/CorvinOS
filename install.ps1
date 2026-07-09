@@ -213,15 +213,43 @@ if (Get-Command corvin-install -ErrorAction SilentlyContinue) {
 # lives as long as this installer window's process tree does, and once the
 # machine reboots or the user logs off, the console (and with it the
 # ADR-0180 presence heartbeat) just stays down until someone notices and
-# manually restarts it. A per-user Scheduled Task (no admin needed) that
-# supervises the process forever -- restart on ANY exit, 5 s cooldown -- is the
-# closest practical match, and this makes it the DEFAULT so it works out of
-# the box instead of being an opt-in step the user has to discover later.
+# manually restarts it. A per-user Scheduled Task (RunLevel Limited, no admin
+# NEEDED in principle) that supervises the process forever -- restart on ANY
+# exit, 5 s cooldown -- is the closest practical match, and this makes it the
+# DEFAULT so it works out of the box instead of being an opt-in step the user
+# has to discover later.
+#
+# WA-9: "no admin needed in principle" isn't "always allowed in practice" --
+# some standard (non-admin) accounts get "Access is denied" from
+# Register-ScheduledTask itself (managed/family/education Windows images,
+# some OEM images restrict the Task Scheduler store via policy). Those
+# accounts still have full write access to their OWN per-user Startup folder
+# with zero elevation, ever, so that's the fallback below.
 #
 # Self-contained on purpose: this installer runs via `irm | iex` before any
 # repo checkout necessarily exists on disk, so the supervisor script is
 # generated here rather than referencing operator/bridges/shared/ (which the
 # dev-checkout equivalent, bridge.ps1 install-autostart, does instead).
+
+function New-CorvinShortcut {
+    # Standard WScript.Shell COM pattern -- creates a .lnk shortcut. Needs no
+    # elevation: any account can always write its own Desktop/Startup folder.
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$TargetPath,
+        [string]$Arguments = "",
+        [string]$Description = "CorvinOS",
+        [switch]$Hidden
+    )
+    $WshShell = New-Object -ComObject WScript.Shell
+    $Shortcut = $WshShell.CreateShortcut($Path)
+    $Shortcut.TargetPath = $TargetPath
+    if ($Arguments) { $Shortcut.Arguments = $Arguments }
+    $Shortcut.Description = $Description
+    if ($Hidden) { $Shortcut.WindowStyle = 7 }  # 7 = minimized; .lnk has no true "hidden"
+    $Shortcut.Save()
+}
+
 function Install-CorvinAutostart {
     $CorvinHome = if ($env:CORVIN_HOME) { $env:CORVIN_HOME } else { Join-Path $env:USERPROFILE ".corvin" }
     # CORVIN_HOME is a documented user-overridable env var, not a validated
@@ -338,8 +366,8 @@ while (`$true) {
 }
 "@ | Set-Content -Path $Supervisor -Encoding UTF8
 
-    $Action   = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$SupervisorEscaped`""
+    $SupervisorArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$SupervisorEscaped`""
+    $Action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $SupervisorArgs
     $Trigger  = New-ScheduledTaskTrigger -AtLogOn
     # -Hidden: belt-and-suspenders on top of the Action's own -WindowStyle
     # Hidden -- marks the TASK ITSELF as hidden in Task Scheduler's UI/API, so
@@ -355,11 +383,30 @@ while (`$true) {
     # Idempotent -- a re-run of install.ps1 (e.g. an update) replaces the
     # existing registration instead of erroring on it.
     Unregister-ScheduledTask -TaskName "CorvinOS-Console" -Confirm:$false -ErrorAction SilentlyContinue
-    Register-ScheduledTask -TaskName "CorvinOS-Console" -Action $Action -Trigger $Trigger `
-        -Settings $Settings -RunLevel Limited `
-        -Description "CorvinOS console -- auto-restarts on crash/reboot (ADR-0180 presence heartbeat)" `
-        | Out-Null
-    Start-ScheduledTask -TaskName "CorvinOS-Console"
+
+    # WA-9: fall back to a Startup-folder shortcut when the Task Scheduler
+    # store denies this account write access. The shortcut loses the OS-level
+    # "restart the task if powershell.exe itself dies" safety net, but the
+    # supervisor's own restart-forever loop (above) already covers the actual
+    # common case (corvinos-serve crashing) -- and it needs zero privilege,
+    # ever, on any Windows account.
+    try {
+        Register-ScheduledTask -TaskName "CorvinOS-Console" -Action $Action -Trigger $Trigger `
+            -Settings $Settings -RunLevel Limited `
+            -Description "CorvinOS console -- auto-restarts on crash/reboot (ADR-0180 presence heartbeat)" `
+            -ErrorAction Stop | Out-Null
+        Start-ScheduledTask -TaskName "CorvinOS-Console"
+        return "task"
+    } catch {
+        Write-Warn "Scheduled Task registration denied ($_) -- falling back to a Startup-folder shortcut (no admin rights needed)."
+        $StartupDir = [Environment]::GetFolderPath("Startup")
+        New-CorvinShortcut -Path (Join-Path $StartupDir "CorvinOS.lnk") `
+            -TargetPath "powershell.exe" -Arguments $SupervisorArgs `
+            -Description "Starts the CorvinOS console at login" -Hidden
+        # Start it once right now too -- this install shouldn't need a logoff/logon first.
+        Start-Process -FilePath "powershell.exe" -ArgumentList $SupervisorArgs -WindowStyle Hidden
+        return "startup-shortcut"
+    }
 }
 
 # ── 4. start server + wait for readiness + auto-launch console ──────────────────
@@ -375,17 +422,40 @@ $MaxRetries = 60
 $RetryCount = 0
 $ServerReady = $false
 
-# Launched via the always-on Scheduled Task above so it's durable from the
-# first boot -- not just a one-off process tied to this installer window.
+# Launched via the always-on Scheduled Task (or its Startup-folder fallback)
+# above so it's durable from the first boot -- not just a one-off process
+# tied to this installer window.
 try {
-    Install-CorvinAutostart
-    Write-Ok "Console will auto-start on login and auto-restart on crash/reboot."
+    $AutostartMode = Install-CorvinAutostart
+    if ($AutostartMode -eq "task") {
+        Write-Ok "Console will auto-start on login and auto-restart on crash/reboot (Scheduled Task)."
+    } else {
+        Write-Ok "Console will auto-start on login via a Startup-folder shortcut (this account can't register Scheduled Tasks)."
+    }
 } catch {
-    Write-Warn "Could not set up auto-restart ($_) -- starting once instead (won't survive logoff/reboot). Re-run install.ps1 later to retry autostart registration."
+    Write-Warn "Could not set up any autostart ($_) -- starting once instead (won't survive logoff/reboot). Re-run install.ps1 later to retry."
     # -Hidden, not -Minimized: a minimized window still has a taskbar entry
     # the user can click and close, killing this process exactly like closing
     # a visible console would -- Hidden has no window at all to close.
     try { Start-Process -FilePath "corvinos-serve" -ArgumentList "--no-browser" -WindowStyle Hidden -ErrorAction Stop } catch {}
+}
+
+# ── 3c. Desktop shortcut ──────────────────────────────────────────────────
+# Independent of autostart: a visible, double-clickable way to (re)start the
+# console by hand. Always attempted, never fatal if it fails.
+try {
+    $DesktopServeCmd = (Get-Command corvinos-serve -ErrorAction SilentlyContinue).Source
+    if (-not $DesktopServeCmd) { $DesktopServeCmd = (Get-Command corvin-serve -ErrorAction SilentlyContinue).Source }
+    if ($DesktopServeCmd) {
+        $DesktopDir = [Environment]::GetFolderPath("Desktop")
+        New-CorvinShortcut -Path (Join-Path $DesktopDir "CorvinOS.lnk") `
+            -TargetPath $DesktopServeCmd -Description "Start the CorvinOS console"
+        Write-Ok "Desktop shortcut created: CorvinOS.lnk"
+    } else {
+        Write-Warn "Could not create Desktop shortcut: corvinos-serve not found on PATH."
+    }
+} catch {
+    Write-Warn "Could not create a Desktop shortcut ($_)."
 }
 
 # Wait for server to be ready

@@ -88,6 +88,43 @@ class TestWindowsAutostartUninstall:
                 # Must not raise even when the task is already gone.
                 installer.uninstall(purge=True)
 
+    def test_uninstall_removes_startup_and_desktop_shortcuts_on_windows(self) -> None:
+        """WA-9: install.ps1 falls back to a Startup-folder shortcut (non-admin
+        accounts) and always creates a Desktop shortcut. uninstall() must remove
+        both, or a "removed" CorvinOS keeps auto-starting via the shortcut."""
+        with tempfile.TemporaryDirectory() as tmp:
+            installer = _make_installer(Path(tmp))
+
+            appdata = Path(tmp) / "AppData" / "Roaming"
+            userprofile = Path(tmp) / "profile"
+            startup_dir = appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+            startup_dir.mkdir(parents=True)
+            (userprofile / "Desktop").mkdir(parents=True)
+            startup_lnk = startup_dir / "CorvinOS.lnk"
+            desktop_lnk = userprofile / "Desktop" / "CorvinOS.lnk"
+            startup_lnk.write_text("fake shortcut")
+            desktop_lnk.write_text("fake shortcut")
+
+            def fake_run(cmd, **kwargs):  # noqa: ANN001
+                result = mock.MagicMock()
+                result.returncode = 1  # no Scheduled Task registered (Startup-folder path)
+                result.stdout = ""
+                result.stderr = "ERROR: not found"
+                return result
+
+            with mock.patch("corvinOS.installer.core.sys.platform", "win32"), \
+                 mock.patch("corvinOS.installer.core.shutil.which", return_value=None), \
+                 mock.patch("corvinOS.installer.core.subprocess.run", side_effect=fake_run), \
+                 mock.patch.dict(
+                     "os.environ",
+                     {"APPDATA": str(appdata), "USERPROFILE": str(userprofile)},
+                 ), \
+                 mock.patch("builtins.input", return_value="n"):
+                installer.uninstall(purge=True)
+
+            assert not startup_lnk.exists(), "Startup-folder CorvinOS.lnk must be removed"
+            assert not desktop_lnk.exists(), "Desktop CorvinOS.lnk must be removed"
+
     def test_uninstall_on_linux_does_not_attempt_schtasks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             installer = _make_installer(Path(tmp))
