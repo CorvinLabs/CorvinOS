@@ -6,6 +6,15 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Agentic Compute run graph edge labels always showed a white box
+- React Flow's own stylesheet (`reactflow/dist/style.css`) hardcodes
+  `.react-flow__edge-textbg { fill: white; }`. `ComputeGraphView.tsx`'s edge
+  builder already sets `labelBgStyle: { fill: "transparent" }`, but that
+  targets a different element and never overrode the library default, so
+  every edge label on the compute run graph (e.g. the best-iteration
+  callout) rendered as a solid white box regardless of theme. Added a
+  targeted override in `index.css` using `var(--card)`.
+
 ### Fixed — HAC sub-managers crashed on every run (AttributeError)
 - `HACCoordinator._exec_manager` (`core/compute/corvin_compute/hac/
   coordinator.py`) read `rec.best_params` off the `ComputeRun` result —

@@ -96,3 +96,13 @@
     transition-duration: 0.001ms !important;
   }
 }
+
+/* React Flow's own stylesheet (reactflow/dist/style.css) hardcodes the edge
+   label background to `fill: white` — the ComputeGraphView edge builder's
+   `labelBgStyle: { fill: "transparent" }` targets a different element and
+   never overrode it, so every edge label (e.g. the "#<iter> <loss>" callout
+   on the Agentic Compute run graph) showed as a solid white box regardless
+   of theme. */
+.react-flow__edge-textbg {
+  fill: var(--card);
+}
