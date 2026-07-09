@@ -188,6 +188,54 @@ def test_compute_license_status_reflects_member_tier_without_enterprise_key(monk
     assert result["daily_limit"] is None
 
 
+def test_pipeline_detail_derives_stage_state_from_pipeline_summary(tmp_path):
+    """WA-16 regression: PipelineCoordinator only ever writes the rolling
+    pipeline_summary.json (per PipelineStore's own documented layout) — a
+    per-stage stage_summary.json was never part of the write-side contract,
+    so every stage card showed "waiting for prev stage…"/"no data" even for
+    a fully converged pipeline with real best_losses. pipeline_detail must
+    derive state/best_loss from pipeline_summary.json when no richer
+    stage_summary.json exists."""
+    import json
+
+    from corvin_console.routes import compute as C
+
+    tid = "_default"
+    home = tmp_path / "corvin_home"
+    pdir = home / "tenants" / tid / "compute" / "pipelines" / "pipeline_test123"
+    (pdir / "stages" / "s1").mkdir(parents=True)
+    (pdir / "stages" / "s2").mkdir(parents=True)
+    (pdir / "manifest.json").write_text(json.dumps({
+        "stages": [
+            {"stage_id": "s1", "tool_name": "t1"},
+            {"stage_id": "s2", "tool_name": "t2"},
+        ],
+    }), encoding="utf-8")
+    (pdir / "pipeline_summary.json").write_text(json.dumps({
+        "state": "converged",
+        "current_stage_id": None,
+        "completed_stages": ["s1", "s2"],
+        "best_losses": {"s1": 0.5038, "s2": 0.1042},
+    }), encoding="utf-8")
+
+    class _FakeRec:
+        tenant_id = tid
+
+    import corvin_console.routes.compute as _compute_mod
+    orig = _compute_mod._pipelines_dir
+    _compute_mod._pipelines_dir = lambda t: home / "tenants" / t / "compute" / "pipelines"
+    try:
+        result = C.pipeline_detail("pipeline_test123", rec=_FakeRec())
+    finally:
+        _compute_mod._pipelines_dir = orig
+
+    stages = {s["stage_id"]: s for s in result["stages"]}
+    assert stages["s1"]["state"] == "complete"
+    assert stages["s1"]["best_loss"] == 0.5038
+    assert stages["s2"]["state"] == "complete"
+    assert stages["s2"]["best_loss"] == 0.1042
+
+
 def test_acs_chokepoint_charges_daily_quota():
     """ADR-0149 WF-CLI-ACS-01: run_acs_workflow charges the daily counter at the
     single chokepoint, so the CLI and scheduler paths cannot bypass it."""

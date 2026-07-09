@@ -6,6 +6,33 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Agentic Compute run graph: every node except "completion" was an unstyled white box
+- `GET /compute/runs/{id}/graph` (flat/l25 mode) emits its own group
+  vocabulary (`run`/`strategy`/`iteration`/`best_iter`) that is entirely
+  different from the ACS graph endpoint's (`task`/`manager`/`decision`).
+  `ComputeGraphView.tsx`'s `NODE_TYPES` map, `NODE_W`/`NODE_H` sizing, and
+  its whole layout algorithm (`buildReactFlowGraph`) key off the ACS
+  vocabulary only, so every l25 node fell through to React Flow's unstyled
+  `react-flow__node-default` (a plain white box) *and* never received a
+  layout position — the graph rendered as a handful of misplaced white
+  boxes instead of the intended themed run/strategy/iteration chain. Added
+  a group-alias step so l25 names map onto their ACS equivalents before
+  anything else touches them; the previously-unused `best_iter` distinction
+  is preserved as a highlight border on the winning iteration node instead
+  of being discarded.
+
+### Fixed — Agentic Compute "Pipelines" tab always showed "no data" per stage
+- `PipelineCoordinator` (`core/compute/corvin_compute/pipeline/
+  coordinator.py`) only ever writes the rolling `pipeline_summary.json` —
+  per `PipelineStore`'s own documented on-disk layout, a per-stage
+  `stage_summary.json` was never part of the write-side contract. The
+  console's `pipeline_detail` route expected that file for every stage's
+  `state`/`best_loss`, so every stage card showed "waiting for prev
+  stage…"/"no data" even for a fully converged pipeline with real,
+  correct `best_losses` sitting one field over in `pipeline_summary.json`.
+  Derives stage state/best_loss from there when no richer
+  `stage_summary.json` exists.
+
 ### Fixed — Agentic Compute run graph edge labels always showed a white box
 - React Flow's own stylesheet (`reactflow/dist/style.css`) hardcodes
   `.react-flow__edge-textbg { fill: white; }`. `ComputeGraphView.tsx`'s edge

@@ -150,11 +150,16 @@ function LossBar({ loss }: { loss: number | null | undefined }) {
 
 function IterationNode({ data }: NodeProps) {
   const [l1 = "Iter", l2 = "", l3 = ""] = String(data.label ?? "Iter").split("\n");
+  // l25 runs flag their single best iteration (matches the green "best iter"
+  // marker already used in LossCurvePanel) — everything else stays the
+  // regular gold iteration styling.
+  const isBest = Boolean(data.isBest);
   return (
     <div style={{
       width: NODE_W.decision, height: NODE_H.decision,
       background: `${COLORS.iteration}1f`,
-      border: `2px solid ${COLORS.iteration}`, borderRadius: 8,
+      border: `${isBest ? 3 : 2}px solid ${isBest ? COLORS.success : COLORS.iteration}`,
+      borderRadius: 8,
       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
       fontFamily: "monospace", gap: 1,
     }}>
@@ -343,10 +348,31 @@ interface RawEdge {
   label?: string;
 }
 
+// The flat/l25 run graph endpoint (GET /compute/runs/{id}/graph) emits its
+// own group vocabulary (run/strategy/iteration/best_iter) instead of the ACS
+// endpoint's (task/manager/decision) — every downstream lookup in this file
+// (byGroup categorisation, NODE_W/NODE_H sizing, the `type: n.group` used to
+// pick a NODE_TYPES renderer) keys off the ACS vocabulary only, so l25 nodes
+// silently fell through to React Flow's unstyled `react-flow__node-default`
+// (a plain white box) and never received a layout position at all. Alias
+// the l25 names onto their ACS equivalent before anything else touches them.
+const _GROUP_ALIAS: Record<string, string> = {
+  run: "task",
+  strategy: "manager",
+  iteration: "decision",
+  best_iter: "decision",
+};
+
 function buildReactFlowGraph(
   rawNodes: RawNode[],
   rawEdges: RawEdge[],
 ): [Node[], Edge[], number] {
+  rawNodes = rawNodes.map((n) =>
+    n.group === "best_iter"
+      ? { ...n, group: _GROUP_ALIAS[n.group], isBest: true }
+      : { ...n, group: _GROUP_ALIAS[n.group] ?? n.group },
+  );
+
   // Categorise nodes by group
   const byGroup: Record<string, RawNode[]> = {};
   rawNodes.forEach((n) => {

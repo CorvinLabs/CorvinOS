@@ -102,7 +102,10 @@
    `labelBgStyle: { fill: "transparent" }` targets a different element and
    never overrode it, so every edge label (e.g. the "#<iter> <loss>" callout
    on the Agentic Compute run graph) showed as a solid white box regardless
-   of theme. */
-.react-flow__edge-textbg {
+   of theme. Reactflow's own stylesheet is a lazy-loaded, page-specific chunk
+   injected into <head> AFTER this global stylesheet, so a same-specificity
+   override here loses on source order alone — the extra `.react-flow`
+   ancestor selector gives this rule higher specificity so it always wins. */
+.react-flow .react-flow__edge-textbg {
   fill: var(--card);
 }

@@ -481,11 +481,30 @@ def pipeline_detail(
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, f"pipeline {pipeline_id!r} not found")
     manifest = _read_json(p / "manifest.json") or {}
     summary = _read_json(p / "pipeline_summary.json") or {}
+    # PipelineCoordinator (core/compute/corvin_compute/pipeline/coordinator.py)
+    # only ever writes the rolling pipeline_summary.json — per its own
+    # PipelineStore docstring, a per-stage stage_summary.json was never part
+    # of the write-side contract, so every stage card showed "waiting for
+    # prev stage…"/"no data" even for a fully converged pipeline with real
+    # results. pipeline_summary.json's completed_stages/best_losses/
+    # current_stage_id already carry everything needed to derive each
+    # stage's state and best_loss — use that as a fallback when a stage has
+    # no (optional, richer) stage_summary.json of its own.
+    completed_stages = set(summary.get("completed_stages") or [])
+    best_losses = summary.get("best_losses") or {}
+    current_stage_id = summary.get("current_stage_id")
     stages_detail: list[dict[str, Any]] = []
     for stage_spec in manifest.get("stages", []):
         sid = stage_spec.get("stage_id", "")
         stage_dir = p / "stages" / sid
         stage_info = _read_stage_summary(stage_dir) if stage_dir.exists() else {}
+        if "state" not in stage_info:
+            if sid in completed_stages:
+                stage_info["state"] = "complete"
+            elif sid == current_stage_id:
+                stage_info["state"] = "running"
+        if stage_info.get("best_loss") is None and best_losses.get(sid) is not None:
+            stage_info["best_loss"] = best_losses[sid]
         stages_detail.append({**stage_spec, **stage_info, "stage_id": sid})
     return {
         "pipeline_id": pipeline_id,
