@@ -10,8 +10,26 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 import corvin_console.routes.settings as settings_route
 import corvinOS.installer.system_service_manager as ssm
+import ops.launcher.service_entry as _service_entry
+
+
+@pytest.fixture(autouse=True)
+def _neutralise_quiesce(monkeypatch):
+    """NEVER let a test run the real _quiesce_stage1 — it disables/stops the
+    developer's LIVE corvin-webui service (round-2 review caught this test
+    doing exactly that on the maintainer's box). The route imports it lazily
+    from ops.launcher.service_entry, so patch it at the source module.
+    """
+    calls = []
+    monkeypatch.setattr(
+        _service_entry, "_quiesce_stage1",
+        lambda *a, **k: calls.append((a, k)),
+    )
+    return calls
 
 
 def _rec():
@@ -98,7 +116,7 @@ def test_put_service_tier_windows_manual_command_has_no_sudo(monkeypatch):
     assert "sudo" not in out["manual_command"]
 
 
-def test_put_service_tier_enable_with_elevation_installs(monkeypatch):
+def test_put_service_tier_enable_with_elevation_installs(monkeypatch, _neutralise_quiesce):
     calls = _silence_audit(monkeypatch)
     manager = _FakeManager("not_found")
     monkeypatch.setattr(ssm, "get_system_service_manager", lambda: manager)
@@ -115,6 +133,9 @@ def test_put_service_tier_enable_with_elevation_installs(monkeypatch):
     assert name == "webui"
     assert "uvicorn" in command
     assert len(calls["performed"]) == 1
+    # The route must quiesce Stufe 1 WITHOUT stopping the running instance
+    # (it may itself be that instance).
+    assert _neutralise_quiesce == [((), {"stop_running": False})]
 
 
 def test_put_service_tier_disable_with_elevation_uninstalls(monkeypatch):

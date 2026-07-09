@@ -146,7 +146,11 @@ def _record_path(task_id: str) -> Path:
 def _atomic_write(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + f".tmp{secrets.token_hex(4)}")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    # encoding= explicit: rec["text"] is the model answer (emoji are routine);
+    # without it Windows writes cp1252 and a finished result dies in
+    # UnicodeEncodeError — the reaper then falsely reports "worker stopped
+    # without reporting a result".
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     # Records carry routing PII (sender uid, chat_id, instruction label). Lock
     # them to owner-only, matching the 0600 the /task spec file gets — otherwise
     # they land world-readable (umask-default 0644) on a shared host.
@@ -159,8 +163,12 @@ def _atomic_write(path: Path, data: dict) -> None:
 
 def _read(path: Path) -> dict | None:
     try:
-        return json.loads(path.read_text())
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        # encoding pinned to match _atomic_write: without it Windows reads
+        # cp1252 and an emoji-bearing result record dies in UnicodeDecodeError
+        # (a ValueError, not caught below) — moving the "worker stopped
+        # without reporting a result" symptom from write- to read-side.
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
         return None
 
 

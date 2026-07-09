@@ -3642,8 +3642,11 @@ def _append_observer_message(
     lines: list[str] = []
     if path.exists():
         try:
-            lines = [l for l in path.read_text().splitlines() if l.strip()]
-        except OSError:
+            # encoding pinned: observer text is user content (emoji/umlauts);
+            # locale-default cp1252 on Windows would raise mid-turn and
+            # poison-quarantine the message.
+            lines = [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        except (OSError, ValueError):
             lines = []
     lines.append(json.dumps(entry, ensure_ascii=False))
     dropped = False
@@ -3654,7 +3657,7 @@ def _append_observer_message(
         lines.pop(0)
         dropped = True
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text("\n".join(lines) + ("\n" if lines else ""))
+    tmp.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     tmp.replace(path)
     return len(lines), dropped
 
@@ -3678,8 +3681,8 @@ def _consume_observer_buffer(
     except OSError:
         return []
     try:
-        raw = tmp.read_text()
-    except OSError:
+        raw = tmp.read_text(encoding="utf-8")  # written utf-8 by the buffer append
+    except (OSError, ValueError):
         return []
     finally:
         tmp.unlink(missing_ok=True)
@@ -3825,7 +3828,7 @@ def _heartbeat_writer(sender: str, msg_id: str, channel: str, chat_id,
         out["chat_id"] = chat_id
     out_file = OUTBOX / f"{msg_id}_hb.json"
     try:
-        out_file.write_text(json.dumps(out, ensure_ascii=False))
+        out_file.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
         log(f"heartbeat sent for {msg_id}")
     except OSError:
         pass
@@ -4097,8 +4100,10 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         # the session tree vanished mid-turn (external wipe), heal and go on.
         try:
             (workdir / ".session_started").touch()
-        except FileNotFoundError:
-            log(f"session dir vanished mid-turn — recreating: {workdir}")
+        except OSError as _se:
+            # Broad OSError: Windows delete-pending -> PermissionError,
+            # dir-replaced-by-file -> NotADirectoryError; all must heal.
+            log(f"session dir unwritable mid-turn ({_se}) — recreating: {workdir}")
             try:
                 workdir.mkdir(parents=True, exist_ok=True)
                 (workdir / ".session_started").touch()
@@ -4720,8 +4725,10 @@ def _call_claude_streaming_via_engine(
             # must heal, never raise the finished turn into poison.
             try:
                 (workdir / ".session_started").touch()
-            except FileNotFoundError:
-                log(f"session dir vanished mid-turn — recreating: {workdir}")
+            except OSError as _se:
+                # Broad OSError: Windows delete-pending -> PermissionError,
+                # dir-replaced-by-file -> NotADirectoryError; all must heal.
+                log(f"session dir unwritable mid-turn ({_se}) — recreating: {workdir}")
                 try:
                     workdir.mkdir(parents=True, exist_ok=True)
                     (workdir / ".session_started").touch()
@@ -7334,7 +7341,11 @@ def _try_openai_tts(
             f"to {len(capped)} for OpenAI TTS")
         text = capped
     try:
-        client = OpenAI(api_key=api_key)
+        # timeout + no retries: without these the SDK defaults to 600s total
+        # with 2 retries — a degraded network parks the messenger turn thread
+        # in TTS for many minutes before edge/piper are even attempted
+        # (say.py's twin already pins this; review parity fix).
+        client = OpenAI(api_key=api_key, timeout=15.0, max_retries=0)
         resp = client.audio.speech.create(
             model="tts-1",
             voice=voice,
@@ -7459,6 +7470,15 @@ def synthesize_voice_note(
       3. Piper local TTS (skipped if binary / model / ffmpeg absent)
       4. None → caller falls back to text-only delivery
     """
+    # All three engines write into ROOT/outbox, which only adapter.main()
+    # creates — `corvin-voice doctor` (and any pre-first-boot caller) ran all
+    # tiers against a missing directory and reported misleading per-tier
+    # failures (review finding).
+    try:
+        (ROOT / "outbox").mkdir(parents=True, exist_ok=True)
+    except OSError as _e:
+        log(f"synth: outbox dir unavailable: {_e}")
+
     path = _try_openai_tts(text, lang, voice)
     if path is not None:
         with _voice_engine_lock:
@@ -7810,12 +7830,15 @@ def _mirror_new_artifacts(
     # poison while their answers were already computed.
     try:
         _entries = list(artifacts_dir.iterdir())
-    except FileNotFoundError:
-        log(f"artifacts dir vanished mid-turn — recreating: {artifacts_dir}")
+    except OSError as _e:
+        # Broad OSError, not just FileNotFoundError: on Windows a wiped-but-
+        # open dir surfaces as PermissionError, a dir replaced by a file as
+        # NotADirectoryError — every variant must heal, never raise.
+        log(f"artifacts dir unreadable mid-turn ({_e}) — recreating: {artifacts_dir}")
         try:
             artifacts_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as _e:
-            log(f"artifacts dir recreate failed: {_e}")
+        except OSError as _e2:
+            log(f"artifacts dir recreate failed: {_e2}")
         return mirrored
     try:
         outputs_dir.mkdir(parents=True, exist_ok=True)
@@ -7823,16 +7846,19 @@ def _mirror_new_artifacts(
         log(f"outputs dir recreate failed: {_e}")
         return mirrored
     for _ap in _entries:
-        if not _ap.is_file():
-            continue
-        if _ap.suffix.lower() not in _MIRROR_EXTS:
-            continue
-        if _ap.name in pre_artifacts and _ap.stat().st_mtime <= pre_artifacts[_ap.name]:
-            continue  # not new this turn
-        _dest = outputs_dir / _ap.name
-        if _dest.exists() and _ap.stat().st_mtime <= _dest.stat().st_mtime:
-            continue  # outputs/ already holds this (or a newer) copy
+        # The whole per-file body is guarded: a file vanishing between
+        # iterdir() and stat() (same external-wipe race, one tick later)
+        # must skip that file, not kill the finished turn.
         try:
+            if not _ap.is_file():
+                continue
+            if _ap.suffix.lower() not in _MIRROR_EXTS:
+                continue
+            if _ap.name in pre_artifacts and _ap.stat().st_mtime <= pre_artifacts[_ap.name]:
+                continue  # not new this turn
+            _dest = outputs_dir / _ap.name
+            if _dest.exists() and _ap.stat().st_mtime <= _dest.stat().st_mtime:
+                continue  # outputs/ already holds this (or a newer) copy
             _shutil.copy2(_ap, _dest)
             mirrored.append(_ap.name)
             log(f"artifact→outputs mirror: {_ap.name}")
@@ -8056,6 +8082,32 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     channel=channel, chat_key=chat_key_for_authz, user=sender,
                     details={"msg_id": msg_id, "age_s": int(_age_ms / 1000)},
                 )
+                # Tell the user — a silent drop reads as "the bot ignored me".
+                # This fires exactly when the message COULDN'T be answered in
+                # time (adapter was down / queue was blocked), so an honest
+                # one-liner beats an answer to a stale question or nothing.
+                try:
+                    _stale_env = {
+                        "channel": channel, "to": sender,
+                        "text": (
+                            f"⚠️ Your message from {int(_age_ms / 3600000)}h ago "
+                            "arrived while I was unavailable and is too old to "
+                            "answer reliably now — please resend it if still "
+                            "relevant."
+                        ),
+                    }
+                    if chat_id is not None:
+                        _stale_env["chat_id"] = chat_id
+                    OUTBOX.mkdir(parents=True, exist_ok=True)
+                    # encoding pinned: the notice text carries "⚠️"; without
+                    # it Windows cp1252 raises UnicodeEncodeError (a
+                    # ValueError, NOT caught by `except OSError`) and the
+                    # finished stale-drop bubbles into poison quarantine.
+                    (OUTBOX / f"{msg_id}_00.json").write_text(
+                        json.dumps(_stale_env, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+                except OSError as _e:
+                    log(f"stale-drop notice failed for {msg_id}: {_e}")
                 PROCESSED.mkdir(exist_ok=True)
                 try:
                     shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
@@ -8153,7 +8205,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     warn_envelope["chat_id"] = chat_id
                 out_file = OUTBOX / f"{msg_id}_00.json"
                 out_file.write_text(json.dumps(warn_envelope,
-                                               ensure_ascii=False, indent=2))
+                                               ensure_ascii=False, indent=2),
+                                    encoding="utf-8")
                 PROCESSED.mkdir(exist_ok=True)
                 shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
                 _audit_event(
@@ -8233,7 +8286,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
         out_file = OUTBOX / f"{msg_id}_00.json"
-        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2))
+        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2), encoding="utf-8")
         PROCESSED.mkdir(exist_ok=True)
         shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
         return
@@ -8261,7 +8314,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 if chat_id is not None:
                     _hr_ack["chat_id"] = chat_id
                 (OUTBOX / f"{msg_id}_00.json").write_text(
-                    json.dumps(_hr_ack, ensure_ascii=False, indent=2)
+                    json.dumps(_hr_ack, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
                 )
                 PROCESSED.mkdir(exist_ok=True)
                 shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
@@ -8307,7 +8361,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
         out_file = OUTBOX / f"{msg_id}_00.json"
-        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2))
+        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2), encoding="utf-8")
         PROCESSED.mkdir(exist_ok=True)
         shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
         return
@@ -8397,17 +8451,31 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                         # would leak the instruction text + routing ids (PII).
                         import tempfile as _tf
                         _fd, _spec_file = _tf.mkstemp(prefix="bgspec_", suffix=".json")
-                        with os.fdopen(_fd, "w") as _sf:
+                        # encoding pinned: instruction text routinely carries
+                        # emoji/umlauts; locale-default cp1252 on Windows
+                        # raised UnicodeEncodeError = task never started.
+                        with os.fdopen(_fd, "w", encoding="utf-8") as _sf:
                             json.dump(_spec, _sf, ensure_ascii=False)
                         try:
                             os.chmod(_spec_file, 0o600)
                         except OSError:
                             pass
                         _worker = str(ROOT / "bg_task_worker.py")
+                        # Windows ignores start_new_session — without explicit
+                        # creationflags the "detached" worker shares the
+                        # parent's console/job and dies with it (the whole
+                        # point of /task is surviving the spawning session).
+                        _detach_flags = 0
+                        if sys.platform == "win32":
+                            _detach_flags = (
+                                getattr(subprocess, "DETACHED_PROCESS", 0)
+                                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                            )
                         subprocess.Popen(
                             [sys.executable, _worker, _spec_file],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True,
+                            creationflags=_detach_flags,
                         )
                         ack_text = ("🛠️ Running in the background — I'll message "
                                     f"you here when it's done. (task {task_id[-6:]})")
@@ -8434,7 +8502,8 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
         (OUTBOX / f"{msg_id}_00.json").write_text(
-            json.dumps(ack_envelope, ensure_ascii=False, indent=2)
+            json.dumps(ack_envelope, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
         PROCESSED.mkdir(exist_ok=True)
         shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
@@ -8543,7 +8612,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
         out_file = OUTBOX / f"{msg_id}_00.json"
-        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2))
+        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2), encoding="utf-8")
         PROCESSED.mkdir(exist_ok=True)
         shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
         return
@@ -8574,7 +8643,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
         out_file = OUTBOX / f"{msg_id}_00.json"
-        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2))
+        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2), encoding="utf-8")
         PROCESSED.mkdir(exist_ok=True)
         shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
         return
@@ -8744,16 +8813,33 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     workdir = _session_dir(channel, chat_key)
     outputs_dir = workdir / "outputs"
     # parents=True: self-heal when the whole session tree was wiped between
-    # _session_dir()'s exists() check and this call.
+    # _session_dir()'s exists() check and this call. The snapshots below are
+    # OSError-guarded for the same wipe landing one tick later: an empty
+    # snapshot degrades to "everything after the turn looks new", which is
+    # harmless — a raised snapshot kills the turn before the engine ran.
     outputs_dir.mkdir(parents=True, exist_ok=True)
-    pre_files = {p.name: p.stat().st_mtime for p in outputs_dir.iterdir() if p.is_file()}
+    def _snapshot_mtimes(d: Path) -> "dict[str, float] | None":
+        # None (NOT {}) on failure: an empty dict makes every pre-existing
+        # file look "new this turn", re-delivering the session's whole output
+        # history as attachments. None tells the post-turn diff to skip
+        # attachment detection for this turn instead.
+        try:
+            return {p.name: p.stat().st_mtime for p in d.iterdir() if p.is_file()}
+        except OSError as _e:
+            log(f"pre-turn snapshot failed for {d} ({_e}) — skipping attachment diff")
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
+            return None
+    pre_files = _snapshot_mtimes(outputs_dir)
     # Also snapshot L33 artifacts/ so we can mirror new plot/image files to
     # outputs/ after the turn. Works for ALL engines (not only ClaudeCodeEngine
     # with PostToolUse hooks) — the adapter is the one common layer that sees
     # every engine's completed turn before the reply goes out.
     artifacts_dir = workdir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    pre_artifacts = {p.name: p.stat().st_mtime for p in artifacts_dir.iterdir() if p.is_file()}
+    pre_artifacts = _snapshot_mtimes(artifacts_dir)
 
     # Per-Chat-Profil frisch aus bridges/<channel>/settings.json read, so that
     # changeen without Adapter-Restart sofort take effect (Hot-Reload).
@@ -8894,7 +8980,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             out.write_text(json.dumps(
                 _envelope({"text": text, "_progress": True}),
                 ensure_ascii=False,
-            ))
+            ), encoding="utf-8")
             log(f"status #{n} ({tool_name or '?'}): chars={len(text)}")
         except OSError as e:
             log(f"status write failed: {e}")
@@ -8963,27 +9049,38 @@ def process_one(inbox_file: Path, settings: dict) -> None:
 
     # Mirror new/regenerated Forge/ACS artifact media into outputs/ so they are
     # picked up as chat attachments (see _mirror_new_artifacts for the mtime-
-    # aware re-mirror semantics).
-    _mirror_new_artifacts(artifacts_dir, outputs_dir, pre_artifacts)
+    # aware re-mirror semantics). Skip when the pre-turn snapshot failed
+    # (None) — without a baseline every artifact reads as new.
+    if pre_artifacts is not None:
+        _mirror_new_artifacts(artifacts_dir, outputs_dir, pre_artifacts)
 
     # Diff: which files in outputs/ are new or changed since snapshot.
     # Same mid-turn-wipe guard as _mirror_new_artifacts: a vanished outputs/
     # means "no attachments this turn", never a lost answer.
     new_files = []
-    try:
-        _out_entries = list(outputs_dir.iterdir())
-    except FileNotFoundError:
-        log(f"outputs dir vanished mid-turn — recreating: {outputs_dir}")
+    # pre_files is None when the pre-turn snapshot failed — skip attachment
+    # detection entirely rather than treat every existing file as new.
+    _out_entries = []
+    if pre_files is not None:
         try:
-            outputs_dir.mkdir(parents=True, exist_ok=True)
+            _out_entries = list(outputs_dir.iterdir())
         except OSError as _e:
-            log(f"outputs dir recreate failed: {_e}")
-        _out_entries = []
+            # Broad OSError (not just FileNotFoundError): Windows delete-pending
+            # dirs raise PermissionError, dir-replaced-by-file NotADirectoryError.
+            log(f"outputs dir unreadable mid-turn ({_e}) — recreating: {outputs_dir}")
+            try:
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as _e2:
+                log(f"outputs dir recreate failed: {_e2}")
+            _out_entries = []
     for p in _out_entries:
-        if not p.is_file():
-            continue
-        if p.name not in pre_files or p.stat().st_mtime > pre_files[p.name]:
-            new_files.append(p)
+        try:
+            if not p.is_file():
+                continue
+            if p.name not in pre_files or p.stat().st_mtime > pre_files[p.name]:
+                new_files.append(p)
+        except OSError:
+            continue  # file vanished between iterdir() and stat() — skip
     if new_files:
         log(f"detected {len(new_files)} new output file(s): {[f.name for f in new_files]}")
 
@@ -9124,7 +9221,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if bundle_voice and i == len(chunks) - 1:
             extra["voice_path"] = str(voice_path)
         out_file = OUTBOX / f"{msg_id}_{seq:02d}.json"
-        out_file.write_text(json.dumps(_envelope(extra), ensure_ascii=False, indent=2))
+        out_file.write_text(json.dumps(_envelope(extra), ensure_ascii=False, indent=2), encoding="utf-8")
         seq += 1
 
     # Non-Discord channels always keep voice as its own outbox entry.
@@ -9135,7 +9232,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         out_file.write_text(json.dumps(
             _envelope({"voice_path": str(voice_path), "_final": True}),
             ensure_ascii=False, indent=2,
-        ))
+        ), encoding="utf-8")
         seq += 1
 
     # Phase 5.18: any new file Claude wrote to outputs/ goes back as an
@@ -9158,7 +9255,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             out["document_name"] = f.name
             out["document_mimetype"] = mt or "application/octet-stream"
         out_file = OUTBOX / f"{msg_id}_{seq:02d}.json"
-        out_file.write_text(json.dumps(out, ensure_ascii=False, indent=2))
+        out_file.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
         seq += 1
 
     log(
@@ -9528,7 +9625,8 @@ def submit_inbox_item(inbox_file: Path, settings: dict) -> None:
                     shutil.move(str(inbox_file), str(target))
                     err_target = target.with_suffix(target.suffix + ".err")
                     err_target.write_text(
-                        f"runner error for {msg_id} ({route}):\n{tb}"
+                        f"runner error for {msg_id} ({route}):\n{tb}",
+                        encoding="utf-8",
                     )
                     log(f"quarantined poison message → {target.name}")
             except Exception as qe:

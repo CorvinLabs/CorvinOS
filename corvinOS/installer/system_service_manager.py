@@ -128,7 +128,12 @@ class LinuxSystemServiceManager(SystemServiceManager):
         user = current_user()
         service_lines = ["Type=simple", f"User={user}"]
         for key, value in (env_vars or {}).items():
-            service_lines.append(f"Environment={key}={value}")
+            # Quote the value: systemd splits an unquoted Environment=
+            # assignment at whitespace, so a repo/home path with a space
+            # (PYTHONPATH, CORVIN_HOME) would be truncated. Escape any
+            # embedded quote/backslash per systemd's rules.
+            _esc = value.replace("\\", "\\\\").replace('"', '\\"')
+            service_lines.append(f'Environment="{key}={_esc}"')
         service_lines += [
             f"ExecStart={command}",
             "Restart=on-failure",
@@ -371,6 +376,15 @@ class WindowsSystemServiceManager(SystemServiceManager):
             raise RuntimeError(
                 f"Register-ScheduledTask failed: {result.stderr or result.stdout}"
             )
+        # Start it NOW, matching Linux (`enable --now`) and macOS (load +
+        # RunAtLoad): -AtStartup alone means "works after the next reboot",
+        # which on the headless box this feature targets reads as "install
+        # did nothing" (review finding). Best-effort — the registration
+        # above already succeeded.
+        subprocess.run(
+            ["schtasks", "/run", "/tn", self._task_name(name)],
+            capture_output=True,
+        )
 
     def uninstall_service(self, name: str) -> None:
         if not is_elevated():
@@ -378,6 +392,13 @@ class WindowsSystemServiceManager(SystemServiceManager):
                 "Removing this Scheduled Task requires an elevated "
                 "PowerShell. Re-run from an admin PowerShell: corvin-service uninstall"
             )
+        # End the running instance first — /delete alone leaves the already-
+        # started process holding port 8765 until reboot, blocking the
+        # Stufe-1 fallback from binding (review finding).
+        subprocess.run(
+            ["schtasks", "/end", "/tn", self._task_name(name)],
+            capture_output=True,
+        )
         subprocess.run(
             ["schtasks", "/delete", "/tn", self._task_name(name), "/f"],
             capture_output=True,

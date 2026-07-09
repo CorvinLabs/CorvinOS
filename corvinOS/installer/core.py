@@ -154,7 +154,7 @@ class CorvinInstaller:
         print("CorvinOS Installer")
         print("=" * 60)
         print(f"Python  : {sys.version.split()[0]}")
-        print(f"Repo    : {_REPO_ROOT}")
+        print(f"Repo    : {self.repo_root}")
 
         self.platform = _platform.detect()
         print(f"OS      : {self.platform.os_kind.value}")
@@ -308,7 +308,7 @@ class CorvinInstaller:
         if piper_bin := shutil.which("piper"):
             extra["PIPER_BIN"] = piper_bin
 
-        _keys.save_keys(openai_key, anthropic_key, extra, repo_root=_REPO_ROOT)
+        _keys.save_keys(openai_key, anthropic_key, extra, repo_root=self.repo_root)
 
     # ── Step 10: Select bridges ────────────────────────────────────────────
 
@@ -401,7 +401,7 @@ class CorvinInstaller:
             return
         print("\n[Step 12] Configuring bridge tokens...")
         _bridges.configure_bridges(
-            _REPO_ROOT,
+            self.repo_root,
             self.selected_bridges,
             interactive=self.interactive,
         )
@@ -414,7 +414,7 @@ class CorvinInstaller:
             print("  ✓ Console SPA pre-built in wheel — no npm build needed")
             return
         _console.install_python_deps()
-        _console.build_frontend(_REPO_ROOT)
+        _console.build_frontend(self.repo_root)
 
     # ── Step 14: Register services ─────────────────────────────────────────
 
@@ -426,7 +426,7 @@ class CorvinInstaller:
             "operator/forge", "operator/skill-forge",
         ]
         # Only include dirs that actually exist (source-tree install).
-        paths = [str(_REPO_ROOT / d) for d in pythonpath_dirs if (_REPO_ROOT / d).exists()]
+        paths = [str(self.repo_root / d) for d in pythonpath_dirs if (self.repo_root / d).exists()]
         env: dict = {"CORVIN_HOME": str(self.corvin_home)}
         if paths:
             env["PYTHONPATH"] = sep.join(paths)
@@ -525,7 +525,7 @@ class CorvinInstaller:
     # ── Step 16: Register Claude Code plugins ─────────────────────────────
 
     def step_16_register_plugins(self) -> None:
-        _plugins.ensure_plugins(_REPO_ROOT, interactive=self.interactive)
+        _plugins.ensure_plugins(self.repo_root, interactive=self.interactive)
 
     # ── Step 17: Start Web Console server ─────────────────────────────────
 
@@ -553,7 +553,7 @@ class CorvinInstaller:
                 return
             except Exception as e:
                 print(f"  ⚠ systemd start failed ({e}), falling back to foreground start")
-        _console.start_server(_REPO_ROOT)
+        _console.start_server(self.repo_root)
 
     # ── Step 18: Save config + open browser ───────────────────────────────
 
@@ -718,9 +718,9 @@ class CorvinInstaller:
                 print("  ✓ corvin-webui.service started")
             else:
                 print("  ⚠ systemd start failed — falling back to direct launch")
-                _console.start_server(_REPO_ROOT)
+                _console.start_server(self.repo_root)
         else:
-            _console.start_server(_REPO_ROOT)
+            _console.start_server(self.repo_root)
 
         # ── Step 6: Restart managed services ──────────────────────────────
         print("\n[5/5] Restarting services...")
@@ -764,7 +764,11 @@ class CorvinInstaller:
 
         # ── Step 1: Stop + remove services via service manager ────────────
         print("\n[1/10] Stopping and removing services...")
-        managed_services = ["voice-bridge-adapter"] + [f"voice-bridge-{b}" for b in self.selected_bridges]
+        # "webui" included: step_14 registers it on Linux AND macOS — leaving
+        # it out kept the console LaunchAgent/user-unit alive after
+        # "uninstall" (macOS relaunched it at every login; WA-7 class).
+        managed_services = (["voice-bridge-adapter", "webui"]
+                            + [f"voice-bridge-{b}" for b in self.selected_bridges])
         for svc in managed_services:
             try:
                 self.service_manager.stop_service(svc)
@@ -845,6 +849,23 @@ class CorvinInstaller:
                 )
             except Exception:
                 pass
+
+            # macOS falls into this non-win32 branch, where every systemctl
+            # call is a silent no-op — sweep the LaunchAgents too, or the
+            # console (KeepAlive=true) relaunches at every login after
+            # "uninstall" (the same WA-7 class fixed for Windows below).
+            if sys.platform == "darwin":
+                la_dir = Path.home() / "Library" / "LaunchAgents"
+                for plist in sorted(la_dir.glob("com.corvin.*.plist")):
+                    try:
+                        subprocess.run(
+                            ["launchctl", "unload", str(plist)],
+                            capture_output=True, check=False,
+                        )
+                        plist.unlink(missing_ok=True)
+                        print(f"  ✓ Removed LaunchAgent: {plist.name}")
+                    except Exception as e:
+                        print(f"  ⚠ Could not remove {plist.name}: {e}")
         elif sys.platform == "win32":
             # install.ps1 (the standalone one-liner installer) registers a
             # persistent, infinite-restart, AtLogOn Scheduled Task named
@@ -1130,7 +1151,8 @@ class CorvinInstaller:
         print("✓ CorvinOS uninstall complete")
         print("=" * 60)
         print("\nFinal step — remove the Python package:")
-        print("  pip uninstall corvinOS -y")
+        print("  uv tool uninstall corvinos     (one-liner installer / uv installs)")
+        print("  pip uninstall corvinOS -y      (plain pip installs)")
         print()
         print("Optional — delete the repo directory:")
         print(f"  rm -rf {self.repo_root}")
@@ -1140,7 +1162,7 @@ class CorvinInstaller:
 
     def _get_adapter_command(self) -> "str | None":
         # Source-tree install: adapter.py lives in the repo checkout.
-        adapter = _REPO_ROOT / "operator" / "bridges" / "shared" / "adapter.py"
+        adapter = self.repo_root / "operator" / "bridges" / "shared" / "adapter.py"
         if adapter.exists():
             # M1: quote both path components so a spaced install/repo path
             # (e.g. C:\Users\John Doe\...) survives re-tokenization intact.
@@ -1167,7 +1189,7 @@ class CorvinInstaller:
         return None
 
     def _get_bridge_command(self, bridge: str) -> str:
-        daemon = _REPO_ROOT / "operator" / "bridges" / bridge / "daemon.js"
+        daemon = self.repo_root / "operator" / "bridges" / bridge / "daemon.js"
         if daemon.exists():
             node = shutil.which("node")
             if node:

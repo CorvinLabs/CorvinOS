@@ -175,7 +175,12 @@ class CodexCliEngine:
 
         try:
             self._proc = subprocess.Popen(
-                args,
+                # Windows: npm ships this CLI as a .cmd shim — CreateProcess can't
+                # launch it directly (WinError 193, an OSError the except
+                # below doesn't map to a clean error event); route through
+                # cmd /c in list form. Mirrors agents/claude_code.py.
+                (["cmd", "/c", *args] if (os.name == "nt" and args
+                    and str(args[0]).lower().endswith((".cmd", ".bat"))) else args),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=cwd,

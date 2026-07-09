@@ -222,7 +222,10 @@ class OpenCodeEngine:
 
         try:
             self._proc = subprocess.Popen(
-                args,
+                # Windows .cmd-shim wrap — same rationale as agents/claude_code.py
+                # (WinError 193 on npm-installed CLIs).
+                (["cmd", "/c", *args] if (os.name == "nt" and args
+                    and str(args[0]).lower().endswith((".cmd", ".bat"))) else args),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=cwd,

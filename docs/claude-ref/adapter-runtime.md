@@ -50,6 +50,13 @@ going autonomously"). The dedicated pool guarantees `/stop`/`/btw`/`/sig` get a
 worker immediately, independent of turn load. Side-channel envelopes also bypass
 the stale-message check and the license gate (always acted on).
 
+The stale-message check (default TTL 1h, `ADAPTER_MSG_STALE_TTL_MS`) no longer
+drops silently: the user gets a one-line outbox notice ("your message from Nh
+ago arrived while I was unavailable — please resend") plus the existing
+`bridge.message_dropped_stale` audit event. A silent drop read as "the bot
+ignored me" (2026-07-08 incident: a re-injected recovered turn vanished
+without a trace).
+
 **Must NOT do:** route side-channel envelopes through `_executor` (re-introduces
 the starvation bug) · hold the per-chat lock while dispatching a `_cancel` ·
 size the side-channel pool from a shared budget that turns can exhaust.

@@ -439,6 +439,12 @@ corvin-service status           # check whether it's active
 corvin-service uninstall        # remove it again
 ```
 
+Installing always-on mode also **disables the start-at-login autostart**
+(both would fight over port 8765 and the loser crash-loops at every
+login). `corvin-service uninstall` prints the one command to re-enable
+start-at-login afterwards. On Windows the always-on service now starts
+immediately after registration — no reboot needed.
+
 The piped installers also accept `--autostart` (registers the normal
 start-at-login setup even when piped, e.g. `curl ... | sh -s -- --autostart`)
 and `--always-on` (also runs `corvin-service install` for you, Linux/macOS

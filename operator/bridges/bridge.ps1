@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# bridge.ps1 — CorvinOS bridge launcher for Windows (ADR-0159 M4).
+# bridge.ps1 -- CorvinOS bridge launcher for Windows (ADR-0159 M4).
 #
 # Equivalent to bridge.sh on Linux/macOS. Activates the venv and dispatches
 # subcommands: up, down, doctor, restart, status, console,
@@ -16,7 +16,7 @@
 #
 #   .\bridge.ps1 install-autostart      # Console + Discord bridge survive crashes
 #                                       # AND reboots (Task Scheduler, no systemd
-#                                       # equivalent on Windows otherwise — this is
+#                                       # equivalent on Windows otherwise -- this is
 #                                       # what keeps the ADR-0180 presence heartbeat
 #                                       # reporting "online" continuously)
 #   .\bridge.ps1 install-autostart telegram   # same, for a non-default bridge
@@ -144,10 +144,10 @@ else:
     "console" {
         Write-Host "Starting CorvinOS web console..." -ForegroundColor Cyan
         # NOTE: this used to point at "shared\corvin_gateway.py", a script that
-        # does not exist anywhere in the repo — the command silently failed
+        # does not exist anywhere in the repo -- the command silently failed
         # (Start-Process -WindowStyle Hidden swallows the "file not found"
-        # error from the hidden Python process), so the console — and with it
-        # the ADR-0180 presence heartbeat thread — never actually started on
+        # error from the hidden Python process), so the console -- and with it
+        # the ADR-0180 presence heartbeat thread -- never actually started on
         # Windows via this path. `python -m corvinOS serve` is the real,
         # PATH-independent entry point (see corvinOS/__main__.py) and is what
         # install.ps1 already tells users to run day-to-day; it wires up the
@@ -161,7 +161,7 @@ else:
     # survive crashes and reboots unattended. Windows has no default persistent
     # background-service story, so a Windows instance silently goes dark (and
     # drops off the ADR-0180 "online now" count) the moment its terminal window
-    # is closed or the machine restarts — until a human notices and re-runs
+    # is closed or the machine restarts -- until a human notices and re-runs
     # `bridge.ps1 console` / `bridge.ps1 up` by hand. These two Scheduled Tasks
     # close that gap: registered once, they relaunch the console and the bridge
     # at every logon AND keep relaunching them forever via
@@ -183,7 +183,7 @@ else:
             $Action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $ArgString
             $Trigger  = New-ScheduledTaskTrigger -AtLogOn
             # -Hidden mirrors install.ps1's Install-CorvinAutostart (keep both
-            # supervisor registrations IDENTICAL in this regard — a visible/
+            # supervisor registrations IDENTICAL in this regard -- a visible/
             # closable window on one path while the other is hidden is exactly
             # the drift that let a real "close the window, the app dies" bug
             # reach users).
@@ -198,9 +198,9 @@ else:
             Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
             Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger `
                 -Settings $Settings -RunLevel Limited `
-                -Description "CorvinOS $TargetArg — auto-restarts on crash/reboot (ADR-0180 presence heartbeat)" `
+                -Description "CorvinOS $TargetArg -- auto-restarts on crash/reboot (ADR-0180 presence heartbeat)" `
                 | Out-Null
-            # Start it now too — don't make the user log off/on to see it take effect.
+            # Start it now too -- don't make the user log off/on to see it take effect.
             Start-ScheduledTask -TaskName $TaskName
             Write-Host "  Registered + started: $TaskName" -ForegroundColor Green
         }

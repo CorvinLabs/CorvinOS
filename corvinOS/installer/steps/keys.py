@@ -180,7 +180,14 @@ def _ensure_restrictive_mode(path: Path) -> None:
     validate/write duration (adversarial review finding).
     """
     if sys.platform == "win32":
-        return  # no POSIX mode bits on NTFS; nothing meaningful to narrow here
+        # No POSIX mode bits on NTFS — but the file must still EXIST after
+        # this call: _upsert() reads it unconditionally next, and the old
+        # early-return crashed a fresh Windows install with FileNotFoundError
+        # on the very first key write (adversarial review finding).
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        return
     if not path.exists():
         fd = os.open(str(path), os.O_CREAT | os.O_WRONLY, 0o600)
         os.close(fd)

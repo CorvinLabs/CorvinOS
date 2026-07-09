@@ -97,8 +97,11 @@ class EdgeStatusTests(unittest.TestCase):
 
 class PiperStatusTests(unittest.TestCase):
     def test_no_binary_no_package_reports_not_ready(self):
+        # Mock the SSOT resolver, not shutil.which — the resolver also probes
+        # PIPER_BIN and the interpreter-neighbor, and the test venv genuinely
+        # ships a piper next to sys.executable (piper-tts is a base dep).
         with mock.patch.dict(sys.modules, {"piper": None}), \
-             mock.patch("shutil.which", return_value=None):
+             mock.patch.object(_say, "_resolve_piper_binary", return_value=None):
             status = _say.provider_status()
         self.assertFalse(status["piper"]["ready"])
         self.assertFalse(status["piper"]["package_installed"])
@@ -106,7 +109,7 @@ class PiperStatusTests(unittest.TestCase):
 
     def test_binary_present_but_no_model_reports_not_ready(self):
         with mock.patch.dict(sys.modules, {"piper": None}), \
-             mock.patch("shutil.which", return_value="/usr/bin/piper"), \
+             mock.patch.object(_say, "_resolve_piper_binary", return_value="/usr/bin/piper"), \
              mock.patch.object(_say, "_piper_model_for", return_value=None):
             status = _say.provider_status()
         self.assertTrue(status["piper"]["package_installed"])
@@ -116,7 +119,7 @@ class PiperStatusTests(unittest.TestCase):
 
     def test_binary_and_model_present_reports_ready(self):
         with mock.patch.dict(sys.modules, {"piper": None}), \
-             mock.patch("shutil.which", return_value="/usr/bin/piper"), \
+             mock.patch.object(_say, "_resolve_piper_binary", return_value="/usr/bin/piper"), \
              mock.patch.object(_say, "_piper_model_for", return_value=Path("/fake/model.onnx")):
             status = _say.provider_status()
         self.assertTrue(status["piper"]["ready"])

@@ -244,7 +244,10 @@ class CopilotCliEngine:
         proc: subprocess.Popen[bytes] | None = None
         try:
             proc = subprocess.Popen(
-                cmd,
+                # Windows .cmd-shim wrap — same rationale as agents/claude_code.py
+                # (WinError 193 on npm-installed CLIs).
+                (["cmd", "/c", *cmd] if (os.name == "nt" and cmd
+                    and str(cmd[0]).lower().endswith((".cmd", ".bat"))) else cmd),
                 stdin=subprocess.DEVNULL,   # non-interactive: no TTY needed
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

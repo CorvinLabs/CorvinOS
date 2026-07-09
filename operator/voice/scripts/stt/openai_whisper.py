@@ -68,9 +68,20 @@ def _load_env_value(key: str, env_path: Path) -> str | None:
             continue
         value = m.group(2).strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            # Fully-quoted value: quotes protect everything inside; take it
+            # verbatim (a `#` inside quotes is a legitimate key character).
             value = value[1:-1]
-        if value:
-            return value
+        else:
+            # Unquoted (incl. `KEY="sk-x" # prod`, where the trailing comment
+            # breaks the first==last quote test): drop an inline comment, then
+            # peel symmetric wrapping quotes. Without this the common
+            # `KEY=sk-x  # prod` idiom poisons the key and every call 401s
+            # while status shows "ready".
+            value = value.split(" #", 1)[0].split("\t#", 1)[0].strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+        if value.strip():
+            return value.strip()
     return None
 
 
@@ -91,9 +102,11 @@ def _resolve_api_key() -> str | None:
     file directly (same as say.py's TTS key resolution) makes STT work the
     same way regardless of how the process was launched.
     """
+    # .strip(): a whitespace-only exported key is truthy, so is_available()
+    # reported "ready" while every call died at auth (review finding).
     key = (
-        os.environ.get("CORVIN_STT_OPENAI_KEY")
-        or os.environ.get("OPENAI_API_KEY")
+        (os.environ.get("CORVIN_STT_OPENAI_KEY") or "").strip()
+        or (os.environ.get("OPENAI_API_KEY") or "").strip()
     )
     if key:
         return key
@@ -139,7 +152,9 @@ class OpenAIWhisperProvider:
 
         budget = timeout_s if timeout_s is not None else _DEFAULT_TIMEOUT_S
         # The OpenAI SDK accepts a per-request timeout; honour it.
-        client = OpenAI(api_key=api_key, timeout=budget)
+        # max_retries=0: the SDK default of 2 retries multiplies the wall
+        # clock by ~3× past `budget`, blowing the caller's STT time budget.
+        client = OpenAI(api_key=api_key, timeout=budget, max_retries=0)
         model = os.environ.get("CORVIN_STT_OPENAI_MODEL", _DEFAULT_MODEL)
         kwargs: dict = {"model": model}
         if lang and lang != "auto":

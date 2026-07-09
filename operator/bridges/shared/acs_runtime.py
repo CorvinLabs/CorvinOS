@@ -1240,16 +1240,25 @@ def _call_manager_sync(
     env["VOICE_HOOK_RECURSION"] = "1"
     _strip_worker_secrets(env)  # full secret/PII strip (round-2)
     _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
+    _argv = [
+        binary, "-p", prompt,
+        "--append-system-prompt", _MANAGER_SYSTEM,
+        "--model", model,
+        "--disallowedTools", "*",
+        "--max-turns", "1",
+        "--output-format", "json",  # extract text from envelope so parse never sees CLI wrapper
+    ]
+    # Windows: npm ships `claude` as a .cmd shim — CreateProcess can't launch
+    # it directly (WinError 193); route through cmd /c in list form (no
+    # shell=True). encoding pinned: claude emits UTF-8 JSON, locale-default
+    # cp1252 mojibakes umlauts or dies in UnicodeDecodeError mid-turn.
+    # Mirrors agents/claude_code.py.
+    if (os.name == "nt" and _argv[0].lower().endswith((".cmd", ".bat"))):
+        _argv = ["cmd", "/c", *_argv]
     proc = subprocess.Popen(
-        [
-            binary, "-p", prompt,
-            "--append-system-prompt", _MANAGER_SYSTEM,
-            "--model", model,
-            "--disallowedTools", "*",
-            "--max-turns", "1",
-            "--output-format", "json",  # extract text from envelope so parse never sees CLI wrapper
-        ],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        _argv,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", env=env,
         stdin=subprocess.DEVNULL,
     )
     if proc_holder is not None:
@@ -1413,15 +1422,21 @@ def _call_worker_sync(
     # if the awaiting asyncio Task gets cancelled while this call is blocked
     # in the executor thread, the caller kills THIS exact process via
     # proc_holder.kill() instead of leaving it running to completion.
+    _argv = [
+        binary, "-p", prompt,
+        "--append-system-prompt", system,
+        "--model", model,
+        "--max-turns", worker_max_turns,
+        "--output-format", "json",
+    ]
+    # Windows .cmd-shim wrap + pinned UTF-8 decode — same rationale as the
+    # manager spawn above (WinError 193 / cp1252 mojibake).
+    if (os.name == "nt" and _argv[0].lower().endswith((".cmd", ".bat"))):
+        _argv = ["cmd", "/c", *_argv]
     proc = subprocess.Popen(
-        [
-            binary, "-p", prompt,
-            "--append-system-prompt", system,
-            "--model", model,
-            "--max-turns", worker_max_turns,
-            "--output-format", "json",
-        ],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        _argv,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", env=env,
         stdin=subprocess.DEVNULL,
     )
     if proc_holder is not None:

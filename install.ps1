@@ -4,7 +4,7 @@ param(
     [string]$Editable = "",
     [switch]$NoHermes
 )
-# install.ps1 — CorvinOS installer for Windows (PowerShell 5.1+).
+# install.ps1 -- CorvinOS installer for Windows (PowerShell 5.1+).
 # Usage:
 #   irm https://corvin-labs.com/install.ps1 | iex
 #   .\install.ps1 -Editable C:\path\to\CorvinOS   # dev install from a local clone
@@ -44,7 +44,7 @@ function Write-Cmd  { param($m) Write-Host "    $m" -ForegroundColor White }
 function Write-Hint { param($m) Write-Host "    $m" -ForegroundColor DarkGray }
 
 Write-Host ""
-Write-Host "CorvinOS installer — self-hosted, local-first AI voice agent" -ForegroundColor White
+Write-Host "CorvinOS installer -- self-hosted, local-first AI voice agent" -ForegroundColor White
 
 # ── editable path validation ──────────────────────────────────────────────────
 $EditablePath = ""
@@ -61,19 +61,19 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     # Run the uv installer in a child powershell.exe process.
     # Any `exit` call inside the uv installer terminates the CHILD process,
     # not our session.  [scriptblock]::Create and iex both propagate `exit`
-    # up to the parent session in PS 5.1 — only a real child process is safe.
+    # up to the parent session in PS 5.1 -- only a real child process is safe.
     powershell -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex"
-    # uv installs to %USERPROFILE%\.local\bin — make it usable in THIS session.
+    # uv installs to %USERPROFILE%\.local\bin -- make it usable in THIS session.
     $env:Path = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:Path"
 }
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Fail "uv is not on PATH after install. Open a new terminal and re-run."
 }
-Write-Ok ("uv " + (((uv --version) 2>$null) -split " ")[1] + " — OK")
+Write-Ok ("uv " + (((uv --version) 2>$null) -split " ")[1] + " -- OK")
 
 # ── 2. install CorvinOS as an isolated tool (uv fetches Python if needed) ─────
 # INST-2: on a re-run/update, a previously-installed CorvinOS-Console task is
-# still running corvinos-serve out of the uv-tool venv — holding locks on the
+# still running corvinos-serve out of the uv-tool venv -- holding locks on the
 # very files `uv tool install --force` must replace, which makes the install
 # fail on Windows. Stop the task and kill any lingering serve/venv python FIRST
 # so the install hits no locked files.
@@ -81,8 +81,23 @@ try {
     Stop-ScheduledTask -TaskName "CorvinOS-Console" -ErrorAction SilentlyContinue
 } catch {}
 try {
+    # Disable (not just stop) the task while installing: the registration
+    # carries restart-on-failure, so a merely-stopped instance can relaunch
+    # mid-install and re-lock the venv (INST-2 class). Step 3b re-registers.
+    Disable-ScheduledTask -TaskName "CorvinOS-Console" -ErrorAction SilentlyContinue | Out-Null
+} catch {}
+try {
+    # Also match corvin_gateway/uvicorn: the wizard and the always-on (Stufe-2)
+    # service run `python -m uvicorn corvin_gateway.app:app`, which the old
+    # pattern missed -- leaving the venv locked and the install failing.
+    # Guard: only kill python-ish processes so an editor/terminal that merely
+    # has a corvin path in its argv is never collateral.
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and $_.CommandLine -match "corvinos-serve|corvin-serve|corvin_console" } |
+        Where-Object {
+            $_.CommandLine -and
+            $_.CommandLine -match "corvinos-serve|corvin-serve|corvin_console|corvin_gateway" -and
+            $_.Name -match "^python|^corvin"
+        } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 } catch {}
 
@@ -93,7 +108,7 @@ if ($EditablePath -ne "") {
     # INST-1: install UNPINNED. `uv tool install corvinos==<ver>` writes that
     # exact pin into the uv receipt, after which `uv tool upgrade corvinos`
     # (the supervisor's per-logon auto-update below, and serve_backend.py)
-    # honours the pin forever and exits 0 "Nothing to upgrade" — permanently
+    # honours the pin forever and exits 0 "Nothing to upgrade" -- permanently
     # freezing auto-update, and on Windows feeding the exit-before-uvicorn
     # relaunch loop. The PyPI JSON query is now used ONLY for a log line.
     $LatestVersion = ""
@@ -101,7 +116,7 @@ if ($EditablePath -ne "") {
         $pypiInfo = Invoke-RestMethod -Uri "https://pypi.org/pypi/$Package/json" -TimeoutSec 10
         $LatestVersion = $pypiInfo.info.version
     } catch {
-        Write-Warn "Could not reach PyPI — installing whatever uv resolves as latest."
+        Write-Warn "Could not reach PyPI -- installing whatever uv resolves as latest."
     }
 
     if ($LatestVersion -ne "") {
@@ -113,7 +128,13 @@ if ($EditablePath -ne "") {
     # WITHOUT pinning the version into the receipt, so upgrades keep working.
     uv tool install --force --refresh $Package
 }
-if ($LASTEXITCODE -ne 0) { Write-Fail "install failed — see the error above" }
+if ($LASTEXITCODE -ne 0) {
+    # Re-enable the autostart task we disabled above before bailing out —
+    # otherwise a failed (e.g. offline) re-install leaves a previously
+    # working autostart permanently disabled, worse than before the install.
+    try { Enable-ScheduledTask -TaskName "CorvinOS-Console" -ErrorAction SilentlyContinue | Out-Null } catch {}
+    Write-Fail "install failed -- see the error above"
+}
 $prevErrorAction = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 uv tool update-shell 2>$null | Out-Null   # persist the tool bin on the user PATH
@@ -145,7 +166,7 @@ if (-not $SkipHermes) {
             winget install --silent --accept-package-agreements --accept-source-agreements Ollama.Ollama
             $env:Path = "$env:LOCALAPPDATA\Programs\Ollama;$env:Path"
         } else {
-            Write-Warn "winget not found — install Ollama from https://ollama.com/download/windows"
+            Write-Warn "winget not found -- install Ollama from https://ollama.com/download/windows"
         }
     }
 
@@ -167,11 +188,11 @@ if (-not $SkipHermes) {
         } else {
             Write-Step "Pulling $HModel (one-time, a few GB) ..."
             ollama pull $HModel
-            if ($LASTEXITCODE -eq 0) { Write-Ok "Hermes ready — $HModel installed" }
-            else { Write-Warn "model pull failed — finish later with: ollama pull $HModel" }
+            if ($LASTEXITCODE -eq 0) { Write-Ok "Hermes ready -- $HModel installed" }
+            else { Write-Warn "model pull failed -- finish later with: ollama pull $HModel" }
         }
     } else {
-        Write-Warn "Ollama not reachable — Hermes self-heals on first run (or see https://ollama.com/download)"
+        Write-Warn "Ollama not reachable -- Hermes self-heals on first run (or see https://ollama.com/download)"
     }
 }
 
@@ -188,12 +209,12 @@ if (Get-Command corvin-install -ErrorAction SilentlyContinue) {
 
 # ── 3b. autostart: survive terminal close, logoff, and reboot ─────────────────
 # Windows has no equivalent of systemd's Restart=always (what keeps the
-# Linux/macOS install always-on) — a bare `Start-Process corvinos-serve` only
+# Linux/macOS install always-on) -- a bare `Start-Process corvinos-serve` only
 # lives as long as this installer window's process tree does, and once the
 # machine reboots or the user logs off, the console (and with it the
 # ADR-0180 presence heartbeat) just stays down until someone notices and
 # manually restarts it. A per-user Scheduled Task (no admin needed) that
-# supervises the process forever — restart on ANY exit, 5 s cooldown — is the
+# supervises the process forever -- restart on ANY exit, 5 s cooldown -- is the
 # closest practical match, and this makes it the DEFAULT so it works out of
 # the box instead of being an opt-in step the user has to discover later.
 #
@@ -204,11 +225,11 @@ if (Get-Command corvin-install -ErrorAction SilentlyContinue) {
 function Install-CorvinAutostart {
     $CorvinHome = if ($env:CORVIN_HOME) { $env:CORVIN_HOME } else { Join-Path $env:USERPROFILE ".corvin" }
     # CORVIN_HOME is a documented user-overridable env var, not a validated
-    # path — its value is interpolated into the generated supervisor script
+    # path -- its value is interpolated into the generated supervisor script
     # below as literal text. Escape backtick/`$`/`"` (in that order) before
     # any such interpolation so a crafted CORVIN_HOME value can't break out
     # of the double-quoted string it lands in (same injection class already
-    # fixed in serve_backend.py::_ps_quote this session — adversarial review
+    # fixed in serve_backend.py::_ps_quote this session -- adversarial review
     # finding).
     $CorvinHomeEscaped = $CorvinHome.Replace('`', '``').Replace('$', '`$').Replace('"', '`"')
     $BinDir = Join-Path $CorvinHome "bin"
@@ -220,7 +241,7 @@ function Install-CorvinAutostart {
     if (-not $ServeCmd) { throw "corvinos-serve not found on PATH" }
 
     # INST-11: $ServeCmd/$Supervisor are filesystem paths interpolated as
-    # literal text into the generated supervisor's double-quoted strings — a
+    # literal text into the generated supervisor's double-quoted strings -- a
     # path containing a `$`, backtick or `"` would break out of them (same
     # injection class already handled for $CorvinHomeEscaped). Escape
     # backtick/`$`/`"` in that order before any such interpolation.
@@ -228,7 +249,7 @@ function Install-CorvinAutostart {
     $SupervisorEscaped = $Supervisor.Replace('`', '``').Replace('$', '`$').Replace('"', '`"')
 
     @"
-# Auto-generated by install.ps1 — restart-forever supervisor for corvinos-serve.
+# Auto-generated by install.ps1 -- restart-forever supervisor for corvinos-serve.
 # Not meant to be run by hand. Re-run install.ps1 (or bridge.ps1 install-autostart
 # from a repo checkout) to regenerate. Logs: `$CorvinHome\logs\console-supervisor.log
 `$ErrorActionPreference = "Continue"
@@ -251,7 +272,7 @@ Write-Log "supervisor starting: $ServeCmdEscaped --no-browser"
 
 # ── One-time auto-update per logon/boot ─────────────────────────────────────
 # The Windows install is `uv tool install`d, so upgrade with `uv tool upgrade`
-# (that venv has no pip). Runs ONCE here — before the restart loop — so a crash
+# (that venv has no pip). Runs ONCE here -- before the restart loop -- so a crash
 # loop never hammers PyPI. Honours the console's auto_update toggle and never
 # blocks startup: any failure/timeout/offline just logs and continues.
 function Get-CorvinAutoUpdate {
@@ -277,22 +298,22 @@ if (Get-CorvinAutoUpdate) {
             if (Wait-Job `$job -Timeout 120) {
                 Write-Log ("auto-update result: " + ((Receive-Job `$job) -join ' '))
             } else {
-                Write-Log "auto-update timed out (120s) — continuing"
+                Write-Log "auto-update timed out (120s) -- continuing"
                 Stop-Job `$job -ErrorAction SilentlyContinue
             }
             Remove-Job `$job -Force -ErrorAction SilentlyContinue
-        } catch { Write-Log "auto-update failed: `$_ — continuing" }
+        } catch { Write-Log "auto-update failed: `$_ -- continuing" }
     } else {
         Write-Log "auto-update skipped: uv not found on PATH"
     }
 }
 
-# Rolling window of recent restart timestamps — bounded crash-loop guard
+# Rolling window of recent restart timestamps -- bounded crash-loop guard
 # (ADR-0184 Stufe-1): 5 restarts per 5-minute window, then stop instead of
 # spinning forever. Mirrors the systemd StartLimitBurst=5/
 # StartLimitIntervalSec=300 pair used for the Linux user unit
 # (corvinOS/installer/service_manager.py) and the dev-checkout supervisor
-# (operator/bridges/shared/corvin-supervisor.ps1) — keep this logic
+# (operator/bridges/shared/corvin-supervisor.ps1) -- keep this logic
 # IDENTICAL across all three; test_windows_supervisor_parity.py checks it.
 `$MaxRestarts = 5
 `$RestartWindowSec = 300
@@ -302,16 +323,16 @@ while (`$true) {
     `$Now = Get-Date
     `$RestartTimestamps = @(`$RestartTimestamps | Where-Object { (`$Now - `$_).TotalSeconds -le `$RestartWindowSec })
     if (`$RestartTimestamps.Count -ge `$MaxRestarts) {
-        Write-Log "CRITICAL: `$MaxRestarts restarts within `${RestartWindowSec}s — stopping supervisor to avoid a crash loop. Check the log above, fix the underlying issue, then restart with: Start-ScheduledTask CorvinOS-Console"
+        Write-Log "CRITICAL: `$MaxRestarts restarts within `${RestartWindowSec}s -- stopping supervisor to avoid a crash loop. Check the log above, fix the underlying issue, then restart with: Start-ScheduledTask CorvinOS-Console"
         break
     }
     `$RestartTimestamps += `$Now
     try {
         Write-Log "launching corvinos-serve"
         `$proc = Start-Process -FilePath "$ServeCmdEscaped" -ArgumentList "--no-browser" -NoNewWindow -PassThru -Wait
-        Write-Log "corvinos-serve exited with code `$(`$proc.ExitCode) — restarting in 5s"
+        Write-Log "corvinos-serve exited with code `$(`$proc.ExitCode) -- restarting in 5s"
     } catch {
-        Write-Log "supervisor error: `$_ — retrying in 5s"
+        Write-Log "supervisor error: `$_ -- retrying in 5s"
     }
     Start-Sleep -Seconds 5
 }
@@ -321,7 +342,7 @@ while (`$true) {
         -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$SupervisorEscaped`""
     $Trigger  = New-ScheduledTaskTrigger -AtLogOn
     # -Hidden: belt-and-suspenders on top of the Action's own -WindowStyle
-    # Hidden — marks the TASK ITSELF as hidden in Task Scheduler's UI/API, so
+    # Hidden -- marks the TASK ITSELF as hidden in Task Scheduler's UI/API, so
     # nothing about this background process is surfaced for a user to
     # discover and terminate by hand.
     $Settings = New-ScheduledTaskSettingsSet `
@@ -331,12 +352,12 @@ while (`$true) {
         -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
         -MultipleInstances IgnoreNew
 
-    # Idempotent — a re-run of install.ps1 (e.g. an update) replaces the
+    # Idempotent -- a re-run of install.ps1 (e.g. an update) replaces the
     # existing registration instead of erroring on it.
     Unregister-ScheduledTask -TaskName "CorvinOS-Console" -Confirm:$false -ErrorAction SilentlyContinue
     Register-ScheduledTask -TaskName "CorvinOS-Console" -Action $Action -Trigger $Trigger `
         -Settings $Settings -RunLevel Limited `
-        -Description "CorvinOS console — auto-restarts on crash/reboot (ADR-0180 presence heartbeat)" `
+        -Description "CorvinOS console -- auto-restarts on crash/reboot (ADR-0180 presence heartbeat)" `
         | Out-Null
     Start-ScheduledTask -TaskName "CorvinOS-Console"
 }
@@ -355,15 +376,15 @@ $RetryCount = 0
 $ServerReady = $false
 
 # Launched via the always-on Scheduled Task above so it's durable from the
-# first boot — not just a one-off process tied to this installer window.
+# first boot -- not just a one-off process tied to this installer window.
 try {
     Install-CorvinAutostart
     Write-Ok "Console will auto-start on login and auto-restart on crash/reboot."
 } catch {
-    Write-Warn "Could not set up auto-restart ($_) — starting once instead (won't survive logoff/reboot). Re-run install.ps1 later to retry autostart registration."
+    Write-Warn "Could not set up auto-restart ($_) -- starting once instead (won't survive logoff/reboot). Re-run install.ps1 later to retry autostart registration."
     # -Hidden, not -Minimized: a minimized window still has a taskbar entry
     # the user can click and close, killing this process exactly like closing
-    # a visible console would — Hidden has no window at all to close.
+    # a visible console would -- Hidden has no window at all to close.
     try { Start-Process -FilePath "corvinos-serve" -ArgumentList "--no-browser" -WindowStyle Hidden -ErrorAction Stop } catch {}
 }
 
@@ -385,29 +406,29 @@ while ($RetryCount -lt $MaxRetries) {
 
 # Open the console no matter what. If the probe timed out the server is still
 # coming up (autostart keeps it durable), so the browser tab will connect on
-# reload a few seconds later — far better than never opening it at all.
+# reload a few seconds later -- far better than never opening it at all.
 if (-not $ServerReady) {
-    Write-Warn "Server is taking longer than expected to answer — opening the console anyway; reload the tab if it doesn't connect immediately: $ConsoleURL"
+    Write-Warn "Server is taking longer than expected to answer -- opening the console anyway; reload the tab if it doesn't connect immediately: $ConsoleURL"
 }
-try { Start-Process $ConsoleURL -ErrorAction Stop; if ($ServerReady) { Write-Ok "Server is ready — opening the console in your browser ..." } }
+try { Start-Process $ConsoleURL -ErrorAction Stop; if ($ServerReady) { Write-Ok "Server is ready -- opening the console in your browser ..." } }
 catch { Write-Ok "Open the console in your browser: $ConsoleURL" }
 
 # ── done / cheat sheet ────────────────────────────────────────────────────────
 Write-Host ""
-Write-Head "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+Write-Head "========================================================"
 Write-Host " CorvinOS is ready!" -ForegroundColor Green
-Write-Head "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+Write-Head "========================================================"
 Write-Host ""
 Write-Host " The console now starts automatically at login and restarts itself" -ForegroundColor White
-Write-Host " if it ever crashes or the machine reboots — nothing more to run:" -ForegroundColor White
+Write-Host " if it ever crashes or the machine reboots -- nothing more to run:" -ForegroundColor White
 Write-Host ""
 Write-Cmd  "$ConsoleURL"
 Write-Hint "# check status:  Get-ScheduledTask CorvinOS-Console"
 Write-Hint "# turn off:      Unregister-ScheduledTask CorvinOS-Console"
 Write-Host ""
-Write-Head "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+Write-Head "========================================================"
 Write-Host " Commands" -ForegroundColor White
-Write-Head "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+Write-Head "========================================================"
 Write-Host ""
 Write-Host "   corvinos-serve     " -NoNewline -ForegroundColor White; Write-Host "Start the web console manually (already auto-started, see above)"
 Write-Host "   corvin-install     " -NoNewline -ForegroundColor White; Write-Host "Setup wizard (bridges, tokens, voice)"

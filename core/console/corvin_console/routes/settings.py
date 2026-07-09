@@ -384,12 +384,23 @@ def put_service_tier(
     manager = get_system_service_manager()
     try:
         if body.enabled:
-            from ops.launcher.service_entry import _webui_command
+            from ops.launcher.service_entry import (
+                _quiesce_stage1,
+                _webui_command,
+                _webui_env_vars,
+            )
             manager.install_service(
                 name=_SERVICE_TIER_NAME,
                 command=_webui_command(),
                 description="CorvinOS WebUI — always-on (ADR-0184 Stufe 2)",
+                env_vars=_webui_env_vars(),
             )
+            # Both tiers bind port 8765 — leaving the Stufe-1 login autostart
+            # active makes the loser crash-loop at every login. stop_running
+            # =False: this route may itself BE the running Stufe-1 console —
+            # stopping it now would kill the request in flight. Disable for
+            # next login only; Stufe 2 takes over on the next restart.
+            _quiesce_stage1(stop_running=False)
         else:
             manager.uninstall_service(_SERVICE_TIER_NAME)
     except ElevationRequired as exc:

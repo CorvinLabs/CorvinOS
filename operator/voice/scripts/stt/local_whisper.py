@@ -53,6 +53,92 @@ from .base import (
 
 
 _DEFAULT_MODEL = "tiny-q5_1"
+
+
+def _resolve_ffmpeg() -> "str | None":
+    """Locate ffmpeg: FFMPEG_BIN env → PATH → bundled imageio-ffmpeg.
+
+    Mirrors the adapter's TTS-side `_resolve_ffmpeg_bin()`. The installer
+    deliberately skips system ffmpeg on Windows, so without the bundled
+    fallback every real voice note (.ogg/.opus — never a 16-kHz WAV) failed
+    local STT on a fresh Windows install (ADR-0185 review finding).
+    """
+    import shutil as _shutil  # noqa: PLC0415
+    ffmpeg_bin = os.environ.get("FFMPEG_BIN") or _shutil.which("ffmpeg")
+    if ffmpeg_bin:
+        return ffmpeg_bin
+    try:
+        import imageio_ffmpeg  # noqa: PLC0415
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ensure_wav_16k(audio_path: Path, budget: float | None = None) -> "tuple[Path, bool]":
+    """Return a 16-kHz mono 16-bit WAV path for whisper.cpp, converting if
+    needed. Second element: True when a temp file was created (caller
+    deletes it).
+
+    pywhispercpp's own non-WAV path shells out to a bare PATH-``ffmpeg`` —
+    unavailable on stock Windows — and its WAV reader rejects anything that
+    is not exactly 16 kHz/16-bit. Converting here with the robustly resolved
+    ffmpeg keeps the vendored code entirely on its dependency-free WAV path.
+
+    ``budget`` caps the ffmpeg conversion so it stays inside the caller's
+    overall transcription budget (a fixed 120s cap let a tiny
+    BRIDGE_TRANSCRIBE_TIMEOUT still block the turn thread for two minutes).
+    """
+    import subprocess as _sp  # noqa: PLC0415
+    import tempfile as _tf  # noqa: PLC0415
+    import wave as _wave  # noqa: PLC0415
+
+    p = Path(audio_path)
+    # Case-SENSITIVE ".wav": pywhispercpp dispatches on `endswith('.wav')`
+    # (case-sensitive), so a passthrough of "NOTE.WAV" would land in its
+    # bare-PATH-ffmpeg branch and fail on stock Windows — the exact hole
+    # this helper closes. An uppercase extension is converted (its temp
+    # output is lowercase .wav) rather than passed through.
+    if str(p).endswith(".wav"):
+        try:
+            with _wave.open(str(p), "rb") as wf:
+                if (wf.getframerate() == 16000
+                        and wf.getnchannels() in (1, 2)
+                        and wf.getsampwidth() == 2):
+                    return p, False
+        except Exception:  # noqa: BLE001
+            pass  # unreadable/nonstandard header — convert below
+
+    ffmpeg = _resolve_ffmpeg()
+    if ffmpeg is None:
+        raise STTTranscriptionFailed(
+            "ffmpeg not found (checked FFMPEG_BIN, PATH, bundled "
+            "imageio-ffmpeg) — required to decode this audio format for "
+            "local transcription"
+        )
+    tmp = _tf.NamedTemporaryFile(suffix=".wav", delete=False)
+    tmp.close()
+    # Cap conversion inside the caller's budget (fall back to 120s only when
+    # unbounded); never below 1s so a near-exhausted budget still attempts it.
+    _conv_timeout = 120.0 if budget is None else max(1.0, min(budget, 120.0))
+    try:
+        _sp.run(
+            [ffmpeg, "-i", str(p), "-ac", "1", "-ar", "16000",
+             "-acodec", "pcm_s16le", tmp.name, "-y"],
+            check=True, stdout=_sp.DEVNULL, stderr=_sp.PIPE, timeout=_conv_timeout,
+        )
+    except Exception as exc:  # noqa: BLE001
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        stderr_tail = ""
+        if isinstance(exc, _sp.CalledProcessError) and exc.stderr:
+            stderr_tail = f": {exc.stderr[-300:]!r}"
+        raise STTTranscriptionFailed(
+            f"audio conversion for local transcription failed "
+            f"({type(exc).__name__}){stderr_tail}"
+        ) from exc
+    return Path(tmp.name), True
 _DEFAULT_TIMEOUT_S = 120.0  # Local CPU runs are slower than OpenAI.
 _ENGINE_ENV = "CORVIN_STT_LOCAL_ENGINE"  # unset/"pywhispercpp" (default) | "faster-whisper"
 
@@ -112,6 +198,16 @@ _loaded_model: tuple[str, str, object] | None = None
 # _load_model's done-callback) — never on a caller's own timeout — so a
 # second caller waiting on the lock can't start a redundant parallel load.
 _load_lock = threading.Lock()
+
+# Serializes actual inference on the shared model singleton. whisper.cpp
+# contexts are NOT thread-safe: pywhispercpp's Model mutates shared _params
+# (_set_params / assign_abort_callback) and whisper_full() runs on one C
+# context — two adapter worker threads transcribing concurrently is undefined
+# behaviour (segfault, or segments of user A bleeding into user B's turn).
+# Inference is CPU-bound anyway, so serializing costs latency only under
+# concurrent voice notes; waiting time is charged against the caller's budget
+# and fails as STTTimeout, never blocks unbounded.
+_transcribe_lock = threading.Lock()
 
 
 class LocalWhisperProvider:
@@ -186,9 +282,15 @@ class LocalWhisperProvider:
         wait_start = time.monotonic()
         acquire_timeout = budget if budget is not None else -1
         if not _load_lock.acquire(timeout=acquire_timeout):
-            raise STTTimeout(
-                f"timed out after {budget}s waiting for a concurrent local STT "
-                f"model load/download to finish"
+            # STTProviderUnavailable, NOT STTTimeout: "another caller's load/
+            # download is still in progress" is a structural local-provider
+            # condition — the resolver must fall through to the next provider
+            # (e.g. OpenAI) instead of failing the turn. A stalled first-use
+            # download once turned every subsequent voice note into a hard
+            # timeout despite a configured cloud fallback (review finding).
+            raise STTProviderUnavailable(
+                f"local STT model load/download still in progress after "
+                f"{budget}s — treating local as unavailable for this call"
             )
 
         try:
@@ -223,7 +325,8 @@ class LocalWhisperProvider:
                     n_threads = int(os.environ.get("CORVIN_STT_LOCAL_THREADS", "4"))
                 except ValueError:
                     n_threads = 4
-                try:
+
+                def _construct() -> object:
                     return Model(
                         size,
                         models_dir=str(_models_dir()),
@@ -236,7 +339,36 @@ class LocalWhisperProvider:
                         print_progress=False,
                         print_realtime=False,
                     )
+
+                try:
+                    return _construct()
                 except Exception as exc:  # noqa: BLE001
+                    # Self-heal a truncated/corrupted model file. An aborted
+                    # first download (Ctrl-C, power loss, dropped connection)
+                    # leaves a half-written ggml file that every later check
+                    # short-circuits on (exists()/st_size>0 both pass), so
+                    # local STT would stay broken forever. Quarantine the
+                    # file and retry once — the retry re-downloads.
+                    model_file = _models_dir() / f"ggml-{size}.bin"
+                    if model_file.exists():
+                        quarantine = model_file.with_name(
+                            model_file.name + ".corrupt")
+                        try:
+                            model_file.replace(quarantine)
+                        except OSError:
+                            raise STTProviderUnavailable(
+                                f"pywhispercpp model {size!r} could not be "
+                                f"loaded and the file could not be "
+                                f"quarantined: {exc}"
+                            ) from exc
+                        try:
+                            return _construct()
+                        except Exception as exc2:  # noqa: BLE001
+                            raise STTProviderUnavailable(
+                                f"pywhispercpp model {size!r} failed to load "
+                                f"even after quarantining a possibly-corrupt "
+                                f"model file and re-downloading: {exc2}"
+                            ) from exc2
                     raise STTProviderUnavailable(
                         f"pywhispercpp model {size!r} could not be loaded: {exc}"
                     ) from exc
@@ -278,10 +410,13 @@ class LocalWhisperProvider:
                 # background thread is still running and owns the release;
                 # releasing it now would let a second caller start a second,
                 # racing load against the same destination file.
-                raise STTTimeout(
+                # STTProviderUnavailable (not STTTimeout) so the resolver
+                # falls through to the next provider — see the acquire-
+                # timeout branch above for the rationale.
+                raise STTProviderUnavailable(
                     f"local STT model load/download exceeded the {budget}s "
-                    f"budget — likely a stalled network connection fetching "
-                    f"the model"
+                    f"budget (likely a stalled network connection fetching "
+                    f"the model) — treating local as unavailable for this call"
                 )
 
             # From here on `_run()`'s finally has already released the lock
@@ -327,56 +462,112 @@ class LocalWhisperProvider:
         if not Path(audio_path).exists():
             raise STTTranscriptionFailed(f"audio file not found: {audio_path}")
 
-        t0 = time.monotonic()
-        aborted = False
-
-        def _abort_check() -> bool:
-            nonlocal aborted
-            if time.monotonic() - t0 > budget:
-                aborted = True
-                return True
-            return False
-
-        kwargs: dict = {}
-        if lang and lang != "auto":
-            kwargs["language"] = lang
-        # No hint: leave `language` unset. whisper.cpp auto-detects the
-        # language as part of the normal decode pass and still produces
-        # segments (confirmed empirically — passing `detect_language=True`
-        # instead makes whisper.cpp run a detect-only pass and return ZERO
-        # segments, silently dropping the transcript; do not set that flag
-        # here).
-
-        try:
-            segments = model.transcribe(
-                str(audio_path), abort_callback=_abort_check, **kwargs,
+        # Convert BEFORE taking the inference lock — conversion is I/O-bound
+        # and safe to run concurrently; only whisper.cpp inference needs
+        # serialization. Charge conversion time against the budget so the
+        # combined wall time stays inside the caller's budget, not ~2×.
+        _conv_start = time.monotonic()
+        wav_path, _converted = _ensure_wav_16k(Path(audio_path), budget=budget)
+        _remaining = budget - (time.monotonic() - _conv_start)
+        if _remaining <= 0:
+            if _converted:
+                try:
+                    os.unlink(wav_path)
+                except OSError:
+                    pass
+            raise STTProviderUnavailable(
+                f"audio conversion consumed the entire {budget}s local STT "
+                f"budget — treating local as unavailable for this call"
             )
-        except FileNotFoundError as exc:
-            raise STTTranscriptionFailed(
-                f"audio file not found: {audio_path}"
-            ) from exc
-        except Exception as exc:  # noqa: BLE001
-            raise STTTranscriptionFailed(
-                f"local whisper (pywhispercpp) failed: {exc}"
-            ) from exc
+        try:
+            return self._transcribe_pywhispercpp_wav(
+                model, wav_path, orig_path=Path(audio_path),
+                lang=lang, budget=_remaining,
+            )
+        finally:
+            if _converted:
+                try:
+                    os.unlink(wav_path)
+                except OSError:
+                    pass
 
-        if aborted:
-            raise STTTimeout(f"local whisper exceeded budget {budget}s")
+    def _transcribe_pywhispercpp_wav(
+        self, model, wav_path: Path, *, orig_path: Path,
+        lang: str | None, budget: float,
+    ) -> TranscriptResult:
+        wait_start = time.monotonic()
+        if not _transcribe_lock.acquire(timeout=budget):
+            # STTProviderUnavailable (not STTTimeout): "another caller holds
+            # the shared model" is the same structural local-busy condition
+            # as the load-lock branch — the resolver must fall through to the
+            # next provider (OpenAI), not fail the turn. Keeping STTTimeout
+            # here left concurrent voice notes hard-failing despite a
+            # configured cloud fallback (round-2 review finding).
+            raise STTProviderUnavailable(
+                f"local transcription busy (concurrent call held the model "
+                f">{budget}s) — treating local as unavailable for this call"
+            )
+        try:
+            remaining = budget - (time.monotonic() - wait_start)
+            if remaining <= 0:
+                raise STTProviderUnavailable(
+                    f"waiting for a concurrent local transcription consumed "
+                    f"the entire {budget}s budget — treating local as "
+                    f"unavailable for this call"
+                )
+            t0 = time.monotonic()
+            aborted = False
 
-        text = "".join(seg.text for seg in segments).strip()
+            def _abort_check() -> bool:
+                nonlocal aborted
+                if time.monotonic() - t0 > remaining:
+                    aborted = True
+                    return True
+                return False
 
-        detected_lang = lang if (lang and lang != "auto") else None
-        if detected_lang is None:
-            # Best-effort: whisper.cpp exposes the auto-detected language id
-            # via a direct C-binding call on the model's context. Never
-            # let this fail the transcription — absence of a language tag
-            # is an acceptable degradation, not an error.
+            kwargs: dict = {}
+            if lang and lang != "auto":
+                kwargs["language"] = lang
+            # No hint: leave `language` unset. whisper.cpp auto-detects the
+            # language as part of the normal decode pass and still produces
+            # segments (confirmed empirically — passing `detect_language=True`
+            # instead makes whisper.cpp run a detect-only pass and return ZERO
+            # segments, silently dropping the transcript; do not set that flag
+            # here).
+
             try:
-                import _pywhispercpp as _pw  # type: ignore[import-not-found]
-                lang_id = _pw.whisper_full_lang_id(model._ctx)  # noqa: SLF001
-                detected_lang = _pw.whisper_lang_str(lang_id)
-            except Exception:  # noqa: BLE001
-                detected_lang = None
+                segments = model.transcribe(
+                    str(wav_path), abort_callback=_abort_check, **kwargs,
+                )
+            except FileNotFoundError as exc:
+                raise STTTranscriptionFailed(
+                    f"audio file not found: {orig_path}"
+                ) from exc
+            except Exception as exc:  # noqa: BLE001
+                raise STTTranscriptionFailed(
+                    f"local whisper (pywhispercpp) failed: {exc}"
+                ) from exc
+
+            if aborted:
+                raise STTTimeout(f"local whisper exceeded budget {remaining}s")
+
+            text = "".join(seg.text for seg in segments).strip()
+
+            detected_lang = lang if (lang and lang != "auto") else None
+            if detected_lang is None:
+                # Best-effort: whisper.cpp exposes the auto-detected language
+                # id via a direct C-binding call on the model's context — it
+                # reads state from the run above, so it MUST stay inside the
+                # inference lock. Never let this fail the transcription —
+                # absence of a language tag is an acceptable degradation.
+                try:
+                    import _pywhispercpp as _pw  # type: ignore[import-not-found]
+                    lang_id = _pw.whisper_full_lang_id(model._ctx)  # noqa: SLF001
+                    detected_lang = _pw.whisper_lang_str(lang_id)
+                except Exception:  # noqa: BLE001
+                    detected_lang = None
+        finally:
+            _transcribe_lock.release()
 
         duration = None
         if segments:

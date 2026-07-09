@@ -6,6 +6,116 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.23] — 2026-07-09
+
+Multi-agent adversarial review of the last days' changes (installation,
+voice in/out, autostart, cross-platform), plus the live-state-wipe
+incident fix.
+
+### Fixed — voice input (STT)
+- **Concurrent voice notes could crash the bridge or cross transcripts.**
+  whisper.cpp contexts are not thread-safe; the shared model singleton is now
+  serialized by an inference lock (budget-aware, times out as a clean STT
+  error instead of blocking unbounded).
+- **Local STT on fresh Windows failed for every real voice note.** pywhispercpp
+  shells out to a bare PATH-`ffmpeg` for non-WAV input, which stock Windows
+  doesn't have. The local provider now converts .ogg/.opus itself using the
+  same FFMPEG_BIN → PATH → bundled imageio-ffmpeg resolution the TTS side
+  uses, and feeds whisper.cpp its dependency-free WAV path.
+- **A truncated model download bricked local STT forever.** An aborted first
+  download (Ctrl-C, power loss) left a half-written ggml file that every
+  exists()/size check accepted. A failed model load now quarantines the file
+  (`.corrupt`) and retries once, which re-downloads.
+- **A stalled model download blocked cloud fallback indefinitely.** Lock-wait
+  and load timeouts now raise "provider unavailable" (falls through to
+  OpenAI STT) instead of a hard timeout that failed the turn.
+- OpenAI STT: whitespace-only keys no longer report "ready"; `.env` inline
+  comments (`KEY=sk-x  # prod`, `KEY="sk-x" # prod`) no longer poison the key
+  value while a `#` inside a quoted value is preserved; the SDK client uses
+  `max_retries=0` so a slow call can't overrun its time budget 3×.
+- `.WAV` (uppercase) voice notes are converted rather than mis-dispatched to
+  whisper.cpp's case-sensitive bare-ffmpeg path; ffmpeg conversion time is
+  charged against the STT budget so total wall time stays bounded.
+
+### Fixed — voice output (TTS)
+- **Adapter's OpenAI TTS had no timeout** (SDK default: 600 s × 2 retries) —
+  a degraded network parked messenger turns in TTS for minutes before
+  edge/piper were tried. Now 15 s, no retries (parity with say.py).
+- say.py Piper binary tier: UTF-8 stdin (cp1252 broke umlauts and killed
+  ru/uk/zh/tr outright), overwrite-safe `replace` on Windows, PIPER_BIN +
+  interpreter-neighbor binary resolution (uv-tool installs), no console
+  window flash, orphan-WAV cleanup on failure.
+- say.py model resolution: an any-language configured model no longer
+  shadows the correct same-language model on disk; cross-language speech is
+  a last resort and logged.
+- `synthesize_voice_note` creates the outbox dir — `corvin-voice doctor`
+  before first bridge boot no longer reports misleading per-tier failures.
+
+### Fixed — installation & autostart
+- **`corvin-supervisor.ps1` failed to parse on Windows PowerShell 5.1**
+  (em-dashes in BOM-less UTF-8 read as ANSI terminate strings) — the repo
+  supervisor, install.ps1 and bridge.ps1 are ASCII-clean now; autostart and
+  crash-loop protection work again on stock Windows.
+- The repo supervisor now sets `CORVIN_SUPERVISED=1` (parity with the
+  install.ps1-generated one) so a pending self-update no longer burns the
+  restart budget against a locked venv.
+- The Windows self-update handoff script is written with a BOM
+  (`utf-8-sig`) so non-ASCII install paths survive PS 5.1.
+- **Stufe-2 (always-on) install now disables the Stufe-1 login autostart**
+  on all three platforms — both bound port 8765 and the loser crash-looped
+  at every login. `corvin-service uninstall` prints how to re-enable it.
+- `corvin-service` command quoting: interpreter paths with spaces
+  (`C:\Users\John Doe\...`) no longer tear; the unit also gets
+  CORVIN_HOME/PYTHONPATH (reader≠writer class).
+- Windows always-on: the Scheduled Task starts immediately after
+  registration (was: only after the next reboot) and is stopped before
+  deletion on uninstall (was: kept running on port 8765).
+- macOS uninstall removes the webui service and sweeps `com.corvin.*`
+  LaunchAgents — the console no longer relaunches at every login after
+  "uninstall" (WA-7 class).
+- install.ps1: the pre-install lock sweep now also matches the
+  `corvin_gateway`/uvicorn console (wizard + Stufe-2), only targets
+  python/corvin processes (an editor with a corvin path in argv is no
+  longer collateral), and disables the autostart task during the install
+  so restart-on-failure can't re-lock the venv mid-upgrade.
+- Fresh Windows install no longer crashes writing the first API key
+  (`service.env` FileNotFoundError).
+- Uninstall hint now shows `uv tool uninstall corvinos` for one-liner
+  installs.
+
+### Fixed — cross-platform correctness
+- ACS delegation spawns (manager + worker) wrap npm `.cmd` shims through
+  `cmd /c` and pin UTF-8 decoding (WinError 193 / mojibake); same wrap for
+  the codex/opencode/copilot engine CLIs.
+- `/task` background worker: detached via `DETACHED_PROCESS` on Windows
+  (start_new_session is a POSIX no-op — closing the console killed the
+  "detached" task), spec file and completion-queue records pinned to UTF-8
+  (emoji killed finished results with UnicodeEncodeError).
+- **Every adapter outbox/observer/completion write is now UTF-8-pinned.**
+  On Windows the locale default (cp1252) raised `UnicodeEncodeError` on any
+  emoji/umlaut reply — a `ValueError`, uncaught by the `OSError` guards — so
+  finished answers were quarantined as poison. All ~15 write/read sites
+  (acks, warnings, progress, voice-note, observer ring-buffer, completion
+  queue) now pin `encoding="utf-8"`.
+- A failed pre-turn output/artifact snapshot no longer re-delivers the
+  session's entire file history as attachments (empty-baseline → sentinel
+  that skips attachment detection for that turn).
+- Stufe-2 install on macOS now targets the invoking user's GUI domain
+  (`SUDO_USER` uid, not the elevated `gui/0`) so the Stufe-1 LaunchAgent is
+  actually stopped/disabled; `install.ps1` re-enables the autostart task if
+  the install aborts; system-service units quote `Environment=` values so a
+  path with spaces doesn't truncate PYTHONPATH.
+
+### Fixed — live-state wipe incident (2026-07-08)
+- The uninstall test wiped the running bridge's in-repo `.corvin` (sessions,
+  budgets, audit chain), the user's systemd `corvin-*` units and the Claude
+  Code plugin cache on every pytest run: every root `uninstall()` deletes
+  from is now instance-injectable and the test sandboxes all of them; a
+  repo-root conftest tripwire fails any test that deletes live operator
+  state; the adapter heals a mid-turn-vanished session tree instead of
+  quarantining finished answers as poison; stale-dropped messages notify
+  the user instead of vanishing silently.
+
 ## [0.10.22] — 2026-07-08
 
 ### Fixed

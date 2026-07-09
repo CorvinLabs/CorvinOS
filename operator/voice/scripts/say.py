@@ -127,7 +127,10 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None) -> bool
         sys.stderr.write("say.py: openai package not installed — skipping\n")
         return False
     try:
-        client = OpenAI(api_key=key, timeout=_PROVIDER_TIMEOUT_S)
+        # max_retries=0: the SDK default of 2 retries pushes the worst case
+        # past the outer 25s route budget (VOICE-10), orphaning a Piper
+        # subprocess when the outer timeout fires first.
+        client = OpenAI(api_key=key, timeout=_PROVIDER_TIMEOUT_S, max_retries=0)
         resp = client.audio.speech.create(
             model="tts-1",
             voice=_openai_voice_for(lang, voice),
@@ -278,10 +281,15 @@ def _piper_model_from_config(lang: str) -> Path | None:
     except Exception:
         return None
     lc = lang.lower()
+    # Language-exact lookups only ("de-de" also tries its "de" primary tag —
+    # the installer writes primary-tag keys). NO any-model/lang_default
+    # fallback here: returning the German model for an English request spoke
+    # English text through Kerstin and, worse, shadowed a correct
+    # English model sitting in the stem-table tier below (review finding).
+    # Cross-language fallback is a deliberate last resort in _piper_model_for.
     path_str = (
         cfg.get(f"piper_model_{lc}")
-        or cfg.get(f"piper_model_{cfg.get('lang_default', 'de')}")
-        or next((v for k, v in cfg.items() if k.startswith("piper_model_") and v), None)
+        or cfg.get(f"piper_model_{lc.split('-')[0]}")
     )
     if not path_str:
         return None
@@ -311,10 +319,54 @@ def _piper_model_for(lang: str) -> Path | None:
         _PIPER_MODELS.get(lc)
         or _PIPER_MODELS.get(lc.split("-")[0])
     )
-    if not stem:
-        return None
-    model = _PIPER_MODEL_DIR / f"{stem}.onnx"
-    return model if model.exists() else None
+    if stem:
+        model = _PIPER_MODEL_DIR / f"{stem}.onnx"
+        if model.exists():
+            return model
+
+    # Last resort — ANY configured model (wrong-language speech beats total
+    # silence only offline; note it on stderr so the degradation is visible).
+    # This tier deliberately sits BELOW the stem table: it used to sit above
+    # it and shadowed a correct same-language model on disk.
+    try:
+        cfg = json.loads((VOICE_CONFIG_DIR / "config.json").read_text(encoding="utf-8"))
+        any_model = (
+            cfg.get(f"piper_model_{cfg.get('lang_default', 'de')}")
+            or next((v for k, v in cfg.items()
+                     if k.startswith("piper_model_") and v), None)
+        )
+        if any_model and Path(any_model).exists():
+            sys.stderr.write(
+                f"say.py: no Piper model for '{lang}' — falling back to "
+                f"{Path(any_model).name} (wrong-language speech)\n"
+            )
+            return Path(any_model)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _resolve_piper_binary() -> str | None:
+    """Locate the piper binary the same way the synth path and adapter do —
+    PIPER_BIN (only if it exists) → PATH → next to the interpreter.
+
+    Single SSOT so provider_status()/voice_doctor report exactly what the
+    synth path will use: PATH-only probes reported "not installed" on the
+    uv-tool installs this resolution was added for (review finding).
+    """
+    import shutil as _shutil  # noqa: PLC0415
+    env_bin = os.environ.get("PIPER_BIN")
+    piper_bin = (
+        (env_bin if (env_bin and Path(env_bin).exists()) else None)
+        or _shutil.which("piper")
+        or _shutil.which("piper-tts")
+    )
+    if not piper_bin:
+        exe_dir = Path(sys.executable).parent
+        for cand in ("piper", "piper.exe"):
+            if (exe_dir / cand).exists():
+                return str(exe_dir / cand)
+    return piper_bin
 
 
 def _try_piper(out_path: Path, text: str, lang: str) -> bool:
@@ -364,7 +416,7 @@ def _try_piper(out_path: Path, text: str, lang: str) -> bool:
     import shutil
     import subprocess as _sp
 
-    piper_bin = shutil.which("piper") or shutil.which("piper-tts")
+    piper_bin = _resolve_piper_binary()
     if not piper_bin:
         sys.stderr.write("say.py: piper binary not found (pip install piper-tts)\n")
         return False
@@ -377,24 +429,36 @@ def _try_piper(out_path: Path, text: str, lang: str) -> bool:
         # inconsistently (orphaned subprocess, no clean fallback). 20s is
         # comfortably below 25s yet ample for a local Piper synth once the
         # model is loaded.
+        # input as UTF-8 BYTES (not text=True): text mode encodes stdin with
+        # the locale codec — cp1252 on Windows — which mojibakes umlauts and
+        # raises UnicodeEncodeError for ru/uk/zh/tr, exactly the languages in
+        # the model table. Mirrors the adapter's piper call.
+        _no_window = 0
+        if sys.platform == "win32":
+            _no_window = getattr(_sp, "CREATE_NO_WINDOW", 0)
         result = _sp.run(
             [piper_bin, "--model", str(model_path), "--output_file", str(wav_path)],
-            input=text,
+            input=text.encode("utf-8"),
             capture_output=True,
-            text=True,
             timeout=20,
+            creationflags=_no_window,
         )
         if result.returncode != 0:
-            sys.stderr.write(f"say.py: piper binary failed: {result.stderr.strip()[:200]}\n")
+            _err = result.stderr.decode("utf-8", "replace").strip()[:200]
+            sys.stderr.write(f"say.py: piper binary failed: {_err}\n")
             return False
         size = wav_path.stat().st_size if wav_path.exists() else 0
         if size == 0:
             sys.stderr.write("say.py: piper binary produced empty output\n")
             return False
-        wav_path.rename(out_path)
+        wav_path.replace(out_path)  # replace (not rename): overwrite-safe on Windows
         return True
     except Exception as e:  # noqa: BLE001
         sys.stderr.write(f"say.py: piper binary error: {e}\n")
+        try:
+            wav_path.unlink(missing_ok=True)  # don't accumulate orphan WAVs
+        except OSError:
+            pass
         return False
 
 
@@ -479,8 +543,10 @@ def provider_status() -> dict[str, dict]:
             import piper  # type: ignore[import-not-found]  # noqa: F401
             piper_installed = True
         except ImportError:
-            import shutil as _shutil
-            piper_installed = bool(_shutil.which("piper") or _shutil.which("piper-tts"))
+            # Same resolution as the synth path (PIPER_BIN + interpreter
+            # neighbor), not a bare PATH probe — otherwise status reports
+            # "not installed" on uv-tool installs where the synth path works.
+            piper_installed = _resolve_piper_binary() is not None
         model_present = any(
             _piper_model_for(lang) is not None for lang in _PIPER_MODELS
         )

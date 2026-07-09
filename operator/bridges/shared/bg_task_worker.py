@@ -48,7 +48,7 @@ def main() -> int:
         return 2
     spec_path = Path(sys.argv[1])
     try:
-        spec = json.loads(spec_path.read_text())
+        spec = json.loads(spec_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, ValueError, OSError) as e:
         print(f"bg_task_worker: bad spec: {e}", file=sys.stderr)
         return 2

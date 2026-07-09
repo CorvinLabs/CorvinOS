@@ -138,7 +138,12 @@ class LinuxServiceManager(ServiceManager):
             "Type=simple",
         ]
         for key, value in (env_vars or {}).items():
-            service_lines.append(f"Environment={key}={value}")
+            # Quote the value: systemd splits an unquoted Environment=
+            # assignment at whitespace, so a repo/home path with a space
+            # (PYTHONPATH, CORVIN_HOME) would be truncated. Escape any
+            # embedded quote/backslash per systemd's rules.
+            _esc = value.replace("\\", "\\\\").replace('"', '\\"')
+            service_lines.append(f'Environment="{key}={_esc}"')
         service_lines += [
             f"ExecStart={command}",
             "Restart=on-failure",

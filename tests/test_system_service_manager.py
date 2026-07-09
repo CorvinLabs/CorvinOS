@@ -138,7 +138,13 @@ class TestWindowsSystemServiceManager:
             run.return_value = mock.Mock(returncode=0, stderr="", stdout="")
             mgr.install_service(name="webui", command="C:\\corvin.exe -m uvicorn app")
 
-        argv = run.call_args.args[0]
+        # Call 1 registers the task; call 2 starts it immediately (parity
+        # with Linux `enable --now` / macOS RunAtLoad -- review finding: a
+        # registered-but-not-started always-on service reads as a no-op
+        # until the next reboot).
+        argv = run.call_args_list[0].args[0]
+        start_argv = run.call_args_list[1].args[0]
+        assert start_argv[:2] == ["schtasks", "/run"]
         assert argv[0] == "powershell"
         ps = argv[-1]
         # S4U logon — no password ever, and the invoking user (not SYSTEM).

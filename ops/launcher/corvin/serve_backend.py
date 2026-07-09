@@ -287,7 +287,11 @@ def _spawn_windows_self_updater(cmd: list[str], relaunch_argv: list[str]) -> boo
                 exit 1
             }}
         """).strip()
-        script_path.write_text(script, encoding="utf-8")
+        # utf-8-sig (BOM): Windows PowerShell 5.1 parses BOM-less files as
+        # ANSI -- any non-ASCII char in an embedded absolute path (umlaut
+        # user name) mojibakes and the detached updater targets broken
+        # paths, leaving the server down after the handoff exit.
+        script_path.write_text(script, encoding="utf-8-sig")
 
         powershell = shutil.which("powershell") or shutil.which("pwsh") or "powershell"
         creationflags = (

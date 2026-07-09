@@ -313,6 +313,116 @@ class LocalWhisperMissingPackageTests(unittest.TestCase):
                 LocalWhisperProvider().transcribe(_tmp_audio())
 
 
+def _tmp_wav16k() -> Path:
+    """A real 16-kHz mono 16-bit WAV (silence) — passes _ensure_wav_16k's
+    passthrough check so provider tests exercise inference, not conversion."""
+    import tempfile
+    import wave as _wave
+    f = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    f.close()
+    with _wave.open(f.name, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00" * 1600)  # 0.1 s silence
+    return Path(f.name)
+
+
+class LocalWhisperInferenceSerializationTests(unittest.TestCase):
+    """whisper.cpp contexts are not thread-safe: concurrent transcribe()
+    calls on the shared model singleton must be serialized by
+    _transcribe_lock (adversarial-review finding: two simultaneous Discord
+    voice notes ran whisper_full on one C context — segfault risk plus
+    user A's segments bleeding into user B's transcript)."""
+
+    def test_concurrent_pywhispercpp_transcribes_never_overlap(self):
+        import threading as _threading
+        import time
+        from stt.local_whisper import LocalWhisperProvider
+
+        overlap = {"active": 0, "max": 0}
+        guard = _threading.Lock()
+
+        class _Seg:
+            text = "hi"
+            t1 = 100
+
+        class _FakeModel:
+            def transcribe(self, path, abort_callback=None, **kw):
+                with guard:
+                    overlap["active"] += 1
+                    overlap["max"] = max(overlap["max"], overlap["active"])
+                time.sleep(0.05)
+                with guard:
+                    overlap["active"] -= 1
+                return [_Seg()]
+
+        provider = LocalWhisperProvider()
+        audio = _tmp_wav16k()
+        model = _FakeModel()
+        errors: list[BaseException] = []
+
+        def _run():
+            try:
+                provider._transcribe_pywhispercpp(
+                    model, audio, lang="de", budget=10.0)
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [_threading.Thread(target=_run) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            overlap["max"], 1,
+            "concurrent transcribe() calls overlapped on the shared model — "
+            "_transcribe_lock is not serializing inference",
+        )
+
+    def test_lock_wait_charges_budget_and_times_out(self):
+        import threading as _threading
+        import time
+        from stt import local_whisper as lw
+        from stt.local_whisper import LocalWhisperProvider
+
+        release = _threading.Event()
+
+        class _SlowModel:
+            def transcribe(self, path, abort_callback=None, **kw):
+                release.wait(5.0)
+                return []
+
+        provider = LocalWhisperProvider()
+        audio = _tmp_wav16k()
+        holder_started = _threading.Event()
+
+        def _holder():
+            holder_started.set()
+            provider._transcribe_pywhispercpp(
+                _SlowModel(), audio, lang="de", budget=10.0)
+
+        t = _threading.Thread(target=_holder, daemon=True)
+        t.start()
+        holder_started.wait(2.0)
+        time.sleep(0.05)  # let the holder actually take the lock
+        try:
+            # STTProviderUnavailable (not STTTimeout): a busy shared model is
+            # a structural local-busy condition the resolver must fall
+            # through on, not a hard turn failure.
+            with self.assertRaises(STTProviderUnavailable):
+                provider._transcribe_pywhispercpp(
+                    _SlowModel(), audio, lang="de", budget=0.2)
+        finally:
+            release.set()
+            t.join(5.0)
+        self.assertFalse(
+            lw._transcribe_lock.locked(),
+            "inference lock leaked after timeout path",
+        )
+
+
 class LocalWhisperEngineSelectionTests(unittest.TestCase):
     """CORVIN_STT_LOCAL_ENGINE opt-in switch to the legacy faster-whisper
     path — pure logic test, no model load (faster-whisper's own model
