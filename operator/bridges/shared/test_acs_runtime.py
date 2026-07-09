@@ -357,6 +357,37 @@ def test_parse_worker_no_json():
     assert wr.error
 
 
+def test_parse_worker_fenced_deeply_nested_result():
+    """WA-11 regression: a ```json-fenced worker output whose `result` is a
+    nested array of objects (3+ brace levels) must still parse as the real
+    status/confidence -- not silently match an inner leaf object and report
+    "partial"/0.0 for a call that actually succeeded. Reproduces a real ACS
+    run: a fenced response with `result.top5` as an array of {track_name,
+    artist, best_peak_rank} objects was previously mis-parsed this way,
+    marking every successful worker "partial" with confidence 0.0 in the
+    run graph even though the raw trace showed a full, valid result."""
+    text = (
+        "```json\n"
+        + json.dumps({
+            "status": "success",
+            "result": {
+                "top5": [
+                    {"track_name": "Overdue", "artist": "Benson Boone", "best_peak_rank": 1},
+                    {"track_name": "Anti-Hero", "artist": "Taylor Swift", "best_peak_rank": 1},
+                ],
+            },
+            "confidence": 1.0,
+            "usage": {"llm_tokens": 0, "tool_calls": 1},
+        })
+        + "\n```"
+    )
+    wr = _rt._parse_worker_output(text, "top5_tracks_by_peak_rank")
+    assert wr.status == "success"
+    assert wr.confidence == pytest.approx(1.0)
+    assert wr.result["top5"][0]["track_name"] == "Overdue"
+    assert wr.result["top5"][1]["artist"] == "Taylor Swift"
+
+
 # ---------------------------------------------------------------------------
 # ACSRuntime dry-run
 # ---------------------------------------------------------------------------

@@ -785,11 +785,16 @@ def _is_valid_subtask_list(subtasks: Any) -> bool:
     return isinstance(subtasks, list) and all(isinstance(st, dict) for st in subtasks)
 
 
-def _parse_manager_decision(text: str) -> dict | None:
-    """Extract and parse the first JSON object from manager output.
+def _extract_json_object(text: str) -> dict | None:
+    """Extract and parse the first top-level JSON object from LLM output.
 
-    Uses bracket-counting to handle arbitrary nesting depth, which the old
-    single-level regex could not do (DELEGATE subtasks are 3+ levels deep).
+    Uses bracket-counting to handle arbitrary nesting depth — a single-level
+    regex (``\\{[^{}]*(?:\\{[^{}]*\\}[^{}]*)*\\}``) cannot match a real result
+    object nested 3+ levels deep (e.g. ``{"result": {"top5": [{...}, ...]}}``),
+    and silently matches an inner leaf object instead. Shared by
+    ``_parse_manager_decision`` (DELEGATE subtasks are 3+ levels deep) and
+    ``_parse_worker_output`` (worker results with nested arrays/objects hit
+    the exact same failure mode — see WA-11).
     """
     import re as _re
     text = text.strip()
@@ -831,6 +836,15 @@ def _parse_manager_decision(text: str) -> dict | None:
                     start = next_start
                     depth = 0
     return None
+
+
+def _parse_manager_decision(text: str) -> dict | None:
+    """Extract and parse the first JSON object from manager output.
+
+    Uses bracket-counting to handle arbitrary nesting depth, which the old
+    single-level regex could not do (DELEGATE subtasks are 3+ levels deep).
+    """
+    return _extract_json_object(text)
 
 
 # ---------------------------------------------------------------------------
@@ -1531,26 +1545,18 @@ def _parse_worker_output(text: str, worker_id: str) -> WorkerResult:
             error=f"upstream returned {_label!r} instead of a valid response",
         )
 
-    data: dict = {}
-
-    # Try direct parse
-    if text.startswith("{"):
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            pass
-
-    if not data:
-        # Find JSON in output
-        import re
-        for m in reversed(list(
-            re.finditer(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.DOTALL)
-        )):
-            try:
-                data = json.loads(m.group(0))
-                break
-            except json.JSONDecodeError:
-                continue
+    # WA-11: was a single-level regex (`\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}`) that
+    # cannot match a real result object nested 3+ levels deep (e.g. a
+    # worker returning `{"result": {"top5": [{...}, {...}]}}`, or any
+    # fenced ```json ... ``` output). It silently matched an inner leaf
+    # object instead — one with no status/confidence/result keys — so
+    # EVERY worker whose result contained a nested array of objects was
+    # marked "partial" at confidence 0.0 in the run graph/index even
+    # though the LLM call fully succeeded (visible only in the raw trace).
+    # _extract_json_object does real bracket-counting, matching the fix
+    # already applied to _parse_manager_decision for the identical failure
+    # mode (DELEGATE subtasks are 3+ levels deep too).
+    data = _extract_json_object(text) or {}
 
     if not data:
         return WorkerResult(

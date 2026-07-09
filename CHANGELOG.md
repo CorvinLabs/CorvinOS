@@ -6,6 +6,21 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — ACS worker/manager JSON parsing silently mis-scored successful runs
+- `_parse_manager_decision` and `_parse_worker_output` in
+  `operator/bridges/shared/acs_runtime.py` used a single-level regex
+  (`\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}`) to pull the JSON object out of LLM
+  output. It cannot match a result object nested 3+ brace levels deep (e.g.
+  `{"result": {"top5": [{...}, {...}]}}`), so it silently matched an inner
+  leaf object instead — one with none of the expected `status`/`confidence`/
+  `result` keys. Every worker whose result contained a nested array of
+  objects was recorded as `"partial"` at `confidence 0.0` in the run
+  graph/index even though the LLM call fully succeeded (only visible in the
+  raw trace). Replaced with a shared `_extract_json_object` helper that does
+  real bracket-counting (string/escape aware) to find the true top-level
+  object at any nesting depth. Regression test:
+  `test_parse_worker_fenced_deeply_nested_result`.
+
 ## [0.10.24] — 2026-07-09
 
 ### Security — Windows `cmd /c` argument-injection (host RCE) closed
