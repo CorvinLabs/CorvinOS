@@ -32,6 +32,7 @@ const { makeLogger }            = require('../shared/js/logger');
 const { makeSettingsAccessor }  = require('../shared/js/settings');
 const { makeAuth }              = require('../shared/js/auth');
 const { startOutboxPoller }     = require('../shared/js/outbox');
+const { isNetworkError, networkUp } = require('../shared/js/net_probe');
 const { startHealthServer }     = require('../shared/js/health-server');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
@@ -921,6 +922,11 @@ async function sendDiscord(payload, _fpath) {
 
 startOutboxPoller({
   outboxDir: OUTBOX, channel: CHANNEL, sendFn: sendDiscord, logger: log,
+  // Don't attempt REST sends before login() has handed the token to the
+  // REST manager — every attempt throws "Expected token to be set" and the
+  // 500 ms tick turned a 20-minute offline login wait into 1000+ log lines
+  // of futile sends (incident 2026-07-10). Files simply wait in the outbox.
+  preCheck: () => client.token != null,
 });
 
 process.on('unhandledRejection', r => log(`unhandledRejection: ${r && r.message || r}`));
@@ -957,12 +963,28 @@ const RECONNECT_WINDOW_MS    = 60_000;
 const RECONNECT_STRIKES_FATAL = 3;
 let reconnectStrikes = 0;
 let lastReconnectAt  = 0;
-client.on('shardReconnecting', sid => {
+client.on('shardReconnecting', async sid => {
   log(`shardReconnecting shard=${sid}`);
   const now = Date.now();
   reconnectStrikes = (now - lastReconnectAt < RECONNECT_WINDOW_MS) ? reconnectStrikes + 1 : 1;
   lastReconnectAt  = now;
   if (reconnectStrikes >= RECONNECT_STRIKES_FATAL) {
+    // A local network outage produces the exact same reconnect burst as a
+    // wedged gateway, but exiting is counterproductive there: the restart
+    // lands in loginWithBackoff against a dead uplink and the daemon goes
+    // blind for the whole backoff ladder (incident 2026-07-10). If the
+    // uplink is down, let discord.js keep its own resume loop running —
+    // it recovers the session without a fresh IDENTIFY once DNS is back.
+    if (!(await networkUp())) {
+      log(`shardReconnecting: ${reconnectStrikes} strikes but local network is down — not a wedged gateway, staying up`);
+      reconnectStrikes = 0;
+      return;
+    }
+    // Re-check after the await: a concurrent handler invocation may have
+    // reset the counter (its probe saw the outage) while ours was in
+    // flight — exiting then would restart on strikes that were already
+    // attributed to the outage.
+    if (reconnectStrikes < RECONNECT_STRIKES_FATAL) return;
     log(`shardReconnecting: stuck loop (${reconnectStrikes} attempts in ${RECONNECT_WINDOW_MS/1000}s without resume) — exiting for systemd-managed restart`);
     try { client.destroy(); } catch {}
     process.exit(2);
@@ -970,13 +992,24 @@ client.on('shardReconnecting', sid => {
 });
 
 const LOGIN_BACKOFF_MS = [60_000, 5*60_000, 15*60_000, 30*60_000, 60*60_000];
+const NET_PROBE_INTERVAL_MS = 15_000;
 const TERMINAL_LOGIN_PATTERNS = /TOKEN_INVALID|invalid token|disallowed intents|invalid form body/i;
 
 async function loginWithBackoff() {
-  for (let attempt = 0; ; attempt++) {
+  // Two failure classes, two policies:
+  //  - API/HTTP errors (rate limit, Cloudflare 503, …): the request REACHED
+  //    Discord and consumed IDENTIFY/rate budget — keep the conservative
+  //    ladder (a stale CF 503 once locked the token after a restart storm).
+  //  - Connection-level errors (DNS dead, ENOTFOUND, ECONNREFUSED): the
+  //    request never left the host, no budget consumed. Probe DNS every
+  //    15 s and retry immediately once the uplink is back, instead of
+  //    sitting out a 900 s ladder step 12 minutes past network recovery
+  //    (incident 2026-07-10). Network failures don't advance the ladder.
+  let apiAttempt = 0;
+  for (;;) {
     try {
       await client.login(TOKEN);
-      if (attempt > 0) log(`login: succeeded after ${attempt} retry/retries`);
+      if (apiAttempt > 0) log(`login: succeeded after ${apiAttempt} retry/retries`);
       return;
     } catch (e) {
       const msg = e?.message || String(e);
@@ -984,8 +1017,24 @@ async function loginWithBackoff() {
         log(`login failed (terminal — token rotation needed): ${msg}`);
         process.exit(1);
       }
-      const delay = LOGIN_BACKOFF_MS[Math.min(attempt, LOGIN_BACKOFF_MS.length - 1)];
-      log(`login failed (attempt ${attempt + 1}, transient): ${msg}. backoff ${Math.round(delay/1000)}s`);
+      // Fast path ONLY when the probe CONFIRMS the uplink is down. A
+      // connection-shaped error with a green probe (ECONNRESET from a
+      // Cloudflare edge ban, Discord-side TCP drops) is remote-caused,
+      // may have consumed an IDENTIFY, and must take the ladder — the
+      // error signature alone cannot distinguish local from remote.
+      if (isNetworkError(msg) && !(await networkUp())) {
+        log(`login failed (local network offline): ${msg}. probing uplink every ${NET_PROBE_INTERVAL_MS/1000}s`);
+        // Always sleep at least one interval so a flapping uplink (probe
+        // green, login still failing) can't tight-loop login attempts.
+        do {
+          await new Promise(r => setTimeout(r, NET_PROBE_INTERVAL_MS));
+        } while (!(await networkUp()));
+        log('login: uplink is back — retrying now');
+        continue;
+      }
+      const delay = LOGIN_BACKOFF_MS[Math.min(apiAttempt, LOGIN_BACKOFF_MS.length - 1)];
+      apiAttempt++;
+      log(`login failed (attempt ${apiAttempt}, transient): ${msg}. backoff ${Math.round(delay/1000)}s`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
@@ -1003,12 +1052,21 @@ const WATCHDOG_INTERVAL_MS = 60 * 1000;
 const WATCHDOG_PING_MAX_MS = 90_000;
 const WATCHDOG_STRIKES_FATAL = 3;
 let watchdogStrikes = 0;
-setInterval(() => {
+setInterval(async () => {
   if (!client.user) return; // not yet logged in
   const ping = client.ws?.ping;
   const status = client.ws?.status; // 0 = READY in discord.js v14
   const zombie = (status !== 0) || (ping == null) || (ping < 0) || (ping > WATCHDOG_PING_MAX_MS);
   if (zombie) {
+    // Not-READY during a local network outage is expected offline behavior,
+    // not a silent half-connect. Restarting would only trade a resumable
+    // gateway session for a blind loginWithBackoff loop — freeze the strike
+    // counter until the uplink is back (then a genuinely wedged gateway
+    // still accumulates 3 strikes and restarts as before).
+    if (!(await networkUp())) {
+      log(`watchdog: gateway not READY but local network is down — strikes frozen at ${watchdogStrikes}`);
+      return;
+    }
     watchdogStrikes++;
     log(`watchdog: zombie indicator strike=${watchdogStrikes}/${WATCHDOG_STRIKES_FATAL} status=${status} ping=${ping}ms`);
     if (watchdogStrikes >= WATCHDOG_STRIKES_FATAL) {

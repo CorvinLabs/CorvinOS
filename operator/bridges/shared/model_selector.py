@@ -303,6 +303,17 @@ _TRANSIENT_HTTP_TOKENS: Final[tuple[str, ...]] = (
     "overloaded_error", "overloaded",
     "internal_server_error", "service_unavailable",
     "api_error_status", "request_too_large",
+    # Connection-level failures (local network / DNS outage — the request
+    # never reached the API). A short network blip mid-turn otherwise kills
+    # the whole turn with zero retries (incident 2026-07-10: hotspot drop →
+    # "Unable to connect to API (ConnectionRefused)" ended the session turn).
+    # These are NOT in _SESSION_CORRUPTING_TOKENS: the on-disk session state
+    # is intact, so the retry keeps context (no wipe).
+    "unable to connect", "connection refused", "connectionrefused",
+    "connection error", "connection reset", "connection timed out",
+    "getaddrinfo", "enotfound", "eai_again", "econnrefused",
+    "econnreset", "etimedout", "enetunreach",
+    "network is unreachable", "name or service not known",
 )
 
 # Codes / tokens that indicate the --continue / --resume session state may be

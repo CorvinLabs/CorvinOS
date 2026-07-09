@@ -61,6 +61,28 @@ without a trace).
 the starvation bug) · hold the per-chat lock while dispatching a `_cancel` ·
 size the side-channel pool from a shared budget that turns can exhaust.
 
+### In-flight dedup (`_in_flight`) — duplicate-submit protection
+
+`submit_inbox_item()` records `msg_id → (submit-ts, runner-Future)` in
+`_in_flight`; the poll loop's re-submission of a file already in flight is a
+no-op. The periodic cleanup (`_cleanup_in_flight`, every
+`ADAPTER_CLEANUP_INTERVAL`) drops an entry only when it is older than
+`ADAPTER_IN_FLIGHT_TTL` (default 1 h) **and** its Future reports done (or was
+never attached — failed submit). Entries whose runner is still executing are
+**never** dropped, regardless of age.
+
+Why (incident 2026-07-10): the old wall-clock-only TTL dropped the entry of a
+still-running >1 h turn; the next poll tick re-submitted the same inbox file
+and a duplicate runner queued behind the per-chat lock. At turn end the
+original moved the file to `processed/` — the duplicate then crashed with
+`FileNotFoundError` ("runner error … No such file"), and in the worse timing
+window it would have **re-executed the whole instruction** (same class as the
+2026-07-09 double-execution incident). E2E: `test_adapter_in_flight.py`
+(red→green verified against the pre-fix code).
+
+**Must NOT do:** reintroduce a wall-clock-only TTL drop for live runners ·
+key the dedup on anything but `msg_id` (inbox filename stem).
+
 ## Stream-idle watchdog
 
 `ADAPTER_STREAM_IDLE_TIMEOUT` (default 300 s): SIGTERM + session reset + one retry on silence.
@@ -99,6 +121,22 @@ The adapter retries once when the engine surfaces a transient API failure
 (HTTP 400/408/429/500/502/503/504/529 or the symbolic tokens `rate_limited`,
 `overloaded_error`, `internal_server_error`, `service_unavailable`,
 `request_too_large`). Classifier: `model_selector.is_transient_http_error()`.
+
+Connection-level failures are transient too (added after incident
+2026-07-10, where a local network outage killed a running turn with zero
+retries): `unable to connect`, `connection refused/reset/timed out`,
+`connection error`, `getaddrinfo`, `enotfound`, `eai_again`, `econnrefused`,
+`econnreset`, `etimedout`, `enetunreach`, `network is unreachable`,
+`name or service not known`. These never reached the API, so they retry
+**with the session preserved** (they are deliberately NOT in
+`_SESSION_CORRUPTING_TOKENS`). A short blip heals on the single retry; a
+long outage surfaces the error to the user after the retry fails.
+
+Known trade-off (same exposure as the pre-existing 429/5xx policy): the
+retry re-runs the whole prompt, so tools already executed before a
+mid-turn connection loss can run twice. Bounding that would require
+retrying only when the failure precedes the first tool_call event —
+backlog, not done here.
 
 **Session wipe vs. retain — critical distinction:**
 
@@ -285,3 +323,46 @@ on latest tag, HEAD has commits past latest tag (dev tree).
 - Don't drop the "HEAD has commits past latest tag" check — protects dev trees.
 - Don't run `npm install`/`pip install` from the autoupdate hook.
 - Don't move `maybe_autoupdate` to `cmd_doctor`/`cmd_status` (read-only paths).
+
+---
+
+## Bridge-daemon network-outage resilience (Discord)
+
+A local uplink outage (DNS dead — e.g. hotspot drop, incident 2026-07-10)
+produces the same surface symptoms as a Discord-side failure, but requires
+the **opposite** policy: connection-level errors never reached Discord, so
+they consume no IDENTIFY/rate budget and may be retried fast, while HTTP/API
+errors keep the conservative ladder (a stale Cloudflare 503 once caused a
+14-restart storm that locked the bot token at the edge).
+
+Shared classifier: `shared/js/net_probe.js` —
+`isNetworkError(msg)` (syscall-level signatures: `getaddrinfo`, `ENOTFOUND`,
+`EAI_AGAIN`, `ETIMEDOUT`, `ECONNREFUSED`, `ECONNRESET`, `ENETUNREACH`, …) and
+`networkUp()` (DNS probe of `discord.com`, 3 s timeout, injectable resolver
+for tests). Consumers in `discord/daemon.js`:
+
+| Mechanism | Behavior when uplink is DOWN | Behavior when uplink is UP |
+|---|---|---|
+| `loginWithBackoff` | connection-shaped error **and** probe confirms offline → probe every 15 s, retry login immediately on recovery; ladder counter NOT advanced | ALL failures take the 60 s→5 m→15 m→30 m→60 m ladder — including connection-shaped ones (an `ECONNRESET` from a Cloudflare edge ban is remote-caused and may have consumed an IDENTIFY; the error signature alone cannot distinguish local from remote, the probe is the gate) |
+| stuck-reconnect detector (3 strikes/60 s) | strikes reset, no exit — discord.js's own resume loop keeps running and resumes without a fresh IDENTIFY | 3 strikes without resume → exit 2 for a systemd restart |
+| zombie watchdog (3×60 s) | strikes frozen (offline ≠ silent half-connect) | not-READY accumulates strikes → exit 2 |
+| outbox poller | `preCheck: client.token != null` — no REST sends before login; files wait in the outbox | normal delivery |
+
+`shared/js/outbox.js` additionally dedups send-failure log lines (same file +
+same message logged once per 60 s instead of twice per second — the incident
+produced 1000+ identical journal lines while waiting out an offline login).
+
+Unit tests: `shared/js/test_net_probe.js`, `shared/js/test_outbox_poller.js`.
+
+**Must NOT do:**
+- Don't take the fast login path on error signature alone — the probe must
+  CONFIRM the uplink is down, or a Discord-side `ECONNRESET` bypasses the
+  IDENTIFY-budget ladder with an unbounded 15 s retry loop.
+- Don't let confirmed-local login failures advance the API backoff ladder —
+  the daemon goes blind for minutes after the network returns.
+- Don't exit on reconnect-strikes while `networkUp()` is false — a restart
+  trades a resumable gateway session for a blind login loop.
+- Don't classify HTTP/API failures (rate limit, 5xx, `TOKEN_INVALID`) as
+  network errors — the IDENTIFY-budget protection depends on the split.
+- Don't remove the outbox `preCheck` — pre-login REST sends always throw and
+  spam the journal at tick frequency.

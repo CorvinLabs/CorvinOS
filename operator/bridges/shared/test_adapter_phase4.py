@@ -87,15 +87,35 @@ def test_in_flight_ttl_cleanup() -> None:
     adapter._chat_locks_last_used = {}
     adapter.IN_FLIGHT_TTL = 0.5  # short for the test
 
-    # Simulate a runner that died: enter msg_id but never release.
-    adapter._in_flight["dead-runner-msg"] = time.time() - 5.0
-    adapter._in_flight["live-runner-msg"] = time.time()
+    # Entries are (submit-ts, runner-Future|None) since the 2026-07-10
+    # duplicate-submit fix. A finished-runner Future stub:
+    class _DoneFut:
+        @staticmethod
+        def done() -> bool:
+            return True
+
+    class _RunningFut:
+        @staticmethod
+        def done() -> bool:
+            return False
+
+    # Aged entry whose submit failed (no Future) → reaped.
+    adapter._in_flight["dead-runner-msg"] = (time.time() - 5.0, None)
+    # Aged entry whose runner finished but finally never popped → reaped.
+    adapter._in_flight["done-runner-msg"] = (time.time() - 5.0, _DoneFut())
+    # Fresh entry → retained.
+    adapter._in_flight["live-runner-msg"] = (time.time(), None)
+    # Aged entry with a STILL-RUNNING runner (long turn) → must be retained,
+    # or the poll loop re-submits the same inbox file (duplicate execution).
+    adapter._in_flight["long-turn-msg"] = (time.time() - 5.0, _RunningFut())
 
     removed = adapter._cleanup_in_flight()
-    assert removed == 1, f"expected 1 stale dropped, got {removed}"
+    assert removed == 2, f"expected 2 stale dropped, got {removed}"
     assert "dead-runner-msg" not in adapter._in_flight
+    assert "done-runner-msg" not in adapter._in_flight
     assert "live-runner-msg" in adapter._in_flight
-    print("PASS: stale entry dropped, live entry retained")
+    assert "long-turn-msg" in adapter._in_flight
+    print("PASS: stale entries dropped, live + long-running entries retained")
 
 
 def test_chat_locks_idle_cleanup() -> None:

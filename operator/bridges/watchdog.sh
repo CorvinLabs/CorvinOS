@@ -64,6 +64,12 @@ handle_service() {
 
     if ! is_active "$svc"; then
         log "$short: inactive but enabled -> start"
+        # Clear a start-limit-hit first: repeated daemon exits (e.g. network
+        # flapping tripping StartLimitBurst) leave the unit 'failed' and a
+        # bare start is rejected until the rate window expires (~10 min
+        # blind). reset-failed makes the watchdog the recovery of last
+        # resort it is meant to be.
+        systemctl --user reset-failed "$svc" 2>/dev/null || true
         systemctl --user start "$svc" \
             && log "$short: start ok" \
             || log "$short: start FAILED rc=$?"

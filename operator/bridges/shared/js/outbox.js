@@ -31,6 +31,21 @@ function startOutboxPoller({
   // unlink() failed. On the next tick we delete them instead of re-sending,
   // which would duplicate voice notes / messages.
   const _sentOnce = new Set();
+  // Send-failure log dedup: with a 500 ms tick, a persistent failure (e.g.
+  // daemon offline during a network outage) logs the same line twice per
+  // second per file — 1000+ journal lines in minutes (incident 2026-07-10).
+  // Log a given file's failure only when the message changes or once per
+  // LOG_DEDUP_MS. Entries are dropped once the file leaves the outbox.
+  const LOG_DEDUP_MS = 60_000;
+  const _lastFailLog = new Map(); // fpath → {msg, ts}
+  function logSendFailure(fpath, f, msg) {
+    if (!logger) return;
+    const prev = _lastFailLog.get(fpath);
+    const now = Date.now();
+    if (prev && prev.msg === msg && now - prev.ts < LOG_DEDUP_MS) return;
+    _lastFailLog.set(fpath, { msg, ts: now });
+    logger(`outbox: send failed for ${f}: ${msg}`);
+  }
 
   async function tick() {
     let files;
@@ -78,10 +93,16 @@ function startOutboxPoller({
         // If unlink failed the file stays in the outbox; _sentOnce keeps the
         // entry so the next tick knows the message was already sent and only
         // retries the unlink (no re-send → prevents duplicate Discord messages).
+        _lastFailLog.delete(fpath);
       } catch (e) {
-        if (logger) logger(`outbox: send failed for ${f}: ${e.message}`);
+        logSendFailure(fpath, f, e.message);
         // File bleibt → nextr Tick versucht es erneut.
       }
+    }
+    // Keep the dedup map bounded: drop entries for files no longer present.
+    if (_lastFailLog.size) {
+      const present = new Set(files.map((f) => path.join(outboxDir, f)));
+      for (const k of _lastFailLog.keys()) if (!present.has(k)) _lastFailLog.delete(k);
     }
   }
 

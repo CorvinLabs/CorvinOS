@@ -714,9 +714,12 @@ _sidechannel_executor: ThreadPoolExecutor | None = None
 _chat_locks: dict[str, threading.Lock] = {}
 _chat_locks_last_used: dict[str, float] = {}
 _chat_locks_guard = threading.Lock()
-# in_flight: msg_id → submit-timestamp. Phase 4: dict statt set, damit ein
-# Runner thread that dies through SIGKILL/OOM doesn't leave an entry behind forever — the periodic cleanup tidies up after IN_FLIGHT_TTL.
-_in_flight: dict[str, float] = {}
+# in_flight: msg_id → (submit-timestamp, runner-Future | None). The Future
+# lets the periodic cleanup distinguish "runner thread finished/never started"
+# (safe to drop after IN_FLIGHT_TTL) from "runner still executing a long turn"
+# (must NOT be dropped: the poll loop would re-submit the same inbox file and
+# spawn a duplicate runner — duplicate-execution window, incident 2026-07-10).
+_in_flight: dict[str, tuple[float, object]] = {}
 _in_flight_guard = threading.Lock()
 
 # Graceful shutdown (systemd stop / SIGTERM). The old handler called
@@ -9585,16 +9588,36 @@ def _cleanup_last_turn_skills() -> int:
 
 
 def _cleanup_in_flight() -> int:
-    """Remove in_flight entries older than IN_FLIGHT_TTL — protects against
-    a runner thread that died (SIGKILL/OOM) without releasing, which would
-    otherwise block re-submission of that msg_id forever."""
+    """Remove in_flight entries older than IN_FLIGHT_TTL whose runner is
+    verifiably finished (Future done) or never started (no Future). Entries
+    with a live runner are NEVER dropped: a wall-clock-only TTL dropped
+    entries of still-running long turns (>1h), the poll loop re-submitted
+    the same inbox file, and the duplicate runner either crashed with
+    FileNotFoundError at turn end or — worse — re-executed the whole
+    instruction (incident 2026-07-10, msgs mrdwmid0/mrdxoi0c)."""
     cutoff = time.time() - IN_FLIGHT_TTL
     removed = 0
     with _in_flight_guard:
-        stale = [mid for mid, ts in _in_flight.items() if ts < cutoff]
+        stale = [
+            mid for mid, (ts, fut) in _in_flight.items()
+            if ts < cutoff and (fut is None or fut.done())  # type: ignore[union-attr]
+        ]
         for mid in stale:
             del _in_flight[mid]
             removed += 1
+        # Visibility for the case the old TTL "protected" against: a runner
+        # alive far beyond the TTL is either a legitimately huge turn or a
+        # wedged thread (deadlocked lock holder). We keep the entry (a
+        # re-submit would just queue a duplicate behind the same lock) but
+        # surface it so a hang is diagnosable from the journal.
+        hung = [
+            (mid, ts) for mid, (ts, fut) in _in_flight.items()
+            if ts < cutoff and fut is not None and not fut.done()  # type: ignore[union-attr]
+        ]
+    for mid, ts in hung:
+        log(f"in-flight watchdog: runner for {mid} alive for "
+            f"{int(time.time() - ts)}s (TTL {int(IN_FLIGHT_TTL)}s) — "
+            f"long turn or wedged thread; entry retained")
     if removed:
         log(f"in-flight cleanup: dropped {removed} stale entries")
     return removed
@@ -9661,7 +9684,10 @@ def submit_inbox_item(inbox_file: Path, settings: dict) -> None:
     with _in_flight_guard:
         if msg_id in _in_flight:
             return
-        _in_flight[msg_id] = time.time()
+        # Future is attached right after pool.submit below; None marks the
+        # short pre-submit window (and a failed submit, which the TTL sweep
+        # may then reap).
+        _in_flight[msg_id] = (time.time(), None)
 
     route = _route_key(inbox_file)
     # Side-channel envelopes (/btw, /cancel) must bypass the per-chat lock,
@@ -9712,7 +9738,13 @@ def submit_inbox_item(inbox_file: Path, settings: dict) -> None:
     # this also bypasses the bounded turn-queue).
     pool = _sidechannel_executor if bypass_lock else _executor
     assert pool is not None
-    pool.submit(_runner)
+    fut = pool.submit(_runner)
+    with _in_flight_guard:
+        entry = _in_flight.get(msg_id)
+        # Guard against the runner having already finished (finally popped
+        # the entry) before we get here — don't resurrect it.
+        if entry is not None:
+            _in_flight[msg_id] = (entry[0], fut)
 
 
 def main() -> int:

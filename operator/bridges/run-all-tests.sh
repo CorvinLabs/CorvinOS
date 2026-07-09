@@ -37,6 +37,7 @@ run() {
 fails=0
 
 run "Python: adapter parallel"   python3 shared/test_adapter_parallel.py >/dev/null   || fails=$((fails+1))
+run "Python: adapter in-flight dedup" python3 shared/test_adapter_in_flight.py >/dev/null || fails=$((fails+1))
 run "Python: adapter profiles"   python3 shared/test_adapter_profiles.py >/dev/null   || fails=$((fails+1))
 run "Python: adapter cowork"     python3 shared/test_adapter_cowork.py >/dev/null     || fails=$((fails+1))
 run "Python: adapter skill-inject" python3 shared/test_adapter_skill_inject.py >/dev/null || fails=$((fails+1))
@@ -356,6 +357,8 @@ run "Python: LIP Tier 4 audit-head (ADR-0141)" python3 shared/test_a2a_audit_hea
 run "Bash: say.py TTS helper"    bash ../voice/scripts/test_say.sh >/dev/null               || fails=$((fails+1))
 run "Python: audit-verify notify" python3 ../voice/scripts/test_audit_verify_notify.py >/dev/null || fails=$((fails+1))
 run "Node: shared/js/ modules"   node shared/js/test_modules.js >/dev/null            || fails=$((fails+1))
+run "Node: net probe (outage detection)" node shared/js/test_net_probe.js >/dev/null  || fails=$((fails+1))
+run "Node: outbox poller (preCheck+dedup)" node shared/js/test_outbox_poller.js >/dev/null || fails=$((fails+1))
 run "Node: in-chat commands"     node shared/js/test_in_chat_commands.js >/dev/null   || fails=$((fails+1))
 run "Node: discord slash-cmds"   node discord/test_slash_commands.js >/dev/null       || fails=$((fails+1))
 run "Node: teams cards (unit)"   node teams/test_cards.js >/dev/null                   || fails=$((fails+1))

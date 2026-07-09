@@ -380,6 +380,33 @@ class TransientHttpErrorTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertTrue(ms.is_transient_http_error(token))
 
+    def test_connection_level_errors_transient(self) -> None:
+        # Incident 2026-07-10: a local network outage (hotspot drop) killed
+        # a running turn with zero retries because connection-level failures
+        # were not classified as transient. The exact production strings:
+        for text in (
+            "API Error: Unable to connect to API (ConnectionRefused)",
+            "connect ECONNREFUSED 127.0.0.1:8082",
+            "getaddrinfo ENOTFOUND api.anthropic.com",
+            "Connection error.",
+            "Cannot connect to host speech.platform.bing.com:443 "
+            "[Name or service not known]",
+            "connect ETIMEDOUT 160.79.104.10:443",
+            "Network is unreachable",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(ms.is_transient_http_error(text))
+
+    def test_connection_level_errors_do_not_wipe_session(self) -> None:
+        # Connection failures never reached the API — on-disk session state
+        # is intact and must be preserved on retry (no wipe).
+        for text in (
+            "API Error: Unable to connect to API (ConnectionRefused)",
+            "getaddrinfo ENOTFOUND api.anthropic.com",
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(ms.is_session_corrupting_http_error(text))
+
     def test_idle_timeout_not_transient_http(self) -> None:
         # Stream-idle has its own reset trigger in the adapter; it must
         # NOT also be classified as HTTP-transient.
