@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import statistics
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from .events import read_session_log
@@ -69,12 +70,24 @@ DELEGATION_ORPHAN_WINDOW_EVENTS = 5      # look within 5 events after decision
 
 # ── Checks ────────────────────────────────────────────────────────────────────
 
+def _parse_ts(ts: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
 def _check_stalled_turns(events: list[dict]) -> list[Anomaly]:
     """Detect turn.start events without a matching turn.done.
 
     Pairing is sequential: the nth turn.start is paired with the nth turn.done
-    in log order. Any turn.start without a corresponding nth done is stalled.
-    This avoids the false-negative where a later done absorbs an earlier start.
+    in log order. Any turn.start without a corresponding nth done is a
+    CANDIDATE stall — but a turn that is still legitimately in flight (started
+    seconds or a couple of minutes ago) always lacks a turn.done too, since it
+    hasn't finished yet. Only flag it once it has been running longer than
+    TURN_TIMEOUT_MS: a turn.start with no ts, or one that fails to parse, is
+    treated conservatively as stalled (better a false positive than hiding a
+    genuinely stuck turn behind a malformed timestamp).
 
     Repair-aware: skips stalls that have a repair.turn_flushed event with a
     matching turn_start_ts (written by Layer 5 repair.py).
@@ -86,6 +99,7 @@ def _check_stalled_turns(events: list[dict]) -> list[Anomaly]:
         if e.get("event") == "repair.turn_flushed" and e.get("turn_start_ts")
     }
 
+    now = datetime.now(timezone.utc)
     anomalies: list[Anomaly] = []
     starts = [e for e in events if e.get("event") == "turn.start"]
     dones  = [e for e in events if e.get("event") == "turn.done"]
@@ -95,6 +109,11 @@ def _check_stalled_turns(events: list[dict]) -> list[Anomaly]:
             start_ts = start.get("ts", "")
             if start_ts in flushed_ts:
                 continue   # already repaired by Layer 5
+            start_dt = _parse_ts(start_ts)
+            if start_dt is not None:
+                elapsed_ms = (now - start_dt).total_seconds() * 1000
+                if elapsed_ms < TURN_TIMEOUT_MS:
+                    continue   # still legitimately in flight — not stalled yet
             anomalies.append(Anomaly(
                 anomaly_class="stalled_turn",
                 severity=SEVERITY_HIGH,

@@ -116,6 +116,21 @@ class TestAnomalyDetector:
         classes = [a.anomaly_class for a in anomalies]
         assert "stalled_turn" in classes
 
+    def test_in_flight_turn_not_flagged_stalled(self, tmp_path):
+        """A turn.start from just now (still legitimately running) must NOT be
+        flagged — only one older than TURN_TIMEOUT_MS with no turn.done is a
+        real stall. Regression for the missing time gate (WA-12)."""
+        from datetime import datetime, timezone
+
+        from corvin_console.aco.anomaly_detector import scan_session
+        now_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        _write_log(tmp_path, [
+            {"ts": now_ts, "event": "turn.start"},
+        ])
+        anomalies = scan_session(tmp_path)
+        classes = [a.anomaly_class for a in anomalies]
+        assert "stalled_turn" not in classes
+
     def test_delegation_orphan_detected(self, tmp_path):
         from corvin_console.aco.anomaly_detector import scan_session
         _write_log(tmp_path, [

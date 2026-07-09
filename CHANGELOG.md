@@ -6,6 +6,23 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — ACO anomaly detector flagged every in-flight turn as "stalled"
+- `_check_stalled_turns` in `core/console/corvin_console/aco/anomaly_detector.py`
+  paired the nth `turn.start` with the nth `turn.done` and flagged any
+  unpaired start as a HIGH `stalled_turn` anomaly — with no check against the
+  module's own `TURN_TIMEOUT_MS` (5 min) constant, which was defined but never
+  read. Every turn that is still legitimately running (a few seconds or
+  minutes old, mid-tool-call) always lacks a `turn.done` yet, so it was
+  flagged as "stalled" the instant a scan ran — confirmed firing on every
+  single turn in a real session's `chat_debug.jsonl`, including a turn still
+  actively in progress. Currently harmless (Layer 5's `repair.py` only writes
+  a log annotation; the actuating registry in `repair_actions.py` has no
+  action registered for `stalled_turn`), but it produced 100% false-positive
+  HIGH-severity noise on the self-healing dashboard and would start acting on
+  healthy turns the moment any future actuating repair is wired to this
+  class. Now gates on elapsed time since `turn.start`, using the timeout
+  constant it was always meant to.
+
 ### Fixed — ACS worker/manager JSON parsing silently mis-scored successful runs
 - `_parse_manager_decision` and `_parse_worker_output` in
   `operator/bridges/shared/acs_runtime.py` used a single-level regex
