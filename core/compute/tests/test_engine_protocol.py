@@ -393,8 +393,45 @@ class TestHACEngineConformance(unittest.TestCase):
         self.assertTrue(job_id.startswith("hac_"))
 
         result = eng.result(job_id, wait_s=20.0)
-        self.assertIn(result.state, ("converged", "budget", "failed"))
+        # WA-15: "failed" used to be tolerated here because every sub-manager
+        # run raised AttributeError on a non-existent RunRecord.best_params
+        # (coordinator.py _exec_manager) — no HAC job had ever completed
+        # successfully. Now that it's fixed, a plain 2-manager/numeric-grid
+        # job must actually converge or exhaust its budget, never "failed".
+        self.assertIn(result.state, ("converged", "budget"))
         loop.call_soon_threadsafe(loop.stop)
+
+    def test_hac_exec_manager_returns_real_best_params(self):
+        """WA-15 regression: _exec_manager used to access RunRecord.best_params,
+        an attribute that has never existed on RunRecord (only best_loss/
+        best_iter) — every sub-manager run raised AttributeError. It must now
+        look the winning iteration's real params up via RunStore."""
+        import tempfile
+
+        from corvin_compute.hac.coordinator import HACCoordinator
+        from corvin_compute.hac.manifest import HACManifest, LossWeights, SubManagerSpec
+
+        tmp = Path(tempfile.mkdtemp())
+        sm = SubManagerSpec.from_dict({
+            "manager_id": "A", "budget_fraction": 1.0, "strategy": "grid",
+            "stages": [{"stage_id": "s1", "tool_name": "t1",
+                        "param_grid": {"x": [1, 2, 3]}}],
+        })
+        manifest = HACManifest(
+            hac_id="hac_bp_test", tenant_id="_test", sub_managers=[sm],
+            loss_weights=LossWeights(weights={"A": 1.0}),
+            budget={"max_iterations": 10, "max_wall_clock_s": 60},
+            backprop_gate=False, backprop_gate_timeout_s=10,
+            max_backprop_rounds=1, convergence_epsilon=0.01,
+        )
+        coord = HACCoordinator(
+            hac_id="hac_bp_test", manifest=manifest, corvin_home=tmp,
+            runner_fn=_stub_runner, audit_emit=lambda *a, **kw: None,
+            gate_queue=None,
+        )
+        result = coord._exec_manager(sm)
+        self.assertNotEqual(result["state"], "failed")
+        self.assertIn(result["best_params"]["x"], (1, 2, 3))
 
 
 # ---------------------------------------------------------------------------

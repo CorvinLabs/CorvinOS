@@ -219,10 +219,22 @@ class HACCoordinator:
             audit_emit=self.audit_emit,
         )
         rec = run.run()
+        # RunRecord has no best_params field (only best_loss/best_iter) — the
+        # public run surface deliberately exposes iteration params only via
+        # RunStore, not on the aggregate record. Look up the winning
+        # iteration's real params there instead of a non-existent attribute
+        # (this raised AttributeError on every HAC sub-manager run — no HAC
+        # job had ever completed successfully).
+        best_params: dict[str, Any] = {}
+        if rec.best_iter is not None:
+            for it in run.store.read_iterations(run_id):
+                if it.iter == rec.best_iter:
+                    best_params = dict(it.params)
+                    break
         return {
             "state": rec.state,
             "best_loss": rec.best_loss,
-            "best_params": dict(rec.best_params) if rec.best_params else {},
+            "best_params": best_params,
             "total_iterations": rec.total_iterations,
             "run_id": run_id,
         }

@@ -6,6 +6,20 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — HAC sub-managers crashed on every run (AttributeError)
+- `HACCoordinator._exec_manager` (`core/compute/corvin_compute/hac/
+  coordinator.py`) read `rec.best_params` off the `ComputeRun` result —
+  `RunRecord` (`corvin_compute/state.py`) has never had a `best_params`
+  field (only `best_loss`/`best_iter`), so every sub-manager run raised
+  `AttributeError`, caught by the coordinator's `asyncio.gather(...,
+  return_exceptions=True)` and recorded as a plain `"sub-manager X failed"`
+  with no traceback surfaced anywhere — no HAC job had ever completed
+  successfully, in any configuration. Now looks the winning iteration's real
+  params up via `RunStore.read_iterations`, which does persist them.
+  Tightened `test_hac_submit_returns_hac_prefix`'s assertion (previously
+  tolerated `"failed"` as an acceptable outcome, which is exactly why this
+  went undetected) and added a direct regression test.
+
 ### Fixed — Agentic Compute "Runs" tab never actually executed a submitted job
 - `POST /compute/runs` (`core/console/corvin_console/routes/compute.py`)
   only wrote a `manifest.json` and returned — no poller ever read that
