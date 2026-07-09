@@ -107,6 +107,34 @@ def test_chat_ws_surfaces_call_the_chat_gate():
     )
 
 
+def test_compute_license_status_reflects_member_tier_without_enterprise_key(monkeypatch):
+    """/compute/license must not hardcode tier="free" merely because no Enterprise
+    (on-prem) license.jwt is installed — that is the normal case for a Paddle/
+    consumer subscriber, who is licensed through the separate operator/license
+    system (license.key). Previously this endpoint always reported "Trial · free"
+    for such a customer even though compute_units_per_day was already correctly
+    unlimited from that same operator/license system on the line above."""
+    import corvin_license.verifier as _clv
+    from corvin_console.routes import compute as C
+
+    def _raise_missing():
+        raise _clv.LicenseFileMissing("no enterprise license installed")
+
+    monkeypatch.setattr(_clv, "load_license_from_disk", _raise_missing)
+    monkeypatch.setattr(C, "_lic_active_tier", lambda: "member")
+    monkeypatch.setattr(C, "_lic_get_limit", lambda *_a, **_kw: None)  # unlimited
+    monkeypatch.setattr(C, "_cq_today", lambda *_a, **_kw: 3)
+    monkeypatch.setattr(C, "_runs_today_count", lambda *_a, **_kw: 3)
+
+    class _FakeRec:
+        tenant_id = "_default"
+
+    result = C.compute_license_status(rec=_FakeRec())
+    assert result["tier"] == "member"
+    assert result["mode"] == "licensed"
+    assert result["daily_limit"] is None
+
+
 def test_acs_chokepoint_charges_daily_quota():
     """ADR-0149 WF-CLI-ACS-01: run_acs_workflow charges the daily counter at the
     single chokepoint, so the CLI and scheduler paths cannot bypass it."""

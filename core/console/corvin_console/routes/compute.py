@@ -98,11 +98,13 @@ try:
     from license.compute_quota import increment_and_check as _cq_increment  # type: ignore[import]
     from license.compute_quota import get_today_count as _cq_today          # type: ignore[import]
     from license.validator import get_limit as _lic_get_limit               # type: ignore[import]
+    from license.validator import active_tier as _lic_active_tier           # type: ignore[import]
     from license.limits import LicenseLimitError as _LicLimitError          # type: ignore[import]
     _COMPUTE_QUOTA_OK = True
 except ImportError:
     _cq_increment = None   # type: ignore[assignment]
     _cq_today = None       # type: ignore[assignment]
+    _lic_active_tier = None  # type: ignore[assignment]
     # ADR-0144 F-01-bis: do NOT fail-open to ``lambda f: None`` (None = unlimited).
     # Mirror the fail-closed fallback used by the five sister routes (space.py,
     # workflows.py, custom_provider.py, data_sources.py, a2a_pair.py): fall back
@@ -689,6 +691,20 @@ def compute_license_status(
         try:
             lic = load_license_from_disk()
         except LicenseFileMissing:
+            # No Enterprise (on-prem) license.jwt installed — this is the
+            # normal case for a Paddle/consumer subscriber, who is licensed
+            # through the SEPARATE operator/license system (license.key,
+            # EdDSA, corvinlabs.io) instead. Missing Enterprise license must
+            # not shadow an active consumer subscription: fall back to that
+            # tier before reporting "free" (previously hardcoded here, so a
+            # paying Member-tier customer always saw "Trial · free" on this
+            # panel even though their daily_limit above was already correctly
+            # unlimited from the same operator/license system).
+            _op_tier = _lic_active_tier() if _lic_active_tier is not None else "free"
+            if _op_tier != "free":
+                return {**_base(), "mode": "licensed", "tier": _op_tier,
+                        "fabric_allowed": False, "reason": None,
+                        "quota": None, "license_meta": None}
             return {**_base(), "mode": "trial", "tier": "free",
                     "fabric_allowed": False, "reason": None,
                     "quota": _trial_counters(), "license_meta": None}

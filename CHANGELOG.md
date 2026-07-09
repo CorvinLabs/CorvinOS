@@ -6,6 +6,19 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Agentic Compute panel showed "Trial · free" for licensed Member-tier customers
+- `GET /compute/license` (`core/console/corvin_console/routes/compute.py`)
+  hardcoded `tier: "free"` whenever no Enterprise on-prem license
+  (`global/license/license.jwt`, the separate `corvin_license` RS256 plugin)
+  was installed — which is the normal case for a Paddle/consumer Member-tier
+  subscriber, licensed instead through the operator/license system
+  (`global/license.key`, EdDSA). The endpoint already read the correct,
+  unlimited `daily_limit` from that same operator/license system one line
+  above, so a paying Member customer saw a self-contradictory panel: "Trial ·
+  free" badge next to an effectively unlimited quota. `LicenseFileMissing`
+  (no Enterprise key) now falls back to the operator/license system's
+  `active_tier()` before defaulting to free. Regression test added.
+
 ### Fixed — ACO anomaly detector flagged every in-flight turn as "stalled"
 - `_check_stalled_turns` in `core/console/corvin_console/aco/anomaly_detector.py`
   paired the nth `turn.start` with the nth `turn.done` and flagged any
