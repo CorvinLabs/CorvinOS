@@ -16,6 +16,21 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Added a Desktop shortcut** (`CorvinOS.lnk`) so the console can be started
   by hand, independent of autostart. Also removed on uninstall.
 
+### Changed — voice STT accuracy defaults
+- **Default local Whisper model raised from `tiny-q5_1` to `base-q5_1`.**
+  `tiny` mis-transcribed real voice notes often enough to be a recurring
+  issue, even though `corvin-voice doctor` always passed (it only
+  round-trips a clean fixture WAV, not real mic audio). Still a small,
+  auto-downloaded, fully offline quantized model — no cost, no API key.
+  Applies to fresh installs (`corvin-install`) and existing installs via
+  `CORVIN_STT_LOCAL_MODEL`.
+- **STT provider chain default flipped from `local → openai` to
+  `openai → local`.** Cloud Whisper is more accurate than any
+  auto-downloadable local model, so it now wins whenever an API key is
+  configured; unchanged behavior with no key (falls straight through to
+  local, exactly as before). Override with `CORVIN_STT_CHAIN=local,openai`
+  to keep local-first.
+
 ## [0.10.23] — 2026-07-09
 
 Multi-agent adversarial review of the last days' changes (installation,

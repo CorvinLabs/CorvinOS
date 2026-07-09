@@ -8,11 +8,15 @@ Resolution order:
    provider where ``is_available()`` returns True. If none, raise
    ``STTProviderUnavailable`` aggregating the chain.
 
-The chain default is ``local → openai`` because local Faster-Whisper
-is free, fast, and requires no API key. Falls back to OpenAI Whisper
-if the local model is unavailable. Operators who want OpenAI-first set
-``CORVIN_STT_CHAIN=openai,local`` (or pin via
-``CORVIN_STT_PROVIDER=openai``).
+The chain default is ``openai → local`` (changed 2026-07-09): cloud Whisper
+is meaningfully more accurate than any local GGML model small enough to
+auto-download, so when an API key is configured it should always win.
+``is_available()`` already makes ``openai`` a no-op without a key, so this
+still degrades to local-only for operators with no API key, air-gapped
+environments, or a data-residency policy forbidding OpenAI — no separate
+"key present?" branch needed. Operators who want local-first (e.g. to avoid
+sending audio off-box even when a key exists) set
+``CORVIN_STT_CHAIN=local,openai`` (or pin via ``CORVIN_STT_PROVIDER=local``).
 
 A failed ``transcribe()`` call falls through to the next provider in
 the chain ONLY when the failure was provider-side
@@ -40,7 +44,7 @@ from .local_whisper import LocalWhisperProvider
 
 
 # Order matters — first available wins by default.
-DEFAULT_CHAIN: tuple[str, ...] = ("local", "openai")
+DEFAULT_CHAIN: tuple[str, ...] = ("openai", "local")
 
 _PROVIDERS: dict[str, type[STTProvider]] = {
     "openai": OpenAIWhisperProvider,

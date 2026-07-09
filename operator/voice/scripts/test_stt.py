@@ -619,7 +619,11 @@ class ProviderStatusTests(unittest.TestCase):
     def test_local_ready_when_package_and_model_present(self):
         model_dir = Path(self._tmpdir) / "whisper-models"
         model_dir.mkdir(parents=True)
-        (model_dir / "ggml-tiny-q5_1.bin").write_bytes(b"fake-model-bytes")
+        # Filename must match local_whisper._DEFAULT_MODEL — this test leaves
+        # CORVIN_STT_LOCAL_MODEL unset (see setUp), so provider_status() falls
+        # through to the module default.
+        from stt.local_whisper import _DEFAULT_MODEL
+        (model_dir / f"ggml-{_DEFAULT_MODEL}.bin").write_bytes(b"fake-model-bytes")
         fake_pywhispercpp = mock.MagicMock()
         with mock.patch.dict(sys.modules, {
             "pywhispercpp": fake_pywhispercpp,

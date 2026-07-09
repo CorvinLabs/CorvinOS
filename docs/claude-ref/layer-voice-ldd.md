@@ -838,7 +838,10 @@ operator/voice/scripts/stt/
    override path for policy enforcement (e.g. "this tenant must
    never use OpenAI").
 2. Else `CORVIN_STT_CHAIN=<n1>,<n2>` → operator-supplied chain.
-3. Else default chain: `local → openai`.
+3. Else default chain: `openai → local` (changed 2026-07-09 — cloud Whisper
+   is more accurate than any auto-downloadable local model, so it wins
+   whenever a key is configured; `is_available()` already degrades to
+   local-only with no key, so this needs no separate branch).
 
 The chain falls through on `STTProviderUnavailable` and
 `STTTranscriptionFailed`. It does **NOT** fall through on
@@ -896,8 +899,8 @@ extended with `timeout`, `provider-error`, `package-unreachable`.
 | Env var | Effect |
 |---|---|
 | `CORVIN_STT_PROVIDER` | Pin one provider (no fallback) |
-| `CORVIN_STT_CHAIN` | Override default chain, e.g. `local,openai` |
-| `CORVIN_STT_LOCAL_MODEL` | pywhispercpp GGML model name (`tiny-q5_1` / `base` / `base-q5_1` / `small` / `medium` / `large-v3`, ...); default `tiny-q5_1` (~31 MB, Q5_1-quantized) |
+| `CORVIN_STT_CHAIN` | Override default chain, e.g. `local,openai` for local-first |
+| `CORVIN_STT_LOCAL_MODEL` | pywhispercpp GGML model name (`tiny-q5_1` / `base` / `base-q5_1` / `small` / `medium` / `large-v3`, ...); default `base-q5_1`, Q5_1-quantized (raised from `tiny-q5_1` 2026-07-09 — `tiny` mis-transcribed real voice notes too often) |
 | `CORVIN_STT_LOCAL_ENGINE` | Opt-in: `faster-whisper` switches the `local` provider to the legacy CTranslate2 engine when it's installed (`corvinos[voice]` extra); never the default |
 | `BRIDGE_TRANSCRIBE_TIMEOUT` | Per-provider budget in seconds (unchanged from pre-Layer-23) |
 
@@ -922,7 +925,7 @@ expresses the same intent via the env var on the bridge process.
   `_emit_transcribe_ok` — fails the test if a future edit
   reintroduces `result.text` into the audit details
 - **`LocalWhisperPywhispercppTests`** (ADR-0185 M1): a REAL, non-mocked
-  round trip — downloads the `tiny-q5_1` GGML model (~31 MB, cached under
+  round trip — downloads the default GGML model (cached under
   a fixed OS-temp test dir) and transcribes a real speech fixture
   (`operator/voice/scripts/fixtures/stt_sample.wav`), asserting the
   actual recognized text, detected language, lang-hint honouring,

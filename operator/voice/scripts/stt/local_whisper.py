@@ -12,13 +12,17 @@ Lazy-imports ``pywhispercpp.model.Model``. If the package is missing,
 ``is_available()`` returns False and the resolver falls through. No GPU is
 required — CPU works fine for short voice notes.
 
-Model selection: ``CORVIN_STT_LOCAL_MODEL`` env (default ``tiny-q5_1``, a
-Q5_1-quantized whisper.cpp GGML model, ~31 MB — small enough to
-auto-download during install with a visible progress bar; see
-``corvinOS/installer/steps/stt.py::_download_whisper_model``). Other
-options: any name from ``pywhispercpp.constants.AVAILABLE_MODELS``, e.g.
-``"base"``, ``"base-q5_1"``, ``"small"``, ``"medium"``, ``"large-v3"``, and
-their ``.en``-only variants. Model files cache under
+Model selection: ``CORVIN_STT_LOCAL_MODEL`` env (default ``base-q5_1``, a
+Q5_1-quantized whisper.cpp GGML model — still small enough to auto-download
+during install with a visible progress bar; see
+``corvinOS/installer/steps/stt.py::_download_whisper_model``. Raised from
+the original ``tiny-q5_1`` default (2026-07-09): ``tiny`` mis-transcribed
+real voice notes often enough in the field to be a recurring support issue,
+even though it always passes ``corvin-voice doctor``'s clean-fixture
+round-trip. Other options: any name from
+``pywhispercpp.constants.AVAILABLE_MODELS``, e.g. ``"tiny-q5_1"``,
+``"small"``, ``"medium"``, ``"large-v3"``, and their ``.en``-only variants.
+Model files cache under
 ``voice_config_dir()/"whisper-models"`` — the same directory the installer
 downloads into, so this provider never re-downloads a model the installer
 already fetched.
@@ -52,7 +56,7 @@ from .base import (
 )
 
 
-_DEFAULT_MODEL = "tiny-q5_1"
+_DEFAULT_MODEL = "base-q5_1"
 
 
 def _resolve_ffmpeg() -> "str | None":

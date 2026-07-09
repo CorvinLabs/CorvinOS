@@ -11,7 +11,7 @@ from .dependencies import pip_install as _pip_install
 # install pays a silent first-use download delay instead of the visible one
 # below (ADR-0185 Decision 3: models are fetched once during install, not on
 # first use).
-_DEFAULT_MODEL = "tiny-q5_1"
+_DEFAULT_MODEL = "base-q5_1"
 
 
 def ensure_stt(voice_config_dir: Path, interactive: bool = True) -> None:
@@ -79,7 +79,7 @@ def _download_whisper_model(voice_config_dir: Path, model_name: str) -> bool:
         print(f"  ✓ Whisper STT model already present: {dest.name}")
         return True
 
-    print(f"  Downloading Whisper STT model {model_name!r} (~31 MB, one-time)...")
+    print(f"  Downloading Whisper STT model {model_name!r} (one-time)...")
     try:
         from pywhispercpp.utils import download_model
         download_model(model_name, download_dir=str(model_dir))
