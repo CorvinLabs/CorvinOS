@@ -11,6 +11,13 @@ What it covers:
      outbox depending on whether anything was running.
   5. End-to-end: spawn a slow fake-claude through call_claude_streaming,
      send /cancel via inbox, verify the subproc dies AND the ACK lands.
+  6. WA-10 regression: /stop against a subprocess-less engine (Hermes/
+     OpenCode/Codex) — previously always false-negatived "No task was
+     running" because `_cancel_chat` only ever looked at
+     `_running_subprocs`, which those engines never populate.
+  7. WA-10 regression: /stop arriving in the race window between
+     `_mark_turn_active` and any subprocess/engine registration must not
+     claim "No task was running" — the turn genuinely exists.
 """
 from __future__ import annotations
 
@@ -260,6 +267,136 @@ def test_registry_clean_after_natural_exit() -> None:
     print("PASS: natural exit + unregister leaves registry clean")
 
 
+# ---------------------------------------------------------------------------
+# 6. WA-10: /stop against a subprocess-less engine (Hermes/OpenCode/Codex)
+# ---------------------------------------------------------------------------
+
+
+class _FakeCancellableEngine:
+    """Stand-in for HermesEngine/OpenCodeEngine/CodexCliEngine — no Popen,
+    just a .cancel() the adapter can reach through `_running_engines`."""
+
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+
+def test_cancel_chat_cancels_engine_only_no_subproc() -> None:
+    _section("cancel_chat calls engine.cancel() when no subproc exists (Hermes-class)")
+    adapter = _fresh_adapter()
+    engine = _FakeCancellableEngine()
+    adapter._register_engine("chatHermes", engine)
+
+    n = adapter._cancel_chat("chatHermes")
+
+    assert n == 1, f"expected 1 (engine cancelled, no subproc to count), got {n}"
+    assert engine.cancelled, "engine.cancel() was never called"
+    with adapter._running_engines_guard:
+        assert "chatHermes" not in adapter._running_engines, \
+            "_cancel_chat must unregister the engine it just cancelled"
+    print("PASS: subprocess-less engine is reached and cancelled via _running_engines")
+
+
+def test_cancel_chat_does_not_double_count_claude_style_engine_plus_subproc() -> None:
+    _section("cancel_chat: engine.cancel() alongside a real subproc doesn't double-count")
+    adapter = _fresh_adapter()
+    proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    engine = _FakeCancellableEngine()
+    adapter._register_subproc("chatClaude", proc)
+    adapter._register_engine("chatClaude", engine)
+    try:
+        n = adapter._cancel_chat("chatClaude")
+        assert n == 1, f"expected count from subprocs (1), got {n}"
+        assert engine.cancelled, "engine.cancel() should still fire (harmless no-op for Claude)"
+        assert proc.poll() is not None, "subproc must still be killed"
+    finally:
+        try: proc.kill()
+        except Exception: pass
+
+
+def test_process_one_cancel_engine_only_running() -> None:
+    _section("process_one /stop against a Hermes-class turn (no subproc registered)")
+    inbox, outbox, processed = _setup_sandbox()
+    try:
+        adapter = _fresh_adapter({
+            "ADAPTER_INBOX":     str(inbox),
+            "ADAPTER_OUTBOX":    str(outbox),
+            "ADAPTER_PROCESSED": str(processed),
+        })
+        chat_key = "chat-hermes-1"
+        engine = _FakeCancellableEngine()
+        adapter._register_engine(chat_key, engine)
+
+        env = {
+            "id": "msg-cancel-hermes",
+            "channel": "sandbox-cancel",
+            "from": "u999",
+            "chat_id": chat_key,
+            "_cancel": True,
+            "ts": time.time(),
+        }
+        in_file = inbox / "msg-cancel-hermes.json"
+        in_file.write_text(json.dumps(env))
+
+        adapter.process_one(in_file, settings={"whitelist": ["u123", "u999"]})
+
+        assert engine.cancelled, "Hermes-class engine was never cancelled by /stop"
+        out_files = list(outbox.glob("msg-cancel-hermes_*.json"))
+        assert len(out_files) == 1, f"expected 1 outbox ack, got {len(out_files)}"
+        ack = json.loads(out_files[0].read_text())
+        assert "No task was running" not in ack["text"], (
+            f"WA-10 regression: /stop falsely reported nothing running: {ack['text']!r}"
+        )
+        assert "aborted" in ack["text"], f"unexpected ack: {ack['text']!r}"
+        print(f"PASS: Hermes-class /stop cancels + writes correct ACK: {ack['text']!r}")
+    finally:
+        shutil.rmtree(inbox.parent, ignore_errors=True)
+
+
+def test_process_one_cancel_during_race_window_before_registration() -> None:
+    _section("process_one /stop in the race window: turn active, nothing registered yet")
+    inbox, outbox, processed = _setup_sandbox()
+    try:
+        adapter = _fresh_adapter({
+            "ADAPTER_INBOX":     str(inbox),
+            "ADAPTER_OUTBOX":    str(outbox),
+            "ADAPTER_PROCESSED": str(processed),
+        })
+        chat_key = "chat-race-1"
+        # Simulate the window between _mark_turn_active (set at dispatch
+        # start) and _register_subproc/_register_engine (set once the
+        # engine actually produces a process/handle) — nothing is
+        # registered in either registry yet, but the turn IS real.
+        adapter._mark_turn_active(chat_key)
+
+        env = {
+            "id": "msg-cancel-race",
+            "channel": "sandbox-cancel",
+            "from": "u999",
+            "chat_id": chat_key,
+            "_cancel": True,
+            "ts": time.time(),
+        }
+        in_file = inbox / "msg-cancel-race.json"
+        in_file.write_text(json.dumps(env))
+
+        adapter.process_one(in_file, settings={"whitelist": ["u123", "u999"]})
+
+        out_files = list(outbox.glob("msg-cancel-race_*.json"))
+        assert len(out_files) == 1, f"expected 1 outbox ack, got {len(out_files)}"
+        ack = json.loads(out_files[0].read_text())
+        assert "No task was running" not in ack["text"], (
+            f"WA-10 regression: /stop lied about a genuinely active turn: {ack['text']!r}"
+        )
+        assert "just started" in ack["text"], f"unexpected ack: {ack['text']!r}"
+        print(f"PASS: race-window /stop tells the truth instead of a false negative: {ack['text']!r}")
+    finally:
+        adapter._mark_turn_done(chat_key)
+        shutil.rmtree(inbox.parent, ignore_errors=True)
+
+
 def main() -> int:
     tests = [
         test_register_unregister,
@@ -268,6 +405,10 @@ def main() -> int:
         test_process_one_cancel_no_running,
         test_process_one_cancel_with_running,
         test_registry_clean_after_natural_exit,
+        test_cancel_chat_cancels_engine_only_no_subproc,
+        test_cancel_chat_does_not_double_count_claude_style_engine_plus_subproc,
+        test_process_one_cancel_engine_only_running,
+        test_process_one_cancel_during_race_window_before_registration,
     ]
     failed = 0
     for t in tests:

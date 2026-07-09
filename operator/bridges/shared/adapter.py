@@ -1186,11 +1186,26 @@ def inject_btw(chat_key: str, text: str) -> bool:
 
 
 def _cancel_chat(chat_key: str) -> int:
-    """SIGTERM every running claude subprocess for a chat, escalate to SIGKILL.
+    """SIGTERM every running claude subprocess for a chat (escalating to
+    SIGKILL), AND cancel() any registered subprocess-less engine.
 
-    Returns the count of subprocesses that were signalled. Zero means
-    nothing was running — the caller should still write a friendly ACK
-    so the user gets confirmation either way.
+    WA-10: Hermes/OpenCode/Codex drive Ollama-HTTP / CLI-JSON streams with
+    no Popen at all (see the `_running_subprocs` docstring above), so
+    before this fix `/stop` had literally no way to reach them — it only
+    ever looked at `_running_subprocs`, which those three engines never
+    populate. `/stop` during a Hermes/OpenCode/Codex turn silently did
+    nothing and told the user "No task was running", even though one very
+    much was (most common on Discord via the stripped-PATH → Hermes
+    auto-downgrade, ADR-0159 M1 — see `_active_turns` above, which was
+    already fixed for `/btw` but not for this). Every engine reachable via
+    `_running_engines` has `.cancel()` (ClaudeCodeEngine included, for
+    `/btw` injection); calling it here too is a safe no-op for the Claude
+    path since its subprocess is already being killed below.
+
+    Returns the count of things stopped: subprocesses signalled, plus 1 if
+    a subprocess-less engine was cancelled. Zero means nothing was
+    running — the caller should still write a friendly ACK so the user
+    gets confirmation either way.
 
     The Popens are spawned with start_new_session=True, so killpg on the
     pid hits both the claude process and any tool-use children (Bash,
@@ -1200,15 +1215,30 @@ def _cancel_chat(chat_key: str) -> int:
     with _running_subprocs_guard:
         procs = list(_running_subprocs.get(chat_key, []))
 
-    if not procs:
+    with _running_engines_guard:
+        engine = _running_engines.get(chat_key)
+
+    if not procs and engine is None:
         return 0
 
     # Drop the live-stdin entry so an in-flight /btw doesn't write into a
-    # pipe whose owning subprocess is being killed. Phase 2.3 also drops
-    # the engine entry — `inject_btw` won't reach a soon-to-be-killed
-    # engine.
+    # pipe whose owning subprocess is being killed. Also drops the engine
+    # entry so a concurrent /btw doesn't reach a soon-to-be-cancelled engine.
     _unregister_stdin(chat_key)
     _unregister_engine(chat_key)
+
+    engine_cancelled = False
+    if engine is not None:
+        try:
+            engine.cancel()
+            engine_cancelled = True
+        except Exception as e:  # noqa: BLE001
+            log(f"cancel_chat: engine.cancel() failed for chat={chat_key}: {e}")
+
+    if not procs:
+        # No subprocess to kill (Hermes/OpenCode/Codex) — engine.cancel()
+        # above IS the stop signal.
+        return 1 if engine_cancelled else 0
 
     log(f"cancel_chat: SIGTERM {len(procs)} subproc(s) for chat={chat_key}")
     for proc in procs:
@@ -5229,6 +5259,11 @@ def _call_codex_streaming_via_engine(
         tool_idle_to = 1800.0
 
     engine = _CodexCliEngine()
+    # WA-10: register immediately — _register_subproc (below) only fires once
+    # the spawn-thread's first event proves `engine._proc` exists, leaving a
+    # window where /stop finds nothing in `_running_subprocs` even though a
+    # turn is genuinely starting.
+    _register_engine(chat_key, engine)
     ev_q: queue.Queue = queue.Queue()
 
     def _stream_thread() -> None:
@@ -5265,9 +5300,11 @@ def _call_codex_streaming_via_engine(
             break
         if kind == "error":
             log(f"codex spawn-thread error: {payload}")
+            _unregister_engine(chat_key)
             return f"[adapter] codex spawn failed: {payload}"
         if kind == "eof":
             log(f"codex spawn ended without proc for chat={chat_key}")
+            _unregister_engine(chat_key)
             return "[adapter] codex spawn produced no events"
 
     proc = getattr(engine, "_proc", None)
@@ -5339,6 +5376,7 @@ def _call_codex_streaming_via_engine(
     finally:
         if proc is not None:
             _unregister_subproc(chat_key, proc)
+        _unregister_engine(chat_key)
         if _cx_turn_started:
             _emit_os_turn_event(
                 "os_turn.completed", _cx_turn_id, chat_key, _cx_persona,
@@ -5507,6 +5545,10 @@ def _call_opencode_streaming_via_engine(
         tool_idle_to = 1800.0
 
     engine = _OpenCodeEngine()
+    # WA-10: register immediately — _register_subproc (below) only fires once
+    # engine._proc materializes, leaving a window where /stop finds nothing
+    # in `_running_subprocs` even though a turn is genuinely starting.
+    _register_engine(chat_key, engine)
     ev_q: queue.Queue = queue.Queue()
 
     def _stream_thread() -> None:
@@ -5545,13 +5587,16 @@ def _call_opencode_streaming_via_engine(
             break
         if kind == "error":
             log(f"opencode spawn-thread error: {payload}")
+            _unregister_engine(chat_key)
             return f"[adapter] opencode spawn failed: {payload}"
         if kind == "eof":
             log(f"opencode spawn ended without proc for chat={chat_key}")
+            _unregister_engine(chat_key)
             return "[adapter] opencode spawn produced no events"
 
     if engine._proc is None:
         log(f"opencode._proc never appeared for chat={chat_key}")
+        _unregister_engine(chat_key)
         return "[adapter] opencode spawn timed out before producing a process"
 
     proc = engine._proc
@@ -5621,6 +5666,7 @@ def _call_opencode_streaming_via_engine(
             rc = proc.poll() if proc.poll() is not None else -1
     finally:
         _unregister_subproc(chat_key, proc)
+        _unregister_engine(chat_key)
         # ADR-0115 M1 — os_turn.completed: always paired with started (EU AI Act Art. 12/13)
         if _oc_turn_started:
             _emit_os_turn_event(
@@ -5879,6 +5925,9 @@ def _call_hermes_streaming_via_engine(
     _h_persona = profile.get("persona") or profile.get("name", "")
 
     engine = _HermesEngine()
+    # WA-10: register so /stop can reach engine.cancel() — Hermes has no
+    # Popen for _running_subprocs to track (see docstring above).
+    _register_engine(chat_key, engine)
     ev_q: "queue.Queue" = queue.Queue()
 
     def _stream_thread() -> None:
@@ -6041,6 +6090,7 @@ def _call_hermes_streaming_via_engine(
 
         return final_text
     finally:
+        _unregister_engine(chat_key)
         # ADR-0115 M2 — os_turn.completed: always paired with started (EU AI Act Art. 12/13)
         if _h_turn_started:
             _emit_os_turn_event(
@@ -8638,7 +8688,16 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                         if killed == 1
                         else f"{killed} running tasks aborted. You can carry on.")
         else:
-            ack_text = "No task was running. You can keep typing."
+            # WA-10: killed==0 doesn't always mean nothing is running — a
+            # turn can be active (_mark_turn_active, set BEFORE any
+            # subprocess/engine registration) in the brief window right
+            # after dispatch starts. Telling the user "No task was
+            # running" there is flatly false; say so honestly instead of
+            # claiming a task that just started doesn't exist.
+            if _turn_active(chat_key):
+                ack_text = "A task just started and can't be stopped yet — try again in a moment."
+            else:
+                ack_text = "No task was running. You can keep typing."
         ack_envelope = {"channel": channel, "to": sender, "text": ack_text}
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id

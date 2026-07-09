@@ -6,6 +6,25 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — /stop falsely reported "No task was running"
+- **`/stop` (and `/cancel`/`/halt`/`/abbruch`) could silently do nothing and
+  tell the user nothing was running, even while a task genuinely was.**
+  `_cancel_chat` only ever inspected `_running_subprocs`, but HermesEngine,
+  OpenCodeEngine, and CodexCliEngine drive HTTP/CLI streams with no Popen at
+  all (most commonly hit on Discord via the stripped-PATH → Hermes
+  auto-downgrade, ADR-0159 M1) — so `/stop` had no way to reach them. A
+  second, narrower race window existed even for the Claude path: a `/stop`
+  arriving between turn-start and subprocess registration also saw an empty
+  registry. `/stop` now also cancels via the existing `_running_engines`
+  registry (all three engines register there, alongside Claude, immediately
+  on dispatch) and gives an honest "just started, try again in a moment"
+  message instead of a flat false negative during the remaining race window.
+- **Email bridge had no `/stop`/`/cancel` handling at all** — every other
+  channel (Discord/Telegram/Slack/WhatsApp/Teams/Signal) already did. An
+  email user had no way to abort a stuck turn.
+- **Teams and Signal recognized `/stop`/`/cancel`/`/abbruch` but not
+  `/halt`**, unlike every other channel — added for parity.
+
 ### Fixed — Windows autostart on non-admin accounts
 - **Windows autostart silently failed with "Access is denied" on some
   standard (non-admin) accounts** (managed/family/education Windows images

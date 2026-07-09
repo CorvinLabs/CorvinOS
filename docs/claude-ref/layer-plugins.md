@@ -570,8 +570,10 @@ falls silent for too long. Three integration sites enforce this:
   fresh task; an approval/rejection signal must NOT silently grade
   skills from the abandoned conversation.
 - `/stop` / `/cancel` — same pop, after `_cancel_chat()` SIGTERMs the
-  running claude subprocess. The user is moving on; a follow-up
-  "danke" must not retroactively grade the cancelled turn's skills.
+  running claude subprocess (WA-10: or calls `.cancel()` on a registered
+  subprocess-less engine — Hermes/OpenCode/Codex have no Popen to kill).
+  The user is moving on; a follow-up "danke" must not retroactively grade
+  the cancelled turn's skills.
 - Periodic sweep — `_cleanup_last_turn_skills()` runs alongside
   `_cleanup_in_flight()` and `_cleanup_chat_locks()` every
   `CLEANUP_INTERVAL` seconds (default 300 s) and drops snapshots whose

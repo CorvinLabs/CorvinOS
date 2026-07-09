@@ -194,7 +194,7 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, se
 
     // ── Special commands ──────────────────────────────────────────────────
     const cmdLower = text.toLowerCase();
-    if (cmdLower === '/stop' || cmdLower === '/cancel' || cmdLower === '/abbruch') {
+    if (cmdLower === '/stop' || cmdLower === '/cancel' || cmdLower === '/abbruch' || cmdLower === '/halt') {
       writeInbox({ ...base, _cancel: true });
       return null;
     }

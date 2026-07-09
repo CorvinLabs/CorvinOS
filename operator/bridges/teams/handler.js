@@ -187,7 +187,7 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, co
 
     // ── In-chat commands (/new, /consent, cowork, etc.) ──────────────────
     const cmdLower = text.toLowerCase();
-    if (cmdLower === '/stop' || cmdLower === '/cancel' || cmdLower === '/abbruch') {
+    if (cmdLower === '/stop' || cmdLower === '/cancel' || cmdLower === '/abbruch' || cmdLower === '/halt') {
       log(`cancel cmd from ${email} in chat ${chatKey}`);
       writeInbox({ ...base, _cancel: true });
       return null;

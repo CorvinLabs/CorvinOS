@@ -348,6 +348,21 @@ async function handleParsed(parsed, uid) {
     return;
   }
 
+  // /stop /cancel: SIGTERM the currently running claude subprocess (or
+  // cancel() a subprocess-less engine) for this chat, same as every other
+  // channel daemon. Previously missing here entirely — an email user had
+  // no way to abort a stuck/long-running turn (adversarial review finding).
+  {
+    const cmdLower = (text || '').trim().toLowerCase();
+    if (cmdLower === '/stop' || cmdLower === '/cancel' || cmdLower === '/abbruch' || cmdLower === '/halt') {
+      log(`cancel cmd from ${fromAddr}`);
+      writeInbox({ from: fromAddr, chat_id: fromAddr, _cancel: true, ts: Date.now(),
+                   reply_subject: subject });
+      await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
+      return;
+    }
+  }
+
   const base = { from: fromAddr, chat_id: fromAddr, ts: Date.now(),
                  reply_subject: subject };
 
