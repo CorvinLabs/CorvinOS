@@ -28,7 +28,7 @@
 
 <p align="center">
   <a href="https://agentic.ai/best/agentic-ai-platforms" target="_blank" rel="noopener noreferrer" title="Best Agentic AI Platforms 2026 — agentic.ai">
-    <img src="docs/assets/award-agentic-ai-2026.svg" alt="Best Agentic AI Platforms 2026 — agentic.ai" height="120">
+    <img src="docs/assets/award-agentic-ai-2026.svg" alt="Best Agentic AI Platforms 2026 — agentic.ai" height="180">
   </a>
 </p>
 
