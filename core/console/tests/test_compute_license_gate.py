@@ -107,6 +107,59 @@ def test_chat_ws_surfaces_call_the_chat_gate():
     )
 
 
+def test_submit_run_talks_to_worker_with_correct_field_names(monkeypatch, tmp_path):
+    """WA-14 regression: POST /compute/runs used to just write a manifest.json
+    that no poller ever read (real runs never executed). It must now call the
+    worker over its Unix socket with the field names the worker actually
+    expects (param_grid/loss_metric/max_wall_clock_s), translated from the
+    console request model's params/budget.timeout_s."""
+    _compute_pkg = _CONSOLE.parents[0] / "compute"
+    if str(_compute_pkg) not in sys.path:
+        sys.path.insert(0, str(_compute_pkg))
+    import corvin_compute.client as _client_mod
+    from corvin_console.routes import _compute_license_gate as G
+    from corvin_console.routes import compute as C
+
+    monkeypatch.setattr(G, "_COMPUTE_QUOTA_OK", True)
+    monkeypatch.setattr(G, "_cq_increment", lambda *a, **kw: None)
+
+    sock = tmp_path / "worker.sock"
+    sock.write_text("")  # just needs to exist for the .exists() check
+    monkeypatch.setattr(C, "_socket_path", lambda tid: sock)
+
+    captured: dict = {}
+
+    class _FakeWorkerClient:
+        def __init__(self, socket_path):
+            captured["socket_path"] = socket_path
+
+        def submit_run(self, **kwargs):
+            captured["kwargs"] = kwargs
+            return {"compute_handle": "run_fake123", "state": "running"}
+
+    monkeypatch.setattr(_client_mod, "WorkerClient", _FakeWorkerClient)
+
+    class _FakeRec:
+        tenant_id = "_default"
+        sid_fingerprint = "fp123456"
+
+    body = C.SubmitRunRequest(
+        tool_name="spotify_rank_score",
+        strategy="grid",
+        budget={"max_iterations": 10, "timeout_s": 120},
+        objective="minimize_loss",
+        params={"w": [0.0, 1.0]},
+    )
+    result = C.submit_run(body, rec=_FakeRec())
+
+    assert result == {"ok": True, "run_id": "run_fake123", "state": "running"}
+    assert captured["kwargs"]["tool_name"] == "spotify_rank_score"
+    assert captured["kwargs"]["param_grid"] == {"w": [0.0, 1.0]}
+    assert captured["kwargs"]["loss_metric"] == "loss"
+    assert captured["kwargs"]["budget"] == {"max_iterations": 10, "max_wall_clock_s": 120}
+    assert captured["kwargs"]["minimise"] is True
+
+
 def test_compute_license_status_reflects_member_tier_without_enterprise_key(monkeypatch):
     """/compute/license must not hardcode tier="free" merely because no Enterprise
     (on-prem) license.jwt is installed — that is the normal case for a Paddle/

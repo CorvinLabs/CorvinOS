@@ -1655,9 +1655,12 @@ export async function updateComputeConfig(
 }
 
 export async function submitComputeRun(
+  // `params` is the hyperparameter SEARCH SPACE (grid/random/bayesian), so each
+  // key maps to the list of candidate values — e.g. { w: [0, 0.5, 1] } — not a
+  // single fixed value; the worker calls it param_grid internally.
   body: { tool_name: string; strategy: string; budget: Record<string, unknown>; objective: string; params?: Record<string, unknown> },
   csrf: string,
-): Promise<{ ok: true; run_id: string; manifest: Record<string, unknown> }> {
+): Promise<{ ok: true; run_id: string; state: string }> {
   return api("/compute/runs", { method: "POST", csrf, body: { ...body } });
 }
 

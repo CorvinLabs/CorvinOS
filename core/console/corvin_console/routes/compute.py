@@ -960,7 +960,17 @@ def submit_run(
     body: SubmitRunRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
-    """Create a new compute run manifest. The worker picks it up if running."""
+    """Submit a new compute run to the worker over its Unix socket.
+
+    WA-14: this used to just write a manifest.json and return — but no
+    poller ever read this directory (recovery.scan_resumable requires a
+    summary.json this endpoint never wrote), so every console-submitted run
+    sat forever, unexecuted, with no error surfaced. The worker's real
+    submit_run op (core/compute/corvin_compute/worker.py) expects
+    ``param_grid``/``loss_metric``/``budget.max_wall_clock_s``, not this
+    model's ``params``/``objective``/``budget.timeout_s`` — routed through
+    WorkerClient with the field names it actually expects.
+    """
     if not verify_reauth(rec, body.re_auth_token):
         console_audit.action_failed(
             tenant_id=rec.tenant_id,
@@ -985,26 +995,52 @@ def submit_run(
         rec.tenant_id, rec.sid_fingerprint, audit_action="compute.run_submit",
     )
 
-    import secrets as _sec
-    run_id = f"run_{_sec.token_hex(6)}"
-    run_dir = _runs_dir(rec.tenant_id) / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
+    sock_path = _socket_path(rec.tenant_id)
+    if not sock_path.exists():
+        raise HTTPException(
+            http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            "compute worker is not running — start it via Settings "
+            "(systemctl --user start corvin-compute@<tenant>)",
+        )
 
-    manifest = {
-        "run_id": run_id,
-        "tool_name": body.tool_name,
-        "strategy": body.strategy,
-        "budget": body.budget,
-        "objective": body.objective,
-        "params": body.params,
-        "started_at": time.time(),
-        "submitted_by": "console",
-        "tenant_id": rec.tenant_id,
-    }
-    (run_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    # corvin_compute lives at core/compute/corvin_compute — not on the
+    # console's PYTHONPATH by default (see compute_license_status above for
+    # the same pattern with corvin_license).
+    import sys as _sys
+    _compute_pkg = Path(__file__).resolve().parents[4] / "core" / "compute"
+    if str(_compute_pkg) not in _sys.path:
+        _sys.path.insert(0, str(_compute_pkg))
+    from corvin_compute.client import WorkerClient, WorkerClientError  # noqa: PLC0415
 
+    worker_budget = dict(body.budget)
+    if "timeout_s" in worker_budget and "max_wall_clock_s" not in worker_budget:
+        worker_budget["max_wall_clock_s"] = worker_budget.pop("timeout_s")
+
+    client = WorkerClient(sock_path)
+    try:
+        result = client.submit_run(
+            tool_name=body.tool_name,
+            param_grid=body.params,
+            loss_metric="loss",
+            strategy=body.strategy,
+            budget=worker_budget,
+            minimise=(body.objective != "maximize_loss"),
+            tenant_id=rec.tenant_id,
+        )
+    except (OSError, WorkerClientError) as exc:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="compute.run_submit",
+            target_kind="compute_run",
+            target_id=body.tool_name,
+            reason=str(exc)[:200],
+        )
+        raise HTTPException(
+            http_status.HTTP_502_BAD_GATEWAY, f"compute worker rejected the run: {exc}",
+        ) from exc
+
+    run_id = result["compute_handle"]
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
@@ -1012,7 +1048,7 @@ def submit_run(
         target_kind="compute_run",
         target_id=run_id,
     )
-    return {"ok": True, "run_id": run_id, "manifest": manifest}
+    return {"ok": True, "run_id": run_id, "state": result.get("state")}
 
 @router.delete("/compute/runs/{run_id}")
 def delete_run(

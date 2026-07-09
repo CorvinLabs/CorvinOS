@@ -228,6 +228,25 @@ async def _cmd_serve(args: argparse.Namespace) -> int:
         except Exception:  # noqa: BLE001 — observability is best-effort
             pass
 
+    # ADR-0029 — pipeline/HAC engines exist and are fully tested
+    # (pipeline/engine.py, hac/engine.py) but were never constructed here, so
+    # the production worker only ever served the flat grid/random/bayesian
+    # engine; any engine="pipeline"/"hac" submit_run call failed with
+    # "unknown engine" no matter how the request was submitted. The
+    # module-level register_pipeline_engine()/register_hac_engine() factories
+    # are not an alternative wiring — they populate engine_registry.py's
+    # standalone registry, which WorkerServer never reads (it only consults
+    # its own self._extra_engines, populated below).
+    from .hac.engine import HACEngine
+    from .pipeline.engine import PipelineEngine
+
+    pipeline_engine = PipelineEngine(
+        corvin_home=home, runner_fn=runner_fn, audit_emit=_audit_emit,
+    )
+    hac_engine = HACEngine(
+        corvin_home=home, runner_fn=runner_fn, audit_emit=_audit_emit,
+    )
+
     server = WorkerServer(
         tenant_id=args.tenant,
         corvin_home=home,
@@ -235,6 +254,7 @@ async def _cmd_serve(args: argparse.Namespace) -> int:
         max_concurrent_runs=args.max_concurrent_runs,
         runner_fn=runner_fn,
         audit_emit=_audit_emit,
+        extra_engines=[pipeline_engine, hac_engine],
     )
     print(f"[corvin-compute] serving tenant={args.tenant!r} at {socket_path}")
     try:

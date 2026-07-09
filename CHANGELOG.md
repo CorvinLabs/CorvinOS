@@ -6,6 +6,30 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — Agentic Compute "Runs" tab never actually executed a submitted job
+- `POST /compute/runs` (`core/console/corvin_console/routes/compute.py`)
+  only wrote a `manifest.json` and returned — no poller ever read that
+  directory (`recovery.scan_resumable` requires a `summary.json` this
+  endpoint never wrote), so every run submitted through the console API sat
+  forever with no error surfaced. Also, the fields it wrote
+  (`params`/`objective`/`budget.timeout_s`) didn't match what the worker's
+  real `submit_run` op expects (`param_grid`/`loss_metric`/
+  `budget.max_wall_clock_s`) even if something had polled it. Rewired to
+  submit over the worker's Unix socket via `WorkerClient`, with the field
+  names translated to the worker's real contract, and a clear 503/502
+  instead of silent no-op when the worker isn't running or rejects the run.
+- Pipeline and HAC compute engines (`core/compute/corvin_compute/pipeline/
+  engine.py`, `hac/engine.py`) are fully implemented and tested but were
+  never constructed at the production worker's startup
+  (`corvin_compute/cli.py::_cmd_serve`), so every `engine="pipeline"` /
+  `engine="hac"` submission failed with "unknown engine" regardless of how
+  it was submitted. `register_pipeline_engine`/`register_hac_engine` looked
+  like the intended wiring but populate a separate, disconnected
+  `engine_registry.py` singleton that `WorkerServer` never reads — it only
+  consults engines passed via its own `extra_engines` constructor argument.
+  `_cmd_serve` now constructs both engines and passes them there directly.
+- Regression tests added for the `/compute/runs` field-name translation.
+
 ### Fixed — Agentic Compute panel showed "Trial · free" for licensed Member-tier customers
 - `GET /compute/license` (`core/console/corvin_console/routes/compute.py`)
   hardcoded `tier: "free"` whenever no Enterprise on-prem license
