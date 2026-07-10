@@ -25,6 +25,27 @@ class WorkflowDoc:
     raw: dict[str, Any] = field(default_factory=dict)
     source_path: str | None = None  # set by load_workflow(); needed to reload on resume (ADR-0188 M5)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], *, source_path: str | None = None) -> "WorkflowDoc":
+        """Build a WorkflowDoc from an already-parsed mapping (YAML/JSON).
+
+        Single source of truth for dict→WorkflowDoc, shared by load_workflow()
+        and any caller that already holds the parsed data (e.g. the awpkg
+        installer validating a workflow straight out of the zip, avoiding a
+        temp-file round-trip)."""
+        if not isinstance(data, dict):
+            raise ValueError("workflow root must be a mapping")
+        wf = data.get("workflow") or {}
+        return cls(
+            awp_version=str(data.get("awp", "1.0.0")),
+            name=str(wf.get("name", "")),
+            description=str(wf.get("description", "")),
+            inputs=dict(data.get("inputs", {})),
+            orchestration=dict(data.get("orchestration", {})),
+            raw=data,
+            source_path=source_path,
+        )
+
     @property
     def graph(self) -> list[dict[str, Any]]:
         orch = self.orchestration or {}
@@ -56,16 +77,7 @@ def load_workflow(path: str | Path) -> WorkflowDoc:
     else:
         raise ValueError(f"unknown workflow extension: {p.suffix}")
 
-    wf = data.get("workflow") or {}
-    return WorkflowDoc(
-        awp_version=str(data.get("awp", "1.0.0")),
-        name=str(wf.get("name", "")),
-        description=str(wf.get("description", "")),
-        inputs=dict(data.get("inputs", {})),
-        orchestration=dict(data.get("orchestration", {})),
-        raw=data,
-        source_path=str(p),
-    )
+    return WorkflowDoc.from_dict(data, source_path=str(p))
 
 
 def dump_workflow(doc: WorkflowDoc) -> str:

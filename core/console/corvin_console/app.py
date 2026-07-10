@@ -62,6 +62,7 @@ class _SPAStaticFiles(StaticFiles):
 from . import __version__
 from .routes import (
     auth_routes, dashboard, sessions, audit_tail, runs, personas,
+    tasks as tasks_route,
     tools, skills, memory, streams, promote,
     workspaces, members, compute, settings as settings_route,
     profile as profile_route, chat_settings as chat_settings_route,
@@ -133,6 +134,7 @@ router.include_router(chain_dual_track_route.router, tags=["console-audit"])
 router.include_router(remote_trigger_log_route.router, tags=["console-a2a"])
 router.include_router(a2a_pair_route.router, tags=["console-a2a-pair"])
 router.include_router(runs.router, tags=["console-runs"])
+router.include_router(tasks_route.router, tags=["console-tasks"])
 router.include_router(personas.router, tags=["console-personas"])
 # Phase C — drilldowns
 # ADR-0124 M5a/M5b: manual-skill and manual-tool routers MUST be registered

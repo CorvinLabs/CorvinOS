@@ -84,10 +84,31 @@ def run_sandboxed_python(
         env = stripped_env()
 
         if have_bwrap():
+            # bwrap's namespace jail exposes only /usr, so an interpreter that
+            # does not live under /usr must be bound in explicitly — otherwise
+            # `bwrap: execvp .../bin/python: No such file or directory`.
+            # On the normal uv-bootstrap install (and this repo's own .venv)
+            # sys.executable is a venv `bin/python` whose symlink chain hops
+            # through TWO uv-managed levels (cpython-3.11 -> cpython-3.11.15),
+            # neither under /usr. Forge's runner.py only re-binds the venv root
+            # (it assumed the venv points back into /usr) — insufficient here.
+            # Instead resolve the interpreter to its real path and exec THAT
+            # directly, binding only its install prefix. This sidesteps every
+            # symlink level and gives the sandboxed snippet a clean stdlib-only
+            # interpreter (no venv site-packages) — the stronger isolation a
+            # deterministic code node wants anyway. (ADR-0188 code-node fix.)
+            import os as _os
+
+            real_exec = Path(_os.path.realpath(sys.executable))
+            extra_ro: list[Path] = []
+            real_prefix = real_exec.parent.parent  # <prefix>/bin/python -> <prefix>
+            if real_exec.parent.name == "bin" and not str(real_prefix).startswith("/usr"):
+                extra_ro.append(real_prefix)
             cmd = build_bwrap_cmd(
-                [sys.executable, str(impl_path), args_json],
+                [str(real_exec), str(impl_path), args_json],
                 impl_path,
                 allow_network=False,
+                extra_ro_binds=extra_ro or None,
             )
         else:
             cmd = [sys.executable, str(impl_path), args_json]

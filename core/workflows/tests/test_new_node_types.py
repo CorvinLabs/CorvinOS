@@ -394,5 +394,31 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(result.nodes["n"].attempts, 1)
 
 
+class AskHumanConsentCoercionTests(unittest.TestCase):
+    """HITL consent must be fail-closed: a negated reply is never consent."""
+
+    def _coerce(self, raw: str):
+        from corvin_workflows.node_types import _coerce_reply
+        return _coerce_reply(raw, "boolean")
+
+    def test_plain_affirmatives_are_true(self) -> None:
+        for r in ("ja", "yes", "y", "ok", "okay", "sure", "confirm", "1"):
+            self.assertTrue(self._coerce(r), f"{r!r} should be consent")
+
+    def test_plain_negatives_are_false(self) -> None:
+        for r in ("nein", "no", "n", "cancel", "decline", "nope", "0", "stop"):
+            self.assertFalse(self._coerce(r), f"{r!r} should NOT be consent")
+
+    def test_negated_affirmatives_are_false(self) -> None:
+        # The regression: "not ok" used to coerce to TRUE (consent on refusal).
+        for r in ("not ok", "not okay", "no, that's not ok", "please don't",
+                  "never", "do not confirm", "nicht ok", "reject this"):
+            self.assertFalse(self._coerce(r), f"{r!r} must be fail-closed (not consent)")
+
+    def test_unrecognized_is_fail_closed(self) -> None:
+        self.assertFalse(self._coerce("hmm maybe later"))
+        self.assertFalse(self._coerce(""))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

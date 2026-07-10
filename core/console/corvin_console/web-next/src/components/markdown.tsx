@@ -22,7 +22,11 @@ function MermaidBlock({ code }: { code: string }) {
       mermaid.initialize({
         startOnLoad: false,
         theme: "dark",
-        securityLevel: "loose",
+        // "strict": neutralize HTML in node labels and disable click/href
+        // directives. Assistant/workflow output is LLM/tool-derived (a delegated
+        // worker can surface untrusted web/file content), so a crafted ```mermaid
+        // block must not be able to execute script in the console origin.
+        securityLevel: "strict",
         fontFamily: "inherit",
       });
       mermaid.render(id, code).then(({ svg }) => {

@@ -449,7 +449,7 @@ async def upload_attachments(
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid[:12],
+        sid_fingerprint=rec.sid_fingerprint,
         action="upload",
         target_kind="chat_attachment",
         target_id=sid,
@@ -792,7 +792,14 @@ async def chat_stream(
                     await websocket.send_json({"type": "done"})
                     continue
                 # Guard: engine must be configured before we charge the quota.
+                # Skip it when the turn will DELEGATE — ACS workers are engine-
+                # independent, so a tenant on opencode/codex (or with claude
+                # missing) can still delegate from chat. Refusing here would both
+                # break delegation and contradict the refusal text, which itself
+                # points users at the delegation path.
                 _engine_msg = chat_runtime.get_engine_unavailable_message(rec.tenant_id)
+                if _engine_msg and chat_runtime.will_delegate(sess, prompt):
+                    _engine_msg = None
                 if _engine_msg:
                     await websocket.send_json({
                         "type": "error", "code": 503,

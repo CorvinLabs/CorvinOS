@@ -6,6 +6,37 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.26] — 2026-07-11 — Adversarial-review hardening (workflows/awpkg, voice model ladder, chat command-center, fresh-install UX)
+
+Overnight full-repo adversarial review (workflows/awpkg, voice, console/chat, install/update) plus fresh-install E2E on Linux + a Windows VM. The install completed end-to-end on both platforms (console up, healthz green, voice provisioned, autostart via fallback); the fixes below close the real defects the review and the E2E runs surfaced.
+
+### Fixed — workflows / awpkg (ADR-0188)
+- **`code` nodes were broken on every venv/uv install** (13 workflow tests red on `main`): the bwrap sandbox never bound the interpreter when it lived outside `/usr`, so `code` nodes failed `bwrap: execvp .../python: No such file or directory`. Now resolves the real interpreter and binds its install prefix (handles uv-managed Python's multi-level symlink chain). All 67 workflow tests green.
+- **HITL consent could be granted on a refusal:** `_coerce_reply("not ok")` returned `True` because the negation wasn't recognized and the affirmative "ok" won. Added negation words (checked first, they win over any affirmative token) and digit tokenization; a negated/mixed reply is now fail-closed. Regression tests added.
+- **Console `start_run` silently mis-ran DAG-only node types:** `code`/`merge`/`route`/`answer`/`ask_human` fell through to a generic `claude -p` step — executing a deterministic `code` node via an LLM and letting an LLM "answer" an `ask_human` consent gate (a human-in-the-loop bypass). `start_run` now fail-closes on those types and points the user at the `corvin-flow` CLI.
+- **awpkg install-time workflow validation was a silent no-op** (it called a non-existent `WorkflowDoc.from_dict` and swallowed every exception), so any malformed/invalid workflow installed clean. Added `WorkflowDoc.from_dict`, made the validator actually run, and made a `WorkflowInvalid` abort the install with `InstallError`. Regression tests added.
+- **A failed resume destroyed a paused run:** the checkpoint was deleted on `failed` as well as `complete`, so a transient error after the human replied made the run unrecoverable. Now deleted only on clean completion.
+- Documented awpkg workflow coverage honestly (`docs/awpkg.md`): the definition round-trips losslessly; checkpoints and cron schedules are deliberately out of scope; three standard extensions (embedded-code permission axis, declarable channel requirements, awp-version pin) named as follow-ups.
+
+### Fixed — voice (fresh-install, all platforms)
+- **Local STT default raised to a quality model:** `base-q5_1` mis-transcribes German/accented audio; the default is now RAM-aware — `small-q5_1` on a normal machine (~190 MB, fits 4 GB), auto-downshifting to `base-q5_1` on a low-RAM box. Installer and provider pick the same file.
+- **Voice summarizer/annex hardened against stripped-PATH / Windows:** replaced hardcoded `python3` spawns with `sys.executable` and widened the fallbacks to catch `OSError`/`FileNotFoundError`, so a spawn failure degrades to the answer head instead of dropping the turn.
+- **Dialectic CLI judge auth-gated:** the research/forge summary judge spawned `claude -p` even when Claude wasn't logged in, burning the full judge timeout on every summary. Now short-circuits to the fallback via the same `_claude_authenticated()` probe the summarizer uses (completes the 41c174e fix).
+
+### Fixed — console (chat as command center)
+- **`/delegate` was dead:** the slash dispatcher rejected the flagship force-delegation verb as "Unknown command" before it could reach the delegation path. It now passes through to `stream_turn`'s delegation branch (verified live).
+- **Delegation was blocked on non-claude engines:** the engine-unavailable guard refused the whole turn (with text that itself pointed at delegation) even though ACS delegation is engine-independent. The guard now skips turns that will delegate.
+- **Task-Engine router was mounted nowhere** → the chat live-update polling fallback and task-recovery hit a permanent 404. Router mounted; added the batch `GET /tasks?ids=` route the frontend expects.
+- **Workflow runs stranded as "running" on client disconnect** → because the terminal-status write sat outside the abort path, a closed tab left the run counting toward the `workflows_concurrent` license cap forever (a few closed tabs locked a free-tier tenant out of starting any run). The run now finalizes as `aborted` on `GeneratorExit`/cancellation.
+- **BYOK secret *writes* 503'd on self-hosted installs** (no Instance Agent): added the self-hosted write branch that decrypts and stores via the same vault + `service.env` pipeline the agent uses, so adding a key actually takes effect (and voice auto-upgrades to the better provider). Also fixed the always-failing `operator.agent` import (stdlib `operator` shadowing) → `agent.byok`.
+- **Mermaid diagrams rendered with `securityLevel: "loose"`** on LLM/workflow-derived output (a stored-XSS vector) → set to `"strict"`.
+- Raw session-token fragment no longer written to the audit log (`rec.sid[:12]` → `rec.sid_fingerprint`).
+
+### Fixed — install / fresh-install UX
+- **Hermes model ladder made RAM-safe:** `qwen3:8b` (~5.2 GB) was pulled on machines with as little as 6 GB, where it can't run alongside the OS + console. Three-tier ladder now: `<6 GB → qwen3:1.7b`, `6–12 GB → qwen3:4b`, `≥12 GB → qwen3:8b` (the running engine auto-selects whatever tag is present). Both `install.sh` and `install.ps1`.
+- Whisper model download now prints a "this can take a minute on a slow connection" line so the connection-latency wait doesn't read as a hang.
+- `corvin-uninstall` no longer suggests `rm -rf <site-packages>` on wheel installs (it would delete the whole Python environment).
+
 ### Changed — provider-key resolution consolidated into a single source of truth (WA-22)
 - Audited every place in the repo that resolves an API key/provider secret
   and found real, user-visible drift: say.py (TTS), stt/openai_whisper.py

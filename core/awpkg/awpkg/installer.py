@@ -171,22 +171,38 @@ def _run_skill_linter(zf: zipfile.ZipFile, manifest: Manifest) -> None:
 
 
 def _run_workflow_validator(zf: zipfile.ZipFile, manifest: Manifest) -> None:
+    """Validate every workflow YAML in the package BEFORE extraction.
+
+    Security-model item: a package must not install a malformed/invalid
+    workflow. A WorkflowInvalid (bad graph, unknown node type, cycle, missing
+    dependency) aborts the install as an InstallError. Only a genuinely
+    unavailable validator (ImportError — the workflows package isn't on this
+    host) is tolerated as a soft skip; every other failure is fatal so a
+    corrupt YAML can never slip through as "installed clean".
+    """
     try:
         import sys as _sys
         wf_path = Path(__file__).resolve().parents[3] / "core" / "workflows"
         if str(wf_path) not in _sys.path:
             _sys.path.insert(0, str(wf_path))
-        from corvin_workflows.validator import validate  # type: ignore[import]
+        from corvin_workflows.validator import validate, WorkflowInvalid  # type: ignore[import]
         from corvin_workflows.storage import WorkflowDoc  # type: ignore[import]
         import yaml  # type: ignore[import]
-        for wf_path_str in manifest.components.get("workflows", []):
-            raw_yaml = zf.read(wf_path_str).decode("utf-8")
-            doc = WorkflowDoc.from_dict(yaml.safe_load(raw_yaml))
+    except ImportError:
+        return  # workflow validator unavailable on this host — soft skip
+
+    for wf_path_str in manifest.components.get("workflows", []):
+        raw_yaml = zf.read(wf_path_str).decode("utf-8")
+        try:
+            data = yaml.safe_load(raw_yaml)
+            doc = WorkflowDoc.from_dict(data)
             validate(doc)
-    except (ImportError, Exception) as exc:
-        if isinstance(exc, InstallError):
+        except InstallError:
             raise
-        pass
+        except WorkflowInvalid as exc:
+            raise InstallError(f"workflow validation failed for {wf_path_str!r}: {exc}")
+        except Exception as exc:  # malformed YAML / bad shape → refuse
+            raise InstallError(f"workflow {wf_path_str!r} could not be parsed/validated: {exc}")
 
 
 def _extract_to(zf: zipfile.ZipFile, manifest: Manifest, dest: Path) -> None:

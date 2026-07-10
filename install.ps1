@@ -156,7 +156,12 @@ if (-not $SkipHermes) {
     # pick a model by RAM
     $ramMB = 8000
     try { $ramMB = [int]((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB) } catch {}
-    $HModel = if ($ramMB -lt 6000) { "qwen3:1.7b" } else { "qwen3:8b" }
+    # Three-tier ladder so the pulled model actually RUNS alongside Windows +
+    # console. qwen3:8b (~5.2 GB) OOMs/swaps on a 6-8 GB box, so it is reserved
+    # for >=12 GB; 6-12 GB gets qwen3:4b (~2.6 GB); < 6 GB gets the 1.7b. The
+    # running Hermes engine auto-selects whatever tag is present, so a later
+    # manual pull upgrades it.
+    $HModel = if ($ramMB -lt 6000) { "qwen3:1.7b" } elseif ($ramMB -lt 12000) { "qwen3:4b" } else { "qwen3:8b" }
     Write-Step "RAM ~$ramMB MB -> model $HModel"
 
     # ensure Ollama is installed (winget)

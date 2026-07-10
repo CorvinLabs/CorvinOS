@@ -99,7 +99,7 @@ def provider_status() -> dict[str, dict]:
     # -- local (pywhispercpp / opt-in faster-whisper) --
     try:
         from .local_whisper import (
-            _DEFAULT_MODEL,
+            _default_local_model,
             _faster_whisper_importable,
             _models_dir,
             _prefer_faster_whisper,
@@ -119,7 +119,7 @@ def provider_status() -> dict[str, dict]:
                 package_installed = True
             except ImportError:
                 package_installed = False
-            model_name = os.environ.get("CORVIN_STT_LOCAL_MODEL", _DEFAULT_MODEL)
+            model_name = os.environ.get("CORVIN_STT_LOCAL_MODEL", "").strip() or _default_local_model()
             model_path = _models_dir() / f"ggml-{model_name}.bin"
             model_present = model_path.exists() and model_path.stat().st_size > 0
             ready = package_installed and model_present

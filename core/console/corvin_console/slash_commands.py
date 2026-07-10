@@ -27,6 +27,12 @@ from __future__ import annotations
 # CCC commands are handled downstream (entity_extract) — never intercept them.
 _CCC_CMDS = frozenset({"/create", "/erase", "/audit"})
 
+# Force-delegation verb (ADR-0114). Handled downstream by stream_turn's
+# ``_force_delegate`` branch — it must pass THROUGH this dispatcher, not be
+# rejected as "Unknown command". Without this entry the console command-center's
+# flagship delegation verb is dead (the slash handler runs before stream_turn).
+_PASSTHROUGH_CMDS = frozenset({"/delegate"})
+
 # Performed by the frontend (abort the live stream / navigate sessions). If they
 # reach the server, give a pointer instead of an LLM turn.
 _CLIENT_SIDE = frozenset({"/stop", "/cancel", "/halt", "/new", "/clear", "/reset"})
@@ -78,6 +84,10 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
 
     # CCC → downstream entity-extract pipeline.
     if cmd in _CCC_CMDS:
+        return None
+
+    # Force-delegation → downstream stream_turn._force_delegate branch.
+    if cmd in _PASSTHROUGH_CMDS:
         return None
 
     if cmd == "/help":

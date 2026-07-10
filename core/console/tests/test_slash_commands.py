@@ -32,6 +32,15 @@ def test_ccc_commands_pass_through():
     assert SC.is_ccc("/whoami") is False
 
 
+def test_delegate_passes_through_to_stream_turn():
+    # /delegate is the force-delegation verb (ADR-0114). It MUST pass through
+    # (None) so stream_turn's _force_delegate branch runs — it used to be
+    # rejected as "Unknown command", making the command-center's flagship
+    # delegation verb dead.
+    assert _h("/delegate refactor the auth module") is None
+    assert _h("/delegate") is None
+
+
 # ── functional commands (real data) ──────────────────────────────────
 def test_help_lists_commands():
     out = _h("/help")

@@ -44,7 +44,7 @@ class TaskCreateResponse(BaseModel):
     task_id: str
 
 
-@router.post("/v1/console/tasks")
+@router.post("/tasks")
 async def create_task(
     body: TaskCreateRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -70,7 +70,30 @@ async def create_task(
     return result
 
 
-@router.get("/v1/console/tasks/{task_id}")
+@router.get("/tasks")
+async def list_tasks(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    ids: str = "",
+) -> dict:
+    """Batch-fetch tasks by id (tenant-scoped). Used by the frontend's
+    IndexedDB task-recovery reconciliation (`task-recovery.ts`).
+
+    ``ids`` is a comma-separated list. Each id is resolved through the same
+    tenant-ownership check as the single-task route; ids that are missing or
+    owned by another tenant are silently skipped (so recovery is best-effort
+    and never leaks another tenant's task). Returns ``{tasks: [...]}``.
+    """
+    wanted = [i.strip() for i in ids.split(",") if i.strip()][:200]
+    tasks: list[dict] = []
+    for task_id in wanted:
+        try:
+            tasks.append(await get_task_handler(tenant_id=rec.tenant_id, task_id=task_id))
+        except HTTPException:
+            continue  # not found / not owned → skip
+    return {"tasks": tasks}
+
+
+@router.get("/tasks/{task_id}")
 async def get_task(
     task_id: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -83,7 +106,7 @@ async def get_task(
     return await get_task_handler(tenant_id=rec.tenant_id, task_id=task_id)
 
 
-@router.post("/v1/console/tasks/{task_id}/abort")
+@router.post("/tasks/{task_id}/abort")
 async def abort_task(
     task_id: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
@@ -103,7 +126,7 @@ async def abort_task(
     return result
 
 
-@router.websocket("/v1/console/tasks/progress")
+@router.websocket("/tasks/progress")
 async def task_progress_ws(
     websocket: WebSocket,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],

@@ -237,6 +237,37 @@ class TestSecurity:
         with pytest.raises(InstallError, match="code\\."):
             install(pkg, corvin_home=_corvin_home(tmp_path))
 
+    def test_invalid_workflow_rejected(self, tmp_path):
+        # Regression: the workflow validator used to be a silent no-op (it
+        # called a non-existent WorkflowDoc.from_dict and swallowed every
+        # exception), so ANY malformed/invalid workflow installed cleanly.
+        # An unknown node type must now abort the install.
+        bad_wf = b"""\
+awp: "1.0.0"
+workflow:
+  name: bad_workflow
+  description: references an unknown node type.
+orchestration:
+  engine: dag
+  graph:
+    - id: step_one
+      type: this_node_type_does_not_exist
+      depends_on: []
+"""
+        m = minimal_manifest()
+        m["components"] = {"workflows": ["workflows/test.awp.yaml"]}
+        pkg = make_awpkg(m, {"workflows/test.awp.yaml": bad_wf}, tmp_path)
+        with pytest.raises(InstallError):
+            install(pkg, corvin_home=_corvin_home(tmp_path))
+
+    def test_valid_workflow_still_installs(self, tmp_path):
+        # Guard the other direction: a VALID workflow must not be rejected by
+        # the newly-live validator.
+        m = minimal_manifest()
+        m["components"] = {"workflows": ["workflows/test.awp.yaml"]}
+        pkg = make_awpkg(m, {"workflows/test.awp.yaml": MINIMAL_WORKFLOW}, tmp_path)
+        install(pkg, corvin_home=_corvin_home(tmp_path))  # must not raise
+
     def test_missing_manifest_rejected(self, tmp_path):
         bad = tmp_path / "no_manifest.awpkg"
         with zipfile.ZipFile(bad, "w") as zf:

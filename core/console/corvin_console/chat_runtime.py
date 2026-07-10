@@ -773,6 +773,27 @@ def get_engine_unavailable_message(tenant_id: str) -> str | None:
     return _engine_unavailable_message(_effective_os_engine(tenant_id))
 
 
+def will_delegate(sess: "WebChatSession", prompt: str) -> bool:
+    """Public mirror of stream_turn's delegation decision (chat_runtime ~L2131).
+
+    The WebSocket handler uses this to skip the engine-unavailable guard for
+    turns that will take the ACS-delegation path — delegation runs on
+    engine-independent workers, so refusing it because the *direct* OS engine
+    (opencode/codex/copilot, or a missing claude) isn't drivable is wrong AND
+    the refusal text itself points the user at delegation. Kept in lock-step
+    with the runtime decision so gate and execution never disagree.
+    """
+    if not _delegation_enabled(sess.tenant_id):
+        return False
+    try:
+        from .aco.repair import is_acs_throttled as _is_acs_throttled
+        if _is_acs_throttled(sess.workdir):
+            return False
+    except Exception:  # noqa: BLE001 — repair module unavailable → no throttle
+        pass
+    return _should_delegate(prompt)
+
+
 _WEB_CHAT_SYSTEM_PROMPT = (
     "When saving any output files (images, PDFs, data files, SVGs, code) during this session, "
     "always write them to the CURRENT WORKING DIRECTORY using relative paths "

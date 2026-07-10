@@ -103,7 +103,12 @@ executor). `POST /workflows/{wid}/runs/{rid}/resume` bridges to
 still uses its own separate node executor (not `corvin_workflows.DAGRunner`), so today a
 run only has a resumable checkpoint once that executor is extended to delegate
 `engine: chat` workflows to `DAGRunner` — tracked as ADR-0188 follow-up work, not
-silently glossed over.
+silently glossed over. **Fail-closed until then:** `start_run` now *refuses* any workflow
+whose graph contains a node type its executor does not implement (`code`, `merge`,
+`route`, `answer`, `ask_human`) rather than silently running it as a generic `claude -p`
+step — which would execute a deterministic `code` node via an LLM and, worse, let an LLM
+"answer" an `ask_human` consent gate (a human-in-the-loop bypass). Such workflows must be
+run with the `corvin-flow` CLI (the full `DAGRunner`) until M7 lands.
 
 **Real LLM engine:** `corvin_workflows.engines_claude.ClaudeCliEngine` shells out to
 headless `claude -p` (tool use disabled, JSON-only responses). Selected via
@@ -117,6 +122,47 @@ and the real `claude` engine:
 proves `code`/`merge`/`retry` work standalone, not only inside a chatflow).
 
 → Full design rationale: ADR-0188 (`Corvin-ADR/decisions/0188-awp-deterministic-nodes-branching-human-in-the-loop.md`).
+
+---
+
+## Coverage — what the package format represents (and what it deliberately does not)
+
+The package's `components.workflows` entries are the workflow YAML **verbatim**, so a
+workflow *definition* — all nine node types, `orchestration.engine: chat`, per-node
+`retry`, `branch:` tags, `inputs` schema — round-trips **losslessly**: what you build is
+byte-for-byte what installs. At install time every workflow YAML is now run through the
+real AWP validator (`corvin_workflows.validator.validate`); a malformed graph or unknown
+node type aborts the install with `InstallError` (previously this check was a silent
+no-op — an invalid workflow could install clean).
+
+What the package format **does not** carry today — by design, and stated here so it is
+never mistaken for a silent data-loss bug:
+
+| Artifact | In a package? | Notes |
+|---|---|---|
+| Workflow definition (9 node types, chatflow, retry, branch, inputs) | **Yes, lossless** | Byte-exact YAML under `components.workflows` |
+| **Paused-run checkpoint state** | **No — out of scope** | A paused run lives in `<corvin_home>/tenants/<tid>/workflow_runs/*.json`, is tenant- and run-scoped, and holds live conversation state (prompts, `chat_id`, accumulated outputs). It is deliberately **not** a package component: a package is a *portable definition*, not a *running instance*. Migrating a live paused run between hosts is a separate concern (out of scope for AWPKG). |
+| **Cron schedule** (`meta.schedule`) | **No** | Schedules are host/tenant-local registrations, not part of the portable definition — a re-import registers no schedule. Set it after install. |
+| Console chat transcript (`{wid}.chat.jsonl`) | **No** | Per-run history, host-local |
+
+**Does the standard need extending to "fully represent" a workflow?** For the *definition*
+— no: the container already carries every ADR-0188 construct losslessly. For *quality of
+the install-time contract*, three extensions are worth doing (tracked as follow-ups, not
+shipped in this release, so the format is honestly documented rather than quietly
+incomplete):
+
+1. **Embedded-code permission axis.** A `code` node ships arbitrary sandboxed Python, but
+   the manifest's `permissions` block only models `{network, compute, secrets}` — it has
+   no axis for "this package executes embedded code," and `inspect` does not surface code
+   nodes. A future manifest key (e.g. `permissions.embedded_code: true`) + inspector
+   output would make that visible before install.
+2. **Declarable channel/bridge requirements.** `answer` / `ask_human` / `deliver` nodes
+   need a specific bridge (Discord/Telegram/…); a package can't declare that today, so it
+   installs silently on a host that lacks the channel.
+3. **AWP-version pin.** The manifest does not pin/validate the `awp:` version of bundled
+   workflows; the validator accepts any.
+
+Checkpoints and schedules are intentionally **excluded**, not missing — see the table.
 
 ---
 

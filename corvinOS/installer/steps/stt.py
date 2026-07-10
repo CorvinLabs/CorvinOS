@@ -6,12 +6,50 @@ from pathlib import Path
 from .dependencies import pip_install as _pip_install
 
 
-# Keep in sync with operator/voice/scripts/stt/local_whisper.py::_DEFAULT_MODEL —
-# the provider must load the exact model this step downloaded, or a fresh
-# install pays a silent first-use download delay instead of the visible one
-# below (ADR-0185 Decision 3: models are fetched once during install, not on
-# first use).
-_DEFAULT_MODEL = "base-q5_1"
+# Keep in sync with operator/voice/scripts/stt/local_whisper.py — the provider
+# must load the exact model this step downloaded, or a fresh install pays a
+# silent first-use download delay instead of the visible one below (ADR-0185
+# Decision 3: models are fetched once during install, not on first use).
+# Default is the quality model `small-q5_1` (`base` mis-transcribes German/
+# accented audio); low-RAM machines get `base-q5_1`. Mirrors the provider's
+# `_default_local_model()` RAM downshift so both pick the SAME file.
+_STT_MODEL_QUALITY = "small-q5_1"
+_STT_MODEL_LOWRAM = "base-q5_1"
+_STT_LOWRAM_THRESHOLD_MB = 3000
+
+
+def _default_model() -> str:
+    """Quality model by default; the lighter one on a RAM-starved box."""
+    try:
+        import os
+        if hasattr(os, "sysconf") and "SC_PHYS_PAGES" in os.sysconf_names:
+            ram_mb = int(os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / (1024 * 1024))
+            if ram_mb < _STT_LOWRAM_THRESHOLD_MB:
+                return _STT_MODEL_LOWRAM
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        import ctypes
+
+        class _MEMSTAT(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        stat = _MEMSTAT()
+        stat.dwLength = ctypes.sizeof(_MEMSTAT)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):  # type: ignore[attr-defined]
+            if int(stat.ullTotalPhys / (1024 * 1024)) < _STT_LOWRAM_THRESHOLD_MB:
+                return _STT_MODEL_LOWRAM
+    except (AttributeError, OSError):
+        pass
+    return _STT_MODEL_QUALITY
+
+
+# Back-compat alias for callers/tests referencing the module constant.
+_DEFAULT_MODEL = _STT_MODEL_QUALITY
 
 
 def ensure_stt(voice_config_dir: Path, interactive: bool = True) -> None:
@@ -50,7 +88,7 @@ def ensure_stt(voice_config_dir: Path, interactive: bool = True) -> None:
                 print("    Manual fix: pip install pywhispercpp")
             return
 
-    _download_whisper_model(voice_config_dir, _DEFAULT_MODEL)
+    _download_whisper_model(voice_config_dir, _default_model())
 
 
 # ── Model download ───────────────────────────────────────────────────────────
@@ -80,6 +118,13 @@ def _download_whisper_model(voice_config_dir: Path, model_name: str) -> bool:
         return True
 
     print(f"  Downloading Whisper STT model {model_name!r} (one-time)...")
+    # The transfer itself is quick, but on a slow/high-latency link the
+    # connection+redirect handshake can sit silently for a minute or two before
+    # the progress bar appears — which reads as a hang to a non-technical user.
+    # Set expectations up front (ADR-0185 Decision 3: visible progress).
+    print("    (this can take a minute on a slow connection — it only happens once)")
+    import sys as _sys
+    _sys.stdout.flush()
     try:
         from pywhispercpp.utils import download_model
         download_model(model_name, download_dir=str(model_dir))

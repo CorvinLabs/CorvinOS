@@ -117,7 +117,14 @@ if [ "$SKIP_HERMES" != "1" ]; then
     # to a conservative 8000 so we fall through to the standard model, and the
     # running engine still auto-selects whatever tag actually gets installed.
     case "$ram_mb" in ''|*[!0-9]*) ram_mb=8000 ;; esac
-    if [ "$ram_mb" -lt 6000 ]; then HMODEL="qwen3:1.7b"; else HMODEL="qwen3:8b"; fi
+    # Three-tier ladder so the pulled model actually RUNS alongside the OS +
+    # console. qwen3:8b (~5.2 GB weights) OOMs/swaps on a 6–8 GB box, so it is
+    # reserved for ≥12 GB; 6–12 GB gets qwen3:4b (~2.6 GB); < 6 GB gets the
+    # 1.7b. The running Hermes engine auto-selects whatever tag is actually
+    # present (_pick_installed_qwen3), so a later manual pull upgrades it.
+    if [ "$ram_mb" -lt 6000 ]; then HMODEL="qwen3:1.7b"
+    elif [ "$ram_mb" -lt 12000 ]; then HMODEL="qwen3:4b"
+    else HMODEL="qwen3:8b"; fi
     echo "  RAM ~${ram_mb} MB → model $HMODEL"
 
     # ensure Ollama is installed

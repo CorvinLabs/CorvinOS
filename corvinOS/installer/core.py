@@ -1205,9 +1205,15 @@ class CorvinInstaller:
         print("  uv tool uninstall corvinos     (one-liner installer / uv installs)")
         print("  pip uninstall corvinOS -y      (plain pip installs)")
         print()
-        print("Optional — delete the repo directory:")
-        print(f"  rm -rf {self.repo_root}")
-        print()
+        # Only suggest deleting the repo checkout on a SOURCE-TREE install. On a
+        # wheel/pip install self.repo_root resolves to site-packages, so this
+        # hint would tell the user to `rm -rf` their whole Python environment
+        # (deleting every installed package). The `uv tool / pip uninstall`
+        # above is the correct removal for wheel installs.
+        if not _IS_WHEEL_INSTALL:
+            print("Optional — delete the repo directory:")
+            print(f"  rm -rf {self.repo_root}")
+            print()
 
     # ── private helpers ────────────────────────────────────────────────────
 

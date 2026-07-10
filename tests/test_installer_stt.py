@@ -33,7 +33,9 @@ def test_ensure_stt_skips_pip_install_when_pywhispercpp_already_importable(tmp_p
         stt_mod.ensure_stt(voice_config_dir, interactive=False)
 
     m_pip.assert_not_called()
-    m_download.assert_called_once_with(voice_config_dir, stt_mod._DEFAULT_MODEL)
+    # The model is now RAM-aware (quality default, low-RAM downshift); assert the
+    # download targets whatever _default_model() selects on this host.
+    m_download.assert_called_once_with(voice_config_dir, stt_mod._default_model())
 
 
 def test_ensure_stt_attempts_pip_install_when_pywhispercpp_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

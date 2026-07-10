@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 
 try:
     import fcntl
@@ -2777,6 +2778,33 @@ async def _stream_run(
                 except OSError:
                     pass
 
+        # Fail-closed on node types this console executor does not implement.
+        # The ADR-0188 DAG node types code/merge/route/answer/ask_human have
+        # DIVERGENT semantics from a generic `claude -p` step: `code` MUST run
+        # its deterministic source (never an LLM), and `ask_human`/`answer` MUST
+        # pause for a human. This streaming executor only knows agent/deliver/
+        # approval/delegation_loop/fan_out; without this guard those nodes would
+        # silently fall through to the default LLM spawn — executing a `code`
+        # node's logic via an LLM and, worse, letting an LLM "answer" an
+        # ask_human consent gate (HITL bypass). Until start_run delegates chat/
+        # DAG workflows to DAGRunner (ADR-0188 M7), refuse rather than mis-run.
+        _CONSOLE_UNSUPPORTED_NODE_TYPES = {"code", "merge", "route", "answer", "ask_human"}
+        _unsupported = sorted({
+            str(n.get("type", "agent"))
+            for n in graph if isinstance(n, dict)
+        } & _CONSOLE_UNSUPPORTED_NODE_TYPES)
+        if _unsupported:
+            _msg = (
+                "This workflow uses node type(s) not yet runnable from the console: "
+                + ", ".join(_unsupported)
+                + ". Run it with the `corvin-flow` CLI (full DAG engine with "
+                "human-in-the-loop and sandboxed code nodes)."
+            )
+            yield _emit({"type": "error", "ts": time.time(), "message": _msg})
+            run_meta.update({"status": "failed", "ok": False, "error": _msg, "finished_at": time.time()})
+            _write_atomic(_run_meta_path(tenant_id, wid, rid), run_meta)
+            return
+
         # Build execution order from depends_on (topological sort)
         node_map = {n["id"]: n for n in graph if isinstance(n, dict) and "id" in n}
         order = _topo_sort(graph)
@@ -3078,6 +3106,25 @@ async def _stream_run(
         yield _emit({"type": "run_completed", "ok": all_ok, "budget": {}, "ts": time.time()})
         run_meta.update({"status": "complete" if all_ok else "failed", "ok": all_ok, "finished_at": time.time()})
 
+    except (GeneratorExit, asyncio.CancelledError):
+        # Client disconnected / Stop pressed mid-run: Starlette closes the SSE
+        # generator, throwing GeneratorExit at the paused yield. The normal
+        # terminal-status write below is then skipped, so the run would stay
+        # "status: running" FOREVER — and _count_running_workflows enforces the
+        # license concurrency cap by counting exactly those files, so a few
+        # closed tabs would permanently lock the tenant out of starting runs
+        # (there is no reaper). Finalize as "aborted" before re-raising. No
+        # yield here (forbidden during generator close); disk I/O + audit only.
+        run_meta.update({"status": "aborted", "ok": False, "finished_at": time.time()})
+        with contextlib.suppress(Exception):
+            _write_atomic(_run_meta_path(tenant_id, wid, rid), run_meta)
+        with contextlib.suppress(Exception):
+            console_audit.action_performed(
+                tenant_id=tenant_id, sid_fingerprint=sid_fingerprint,
+                action="workflow.run_aborted", target_kind="workflow",
+                target_id=wid, run_id=rid,
+            )
+        raise
     except Exception as exc:
         yield _emit({"type": "error", "ts": time.time(), "message": str(exc)})
         run_meta.update({"status": "failed", "ok": False, "error": str(exc), "finished_at": time.time()})

@@ -167,11 +167,13 @@ def post_secret(
 
     Audit event: console.byok_updated { key_name, tenant_id }
     """
-    # Validate key_name before forwarding.
-    # ImportError / ModuleNotFoundError → agent module not in path, fall through
-    # and let the downstream agent validate instead.
+    # Validate key_name before storing/forwarding.
+    # NOTE: import as `agent.byok`, NOT `operator.agent.byok` — Python's stdlib
+    # `operator` is a module (not a package), so the latter ALWAYS raises
+    # ModuleNotFoundError and silently skipped validation (WA fix). The sys.path
+    # insert at module import makes `agent` importable.
     try:
-        from operator.agent.byok import validate_key_name  # type: ignore
+        from agent.byok import validate_key_name  # type: ignore
         validate_key_name(key_name)
     except ImportError:
         pass  # agent module unavailable in console context — delegate validation
@@ -184,17 +186,43 @@ def post_secret(
             detail=f"unsupported algorithm: {body.algorithm!r}",
         )
 
-    result = _agent_post(f"/secrets/{key_name}", {
-        "ciphertext": body.ciphertext,
-        "algorithm": body.algorithm,
-        "updated_by": rec.sid_fingerprint[:8] if rec.sid_fingerprint else "console",
-    })
-
-    if not result.get("ok"):
-        raise HTTPException(
-            status_code=http_status.HTTP_400_BAD_REQUEST,
-            detail=result.get("error", "agent rejected secret"),
-        )
+    if _is_hosted():
+        result = _agent_post(f"/secrets/{key_name}", {
+            "ciphertext": body.ciphertext,
+            "algorithm": body.algorithm,
+            "updated_by": rec.sid_fingerprint[:8] if rec.sid_fingerprint else "console",
+        })
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=result.get("error", "agent rejected secret"),
+            )
+    else:
+        # Self-hosted (pip/uv install): no Instance Agent runs, so decrypt and
+        # store the secret directly via the same pipeline the agent uses (L16
+        # vault + service.env, so voice/STT pick the new key up on next use).
+        # Without this branch every key-save 503'd — breaking the "add a key →
+        # console auto-upgrades to the better provider" experience. get_pubkey /
+        # list_secrets already have their self-hosted branches; this is the
+        # missing write half. (H4/H5 fix.)
+        try:
+            from agent.byok import apply_byok_secret  # type: ignore
+            result = apply_byok_secret(
+                key_name,
+                body.ciphertext,
+                tenant_id=rec.tenant_id,
+                updated_by=rec.sid_fingerprint[:8] if rec.sid_fingerprint else "console",
+            )
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            # decrypt failure / bad key-shape → client-correctable 400
+            raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"could not store secret: {exc}",
+            )
 
     # Audit — key_name only, NO ciphertext, NO plaintext.
     console_audit.action_performed(

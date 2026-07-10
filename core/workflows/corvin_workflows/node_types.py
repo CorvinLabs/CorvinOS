@@ -486,18 +486,32 @@ def _validate_ask_human(node: dict[str, Any]) -> None:
 
 
 _AFFIRMATIVE_WORDS = {"ja", "yes", "y", "true", "1", "confirm", "confirmed", "ok", "okay", "sure", "yep", "yup"}
-_NEGATIVE_WORDS = {"nein", "no", "n", "false", "0", "cancel", "decline", "declined", "nope", "nicht"}
+# Negation matters as much as explicit "no": "not ok" / "not okay" must NOT be
+# read as consent (the affirmative "ok" would otherwise win). Includes the
+# common English/German negators and contraction stems ("don't"/"can't" tokenize
+# to "dont"/"cant" once the apostrophe is stripped — see the tokenizer below).
+_NEGATIVE_WORDS = {
+    "nein", "no", "n", "false", "0", "cancel", "decline", "declined", "nope", "nicht",
+    "not", "never", "nie", "niemals", "kein", "keine", "dont", "don", "cant", "cannot",
+    "wont", "wouldnt", "stop", "abort", "reject", "rejected", "deny", "denied",
+}
 
 
 def _coerce_reply(raw: str, type_: str) -> Any:
     """Boolean coercion for a free-text human reply. Real replies are phrases
     ("ja, bitte", "no thanks") not just bare tokens — matches on whole-word
     membership, not full-string equality, so a leading/trailing word doesn't
-    silently flip the result. Ambiguous/unmatched text defaults to False
+    silently flip the result. NEGATION IS CHECKED FIRST and wins over any
+    affirmative token in the same reply, so mixed/negated phrases ("not ok",
+    "no, don't") stay fail-closed. Ambiguous/unmatched text defaults to False
     (fail-closed: an unrecognised reply must never be treated as consent)."""
     if type_ != "boolean":
         return raw
-    words = re.findall(r"[a-zA-ZäöüÄÖÜß]+", raw.lower())
+    # Strip apostrophes first so "don't"/"can't" become "dont"/"cant" (single
+    # tokens) instead of splitting into "don"+"t". Include digits so the "1"/"0"
+    # entries in the word sets are actually reachable.
+    normalized = raw.lower().replace("'", "").replace("’", "")
+    words = re.findall(r"[a-z0-9äöüß]+", normalized)
     word_set = set(words)
     if word_set & _NEGATIVE_WORDS:
         return False

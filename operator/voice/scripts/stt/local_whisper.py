@@ -12,14 +12,14 @@ Lazy-imports ``pywhispercpp.model.Model``. If the package is missing,
 ``is_available()`` returns False and the resolver falls through. No GPU is
 required — CPU works fine for short voice notes.
 
-Model selection: ``CORVIN_STT_LOCAL_MODEL`` env (default ``base-q5_1``, a
-Q5_1-quantized whisper.cpp GGML model — still small enough to auto-download
-during install with a visible progress bar; see
-``corvinOS/installer/steps/stt.py::_download_whisper_model``. Raised from
-the original ``tiny-q5_1`` default (2026-07-09): ``tiny`` mis-transcribed
-real voice notes often enough in the field to be a recurring support issue,
-even though it always passes ``corvin-voice doctor``'s clean-fixture
-round-trip. Other options: any name from
+Model selection: ``CORVIN_STT_LOCAL_MODEL`` env overrides everything. With no
+override the default is RAM-aware (``_default_local_model``): ``small-q5_1`` on
+a normal machine, ``base-q5_1`` on a low-RAM box (< ~3 GB). History: the
+default rose tiny→base (2026-07-09) then base→small (2026-07-10) — ``tiny`` and
+``base`` both mis-transcribed real German/accented voice notes often enough to
+be a recurring support issue, even though both pass ``corvin-voice doctor``'s
+clean-fixture round-trip; ``small`` is the accuracy floor for the zero-config
+promise while still fitting a 4 GB machine. Other options: any name from
 ``pywhispercpp.constants.AVAILABLE_MODELS``, e.g. ``"tiny-q5_1"``,
 ``"small"``, ``"medium"``, ``"large-v3"``, and their ``.en``-only variants.
 Model files cache under
@@ -56,7 +56,68 @@ from .base import (
 )
 
 
-_DEFAULT_MODEL = "base-q5_1"
+# Default local STT model, chosen for TRANSCRIPTION QUALITY on the fresh,
+# keyless install (the product's zero-config voice promise). `base` mis-
+# transcribes German/accented/noisy audio badly — the field failure that
+# motivated raising tiny→base still bites at `base`. `small-q5_1` (~190 MB on
+# disk, ~500 MB peak RAM) is a large accuracy jump, especially non-English, and
+# still fits a 4 GB machine. On genuinely RAM-starved boxes we fall back to
+# `base-q5_1` automatically (see `_default_local_model`). `medium` is
+# deliberately NOT the floor default — too heavy for the "unknown grandma
+# machine" guarantee. Override either way with CORVIN_STT_LOCAL_MODEL.
+_STT_MODEL_QUALITY = "small-q5_1"
+_STT_MODEL_LOWRAM = "base-q5_1"
+
+# Below this much total RAM, prefer the lighter model so a low-end box stays
+# responsive instead of swapping. ~3 GB: a 2–4 GB machine still gets `base`,
+# a typical 8 GB+ machine gets `small`.
+_STT_LOWRAM_THRESHOLD_MB = 3000
+
+
+def _total_ram_mb() -> "int | None":
+    """Best-effort total physical RAM in MB, cross-platform, no hard deps.
+
+    POSIX: os.sysconf. Windows: GlobalMemoryStatusEx via ctypes. Returns None
+    when it can't be determined — callers then assume "enough" (pick quality),
+    matching the installer's conservative-default posture.
+    """
+    try:
+        import os as _os
+        if hasattr(_os, "sysconf") and "SC_PHYS_PAGES" in _os.sysconf_names and "SC_PAGE_SIZE" in _os.sysconf_names:
+            return int(_os.sysconf("SC_PHYS_PAGES") * _os.sysconf("SC_PAGE_SIZE") / (1024 * 1024))
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        import ctypes
+
+        class _MEMSTAT(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = _MEMSTAT()
+        stat.dwLength = ctypes.sizeof(_MEMSTAT)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):  # type: ignore[attr-defined]
+            return int(stat.ullTotalPhys / (1024 * 1024))
+    except (AttributeError, OSError):
+        pass
+    return None
+
+
+def _default_local_model() -> str:
+    """The shipped default model, downshifted on low-RAM machines."""
+    ram = _total_ram_mb()
+    if ram is not None and ram < _STT_LOWRAM_THRESHOLD_MB:
+        return _STT_MODEL_LOWRAM
+    return _STT_MODEL_QUALITY
+
+
+# Back-compat alias — some call sites / tests reference _DEFAULT_MODEL directly.
+_DEFAULT_MODEL = _STT_MODEL_QUALITY
 
 
 def _resolve_ffmpeg() -> "str | None":
@@ -318,7 +379,7 @@ class LocalWhisperProvider:
         download can't block shutdown.
         """
         global _loaded_model
-        size = os.environ.get("CORVIN_STT_LOCAL_MODEL", _DEFAULT_MODEL)
+        size = os.environ.get("CORVIN_STT_LOCAL_MODEL", "").strip() or _default_local_model()
         # Offline-safe model selection. When 453f026 raised the default from
         # tiny-q5_1 to base-q5_1, an upgraded install that already has ONLY the
         # old tiny model (autoupdate/pip don't run the model downloader) would,

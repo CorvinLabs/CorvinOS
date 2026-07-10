@@ -378,6 +378,30 @@ def _json_safe(v: Any) -> str:
 _CLI_TIMEOUT_SECONDS = 15.0
 
 
+def _claude_authenticated() -> bool:
+    """Cheap, subprocess-free Claude Code auth probe — the ungated sibling of
+    the 41c174e summarize.py gate. Without it, a fresh install with `claude` on
+    PATH but not yet logged in burns the full judge timeout (15–20 s) on EVERY
+    research/forge voice summary before falling back. Mirrors
+    summarize.py::_claude_authenticated (ANTHROPIC_API_KEY or an OAuth session
+    in ~/.claude/.credentials.json). Fail-OPEN on read error so a transient
+    glitch never disables a genuinely-logged-in user's judge.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+    if _os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    try:
+        creds_path = _Path.home() / ".claude" / ".credentials.json"
+        if not creds_path.exists():
+            return False
+        import json as _json
+        creds = _json.loads(creds_path.read_text(encoding="utf-8"))
+        return bool(creds.get("claudeAiOauth") or creds.get("accessToken"))
+    except Exception:  # noqa: BLE001
+        return True  # fail-open: don't disable a possibly-authenticated judge
+
+
 def _run_cli_judge(*, site: str, thesis: Any, antithesis: Any) -> str:
     """Spawn ``claude -p --max-turns 1 --no-tools`` to author a one-line
     synthesis. Returns the choice string. On timeout / failure, returns a
@@ -390,6 +414,12 @@ def _run_cli_judge(*, site: str, thesis: Any, antithesis: Any) -> str:
         "  A | B | <one-sentence why>\n"
         "Use A if the thesis wins, B if the antithesis wins. Be terse."
     )
+    # Auth short-circuit (F3): avoid burning the full CLI timeout when `claude`
+    # is present but not logged in. Binary ABSENCE is handled by the spawn's
+    # FileNotFoundError catch below — do NOT gate on which("claude") here, which
+    # false-negatives under a stripped PATH (engine-binary-resolution guard).
+    if not _claude_authenticated():
+        return "A | (cli unavailable, falling back to thesis)"
     try:
         from . import helper_model as _hm  # type: ignore
     except ImportError:
@@ -472,6 +502,10 @@ def _run_summary_judge(source: str, candidate: str, lang: str) -> str:
     returns a deterministic ``FAITHFUL | (cli unavailable)`` so the caller
     never blocks indefinitely AND defaults to shipping the candidate."""
     prompt = _summary_judge_prompt(source, candidate, lang)
+    # Auth short-circuit (F3): see _run_cli_judge. Binary absence is caught at
+    # the spawn; do not gate on which("claude") (stripped-PATH false-negative).
+    if not _claude_authenticated():
+        return "FAITHFUL | (cli unavailable, shipping candidate)"
     try:
         from . import helper_model as _hm  # type: ignore
     except ImportError:

@@ -6876,14 +6876,17 @@ def _append_lern_zugabe(text: str, *, lang: str = "de") -> str:
     env["VOICE_HOOK_RECURSION"] = "1"
     try:
         out = subprocess.run(
-            ["python3", str(summarizer),
+            [sys.executable, str(summarizer),
              "--lang", lang, "--appendix-mode"],
             input=text, capture_output=True, text=True,
             env=env, timeout=60, check=True,
         )
         result = out.stdout.strip()
         return result or text
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        # Include OSError (spawn/FileNotFoundError): this helper also runs in
+        # build_voice_summary's FALLBACK paths, outside its outer try, so a
+        # propagating error here would drop the turn. Best-effort: verbatim input.
         log(f"_append_lern_zugabe failed: {e} — using verbatim input")
         return text
 
@@ -6904,7 +6907,7 @@ def _append_metapher(text: str, *, lang: str = "de") -> str:
     env["VOICE_HOOK_RECURSION"] = "1"
     try:
         out = subprocess.run(
-            ["python3", str(summarizer),
+            [sys.executable, str(summarizer),
              "--lang", lang, "--metapher-mode"],
             input=text, capture_output=True, text=True,
             env=env, timeout=60, check=True,
@@ -7013,7 +7016,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
             clean_env = {k: v for k, v in os.environ.items()
                          if k not in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_BASE')}
             pre = subprocess.run(
-                ["python3", str(stripper), "--mode", "code-only"],
+                [sys.executable, str(stripper), "--mode", "code-only"],
                 input=text, capture_output=True, text=True, timeout=10, check=True, env=clean_env,
             ).stdout
             elapsed_strip = time.time() - start_strip
@@ -7029,6 +7032,14 @@ def build_voice_summary(text: str, max_chars: int = 400,
             pre = text
         except subprocess.CalledProcessError as e:
             log(f"build_voice_summary: strip_for_tts failed (rc={e.returncode}) — using raw text as input")
+            pre = text
+        except OSError as e:
+            # e.g. FileNotFoundError if the interpreter/script path can't be
+            # spawned. Must degrade to raw text, not propagate out of
+            # build_voice_summary (which would drop the whole turn). sys.executable
+            # makes this far less likely than the old hardcoded "python3", but
+            # stay fail-soft regardless.
+            log(f"build_voice_summary: strip_for_tts could not run ({type(e).__name__}) — using raw text as input")
             pre = text
 
         env = {k: v for k, v in os.environ.items()
@@ -7048,7 +7059,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
         # Audience block: render in the user's pivot locale (de keeps
         # German, every other code uses English block).
         audience_lang = output_language or "de"
-        cmd = ["python3", str(summarizer), "--lang", "de",
+        cmd = [sys.executable, str(summarizer), "--lang", "de",
                "--max-chars", str(max_chars)]
         if _voice_profile is not None:
             try:
@@ -7098,7 +7109,10 @@ def build_voice_summary(text: str, max_chars: int = 400,
         if want_metapher and not _has_metapher_suffix(spoken):
             spoken = _strip_for_speech(_append_metapher(spoken, lang=appendix_lang))
         return spoken
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+        # OSError (e.g. FileNotFoundError spawning the summarizer) must degrade to
+        # the answer head, not propagate out and drop the whole turn — this was
+        # an uncaught crash on stripped-PATH / Windows before sys.executable.
         log(f"build_voice_summary: summarize failed ({type(e).__name__}) — using head of answer")
         spoken = _strip_for_speech(text[:max_chars])
         if want_appendix and not _has_lern_zugabe_suffix(spoken):
@@ -9505,7 +9519,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         try:
             if mode == "earcon":
                 subprocess.Popen(
-                    ["python3", str(plugin_root / "scripts" / "earcon.py"), "play", "done"],
+                    [sys.executable, str(plugin_root / "scripts" / "earcon.py"), "play", "done"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
                 )
             elif mode == "voice":

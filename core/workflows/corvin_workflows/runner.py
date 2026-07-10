@@ -412,6 +412,11 @@ def resume_workflow(
             reply=reply,
         ),
     )
-    if result.state in ("complete", "failed"):
+    # Delete the checkpoint ONLY on clean completion. A "failed" resume (a
+    # transient engine timeout, a bwrap hiccup, an I/O blip) after the human
+    # already replied must NOT erase all pre-pause work and the reply — that
+    # would make the run unrecoverable. Keep the checkpoint so it can be
+    # re-resumed; a genuinely-abandoned run is reaped by TTL/GC, not here.
+    if result.state == "complete":
         _checkpoint.delete(run_id, tenant_id=tenant_id)
     return result
