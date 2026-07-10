@@ -444,6 +444,68 @@ def test_hermes_backend_strips_think_block() -> None:
     assert "<think>" not in (out or "")
 
 
+def test_claude_authenticated_true_with_api_key(monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
+    assert summarize._claude_authenticated() is True
+
+
+def test_claude_authenticated_false_without_creds(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    assert summarize._claude_authenticated() is False
+
+
+def test_claude_authenticated_true_with_oauth_creds(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    creds_dir = tmp_path / ".claude"
+    creds_dir.mkdir()
+    (creds_dir / ".credentials.json").write_text('{"claudeAiOauth": {"x": "y"}}')
+    assert summarize._claude_authenticated() is True
+
+
+def test_summarize_via_cli_skips_when_unauthenticated(monkeypatch) -> None:
+    """M4-mirror regression: an unauthenticated-but-installed `claude` CLI must
+    not be invoked — the 90s subprocess timeout would otherwise fire on every
+    voice summary on a fresh, not-yet-logged-in install."""
+    from unittest.mock import patch
+    monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(summarize, "_claude_authenticated", lambda: False)
+    with patch.object(summarize.subprocess, "run") as run:
+        out = summarize._summarize_via_cli("hello", "", "en", 200, "claude-haiku-4-5")
+    run.assert_not_called()
+    assert out is None
+
+
+def test_appendix_falls_back_to_hermes_when_cli_unavailable() -> None:
+    """The LERN-ZUGABE annex generator previously had no fallback at all — a
+    Hermes-only install (no Claude login, ever) could never produce an annex.
+    generate_appendix must now try Hermes when the CLI backend returns None."""
+    from unittest.mock import patch
+    with (
+        patch.object(summarize, "_appendix_via_cli", return_value=None) as cli,
+        patch.object(summarize, "_appendix_via_hermes",
+                     return_value="Und zur Einordnung, das ist ein Beispiel.") as herm,
+    ):
+        out = summarize.generate_appendix("some source text", lang="de")
+    cli.assert_called_once()
+    herm.assert_called_once()
+    assert out == "Und zur Einordnung, das ist ein Beispiel."
+
+
+def test_metapher_falls_back_to_hermes_when_cli_unavailable() -> None:
+    from unittest.mock import patch
+    with (
+        patch.object(summarize, "_metapher_via_cli", return_value=None) as cli,
+        patch.object(summarize, "_metapher_via_hermes",
+                     return_value="Bildlich gesprochen, das ist wie ein Beispiel.") as herm,
+    ):
+        out = summarize.generate_metapher("some source text", lang="de")
+    cli.assert_called_once()
+    herm.assert_called_once()
+    assert out == "Bildlich gesprochen, das ist wie ein Beispiel."
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------

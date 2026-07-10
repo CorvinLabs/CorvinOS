@@ -900,13 +900,40 @@ def _system_for(lang: str, target_chars: int, has_task: bool,
     return base
 
 
+def _claude_authenticated() -> bool:
+    """Cheap, subprocess-free Claude Code auth probe — mirrors
+    chat_runtime.py::_claude_authenticated() (the H4 fix, 0.10.25) so the
+    voice summarizer gets the same fast-fail as the main chat engine. Without
+    this, a fresh install with the `claude` CLI on PATH but not yet logged in
+    (via `claude login`) burns the full 90s CLI timeout on EVERY summarize
+    call before falling through to Hermes — on the short-text fast path this
+    also silently kills the LERN-ZUGABE/METAPHER annex (its own failure mode
+    is "return text verbatim"), so the very first replies read back near-raw
+    instead of humanized. Authenticated iff an OAuth session exists in
+    ~/.claude/.credentials.json OR ANTHROPIC_API_KEY is set. Fail-OPEN
+    (True) on an unexpected read error so a transient glitch never reroutes
+    a genuinely-logged-in user off Claude.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    try:
+        creds_path = Path.home() / ".claude" / ".credentials.json"
+        if not creds_path.exists():
+            return False
+        import json as _json
+        creds = _json.loads(creds_path.read_text(encoding="utf-8"))
+        return bool(creds.get("claudeAiOauth") or creds.get("accessToken"))
+    except Exception:  # noqa: BLE001
+        return True  # fail-open: don't reroute a possibly-authenticated user
+
+
 def _summarize_via_cli(text: str, task: str, lang: str, target_chars: int, model: str, persona: str = "", audience: str = "", output_language: str = "") -> str | None:
     """Backend 1: the local `claude` CLI (uses OAuth from Claude Max — no key).
 
     Sets VOICE_HOOK_RECURSION=1 so the CLI's own stop-hook does not re-trigger
     this summarizer on its own output.
     """
-    if not shutil.which("claude"):
+    if not shutil.which("claude") or not _claude_authenticated():
         return None
     has_task = bool(task.strip())
     system_prompt = _system_for(lang, target_chars, has_task, persona, audience, output_language)
@@ -1083,9 +1110,53 @@ _APPENDIX_SYSTEM_EN = (
 )
 
 
+def _ollama_generate(system_prompt: str, user_input: str, timeout: int = 45) -> str | None:
+    """Shared low-level Hermes (Ollama /api/generate) call for the appendix
+    and metapher backends — same base-url resolution and <think> stripping
+    as _summarize_via_hermes, factored out so both annex generators can fall
+    back to the zero-config default engine instead of having no fallback at
+    all (their previous CLI-only shape meant a Hermes-only install, with no
+    Claude CLI login ever, could never produce a LERN-ZUGABE/METAPHER
+    annex). Returns None on any error (→ caller's existing silent-fail path,
+    never worse than before)."""
+    import json as _json
+    import urllib.request as _ur
+
+    base_url = ""
+    for env_key in ("CORVIN_OLLAMA_BASE_URL", "OLLAMA_HOST", "CORVIN_HERMES_URL"):
+        v = os.environ.get(env_key, "").strip()
+        if v:
+            base_url = v.rstrip("/")
+            break
+    if not base_url:
+        base_url = "http://localhost:11434"
+
+    payload = _json.dumps({
+        "model": _resolve_hermes_model_for_summary(),
+        "system": system_prompt,
+        "prompt": user_input,
+        "stream": False,
+        "options": {"temperature": 0.4},
+    }).encode("utf-8")
+    try:
+        req = _ur.Request(
+            f"{base_url}/api/generate", data=payload,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            if not (200 <= resp.getcode() < 300):
+                return None
+            data = _json.loads(resp.read().decode("utf-8"))
+        out = str(data.get("response", "")).strip()
+        out = re.sub(r"(?is)<think>.*?</think>", "", out).strip()
+        return out or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _appendix_via_cli(text: str, lang: str, model: str) -> str | None:
     """Run claude -p with the appendix-only system prompt."""
-    if not shutil.which("claude"):
+    if not shutil.which("claude") or not _claude_authenticated():
         return None
     sys_prompt = _APPENDIX_SYSTEM_EN if lang == "en" else _APPENDIX_SYSTEM_DE
     env = os.environ.copy()
@@ -1104,6 +1175,13 @@ def _appendix_via_cli(text: str, lang: str, model: str) -> str | None:
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         print(f"[summarize] appendix CLI call failed: {exc}", file=sys.stderr)
         return None
+
+
+def _appendix_via_hermes(text: str, lang: str) -> str | None:
+    """Backend 2 for the LERN-ZUGABE annex — local Hermes (Ollama), tried
+    when the CLI is unavailable/unauthenticated. See _ollama_generate."""
+    sys_prompt = _APPENDIX_SYSTEM_EN if lang == "en" else _APPENDIX_SYSTEM_DE
+    return _ollama_generate(sys_prompt, text)
 
 
 
@@ -1145,6 +1223,8 @@ def generate_appendix(text: str, lang: str = "de",
     if not text or not text.strip():
         return ""
     raw = _appendix_via_cli(text, lang, model)
+    if raw is None:
+        raw = _appendix_via_hermes(text, lang)
     if raw is None:
         return ""
     return _extract_appendix(raw)
@@ -1232,7 +1312,7 @@ _METAPHER_MARKERS = (
 
 def _metapher_via_cli(text: str, lang: str, model: str) -> str | None:
     """Run claude -p with the metapher-only system prompt."""
-    if not shutil.which("claude"):
+    if not shutil.which("claude") or not _claude_authenticated():
         return None
     sys_prompt = _METAPHER_SYSTEM_EN if lang == "en" else _METAPHER_SYSTEM_DE
     env = os.environ.copy()
@@ -1268,12 +1348,21 @@ def _extract_metapher(raw: str) -> str:
     return ""
 
 
+def _metapher_via_hermes(text: str, lang: str) -> str | None:
+    """Backend 2 for the METAPHER annex — local Hermes (Ollama), tried when
+    the CLI is unavailable/unauthenticated. See _ollama_generate."""
+    sys_prompt = _METAPHER_SYSTEM_EN if lang == "en" else _METAPHER_SYSTEM_DE
+    return _ollama_generate(sys_prompt, text)
+
+
 def generate_metapher(text: str, lang: str = "de",
                       model: str = "claude-haiku-4-5-20251001") -> str:
     """Return 1-2 metaphor sentences for *text*, or "" on any failure."""
     if not text or not text.strip():
         return ""
     raw = _metapher_via_cli(text, lang, model)
+    if raw is None:
+        raw = _metapher_via_hermes(text, lang)
     if raw is None:
         return ""
     return _extract_metapher(raw)

@@ -361,6 +361,25 @@ fail-open dropped via `_sanitize_voice_audience()`. The `learning=0`
 case still emits the bullet `Lern-Modus 0/3` for transparency, but
 suppresses the annex clause — `0` is the explicit "off" sentinel.
 
+**Auth-gate + Hermes fallback for the annex generators.** `_summarize_via_cli`
+already checked `shutil.which("claude")` before spawning the CLI, but not
+whether the CLI was actually *authenticated* — on a fresh install with the
+`claude` binary on PATH but no `claude login` yet, this burned the full 90s
+timeout on every call before falling through to Hermes, and on the
+short-text/override path (which never reaches the main summarizer's Hermes
+fallback) this meant the LERN-ZUGABE/METAPHER annex silently vanished for
+the very first replies. `summarize.py` now carries `_claude_authenticated()`
+(mirrors `chat_runtime.py`'s H4 fix: OAuth creds file or
+`ANTHROPIC_API_KEY`, fail-open on read errors) and checks it in all three
+CLI gate sites (`_summarize_via_cli`, `_appendix_via_cli`,
+`_metapher_via_cli`). The appendix and metaphor generators additionally
+gained their own Hermes backend (`_appendix_via_hermes` /
+`_metapher_via_hermes`, both routed through the shared `_ollama_generate`
+helper) — previously they had no fallback at all, so a Hermes-only install
+(the zero-config default, no Claude login ever) could never produce a
+LERN-ZUGABE/METAPHER annex; now `generate_appendix`/`generate_metapher` try
+CLI (if authenticated) then Hermes before giving up.
+
 ### User-facing commands (in `bridges/shared/js/in_chat_commands.js`)
 
 | Command                          | Effect                                |
