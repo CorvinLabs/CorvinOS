@@ -10,7 +10,7 @@
   </defs>
   <rect width="480" height="480" rx="24" fill="url(#bg)"></rect>
   <path d="M0 -11 L2.7 -3.72 10.46 -3.4 4.37 1.42 6.47 8.9 0 4.6 -6.47 8.9 -4.37 1.42 -10.46 -3.4 -2.7 -3.72 Z" transform="translate(240,150) scale(11)" fill="url(#gold)"></path>
-  <text x="240" y="154" text-anchor="middle" style="font-family:&#39;Helvetica Neue&#39;,Helvetica,Arial,sans-serif;font-size:30px;font-weight:800;fill:#15336b;stroke:#ffffff;stroke-width:2.2px;paint-order:stroke;stroke-linejoin:round">22 / 36</text>
+  <text x="240" y="154" text-anchor="middle" style="font-family:&#39;Helvetica Neue&#39;,Helvetica,Arial,sans-serif;font-size:30px;font-weight:800;fill:#15336b;stroke:#ffffff;stroke-width:2.2px;paint-order:stroke;stroke-linejoin:round">25 / 36</text>
 
   <text x="240" y="312" text-anchor="middle" style="font-family:&#39;Helvetica Neue&#39;,Helvetica,Arial,sans-serif;font-weight:900;letter-spacing:-1.5px">
     <tspan font-size="49" fill="#ffffff">Agentic</tspan><tspan dx="9" dy="-16" font-size="24" font-weight="700" letter-spacing="-0.5" fill="#9aa6b4">.ai</tspan>
