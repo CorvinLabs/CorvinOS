@@ -321,23 +321,33 @@ function computeIslandLayout(nodes: GraphNode[]): {
   const positions = new Map<string, { x: number; y: number; level: number }>();
   const islands: IslandBox[] = [];
   const PAD = 14;
+  // A chain that sits dead-flat on one line reads as too rigid ("in Reihe").
+  // Instead each island flows gently through three levels — up, centre,
+  // down, centre, repeat — so a multi-node chain visibly spans multiple
+  // heights while still returning to its lane's centre line periodically
+  // (keeping lanes readable and non-overlapping). Single-node islands
+  // (branch/merge points) stay exactly on the lane centre.
+  const WAVE_AMPLITUDE = 46;
   for (const island of islandList) {
     const lane = laneOfIsland.get(island.id)!;
-    island.ids.forEach((id) => {
+    const baseY = lane * ISLAND_LANE_GAP;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    island.ids.forEach((id, idx) => {
       const lvl = levels.get(id)!;
-      positions.set(id, {
-        x: lvl * (LAYOUT_NODE_W + LAYOUT_GAP_X),
-        y: lane * ISLAND_LANE_GAP,
-        level: lvl,
-      });
+      const wave = island.ids.length > 1 ? Math.sin(idx * (Math.PI / 2)) * WAVE_AMPLITUDE : 0;
+      const y = baseY + wave;
+      positions.set(id, { x: lvl * (LAYOUT_NODE_W + LAYOUT_GAP_X), y, level: lvl });
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
     });
     if (island.ids.length > 1) {
       islands.push({
         id: island.id,
         x: island.minLevel * (LAYOUT_NODE_W + LAYOUT_GAP_X) - PAD,
-        y: lane * ISLAND_LANE_GAP - PAD,
+        y: minY - PAD,
         w: (island.maxLevel - island.minLevel) * (LAYOUT_NODE_W + LAYOUT_GAP_X) + LAYOUT_NODE_W + PAD * 2,
-        h: LAYOUT_NODE_H + PAD * 2,
+        h: (maxY - minY) + LAYOUT_NODE_H + PAD * 2,
       });
     }
   }
@@ -548,7 +558,7 @@ function AwpCanvas({
             refY="4"
             orient="auto"
           >
-            <path d="M0,0 L0,8 L8,4 z" fill="hsl(var(--muted-foreground)/0.4)" />
+            <path d="M0,0 L0,8 L8,4 z" fill="hsl(var(--foreground)/0.75)" />
           </marker>
         </defs>
 
@@ -586,8 +596,8 @@ function AwpCanvas({
               key={`${e.from}->${e.to}`}
               d={`M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`}
               fill="none"
-              stroke="hsl(var(--muted-foreground)/0.35)"
-              strokeWidth="1.5"
+              stroke="hsl(var(--foreground)/0.55)"
+              strokeWidth="2"
               markerEnd="url(#arrowhead)"
             />
           );
