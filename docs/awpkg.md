@@ -45,6 +45,78 @@ A single package can contain multiple workflows mixing any of the AWP node types
 | Parallel fan-out/fan-in | `agent` (parallel level-0) | `market_research_suite` — news + reddit + filings in parallel → merge |
 | Delegation graph | `delegation_loop` | `code_review_bot` — orchestrator spawns security/perf/style workers |
 | Mixed DAG + delegation | `agent` + `delegation_loop` | `trading_strategy_pack` — parallel fetchers → signal delegation loop → risk filter |
+| Chatflow / human-in-the-loop | `route` + `code` + `ask_human` + `answer` | `it_support_ticket_agent` — triage → KB lookup → confirm before acting → ticket |
+
+---
+
+## AWP node types (ADR-0188)
+
+The `dag` engine (`core/workflows/corvin_workflows/node_types.py`) dispatches on each
+node's `type:` field. Nine types are registered:
+
+| Node type | Role | LLM call? |
+|---|---|---|
+| `agent` | Single `engine.spawn()` call (default when `type:` is omitted) | Yes |
+| `fan_out` | Same agent replayed once per item of a state list — sequential, not parallel | Yes (× N) |
+| `delegation_loop` | Manager/worker adaptive loop, bounded by `config.budget` | Yes |
+| `deliver` | Fire-and-forget push of upstream output to a bridge outbox — never waits for a reply | No |
+| `code` | Deterministic, sandboxed Python (`def main(...) -> dict`) — same bwrap isolation Forge tools use, no MCP registration | **Never** |
+| `merge` | Deterministic fan-in: `concat_list` / `first_non_empty` / `dict_union` — no LLM re-summarizes branch outputs | No |
+| `route` | Engine-native branching — `mode: condition` (structured `{selector, op, value}`, no `eval()`) or `mode: classify` (LLM-routed into N labeled branches) | `classify` mode only |
+| `answer` | Chatflow terminal — sends a turn's output, never pauses | No |
+| `ask_human` | Pauses the run for a human reply (see below), resumes with the answer injected into state | No |
+
+Every node also accepts an optional `retry: {max_retries, retry_interval_s, error_strategy}`
+block. `error_strategy: fail_branch` contains a failure to that node's downstream subgraph
+(marked `skipped`, not executed) instead of aborting the whole run; the default `abort`
+preserves the original all-or-nothing behavior.
+
+### Chatflow (`orchestration.engine: chat`) and human-in-the-loop
+
+Setting `orchestration.engine: chat` (instead of `dag`) marks a workflow as turn-based. It
+runs on the exact same `DAGRunner` — no separate engine — but the validator (rule R11)
+requires at least one `answer` or `ask_human` node, since a chat-engine workflow with
+neither could never actually pause.
+
+An `ask_human` node sends its `prompt` (or `prompt_from: <selector>`) to the same bridge
+outbox `deliver` uses, then the run stops with `RunResult.state == "paused"` and a
+`run_id`. The paused state is checkpointed to
+`<corvin_home>/tenants/<tid>/workflow_runs/<run_id>.json` (mirrors the audit chain's
+append-only, run-id-keyed pattern — no new storage subsystem). Continue it with:
+
+```bash
+python -m corvin_workflows resume <run_id> "<the human's reply>" --engine claude
+```
+
+or programmatically via `corvin_workflows.resume_workflow(run_id, reply, engine=...)`.
+`expect: {field, type}` on the node coerces the free-text reply (`type: boolean` does
+fail-closed whole-word matching against affirmative/negative word lists — an unrecognised
+reply is never treated as consent). A `route(mode: condition)` decision made *before* the
+pause is honored again after resume — the skip state survives the checkpoint round-trip.
+
+**Console UI:** `WorkflowChatPanel` (`core/console/corvin_console/web-next/src/pages/
+workflows.tsx`) renders a real chat window — conversation bubbles + a free-text reply
+box — for `ask_human` pauses, distinct from the older binary `HitlApprovalBar` (approve/
+reject, for the separate "approval" node type used by the console's own hand-rolled
+executor). `POST /workflows/{wid}/runs/{rid}/resume` bridges to
+`corvin_workflows.resume_workflow()`. **Known gap:** the console's `start_run` endpoint
+still uses its own separate node executor (not `corvin_workflows.DAGRunner`), so today a
+run only has a resumable checkpoint once that executor is extended to delegate
+`engine: chat` workflows to `DAGRunner` — tracked as ADR-0188 follow-up work, not
+silently glossed over.
+
+**Real LLM engine:** `corvin_workflows.engines_claude.ClaudeCliEngine` shells out to
+headless `claude -p` (tool use disabled, JSON-only responses). Selected via
+`corvin_workflows run <name> --engine claude` (default remains `--engine stub`, the
+deterministic canned-response engine used by tests and CI).
+
+Two bundled examples exercise every node type end-to-end, verified against both the stub
+and the real `claude` engine:
+`core/workflows/corvin_workflows/examples/it_support_ticket_agent.awp.yaml` (chatflow) and
+`core/workflows/corvin_workflows/examples/expense_approval_pipeline.awp.yaml` (plain `dag`,
+proves `code`/`merge`/`retry` work standalone, not only inside a chatflow).
+
+→ Full design rationale: ADR-0188 (`Corvin-ADR/decisions/0188-awp-deterministic-nodes-branching-human-in-the-loop.md`).
 
 ---
 
