@@ -7,11 +7,15 @@ Each entry binds a node-type string (the YAML `type:` field) to:
 Operators can register additional types without forking by calling
 `register_node_type(name, validator=..., executor=...)`.
 
-The three shipped types:
+Shipped types:
 
   agent             — static single-shot engine call (default)
-  fan_out           — same agent over N items from a state field, parallel
+  fan_out           — same agent over N items from a state field, sequential
   delegation_loop   — manager-LLM iterates DELEGATE / COMPLETE until budget
+  deliver           — fire-and-forget push of upstream output to a bridge outbox
+  code              — deterministic, sandboxed Python; never calls the engine (ADR-0188 M1)
+  merge             — deterministic fan-in (concat_list/first_non_empty/dict_union) (ADR-0188 M2)
+  route             — engine-native branching: condition (structured, no eval) or classify (LLM) (ADR-0188 M3)
 """
 from __future__ import annotations
 
@@ -343,6 +347,242 @@ def _execute_deliver(*, node: dict[str, Any], engine: Any, state: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
+# Code node — deterministic, sandboxed Python (ADR-0188 M1)
+# ---------------------------------------------------------------------------
+
+_CODE_LANGUAGES = {"python3"}
+
+
+def _validate_code(node: dict[str, Any]) -> None:
+    lang = node.get("language")
+    if lang not in _CODE_LANGUAGES:
+        raise ValueError(f"code node requires language in {sorted(_CODE_LANGUAGES)}, got {lang!r}")
+    source = node.get("source")
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("code node requires non-empty 'source'")
+    if "def main(" not in source:
+        raise ValueError("code node 'source' must define a top-level 'def main(...)' entry point")
+    outputs = node.get("outputs")
+    if not isinstance(outputs, list) or not outputs or not all(isinstance(o, str) for o in outputs):
+        raise ValueError("code node requires non-empty 'outputs' list of field names")
+    node_inputs = node.get("inputs") or {}
+    if not isinstance(node_inputs, dict) or not all(isinstance(v, str) for v in node_inputs.values()):
+        raise ValueError("code node 'inputs' must be a mapping of param name -> selector string")
+
+
+def _execute_code(*, node, engine, state, inputs, audit) -> dict[str, Any]:
+    """Deterministic node: never calls engine.spawn(). Runs `source` in the
+    same bwrap sandbox Forge tools use (see code_exec.py). Enforces AWP-1.0
+    spec rule R33 ("deterministic node must not invoke an LLM") by
+    construction — there is no code path here that reaches the engine.
+    """
+    from .code_exec import CodeExecutionError, _resolve_selector, run_sandboxed_python
+
+    node_inputs = node.get("inputs") or {}
+    resolved_args = {
+        param: _resolve_selector(selector, state=state, inputs=inputs)
+        for param, selector in node_inputs.items()
+    }
+    audit("node.code_exec", node_id=node["id"], params=sorted(resolved_args.keys()))
+    try:
+        result = run_sandboxed_python(node["source"], resolved_args)
+    except CodeExecutionError as e:
+        raise RuntimeError(f"code node {node['id']!r} execution failed: {e}") from e
+
+    outputs = node["outputs"]
+    missing = [o for o in outputs if o not in result]
+    if missing:
+        raise RuntimeError(
+            f"code node {node['id']!r}: main() return dict missing declared outputs {missing} "
+            f"(got keys: {sorted(result.keys())})"
+        )
+    return {k: result[k] for k in outputs}
+
+
+# ---------------------------------------------------------------------------
+# Merge node — deterministic fan-in (ADR-0188 M2)
+# ---------------------------------------------------------------------------
+
+_MERGE_STRATEGIES = {"concat_list", "first_non_empty", "dict_union"}
+
+
+def _validate_merge(node: dict[str, Any]) -> None:
+    strategy = node.get("strategy")
+    if strategy not in _MERGE_STRATEGIES:
+        raise ValueError(f"merge node requires strategy in {sorted(_MERGE_STRATEGIES)}, got {strategy!r}")
+    node_inputs = node.get("inputs")
+    if not isinstance(node_inputs, list) or not node_inputs or not all(isinstance(s, str) for s in node_inputs):
+        raise ValueError("merge node requires non-empty 'inputs' list of dotted selector strings")
+    output = node.get("output")
+    if not isinstance(output, str) or not output:
+        raise ValueError("merge node requires non-empty 'output' field name")
+
+
+def _execute_merge(*, node, engine, state, inputs, audit) -> dict[str, Any]:
+    """Deterministic fan-in — no LLM. Mirrors Dify's variable-aggregator:
+    combine upstream branch outputs by a fixed strategy instead of asking an
+    LLM to merge them in a prompt (AWP's previous only option via `agent`)."""
+    from .code_exec import _resolve_selector
+
+    strategy = node["strategy"]
+    values = [_resolve_selector(sel, state=state, inputs=inputs) for sel in node["inputs"]]
+    audit("node.merge", node_id=node["id"], strategy=strategy, n=len(values))
+
+    if strategy == "concat_list":
+        merged: Any = []
+        for v in values:
+            if isinstance(v, list):
+                merged.extend(v)
+            elif v is not None:
+                merged.append(v)
+    elif strategy == "first_non_empty":
+        merged = next((v for v in values if v), None)
+    elif strategy == "dict_union":
+        merged = {}
+        for v in values:
+            if isinstance(v, dict):
+                merged.update(v)
+    else:  # pragma: no cover — guarded by validator
+        raise ValueError(f"unknown merge strategy {strategy!r}")
+
+    return {node["output"]: merged}
+
+
+# ---------------------------------------------------------------------------
+# Route node — engine-native branching (ADR-0188 M3)
+# ---------------------------------------------------------------------------
+
+_ROUTE_MODES = {"condition", "classify"}
+_ROUTE_OPS = {"==", "!=", ">", ">=", "<", "<=", "contains", "in"}
+
+
+def _validate_route(node: dict[str, Any]) -> None:
+    mode = node.get("mode")
+    if mode not in _ROUTE_MODES:
+        raise ValueError(f"route node requires mode in {sorted(_ROUTE_MODES)}, got {mode!r}")
+
+    if mode == "condition":
+        cases = node.get("cases")
+        if not isinstance(cases, list) or not cases:
+            raise ValueError("route(mode=condition) requires a non-empty 'cases' list")
+        seen_ids: set[str] = set()
+        has_default = False
+        for c in cases:
+            if not isinstance(c, dict) or not isinstance(c.get("id"), str) or not c["id"]:
+                raise ValueError("route condition case requires a non-empty 'id'")
+            if c["id"] in seen_ids:
+                raise ValueError(f"route condition: duplicate case id {c['id']!r}")
+            seen_ids.add(c["id"])
+            when = c.get("when")
+            if when == "default":
+                has_default = True
+                continue
+            if not isinstance(when, dict):
+                raise ValueError(
+                    f"route condition case {c['id']!r}: 'when' must be 'default' or a "
+                    f"structured {{selector, op, value}} mapping — no free-form eval by design"
+                )
+            if not isinstance(when.get("selector"), str) or not when["selector"]:
+                raise ValueError(f"route condition case {c['id']!r}: 'when.selector' required")
+            if when.get("op") not in _ROUTE_OPS:
+                raise ValueError(
+                    f"route condition case {c['id']!r}: 'when.op' must be one of {sorted(_ROUTE_OPS)}"
+                )
+            if "value" not in when:
+                raise ValueError(f"route condition case {c['id']!r}: 'when.value' required")
+        if not has_default:
+            raise ValueError(
+                "route(mode=condition) requires exactly one case with when: 'default' "
+                "as the guaranteed fallback branch"
+            )
+    else:  # classify
+        agent = node.get("agent")
+        if not isinstance(agent, str) or not agent:
+            raise ValueError("route(mode=classify) requires 'agent'")
+        classes = node.get("classes")
+        if not isinstance(classes, list) or not classes or not all(isinstance(c, str) and c for c in classes):
+            raise ValueError("route(mode=classify) requires a non-empty list of string 'classes'")
+        input_sel = node.get("input")
+        if not isinstance(input_sel, str) or not input_sel:
+            raise ValueError("route(mode=classify) requires a non-empty 'input' selector")
+
+
+def _apply_op(op: str, actual: Any, expected: Any) -> bool:
+    if op == "==":
+        return actual == expected
+    if op == "!=":
+        return actual != expected
+    if op == ">":
+        return actual is not None and actual > expected
+    if op == ">=":
+        return actual is not None and actual >= expected
+    if op == "<":
+        return actual is not None and actual < expected
+    if op == "<=":
+        return actual is not None and actual <= expected
+    if op == "contains":
+        return actual is not None and expected in actual
+    if op == "in":
+        return actual in (expected or [])
+    raise ValueError(f"unknown route op {op!r}")  # pragma: no cover — guarded by validator
+
+
+def _execute_route_condition(*, node, state, inputs, audit) -> dict[str, Any]:
+    from .code_exec import _resolve_selector
+
+    default_case = None
+    for case in node["cases"]:
+        if case.get("when") == "default":
+            default_case = case["id"]
+            continue
+        when = case["when"]
+        actual = _resolve_selector(when["selector"], state=state, inputs=inputs)
+        if _apply_op(when["op"], actual, when["value"]):
+            audit("node.route_matched", node_id=node["id"], case=case["id"], mode="condition")
+            return {"case": case["id"], "mode": "condition"}
+    audit("node.route_matched", node_id=node["id"], case=default_case, mode="condition", fallback=True)
+    return {"case": default_case, "mode": "condition", "fallback": True}
+
+
+def _execute_route_classify(*, node, engine, state, inputs, audit) -> dict[str, Any]:
+    from .code_exec import _resolve_selector
+    from .engines import EngineCall
+
+    classes = node["classes"]
+    query = _resolve_selector(node["input"], state=state, inputs=inputs)
+    instructions = (
+        f"{node.get('instructions', '')}\n\n"
+        f"Classify the input below into EXACTLY ONE of these classes: {', '.join(classes)}.\n"
+        f'Respond with a JSON object of the exact shape {{"class": "<one of the classes>"}} '
+        f"and nothing else.\n\nInput:\n{query}"
+    ).strip()
+    call = EngineCall(
+        agent=node["agent"],
+        instructions=instructions,
+        inputs=dict(inputs),
+        state=dict(state),
+        iteration=0,
+        metadata={"node_id": node["id"], "node_type": "route", "mode": "classify", "classes": classes},
+    )
+    audit("node.engine_call", node_id=node["id"], agent=call.agent, iteration=0)
+    decision = engine.spawn(call)
+    chosen = decision.get("class")
+    if chosen not in classes:
+        raise RuntimeError(
+            f"route(mode=classify) node {node['id']!r}: engine returned class {chosen!r}, "
+            f"not one of the declared classes {classes}"
+        )
+    audit("node.route_matched", node_id=node["id"], case=chosen, mode="classify")
+    return {"case": chosen, "mode": "classify"}
+
+
+def _execute_route(*, node, engine, state, inputs, audit) -> dict[str, Any]:
+    if node["mode"] == "condition":
+        return _execute_route_condition(node=node, state=state, inputs=inputs, audit=audit)
+    return _execute_route_classify(node=node, engine=engine, state=state, inputs=inputs, audit=audit)
+
+
+# ---------------------------------------------------------------------------
 # Registry + extension point
 # ---------------------------------------------------------------------------
 
@@ -354,6 +594,9 @@ NODE_TYPES: dict[str, dict[str, Any]] = {
         "execute": _execute_delegation_loop,
     },
     "deliver": {"validate": _validate_deliver, "execute": _execute_deliver},
+    "code": {"validate": _validate_code, "execute": _execute_code},
+    "merge": {"validate": _validate_merge, "execute": _execute_merge},
+    "route": {"validate": _validate_route, "execute": _execute_route},
 }
 
 
