@@ -184,6 +184,34 @@ class TestServiceNameContract:
             assert unit in validate_src
 
 
+class TestLinuxServiceManagerPreExec:
+    """WA-19: the systemd manager must run the auto-update check before the
+    real command on every (re)start, without ever blocking the service."""
+
+    def test_pre_exec_adds_execstartpre_with_failure_tolerant_prefix(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = LinuxServiceManager()
+            mgr.systemd_user_dir = Path(tmpdir)
+            mgr.install_service(
+                name="test",
+                command="/usr/bin/echo hello",
+                auto_start=False,
+                pre_exec="/usr/bin/python3 /opt/corvin/autoupdate.py",
+            )
+            content = (Path(tmpdir) / "corvin-test.service").read_text()
+            # "-" prefix: a failed/offline check must never block ExecStart.
+            assert "ExecStartPre=-/usr/bin/python3 /opt/corvin/autoupdate.py" in content
+            assert "ExecStart=/usr/bin/echo hello" in content
+
+    def test_no_pre_exec_means_no_execstartpre_line(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = LinuxServiceManager()
+            mgr.systemd_user_dir = Path(tmpdir)
+            mgr.install_service(name="test", command="/usr/bin/echo hello", auto_start=False)
+            content = (Path(tmpdir) / "corvin-test.service").read_text()
+            assert "ExecStartPre" not in content
+
+
 class TestDarwinServiceManager:
     """Tests for macOS launchd manager."""
 
@@ -225,6 +253,26 @@ class TestDarwinServiceManager:
         assert "<string>mymodule</string>" in plist
         assert "<string>--flag</string>" in plist
         assert "<string>value</string>" in plist
+
+    def test_generate_plist_with_pre_exec_wraps_in_shell(self):
+        """WA-19: launchd has no ExecStartPre equivalent for user agents —
+        the real command must be wrapped in a bash -c script that runs the
+        update check then `exec`s the original program (KeepAlive still
+        tracks exactly one long-running process)."""
+        mgr = DarwinServiceManager()
+        plist = mgr._generate_plist(
+            "test", "/usr/bin/python3 -m mymodule", "Test",
+            pre_exec="/usr/bin/python3 /opt/corvin/autoupdate.py",
+        )
+        assert "<string>/bin/bash</string>" in plist
+        assert "<string>-c</string>" in plist
+        assert "/opt/corvin/autoupdate.py; exec /usr/bin/python3 -m mymodule" in plist
+
+    def test_generate_plist_without_pre_exec_runs_program_directly(self):
+        mgr = DarwinServiceManager()
+        plist = mgr._generate_plist("test", "/usr/bin/echo hello", "Test")
+        assert "<string>/bin/bash</string>" not in plist
+        assert "<string>/usr/bin/echo</string>" in plist
 
 
 class TestWindowsServiceManager:

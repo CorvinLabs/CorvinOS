@@ -30,8 +30,16 @@ class ServiceManager(ABC):
         description: str = "",
         auto_start: bool = True,
         env_vars: Optional[dict] = None,
+        pre_exec: Optional[str] = None,
     ) -> None:
-        """Register and optionally start a service."""
+        """Register and optionally start a service.
+
+        ``pre_exec``, when given, is a shell command run once before
+        ``command`` on every service (re)start — best-effort, a failure here
+        must never block the service from starting. Used to run the PyPI
+        auto-update check so a newer CorvinOS release actually reaches users
+        who rely on autostart and never invoke the CLI directly (WA-19).
+        """
         pass
 
     @abstractmethod
@@ -130,6 +138,7 @@ class LinuxServiceManager(ServiceManager):
         description: str = "",
         auto_start: bool = True,
         env_vars: Optional[dict] = None,
+        pre_exec: Optional[str] = None,
     ) -> None:
         """Create and enable a systemd user unit."""
         unit_file = self._service_file(name)
@@ -144,6 +153,12 @@ class LinuxServiceManager(ServiceManager):
             # embedded quote/backslash per systemd's rules.
             _esc = value.replace("\\", "\\\\").replace('"', '\\"')
             service_lines.append(f'Environment="{key}={_esc}"')
+        if pre_exec:
+            # WA-19: leading "-" means a failure here (offline, PyPI
+            # unreachable, no newer release) must never block ExecStart —
+            # the whole point is a silent, best-effort catch-up on every
+            # (re)start, same contract as the auto-update code it invokes.
+            service_lines.append(f"ExecStartPre=-{pre_exec}")
         service_lines += [
             f"ExecStart={command}",
             "Restart=on-failure",
@@ -231,12 +246,25 @@ class DarwinServiceManager(ServiceManager):
     def _generate_plist(
         self, name: str, command: str, description: str,
         env_vars: Optional[dict] = None,
+        pre_exec: Optional[str] = None,
     ) -> str:
         """Generate launchd plist XML."""
         # WA-5: shlex.split so a program path with spaces stays one token.
         parts = shlex.split(command)
         program = parts[0]
         arguments = parts[1:] if len(parts) > 1 else []
+
+        if pre_exec:
+            # WA-19: launchd has no ExecStartPre equivalent for user agents —
+            # fold the update check into the launched program itself via a
+            # shell wrapper that execs into the real command afterwards, so
+            # KeepAlive still tracks exactly one long-running process. A
+            # failure in pre_exec must never block startup — `;` (not `&&`)
+            # so the real command still execs even if the check errored.
+            quoted_cmd = " ".join(shlex.quote(p) for p in ([program] + arguments))
+            wrapped = f"{pre_exec}; exec {quoted_cmd}"
+            program = "/bin/bash"
+            arguments = ["-c", wrapped]
 
         plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -282,10 +310,11 @@ class DarwinServiceManager(ServiceManager):
         description: str = "",
         auto_start: bool = True,
         env_vars: Optional[dict] = None,
+        pre_exec: Optional[str] = None,
     ) -> None:
         """Create and load a launchd plist."""
         plist_file = self._plist_path(name)
-        plist_content = self._generate_plist(name, command, description, env_vars)
+        plist_content = self._generate_plist(name, command, description, env_vars, pre_exec)
         plist_file.write_text(plist_content)
         plist_file.chmod(0o644)
 
@@ -386,8 +415,18 @@ class WindowsServiceManager(ServiceManager):
         description: str = "",
         auto_start: bool = True,
         env_vars: Optional[dict] = None,
+        pre_exec: Optional[str] = None,  # noqa: ARG002 — see docstring
     ) -> None:
-        """Create a Task Scheduler task."""
+        """Create a Task Scheduler task.
+
+        ``pre_exec`` (WA-19 auto-update check) is accepted for interface
+        parity with the Linux/macOS managers but intentionally unused here:
+        this class isn't reachable from the real installer (Windows service
+        registration is skipped in ``core.py::step_14_register_services`` —
+        needs admin rights). The actual Windows autostart path is
+        ``install.ps1``'s Scheduled Task + supervisor, which already runs its
+        own one-shot ``uv tool upgrade corvinos`` per logon/boot.
+        """
         task_name = self._task_name(name)
 
         # Create folder first

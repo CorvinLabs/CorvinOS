@@ -505,12 +505,23 @@ class CorvinInstaller:
                 f'"{sys.executable}" -m uvicorn corvin_gateway.app:app'
                 " --host 127.0.0.1 --port 8765 --log-level info"
             )
+            # WA-19: a plain two-token command needs no shell quoting (unlike
+            # inlining `python -c "..."` directly into a systemd unit / launchd
+            # plist) — see _autoupdate_entrypoint.py's own docstring. Quoted
+            # for the same reason as sys.executable above (a spaced profile
+            # path must survive as one token).
+            autoupdate_script = (
+                Path(__file__).resolve().parents[2]
+                / "ops" / "launcher" / "corvin" / "_autoupdate_entrypoint.py"
+            )
+            pre_exec = f'"{sys.executable}" "{autoupdate_script}"'
             self.service_manager.install_service(
                 name="webui",
                 command=webui_cmd,
                 description="Corvin WebUI — gateway + console (uvicorn)",
                 env_vars=self._webui_env_vars(),
                 auto_start=True,
+                pre_exec=pre_exec,
             )
             print("  ✓ WebUI service registered (corvin-webui.service)")
         except Exception as e:

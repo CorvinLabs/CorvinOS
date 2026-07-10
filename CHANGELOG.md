@@ -6,6 +6,47 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — autostart now runs the PyPI auto-update check (WA-19)
+- The auto-update logic (`ops/launcher/corvin/serve_backend.py::
+  maybe_pypi_autoupdate`) only ever ran when a user manually invoked
+  `corvin`/`corvin serve` — the actual autostart entrypoint registered by
+  the installer (`corvinOS/installer/core.py::step_14_register_services`,
+  Linux systemd user unit / macOS LaunchAgent) execs `uvicorn` directly,
+  bypassing it entirely. Any user who relies on autostart and never
+  manually runs the CLI never received an update. Added `pre_exec` support
+  to `ServiceManager.install_service` (Linux: `ExecStartPre=-...`; macOS:
+  wraps the launched program in a `bash -c '<check>; exec <program>'` so
+  `KeepAlive` still tracks one process) and wired the WebUI service
+  registration to it via a new standalone entrypoint,
+  `ops/launcher/corvin/_autoupdate_entrypoint.py` (a plain two-token
+  `<python> <script>` command needs no shell quoting, unlike inlining
+  `python -c "..."` into a unit file / plist). The equivalent "Stufe 2"
+  always-on `SystemServiceManager` got the same Linux/macOS wiring; Windows
+  is unaffected either way — `install.ps1`'s supervisor already runs its
+  own one-shot `uv tool upgrade corvinos` per logon/boot.
+
+### Fixed — Settings → API Keys showed "not set" for keys that were actually configured and in use
+- `GET /byok/secrets` only ever checked the opt-in BYOK vault
+  (`operator/bridges/shared/vault.py`) — which nothing writes to unless a
+  key is entered through that specific UI form. A key configured the way
+  this codebase's own docs and comments tell users to configure it (an env
+  var, or a line in `~/.config/corvin-voice/{.env,service.env}`) always
+  showed "not set" even while actively in use, because the code that
+  actually resolves these keys at call time (`say.py`, `stt/
+  openai_whisper.py`) reads those variables directly and never touches the
+  vault. `list_secrets` now also checks the same env vars / config files
+  each key's real resolver falls back to (self-hosted mode only — hosted
+  mode's "present" already reflects a remote agent, where local files are
+  meaningless).
+- Along the way: found the OpenAI key added for Whisper transcription
+  earlier was placed under `CORVIN_TTS_OPENAI_KEY` (say.py's TTS-output
+  variable) instead of `CORVIN_STT_OPENAI_KEY` (the STT provider chain's
+  own variable) — a stale, mislabeled comment ("OpenAI key for say.py
+  (STT) only") likely caused the mix-up. STT was silently falling back to
+  the local model instead of the intended paid OpenAI Whisper API this
+  whole time. Added `CORVIN_STT_OPENAI_KEY` alongside it and corrected the
+  comment.
+
 ## [0.10.25] — Adversarial-review hardening sweep (fresh-install voice, agentic compute, telemetry, licensing)
 
 Full adversarial review across four surfaces (install/voice on a fresh unknown

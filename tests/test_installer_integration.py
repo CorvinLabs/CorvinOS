@@ -120,6 +120,40 @@ class TestCorvinInstallerIntegration:
         assert not installer.interactive
 
 
+class TestStep14AutoUpdatePreExec:
+    """WA-19: the WebUI service registration must wire the PyPI auto-update
+    check as pre_exec — otherwise autostart never upgrades, only a manual
+    CLI invocation does (the gap this whole feature exists to close)."""
+
+    def test_webui_registration_passes_pre_exec(self):
+        installer = CorvinInstaller(interactive=False)
+        installer.selected_bridges = []
+        calls = []
+        with mock.patch.object(sys, "platform", "linux"):
+            with mock.patch.object(
+                installer.service_manager, "install_service",
+                side_effect=lambda **kw: calls.append(kw),
+            ):
+                installer.step_14_register_services()
+
+        webui_calls = [c for c in calls if c["name"] == "webui"]
+        assert len(webui_calls) == 1
+        pre_exec = webui_calls[0].get("pre_exec")
+        assert pre_exec, "webui service must set pre_exec (WA-19 auto-update check)"
+        assert "_autoupdate_entrypoint.py" in pre_exec
+
+    def test_autoupdate_entrypoint_script_exists_at_the_path_core_py_references(self):
+        """A pre_exec pointing at a nonexistent file would silently no-op
+        forever (ExecStartPre="-..." swallows the failure) — assert the file
+        this session's fix actually points at is really there."""
+        installer = CorvinInstaller(interactive=False)
+        script = (
+            installer.repo_root / "ops" / "launcher" / "corvin"
+            / "_autoupdate_entrypoint.py"
+        )
+        assert script.is_file()
+
+
 class TestCorvinInstallerWithPathsMocked:
     """Tests with mocked paths."""
 

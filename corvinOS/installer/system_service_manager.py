@@ -89,7 +89,14 @@ class SystemServiceManager(ABC):
         command: str,
         description: str = "",
         env_vars: Optional[dict] = None,
-    ) -> None: ...
+        pre_exec: Optional[str] = None,
+    ) -> None:
+        """``pre_exec``, when given, runs once before ``command`` on every
+        (re)start — best-effort, never blocks the service. Used for the
+        WA-19 PyPI auto-update check: an always-on service is exactly the
+        case a user never manually restarts, so without this it can run a
+        stale release indefinitely."""
+        ...
 
     @abstractmethod
     def uninstall_service(self, name: str) -> None: ...
@@ -119,6 +126,7 @@ class LinuxSystemServiceManager(SystemServiceManager):
         command: str,
         description: str = "",
         env_vars: Optional[dict] = None,
+        pre_exec: Optional[str] = None,
     ) -> None:
         if not is_elevated():
             raise ElevationRequired(
@@ -134,6 +142,9 @@ class LinuxSystemServiceManager(SystemServiceManager):
             # embedded quote/backslash per systemd's rules.
             _esc = value.replace("\\", "\\\\").replace('"', '\\"')
             service_lines.append(f'Environment="{key}={_esc}"')
+        if pre_exec:
+            # WA-19: "-" prefix so a failed/offline check never blocks ExecStart.
+            service_lines.append(f"ExecStartPre=-{pre_exec}")
         service_lines += [
             f"ExecStart={command}",
             "Restart=on-failure",
@@ -206,6 +217,7 @@ class DarwinSystemServiceManager(SystemServiceManager):
         command: str,
         description: str = "",
         env_vars: Optional[dict] = None,
+        pre_exec: Optional[str] = None,
     ) -> None:
         if not is_elevated():
             raise ElevationRequired(
@@ -218,6 +230,14 @@ class DarwinSystemServiceManager(SystemServiceManager):
         parts = shlex.split(command)
         program = parts[0]
         arguments = parts[1:] if len(parts) > 1 else []
+
+        if pre_exec:
+            # WA-19: LaunchDaemon has no ExecStartPre equivalent — wrap into a
+            # shell that runs the (best-effort) update check then execs the
+            # real command, same pattern as the Stufe-1 LaunchAgent.
+            quoted_cmd = " ".join(shlex.quote(p) for p in ([program] + arguments))
+            program = "/bin/bash"
+            arguments = ["-c", f"{pre_exec}; exec {quoted_cmd}"]
 
         plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -319,7 +339,16 @@ class WindowsSystemServiceManager(SystemServiceManager):
         command: str,
         description: str = "",
         env_vars: Optional[dict] = None,
+        pre_exec: Optional[str] = None,  # noqa: ARG002 — see docstring
     ) -> None:
+        """``pre_exec`` (WA-19 auto-update check) is accepted for interface
+        parity but not yet wired here: a ScheduledTaskAction has exactly one
+        -Execute/-Argument pair with no ExecStartPre/exec-chaining
+        equivalent, so honoring it needs a generated wrapper script (the same
+        shape as corvin-supervisor.ps1) rather than a one-line change — left
+        as a follow-up. This is the opt-in "Stufe 2" path only; the default
+        Stufe-1 Windows autostart (install.ps1 + corvin-supervisor.ps1)
+        already runs its own one-shot `uv tool upgrade corvinos` per logon."""
         if not is_elevated():
             raise ElevationRequired(
                 "Registering a boot-time Scheduled Task requires an elevated "
