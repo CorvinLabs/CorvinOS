@@ -11,12 +11,6 @@ pip install corvinOS
 corvin-install
 ```
 
-### From Ollama
-
-```bash
-ollama install corvinOS
-```
-
 ### From Source
 
 ```bash
@@ -34,7 +28,7 @@ corvin-install
 |----------|-------------|--------------|
 | **Linux** | `~/.corvin/` | `~/.config/corvin-voice/` |
 | **macOS** | `~/.corvin/` | `~/.config/corvin-voice/` |
-| **Windows** | `~/.corvin/` | `%APPDATA%\Local\corvin-voice\` |
+| **Windows** | `~/.corvin/` | `%USERPROFILE%\.config\corvin-voice\` |
 
 ### Service Management
 

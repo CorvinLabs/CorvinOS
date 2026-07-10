@@ -257,7 +257,7 @@ def probe_hermes() -> EngineProbeResult:
         return EngineProbeResult(
             engine_id=engine_id, installed=True, authenticated=False,
             credential_source="none", version=version, models=[],
-            detail="Ollama running but no models — run: ollama pull qwen2.5:7b",
+            detail="Ollama running but no models — run: ollama pull qwen3:1.7b",
         )
     return EngineProbeResult(
         engine_id=engine_id, installed=True, authenticated=False,

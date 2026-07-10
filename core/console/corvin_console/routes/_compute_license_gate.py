@@ -30,11 +30,13 @@ from forge import paths as _forge_paths  # noqa: E402
 
 try:
     from license.compute_quota import increment_and_check as _cq_increment  # type: ignore[import]
+    from license.compute_quota import refund_one as _cq_refund  # type: ignore[import]
     from license.validator import get_limit as _lic_get_limit  # type: ignore[import]
     from license.limits import LicenseLimitError as _LicLimitError  # type: ignore[import]
     _COMPUTE_QUOTA_OK = True
 except ImportError:
     _cq_increment = None  # type: ignore[assignment]
+    _cq_refund = None  # type: ignore[assignment]
     try:
         from license.limits import FREE_TIER as _FREE_TIER  # type: ignore[import]
     except ImportError:
@@ -88,6 +90,20 @@ def enforce_compute_quota(
                 "upgrade_url": "https://corvin-labs.com/pricing",
             },
         ) from exc
+
+
+def refund_compute_quota() -> None:
+    """Give back one compute unit charged by enforce_compute_quota when the run was
+    NOT actually dispatched (the worker rejected the submission before doing any
+    work). Best-effort, never raises. On the free tier (1 unit/day) this prevents a
+    single transient worker error from burning the user's entire daily budget with
+    nothing run. No-op when the quota module is unavailable."""
+    if not _COMPUTE_QUOTA_OK or _cq_refund is None:
+        return
+    try:
+        _cq_refund(_forge_paths.corvin_home())
+    except Exception:  # noqa: BLE001 — refund is best-effort
+        pass
 
 
 def enforce_chat_turns(

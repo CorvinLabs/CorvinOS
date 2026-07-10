@@ -7,12 +7,16 @@ _assert_safe_htrace, then POSTs the bundle to the configured endpoint.
 Primary target: POST /v1/telemetry/healing-traces (Corvin-Features proxy, M4).
 Transparency mirror: github.com/CorvinLabs/CorvinLogs (via CORVINLOGS_GITHUB_TOKEN).
 
-Upload is silently skipped when:
-  - telemetry.healing_traces flag is not set in tenant config, OR
-  - No valid ConsentAct is present (double-gate, ADR-0180 §2), OR
-  - tenant_shape == "multi" (operator cannot consent for end-users).
+Gating is DEFAULT-ON / opt-OUT (maintainer decision, ADR-0180): healing traces
+upload unless disabled via ``spec.telemetry.healing_traces: false``
+(``healing_traces_enabled``). A recorded ConsentAct is NO LONGER required — it is
+embedded only as an audit-correlation id when a user explicitly consented. The
+load-bearing safety invariant is not consent but that every uploaded record is
+CONTENT-FREE (``_assert_safe_htrace`` fail-closed drops any PII/secret shape).
 
-On network failure: leave file, retry on next trigger (14-day cap).
+Upload is silently skipped when: the opt-out flag is set, there is no bundle for
+the day, or a lock is already held. On network failure: leave file, retry on next
+trigger (14-day cap).
 """
 from __future__ import annotations
 
@@ -55,6 +59,7 @@ from .htrace_consent import (
     ping_enabled,
     ensure_ping_tokens,
     _tenant_cfg_path,
+    _open_no_redirect,
 )
 from .nerve import NerveFiber, NerveSignal, SEVERITY_OK, SEVERITY_LOW, SEVERITY_MEDIUM
 
@@ -100,8 +105,8 @@ _PING_BODY_ALLOWED_KEYS = frozenset(
     {"corvin_version", "platform", "python_minor", "active_engine"}
 )
 _PING_ALLOWED_PLATFORMS = frozenset({"linux", "win32", "darwin", "other"})
-_RE_PING_VERSION = re.compile(r"^[0-9A-Za-z.\-+]{1,32}$")
-_RE_PING_PY_MINOR = re.compile(r"^\d{1,2}\.\d{1,3}$")
+_RE_PING_VERSION = re.compile(r"^[0-9A-Za-z.\-+]{1,32}\Z")
+_RE_PING_PY_MINOR = re.compile(r"^\d{1,2}\.\d{1,3}\Z")
 
 
 def _assert_ping_safe(body: dict) -> None:
@@ -385,7 +390,12 @@ def ping_if_due(home: Path) -> bool:
                     "X-HTrace-Instance-Id": instance_id,
                 },
             )
-            with urllib.request.urlopen(req, timeout=_PING_TIMEOUT_S) as resp:
+            # No-redirect + https-only opener (F8): the ping carries the Bearer
+            # telemetry token + instance token/id in headers. A plain urlopen
+            # would follow a 302 to an attacker host WITH those credentials
+            # intact, and would POST them in plaintext over an http:// base URL.
+            # Route through the same hardened opener the token endpoint uses.
+            with _open_no_redirect(req, _PING_TIMEOUT_S) as resp:
                 status = resp.getcode()
                 if not (200 <= status < 300):
                     logger.debug("htrace: ping returned %d", status)
@@ -595,7 +605,10 @@ def _post_bundle(
                 "X-HTTrace-Consent-Act-Id": consent_act_id,
             },
         )
-        with urllib.request.urlopen(req, timeout=_UPLOAD_TIMEOUT_S) as resp:
+        # No-redirect + https-only (F8): the bundle POST carries a Bearer token +
+        # instance token/id + consent_act_id. A 302 must never re-send them to a
+        # different host. (The https prefix is already checked above.)
+        with _open_no_redirect(req, _UPLOAD_TIMEOUT_S) as resp:
             status = resp.getcode()
             if 200 <= status < 300:
                 logger.info("htrace: bundle uploaded (%s → %d)", gz_path.name, status)
@@ -647,7 +660,10 @@ def _push_to_corvinlogs(gz_path: Path, *, instance_token: str) -> bool:
                 "User-Agent": "CorvinOS-HealingTrace/1",
             },
         )
-        with urllib.request.urlopen(req, timeout=_UPLOAD_TIMEOUT_S) as resp:
+        # No-redirect + https-only (F8): this PUT carries a GitHub PAT with
+        # contents:write. A redirect must never forward that credential to
+        # another host. api.github.com is https, so the guard also asserts it.
+        with _open_no_redirect(req, _UPLOAD_TIMEOUT_S) as resp:
             status = resp.getcode()
             ok = 200 <= status < 300
             if ok:
@@ -678,11 +694,13 @@ def run_upload_cycle(home: Path) -> tuple[str, int]:
     # it in a dedicated except branch if flock raises.  Without this the FD
     # leaks on every concurrent invocation because the finally block of the
     # inner try is never entered when flock raises before it is reached.
-    # Double-gate: both YAML flag and ConsentAct must be present.
-    # scan() also checks this, but run_upload_cycle() is a public function —
-    # direct callers (e.g. maintainer_cli upload) must not bypass consent.
+    # Opt-out gate (default-ON): the healing-traces channel is disabled only by an
+    # explicit spec.telemetry.healing_traces: false. scan() also checks this, but
+    # run_upload_cycle() is a public function — direct callers (e.g. maintainer_cli
+    # upload) must still honour the opt-out. (Safety rides on CONTENT-FREE records,
+    # not on a consent gate — see the module docstring.)
     if not healing_traces_enabled(home):
-        logger.debug("htrace: upload skipped — consent gate not active")
+        logger.debug("htrace: upload skipped — opt-out gate active")
         return "skipped", 0
 
     lf = None
@@ -800,11 +818,11 @@ class HealingTraceUploaderFiber(NerveFiber):
 
     Fires at boot if yesterday's bundle wasn't sent, and opportunistically
     when the scheduled nightly window passes (checked by last-upload stamp).
-    Silent no-op when consent is not active.
+    Silent no-op when the opt-out flag disables the channel.
     """
     fiber_id = "htrace.uploader"
     fiber_version = "1.0.0"
-    fiber_description = "ADR-0180: täglicher Healing-Trace-Upload (opt-in, deny-by-default)"
+    fiber_description = "ADR-0180: täglicher Healing-Trace-Upload (default-ON, opt-out; content-free)"
 
     def scan(self) -> list[NerveSignal]:
         home = _home()

@@ -21,6 +21,14 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PLUGIN_ROOT))
 _SHARED = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
 sys.path.insert(0, str(_SHARED))
+# The sibling harness ``test_worker`` is imported top-level. Under a direct
+# ``python core/compute/tests/test_compute_notify.py`` run the script's own dir
+# is sys.path[0] so it resolves — but under ``pytest core/compute/tests`` this
+# module is collected as a package member (tests/__init__.py exists) and the
+# tests dir is NOT auto-added, so the import fails and takes down the WHOLE
+# compute suite's collection. Insert the tests dir explicitly so both work.
+_TESTS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_TESTS_DIR))
 
 from corvin_compute.client import _origin_from_env  # noqa: E402
 from test_worker import _WorkerHarness, _identity_runner  # noqa: E402

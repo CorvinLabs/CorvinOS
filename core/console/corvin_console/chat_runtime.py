@@ -662,7 +662,39 @@ def _effective_os_engine(tenant_id: str) -> str:
         # surface a clearer "Ollama not running" error if needed, which is far
         # more actionable than "claude binary not found".
         return "hermes"
+    # Binary present but NOT authenticated (OAuth session / API key absent): the
+    # wizard installs the claude binary but login is skippable and commonly
+    # deferred, so spawning it would fail every turn with a raw CLI auth error
+    # while a fully-provisioned Hermes sits unused — the "positive first run"
+    # killer. Fall back to Hermes here too, using the SAME credential signal the
+    # rest of the product uses (~/.claude/.credentials.json + ANTHROPIC_API_KEY;
+    # no macOS keychain path is used anywhere, so this introduces no new
+    # false-negative). The user can `claude login` and switch back any time.
+    if not _claude_authenticated():
+        return "hermes"
     return engine
+
+
+def _claude_authenticated() -> bool:
+    """Cheap, subprocess-free Claude Code auth probe — mirrors the credential
+    signal used by engine_detection.probe_claude_code() without the `claude
+    --version` spawn (this runs on the per-turn engine-selection path).
+
+    Authenticated iff an OAuth session exists in ~/.claude/.credentials.json OR
+    ANTHROPIC_API_KEY is set. Fail-OPEN (returns True) on an unexpected read error
+    so a transient glitch never silently reroutes a genuinely-logged-in user off
+    Claude — the reroute only fires on a clearly-absent credential.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    try:
+        creds_path = Path.home() / ".claude" / ".credentials.json"
+        if not creds_path.exists():
+            return False
+        creds = json.loads(creds_path.read_text(encoding="utf-8"))
+        return bool(creds.get("claudeAiOauth") or creds.get("accessToken"))
+    except Exception:  # noqa: BLE001
+        return True  # fail-open: don't reroute a possibly-authenticated user
 
 
 def _engine_unavailable_message(engine_id: str) -> str | None:

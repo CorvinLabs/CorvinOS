@@ -389,7 +389,14 @@ def _handle_expired_license(
         fp = getattr(exc, "customer_fingerprint", None)
         grace = _assess_grace(valid_until=None, now=now)
         if grace.in_grace:
-            tier = getattr(exc, "tier", "pro") or "pro"
+            # Grace continues the PREVIOUSLY-PAID tier. If the tier could not be
+            # extracted from the (validly-signed) expired token, do NOT invent a
+            # paid tier — the old `or "pro"` silently granted full pro compute to
+            # any expired token with an empty tier. Fall through to trial instead,
+            # so an indeterminate tier never over-grants during grace.
+            tier = getattr(exc, "tier", None)
+            if not tier:
+                return _check_trial(corvin_home)
             return _licensed(tier, in_grace=True)
         if fp:
             _mark_observed_expired(now=now, customer_fingerprint=fp)

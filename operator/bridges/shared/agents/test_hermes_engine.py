@@ -173,6 +173,33 @@ class ProtocolContractTests(unittest.TestCase):
             resolved = _resolve_base_url()
             self.assertEqual(resolved, "http://custom:9999")
 
+    def test_default_model_resolves_to_installed_qwen3(self) -> None:
+        """Adversarial fresh-install finding (BLOCKER): a &lt;6 GB box only pulls
+        qwen3:1.7b, but the default used to hardcode qwen3:8b → every Hermes turn
+        errored 'model not available' with no recovery. With no env override, the
+        default must resolve to the qwen3 tag ACTUALLY installed in Ollama."""
+        from agents import hermes_engine as he
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("CORVIN_HERMES_MODEL", None)
+            # Only the small model is pulled.
+            with patch.object(he, "_installed_ollama_models",
+                              return_value=["qwen3:1.7b"]):
+                self.assertEqual(he._resolve_default_model(), "qwen3:1.7b")
+            # Full box with the 8b present → keep the 8b default.
+            with patch.object(he, "_installed_ollama_models",
+                              return_value=["qwen3:1.7b", "qwen3:8b"]):
+                self.assertEqual(he._resolve_default_model(), "qwen3:8b")
+            # Ollama unreachable / empty → fall back to the built-in default so the
+            # actionable "run: ollama pull" path still fires.
+            with patch.object(he, "_installed_ollama_models", return_value=[]):
+                self.assertEqual(he._resolve_default_model(), he._DEFAULT_MODEL)
+
+    def test_pick_installed_qwen3_prefers_largest(self) -> None:
+        from agents import hermes_engine as he
+        self.assertEqual(he._pick_installed_qwen3(["qwen3:1.7b", "qwen3:14b"]),
+                         "qwen3:14b")
+        self.assertIsNone(he._pick_installed_qwen3(["llama3:8b"]))
+
 
 # ---------------------------------------------------------------------------
 # Live tests (require Ollama + pulled model)

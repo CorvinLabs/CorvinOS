@@ -355,8 +355,15 @@ class WorkerServer:
                           result_event=asyncio.Event())
         async with self._runs_lock:
             self._runs[run_id] = entry
+            # max_concurrent_runs budgets FLAT ComputeRun worker tasks only.
+            # Non-flat engine jobs (pipeline/HAC) manage their own internal
+            # concurrency and never occupy a flat _exec_run task — counting their
+            # perpetually-RUNNING placeholder entries here let two non-flat submits
+            # permanently starve every flat run (they never transition out of
+            # RUNNING). Count only flat entries against the flat budget.
             running_count = sum(1 for e in self._runs.values()
-                                if e.state == RUN_STATE_RUNNING)
+                                if e.state == RUN_STATE_RUNNING
+                                and e.engine_id == "flat")
             if running_count < self.max_concurrent_runs:
                 entry.state = RUN_STATE_RUNNING
                 entry.task = asyncio.create_task(self._exec_run(run_id))
@@ -606,8 +613,11 @@ class WorkerServer:
         async with self._runs_lock:
             if not self._queue:
                 return
+            # Flat-only slot accounting (see _op_submit_run): non-flat engine
+            # jobs must not count against the flat worker-task budget.
             running_count = sum(1 for e in self._runs.values()
-                                if e.state == RUN_STATE_RUNNING)
+                                if e.state == RUN_STATE_RUNNING
+                                and e.engine_id == "flat")
             while self._queue and running_count < self.max_concurrent_runs:
                 rid = self._queue.pop(0)
                 e = self._runs.get(rid)

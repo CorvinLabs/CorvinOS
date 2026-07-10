@@ -186,6 +186,63 @@ class ConcurrencyTests(unittest.TestCase):
         finally:
             h.stop()
 
+    def test_non_flat_jobs_do_not_starve_flat_runs(self) -> None:
+        """Adversarial-review finding (HIGH): a non-flat engine job (pipeline/HAC)
+        creates a placeholder _RunEntry stuck in RUNNING with no worker task and no
+        terminal transition. If those entries counted against the flat
+        max_concurrent_runs budget, submitting max_concurrent_runs non-flat jobs
+        would permanently starve every subsequent FLAT run. Flat-only slot
+        accounting must keep flat runs executing regardless of non-flat jobs."""
+        from unittest.mock import MagicMock
+        from corvin_compute.engine_protocol import ComputeStatus
+
+        mock_engine = MagicMock()
+        mock_engine.engine_id = "pipeline"
+        mock_engine.job_id_prefix = "pipe_"
+        mock_engine.supports_gates = False
+        _n = {"i": 0}
+
+        def _submit(spec):
+            _n["i"] += 1
+            return f"pipe_stuck{_n['i']:04d}"
+
+        mock_engine.submit.side_effect = _submit
+        mock_engine.status.return_value = ComputeStatus(
+            job_id="pipe_stuck0001", engine_id="pipeline",
+            state="running", progress={}, detail={},  # never terminal
+        )
+
+        h = _WorkerHarness(max_concurrent_runs=2)
+        client = h.start()
+        h.server.register_engine(mock_engine)
+        try:
+            # Occupy >= max_concurrent_runs with perpetually-running non-flat jobs.
+            for _ in range(3):
+                client.submit_run(engine="pipeline", tenant_id="_default",
+                                  param_grid={"x": [0.1]},
+                                  budget={"max_iterations": 1})
+            # A flat run submitted now must still execute and reach terminal —
+            # before the fix it would sit "queued" forever.
+            sub = client.submit_run(
+                tenant_id="_default", tool_name="echo",
+                param_grid={"x": [0.1, 0.2, 0.3]}, loss_metric="loss",
+                strategy="grid", budget={"max_iterations": 5, "max_wall_clock_s": 5},
+            )
+            handle = sub["compute_handle"]
+            terminal = False
+            for _ in range(80):
+                st = client.get_status(handle)
+                if st["state"] in ("converged", "stalled", "budget_exhausted"):
+                    terminal = True
+                    break
+                time.sleep(0.1)
+            self.assertTrue(
+                terminal,
+                "flat run was starved by non-flat jobs holding the slot budget",
+            )
+        finally:
+            h.stop()
+
 
 class ErrorMappingTests(unittest.TestCase):
     def test_unknown_handle_returns_typed_error(self) -> None:

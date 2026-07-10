@@ -7253,22 +7253,41 @@ def _resolve_ffmpeg_bin() -> str | None:
         return None
 
 
+# Kept in lock-step with the CANONICAL table in operator/voice/scripts/say.py
+# (``_EDGE_VOICES``). This bridge-side copy previously carried only 15 of the 29
+# languages and a DIFFERENT Arabic voice (ar-SA vs ar-EG), so uk/cs/ro/he/hi/…
+# spoken on the bridge path silently fell back to English while the console TTS
+# used the right voice. Any edit here MUST mirror say.py and vice-versa.
 _EDGE_TTS_VOICES: dict[str, str] = {
-    "de": "de-DE-KatjaNeural",
-    "en": "en-US-AriaNeural",
-    "fr": "fr-FR-DeniseNeural",
-    "es": "es-ES-ElviraNeural",
-    "it": "it-IT-ElsaNeural",
-    "pt": "pt-BR-FranciscaNeural",
-    "nl": "nl-NL-ColetteNeural",
-    "pl": "pl-PL-AgnieszkaNeural",
-    "ru": "ru-RU-SvetlanaNeural",
-    "zh": "zh-CN-XiaoxiaoNeural",
-    "ja": "ja-JP-NanamiNeural",
-    "ko": "ko-KR-SunHiNeural",
-    "ar": "ar-SA-ZariyahNeural",
-    "tr": "tr-TR-EmelNeural",
-    "sv": "sv-SE-SofieNeural",
+    "de":    "de-DE-KatjaNeural",
+    "en":    "en-US-AriaNeural",
+    "zh":    "zh-CN-XiaoxiaoNeural",
+    "zh-hans": "zh-CN-XiaoxiaoNeural",
+    "zh-hant": "zh-TW-HsiaoChenNeural",
+    "ja":    "ja-JP-NanamiNeural",
+    "ko":    "ko-KR-SunHiNeural",
+    "fr":    "fr-FR-DeniseNeural",
+    "es":    "es-ES-ElviraNeural",
+    "ar":    "ar-EG-SalmaNeural",
+    "ru":    "ru-RU-SvetlanaNeural",
+    "hi":    "hi-IN-SwaraNeural",
+    "it":    "it-IT-ElsaNeural",
+    "pt":    "pt-BR-FranciscaNeural",
+    "nl":    "nl-NL-ColetteNeural",
+    "pl":    "pl-PL-AgnieszkaNeural",
+    "sv":    "sv-SE-SofieNeural",
+    "tr":    "tr-TR-EmelNeural",
+    "he":    "he-IL-HilaNeural",
+    "cs":    "cs-CZ-VlastaNeural",
+    "da":    "da-DK-ChristelNeural",
+    "fi":    "fi-FI-NooraNeural",
+    "nb":    "nb-NO-PernilleNeural",
+    "ro":    "ro-RO-AlinaNeural",
+    "hu":    "hu-HU-NoemiNeural",
+    "th":    "th-TH-PremwadeeNeural",
+    "vi":    "vi-VN-HoaiMyNeural",
+    "id":    "id-ID-GadisNeural",
+    "ms":    "ms-MY-YasminNeural",
 }
 
 
@@ -9903,7 +9922,7 @@ def main() -> int:
                     log(
                         "house-rules: WARNING — Ollama is reachable but has NO models "
                         "pulled. The L44 classifier will fail-closed and block every "
-                        "request. Fix: ollama pull qwen3:8b  (or any supported model)"
+                        "request. Fix: ollama pull qwen3:1.7b  (or any supported model)"
                     )
                 else:
                     _configured = (

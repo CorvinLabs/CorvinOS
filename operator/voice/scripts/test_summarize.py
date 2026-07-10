@@ -404,6 +404,46 @@ def test_naive_truncate_dash_bullets_recognised() -> None:
         assert must in out, f"lost: {must!r}"
 
 
+def test_hermes_backend_tried_when_cli_unavailable() -> None:
+    """M3 regression: on a Hermes-only install (no claude CLI) summarize() must
+    try the Hermes backend BEFORE falling through to structural truncation, so a
+    long voice reply gets a real summary instead of being cut mid-sentence."""
+    from unittest.mock import patch
+    long_text = "This is a genuinely long spoken answer that must be summarised. " * 30
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value=None) as cli,
+        patch.object(summarize, "_summarize_via_hermes",
+                     return_value="A concise Hermes summary.") as herm,
+    ):
+        out = summarize.summarize(long_text, "en", 200, "claude-haiku-4-5")
+    cli.assert_called_once()
+    herm.assert_called_once()
+    assert out == "A concise Hermes summary."
+
+
+def test_hermes_backend_strips_think_block() -> None:
+    """qwen3 emits <think>…</think> reasoning — it must never be spoken."""
+    from unittest.mock import patch
+
+    class _Resp:
+        def getcode(self):
+            return 200
+
+        def read(self):
+            return b'{"response": "<think>plan the reply</think>Final spoken answer."}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    with patch("urllib.request.urlopen", return_value=_Resp()):
+        out = summarize._summarize_via_hermes("some long text", "", "en", 200, "m")
+    assert out == "Final spoken answer."
+    assert "<think>" not in (out or "")
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------

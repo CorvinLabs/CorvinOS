@@ -83,7 +83,10 @@ def test_ping_if_due_sends_when_lock_is_free(tmp_path):
         patch.object(hu, "_load_instance_token", return_value="itok"),
         patch.object(hu, "load_or_create_instance_id", return_value="iid"),
         patch.object(hu, "_detect_active_engine", return_value="claude_code"),
-        patch("urllib.request.urlopen", return_value=mock_ctx) as mock_urlopen,
+        # The ping send routes through the hardened no-redirect/https-only opener
+        # (F8), not a bare urlopen — patch that so the test exercises the real
+        # transport path.
+        patch.object(hu, "_open_no_redirect", return_value=mock_ctx) as mock_urlopen,
     ):
         result = hu.ping_if_due(home)
 
@@ -119,7 +122,7 @@ def test_ping_body_carries_only_allowlisted_enum_fields(tmp_path):
         patch.object(hu, "_load_instance_token", return_value="itok-hmac"),
         patch.object(hu, "load_or_create_instance_id", return_value="uuid4-iid"),
         patch.object(hu, "_detect_active_engine", return_value="claude_code"),
-        patch("urllib.request.urlopen", side_effect=_capture) as mock_urlopen,
+        patch.object(hu, "_open_no_redirect", side_effect=_capture) as mock_urlopen,
     ):
         result = hu.ping_if_due(home)
 
@@ -167,6 +170,50 @@ def test_assert_ping_safe_is_fail_closed():
         body = {"corvin_version": "0.10.17", **bad}
         with pytest.raises(ValueError, match="non-allowlisted"):
             hu._assert_ping_safe(body)
+
+
+def test_unquoted_yaml_zero_opts_out(tmp_path):
+    """Adversarial-review finding: an operator hand-editing the tenant config to
+    ``ping_enabled: 0`` (unquoted → parsed as int 0, not the string "0") must
+    opt out, as the docstring promises. Previously only ``false``/``no``/``off``/
+    ``'0'`` (string) disabled it, silently ignoring the int form."""
+    from corvin_console.aco import htrace_consent as hc
+
+    cfg = tmp_path / "tenant.corvin.yaml"
+    cfg.write_text("spec:\n  telemetry:\n    ping_enabled: 0\n", encoding="utf-8")
+    assert hc._read_telemetry_flag(cfg, "ping_enabled") is False
+    cfg.write_text("spec:\n  telemetry:\n    healing_traces: 0\n", encoding="utf-8")
+    assert hc._read_telemetry_flag(cfg, "healing_traces") is False
+    assert hc._healing_flag_on({"telemetry": {"healing_traces": 0}}) is False
+    # A truthy int (e.g. 1) still counts as opted-in.
+    cfg.write_text("spec:\n  telemetry:\n    ping_enabled: 1\n", encoding="utf-8")
+    assert hc._read_telemetry_flag(cfg, "ping_enabled") is True
+
+
+def test_ping_send_uses_no_redirect_opener(tmp_path):
+    """The ping POST carries a Bearer + instance token in headers; it must go
+    through the hardened no-redirect/https-only opener (F8), never a bare
+    urlopen that would forward those credentials across a 302 or over http://."""
+    home = _make_home(tmp_path)
+    mock_resp = type("R", (), {"getcode": lambda self: 200})()
+    mock_ctx = type("Ctx", (), {
+        "__enter__": lambda self: mock_resp,
+        "__exit__": lambda self, *a: False,
+    })()
+    with (
+        patch.object(hu, "ping_enabled", return_value=True),
+        patch.object(hu, "ensure_ping_tokens", return_value=True),
+        patch.object(hu, "_last_ping_path", return_value=tmp_path / "last_ping"),
+        patch.object(hu, "_load_telemetry_token", return_value="tok"),
+        patch.object(hu, "_load_instance_token", return_value="itok"),
+        patch.object(hu, "load_or_create_instance_id", return_value="iid"),
+        patch.object(hu, "_detect_active_engine", return_value="claude_code"),
+        patch.object(hu, "_open_no_redirect", return_value=mock_ctx) as mock_open,
+        patch("urllib.request.urlopen") as mock_urlopen,
+    ):
+        assert hu.ping_if_due(home) is True
+    mock_open.assert_called_once()
+    mock_urlopen.assert_not_called()
 
 
 def test_ping_loop_reinvokes_ping_if_due_repeatedly():
@@ -218,7 +265,7 @@ def test_ping_if_due_still_sends_after_a_backward_clock_jump(tmp_path):
         patch.object(hu, "_load_instance_token", return_value="itok"),
         patch.object(hu, "load_or_create_instance_id", return_value="iid"),
         patch.object(hu, "_detect_active_engine", return_value="claude_code"),
-        patch("urllib.request.urlopen", return_value=mock_ctx) as mock_urlopen,
+        patch.object(hu, "_open_no_redirect", return_value=mock_ctx) as mock_urlopen,
     ):
         result = hu.ping_if_due(home)
 

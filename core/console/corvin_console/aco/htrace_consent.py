@@ -227,6 +227,11 @@ def _read_telemetry_flag(cfg_path: Path, key: str) -> Optional[bool]:
     v = tele.get(key, True)
     if v is False:
         return False
+    # Unquoted YAML ``0`` parses to int 0, not the string "0" — the docstring
+    # promises "0" opts out, so honour the int form too (bool is an int subclass,
+    # already handled by the ``is False`` check above).
+    if isinstance(v, int) and not isinstance(v, bool) and v == 0:
+        return False
     if isinstance(v, str) and v.strip().lower() in _FALSE_LIKE:
         return False
     return True
@@ -367,6 +372,8 @@ def _healing_flag_on(spec: dict) -> bool:
     v = spec.get("telemetry", {}).get("healing_traces", True)
     if v is False:
         return False
+    if isinstance(v, int) and not isinstance(v, bool) and v == 0:
+        return False  # unquoted YAML 0 → opt out (parity with _read_telemetry_flag)
     if isinstance(v, str) and v.strip().lower() in ("false", "no", "0", "off"):
         return False
     return True
@@ -417,8 +424,10 @@ def ping_enabled(home: Path) -> bool:
     enums (platform, python minor, engine id) + an HMAC token — NO personal data,
     no prompts, no PII (see htrace_uploader.ping_if_due). Legal basis: GDPR
     Art. 6(1)(f) legitimate interest (counting how many installations exist).
-    Distinct from the healing-trace / error-signature channels, which remain
-    strictly opt-in / deny-by-default.
+    The healing-trace / error-signature channels are ALSO default-ON / opt-out
+    (maintainer decision, ADR-0180) — their safety rides on being CONTENT-FREE,
+    not on a consent gate. This ping differs only in what it carries (a pseudonym
+    + coarse enums vs. scrubbed code signatures), not in its default posture.
 
     To opt out — the operator/user disables it — set
     ``spec.telemetry.ping_enabled: false`` in
@@ -442,7 +451,11 @@ def ping_enabled(home: Path) -> bool:
             if not _tenant_ping_flag(home, tid):
                 return False
     except Exception:  # noqa: BLE001
-        pass
+        # Fail CLOSED: if we cannot enumerate tenants to honour a per-tenant
+        # opt-out (e.g. an unreadable tenants/ dir), suppress the shared ping
+        # rather than sending it on the default flag alone — a config we cannot
+        # fully read must not override an opt-out we simply failed to see.
+        return False
     return True
 
 

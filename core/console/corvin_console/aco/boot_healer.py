@@ -147,12 +147,13 @@ async def _heal_cycle() -> None:
     except Exception:
         logger.debug("[ACO] L5 actuating repair failed", exc_info=True)
 
-    # ── Step L5.1: opt-in error telemetry (ADR-0179, foreign users) ──────
+    # ── Step L5.1: default-ON (opt-out) error telemetry (ADR-0179/0180) ──────
     # A machine that cannot fix its own code (no maintainer capability) still
-    # helps fix bugs everywhere: IF (and only if) the operator opted in, it ships
-    # SCRUBBED error signatures — never content — to the maintainer intake, who
-    # synthesizes a proven fix and releases it via PyPI. Deny-by-default: without
-    # consent this whole step is a no-op. Best-effort, never blocks the cycle.
+    # helps fix bugs everywhere: UNLESS the operator opted OUT, it ships SCRUBBED,
+    # CONTENT-FREE error signatures — never prompts/user data — to the maintainer
+    # intake, who synthesizes a proven fix and releases it via PyPI. Default-ON,
+    # opt-out (consent_granted): an explicit opt-out makes this step a no-op. The
+    # safety guarantee is content-freeness, not consent. Best-effort, never blocks.
     try:
         from ..aco import telemetry as _tel
         from forge import paths as _paths_t

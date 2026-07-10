@@ -6,10 +6,10 @@
 
 | | |
 |---|---|
-| **Python** | 3.10 or later |
+| **Python** | not required up front — the installer bootstraps its own via `uv` (3.10+ if you install manually) |
 | **OS** | Linux (Ubuntu 22.04+ recommended), macOS 12+ (Monterey), Windows 10 build 19041+ or Windows 11 |
-| **Disk** | ~500 MB |
-| **RAM** | 4 GB minimum |
+| **Disk** | 2–7 GB (the local Hermes model is 1.4–5.2 GB; plus the Whisper STT + Piper TTS voice models) |
+| **RAM** | 4 GB minimum. The installer picks the local model by available RAM — under ~6 GB it installs the lighter `qwen3:1.7b`, otherwise `qwen3:8b`; the running engine automatically uses whichever model is actually installed. |
 
 > **Bridges only** (Discord, WhatsApp, Telegram, Slack, Email) additionally require Node.js 20+
 > and systemd (Linux) or launchd (macOS). On Windows, bridges require WSL2.
@@ -26,13 +26,18 @@ curl -fsSL https://corvin-labs.com/install.sh | bash
 irm https://corvin-labs.com/install.ps1 | iex
 ```
 
-Both one-liners create a virtualenv at `~/.corvinos`, pip-install CorvinOS into it, and add it to
-your PATH. Equivalent to doing it manually:
+Both one-liners bootstrap the `uv` runtime (which brings its own Python — no system Python, pip, or
+package manager needed), then `uv tool install corvinos` into an isolated tool environment and add
+it to your PATH. They also provision the local Hermes model and the voice (STT + TTS) models so the
+install is voice-ready out of the box. Equivalent to doing it manually if you already have `uv`:
 
 ```bash
-pip install corvinos
+uv tool install corvinos
 corvinos-serve          # opens http://localhost:8765
 ```
+
+(With a system Python + pip you can also `pip install corvinos`, but the `uv` path above is what the
+one-liners use and needs no pre-installed Python.)
 
 **Hermes (local AI, no cloud required)** is automatically detected. If Ollama is not yet installed,
 the console's Settings → Engine page has a one-click bootstrap button.

@@ -567,6 +567,7 @@ def hac_detail(
 
     managers: list[dict[str, Any]] = []
     sub_losses: dict[str, float] = summary.get("sub_manager_losses", {})
+    manager_states: dict[str, str] = summary.get("manager_states", {})
 
     for sm in manifest.get("sub_managers", []):
         # Support both "manager_id" and "sub_manager_id" key names
@@ -593,8 +594,26 @@ def hac_detail(
                     })
 
         current_loss = sub_losses.get(mid)
-        best_loss = min((s["best_loss"] for s in stages_detail
-                         if s.get("best_loss") is not None), default=None)
+        best_loss = sub_losses.get(mid)
+        if best_loss is None and stages_detail:
+            best_loss = min((s["best_loss"] for s in stages_detail
+                             if s.get("best_loss") is not None), default=None)
+
+        # Authoritative per-manager state: the coordinator persists the REAL
+        # terminal state per sub-manager in summary["manager_states"]. The old
+        # derivation scanned stages_detail — which is ALWAYS empty because
+        # sub-manager runs are written to the global runs/ dir, not under
+        # sub_managers/<mid>/stages/ — so `all(... for s in [])` evaluated to True
+        # and every manager was falsely reported "complete" (even mid-run/failed).
+        persisted_state = manager_states.get(mid)
+        if persisted_state:
+            mgr_state = persisted_state
+        elif any(s.get("state") == "running" for s in stages_detail):
+            mgr_state = "running"
+        elif stages_detail and all(s.get("state") == "complete" for s in stages_detail):
+            mgr_state = "complete"
+        else:
+            mgr_state = "pending"  # no stage data AND no persisted state → not "complete"
 
         managers.append({
             "manager_id": mid,
@@ -603,8 +622,7 @@ def hac_detail(
             "strategy": sm.get("strategy", "bayesian"),
             "stages": stages_detail,
             "summary": {
-                "state": "running" if any(s.get("state") == "running" for s in stages_detail) else
-                         "complete" if all(s.get("state") == "complete" for s in stages_detail) else "pending",
+                "state": mgr_state,
                 "best_loss": best_loss,
                 "current_loss": current_loss,
             },
@@ -1047,6 +1065,12 @@ def submit_run(
             tenant_id=rec.tenant_id,
         )
     except (OSError, WorkerClientError) as exc:
+        # The quota was charged above but the worker never accepted the run — no
+        # work was done. Refund the unit so a transient worker error (worker down,
+        # socket hiccup) does not burn a free-tier user's entire 1/day budget for
+        # nothing. Best-effort; never masks the 502.
+        from ._compute_license_gate import refund_compute_quota  # noqa: PLC0415
+        refund_compute_quota()
         console_audit.action_failed(
             tenant_id=rec.tenant_id,
             sid_fingerprint=rec.sid_fingerprint,
@@ -3140,8 +3164,13 @@ def _build_l25_graph(run_dir: "Path") -> "dict[str, Any]":
         edges.append({"from": best_iter_id, "to": "best_params_node",
                       "color": "#FFD700", "width": 2, "dashes": False})
 
-    # Completion node
-    comp_color = "#00E676" if state == "complete" else "#FF1744"
+    # Completion node — a flat ComputeRun NEVER reaches a "complete" state; its
+    # successful terminal states are converged / stalled / budget_exhausted (only
+    # failed / aborted are real failures). The old `state == "complete"` check was
+    # never true, so every successful run's Result node rendered red with a
+    # "failed"-styled edge. Mirror the frontend isRunDone success set instead.
+    _SUCCESS_STATES = {"converged", "stalled", "budget_exhausted", "complete"}
+    comp_color = "#00E676" if state in _SUCCESS_STATES else "#FF1744"
     comp_level = 4 if (best_iter_id and best_params) else 3
     nodes.append({
         "id": "completion",
@@ -3160,7 +3189,8 @@ def _build_l25_graph(run_dir: "Path") -> "dict[str, Any]":
         ),
     })
     edges.append({"from": "run_root", "to": "completion",
-                  "color": comp_color, "width": 2, "dashes": True})
+                  "color": comp_color, "width": 2,
+                  "dashes": state not in _SUCCESS_STATES})
 
     return {
         "mode": "l25",

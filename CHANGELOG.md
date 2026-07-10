@@ -6,6 +6,95 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.25] — Adversarial-review hardening sweep (fresh-install voice, agentic compute, telemetry, licensing)
+
+Full adversarial review across four surfaces (install/voice on a fresh unknown
+system, the agentic-compute engine + console UI, the anonymous instance ping +
+telemetry channels, and the licensing bypass surface). Fixes below; the two
+highest-value install blockers are the Hermes model mismatch (B1) and the piped
+install skipping voice provisioning (B2).
+
+### Fixed — fresh install / voice-first first run
+- **Hermes default model mismatch broke chat on low-RAM machines (BLOCKER).**
+  The installer pulls `qwen3:1.7b` on <6 GB boxes, but the engine (and the L44
+  house-rules classifier) resolved the default to a hardcoded `qwen3:8b` that was
+  never pulled → every Hermes turn errored "model not available" with no recovery.
+  `hermes_engine._resolve_default_model()` now discovers the qwen3 tag actually
+  installed in Ollama and uses it (env override still wins; unreachable Ollama
+  still falls back to the built-in default). This also fixes the L44 classifier
+  false-blocking every chat/voice turn on those installs.
+- **Piped `curl … | sh` install skipped ALL voice provisioning + services
+  (BLOCKER).** The setup wizard only ran on a TTY, so the documented one-liner
+  left Whisper STT + Piper TTS unprovisioned while printing "CorvinOS is ready!".
+  The piped path now runs `corvin-install --yes` (voice models + Stufe-1 login
+  services), matching the interactive install; Stufe-2 always-on stays opt-in.
+- **Console voice transcription froze the whole console on first use (HIGH).**
+  `voice_transcribe` ran the blocking STT (up to 120 s, plus a first-run model
+  download) directly on the asyncio loop, freezing every SSE stream/tab. It now
+  offloads to the threadpool.
+- **Claude installed but not logged in → raw CLI auth error instead of Hermes
+  fallback (HIGH).** `_effective_os_engine` now falls back to Hermes when the
+  claude binary is present but unauthenticated (same credential signal the rest of
+  the product uses), not only when the binary is missing.
+- **Voice replies were cut mid-sentence on the default Hermes-only install.**
+  Added a Hermes/Ollama backend to the voice summarizer between the Claude-CLI and
+  the structural-truncation fallback, so the shipped default gets a real summary.
+- Reconciled the drifted edge-tts voice table on the bridge path with the
+  canonical 29-language table (uk/cs/ro/he/hi/… no longer fall back to English;
+  Arabic voice matched); refreshed stale `qwen2.5:7b` model guidance to `qwen3`;
+  guarded the macOS RAM probe against an empty result; corrected `INSTALLATION.md`
+  / `INSTALL-UNIVERSAL.md` drift (uv-not-pip, realistic disk/RAM, removed the
+  bogus `ollama install corvinOS`, fixed the Windows voice-config path).
+
+### Fixed — Agentic Compute
+- **HAC mode was 100 % broken on any install without scikit-learn.** Sub-managers
+  defaulted to the `bayesian` strategy, which only registers when sklearn is
+  present, so every sub-manager raised `UnknownStrategy` and every HAC run failed.
+  Sub-managers now fall back to the always-available `grid` walker when the
+  requested strategy is not installed. The swallowed failure log (`log.exception`
+  with no active exception → "NoneType: None") now records the real cause.
+- **Pipeline/HAC jobs permanently leaked their concurrency slot (HIGH).** Non-flat
+  engine jobs held a `RUNNING` placeholder that never went terminal; because it
+  counted against the flat `max_concurrent_runs` budget, two of them starved every
+  subsequent flat run. Flat-slot accounting now counts only flat runs.
+- **HAC detail view showed fabricated "complete" sub-managers with no loss data.**
+  The route derived per-manager state from an always-empty stage scan
+  (`all([]) == True`); the coordinator now persists real `manager_states`,
+  `sub_manager_losses`, and `root_loss_history`, and the route uses them.
+- **Pipeline `$ref.best_params` resolved to a fingerprint dict, not real
+  parameters** (the a64a50d HAC fix was never applied to the pipeline coordinator)
+  — downstream stage steering now reads the winning iteration's actual params.
+- **L25 run-graph rendered every successful run's Result node red/"failed"**
+  (`state == "complete"` is never true) — now green for `converged`/`stalled`/
+  `budget_exhausted`.
+- **A transient compute-worker error burned a free-tier user's entire 1/day quota
+  with nothing run** — the unit is now refunded when the worker rejects the submit.
+- Fixed a test-collection import error that took down the entire compute test
+  suite under `pytest`.
+
+### Fixed — telemetry / instance ping
+- **Ping / bundle / CorvinLogs POSTs followed redirects and had no https-only
+  guard (HIGH)** — they carried the Bearer + instance tokens (and a GitHub PAT) in
+  headers and would forward them across a 302 or over `http://`. All three now use
+  the hardened no-redirect/https-only opener (F8).
+- An unquoted YAML `ping_enabled: 0` / `healing_traces: 0` did not opt out
+  (docstring promised "0" does) — the int form is now honoured.
+- Multi-tenant ping opt-out enumeration now fails **closed** on a discovery error.
+- Version regex uses `\Z` (no trailing-newline bypass).
+- Corrected stale "opt-in, deny-by-default" docstrings that misdescribed the
+  now-default-ON/opt-out error + healing channels (the safety invariant is
+  content-freeness, not consent).
+
+### Notes — licensing
+- Adversarial review confirmed the fork/Kerckhoffs ceiling documented in
+  ADR-0139/0167 (a pure-Python gate can be NOP'd in a fork; the deterrent is
+  economic/legal, not technical). Unmodified-binary findings that need issuer/
+  server coordination (long-lived-token instance binding, offline-revocation
+  fail-open, clock-rollback of an expired token) are documented for maintainer
+  decision rather than patched with a change that could lock out paying customers.
+  Fixed one safe item: compute grace no longer defaults an indeterminate tier to
+  paid `pro`.
+
 ### Fixed — Agentic Compute page always showed "0 completed" / empty Analytics no matter how many runs succeeded
 - The flat/l25 compute engine (`core/compute/corvin_compute/budget.py`
   `RUN_STATE_*`) never produces a state literally named `"complete"` — its

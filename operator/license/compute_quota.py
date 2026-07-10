@@ -373,8 +373,73 @@ def _do_increment_and_check(
                     fcntl.flock(lf, fcntl.LOCK_UN)
 
 
+def refund_one(
+    corvin_home: Path,
+    *,
+    feature: str = "compute_units_per_day",
+    counter_file: str = "compute_quota.json",
+) -> None:
+    """Give back ONE unit charged by a preceding increment_and_check that did not
+    result in real work (e.g. the compute worker rejected the submission before
+    running anything). Decrements today's counter, floored at 0. Fail-soft: any
+    error is swallowed — a failed refund must never surface to the caller (worst
+    case the user simply keeps the pre-existing over-charge).
+
+    Symmetric with _do_increment_and_check: same on-disk counter, same lock file,
+    same cross-process locking, so a refund cannot race an increment on another
+    thread/process into an inconsistent count.
+    """
+    try:
+        today = _today_utc()
+        path = _quota_path(corvin_home, counter_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _read_modify_write() -> None:
+            data = _load(path)
+            current = max(0, int(data.get(today, 0)))
+            if current <= 0:
+                return  # nothing to refund
+            data[today] = current - 1
+            cutoff = _cutoff_date()
+            data = {k: v for k, v in data.items() if k >= cutoff}
+            _save(path, data)
+
+        lock_path = path.parent / f".{counter_file}.lock"
+        lock_path.touch()
+        with _INCREMENT_LOCK:
+            if _IS_WINDOWS and msvcrt is not None:
+                lf = open(lock_path, "a+")
+                try:
+                    lf.seek(0)
+                    _locked = False
+                    try:
+                        msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+                        _locked = True
+                    except OSError:
+                        pass
+                    _read_modify_write()
+                finally:
+                    if _locked:
+                        try:
+                            lf.seek(0)
+                            msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+                        except OSError:
+                            pass
+                    lf.close()
+            else:
+                with open(lock_path) as lf:
+                    fcntl.flock(lf, fcntl.LOCK_EX)
+                    try:
+                        _read_modify_write()
+                    finally:
+                        fcntl.flock(lf, fcntl.LOCK_UN)
+    except Exception as exc:  # noqa: BLE001 — refund is best-effort
+        _log.debug("compute_quota: refund_one failed (non-fatal): %s", exc)
+
+
 __all__ = [
     "get_today_count",
     "increment_and_check",
+    "refund_one",
     "LicenseLimitError",
 ]

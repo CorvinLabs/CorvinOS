@@ -31,6 +31,7 @@ Corvin is **structurally constrained** by EU AI Act 2026 + GDPR. Every feature m
 | House-rules gate (acceptable-use, fail-closed) | EU AI Act Art. 5, 50 | [Layer 44](docs/claude-ref/layer-44-house-rules.md) |
 | Error/healing telemetry (default-ON, opt-out; CONTENT-FREE scrubbed signatures only, fail-closed `_assert_safe`) | GDPR Art. 6(1)(f) legitimate interest | ADR-0179/0180 (`aco/telemetry.py::consent_granted`, `htrace_consent.py::healing_traces_enabled`) |
 | Anonymous instance-count ping (default-ON, opt-out; random uuid4 + version + coarse allowlisted environment enums [platform, python minor, engine id], no PII) | GDPR Art. 6(1)(f) legitimate interest | ADR-0180 (`aco/htrace_consent.py::ping_enabled`) |
+| Presence heartbeat (default-ON, opt-out; gated by the SAME `ping_enabled` flag; empty body + pseudonymous instance_id/token headers only, no PII; ~5-min cadence — finer than the daily ping) | GDPR Art. 6(1)(f) legitimate interest | ADR-0186 (`aco/heartbeat.py`) |
 
 **Must NOT do (absolute):**
 - Don't weaken disclosure — AI-nature statement and opt-out (`/pass`, `/leave`) are locked.

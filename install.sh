@@ -112,6 +112,11 @@ if [ "$SKIP_HERMES" != "1" ]; then
     elif command -v sysctl >/dev/null 2>&1; then
         ram_mb=$(sysctl -n hw.memsize 2>/dev/null | awk '{printf "%d",$1/1024/1024}' || echo 8000)
     fi
+    # Guard against an empty / non-numeric probe result (e.g. sysctl failed and
+    # awk emitted nothing): `[ "" -lt 6000 ]` would print a shell error. Default
+    # to a conservative 8000 so we fall through to the standard model, and the
+    # running engine still auto-selects whatever tag actually gets installed.
+    case "$ram_mb" in ''|*[!0-9]*) ram_mb=8000 ;; esac
     if [ "$ram_mb" -lt 6000 ]; then HMODEL="qwen3:1.7b"; else HMODEL="qwen3:8b"; fi
     echo "  RAM ~${ram_mb} MB → model $HMODEL"
 
@@ -154,15 +159,28 @@ if [ "$SKIP_HERMES" != "1" ]; then
     fi
 fi
 
-# ── 3. setup wizard (interactive terminal, or --autostart/--always-on) ───────
+# ── 3. setup wizard (voice provisioning + Stufe-1 login autostart) ────────────
+# A fresh install must be voice-ready (Whisper STT + Piper TTS models) with zero
+# manual steps — that is the product's core promise. The wizard provisions those
+# models (installer steps ensure_stt / ensure_piper) plus registers the Stufe-1
+# login services. On an interactive terminal it runs interactively; on a PIPED
+# install (curl | sh, no TTY) it previously SKIPPED entirely, silently leaving
+# STT/TTS unprovisioned and the console un-serviced while still printing
+# "CorvinOS is ready!" — a broken voice-first first run. We now run it
+# non-interactively (`--yes`) in the piped case so voice works out of the box.
+# Stufe-2 always-on (survives reboot with no login, needs sudo) stays strictly
+# opt-in via --always-on below — it is NEVER implied here.
 if command -v corvin-install >/dev/null 2>&1; then
-    if [ -t 0 ] || [ "$FORCE_AUTOSTART" = "1" ]; then
+    if [ -t 0 ] && [ "$FORCE_AUTOSTART" != "1" ]; then
         echo "  Launching setup wizard ..."; echo ""
         corvin-install || true
     else
-        printf '\n  %s Piped install detected — this skips autostart setup by default.\n    Run the wizard once your terminal is ready: %s\n    Or re-run this installer with: %s\n' \
-            "$(_yellow 'Note:')" "$(_bold 'corvin-install')" \
-            "$(_bold 'curl ... | sh -s -- --autostart')"
+        # Piped (or --autostart): provision voice + services non-interactively so
+        # the fresh install is genuinely voice-ready. Fail-soft — a failed model
+        # download (e.g. offline) must not abort the whole install.
+        echo "  Provisioning voice (STT + TTS) and services non-interactively ..."; echo ""
+        corvin-install --yes || printf '  %s Voice/setup provisioning did not fully complete — re-run later with: %s\n' \
+            "$(_yellow '⚠')" "$(_bold 'corvin-install')"
     fi
 fi
 

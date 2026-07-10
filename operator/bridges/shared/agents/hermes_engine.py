@@ -59,14 +59,62 @@ HERMES_MODEL_ALIASES: dict[str, str] = {
 _DEFAULT_MODEL = "qwen3:8b"
 
 
+def _installed_ollama_models(base_url: str, timeout: float = 2.0) -> list[str]:
+    """Return the list of model tags currently pulled into Ollama, or [] on any
+    error. Fail-soft: never raises. Used to pick a default that actually exists."""
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        out: list[str] = []
+        for m in data.get("models", []) or []:
+            name = (m.get("name") or m.get("model") or "").strip()
+            if name:
+                out.append(name)
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _pick_installed_qwen3(installed: list[str]) -> str | None:
+    """Choose the best installed qwen3 tag: prefer the built-in default if it is
+    present, else the largest-parameter qwen3 tag actually pulled (e.g. an 8b over
+    a 1.7b), else None. This is what closes the installer/runtime mismatch — a
+    low-RAM box that only pulled qwen3:1.7b must resolve to THAT, not the absent 8b."""
+    if _DEFAULT_MODEL in installed:
+        return _DEFAULT_MODEL
+    qwen3 = [m for m in installed if m.startswith("qwen3")]
+    if not qwen3:
+        return None
+
+    def _params(tag: str) -> float:
+        # Parse the "<n>b" size hint out of e.g. "qwen3:1.7b" / "qwen3:8b".
+        try:
+            size = tag.split(":", 1)[1] if ":" in tag else ""
+            num = "".join(c for c in size if (c.isdigit() or c == "."))
+            return float(num) if num else 0.0
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+    return max(qwen3, key=_params)
+
+
 def _resolve_default_model() -> str:
     """Resolution order:
     1. CORVIN_HERMES_MODEL env var (direct Ollama tag or alias)
-    2. Built-in default: "qwen3:8b"
+    2. The best qwen3 model ACTUALLY installed in Ollama (installer picks the tag
+       by available RAM — a &lt;6 GB box gets qwen3:1.7b, not the 8b this used to
+       hardcode; resolving to the absent 8b made first-run chat error on every
+       turn with no recovery, since healing matches any qwen3 tag).
+    3. Built-in default: "qwen3:8b" (kept as the fallback when Ollama is
+       unreachable / empty, so the actionable "run: ollama pull …" path still fires).
     """
     env = os.environ.get("CORVIN_HERMES_MODEL", "").strip()
     if env:
         return HERMES_MODEL_ALIASES.get(env, env)
+    installed = _installed_ollama_models(_resolve_base_url())
+    picked = _pick_installed_qwen3(installed)
+    if picked:
+        return picked
     return _DEFAULT_MODEL
 
 

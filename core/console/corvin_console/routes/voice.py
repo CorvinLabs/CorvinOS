@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status as http_status
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from .. import auth as session_auth
@@ -312,7 +313,14 @@ async def voice_transcribe(
     t0 = time.monotonic()
     try:
         try:
-            result = _stt_transcribe(path, lang=lang)
+            # _stt_transcribe is a synchronous, CPU/IO-heavy call (local Whisper
+            # budget is up to 120 s, and the very first call on a fresh install may
+            # also download the GGML model in-band). Calling it directly on the
+            # asyncio loop froze the ENTIRE console — every SSE chat stream, healthz,
+            # and other tab — for the duration. Offload to the threadpool so the
+            # loop stays responsive (voice_tts is already a sync def for the same
+            # reason; this route must stay async for the awaited UploadFile.read()).
+            result = await run_in_threadpool(_stt_transcribe, path, lang=lang)
         except STTTimeout as e:
             console_audit.action_failed(
                 tenant_id=rec.tenant_id,

@@ -93,10 +93,18 @@ class HACStore:
         os.chmod(path, 0o600)
 
     def write_summary(self, *, state: str, round_n: int, root_loss: float | None,
-                      manager_states: dict, attributions: dict) -> None:
+                      manager_states: dict, attributions: dict,
+                      sub_manager_losses: dict | None = None,
+                      root_loss_history: list | None = None) -> None:
         data = {
             "state": state, "round": round_n, "root_loss": root_loss,
             "manager_states": manager_states, "attributions": attributions,
+            # Persisted so the console HAC detail view can render real per-manager
+            # best-loss values and the round-loss history chart. Without these the
+            # detail route fell back to an always-empty stage scan (managers were
+            # falsely reported "complete" and no loss chart ever had data).
+            "sub_manager_losses": sub_manager_losses or {},
+            "root_loss_history": root_loss_history or [],
         }
         path = self.root / "hac_summary.json"
         tmp = path.with_suffix(".tmp")

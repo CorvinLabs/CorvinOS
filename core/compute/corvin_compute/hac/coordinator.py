@@ -156,6 +156,12 @@ class HACCoordinator:
             manager_states={mid: res.get("state", "unknown")
                             for mid, res in self._manager_results.items()},
             attributions={},
+            # Real per-manager best-loss + the round-loss history so the console
+            # detail view renders actual data instead of an always-empty stage scan.
+            sub_manager_losses={mid: res.get("best_loss")
+                                for mid, res in self._manager_results.items()
+                                if res.get("best_loss") is not None},
+            root_loss_history=list(self._root_loss_history),
         )
 
     async def _run_managers(self, manager_ids: list[str]) -> None:
@@ -173,7 +179,14 @@ class HACCoordinator:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for manager_id, result in zip(manager_ids, results):
                 if isinstance(result, Exception):
-                    log.exception("sub-manager %s failed", manager_id)
+                    # gather(return_exceptions=True) hands back the exception as a
+                    # value — there is no active exc context here, so log.exception
+                    # would print a useless "NoneType: None". Log the exception
+                    # object itself (with type) so the real cause is recoverable.
+                    log.error(
+                        "sub-manager %s failed: %s: %s",
+                        manager_id, type(result).__name__, result,
+                    )
                     self._manager_results[manager_id] = {"state": "failed", "best_loss": None}
                 else:
                     self._manager_results[manager_id] = result
@@ -197,12 +210,34 @@ class HACCoordinator:
 
         first_stage = sm.stages[0]
         run_id = new_run_id()
+
+        # Resolve the sub-manager strategy against what is actually registered.
+        # SubManagerSpec.strategy defaults to "bayesian", but that strategy only
+        # auto-registers when sklearn+numpy are installed (see strategies/__init__).
+        # On a minimal install (no sklearn) load_strategy("bayesian") raised
+        # UnknownStrategy inside the worker thread, which surfaced as "sub-manager
+        # X failed" for EVERY sub-manager — HAC mode was 100% broken out of the
+        # box. Fall back to the always-present "grid" walker (param_grid input is
+        # grid-shaped anyway) so a run degrades gracefully instead of failing;
+        # an explicitly-available strategy is still honoured unchanged.
+        strategy_name = sm.strategy
+        try:
+            if strategy_name not in strat_pkg.available_strategies():
+                log.warning(
+                    "HAC sub-manager %s requested strategy %r which is not "
+                    "installed (available: %s) — falling back to 'grid'",
+                    sm.manager_id, strategy_name, strat_pkg.available_strategies(),
+                )
+                strategy_name = "grid"
+        except Exception:  # noqa: BLE001 — never let resolution itself fail the run
+            strategy_name = "grid"
+
         spec = ComputeRunSpec(
             tenant_id=self.manifest.tenant_id,
             tool_name=str(first_stage.get("tool_name", "")),
             param_grid=dict(first_stage.get("param_grid", {})),
             loss_metric="loss",
-            strategy_name=sm.strategy,
+            strategy_name=strategy_name,
             budget=budget,
             minimise=True,
             data_handle=None,

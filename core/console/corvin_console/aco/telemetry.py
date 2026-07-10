@@ -1,4 +1,4 @@
-"""ACO — opt-in error telemetry channel (ADR-0179).
+"""ACO — default-ON (opt-out) error telemetry channel (ADR-0179 / ADR-0180).
 
 How a FOREIGN user's machine — which can NOT fix its own code (no maintainer
 capability) — still gets bugs fixed: it ships *scrubbed error signatures* to the
@@ -6,9 +6,13 @@ maintainer, who synthesizes a diagnosis, proves+fixes it, releases a new PyPI
 version, and the fix returns to every machine via ``pip``.
 
 Hard privacy guarantees (GDPR / CLAUDE.md compliance baseline):
-  * **Opt-in, deny-by-default.** Nothing leaves a machine unless the operator has
-    explicitly granted consent (``consent.json`` or ``CORVIN_TELEMETRY_OPTIN=1``).
-    No consent → every function here is a no-op.
+  * **Default-ON, opt-OUT (maintainer decision).** This channel ships by default
+    so Corvin-Logs gets real crash data across installs; it is disabled by an
+    explicit opt-out (``CORVIN_TELEMETRY_OPTIN=false``, a ``consent.json`` with
+    ``{"opted_in": false}``, or ``spec.telemetry.error_traces: false``) — see
+    ``consent_granted``. Legal basis: GDPR Art. 6(1)(f) legitimate interest. The
+    load-bearing safety invariant is NOT consent-gating but that everything sent
+    stays strictly CONTENT-FREE (below); an opt-out always wins.
   * **Signatures only, never content.** The payload is the output of
     ``error_signature`` — exception type, repo-relative frames, and a scrubbed
     message TEMPLATE. Never a prompt, transcript, name, email, token, path, or

@@ -308,18 +308,25 @@ class PipelineCoordinator:
         )
         record = run.run()
 
-        # best_params lives in the rolling summary, not on RunRecord directly
         summary = record.summary or {}
         best_params_raw = summary.get("top_k", [{}])
-        # top_k is a list of {iter, loss, param_fingerprint} — best_params is
-        # stored in the iteration file.  Expose the summary's top_k entry so
-        # downstream stages can steer based on the winning fingerprint.
-        # For $ref resolution we expose best_params from the summary dict when
-        # it is present (populated by ComputeRun._update_rolling_summary).
-        best_params = summary.get("best_params", {})
-        if not best_params and best_params_raw:
-            # Fallback: represent as the first top-k entry's fingerprint dict
-            best_params = best_params_raw[0] if isinstance(best_params_raw[0], dict) else {}
+        # The driver NEVER writes real params into the summary — top_k entries are
+        # {iter, loss, param_fingerprint}, and there is no summary["best_params"].
+        # Resolving $sid.best_params from the summary therefore yielded {} or a
+        # fingerprint dict, so a downstream stage steering on the prior stage's
+        # winning parameters got garbage. HAC's _exec_manager was fixed (a64a50d)
+        # to read the winning iteration's REAL params from the RunStore; the
+        # pipeline coordinator had the identical defect. Look up the winning
+        # iteration's actual params the same way.
+        best_params: dict[str, Any] = {}
+        if record.best_iter is not None:
+            try:
+                for it in run.store.read_iterations(run_id):
+                    if it.iter == record.best_iter:
+                        best_params = dict(it.params)
+                        break
+            except Exception:  # noqa: BLE001 — never fail a stage on param lookup
+                best_params = {}
 
         return {
             "state": record.state,

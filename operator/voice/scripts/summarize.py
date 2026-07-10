@@ -929,6 +929,71 @@ def _summarize_via_cli(text: str, task: str, lang: str, target_chars: int, model
         return None
 
 
+def _resolve_hermes_model_for_summary() -> str:
+    """Model tag for the Hermes summarize backend — the SAME resolution the
+    running Hermes engine uses (CORVIN_HERMES_MODEL → installed qwen3 tag →
+    built-in default), so no extra Ollama model is needed."""
+    try:
+        from agents.hermes_engine import _resolve_default_model  # type: ignore
+        return _resolve_default_model()
+    except Exception:  # noqa: BLE001
+        return os.environ.get("CORVIN_HERMES_MODEL", "").strip() or "qwen3:8b"
+
+
+def _summarize_via_hermes(text: str, task: str, lang: str, target_chars: int, model: str, persona: str = "", audience: str = "", output_language: str = "") -> str | None:
+    """Backend 2: the local Hermes engine (Ollama). This is the DEFAULT zero-config
+    engine, so without it a Hermes-only install had no LLM summarizer at all and
+    every long voice reply fell through to naive_truncate — spoken answers cut off
+    mid-thought on exactly the shipped default. Uses the same system prompt as the
+    CLI backend; POSTs to Ollama /api/generate (non-streaming) with a bounded
+    timeout. Returns None (→ structural fallback) on any error / when Ollama is
+    unreachable, so this never makes things worse than before."""
+    import json as _json
+    import urllib.request as _ur
+
+    base_url = ""
+    for env_key in ("CORVIN_OLLAMA_BASE_URL", "OLLAMA_HOST", "CORVIN_HERMES_URL"):
+        v = os.environ.get(env_key, "").strip()
+        if v:
+            base_url = v.rstrip("/")
+            break
+    if not base_url:
+        base_url = "http://localhost:11434"
+
+    has_task = bool(task.strip())
+    system_prompt = _system_for(lang, target_chars, has_task, persona, audience, output_language)
+    user_input = _build_input(text, task, lang) if has_task else text
+    hermes_model = _resolve_hermes_model_for_summary()
+
+    payload = _json.dumps({
+        "model": hermes_model,
+        "system": system_prompt,
+        "prompt": user_input,
+        "stream": False,
+        # Voice summaries must be concise + deterministic — low temperature keeps
+        # the model from padding the spoken reply.
+        "options": {"temperature": 0.2},
+    }).encode("utf-8")
+    try:
+        req = _ur.Request(
+            f"{base_url}/api/generate", data=payload,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        # CPU Hermes is slow; 60 s keeps the spoken-reply latency bounded while
+        # still allowing a real summary on modest hardware. On timeout → None →
+        # structural fallback (never blocks the voice pipeline indefinitely).
+        with _ur.urlopen(req, timeout=60) as resp:
+            if not (200 <= resp.getcode() < 300):
+                return None
+            data = _json.loads(resp.read().decode("utf-8"))
+        out = str(data.get("response", "")).strip()
+        # qwen3 emits <think>…</think> reasoning before the answer — strip it so
+        # the internal monologue is never spoken aloud.
+        out = re.sub(r"(?is)<think>.*?</think>", "", out).strip()
+        return out or None
+    except Exception as exc:  # noqa: BLE001
+        print(f"[summarize] Hermes call failed: {exc}", file=sys.stderr)
+        return None
 
 
 # Fallback prefix when no LLM backend is available but a task is supplied.
@@ -1261,14 +1326,26 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
 
     candidate: str | None = None
 
+    _backend = os.environ.get("VOICE_SUMMARIZE_BACKEND", "auto")
+
     # Backend 1: CLI — preferred for users with Claude Max who don't want
     # to manage a separate API key.
-    if os.environ.get("VOICE_SUMMARIZE_BACKEND", "auto") in ("auto", "cli"):
+    if _backend in ("auto", "cli"):
         out = _summarize_via_cli(text, task, lang, target, model, persona, audience, output_language)
         if out:
             candidate = out
 
-    # Backend 2: structural compression. Never drops list items. When a task
+    # Backend 2: Hermes (local Ollama) — the DEFAULT zero-config engine. Without
+    # this a Hermes-only install (no claude CLI / API key) had no LLM summarizer
+    # and every long voice reply was naive_truncate'd mid-sentence. Tried after the
+    # CLI so Claude-Max users are unaffected; before structural so the shipped
+    # default gets a real summary.
+    if candidate is None and _backend in ("auto", "hermes"):
+        out = _summarize_via_hermes(text, task, lang, target, model, persona, audience, output_language)
+        if out:
+            candidate = out
+
+    # Backend 3: structural compression. Never drops list items. When a task
     # is given, prefix it manually since the structural fallback can't
     # rephrase prose. The audience block has no effect here — it's an LLM-
     # only steering signal; structural compression keeps every list item
