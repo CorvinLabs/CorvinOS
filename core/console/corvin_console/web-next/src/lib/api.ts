@@ -1444,7 +1444,7 @@ export interface WorkflowDetailResponse {
 export interface RunMeta {
   rid: string;
   wid: string;
-  status: "running" | "complete" | "failed";
+  status: "running" | "complete" | "failed" | "paused";
   dry_run: boolean;
   started_at: number;
   finished_at: number | null;
@@ -1458,7 +1458,7 @@ export interface RunDetailResponse {
 }
 
 export interface WorkflowRunEvent {
-  type: "node_started" | "node_completed" | "node_failed" | "node_awaiting_approval" | "run_completed" | "error" | "media" | "table";
+  type: "node_started" | "node_completed" | "node_failed" | "node_awaiting_approval" | "node_awaiting_reply" | "run_completed" | "run_paused" | "error" | "media" | "table";
   ts: number;
   node_id?: string;
   tokens?: number;
@@ -1503,6 +1503,22 @@ export async function rejectRunNode(
     method: "POST",
     csrf,
     body: { comment },
+  });
+}
+
+// ADR-0188 — resume a run paused at an `ask_human` node with a free-text
+// (or yes/no) reply. `confirmed` is present only when the node declared an
+// `expect: {type: boolean}` field; absent for plain free-text replies.
+export async function resumeWorkflowRun(
+  wid: string,
+  rid: string,
+  reply: string,
+  csrf: string,
+): Promise<{ ok: true; status: "complete" | "failed" | "paused"; confirmed?: boolean }> {
+  return api(`/workflows/${encodeURIComponent(wid)}/runs/${encodeURIComponent(rid)}/resume`, {
+    method: "POST",
+    csrf,
+    body: { reply },
   });
 }
 

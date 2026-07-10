@@ -2372,6 +2372,131 @@ function HitlApprovalBar({
   );
 }
 
+// ── Workflow Chat Panel (ADR-0188 M6/M10 — ask_human / chatflow) ─────────
+//
+// Distinct from HitlApprovalBar above: that one is a binary approve/reject
+// gate for the older "approval" node type. This is a genuine chat window
+// for `ask_human` nodes (ADR-0188) — free-text or yes/no replies, rendered
+// as a conversation, matching how a chatflow (`orchestration.engine: chat`)
+// actually talks to a user: the workflow's `answer`/`ask_human` messages
+// appear as assistant bubbles, the human types a real reply, not just a
+// click.
+
+interface ChatTurn {
+  role: "assistant" | "user";
+  text: string;
+  ts: number;
+}
+
+function WorkflowChatPanel({
+  wid,
+  rid,
+  nodeId,
+  prompt,
+  history,
+  csrf,
+  onResumed,
+}: {
+  wid: string;
+  rid: string;
+  nodeId: string;
+  prompt: string;
+  history: ChatTurn[];
+  csrf: string;
+  onResumed: (status: "confirmed" | "declined" | "sent") => void;
+}) {
+  const [reply, setReply] = React.useState("");
+  const [sending, setSending] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const bottomRef = React.useRef<HTMLDivElement>(null);
+  const inputRef = React.useRef<HTMLTextAreaElement>(null);
+
+  React.useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [history.length]);
+
+  React.useEffect(() => {
+    inputRef.current?.focus();
+  }, [nodeId]);
+
+  const send = async () => {
+    const text = reply.trim();
+    if (!text || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      const { resumeWorkflowRun } = await import("@/lib/api");
+      const res = await resumeWorkflowRun(wid, rid, text, csrf);
+      setReply("");
+      onResumed(res.confirmed === undefined ? "sent" : res.confirmed ? "confirmed" : "declined");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const allTurns: ChatTurn[] = [...history, { role: "assistant", text: prompt, ts: Date.now() / 1000 }];
+
+  return (
+    <div className="border-t border-amber-300 dark:border-amber-700 bg-background flex flex-col max-h-[45vh]">
+      <div className="flex items-center gap-2 border-b border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3 py-2">
+        <span className="flex h-2 w-2 shrink-0 rounded-full bg-amber-500 animate-pulse" />
+        <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
+          Waiting for your reply — node <code className="font-mono">{nodeId}</code>
+        </span>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 space-y-2.5">
+        {allTurns.map((t, i) => (
+          <div key={i} className={cn("flex", t.role === "user" ? "justify-end" : "justify-start")}>
+            <div
+              className={cn(
+                "max-w-[85%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed",
+                t.role === "user"
+                  ? "bg-accent text-accent-foreground rounded-br-sm"
+                  : "bg-amber-100 dark:bg-amber-950/40 text-foreground rounded-bl-sm border border-amber-200 dark:border-amber-800",
+              )}
+            >
+              {t.text}
+            </div>
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+
+      {error && (
+        <div className="mx-3 mb-1 rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+          {error}
+        </div>
+      )}
+
+      <div className="shrink-0 border-t border-border p-3">
+        <div className="flex gap-2">
+          <Textarea
+            ref={inputRef}
+            value={reply}
+            onChange={(e) => setReply(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder="Type your reply… (Enter to send)"
+            disabled={sending}
+            className="min-h-[44px] resize-none text-sm"
+            rows={1}
+          />
+          <Button size="sm" onClick={send} disabled={sending || !reply.trim()} className="self-end">
+            {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Send"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Workflow I/O Panel ────────────────────────────────────────────────────
 
 function WorkflowIOPanel({ yaml }: { yaml: string }) {
@@ -2468,6 +2593,7 @@ export function WorkflowEditorPage() {
   const [showQuickAdd, setShowQuickAdd] = React.useState(false);
   const [currentRid, setCurrentRid] = React.useState<string | null>(null);
   const [awaitingApproval, setAwaitingApproval] = React.useState<{ nodeId: string; message: string } | null>(null);
+  const [awaitingReply, setAwaitingReply] = React.useState<{ nodeId: string; prompt: string; history: ChatTurn[] } | null>(null);
   const [inspectorTab, setInspectorTab] = React.useState<"node" | "io">("node");
   const abortRef = React.useRef<AbortController | null>(null);
 
@@ -2536,12 +2662,22 @@ export function WorkflowEditorPage() {
               } else if (evt.type === "node_awaiting_approval" && evt.node_id) {
                 setNodeStates((prev) => ({ ...prev, [evt.node_id!]: "waiting" }));
                 setAwaitingApproval({ nodeId: evt.node_id, message: evt.message ?? "Please review and approve or reject to continue." });
+              } else if (evt.type === "node_awaiting_reply" && evt.node_id) {
+                // ADR-0188 ask_human — chatflow reply, distinct from binary approve/reject.
+                setNodeStates((prev) => ({ ...prev, [evt.node_id!]: "waiting" }));
+                setAwaitingReply((prev) => ({
+                  nodeId: evt.node_id!,
+                  prompt: evt.message ?? "",
+                  history: prev && prev.nodeId === evt.node_id ? prev.history : [],
+                }));
               } else if (evt.type === "node_completed" && evt.node_id) {
                 setNodeStates((prev) => ({ ...prev, [evt.node_id!]: "ok" }));
                 if (awaitingApproval?.nodeId === evt.node_id) setAwaitingApproval(null);
+                if (awaitingReply?.nodeId === evt.node_id) setAwaitingReply(null);
               } else if (evt.type === "node_failed" && evt.node_id) {
                 setNodeStates((prev) => ({ ...prev, [evt.node_id!]: "failed" }));
                 if (awaitingApproval?.nodeId === evt.node_id) setAwaitingApproval(null);
+                if (awaitingReply?.nodeId === evt.node_id) setAwaitingReply(null);
               } else if (evt.type === "run_completed") {
                 await qc.invalidateQueries({ queryKey: ["workflow-runs", wid] });
               }
@@ -2701,7 +2837,7 @@ export function WorkflowEditorPage() {
               onClose={() => setShowQuickAdd(false)}
             />
           )}
-          {/* HITL Approval Bar */}
+          {/* HITL Approval Bar (binary approve/reject — "approval" node type) */}
           {awaitingApproval && currentRid && (
             <HitlApprovalBar
               wid={wid!}
@@ -2712,6 +2848,21 @@ export function WorkflowEditorPage() {
               onDecision={(status) => {
                 setNodeStates((prev) => ({ ...prev, [awaitingApproval.nodeId]: status === "approved" ? "ok" : "failed" }));
                 setAwaitingApproval(null);
+              }}
+            />
+          )}
+          {/* Workflow Chat Panel (free-text reply — "ask_human" node type, ADR-0188) */}
+          {awaitingReply && currentRid && (
+            <WorkflowChatPanel
+              wid={wid!}
+              rid={currentRid}
+              nodeId={awaitingReply.nodeId}
+              prompt={awaitingReply.prompt}
+              history={awaitingReply.history}
+              csrf={session!.csrf_token}
+              onResumed={() => {
+                setNodeStates((prev) => ({ ...prev, [awaitingReply.nodeId]: "ok" }));
+                setAwaitingReply(null);
               }}
             />
           )}

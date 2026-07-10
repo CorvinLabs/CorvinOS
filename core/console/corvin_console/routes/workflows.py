@@ -136,12 +136,18 @@ try:
     from corvin_workflows import load_workflow as _load_workflow  # noqa: E402
     from corvin_workflows import validate as _validate_workflow   # noqa: E402
     from corvin_workflows import WorkflowInvalid                  # noqa: E402
+    from corvin_workflows.runner import resume_workflow as _resume_awp_workflow  # noqa: E402
+    from corvin_workflows import checkpoint as _awp_checkpoint     # noqa: E402
+    from corvin_workflows.engines_claude import ClaudeCliEngine as _AwpClaudeEngine  # noqa: E402
     _AWP_OK = True
 except Exception:
     _load_workflow = None     # type: ignore[assignment]
     _validate_workflow = None  # type: ignore[assignment]
     class WorkflowInvalid(Exception):  # type: ignore[no-redef]
         pass
+    _resume_awp_workflow = None  # type: ignore[assignment]
+    _awp_checkpoint = None       # type: ignore[assignment]
+    _AwpClaudeEngine = None      # type: ignore[assignment]
     _AWP_OK = False
 
 # ── PyYAML (soft dep) ──────────────────────────────────────────────────────
@@ -827,6 +833,10 @@ class SetScheduleRequest(BaseModel):
 
 class ApproveRunRequest(BaseModel):
     comment: str = Field("", max_length=2000)
+    model_config = {"extra": "forbid"}
+
+class ResumeRunRequest(BaseModel):
+    reply: str = Field(..., min_length=1, max_length=4000)
     model_config = {"extra": "forbid"}
 
 # ── Routes: CRUD ──────────────────────────────────────────────────────────
@@ -1813,6 +1823,47 @@ def reject_run_node(
         target_id=f"{wid}/{rid}",
     )
     return {"ok": True, "status": "rejected"}
+
+@router.post("/workflows/{wid}/runs/{rid}/resume")
+def resume_run(
+    wid: str,
+    rid: str,
+    body: ResumeRunRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """ADR-0188 — continue a run paused at an `ask_human` node with a
+    free-text (or yes/no) reply. Distinct from approve/reject above: this
+    resumes AWP-native `orchestration.engine: chat` workflows executed via
+    corvin_workflows.DAGRunner (checkpointed under
+    <corvin_home>/tenants/<tid>/workflow_runs/<run_id>.json), not the
+    console's separate hand-rolled node executor used by start_run — a run
+    only has a resumable checkpoint here once that executor is extended to
+    delegate chat-engine workflows to DAGRunner (tracked as ADR-0188 M6/M7
+    follow-up work; this endpoint is real and functional today for any run
+    whose checkpoint exists, it does not fabricate one)."""
+    _validate_wid(wid)
+    _require_workflow(rec.tenant_id, wid)
+    if not _AWP_OK:
+        raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE, "AWP workflow stack not available")
+    ckpt = _awp_checkpoint.load(rid, tenant_id=rec.tenant_id)
+    if ckpt is None:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "no paused AWP run found for this run id")
+    try:
+        result = _resume_awp_workflow(rid, body.reply, engine=_AwpClaudeEngine(), tenant_id=rec.tenant_id)
+    except Exception as exc:
+        raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, f"resume failed: {exc}") from exc
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="workflow.run_resumed",
+        target_kind="workflow_run",
+        target_id=f"{wid}/{rid}",
+    )
+    paused_node = ckpt.get("paused_at_node")
+    confirmed = None
+    if paused_node and paused_node in result.nodes:
+        confirmed = result.nodes[paused_node].output.get("confirmed")
+    return {"ok": True, "status": result.state, "confirmed": confirmed}
 
 # ══════════════════════════════════════════════════════════════════════════
 # ── ADR-0091: Workflow Run Media ───────────────────────────────────────────
