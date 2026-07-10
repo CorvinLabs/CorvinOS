@@ -6,6 +6,59 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed — provider-key resolution consolidated into a single source of truth (WA-22)
+- Audited every place in the repo that resolves an API key/provider secret
+  and found real, user-visible drift: say.py (TTS), stt/openai_whisper.py
+  (STT), the console's byok.py, and the console's setup.py each carried an
+  independently-maintained copy of "where is the OpenAI key" — different
+  precedence orders, and two of them scanned a second,
+  independently-drifting `~/.config/corvin-voice/.env` file that nothing
+  wrote to programmatically. Added `operator/bridges/shared/
+  provider_keys.py` as the one canonical resolver (env var → service.env →
+  legacy alias, `service.env` the ONE file consulted) and aligned every
+  consumer to it — say.py/stt/openai_whisper.py keep private,
+  import-independent copies for portability, but a new parity guard
+  (`tests/test_secrets_ssot.py`, same pattern as the existing
+  `test_voice_config_ssot.py`) asserts all implementations agree, byte for
+  byte, under every fixture.
+- Closed the single biggest structural gap found: BYOK's write path
+  (`operator/agent/byok.py::apply_byok_secret`) only ever wrote into the
+  BYOK vault (`operator/bridges/shared/vault.py`) — a store nothing reads
+  back for provider keys (confirmed: the vault's only reader is the
+  Tier-3 "ask before reveal" LLM tool, an unrelated use case). A key saved
+  through the BYOK UI silently never took effect anywhere. Now also writes
+  into `service.env`, the file every real consumer resolves through.
+- Fixed a genuine cross-contamination bug along the way: the console's
+  generic "OpenAI" BYOK presence check treated a TTS-only
+  `CORVIN_TTS_OPENAI_KEY` as satisfying the *general* key slot — backwards,
+  since TTS is a fallback *consumer* of the general key, not the other way
+  around. The general slot now only reflects a real `OPENAI_API_KEY` (or
+  its legacy `OPENAI_APIKEY` alias).
+- Named the new module `provider_keys.py`, not `secrets.py`: a module by
+  that name on `operator/bridges/shared`'s sys.path would shadow the Python
+  stdlib `secrets` module for every other file in that tree — caught during
+  testing when `adapter.py`'s own `secrets.token_hex(8)` broke under
+  exactly this collision.
+- Incident caught during this work: the first test run of the new BYOK
+  write-path silently overwrote the real
+  `~/.config/corvin-voice/service.env` with test fixture values, clobbering
+  a working `CORVIN_STT_OPENAI_KEY`. Fixed immediately (real file restored)
+  and closed structurally with an autouse pytest fixture isolating
+  `VOICE_CONFIG_DIR` for every test in `operator/agent/tests/
+  test_agent_e2e.py`, plus an explicit `path_override`/`service_env_path`
+  parameter threaded through `provider_keys.write_key()` and
+  `apply_byok_secret()` for any future direct callers.
+- Deliberately out of scope for this pass (flagged, not touched): the two
+  independent license-verification systems (Ed25519 operator token vs
+  RS256 JWT — both live, one backing paid Member-tier licensing), the
+  Anthropic/Claude-Code provider-redirect subprocess-spawn logic in
+  adapter.py/acs_runtime.py (drives the engine running this very
+  conversation), the bash-side voice_lib.sh/bridge.sh and systemd-unit
+  path resolvers (hardcode `$HOME`, bypass `VOICE_CONFIG_DIR`/
+  `XDG_CONFIG_HOME`), and the broken BYOK vault symlink on this specific
+  install. Each carries materially higher blast radius than the provider-key
+  read/write paths closed here.
+
 ### Added — autostart now runs the PyPI auto-update check (WA-19)
 - The auto-update logic (`ops/launcher/corvin/serve_backend.py::
   maybe_pypi_autoupdate`) only ever ran when a user manually invoked

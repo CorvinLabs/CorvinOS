@@ -86,51 +86,56 @@ def _clean_env_value(v: str) -> str:
     return v.strip().strip('"').strip("'")
 
 
+# WA-22: single canonical source of truth (operator/bridges/shared/secrets.py)
+# — service.env is the ONE config file consulted; the second, independently
+# maintained ~/.config/corvin-voice/.env is retired (nothing writes to it
+# post-consolidation, and it drifted from service.env on every install this
+# was audited on). This function stays a private, import-independent copy
+# (say.py must keep working when invoked standalone with no PYTHONPATH set
+# up) but MUST stay byte-identical to secrets.resolve_key("tts_openai_api_key")
+# — see the parity guard in tests/test_secrets_ssot.py.
+_CANDIDATES = ("CORVIN_TTS_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY")
+
+
 def _load_key_from_env_files() -> str | None:
-    # Prefer the dedicated CORVIN_TTS_OPENAI_KEY over the general OPENAI_API_KEY
-    # (which the claude CLI also consumes) — same precedence as the STT side and
-    # as the env path below. Collect every candidate first, then pick, so a file
-    # that sets both keys returns the dedicated one regardless of line order.
+    f = VOICE_CONFIG_DIR / "service.env"
+    if not f.exists():
+        return None
     found: dict[str, str] = {}
-    for fname in (".env", "service.env"):
-        f = VOICE_CONFIG_DIR / fname
-        if not f.exists():
-            continue
-        try:
-            for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
-                line = line.strip()
-                if line.startswith("#") or "=" not in line:
-                    continue
-                # Handle shell-style `export KEY=value` lines (bridge.sh /
-                # voice_lib.sh write these); without stripping the prefix the key
-                # became "export OPENAI_API_KEY" and never matched, so a shell
-                # service.env silently yielded no TTS key (path-audit 2026-07-06).
-                if line.startswith("export "):
-                    line = line[len("export "):].lstrip()
-                k, _, v = line.partition("=")
-                k = k.strip()
-                if k in ("OPENAI_API_KEY", "OPENAI_APIKEY", "CORVIN_TTS_OPENAI_KEY"):
-                    cleaned = _clean_env_value(v)
-                    if cleaned and k not in found:
-                        found[k] = cleaned
-    # OSError on one file must not abort the other.
-        except OSError:
-            continue
-    for k in ("CORVIN_TTS_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY"):
+    try:
+        for line in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if line.startswith("#") or "=" not in line:
+                continue
+            # Handle shell-style `export KEY=value` lines (bridge.sh /
+            # voice_lib.sh write these); without stripping the prefix the key
+            # became "export OPENAI_API_KEY" and never matched, so a shell
+            # service.env silently yielded no TTS key (path-audit 2026-07-06).
+            if line.startswith("export "):
+                line = line[len("export "):].lstrip()
+            k, _, v = line.partition("=")
+            k = k.strip()
+            if k in _CANDIDATES:
+                cleaned = _clean_env_value(v)
+                if cleaned and k not in found:
+                    found[k] = cleaned
+    except OSError:
+        return None
+    for k in _CANDIDATES:
         if found.get(k):
             return found[k]
     return None
 
 
 def _resolve_key() -> str | None:
-    # Dedicated TTS key first (env AND file) — service.env sets
-    # CORVIN_TTS_OPENAI_KEY specifically so a general OPENAI_API_KEY meant for
-    # the claude CLI can't shadow the TTS-scoped key (ADR-0193).
-    return (
-        os.environ.get("CORVIN_TTS_OPENAI_KEY")
-        or os.environ.get("OPENAI_API_KEY")
-        or _load_key_from_env_files()
-    )
+    # Every candidate checked against env first (dedicated, then general,
+    # then legacy alias) before any is checked against the file — an
+    # explicit env-var override always beats anything in service.env.
+    for k in _CANDIDATES:
+        v = (os.environ.get(k) or "").strip()
+        if v:
+            return v
+    return _load_key_from_env_files()
 
 
 def _openai_voice_for(lang: str, voice: str | None = None) -> str:

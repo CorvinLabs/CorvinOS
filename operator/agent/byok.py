@@ -2,7 +2,11 @@
 
 Receives an RSA-OAEP-SHA256 ciphertext from the Management API,
 decrypts it with the instance private key, and writes the plaintext
-to the L16 vault.
+to the L16 vault AND to ~/.config/corvin-voice/service.env (WA-22 —
+the vault's write path was previously disconnected from every actual
+runtime reader; service.env is the single source of truth every
+provider-key consumer resolves through, see
+operator/bridges/shared/provider_keys.py).
 
 Key name rules (per ADR-0047):
   Allowed:  anthropic_api_key, openai_api_key, stt_openai_api_key,
@@ -150,21 +154,57 @@ def _vault_set(key_name: str, value: str, *, vault_dir: Path | None = None) -> N
     )
 
 
+def _write_service_env(
+    key_name: str, value: str, *, service_env_path: Path | None = None,
+) -> None:
+    """WA-22: write *value* into service.env — the ONE file say.py,
+    stt/openai_whisper.py, and every other consumer actually reads at
+    runtime. Before this, apply_byok_secret() only wrote into the vault
+    (above), which nothing reads back for provider keys — a key saved
+    through the BYOK UI silently never took effect anywhere. Raises on
+    failure rather than degrading silently: if this write doesn't land,
+    the "single source of truth" file is now stale and every consumer
+    will keep resolving the old value (or none).
+
+    *service_env_path*, when given, is an isolated override (tests) — see
+    provider_keys.write_key's path_override for why this parameter exists
+    at all: a prior version of this function had no override and a test
+    run silently overwrote the real ~/.config/corvin-voice/service.env,
+    clobbering a working CORVIN_STT_OPENAI_KEY with test fixture garbage.
+    """
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        if (parent / "operator").is_dir():
+            shared = parent / "operator" / "bridges" / "shared"
+            if str(shared) not in sys.path:
+                sys.path.insert(0, str(shared))
+            break
+
+    import provider_keys  # type: ignore
+    provider_keys.write_key(key_name, value, path_override=service_env_path)
+
+
 def apply_byok_secret(
     key_name: str,
     ciphertext_b64: str,
     *,
     agent_dir: Path | None = None,
     vault_dir: Path | None = None,
+    service_env_path: Path | None = None,
     tenant_id: str | None = None,
     updated_by: str = "unknown",
 ) -> dict[str, Any]:
-    """Decrypt *ciphertext_b64* and write the result to the L16 vault.
+    """Decrypt *ciphertext_b64* and write the result to the L16 vault and
+    to service.env (see _write_service_env).
 
     Returns a dict with ``{key_name, rotated_at, last4}`` where last4 is
     the last 4 chars of the plaintext (informational; opt-in).
 
     Emits ``vault.secret_rotated`` audit event.
+
+    *service_env_path*: test-only override, see _write_service_env. When
+    None (production default), writes to the real
+    ~/.config/corvin-voice/service.env.
     """
     validate_key_name(key_name)
 
@@ -177,6 +217,7 @@ def apply_byok_secret(
     _check_key_shape(key_name, plaintext)
 
     _vault_set(key_name, plaintext, vault_dir=vault_dir)
+    _write_service_env(key_name, plaintext, service_env_path=service_env_path)
 
     rotated_at = time.time()
     last4 = plaintext[-4:] if len(plaintext) >= 4 else "****"

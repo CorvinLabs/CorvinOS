@@ -28,6 +28,17 @@ sys.path.insert(0, str(_REPO / "operator" / "bridges" / "shared"))
 sys.path.insert(0, str(_REPO / "operator" / "forge"))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_voice_config_dir(tmp_path, monkeypatch):
+    """WA-22 incident: apply_byok_secret() now also writes into
+    service.env (operator/bridges/shared/provider_keys.py) — without this
+    fixture, every BYOK test in this file silently wrote its fixture
+    plaintext into the REAL ~/.config/corvin-voice/service.env, once
+    clobbering a working CORVIN_STT_OPENAI_KEY with test garbage. Every
+    test in this module gets its own isolated VOICE_CONFIG_DIR."""
+    monkeypatch.setenv("VOICE_CONFIG_DIR", str(tmp_path / "voice-config-isolated"))
+
+
 # ── helpers ──────────────────────────────────────────────────────────────
 
 def _encrypt_for_agent(plaintext: str, pub_pem: bytes) -> str:

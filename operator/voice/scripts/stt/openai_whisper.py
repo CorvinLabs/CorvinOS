@@ -85,14 +85,25 @@ def _load_env_value(key: str, env_path: Path) -> str | None:
     return None
 
 
+# WA-22: single canonical source of truth (operator/bridges/shared/secrets.py)
+# — service.env is the ONE config file consulted; the second, independently
+# maintained ~/.config/corvin-voice/.env is retired (nothing writes to it
+# post-consolidation, and it drifted from service.env on every install this
+# was audited on). This function stays a private, import-independent copy
+# (this module must keep working when invoked standalone with no PYTHONPATH
+# set up) but MUST stay byte-identical to
+# secrets.resolve_key("stt_openai_api_key") — see the parity guard in
+# tests/test_secrets_ssot.py.
+_CANDIDATES = ("CORVIN_STT_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY")
+
+
 def _resolve_api_key() -> str | None:
     """Return the OpenAI API key, checking STT-specific var first.
 
-    Resolution order:
-      1. CORVIN_STT_OPENAI_KEY  — dedicated STT key (preferred; not counted
-         as an engine credential by the console engines page)
-      2. OPENAI_API_KEY         — general OpenAI key (legacy fallback)
-      3. ~/.config/corvin-voice/.env or service.env — file fallback.
+    Resolution order: every candidate (dedicated, then general, then legacy
+    alias) checked against the process env before any is checked against
+    service.env — an explicit env-var override always beats anything in
+    the file.
 
     The file fallback matters because process env vars aren't always
     populated: bridge.sh/voice_lib.sh export OPENAI_API_KEY into the shell
@@ -102,19 +113,17 @@ def _resolve_api_key() -> str | None:
     file directly (same as say.py's TTS key resolution) makes STT work the
     same way regardless of how the process was launched.
     """
-    # .strip(): a whitespace-only exported key is truthy, so is_available()
-    # reported "ready" while every call died at auth (review finding).
-    key = (
-        (os.environ.get("CORVIN_STT_OPENAI_KEY") or "").strip()
-        or (os.environ.get("OPENAI_API_KEY") or "").strip()
-    )
-    if key:
-        return key
-    for env_file in (_VOICE_CONFIG_DIR / ".env", _VOICE_CONFIG_DIR / "service.env"):
-        for env_key in ("CORVIN_STT_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY"):
-            key = _load_env_value(env_key, env_file)
-            if key:
-                return key
+    for env_key in _CANDIDATES:
+        # .strip(): a whitespace-only exported key is truthy, so
+        # is_available() reported "ready" while every call died at auth.
+        key = (os.environ.get(env_key) or "").strip()
+        if key:
+            return key
+    env_file = _VOICE_CONFIG_DIR / "service.env"
+    for env_key in _CANDIDATES:
+        key = _load_env_value(env_key, env_file)
+        if key:
+            return key
     return None
 
 

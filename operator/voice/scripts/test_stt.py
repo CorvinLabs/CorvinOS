@@ -146,8 +146,12 @@ def _tmp_audio() -> Path:
 class OpenAIKeyEnvFileFallbackTests(unittest.TestCase):
     """Windows regression: bridge.ps1 launches the console/daemon directly,
     without the .env-into-shell-env step voice_lib.sh does on Linux/macOS.
-    _resolve_api_key() must therefore also check the canonical .env file
-    directly so STT doesn't depend on how the process was launched.
+    _resolve_api_key() must therefore also check the canonical service.env
+    file directly so STT doesn't depend on how the process was launched.
+
+    WA-22: the second, independently-drifting ~/.config/corvin-voice/.env
+    file is retired — service.env is the ONE canonical file consulted
+    (see operator/bridges/shared/provider_keys.py).
     """
 
     def setUp(self):
@@ -176,15 +180,22 @@ class OpenAIKeyEnvFileFallbackTests(unittest.TestCase):
         importlib.reload(_oaw)  # restore module-level VOICE_CONFIG_DIR
 
     def test_key_read_from_env_file_when_env_var_absent(self):
-        env_path = Path(self._tmpdir) / ".env"
+        env_path = Path(self._tmpdir) / "service.env"
         env_path.write_text('OPENAI_API_KEY="sk-from-file-test"\n', encoding="utf-8")
         self.assertEqual(self._oaw._resolve_api_key(), "sk-from-file-test")
 
     def test_env_var_takes_priority_over_file(self):
-        env_path = Path(self._tmpdir) / ".env"
+        env_path = Path(self._tmpdir) / "service.env"
         env_path.write_text("OPENAI_API_KEY=sk-from-file\n", encoding="utf-8")
         os.environ["OPENAI_API_KEY"] = "sk-from-env-var"
         self.assertEqual(self._oaw._resolve_api_key(), "sk-from-env-var")
+
+    def test_retired_dotenv_file_is_no_longer_consulted(self):
+        """WA-22: a value living ONLY in the retired .env file must not
+        surface — pre-consolidation this test's own predecessor wrote here."""
+        env_path = Path(self._tmpdir) / ".env"
+        env_path.write_text('OPENAI_API_KEY="sk-should-be-ignored"\n', encoding="utf-8")
+        self.assertIsNone(self._oaw._resolve_api_key())
 
     def test_no_key_anywhere_returns_none(self):
         self.assertIsNone(self._oaw._resolve_api_key())

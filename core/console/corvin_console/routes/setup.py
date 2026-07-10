@@ -489,18 +489,22 @@ _GLOBAL_COMMANDS: dict[str, list[dict[str, Any]]] = {
 
 
 def _read_service_env() -> dict[str, str]:
+    # WA-22: a second, repo-relative candidate (operator/bridges/shared/
+    # service.env) was checked here too, but never existed on any real
+    # install (no writer ever targeted it, no git history) — dead weight
+    # that just implied a second file was in play. _SERVICE_ENV (via
+    # forge.paths.voice_config_dir()) is the ONE canonical file.
     result: dict[str, str] = {}
-    for path in [_SERVICE_ENV, _REPO / "operator" / "bridges" / "shared" / "service.env"]:
-        if path.exists():
-            try:
-                for line in path.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    k, _, v = line.partition("=")
-                    result[k.strip()] = v.strip()
-            except Exception:
-                pass
+    if _SERVICE_ENV.exists():
+        try:
+            for line in _SERVICE_ENV.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                result[k.strip()] = v.strip()
+        except Exception:
+            pass
     return result
 
 

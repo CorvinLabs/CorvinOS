@@ -89,21 +89,26 @@ def _tts_provider_rows() -> list[tuple[str, bool, str]]:
 
     rows: list[tuple[str, bool, str]] = []
 
-    key = os.environ.get("OPENAI_API_KEY")
+    # WA-22: mirrors say.py's actual TTS key resolution — dedicated var
+    # first, then general, then legacy alias; service.env is the ONE
+    # canonical file (the second, retired .env is no longer consulted by
+    # anything, so this diagnostic must not check it either).
+    _tts_candidates = ("CORVIN_TTS_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY")
+    key = None
+    for env_key in _tts_candidates:
+        value = (os.environ.get(env_key) or "").strip()
+        if value:
+            key = value
+            break
     if not key:
-        for env_file in (
-            adapter._VOICE_CONFIG_DIR / ".env",
-            adapter._VOICE_CONFIG_DIR / "service.env",
-        ):
-            for env_key in ("OPENAI_API_KEY", "OPENAI_APIKEY"):
-                try:
-                    value = adapter._load_env_value(env_key, env_file)
-                except Exception:  # noqa: BLE001 — diagnostics must never crash
-                    value = None
-                if value:
-                    key = value
-                    break
-            if key:
+        env_file = adapter._VOICE_CONFIG_DIR / "service.env"
+        for env_key in _tts_candidates:
+            try:
+                value = adapter._load_env_value(env_key, env_file)
+            except Exception:  # noqa: BLE001 — diagnostics must never crash
+                value = None
+            if value:
+                key = value
                 break
     if not key:
         rows.append(("openai (cloud TTS)", False, "no API key (OPENAI_API_KEY unset)"))
