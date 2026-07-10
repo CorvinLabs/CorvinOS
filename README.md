@@ -168,9 +168,11 @@ Full reference: [docs/eu-ai-act/README.md](docs/eu-ai-act/README.md) · [docs/au
 
 ## Architecture
 
-<img src="docs/assets/arch.svg" alt="CorvinOS architecture — channels → Bridge Adapter → WorkerEngine" width="100%"/>
+<img src="docs/assets/arch.svg" alt="CorvinOS architecture — channels funnel into CorvinOS (Bridge Adapter + MCP plugins), which drives a separate, swappable layer of Worker Engines via the WorkerEngine protocol" width="100%"/>
 
-Bridge daemons funnel messages into a shared inbox. The Bridge Adapter enforces ACL, routes to the right persona, runs the TTS pipeline, and grades skills — per-chat-sequential, cross-chat-parallel. The WorkerEngine abstraction swaps the LLM backend without touching the compliance stack.
+CorvinOS and the Worker Engines are two deliberately separate layers. Bridge daemons funnel messages from every channel into **CorvinOS**: the Bridge Adapter enforces ACL, routes to the right persona, runs the TTS pipeline, and grades skills — per-chat-sequential, cross-chat-parallel — alongside the MCP plugin stack (Forge, SkillForge, Recall, Compute). None of that changes based on which LLM answers the message.
+
+Below the `WorkerEngine` protocol boundary sits a swappable set of **Worker Engines** — Claude Code, Codex CLI, OpenCode, Copilot CLI, and Hermes (the zero-config local default via Ollama) — each a thin adapter implementing the same interface. Compliance, audit, and the rest of the OS stay identical no matter which engine is plugged in; adding a new engine means implementing the protocol, not touching CorvinOS.
 
 Full breakdown: [docs/layer-model.md](docs/layer-model.md) · Diagrams: [docs/diagrams/](docs/diagrams/) · Full documentation: [docs/overview.md](docs/overview.md)
 
