@@ -188,25 +188,12 @@ function nodeColor(type: string, state: "idle" | "running" | "ok" | "failed" | "
   return NODE_TYPE_COLOR[type] ?? "hsl(var(--muted-foreground))";
 }
 
-// Deterministic 0..1 pseudo-random value from a string seed (stable across
-// re-renders of the same node id — used only by the opt-in "organic" layout
-// so a screenshot/preview doesn't jitter differently on every reload).
-function seededUnit(seed: string): number {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) {
-    h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
-  }
-  h ^= h >>> 16;
-  return ((h >>> 0) % 10000) / 10000;
-}
-
-// Groups nodes into visual "clusters" for the organic layout: a node starts
-// a new cluster at a root, a merge point (>1 dependency), or right after a
+// Groups nodes into visual "islands" for the organic layout: a node starts a
+// new island at a root, a merge point (>1 dependency), or right after a
 // branch point (its single parent has >1 children) — everything else joins
-// its parent's cluster. A simple linear chain inside one branch (the common
-// shape: route -> code -> deliver) ends up as one cluster, so those nodes
-// jitter together as a group instead of independently, reading as a loose
-// "clustered" arrangement rather than either a rigid grid or scattered noise.
+// its parent's island. A simple linear chain inside one branch (the common
+// shape: route -> code -> deliver) ends up as one island — a clean, single
+// horizontal pipeline segment, not a jittered blob.
 function computeClusters(nodes: GraphNode[]): Map<string, string> {
   const idSet = new Set(nodes.map((n) => n.id));
   const parentsOf = new Map<string, string[]>(
@@ -225,12 +212,12 @@ function computeClusters(nodes: GraphNode[]): Map<string, string> {
     seen.add(id);
     const parents = parentsOf.get(id) ?? [];
     if (parents.length !== 1) {
-      cache.set(id, id); // root or merge point — starts its own cluster
+      cache.set(id, id); // root or merge point — starts its own island
       return id;
     }
     const [parent] = parents;
     if ((childCount.get(parent) ?? 0) > 1) {
-      cache.set(id, id); // right after a branch point — starts a new cluster
+      cache.set(id, id); // right after a branch point — starts a new island
       return id;
     }
     const c = findCluster(parent, seen);
@@ -242,10 +229,127 @@ function computeClusters(nodes: GraphNode[]): Map<string, string> {
   return result;
 }
 
+export type IslandBox = { id: string; x: number; y: number; w: number; h: number };
+
+const LAYOUT_NODE_W = 160;
+const LAYOUT_NODE_H = 56;
+const LAYOUT_GAP_X = 40;
+const LAYOUT_GAP_Y = 72;
+// Vertical gap between two different islands/lanes — deliberately larger
+// than the intra-island node gap, so each island reads as a clearly
+// separated, calm group instead of one continuous dense grid.
+const ISLAND_LANE_GAP = LAYOUT_NODE_H + LAYOUT_GAP_Y * 2;
+
+// Swim-lane layout: every island (a straight chain of nodes, see
+// computeClusters above) is assigned a horizontal lane. A chain that
+// continues from a single upstream island inherits that island's lane
+// whenever it's free, so one "main line" flows straight across the canvas;
+// everything else (branches, merges, parallel chains) takes the next free
+// lane. Nodes never move off their exact dependency-level column and never
+// jitter within an island — the result is a small number of clean,
+// deliberately separated horizontal "islands" instead of a jittered grid,
+// matching how n8n/Zapier/Make lay out parallel branches.
+function computeIslandLayout(nodes: GraphNode[]): {
+  positions: Map<string, { x: number; y: number; level: number }>;
+  islands: IslandBox[];
+} {
+  const idSet = new Set(nodes.map((n) => n.id));
+  const depMap = new Map<string, string[]>(
+    nodes.map((n) => [n.id, (n.depends_on ?? []).filter((d) => idSet.has(d))]),
+  );
+  const levels = new Map<string, number>();
+  const visited = new Set<string>();
+  function getLevel(id: string): number {
+    if (levels.has(id)) return levels.get(id)!;
+    if (visited.has(id)) return 0; // cycle guard
+    visited.add(id);
+    const deps = depMap.get(id) ?? [];
+    const level = deps.length === 0 ? 0 : Math.max(...deps.map(getLevel)) + 1;
+    levels.set(id, level);
+    return level;
+  }
+  nodes.forEach((n) => getLevel(n.id));
+
+  const clusters = computeClusters(nodes);
+  const clusterMembers = new Map<string, string[]>();
+  nodes.forEach((n) => {
+    const c = clusters.get(n.id)!;
+    const arr = clusterMembers.get(c) ?? [];
+    arr.push(n.id);
+    clusterMembers.set(c, arr);
+  });
+  for (const ids of clusterMembers.values()) {
+    ids.sort((a, b) => levels.get(a)! - levels.get(b)!);
+  }
+
+  const islandList = Array.from(clusterMembers.entries())
+    .map(([id, ids]) => ({
+      id,
+      ids,
+      minLevel: Math.min(...ids.map((i) => levels.get(i)!)),
+      maxLevel: Math.max(...ids.map((i) => levels.get(i)!)),
+    }))
+    .sort((a, b) => a.minLevel - b.minLevel);
+
+  const laneOfIsland = new Map<string, number>();
+  const laneOccupancy: { lane: number; minLevel: number; maxLevel: number }[] = [];
+  function laneIsFree(lane: number, minL: number, maxL: number): boolean {
+    return !laneOccupancy.some(
+      (o) => o.lane === lane && !(maxL < o.minLevel || minL > o.maxLevel),
+    );
+  }
+
+  for (const island of islandList) {
+    const firstNode = island.ids[0];
+    const parents = depMap.get(firstNode) ?? [];
+    let lane: number | null = null;
+    if (parents.length === 1) {
+      const parentIsland = clusters.get(parents[0])!;
+      const candidate = laneOfIsland.get(parentIsland);
+      if (candidate !== undefined && laneIsFree(candidate, island.minLevel, island.maxLevel)) {
+        lane = candidate; // continue the same lane as a single upstream chain
+      }
+    }
+    if (lane === null) {
+      lane = 0;
+      while (!laneIsFree(lane, island.minLevel, island.maxLevel)) lane++;
+    }
+    laneOfIsland.set(island.id, lane);
+    laneOccupancy.push({ lane, minLevel: island.minLevel, maxLevel: island.maxLevel });
+  }
+
+  const positions = new Map<string, { x: number; y: number; level: number }>();
+  const islands: IslandBox[] = [];
+  const PAD = 14;
+  for (const island of islandList) {
+    const lane = laneOfIsland.get(island.id)!;
+    island.ids.forEach((id) => {
+      const lvl = levels.get(id)!;
+      positions.set(id, {
+        x: lvl * (LAYOUT_NODE_W + LAYOUT_GAP_X),
+        y: lane * ISLAND_LANE_GAP,
+        level: lvl,
+      });
+    });
+    if (island.ids.length > 1) {
+      islands.push({
+        id: island.id,
+        x: island.minLevel * (LAYOUT_NODE_W + LAYOUT_GAP_X) - PAD,
+        y: lane * ISLAND_LANE_GAP - PAD,
+        w: (island.maxLevel - island.minLevel) * (LAYOUT_NODE_W + LAYOUT_GAP_X) + LAYOUT_NODE_W + PAD * 2,
+        h: LAYOUT_NODE_H + PAD * 2,
+      });
+    }
+  }
+  return { positions, islands };
+}
+
 function computeLayout(
   nodes: GraphNode[],
   organic = false,
 ): Map<string, { x: number; y: number; level: number }> {
+  if (organic) return computeIslandLayout(nodes).positions;
+
   const idSet = new Set(nodes.map((n) => n.id));
   const depMap = new Map<string, string[]>(
     nodes.map((n) => [n.id, (n.depends_on ?? []).filter((d) => idSet.has(d))]),
@@ -272,33 +376,14 @@ function computeLayout(
     byLevel.set(lvl, arr);
   }
 
-  const NODE_W = 160;
-  const NODE_H = 56;
-  const GAP_X = 40;
-  const GAP_Y = 72;
   const positions = new Map<string, { x: number; y: number; level: number }>();
-  const clusters = organic ? computeClusters(nodes) : null;
-
   for (const [lvl, ids] of byLevel) {
     ids.forEach((id, i) => {
-      const baseX = lvl * (NODE_W + GAP_X);
-      const baseY = i * (NODE_H + GAP_Y);
-      if (!organic || !clusters) {
-        positions.set(id, { x: baseX, y: baseY, level: lvl });
-        return;
-      }
-      // Organic mode: a shared per-cluster offset (same branch/chain moves
-      // together as a loose group — "clustered") plus a small per-node
-      // offset on top (so it isn't a perfectly rigid sub-grid either).
-      // Smaller magnitudes than a fully independent jitter would use, for a
-      // more ordered-but-still-flexible feel. Dependency-level x-ordering is
-      // preserved throughout, so the left-to-right flow stays readable.
-      const clusterId = clusters.get(id) ?? id;
-      const cjx = (seededUnit(clusterId + ":cx") - 0.5) * (NODE_W + GAP_X) * 0.35;
-      const cjy = (seededUnit(clusterId + ":cy") - 0.5) * (NODE_H + GAP_Y) * 0.4;
-      const njx = (seededUnit(id + ":x") - 0.5) * (NODE_W + GAP_X) * 0.18;
-      const njy = (seededUnit(id + ":y") - 0.5) * (NODE_H + GAP_Y) * 0.22;
-      positions.set(id, { x: baseX + cjx + njx, y: baseY + cjy + njy, level: lvl });
+      positions.set(id, {
+        x: lvl * (LAYOUT_NODE_W + LAYOUT_GAP_X),
+        y: i * (LAYOUT_NODE_H + LAYOUT_GAP_Y),
+        level: lvl,
+      });
     });
   }
   return positions;
@@ -320,6 +405,10 @@ function AwpCanvas({
   organic?: boolean;
 }) {
   const positions = React.useMemo(() => computeLayout(nodes, organic), [nodes, organic]);
+  const islands = React.useMemo(
+    () => (organic ? computeIslandLayout(nodes).islands : []),
+    [nodes, organic],
+  );
 
   const NODE_W = 168;
   const NODE_H = 64;
@@ -462,6 +551,26 @@ function AwpCanvas({
             <path d="M0,0 L0,8 L8,4 z" fill="hsl(var(--muted-foreground)/0.4)" />
           </marker>
         </defs>
+
+        {/* Island frames — a soft rounded card behind each multi-node chain,
+            drawn first so it sits behind edges/nodes. This is what makes the
+            "organic" layout read as distinct, calm groups (islands) instead
+            of one dense grid, matching how n8n/Make show parallel branches. */}
+        {islands.map((box) => (
+          <rect
+            key={`island-${box.id}`}
+            x={PAD + box.x}
+            y={PAD + box.y}
+            width={box.w}
+            height={box.h}
+            rx={16}
+            ry={16}
+            fill="hsl(var(--muted-foreground)/0.05)"
+            stroke="hsl(var(--muted-foreground)/0.18)"
+            strokeWidth={1}
+            strokeDasharray="4 3"
+          />
+        ))}
 
         {edges.map((e) => {
           const from = positions.get(e.from);
