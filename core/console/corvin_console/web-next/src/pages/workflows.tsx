@@ -2382,13 +2382,13 @@ function HitlApprovalBar({
 // appear as assistant bubbles, the human types a real reply, not just a
 // click.
 
-interface ChatTurn {
+export interface ChatTurn {
   role: "assistant" | "user";
   text: string;
   ts: number;
 }
 
-function WorkflowChatPanel({
+export function WorkflowChatPanel({
   wid,
   rid,
   nodeId,
