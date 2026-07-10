@@ -32,12 +32,6 @@
   </a>
 </p>
 
-<p align="center">
-  <a href="https://aiagentsdirectory.com" target="_blank" rel="noopener" title="Discover AI Agents Directory">
-    <img src="https://aiagentsdirectory.com/featured-badge.svg?v=2024" alt="Featured on AI Agents Directory" width="200" height="50" />
-  </a>
-</p>
-
 ---
 
 **One install. Any bridge. Any LLM.**
@@ -189,6 +183,14 @@ Tests span the Python adapter, Node daemon-boot smoke tests, cowork, forge, skil
 ## Contributing
 
 By opening a pull request you accept [`CLA.md`](CLA.md). Every merged contribution requires a corresponding entry in [`CLA-SIGNATORIES.md`](CLA-SIGNATORIES.md). See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow.
+
+---
+
+<p align="center">
+  <a href="https://aiagentsdirectory.com" target="_blank" rel="noopener" title="Discover AI Agents Directory">
+    <img src="https://aiagentsdirectory.com/featured-badge.svg?v=2024" alt="Featured on AI Agents Directory" width="200" height="50" />
+  </a>
+</p>
 
 ---
 
