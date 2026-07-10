@@ -19,6 +19,7 @@ the value ever entering the model context.
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 from dataclasses import dataclass
@@ -33,15 +34,76 @@ logger = logging.getLogger("corvin.browser.compliance")
 # home-network admin panels), which stays governed by the normal
 # allowlist/no-allowlist-configured policy below.
 _METADATA_HOSTS = frozenset({
-    "169.254.169.254",             # AWS / Azure / GCP IMDS (IPv4)
     "metadata.google.internal",    # GCP metadata DNS alias
     "metadata",                    # short-form alias used by some SDKs
-    "fd00:ec2::254",                # AWS IMDSv2 (IPv6)
+})
+
+# IP-level metadata targets. Matched against the host PARSED to a canonical IP
+# (review HIGH-2), so alternate encodings of 169.254.169.254 — decimal
+# (2852039166), hex (0xa9fea9fe), octal (0251.0376.0251.0376), a trailing dot,
+# or an IPv4-mapped IPv6 ([::ffff:169.254.169.254]) — cannot slip past a bare
+# string compare the way the old exact-match set allowed.
+_METADATA_V4_NETS = (ipaddress.ip_network("169.254.0.0/16"),)  # link-local, incl IMDS
+_METADATA_V4_HOSTS = frozenset({ipaddress.ip_address("100.100.100.200")})  # Alibaba ECS
+_METADATA_V6_HOSTS = frozenset({
+    ipaddress.ip_address("fd00:ec2::254"),   # AWS IMDSv2 (IPv6)
 })
 
 
+def _parse_host_ip(host: str):
+    """Best-effort: canonicalize an IP-literal host (in ANY textual encoding) to
+    an ``ipaddress`` object, else None for a real DNS name. Handles dotted v4/v6,
+    a single decimal/hex/octal integer, dotted octal/hex octets, brackets, and a
+    trailing dot. Returns None (not an error) for anything that isn't an IP."""
+    h = (host or "").strip().rstrip(".")
+    if not h:
+        return None
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+    try:
+        return ipaddress.ip_address(h)                 # dotted v4 / v6 literal
+    except ValueError:
+        pass
+    try:
+        val = int(h, 0)                                # 2852039166 / 0xa9fea9fe / 0o...
+        if 0 <= val <= 0xFFFFFFFF:
+            return ipaddress.ip_address(val)
+    except ValueError:
+        pass
+    parts = h.split(".")                               # 0251.0376.0251.0376 etc.
+    if len(parts) == 4:
+        try:
+            octets = [_octet(p) for p in parts]
+            if all(0 <= o <= 255 for o in octets):
+                return ipaddress.ip_address(".".join(str(o) for o in octets))
+        except ValueError:
+            pass
+    return None
+
+
+def _octet(p: str) -> int:
+    """Parse one IPv4 octet honoring legacy hex (0x..) and octal (leading-0)
+    encodings — ``int(p, 0)`` rejects bare-leading-zero octal in Python 3, which
+    is exactly the SSRF-obfuscation form ``0251.0376.0251.0376`` relies on."""
+    p = p.strip().lower()
+    if p.startswith("0x"):
+        return int(p, 16)
+    if len(p) > 1 and p.startswith("0"):
+        return int(p, 8)
+    return int(p)
+
+
 def _is_cloud_metadata(host: str) -> bool:
-    return host in _METADATA_HOSTS
+    if host in _METADATA_HOSTS:
+        return True
+    ip = _parse_host_ip(host)
+    if ip is None:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped                            # unwrap ::ffff:169.254.169.254
+    if isinstance(ip, ipaddress.IPv4Address):
+        return ip in _METADATA_V4_HOSTS or any(ip in net for net in _METADATA_V4_NETS)
+    return ip in _METADATA_V6_HOSTS
 
 
 # Actions whose element name/role suggests an irreversible or outward-facing
@@ -161,6 +223,24 @@ def is_sensitive(
     return False
 
 
+# Keys whose VALUE could be user-typed content / a secret and must never enter
+# the metadata-only audit trail (review LOW-2 — broadened from the original
+# 5-key list; still a denylist because the permitted metadata key set is open).
+_AUDIT_VALUE_KEYS = frozenset({
+    "value", "text", "secret", "password", "content", "query", "email",
+    "token", "credential", "card", "cvv", "cvc", "ssn", "otp", "pin",
+})
+
+
+def _scrub_extra(extra: dict) -> dict:
+    out = {}
+    for k, v in extra.items():
+        if k.lower() in _AUDIT_VALUE_KEYS:
+            continue
+        out[k] = _scrub_extra(v) if isinstance(v, dict) else v
+    return out
+
+
 def audit_action(
     audit_fn,
     *,
@@ -187,11 +267,11 @@ def audit_action(
         "ok": ok,
     }
     if extra:
-        # defensive: never let a caller smuggle a value/text field into audit
-        for k, v in extra.items():
-            if k in ("value", "text", "secret", "password", "content"):
-                continue
-            details[k] = v
+        # Defensive scrub (review LOW-2): never let a caller smuggle a field value
+        # into the audit trail. Broadened denylist + one level of recursion into
+        # nested dicts, so a value tucked under a common alias or a sub-dict is
+        # still dropped. Defense-in-depth only — no current call site does this.
+        details.update(_scrub_extra(extra))
     try:
         if audit_fn is not None:
             audit_fn(tenant_id=tenant_id, event="browser.action", details=details)

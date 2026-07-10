@@ -84,6 +84,94 @@ BROWSER_TOOLS: list[dict] = [
                        "viewport with the mark overlay painted on.",
         "inputSchema": {"type": "object", "properties": {}},
     },
+    # ── ADR-0183 S2: expanded action surface ─────────────────────────────────
+    {
+        "name": "browser.hover",
+        "description": "Hover the element with the given mark index (e.g. to reveal "
+                       "a hover-only menu) without clicking it.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"index": {"type": "integer"}},
+            "required": ["index"],
+        },
+    },
+    {
+        "name": "browser.key",
+        "description": "Press a single named key on the page: Enter (submit a form/"
+                       "search), Tab, Escape, Backspace, Delete, Space, Arrow*, "
+                       "Home/End, PageUp/PageDown, F1–F12. A committing key "
+                       "(Enter/Space) on a sensitive form requires user confirmation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"key": {"type": "string"}},
+            "required": ["key"],
+        },
+    },
+    {
+        "name": "browser.select_option",
+        "description": "Choose an option (by its value attribute) in the <select> "
+                       "with the given mark index. The chosen value is never logged.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"index": {"type": "integer"}, "value": {"type": "string"}},
+            "required": ["index", "value"],
+        },
+    },
+    {
+        "name": "browser.upload_file",
+        "description": "Attach a file to the file-input with the given mark index. The "
+                       "file must already exist under the session's uploads directory "
+                       "(no arbitrary host path); the filename only, never content, is logged.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"index": {"type": "integer"}, "filename": {"type": "string"}},
+            "required": ["index", "filename"],
+        },
+    },
+    {
+        "name": "browser.drag",
+        "description": "Drag the element at from_index onto the element at to_index "
+                       "(e.g. a slider or reorder handle).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"from_index": {"type": "integer"},
+                           "to_index": {"type": "integer"}},
+            "required": ["from_index", "to_index"],
+        },
+    },
+    {
+        "name": "browser.tabs",
+        "description": "List every open tab in this session (index, url, title) — "
+                       "including a tab opened by a target=_blank click or window.open.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser.switch_tab",
+        "description": "Make the tab with the given index (from browser.tabs) the "
+                       "active page and return its Set-of-Marks observation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"index": {"type": "integer"}},
+            "required": ["index"],
+        },
+    },
+    {
+        "name": "browser.extract_table",
+        "description": "Parse the table (or table-role container) at the given mark "
+                       "index into {headers, rows} JSON. Bounded row count.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"index": {"type": "integer"}},
+            "required": ["index"],
+        },
+    },
+    {
+        "name": "browser.extract_form_schema",
+        "description": "Describe every <form> on the current top-level document "
+                       "(action/method + field name/type/required/label). Never "
+                       "includes any field's current value.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 BROWSER_TOOL_NAMES = [t["name"] for t in BROWSER_TOOLS]

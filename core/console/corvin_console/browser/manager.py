@@ -113,7 +113,9 @@ class BrowserSessionManager:
             nonlocal pid_seq
             pid_seq += 1
             pid = f"c{pid_seq}"      # monotonic per-session → never collides
-            fut: asyncio.Future[bool] = asyncio.get_event_loop().create_future()
+            # get_running_loop() (review L1): we are inside a coroutine, so the
+            # running loop is the correct — and non-deprecated — future factory.
+            fut: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
             live.pending[pid] = _Pending(pid, action, host, role, name, self._now(), fut)
             live.append({"action": "confirm_request", "id": pid, "host": host,
                          "role": role, "name": name, "ts": self._now()})
@@ -274,20 +276,46 @@ class BrowserSessionManager:
         return [{"id": p.id, "action": p.action, "host": p.host, "role": p.role,
                  "name": p.name} for p in live.pending.values()]
 
+    @staticmethod
+    def _drain_pending(live: _Live) -> None:
+        """Fail-closed-resolve every parked human-in-the-loop confirm (review M5).
+        A REST-path click can park a confirm future with a 120s timeout; once the
+        session is being torn down, nobody can ever resolve it via the (popped)
+        _Live, so the click coroutine would hang for the full timeout. Resolve
+        them False (declined) so those coroutines unwind immediately."""
+        for p in list(live.pending.values()):
+            if not p.future.done():
+                p.future.set_result(False)
+        live.pending.clear()
+
+    @staticmethod
+    async def _cancel_agent(live: _Live) -> None:
+        """Cancel a running agent task and AWAIT it (review H4/L5): its `finally`
+        (auto_close) may itself close the session and append to the _Live, so we
+        let it fully unwind before we close — session.close() is idempotent, so
+        the double close is a safe no-op rather than a driver-corrupting race."""
+        if live.agent_task is not None and not live.agent_task.done():
+            live.agent_task.cancel()
+            with contextlib.suppress(Exception):
+                await live.agent_task
+
     async def close(self, tenant_id: str, sid: str, *, owner_fingerprint: str = "") -> None:
         # Verify ownership BEFORE popping — a foreign caller must not be able to
         # tear down (or even detect the existence of) another user's session.
         self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint)
         key = self._key(tenant_id, sid)
         live = self._sessions.pop(key, None)
-        if live and live.agent_task is not None and not live.agent_task.done():
-            live.agent_task.cancel()
-        if live and live.session:
-            await live.session.close()
+        if live:
+            self._drain_pending(live)
+            await self._cancel_agent(live)
+            if live.session:
+                await live.session.close()
 
     async def close_all(self) -> None:
         for live in list(self._sessions.values()):
             try:
+                self._drain_pending(live)
+                await self._cancel_agent(live)   # review H2: was never cancelling agents
                 if live.session:
                     await live.session.close()
             except Exception:  # noqa: BLE001

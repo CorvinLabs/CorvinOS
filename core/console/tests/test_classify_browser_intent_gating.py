@@ -29,7 +29,10 @@ import corvin_console.routes.chat as chat_routes  # noqa: E402
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # asyncio.run (not get_event_loop) so this is robust when a prior test in the
+    # same process already ran+closed a loop via asyncio.run and left the current
+    # loop unset (Python 3.11 raises "no current event loop" otherwise).
+    return asyncio.run(coro)
 
 
 class ClassifyBrowserIntentGatingTests(unittest.TestCase):

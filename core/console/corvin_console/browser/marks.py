@@ -59,17 +59,26 @@ _COLLECT_JS = r"""
     // TOTP, email) would otherwise be read back as the element name on the next
     // observe() and leak into the model context + action log. Use only the
     // stable label attributes; for editable fields fall back to their type.
+    //
+    // Every branch is hard-capped to NAME_CAP chars. An UNBOUNDED accessible
+    // name (aria-label/name/title/placeholder were previously returned whole)
+    // is an indirect-prompt-injection vector: a page can stuff a multi-line
+    // aria-label containing the agent's UNTRUSTED-CONTENT fence delimiter plus
+    // forged operator instructions and break out of the fence (ADR-0183 S1
+    // hardening). Capping every field bounds that payload to one short label.
+    const NAME_CAP = 100;
+    const cap = (s) => s.slice(0, NAME_CAP);
     const aria = el.getAttribute('aria-label');
-    if (aria && aria.trim()) return aria.trim();
-    if (el.getAttribute('placeholder')) return el.getAttribute('placeholder').trim();
-    if (el.getAttribute('name')) return el.getAttribute('name').trim();
-    if (el.getAttribute('title')) return el.getAttribute('title').trim();
+    if (aria && aria.trim()) return cap(aria.trim());
+    if (el.getAttribute('placeholder')) return cap(el.getAttribute('placeholder').trim());
+    if (el.getAttribute('name')) return cap(el.getAttribute('name').trim());
+    if (el.getAttribute('title')) return cap(el.getAttribute('title').trim());
     const tag = el.tagName.toLowerCase();
     if (tag === 'input' || tag === 'textarea' || el.isContentEditable) {
       return (el.getAttribute('type') || 'text') + ' field';   // never el.value
     }
     const t = (el.innerText || el.textContent || '').trim();
-    return t.slice(0, 80);
+    return cap(t);
   }
   function role(el) {
     const explicit = el.getAttribute('role');
@@ -110,7 +119,14 @@ _COLLECT_JS = r"""
     if (!interactive(el)) continue;
     if (!visible(el)) continue;
     const rl = role(el);
-    if (rl === 'password') continue; // never surface password fields as targets to the model
+    // Password fields ARE surfaced (role 'password') so a login/credential
+    // flow has a reachable target for fill_secret — WITHOUT this a vault
+    // credential could never be aimed at the password box (ADR-0183 S1: the
+    // advertised fill_secret capability was structurally unusable). This is
+    // safe because accName() NEVER reads el.value — a password mark carries
+    // only its static label ("password field" / its placeholder), never the
+    // typed secret. Consumers gate these to fill_secret; plain fill/click on a
+    // password mark stays possible but is never what the agent is steered to.
     const r = el.getBoundingClientRect();
     el.setAttribute('data-corvin-mark', String(idx));
     out.push({
@@ -160,17 +176,19 @@ _UNPAINT_JS = "() => document.getElementById('corvin-marks-overlay')?.remove()"
 # check can never leak a typed secret back into the comparison / model context.
 _FINGERPRINT_JS = r"""
 (el) => {
+  const NAME_CAP = 100;                       // must match accName()'s cap exactly,
+  const cap = (s) => s.slice(0, NAME_CAP);    // else a long label reads as "stale"
   const aria = el.getAttribute('aria-label');
-  if (aria && aria.trim()) return aria.trim();
-  if (el.getAttribute('placeholder')) return el.getAttribute('placeholder').trim();
-  if (el.getAttribute('name')) return el.getAttribute('name').trim();
-  if (el.getAttribute('title')) return el.getAttribute('title').trim();
+  if (aria && aria.trim()) return cap(aria.trim());
+  if (el.getAttribute('placeholder')) return cap(el.getAttribute('placeholder').trim());
+  if (el.getAttribute('name')) return cap(el.getAttribute('name').trim());
+  if (el.getAttribute('title')) return cap(el.getAttribute('title').trim());
   const tag = el.tagName.toLowerCase();
   if (tag === 'input' || tag === 'textarea' || el.isContentEditable) {
     return (el.getAttribute('type') || 'text') + ' field';   // never el.value
   }
   const t = (el.innerText || el.textContent || '').trim();
-  return t.slice(0, 80);
+  return cap(t);
 }
 """
 
@@ -189,6 +207,29 @@ _FORM_SENSITIVE_JS = r"""
   const pattern = /card.?number|cvv|cvc|card.?code|kreditkarte|kartennummer/i;
   const fields = form.querySelectorAll('input, select, textarea');
   for (const f of fields) {
+    const label = (f.getAttribute('aria-label') || f.getAttribute('placeholder') ||
+                   f.getAttribute('name') || f.getAttribute('id') || '');
+    if (pattern.test(label)) return true;
+  }
+  return false;
+}
+"""
+
+# Commit-gating (ADR-0183 S1 hardening): does the form enclosing the CURRENTLY
+# FOCUSED element contain a password / card-number field? Used to gate a
+# key("Enter"/"Space") press — which can submit a form without any click ever
+# happening — through the SAME human-in-the-loop confirm as a sensitive click,
+# closing the "Enter bypasses the sensitivity gate" hole. SECURITY: reads only
+# static labels of the focused element's form, never any field value.
+_ACTIVE_FORM_SENSITIVE_JS = r"""
+() => {
+  const el = document.activeElement;
+  if (!el || !el.closest) return false;
+  const form = el.closest('form');
+  if (!form) return false;
+  if (form.querySelector('input[type="password"]')) return true;
+  const pattern = /card.?number|cvv|cvc|card.?code|kreditkarte|kartennummer/i;
+  for (const f of form.querySelectorAll('input, select, textarea')) {
     const label = (f.getAttribute('aria-label') || f.getAttribute('placeholder') ||
                    f.getAttribute('name') || f.getAttribute('id') || '');
     if (pattern.test(label)) return true;

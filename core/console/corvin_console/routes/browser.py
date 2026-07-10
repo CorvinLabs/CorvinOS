@@ -129,6 +129,29 @@ class AgentReq(BaseModel):
     max_steps: int = 12
     model_config = {"extra": "forbid"}
 
+class KeyReq(BaseModel):
+    key: str
+    model_config = {"extra": "forbid"}
+
+class SelectReq(BaseModel):
+    index: int
+    value: str
+    model_config = {"extra": "forbid"}
+
+class UploadReq(BaseModel):
+    index: int
+    filename: str
+    model_config = {"extra": "forbid"}
+
+class DragReq(BaseModel):
+    from_index: int
+    to_index: int
+    model_config = {"extra": "forbid"}
+
+class SwitchTabReq(BaseModel):
+    index: int
+    model_config = {"extra": "forbid"}
+
 
 async def _act(coro):
     from ..browser import BrowserActionError
@@ -247,6 +270,76 @@ async def back(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(requ
     s = _owned_session(rec, sid)
     obs = await _act(s.back())
     return obs.to_dict()
+
+
+# ── ADR-0183 S2: expanded action surface ──────────────────────────────────────
+@router.post("/browser/{sid}/hover")
+async def hover(sid: str, body: IndexReq,
+                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    s = _owned_session(rec, sid)
+    await _act(s.hover(body.index))
+    return {"ok": True}
+
+@router.post("/browser/{sid}/key")
+async def key(sid: str, body: KeyReq,
+              rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    s = _owned_session(rec, sid)
+    await _act(s.key(body.key))
+    return {"ok": True}
+
+@router.post("/browser/{sid}/select_option")
+async def select_option(sid: str, body: SelectReq,
+                        rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    s = _owned_session(rec, sid)
+    await _act(s.select_option(body.index, body.value))
+    return {"ok": True}
+
+@router.post("/browser/{sid}/upload_file")
+async def upload_file(sid: str, body: UploadReq,
+                      rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    s = _owned_session(rec, sid)
+    await _act(s.upload_file(body.index, body.filename))
+    return {"ok": True}
+
+@router.post("/browser/{sid}/drag")
+async def drag(sid: str, body: DragReq,
+               rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    s = _owned_session(rec, sid)
+    await _act(s.drag(body.from_index, body.to_index))
+    return {"ok": True}
+
+@router.post("/browser/{sid}/tabs")
+async def tabs(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    s = _owned_session(rec, sid)
+    return {"tabs": await _act(s.tabs())}
+
+@router.post("/browser/{sid}/switch_tab")
+async def switch_tab(sid: str, body: SwitchTabReq,
+                     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    s = _owned_session(rec, sid)
+    obs = await _act(s.switch_tab(body.index))
+    return obs.to_dict()
+
+@router.post("/browser/{sid}/extract_table")
+async def extract_table(sid: str, body: IndexReq,
+                        rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    s = _owned_session(rec, sid)
+    return await _act(s.extract_table(body.index))
+
+@router.post("/browser/{sid}/extract_form_schema")
+async def extract_form_schema(sid: str,
+                              rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    s = _owned_session(rec, sid)
+    return {"forms": await _act(s.extract_form_schema())}
+
+@router.post("/browser/{sid}/screenshot")
+async def screenshot(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    """Return the current viewport as a base64 JPEG data URL (mark overlay
+    painted on) — the tool-surface counterpart to the live-view frame.jpg GET,
+    so a WorkerEngine driving browser.* can fetch a screenshot too."""
+    s = _owned_session(rec, sid)
+    png = await _act(s.screenshot(marks=True))
+    return {"data_url": s.screenshot_data_url(png)}
 
 
 # ── live view ─────────────────────────────────────────────────────────────────

@@ -22,11 +22,12 @@ import contextlib
 import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
+from urllib.parse import urlparse
 
 from . import compliance as _cmp
 from .marks import (
-    _COLLECT_JS, _EXTRACT_FORMS_JS, _EXTRACT_TABLE_JS, _FINGERPRINT_JS,
-    _FORM_SENSITIVE_JS, _PAINT_JS, _UNPAINT_JS,
+    _ACTIVE_FORM_SENSITIVE_JS, _COLLECT_JS, _EXTRACT_FORMS_JS, _EXTRACT_TABLE_JS,
+    _FINGERPRINT_JS, _FORM_SENSITIVE_JS, _PAINT_JS, _UNPAINT_JS,
     MAX_MARKS, Mark, Observation,
 )
 
@@ -52,9 +53,21 @@ ALLOWED_KEYS = frozenset({
     "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
 })
 
+# Keys that can COMMIT the focused control — submit a form / activate a button —
+# without any click() ever happening. A press of one of these must go through the
+# SAME human-in-the-loop sensitivity gate + landing-egress recheck as a click,
+# otherwise `fill(user); fill(pw); key("Enter")` would log in / pay / delete
+# entirely un-confirmed (ADR-0183 S1 hardening — the "submit" sensitivity branch
+# was previously dead code, reachable by nothing).
+_COMMIT_KEYS = frozenset({"Enter", "Space"})
+
 # Structured extraction bounds (ADR-0183 S2) — keep the model's context bounded
 # regardless of how large the live page's table/forms are.
 _MAX_EXTRACT_ROWS = 200
+
+# Hard cap on concurrently-open tabs per session (review H3): a page that
+# window.open()s in a loop must not spawn unbounded tabs + 30s guard tasks.
+_MAX_TABS = 12
 
 
 class BrowserActionError(RuntimeError):
@@ -124,14 +137,31 @@ class BrowserSession:
         # the browser is up.
         self._start_lock = asyncio.Lock()
         self._pending_on_frame: "OnFrame | None" = None
+        # Terminal-state flag (concurrency review H1): close() sets it FIRST so a
+        # concurrent in-flight action cannot re-launch Chromium after teardown
+        # (close() nulls _pw/_context, which _ensure_started would otherwise read
+        # as "never started" and relaunch → a leaked, unreachable zombie browser).
+        self._closed = False
+        # Fire-and-forget new-tab egress guards (review H3): the event loop keeps
+        # only a WEAK ref to a bare ensure_future task, so it can be GC'd mid-wait
+        # and silently skip the egress check (fail-closed → fail-open). Keep a hard
+        # ref here; cancel them all on close().
+        self._guard_tasks: set[asyncio.Task] = set()
 
     # ── lifecycle ────────────────────────────────────────────────────────────
     async def _ensure_started(self) -> None:
         """Lazily launch Chromium on the first action — double-checked lock."""
-        if self._pw is not None and self._context is not None:
+        if self._closed:
+            raise BrowserActionError("session closed")
+        # Fast path requires a live PAGE too (review M4): a persistent context can
+        # briefly exist with _pw/_context set but _page still None during start(),
+        # and the invariant "fast path ⇒ fully usable" must hold.
+        if self._pw is not None and self._context is not None and self._page is not None:
             return
         async with self._start_lock:
-            if self._pw is None or self._context is None:
+            if self._closed:
+                raise BrowserActionError("session closed")
+            if self._pw is None or self._context is None or self._page is None:
                 await self.start()
                 if self._pending_on_frame is not None:
                     await self.start_screencast(self._pending_on_frame)
@@ -179,11 +209,43 @@ class BrowserSession:
         # exists, which is fine: that first tab is only ever driven through
         # our own navigate(), which already egress-checks explicitly).
         self._context.on("page", self._on_new_page)
+        # Network-layer egress enforcement (review HIGH-1). check_egress() gates
+        # top-level NAVIGATION, but a loaded page can still fetch()/XHR/beacon/
+        # <img>/WebSocket to ANY host — the real indirect-prompt-injection
+        # exfil vector — with nothing stopping it. Route EVERY request through
+        # the same policy and abort a disallowed one. This also blocks a
+        # subresource fetch to a cloud-metadata endpoint even when no allowlist
+        # is configured (check_egress blocks metadata unconditionally).
+        await self._context.route("**/*", self._route_egress)
+
+    async def _route_egress(self, route) -> None:
+        """Per-request egress gate. In-page pseudo-schemes (data:/blob:/about:)
+        make no network egress and are always allowed; everything else must pass
+        check_egress or is aborted. Fail-closed: any handler error aborts the
+        single request rather than letting it through."""
+        try:
+            url = route.request.url
+            scheme = (urlparse(url).scheme or "").lower()
+            if scheme in ("data", "blob", "about", "javascript", "filesystem"):
+                await route.continue_()
+                return
+            if _cmp.check_egress(url, allowlist=self._allowlist,
+                                 forbidden=self._forbidden).allowed:
+                await route.continue_()
+            else:
+                await route.abort()
+        except Exception:  # noqa: BLE001 — fail-closed on this one request
+            with contextlib.suppress(Exception):
+                await route.abort()
 
     def _on_new_page(self, new_page) -> None:
         """Sync 'page' event callback (Playwright fires this synchronously) —
-        just schedules the actual async egress check/audit."""
-        asyncio.ensure_future(self._guard_new_page(new_page))
+        just schedules the actual async egress check/audit. Keep a HARD ref to
+        the task (review H3) so the loop's weak-ref bookkeeping can't GC it
+        mid-wait and silently skip the guard."""
+        task = asyncio.ensure_future(self._guard_new_page(new_page))
+        self._guard_tasks.add(task)
+        task.add_done_callback(self._guard_tasks.discard)
 
     async def _guard_new_page(self, new_page) -> None:
         """Fail-closed egress gate for a newly-opened tab/popup.
@@ -199,6 +261,12 @@ class BrowserSession:
         """
         host = ""
         try:
+            # Tab-flood cap (review H3): a page that window.open()s in a loop must
+            # not spawn unbounded tabs+guards. Over the cap, close the newcomer.
+            if self._context is not None and len(self._context.pages) > _MAX_TABS:
+                await self._safe_close_tab(new_page)
+                self._emit("new_tab", host="", ok=False, reason="tab_limit")
+                return
             with contextlib.suppress(Exception):
                 await new_page.wait_for_load_state("load", timeout=self._nav_timeout)
             new_page.set_default_timeout(self._nav_timeout)
@@ -206,8 +274,7 @@ class BrowserSession:
             decision = _cmp.check_egress(url, allowlist=self._allowlist, forbidden=self._forbidden)
             host = decision.host
             if not decision.allowed and url not in ("about:blank", ""):
-                with contextlib.suppress(Exception):
-                    await new_page.close()
+                await self._safe_close_tab(new_page)
                 _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                                   action="new_tab", host=host, ok=False,
                                   extra={"reason": decision.reason})
@@ -219,33 +286,65 @@ class BrowserSession:
         except Exception:  # noqa: BLE001 — a hook failure must never crash the session;
             # fail-closed: an unexpected error means we could NOT confirm the new
             # tab is safe, so close it rather than leave it open unchecked.
-            with contextlib.suppress(Exception):
-                await new_page.close()
+            await self._safe_close_tab(new_page)
             logger.debug("new-tab egress guard failed for %s", host, exc_info=True)
 
+    async def _safe_close_tab(self, page) -> None:
+        """Close a popup/secondary tab under the page lock (review M2: the guard
+        must not race an in-flight locked action on the same Page). NEVER closes
+        the tab that is currently the active ``self._page`` — switch_tab() may
+        have promoted this popup to primary while we were waiting for its load;
+        closing it would leave every later action raising a raw 'Target closed'.
+        """
+        if page is self._page:
+            return
+        async with self._page_lock:
+            if page is self._page:      # re-check under the lock
+                return
+            with contextlib.suppress(Exception):
+                await page.close()
+
     async def close(self) -> None:
-        if self._screencast_task:
-            self._screencast_task.cancel()
+        """Idempotent, self-serializing teardown (review H1/H3/H4/M3).
+
+        Sets ``_closed`` FIRST so any queued ``_ensure_started`` bails instead of
+        relaunching Chromium onto a popped session (the resurrection-zombie bug),
+        then serializes with ``_start_lock`` so a close racing an in-flight
+        ``start()`` cannot stop the driver mid-launch. Safe to call twice (the
+        chat auto_close finally + an explicit REST close can race): the second
+        call sees ``_pw is None`` and no-ops rather than double-stopping the
+        Playwright driver."""
+        already = self._closed
+        self._closed = True
+        # Cancel the fire-and-forget new-tab guards up front (review H3).
+        for t in list(self._guard_tasks):
+            t.cancel()
+        self._guard_tasks.clear()
+        async with self._start_lock:
+            if already and self._pw is None:
+                return                       # a concurrent close() already tore down
+            if self._screencast_task:
+                self._screencast_task.cancel()
+                try:
+                    await self._screencast_task     # drain the in-flight frame cleanly
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+                self._screencast_task = None
             try:
-                await self._screencast_task     # drain the in-flight frame cleanly
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
-            self._screencast_task = None
-        try:
-            if self._context:
-                await self._context.close()
-        finally:
-            if self._pw:
-                await self._pw.stop()
-            self._pw = self._browser = self._context = self._page = None
-            # L3: wipe the persistent profile (cookies/localStorage/auth) — the
-            # ephemeral managed session must not leave credentials on disk.
-            try:
-                import shutil
-                if getattr(self, "_user_data", None) and self._user_data.exists():
-                    shutil.rmtree(self._user_data, ignore_errors=True)
-            except Exception:  # noqa: BLE001
-                pass
+                if self._context:
+                    await self._context.close()
+            finally:
+                if self._pw:
+                    await self._pw.stop()
+                self._pw = self._browser = self._context = self._page = None
+                # L3: wipe the persistent profile (cookies/localStorage/auth) — the
+                # ephemeral managed session must not leave credentials on disk.
+                try:
+                    import shutil
+                    if getattr(self, "_user_data", None) and self._user_data.exists():
+                        shutil.rmtree(self._user_data, ignore_errors=True)
+                except Exception:  # noqa: BLE001
+                    pass
 
     def _require_page(self):
         if self._page is None:
@@ -264,6 +363,90 @@ class BrowserSession:
         if self.paused:
             raise BrowserActionError(
                 f"blocked: session is paused / under user take-over ({action})")
+
+    # ── shared sensitivity + egress gates (used by every commit-capable action) ─
+    async def _confirm_sensitive_or_raise(
+        self, action: str, *, host: str, role: str = "", name: str = "",
+        url: str = "", form_sensitive: bool = False, index: int | None = None,
+    ) -> None:
+        """Human-in-the-loop gate shared by click / key / select_option / drag.
+
+        MUST be called with the page lock NOT held — the confirm can block for up
+        to the broker timeout and we want the live screencast to keep updating
+        while the user decides. Fail-closed: a sensitive action with no confirm
+        broker wired is blocked (never auto-approved); a declined one raises."""
+        if not _cmp.is_sensitive(action, role=role, name=name, url=url,
+                                 form_has_sensitive_field=form_sensitive):
+            return
+        if self._confirm is None:
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                              action=action, host=host, role=role, index=index, ok=False,
+                              extra={"reason": "no_confirm_broker"})
+            self._emit(action, index=index, role=role, name=name, ok=False,
+                       reason="no_confirm_broker")
+            raise BrowserActionError(
+                f"sensitive {action} on '{name}' blocked: no confirmation channel")
+        approved = await self._confirm(action=action, host=host, role=role, name=name)
+        if not approved:
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                              action=action, host=host, role=role, index=index, ok=False,
+                              extra={"reason": "user_declined_sensitive"})
+            self._emit(action, index=index, role=role, name=name, ok=False,
+                       reason="user_declined_sensitive")
+            raise BrowserActionError(f"sensitive {action} on '{name}' declined by user")
+
+    async def _recheck_landing_egress_locked(
+        self, action: str, *, role: str = "", index: int | None = None,
+    ) -> None:
+        """Re-validate the CURRENT landing host after an act that may have
+        navigated (a click's <a href>, a key('Enter') form submit, a
+        <select onchange=location=…>, a drag-to-confirm). Assumes ``_page_lock``
+        is held. Fail-closed: a denied destination is parked on about:blank and
+        the action refused, exactly like navigate()'s redirect guard."""
+        page = self._require_page()
+        fdec = _cmp.check_egress(page.url, allowlist=self._allowlist, forbidden=self._forbidden)
+        if not fdec.allowed:
+            try:
+                await page.goto("about:blank")
+            except Exception:  # noqa: BLE001
+                pass
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                              action=action, host=fdec.host, role=role, index=index, ok=False,
+                              extra={"reason": "nav_" + fdec.reason})
+            self._emit(action, index=index, role=role, ok=False, reason="navigation blocked")
+            raise BrowserActionError(
+                f"{action} navigated to disallowed host {fdec.host}: {fdec.reason}")
+
+    async def _act_and_settle(self, page, do: Callable[[], Awaitable[Any]]) -> None:
+        """Run the page-mutating coroutine ``do`` and, when an egress policy is
+        configured, wait (bounded) for any navigation it triggers to SETTLE
+        before returning — so a subsequent ``_recheck_landing_egress_locked``
+        sees the real destination, not a stale pre-navigation url.
+
+        Needed because ``page.keyboard.press`` / ``select_option`` / a drag do
+        NOT auto-wait for a navigation the way ``ElementHandle.click`` does — a
+        form submitted via Enter starts navigating asynchronously, so an
+        immediate ``page.url`` read still shows the old host and the egress
+        recheck would be a no-op (fail-OPEN). When no allowlist/forbidden is set
+        the recheck is a no-op anyway, so we skip the wait entirely to keep the
+        common no-policy path fast. Assumes ``_page_lock`` is held."""
+        if self._allowlist is None and not self._forbidden:
+            await do()
+            return
+        from playwright.async_api import Error as PWError, TimeoutError as PWTimeout
+        try:
+            async with page.expect_navigation(timeout=3000):
+                await do()
+        except PWTimeout:
+            pass   # the action did not navigate — that is fine, recheck the current url
+        except PWError:
+            # The navigation was aborted at the network layer — the per-request
+            # egress route (HIGH-1) refuses an off-allowlist / metadata document
+            # request, surfacing as net::ERR_FAILED/ERR_ABORTED here. That IS the
+            # block working: the page stays on the current (allowed) host, so the
+            # landing recheck below is a no-op. Swallow it rather than leaking a
+            # raw Playwright error out of a commit action.
+            pass
 
     # ── actions ──────────────────────────────────────────────────────────────
     async def navigate(self, url: str, *, confirm_cross_host: bool = False) -> Observation:
@@ -286,8 +469,13 @@ class BrowserSession:
             # skip the confirm — that would let the agent's very FIRST hop of a
             # session go unconfirmed regardless of destination.
             if decision.host and (not cur or decision.host != cur):
+                # SECURITY: pass the HOST only, never the full URL — the confirm
+                # `name` is written verbatim into the live action-log ring buffer
+                # and the pending() payload, and a full URL can carry a
+                # ?token=/reset secret. The audit trail is already host-only
+                # (below); the live view must not leak more than the audit trail.
                 approved = await self._confirm(action="navigate", host=decision.host,
-                                               role="navigation", name=url[:120])
+                                               role="navigation", name=decision.host)
                 if not approved:
                     _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                                       action="navigate", host=decision.host, ok=False,
@@ -455,50 +643,39 @@ class BrowserSession:
         # the fail-closed backstop for the actual click.
         form_sensitive = await self._form_sensitive_hint(index)
         # Human-in-the-loop confirmation happens OUTSIDE the page lock so the live
-        # screencast keeps updating while the user decides.
-        if _cmp.is_sensitive("click", role=role, name=name, url=url,
-                             form_has_sensitive_field=form_sensitive):
-            # Fail-CLOSED: a sensitive click with NO confirm broker wired is blocked,
-            # never auto-approved.
-            if self._confirm is None:
-                _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
-                                  action="click", host=host, role=role, index=index, ok=False,
-                                  extra={"reason": "no_confirm_broker"})
-                self._emit("click", index=index, role=role, name=name, ok=False,
-                           reason="no_confirm_broker")
-                raise BrowserActionError(
-                    f"sensitive click on '{name}' blocked: no confirmation channel")
-            approved = await self._confirm(action="click", host=host, role=role, name=name)
-            if not approved:
-                _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
-                                  action="click", host=host, role=role, index=index, ok=False,
-                                  extra={"reason": "user_declined_sensitive"})
-                self._emit("click", index=index, role=role, name=name, ok=False,
-                           reason="user_declined_sensitive")
-                raise BrowserActionError(f"sensitive click on '{name}' declined by user")
+        # screencast keeps updating while the user decides. Fail-closed inside the
+        # shared helper (no broker → blocked; declined → raised).
+        await self._confirm_sensitive_or_raise(
+            "click", host=host, role=role, name=name, url=url,
+            form_sensitive=form_sensitive, index=index)
         self._guard_active("click")   # re-check: user may have paused during confirm
         async with self._page_lock:
             el = await self._resolve(index)
+            # TOCTOU re-check (review M1): the sensitivity decision above was made
+            # on pre-lock state, and there are await boundaries (up to the full
+            # confirm timeout) before we actually click. If the page swapped the
+            # form under this element (benign "Continue" → payment form) or
+            # pushState'd onto a /checkout path in that window, re-evaluate on the
+            # LIVE element/url; a benign→sensitive transition that we never
+            # confirmed must refuse, not click through unconfirmed.
+            try:
+                live_url = self._require_page().url
+                live_form_sensitive = bool(await el.evaluate(_FORM_SENSITIVE_JS))
+            except Exception:  # noqa: BLE001
+                live_url, live_form_sensitive = url, form_sensitive
+            if (_cmp.is_sensitive("click", role=role, name=name, url=live_url,
+                                  form_has_sensitive_field=live_form_sensitive)
+                    and not _cmp.is_sensitive("click", role=role, name=name, url=url,
+                                              form_has_sensitive_field=form_sensitive)):
+                raise StaleMarkError(
+                    f"click target [{index}] became sensitive since the confirm "
+                    f"decision — call observe() again and retry")
             await el.click(timeout=self._nav_timeout)
             self._last_marks = []      # a click may have navigated — force re-observe
             self._mark_frame = {}      # old frames (if any) are gone/detached too
             # C1 egress guard: a click can navigate anywhere (e.g. an <a href> to an
-            # off-allowlist host). Re-validate the LANDING host, fail-closed —
-            # a denied destination is parked on about:blank and the click refused.
-            page = self._require_page()
-            fdec = _cmp.check_egress(page.url, allowlist=self._allowlist, forbidden=self._forbidden)
-            if not fdec.allowed:
-                try:
-                    await page.goto("about:blank")
-                except Exception:  # noqa: BLE001
-                    pass
-                _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
-                                  action="click", host=fdec.host, role=role, index=index, ok=False,
-                                  extra={"reason": "nav_" + fdec.reason})
-                self._emit("click", index=index, role=role, name=name, ok=False,
-                           reason="navigation blocked")
-                raise BrowserActionError(
-                    f"click navigated to disallowed host {fdec.host}: {fdec.reason}")
+            # off-allowlist host). Re-validate the LANDING host, fail-closed.
+            await self._recheck_landing_egress_locked("click", role=role, index=index)
         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                           action="click", host=host, role=role, index=index, ok=True)
         self._emit("click", index=index, role=role, name=name, ok=True)
@@ -615,10 +792,35 @@ class BrowserSession:
         if key not in ALLOWED_KEYS:
             raise BrowserActionError(
                 f"key '{key}' is not in the allowed key set ({sorted(ALLOWED_KEYS)})")
+        url = self._require_page().url
+        host = _cmp._host(url)
+        # A commit key (Enter/Space) can submit the focused form without any
+        # click — gate it through the SAME sensitivity confirm as a click, using
+        # the current page path + whether the FOCUSED element's form carries a
+        # password/card field. Closes the "Enter bypasses the sensitivity gate"
+        # hole (the previously-dead is_sensitive("submit", …) branch).
+        if key in _COMMIT_KEYS:
+            active_sensitive = False
+            try:
+                async with self._page_lock:
+                    active_sensitive = bool(
+                        await self._require_page().evaluate(_ACTIVE_FORM_SENSITIVE_JS))
+            except Exception:  # noqa: BLE001 — best-effort hint, never blocks on eval error
+                active_sensitive = False
+            await self._confirm_sensitive_or_raise(
+                "submit", host=host, name=key, url=url, form_sensitive=active_sensitive)
+            self._guard_active("key")   # re-check: user may have paused during confirm
         async with self._page_lock:
             page = self._require_page()
-            host = _cmp._host(page.url)
-            await page.keyboard.press(key)
+            # A committed form submit can navigate anywhere — wait for the nav to
+            # settle, then re-validate the landing host fail-closed (same as click).
+            if key in _COMMIT_KEYS:
+                self._last_marks = []
+                self._mark_frame = {}
+                await self._act_and_settle(page, lambda: page.keyboard.press(key))
+                await self._recheck_landing_egress_locked("key")
+            else:
+                await page.keyboard.press(key)
         # The key NAME itself ("Enter") is not sensitive content — it is
         # metadata about the action, not typed text — so it is safe to audit,
         # unlike a fill() value.
@@ -635,10 +837,23 @@ class BrowserSession:
         await self._ensure_started()
         mark = self._mark(index)
         role = mark.role if mark else ""
+        url = self._require_page().url
+        host = _cmp._host(url)
+        # A <select onchange="location=…"> commits + navigates like a click —
+        # gate it through the same sensitivity confirm (url path + enclosing-form
+        # context) and re-check the landing host afterwards.
+        form_sensitive = await self._form_sensitive_hint(index)
+        await self._confirm_sensitive_or_raise(
+            "click", host=host, role=role, name=mark.name if mark else "", url=url,
+            form_sensitive=form_sensitive, index=index)
+        self._guard_active("select_option")
         async with self._page_lock:
-            host = _cmp._host(self._require_page().url)
+            page = self._require_page()
             el = await self._resolve(index)
-            await el.select_option(value=value)
+            self._last_marks = []
+            self._mark_frame = {}
+            await self._act_and_settle(page, lambda: el.select_option(value=value))
+            await self._recheck_landing_egress_locked("select_option", role=role, index=index)
         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                           action="select_option", host=host, role=role, index=index, ok=True,
                           extra={"chars": len(value)})   # length only, never the value
@@ -712,10 +927,17 @@ class BrowserSession:
             sy = src_box["y"] + src_box["height"] / 2
             tx = dst_box["x"] + dst_box["width"] / 2
             ty = dst_box["y"] + dst_box["height"] / 2
-            await page.mouse.move(sx, sy)
-            await page.mouse.down()
-            await page.mouse.move(tx, ty, steps=10)
-            await page.mouse.up()
+            async def _do_drag():
+                await page.mouse.move(sx, sy)
+                await page.mouse.down()
+                await page.mouse.move(tx, ty, steps=10)
+                await page.mouse.up()
+            # A drag-to-confirm / slide-to-pay control can navigate — settle any
+            # nav, then re-validate the landing host fail-closed (like click/key).
+            self._last_marks = []
+            self._mark_frame = {}
+            await self._act_and_settle(page, _do_drag)
+            await self._recheck_landing_egress_locked("drag")
         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                           action="drag", host=host, ok=True,
                           extra={"from_index": from_index, "to_index": to_index})
