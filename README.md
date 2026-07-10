@@ -27,6 +27,9 @@
 </p>
 
 <p align="center">
+  <a href="https://aiagentsdirectory.com" target="_blank" rel="noopener" title="Discover AI Agents Directory">
+    <img src="https://aiagentsdirectory.com/featured-badge.svg?v=2024" alt="Featured on AI Agents Directory" width="200" height="50" />
+  </a>
   <a href="https://agentic.ai/best/agentic-ai-platforms" target="_blank" rel="noopener noreferrer" title="Best Agentic AI Platforms 2026 — agentic.ai">
     <img src="docs/assets/award-agentic-ai-2026.svg" alt="Best Agentic AI Platforms 2026 — agentic.ai" height="180">
   </a>
@@ -183,14 +186,6 @@ Tests span the Python adapter, Node daemon-boot smoke tests, cowork, forge, skil
 ## Contributing
 
 By opening a pull request you accept [`CLA.md`](CLA.md). Every merged contribution requires a corresponding entry in [`CLA-SIGNATORIES.md`](CLA-SIGNATORIES.md). See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full workflow.
-
----
-
-<p align="center">
-  <a href="https://aiagentsdirectory.com" target="_blank" rel="noopener" title="Discover AI Agents Directory">
-    <img src="https://aiagentsdirectory.com/featured-badge.svg?v=2024" alt="Featured on AI Agents Directory" width="200" height="50" />
-  </a>
-</p>
 
 ---
 
