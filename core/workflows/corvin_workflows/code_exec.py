@@ -40,12 +40,19 @@ class CodeExecutionError(RuntimeError):
 
 
 def _resolve_selector(selector: str, *, state: dict[str, Any], inputs: dict[str, Any]) -> Any:
-    """Same selector grammar as `fan_out.items_from`: dotted `node.field`
-    reads `state[node][field]`; a bare name checks workflow `inputs` first,
-    then top-level `state`."""
+    """Same selector grammar as `fan_out.items_from`, extended to arbitrary
+    depth: `node.field.subfield...` walks `state[node][field][subfield]...`
+    one dict level per dot (needed for e.g. a `merge` node's single-key
+    output wrapper: `combined.context.alcohol_flag`). A bare name (no dot)
+    checks workflow `inputs` first, then top-level `state`."""
     if "." in selector:
-        nid, field = selector.split(".", 1)
-        return (state.get(nid) or {}).get(field)
+        parts = selector.split(".")
+        value: Any = state.get(parts[0])
+        for part in parts[1:]:
+            if not isinstance(value, dict):
+                return None
+            value = value.get(part)
+        return value
     if selector in inputs:
         return inputs[selector]
     return state.get(selector)

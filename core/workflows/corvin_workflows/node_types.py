@@ -21,6 +21,7 @@ Shipped types:
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 # Forward references — runner imports node_types, node_types imports nothing.
@@ -355,6 +356,28 @@ def _execute_deliver(*, node: dict[str, Any], engine: Any, state: dict[str, Any]
 # ---------------------------------------------------------------------------
 
 
+def _validate_chat_id_fields(node: dict[str, Any], *, node_kind: str) -> None:
+    """Shared by answer/ask_human: chat_id is either a literal string, a
+    selector (chat_id_from — e.g. a workflow input carrying the triggering
+    chat), or omitted entirely to fall back to 'auto' (state.__trigger_chat_id__,
+    set by a bridge-driven caller). At most one of chat_id/chat_id_from."""
+    has_literal = "chat_id" in node and node["chat_id"] != "auto"
+    has_selector = isinstance(node.get("chat_id_from"), str) and node["chat_id_from"]
+    if has_literal and has_selector:
+        raise ValueError(f"{node_kind} node: set at most one of 'chat_id' or 'chat_id_from', not both")
+
+
+def _resolve_chat_id(node: dict[str, Any], *, state: dict[str, Any], inputs: dict[str, Any]) -> str:
+    from .code_exec import _resolve_selector
+
+    if isinstance(node.get("chat_id_from"), str) and node["chat_id_from"]:
+        return str(_resolve_selector(node["chat_id_from"], state=state, inputs=inputs))
+    chat_id = str(node.get("chat_id", "auto"))
+    if chat_id == "auto":
+        return str(state.get("__trigger_chat_id__", ""))
+    return chat_id
+
+
 def _validate_answer(node: dict[str, Any]) -> None:
     channel = node.get("channel")
     if channel not in _DELIVER_CHANNELS:
@@ -363,6 +386,7 @@ def _validate_answer(node: dict[str, Any]) -> None:
     has_text_from = isinstance(node.get("text_from"), str) and node["text_from"]
     if has_text == has_text_from:
         raise ValueError("answer node requires exactly one of 'text' (literal) or 'text_from' (selector)")
+    _validate_chat_id_fields(node, node_kind="answer")
 
 
 def _execute_answer(*, node, engine, state, inputs, audit) -> dict[str, Any]:
@@ -376,12 +400,10 @@ def _execute_answer(*, node, engine, state, inputs, audit) -> dict[str, Any]:
 
     text = node.get("text") or str(_resolve_selector(node["text_from"], state=state, inputs=inputs))
     channel = node["channel"]
-    chat_id = str(node.get("chat_id", "auto"))
-    if chat_id == "auto":
-        chat_id = str(state.get("__trigger_chat_id__", ""))
-        if not chat_id:
-            audit("answer.skipped", node_id=node["id"], reason="chat_id=auto but no trigger context")
-            return {"sent": False, "text": text, "reason": "chat_id=auto — no trigger context available"}
+    chat_id = _resolve_chat_id(node, state=state, inputs=inputs)
+    if not chat_id:
+        audit("answer.skipped", node_id=node["id"], reason="no chat_id resolved")
+        return {"sent": False, "text": text, "reason": "no chat_id resolved (chat_id/chat_id_from/auto all empty)"}
 
     _write_outbox(channel, chat_id, text, extra={"_workflow_answer": True})
     audit("answer.sent", node_id=node["id"], channel=channel, chat_id=chat_id, chars=len(text))
@@ -431,12 +453,28 @@ def _validate_ask_human(node: dict[str, Any]) -> None:
     on_timeout = node.get("on_timeout")
     if on_timeout is not None and (not isinstance(on_timeout, dict) or not on_timeout.get("branch")):
         raise ValueError("ask_human node 'on_timeout' requires a 'branch' field")
+    _validate_chat_id_fields(node, node_kind="ask_human")
+
+
+_AFFIRMATIVE_WORDS = {"ja", "yes", "y", "true", "1", "confirm", "confirmed", "ok", "okay", "sure", "yep", "yup"}
+_NEGATIVE_WORDS = {"nein", "no", "n", "false", "0", "cancel", "decline", "declined", "nope", "nicht"}
 
 
 def _coerce_reply(raw: str, type_: str) -> Any:
-    if type_ == "boolean":
-        return raw.strip().lower() in ("ja", "yes", "y", "true", "1", "confirm", "confirmed", "ok")
-    return raw
+    """Boolean coercion for a free-text human reply. Real replies are phrases
+    ("ja, bitte", "no thanks") not just bare tokens — matches on whole-word
+    membership, not full-string equality, so a leading/trailing word doesn't
+    silently flip the result. Ambiguous/unmatched text defaults to False
+    (fail-closed: an unrecognised reply must never be treated as consent)."""
+    if type_ != "boolean":
+        return raw
+    words = re.findall(r"[a-zA-ZäöüÄÖÜß]+", raw.lower())
+    word_set = set(words)
+    if word_set & _NEGATIVE_WORDS:
+        return False
+    if word_set & _AFFIRMATIVE_WORDS:
+        return True
+    return False
 
 
 def _execute_ask_human(*, node, engine, state, inputs, audit) -> dict[str, Any]:
@@ -456,13 +494,11 @@ def _execute_ask_human(*, node, engine, state, inputs, audit) -> dict[str, Any]:
     # runner checkpoints and returns state="paused" instead of failing.
     prompt = node.get("prompt") or str(_resolve_selector(node["prompt_from"], state=state, inputs=inputs))
     channel = node["channel"]
-    chat_id = str(node.get("chat_id", "auto"))
-    if chat_id == "auto":
-        chat_id = str(state.get("__trigger_chat_id__", ""))
-        if not chat_id:
-            raise RuntimeError(
-                f"ask_human node {node['id']!r}: chat_id=auto but no trigger context available"
-            )
+    chat_id = _resolve_chat_id(node, state=state, inputs=inputs)
+    if not chat_id:
+        raise RuntimeError(
+            f"ask_human node {node['id']!r}: no chat_id resolved (chat_id/chat_id_from/auto all empty)"
+        )
     _write_outbox(channel, chat_id, prompt, extra={"_workflow_ask_human": True, "node_id": node["id"]})
     audit("ask_human.sent", node_id=node["id"], channel=channel, chat_id=chat_id)
     raise WorkflowPaused(
