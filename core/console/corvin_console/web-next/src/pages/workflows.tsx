@@ -200,6 +200,48 @@ function seededUnit(seed: string): number {
   return ((h >>> 0) % 10000) / 10000;
 }
 
+// Groups nodes into visual "clusters" for the organic layout: a node starts
+// a new cluster at a root, a merge point (>1 dependency), or right after a
+// branch point (its single parent has >1 children) — everything else joins
+// its parent's cluster. A simple linear chain inside one branch (the common
+// shape: route -> code -> deliver) ends up as one cluster, so those nodes
+// jitter together as a group instead of independently, reading as a loose
+// "clustered" arrangement rather than either a rigid grid or scattered noise.
+function computeClusters(nodes: GraphNode[]): Map<string, string> {
+  const idSet = new Set(nodes.map((n) => n.id));
+  const parentsOf = new Map<string, string[]>(
+    nodes.map((n) => [n.id, (n.depends_on ?? []).filter((d) => idSet.has(d))]),
+  );
+  const childCount = new Map<string, number>();
+  for (const n of nodes) {
+    for (const dep of n.depends_on ?? []) {
+      if (idSet.has(dep)) childCount.set(dep, (childCount.get(dep) ?? 0) + 1);
+    }
+  }
+  const cache = new Map<string, string>();
+  function findCluster(id: string, seen: Set<string>): string {
+    if (cache.has(id)) return cache.get(id)!;
+    if (seen.has(id)) return id; // cycle guard
+    seen.add(id);
+    const parents = parentsOf.get(id) ?? [];
+    if (parents.length !== 1) {
+      cache.set(id, id); // root or merge point — starts its own cluster
+      return id;
+    }
+    const [parent] = parents;
+    if ((childCount.get(parent) ?? 0) > 1) {
+      cache.set(id, id); // right after a branch point — starts a new cluster
+      return id;
+    }
+    const c = findCluster(parent, seen);
+    cache.set(id, c);
+    return c;
+  }
+  const result = new Map<string, string>();
+  nodes.forEach((n) => result.set(n.id, findCluster(n.id, new Set())));
+  return result;
+}
+
 function computeLayout(
   nodes: GraphNode[],
   organic = false,
@@ -235,22 +277,28 @@ function computeLayout(
   const GAP_X = 40;
   const GAP_Y = 72;
   const positions = new Map<string, { x: number; y: number; level: number }>();
+  const clusters = organic ? computeClusters(nodes) : null;
 
   for (const [lvl, ids] of byLevel) {
     ids.forEach((id, i) => {
       const baseX = lvl * (NODE_W + GAP_X);
       const baseY = i * (NODE_H + GAP_Y);
-      if (!organic) {
+      if (!organic || !clusters) {
         positions.set(id, { x: baseX, y: baseY, level: lvl });
         return;
       }
-      // Organic mode: bounded per-node jitter around the topological grid
-      // position — still left-to-right by dependency level (so the flow
-      // stays readable) but not lined up in strict rows/columns. Deterministic
-      // per node id so the layout doesn't reshuffle on every render.
-      const jx = (seededUnit(id + ":x") - 0.5) * (NODE_W + GAP_X) * 0.7;
-      const jy = (seededUnit(id + ":y") - 0.5) * (NODE_H + GAP_Y) * 0.9;
-      positions.set(id, { x: baseX + jx, y: baseY + jy, level: lvl });
+      // Organic mode: a shared per-cluster offset (same branch/chain moves
+      // together as a loose group — "clustered") plus a small per-node
+      // offset on top (so it isn't a perfectly rigid sub-grid either).
+      // Smaller magnitudes than a fully independent jitter would use, for a
+      // more ordered-but-still-flexible feel. Dependency-level x-ordering is
+      // preserved throughout, so the left-to-right flow stays readable.
+      const clusterId = clusters.get(id) ?? id;
+      const cjx = (seededUnit(clusterId + ":cx") - 0.5) * (NODE_W + GAP_X) * 0.35;
+      const cjy = (seededUnit(clusterId + ":cy") - 0.5) * (NODE_H + GAP_Y) * 0.4;
+      const njx = (seededUnit(id + ":x") - 0.5) * (NODE_W + GAP_X) * 0.18;
+      const njy = (seededUnit(id + ":y") - 0.5) * (NODE_H + GAP_Y) * 0.22;
+      positions.set(id, { x: baseX + cjx + njx, y: baseY + cjy + njy, level: lvl });
     });
   }
   return positions;
