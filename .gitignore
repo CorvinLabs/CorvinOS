@@ -150,3 +150,6 @@ ops/.env.local-test
 
 # Build artifacts (wheels/sdist) — never commit
 dist/
+
+# wrangler (Cloudflare Pages) local deploy cache
+.wrangler/
