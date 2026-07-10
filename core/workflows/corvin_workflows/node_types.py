@@ -292,6 +292,18 @@ def _validate_deliver(node: dict[str, Any]) -> None:
         raise ValueError("deliver node config.voice must be true or false")
 
 
+def _stringify_for_chat(value: Any) -> str:
+    """Render a resolved selector value as chat text. A bare `str(dict)`
+    would emit Python repr syntax (single-quoted, not valid JSON) — use
+    json.dumps for structured values so a `text_from`/`prompt_from`
+    pointing at e.g. a `code` node's dict output reads as real JSON."""
+    if isinstance(value, (dict, list)):
+        import json as _json
+
+        return _json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    return str(value)
+
+
 def _write_outbox(channel: str, chat_id: str, text: str, *, extra: dict[str, Any] | None = None) -> None:
     """Shared outbox-write path (bridge daemons poll this directory) — used
     by `deliver`, `ask_human`, and `answer` so all three chat-facing node
@@ -398,7 +410,7 @@ def _execute_answer(*, node, engine, state, inputs, audit) -> dict[str, Any]:
     *next* inbound chat message starts a fresh run, not a resume."""
     from .code_exec import _resolve_selector
 
-    text = node.get("text") or str(_resolve_selector(node["text_from"], state=state, inputs=inputs))
+    text = node.get("text") or _stringify_for_chat(_resolve_selector(node["text_from"], state=state, inputs=inputs))
     channel = node["channel"]
     chat_id = _resolve_chat_id(node, state=state, inputs=inputs)
     if not chat_id:
@@ -492,7 +504,7 @@ def _execute_ask_human(*, node, engine, state, inputs, audit) -> dict[str, Any]:
 
     # First pass — no reply yet. Send the prompt, then signal a pause; the
     # runner checkpoints and returns state="paused" instead of failing.
-    prompt = node.get("prompt") or str(_resolve_selector(node["prompt_from"], state=state, inputs=inputs))
+    prompt = node.get("prompt") or _stringify_for_chat(_resolve_selector(node["prompt_from"], state=state, inputs=inputs))
     channel = node["channel"]
     chat_id = _resolve_chat_id(node, state=state, inputs=inputs)
     if not chat_id:

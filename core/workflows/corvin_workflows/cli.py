@@ -124,10 +124,11 @@ def _validate_workflow(name: str) -> int:
 
 
 def _parse_kv_inputs(raw: list[str]) -> dict[str, object]:
-    """Turn ['ticker=NVDA', 'window_days=7'] into {ticker: 'NVDA', window_days: 7}.
+    """Turn ['ticker=NVDA', 'window_days=7', 'amount=1450.00'] into
+    {ticker: 'NVDA', window_days: 7, amount: 1450.0}.
 
-    Integer-shaped values are coerced; everything else stays a string. JSON
-    values are recognised by a leading '{' or '[' and parsed.
+    Integer- and float-shaped values are coerced; everything else stays a
+    string. JSON values are recognised by a leading '{' or '[' and parsed.
     """
     out: dict[str, object] = {}
     for tok in raw:
@@ -143,7 +144,10 @@ def _parse_kv_inputs(raw: list[str]) -> dict[str, object]:
         elif v.lstrip("-").isdigit():
             out[k] = int(v)
         else:
-            out[k] = v
+            try:
+                out[k] = float(v)
+            except ValueError:
+                out[k] = v
     return out
 
 
