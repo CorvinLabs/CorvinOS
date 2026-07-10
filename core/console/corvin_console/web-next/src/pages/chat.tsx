@@ -799,6 +799,18 @@ function ChatPane({
   // Last completed TTS text + detected language — used for the replay button.
   const [lastTts, setLastTts] = React.useState<{ text: string; lang: string } | null>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
+  // Whether the view should keep following new content to the bottom.
+  // Updated only from real user scroll events (see effect below) — NOT
+  // recomputed from scrollHeight/scrollTop inside the messages-effect,
+  // because during fast token-by-token streaming `messages` gets a new
+  // reference on every chunk, so that effect's cleanup cancels its own
+  // pending rAF almost every time (starving it) and the geometry read
+  // that did land could be racing a not-yet-painted DOM update. Either
+  // way, one missed correction pushes the gap past the old 120px
+  // threshold and it never recovers — the view visibly stops following
+  // the conversation. Tracking intent from actual scroll input sidesteps
+  // that race entirely.
+  const stickToBottom = React.useRef(true);
   // Persistent audio element — one across the chat's lifetime to avoid
   // browser quirks where a fresh Audio() per turn can lose autoplay
   // grant from the original user gesture.
@@ -1026,11 +1038,27 @@ function ChatPane({
     return () => clearTimeout(t);
   }, [chatSession.reconnecting]);
 
+  // ── Track whether the view should stick to the bottom ──────────────────────
+  // Driven only by real scroll events, not by re-deriving it from geometry on
+  // every `messages` update (see stickToBottom comment above for why that was
+  // unreliable). Scrolling within 64px of the bottom re-engages sticky mode;
+  // scrolling further up disengages it so reading history isn't interrupted.
+  React.useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [sid]);
+
   // ── Auto-scroll on new content ──────────────────────────────────────────────
   // On the very first batch of messages (initial session load), always jump to
   // the bottom so the user sees the latest exchange without having to scroll.
-  // On subsequent updates, only scroll if the user is already near the bottom
-  // (within 120 px) so that manually scrolling up isn't hijacked by streaming.
+  // On subsequent updates, follow to the bottom whenever stickToBottom is true
+  // (see effect above) — unconditionally, not gated on a fresh geometry read,
+  // so a burst of fast streaming updates can't starve the correction.
   // isInitialLoad resets to true automatically on every remount (key={activeSid}).
   const isInitialLoad = React.useRef(true);
   React.useEffect(() => {
@@ -1038,22 +1066,32 @@ function ChatPane({
     if (!el || !messages.length) return;
     if (isInitialLoad.current) {
       isInitialLoad.current = false;
+      stickToBottom.current = true;
       requestAnimationFrame(() => {
         if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
       });
       return;
     }
+    if (!stickToBottom.current) return;
     // Defer to next animation frame so the browser has painted the new node
     // before we read scrollHeight — avoids a forced synchronous layout on every
-    // streaming token (which was causing jank during fast streaming).
+    // streaming token (which was causing jank during fast streaming). Unlike
+    // before, a starved/cancelled frame here just means the current chunk's
+    // scroll lands with the next one — it can't get permanently stuck, since
+    // we're not conditioning the jump on a geometry snapshot that may already
+    // be stale.
     const raf = requestAnimationFrame(() => {
       const container = scrollRef.current;
-      if (!container) return;
-      const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
-      if (atBottom) container.scrollTop = container.scrollHeight;
+      if (container) container.scrollTop = container.scrollHeight;
     });
     return () => cancelAnimationFrame(raf);
   }, [messages]);
+
+  // Sending a message is an explicit signal the user wants to follow the
+  // conversation again, even if they'd scrolled up to read history.
+  const scrollToBottomOnSend = React.useCallback(() => {
+    stickToBottom.current = true;
+  }, []);
 
   // ── Upload files when selected ────────────────────────────────────────────
   const handleFileSelect = async (evt: React.ChangeEvent<HTMLInputElement>) => {
@@ -1098,6 +1136,7 @@ function ChatPane({
       setReconnectingVisible(true);
       return;
     }
+    scrollToBottomOnSend();
     setError(null);
     setInput("");
     setPendingAttachments([]);
