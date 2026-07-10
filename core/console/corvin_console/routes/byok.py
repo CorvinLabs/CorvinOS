@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import ssl
 import sys
 import time
@@ -41,6 +42,77 @@ _DEFAULT_AGENT_URL = "http://127.0.0.1:8766"
 _MGMT_API_URL_ENV = "CORVIN_MANAGEMENT_API_URL"
 
 _BYOK_TIMEOUT = 15.0
+
+# WA-20: /byok/secrets only ever checked the BYOK vault (operator/bridges/
+# shared/vault.py), which is a separate, opt-in path nothing writes to by
+# default — a key set the way this codebase's own docs tell users to set it
+# (an env var, or a line in ~/.config/corvin-voice/{.env,service.env}) always
+# showed "not set" here even while actively in use, because say.py / the STT
+# provider chain resolve those same variables directly and never touch the
+# vault. Mirrors the tolerant .env parser already duplicated in say.py /
+# adapter.py / stt/openai_whisper.py (comments there: "mirrors say.py /
+# adapter.py::_load_env_value") — same accepted pattern, not new duplication.
+_ENV_VAR_FALLBACKS: dict[str, list[str]] = {
+    "anthropic_api_key": ["ANTHROPIC_API_KEY"],
+    "openai_api_key": ["OPENAI_API_KEY", "CORVIN_TTS_OPENAI_KEY", "OPENAI_APIKEY"],
+    "stt_openai_api_key": ["CORVIN_STT_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY"],
+}
+
+_ENV_LINE_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+
+
+def _voice_config_dir() -> Path:
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+        os.path.expanduser("~"), ".config"
+    )
+    return Path(xdg) / "corvin-voice"
+
+
+def _load_env_value(key: str, env_path: Path) -> str | None:
+    """Read one value out of a .env-style file. Tolerant of comments, blank
+    lines, `export KEY=...`, quoted values, and a trailing `# comment`."""
+    if not env_path.exists():
+        return None
+    try:
+        text = env_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for raw in text.splitlines():
+        line = raw.lstrip()
+        if not line or line.startswith("#"):
+            continue
+        m = _ENV_LINE_RE.match(line)
+        if not m or m.group(1) != key:
+            continue
+        value = m.group(2).strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        else:
+            value = value.split(" #", 1)[0].split("\t#", 1)[0].strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+        if value.strip():
+            return value.strip()
+    return None
+
+
+def _env_or_file_present(key_name: str) -> bool:
+    """True if any of the env-var names this key resolves to (at runtime, by
+    the code that actually uses it) has a non-empty value — checked directly
+    in os.environ first, then in the same two config files the real
+    resolvers fall back to."""
+    names = _ENV_VAR_FALLBACKS.get(key_name)
+    if not names:
+        return False
+    for name in names:
+        if (os.environ.get(name) or "").strip():
+            return True
+    voice_dir = _voice_config_dir()
+    for env_file in (voice_dir / ".env", voice_dir / "service.env"):
+        for name in names:
+            if _load_env_value(name, env_file):
+                return True
+    return False
 
 _REPO = Path(__file__).resolve().parents[4]
 _AGENT_PATH = _REPO / "operator" / "agent"
@@ -245,7 +317,9 @@ def list_secrets(
     keys_info = [
         {
             "key_name": k,
-            "present": k in key_map,
+            "present": (
+                (k in key_map) or (not _is_hosted() and _env_or_file_present(k))
+            ),
             "algorithm": "RSA-OAEP-SHA256",
         }
         for k in all_keys
