@@ -8,7 +8,7 @@
  *   WorkflowRunDetailPage /app/workflows/:wid/runs/:rid
  */
 import * as React from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCCCEvents } from "../lib/ccc-bus";
 import {
@@ -167,6 +167,19 @@ const NODE_TYPE_COLOR: Record<string, string> = {
   ask_human: "hsl(38 85% 55%)",  // amber — same family as approval
 };
 
+const NODE_TYPE_ICON: Record<string, string> = {
+  delegation_loop: "⟳",
+  fan_out: "⤆",
+  deliver: "✉",
+  approval: "👤",
+  code: "λ",
+  merge: "⑂",
+  route: "⑃",
+  answer: "💬",
+  ask_human: "🙋",
+  agent: "→",
+};
+
 function nodeColor(type: string, state: "idle" | "running" | "ok" | "failed" | "waiting"): string {
   if (state === "waiting") return "hsl(38 85% 65%)";
   if (state === "running") return "hsl(38 90% 55%)";
@@ -175,7 +188,22 @@ function nodeColor(type: string, state: "idle" | "running" | "ok" | "failed" | "
   return NODE_TYPE_COLOR[type] ?? "hsl(var(--muted-foreground))";
 }
 
-function computeLayout(nodes: GraphNode[]): Map<string, { x: number; y: number; level: number }> {
+// Deterministic 0..1 pseudo-random value from a string seed (stable across
+// re-renders of the same node id — used only by the opt-in "organic" layout
+// so a screenshot/preview doesn't jitter differently on every reload).
+function seededUnit(seed: string): number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) {
+    h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
+  }
+  h ^= h >>> 16;
+  return ((h >>> 0) % 10000) / 10000;
+}
+
+function computeLayout(
+  nodes: GraphNode[],
+  organic = false,
+): Map<string, { x: number; y: number; level: number }> {
   const idSet = new Set(nodes.map((n) => n.id));
   const depMap = new Map<string, string[]>(
     nodes.map((n) => [n.id, (n.depends_on ?? []).filter((d) => idSet.has(d))]),
@@ -210,11 +238,19 @@ function computeLayout(nodes: GraphNode[]): Map<string, { x: number; y: number; 
 
   for (const [lvl, ids] of byLevel) {
     ids.forEach((id, i) => {
-      positions.set(id, {
-        x: lvl * (NODE_W + GAP_X),
-        y: i * (NODE_H + GAP_Y),
-        level: lvl,
-      });
+      const baseX = lvl * (NODE_W + GAP_X);
+      const baseY = i * (NODE_H + GAP_Y);
+      if (!organic) {
+        positions.set(id, { x: baseX, y: baseY, level: lvl });
+        return;
+      }
+      // Organic mode: bounded per-node jitter around the topological grid
+      // position — still left-to-right by dependency level (so the flow
+      // stays readable) but not lined up in strict rows/columns. Deterministic
+      // per node id so the layout doesn't reshuffle on every render.
+      const jx = (seededUnit(id + ":x") - 0.5) * (NODE_W + GAP_X) * 0.7;
+      const jy = (seededUnit(id + ":y") - 0.5) * (NODE_H + GAP_Y) * 0.9;
+      positions.set(id, { x: baseX + jx, y: baseY + jy, level: lvl });
     });
   }
   return positions;
@@ -226,14 +262,16 @@ function AwpCanvas({
   selectedId,
   onSelect,
   className,
+  organic = false,
 }: {
   nodes: GraphNode[];
   nodeStates?: NodeState;
   selectedId?: string | null;
   onSelect?: (id: string) => void;
   className?: string;
+  organic?: boolean;
 }) {
-  const positions = React.useMemo(() => computeLayout(nodes), [nodes]);
+  const positions = React.useMemo(() => computeLayout(nodes, organic), [nodes, organic]);
 
   const NODE_W = 168;
   const NODE_H = 64;
@@ -418,30 +456,32 @@ function AwpCanvas({
                 height={NODE_H}
                 rx={8}
                 ry={8}
-                fill="hsl(var(--card))"
-                stroke={isSelected ? color : "hsl(var(--border))"}
-                strokeWidth={isSelected ? 2 : 1}
+                fill={color}
+                opacity={0.1}
               />
-              <rect x={0} y={0} width={4} height={NODE_H} rx={2} fill={color} opacity={0.8} />
-              <text x={28} y={20} fontSize={11} fontWeight="600"
+              <rect
+                width={NODE_W}
+                height={NODE_H}
+                rx={8}
+                ry={8}
+                fill="none"
+                stroke={isSelected ? color : "hsl(var(--border))"}
+                strokeWidth={isSelected ? 2.5 : 1}
+              />
+              <rect x={0} y={0} width={7} height={NODE_H} rx={3} fill={color} />
+              {/* Type badge — a filled color circle with the type icon, far more
+                  scannable at a glance than the previous 9px colored glyph. */}
+              <circle cx={22} cy={19} r={11} fill={color} opacity={0.92} />
+              <text x={22} y={23} fontSize={12} textAnchor="middle" fill="hsl(var(--card))" fontFamily="inherit">
+                {NODE_TYPE_ICON[node.type] ?? "•"}
+              </text>
+              <text x={40} y={17} fontSize={11} fontWeight="700"
                 fill="hsl(var(--foreground))" fontFamily="inherit">
-                {node.id.length > 17 ? node.id.slice(0, 16) + "…" : node.id}
+                {node.id.length > 15 ? node.id.slice(0, 14) + "…" : node.id}
               </text>
-              <text x={12} y={20} fontSize={9} fill={color} fontFamily="inherit">
-                {node.type === "delegation_loop" ? "⟳" :
-                 node.type === "fan_out" ? "⤆" :
-                 node.type === "deliver" ? "✉" :
-                 node.type === "approval" ? "👤" :
-                 node.type === "code" ? "λ" :
-                 node.type === "merge" ? "⑂" :
-                 node.type === "route" ? "⑃" :
-                 node.type === "answer" ? "💬" :
-                 node.type === "ask_human" ? "🙋" :
-                 node.type === "agent" ? "→" : "•"}
-              </text>
-              <text x={12} y={34} fontSize={9}
-                fill="hsl(var(--muted-foreground))" fontFamily="inherit">
-                {node.type}
+              <text x={40} y={30} fontSize={9.5} fontWeight="600"
+                fill={color} fontFamily="inherit" letterSpacing="0.02em">
+                {node.type.toUpperCase()}
                 {state === "waiting" ? " ⏸" : state === "running" ? " ⟳" : state === "ok" ? " ✓" : state === "failed" ? " ✗" : ""}
               </text>
               <text x={12} y={47} fontSize={8}
@@ -2585,6 +2625,11 @@ export function WorkflowEditorPage() {
   const { wid } = useParams<{ wid: string }>();
   const { session } = useAuth();
   const qc = useQueryClient();
+  const [searchParams] = useSearchParams();
+  // Opt-in, non-default: ?canvas=organic breaks the strict grid layout into
+  // a looser, hand-placed-looking arrangement — used for marketing/preview
+  // screenshots. Real usage is unaffected (defaults to the strict grid).
+  const organicCanvas = searchParams.get("canvas") === "organic";
 
   const detail = useQuery({
     queryKey: ["workflow", wid],
@@ -2832,6 +2877,7 @@ export function WorkflowEditorPage() {
             selectedId={selectedNode}
             onSelect={(id) => setSelectedNode((prev) => (prev === id ? null : id))}
             className="flex-1 bg-muted/10 p-4"
+            organic={organicCanvas}
           />
           {/* M10: Quick-Add FAB */}
           <button
