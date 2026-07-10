@@ -172,6 +172,12 @@ def tenant_cowork_dir(tenant_id: str | None = None) -> Path:
     return tenant_home(tenant_id) / "cowork"
 
 
+def tenant_workflow_runs_dir(tenant_id: str | None = None) -> Path:
+    """Return tenant workflow-runs directory (ADR-0188 M5: paused/resumable
+    AWP run checkpoints, one JSON file per run_id)."""
+    return tenant_home(tenant_id) / "workflow_runs"
+
+
 def voice_sessions_dir(tenant_id: str | None = None) -> Path:
     """Return voice sessions directory for a given tenant."""
     return tenant_sessions_dir(tenant_id) / "voice"

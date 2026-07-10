@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 from .engines import StubEngine, EngineCall
-from .runner import DAGRunner
+from .runner import DAGRunner, resume_workflow
 from .storage import load_workflow
 from .validator import WorkflowInvalid, validate
 
@@ -521,7 +521,82 @@ def _run_workflow_acs(
     return 0 if out.get("status") == "success" else 1
 
 
-def _run_workflow(name: str, raw_inputs: list[str], *, format_: str, dry_run: bool = False) -> int:
+def _build_engine(engine_name: str):
+    if engine_name == "stub":
+        return _build_default_stub()
+    if engine_name == "claude":
+        from .engines_claude import ClaudeCliEngine
+
+        return ClaudeCliEngine()
+    raise SystemExit(f"unknown --engine {engine_name!r} (expected 'stub' or 'claude')")
+
+
+def _format_run_result(doc, result, inputs: dict, *, format_: str, engine) -> tuple[str, int]:
+    """Shared pretty/json rendering for both a fresh run() and a resume()."""
+    history_len = len(getattr(engine, "history", []))
+
+    if format_ == "json":
+        payload = {
+            "workflow": result.workflow,
+            "state": result.state,
+            "run_id": result.run_id,
+            "paused_at_node": result.paused_at_node,
+            "paused_prompt": result.paused_prompt,
+            "inputs": result.inputs,
+            "error": result.error,
+            "nodes": {
+                nid: {
+                    "type": n.node_type,
+                    "status": n.status,
+                    "wall_ms": int(n.wall_s * 1000),
+                    "output": n.output,
+                    "error": n.error,
+                }
+                for nid, n in result.nodes.items()
+            },
+            "final_state": result.final_state,
+        }
+        exit_code = 0 if result.state in ("complete", "paused") else 1
+        return json.dumps(payload, indent=2, default=str), exit_code
+
+    icon = {"complete": "✅", "paused": "⏸️", "failed": "❌"}.get(result.state, "❓")
+    lines: list[str] = [f"{icon} **{doc.name}** → `{result.state}`"]
+    if result.state == "paused":
+        lines.append(f"Run-ID: `{result.run_id}`  (resume with: `resume {result.run_id} \"<reply>\"`)")
+        lines.append(f"Waiting at node `{result.paused_at_node}`: {result.paused_prompt}")
+    lines.append(f"Inputs: `{json.dumps(inputs, sort_keys=True)}`")
+    lines.append(f"Nodes: {len(result.nodes)} · Engine spawns: {history_len}")
+    lines.append("")
+    for nid, n in result.nodes.items():
+        status_tag = "" if n.status == "success" else f" [{n.status}]"
+        if n.node_type == "delegation_loop":
+            term = n.output.get("terminal", {})
+            iters = n.output.get("iterations", [])
+            lines.append(
+                f"• `{nid}` ({n.node_type}){status_tag}  "
+                f"→ {term.get('state')}  "
+                f"iter={term.get('iteration')}  "
+                f"workers={n.output.get('workers_spawned')}"
+            )
+            for it in iters:
+                dec = it["manager"]["decision"]
+                wc = len(it["workers"])
+                lines.append(f"    iter {it['iteration']}: {dec} ({wc} workers)")
+        else:
+            lines.append(f"• `{nid}` ({n.node_type}){status_tag}  {int(n.wall_s*1000)}ms")
+    reporter_node = result.nodes.get("reporter")
+    if reporter_node and reporter_node.output.get("report_text"):
+        lines.append("")
+        lines.append("```")
+        lines.append(reporter_node.output["report_text"])
+        lines.append("```")
+    exit_code = 0 if result.state in ("complete", "paused") else 1
+    return "\n".join(lines), exit_code
+
+
+def _run_workflow(
+    name: str, raw_inputs: list[str], *, format_: str, dry_run: bool = False, engine_name: str = "stub",
+) -> int:
     p = _resolve_workflow_path(name)
     doc = load_workflow(p)
 
@@ -540,63 +615,28 @@ def _run_workflow(name: str, raw_inputs: list[str], *, format_: str, dry_run: bo
         return 0
 
     inputs = _parse_kv_inputs(raw_inputs)
-    engine = _build_default_stub()
+    engine = _build_engine(engine_name)
     runner = DAGRunner(doc, engine=engine)
     result = runner.run(inputs=inputs)
 
-    if format_ == "json":
-        # Compact JSON dump — usable by other tools
-        payload = {
-            "workflow": result.workflow,
-            "state": result.state,
-            "inputs": result.inputs,
-            "error": result.error,
-            "nodes": {
-                nid: {
-                    "type": n.node_type,
-                    "wall_ms": int(n.wall_s * 1000),
-                    "output": n.output,
-                    "error": n.error,
-                }
-                for nid, n in result.nodes.items()
-            },
-            "final_state": result.final_state,
-        }
-        print(json.dumps(payload, indent=2, default=str))
-        return 0 if result.state == "complete" else 1
+    text, exit_code = _format_run_result(doc, result, inputs, format_=format_, engine=engine)
+    print(text)
+    return exit_code
 
-    # format_ == "pretty" — bridge-friendly markdown
-    lines: list[str] = []
-    icon = "✅" if result.state == "complete" else "❌"
-    lines.append(f"{icon} **{doc.name}** → `{result.state}`")
-    lines.append(f"Inputs: `{json.dumps(inputs, sort_keys=True)}`")
-    lines.append(f"Nodes: {len(result.nodes)} · Engine spawns: {len(engine.history)}")
-    lines.append("")
-    for nid, n in result.nodes.items():
-        if n.node_type == "delegation_loop":
-            term = n.output.get("terminal", {})
-            iters = n.output.get("iterations", [])
-            lines.append(
-                f"• `{nid}` ({n.node_type})  "
-                f"→ {term.get('state')}  "
-                f"iter={term.get('iteration')}  "
-                f"workers={n.output.get('workers_spawned')}"
-            )
-            for it in iters:
-                dec = it["manager"]["decision"]
-                wc = len(it["workers"])
-                lines.append(f"    iter {it['iteration']}: {dec} ({wc} workers)")
-        else:
-            lines.append(f"• `{nid}` ({n.node_type})  {int(n.wall_s*1000)}ms")
-    # Final reporter output, if any
-    reporter_node = result.nodes.get("reporter")
-    if reporter_node and reporter_node.output.get("report_text"):
-        lines.append("")
-        lines.append("```")
-        lines.append(reporter_node.output["report_text"])
-        lines.append("```")
-    print("\n".join(lines))
-    return 0 if result.state == "complete" else 1
+
+def _resume_workflow_cmd(run_id: str, reply: str, *, format_: str, engine_name: str = "stub") -> int:
+    engine = _build_engine(engine_name)
+    try:
+        result = resume_workflow(run_id, reply, engine=engine)
+    except KeyError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    # doc.name isn't available post-resume without reloading; result.workflow carries it.
+    class _DocStub:
+        name = result.workflow
+    text, exit_code = _format_run_result(_DocStub(), result, result.inputs, format_=format_, engine=engine)
+    print(text)
+    return exit_code
 
 
 def _schedule_workflow(
@@ -730,6 +770,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="validate only; do not spawn any workers or LLM calls",
     )
+    sp.add_argument(
+        "--engine",
+        dest="engine_name",
+        choices=("stub", "claude"),
+        default="stub",
+        help="'stub' (canned/no tokens, default) or 'claude' (real headless `claude -p` calls)",
+    )
+    sp = sub.add_parser("resume", help="continue a workflow paused at an ask_human node")
+    sp.add_argument("run_id")
+    sp.add_argument("reply", help="the human's reply text")
+    sp.add_argument("--format", dest="fmt", choices=("pretty", "json"), default="pretty")
+    sp.add_argument("--engine", dest="engine_name", choices=("stub", "claude"), default="stub")
     # `schedule` sub-command tree: add / list / rm
     sp = sub.add_parser(
         "schedule",
@@ -764,7 +816,11 @@ def main(argv: list[str] | None = None) -> int:
         return _validate_workflow(args.name)
     if args.cmd == "run":
         return _run_workflow(args.name, args.inputs,
-                             format_=args.fmt, dry_run=getattr(args, "dry_run", False))
+                             format_=args.fmt, dry_run=getattr(args, "dry_run", False),
+                             engine_name=getattr(args, "engine_name", "stub"))
+    if args.cmd == "resume":
+        return _resume_workflow_cmd(args.run_id, args.reply, format_=args.fmt,
+                                     engine_name=getattr(args, "engine_name", "stub"))
     if args.cmd == "schedule":
         if args.sched_cmd == "add":
             return _schedule_workflow(

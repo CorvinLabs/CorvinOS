@@ -10,9 +10,9 @@ Public API:
 
 from .storage import WorkflowDoc, load_workflow, dump_workflow
 from .validator import validate, WorkflowInvalid
-from .runner import DAGRunner, RunResult, NodeResult
+from .runner import DAGRunner, RunResult, NodeResult, ResumeContext, resume_workflow
 from .engines import WorkerEngine, StubEngine, EngineCall
-from .node_types import NODE_TYPES, register_node_type
+from .node_types import NODE_TYPES, register_node_type, WorkflowPaused
 
 __all__ = [
     "WorkflowDoc",
@@ -23,9 +23,12 @@ __all__ = [
     "DAGRunner",
     "RunResult",
     "NodeResult",
+    "ResumeContext",
+    "resume_workflow",
     "WorkerEngine",
     "StubEngine",
     "EngineCall",
     "NODE_TYPES",
     "register_node_type",
+    "WorkflowPaused",
 ]

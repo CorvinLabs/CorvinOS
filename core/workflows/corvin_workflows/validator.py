@@ -8,7 +8,8 @@ touching this module. Rules raise WorkflowInvalid with a stable error code.
 | R1    | awp version present and parseable                                   |
 | R2    | workflow.name is a non-empty snake_case-ish identifier              |
 | R3    | workflow.description is a non-empty string                          |
-| R4    | orchestration.engine is "dag" (Corvin-MVP only ships DAG outer)    |
+| R4    | orchestration.engine is "dag" or "chat" (delegation_loop routes to  |
+|       | the separate ACS R1-R36 validator, never reaches this module)       |
 | R5    | orchestration.graph is a non-empty list                             |
 | R6    | every node has a unique id (slug-shape)                             |
 | R7    | every node has a known type (NODE_TYPES key)                        |
@@ -16,6 +17,8 @@ touching this module. Rules raise WorkflowInvalid with a stable error code.
 | R9    | the graph has no cycles                                             |
 | R10   | every node passes its own type's validator (delegation_loop needs   |
 |       | a manager + budget, fan_out needs an items_from, etc.)              |
+| R11   | engine "chat" requires >= 1 answer/ask_human node (ADR-0188 M7) —   |
+|       | otherwise a chat-engine workflow could never actually turn-pause    |
 """
 from __future__ import annotations
 
@@ -56,11 +59,15 @@ def _r3_description(doc: "WorkflowDoc") -> None:
         raise WorkflowInvalid("R3", "workflow.description must be a non-empty string")
 
 
+_VALID_ENGINES = {"dag", "chat"}
+
+
 def _r4_engine(doc: "WorkflowDoc") -> None:
-    if doc.engine != "dag":
+    if doc.engine not in _VALID_ENGINES:
         raise WorkflowInvalid(
             "R4",
-            f"top-level engine must be 'dag' (composed delegation lives inside nodes); got {doc.engine!r}",
+            f"top-level engine must be one of {sorted(_VALID_ENGINES)} "
+            f"(composed delegation lives inside nodes, not at the top level); got {doc.engine!r}",
         )
 
 
@@ -135,6 +142,21 @@ def _r10_per_type_validation(doc: "WorkflowDoc") -> None:
                 ) from e
 
 
+_CHAT_TURN_NODE_TYPES = {"answer", "ask_human"}
+
+
+def _r11_chat_engine_needs_turn_node(doc: "WorkflowDoc") -> None:
+    if doc.engine != "chat":
+        return
+    if not any(n.get("type") in _CHAT_TURN_NODE_TYPES for n in doc.graph):
+        raise WorkflowInvalid(
+            "R11",
+            "engine 'chat' requires at least one 'answer' or 'ask_human' node — "
+            "otherwise the workflow can never actually turn-pause and behaves "
+            "exactly like a plain 'dag' workflow, which is a likely authoring mistake",
+        )
+
+
 RULES = (
     _r1_awp_version,
     _r2_name,
@@ -146,6 +168,7 @@ RULES = (
     _r8_depends_on_refs,
     _r9_no_cycles,
     _r10_per_type_validation,
+    _r11_chat_engine_needs_turn_node,
 )
 
 

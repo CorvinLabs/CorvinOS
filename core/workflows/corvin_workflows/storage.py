@@ -23,6 +23,7 @@ class WorkflowDoc:
     inputs: dict[str, Any] = field(default_factory=dict)
     orchestration: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
+    source_path: str | None = None  # set by load_workflow(); needed to reload on resume (ADR-0188 M5)
 
     @property
     def graph(self) -> list[dict[str, Any]]:
@@ -63,6 +64,7 @@ def load_workflow(path: str | Path) -> WorkflowDoc:
         inputs=dict(data.get("inputs", {})),
         orchestration=dict(data.get("orchestration", {})),
         raw=data,
+        source_path=str(p),
     )
 
 

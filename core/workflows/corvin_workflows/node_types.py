@@ -16,6 +16,8 @@ Shipped types:
   code              — deterministic, sandboxed Python; never calls the engine (ADR-0188 M1)
   merge             — deterministic fan-in (concat_list/first_non_empty/dict_union) (ADR-0188 M2)
   route             — engine-native branching: condition (structured, no eval) or classify (LLM) (ADR-0188 M3)
+  answer            — chatflow terminal: sends a turn's output, never pauses (ADR-0188 M6)
+  ask_human         — pauses the run for a human reply via checkpoint/resume (ADR-0188 M5/M6)
 """
 from __future__ import annotations
 
@@ -289,18 +291,38 @@ def _validate_deliver(node: dict[str, Any]) -> None:
         raise ValueError("deliver node config.voice must be true or false")
 
 
-def _execute_deliver(*, node: dict[str, Any], engine: Any, state: dict[str, Any], inputs: dict[str, Any], audit: Any) -> dict[str, Any]:
-    """Write upstream output to the bridge outbox so the messenger daemon delivers it."""
+def _write_outbox(channel: str, chat_id: str, text: str, *, extra: dict[str, Any] | None = None) -> None:
+    """Shared outbox-write path (bridge daemons poll this directory) — used
+    by `deliver`, `ask_human`, and `answer` so all three chat-facing node
+    types speak the exact same wire envelope."""
     import json as _json
-    import os as _os
     import secrets as _secrets
     import time as _time
     from pathlib import Path as _Path
 
+    _here = _Path(__file__).resolve()
+    _repo = _here.parents[3]  # workflows/corvin_workflows/ → core/ → repo root
+    outbox_dir = _repo / "operator" / "bridges" / "shared" / "outbox"
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+
+    envelope = {
+        "channel": channel,
+        "chat_id": chat_id,
+        "text": text[:4000],  # Discord hard limit is 2000; daemon chunks longer messages
+        "ts": int(_time.time() * 1000),
+        **(extra or {}),
+    }
+    fname = f"wf_msg_{_secrets.token_hex(6)}.json"
+    (outbox_dir / fname).write_text(
+        _json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _execute_deliver(*, node: dict[str, Any], engine: Any, state: dict[str, Any], inputs: dict[str, Any], audit: Any) -> dict[str, Any]:
+    """Write upstream output to the bridge outbox so the messenger daemon delivers it."""
     cfg = node.get("config") or {}
     channel = cfg["channel"]
     chat_id = str(cfg.get("chat_id", "auto"))
-    fmt = cfg.get("format", "markdown")
 
     # Collect text from upstream nodes via state
     deps = node.get("depends_on") or []
@@ -317,33 +339,135 @@ def _execute_deliver(*, node: dict[str, Any], engine: Any, state: dict[str, Any]
         audit("deliver.skipped", node_id=node["id"], reason="no upstream output")
         return {"delivered": False, "reason": "no upstream output"}
 
-    # Resolve chat_id="auto" from state (set by the workflow runner on triggered runs)
     if chat_id == "auto":
         chat_id = str(state.get("__trigger_chat_id__", ""))
         if not chat_id:
             audit("deliver.skipped", node_id=node["id"], reason="chat_id=auto but no trigger context")
             return {"delivered": False, "reason": "chat_id=auto — no trigger context available"}
 
-    # Locate the shared outbox directory (same path Discord/Telegram daemons poll)
-    _here = _Path(__file__).resolve()
-    _repo = _here.parents[3]  # workflows/corvin_workflows/ → core/ → repo root
-    outbox_dir = _repo / "operator" / "bridges" / "shared" / "outbox"
-    outbox_dir.mkdir(parents=True, exist_ok=True)
-
-    envelope = {
-        "channel": channel,
-        "chat_id": chat_id,
-        "text": text[:4000],  # Discord hard limit is 2000; daemon chunks longer messages
-        "_workflow_deliver": True,
-        "ts": int(_time.time() * 1000),
-    }
-
-    fname = f"wf_deliver_{_secrets.token_hex(6)}.json"
-    fpath = outbox_dir / fname
-    fpath.write_text(_json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8")
-
+    _write_outbox(channel, chat_id, text, extra={"_workflow_deliver": True})
     audit("deliver.sent", node_id=node["id"], channel=channel, chat_id=chat_id, chars=len(text))
     return {"delivered": True, "channel": channel, "chat_id": chat_id, "chars": len(text)}
+
+
+# ---------------------------------------------------------------------------
+# Answer node — chatflow terminal (ADR-0188 M6)
+# ---------------------------------------------------------------------------
+
+
+def _validate_answer(node: dict[str, Any]) -> None:
+    channel = node.get("channel")
+    if channel not in _DELIVER_CHANNELS:
+        raise ValueError(f"answer node requires channel in {sorted(_DELIVER_CHANNELS)}, got {channel!r}")
+    has_text = isinstance(node.get("text"), str) and node["text"]
+    has_text_from = isinstance(node.get("text_from"), str) and node["text_from"]
+    if has_text == has_text_from:
+        raise ValueError("answer node requires exactly one of 'text' (literal) or 'text_from' (selector)")
+
+
+def _execute_answer(*, node, engine, state, inputs, audit) -> dict[str, Any]:
+    """Terminal/streaming node for a chatflow turn (Dify `answer`-equivalent).
+    Unlike `ask_human`, it never pauses the run for a reply — it just ends
+    the current turn's output. Under `orchestration.engine: chat` the caller
+    (bridge adapter) treats a run that finished with an `answer` node the
+    same way it treats one that finished with `end`: the run is over: the
+    *next* inbound chat message starts a fresh run, not a resume."""
+    from .code_exec import _resolve_selector
+
+    text = node.get("text") or str(_resolve_selector(node["text_from"], state=state, inputs=inputs))
+    channel = node["channel"]
+    chat_id = str(node.get("chat_id", "auto"))
+    if chat_id == "auto":
+        chat_id = str(state.get("__trigger_chat_id__", ""))
+        if not chat_id:
+            audit("answer.skipped", node_id=node["id"], reason="chat_id=auto but no trigger context")
+            return {"sent": False, "text": text, "reason": "chat_id=auto — no trigger context available"}
+
+    _write_outbox(channel, chat_id, text, extra={"_workflow_answer": True})
+    audit("answer.sent", node_id=node["id"], channel=channel, chat_id=chat_id, chars=len(text))
+    return {"sent": True, "text": text, "channel": channel, "chat_id": chat_id}
+
+
+# ---------------------------------------------------------------------------
+# Ask-human node — pause for approval, resume with the reply (ADR-0188 M5/M6)
+# ---------------------------------------------------------------------------
+
+_EXPECT_TYPES = {"boolean", "string"}
+
+
+class WorkflowPaused(Exception):
+    """Not a failure — raised by `ask_human` on its first pass (no reply
+    yet) to tell DAGRunner.run() to checkpoint and return `state="paused"`
+    instead of treating this as a node error. Caught explicitly in
+    runner.py, never by the generic `except Exception` failure path."""
+
+    def __init__(self, *, node_id: str, prompt: str, channel: str, chat_id: str,
+                 expect: dict[str, Any] | None) -> None:
+        super().__init__(f"workflow paused at node {node_id!r} awaiting a human reply")
+        self.node_id = node_id
+        self.prompt = prompt
+        self.channel = channel
+        self.chat_id = chat_id
+        self.expect = expect
+
+
+def _validate_ask_human(node: dict[str, Any]) -> None:
+    channel = node.get("channel")
+    if channel not in _DELIVER_CHANNELS:
+        raise ValueError(f"ask_human node requires channel in {sorted(_DELIVER_CHANNELS)}, got {channel!r}")
+    has_prompt = isinstance(node.get("prompt"), str) and node["prompt"]
+    has_prompt_from = isinstance(node.get("prompt_from"), str) and node["prompt_from"]
+    if has_prompt == has_prompt_from:
+        raise ValueError("ask_human node requires exactly one of 'prompt' (literal) or 'prompt_from' (selector)")
+    expect = node.get("expect")
+    if expect is not None:
+        if not isinstance(expect, dict) or not isinstance(expect.get("field"), str) or not expect["field"]:
+            raise ValueError("ask_human node 'expect' requires a non-empty 'field' name")
+        if expect.get("type", "string") not in _EXPECT_TYPES:
+            raise ValueError(f"ask_human node 'expect.type' must be one of {sorted(_EXPECT_TYPES)}")
+    timeout = node.get("timeout_minutes")
+    if timeout is not None and (not isinstance(timeout, (int, float)) or timeout <= 0):
+        raise ValueError("ask_human node 'timeout_minutes' must be a positive number")
+    on_timeout = node.get("on_timeout")
+    if on_timeout is not None and (not isinstance(on_timeout, dict) or not on_timeout.get("branch")):
+        raise ValueError("ask_human node 'on_timeout' requires a 'branch' field")
+
+
+def _coerce_reply(raw: str, type_: str) -> Any:
+    if type_ == "boolean":
+        return raw.strip().lower() in ("ja", "yes", "y", "true", "1", "confirm", "confirmed", "ok")
+    return raw
+
+
+def _execute_ask_human(*, node, engine, state, inputs, audit) -> dict[str, Any]:
+    from .code_exec import _resolve_selector
+
+    replies = state.get("__replies__") or {}
+    if node["id"] in replies:
+        raw_reply = replies[node["id"]]
+        expect = node.get("expect")
+        audit("ask_human.resumed", node_id=node["id"])
+        if expect:
+            value = _coerce_reply(raw_reply, expect.get("type", "string"))
+            return {expect["field"]: value, "raw_reply": raw_reply}
+        return {"reply": raw_reply}
+
+    # First pass — no reply yet. Send the prompt, then signal a pause; the
+    # runner checkpoints and returns state="paused" instead of failing.
+    prompt = node.get("prompt") or str(_resolve_selector(node["prompt_from"], state=state, inputs=inputs))
+    channel = node["channel"]
+    chat_id = str(node.get("chat_id", "auto"))
+    if chat_id == "auto":
+        chat_id = str(state.get("__trigger_chat_id__", ""))
+        if not chat_id:
+            raise RuntimeError(
+                f"ask_human node {node['id']!r}: chat_id=auto but no trigger context available"
+            )
+    _write_outbox(channel, chat_id, prompt, extra={"_workflow_ask_human": True, "node_id": node["id"]})
+    audit("ask_human.sent", node_id=node["id"], channel=channel, chat_id=chat_id)
+    raise WorkflowPaused(
+        node_id=node["id"], prompt=prompt, channel=channel, chat_id=chat_id, expect=node.get("expect"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +721,8 @@ NODE_TYPES: dict[str, dict[str, Any]] = {
     "code": {"validate": _validate_code, "execute": _execute_code},
     "merge": {"validate": _validate_merge, "execute": _execute_merge},
     "route": {"validate": _validate_route, "execute": _execute_route},
+    "answer": {"validate": _validate_answer, "execute": _execute_answer},
+    "ask_human": {"validate": _validate_ask_human, "execute": _execute_ask_human},
 }
 
 
