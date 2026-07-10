@@ -185,6 +185,83 @@ class TestBYOKPipeline:
             apply_byok_secret("audit_bypass", "AAAA==", agent_dir=tmp_path)
 
 
+# ── WA-21: key-shape validation ────────────────────────────────────────────
+#
+# Nothing in the pipeline ever checked that a decrypted value looks like the
+# provider's real key format — autoComplete="off" is well known to be
+# ignored by Chromium/most password managers on type="password" inputs, so
+# these "paste a new key" fields can get silently autofilled with an
+# unrelated saved credential; without this check it would be accepted and
+# stored as though it were a working key, with no feedback at all.
+
+class TestKeyShapeValidation:
+    @pytest.mark.parametrize("key_name,plaintext", [
+        ("anthropic_api_key", "atlr 0e1feae0e6945d06b988c9902267f1d1"),
+        ("openai_api_key", "atlr 0e1feae0e6945d06b988c9902267f1d1"),
+        ("stt_openai_api_key", "not-a-real-key-at-all"),
+    ])
+    def test_wrong_shape_rejected(self, tmp_path, key_name, plaintext):
+        from agent.keypair import generate_or_load_keypair
+        from agent.byok import apply_byok_secret
+
+        agent_dir = tmp_path / "agent"
+        vault_dir = tmp_path / "vaultroot"
+        _, pub_pem = generate_or_load_keypair(agent_dir)
+        ct = _encrypt_for_agent(plaintext, pub_pem)
+
+        with pytest.raises(ValueError, match="does not look like a valid key"):
+            apply_byok_secret(key_name, ct, agent_dir=agent_dir, vault_dir=vault_dir)
+
+        # Rejected — must NOT have been written to the vault.
+        assert not (vault_dir / "vault" / f"{key_name}.json").exists()
+
+    @pytest.mark.parametrize("key_name,plaintext", [
+        ("anthropic_api_key", "sk-ant-api03-abcdef1234567890"),
+        ("openai_api_key", "sk-abcdef1234567890"),
+        ("stt_openai_api_key", "sk-proj-abcdef1234567890"),
+    ])
+    def test_correct_shape_accepted(self, tmp_path, key_name, plaintext):
+        from agent.keypair import generate_or_load_keypair
+        from agent.byok import apply_byok_secret
+
+        agent_dir = tmp_path / "agent"
+        vault_dir = tmp_path / "vaultroot"
+        _, pub_pem = generate_or_load_keypair(agent_dir)
+        ct = _encrypt_for_agent(plaintext, pub_pem)
+
+        result = apply_byok_secret(key_name, ct, agent_dir=agent_dir, vault_dir=vault_dir)
+        assert result["key_name"] == key_name
+
+    def test_custom_key_has_no_shape_restriction(self, tmp_path):
+        """custom_<slug> keys are explicitly free-form (MCP tokens, third-party
+        services, ...) and must never be shape-checked."""
+        from agent.keypair import generate_or_load_keypair
+        from agent.byok import apply_byok_secret
+
+        agent_dir = tmp_path / "agent"
+        vault_dir = tmp_path / "vaultroot"
+        _, pub_pem = generate_or_load_keypair(agent_dir)
+        ct = _encrypt_for_agent("literally anything", pub_pem)
+
+        result = apply_byok_secret("custom_mytool", ct, agent_dir=agent_dir, vault_dir=vault_dir)
+        assert result["key_name"] == "custom_mytool"
+
+    def test_local_whisper_key_has_no_shape_restriction(self, tmp_path):
+        """Reserved slot, documented as having no fixed format yet."""
+        from agent.keypair import generate_or_load_keypair
+        from agent.byok import apply_byok_secret
+
+        agent_dir = tmp_path / "agent"
+        vault_dir = tmp_path / "vaultroot"
+        _, pub_pem = generate_or_load_keypair(agent_dir)
+        ct = _encrypt_for_agent("whatever-format-this-turns-out-to-be", pub_pem)
+
+        result = apply_byok_secret(
+            "stt_local_whisper_api_key", ct, agent_dir=agent_dir, vault_dir=vault_dir,
+        )
+        assert result["key_name"] == "stt_local_whisper_api_key"
+
+
 # ── M1: Config-push handler ──────────────────────────────────────────────
 
 class TestConfigPush:

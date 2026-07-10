@@ -47,6 +47,34 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whole time. Added `CORVIN_STT_OPENAI_KEY` alongside it and corrected the
   comment.
 
+### Fixed — adversarial review: BYOK "paste a new key" fields could be silently contaminated by browser/password-manager autofill (WA-21)
+- The API Keys settings page showed a plaintext value in the "OpenAI STT
+  Key" field that was clearly not a real key — root cause: the input's
+  `autoComplete="off"` is well documented as ignored by Chromium and most
+  password managers specifically for `type="password"` fields, so a saved,
+  unrelated credential got silently offered and accepted into what is meant
+  to always start blank. Nothing downstream ever checked whether the
+  decrypted value even looked like the provider's key format, so it would
+  have been stored as though it were a working credential with zero
+  feedback. Fixed on both ends:
+  - Frontend (`api-keys.tsx`): `KeyCard` and `AddCustomKeyForm`'s value
+    inputs now use `autoComplete="new-password"` plus `data-lpignore`,
+    `data-1p-ignore`, `data-bwignore` hints (LastPass/1Password/Bitwarden)
+    to stop autofill from targeting these fields at all.
+  - Backend (`operator/agent/byok.py`): added `_check_key_shape()`, checked
+    right after decryption in `apply_byok_secret()` — rejects
+    `anthropic_api_key` / `openai_api_key` / `stt_openai_api_key` values that
+    don't start with their provider's documented prefix (`sk-ant-` / `sk-`).
+    `custom_<slug>` and `stt_local_whisper_api_key` are intentionally exempt
+    (no fixed format).
+  - Along the way, found `core/console/corvin_console/routes/byok.py::
+    _agent_post` caught `HTTPError` with the generic `except URLError`
+    (`HTTPError` is a `URLError` subclass) — so the new 400 from a rejected
+    key shape (or any other legitimate 4xx from the agent) was reported to
+    the user as "503 Instance Agent unreachable" instead of the real reason.
+    Added an `except HTTPError` branch first that forwards the agent's
+    actual status code and `detail` message.
+
 ## [0.10.25] — Adversarial-review hardening sweep (fresh-install voice, agentic compute, telemetry, licensing)
 
 Full adversarial review across four surfaces (install/voice on a fresh unknown

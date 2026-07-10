@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException, status as http_status
@@ -152,6 +152,20 @@ def _agent_post(path: str, payload: dict[str, Any], *, timeout: float = _BYOK_TI
     try:
         with urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
+    except HTTPError as exc:
+        # WA-21: HTTPError is a URLError subclass — without this branch FIRST,
+        # a legitimate 400 from the agent (e.g. a rejected key name or, after
+        # this same review, an obviously-malformed key value) was swallowed by
+        # the generic `except URLError` below and reported to the user as
+        # "503 Instance Agent unreachable", hiding the real reason a save
+        # failed behind a misleading "is it even running?" message.
+        try:
+            detail = json.loads(exc.read().decode("utf-8", errors="replace")).get(
+                "detail", str(exc)
+            )
+        except Exception:  # noqa: BLE001 — never let error-message parsing itself fail
+            detail = str(exc)
+        raise HTTPException(status_code=exc.code, detail=detail)
     except URLError as exc:
         raise HTTPException(
             status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,

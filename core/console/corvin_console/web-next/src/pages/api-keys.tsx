@@ -201,9 +201,12 @@ function KeyCard({ keyName, label, hint, present, pubkey, csrf, onRotated }: Key
               placeholder={`Paste ${label}…`}
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              autoComplete="off"
+              autoComplete="new-password"
               autoCorrect="off"
               spellCheck={false}
+              data-lpignore="true"
+              data-1p-ignore
+              data-bwignore
               className="pr-9 font-mono text-sm"
             />
             <button
@@ -328,9 +331,12 @@ function AddCustomKeyForm({ pubkey, csrf, onAdded }: AddCustomKeyFormProps) {
                 placeholder="Paste key value…"
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                autoComplete="off"
+                autoComplete="new-password"
                 autoCorrect="off"
                 spellCheck={false}
+                data-lpignore="true"
+                data-1p-ignore
+                data-bwignore
                 className="pr-9 font-mono text-sm"
               />
               <button

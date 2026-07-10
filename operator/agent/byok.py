@@ -31,6 +31,35 @@ _FORBIDDEN_SUBSTRINGS = ("audit", "vault", "path_gate", "policy", "license")
 _CUSTOM_SLUG_RE = re.compile(r"^custom_[a-z0-9_-]{1,32}$")
 _KNOWN_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 
+# WA-21: nothing in this pipeline ever checked that a decrypted value looks
+# like the provider's real key format — any non-empty string, including
+# browser/password-manager autofill garbage silently dropped into the
+# console's "paste a new key" fields (autoComplete="off" is well known to be
+# ignored by Chromium/most password managers for type="password" inputs),
+# was accepted and stored as though it were a working credential, with no
+# feedback that it plainly wasn't. Only the well-known keys with a stable,
+# documented prefix are checked; custom_<slug> and stt_local_whisper_api_key
+# (no fixed format) are intentionally exempt.
+_SHAPE_PATTERNS: dict[str, re.Pattern[str]] = {
+    "anthropic_api_key": re.compile(r"^sk-ant-"),
+    "openai_api_key": re.compile(r"^sk-"),
+    "stt_openai_api_key": re.compile(r"^sk-"),
+}
+
+
+def _check_key_shape(key_name: str, plaintext: str) -> None:
+    """Raise ValueError when a well-known key's value doesn't match its
+    provider's documented prefix — never blocks custom/unrecognised names."""
+    pattern = _SHAPE_PATTERNS.get(key_name)
+    if pattern is None:
+        return
+    if not pattern.match(plaintext.strip()):
+        expected = pattern.pattern.lstrip("^")
+        raise ValueError(
+            f"{key_name} does not look like a valid key "
+            f"(expected it to start with {expected!r})"
+        )
+
 
 def validate_key_name(key_name: str) -> None:
     """Raise ValueError for names that violate ADR-0047 key-name rules."""
@@ -144,6 +173,8 @@ def apply_byok_secret(
         agent_dir=agent_dir,
         tenant_id=tenant_id,
     )
+
+    _check_key_shape(key_name, plaintext)
 
     _vault_set(key_name, plaintext, vault_dir=vault_dir)
 
