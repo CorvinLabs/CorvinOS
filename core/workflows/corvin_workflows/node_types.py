@@ -310,12 +310,14 @@ def _write_outbox(channel: str, chat_id: str, text: str, *, extra: dict[str, Any
     types speak the exact same wire envelope."""
     import json as _json
     import secrets as _secrets
+    import sys as _sys
     import time as _time
     from pathlib import Path as _Path
 
     _here = _Path(__file__).resolve()
     _repo = _here.parents[3]  # workflows/corvin_workflows/ → core/ → repo root
-    outbox_dir = _repo / "operator" / "bridges" / "shared" / "outbox"
+    _bridges_shared = _repo / "operator" / "bridges" / "shared"
+    outbox_dir = _bridges_shared / "outbox"
     outbox_dir.mkdir(parents=True, exist_ok=True)
 
     envelope = {
@@ -323,8 +325,23 @@ def _write_outbox(channel: str, chat_id: str, text: str, *, extra: dict[str, Any
         "chat_id": chat_id,
         "text": text[:4000],  # Discord hard limit is 2000; daemon chunks longer messages
         "ts": int(_time.time() * 1000),
+        "_final": True,
         **(extra or {}),
     }
+    # EU AI Act Art. 50 §4 disclosure stamp — every other outbound-message
+    # path (adapter replies, completion_notify, scheduler workflow runs)
+    # applies this via the single shared build_provenance(); a workflow
+    # chat/deliver message is exactly the same kind of AI-generated content
+    # and must not skip it.
+    try:
+        if str(_bridges_shared) not in _sys.path:
+            _sys.path.insert(0, str(_bridges_shared))
+        from provenance import build_provenance  # type: ignore  # noqa: PLC0415
+
+        envelope["provenance"] = build_provenance(channel, chat_id)
+    except Exception:
+        pass  # never let a missing/broken provenance module block delivery
+
     fname = f"wf_msg_{_secrets.token_hex(6)}.json"
     (outbox_dir / fname).write_text(
         _json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -608,7 +625,10 @@ def _execute_merge(*, node, engine, state, inputs, audit) -> dict[str, Any]:
             elif v is not None:
                 merged.append(v)
     elif strategy == "first_non_empty":
-        merged = next((v for v in values if v), None)
+        # `is not None`, not truthiness — 0/False/"" are legitimate values,
+        # not "empty". A prior version used `if v`, which silently skipped a
+        # real 0/False upstream value in favor of a later input.
+        merged = next((v for v in values if v is not None), None)
     elif strategy == "dict_union":
         merged = {}
         for v in values:
@@ -638,7 +658,7 @@ def _validate_route(node: dict[str, Any]) -> None:
         if not isinstance(cases, list) or not cases:
             raise ValueError("route(mode=condition) requires a non-empty 'cases' list")
         seen_ids: set[str] = set()
-        has_default = False
+        default_count = 0
         for c in cases:
             if not isinstance(c, dict) or not isinstance(c.get("id"), str) or not c["id"]:
                 raise ValueError("route condition case requires a non-empty 'id'")
@@ -647,7 +667,7 @@ def _validate_route(node: dict[str, Any]) -> None:
             seen_ids.add(c["id"])
             when = c.get("when")
             if when == "default":
-                has_default = True
+                default_count += 1
                 continue
             if not isinstance(when, dict):
                 raise ValueError(
@@ -662,10 +682,10 @@ def _validate_route(node: dict[str, Any]) -> None:
                 )
             if "value" not in when:
                 raise ValueError(f"route condition case {c['id']!r}: 'when.value' required")
-        if not has_default:
+        if default_count != 1:
             raise ValueError(
-                "route(mode=condition) requires exactly one case with when: 'default' "
-                "as the guaranteed fallback branch"
+                f"route(mode=condition) requires exactly one case with when: 'default' "
+                f"as the guaranteed fallback branch, found {default_count}"
             )
     else:  # classify
         agent = node.get("agent")

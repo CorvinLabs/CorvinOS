@@ -229,6 +229,59 @@ class PauseResumeTests(unittest.TestCase):
         called_agents = {c.agent for c in engine.history}
         self.assertNotIn("never_called", called_agents)
 
+    def test_skipped_sibling_materialized_before_pause_survives_resume(self) -> None:
+        """Regression: when the skipped sibling sorts BEFORE the pausing node
+        within the same level, the runner actually iterates to it and gives
+        it a NodeResult (status='skipped') before the pause happens — so it
+        lands in BOTH `run.nodes` (-> completed_ids) and the `skipped` set
+        (-> skipped_ids) at checkpoint time. An earlier implementation let
+        those two id sets overlap; on resume, the `if nid in done: continue`
+        check fired before the `skipped` check ever ran, silently dropping
+        the node from the resumed run's `nodes` entirely (neither skipped
+        nor success — just gone)."""
+        graph = [
+            {
+                "id": "gate", "type": "route", "mode": "condition", "depends_on": [],
+                "cases": [
+                    {"id": "needs_confirm", "when": {"selector": "risky", "op": "==", "value": True}},
+                    {"id": "skip_path", "when": "default"},
+                ],
+            },
+            # Sorts BEFORE the ask_human node within the same level, so the
+            # runner actually reaches and materializes it as skipped before
+            # the pause.
+            {"id": "aaa_never_taken", "type": "agent", "agent": "never_called",
+             "depends_on": ["gate"], "branch": "skip_path"},
+            {
+                "id": "zzz_confirm", "type": "ask_human", "depends_on": ["gate"], "branch": "needs_confirm",
+                "channel": "discord", "chat_id": "1", "prompt": "Confirm?",
+                "expect": {"field": "confirmed", "type": "boolean"},
+            },
+        ]
+        path = self._write_workflow_file(graph)
+        from corvin_workflows.storage import load_workflow
+        doc = load_workflow(path)
+        validate(doc)
+        engine = StubEngine()
+        runner = DAGRunner(doc, engine=engine)
+        paused = runner.run(inputs={"chat_id": "1", "risky": True})
+        self.assertEqual(paused.state, "paused")
+        self.assertEqual(paused.nodes["aaa_never_taken"].status, "skipped")
+
+        from corvin_workflows import checkpoint
+        ckpt = checkpoint.load(paused.run_id)
+        self.assertIsNotNone(ckpt)
+        self.assertEqual(
+            set(ckpt["completed_ids"]) & set(ckpt["skipped_ids"]), set(),
+            "completed_ids and skipped_ids must never overlap",
+        )
+
+        resumed = resume_workflow(paused.run_id, "ja", engine=engine)
+        self.assertEqual(resumed.state, "complete", resumed.error)
+        self.assertIn("aaa_never_taken", resumed.nodes,
+                       "a node skipped before the pause must not disappear from the resumed run")
+        self.assertEqual(resumed.nodes["aaa_never_taken"].status, "skipped")
+
 
 class AnswerNodeTests(unittest.TestCase):
     def setUp(self) -> None:

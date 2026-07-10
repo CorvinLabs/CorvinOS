@@ -1848,6 +1848,24 @@ def resume_run(
     ckpt = _awp_checkpoint.load(rid, tenant_id=rec.tenant_id)
     if ckpt is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "no paused AWP run found for this run id")
+    # Scope the checkpoint to the workflow named in the URL — the checkpoint
+    # lookup above is keyed only by (rid, tenant_id), so without this check
+    # any paused run_id in the tenant could be resumed through any other
+    # workflow's URL. Best-effort (compares declared workflow.name, since
+    # the console's `wid` and the AWP engine's `run_id` are still separate
+    # id spaces pending the full M7 integration — see docstring above).
+    yaml_p = _yaml_path(rec.tenant_id, wid)
+    if yaml_p.exists() and _AWP_OK:
+        try:
+            this_doc = _load_workflow(str(yaml_p))
+            if this_doc.name and ckpt.get("workflow_name") and this_doc.name != ckpt["workflow_name"]:
+                raise HTTPException(
+                    http_status.HTTP_404_NOT_FOUND, "no paused AWP run found for this run id",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # can't confirm a mismatch — fall through rather than false-block a legit resume
     try:
         result = _resume_awp_workflow(rid, body.reply, engine=_AwpClaudeEngine(), tenant_id=rec.tenant_id)
     except Exception as exc:
@@ -1862,7 +1880,12 @@ def resume_run(
     paused_node = ckpt.get("paused_at_node")
     confirmed = None
     if paused_node and paused_node in result.nodes:
-        confirmed = result.nodes[paused_node].output.get("confirmed")
+        # Read the node's OWN declared expect.field (defaults to "confirmed"
+        # only when the node didn't set one) — a hardcoded "confirmed" key
+        # silently returned None for any ask_human node using a different
+        # field name (e.g. expect: {field: approved, type: boolean}).
+        expect_field = (ckpt.get("expect") or {}).get("field", "confirmed")
+        confirmed = result.nodes[paused_node].output.get(expect_field)
     return {"ok": True, "status": result.state, "confirmed": confirmed}
 
 # ══════════════════════════════════════════════════════════════════════════

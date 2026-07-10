@@ -188,6 +188,24 @@ class MergeNodeTests(unittest.TestCase):
         result = DAGRunner(doc, engine=engine).run()
         self.assertEqual(result.nodes["combined"].output["picked"], "fallback")
 
+    def test_first_non_empty_keeps_a_real_zero(self) -> None:
+        """Regression: an earlier implementation used truthiness (`if v`),
+        which treated a legitimate 0 as 'empty' and skipped it in favor of
+        a later, non-zero fallback — 0 must win here since it is present
+        (`is not None`), not falsy-therefore-missing."""
+        doc = _doc([
+            {"id": "a", "type": "agent", "agent": "a_agent", "depends_on": []},
+            {"id": "b", "type": "agent", "agent": "b_agent", "depends_on": []},
+            {
+                "id": "combined", "type": "merge", "depends_on": ["a", "b"],
+                "strategy": "first_non_empty", "inputs": ["a.val", "b.val"], "output": "picked",
+            },
+        ])
+        validate(doc)
+        engine = StubEngine(responses={"a_agent": {"val": 0}, "b_agent": {"val": 99}})
+        result = DAGRunner(doc, engine=engine).run()
+        self.assertEqual(result.nodes["combined"].output["picked"], 0)
+
     def test_validator_rejects_bad_strategy(self) -> None:
         doc = _doc([{
             "id": "combined", "type": "merge", "depends_on": [],
@@ -242,6 +260,21 @@ class RouteConditionTests(unittest.TestCase):
         doc = _doc([{
             "id": "gate", "type": "route", "mode": "condition", "depends_on": [],
             "cases": [{"id": "a", "when": {"selector": "x.y", "op": "==", "value": 1}}],
+        }])
+        with self.assertRaises(WorkflowInvalid):
+            validate(doc)
+
+    def test_validator_rejects_duplicate_default_cases(self) -> None:
+        """Regression: an earlier implementation only checked 'at least one
+        default', contradicting its own error message ('requires exactly
+        one'). Two default cases must be rejected, not silently accepted
+        with the last one winning at execution time."""
+        doc = _doc([{
+            "id": "gate", "type": "route", "mode": "condition", "depends_on": [],
+            "cases": [
+                {"id": "a", "when": "default"},
+                {"id": "b", "when": "default"},
+            ],
         }])
         with self.assertRaises(WorkflowInvalid):
             validate(doc)

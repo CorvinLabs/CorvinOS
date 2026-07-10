@@ -159,6 +159,12 @@ const NODE_TYPE_COLOR: Record<string, string> = {
   trigger: "hsl(142 60% 50%)",
   deliver: "hsl(142 60% 44%)",  // emerald — delivery = "sent"
   approval: "hsl(38 85% 55%)",  // amber — waiting for human
+  // ADR-0188 node types
+  code: "hsl(199 80% 55%)",      // blue — deterministic, same family as http
+  merge: "hsl(199 60% 45%)",     // muted blue — deterministic fan-in
+  route: "hsl(38 90% 60%)",      // amber — branching, same family as condition
+  answer: "hsl(142 60% 44%)",    // emerald — same family as deliver
+  ask_human: "hsl(38 85% 55%)",  // amber — same family as approval
 };
 
 function nodeColor(type: string, state: "idle" | "running" | "ok" | "failed" | "waiting"): string {
@@ -426,6 +432,11 @@ function AwpCanvas({
                  node.type === "fan_out" ? "⤆" :
                  node.type === "deliver" ? "✉" :
                  node.type === "approval" ? "👤" :
+                 node.type === "code" ? "λ" :
+                 node.type === "merge" ? "⑂" :
+                 node.type === "route" ? "⑃" :
+                 node.type === "answer" ? "💬" :
+                 node.type === "ask_human" ? "🙋" :
                  node.type === "agent" ? "→" : "•"}
               </text>
               <text x={12} y={34} fontSize={9}
@@ -2613,6 +2624,7 @@ export function WorkflowEditorPage() {
     setRunError(null);
     setNodeStates({});
     setAwaitingApproval(null);
+    setAwaitingReply(null);
     setCurrentRid(null);
 
     const ctrl = new AbortController();
@@ -2698,6 +2710,7 @@ export function WorkflowEditorPage() {
     } finally {
       setIsRunning(false);
       setAwaitingApproval(null);
+      setAwaitingReply(null);
       abortRef.current = null;
     }
   };
@@ -2706,6 +2719,7 @@ export function WorkflowEditorPage() {
     abortRef.current?.abort();
     setIsRunning(false);
     setAwaitingApproval(null);
+    setAwaitingReply(null);
   };
 
   // Phase 5: import a workflow file into the current editor slot

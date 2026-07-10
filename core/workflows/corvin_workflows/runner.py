@@ -241,10 +241,18 @@ class DAGRunner:
                         break
                     except WorkflowPaused as p:
                         # Not a failure — never retried. Checkpoint and stop.
+                        # Exclude `skipped` from completed_ids: a node that was
+                        # skipped (not executed) before the pause must resume
+                        # via the `skipped` branch below, not the `done`
+                        # short-circuit — overlapping the two sets means a
+                        # previously-skipped node silently vanishes from the
+                        # resumed run's `nodes` (verified: `if nid in done`
+                        # is checked before `if nid in skipped`).
+                        done_now = (set(run.nodes.keys()) | done) - skipped
                         self._checkpoint_and_pause(
                             run=run, pause=p, node_specs=node_specs,
                             state=state, inputs=inputs,
-                            done_now=set(run.nodes.keys()) | done,
+                            done_now=done_now,
                             skipped_now=skipped,
                         )
                         return run

@@ -73,7 +73,12 @@ def save(
         "paused_at_ms": int(time.time() * 1000),
     }
     p = _run_path(run_id, tenant_id)
-    p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Atomic write (tmp file + rename) — a torn write from a crash mid-write
+    # would otherwise leave load() unable to parse the checkpoint, with no
+    # way to recover a paused run.
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(p)
     return p
 
 
@@ -81,7 +86,10 @@ def load(run_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
     p = _run_path(run_id, tenant_id)
     if not p.exists():
         return None
-    return json.loads(p.read_text(encoding="utf-8"))
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
 
 
 def delete(run_id: str, *, tenant_id: str | None = None) -> None:
