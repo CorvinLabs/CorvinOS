@@ -178,10 +178,12 @@ if (-not $SkipHermes) {
     # ensure the Ollama server is reachable (start it if needed)
     function Test-Ollama { try { Invoke-RestMethod -TimeoutSec 2 http://localhost:11434/api/tags | Out-Null; $true } catch { $false } }
     if (-not (Test-Ollama)) {
+        Write-Host -NoNewline "  Starting Ollama service "
         if (Get-Command ollama -ErrorAction SilentlyContinue) {
             Start-Process -WindowStyle Hidden ollama -ArgumentList "serve" -ErrorAction SilentlyContinue
         }
-        for ($i = 0; $i -lt 30 -and -not (Test-Ollama); $i++) { Start-Sleep 1 }
+        for ($i = 0; $i -lt 30 -and -not (Test-Ollama); $i++) { Write-Host -NoNewline "."; Start-Sleep 1 }
+        if (Test-Ollama) { Write-Host " ready" } else { Write-Host " not ready yet" }
     }
 
     # pull the model so Hermes is immediately usable offline
@@ -195,6 +197,24 @@ if (-not $SkipHermes) {
             ollama pull $HModel
             if ($LASTEXITCODE -eq 0) { Write-Ok "Hermes ready -- $HModel installed" }
             else { Write-Warn "model pull failed -- finish later with: ollama pull $HModel" }
+        }
+        # Pre-warm the L44 safety classifier (it uses the SAME model) so the very
+        # first message isn't a ~22 s cold model load and hits a real semantic
+        # check instead of the deterministic Tier-0 floor. keep_alive 30m keeps it
+        # resident. (We deliberately don't pin a tiny model: qwen3:1.7b is fast but
+        # fails the classifier JSON schema, so it'd be worse than the warm model.)
+        $have2 = $false
+        try { $have2 = ((Invoke-RestMethod http://localhost:11434/api/tags).models.name -join ",") -match [regex]::Escape($HModel) } catch {}
+        if ($have2) {
+            Write-Host -NoNewline "  Warming up the safety classifier ($HModel) "
+            $body = @{ model = $HModel; prompt = "ok"; stream = $false; keep_alive = "30m" } | ConvertTo-Json -Compress
+            $job = Start-Job -ScriptBlock {
+                param($b)
+                try { Invoke-RestMethod -Method Post -TimeoutSec 180 -Uri "http://localhost:11434/api/generate" -Body $b -ContentType "application/json" | Out-Null } catch {}
+            } -ArgumentList $body
+            while ($job.State -eq 'Running') { Write-Host -NoNewline "."; Start-Sleep -Seconds 1 }
+            Receive-Job $job | Out-Null; Remove-Job $job -Force
+            Write-Host " done"
         }
     } else {
         Write-Warn "Ollama not reachable -- Hermes self-heals on first run (or see https://ollama.com/download)"

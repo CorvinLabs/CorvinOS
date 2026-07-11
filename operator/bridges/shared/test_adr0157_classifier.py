@@ -950,9 +950,11 @@ class TestProductionAuditWiringF03:
     def test_classifier_degraded_event_written_via_3arg_writer(
         self, adp, monkeypatch, hr, tmp_path
     ):
-        """Both providers fail repeatedly → classifier_error escalate path drives
-        _house_rules_track_degradation, which must emit house_rules.classifier_degraded
-        (WARNING) onto the 3-arg production writer after the threshold."""
+        """Both providers fail repeatedly → the classify() degrade-to-floor path
+        drives _house_rules_track_degradation, which must emit
+        house_rules.classifier_degraded (WARNING) onto the 3-arg production writer
+        after the threshold — even though benign traffic is now ALLOWED via the
+        floor (the operator must still see the backend outage)."""
         recorded = self._install_recording_writer(monkeypatch)
 
         def _fail(*a, **kw):
@@ -972,9 +974,11 @@ class TestProductionAuditWiringF03:
                 prompt=f"benign request number {i}",
                 persona="assistant", channel="discord", chat_key="c1",
             )
-            # Both providers down → classifier raises → gate escalates
-            # (classifier_error) → fail-closed refusal string (never None).
-            assert last is not None
+            # Both providers down + BENIGN prompt → classify() degrades to the
+            # deterministic Tier-0 floor → ALLOW → _check returns None. The
+            # classifier_degraded signal below must still fire — the backend
+            # outage is what's tracked, independent of the per-request verdict.
+            assert last is None
 
         degraded = [r for r in recorded if r[0] == "house_rules.classifier_degraded"]
         assert degraded, (

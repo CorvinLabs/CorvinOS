@@ -415,8 +415,27 @@ class HouseRulesGate:
             # (fresh-install UX). Genuine classifier UNCERTAINTY (backend RAN, low
             # confidence / anomalous rule id) still ESCALATES via the checks below —
             # only total backend UNAVAILABILITY degrades here.
+            # Track the classifier outage in the M4 health window AND emit the
+            # `house_rules.classifier_degraded` WARNING so the operator still sees
+            # the backend is down — even though we now ALLOW benign traffic via the
+            # floor (the escalate path that used to carry this signal is no longer
+            # taken). The event details (error_count/window_s) are NOT in the gate's
+            # metadata allow-list, so route them straight to the raw 3-arg audit
+            # writer (bypassing self._emit) exactly like the adapter's F-03 adapter.
+            def _degrade_audit(evt: str, details: "dict[str, Any]") -> None:
+                if self.audit_writer is None:
+                    return
+                try:
+                    from forge.security_events import EVENT_SEVERITY as _sev  # type: ignore
+                    severity = _sev.get(evt, "WARNING")
+                except Exception:  # noqa: BLE001 — severity lookup is best-effort
+                    severity = "WARNING"
+                try:
+                    self.audit_writer(evt, severity, details)
+                except Exception:  # noqa: BLE001 — observability never blocks the verdict
+                    pass
             try:
-                _house_rules_track_degradation()  # ADR-0157 M4 health window (+ heal trigger)
+                _house_rules_track_degradation(audit_write=_degrade_audit)  # ADR-0157 M4
             except Exception:  # noqa: BLE001 — observability never blocks the verdict
                 pass
             floor = _tier0_floor()
@@ -933,7 +952,14 @@ def _house_rules_classify_hermes(chunk: str, rules_block: str, auth_str: str,
     # classifier hardcoded to qwen3:8b hit Ollama 404 → classifier_error →
     # fail-closed block of every request even though Hermes WAS ready. Using the
     # configured model makes "the engine that's running does the check" literal.
-    hermes_model = _house_rules_tenant_hermes_model(tenant_id)
+    #
+    # CORVIN_HOUSE_RULES_MODEL (highest priority) pins the L44 classifier to a
+    # DEDICATED model independent of the chat engine — the installer sets it to
+    # qwen3:1.7b (pulled + pre-warmed at install), so a fresh box gets a fast, warm
+    # safety-check on the very first message instead of a cold ~22 s 8b model load
+    # (the fresh-install block this closes). Unset → the configured chat model.
+    hermes_model = os.environ.get("CORVIN_HOUSE_RULES_MODEL", "").strip() \
+        or _house_rules_tenant_hermes_model(tenant_id)
     if not hermes_model:
         try:
             from agents.hermes_engine import _resolve_default_model as _hermes_model  # type: ignore
@@ -957,6 +983,11 @@ def _house_rules_classify_hermes(chunk: str, rules_block: str, auth_str: str,
         "prompt": prompt,
         "stream": False,
         "format": "json",
+        # Keep the classifier model RESIDENT between messages so the next
+        # safety-check is not a cold model load (fresh-install cold-start was
+        # ~22 s on 8b). "30m" balances warmth against idle RAM on a small box;
+        # override via CORVIN_HOUSE_RULES_KEEP_ALIVE (e.g. "-1" = never unload).
+        "keep_alive": os.environ.get("CORVIN_HOUSE_RULES_KEEP_ALIVE", "").strip() or "30m",
     }).encode()
     req = _ur.Request(
         f"{hermes_url}/api/generate",

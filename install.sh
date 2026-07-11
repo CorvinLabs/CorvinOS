@@ -28,6 +28,21 @@ _yellow(){ printf '\033[33m%s\033[0m' "$*"; }
 _dim()   { printf '\033[2m%s\033[0m' "$*"; }
 die() { printf '%s %s\n' "$(_red 'Error:')" "$*" >&2; exit 1; }
 
+# Progress heartbeat for a long, otherwise-SILENT command: prints a dot every
+# second while it runs so the user always sees "still working …", then ✓ / ⚠.
+# `set -e`-safe: the `if wait` swallows a non-zero exit; the caller decides what
+# a failure means. Use ONLY for silent steps — a command with its own progress
+# (ollama pull, uv sync) should run plainly so its native bar shows through.
+_await() {
+    _aw_msg="$1"; shift
+    printf '  %s %s ' "$(_dim '⏳')" "$_aw_msg"
+    "$@" >/dev/null 2>&1 &
+    _aw_pid=$!
+    while kill -0 "$_aw_pid" 2>/dev/null; do printf '.'; sleep 1; done
+    if wait "$_aw_pid"; then printf ' %s\n' "$(_green '✓')"; return 0
+    else printf ' %s\n' "$(_yellow '⚠')"; return 1; fi
+}
+
 # ── argument parsing ──────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -141,12 +156,15 @@ if [ "$SKIP_HERMES" != "1" ]; then
 
     # ensure the Ollama server is reachable (start it detached if needed)
     if ! curl -s -m 2 http://localhost:11434/api/tags >/dev/null 2>&1; then
+        printf '  %s Starting Ollama service ' "$(_dim '⏳')"
         command -v ollama >/dev/null 2>&1 && nohup ollama serve >/dev/null 2>&1 &
-        i=0; while [ "$i" -lt 30 ]; do
-            sleep 1
-            curl -s -m 2 http://localhost:11434/api/tags >/dev/null 2>&1 && break
+        _ollama_ok=0; i=0; while [ "$i" -lt 30 ]; do
+            sleep 1; printf '.'
+            if curl -s -m 2 http://localhost:11434/api/tags >/dev/null 2>&1; then _ollama_ok=1; break; fi
             i=$((i + 1))
         done
+        if [ "$_ollama_ok" = 1 ]; then printf ' %s\n' "$(_green 'ready')"
+        else printf ' %s\n' "$(_yellow 'not ready yet')"; fi
     fi
 
     # pull the model so Hermes is immediately usable offline
@@ -163,6 +181,24 @@ if [ "$SKIP_HERMES" != "1" ]; then
         fi
     else
         printf '  %s Ollama not reachable — Hermes self-heals on first run (or see https://ollama.com/download)\n' "$(_yellow '⚠')"
+    fi
+
+    # ── Pre-warm the L44 safety classifier ───────────────────────────────────
+    # The acceptable-use gate classifies EVERY message using the SAME model the
+    # Hermes engine runs ($HMODEL). On a fresh box that model's first load was a
+    # ~22 s COLD start (and it may still be finishing its download), so the first
+    # message fell back to the deterministic Tier-0 floor instead of a real
+    # semantic check. Pre-warm it now (one throwaway generation, keep_alive 30m so
+    # it stays resident) → the very first real safety-check is instant and warm.
+    # (We deliberately do NOT pin a tiny model here: qwen3:1.7b is fast but fails
+    # the classifier JSON schema ~always, so it would be worse than the warm chat
+    # model; the gate's Tier-0 floor still covers any low-quality verdict.)
+    if command -v ollama >/dev/null 2>&1 \
+       && curl -s http://localhost:11434/api/tags 2>/dev/null | grep -q "$HMODEL"; then
+        _await "Warming up the safety classifier ($HMODEL)" \
+            curl -s -m 180 http://localhost:11434/api/generate \
+                -d "{\"model\":\"$HMODEL\",\"prompt\":\"ok\",\"stream\":false,\"keep_alive\":\"30m\"}" \
+            || true
     fi
 fi
 

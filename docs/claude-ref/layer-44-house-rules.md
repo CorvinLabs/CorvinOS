@@ -115,6 +115,15 @@ This adds the LIP integrity pin on top of the committed-anchor check.
     degrades. Maintainer-approved. Tests: `test_house_rules.py::
     test_classifier_backend_unreachable_degrades_to_tier0_floor` +
     `test_console_spawn_gates.py::test_gate_exception_degrades_to_floor`.
+  - **Fresh-install readiness (shrinks the floor window, 2026-07-12):** the
+    installer (`install.sh` / `install.ps1`) now **pre-warms** the Hermes classifier
+    model (one throwaway `/api/generate` with `keep_alive: 30m`) right after pulling
+    it, so the classifier's *first real* check is not a ~22 s cold model load. The
+    classifier payload also sends `keep_alive` (`CORVIN_HOUSE_RULES_KEEP_ALIVE`,
+    default `30m`). A dedicated classifier-model override exists
+    (`CORVIN_HOUSE_RULES_MODEL`) but is intentionally NOT set to a tiny model:
+    `qwen3:1.7b` is fast yet failed the classifier JSON schema in testing (0/5
+    valid), so the reliable warm chat model (`qwen3:8b` ≈ 3 s warm) is used.
   - **Binary resolution (load-bearing):** the classifier subprocess resolves the
     claude CLI via `adapter._resolve_helper_claude_bin()`
     (`CORVIN_CLAUDE_BIN` → PATH → engine known-location fallbacks), NOT the bare
