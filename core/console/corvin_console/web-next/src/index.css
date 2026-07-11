@@ -64,6 +64,37 @@
     font-feature-settings: "ss01", "cv11", "kern";
   }
 
+  /* Corvin-styled scrollbars — the OS/browser default (bright, chunky) broke
+     the dark canvas everywhere it appeared (sidebar nav, chat log, any
+     overflow panel). Thin track in --muted, brass --accent thumb, same
+     radius language as the rest of the UI. Applies globally in both themes
+     via the existing theme tokens, so it never needs its own light/dark
+     branch. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--accent) / 0.6) hsl(var(--muted) / 0.4);
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: hsl(var(--muted) / 0.4);
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--accent) / 0.6);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--accent) / 0.85);
+  }
+
   /* Subtle texture for the landing — gradient + soft grain. */
   .corvin-hero {
     background:
