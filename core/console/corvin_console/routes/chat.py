@@ -565,7 +565,12 @@ async def _handle_browser_command(websocket, rec, task: str) -> None:
             action="chat.browser_command", target_kind="browser_session", target_id=sid)
 
     await websocket.send_json({"type": "delta", "text":
-        f"🌐 Browser started — open **Browser** in the sidebar to watch live.\n"
+        # WA: clicking "Browser-Session starten" in the sidebar creates a
+        # brand-new, disconnected session (POST /browser/session) instead of
+        # attaching to the one this command just started — the user always
+        # saw an unrelated, never-navigated about:blank tab. Deep-link with
+        # ?sid=... instead; browser.tsx now reads it and attaches directly.
+        f"🌐 Browser started — [open Browser to watch live](/console/app/browser?sid={sid}).\n"
         f"**Task:** {task}\n\n"})
     # auto_close: a chat-initiated session closes itself when the agent finishes,
     # so it can never leak / wedge the per-tenant session cap.

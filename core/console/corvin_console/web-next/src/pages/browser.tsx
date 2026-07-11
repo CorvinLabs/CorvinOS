@@ -53,6 +53,28 @@ export function BrowserPage() {
 
   const lang = "de"; // matches the session language
 
+  // Attach to an already-running session passed via ?sid=... (e.g. the deep
+  // link chat's `/browser <task>` command sends: "open Browser in the
+  // sidebar" used to mean "click Browser-Session starten", which creates a
+  // BRAND NEW, disconnected, never-navigated session — the user then always
+  // saw a blank about:blank tab because they were never looking at the
+  // session the chat command actually started. Reading `sid` off the URL
+  // and setting it directly (skipping browserCreateSession) makes the
+  // existing frame/actions polling effect below attach to that real,
+  // already-running session instead.
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const deepLinkSid = params.get("sid");
+    if (deepLinkSid && !sid) {
+      setSid(deepLinkSid);
+      sinceRef.current = 0;
+      setActions([]);
+      setFrameOk(false);
+      lastSpokenSeqRef.current = -1;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Speak text through TTS (queued — never overlaps).
   // Reads csrfRef.current at call-time so token refreshes are always picked up.
   const speak = React.useCallback((text: string) => {
