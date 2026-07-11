@@ -158,6 +158,18 @@ def _quiesce_stage1(stop_running: bool = True) -> None:
                     # bootout stops the running instance in the user's GUI
                     # domain; fall back to legacy unload -w if uid unknown.
                     if target_uid is not None:
+                        # Persistently DISABLE first (M1): bootout alone only
+                        # stops the current session — the Stufe-1 KeepAlive
+                        # agent re-bootstraps from ~/Library/LaunchAgents at the
+                        # next login and fights Stufe-2 for port 8765 forever.
+                        # `launchctl disable` records a persistent override so
+                        # it stays down across logins (matches the stop_running
+                        # =False console path); the legacy `unload -w` fallback
+                        # below already persists via -w.
+                        subprocess.run(
+                            ["launchctl", "disable", f"gui/{target_uid}/{label}"],
+                            capture_output=True, check=False,
+                        )
                         argv = ["launchctl", "bootout", f"gui/{target_uid}/{label}"]
                     else:
                         argv = ["launchctl", "unload", "-w", str(plist)]
@@ -180,8 +192,13 @@ def _quiesce_stage1(stop_running: bool = True) -> None:
                 uid = pwd.getpwnam(user).pw_uid
                 # List form (no shell) — the username is never re-parsed by a
                 # shell, so a name with metacharacters can't inject.
+                # Use `env` to set XDG_RUNTIME_DIR (M5): passing a bare
+                # `VAR=value` token directly to sudo needs the SETENV sudoers
+                # tag, which stock sudoers does NOT grant, so sudo would treat
+                # it as the command name and fail. `env` is an ordinary binary
+                # whose own VAR=value arg syntax works under any sudoers policy.
                 r = subprocess.run(
-                    ["sudo", "-u", user,
+                    ["sudo", "-u", user, "env",
                      f"XDG_RUNTIME_DIR=/run/user/{uid}", *disable_argv],
                     capture_output=True, check=False)
             else:

@@ -10,6 +10,7 @@ the run reaches a terminal state (complete/failed) after resuming.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -54,6 +55,7 @@ def save(
     channel: str | None,
     chat_id: str | None,
     expect: dict[str, Any] | None,
+    approver: str | None = None,
     tenant_id: str | None = None,
 ) -> Path:
     payload = {
@@ -69,6 +71,9 @@ def save(
         "channel": channel,
         "chat_id": chat_id,
         "expect": expect,
+        # WF-A3: identity the approval prompt was directed to. Only this
+        # recipient (or a privileged owner caller) may answer on resume.
+        "approver": approver if approver is not None else chat_id,
         "status": "paused",
         "paused_at_ms": int(time.time() * 1000),
     }
@@ -85,7 +90,13 @@ def save(
 def load(run_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
     p = _run_path(run_id, tenant_id)
     if not p.exists():
-        return None
+        # A resume in flight may hold the checkpoint under its `.claimed`
+        # sidecar — fall back to it so load() still finds a paused run.
+        claimed = p.with_suffix(".json.claimed")
+        if claimed.exists():
+            p = claimed
+        else:
+            return None
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
@@ -95,6 +106,60 @@ def load(run_id: str, *, tenant_id: str | None = None) -> dict[str, Any] | None:
 def delete(run_id: str, *, tenant_id: str | None = None) -> None:
     p = _run_path(run_id, tenant_id)
     p.unlink(missing_ok=True)
+    # A resume in flight may have moved the checkpoint to its `.claimed` sidecar
+    # (see claim() below) — remove that too so a completed run leaves nothing.
+    p.with_suffix(".json.claimed").unlink(missing_ok=True)
+
+
+class AlreadyClaimedError(RuntimeError):
+    """Raised by claim() when another resume already holds the checkpoint."""
+
+
+def claim(run_id: str, *, tenant_id: str | None = None) -> Path:
+    """Atomically claim a paused checkpoint for the duration of one resume
+    (CON-F2). Renames `<run_id>.json` -> `<run_id>.json.claimed`; the rename is
+    atomic on POSIX and Windows, so exactly one concurrent resume wins and every
+    other observes the source already gone. Prevents the double-resume race that
+    would otherwise double-execute side-effecting nodes.
+
+    Returns the claimed path. Raises FileNotFoundError if there is no paused
+    checkpoint, AlreadyClaimedError if a concurrent resume already claimed it.
+    Call release() on a non-terminal resume to make it re-resumable, or delete()
+    on completion to remove it for good.
+    """
+    p = _run_path(run_id, tenant_id)
+    claimed = p.with_suffix(".json.claimed")
+    try:
+        # os.rename raises FileNotFoundError if the source vanished (already
+        # claimed by a racing resume that renamed it away, or never existed).
+        os.rename(p, claimed)
+    except FileNotFoundError as exc:
+        if claimed.exists():
+            raise AlreadyClaimedError(
+                f"run {run_id!r} is already being resumed"
+            ) from exc
+        raise FileNotFoundError(f"no paused run found for run_id={run_id!r}") from exc
+    return claimed
+
+
+def release(run_id: str, *, tenant_id: str | None = None) -> None:
+    """Undo a claim() — restore `<run_id>.json` so the run can be re-resumed
+    (used when a resume ends non-terminal: paused again or failed).
+
+    If the resumed run RE-PAUSED, the runner already wrote a fresh checkpoint at
+    the canonical path; in that case the stale `.claimed` sidecar is discarded
+    rather than clobbering the fresh state. Otherwise the claimed file is moved
+    back to the canonical path so the original pause stays resumable.
+    """
+    p = _run_path(run_id, tenant_id)
+    claimed = p.with_suffix(".json.claimed")
+    if not claimed.exists():
+        return
+    if p.exists():
+        # A fresh checkpoint was written during the resume — keep it, drop stale.
+        claimed.unlink(missing_ok=True)
+    else:
+        os.replace(claimed, p)
 
 
 def list_paused(*, tenant_id: str | None = None) -> list[dict[str, Any]]:

@@ -25,7 +25,13 @@ from pathlib import Path
 from typing import Any
 
 from .audit import emit
-from .manifest import Manifest, ManifestError, parse_bytes, validate_tool_names
+from .manifest import (
+    Manifest,
+    ManifestError,
+    parse_bytes,
+    validate_tool_names,
+    verify_manifest_signature,
+)
 
 _ALLOWED_PREFIXES = frozenset(
     {"workflows/", "tools/", "skills/", "personas/", "data/"}
@@ -205,6 +211,74 @@ def _run_workflow_validator(zf: zipfile.ZipFile, manifest: Manifest) -> None:
             raise InstallError(f"workflow {wf_path_str!r} could not be parsed/validated: {exc}")
 
 
+def _package_has_code_node(zf: zipfile.ZipFile, manifest: Manifest) -> bool:
+    """True if any workflow YAML in the package declares a `code` node — i.e.
+    the package ships arbitrary (sandboxed) Python that will execute when the
+    workflow runs. Used to gate installation on signature/operator-ack (WF-A1).
+
+    Fail-closed on parse ambiguity: a workflow we cannot parse is treated as
+    potentially containing a code node, so a malformed YAML can't smuggle one
+    past the gate.
+    """
+    try:
+        import yaml  # type: ignore[import]
+    except ImportError:
+        # Can't inspect node types without a YAML parser — assume the worst.
+        return bool(manifest.components.get("workflows"))
+
+    names = set(zf.namelist())
+    for wf_path in manifest.components.get("workflows", []):
+        if wf_path not in names:
+            continue
+        try:
+            data = yaml.safe_load(zf.read(wf_path).decode("utf-8")) or {}
+            graph = (data.get("orchestration") or {}).get("graph") or []
+        except Exception:
+            return True  # unparsable workflow → fail closed
+        for node in graph:
+            if isinstance(node, dict) and node.get("type") == "code":
+                return True
+    return False
+
+
+def _check_code_node_signature(
+    zf: zipfile.ZipFile,
+    manifest: Manifest,
+    manifest_bytes: bytes,
+    *,
+    allow_unsigned_code: bool,
+) -> None:
+    """WF-A1(b): a package whose workflows contain a `code` node executes
+    unreviewed arbitrary Python. Refuse to install it unless the package is
+    signed AND the signature verifies, OR the operator has explicitly
+    acknowledged the risk (allow_unsigned_code=True). Deny-by-default."""
+    if not _package_has_code_node(zf, manifest):
+        return
+    if allow_unsigned_code:
+        emit(
+            "package.code_node_unsigned_acknowledged",
+            id=manifest.id,
+            version=manifest.version,
+        )
+        return
+    signed_ok = False
+    try:
+        import yaml  # type: ignore[import]
+        raw = yaml.safe_load(manifest_bytes.decode("utf-8"))
+        if isinstance(raw, dict):
+            signed_ok = verify_manifest_signature(raw)
+    except Exception:
+        signed_ok = False
+    if not signed_ok:
+        raise InstallError(
+            "package contains a `code` node (arbitrary sandboxed Python) but is "
+            "not signed with a verifying signature. Refusing to install "
+            "unreviewed executable code. Install a signed package, or an "
+            "operator who has reviewed the source may acknowledge the risk with "
+            "allow_unsigned_code=True."
+        )
+
+
 def _extract_to(zf: zipfile.ZipFile, manifest: Manifest, dest: Path) -> None:
     dest.mkdir(parents=True, exist_ok=True)
     for name in zf.namelist():
@@ -235,8 +309,16 @@ def install(
     scope: str = "user",
     corvin_home: Path | None = None,
     tenant_id: str = "_default",
+    *,
+    allow_unsigned_code: bool = False,
 ) -> InstalledPackage:
-    """Install an .awpkg file. Raises InstallError on any violation."""
+    """Install an .awpkg file. Raises InstallError on any violation.
+
+    `allow_unsigned_code` (WF-A1): explicit operator acknowledgment permitting
+    installation of a package whose workflows contain a `code` node (arbitrary
+    sandboxed Python) even when the package is unsigned. Deny-by-default: an
+    unsigned code-node package is refused unless this is set.
+    """
     awpkg_path = Path(awpkg_path)
     if not awpkg_path.exists():
         raise InstallError(f"file not found: {awpkg_path}")
@@ -257,6 +339,9 @@ def install(
         _check_archive_safety(zf, manifest)
         _check_tool_names(zf, manifest)
         _check_tool_network(zf, manifest)
+        _check_code_node_signature(
+            zf, manifest, manifest_bytes, allow_unsigned_code=allow_unsigned_code
+        )
         _run_skill_linter(zf, manifest)
         _run_workflow_validator(zf, manifest)
 

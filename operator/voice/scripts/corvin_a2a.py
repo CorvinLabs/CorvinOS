@@ -348,7 +348,11 @@ def _compute_sest_fp() -> str | None:
     if not token:
         # Session key written by the refresh daemon (mirrors validator._find_token order)
         try:
-            session_key = Path.home() / ".config" / "corvin-voice" / "session.key"
+            # VOICE-F8: honor XDG_CONFIG_HOME — the writer (session_refresh.py)
+            # resolves this dir via XDG, so a hardcoded ~/.config here is a
+            # reader≠writer split whenever XDG_CONFIG_HOME is set.
+            _xdg = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
+            session_key = Path(os.path.expanduser(_xdg)) / "corvin-voice" / "session.key"
             if session_key.exists():
                 t = session_key.read_text("utf-8").strip()
                 if t:

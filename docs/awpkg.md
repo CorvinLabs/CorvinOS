@@ -151,11 +151,27 @@ the install-time contract*, three extensions are worth doing (tracked as follow-
 shipped in this release, so the format is honestly documented rather than quietly
 incomplete):
 
-1. **Embedded-code permission axis.** A `code` node ships arbitrary sandboxed Python, but
-   the manifest's `permissions` block only models `{network, compute, secrets}` — it has
-   no axis for "this package executes embedded code," and `inspect` does not surface code
-   nodes. A future manifest key (e.g. `permissions.embedded_code: true`) + inspector
-   output would make that visible before install.
+1. **Embedded-code permission axis.** A `code` node ships Python, but the manifest's
+   `permissions` block only models `{network, compute, secrets}` — it has no axis for
+   "this package executes embedded code," and `inspect` does not surface code nodes. A
+   future manifest key (e.g. `permissions.embedded_code: true`) + inspector output would
+   make that visible before install.
+
+   **Install-time signature gate (shipped):** `awpkg install` now **refuses** a package
+   whose workflow graph contains a `type: code` node unless the manifest signature verifies
+   (Ed25519 over the canonical manifest digest) **or** the operator passes
+   `allow_unsigned_code=True`. Unsigned third-party code no longer installs silently.
+   Caveat: the signature currently binds the manifest *digest* (which lists component
+   paths), not the component file *bytes* — it proves signer provenance, not that the
+   code-node source is unmodified. Binding content hashes is a wire-format change tracked
+   as a follow-up (needs an ADR).
+
+   **Runtime sandbox gate (shipped):** a `code` node runs in the bwrap sandbox on Linux
+   hosts that have bubblewrap. On hosts **without** bwrap (macOS, Windows, or a Linux box
+   with no bubblewrap) the node now **fails closed** — it raises rather than silently
+   running unsandboxed with full user privileges. An operator who accepts that risk on a
+   non-bwrap host must opt in explicitly via the `CORVIN_ALLOW_UNSANDBOXED_CODE=1`
+   environment variable.
 2. **Declarable channel/bridge requirements.** `answer` / `ask_human` / `deliver` nodes
    need a specific bridge (Discord/Telegram/…); a package can't declare that today, so it
    installs silently on a host that lacks the channel.

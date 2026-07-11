@@ -6,6 +6,7 @@ analog to L25-compute's ParallelDriver).
 """
 from __future__ import annotations
 
+import logging
 import secrets
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -13,6 +14,8 @@ from typing import Any, Callable
 
 from .node_types import NODE_TYPES, WorkflowPaused
 from .storage import WorkflowDoc
+
+_log = logging.getLogger("corvin_workflows.runner")
 
 
 @dataclass
@@ -107,18 +110,48 @@ def _transitive_dependents(dependents: dict[str, list[str]], node_id: str) -> se
 _DEFAULT_ERROR_STRATEGY = "abort"
 _ERROR_STRATEGIES = {"abort", "fail_branch"}
 
+# WF-A4: hard upper bounds against resource-exhaustion DoS from a crafted
+# workflow. A workflow author can request retries/intervals, but never more than
+# these ceilings — a `max_retries: 100000` or `retry_interval_s: 1e9` must not
+# turn one node into an unbounded busy/sleep loop.
+_MAX_RETRIES_CAP = 10
+_MAX_RETRY_INTERVAL_S = 60.0
+
+# WF-A4: node types whose executor performs an externally-visible side effect
+# (writes to the bridge outbox). Retrying them on a post-side-effect exception
+# would double-deliver, so they are NEVER retried regardless of the workflow's
+# declared retry block. `ask_human` is already excluded structurally (it raises
+# WorkflowPaused, caught before the retry path).
+_NON_RETRYABLE_TYPES = {"deliver", "answer"}
+
 
 def _retry_config(node_spec: dict[str, Any]) -> tuple[int, float, str]:
     """Parse the optional `retry:` block (ADR-0188 M4). Absent -> unchanged
-    legacy behavior: 1 attempt, abort the whole run on failure."""
+    legacy behavior: 1 attempt, abort the whole run on failure. Requested
+    retries/intervals are clamped to hard caps (WF-A4)."""
     cfg = node_spec.get("retry") or {}
-    max_retries = int(cfg.get("max_retries", 0))
-    interval_s = float(cfg.get("retry_interval_s", 0))
+    requested_retries = int(cfg.get("max_retries", 0))
+    max_retries = max(0, min(requested_retries, _MAX_RETRIES_CAP))
+    if requested_retries > _MAX_RETRIES_CAP:
+        _log.warning(
+            "workflow node %r requested max_retries=%d — clamped to cap %d (WF-A4)",
+            node_spec.get("id"), requested_retries, _MAX_RETRIES_CAP,
+        )
+    requested_interval = float(cfg.get("retry_interval_s", 0))
+    interval_s = max(0.0, min(requested_interval, _MAX_RETRY_INTERVAL_S))
+    if requested_interval > _MAX_RETRY_INTERVAL_S:
+        _log.warning(
+            "workflow node %r requested retry_interval_s=%s — clamped to cap %s (WF-A4)",
+            node_spec.get("id"), requested_interval, _MAX_RETRY_INTERVAL_S,
+        )
     strategy = cfg.get("error_strategy", _DEFAULT_ERROR_STRATEGY)
     if strategy not in _ERROR_STRATEGIES:
         raise ValueError(
             f"retry.error_strategy must be one of {sorted(_ERROR_STRATEGIES)}, got {strategy!r}"
         )
+    # Side-effecting nodes are never retried (double-delivery guard).
+    if node_spec.get("type", "agent") in _NON_RETRYABLE_TYPES:
+        max_retries = 0
     return max_retries, interval_s, strategy
 
 
@@ -152,10 +185,17 @@ class DAGRunner:
         *,
         engine: Any,
         audit_sink: Callable[[dict[str, Any]], None] | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         self.doc = doc
         self.engine = engine
         self._audit_sink = audit_sink
+        # WF-A2: the tenant a run belongs to. Threaded into checkpoint.save so a
+        # paused run's checkpoint is stored under ITS tenant, not always _default
+        # (which made non-default tenants unable to resume — console resume loads
+        # with rec.tenant_id — and colocated paused state cross-tenant in
+        # _default). None keeps the legacy _default location for back-compat.
+        self._tenant_id = tenant_id
         self._audit_buffer: list[dict[str, Any]] = []
 
     def _audit(self, event: str, **details: Any) -> None:
@@ -365,6 +405,12 @@ class DAGRunner:
             channel=pause.channel,
             chat_id=pause.chat_id,
             expect=pause.expect,
+            # WF-A3: bind the intended approver. The approval prompt was sent to
+            # (channel, chat_id) — only that recipient (or a privileged/owner
+            # caller passing replier=None) may answer on resume. Deny-by-default
+            # is enforced in resume_workflow().
+            approver=pause.chat_id,
+            tenant_id=self._tenant_id,
         )
 
         run.state = "paused"
@@ -377,19 +423,35 @@ class DAGRunner:
         )
 
 
+class UnauthorizedReplier(PermissionError):
+    """WF-A3: raised when a resume reply comes from an identity other than the
+    approver the pause was directed to. Deny-by-default."""
+
+
 def resume_workflow(
     run_id: str,
     reply: str,
     *,
     engine: Any,
     tenant_id: str | None = None,
+    replier: str | None = None,
     audit_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> RunResult:
     """Load a paused run's checkpoint, reload its workflow, and continue
     execution with `reply` injected at the paused `ask_human` node
     (ADR-0188 M5). Deletes the checkpoint once the resumed run reaches a
     terminal state (complete/failed); leaves it in place if it pauses again
-    at a second ask_human node."""
+    at a second ask_human node.
+
+    `replier` (WF-A3) is the identity answering the approval. When the caller is
+    a specific chat participant (bridge path), it must equal the checkpoint's
+    recorded `approver` — otherwise `UnauthorizedReplier` is raised. A privileged
+    owner caller (console) passes `replier=None`, which is always authorized.
+
+    CON-F2: the checkpoint is atomically CLAIMED for the duration of the resume,
+    so a second concurrent resume of the same run fails fast instead of
+    double-executing side-effecting nodes.
+    """
     from . import checkpoint as _checkpoint
     from .storage import load_workflow
 
@@ -399,24 +461,47 @@ def resume_workflow(
     if not ckpt.get("workflow_path"):
         raise RuntimeError(f"checkpoint {run_id!r} has no workflow_path — cannot resume")
 
-    doc = load_workflow(ckpt["workflow_path"])
-    runner = DAGRunner(doc, engine=engine, audit_sink=audit_sink)
-    result = runner.run(
-        inputs=ckpt["inputs"],
-        resume=ResumeContext(
-            run_id=run_id,
-            state=ckpt["state"],
-            completed_ids=set(ckpt["completed_ids"]),
-            skipped_ids=set(ckpt.get("skipped_ids") or []),
-            paused_at_node=ckpt["paused_at_node"],
-            reply=reply,
-        ),
-    )
-    # Delete the checkpoint ONLY on clean completion. A "failed" resume (a
-    # transient engine timeout, a bwrap hiccup, an I/O blip) after the human
-    # already replied must NOT erase all pre-pause work and the reply — that
-    # would make the run unrecoverable. Keep the checkpoint so it can be
-    # re-resumed; a genuinely-abandoned run is reaped by TTL/GC, not here.
+    # WF-A3: enforce the approver binding BEFORE claiming/executing anything.
+    approver = ckpt.get("approver")
+    if replier is not None and approver is not None and str(replier) != str(approver):
+        raise UnauthorizedReplier(
+            f"reply from {replier!r} rejected: approval for run {run_id!r} was "
+            f"directed to a different recipient"
+        )
+
+    # CON-F2: atomically claim so concurrent resumes can't double-execute.
+    _checkpoint.claim(run_id, tenant_id=tenant_id)
+
+    result: RunResult
+    try:
+        doc = load_workflow(ckpt["workflow_path"])
+        runner = DAGRunner(doc, engine=engine, audit_sink=audit_sink, tenant_id=tenant_id)
+        result = runner.run(
+            inputs=ckpt["inputs"],
+            resume=ResumeContext(
+                run_id=run_id,
+                state=ckpt["state"],
+                completed_ids=set(ckpt["completed_ids"]),
+                skipped_ids=set(ckpt.get("skipped_ids") or []),
+                paused_at_node=ckpt["paused_at_node"],
+                reply=reply,
+            ),
+        )
+    except BaseException:
+        # A resume that never reached a terminal state must release its claim so
+        # the run stays re-resumable (transient engine/I-O errors, cancellation).
+        _checkpoint.release(run_id, tenant_id=tenant_id)
+        raise
+
+    # Delete the checkpoint ONLY on clean completion. A "failed"/paused resume
+    # (a transient engine timeout, a second ask_human) after the human already
+    # replied must NOT erase all pre-pause work and the reply — that would make
+    # the run unrecoverable. Release the claim so it can be re-resumed; a
+    # genuinely-abandoned run is reaped by TTL/GC, not here.
     if result.state == "complete":
         _checkpoint.delete(run_id, tenant_id=tenant_id)
+    else:
+        # runner may have re-saved a fresh checkpoint (paused again) at the
+        # canonical path; only release the claim sidecar if no fresh one exists.
+        _checkpoint.release(run_id, tenant_id=tenant_id)
     return result

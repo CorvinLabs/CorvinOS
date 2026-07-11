@@ -1,6 +1,8 @@
 """AWPKG manifest parsing and JSON Schema validation."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -81,6 +83,59 @@ class Manifest:
 def _load_schema() -> dict[str, Any]:
     with open(_SCHEMA_PATH, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+# ── Signature verification (ADR-0141-style provenance for awpkg) ────────────
+#
+# A package MAY carry a `signature` block (algorithm=ed25519, public_key and
+# value both base64url). The value is an Ed25519 signature over the SHA-256
+# digest of the manifest's canonical JSON *with the signature field removed*
+# (so the signature never covers itself). This gives installer.py a verifiable
+# provenance signal it uses to gate arbitrary `code`-node execution (WF-A1).
+
+
+def _b64url_decode(s: str) -> bytes:
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s + pad)
+
+
+def manifest_signing_digest(raw: dict[str, Any]) -> bytes:
+    """SHA-256 over the canonical JSON of the manifest with `signature` removed.
+    This is the exact byte string an Ed25519 signature must be produced over."""
+    body = {k: v for k, v in raw.items() if k != "signature"}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).digest()
+
+
+def verify_manifest_signature(raw: dict[str, Any]) -> bool:
+    """Return True iff `raw` carries a well-formed ed25519 signature that
+    verifies against the manifest signing digest. Returns False for any missing
+    field, unsupported algorithm, bad encoding, verification failure, or when
+    the `cryptography` backend is unavailable — i.e. fail-closed: an
+    unverifiable package is treated as unsigned by the caller."""
+    sig = raw.get("signature")
+    if not isinstance(sig, dict):
+        return False
+    if sig.get("algorithm") != "ed25519":
+        return False
+    pub_b64 = sig.get("public_key")
+    val_b64 = sig.get("value")
+    if not isinstance(pub_b64, str) or not isinstance(val_b64, str):
+        return False
+    try:
+        from cryptography.hazmat.primitives.serialization import load_der_public_key
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        from cryptography.exceptions import InvalidSignature
+    except ImportError:
+        return False  # no crypto backend → cannot verify → fail closed
+    try:
+        pub = load_der_public_key(_b64url_decode(pub_b64))
+        if not isinstance(pub, Ed25519PublicKey):
+            return False
+        pub.verify(_b64url_decode(val_b64), manifest_signing_digest(raw))
+        return True
+    except (InvalidSignature, ValueError, TypeError):
+        return False
 
 
 def parse_raw(raw: dict[str, Any]) -> Manifest:

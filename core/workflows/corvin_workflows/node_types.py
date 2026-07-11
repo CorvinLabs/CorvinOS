@@ -21,12 +21,22 @@ Shipped types:
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Callable
 
 # Forward references — runner imports node_types, node_types imports nothing.
 _Executor = Callable[..., Any]
 _Validator = Callable[[dict[str, Any]], None]
+
+_log = logging.getLogger("corvin_workflows.node_types")
+
+# WF-A4: hard upper bounds against resource-exhaustion DoS from a crafted
+# workflow. A fan_out over a state-supplied list, or a delegation_loop's budget,
+# must never let one node spawn an unbounded number of paid engine calls.
+_MAX_FAN_OUT_ITEMS = 500
+_MAX_DELEGATION_LOOPS = 100
+_MAX_DELEGATION_WORKERS = 200
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +93,19 @@ def _execute_fan_out(*, node, engine, state, inputs, audit) -> dict[str, Any]:
     if not isinstance(items, list):
         raise ValueError(f"fan_out: items_from {field!r} did not resolve to a list")
 
+    # WF-A4: cap the number of items so a state-supplied list can't fan out into
+    # an unbounded number of paid engine calls (resource-exhaustion DoS).
+    if len(items) > _MAX_FAN_OUT_ITEMS:
+        _log.warning(
+            "fan_out node %r: %d items exceeds cap %d — truncating (WF-A4)",
+            node["id"], len(items), _MAX_FAN_OUT_ITEMS,
+        )
+        audit(
+            "node.fan_out_clamped", node_id=node["id"],
+            requested=len(items), cap=_MAX_FAN_OUT_ITEMS,
+        )
+        items = items[:_MAX_FAN_OUT_ITEMS]
+
     results = []
     for i, item in enumerate(items):
         call = EngineCall(
@@ -132,8 +155,24 @@ def _execute_delegation_loop(*, node, engine, state, inputs, audit) -> dict[str,
     cfg = node["config"]
     manager_name = cfg["manager"]
     budget = cfg["budget"]
-    max_loops = int(budget["max_loops"])
-    max_total_workers = int(budget["max_total_workers"])
+    # WF-A4: clamp the budget to hard caps so a crafted workflow can't request
+    # e.g. max_loops: 1_000_000 and drive unbounded paid engine calls.
+    req_loops = int(budget["max_loops"])
+    req_workers = int(budget["max_total_workers"])
+    max_loops = max(1, min(req_loops, _MAX_DELEGATION_LOOPS))
+    max_total_workers = max(1, min(req_workers, _MAX_DELEGATION_WORKERS))
+    if req_loops > _MAX_DELEGATION_LOOPS or req_workers > _MAX_DELEGATION_WORKERS:
+        _log.warning(
+            "delegation_loop node %r: budget (loops=%d, workers=%d) exceeds caps "
+            "(%d/%d) — clamped (WF-A4)",
+            node["id"], req_loops, req_workers,
+            _MAX_DELEGATION_LOOPS, _MAX_DELEGATION_WORKERS,
+        )
+        audit(
+            "node.delegation_budget_clamped", node_id=node["id"],
+            requested_loops=req_loops, requested_workers=req_workers,
+            max_loops=max_loops, max_total_workers=max_total_workers,
+        )
 
     iterations: list[dict[str, Any]] = []
     workers_spawned = 0

@@ -93,32 +93,153 @@ _STT_HIGHRAM_THRESHOLD_MB = 16000
 _STT_HIGH_MIN_CPUS = 8
 
 
+def _read_cgroup_str(path: str) -> "str | None":
+    """Read a single cgroup control file, stripped, or None on any error."""
+    try:
+        with open(path, "r", encoding="ascii", errors="ignore") as fh:
+            return fh.read().strip()
+    except OSError:
+        return None
+
+
+def _read_cgroup_int(path: str) -> "int | None":
+    """Read a cgroup control file as a positive, non-sentinel int, or None.
+
+    Returns None for missing/blank files, the literal ``max`` (v2 unlimited),
+    non-numeric contents, and the exabyte-range sentinels v1 uses for
+    "unlimited" (``val >= 1<<62``)."""
+    raw = _read_cgroup_str(path)
+    if raw is None or raw == "" or raw == "max":
+        return None
+    try:
+        val = int(raw)
+    except ValueError:
+        return None
+    if val <= 0 or val >= (1 << 62):
+        return None
+    return val
+
+
+def _cgroup_self_dirs() -> "list[str]":
+    """Directories of THIS process's own cgroup, tightest (deepest) first,
+    walking UP to the mount root.
+
+    Why walk the hierarchy: a systemd ``MemoryMax=`` / ``CPUQuota=`` on the
+    unit, a Docker ``--cgroupns=host``, or a K8s parent-cgroup limit all sit
+    at ``/sys/fs/cgroup/<...deep path...>/memory.max`` — NOT at the namespace
+    root ``/sys/fs/cgroup/memory.max`` (which is usually absent/``max`` for
+    the root cgroup). Reading only the root therefore reports "unlimited" and
+    the RAM/CPU gate picks the heavy tier and gets OOM-killed / times out.
+    We resolve the process's own cgroup from ``/proc/self/cgroup`` (the
+    unified ``0::<path>`` line on cgroup-v2) and yield every ancestor dir so
+    the caller can take the TIGHTEST real limit anywhere in the chain.
+
+    cgroup-v2 unified only (the modern default). Returns [] on non-Linux, on
+    legacy v1-only hosts (handled separately below), or when unresolvable.
+    """
+    raw = _read_cgroup_str("/proc/self/cgroup")
+    if not raw:
+        return []
+    rel = None
+    for line in raw.splitlines():
+        parts = line.split(":", 2)
+        # Unified cgroup-v2 line: "0::<path>".
+        if len(parts) == 3 and parts[0] == "0" and parts[1] == "":
+            rel = parts[2].strip()
+            break
+    if rel is None:
+        return []
+    base = "/sys/fs/cgroup"
+    segs = [s for s in rel.split("/") if s]
+    dirs: list[str] = []
+    for i in range(len(segs), -1, -1):  # deepest → root
+        dirs.append(os.path.join(base, *segs[:i]) if segs[:i] else base)
+    return dirs
+
+
+def _cgroup_v1_dirs(controller: str) -> "list[str]":
+    """Ancestor dirs for a legacy cgroup-v1 *controller*, deepest first."""
+    raw = _read_cgroup_str("/proc/self/cgroup")
+    if not raw:
+        return []
+    rel = None
+    for line in raw.splitlines():
+        parts = line.split(":", 2)
+        # v1 line: "N:<controllers>:<path>"; controllers is comma-joined.
+        if len(parts) == 3 and parts[0] != "0" and controller in parts[1].split(","):
+            rel = parts[2].strip()
+            break
+    if rel is None:
+        return []
+    base = f"/sys/fs/cgroup/{controller}"
+    segs = [s for s in rel.split("/") if s]
+    dirs: list[str] = []
+    for i in range(len(segs), -1, -1):
+        dirs.append(os.path.join(base, *segs[:i]) if segs[:i] else base)
+    return dirs
+
+
 def _cgroup_limit_mb() -> "int | None":
-    """Linux cgroup memory limit in MB (v2 `memory.max`, then v1
-    `memory.limit_in_bytes`), or None when unlimited / not containerized / not
-    Linux. `SC_PHYS_PAGES` is blind to cgroup limits, so without this a
-    memory-capped container would read the host's full RAM and pick a model
-    too big for its limit (OOM). Values at/above the host total (the "max"
-    sentinel) are treated as unlimited by the caller's min()."""
-    for path, is_v2 in (("/sys/fs/cgroup/memory.max", True),
-                        ("/sys/fs/cgroup/memory/memory.limit_in_bytes", False)):
-        try:
-            with open(path, "r", encoding="ascii", errors="ignore") as fh:
-                raw = fh.read().strip()
-        except OSError:
+    """Tightest cgroup memory limit in MB anywhere in THIS process's cgroup
+    hierarchy, or None when unlimited / not containerized / not Linux.
+
+    Walks the process's own cgroup up to the root (``_cgroup_self_dirs`` for
+    v2 ``memory.max``, ``_cgroup_v1_dirs`` for v1 ``memory.limit_in_bytes``)
+    and takes the MINIMUM real limit — so a systemd ``MemoryMax=`` on the unit
+    or a K8s parent-cgroup cap is honoured, not just the (usually-unlimited)
+    namespace root. ``SC_PHYS_PAGES`` is blind to all of these; without this a
+    memory-capped container reads the host's full RAM and picks a model too
+    big for its limit (OOM)."""
+    best: "int | None" = None
+    for d in _cgroup_self_dirs():
+        val = _read_cgroup_int(os.path.join(d, "memory.max"))
+        if val is not None:
+            best = val if best is None else min(best, val)
+    for d in _cgroup_v1_dirs("memory"):
+        val = _read_cgroup_int(os.path.join(d, "memory.limit_in_bytes"))
+        if val is not None:
+            best = val if best is None else min(best, val)
+    if best is None:
+        return None
+    return int(best / (1024 * 1024))
+
+
+def _cgroup_cpu_quota() -> "int | None":
+    """Effective CPU count from the tightest cgroup CPU quota in THIS
+    process's hierarchy, or None when unlimited / unmeasurable / not Linux.
+
+    cgroup-v2 ``cpu.max`` is ``"<quota> <period>"`` (quota ``max`` =
+    unlimited); v1 uses ``cpu.cfs_quota_us`` / ``cpu.cfs_period_us`` (quota
+    ``-1`` = unlimited). ``effective_cpus = floor(quota / period)`` (>= 1).
+    ``os.cpu_count()`` reports the host's cores and is blind to the quota, so
+    a box throttled to a fraction of a core would still pick the heavy tier
+    and time out decoding it. Taking the MINIMUM across the hierarchy honours
+    a systemd ``CPUQuota=`` on the unit as well as a parent-cgroup cap."""
+    best: "float | None" = None
+    for d in _cgroup_self_dirs():
+        raw = _read_cgroup_str(os.path.join(d, "cpu.max"))
+        if not raw:
             continue
-        if is_v2 and raw == "max":
-            return None
+        parts = raw.split()
+        if len(parts) != 2 or parts[0] == "max":
+            continue
         try:
-            val = int(raw)
+            quota, period = float(parts[0]), float(parts[1])
         except ValueError:
             continue
-        # v1 uses a huge sentinel (~PAGE_COUNTER_MAX) for "unlimited"; anything
-        # in the exabyte range is not a real limit.
-        if val <= 0 or val >= (1 << 62):
+        if quota > 0 and period > 0:
+            cpus = quota / period
+            best = cpus if best is None else min(best, cpus)
+    for d in _cgroup_v1_dirs("cpu"):
+        q = _read_cgroup_int(os.path.join(d, "cpu.cfs_quota_us"))
+        p = _read_cgroup_int(os.path.join(d, "cpu.cfs_period_us"))
+        if q is None or p is None:
             continue
-        return int(val / (1024 * 1024))
-    return None
+        cpus = q / p
+        best = cpus if best is None else min(best, cpus)
+    if best is None:
+        return None
+    return max(1, int(best))  # floor, but never below one whole CPU
 
 
 def _total_ram_mb() -> "int | None":
@@ -179,7 +300,14 @@ def _default_local_model() -> str:
         return _STT_MODEL_QUALITY
     if ram < _STT_LOWRAM_THRESHOLD_MB:
         return _STT_MODEL_LOWRAM
+    # Effective CPUs = host cores clamped to any cgroup CPU quota. `cpu_count()`
+    # is host-visible and blind to a `CPUQuota=` / `--cpus` / cfs cap, so a box
+    # throttled to a few effective cores would otherwise pick the heavy `medium`
+    # tier and time out decoding it (returning NOTHING — worse than `small`).
     cpus = _os.cpu_count() or 1
+    quota = _cgroup_cpu_quota()
+    if quota is not None:
+        cpus = min(cpus, quota)
     if ram >= _STT_HIGHRAM_THRESHOLD_MB and cpus >= _STT_HIGH_MIN_CPUS:
         return _STT_MODEL_HIGH
     return _STT_MODEL_QUALITY
@@ -374,6 +502,63 @@ def _first_present_model() -> "str | None":
     return max(present, key=lambda m: (_model_family_rank(m), m))
 
 
+# Conservative on-disk floor sizes (bytes) for the ggml q5 model families. A
+# file FAR below its family's real size is a truncated / aborted download and
+# worth re-fetching; a full-size file that still won't load is NOT truncation
+# (malloc failure, ABI/CPU mismatch, ggml-format version drift) and must NOT be
+# re-downloaded on every voice note. Thresholds are deliberately well under the
+# true sizes (medium-q5_0 ~539 MB, small-q5_1 ~190 MB, base-q5_1 ~57 MB) so only
+# a clearly-partial file trips the "truncated" branch. Unknown family → treated
+# as NOT truncated (never re-download something we can't size-check).
+_MODEL_MIN_PLAUSIBLE_BYTES = {
+    "tiny": 20 * 1024 * 1024,
+    "base": 40 * 1024 * 1024,
+    "small": 130 * 1024 * 1024,
+    "medium": 400 * 1024 * 1024,
+    "large": 900 * 1024 * 1024,
+}
+
+
+def _looks_truncated(model_file: Path, size: str) -> bool:
+    """True iff *model_file* is implausibly small for its model family — the
+    signature of an aborted/partial download, the only load failure a
+    re-download can actually repair (VOICE-F3)."""
+    fam = size.split("-", 1)[0].split(".", 1)[0].lower()
+    floor = _MODEL_MIN_PLAUSIBLE_BYTES.get(fam)
+    if floor is None:
+        return False
+    try:
+        return model_file.stat().st_size < floor
+    except OSError:
+        return False
+
+
+def _plan_model_heal(size: str, model_file: Path, now: float) -> "tuple[bool, str]":
+    """Decide whether a failed model load warrants a quarantine+re-download
+    self-heal (VOICE-F3).
+
+    Returns ``(healable, detail)``. Heals ONLY when the file is present, looks
+    TRUNCATED for its family, AND we haven't already healed it inside the
+    current ``_HEAL_COOLDOWN_S`` window — bounding downloads to
+    ``_HEAL_MAX_HEALS`` per window so a full-size-but-unloadable model (malloc
+    failure, ABI/CPU mismatch, ggml version drift) is never re-fetched on every
+    voice note. When it returns True it has ALREADY recorded the attempt, so a
+    crash mid-download still consumes the window's budget. ``detail`` explains
+    the give-up reason for the surfaced error. Callers hold ``_load_lock``, so
+    the ``_heal_attempts`` read-modify-write is already serialized."""
+    heal_count, heal_ts = _heal_attempts.get(size, (0, 0.0))
+    if now - heal_ts > _HEAL_COOLDOWN_S:
+        heal_count = 0  # cooldown elapsed → window resets
+    if model_file.exists() and _looks_truncated(model_file, size) and heal_count < _HEAL_MAX_HEALS:
+        _heal_attempts[size] = (heal_count + 1, now)
+        return True, ""
+    if not model_file.exists():
+        return False, " (model file absent)"
+    if not _looks_truncated(model_file, size):
+        return False, " (full-size file; not a truncated download)"
+    return False, " (already re-downloaded once this window)"
+
+
 def _prefer_faster_whisper() -> bool:
     """Opt-in escape hatch for operators who already have a working
     faster-whisper/av/CTranslate2 install and want its GPU-accelerated
@@ -417,6 +602,17 @@ _load_lock = threading.Lock()
 # concurrent voice notes; waiting time is charged against the caller's budget
 # and fails as STTTimeout, never blocks unbounded.
 _transcribe_lock = threading.Lock()
+
+# Corrupt-model self-heal throttle (VOICE-F3). Maps model size → (heal_count,
+# last_heal_monotonic). A model may be quarantined+re-downloaded at most
+# `_HEAL_MAX_HEALS` times per `_HEAL_COOLDOWN_S` window; past that we give up
+# and raise STTProviderUnavailable (resolver falls through to cloud) instead of
+# re-fetching hundreds of MB on every single voice note. Only ever mutated
+# inside `_do_load`, which runs while `_load_lock` is held, so no extra lock is
+# needed.
+_HEAL_COOLDOWN_S = 3600.0
+_HEAL_MAX_HEALS = 1
+_heal_attempts: "dict[str, tuple[int, float]]" = {}
 
 
 class LocalWhisperProvider:
@@ -573,35 +769,45 @@ class LocalWhisperProvider:
                 try:
                     return _construct()
                 except Exception as exc:  # noqa: BLE001
-                    # Self-heal a truncated/corrupted model file. An aborted
-                    # first download (Ctrl-C, power loss, dropped connection)
-                    # leaves a half-written ggml file that every later check
-                    # short-circuits on (exists()/st_size>0 both pass), so
-                    # local STT would stay broken forever. Quarantine the
-                    # file and retry once — the retry re-downloads.
+                    # Self-heal a TRUNCATED model file — but ONLY that, and at
+                    # most once per cooldown window (VOICE-F3). An aborted first
+                    # download (Ctrl-C, power loss, dropped connection) leaves a
+                    # half-written ggml file that every later check short-
+                    # circuits on (exists()/st_size>0 both pass), so local STT
+                    # would stay broken forever; quarantining + re-downloading
+                    # fixes that. But the OLD code re-downloaded on ANY load
+                    # failure (malloc, ABI/CPU mismatch, ggml version drift) —
+                    # none of which a re-download repairs — so a persistently-
+                    # unloadable full-size model re-fetched ~539 MB on EVERY
+                    # voice note, unbounded. We now re-download only when the
+                    # file is implausibly small for its family AND we haven't
+                    # already healed it this window; otherwise we give up and
+                    # raise STTProviderUnavailable so the resolver falls through
+                    # to the next provider (e.g. OpenAI) instead of looping
+                    # downloads.
                     model_file = _models_dir() / f"ggml-{size}.bin"
-                    if model_file.exists():
-                        quarantine = model_file.with_name(
-                            model_file.name + ".corrupt")
-                        try:
-                            model_file.replace(quarantine)
-                        except OSError:
-                            raise STTProviderUnavailable(
-                                f"pywhispercpp model {size!r} could not be "
-                                f"loaded and the file could not be "
-                                f"quarantined: {exc}"
-                            ) from exc
-                        try:
-                            return _construct()
-                        except Exception as exc2:  # noqa: BLE001
-                            raise STTProviderUnavailable(
-                                f"pywhispercpp model {size!r} failed to load "
-                                f"even after quarantining a possibly-corrupt "
-                                f"model file and re-downloading: {exc2}"
-                            ) from exc2
-                    raise STTProviderUnavailable(
-                        f"pywhispercpp model {size!r} could not be loaded: {exc}"
-                    ) from exc
+                    healable, detail = _plan_model_heal(
+                        size, model_file, time.monotonic())
+                    if not healable:
+                        raise STTProviderUnavailable(
+                            f"pywhispercpp model {size!r} could not be loaded"
+                            f"{detail}: {exc}"
+                        ) from exc
+                    quarantine = model_file.with_name(model_file.name + ".corrupt")
+                    try:
+                        model_file.replace(quarantine)
+                    except OSError:
+                        raise STTProviderUnavailable(
+                            f"pywhispercpp model {size!r} appears truncated but "
+                            f"the file could not be quarantined: {exc}"
+                        ) from exc
+                    try:
+                        return _construct()
+                    except Exception as exc2:  # noqa: BLE001
+                        raise STTProviderUnavailable(
+                            f"pywhispercpp model {size!r} failed to load even "
+                            f"after re-downloading a truncated model file: {exc2}"
+                        ) from exc2
 
             result_box: dict[str, object] = {}
             done = threading.Event()

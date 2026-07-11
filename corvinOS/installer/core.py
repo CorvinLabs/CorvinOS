@@ -524,6 +524,10 @@ class CorvinInstaller:
                 pre_exec=pre_exec,
             )
             print("  ✓ WebUI service registered (corvin-webui.service)")
+            # M3: record that the init system now owns the WebUI (launchd
+            # RunAtLoad / systemd) so step 17 waits for it instead of starting a
+            # SECOND foreground instance that would fight it for port 8765.
+            self._webui_service_registered = True
         except Exception as e:
             print(f"  ⚠ Could not register WebUI service: {e}")
 
@@ -580,6 +584,26 @@ class CorvinInstaller:
                 return
             except Exception as e:
                 print(f"  ⚠ systemd start failed ({e}), falling back to foreground start")
+        # macOS (M3): the launchd webui service (RunAtLoad) already started
+        # uvicorn in step 14. Starting a SECOND foreground instance here would
+        # _kill_port the launchd child, which KeepAlive respawns → both fight
+        # for 8765 in a crash-loop. Wait for the launchd-managed server instead
+        # of spawning our own.
+        if sys.platform == "darwin" and getattr(self, "_webui_service_registered", False):
+            for _ in range(30):
+                time.sleep(0.5)
+                try:
+                    s = socket.socket()
+                    s.settimeout(0.5)
+                    s.connect(("127.0.0.1", 8765))
+                    s.close()
+                    print("  ✓ Web Console running on http://127.0.0.1:8765/console/ (launchd)")
+                    return
+                except OSError:
+                    pass
+            print("  ⚠ WebUI (launchd) did not respond within 15 s — check "
+                  "~/.corvin/logs/launchd/webui.err")
+            return
         _console.start_server(self.repo_root)
 
     # ── Step 18: Save config + open browser ───────────────────────────────

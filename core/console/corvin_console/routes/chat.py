@@ -202,12 +202,32 @@ async def _classify_browser_intent(
             "read a live page, check a cart/checkout), reply EXACTLY 'BROWSE: <one "
             "concise task>'. Otherwise (normal conversation, coding, general questions) "
             "reply EXACTLY 'NO'. Output only that one line.")
+        import os as _os
+        import shutil as _shutil
+        import sys as _sys
         binp = chat_runtime._claude_binary()
+        # Pass the (operator's own) message via STDIN, not argv, and resolve a
+        # Windows .cmd shim through _win_shim's cmd.exe-safe quoting instead of
+        # letting a bare "claude" list fail to launch (WinError → classifier
+        # silently non-functional on Windows). Parity with chat_runtime's spawn
+        # hardening; the system prompt is a constant, so no untrusted content
+        # ever reaches the command line.
+        argv = [binp, "-p", "--max-turns", "1", "--disallowedTools", "*",
+                "--system-prompt", sysp]
+        if _sys.platform == "win32" and not _os.path.isabs(binp):
+            resolved = _shutil.which(binp)
+            if resolved:
+                argv[0] = resolved
+        try:
+            from agents._win_shim import windows_shim_command  # noqa: PLC0415
+            cmd = windows_shim_command(argv)  # list on POSIX/.exe, cmd-safe str on win .cmd
+        except Exception:  # noqa: BLE001
+            cmd = argv
         try:
             r = subprocess.run(
-                [binp, "-p", "--max-turns", "1", "--disallowedTools", "*",
-                 "--system-prompt", sysp, prompt],
-                capture_output=True, text=True, encoding="utf-8", timeout=30)
+                cmd, input=prompt,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=30)
             return (r.stdout or "").strip()
         except Exception:  # noqa: BLE001
             return ""

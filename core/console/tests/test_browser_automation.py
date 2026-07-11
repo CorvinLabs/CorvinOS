@@ -57,6 +57,48 @@ def test_ssrf_metadata_encodings_all_blocked():
     assert check_egress("https://example.com/", allowlist=None, forbidden=None).allowed
 
 
+def test_egress_blocks_private_and_rebind_targets_by_default(monkeypatch):
+    """BR-F2 regression: in the DEFAULT no-allowlist mode the egress gate must
+    block RFC-1918 / link-local targets AND a DNS name that RESOLVES into one
+    (DNS-rebind-to-metadata / -to-LAN) — the SSRF hole where the metadata guard
+    only canonicalized IP LITERALS. Legitimate public browsing, and the operator's
+    own loopback dev servers, must stay reachable; an explicit allowlist is the
+    one deliberate escape hatch for a specific private host."""
+    from corvin_console.browser import compliance as _cmp
+    from corvin_console.browser.compliance import check_egress
+
+    # IP-literal private / link-local / unspecified ranges: blocked, no DNS needed.
+    for u in ("http://192.168.1.1/", "http://10.0.0.5/", "http://172.16.9.9/",
+              "http://169.254.1.1/", "http://[fe80::1]/", "http://[fd00::1]/",
+              "http://0.0.0.0/"):
+        assert not check_egress(u, allowlist=None, forbidden=None).allowed, u
+
+    # A DNS name that RESOLVES into a private / metadata range is blocked too
+    # (rebind). Resolution is stubbed so the test is deterministic + offline.
+    import ipaddress
+    resolved = {
+        "rebind-lan.example": (ipaddress.ip_address("192.168.7.7"),),
+        "rebind-imds.example": (ipaddress.ip_address("169.254.169.254"),),
+        "totally-public.example": (ipaddress.ip_address("93.184.216.34"),),
+    }
+    monkeypatch.setattr(_cmp, "_resolve_host_ips", lambda host: resolved.get(host, ()))
+    assert not check_egress("http://rebind-lan.example/", allowlist=None, forbidden=None).allowed
+    assert not check_egress("http://rebind-imds.example/", allowlist=None, forbidden=None).allowed
+    # a DNS name resolving to a PUBLIC address is unaffected
+    assert check_egress("http://totally-public.example/", allowlist=None, forbidden=None).allowed
+
+    # loopback stays reachable by default (operator's own machine / dev servers) —
+    # a deliberate scoping decision: blocking it would break every same-host
+    # request a page makes to itself and the whole local-automation use case.
+    assert check_egress("http://127.0.0.1:8000/", allowlist=None, forbidden=None).allowed
+    assert check_egress("http://[::1]/", allowlist=None, forbidden=None).allowed
+
+    # an explicit allowlist naming a private host is the escape hatch …
+    assert check_egress("http://192.168.1.1/", allowlist=["192.168.1.1"], forbidden=None).allowed
+    # … but a private host NOT on the allowlist stays blocked (deny-by-default)
+    assert not check_egress("http://192.168.1.1/", allowlist=["example.com"], forbidden=None).allowed
+
+
 def test_sensitive_action_classification():
     assert is_sensitive("click", role="button", name="Buy now")
     assert is_sensitive("click", role="button", name="Sign in")
@@ -361,6 +403,83 @@ def test_click_link_to_off_allowlist_host_is_blocked():
         asyncio.run(run())
     finally:
         httpd.shutdown()
+
+
+def test_cross_host_click_without_allowlist_requires_confirm():
+    """BR-F1 regression: navigate()'s cross-host confirm used to be the ONLY
+    indirect-prompt-injection guard; a CLICK that hops to a DIFFERENT host with
+    no allowlist sailed straight through with NO confirmation, feeding the new
+    host's content back into the planner. Now a cross-host click asks the SAME
+    confirm as navigate() — and a decline blocks it AND parks the page off the
+    injected host (about:blank), fail-closed."""
+    import http.server as _h, socketserver as _s, threading as _t
+
+    # A page on 127.0.0.1 whose only link points at localhost — a DIFFERENT host,
+    # yet still loopback so it stays reachable with no allowlist (isolates the
+    # CROSS-HOST confirm from the BR-F2 private-range egress block).
+    html = b'<!doctype html><html><body><a id="x" href="http://localhost:%d/">go</a></body></html>'
+
+    class _H(_h.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
+            self.wfile.write(html % self.server.server_address[1])
+        def log_message(self, *a): pass
+
+    _s.TCPServer.allow_reuse_address = True
+    httpd = _s.TCPServer(("127.0.0.1", 0), _H)
+    port = httpd.server_address[1]
+    _t.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        async def run():
+            from corvin_console.browser import BrowserSession, BrowserActionError
+            seen = []
+
+            async def confirm(**kw):
+                seen.append(kw)
+                return False   # decline the cross-host hop
+
+            # allowlist=None → no egress allowlist, so the CROSS-HOST confirm is the
+            # only thing that can stop the hop (before this fix: nothing did).
+            s = BrowserSession("xhclick", "_default", home=Path(tempfile.mkdtemp()),
+                               headless=True, allowlist=None, confirm_fn=confirm)
+            await s.start()
+            obs = await s.navigate(f"http://127.0.0.1:{port}/")
+            link = next(m.index for m in obs.marks if m.role == "link")
+            with pytest.raises(BrowserActionError, match="cross-host"):
+                await s.click(link)
+            assert seen and seen[0]["host"] == "localhost", \
+                "the cross-host click must ask confirm for the LANDING host, host-only"
+            # declined → the page is parked OFF the injected host
+            assert "localhost" not in s._require_page().url
+            await s.close()
+        asyncio.run(run())
+    finally:
+        httpd.shutdown()
+
+
+def test_same_host_click_does_not_trigger_cross_host_confirm(server):
+    """BR-F1 must not over-fire: a click that stays on the SAME host (or does not
+    navigate at all) must never park a cross-host confirm, even with a broker
+    wired — otherwise every benign click would prompt."""
+    async def run():
+        from corvin_console.browser import BrowserSession
+        seen = []
+
+        async def confirm(**kw):
+            seen.append(kw)
+            return True
+
+        s = BrowserSession("samehost", "_default", home=Path(tempfile.mkdtemp()),
+                           headless=True, allowlist=None, confirm_fn=confirm)
+        await s.start()
+        obs = await s.navigate(server)
+        # "Read more" is non-sensitive and does not navigate → no confirm of any kind
+        help_btn = next(m.index for m in obs.marks if m.name.lower() == "read more")
+        await s.click(help_btn)
+        assert seen == [], "a same-host, non-navigating click must not trigger a confirm"
+        await s.close()
+
+    asyncio.run(run())
 
 
 def test_network_egress_blocks_offallowlist_subresource_fetch():

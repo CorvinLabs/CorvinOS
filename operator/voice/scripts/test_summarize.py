@@ -507,6 +507,52 @@ def test_metapher_falls_back_to_hermes_when_cli_unavailable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# VOICE-F7: child timeout budgets must fit inside the adapter's parent caps.
+# ---------------------------------------------------------------------------
+
+
+def test_voice_summary_timeout_budgets_fit_parent_caps() -> None:
+    """The CLI backend and the Hermes fallback run SEQUENTIALLY inside the
+    adapter's subprocess cap. If CLI + Hermes >= the parent cap, the adapter
+    kills the child mid-Hermes and the 41c174e Hermes fallback is unreachable
+    in the hang case it exists for. Require a >=10s margin for spawn+extract.
+
+    Old (broken) budgets:
+      main : CLI 90 + Hermes 60 = 150 > 120  → Hermes killed at 120
+      annex: CLI 45 + Hermes 45 =  90 >  60  → Hermes killed at 60
+    """
+    main_sum = summarize._SUMMARY_CLI_TIMEOUT_S + summarize._SUMMARY_HERMES_TIMEOUT_S
+    assert main_sum + 10 <= summarize._PARENT_CAP_MAIN_S, (
+        f"main ladder {main_sum}s + margin overflows the "
+        f"{summarize._PARENT_CAP_MAIN_S}s parent cap"
+    )
+    annex_sum = summarize._ANNEX_CLI_TIMEOUT_S + summarize._ANNEX_HERMES_TIMEOUT_S
+    assert annex_sum + 10 <= summarize._PARENT_CAP_ANNEX_S, (
+        f"annex ladder {annex_sum}s + margin overflows the "
+        f"{summarize._PARENT_CAP_ANNEX_S}s parent cap"
+    )
+    # Hermes must get a FULL turn even when the CLI burns its entire budget.
+    assert summarize._SUMMARY_CLI_TIMEOUT_S + summarize._SUMMARY_HERMES_TIMEOUT_S <= summarize._PARENT_CAP_MAIN_S
+    assert summarize._ANNEX_CLI_TIMEOUT_S + summarize._ANNEX_HERMES_TIMEOUT_S <= summarize._PARENT_CAP_ANNEX_S
+
+
+def test_adapter_parent_caps_match_summarize_contract() -> None:
+    """Guard against the adapter's hard-coded subprocess caps drifting below
+    the child ladder sums. Reads adapter.py source (importing it is heavy)."""
+    import re
+
+    adapter_src = (
+        Path(summarize.__file__).resolve().parent.parent.parent
+        / "bridges" / "shared" / "adapter.py"
+    ).read_text(encoding="utf-8")
+    caps = [int(m) for m in re.findall(r"env=env,\s*timeout=(\d+),\s*check=True", adapter_src)]
+    # The main summary cap (120) and the two annex caps (60, 60) live in the
+    # voice-summary block; assert the documented contract values are present.
+    assert summarize._PARENT_CAP_MAIN_S in caps, "main summary cap 120 not found in adapter.py"
+    assert caps.count(summarize._PARENT_CAP_ANNEX_S) >= 2, "annex caps 60 not found in adapter.py"
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -536,6 +582,8 @@ def main() -> int:
         test_audience_block_appended_after_persona,
         test_audience_block_does_not_remove_faithfulness_rule,
         test_audience_does_not_double_render_when_called_twice,
+        test_voice_summary_timeout_budgets_fit_parent_caps,
+        test_adapter_parent_caps_match_summarize_contract,
     ]
     failed = 0
     for t in tests:

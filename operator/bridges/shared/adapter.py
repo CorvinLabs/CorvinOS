@@ -6880,6 +6880,10 @@ def _append_lern_zugabe(text: str, *, lang: str = "de") -> str:
              "--lang", lang, "--appendix-mode"],
             input=text, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
+            # Parent cap for the annex ladder (VOICE-F7): summarize.py runs its
+            # annex CLI (20s) then Hermes (30s) = 50s inside this 60s cap, so the
+            # Hermes fallback always gets a full turn. Do NOT lower below the
+            # child sum — see summarize.py::_ANNEX_* budgets.
             env=env, timeout=60, check=True,
         )
         result = out.stdout.strip()
@@ -6912,6 +6916,8 @@ def _append_metapher(text: str, *, lang: str = "de") -> str:
              "--lang", lang, "--metapher-mode"],
             input=text, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
+            # Parent cap for the annex ladder (VOICE-F7): annex CLI 20s + Hermes
+            # 30s = 50s inside this 60s cap. See summarize.py::_ANNEX_* budgets.
             env=env, timeout=60, check=True,
         )
         result = out.stdout.strip()
@@ -7117,6 +7123,11 @@ def build_voice_summary(text: str, max_chars: int = 400,
             cmd,
             input=pre, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
+            # Parent cap for the main summary ladder (VOICE-F7): summarize.py
+            # runs its CLI backend (45s) then the Hermes fallback (60s) = 105s
+            # inside this 120s cap, so a hung/slow CLI can't starve Hermes of a
+            # turn. Do NOT lower below the child sum — see summarize.py::
+            # _SUMMARY_* budgets.
             env=env, timeout=120, check=True,
         ).stdout.strip()
         # Sanity check: summarize.py should never return empty unless input was empty.

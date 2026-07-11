@@ -43,6 +43,26 @@ except Exception:  # noqa: BLE001
     _i18n = None
 
 
+# ── Voice-summary timeout budgets (VOICE-F7) ─────────────────────────────────
+# adapter.py spawns THIS script under a HARD subprocess cap. Inside that cap the
+# CLI backend and the Hermes fallback run SEQUENTIALLY, so their waits must SUM
+# to comfortably LESS than the parent cap (with margin for process spawn +
+# extraction) — otherwise the parent kills the child mid-Hermes and the Hermes
+# fallback added in 41c174e is unreachable in exactly the hang case it exists
+# for. Contract (parent caps mirrored in adapter.py build_voice_summary /
+# _append_lern_zugabe / _append_metapher):
+#   main summary : parent cap 120s  →  CLI 45s + Hermes 60s = 105s  (15s margin)
+#   annex (each) : parent cap  60s  →  CLI 20s + Hermes 30s =  50s  (10s margin)
+# Guard: test_summarize.py::test_voice_summary_timeout_budgets_fit_parent_caps.
+_SUMMARY_CLI_TIMEOUT_S = 45      # was 90 — 90+60 overflowed the 120s parent cap
+_SUMMARY_HERMES_TIMEOUT_S = 60
+_ANNEX_CLI_TIMEOUT_S = 20        # was 45 — 45+45 overflowed the 60s parent cap
+_ANNEX_HERMES_TIMEOUT_S = 30     # was 45 (the _ollama_generate default)
+# The adapter-side parent caps this ladder must fit inside (SSOT for the test).
+_PARENT_CAP_MAIN_S = 120
+_PARENT_CAP_ANNEX_S = 60
+
+
 SYSTEM = {
     "de": (
         "Du bist ein Sprachassistent, der Claude-Antworten so vorliest, "
@@ -948,7 +968,8 @@ def _summarize_via_cli(text: str, task: str, lang: str, target_chars: int, model
                 "--model", model,
                 "--disallowedTools", "*",
             ],
-            capture_output=True, text=True, env=env, timeout=90, check=True,
+            capture_output=True, text=True, env=env,
+            timeout=_SUMMARY_CLI_TIMEOUT_S, check=True,
         )
         return out.stdout.strip() or None
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
@@ -1006,10 +1027,11 @@ def _summarize_via_hermes(text: str, task: str, lang: str, target_chars: int, mo
             f"{base_url}/api/generate", data=payload,
             headers={"Content-Type": "application/json"}, method="POST",
         )
-        # CPU Hermes is slow; 60 s keeps the spoken-reply latency bounded while
-        # still allowing a real summary on modest hardware. On timeout → None →
-        # structural fallback (never blocks the voice pipeline indefinitely).
-        with _ur.urlopen(req, timeout=60) as resp:
+        # CPU Hermes is slow; this budget keeps the spoken-reply latency bounded
+        # while still allowing a real summary on modest hardware. On timeout →
+        # None → structural fallback (never blocks the voice pipeline forever).
+        # Sized so CLI + Hermes fit inside the adapter's parent cap (VOICE-F7).
+        with _ur.urlopen(req, timeout=_SUMMARY_HERMES_TIMEOUT_S) as resp:
             if not (200 <= resp.getcode() < 300):
                 return None
             data = _json.loads(resp.read().decode("utf-8"))
@@ -1110,7 +1132,7 @@ _APPENDIX_SYSTEM_EN = (
 )
 
 
-def _ollama_generate(system_prompt: str, user_input: str, timeout: int = 45) -> str | None:
+def _ollama_generate(system_prompt: str, user_input: str, timeout: int = _ANNEX_HERMES_TIMEOUT_S) -> str | None:
     """Shared low-level Hermes (Ollama /api/generate) call for the appendix
     and metapher backends — same base-url resolution and <think> stripping
     as _summarize_via_hermes, factored out so both annex generators can fall
@@ -1169,7 +1191,8 @@ def _appendix_via_cli(text: str, lang: str, model: str) -> str | None:
                 "--model", model,
                 "--disallowedTools", "*",
             ],
-            capture_output=True, text=True, env=env, timeout=45, check=True,
+            capture_output=True, text=True, env=env,
+            timeout=_ANNEX_CLI_TIMEOUT_S, check=True,
         )
         return out.stdout.strip() or None
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
@@ -1325,7 +1348,8 @@ def _metapher_via_cli(text: str, lang: str, model: str) -> str | None:
                 "--model", model,
                 "--disallowedTools", "*",
             ],
-            capture_output=True, text=True, env=env, timeout=45, check=True,
+            capture_output=True, text=True, env=env,
+            timeout=_ANNEX_CLI_TIMEOUT_S, check=True,
         )
         return out.stdout.strip() or None
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:

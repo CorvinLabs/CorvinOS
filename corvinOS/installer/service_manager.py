@@ -19,6 +19,21 @@ from pathlib import Path
 from typing import Optional
 
 
+def _corvin_home_dir() -> Path:
+    """CORVIN_HOME-aware runtime root (env → ~/.corvin). Kept local so the
+    installer has no import dependency on the runtime path package."""
+    env = os.environ.get("CORVIN_HOME")
+    if env:
+        return Path(os.path.expanduser(os.path.expandvars(env)))
+    return Path.home() / ".corvin"
+
+
+def _launchd_log_dir() -> Path:
+    """Directory launchd agents write stdout/stderr into. Under CORVIN_HOME so
+    it moves with a pinned runtime root instead of a hardcoded ~/.corvin."""
+    return _corvin_home_dir() / "logs" / "launchd"
+
+
 class ServiceManager(ABC):
     """Abstract base for platform-specific service management."""
 
@@ -273,26 +288,40 @@ class DarwinServiceManager(ServiceManager):
             program = "/bin/bash"
             arguments = ["-c", wrapped]
 
+        # M6: XML-escape every interpolated value. A path/env value containing
+        # `&`, `<` or `>` (e.g. a home under `/Users/q&a/`) would otherwise
+        # produce an invalid plist that `launchctl load` rejects → no autostart.
+        def _esc(v: object) -> str:
+            return (str(v).replace("&", "&amp;")
+                    .replace("<", "&lt;").replace(">", "&gt;"))
+
+        # M4: honor CORVIN_HOME (not a hardcoded ~/.corvin) and use a dir the
+        # installer actually creates (see install_service) — launchd does NOT
+        # create intermediate dirs for StandardOutPath/StandardErrorPath, so an
+        # absent dir silently loses all agent stdout/stderr (and on some macOS
+        # versions fails the spawn outright).
+        _log_dir = _launchd_log_dir()
+
         plist = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.corvin.{name}</string>
+    <string>com.corvin.{_esc(name)}</string>
     <key>Program</key>
-    <string>{program}</string>
+    <string>{_esc(program)}</string>
 """
         if arguments:
             plist += "    <key>ProgramArguments</key>\n    <array>\n"
-            plist += f"        <string>{program}</string>\n"
+            plist += f"        <string>{_esc(program)}</string>\n"
             for arg in arguments:
-                plist += f"        <string>{arg}</string>\n"
+                plist += f"        <string>{_esc(arg)}</string>\n"
             plist += "    </array>\n"
 
         if env_vars:
             plist += "    <key>EnvironmentVariables</key>\n    <dict>\n"
             for key, value in env_vars.items():
-                plist += f"        <key>{key}</key>\n        <string>{value}</string>\n"
+                plist += f"        <key>{_esc(key)}</key>\n        <string>{_esc(value)}</string>\n"
             plist += "    </dict>\n"
 
         plist += f"""    <key>RunAtLoad</key>
@@ -302,9 +331,9 @@ class DarwinServiceManager(ServiceManager):
     <key>ThrottleInterval</key>
     <integer>60</integer>
     <key>StandardOutPath</key>
-    <string>{Path.home() / '.corvin/logs/launchd'}/{name}.out</string>
+    <string>{_esc(_log_dir)}/{_esc(name)}.out</string>
     <key>StandardErrorPath</key>
-    <string>{Path.home() / '.corvin/logs/launchd'}/{name}.err</string>
+    <string>{_esc(_log_dir)}/{_esc(name)}.err</string>
 </dict>
 </plist>
 """
@@ -325,6 +354,15 @@ class DarwinServiceManager(ServiceManager):
         plist_file.write_text(plist_content)
         plist_file.chmod(0o644)
 
+        # M4: create the launchd log dir — launchd does not mkdir intermediate
+        # dirs for StandardOutPath/StandardErrorPath, so without this the
+        # agent's stdout/stderr is silently lost (or the spawn fails outright
+        # on some macOS versions).
+        try:
+            _launchd_log_dir().mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
         if auto_start:
             self.enable_autostart(name)
 
@@ -344,8 +382,19 @@ class DarwinServiceManager(ServiceManager):
         )
 
     def enable_autostart(self, name: str) -> None:
-        """Load a launchd plist."""
+        """Load a launchd plist (unload-before-load so re-install re-applies)."""
         plist_file = self._plist_path(name)
+        # M2: on a re-install the agent is often already loaded, and
+        # `launchctl load` on an already-loaded plist errors out — so the
+        # UPDATED plist (e.g. the new auto-update wrapper) would never take
+        # effect and the installer printed a misleading failure. Unload first
+        # (best-effort; a not-loaded agent just no-ops), then load the current
+        # definition so the running session actually picks up the change.
+        subprocess.run(
+            ["launchctl", "unload", str(plist_file)],
+            check=False,
+            capture_output=True,
+        )
         subprocess.run(
             ["launchctl", "load", str(plist_file)],
             check=True,

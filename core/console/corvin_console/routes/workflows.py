@@ -1843,6 +1843,11 @@ def resume_run(
     follow-up work; this endpoint is real and functional today for any run
     whose checkpoint exists, it does not fabricate one)."""
     _validate_wid(wid)
+    # CON-F3: a malformed run id (path traversal / slashes) must not reach the
+    # checkpoint layer and surface as a 500 — reject it as a 404 up front. The
+    # checkpoint store rejects the same shapes with a ValueError; we pre-empt it.
+    if not rid or any(c in rid for c in ("/", "\\", "..")) or len(rid) > 128:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND, "no paused AWP run found for this run id")
     _require_workflow(rec.tenant_id, wid)
     if not _AWP_OK:
         raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE, "AWP workflow stack not available")
@@ -1867,10 +1872,96 @@ def resume_run(
             raise
         except Exception:
             pass  # can't confirm a mismatch — fall through rather than false-block a legit resume
+
+    # CON-F1 (ADR-0094): a resume executes the full DAG — the same paid compute
+    # surface as start_run — so it must pass the SAME workflows_concurrent gate.
+    # Without it a tenant could spawn unbounded concurrent resumes and pin the
+    # request thread pool (DoS). Mirror start_run's fail-closed handling.
     try:
-        result = _resume_awp_workflow(rid, body.reply, engine=_AwpClaudeEngine(), tenant_id=rec.tenant_id)
+        _running = _count_running_workflows(rec.tenant_id)
+        try:
+            _lic_assert("workflows_concurrent", _running + 1)
+        except _LicLimitError as _wf_exc:
+            console_audit.action_failed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="workflow.run_resumed",
+                target_kind="workflow_run",
+                target_id=f"{wid}/{rid}",
+                reason="quota_exceeded",
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_402_PAYMENT_REQUIRED,
+                detail={
+                    "error": "license_limit",
+                    "feature": "workflows_concurrent",
+                    "running": _running,
+                    "limit": _lic_get_limit("workflows_concurrent"),
+                    "msg": str(_wf_exc),
+                    "upgrade_url": "https://corvin-labs.com/pricing",
+                },
+            ) from _wf_exc
+    except HTTPException:
+        raise
+    except Exception as _wf_unexpected:
+        _log.warning(
+            "license: resume concurrent-workflow check raised unexpectedly (%s) — "
+            "refusing (fail-closed)", _wf_unexpected,
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="concurrent-workflow limit check unavailable — try again",
+        ) from _wf_unexpected
+
+    # CON-F3 (ADR-0171): hash-chain every resumed node event into the owner's
+    # audit chain (parity with start_run). Each DAGRunner event carrying a
+    # node_id becomes an allowlisted console.action_performed with the node id
+    # in step_id — so the resumed nodes are as auditable as the pre-pause ones.
+    def _awp_node_sink(event: dict[str, Any]) -> None:
+        node_id = event.get("node_id")
+        ev = event.get("event", "event")
+        try:
+            console_audit.action_performed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action=f"workflow.{ev}",
+                target_kind="workflow_run",
+                target_id=f"{wid}/{rid}",
+                run_id=rid,
+                step_id=str(node_id) if node_id is not None else None,
+            )
+        except Exception:  # never let audit shaping abort a live resume
+            pass
+
+    try:
+        result = _resume_awp_workflow(
+            rid, body.reply,
+            engine=_AwpClaudeEngine(),
+            tenant_id=rec.tenant_id,
+            # Console owner is the privileged operator for this tenant — the
+            # per-approver binding (WF-A3) is enforced on the bridge path where
+            # the replier is a specific chat participant; here replier=None.
+            replier=None,
+            audit_sink=_awp_node_sink,
+        )
+    except HTTPException:
+        raise
+    except _awp_checkpoint.AlreadyClaimedError as exc:
+        # CON-F2: a concurrent resume already claimed this checkpoint.
+        raise HTTPException(
+            http_status.HTTP_409_CONFLICT, "run is already being resumed",
+        ) from exc
+    except KeyError as exc:
+        raise HTTPException(
+            http_status.HTTP_404_NOT_FOUND, "no paused AWP run found for this run id",
+        ) from exc
     except Exception as exc:
-        raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, f"resume failed: {exc}") from exc
+        # CON-F3: do NOT leak raw exception detail (paths, internals) to the
+        # client. Log server-side, return a generic 500.
+        _log.warning("workflow resume failed for %s/%s: %s", wid, rid, exc)
+        raise HTTPException(
+            http_status.HTTP_500_INTERNAL_SERVER_ERROR, "resume failed",
+        ) from exc
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,

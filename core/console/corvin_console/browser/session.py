@@ -449,6 +449,61 @@ class BrowserSession:
             raise BrowserActionError(
                 f"{action} navigated to disallowed host {fdec.host}: {fdec.reason}")
 
+    async def _confirm_cross_host_or_park(
+        self, action: str, *, prev_host: str, role: str = "", index: int | None = None,
+    ) -> None:
+        """Post-landing indirect-prompt-injection guard shared by click / key-submit
+        / select_option / drag / navigate's redirect (BR-F1).
+
+        navigate()'s PRE-navigation cross-host confirm used to be the ONLY place
+        this defense ran; every other navigating action only rechecked the (in the
+        default config, EMPTY) egress allowlist — so an injected page could get the
+        agent to CLICK a link and hop to any host with no confirmation, feeding
+        that host's content straight back into the planner. This runs AFTER an
+        action has landed: when NO allowlist is configured and the landing host
+        differs from where the action started, it requires the SAME human confirm
+        as navigate(), so a cross-host transition via ANY action is gated, not just
+        navigate().
+
+        MUST be called with the page lock NOT held — the confirm can block up to
+        the broker timeout and the live screencast must keep updating while the
+        user decides (mirrors ``_confirm_sensitive_or_raise``). A declined hop
+        parks the page on about:blank and raises, exactly like navigate()'s
+        redirect guard.
+
+        Only the no-allowlist mode uses this: with an allowlist set, the
+        fail-closed landing-egress recheck (run under the lock, BEFORE this)
+        already constrains every landing host and an on-allowlist host is
+        pre-approved policy — so the allowlist-first ordering is preserved. With no
+        confirm broker wired there is nothing to ask, matching navigate()."""
+        if self._allowlist is not None or self._confirm is None:
+            return
+        landing = _cmp._host(self._require_page().url)
+        if not landing or landing == (prev_host or ""):
+            return
+        # ADR-0189 task-scope carve-out (same as navigate()): a host the user's own
+        # task text named is already informed consent for THAT host — auto-approve
+        # with no prompt. Only a host the task never named (the real injection
+        # surface: the agent hopping somewhere off its own bat) reaches the confirm.
+        if self._task_scoped_hosts and _host_task_scoped(landing, self._task_scoped_hosts):
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                              action=action, host=landing, role=role, index=index, ok=True,
+                              extra={"reason": "task_scoped_auto_approved"})
+            return
+        # SECURITY: pass the HOST only, never the full URL — a full URL can carry a
+        # ?token=/reset secret and the live action-log + audit trail are host-only.
+        approved = await self._confirm(action=action, host=landing, role="navigation", name=landing)
+        if not approved:
+            async with self._page_lock:
+                with contextlib.suppress(Exception):
+                    await self._require_page().goto("about:blank")
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                              action=action, host=landing, role=role, index=index, ok=False,
+                              extra={"reason": "user_declined_cross_host"})
+            self._emit(action, index=index, role=role, ok=False, reason="cross-host declined")
+            raise BrowserActionError(
+                f"{action} navigated cross-host to {landing} declined")
+
     async def _act_and_settle(self, page, do: Callable[[], Awaitable[Any]]) -> None:
         """Run the page-mutating coroutine ``do`` and, when an egress policy is
         configured, wait (bounded) for any navigation it triggers to SETTLE
@@ -460,9 +515,12 @@ class BrowserSession:
         form submitted via Enter starts navigating asynchronously, so an
         immediate ``page.url`` read still shows the old host and the egress
         recheck would be a no-op (fail-OPEN). When no allowlist/forbidden is set
-        the recheck is a no-op anyway, so we skip the wait entirely to keep the
-        common no-policy path fast. Assumes ``_page_lock`` is held."""
-        if self._allowlist is None and not self._forbidden:
+        AND no confirm broker is wired the recheck is a no-op anyway, so we skip
+        the wait to keep that path fast. But with a confirm broker present (the
+        agent path) the post-landing cross-host confirm (BR-F1) needs the REAL
+        destination, so we must still settle the navigation even with no allowlist.
+        Assumes ``_page_lock`` is held."""
+        if self._allowlist is None and not self._forbidden and self._confirm is None:
             await do()
             return
         from playwright.async_api import Error as PWError, TimeoutError as PWTimeout
@@ -545,6 +603,15 @@ class BrowserSession:
                                   extra={"reason": "redirect_" + fdec.reason})
                 self._emit("navigate", host=fdec.host, ok=False, reason="redirect blocked")
                 raise BrowserActionError(f"egress denied after redirect to {fdec.host}: {fdec.reason}")
+        # BR-F1: a server 3xx to a DIFFERENT host than the agent-approved target is
+        # a fresh cross-host hop the human never approved — with no allowlist the
+        # redirect guard above only rechecked the (empty) allowlist, so confirm the
+        # redirect landing too (agent path only; a manual navigate stays ungated).
+        # Runs OUTSIDE the lock so the confirm can block without freezing the
+        # screencast; a same-host landing (the common case) is a no-op.
+        if confirm_cross_host:
+            await self._confirm_cross_host_or_park("navigate", prev_host=decision.host)
+        async with self._page_lock:
             _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                               action="navigate", host=fdec.host, ok=True)
             # L1: action log carries HOST only, never the full URL (which could
@@ -739,6 +806,10 @@ class BrowserSession:
             # C1 egress guard: a click can navigate anywhere (e.g. an <a href> to an
             # off-allowlist host). Re-validate the LANDING host, fail-closed.
             await self._recheck_landing_egress_locked("click", role=role, index=index)
+        # BR-F1: a click that hops to a DIFFERENT host with no allowlist is the
+        # indirect-prompt-injection vector navigate()'s confirm was meant to stop —
+        # gate it too (outside the lock so the screencast keeps updating).
+        await self._confirm_cross_host_or_park("click", prev_host=host, role=role, index=index)
         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                           action="click", host=host, role=role, index=index, ok=True)
         self._emit("click", index=index, role=role, name=name, ok=True)
@@ -893,6 +964,11 @@ class BrowserSession:
                 await self._recheck_landing_egress_locked("key")
             else:
                 await page.keyboard.press(key)
+        # BR-F1: an Enter/Space submit can navigate cross-host just like a click —
+        # gate a no-allowlist cross-host hop through the same confirm (outside the
+        # lock). Only commit keys can navigate, so only they need the check.
+        if key in _COMMIT_KEYS:
+            await self._confirm_cross_host_or_park("key", prev_host=host)
         # The key NAME itself ("Enter") is not sensitive content — it is
         # metadata about the action, not typed text — so it is safe to audit,
         # unlike a fill() value.
@@ -926,6 +1002,9 @@ class BrowserSession:
             self._mark_frame = {}
             await self._act_and_settle(page, lambda: el.select_option(value=value))
             await self._recheck_landing_egress_locked("select_option", role=role, index=index)
+        # BR-F1: a <select onchange=location=…> can hop cross-host — gate a
+        # no-allowlist cross-host landing through the same confirm (outside lock).
+        await self._confirm_cross_host_or_park("select_option", prev_host=host, role=role, index=index)
         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                           action="select_option", host=host, role=role, index=index, ok=True,
                           extra={"chars": len(value)})   # length only, never the value
@@ -1010,6 +1089,9 @@ class BrowserSession:
             self._mark_frame = {}
             await self._act_and_settle(page, _do_drag)
             await self._recheck_landing_egress_locked("drag")
+        # BR-F1: a drag-to-confirm / slide-to-pay control can navigate cross-host —
+        # gate a no-allowlist cross-host landing through the same confirm.
+        await self._confirm_cross_host_or_park("drag", prev_host=host)
         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                           action="drag", host=host, ok=True,
                           extra={"from_index": from_index, "to_index": to_index})

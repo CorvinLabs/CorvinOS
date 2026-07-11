@@ -274,6 +274,36 @@ class TestDarwinServiceManager:
         assert "<string>/bin/bash</string>" not in plist
         assert "<string>/usr/bin/echo</string>" in plist
 
+    def test_generate_plist_xml_escapes_ampersand_in_paths(self):
+        # M6: a home/repo path containing & < > must be XML-escaped, else the
+        # plist is invalid and `launchctl load` rejects it (no autostart).
+        mgr = DarwinServiceManager()
+        plist = mgr._generate_plist(
+            "test", "/Users/q&a/bin/python -m mod", "Test",
+            env_vars={"CORVIN_HOME": "/Users/q&a/.corvin"},
+        )
+        assert "&amp;" in plist
+        # No RAW ampersand survives (every & is part of an &amp; / &lt; / &gt;).
+        import re
+        assert not re.search(r"&(?!amp;|lt;|gt;)", plist)
+
+    def test_generate_plist_log_paths_honor_corvin_home(self):
+        # M4: StandardOutPath/StandardErrorPath must live under CORVIN_HOME, not
+        # a hardcoded ~/.corvin, so the log dir moves with a pinned root.
+        import os
+        mgr = DarwinServiceManager()
+        old = os.environ.get("CORVIN_HOME")
+        os.environ["CORVIN_HOME"] = "/tmp/pinned-corvin"
+        try:
+            plist = mgr._generate_plist("webui", "/usr/bin/echo hi", "Test")
+            assert "/tmp/pinned-corvin/logs/launchd/webui.out" in plist
+            assert "/tmp/pinned-corvin/logs/launchd/webui.err" in plist
+        finally:
+            if old is None:
+                os.environ.pop("CORVIN_HOME", None)
+            else:
+                os.environ["CORVIN_HOME"] = old
+
 
 class TestWindowsServiceManager:
     """Tests for Windows Task Scheduler manager."""

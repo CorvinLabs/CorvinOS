@@ -22,6 +22,8 @@ from __future__ import annotations
 import ipaddress
 import logging
 import re
+import socket
+import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -93,17 +95,104 @@ def _octet(p: str) -> int:
     return int(p)
 
 
+def _is_cloud_metadata_ip(ip) -> bool:
+    """True if a resolved/parsed ``ipaddress`` object is a cloud-metadata target.
+    Split out from ``_is_cloud_metadata`` so the DNS-rebind guard below can reuse
+    it on RESOLVED addresses, not just IP-literal hosts (BR-F2)."""
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped                            # unwrap ::ffff:169.254.169.254
+    if isinstance(ip, ipaddress.IPv4Address):
+        return ip in _METADATA_V4_HOSTS or any(ip in net for net in _METADATA_V4_NETS)
+    return ip in _METADATA_V6_HOSTS
+
+
 def _is_cloud_metadata(host: str) -> bool:
     if host in _METADATA_HOSTS:
         return True
     ip = _parse_host_ip(host)
     if ip is None:
         return False
+    return _is_cloud_metadata_ip(ip)
+
+
+# ── BR-F2: private/link-local SSRF + DNS-rebind guard ────────────────────────
+# Besides the cloud-metadata endpoints above, a browser agent in the DEFAULT
+# no-allowlist mode must not be steerable — by an injected link, a redirect, or a
+# DNS-rebind — into the operator's PRIVATE network: RFC-1918 (10/8, 172.16/12,
+# 192.168/16), IPv4 link-local (169.254/16, which also carries the IMDS IP),
+# IPv6 ULA (fc00::/7) and IPv6 link-local (fe80::/10), plus reserved/unspecified.
+# These are blocked by default and reachable ONLY when an explicit allowlist
+# names the specific host.
+#
+# LOOPBACK (127.0.0.0/8, ::1) is deliberately NOT in this default block: it is
+# the operator's OWN machine (local dev servers — the single most common
+# automation target), it stays governed by the normal allowlist policy exactly as
+# the long-standing carve-out on _METADATA_HOSTS already documents, and an
+# operator who wants it blocked names it on the tenant `forbidden_hosts` list.
+# (Blocking loopback by default would additionally break every same-host request
+# a page makes to itself, since a page and its own subresources share a host.)
+_RESOLVE_CACHE: dict[str, tuple[float, tuple]] = {}
+_RESOLVE_TTL = 30.0   # seconds — bounds per-host getaddrinfo cost on the request hot path
+
+
+def _resolve_host_ips(host: str) -> tuple:
+    """Best-effort DNS resolution of ``host`` to a tuple of ``ipaddress`` objects,
+    memoized with a short TTL so the per-request egress gate does not re-resolve
+    the same host on every subresource. NEVER raises: an unresolvable host (or an
+    offline CI) yields an empty tuple — a host that does not resolve cannot reach
+    a private target anyway, and every IP-LITERAL private range is blocked below
+    WITHOUT any lookup, so this stays fail-safe rather than fail-open onto a
+    known-bad literal."""
+    now = time.monotonic()
+    hit = _RESOLVE_CACHE.get(host)
+    if hit is not None and hit[0] > now:
+        return hit[1]
+    ips: list = []
+    try:
+        for *_meta, sockaddr in socket.getaddrinfo(host, None):
+            try:
+                ips.append(ipaddress.ip_address(sockaddr[0]))
+            except ValueError:
+                continue
+    except Exception:  # noqa: BLE001 — offline / NXDOMAIN / timeout: treat as unresolved
+        ips = []
+    out = tuple(ips)
+    _RESOLVE_CACHE[host] = (now + _RESOLVE_TTL, out)
+    return out
+
+
+def _is_private_target_ip(ip) -> bool:
+    """True if ``ip`` is in a range the default egress block forbids — every
+    non-global range EXCEPT loopback (see the module note above). Unwraps an
+    IPv4-mapped IPv6 first so ``::ffff:192.168.0.1`` is judged as its v4 form."""
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped                            # unwrap ::ffff:169.254.169.254
-    if isinstance(ip, ipaddress.IPv4Address):
-        return ip in _METADATA_V4_HOSTS or any(ip in net for net in _METADATA_V4_NETS)
-    return ip in _METADATA_V6_HOSTS
+        ip = ip.ipv4_mapped
+    if ip.is_loopback:
+        return False
+    # ``is_private`` already spans RFC-1918, IPv4 link-local (169.254/16, IMDS),
+    # IPv6 ULA (fc00::/7) and IPv6 link-local; keep ``is_link_local`` explicit for
+    # clarity. Deliberately NOT ``is_reserved``/``is_multicast``: the NAT64 prefix
+    # 64:ff9b::/96 (a public IPv4 tunnelled over v6, used by DNS64 resolvers for
+    # ordinary public sites) is is_reserved=True yet globally routable, so blocking
+    # it would break legitimate public browsing on v6-only / NAT64 networks.
+    return bool(ip.is_private or ip.is_link_local or ip.is_unspecified)
+
+
+def _private_block_reason(host: str) -> str | None:
+    """Return a block reason if ``host`` IS, or RESOLVES to, a forbidden private/
+    link-local target (SSRF / DNS-rebind guard); else None. An IP-literal host is
+    judged with no DNS lookup (keeps the existing canonicalization); a DNS name is
+    resolved best-effort and blocked if ANY resolved address lands in a forbidden
+    range OR a cloud-metadata range — closing the DNS-rebind-to-IMDS gap where a
+    public-looking name resolves to 169.254.169.254."""
+    lit = _parse_host_ip(host)
+    if lit is not None:
+        return ("private/link-local address blocked (SSRF guard)"
+                if _is_private_target_ip(lit) else None)
+    for rip in _resolve_host_ips(host):
+        if _is_private_target_ip(rip) or _is_cloud_metadata_ip(rip):
+            return "host resolves to a private/link-local address (SSRF/rebind guard)"
+    return None
 
 
 # Actions whose element name/role suggests an irreversible or outward-facing
@@ -177,12 +266,24 @@ def check_egress(
 
     if forbidden and _match(forbidden):
         return EgressDecision(False, host, "host is on the forbidden list")
+
+    # BR-F2 SSRF / DNS-rebind guard: a private/link-local target (or a DNS name
+    # that RESOLVES into one) is blocked UNLESS an explicit allowlist names this
+    # host. Ordering: an allowlist match wins (an operator can opt a specific LAN
+    # host in), but the private block runs BEFORE the deny-by-default verdict so a
+    # rebind host is rejected with a precise reason rather than a generic miss —
+    # and, crucially, it applies in the no-allowlist mode where nothing else would.
+    allowlisted = allowlist is not None and _match(allowlist)
+    if not allowlisted:
+        reason = _private_block_reason(host)
+        if reason:
+            return EgressDecision(False, host, reason)
+
     # allowlist is not None → explicit policy set (even [] means deny-all).
     # allowlist is None    → no policy configured → allow (still audited).
     if allowlist is not None:
-        if _match(allowlist):
-            return EgressDecision(True, host, "host on allowlist")
-        return EgressDecision(False, host, "host not on the egress allowlist (deny-by-default)")
+        return (EgressDecision(True, host, "host on allowlist") if allowlisted
+                else EgressDecision(False, host, "host not on the egress allowlist (deny-by-default)"))
     return EgressDecision(True, host, "no allowlist configured")
 
 

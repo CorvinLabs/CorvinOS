@@ -13,6 +13,7 @@ for the first time with a real executor instead of an unenforced annotation.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,25 @@ from pathlib import Path
 from typing import Any
 
 _FORGE_ROOT = Path(__file__).resolve().parents[3] / "operator" / "forge"
+
+# Operator opt-in for running a `code` node WITHOUT the bwrap namespace jail.
+# On hosts where bwrap is unavailable (macOS, Windows, no-bwrap Linux) a code
+# node would otherwise fall back to a bare subprocess with only stripped-env +
+# rlimits — i.e. arbitrary workflow-supplied Python running with full user
+# privileges (can read .env, corrupt ~/.corvin/audit.jsonl, reach the network).
+# That is exactly the "run Forge-tool Python in-process without operator review"
+# case the repo forbids, so it is FAIL-CLOSED by default: the code node refuses
+# to execute unless the operator has explicitly acknowledged the risk by setting
+# this env var truthy. This is a deliberate operator gate, NOT a compliance-off
+# switch — it does not weaken any existing gate; it only permits the already-
+# reviewed operator to opt a specific host into the weaker rlimit-only sandbox.
+_UNSANDBOXED_OPT_IN_ENV = "CORVIN_ALLOW_UNSANDBOXED_CODE"
+
+
+def _unsandboxed_opt_in() -> bool:
+    return os.environ.get(_UNSANDBOXED_OPT_IN_ENV, "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 _RUNNER_PREAMBLE = "import json\nimport sys\n\n"
 _RUNNER_EPILOGUE = """
@@ -111,6 +131,18 @@ def run_sandboxed_python(
                 extra_ro_binds=extra_ro or None,
             )
         else:
+            # No bwrap namespace jail available on this host. Running arbitrary
+            # workflow-supplied Python here has ONLY the rlimit + stripped-env
+            # belt — no filesystem/network isolation. Fail closed unless the
+            # operator has explicitly opted this host in (see module docstring).
+            if not _unsandboxed_opt_in():
+                raise CodeExecutionError(
+                    "code node requires the bwrap sandbox, which is unavailable on "
+                    "this host. Arbitrary code execution without the namespace jail "
+                    "is disabled by default. An operator who has reviewed the risk "
+                    f"may opt in by setting {_UNSANDBOXED_OPT_IN_ENV}=1 (runs with "
+                    "rlimits + stripped env only — no filesystem/network isolation)."
+                )
             cmd = [sys.executable, str(impl_path), args_json]
 
         run_kwargs: dict[str, Any] = dict(
