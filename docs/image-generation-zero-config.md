@@ -2,6 +2,10 @@
 
 Companion to [imagegen-mcp.md](claude-ref/imagegen-mcp.md) (current BYOK-only integration)
 and the zero-config precedent in `Corvin-ADR/decisions/0185-cross-platform-voice-reliability.md`.
+Formalized in `Corvin-ADR/decisions/0191-zero-config-image-generation-tier.md`.
+
+**Status: proposed (2026-07-12).** The ADR captures the decision; this doc remains the fuller
+design rationale (research findings, dialectical pass, open questions) it's derived from.
 
 ## 1. Problem
 
@@ -152,8 +156,8 @@ L35 already fails closed on that.
 
 ## 10. Governance note
 
-This is a **concept only** — no ADR has been filed. If this moves to implementation, it
-should get one: it introduces a new default external dependency (an egress path) plus a new
-compliance-relevant mechanism (the disclosure gate), which are exactly this repo's own
-ADR-gate triggers. `docs/claude-ref/imagegen-mcp.md`'s existing "don't broaden this without
-an ADR" line already anticipated that.
+Formalized as `Corvin-ADR/decisions/0191-zero-config-image-generation-tier.md` (Proposed,
+2026-07-12) — it introduces a new default external dependency (an egress path) plus a new
+compliance-relevant mechanism (the disclosure gate), exactly this repo's own ADR-gate
+triggers. `docs/claude-ref/imagegen-mcp.md`'s existing "don't broaden this without an ADR"
+line anticipated that. Implementation (§9's phased plan) has not started.
