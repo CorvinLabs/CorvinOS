@@ -679,6 +679,16 @@ def _house_rules_parse_verdict(raw: str) -> "tuple[str, float, str]":
         raise _HouseRulesClassifierError("empty_output")
     try:
         verdict = _json.loads(raw, parse_constant=_house_rules_reject_nonfinite)
+        if not isinstance(verdict, dict):
+            # Syntactically valid JSON that isn't an object (a bare list/
+            # string/number/null) — e.g. a model replying `["ok"]` instead of
+            # the requested envelope. Treat exactly like malformed JSON so the
+            # provider-chain fallback below still gets a chance, instead of
+            # falling through to `.get()` on a non-dict and raising a raw
+            # AttributeError that the chain's `except _HouseRulesClassifierError`
+            # doesn't match — which would skip the OTHER (healthy) provider
+            # entirely and escalate/block even though it never got tried.
+            raise _HouseRulesClassifierError("bad_json", f"top-level {type(verdict).__name__}, not object")
         if "violated_rule_id" not in verdict:
             raise _HouseRulesClassifierError("bad_json", "missing violated_rule_id")
         rid = str(verdict.get("violated_rule_id", "") or "")
@@ -696,8 +706,12 @@ def _house_rules_parse_verdict(raw: str) -> "tuple[str, float, str]":
         raise _HouseRulesClassifierError("no_json")
     try:
         verdict = _json.loads(raw[start:end + 1], parse_constant=_house_rules_reject_nonfinite)
+        if not isinstance(verdict, dict):
+            raise _HouseRulesClassifierError("bad_json", f"top-level {type(verdict).__name__}, not object")
         rid = str(verdict.get("violated_rule_id", "") or "")
         conf = float(verdict.get("confidence", 0.0))
+    except _HouseRulesClassifierError:
+        raise
     except (ValueError, TypeError, AttributeError) as e:
         raise _HouseRulesClassifierError("bad_json", str(e)) from e
     if not math.isfinite(conf):
@@ -1180,16 +1194,25 @@ def _house_rules_classify_with_chain(
         result = primary()
         _hr_log.info("[house-rules] classified via %s (order=%s)", p_name, order)
         return result
-    except _HouseRulesClassifierError as e:
+    except Exception as e:  # noqa: BLE001 — ANY primary failure must still try the secondary.
+        # Catching only _HouseRulesClassifierError here left a hole: a bug in a
+        # parsing/shape-assumption path could raise something else (AttributeError,
+        # KeyError, ...) that skipped the fallback entirely, blocking the user on
+        # a two-provider gate where the OTHER provider was never even tried. The
+        # provider chain's whole reason to exist is resilience against exactly
+        # this kind of single-provider fault — it must not depend on the fault
+        # being anticipated ahead of time. The final, non-transient failure (if
+        # the secondary also fails) still fail-closes at the caller as before.
+        cause = getattr(e, "cause", None) or type(e).__name__
         _hr_log.info(
             "[house-rules] %s unavailable (cause=%s) — falling back to %s",
-            p_name, e.cause, s_name,
+            p_name, cause, s_name,
         )
         if audit_write is not None:
             try:
                 audit_write("house_rules.provider_fallback", {
                     "provider": p_name,
-                    "cause": e.cause,
+                    "cause": cause,
                     "fallback_to": s_name,
                 })
             except Exception:  # noqa: BLE001 — observability never raises

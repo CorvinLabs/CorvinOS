@@ -132,6 +132,23 @@ class TestParseVerdict:
             adp._house_rules_parse_verdict('{"error": "model not found"}')
         assert exc.value.cause == "bad_json"
 
+    def test_top_level_list_raises_bad_json_not_attributeerror(self, adp):
+        """A syntactically-valid but non-object top-level JSON (a bare list) must
+        raise _HouseRulesClassifierError, not a raw AttributeError from calling
+        .get() on a list. An unwrapped AttributeError here would not match the
+        provider chain's `except _HouseRulesClassifierError`, skipping the
+        fallback provider entirely and blocking the user even though the OTHER
+        provider was never tried (the exact real-world incident this guards)."""
+        with pytest.raises(adp._HouseRulesClassifierError) as exc:
+            adp._house_rules_parse_verdict('["unexpected", "array", "shape"]')
+        assert exc.value.cause == "bad_json"
+
+    def test_top_level_string_raises_bad_json_not_attributeerror(self, adp):
+        """Same guard for a bare JSON string/number/null top-level response."""
+        with pytest.raises(adp._HouseRulesClassifierError) as exc:
+            adp._house_rules_parse_verdict('"just a string"')
+        assert exc.value.cause == "bad_json"
+
 
 class TestJsonWrapperExtraction:
     """_house_rules_classify_chunk_once: extracts 'result' from --output-format json wrapper."""
@@ -343,6 +360,53 @@ class TestProviderChain:
         monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
 
         with pytest.raises(adp._HouseRulesClassifierError):
+            adp._house_rules_classify_with_chain("test", "(no rules)", "none")
+
+    def test_unexpected_exception_type_still_falls_back(self, adp, monkeypatch, hr):
+        """A primary-provider failure that ISN'T _HouseRulesClassifierError (e.g. a
+        parsing/shape bug raising AttributeError/KeyError/whatever) must still
+        trigger the fallback to the secondary provider — the whole point of the
+        two-provider chain is resilience against a single provider's fault,
+        which must not depend on that fault being an anticipated exception type.
+        Catching only _HouseRulesClassifierError left a hole where an
+        unanticipated bug in ONE provider's response parsing silently skipped a
+        perfectly healthy OTHER provider and blocked the user — the real-world
+        incident this test guards against."""
+        def _hermes_unexpected_bug(*a, **kw):
+            raise AttributeError("'list' object has no attribute 'get'")
+
+        cloud_called = []
+
+        def _cloud_ok(*a, **kw):
+            cloud_called.append(True)
+            return "", 0.9, "safe"
+
+        monkeypatch.setattr(hr, "_house_rules_classify_hermes", _hermes_unexpected_bug)
+        monkeypatch.setattr(hr, "_house_rules_classify_chunk", _cloud_ok)
+        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
+
+        rid, conf, _ = adp._house_rules_classify_with_chain(
+            "test", "(no rules)", "none", order="local_first")
+        assert cloud_called
+        assert rid == ""
+        assert conf == pytest.approx(0.9)
+
+    def test_both_fail_with_unexpected_exception_still_raises(self, adp, monkeypatch, hr):
+        """Even with the broadened catch, if BOTH providers fail (any exception
+        type) the gate still fails closed — the fallback broadening only gives
+        the secondary a fair chance, it never turns into a silent allow."""
+        monkeypatch.setattr(hr, "_house_rules_classify_hermes",
+                            mock.MagicMock(side_effect=AttributeError("boom")))
+        monkeypatch.setattr(hr, "_house_rules_classify_chunk",
+                            mock.MagicMock(side_effect=KeyError("boom")))
+        monkeypatch.delenv("CORVIN_HOUSE_RULES_DISABLE_HERMES", raising=False)
+
+        # Whichever provider is secondary (order-dependent), its exception type
+        # propagates raw here — the gate's own outer `except Exception` (in
+        # HouseRulesGate.classify) is what normalises this to classifier_error
+        # fail-closed; this test only asserts the chain never swallows both
+        # failures into a silent success.
+        with pytest.raises((adp._HouseRulesClassifierError, KeyError, AttributeError)):
             adp._house_rules_classify_with_chain("test", "(no rules)", "none")
 
 
