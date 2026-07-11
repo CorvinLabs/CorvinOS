@@ -1237,6 +1237,7 @@ class TestIBCGates(unittest.TestCase):
                 return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
             claims = {
+                "type": "instance_binding", "iss": "corvinlabs.io",
                 "sub": sender_instance_id, "instance_pubkey": instance_pubkey_b64,
                 "jti": "valid-jti-1", "exp": int(time.time()) + 3600,
             }

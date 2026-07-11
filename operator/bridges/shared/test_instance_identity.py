@@ -270,7 +270,12 @@ class TestVerifyIbcSignature(_TempIBCHomeMixin, unittest.TestCase):
     """Direct coverage of the Ed25519 CORVIN-token verifier."""
 
     def _claims(self, **extra) -> dict:
+        # Mirror the real server (Corvin-Features issue_ibc_jwt): a genuine IBC
+        # always carries type="instance_binding" + iss="corvinlabs.io", which
+        # the verifier now pins.
         base = {
+            "type": "instance_binding",
+            "iss": "corvinlabs.io",
             "sub": instance_identity.get_instance_id(),
             "instance_pubkey": instance_identity.get_instance_pubkey_b64(),
             "iat": int(time.time()), "exp": int(time.time()) + 3600, "jti": "x",
@@ -307,11 +312,15 @@ class TestVerifyIbcSignature(_TempIBCHomeMixin, unittest.TestCase):
         with self.assertRaises(instance_identity.IBCError):
             instance_identity._verify_ibc_signature(token)
 
-    def test_lic_and_sess_kid_share_same_trust_entry(self) -> None:
-        # The trust ring is keyed by "sess-v1"; both "sess-" and bare kids
-        # resolve directly, "ibc-" strips its prefix onto "sess-".
-        token_sess = _sign_test_ibc(self.ibc_signing_key, self._claims(), kid="sess-v1")
-        instance_identity._verify_ibc_signature(token_sess)  # must not raise
+    def test_non_ibc_kid_rejected(self) -> None:
+        # Defense-in-depth (IBC-4): the sess-/lic-/ibc- token classes share ONE
+        # Ed25519 keypair. A real IBC is always signed with an "ibc-" kid, so a
+        # bare "sess-"/"lic-" kid — even signed by the shared key — must NOT
+        # verify as an IBC (else another token class could be replayed as one).
+        for bad_kid in ("sess-v1", "lic-v1"):
+            token = _sign_test_ibc(self.ibc_signing_key, self._claims(), kid=bad_kid)
+            with self.assertRaises(instance_identity.IBCError):
+                instance_identity._verify_ibc_signature(token)
 
 
 @unittest.skipUnless(_M3_DEPS_OK, "cryptography not installed")
@@ -415,6 +424,7 @@ class TestBindInstance(_TempIBCHomeMixin, unittest.TestCase):
         base = {
             "sub": instance_identity.get_instance_id(),
             "type": "instance_binding",
+            "iss": "corvinlabs.io",
             "email": "a@b.com", "customer_fp": "fp1", "plan": "member",
             "instance_pubkey": instance_identity.get_instance_pubkey_b64(),
             "iat": int(time.time()), "exp": int(time.time()) + 3600, "jti": "bind-jti",

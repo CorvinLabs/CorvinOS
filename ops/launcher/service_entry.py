@@ -14,6 +14,23 @@ import argparse
 import sys
 
 
+def _autoupdate_pre_exec() -> "str | None":
+    """Build the WA-19 auto-update ExecStartPre command for the always-on
+    (Stufe-2) service, mirroring the Stufe-1 wiring in installer/core.py.
+
+    Returns a quoted ``"<python>" "<script>"`` string, or None when the
+    entrypoint script cannot be located (best-effort: a missing script must
+    never block service install). Without this the always-on service NEVER
+    ran the auto-update check — a headless always-on box (the exact case the
+    check exists for) stayed pinned on a stale release forever.
+    """
+    from pathlib import Path
+    script = Path(__file__).resolve().parent / "corvin" / "_autoupdate_entrypoint.py"
+    if not script.exists():
+        return None
+    return f'"{sys.executable}" "{script}"'
+
+
 def _webui_command() -> str:
     # Quote the interpreter path: all three SystemServiceManagers re-tokenize
     # this string (shlex.split / systemd ExecStart) — an unquoted
@@ -217,6 +234,7 @@ def main() -> int:
                 command=_webui_command(),
                 description="CorvinOS WebUI — always-on (ADR-0184 Stufe 2)",
                 env_vars=_webui_env_vars(),
+                pre_exec=_autoupdate_pre_exec(),
             )
         except ElevationRequired as exc:
             print(f"  {exc}")

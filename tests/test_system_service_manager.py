@@ -25,6 +25,19 @@ from corvinOS.installer.system_service_manager import (
 )
 
 
+class TestStage2AutoUpdateWiring:
+    def test_autoupdate_pre_exec_resolves_the_real_entrypoint(self):
+        # H1: the always-on (Stufe-2) callers must be able to build a non-None
+        # pre_exec so the WA-19 auto-update actually runs. The helper resolves
+        # the shipped ops/launcher/corvin/_autoupdate_entrypoint.py.
+        from ops.launcher.service_entry import _autoupdate_pre_exec
+        pre = _autoupdate_pre_exec()
+        assert pre is not None
+        assert "_autoupdate_entrypoint.py" in pre
+        # Interpreter + script are both quoted (space-safe re-tokenization).
+        assert pre.count('"') >= 4
+
+
 class TestIsElevated:
     def test_posix_root_is_elevated(self):
         with mock.patch("os.geteuid", return_value=0, create=True):
@@ -68,6 +81,47 @@ class TestLinuxSystemServiceManager:
             assert "StartLimitIntervalSec=300" in content
             assert "StartLimitBurst=5" in content
             assert "WantedBy=multi-user.target" in content
+
+    def test_pre_exec_adds_execstartpre_and_widened_start_timeout(self):
+        # H1/H2: the Stufe-2 always-on unit must run the WA-19 auto-update
+        # ExecStartPre AND widen the start timeout past systemd's 90s default,
+        # else a slow boot-time upgrade aborts the start job and the unit
+        # crash-loops into the StartLimitBurst lockout.
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = LinuxSystemServiceManager()
+            mgr.UNIT_DIR = Path(tmp)
+            with mock.patch(
+                "corvinOS.installer.system_service_manager.is_elevated",
+                return_value=True,
+            ), mock.patch(
+                "corvinOS.installer.system_service_manager.current_user",
+                return_value="silvio",
+            ), mock.patch("subprocess.run") as run:
+                run.return_value = mock.Mock(returncode=0)
+                mgr.install_service(
+                    name="webui", command="/usr/bin/true",
+                    pre_exec='"/py" "/auto.py"',
+                )
+            content = (Path(tmp) / "corvin-webui.service").read_text()
+            assert 'ExecStartPre=-"/py" "/auto.py"' in content
+            assert "TimeoutStartSec=300" in content
+
+    def test_no_pre_exec_omits_execstartpre(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mgr = LinuxSystemServiceManager()
+            mgr.UNIT_DIR = Path(tmp)
+            with mock.patch(
+                "corvinOS.installer.system_service_manager.is_elevated",
+                return_value=True,
+            ), mock.patch(
+                "corvinOS.installer.system_service_manager.current_user",
+                return_value="silvio",
+            ), mock.patch("subprocess.run") as run:
+                run.return_value = mock.Mock(returncode=0)
+                mgr.install_service(name="webui", command="/usr/bin/true")
+            content = (Path(tmp) / "corvin-webui.service").read_text()
+            assert "ExecStartPre" not in content
+            assert "TimeoutStartSec" not in content
 
     def test_uninstall_without_elevation_raises(self):
         mgr = LinuxSystemServiceManager()

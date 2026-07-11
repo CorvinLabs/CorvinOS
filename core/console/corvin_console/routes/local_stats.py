@@ -102,6 +102,34 @@ def _client_is_loopback(request: Request) -> bool:
         return False
 
 
+@router.get("/instance-stats")
+def instance_stats(request: Request) -> dict[str, Any]:
+    """Proxy the PUBLIC aggregate instance stats from the Corvin-Features server.
+
+    The Settings page used to fetch ``https://api.corvin-labs.com/v1/stats/instances``
+    directly from the browser, but that host is NXDOMAIN — the backend moved to
+    the Railway deployment. Proxying here reuses the single Python resolver
+    (``instance_identity._features_server``) so the features-server URL has ONE
+    source of truth instead of a stale literal baked into the SPA bundle. The
+    upstream data is aggregate/anonymous, but we still gate on loopback (same as
+    ``/local-stats``) so a remote unauthenticated caller can't turn the console
+    into an open proxy to the features server."""
+    if not _client_is_loopback(request):
+        raise HTTPException(status_code=403, detail="instance-stats is loopback-only")
+    try:
+        import httpx  # noqa: PLC0415
+        from instance_identity import _features_server  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"instance-stats unavailable: {exc}") from exc
+    base = _features_server().rstrip("/")
+    try:
+        resp = httpx.get(f"{base}/v1/stats/instances", timeout=8.0)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"features stats fetch failed: {exc}") from exc
+
+
 @router.get("/local-stats")
 def local_stats(request: Request) -> dict[str, Any]:
     """Return a local instance snapshot — no remote API calls, loopback-only.

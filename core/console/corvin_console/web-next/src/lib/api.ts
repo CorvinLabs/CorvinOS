@@ -5472,8 +5472,11 @@ export interface InstanceStatsResponse {
 }
 
 export async function getInstanceStats(signal?: AbortSignal): Promise<InstanceStatsResponse> {
-  // Fetch from the PUBLIC endpoint — no auth needed.
-  const res = await fetch("https://api.corvin-labs.com/v1/stats/instances", { signal });
+  // Proxy through the local console backend, which resolves the features-server
+  // URL via the single Python resolver (instance_identity._features_server).
+  // The old direct fetch to api.corvin-labs.com is dead (NXDOMAIN) — the backend
+  // moved to the Railway deployment.
+  const res = await fetch("/v1/console/instance-stats", { signal });
   if (!res.ok) throw new Error(`stats fetch failed: ${res.status}`);
   return res.json();
 }

@@ -539,14 +539,23 @@ def _verify_ibc_signature(ibc_token: str) -> dict:
     except Exception as exc:  # noqa: BLE001
         raise IBCError(f"IBC header malformed: {exc}") from exc
 
-    lookup_kid = "sess-" + kid[len("ibc-"):] if kid.startswith("ibc-") else kid
-    pubkey_der_b64 = _IBC_TRUST_KEY_RING.get(lookup_kid)
+    # A real IBC is always signed with an ``ibc-`` kid (server:
+    # issue_ibc_jwt → _ibc_kid_for(CURRENT_SESSION_KID)). The sess-/lic-/ibc-
+    # token classes share ONE Ed25519 keypair, so only the ``ibc-`` kid may be
+    # resolved from the trust ring — accepting a bare ``sess-``/``lic-`` kid
+    # would let another token class signed by the same key verify as an IBC
+    # (defense-in-depth; the test-mode env override below is unaffected).
+    if kid.startswith("ibc-"):
+        lookup_kid = "sess-" + kid[len("ibc-"):]
+        pubkey_der_b64 = _IBC_TRUST_KEY_RING.get(lookup_kid)
+    else:
+        pubkey_der_b64 = None
     if not pubkey_der_b64:
         env_key = os.environ.get("CORVIN_IBC_PUBKEY_DER_B64")
         if env_key and _TEST_MODE_SNAPSHOT == "1":
             pubkey_der_b64 = env_key
         else:
-            raise IBCError(f"IBC signed with unknown kid={kid!r} — cannot verify")
+            raise IBCError(f"IBC signed with unknown/non-IBC kid={kid!r} — cannot verify")
 
     try:
         from cryptography.hazmat.primitives.serialization import load_der_public_key
@@ -561,6 +570,15 @@ def _verify_ibc_signature(ibc_token: str) -> dict:
         claims = json.loads(_b64url_pad_decode(payload_b64))
     except Exception as exc:  # noqa: BLE001
         raise IBCError(f"IBC payload malformed: {exc}") from exc
+
+    # Pin the token class and issuer (parity with the server's
+    # auth._verify_corvin_token, which pins both). Without this a same-key
+    # token of another class that happened to carry a sub+instance_pubkey
+    # shape could be replayed as an IBC.
+    if claims.get("type") != "instance_binding":
+        raise IBCError(f"IBC has wrong type={claims.get('type')!r} — expected instance_binding")
+    if claims.get("iss") != "corvinlabs.io":
+        raise IBCError(f"IBC has wrong iss={claims.get('iss')!r} — expected corvinlabs.io")
 
     exp = claims.get("exp")
     if exp is not None and exp < _dt.datetime.now(_dt.timezone.utc).timestamp():

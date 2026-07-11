@@ -1449,7 +1449,12 @@ function ChatPane({
     // the transcript). Skips native targets above so it never hijacks
     // Enter inside some other field/dialog elsewhere on the page.
     const onGlobalEnter = (e: KeyboardEvent) => {
-      if (e.key !== "Enter" || e.repeat || e.shiftKey || e.metaKey || e.ctrlKey) return;
+      if (e.key !== "Enter" || e.repeat || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+      // Ignore IME composition (CJK candidate confirmation) and any Enter a
+      // menu/dialog/other handler already acted on — otherwise the global
+      // send hijacks Enter meant for another control.
+      if (e.isComposing || (e as KeyboardEvent & { keyCode?: number }).keyCode === 229) return;
+      if (e.defaultPrevented) return;
       if (isNativeEnterTarget(e.target)) return;
       if (recordingRef.current || streamingRef.current) return;
       e.preventDefault();

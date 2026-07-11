@@ -473,10 +473,13 @@ def _allowed_engines_for_tenant(tid: str) -> list[str]:
     """
     _default = ["claude_code", "hermes", "codex_cli", "opencode", "copilot"]
     try:
-        import os
         import yaml as _yaml  # type: ignore
-        home = Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
-        yf = home / "tenants" / tid / "tenant.corvin.yaml"
+        # SSOT: resolve via forge.paths.tenant_global_dir (same resolver every
+        # other reader uses — engine.py, adapter.py, browser.py). The config
+        # lives under the ``global/`` subdir; the old inline resolver dropped
+        # ``global/`` so the file was never found and the allowed_engines gate
+        # silently fell open to the default engine list for every tenant.
+        yf = _forge_paths.tenant_global_dir(tid) / "tenant.corvin.yaml"
         if not yf.exists():
             return _default
         data = _yaml.safe_load(yf.read_text(encoding="utf-8")) or {}

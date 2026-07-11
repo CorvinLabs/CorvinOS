@@ -6879,6 +6879,7 @@ def _append_lern_zugabe(text: str, *, lang: str = "de") -> str:
             [sys.executable, str(summarizer),
              "--lang", lang, "--appendix-mode"],
             input=text, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             env=env, timeout=60, check=True,
         )
         result = out.stdout.strip()
@@ -6910,6 +6911,7 @@ def _append_metapher(text: str, *, lang: str = "de") -> str:
             [sys.executable, str(summarizer),
              "--lang", lang, "--metapher-mode"],
             input=text, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
             env=env, timeout=60, check=True,
         )
         result = out.stdout.strip()
@@ -7050,7 +7052,9 @@ def build_voice_summary(text: str, max_chars: int = 400,
                          if k not in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_BASE')}
             pre = subprocess.run(
                 [sys.executable, str(stripper), "--mode", "code-only"],
-                input=text, capture_output=True, text=True, timeout=10, check=True, env=clean_env,
+                input=text, capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=10, check=True, env=clean_env,
             ).stdout
             elapsed_strip = time.time() - start_strip
             if elapsed_strip > 5:
@@ -7111,7 +7115,9 @@ def build_voice_summary(text: str, max_chars: int = 400,
             cmd += ["--task", task_text]
         out = subprocess.run(
             cmd,
-            input=pre, capture_output=True, text=True, env=env, timeout=120, check=True,
+            input=pre, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            env=env, timeout=120, check=True,
         ).stdout.strip()
         # Sanity check: summarize.py should never return empty unless input was empty.
         # If it does, log and fall back to text head.
@@ -7358,7 +7364,13 @@ def _try_edge_tts(text: str, lang: str = "de") -> Path | None:
     MP3 → OGG-Opus conversion — see `_resolve_ffmpeg_bin()`, which falls
     back to the bundled `imageio-ffmpeg` binary when no system ffmpeg is
     on PATH. Returns OGG path on success, None otherwise.
+
+    edge-tts ships the reply text to Microsoft's cloud, so it is disabled
+    when the EU local-only egress guarantee (``CORVIN_TTS_LOCAL_ONLY=1`` /
+    EU_PRODUCTION) is active — the caller falls through to local Piper.
     """
+    if os.environ.get("CORVIN_TTS_LOCAL_ONLY") == "1":
+        return None
     try:
         import edge_tts as _edge_tts_mod  # noqa: PLC0415
     except ImportError:
@@ -7425,6 +7437,11 @@ def _try_openai_tts(
 
     Thread-safe: quota state is protected by _voice_engine_lock.
     """
+    # OpenAI TTS ships the reply text to OpenAI's cloud — disabled under the
+    # EU local-only egress guarantee (CORVIN_TTS_LOCAL_ONLY=1 / EU_PRODUCTION).
+    if os.environ.get("CORVIN_TTS_LOCAL_ONLY") == "1":
+        return None
+
     now = time.time()
     with _voice_engine_lock:
         if now < _voice_engine_state.get("quota_until", 0.0):
@@ -7432,18 +7449,13 @@ def _try_openai_tts(
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        # Canonical location is ~/.config/corvin-voice/.env (consistent with
-        # say.py and voice_lib.sh). Repo-root .env is a secondary fallback.
-        for env_file in (
-            _VOICE_CONFIG_DIR / ".env",
-            _VOICE_CONFIG_DIR / "service.env",
-            ROOT.parent.parent.parent / ".env",
-        ):
-            for key in ("OPENAI_API_KEY", "OPENAI_APIKEY"):
-                api_key = _load_env_value(key, env_file)
-                if api_key:
-                    os.environ["OPENAI_API_KEY"] = api_key
-                    break
+        # Canonical key file is ~/.config/corvin-voice/service.env (WA-22 SSOT;
+        # the retired ~/.config/corvin-voice/.env and the repo-root .env are NOT
+        # consulted — reading them here shadowed a rotated service.env key and,
+        # via the old os.environ injection below, silently flipped STT to the
+        # cloud provider using a key the operator believed retired).
+        for key in ("OPENAI_API_KEY", "OPENAI_APIKEY"):
+            api_key = _load_env_value(key, _VOICE_CONFIG_DIR / "service.env")
             if api_key:
                 break
     if api_key:

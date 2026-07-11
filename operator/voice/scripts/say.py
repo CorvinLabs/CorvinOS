@@ -643,7 +643,18 @@ def main() -> int:
     if not text.strip():
         return 0
 
+    # EU local-only egress guarantee: openai + edge both ship text to a cloud
+    # (OpenAI / Microsoft), so they are disabled when CORVIN_TTS_LOCAL_ONLY=1
+    # (EU_PRODUCTION). Enforced in _run so it covers BOTH the pinned-provider
+    # path and the auto-chain — previously only voice_lib.sh honored the flag.
+    local_only = os.environ.get("CORVIN_TTS_LOCAL_ONLY", "0") == "1"
+
     def _run(name: str) -> bool:
+        if local_only and name in ("openai", "edge"):
+            sys.stderr.write(
+                f"say.py: provider '{name}' disabled by CORVIN_TTS_LOCAL_ONLY\n"
+            )
+            return False
         if name == "openai":
             return _try_openai(out_path, text, lang, voice_override)
         if name == "edge":

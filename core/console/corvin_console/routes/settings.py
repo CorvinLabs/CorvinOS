@@ -385,6 +385,7 @@ def put_service_tier(
     try:
         if body.enabled:
             from ops.launcher.service_entry import (
+                _autoupdate_pre_exec,
                 _quiesce_stage1,
                 _webui_command,
                 _webui_env_vars,
@@ -394,6 +395,7 @@ def put_service_tier(
                 command=_webui_command(),
                 description="CorvinOS WebUI — always-on (ADR-0184 Stufe 2)",
                 env_vars=_webui_env_vars(),
+                pre_exec=_autoupdate_pre_exec(),
             )
             # Both tiers bind port 8765 — leaving the Stufe-1 login autostart
             # active makes the loser crash-loop at every login. stop_running

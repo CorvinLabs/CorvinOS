@@ -159,6 +159,13 @@ class LinuxServiceManager(ServiceManager):
             # the whole point is a silent, best-effort catch-up on every
             # (re)start, same contract as the auto-update code it invokes.
             service_lines.append(f"ExecStartPre=-{pre_exec}")
+            # The auto-update ExecStartPre can run up to ~120s on a slow link
+            # with dependency bumps. systemd's DEFAULT start timeout is 90s and
+            # applies to the whole start job, so without an explicit widening a
+            # slow upgrade at boot aborts the start → Restart loop →
+            # StartLimitBurst exhausted → unit permanently failed until a manual
+            # `systemctl start`. 300s clears the 120s internal cap.
+            service_lines.append("TimeoutStartSec=300")
         service_lines += [
             f"ExecStart={command}",
             "Restart=on-failure",

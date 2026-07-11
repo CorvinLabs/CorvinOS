@@ -163,6 +163,12 @@ function ConfigureModal({
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder={connector.api_key_set ? "Leave blank to keep existing key" : "Paste API key…"}
                 className="font-mono text-sm"
+                autoComplete="new-password"
+                autoCorrect="off"
+                spellCheck={false}
+                data-lpignore="true"
+                data-1p-ignore
+                data-bwignore
               />
             </div>
           ) : null}

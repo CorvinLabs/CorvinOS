@@ -893,6 +893,25 @@ class CorvinInstaller:
                         print(f"  ✓ Removed LaunchAgent: {plist.name}")
                     except Exception as e:
                         print(f"  ⚠ Could not remove {plist.name}: {e}")
+
+            # WA-7 (POSIX): an opt-in Stufe-2 always-on service (ADR-0184) is a
+            # ROOT-owned systemd system unit (/etc/systemd/system) or a macOS
+            # LaunchDaemon (/Library/LaunchDaemons) — registered elevated and
+            # NOT removable from this unprivileged uninstall. The sweeps above
+            # only touch the user-level Stufe-1 units. Detect it and tell the
+            # user to run `sudo corvin-service uninstall` first, else CorvinOS
+            # keeps serving on 8765 after "uninstall" (parity with the Windows
+            # branch below).
+            try:
+                from corvinOS.installer.system_service_manager import (  # noqa: PLC0415
+                    get_system_service_manager,
+                )
+                if get_system_service_manager().status("webui") == "registered":
+                    print("  ⚠ An always-on (Stufe 2) service is still registered. "
+                          "It runs as root and cannot be removed here — first run:  "
+                          "sudo corvin-service uninstall")
+            except Exception:
+                pass
         elif sys.platform == "win32":
             # install.ps1 (the standalone one-liner installer) registers a
             # persistent, infinite-restart, AtLogOn Scheduled Task named

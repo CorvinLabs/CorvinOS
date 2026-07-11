@@ -333,25 +333,45 @@ def _model_file_present(size: str) -> bool:
     return False
 
 
+# Accuracy rank of the whisper model families, worst → best. Used to pick the
+# BEST already-present model as the offline fallback instead of the
+# alphabetically-first one (``base`` sorts before ``medium``/``small`` — the
+# old ``sorted()`` pick silently selected the weakest model on disk even when a
+# better one sat right next to it, defeating the tier ladder).
+_MODEL_FAMILY_RANK = {"tiny": 0, "base": 1, "small": 2, "medium": 3, "large": 4}
+
+
+def _model_family_rank(model_name: str) -> int:
+    """Accuracy rank for a model name (``small-q5_1`` → family ``small``)."""
+    fam = model_name.split("-", 1)[0].split(".", 1)[0].lower()
+    return _MODEL_FAMILY_RANK.get(fam, -1)
+
+
 def _first_present_model() -> "str | None":
-    """Name of any already-downloaded pywhispercpp model, or None.
+    """Name of the BEST already-downloaded pywhispercpp model, or None.
 
     Used as the offline-safe fallback when the configured default model
-    file is absent. Deterministic ordering (sorted) so the pick is stable.
+    file is absent. Picks the highest-accuracy family present on disk
+    (deterministic: family rank, then name) so a lingering ``base`` never
+    shadows a better ``small``/``medium`` in the same directory.
     """
     d = _models_dir()
     try:
         entries = sorted(d.glob("ggml-*.bin"))
     except OSError:
         return None
+    present: list[str] = []
     for p in entries:
         try:
             if p.is_file() and p.stat().st_size > 0:
                 # ggml-<size>.bin → <size>
-                return p.name[len("ggml-"):-len(".bin")]
+                present.append(p.name[len("ggml-"):-len(".bin")])
         except OSError:
             continue
-    return None
+    if not present:
+        return None
+    # Highest family rank wins; ties broken by name for determinism.
+    return max(present, key=lambda m: (_model_family_rank(m), m))
 
 
 def _prefer_faster_whisper() -> bool:

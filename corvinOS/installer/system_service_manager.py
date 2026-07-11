@@ -145,6 +145,10 @@ class LinuxSystemServiceManager(SystemServiceManager):
         if pre_exec:
             # WA-19: "-" prefix so a failed/offline check never blocks ExecStart.
             service_lines.append(f"ExecStartPre=-{pre_exec}")
+            # H2: widen the start timeout past systemd's 90s default so a slow
+            # auto-update (up to ~120s) at boot can't abort the start job and
+            # trip the crash-loop / StartLimitBurst lockout.
+            service_lines.append("TimeoutStartSec=300")
         service_lines += [
             f"ExecStart={command}",
             "Restart=on-failure",
