@@ -193,6 +193,42 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+# ADR-0189: a variant of the fixture page with NO password field, for tests
+# that exercise agent-loop behavior unrelated to the login-pause feature
+# (planner errors, cross-host decline, done-with-answer, generic step
+# execution) — the shared `server` fixture's page above legitimately has a
+# password input (asserted by test_browser_e2e_full), so any agent.run()
+# against it now correctly pauses with needs_login at step 0 before those
+# tests' own scenarios ever get to run.
+_HTML_NO_PASSWORD = b"""<!doctype html><html><head><title>Shop</title></head><body>
+<input id="q" name="q" placeholder="Search products">
+<button id="buy">Buy now</button>
+<button id="help">Read more</button>
+</body></html>"""
+
+
+class _HandlerNoPassword(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(_HTML_NO_PASSWORD)
+
+    def log_message(self, *a):
+        pass
+
+
+@pytest.fixture()
+def server_no_password():
+    socketserver.TCPServer.allow_reuse_address = True
+    httpd = socketserver.TCPServer(("127.0.0.1", 0), _HandlerNoPassword)
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    yield f"http://127.0.0.1:{port}/"
+    httpd.shutdown()
+
+
 @pytest.fixture()
 def server():
     socketserver.TCPServer.allow_reuse_address = True
@@ -396,7 +432,7 @@ def test_action_log_survives_deque_rollover():
     assert mgr.next_seq("_default", "s") == 500
 
 
-def test_agent_loop_drives_browser(server):
+def test_agent_loop_drives_browser(server_no_password):
     """The browser-agent loop executes a planner's actions end-to-end and stops
     on 'done'. Uses a deterministic planner (no LLM) so it's fast + hermetic."""
     async def run():
@@ -404,7 +440,7 @@ def test_agent_loop_drives_browser(server):
         from corvin_console.browser.agent import BrowserAgent
         s = BrowserSession("ag", "_default", home=Path(tempfile.mkdtemp()), headless=True)
         await s.start()
-        await s.navigate(server)
+        await s.navigate(server_no_password)
         events = []
         script = iter([
             {"action": "fill", "index": 0, "text": "hello", "reason": "type"},
@@ -477,7 +513,7 @@ def test_agent_unknown_action_does_not_abort_run(server):
         assert any("unknown action" in (e.get("error") or "") for e in errors)
 
 
-def test_agent_planner_transport_failure_reports_error(server):
+def test_agent_planner_transport_failure_reports_error(server_no_password):
     """F5 regression: when the planner subprocess fails to run, the loop reports
     status='error', not a bogus 'done'."""
     async def run():
@@ -485,7 +521,7 @@ def test_agent_planner_transport_failure_reports_error(server):
         from corvin_console.browser.agent import BrowserAgent, _PLANNER_ERROR
         s = BrowserSession("perr", "_default", home=Path(tempfile.mkdtemp()), headless=True)
         await s.start()
-        await s.navigate(server)
+        await s.navigate(server_no_password)
 
         async def planner(task, obs, transcript):
             return {"action": _PLANNER_ERROR, "reason": "planner transport failed"}
@@ -498,7 +534,7 @@ def test_agent_planner_transport_failure_reports_error(server):
     asyncio.run(run())
 
 
-def test_agent_cross_host_decline_returns_needs_approval(server):
+def test_agent_cross_host_decline_returns_needs_approval(server_no_password):
     """F10 regression: a declined cross-host navigate ends the run with
     needs_approval instead of retrying the same hop until max_steps (each retry
     would park another 120s confirm timeout — up to ~24 min of dead looping)."""
@@ -512,7 +548,7 @@ def test_agent_cross_host_decline_returns_needs_approval(server):
         s = BrowserSession("na", "_default", home=Path(tempfile.mkdtemp()), headless=True,
                            allowlist=None, confirm_fn=confirm)
         await s.start()
-        await s.navigate(server)
+        await s.navigate(server_no_password)
 
         async def planner(task, obs, transcript):
             return {"action": "navigate", "url": "https://example.com", "reason": "go"}
@@ -526,7 +562,7 @@ def test_agent_cross_host_decline_returns_needs_approval(server):
     asyncio.run(run())
 
 
-def test_agent_done_carries_answer_payload(server):
+def test_agent_done_carries_answer_payload(server_no_password):
     """F9 regression: the operator's requested data comes back on done via the
     'answer' field, not squeezed into a one-word reason."""
     async def run():
@@ -534,7 +570,7 @@ def test_agent_done_carries_answer_payload(server):
         from corvin_console.browser.agent import BrowserAgent
         s = BrowserSession("ans", "_default", home=Path(tempfile.mkdtemp()), headless=True)
         await s.start()
-        await s.navigate(server)
+        await s.navigate(server_no_password)
 
         async def planner(task, obs, transcript):
             return {"action": "done", "answer": "The cheapest plan is 9.99 EUR/mo",
@@ -1118,3 +1154,298 @@ def test_tool_surface_no_password_target_still_gated_to_fill_secret(server):
         assert any(m.role == "password" for m in obs.marks)
         await s.close()
     asyncio.run(run())
+
+
+# ── ADR-0189: task-scoped navigation + voice-guided login pause ─────────────
+
+def test_host_task_scoped_exact_and_subdomain_match():
+    from corvin_console.browser.session import _host_task_scoped
+    assert _host_task_scoped("example.com", ["example.com"])
+    assert _host_task_scoped("accounts.example.com", ["example.com"])   # subdomain of task host
+    assert _host_task_scoped("example.com", ["www.example.com"])        # task host is subdomain of dest
+    assert not _host_task_scoped("evil.com", ["example.com"])
+    assert not _host_task_scoped("notexample.com", ["example.com"]), \
+        "must not match on bare substring — 'example.com' is not a suffix component of 'notexample.com'"
+    assert not _host_task_scoped("example.com.evil.com", ["example.com"]), \
+        "a host that merely CONTAINS the task host as a prefix, not a real subdomain, must not match"
+
+
+def test_task_scoped_host_navigates_without_confirm(server):
+    """ADR-0189: a host present in the user's own task text is auto-approved —
+    the confirm broker must never even be called for it — while a DIFFERENT
+    host the agent tries on its own still goes through the normal confirm."""
+    async def run():
+        from corvin_console.browser import BrowserSession
+        confirm_calls = []
+
+        async def confirm(**kw):
+            confirm_calls.append(kw)
+            return True
+
+        s = BrowserSession("tsh", "_default", home=Path(tempfile.mkdtemp()), headless=True,
+                           allowlist=None, confirm_fn=confirm,
+                           task_scoped_hosts=["127.0.0.1"])
+        await s.start()
+        # First hop of the session, to the task-scoped host — must NOT confirm.
+        await s.navigate(server, confirm_cross_host=True)
+        assert confirm_calls == [], "task-scoped host must not trigger a confirm"
+        await s.close()
+
+    asyncio.run(run())
+
+
+def test_non_task_scoped_host_still_requires_confirm(server):
+    """The task-scoped carve-out must not widen to hosts the task never named
+    — this is the actual indirect-prompt-injection defense and must be
+    unchanged for anything outside the task's own scope."""
+    async def run():
+        from corvin_console.browser import BrowserSession, BrowserActionError
+        confirm_calls = []
+
+        async def confirm(**kw):
+            confirm_calls.append(kw)
+            return False   # decline
+
+        s = BrowserSession("nts", "_default", home=Path(tempfile.mkdtemp()), headless=True,
+                           allowlist=None, confirm_fn=confirm,
+                           task_scoped_hosts=["totally-different-host.example"])
+        await s.start()
+        with pytest.raises(BrowserActionError, match="cross-host"):
+            await s.navigate(server, confirm_cross_host=True)
+        assert len(confirm_calls) == 1, "a host NOT in task_scoped_hosts must still confirm"
+        await s.close()
+
+    asyncio.run(run())
+
+
+def test_agent_pauses_with_needs_login_on_password_field(server):
+    """ADR-0189: a visible password field pauses the WHOLE agent loop before
+    the planner is ever asked — the planner must never even be invoked, so it
+    cannot decide to fill()/fill_secret() the field itself."""
+    async def run():
+        from corvin_console.browser import BrowserSession
+        from corvin_console.browser.agent import BrowserAgent
+        s = BrowserSession("login", "_default", home=Path(tempfile.mkdtemp()), headless=True)
+        await s.start()
+        await s.navigate(server)   # the shared fixture page DOES have a password field
+
+        planner_calls = []
+
+        async def planner(task, obs, transcript):
+            planner_calls.append(1)
+            return {"action": "done", "reason": "should never get here"}
+
+        agent = BrowserAgent(s, planner=planner, max_steps=5)
+        result = await agent.run("log in and buy something")
+        await s.close()
+        assert result["status"] == "needs_login"
+        assert result["steps"] == 0
+        assert planner_calls == [], "the planner must never be consulted on a login-paused step"
+
+    asyncio.run(run())
+
+
+def test_agent_no_password_field_does_not_pause(server_no_password):
+    """Control for the above: a page with no password field must never
+    produce needs_login."""
+    async def run():
+        from corvin_console.browser import BrowserSession
+        from corvin_console.browser.agent import BrowserAgent
+        s = BrowserSession("nologin", "_default", home=Path(tempfile.mkdtemp()), headless=True)
+        await s.start()
+        await s.navigate(server_no_password)
+
+        async def planner(task, obs, transcript):
+            return {"action": "done", "reason": "ok"}
+
+        agent = BrowserAgent(s, planner=planner, max_steps=5)
+        result = await agent.run("do something")
+        await s.close()
+        assert result["status"] == "done"
+
+    asyncio.run(run())
+
+
+def test_manager_start_agent_does_not_close_session_on_needs_login(server):
+    """ADR-0189: auto_close must NOT tear down a session that paused for a
+    human to complete a login — that would close the live view mid-login.
+    Only a genuinely terminal status (done/error/max_steps) still closes."""
+    async def run():
+        from corvin_console.browser import BrowserSessionManager
+        home = Path(tempfile.mkdtemp())
+        mgr = BrowserSessionManager(home_resolver=lambda t: home / t,
+                                    allowlist_resolver=lambda t: (None, None))
+        sid = await mgr.create("_default", headless=True)
+        s = mgr.session("_default", sid)
+        await s.navigate(server)   # password field present
+
+        async def planner(task, obs, transcript):
+            return {"action": "done", "reason": "should not run"}
+
+        import corvin_console.browser.agent as agent_mod
+        orig = agent_mod.BrowserAgent
+        try:
+            agent_mod.BrowserAgent = lambda session, **kw: orig(session, planner=planner, **{
+                k: v for k, v in kw.items() if k != "planner"})
+            started = mgr.start_agent("_default", sid, "log in", auto_close=True)
+            assert started
+            for _ in range(100):
+                if not mgr.agent_running("_default", sid):
+                    break
+                await asyncio.sleep(0.05)
+        finally:
+            agent_mod.BrowserAgent = orig
+
+        # The session must STILL exist — auto_close must have been skipped.
+        s2 = mgr.session("_default", sid)
+        assert s2 is not None
+        await mgr.close("_default", sid)
+
+    asyncio.run(run())
+
+
+def test_manager_continue_agent_resumes_paused_session(server_no_password):
+    """ADR-0189: /browser continue re-runs the agent on the SAME session using
+    the originally-captured task text, without the caller re-supplying it."""
+    async def run():
+        from corvin_console.browser import BrowserSessionManager
+        home = Path(tempfile.mkdtemp())
+        mgr = BrowserSessionManager(home_resolver=lambda t: home / t,
+                                    allowlist_resolver=lambda t: (None, None))
+        sid = await mgr.create("_default", headless=True)
+        s = mgr.session("_default", sid)
+        await s.navigate(server_no_password)
+
+        calls = []
+
+        async def planner(task, obs, transcript):
+            calls.append(task)
+            return {"action": "done", "reason": "ok"}
+
+        import corvin_console.browser.agent as agent_mod
+        orig = agent_mod.BrowserAgent
+        try:
+            agent_mod.BrowserAgent = lambda session, **kw: orig(session, planner=planner, **{
+                k: v for k, v in kw.items() if k != "planner"})
+            started = mgr.start_agent("_default", sid, "original task", auto_close=False)
+            assert started
+            for _ in range(100):
+                if not mgr.agent_running("_default", sid):
+                    break
+                await asyncio.sleep(0.05)
+            assert calls, "first run must have reached the planner (no password field)"
+
+            # continue_agent must start a NEW run reusing the captured task.
+            resumed = mgr.continue_agent("_default", sid)
+            assert resumed
+            for _ in range(100):
+                if not mgr.agent_running("_default", sid):
+                    break
+                await asyncio.sleep(0.05)
+            assert len(calls) >= 2
+            assert "original task" in calls[-1]
+        finally:
+            agent_mod.BrowserAgent = orig
+            await mgr.close("_default", sid)
+
+    asyncio.run(run())
+
+
+def test_manager_continue_agent_fails_closed_with_no_prior_task():
+    """A session that never had start_agent() called has nothing to continue —
+    must report failure, not silently no-op or crash."""
+    async def run():
+        from corvin_console.browser import BrowserSessionManager
+        home = Path(tempfile.mkdtemp())
+        mgr = BrowserSessionManager(home_resolver=lambda t: home / t,
+                                    allowlist_resolver=lambda t: (None, None))
+        sid = await mgr.create("_default", headless=True)
+        assert not mgr.continue_agent("_default", sid)
+        await mgr.close("_default", sid)
+
+    asyncio.run(run())
+
+
+# ── ADR-0189 Part 3: proactive voice notification on agent pause ────────────
+
+def test_notify_resolver_absent_config_returns_none_none(monkeypatch):
+    """No tenant.corvin.yaml at all -> (None, None), never an error — this
+    tenant simply has no notify routing opted in."""
+    from corvin_console.routes import browser as _br
+    home = Path(tempfile.mkdtemp())
+    monkeypatch.setattr(_br._forge_paths, "tenant_global_dir", lambda t: home / t)
+    assert _br._notify_resolver("_default") == (None, None)
+
+
+def test_notify_resolver_reads_configured_channel_and_chat_id(monkeypatch):
+    """spec.browser.notify_channel / notify_chat_id in tenant.corvin.yaml is
+    the sole opt-in path (no UI, no API) — mirrors the pre-existing
+    allowlist-resolver pattern."""
+    from corvin_console.routes import browser as _br
+    home = Path(tempfile.mkdtemp())
+    tdir = home / "_default"
+    tdir.mkdir(parents=True)
+    (tdir / "tenant.corvin.yaml").write_text(
+        "spec:\n  browser:\n    notify_channel: discord\n    notify_chat_id: '12345'\n",
+        encoding="utf-8")
+    monkeypatch.setattr(_br._forge_paths, "tenant_global_dir", lambda t: home / t)
+    assert _br._notify_resolver("_default") == ("discord", "12345")
+
+
+def test_notify_resolver_malformed_yaml_fails_closed_to_none(monkeypatch):
+    """Broken config must never raise into the WS loop — best-effort only."""
+    from corvin_console.routes import browser as _br
+    home = Path(tempfile.mkdtemp())
+    tdir = home / "_default"
+    tdir.mkdir(parents=True)
+    (tdir / "tenant.corvin.yaml").write_text("not: [valid: yaml: at all", encoding="utf-8")
+    monkeypatch.setattr(_br._forge_paths, "tenant_global_dir", lambda t: home / t)
+    assert _br._notify_resolver("_default") == (None, None)
+
+
+def test_notify_pause_no_routing_context_is_a_noop():
+    from corvin_console.browser import notify as _br_notify
+    assert _br_notify.notify_pause(channel=None, chat_id=None, tenant_id="_default",
+                                   text="x") is False
+    assert _br_notify.notify_pause(channel="discord", chat_id=None, tenant_id="_default",
+                                   text="x") is False
+
+
+def test_notify_pause_registers_and_marks_done_with_voice(monkeypatch):
+    """With routing context, notify_pause must reach completion_notify's
+    register()+mark_done() with want_voice=True so the bridge synthesizes a
+    voice note, not just a text message."""
+    import types
+    calls = {}
+
+    class _FakeCN(types.ModuleType):
+        def register(self, *, channel, chat_id, tenant_id, label, want_voice=False):
+            calls["register"] = dict(channel=channel, chat_id=chat_id,
+                                     tenant_id=tenant_id, label=label, want_voice=want_voice)
+            return "fake-task-id"
+
+        def mark_done(self, tid, *, text, ok=True):
+            calls["mark_done"] = dict(tid=tid, text=text, ok=ok)
+            return True
+
+    import sys
+    fake = _FakeCN("completion_notify")
+    monkeypatch.setitem(sys.modules, "completion_notify", fake)
+
+    from corvin_console.browser import notify as _br_notify
+    ok = _br_notify.notify_pause(channel="discord", chat_id="12345", tenant_id="_default",
+                                 label="browser task", text="login required")
+    assert ok is True
+    assert calls["register"]["want_voice"] is True
+    assert calls["register"]["channel"] == "discord"
+    assert calls["mark_done"]["text"] == "login required"
+
+
+def test_notify_browser_pause_never_raises_when_notify_queue_missing(monkeypatch):
+    """chat._notify_browser_pause() must be fail-soft end-to-end: if the
+    underlying completion_notify module can't be imported, the WS loop must
+    keep running (the in-chat text delta already carries the information)."""
+    import sys
+    from corvin_console.routes import chat as _chat
+    monkeypatch.setitem(sys.modules, "completion_notify", None)  # forces ImportError on `import`
+    _chat._notify_browser_pause("_default", text="should not raise")

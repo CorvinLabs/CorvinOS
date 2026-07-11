@@ -10316,7 +10316,15 @@ def main() -> int:
                             from . import completion_notify as _cn  # type: ignore
                         except ImportError:
                             import completion_notify as _cn  # type: ignore[no-redef]
-                        sent = _cn.deliver_ready(OUTBOX)
+                        # ADR-0189: records registered with want_voice=True (e.g. a
+                        # paused browser-agent task needing login/approval) get a
+                        # spoken voice note attached here, using the SAME synthesis
+                        # pipeline a normal end-of-turn reply uses. Failure degrades
+                        # to text-only inside deliver_ready — never blocks delivery.
+                        def _synth_voice(text: str) -> str | None:
+                            p = synthesize_voice_note(text, lang="de")
+                            return str(p) if p else None
+                        sent = _cn.deliver_ready(OUTBOX, synthesize_voice=_synth_voice)
                         if sent:
                             log(f"completion_notify: delivered {sent} notification(s)")
                     except Exception as e:

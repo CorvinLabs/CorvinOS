@@ -235,6 +235,84 @@ def test_claimed_live_producer_not_reaped() -> None:
         print("PASS: claimed live-producer record not reaped")
 
 
+# ── ADR-0189: want_voice / synthesize_voice ──────────────────────────────
+
+def test_want_voice_attaches_voice_path_when_synthesizer_given() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        tid = cn.register(channel="discord", chat_id="1", sender="u1",
+                          tenant_id="acme", label="browser pause", want_voice=True)
+        cn.mark_done(tid, text="please log in", ok=True)
+
+        calls: list[str] = []
+
+        def fake_synth(text: str) -> str:
+            calls.append(text)
+            return "/tmp/fake-voice.ogg"
+
+        n = cn.deliver_ready(outbox, synthesize_voice=fake_synth)
+        assert n == 1
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        assert env["voice_path"] == "/tmp/fake-voice.ogg"
+        assert calls and "please log in" in calls[0]
+        print("PASS: want_voice=True attaches voice_path via the injected synthesizer")
+
+
+def test_no_synthesizer_delivers_text_only_even_with_want_voice() -> None:
+    """A poller that was never given a synthesizer (e.g. bg_monitor today)
+    must still deliver — text-only — never block on the missing capability."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        tid = cn.register(channel="discord", chat_id="1", sender="u1",
+                          tenant_id="acme", label="browser pause", want_voice=True)
+        cn.mark_done(tid, text="please log in", ok=True)
+        n = cn.deliver_ready(outbox)   # no synthesize_voice kwarg
+        assert n == 1
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        assert "voice_path" not in env
+        print("PASS: no synthesizer configured -> text-only delivery, not blocked")
+
+
+def test_want_voice_false_never_calls_synthesizer() -> None:
+    """The common case (task_worker_pool.py's existing register() calls) must
+    see ZERO behavior change — no synthesizer invocation, no voice_path."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        tid = cn.register(channel="discord", chat_id="1", sender="u1",
+                          tenant_id="acme", label="normal task")  # want_voice defaults False
+        cn.mark_done(tid, text="done", ok=True)
+        calls: list[str] = []
+        n = cn.deliver_ready(outbox, synthesize_voice=lambda t: calls.append(t) or "x.ogg")
+        assert n == 1
+        assert calls == [], "synthesizer must never be called for want_voice=False records"
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        assert "voice_path" not in env
+        print("PASS: want_voice=False (default) never touches the synthesizer")
+
+
+def test_synthesis_failure_degrades_to_text_only_not_blocked() -> None:
+    """A raising synthesizer must not prevent delivery — voice is an
+    enhancement, never a delivery precondition."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        tid = cn.register(channel="discord", chat_id="1", sender="u1",
+                          tenant_id="acme", label="browser pause", want_voice=True)
+        cn.mark_done(tid, text="please log in", ok=True)
+
+        def broken_synth(text: str) -> str:
+            raise RuntimeError("TTS engine unavailable")
+
+        n = cn.deliver_ready(outbox, synthesize_voice=broken_synth)
+        assert n == 1, "delivery must succeed even though voice synthesis raised"
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        assert "voice_path" not in env
+        print("PASS: a raising synthesizer degrades to text-only, delivery still succeeds")
+
+
 def main() -> int:
     tests = [
         test_register_done_deliver_roundtrip,
@@ -248,6 +326,10 @@ def main() -> int:
         test_unclaimed_long_job_not_reaped_result_delivers,
         test_claimed_dead_producer_reaped,
         test_claimed_live_producer_not_reaped,
+        test_want_voice_attaches_voice_path_when_synthesizer_given,
+        test_no_synthesizer_delivers_text_only_even_with_want_voice,
+        test_want_voice_false_never_calls_synthesizer,
+        test_synthesis_failure_degrades_to_text_only_not_blocked,
     ]
     failed = 0
     for t in tests:

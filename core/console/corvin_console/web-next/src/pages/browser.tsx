@@ -4,7 +4,7 @@ import { Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 import {
   browserCreateSession, browserClose, browserNavigate, browserObserve,
   browserClick, browserFill, browserScroll, browserActions, browserConfirm,
-  browserPause, browserAgent, browserAgentStop,
+  browserPause, browserAgent, browserAgentStop, browserAgentContinue,
   transcribeAudio, ttsBlob,
   type BrowserObservation, type BrowserAction, type BrowserPending,
 } from "@/lib/api";
@@ -50,6 +50,7 @@ export function BrowserPage() {
   const ttsQueueRef = React.useRef<Promise<void>>(Promise.resolve());
   const lastSpokenSeqRef = React.useRef(-1); // action index of last spoken step
   const lastPendingIdRef = React.useRef<string | null>(null); // pending ID we already asked about
+  const lastPausedSeqRef = React.useRef(-1); // action index of last needs_login/needs_approval we announced
 
   const lang = "de"; // matches the session language
 
@@ -71,6 +72,7 @@ export function BrowserPage() {
       setActions([]);
       setFrameOk(false);
       lastSpokenSeqRef.current = -1;
+      lastPausedSeqRef.current = -1;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -126,6 +128,27 @@ export function BrowserPage() {
     }
   }, []); // csrfRef is a stable ref — no deps needed
 
+  // ADR-0189: the agent loop pauses on needs_login (a password field became
+  // visible) or needs_approval (a cross-host navigate confirm was declined
+  // or timed out) — the human must act in the live view, then say "weiter"
+  // or press the Continue button to resume the SAME agent run. Only the
+  // most recent agent_finished event decides this — a fresh agent_start
+  // (runAgent) or a later terminal status clears it.
+  const pausedInfo = React.useMemo(() => {
+    for (let i = actions.length - 1; i >= 0; i--) {
+      const a = actions[i];
+      if (a.action === "agent_start") return null; // a newer run started, no stale pause
+      if (a.action === "agent_finished") {
+        const status = String((a as Record<string, unknown>)["status"] ?? "");
+        if (status === "needs_login" || status === "needs_approval") {
+          return { seq: i, status, reason: String((a as Record<string, unknown>)["reason"] ?? "") };
+        }
+        return null; // most recent run ended some other way (done/error/max steps)
+      }
+    }
+    return null;
+  }, [actions]);
+
   // ── Auto-TTS: agent steps ────────────────────────────────────────────────
   // Speak whenever a new agent_step enters the log (most recent one wins).
   React.useEffect(() => {
@@ -169,6 +192,20 @@ export function BrowserPage() {
     speak(question);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, voiceOut]);
+
+  // ── Auto-TTS: agent pause (needs_login / needs_approval) ────────────────
+  // Tell the user IN VOICE what to do — not just show it in the log — since
+  // this is the moment they have to act in the browser themselves.
+  React.useEffect(() => {
+    if (!voiceOut || !pausedInfo || pausedInfo.seq === lastPausedSeqRef.current) return;
+    lastPausedSeqRef.current = pausedInfo.seq;
+    const question = pausedInfo.status === "needs_login"
+      ? "Login erforderlich. Melde dich im Browser an, dann sage weiter."
+      : `Ich brauche deine Zustimmung. ${pausedInfo.reason || ""} Genehmige es im Browser, dann sage weiter.`;
+    stopSpeaking();
+    speak(question);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pausedInfo, voiceOut]);
 
   // ── PTT in task input (hold Space ≥ 400 ms) ─────────────────────────────
   const taskInputRef = React.useRef<HTMLInputElement>(null);
@@ -244,6 +281,7 @@ export function BrowserPage() {
     const { session: s } = await browserCreateSession(csrfRef.current);
     setSid(s); sinceRef.current = 0; setActions([]); setFrameOk(false);
     lastSpokenSeqRef.current = -1;
+    lastPausedSeqRef.current = -1;
     speak("Browser-Session gestartet. Gib eine Aufgabe ein oder navigiere direkt.");
   });
 
@@ -271,6 +309,23 @@ export function BrowserPage() {
     await browserAgent(sid, task.trim(), csrfRef.current);
   });
   const stopAgent = () => sid && run(() => browserAgentStop(sid, csrfRef.current));
+  const continueAgent = () => sid && run(async () => {
+    await browserAgentContinue(sid, csrfRef.current);
+    lastPausedSeqRef.current = actions.length; // don't re-announce the same pause
+  });
+
+  // Voice-record for the paused-for-human banner: only "weiter"/"continue"
+  // resumes — anything else is a no-op (narrow vocabulary, no open-ended
+  // action synthesis, per ADR-0189 §4.4).
+  const handlePausedMicClick = async () => {
+    if (recording) return;
+    stopSpeaking();
+    setVoiceStatus("Warte auf Antwort…");
+    const text = await recordAndTranscribe();
+    setVoiceStatus(null);
+    if (!text) return;
+    if (/\b(weiter|continue|los|weitermachen)\b/i.test(text)) continueAgent();
+  };
 
   // Manual voice-record for task (tap mic button).
   const handleMicClick = async () => {
@@ -442,6 +497,38 @@ export function BrowserPage() {
               </span>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Agent paused for human (needs_login / needs_approval, ADR-0189) */}
+      {pausedInfo && (
+        <div className="rounded border border-sky-500 bg-sky-500/10 p-3 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">
+                {pausedInfo.status === "needs_login" ? "Login erforderlich" : "Warte auf deine Genehmigung"}
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                {pausedInfo.status === "needs_login"
+                  ? "Melde dich im Browser oben an. Sage danach \"weiter\" oder drücke den Button."
+                  : `${pausedInfo.reason || "Eine Aktion braucht deine Zustimmung."} Genehmige sie im Browser, dann sage "weiter".`}
+              </p>
+            </div>
+            <span className="flex gap-2 items-center shrink-0">
+              {voiceOut && (
+                <button
+                  onClick={handlePausedMicClick}
+                  disabled={recording}
+                  title="Per Stimme antworten (weiter)"
+                  className="rounded border border-sky-400 text-sky-700 dark:text-sky-300 px-2 py-1 text-xs flex items-center gap-1"
+                >
+                  <Mic className="h-3 w-3" /> Sprechen
+                </button>
+              )}
+              <button onClick={continueAgent} disabled={busy}
+                className="rounded bg-sky-600 text-white px-2 py-1 text-xs">Weiter</button>
+            </span>
+          </div>
         </div>
       )}
 

@@ -3,6 +3,21 @@
 Companion to [browser-automation.md](browser-automation.md) (ADR-0182/0183/0187).
 Formalized in `Corvin-ADR/decisions/0189-browser-task-scoped-navigation-and-voice-guided-login.md`.
 
+**Status: implemented (2026-07-11).** All four phases in §7 shipped. Two
+implementation deltas versus the plan below, both simplifications that keep
+the same external behavior:
+
+- §4.2 planned splitting the collapsed "form is sensitive" boolean into
+  `form_has_password_field` / `form_has_payment_field`. Shipped instead: the
+  agent loop checks the already-existing per-mark `role == "password"` tag
+  from `marks.py` directly, before ever calling the planner — same pause
+  behavior, no change to the payment-form sensitive-commit gate at all
+  (smaller, lower-risk diff on a well-tested security-critical path).
+- §4.4's "genehmigen/ja" and "ablehnen/nein" were **already implemented**
+  before this concept (the pending-confirm mic button in `browser.tsx`); only
+  "weiter/continue" (resuming a `needs_login`/`needs_approval` pause) was new
+  and is now wired to a new `POST /browser/{sid}/agent/continue` endpoint.
+
 ## 1. Problem
 
 Two usability complaints from real use, both traced to the same root architecture:

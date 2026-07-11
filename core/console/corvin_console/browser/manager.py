@@ -55,6 +55,13 @@ class _Live:
     created: float = field(default_factory=lambda: 0.0)
     emitted: int = 0          # monotonic total events ever appended (survives deque rollover)
     agent_task: "asyncio.Task | None" = None
+    # ADR-0189: needed so a paused (needs_login) agent can be resumed by
+    # /browser continue <sid> without the caller having to re-supply the
+    # original task text, and so start_agent's auto_close wrapper knows
+    # whether the run it just finished actually ended the task or merely
+    # paused it waiting for a human.
+    last_task: str = ""
+    last_auto_close: bool = False
 
     def append(self, rec: dict) -> None:
         self.emitted += 1
@@ -82,7 +89,8 @@ class BrowserSessionManager:
         return f"{tenant_id}:{sid}"
 
     async def create(self, tenant_id: str, *, headless: bool = True,
-                     owner_fingerprint: str = "") -> str:
+                     owner_fingerprint: str = "",
+                     task_scoped_hosts: list[str] | None = None) -> str:
         # Bound concurrent browsers per tenant → no Chromium/PID exhaustion (DoS).
         live_count = sum(1 for k in self._sessions if k.startswith(f"{tenant_id}:"))
         if live_count >= _MAX_SESSIONS_PER_TENANT:
@@ -134,6 +142,7 @@ class BrowserSessionManager:
             sid, tenant_id,
             home=self._home_resolver(tenant_id),
             allowlist=allowlist, forbidden=forbidden,
+            task_scoped_hosts=task_scoped_hosts,
             audit_fn=self._audit_fn, vault_resolve=vault,
             confirm_fn=_confirm, on_action=_on_action, headless=headless,
         )
@@ -220,19 +229,29 @@ class BrowserSessionManager:
         if live.agent_task is not None and not live.agent_task.done():
             return False
 
+        live.last_task = task
+        live.last_auto_close = auto_close
         agent = BrowserAgent(live.session, max_steps=max_steps,
                              on_step=lambda rec: live.append({**rec, "ts": self._now()}))
 
         async def _run() -> None:
+            # ADR-0189: needs_login (and the pre-existing needs_approval) mean a
+            # human still has to act IN the browser — closing the session here
+            # would tear down the window/live-view mid-login. Only PAUSE
+            # statuses skip auto_close; every terminal status (done, error,
+            # max_steps, needs_approval's own eventual timeout-decline) still
+            # closes exactly as before.
+            status = None
             try:
                 result = await agent.run(task)
+                status = result.get("status")
                 live.append({"action": "agent_finished", **result, "ts": self._now()})
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
                 live.append({"action": "agent_error", "error": str(e), "ts": self._now()})
             finally:
-                if auto_close:
+                if auto_close and status not in ("needs_login", "needs_approval"):
                     # Inline close — do NOT call self.close() here: it would cancel
                     # THIS still-finishing agent task. Just drop the session + shut
                     # the browser down.
@@ -242,6 +261,29 @@ class BrowserSessionManager:
 
         live.agent_task = asyncio.ensure_future(_run())
         return True
+
+    def continue_agent(self, tenant_id: str, sid: str, *,
+                       max_steps: int = 12,
+                       owner_fingerprint: str = "") -> bool:
+        """ADR-0189: resume a session paused on needs_login (human just
+        finished logging in) or needs_approval (human approved via a
+        SEPARATE confirm — this covers the case where the run already timed
+        out/ended before they got to it) by re-running the agent loop on the
+        SAME session — same browser, same cookies/page state, so the next
+        observe() sees the now-authenticated page. Reuses the original task
+        text captured at start_agent() time plus a short note so the planner
+        knows not to repeat the login step."""
+        live = self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint)
+        if live.agent_task is not None and not live.agent_task.done():
+            return False
+        if not live.last_task:
+            return False
+        note = ("\n\n[The human has just completed a manual step you paused "
+                "for (login or an approval) — continue the task from the "
+                "CURRENT page state; do not repeat steps already done.]")
+        return self.start_agent(tenant_id, sid, live.last_task + note,
+                                max_steps=max_steps, auto_close=live.last_auto_close,
+                                owner_fingerprint=owner_fingerprint)
 
     def agent_running(self, tenant_id: str, sid: str) -> bool:
         live = self.get(tenant_id, sid)

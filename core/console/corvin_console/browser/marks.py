@@ -199,6 +199,14 @@ _FINGERPRINT_JS = r"""
 # sensitive even though its own accessible name matches no keyword. Scoped to
 # the enclosing form only (not the whole page) to avoid over-flagging every
 # click on a page that merely CONTAINS a login form elsewhere.
+#
+# Kept as ONE collapsed boolean deliberately (ADR-0189 considered and
+# rejected splitting this specific commit-confirm gate): a password OR a
+# payment field both still need to require confirm before commit, so this
+# well-tested path is unchanged. The login-vs-payment distinction ADR-0189
+# actually needs lives one layer up, in the agent loop, by checking
+# Observation.marks for role == "password" (marks.py already tags those
+# individually) — see BrowserAgent's needs_login check.
 _FORM_SENSITIVE_JS = r"""
 (el) => {
   const form = el.closest ? el.closest('form') : null;

@@ -39,6 +39,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Cookie, Depends, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect, status as http_status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -101,6 +102,48 @@ def _detect_browser_task(prompt: str) -> str | None:
     if _URL_START_RE.match(stripped) or _BROWSE_INTENT_RE.match(stripped):
         return stripped
     return None
+
+
+# ADR-0189: any http(s) URL literally present ANYWHERE in the task text (not
+# just a leading one, unlike _URL_START_RE above) — used to extract the
+# host(s) the user's own instruction named, for ephemeral per-session
+# navigation auto-approval. Deliberately broad matching (URLs can appear
+# mid-sentence: "read the CorvinOS listing at https://x.com/y and summarize
+# it") but the EXTRACTED VALUE is only ever a host, passed through
+# BrowserSession's own _host_task_scoped() subdomain check — a malformed or
+# adversarial-looking match here can at worst fail to auto-approve (falls
+# through to the existing confirm), never silently widen anything.
+_TASK_URL_RE = re.compile(r'https?://[^\s<>"\')\]]+', re.I)
+
+
+def _extract_task_hosts(task: str) -> list[str]:
+    """Extract the distinct hostnames of every http(s) URL literally present
+    in the user's own /browser task text."""
+    hosts: list[str] = []
+    for m in _TASK_URL_RE.finditer(task or ""):
+        try:
+            host = urlsplit(m.group(0)).hostname
+        except ValueError:
+            continue
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def _notify_browser_pause(tenant_id: str, *, text: str) -> None:
+    """ADR-0189: best-effort proactive voice notification for a browser-agent
+    pause (needs_login / needs_approval), on top of the in-chat text delta
+    already sent. No-ops silently if the tenant has no notify routing
+    configured (see routes.browser._notify_resolver) — this is an ADDITION,
+    never a required delivery path."""
+    try:
+        from . import browser as _br  # noqa: PLC0415 — local import, see other call sites in this file
+        from ..browser import notify as _br_notify  # noqa: PLC0415
+        channel, chat_id = _br._notify_resolver(tenant_id)
+        _br_notify.notify_pause(channel=channel, chat_id=chat_id, tenant_id=tenant_id,
+                                label="browser task", text=text)
+    except Exception:  # noqa: BLE001 — never let a notify failure break the WS loop
+        logging.getLogger(__name__).debug("browser pause notify failed", exc_info=True)
 
 
 # Broad browsing-signal pre-gate — only messages matching this are worth the LLM
@@ -465,6 +508,12 @@ async def upload_attachments(
 _BROWSER_CONFIRM_CMD_RE = re.compile(
     r"^confirm\s+(\S+)\s+(yes|no|y|n|approve|deny|decline)\s*$", re.IGNORECASE)
 
+# ADR-0189 — `/browser continue <sid>` resumes a session paused on
+# needs_login (or needs_approval): the human has just finished the manual
+# step (login, or approving a separate confirm) and wants the agent to pick
+# the original task back up from the current, now-changed page state.
+_BROWSER_CONTINUE_CMD_RE = re.compile(r"^continue\s+(\S+)\s*$", re.IGNORECASE)
+
 
 async def _handle_browser_confirm_command(websocket, rec, match: "re.Match") -> None:
     """Resolve the oldest pending confirm for a browser session from chat.
@@ -499,6 +548,36 @@ async def _handle_browser_confirm_command(websocket, rec, match: "re.Match") -> 
     await websocket.send_json({"type": "done"})
 
 
+async def _handle_browser_continue_command(websocket, rec, match: "re.Match") -> None:
+    """ADR-0189 — `/browser continue <sid>`: resume an agent paused on
+    needs_login/needs_approval. Fail-closed: an unknown session, a session
+    with an agent already running, or one that was never paused (no
+    last_task recorded) is reported as a clear, distinct error."""
+    from . import browser as _br  # reuse the singleton manager
+    sid = match.group(1)
+    mgr = _br._mgr()
+    try:
+        started = mgr.continue_agent(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint)
+    except KeyError:
+        await websocket.send_json({"type": "error",
+            "message": f"no browser session '{sid}' for this tenant."})
+        await websocket.send_json({"type": "done"})
+        return
+    if not started:
+        await websocket.send_json({"type": "error",
+            "message": f"browser session '{sid}' has nothing to continue "
+                       f"(already running, or was never paused)."})
+        await websocket.send_json({"type": "done"})
+        return
+    with contextlib.suppress(Exception):
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="chat.browser_continue", target_kind="browser_session", target_id=sid)
+    await websocket.send_json({"type": "delta",
+        "text": f"▶️ resuming browser session `{sid}`.\n"})
+    await websocket.send_json({"type": "done"})
+
+
 async def _handle_browser_command(websocket, rec, task: str) -> None:
     """ADR-0182 Part B — `/browser <task>` in the command-center chat: open a
     visible browser, run the browser-agent loop, and stream its progress back as
@@ -516,6 +595,10 @@ async def _handle_browser_command(websocket, rec, task: str) -> None:
     _confirm_match = _BROWSER_CONFIRM_CMD_RE.match(task)
     if _confirm_match:
         await _handle_browser_confirm_command(websocket, rec, _confirm_match)
+        return
+    _continue_match = _BROWSER_CONTINUE_CMD_RE.match(task)
+    if _continue_match:
+        await _handle_browser_continue_command(websocket, rec, _continue_match)
         return
     # Same gates as a normal chat turn: (1) L44 acceptable-use on the task text
     # (it drives an LLM + a browser), fail-closed; (2) charge the chat-turn quota
@@ -551,10 +634,18 @@ async def _handle_browser_command(websocket, rec, task: str) -> None:
             "message": "daily chat-turn limit reached (chat_turns_per_day)"})
         await websocket.send_json({"type": "done"})
         return
+    # ADR-0189: hosts literally named in the user's own task text get an
+    # ephemeral, per-session navigation auto-approval — never persisted,
+    # never merged into the tenant's configured allowlist. Anything the
+    # agent decides to visit on its own is unaffected (see BrowserSession's
+    # _host_task_scoped()).
+    task_scoped_hosts = _extract_task_hosts(task)
+
     mgr = _br._mgr()
     try:
         sid = await mgr.create(rec.tenant_id, headless=_br._default_headless(),
-                               owner_fingerprint=rec.sid_fingerprint)
+                               owner_fingerprint=rec.sid_fingerprint,
+                               task_scoped_hosts=task_scoped_hosts or None)
     except Exception as e:  # noqa: BLE001 — cap reached / launch failure
         await websocket.send_json({"type": "error", "message": f"could not start browser: {e}"})
         await websocket.send_json({"type": "done"})
@@ -564,6 +655,10 @@ async def _handle_browser_command(websocket, rec, task: str) -> None:
             tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
             action="chat.browser_command", target_kind="browser_session", target_id=sid)
 
+    _scope_note = (
+        f"Approved for this task: {', '.join(task_scoped_hosts)}. Anything else will ask you first.\n"
+        if task_scoped_hosts else ""
+    )
     await websocket.send_json({"type": "delta", "text":
         # WA: clicking "Browser-Session starten" in the sidebar creates a
         # brand-new, disconnected session (POST /browser/session) instead of
@@ -571,7 +666,7 @@ async def _handle_browser_command(websocket, rec, task: str) -> None:
         # saw an unrelated, never-navigated about:blank tab. Deep-link with
         # ?sid=... instead; browser.tsx now reads it and attaches directly.
         f"🌐 Browser started — [open Browser to watch live](/console/app/browser?sid={sid}).\n"
-        f"**Task:** {task}\n\n"})
+        f"**Task:** {task}\n{_scope_note}\n"})
     # auto_close: a chat-initiated session closes itself when the agent finishes,
     # so it can never leak / wedge the per-tenant session cap.
     if not mgr.start_agent(rec.tenant_id, sid, task, auto_close=True):
@@ -600,6 +695,22 @@ async def _handle_browser_command(websocket, rec, task: str) -> None:
                 elif a == "confirm_request":
                     await websocket.send_json({"type": "delta",
                         "text": f"⚠️ needs your approval: “{e.get('name','')}” — approve it in the Browser page.\n"})
+                elif a == "agent_finished" and e.get("status") == "needs_login":
+                    _login_text = ("Login required — open the live view, log in, "
+                                   f"then say weiter or send /browser continue {sid}.")
+                    await websocket.send_json({"type": "delta",
+                        "text": f"\n🔐 **Login required** — open the live view, log in, "
+                                f"then send `/browser continue {sid}` (or say “weiter”).\n"})
+                    _notify_browser_pause(rec.tenant_id, text=_login_text)
+                elif a == "agent_finished" and e.get("status") == "needs_approval":
+                    _approval_text = ("Paused, waiting for your approval — "
+                                       f"{e.get('reason','')} Once approved in the Browser page, "
+                                       f"say weiter or send /browser continue {sid} to keep going.")
+                    await websocket.send_json({"type": "delta",
+                        "text": f"\n⏸️ **Paused, waiting for your approval** — {e.get('reason','')}\n"
+                                f"Once approved in the Browser page, send `/browser continue {sid}` "
+                                f"to keep going.\n"})
+                    _notify_browser_pause(rec.tenant_id, text=_approval_text)
                 elif a in ("agent_finished",):
                     await websocket.send_json({"type": "delta",
                         "text": f"\n✅ **Done** — {e.get('summary') or e.get('reason','')}\n"})

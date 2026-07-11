@@ -58,6 +58,49 @@ buttons, read results — while **you watch live** and can pause or take over.
 - **Bounds** — max 8 concurrent browser sessions per tenant; the profile
   (cookies/localStorage) is wiped when the session closes.
 
+## Task-scoped navigation + voice-guided login (ADR-0189)
+
+Two usability additions layered on top of the safety model above — neither
+weakens the fail-closed default for anything the user didn't explicitly ask
+for:
+
+- **Task-scoped auto-approval.** When a `/browser <task>` chat command's own
+  task text literally names a URL (e.g. *"open https://aiagentslist.com and
+  read the listing"*), navigating to that host (or a subdomain of it) no
+  longer pauses for a confirm — the user already approved it by naming it.
+  Any OTHER cross-host hop the agent tries mid-task (something it discovered
+  on the page, not something the user asked for) still requires the normal
+  confirm. This only ever *narrows* what needs approval; it never disables
+  the confirm/egress-allowlist machinery itself.
+- **Login pause (`needs_login`).** The agent loop checks for a visible
+  password field *before* asking the planner what to do next. If one is
+  present, the loop stops immediately — the agent can never decide to
+  `fill()`/`fill_secret()` a password itself — and reports `needs_login`. The
+  session stays open (it does **not** auto-close) so the live view keeps
+  showing the page for the human to log in manually.
+- **Approval pause (`needs_approval`).** A cross-host confirm that's declined
+  or times out ends the run cleanly with `needs_approval` instead of retrying
+  the same hop every step until `max_steps`. The session likewise stays open.
+- **Resuming a pause.** `/browser continue <sid>` in chat (or the **Weiter**
+  button / saying "weiter" in the Browser page) re-runs the agent loop on the
+  *same* session — same browser, same cookies/page state — with a short note
+  telling the planner not to repeat the step it paused for.
+- **Voice notification on pause.** If the tenant has notify routing
+  configured (see `spec.browser.notify_channel`/`notify_chat_id` below), a
+  proactive voice-capable notification is pushed the moment the agent pauses
+  — not just the in-chat text delta — reusing the existing completion-notify
+  outbox/TTS pipeline. No routing configured → silently skipped; the in-chat
+  message and the live view remain the primary UX either way.
+- **Narrow voice vocabulary in the Browser page.** The existing mic button
+  now also listens for "weiter"/"continue" (resumes a pause) alongside the
+  pre-existing "ja"/"nein" confirm-answer vocabulary. Recognized phrases route
+  to the existing narrow confirm/continue endpoints only — there is no
+  open-ended "do X" voice command that synthesizes new agent actions.
+
+See `docs/browser-voice-guided-navigation.md` for the full design rationale
+and `Corvin-ADR/decisions/0189-browser-task-scoped-navigation-and-voice-guided-login.md`
+for the formal decision record.
+
 ## Enable it
 
 ```bash
@@ -89,12 +132,16 @@ wins.
 |---|---|
 | `spec.browser.allowed_hosts` | Egress allowlist (deny-by-default when set) |
 | `spec.browser.forbidden_hosts` | Always-blocked hosts |
+| `spec.browser.notify_channel` / `spec.browser.notify_chat_id` | ADR-0189: opt-in routing (e.g. `discord` + a chat ID) for proactive voice notifications when the agent pauses. No console UI/API yet — manual YAML edit only, same pattern as the allowlist above. Absent → no proactive notification (in-chat text + live view still apply). |
 | env `CORVIN_BROWSER_NO_SANDBOX=1` | Disable the renderer sandbox (constrained hosts only) |
 
 ## Known limitations
 
 - A confirm can be approved from the live-view **or** from the main chat
   (`/browser confirm <sid> yes|no`); both resolve the same pending request.
+- A `needs_login`/`needs_approval` pause can be resumed from the live-view
+  (Weiter button or saying "weiter") **or** from the main chat
+  (`/browser continue <sid>`); both call the same `continue_agent()` path.
 - Sensitivity detection is heuristic (element name + URL path + form context); an
   icon-only commit button on a plain-looking page may not be auto-flagged (the
   network-layer egress guard, the audit trail, and the live view are the

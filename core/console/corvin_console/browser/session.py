@@ -84,6 +84,26 @@ class StaleMarkError(BrowserActionError):
     blindly or surfacing a generic error."""
 
 
+def _host_task_scoped(host: str, task_hosts: list[str]) -> bool:
+    """ADR-0189: True if `host` is one of the hosts the user's own task text
+    named, or in a direct subdomain relationship with one (task said
+    "example.com", a login/OAuth redirect lands on "accounts.example.com" or
+    "www.example.com"). Deliberately narrower than "same registrable
+    domain" — that needs a public-suffix-list dependency to do correctly
+    (co.uk-style multi-part TLDs) and getting it wrong in the permissive
+    direction would silently widen the auto-approved surface. A sibling
+    subdomain that isn't in a subdomain relationship with a named task host
+    still requires the normal confirm — the safe failure direction."""
+    host = host.lower().rstrip(".")
+    for th in task_hosts:
+        th = (th or "").lower().rstrip(".")
+        if not th:
+            continue
+        if host == th or host.endswith("." + th) or th.endswith("." + host):
+            return True
+    return False
+
+
 class BrowserSession:
     def __init__(
         self,
@@ -93,6 +113,7 @@ class BrowserSession:
         home: Path,
         allowlist: list[str] | None = None,
         forbidden: list[str] | None = None,
+        task_scoped_hosts: list[str] | None = None,
         audit_fn: AuditFn | None = None,
         vault_resolve: VaultResolve | None = None,
         confirm_fn: ConfirmFn | None = None,
@@ -105,6 +126,11 @@ class BrowserSession:
         self._home = home
         self._allowlist = allowlist
         self._forbidden = forbidden
+        # ADR-0189: ephemeral, per-session hosts extracted from the user's own
+        # task text — never persisted, never merged into self._allowlist (that
+        # field's mere presence disables the cross-host confirm entirely, see
+        # navigate() below; task_scoped_hosts must NOT have that side effect).
+        self._task_scoped_hosts = task_scoped_hosts
         self._audit = audit_fn
         self._vault = vault_resolve
         self._confirm = confirm_fn
@@ -469,19 +495,30 @@ class BrowserSession:
             # skip the confirm — that would let the agent's very FIRST hop of a
             # session go unconfirmed regardless of destination.
             if decision.host and (not cur or decision.host != cur):
-                # SECURITY: pass the HOST only, never the full URL — the confirm
-                # `name` is written verbatim into the live action-log ring buffer
-                # and the pending() payload, and a full URL can carry a
-                # ?token=/reset secret. The audit trail is already host-only
-                # (below); the live view must not leak more than the audit trail.
-                approved = await self._confirm(action="navigate", host=decision.host,
-                                               role="navigation", name=decision.host)
-                if not approved:
+                # ADR-0189: a host the user's own task text named is already
+                # informed consent for THAT host — auto-approve with no prompt.
+                # Anything else (the actual indirect-prompt-injection surface:
+                # the agent deciding on its own, from page content, to hop
+                # somewhere the user never mentioned) is unchanged below.
+                if self._task_scoped_hosts and _host_task_scoped(decision.host, self._task_scoped_hosts):
                     _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
-                                      action="navigate", host=decision.host, ok=False,
-                                      extra={"reason": "user_declined_cross_host"})
-                    self._emit("navigate", host=decision.host, ok=False, reason="cross-host declined")
-                    raise BrowserActionError(f"cross-host navigation to {decision.host} declined")
+                                      action="navigate", host=decision.host, ok=True,
+                                      extra={"reason": "task_scoped_auto_approved"})
+                    self._emit("navigate", host=decision.host, ok=True, reason="task-scoped, auto-approved")
+                else:
+                    # SECURITY: pass the HOST only, never the full URL — the confirm
+                    # `name` is written verbatim into the live action-log ring buffer
+                    # and the pending() payload, and a full URL can carry a
+                    # ?token=/reset secret. The audit trail is already host-only
+                    # (below); the live view must not leak more than the audit trail.
+                    approved = await self._confirm(action="navigate", host=decision.host,
+                                                   role="navigation", name=decision.host)
+                    if not approved:
+                        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                                          action="navigate", host=decision.host, ok=False,
+                                          extra={"reason": "user_declined_cross_host"})
+                        self._emit("navigate", host=decision.host, ok=False, reason="cross-host declined")
+                        raise BrowserActionError(f"cross-host navigation to {decision.host} declined")
         async with self._page_lock:
             page = self._require_page()
             self._last_marks = []       # stamps from the old page are gone

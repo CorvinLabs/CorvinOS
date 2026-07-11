@@ -5504,3 +5504,6 @@ export function browserAgent(sid: string, task: string, csrf: string): Promise<{
 export function browserAgentStop(sid: string, csrf: string): Promise<{ stopped: boolean }> {
   return api(`/browser/${sid}/agent/stop`, { method: "POST", csrf });
 }
+export function browserAgentContinue(sid: string, csrf: string): Promise<{ resumed: boolean }> {
+  return api(`/browser/${sid}/agent/continue`, { method: "POST", csrf });
+}

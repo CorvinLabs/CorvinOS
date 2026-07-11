@@ -73,6 +73,35 @@ def _allowlist_resolver(tenant_id: str):
     return (allow, forbid)
 
 
+def _notify_resolver(tenant_id: str) -> tuple[str | None, str | None]:
+    """ADR-0189: (channel, chat_id) to proactively voice-notify for THIS
+    tenant's browser-agent pauses (needs_login / needs_approval), from
+    spec.browser.notify_channel / notify_chat_id in tenant.corvin.yaml.
+
+    Same manual-YAML-edit pattern as the allowlist above (no UI, no API) —
+    there is no automatic mapping from a console chat session to a
+    messenger identity (a Discord conversation and a console web session
+    are architecturally separate systems), so an operator who wants proactive
+    voice notifications for browser pauses opts in explicitly here. Absent
+    or malformed config -> (None, None), which notify.notify_pause() treats
+    as "no routing context, skip silently" — never an error."""
+    try:
+        import yaml  # type: ignore
+        cfg = _forge_paths.tenant_global_dir(tenant_id) / "tenant.corvin.yaml"
+        if not cfg.exists():
+            return (None, None)
+        data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+        spec = data.get("spec", data)
+        br = spec.get("browser", {}) if isinstance(spec.get("browser"), dict) else {}
+        channel = br.get("notify_channel")
+        chat_id = br.get("notify_chat_id")
+        channel = channel if isinstance(channel, str) and channel else None
+        chat_id = chat_id if chat_id else None
+        return (channel, chat_id)
+    except Exception:  # noqa: BLE001 — best-effort; never block on this
+        return (None, None)
+
+
 _manager = None
 
 def _mgr():
@@ -416,3 +445,21 @@ async def stop_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depend
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"stopped": True}
+
+
+@router.post("/browser/{sid}/agent/continue")
+async def continue_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+    """ADR-0189: resume a session paused on needs_login/needs_approval — the
+    live-view equivalent of the chat `/browser continue <sid>` command, so
+    the "weiter" voice command works from the Browser page itself."""
+    try:
+        resumed = _mgr().continue_agent(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    if not resumed:
+        raise HTTPException(status_code=http_status.HTTP_409_CONFLICT,
+                            detail="nothing to continue (no prior paused task, or agent already running)")
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+        action="browser.agent.continue", target_kind="browser_session", target_id=sid)
+    return {"resumed": True}

@@ -210,6 +210,20 @@ class BrowserAgent:
         known_tabs = 1
 
         for step in range(self._max):
+            # ADR-0189: a visible password field is a login moment — pause the
+            # WHOLE loop before ever asking the planner what to do, so the
+            # agent can never decide to fill()/fill_secret() it itself (the
+            # prompt-level "use fill_secret, never fill" instruction above was
+            # a nudge, not an enforcement point). The human completes the
+            # entire login manually in the live view; /browser continue
+            # resumes with a fresh observe() that only still sees the
+            # password mark if the login genuinely isn't done yet.
+            if any(m.role == "password" for m in obs.marks):
+                self._emit({"action": "agent_done", "step": step,
+                            "reason": "awaiting human login (password field detected)"})
+                return {"status": "needs_login", "steps": step,
+                        "reason": "a password field is visible — complete the login "
+                                  "in the live view, then resume"}
             action = await self._plan(task, obs, transcript)
             act = str(action.get("action", "")).lower()
             transcript.append(action)

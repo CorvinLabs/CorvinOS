@@ -40,6 +40,7 @@ import secrets
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 # Delivered records are kept briefly for idempotency/forensics, then pruned.
 CN_DELIVERED_TTL = float(os.environ.get("CN_DELIVERED_TTL", str(24 * 3600)))
@@ -184,12 +185,21 @@ def register(
     sender: str = "",
     tenant_id: str = "_default",
     label: str = "",
+    want_voice: bool = False,
 ) -> str:
     """Register a pending completion notification and return its task id.
 
     Capture the originating routing context NOW, while it is still available in
     the turn, so the later (out-of-band) completion can be routed. ``chat_id``
     is required for chat_id-routed channels; ``to`` for whatsapp.
+
+    ``want_voice`` (ADR-0189): ask the delivering poller to also synthesize a
+    spoken voice note for this record's text, IF the poller was given a
+    synthesizer (see ``deliver_ready``'s ``synthesize_voice`` param) — this
+    module stays pure-stdlib/no-subprocess either way; it only carries the
+    flag, it never calls into the (heavy, subprocess-based) TTS pipeline
+    itself. A poller with no synthesizer configured silently delivers
+    text-only, exactly as before this flag existed.
     """
     tid = str(task_id) if task_id else f"cn_{secrets.token_hex(8)}"
     rec = {
@@ -200,6 +210,7 @@ def register(
         "sender": str(sender or ""),
         "tenant_id": str(tenant_id or "_default"),
         "label": str(label or ""),
+        "want_voice": bool(want_voice),
         "state": _STATE_PENDING,
         "text": None,
         "ok": None,
@@ -271,8 +282,15 @@ def mark_done(task_id: str, *, text: str, ok: bool = True) -> bool:
 # ─── delivery (poller) API ─────────────────────────────────────────────────
 
 
-def _envelope_for(rec: dict) -> dict:
-    """Build the outbox envelope with the correct per-channel routing key."""
+def _envelope_for(rec: dict, *, voice_path: str | None = None) -> dict:
+    """Build the outbox envelope with the correct per-channel routing key.
+
+    ``voice_path`` (ADR-0189): when the caller already synthesized a voice
+    note for this record's text (see deliver_ready's synthesize_voice
+    callback), attach it here — the outbox consumer already knows how to
+    turn a voice_path into an attached voice note for any envelope that has
+    one, so no daemon-side change is needed to make this audible.
+    """
     channel = rec.get("channel") or "discord"
     label = rec.get("label") or "background task"
     ok = rec.get("ok")
@@ -286,6 +304,8 @@ def _envelope_for(rec: dict) -> dict:
         "_completion_notify": True,
         "ts": time.time(),
     }
+    if voice_path:
+        env["voice_path"] = voice_path
     # Route: chat_id for most channels; `to` (JID) for whatsapp. Stamp both when
     # available so a channel that reads either key still delivers.
     #
@@ -314,7 +334,10 @@ def _envelope_for(rec: dict) -> dict:
     return env
 
 
-def deliver_ready(outbox_dir: str | Path, *, now: float | None = None) -> int:
+def deliver_ready(
+    outbox_dir: str | Path, *, now: float | None = None,
+    synthesize_voice: "Callable[[str], str | None] | None" = None,
+) -> int:
     """Deliver every ready notification to *outbox_dir* exactly once.
 
     For each ready record: acquire a per-record ``O_EXCL`` lock (so the adapter
@@ -323,6 +346,13 @@ def deliver_ready(outbox_dir: str | Path, *, now: float | None = None) -> int:
     records past ``CN_DELIVERED_TTL`` and abandoned pending records past
     ``CN_PENDING_MAX_AGE``. Fail-safe: any per-record error is logged to stderr
     and skipped; never raises. Returns the count delivered this call.
+
+    ``synthesize_voice`` (ADR-0189): optional ``text -> voice_path | None``
+    callback, injected by a caller that HAS the (heavy, subprocess-based) TTS
+    pipeline available — this module itself stays pure-stdlib/no-subprocess.
+    Only called for records with ``want_voice=True`` (see ``register``).
+    Synthesis failure degrades to text-only delivery, never blocks it — a
+    voice note is an enhancement, not a delivery precondition.
     """
     now = time.time() if now is None else now
     qdir = _queue_dir()
@@ -437,7 +467,17 @@ def deliver_ready(outbox_dir: str | Path, *, now: float | None = None) -> int:
             rec = _read(path)
             if rec is None or rec.get("state") != _STATE_READY:
                 continue
-            env = _envelope_for(rec)
+            voice_path = None
+            if synthesize_voice is not None and rec.get("want_voice"):
+                try:
+                    voice_path = synthesize_voice(rec.get("text") or "")
+                except Exception as ve:  # noqa: BLE001 — never let a TTS failure
+                    # block the (already-ready) text delivery this record is
+                    # about to get; log and fall through voice-less.
+                    print(f"completion_notify: voice synth failed {path.name}: {ve}",
+                          file=sys.stderr)
+                    voice_path = None
+            env = _envelope_for(rec, voice_path=voice_path)
             out_file = outbox / f"cn_{rec.get('id')}_{secrets.token_hex(4)}.json"
             tmp = out_file.with_suffix(out_file.suffix + ".tmp")
             tmp.write_text(json.dumps(env, ensure_ascii=False), encoding="utf-8")
