@@ -6919,6 +6919,39 @@ def _append_metapher(text: str, *, lang: str = "de") -> str:
         return text
 
 
+def _truncate_at_boundary(text: str, max_chars: int) -> str:
+    """Truncate *text* to at most max_chars, preferring a sentence boundary
+    over a hard mid-word/mid-sentence cut.
+
+    build_voice_summary's degraded-path fallbacks (summarize.py timeout,
+    crash, or empty output) used to do a plain `text[:max_chars]` slice —
+    landing wherever the character count happened to fall, mid-sentence or
+    mid-word, so the spoken voice note just stopped abruptly with no audible
+    indication it was cut short. This finds the last sentence-ending
+    punctuation within the budget and cuts there instead; if none exists
+    close enough to be worth keeping, falls back to the last whole word
+    (never a mid-word cut) and appends an ellipsis so an abrupt ending at
+    least *sounds* unfinished rather than sounding like a complete thought.
+    """
+    if len(text) <= max_chars:
+        return text
+    window = text[:max_chars]
+    best = -1
+    for punct in (".", "!", "?", "\n"):
+        idx = window.rfind(punct)
+        if idx > best:
+            best = idx
+    # Only accept a sentence boundary if it doesn't throw away too much of
+    # the budget (e.g. a stray "." near the start would leave almost
+    # nothing spoken) — require it to cover at least 40% of max_chars.
+    if best >= max_chars * 0.4:
+        return window[:best + 1].strip()
+    space_idx = window.rfind(" ")
+    if space_idx >= max_chars * 0.4:
+        return window[:space_idx].rstrip() + "…"
+    return window.rstrip() + "…"
+
+
 def build_voice_summary(text: str, max_chars: int = 400,
                          override: str | None = None,
                          task: str = "") -> str:
@@ -7002,7 +7035,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
     summarizer = SCRIPTS_DIR / "summarize.py"
     stripper = SCRIPTS_DIR / "strip_for_tts.py"
     if not summarizer.exists() or not stripper.exists():
-        spoken = _strip_for_speech(text[:max_chars])
+        spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
         if want_appendix and not _has_lern_zugabe_suffix(spoken):
             spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
         if want_metapher and not _has_metapher_suffix(spoken):
@@ -7103,7 +7136,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
                 )
             return result
         log("build_voice_summary: summarize returned empty — using head of answer")
-        spoken = _strip_for_speech(text[:max_chars])
+        spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
         if want_appendix and not _has_lern_zugabe_suffix(spoken):
             spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
         if want_metapher and not _has_metapher_suffix(spoken):
@@ -7114,7 +7147,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
         # the answer head, not propagate out and drop the whole turn — this was
         # an uncaught crash on stripped-PATH / Windows before sys.executable.
         log(f"build_voice_summary: summarize failed ({type(e).__name__}) — using head of answer")
-        spoken = _strip_for_speech(text[:max_chars])
+        spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
         if want_appendix and not _has_lern_zugabe_suffix(spoken):
             spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
         if want_metapher and not _has_metapher_suffix(spoken):
