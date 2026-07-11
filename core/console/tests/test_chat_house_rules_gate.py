@@ -197,19 +197,33 @@ class HouseRulesGateE2E(unittest.TestCase):
                ("house_rules.denied", "house_rules.escalated")]
         self.assertFalse(bad, "a benign prompt must not produce a deny/escalate event")
 
-    # ── (c) classifier exception fails CLOSED (no spawn) ─────────────────────
-    def test_classifier_error_fails_closed(self) -> None:
+    # ── (c) classifier backend unreachable → degrades to Tier-0 floor ────────
+    def test_classifier_error_degrades_to_floor_benign_passes(self) -> None:
+        # A raising classifier = semantic backend unreachable (fresh install
+        # before Hermes/Claude are ready, or a transient outage). The gate must
+        # NOT block a benign prompt — it degrades to the always-available
+        # deterministic Tier-0 floor, which clears benign traffic. Prohibited
+        # content is still blocked by that floor (see test_house_rules.py's
+        # test_classifier_backend_unreachable_degrades_to_tier0_floor). This is
+        # fail-TO-FLOOR, not fail-open. Fixes the reported fresh-install UX bug
+        # where a first "hallo" was blocked out of the box.
         self._raise_classifier()
-        called = self._no_spawn_guard()
+
+        spawned = {"hit": False}
+
+        async def _fake_spawn(*args, **kwargs):
+            spawned["hit"] = True
+            raise FileNotFoundError("stubbed: gate passed via floor, spawn reached")
+
+        self.cr.asyncio.create_subprocess_exec = _fake_spawn  # type: ignore[attr-defined]
 
         events = _drain(self.cr.stream_turn(self.sess, "Tell me a joke."))
 
-        self.assertFalse(called["hit"],
-                         "a classifier error must fail CLOSED — never spawn")
-        result = next(e for e in events if e.get("type") == "result")
-        self.assertIn("[house-rules]", result["text"])
-        # classifier_error → neutral try-again wording (not the violation wording).
-        self.assertIn("couldn't be safety-checked", result["text"])
+        self.assertTrue(spawned["hit"],
+                        "benign prompt must PASS via the Tier-0 floor even when the classifier backend is down")
+        for e in events:
+            if e.get("type") in ("result", "delta"):
+                self.assertNotIn("[house-rules]", e.get("text", ""))
 
 
 if __name__ == "__main__":

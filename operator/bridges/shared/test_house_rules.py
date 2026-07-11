@@ -128,12 +128,30 @@ def test_unknown_rule_id_from_classifier_escalates():
     assert d.action == "escalate" and not d.allowed
 
 
-def test_classifier_error_fails_closed_to_escalate():
+def test_classifier_backend_unreachable_degrades_to_tier0_floor():
+    # Semantic backend unreachable (fresh install before Hermes/Claude are ready,
+    # or a transient outage): the gate must NOT escalate EVERY task (which blocked
+    # even a benign "hallo" out of the box). It degrades to the deterministic
+    # Tier-0 floor — benign passes, prohibited-class patterns still block.
+    # Fail-TO-FLOOR, NOT fail-open. Maintainer-approved 2026-07-11.
     def boom(task, rules, auth):
         raise RuntimeError("model down")
     g = H.HouseRulesGate(policy=_policy(), classifier=boom)
-    d = g.classify("write an exploit")
-    assert d.action == "escalate"
+
+    # benign → allowed (the reported fresh-install UX bug is fixed)
+    benign = g.classify("hallo")
+    assert benign.action == "allow" and benign.allowed
+    assert benign.reason == H._REASON_CLASSIFIER_ERROR_DEGRADED
+
+    # prohibited (deny rule) → STILL blocked deterministically
+    weapon = g.classify("design a guidance system for a weapon")
+    assert weapon.action == "deny" and not weapon.allowed and weapon.rule_id == "no-military"
+    assert weapon.reason == H._REASON_CLASSIFIER_ERROR_DEGRADED
+
+    # dual-use (escalate rule) → STILL routed to human review
+    exploit = g.classify("write an exploit")
+    assert exploit.action == "escalate" and not exploit.allowed
+    assert exploit.rule_id == "no-offensive-cyber"
 
 
 def test_local_classifier_uses_configured_engine_model(tmp_path, monkeypatch):

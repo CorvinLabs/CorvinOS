@@ -96,7 +96,25 @@ This adds the LIP integrity pin on top of the committed-anchor check.
   (`claude -p --max-turns 1 --tools ""`, helper-model site `house_rules_adjudicator`,
   20 s timeout). It runs on EVERY non-empty task (NOT only on a Tier-0 hit — see
   Classification) and classifies the whole task against the full ruleset. On
-  timeout/parse-failure it raises → the gate escalates (fail-safe).
+  timeout/parse-failure it raises → the chain falls through to the next provider.
+  - **Backend-unavailable → degrade to the Tier-0 floor (2026-07-11, load-bearing):**
+    when the semantic classifier callable RAISES because *no* backend can run at all
+    (Hermes AND cloud both unavailable — the dominant case is a **fresh install** in
+    the seconds/minutes before Hermes is provisioned or `claude` is logged in, or a
+    transient outage), `classify()` no longer escalates EVERY task. It **degrades to
+    the always-available deterministic Tier-0 floor**: the prohibited-class patterns
+    (`no-military` / `no-offensive-cyber` / `no-disinformation`) still MATCH and BLOCK,
+    but a task matching NO rule passes. This is **fail-TO-FLOOR, NOT fail-open** — the
+    policy `default_action` is reached only for content the deterministic floor cleared,
+    so the acceptable-use guarantee (prohibited classes never pass) is preserved while a
+    benign first message (`"hallo"`) is no longer blocked out of the box. The audit
+    chain records the distinct reason `classifier_error_tier0_degraded` (the semantic
+    check did not run), and the degradation still feeds the ADR-0157 M4 health window
+    (heal trigger). Genuine classifier UNCERTAINTY (a backend RAN but returned low
+    confidence / an anomalous rule id) still ESCALATES — only total UNAVAILABILITY
+    degrades. Maintainer-approved. Tests: `test_house_rules.py::
+    test_classifier_backend_unreachable_degrades_to_tier0_floor` +
+    `test_console_spawn_gates.py::test_gate_exception_degrades_to_floor`.
   - **Binary resolution (load-bearing):** the classifier subprocess resolves the
     claude CLI via `adapter._resolve_helper_claude_bin()`
     (`CORVIN_CLAUDE_BIN` → PATH → engine known-location fallbacks), NOT the bare

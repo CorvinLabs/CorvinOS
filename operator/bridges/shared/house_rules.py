@@ -29,8 +29,13 @@ Hybrid, three tiers:
             (CTF / signed pentest / defensive work are NOT offensive cyber). The
             adjudicator is INJECTED (``adjudicator=`` callable) so this module
             never imports anthropic — the bridge wires a helper-model call.
-  Decision — deny / escalate / warn / allow. Gate-error → fail-closed (deny);
-            classifier-uncertainty → escalate, never silent allow.
+  Decision — deny / escalate / warn / allow. Policy/integrity error → fail-closed
+            (deny). Classifier UNCERTAINTY (backend ran, low confidence / anomalous
+            output) → escalate, never silent allow. Classifier BACKEND UNAVAILABLE
+            (raised — e.g. a fresh install before Hermes/Claude are ready) → degrade
+            to the deterministic Tier-0 floor: prohibited-class patterns still BLOCK,
+            benign passes. Fail-TO-FLOOR, not fail-open (the policy default ALLOW is
+            reached only when NO rule pattern matches). See ``classify``.
 
 STATUS: ACTIVE — gate is live at two call sites in adapter.py:
   1. ClaudeCode OS-turn path (``_check_house_rules_or_fail`` before spawn)
@@ -222,6 +227,11 @@ _REASON_CLASSIFIER_LOWCONF = "classifier_violation_low_confidence"
 _REASON_CLASSIFIER_CLEARED = "classifier_cleared"
 _REASON_CLEAR_LOWCONF = "clear_low_confidence"   # any low-conf clear → escalate
 _REASON_CLASSIFIER_ERROR = "classifier_error"
+# Semantic backend unreachable (fresh install before Hermes is provisioned, or a
+# transient outage) → we degrade to the deterministic Tier-0 floor instead of
+# escalating every task. Distinct reason so the audit chain records that the
+# semantic check did not run and the messenger/console pick the neutral wording.
+_REASON_CLASSIFIER_ERROR_DEGRADED = "classifier_error_tier0_degraded"
 _REASON_TIER0_MATCH = "tier0_match_no_classifier"
 _REASON_NO_MATCH = "no_rule_matched"
 
@@ -367,10 +377,12 @@ class HouseRulesGate:
         rule_by_id = {r.id: r for r in self.policy.rules}
         tier0_hits = sum(1 for r in self.policy.rules if _matches(r, task_text))
 
-        # No classifier wired → fail-safe Tier-0 fallback (strictest matched rule
-        # action, else default). This is the degraded mode; the wired bridge
-        # always provides a classifier.
-        if self.classifier is None:
+        # Tier-0 deterministic floor: strictest matched rule action, else the
+        # policy default. Needs NO backend (no Hermes, no cloud) and never raises
+        # — the always-available acceptable-use decision. The prohibited-class
+        # patterns still MATCH and BLOCK here; only a task that matches NO rule
+        # reaches the policy default.
+        def _tier0_floor() -> HouseRulesDecision:
             worst: HouseRulesDecision | None = None
             for r in self.policy.rules:
                 if not _matches(r, task_text):
@@ -378,27 +390,39 @@ class HouseRulesGate:
                 cand = HouseRulesDecision(r.action, r.id, _REASON_TIER0_MATCH, 1.0)
                 if worst is None or _SEVERITY_ORDER[cand.action] > _SEVERITY_ORDER[worst.action]:
                     worst = cand
-            if worst is None:
-                worst = HouseRulesDecision(self.policy.default_action, "", _REASON_NO_MATCH, 1.0)
-            return self._decide(worst, persona, channel, chat_key, engine_id, tier0_hits)
+            return worst or HouseRulesDecision(self.policy.default_action, "", _REASON_NO_MATCH, 1.0)
+
+        # No classifier wired → Tier-0 fallback. Degraded mode; the wired bridge
+        # always provides a classifier.
+        if self.classifier is None:
+            return self._decide(_tier0_floor(), persona, channel, chat_key, engine_id, tier0_hits)
 
         # Tier-1 semantic classification over the WHOLE ruleset (one pass).
         try:
             rid, confidence, _detail = self.classifier(task_text, self.policy.rules, auth)
-        except Exception:  # noqa: BLE001 — classifier error → fail-CLOSED escalate
-            # L44 is fail-CLOSED (CLAUDE.md compliance red-line "don't fail-open
-            # the L44 gate" + this module's header contract "classifier-
-            # uncertainty → escalate, never silent allow"). A classifier failure
-            # must NOT fall through to the policy default ALLOW — that waved
-            # unchecked tasks through whenever the classifier backend was down,
-            # which is exactly the acceptable-use guarantee the gate exists to
-            # provide. Escalate to human review instead. Friction is bounded by
-            # the classifier-availability guarantees (Hermes always-available
-            # healing + ADR-0157 M4 retry/degradation window + the neutral
-            # "couldn't be safety-checked, try again" wording), NOT by fail-
-            # opening the gate. Tier-0 obvious-violation blocking still applies.
+        except Exception:  # noqa: BLE001 — semantic BACKEND unreachable → degrade to floor
+            # The semantic classifier's backend (Hermes local / cloud Haiku) could
+            # not run AT ALL — e.g. a fresh install in the seconds before Hermes /
+            # Claude auth are ready, or a transient outage. The OLD behaviour
+            # escalated EVERY task (even a benign "hallo") to human review, locking
+            # first-run users out of the box (the reported bad-UX bug) for zero real
+            # safety gain. Instead we degrade to the always-available deterministic
+            # Tier-0 floor: the prohibited-class patterns (military / offensive-cyber
+            # / disinformation) STILL match and STILL block — this is fail-TO-FLOOR,
+            # NOT fail-open (the policy default ALLOW is reached ONLY when NO rule
+            # pattern matches). A distinct reason code records in the audit chain
+            # that the semantic check did not run. Maintainer-approved 2026-07-11
+            # (fresh-install UX). Genuine classifier UNCERTAINTY (backend RAN, low
+            # confidence / anomalous rule id) still ESCALATES via the checks below —
+            # only total backend UNAVAILABILITY degrades here.
+            try:
+                _house_rules_track_degradation()  # ADR-0157 M4 health window (+ heal trigger)
+            except Exception:  # noqa: BLE001 — observability never blocks the verdict
+                pass
+            floor = _tier0_floor()
             return self._decide(
-                HouseRulesDecision("escalate", "", _REASON_CLASSIFIER_ERROR, 0.0),
+                HouseRulesDecision(floor.action, floor.rule_id,
+                                   _REASON_CLASSIFIER_ERROR_DEGRADED, floor.confidence),
                 persona, channel, chat_key, engine_id, tier0_hits)
 
         # Defense-in-depth: a non-finite confidence (NaN/+Inf) would make the
