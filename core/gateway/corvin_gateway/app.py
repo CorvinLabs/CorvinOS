@@ -169,6 +169,26 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         _start_hb(_fp.corvin_home())
     except Exception:
         pass  # best-effort — never blocks startup
+
+    # ADR-0191 — idempotently seed the zero-config image-generation tool into
+    # the mcp_manager catalog on every boot, so a genuinely fresh install has
+    # it active with no manual registration step (the whole point of "zero
+    # config"). Safe to re-run every startup: add_tool overwrites with
+    # identical content, activate() is a no-op if already active.
+    try:
+        import os as _os2
+        import sys as _sys2
+        _mcp_mgr_root = _os2.path.normpath(_os2.path.join(
+            _os2.path.dirname(_os2.path.abspath(__file__)),
+            "..", "..", "..", "operator", "mcp_manager",
+        ))
+        if _mcp_mgr_root not in _sys2.path:
+            _sys2.path.insert(0, _mcp_mgr_root)
+        from mcp_manager.seed_builtin import ensure_imagegen_zero_config as _seed_imagegen
+        _seed_imagegen("_default")
+    except Exception:
+        pass  # best-effort — never blocks gateway startup
+
     try:
         yield
     finally:

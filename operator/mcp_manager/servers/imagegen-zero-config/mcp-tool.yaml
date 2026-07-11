@@ -1,0 +1,38 @@
+# ADR-0191 — zero-config image generation, registered as a proper
+# mcp_manager catalog entry (not persona-hardcoded JSON) so L34/L35
+# actually gate it. See docs/image-generation-zero-config.md.
+#
+# NOTE: this tool is registered via mcp_manager.seed_builtin.
+# ensure_imagegen_zero_config(), NOT via `corvin-mcp install local:...` —
+# installer.py's local: loader rewrites a relative runtime.command to an
+# absolute path but does NOT rewrite entries inside runtime.args, so the
+# relative "main.py" below would break the moment the spawning process's
+# cwd isn't this directory (which it normally isn't). This manifest is
+# kept as documentation of the tool's shape, not as an install source.
+#
+# ALSO found the hard way: no `secrets` entry, deliberately. Declaring
+# OPENAI_API_KEY as a catalog secret would make get_active_mcp_servers()
+# inject env: {"OPENAI_API_KEY": "${OPENAI_API_KEY}"} into this server's
+# process — but `claude` does NOT resolve ${VAR} templates in MCP server
+# env (confirmed live: the pre-existing `imagegen` server hits the same
+# wall, its OpenAI call failing with the literal string "${OPENAI...KEY}"
+# as the bearer token). That literal string would then look like a
+# genuinely-configured key to provider_keys.resolve_key() (which checks
+# process env first) and Tier 1 would always be attempted and always fail
+# with 401, instead of correctly falling back to Tier 0. This server reads
+# the OpenAI key directly via provider_keys.resolve_key("openai_api_key")
+# (which reads service.env from disk) — no env-var passthrough needed.
+id: imagegen-zero-config
+runtime:
+  command: python3
+  args: [main.py]
+secrets: []
+compliance:
+  # Both tiers send the prompt to an external cloud service — declared
+  # honestly as us_cloud (not "local"), so L34/L35 actually see this
+  # egress path instead of the gap ADR-0191 closes.
+  locality: us_cloud
+  network_egress: required
+  hosts:
+    - image.pollinations.ai
+    - api.openai.com

@@ -4,8 +4,34 @@ Companion to [imagegen-mcp.md](claude-ref/imagegen-mcp.md) (current BYOK-only in
 and the zero-config precedent in `Corvin-ADR/decisions/0185-cross-platform-voice-reliability.md`.
 Formalized in `Corvin-ADR/decisions/0191-zero-config-image-generation-tier.md`.
 
-**Status: proposed (2026-07-12).** The ADR captures the decision; this doc remains the fuller
-design rationale (research findings, dialectical pass, open questions) it's derived from.
+**Status: implemented (2026-07-12).** Live-tested end-to-end in a real chat turn (the model
+discovered and called the tool via ToolSearch, Tier 0 generated a real image, the one-time
+disclosure text appeared alongside it). Three bugs surfaced only by that live test, all fixed:
+
+- A relative `args: [main.py]` catalog entry breaks the moment the spawning `claude` process's
+  cwd isn't this tool's own directory (it normally isn't) — `runtime.args` needs an absolute
+  path; the generic `local:` installer only rewrites `runtime.command`, not `args` entries.
+  Fixed by registering via a dedicated `mcp_manager.seed_builtin` module instead of the
+  generic installer.
+- A bare `"python3"` command resolves via the *spawning* process's PATH, not this one's —
+  confirmed live to resolve to the system interpreter (no `mcp`/`httpx` installed), with the
+  MCP connection silently reported as `"status": "failed"` and no diagnostic surfaced to chat.
+  Fixed with `sys.executable` (this process's own interpreter, guaranteed to have every base
+  dependency since it's the same package install).
+- Declaring `OPENAI_API_KEY` as a catalog `secrets` entry makes `get_active_mcp_servers()`
+  inject `env: {"OPENAI_API_KEY": "${OPENAI_API_KEY}"}` — but `claude` does NOT resolve
+  `${VAR}` templates in MCP server env (the pre-existing persona-hardcoded `imagegen` server
+  hits the identical wall). That literal, unresolved string then looks like a genuinely-
+  configured key to `provider_keys.resolve_key()`, so Tier 1 was always attempted and always
+  failed with 401 instead of correctly falling back to Tier 0. Fixed by declaring no catalog
+  secrets at all — this server is first-party Python and reads the key directly via
+  `provider_keys.resolve_key("openai_api_key")` (which reads `service.env` from disk), no
+  env-var passthrough needed.
+
+The tool is seeded automatically on every gateway boot (`core/gateway/corvin_gateway/app.py`'s
+lifespan, mirroring the L44 boot-health-check/ACO-boot-healer precedent) — verified by removing
+the catalog entry and restarting the live service, confirming it re-registers with zero manual
+steps, which is the actual "zero-config" claim this ADR makes.
 
 ## 1. Problem
 

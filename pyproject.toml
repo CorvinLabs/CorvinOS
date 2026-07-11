@@ -72,6 +72,13 @@ dependencies = [
     # OpenAI SDK — TTS fallback, Whisper STT provider, and ImageGen MCP (standard
     # feature). Pure-Python; installs cleanly on every platform.
     "openai >= 1.0",
+    # Official MCP Python SDK (ADR-0191): the zero-config image-generation
+    # tool (Tier 0 = Pollinations.ai, no key; Tier 1 = the existing OpenAI
+    # BYOK path) is a hand-written stdio MCP server using this SDK directly,
+    # rather than a third-party npm package fetched on first use — keeps the
+    # dependency footprint auditable and installer-time, matching the
+    # zero-config philosophy already established for voice.
+    "mcp >= 1.0",
     # Forge (L6): JSON-Schema validation of generated tool I/O — a core safety
     # gate, not optional. corvin-a2a pair emits a QR code for the friendship token.
     "jsonschema >= 4.0",
