@@ -6,9 +6,43 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.27] — 2026-07-11 — Big-release security & correctness hardening (8-agent adversarial review)
+
+A full 8-agent adversarial review of CorvinOS + Corvin-Features (install ×2, voice,
+SSOT, browser, identity/IBC, console, workflows + licensing server). Every fix below is
+unit-tested; the deferred items are documented, not silently dropped.
+
+### Security — critical
+- **Windows web-chat RCE closed:** the console chat spawn built `cmd /c … --append-system-prompt <user profile/memory>` and let `create_subprocess_exec`'s `list2cmdline` hand it to cmd.exe, which re-parses `\"` as a quote toggle — so `" & powershell … & "` in a profile/memory broke out and executed on the host (BatBadBut), outside L10/L44/audit. The argv no longer carries a `cmd /c` wrapper; a Windows `.cmd` shim is spawned via `create_subprocess_shell` with `_win_shim`'s cmd.exe-safe quoting. POSIX / `.exe` launches are byte-for-byte unchanged.
+- **IBC revocation is now enforced on the A2A receive path (ADR-0145 M3):** a revoked instance (lost/stolen device, GDPR erasure) previously kept authenticating until its 1-year cert expired because the CRL was never consulted for a peer. A confirmed-revoked `jti` is now rejected unconditionally (cached CRL, never blocks the receive path).
+- **IBC verifier pins token class + issuer + kid:** `type=instance_binding`, `iss=corvinlabs.io`, and only an `ibc-` kid resolves from the shared Ed25519 trust ring — a `sess-`/`lic-` kid signed by the same key can no longer be replayed as an IBC.
+- **Instance-identity fail-closed no longer self-heals:** deleting `instance_id.json` and calling `create_if_missing=False` previously fabricated + persisted a NEW identity (via the missing-identity audit's re-entrant attestation) before raising — silently replacing the deleted file. A thread-local guard now returns a transient, non-persisted placeholder; a deleted file is detected, never replaced (ADR-0052 F10).
+- **Workflow `code` node fails closed off bwrap:** on macOS/Windows/no-bwrap Linux a `code` node now raises rather than running unsandboxed with full user privileges — opt in per host with `CORVIN_ALLOW_UNSANDBOXED_CODE=1`. `awpkg install` refuses a package containing a `code` node unless its manifest signature verifies (or `allow_unsigned_code=True`).
+- **Browser cross-host injection defense covers all navigating actions:** the human-confirm that guards indirect prompt injection now fires on `click`/`key`/`select`/`drag`/redirect, not only `navigate()`. Egress blocks private/link-local/cloud-metadata targets by default, including DNS-rebind-to-IMDS.
+
+### Fixed — workflows / resume
+- Checkpoints are tenant-scoped (non-default tenants can resume); `ask_human`/approval binds the intended approver; retry / fan-out / delegation get hard caps; `deliver`/`answer` are non-retryable. `resume_run` is license-gated (`workflows_concurrent`), takes an atomic checkpoint claim (409 on double-resume), hash-chains resumed node events into the audit log, and no longer leaks raw exception detail.
+
+### Fixed — voice
+- **STT RAM/CPU gate is cgroup-hierarchy aware:** it walks the process's own cgroup and honors `cpu.max` quota, so a systemd `MemoryMax=` / Docker / K8s parent-cgroup limit no longer reads as "unlimited" → no OOM on the `medium` tier.
+- Corrupt-model self-heal only re-downloads a *truncated* file, at most once per hour (was an unbounded full re-download on any load failure).
+- Voice-summary child timeouts (CLI + Hermes) now fit inside the parent cap, so the local Hermes fallback is actually reachable when the CLI hangs.
+- `corvin_a2a` session-key lookup honors `XDG_CONFIG_HOME` (reader = writer).
+
+### Fixed — install (all platforms)
+- Stufe-2 always-on now runs the WA-19 auto-update check; systemd units set `TimeoutStartSec=300` so a slow boot-time upgrade can't trip the crash-loop lockout; POSIX uninstall detects + reports a root-owned Stufe-2 service.
+- macOS: Stufe-1 quiesce persistently `launchctl disable`s (no more next-login port fight); re-install unloads before load; fresh install waits for the launchd WebUI instead of spawning a second competing one; the launchd log dir is created and honors `CORVIN_HOME`; plists XML-escape every value; the Linux sudo quiesce uses `env` (stock-sudoers safe).
+
 ### Added — voice (local STT accuracy)
-- **Local STT model ladder gained a high tier:** on a capable box (≥ 16 GB usable RAM **and** ≥ 8 CPUs) the keyless local default is now `medium-q5_0` — an automatic accuracy upgrade over `small-q5_1`, especially for German/accented audio. Below that it stays `small-q5_1` (3–16 GB) and `base-q5_1` (< 3 GB). Runtime provider and installer prefetch pick the SAME file (Single Source of Truth: `operator/voice/scripts/stt/local_whisper.py::_default_local_model`; the installer step now delegates to it). Explicit `CORVIN_STT_LOCAL_MODEL` still overrides every tier.
-- **The high tier is gated safely** after an adversarial review found RAM alone was an unsafe signal: RAM is now **cgroup-aware** (a memory-limited container reports its limit, not the host's physical RAM — so a 2 GB container on a 64 GB host is not OOM-killed loading the ~1.5 GB-peak `medium`), and the tier **also requires ≥ 8 CPUs** (a 16 GB / 4-slow-core mini-PC would exceed the STT budget decoding `medium` and return *nothing* — strictly worse than `small`'s poor-but-present transcription; it stays on `small`). Unmeasurable RAM falls back to `small`, never the heavy tier. New regression tests: `tests/test_stt_model_tiers.py`.
+- **Local STT model ladder gained a high tier:** on a capable box (≥ 16 GB usable RAM **and** ≥ 8 CPUs) the keyless local default is now `medium-q5_0` — an automatic accuracy upgrade over `small-q5_1`, especially for German/accented audio. Below that it stays `small-q5_1` (3–16 GB) and `base-q5_1` (< 3 GB). Runtime provider and installer prefetch pick the SAME file (Single Source of Truth: `operator/voice/scripts/stt/local_whisper.py::_default_local_model`). Explicit `CORVIN_STT_LOCAL_MODEL` still overrides every tier. The offline fallback now picks the best present model family instead of the alphabetically-first.
+
+### Corvin-Features (licensing/stats server — requires Railway redeploy)
+- Paddle webhook replay/ordering guard is atomic (a stale event can no longer leave a cancelled customer active or regress the ordering cursor); `/v1/licenses/revoked` keyset pagination gained a stable `(revoked_at, id)` tiebreaker so bulk same-second revocations no longer stall the cursor; retired signing keys get a staleness warning; `online_now` window unified to 15 min.
+
+### Deferred (documented, ADR fast-follow — not blind-fixed)
+- IBC email→peer minimization (needs a dual-token / bind-response protocol change so the holder still sees their binding without disclosing the email to paired peers).
+- awpkg content-hash signing (the signature binds the manifest digest, not component file bytes — a wire-format change).
+- SSOT forge-audit "split" — confirmed **by design** (the dual-track audit architecture: bridge-events vs tenant-events, both read by `audit_tail`).
 
 ## [0.10.26] — 2026-07-11 — Adversarial-review hardening (workflows/awpkg, voice model ladder, chat command-center, fresh-install UX)
 
