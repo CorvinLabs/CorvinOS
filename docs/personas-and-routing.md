@@ -50,6 +50,7 @@ The fields fall into five groups:
 | **System prompt** | `append_system` | Concatenated onto Claude Code's own system prompt — this is how the persona "knows its role" |
 | **Routing** | `routing_anchors`, `routing_exclude` | Used only by layer 4 (auto-router), see below |
 | **LDD discipline** (Layer 14) | `ldd_preset`, `ldd_layers`, `ldd_enabled` | Which LDD disciplines the persona runs by default — preset (default/strict/quick/off) + delta + master flag. Resolved by `cowork.resolver._resolve_ldd_section`; `chat_profile` overrides win |
+| **Self-awareness** (ADR-0190) | `capability_aware` | Opt-in flag: when `true`, the resolver injects a generated "what CorvinOS can do" capability map into `append_system` — see below |
 
 ### Bundled personas
 
@@ -65,6 +66,17 @@ The fields fall into five groups:
 | `os` | Corvin sysadmin (pin-only, `routing_exclude: true`) | Read-heavy, no Edit/Write/Bash | None | `off` + `+dialectical_reasoning, +drift_detection, +docs_as_dod, +method_evolution, +reproducibility_first, +root_cause_by_layer` (6 / 12) |
 
 Capability is opt-in per persona via `forge_enabled: true` and / or `skill_forge_enabled: true` in the persona JSON. The resolver injects the corresponding MCP tools, the MCP server wiring, and a runtime-built capability brief into the persona's `append_system` (see [forge.md](forge.md) for the brief contents). The brief is read fresh from `policy.json` per resolve, so it never lies about what the runtime actually permits.
+
+### Self-awareness — `capability_aware` (ADR-0190)
+
+A fresh CorvinOS install has no built-in knowledge of what CorvinOS itself can do — a persona only ever describes the specific tools it happens to have. `capability_aware: true` fixes this by injecting a compact, always-on "what can you actually do right now" brief, generated from `operator/cowork/lib/capability_registry.py` — never hand-written prose, so it cannot drift from what's really wired the way a manual doc would.
+
+- Set on the bundled `assistant`, `coder`, and `orchestrator` personas. **Not** set on `os` (deliberately constrained sysadmin persona) or `homeassistant` (single-purpose) — capability-awareness is a per-persona opt-in, not a global default.
+- The brief only lists a capability as available if the resolved persona's own gating flag is actually satisfied (e.g. a `capability_aware` persona without `forge_enabled` will not see Forge listed) — it never over-claims for a persona that lacks the underlying tool wiring.
+- Capabilities not yet reachable from chat (see ADR-0190 milestones M2–M8: compute pipelines, general-availability data-source registration, A2A send, AWP workflows, ACS) are still disclosed, explicitly marked "not yet available via chat" with the tracking milestone — silence would read as "doesn't exist," which is worse than an honest "not yet."
+- Enforced by `operator/cowork/test/test_capability_registry_matches_reality.py`, which fails the build if a registry entry marked `status="wired"` doesn't correspond to a real tool name in its subsystem's source, or if a `persona_flag` doesn't correspond to a flag the resolver actually propagates.
+
+Adding a new chat-reachable capability in a future milestone means adding an entry to `capability_registry.py` first — the capability map and the enforcement test both read from that one file.
 
 ### Adding your own
 

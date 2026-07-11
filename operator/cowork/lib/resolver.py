@@ -450,7 +450,9 @@ def resolve(name: str, overrides: dict | None = None) -> dict:
               "tts_voice", "tts_voice_de", "tts_voice_en",
               "default_engine", "awp_enabled",
               # Layer 29 — delegation capability flag.
-              "delegate_enabled"):
+              "delegate_enabled",
+              # ADR-0190 — self-aware capability-map opt-in.
+              "capability_aware"):
         if k in overrides and overrides[k] is not None:
             out[k] = overrides[k]
         elif k in persona:
@@ -493,6 +495,11 @@ def resolve(name: str, overrides: dict | None = None) -> dict:
     out = _inject_forge_capability(out, name)
     out = _inject_skill_forge_capability(out, name)
     out = _inject_delegate_capability(out, name)
+    # ADR-0190 — runs LAST of the four injectors so it can read the
+    # resolved forge_enabled/skill_forge_enabled/delegate_enabled flags
+    # off `out` and describe only what THIS persona actually has, not a
+    # one-size-fits-all map.
+    out = _inject_capability_awareness(out, name)
 
     # Layer-14 LDD section: persona preset/delta + chat-profile overrides.
     # Result lives directly on the merged profile dict, where the bridge
@@ -736,6 +743,53 @@ def _inject_delegate_capability(merged: dict, persona_name: str) -> dict:
         }
     out["mcp_servers"] = mcp
     _ensure_brief(out, _DELEGATE_BRIEF)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# ADR-0190 — self-aware capability map
+# ---------------------------------------------------------------------------
+
+
+def _inject_capability_awareness(merged: dict, persona_name: str) -> dict:
+    """ADR-0190 — inject the self-aware capability map when the persona
+    opts in via ``capability_aware: true``.
+
+    Unlike the forge/skill-forge/delegate injectors, this does NOT wire any
+    MCP server — those injectors already did that. This purely adds the
+    narrative "here is the full picture of what you can do" brief, so it
+    must run AFTER them (see call site in ``resolve()``) so it can read
+    the already-resolved ``forge_enabled``/``skill_forge_enabled``/
+    ``delegate_enabled`` flags off ``merged`` and describe only what this
+    specific persona actually has wired — never a generic, possibly
+    over-claiming, one-size-fits-all map.
+
+    Idempotent via ``_ensure_brief``. No-op for personas without the flag
+    (default — capability-awareness is an explicit per-persona opt-in, not
+    a global default; see ADR-0190 "What NOT to Do").
+    """
+    if not persona_name:
+        return merged
+    persona = load(persona_name)
+    if not persona:
+        return merged
+    if not persona.get("capability_aware"):
+        return merged
+    try:
+        from capability_map import render_capability_map  # type: ignore[import-not-found]
+    except ImportError:
+        here = Path(__file__).resolve().parent
+        if str(here) not in sys.path:
+            sys.path.insert(0, str(here))
+        from capability_map import render_capability_map  # type: ignore[import-not-found]
+
+    out = dict(merged)
+    brief = render_capability_map(
+        forge_enabled=bool(out.get("forge_enabled")),
+        skill_forge_enabled=bool(out.get("skill_forge_enabled")),
+        delegate_enabled=bool(out.get("delegate_enabled")),
+    )
+    _ensure_brief(out, brief)
     return out
 
 
