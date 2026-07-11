@@ -1279,6 +1279,91 @@ class TestIBCGates(unittest.TestCase):
             shutil.rmtree(str(origins_dir), ignore_errors=True)
             shutil.rmtree(str(tmp), ignore_errors=True)
 
+    def test_revoked_ibc_jti_is_rejected_even_when_signature_valid(self):
+        # ADR-0145 M3 (IBC-1): a cert whose jti is confirmed on the CRL must be
+        # rejected on the receive path even though its Ed25519 signature and
+        # expiry are still valid.
+        import base64
+        import instance_identity as iid
+        from cryptography.hazmat.primitives import serialization as _ser
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        tmp = Path(tempfile.mkdtemp(prefix="ibc-revoked-"))
+        prev_env = {
+            k: os.environ.get(k) for k in (
+                "CORVIN_INSTANCE_ID_PATH", "CORVIN_INSTANCE_KEY_PATH",
+                "CORVIN_INSTANCE_CERT_PATH",
+            )
+        }
+        os.environ["CORVIN_INSTANCE_ID_PATH"] = str(tmp / "instance_id.json")
+        os.environ["CORVIN_INSTANCE_KEY_PATH"] = str(tmp / "instance_key.pem")
+        os.environ["CORVIN_INSTANCE_CERT_PATH"] = str(tmp / "instance_cert.jwt")
+
+        origins_dir = self._make_origins_dir(require_ibc=True)
+        trust_key = Ed25519PrivateKey.generate()
+        pub_der = trust_key.public_key().public_bytes(
+            _ser.Encoding.DER, _ser.PublicFormat.SubjectPublicKeyInfo
+        )
+        trust_pub_b64 = base64.b64encode(pub_der).decode()
+
+        import remote_trigger_receiver as rtr
+        orig_ring = dict(iid._IBC_TRUST_KEY_RING)
+        orig_crl = rtr._peer_ibc_revoked
+        iid._IBC_TRUST_KEY_RING.clear()
+        iid._IBC_TRUST_KEY_RING["sess-v1"] = trust_pub_b64
+        # CRL says this exact jti is revoked.
+        rtr._peer_ibc_revoked = lambda jti, **_kw: jti == "revoked-jti-9"
+        try:
+            sender_instance_id = iid.get_instance_id()
+            instance_pubkey_b64 = iid.get_instance_pubkey_b64()
+
+            def _b64url(data: bytes) -> str:
+                return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+            claims = {
+                "type": "instance_binding", "iss": "corvinlabs.io",
+                "sub": sender_instance_id, "instance_pubkey": instance_pubkey_b64,
+                "jti": "revoked-jti-9", "exp": int(time.time()) + 3600,
+            }
+            header_b64 = _b64url(json.dumps({"alg": "EdDSA", "typ": "JWT", "kid": "ibc-v1"}).encode())
+            payload_b64 = _b64url(json.dumps(claims).encode())
+            sig = trust_key.sign(f"{header_b64}.{payload_b64}".encode())
+            ibc_snapshot = f"CORVIN-{header_b64}.{payload_b64}.{_b64url(sig)}"
+
+            task_id, nonce, issued_at = str(uuid.uuid4()), secrets.token_hex(32), time.time()
+            instruction = "hello"
+            canonical = iid.build_canonical_payload(
+                task_id=task_id, origin_id="ibc-test", issued_at=issued_at,
+                nonce=nonce, instruction=instruction,
+            )
+            ed25519_sig = iid.sign_payload(canonical)
+
+            att = {"ibc_jti": "revoked-jti-9", "ed25519_sig": ed25519_sig, "ibc_snapshot": ibc_snapshot}
+            env = self._signed_envelope(origins_dir, extra={
+                "task_id": task_id, "nonce": nonce, "issued_at": issued_at,
+                "instruction": instruction, "sender_instance_id": sender_instance_id,
+                "instance_attestation": att,
+            })
+            recv = rtr.RemoteTriggerReceiver(
+                origins_dir=origins_dir, engine_factory=lambda: mock.MagicMock()
+            )
+            resp = recv.receive(env)
+            self.assertEqual(
+                resp.status, "rejected",
+                f"a revoked IBC jti must be rejected, got: {resp}"
+            )
+        finally:
+            rtr._peer_ibc_revoked = orig_crl
+            iid._IBC_TRUST_KEY_RING.clear()
+            iid._IBC_TRUST_KEY_RING.update(orig_ring)
+            for k, v in prev_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            shutil.rmtree(str(origins_dir), ignore_errors=True)
+            shutil.rmtree(str(tmp), ignore_errors=True)
+
 
 # ── CI lint test ──────────────────────────────────────────────────────────
 

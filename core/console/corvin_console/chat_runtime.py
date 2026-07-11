@@ -1009,14 +1009,18 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None)
     """
     binary = _claude_binary()
     # On Windows, shutil.which() may resolve the npm-installed claude to a
-    # .cmd shim (e.g. claude.cmd). asyncio.create_subprocess_exec cannot
-    # start .cmd files directly — they must be wrapped in `cmd /c`.
+    # .cmd shim (e.g. claude.cmd). asyncio.create_subprocess_exec cannot start
+    # a .cmd directly, so it has to run through cmd.exe. We resolve the shim
+    # path here but do NOT prepend ``cmd /c`` in the argv: the untrusted
+    # ``--append-system-prompt`` content (user profile/memory) must never cross
+    # the cmd.exe re-parse boundary as a list2cmdline-quoted argv element — cmd
+    # treats the ``\"`` escape as a quote toggle, so ``" & powershell … & "``
+    # would break out and execute (BatBadBut host RCE). The spawn site instead
+    # wraps a .cmd shim through _win_shim's cmd.exe-safe quoting. argv[0] stays
+    # the resolved .cmd path so the spawn can detect the shim case.
     if sys.platform == "win32" and not os.path.isabs(binary):
         resolved = shutil.which(binary)
-        if resolved and resolved.lower().endswith((".cmd", ".bat")):
-            args: list[str] = ["cmd", "/c", resolved]
-        else:
-            args = [resolved or binary]
+        args: list[str] = [resolved or binary]
     else:
         args = [binary]
     args += ["-p",
@@ -2784,16 +2788,31 @@ async def stream_turn(
     # session workdir and write WDAT run directories for the Audit graph.
     # Per-subprocess env copy keeps concurrent sessions isolated.
     _spawn_env = {**os.environ, "CORVIN_SESSION_DIR": str(sess.workdir)}
+    _spawn_kwargs: dict[str, Any] = dict(
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=str(sess.workdir),
+        env=_spawn_env,
+        limit=8 * 1024 * 1024,  # 8 MB — default 64 KB is too small for large tool results
+    )
+    # Windows .cmd/.bat shim: spawn through cmd.exe with _win_shim's
+    # cmd.exe-safe quoting (doubled inner quotes) instead of letting
+    # create_subprocess_exec's list2cmdline hand untrusted argv to cmd's
+    # re-parser. POSIX and direct .exe launches keep create_subprocess_exec
+    # byte-for-byte (Linux/macOS behaviour unchanged).
+    _is_win_cmd_shim = (
+        sys.platform == "win32" and args
+        and isinstance(args[0], str)
+        and args[0].lower().endswith((".cmd", ".bat"))
+    )
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(sess.workdir),
-            env=_spawn_env,
-            limit=8 * 1024 * 1024,  # 8 MB — default 64 KB is too small for large tool results
-        )
+        if _is_win_cmd_shim:
+            from agents._win_shim import cmd_quote  # noqa: PLC0415
+            _cmd_line = " ".join(cmd_quote(a) for a in args)
+            proc = await asyncio.create_subprocess_shell(_cmd_line, **_spawn_kwargs)
+        else:
+            proc = await asyncio.create_subprocess_exec(*args, **_spawn_kwargs)
     except FileNotFoundError as e:
         binary = _claude_binary()
         if e.filename and str(e.filename) != binary and binary not in str(e.filename or ""):

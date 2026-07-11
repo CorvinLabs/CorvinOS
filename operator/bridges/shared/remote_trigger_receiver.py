@@ -93,6 +93,7 @@ try:
         verify_instance_sig as _verify_ibc_sig,
         build_canonical_payload as _build_ibc_canonical,
         _verify_ibc_signature as _verify_ibc_ed25519,
+        peer_ibc_revoked as _peer_ibc_revoked,
     )
     _IBC_VERIFY_AVAILABLE = True
 except ImportError:
@@ -1725,6 +1726,25 @@ class RemoteTriggerReceiver:
                     )
                     raise ValidationError(
                         "instance_attestation_failed:ibc_sub_mismatch", recv_key
+                    )
+                # ADR-0145 M3 (IBC-1): enforce revocation on the RECEIVE path.
+                # A cert whose jti is confirmed on the CRL must be rejected even
+                # though its signature + expiry are still valid — an operator
+                # revoked this instance (lost/stolen device, GDPR erasure), and
+                # a 1-year IBC would otherwise keep authenticating until expiry.
+                # Rejected UNCONDITIONALLY (like sub-mismatch): we hold the cert
+                # and it is demonstrably revoked. Uses the cached CRL so the
+                # receive path never blocks on a live network fetch; an
+                # unreachable-CRL-with-no-cache stays fail-open (ADR-0145).
+                elif ibc_decoded.get("jti") and _peer_ibc_revoked(ibc_decoded.get("jti", "")):
+                    self._audit_best_effort(
+                        "instance.ibc_revoked", "CRITICAL",
+                        {"origin_id": env.origin_id,
+                         "ibc_jti": (ibc_jti[:16] if ibc_jti else ""),
+                         "reason": "crl_match"},
+                    )
+                    raise ValidationError(
+                        "instance_attestation_failed:ibc_revoked", recv_key
                     )
                 else:
                     # Verify Ed25519 signature over the canonical envelope payload.

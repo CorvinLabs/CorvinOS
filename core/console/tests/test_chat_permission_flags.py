@@ -100,6 +100,32 @@ class PermissionFlagTests(unittest.TestCase):
         args = self.cr._build_args(self.sess, resume=False)
         self.assertIn("/tmp/alt", _add_dirs(args))
 
+    def test_no_cmd_c_prefix_in_argv(self) -> None:
+        # BatBadBut RCE fix: _build_args must NOT prepend a `cmd /c` wrapper to
+        # the argv. The untrusted --append-system-prompt content must never
+        # reach cmd.exe's re-parser as a list2cmdline-quoted argv element; the
+        # spawn site wraps a Windows .cmd shim through _win_shim quoting and
+        # create_subprocess_shell instead.
+        args = self.cr._build_args(self.sess, resume=False)
+        self.assertNotIn("cmd", args[:1])
+        self.assertNotIn("/c", args)
+
+    def test_win_shim_line_neutralises_breakout_payload(self) -> None:
+        # The exact expression the spawn site uses for a .cmd shim must quote a
+        # cmd metachar breakout payload so cmd stays in quoted mode across the
+        # whole token: the token is wrapped in outer quotes and every inner `"`
+        # is DOUBLED (`""`) — cmd's literal-quote-inside-quotes form — so the
+        # `&` can never act as a command separator.
+        from agents._win_shim import cmd_quote  # noqa: WPS433
+        payload = 'hello" & powershell -enc AAAA & "world'
+        quoted = cmd_quote(payload)
+        # Contract: outer-quoted, and each original `"` became `""`.
+        self.assertTrue(quoted.startswith('"') and quoted.endswith('"'))
+        self.assertEqual(quoted, '"' + payload.replace('"', '""') + '"')
+        # No lone (undoubled) inner quote survives → cmd never leaves quoted mode.
+        inner = quoted[1:-1]
+        self.assertNotIn('"', inner.replace('""', ''))
+
 
 if __name__ == "__main__":
     unittest.main()

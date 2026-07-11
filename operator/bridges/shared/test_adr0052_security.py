@@ -343,6 +343,28 @@ class TestF10InstanceIdentity:
         finally:
             os.environ.pop("CORVIN_INSTANCE_ID_PATH", None)
 
+    def test_create_if_missing_false_does_not_regenerate_identity(self, tmp_path):
+        # ADR-0052 F10 (IBC-2): the fail-closed path emits a CRITICAL audit
+        # event, whose per-event attestation calls back into
+        # instance_id_metadata() with the DEFAULT create_if_missing=True. That
+        # nested call must NOT fabricate + persist a new identity — a deleted
+        # file must be DETECTED, never silently replaced.
+        id_path = tmp_path / "instance_id.json"
+        os.environ["CORVIN_INSTANCE_ID_PATH"] = str(id_path)
+        os.environ["CORVIN_HOME"] = str(tmp_path)
+        (tmp_path / "global" / "forge").mkdir(parents=True, exist_ok=True)
+        try:
+            import importlib, instance_identity as _ii
+            importlib.reload(_ii)
+            assert not id_path.exists()
+            with pytest.raises(_ii.InstanceIdentityMissing):
+                _ii.instance_id_metadata(create_if_missing=False)
+            # The file must STILL be absent — no new identity was persisted.
+            assert not id_path.exists(), "F10 violated: identity silently regenerated"
+        finally:
+            os.environ.pop("CORVIN_INSTANCE_ID_PATH", None)
+            os.environ.pop("CORVIN_HOME", None)
+
     def test_rotate_changes_instance_id(self, tmp_path):
         id_path = tmp_path / "instance_id.json"
         os.environ["CORVIN_INSTANCE_ID_PATH"] = str(id_path)

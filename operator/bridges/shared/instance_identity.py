@@ -83,6 +83,20 @@ _GLOBAL_DIR = "global"
 # the fail-closed missing-identity path would hang forever instead of raising.
 _lock = threading.RLock()
 
+# Re-entrancy guard for the fail-closed missing-identity path (ADR-0052 F10).
+# While handling a genuinely-missing identity we emit a CRITICAL audit event;
+# that emit attests via get_instance_id() -> back into instance_id_metadata()
+# with the DEFAULT create_if_missing=True. Without this flag that nested call
+# would _generate() + _atomic_write() a brand-new UUID BEFORE the outer call
+# raises InstanceIdentityMissing — silently replacing the deleted file and
+# defeating the whole point of fail-closed detection. When the flag is set, the
+# nested call returns a transient, NON-persisted placeholder instead.
+_missing_emit = threading.local()
+
+# Non-persisted identity used only to stamp the missing-identity audit event so
+# it can be written without fabricating a durable identity on disk.
+_MISSING_INSTANCE_ID = "00000000-0000-0000-0000-000000000000"
+
 _INSTANCE_KEY_FILE = "instance_key.pem"
 _INSTANCE_PUBKEY_FILE = "instance_pubkey.pem"
 _IBC_FILE = "instance_cert.jwt"
@@ -228,8 +242,17 @@ def instance_id_metadata(*, create_if_missing: bool = True) -> dict[str, Any]:
         data = _load(path)
         if data is not None:
             return data
+        # Nested call from the missing-identity audit emit: never fabricate or
+        # persist a new identity — return a transient placeholder so the audit
+        # event can still be stamped, then let the outer call fail-closed.
+        if getattr(_missing_emit, "active", False):
+            return {"instance_id": _MISSING_INSTANCE_ID, "created_at": "", "label": ""}
         if not create_if_missing:
-            _emit_missing_audit(path)
+            _missing_emit.active = True
+            try:
+                _emit_missing_audit(path)
+            finally:
+                _missing_emit.active = False
             raise InstanceIdentityMissing(
                 f"instance_id.json missing at {path} — cannot attest identity. "
                 "Run 'corvin-instance-id show' to create it, or investigate why "
@@ -1042,6 +1065,26 @@ def is_ibc_revoked(*, force_refresh: bool = False) -> bool:
     return False
 
 
+def peer_ibc_revoked(jti: str, *, force_refresh: bool = False) -> bool:
+    """True only if a PEER's IBC jti is confirmed present on the CRL.
+
+    Unlike :func:`is_ibc_revoked` (which checks THIS instance's own cert), this
+    checks an incoming A2A peer's presented ``ibc_jti`` so the receiver can
+    reject a revoked instance (ADR-0145 M3 — IBC-1). Uses the cached
+    revocation list (24h TTL, 7-day offline grace) so the receive path never
+    blocks on a live network call. Ambiguity (empty jti, or CRL unreachable
+    with no cache) resolves to False — fail-open on the network dimension,
+    fail-closed only on a CONFIRMED revocation, per ADR-0145.
+    """
+    if not jti:
+        return False
+    try:
+        revoked_list = fetch_revocation_list(force_refresh=force_refresh)
+    except Exception:  # noqa: BLE001
+        return False
+    return jti in revoked_list
+
+
 def revocation_status_cached() -> str:
     """Cache-only revocation read — never makes a network call.
 
@@ -1089,6 +1132,7 @@ __all__ = [
     "instance_id_path",
     "instance_key_path",
     "is_ibc_revoked",
+    "peer_ibc_revoked",
     "revocation_status_cached",
     "rotate",
     "set_label",
