@@ -513,7 +513,12 @@ def bind_instance(sest_token: str, license_fp: str) -> dict:
     except urllib.error.URLError as exc:
         raise IBCError(f"IBC bind request failed: {exc.reason}") from exc
 
-    resp_data = _json.loads(resp_body)
+    try:
+        resp_data = _json.loads(resp_body)
+    except ValueError as exc:
+        raise IBCError(f"IBC bind response was not valid JSON: {exc}") from exc
+    if not isinstance(resp_data, dict):
+        raise IBCError("IBC bind response was not a JSON object")
     ibc_jwt = resp_data.get("ibc")
     if not ibc_jwt:
         raise IBCError("IBC bind response missing 'ibc' field")
@@ -619,7 +624,19 @@ def get_ibc() -> dict | None:
 
 
 def get_ibc_jwt() -> str | None:
-    """Return the raw IBC JWT string for embedding in A2A envelopes."""
+    """Return the raw IBC JWT string for embedding in A2A envelopes.
+
+    Returns None if the IBC's JTI is confirmed revoked. Uses
+    ``revocation_status_cached()`` — a *cache-only* CRL read — rather than
+    ``is_ibc_revoked()``, which is allowed to make a live network fetch when
+    its 24h cache has expired. This function is the single chokepoint every
+    outbound instance_attestation goes through, so it must never block a
+    send on a Corvin Labs round-trip; the CRL cache is instead refreshed out
+    of band (``corvin-id check-revocation`` or an operator-scheduled job).
+    A confirmed-revoked cache entry still actually stops the send from
+    presenting the revoked cert, per ADR-0145 ("revoked IBC must block, not
+    just warn").
+    """
     cert_path = instance_cert_path()
     if not cert_path.exists():
         return None
@@ -628,16 +645,69 @@ def get_ibc_jwt() -> str | None:
         # Quick expiry guard
         if _JWT_OK:
             _jwt.decode(ibc, options={"verify_signature": False, "verify_exp": True})
+        if revocation_status_cached() == "revoked":
+            return None
         return ibc
     except Exception:  # noqa: BLE001
         return None
 
 
+def _read_tpm_pcr0() -> str:
+    """Best-effort read of TPM PCR[0] (SHA-256 bank), Linux only.
+
+    Tries the kernel sysfs exposure first (no subprocess, no extra
+    package required); falls back to ``tpm2_pcrread`` if the tools are
+    installed. Returns "" on any failure — a machine without a TPM (or
+    without operator-granted /dev/tpm0 access) must not break hardware
+    fingerprinting, only make it slightly less specific.
+    """
+    if not sys.platform.startswith("linux"):
+        return ""
+    sysfs_candidates = (
+        "/sys/class/tpm/tpm0/pcr-sha256/0",
+        "/sys/class/tpm/tpm0/pcrs",  # older kernels: multi-line "PCR-00: xx xx ..."
+    )
+    for candidate in sysfs_candidates:
+        try:
+            text = Path(candidate).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        if candidate.endswith("pcrs"):
+            for line in text.splitlines():
+                if line.startswith("PCR-00:"):
+                    return line.split(":", 1)[1].strip().replace(" ", "")[:64]
+            continue
+        return text.replace(" ", "")[:64]
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["tpm2_pcrread", "sha256:0"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        if out.returncode == 0:
+            for line in out.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("0 "):
+                    return line.split(":", 1)[-1].strip().replace(" ", "")[:64]
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 def compute_hardware_fp() -> str:
     """Compute a stable hardware fingerprint (M3 feature, best-effort).
 
-    Returns SHA-256 hex of: cpu_brand:mac:disk_serial
+    Returns SHA-256 hex of: cpu_brand:mac:disk_serial:tpm_pcr0
     Falls back to empty string on any failure (non-fatal, opt-in feature).
+
+    The TPM PCR[0] component (firmware/bootloader measurement) is
+    included when available so the fingerprint also detects a VM clone
+    or disk image restored onto different physical firmware, not just a
+    changed NIC/disk. Its absence (no TPM, no access) degrades the
+    fingerprint's specificity but never breaks it — this must stay
+    best-effort per ADR-0145 (hardware binding is opt-in, not a boot gate).
     """
     import platform
     parts = []
@@ -670,19 +740,268 @@ def compute_hardware_fp() -> str:
         pass
     parts.append(disk_serial)
 
+    # TPM PCR[0] — best-effort, "" on any unavailability
+    parts.append(_read_tpm_pcr0())
+
     raw = ":".join(parts)
     if not any(parts):
         return ""
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+_HARDWARE_BIND_URL = "https://api.corvin-labs.com/v1/instance/bind-hardware"
+
+
+def bind_hardware() -> dict:
+    """Tether the current IBC to this machine's hardware fingerprint (M3).
+
+    Requires an existing IBC (call ``bind_instance`` first). Signs the
+    freshly computed hardware fingerprint with the instance Ed25519 key
+    and POSTs it alongside the current IBC JTI; the server re-issues the
+    IBC with a ``hardware_fp`` claim added, which this function verifies
+    and stores exactly like ``bind_instance`` does.
+
+    This is an explicit, operator-initiated, opt-in step — never run
+    automatically at boot or on every spawn (ADR-0145 "what not to do").
+
+    Raises IBCError on any failure (no IBC yet, empty fingerprint,
+    network error, signature mismatch).
+    """
+    if not _JWT_OK:
+        raise IBCError("pyjwt not installed — cannot parse IBC JWT")
+
+    current = get_ibc()
+    if current is None:
+        raise IBCError(
+            "No valid IBC found — run 'corvin-id init' (license bind) before "
+            "'corvin-id bind-hardware'."
+        )
+
+    hardware_fp = compute_hardware_fp()
+    if not hardware_fp:
+        raise IBCError(
+            "Could not compute a hardware fingerprint on this machine "
+            "(no CPU/MAC/disk signal available) — hardware binding unsupported here."
+        )
+
+    instance_id = get_instance_id()
+    jti = current.get("jti", "")
+    sig = sign_payload(hardware_fp.encode("utf-8"))
+
+    body = {
+        "instance_id": instance_id,
+        "ibc_jti": jti,
+        "hardware_fp": hardware_fp,
+        "hardware_fp_sig": sig,
+    }
+    import json as _json
+    body_bytes = _json.dumps(body).encode("utf-8")
+
+    bind_url = os.environ.get("CORVIN_HARDWARE_BIND_URL", _HARDWARE_BIND_URL)
+    req = urllib.request.Request(
+        bind_url,
+        data=body_bytes,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp_body = resp.read()
+    except urllib.error.HTTPError as exc:
+        raise IBCError(f"Hardware bind request failed: HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise IBCError(f"Hardware bind request failed: {exc.reason}") from exc
+
+    try:
+        resp_data = _json.loads(resp_body)
+    except ValueError as exc:
+        raise IBCError(f"Hardware bind response was not valid JSON: {exc}") from exc
+    if not isinstance(resp_data, dict):
+        raise IBCError("Hardware bind response was not a JSON object")
+    ibc_jwt = resp_data.get("ibc")
+    if not ibc_jwt:
+        raise IBCError("Hardware bind response missing 'ibc' field")
+
+    _verify_ibc_signature(ibc_jwt)
+    decoded = _jwt.decode(ibc_jwt, options={"verify_signature": False})
+    if decoded.get("sub") != instance_id:
+        raise IBCError(
+            f"IBC sub mismatch after hardware bind: expected {instance_id!r}, "
+            f"got {decoded.get('sub')!r}"
+        )
+    if decoded.get("hardware_fp") != hardware_fp:
+        raise IBCError("Re-issued IBC does not carry the hardware fingerprint we sent")
+
+    cert_path = instance_cert_path()
+    with _lock:
+        cert_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cert_path.with_suffix(".tmp")
+        tmp.write_text(ibc_jwt, encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, cert_path)
+
+    _audit_ibc(
+        "instance.hardware_bound", "INFO",
+        {"ibc_jti": (decoded.get("jti", "") or "")[:16]},
+    )
+    return decoded
+
+
+def check_hardware_binding() -> dict:
+    """Compare the currently computed hardware fingerprint against the IBC claim.
+
+    Explicit, operator-invoked check only (``corvin-id check-hardware`` or
+    equivalent) — NOT run automatically on every spawn, per ADR-0145: a
+    laptop's MAC can legitimately change (new dock, disabled NIC) and a
+    boot-time hard-fail would be a denial-of-service against the operator's
+    own machine. Callers decide what to do with the result.
+
+    Returns {"bound": bool, "matches": bool | None, "current_fp": str,
+    "claimed_fp": str | None}. ``matches`` is None when the IBC has no
+    hardware_fp claim at all (hardware binding never performed).
+    """
+    ibc = get_ibc()
+    current_fp = compute_hardware_fp()
+    if ibc is None:
+        return {"bound": False, "matches": None, "current_fp": current_fp, "claimed_fp": None}
+    claimed_fp = ibc.get("hardware_fp")
+    if not claimed_fp:
+        return {"bound": False, "matches": None, "current_fp": current_fp, "claimed_fp": None}
+    matches = bool(current_fp) and current_fp == claimed_fp
+    if not matches:
+        _audit_ibc("instance.ibc_hardware_mismatch", "WARNING", {"reason": "fp_mismatch"})
+    return {"bound": True, "matches": matches, "current_fp": current_fp, "claimed_fp": claimed_fp}
+
+
+# ── M3: Certificate Revocation List (CRL) ──────────────────────────────────────
+
+_CRL_URL = "https://api.corvin-labs.com/v1/instance/revoked"
+_CRL_CACHE_FILE = "ibc_crl_cache.json"
+_CRL_TTL_SECONDS = 24 * 3600
+_CRL_GRACE_SECONDS = 7 * 24 * 3600  # serve a stale cache up to 7 days offline
+
+
+def _crl_cache_path() -> Path:
+    env = os.environ.get("CORVIN_CRL_CACHE_PATH")
+    if env:
+        return Path(env).expanduser()
+    return corvin_home() / _GLOBAL_DIR / _CRL_CACHE_FILE
+
+
+def _fetch_crl_remote() -> list[str]:
+    url = os.environ.get("CORVIN_CRL_URL", _CRL_URL)
+    req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        body = resp.read()
+    import json as _json
+    data = _json.loads(body)
+    revoked = data.get("revoked_jti", [])
+    if not isinstance(revoked, list):
+        raise IBCError("CRL response malformed: 'revoked_jti' is not a list")
+    return [str(x) for x in revoked]
+
+
+def fetch_revocation_list(*, force_refresh: bool = False) -> list[str]:
+    """Fetch the revoked-JTI list, with a 24h local cache and offline grace.
+
+    Never raises on network failure: falls back to the last cached list
+    (even if past its 24h TTL, up to a 7-day grace window) so a temporary
+    outage does not strand an operator without an answer. Returns an empty
+    list only when there is no cache at all AND the network is unreachable
+    — in that case revocation status is simply "unknown", never "revoked"
+    (fail-open on the network dimension; fail-closed only on an actually
+    confirmed revocation, per ADR-0145).
+    """
+    cache_path = _crl_cache_path()
+    now = _dt.datetime.now(_dt.timezone.utc).timestamp()
+
+    cached: dict[str, Any] | None = None
+    if cache_path.exists():
+        try:
+            import json as _json
+            cached = _json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            cached = None
+
+    if not force_refresh and cached is not None:
+        fetched_at = cached.get("fetched_at", 0)
+        if now - fetched_at < _CRL_TTL_SECONDS:
+            return list(cached.get("revoked_jti", []))
+
+    try:
+        revoked = _fetch_crl_remote()
+    except Exception:  # noqa: BLE001
+        if cached is not None and now - cached.get("fetched_at", 0) < _CRL_GRACE_SECONDS:
+            return list(cached.get("revoked_jti", []))
+        return []
+
+    payload = {"fetched_at": now, "revoked_jti": revoked}
+    try:
+        _atomic_write(cache_path, payload)
+    except OSError:
+        pass  # cache write is best-effort; the fetch itself still succeeded
+    return revoked
+
+
+def is_ibc_revoked(*, force_refresh: bool = False) -> bool:
+    """True only if the current IBC's JTI is confirmed present on the CRL.
+
+    Any ambiguity (no IBC, no JTI, CRL unreachable with no cache) resolves
+    to False — this function answers "is this instance confirmed revoked",
+    not "can we prove it isn't". Emits ``instance.ibc_revoked`` (CRITICAL)
+    when a revocation is confirmed.
+    """
+    ibc = get_ibc()
+    if ibc is None:
+        return False
+    jti = ibc.get("jti", "")
+    if not jti:
+        return False
+    revoked_list = fetch_revocation_list(force_refresh=force_refresh)
+    if jti in revoked_list:
+        _audit_ibc("instance.ibc_revoked", "CRITICAL", {"ibc_jti": jti[:16], "reason": "crl_match"})
+        return True
+    return False
+
+
+def revocation_status_cached() -> str:
+    """Cache-only revocation read — never makes a network call.
+
+    For UI surfaces (e.g. the console Dashboard) that must render fast and
+    must not block a page load on network I/O. Returns one of
+    ``"revoked"``, ``"clean"``, or ``"unknown"`` (no IBC, no cache yet, or
+    cache older than the 7-day grace window).
+    """
+    ibc = get_ibc()
+    if ibc is None:
+        return "unknown"
+    jti = ibc.get("jti", "")
+    if not jti:
+        return "unknown"
+    cache_path = _crl_cache_path()
+    if not cache_path.exists():
+        return "unknown"
+    try:
+        import json as _json
+        cached = _json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return "unknown"
+    now = _dt.datetime.now(_dt.timezone.utc).timestamp()
+    if now - cached.get("fetched_at", 0) > _CRL_GRACE_SECONDS:
+        return "unknown"
+    return "revoked" if jti in cached.get("revoked_jti", []) else "clean"
+
+
 __all__ = [
     "IBCError",
     "InstanceIdentityMissing",
+    "bind_hardware",
     "bind_instance",
     "build_canonical_payload",
+    "check_hardware_binding",
     "compute_hardware_fp",
     "ensure_instance_key",
+    "fetch_revocation_list",
     "get_ibc",
     "get_ibc_jwt",
     "get_instance_id",
@@ -691,6 +1010,8 @@ __all__ = [
     "instance_id_metadata",
     "instance_id_path",
     "instance_key_path",
+    "is_ibc_revoked",
+    "revocation_status_cached",
     "rotate",
     "set_label",
     "sign_payload",

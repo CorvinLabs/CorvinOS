@@ -10,6 +10,11 @@ Commands:
                                        identity registry and print result. Emits a
                                        CRITICAL audit event — always.
   export-pubkey                        Print Ed25519 public key in PEM format.
+  bind-hardware                        ADR-0145 M3: tether the IBC to this
+                                       machine's hardware fingerprint.
+  check-hardware                       Compare current hardware fingerprint
+                                       against the bound claim (no network call).
+  check-revocation [--refresh]         Check the CRL for this instance's IBC.
 
 CI lint: this module MUST NOT ``import anthropic``.
 """
@@ -290,6 +295,76 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bind_hardware(args: argparse.Namespace) -> int:
+    """ADR-0145 M3: tether the current IBC to this machine's hardware fingerprint."""
+    try:
+        from instance_identity import bind_hardware, IBCError  # type: ignore[import-not-found]
+    except ImportError as exc:
+        _die(f"Cannot import instance_identity: {exc}")
+
+    print("Computing hardware fingerprint and binding to IBC ...")
+    try:
+        decoded = bind_hardware()
+    except IBCError as exc:
+        _die(f"Hardware bind failed: {exc}")
+
+    print("Hardware binding successful.")
+    hw = decoded.get("hardware_fp", "")
+    if hw:
+        print(f"  hardware_fp : {hw[:16]}...")
+    jti = decoded.get("jti", "")
+    if jti:
+        print(f"  cert jti    : {jti}")
+    return 0
+
+
+def cmd_check_hardware(args: argparse.Namespace) -> int:
+    """Compare the current hardware fingerprint against the bound IBC claim.
+
+    Purely local — no network call, no CLI-level enforcement. Operators
+    decide what to do with a mismatch (e.g. a legitimately swapped NIC).
+    """
+    try:
+        from instance_identity import check_hardware_binding  # type: ignore[import-not-found]
+    except ImportError as exc:
+        _die(f"Cannot import instance_identity: {exc}")
+
+    result = check_hardware_binding()
+    if not result["bound"]:
+        print("hardware binding : not set (run 'corvin-id bind-hardware' to enable)")
+        return 0
+    if result["matches"]:
+        print("hardware binding : OK (matches bound fingerprint)")
+        return 0
+    print("hardware binding : MISMATCH")
+    print(f"  current fingerprint : {result['current_fp'][:16]}...")
+    print(f"  bound fingerprint   : {result['claimed_fp'][:16]}...")
+    print("  This can be legitimate (hardware upgrade/dock change) or indicate")
+    print("  the IBC was copied to another machine. Investigate before trusting.")
+    return 1
+
+
+def cmd_check_revocation(args: argparse.Namespace) -> int:
+    """ADR-0145 M3: check the CRL for this instance's current IBC."""
+    try:
+        from instance_identity import get_ibc, is_ibc_revoked  # type: ignore[import-not-found]
+    except ImportError as exc:
+        _die(f"Cannot import instance_identity: {exc}")
+
+    if get_ibc() is None:
+        print("No valid local IBC — nothing to check.")
+        return 0
+
+    force_refresh = bool(getattr(args, "refresh", False))
+    revoked = is_ibc_revoked(force_refresh=force_refresh)
+    if revoked:
+        print("REVOKED: this instance's IBC has been revoked. Re-run 'corvin-id init' "
+              "after resolving the revocation reason with Corvin Labs support.")
+        return 1
+    print("OK: IBC is not on the revocation list.")
+    return 0
+
+
 def cmd_export_pubkey(args: argparse.Namespace) -> int:
     """Print Ed25519 public key in PEM format."""
     (bind_instance, ensure_instance_key, get_ibc, get_instance_id,
@@ -425,6 +500,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("export-pubkey", help="Print Ed25519 public key in PEM format")
 
+    sub.add_parser("bind-hardware", help="Tether the current IBC to this machine's hardware fingerprint")
+    sub.add_parser("check-hardware", help="Compare current hardware fingerprint against bound claim (local only)")
+
+    p_check_revocation = sub.add_parser("check-revocation", help="Check the CRL for this instance's IBC")
+    p_check_revocation.add_argument(
+        "--refresh", action="store_true", help="Bypass the 24h CRL cache and force a network fetch"
+    )
+
     return parser
 
 
@@ -436,6 +519,9 @@ _COMMAND_MAP = {
     "rotate": cmd_rotate,
     "resolve": cmd_resolve,
     "export-pubkey": cmd_export_pubkey,
+    "bind-hardware": cmd_bind_hardware,
+    "check-hardware": cmd_check_hardware,
+    "check-revocation": cmd_check_revocation,
 }
 
 

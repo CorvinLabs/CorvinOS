@@ -418,6 +418,8 @@ EVENT_SEVERITY: dict[str, str] = {
     "instance.key_rotated":                 "WARNING",
     "instance.ibc_sig_failed":              "CRITICAL",
     "instance.ibc_hardware_mismatch":       "WARNING",
+    # ADR-0145 M3 — hardware tethering
+    "instance.hardware_bound":              "INFO",
     # ADR-0153 M3 — per-event instance_id / Ed25519 audit-signature attestation.
     # Emitted best-effort; never blocks a chain write.
     "instance.audit_sig_failed":            "WARNING",   # signing failed at write time
@@ -1213,6 +1215,7 @@ _EVENT_ALLOWLIST: dict[str, frozenset[str]] = {
     "instance.key_rotated":           frozenset(set()),
     "instance.ibc_sig_failed":        frozenset({"origin_id", "reason", "ibc_jti"}),
     "instance.ibc_hardware_mismatch": frozenset({"reason"}),
+    "instance.hardware_bound":        frozenset({"ibc_jti"}),
     "instance.attestation_verified":  frozenset({"origin_id", "trust_level", "ibc_jti"}),
     "instance.attestation_failed":    frozenset({"origin_id", "trust_level", "ibc_jti", "reason"}),
     # ADR-0153 M4 — CorvinID cert lifecycle. Metadata-only: 8-char instance_id

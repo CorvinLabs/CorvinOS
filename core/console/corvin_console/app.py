@@ -88,6 +88,7 @@ from .routes import (
     tokens as tokens_route,
     assistant as assistant_route,
     license as license_route,
+    instance as instance_route,
     rag as rag_route,
     rag_hub as rag_hub_route,
     rag_hub_analytics as rag_hub_analytics_route,
@@ -208,6 +209,7 @@ router.include_router(rag_hub_analytics_route.router, tags=["console-rag-hub-ana
 router.include_router(custom_provider_route.router, tags=["console-custom-provider"])
 # ADR-0017 Phase IV — License management (upload, revoke, status, audit).
 router.include_router(license_route.router, tags=["console-license"])
+router.include_router(instance_route.router, tags=["console-instance"])
 # ADR-0096 M3 — MCP Plugin Manager console UI.
 router.include_router(mcp_plugins_route.router, tags=["console-mcp-plugins"])
 # ADR-0106 — DSI v1 Data Source management.

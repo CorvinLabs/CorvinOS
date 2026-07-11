@@ -247,6 +247,23 @@ export async function dashboard(signal?: AbortSignal): Promise<DashboardResponse
   return api<DashboardResponse>("/dashboard", { signal });
 }
 
+// ADR-0145 M4 — instance identity / IBC binding status, local-state-only.
+export interface InstanceIdentityStatus {
+  instance_id: string;
+  label: string;
+  ibc_bound: boolean;
+  plan: string | null;
+  email: string | null;
+  expires_at: number | null;
+  hardware_bound: boolean;
+  hardware_matches: boolean | null;
+  revocation_status: "revoked" | "clean" | "unknown";
+}
+
+export async function getInstanceIdentity(signal?: AbortSignal): Promise<InstanceIdentityStatus> {
+  return api<InstanceIdentityStatus>("/settings/instance-identity", { signal });
+}
+
 // Landing-personas is a NEW endpoint (Iteration 1, task 5) — exposed
 // unauthenticated so the public hero can render the gallery without a
 // login. Backend returns only the curated "publishable" projection

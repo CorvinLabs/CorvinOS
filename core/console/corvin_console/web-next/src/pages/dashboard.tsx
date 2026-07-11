@@ -9,6 +9,7 @@ import {
   Cpu,
   Database,
   File,
+  Fingerprint,
   Hash,
   Key,
   Network,
@@ -32,9 +33,10 @@ import {
   getOsEngineSetting,
   getOsEngineHealth,
   listDataSources,
+  getInstanceIdentity,
 } from "@/lib/api";
 import { formatBytes, formatDate } from "@/lib/utils";
-import type { DSIConnection, OsEngineSetting, OsEngineHealth } from "@/lib/api";
+import type { DSIConnection, OsEngineSetting, OsEngineHealth, InstanceIdentityStatus } from "@/lib/api";
 
 // ── Local types ───────────────────────────────────────────────────────────────
 
@@ -159,6 +161,12 @@ export function DashboardPage() {
   const secrets = useQuery({
     queryKey: ["byok", "secrets"],
     queryFn: ({ signal }) => api<SecretsListResponse>("/byok/secrets", { signal }),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const identity = useQuery({
+    queryKey: ["settings", "instance-identity"],
+    queryFn: ({ signal }) => getInstanceIdentity(signal),
     staleTime: 5 * 60_000,
     retry: false,
   });
@@ -533,6 +541,78 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       </section>
+
+      {/* ── Instance identity (ADR-0145) ── */}
+      <section className="grid gap-4">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Fingerprint className="h-4 w-4 text-accent" />
+              <CardTitle className="text-base">Instance identity</CardTitle>
+            </div>
+            <CardDescription>
+              This installation's stable identifier and Instance Binding Certificate (IBC) status.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {identity.isLoading && (
+              <div className="space-y-2">
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-2/3" />
+              </div>
+            )}
+            {identity.data && <InstanceIdentityCard status={identity.data} />}
+            {!identity.isLoading && !identity.data && (
+              <p className="text-sm text-muted-foreground">
+                Instance identity unavailable — this feature requires the ADR-0145
+                identity module.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      </section>
+    </div>
+  );
+}
+
+// ── Instance Identity Card ──────────────────────────────────────────────────
+
+function InstanceIdentityCard({ status }: { status: InstanceIdentityStatus }) {
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-xs break-all">{status.instance_id || "—"}</span>
+        {status.label && (
+          <Badge variant="outline" className="text-[10px]">{status.label}</Badge>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={status.ibc_bound ? "ok" : "outline"}>
+          {status.ibc_bound ? "IBC bound" : "not bound"}
+        </Badge>
+        {status.ibc_bound && status.plan && (
+          <Badge variant="secondary" className="text-[10px]">{status.plan}</Badge>
+        )}
+        <Badge variant={status.hardware_bound ? "ok" : "outline"}>
+          {status.hardware_bound ? "hardware tethered" : "hardware not tethered"}
+        </Badge>
+        {status.hardware_bound && status.hardware_matches === false && (
+          <Badge variant="danger" className="text-[10px]">hardware mismatch</Badge>
+        )}
+        {status.revocation_status === "revoked" && (
+          <Badge variant="danger">revoked</Badge>
+        )}
+        {status.revocation_status === "clean" && (
+          <Badge variant="ok" className="text-[10px]">not revoked</Badge>
+        )}
+      </div>
+      {!status.ibc_bound && (
+        <p className="text-xs text-muted-foreground">
+          Bind this instance to your Corvin Labs account with{" "}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">corvin-id init</code>{" "}
+          to turn this ID into a verifiable credential.
+        </p>
+      )}
     </div>
   );
 }
