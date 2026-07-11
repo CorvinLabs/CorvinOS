@@ -1365,6 +1365,8 @@ function ChatPane({
   const stopRecRef = React.useRef(stopRecording);
   const inputRef = React.useRef(input);
   const setInputRef = React.useRef(setInput);
+  const sendUserRef = React.useRef(sendUser);
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   React.useEffect(() => {
     recordingRef.current = recording;
     if (recording) pttPendingRef.current = false; // recording confirmed — clear pending
@@ -1374,6 +1376,7 @@ function ChatPane({
   React.useEffect(() => { stopRecRef.current = stopRecording; });
   React.useEffect(() => { inputRef.current = input; }, [input]);
   React.useEffect(() => { setInputRef.current = setInput; }, [setInput]);
+  React.useEffect(() => { sendUserRef.current = sendUser; });
 
   React.useEffect(() => {
     // Elements where Space has a native role we must not override.
@@ -1428,11 +1431,39 @@ function ChatPane({
       stopRecRef.current();
     };
 
+    // Elements where Enter has a native role we must not override — same
+    // list as Space, plus ALL textareas (the main composer already sends
+    // on Enter via its own onKeyDown; any other textarea on the page, e.g.
+    // inside a dialog, keeps its normal newline/submit behaviour).
+    const isNativeEnterTarget = (el: EventTarget | null): boolean => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName.toLowerCase();
+      if (tag === "input" || tag === "select" || tag === "textarea") return true;
+      if (el.isContentEditable) return true;
+      if (tag === "button" || tag === "a") return true;
+      return false;
+    };
+
+    // Global "Enter sends" — so a reply can be sent without first clicking
+    // into the composer (e.g. right after push-to-talk, or while reading
+    // the transcript). Skips native targets above so it never hijacks
+    // Enter inside some other field/dialog elsewhere on the page.
+    const onGlobalEnter = (e: KeyboardEvent) => {
+      if (e.key !== "Enter" || e.repeat || e.shiftKey || e.metaKey || e.ctrlKey) return;
+      if (isNativeEnterTarget(e.target)) return;
+      if (recordingRef.current || streamingRef.current) return;
+      e.preventDefault();
+      setPaletteOpen(false);
+      sendUserRef.current(inputRef.current);
+    };
+
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("keydown", onGlobalEnter);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("keydown", onGlobalEnter);
       if (holdTimer !== null) clearTimeout(holdTimer);
     };
   }, []);
@@ -1734,6 +1765,7 @@ function ChatPane({
                 }}
               />
               <Textarea
+                ref={textareaRef}
                 value={input}
                 onChange={(e) => {
                   const v = e.target.value;
