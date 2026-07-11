@@ -49,10 +49,32 @@ def expect(cond: bool, label: str, detail: str = "") -> None:
 # pin an exact file:line.
 _SUBSYSTEM_ROOTS: dict[str, tuple[str, ...]] = {
     "forge.": ("operator/forge",),
+    "data.": ("operator/forge", "core/compute"),
+    # ADR-0190 M6 — compute.delegation_loop's tool (acs_delegate) is
+    # registered in core/orchestration, NOT operator/forge or core/compute.
+    # Matched correctly regardless of dict order below: _subsystem_source
+    # picks the LONGEST matching prefix, not the first-in-iteration-order
+    # one, so a more-specific entry can never be silently shadowed by a
+    # shorter, more general one added later (or reordered by a future edit).
+    "compute.delegation_loop": ("core/orchestration",),
     "compute.": ("operator/forge", "core/compute"),
     "skill_forge.": ("operator/skill-forge",),
     "delegate.": ("core/delegate",),
+    "workflows.": ("core/orchestration", "core/workflows"),
+    "a2a.": ("core/orchestration",),
 }
+
+
+# Directory-name segments never worth scanning for a hand-written CorvinOS
+# tool name — vendored dependencies (core/compute/.venv alone is ~270 MB /
+# 3000+ .py files) that can never contain a match but cost a full read+
+# decode every time a capability under that root is checked.
+_SKIP_DIR_PARTS = frozenset({"__pycache__", ".venv", "venv", "node_modules", ".git"})
+
+# Cache concatenated source per root-tuple so capabilities that share roots
+# (e.g. every "compute.*" entry) pay the rglob+read cost once, not once per
+# capability that happens to map to the same subsystem tree.
+_source_cache: dict[tuple[str, ...], str] = {}
 
 
 def _subsystem_source(capability_id: str) -> str | None:
@@ -60,26 +82,30 @@ def _subsystem_source(capability_id: str) -> str | None:
     capability id. Returns None if no root mapping exists (e.g. externally
     -wired capabilities like Playwright/ImageGen, which have no CorvinOS
     source tree to check tool names against)."""
-    roots: tuple[str, ...] | None = None
-    for prefix, paths in _SUBSYSTEM_ROOTS.items():
-        if capability_id.startswith(prefix):
-            roots = paths
-            break
-    if roots is None:
+    matches = [prefix for prefix in _SUBSYSTEM_ROOTS if capability_id.startswith(prefix)]
+    if not matches:
         return None
+    # Longest-prefix-wins — correctness must not depend on dict insertion
+    # order (a "compute.foo" root_bar mapping added after the general
+    # "compute." entry must still win over it).
+    roots = _SUBSYSTEM_ROOTS[max(matches, key=len)]
+    if roots in _source_cache:
+        return _source_cache[roots]
     chunks: list[str] = []
     for rel in roots:
         root = REPO_ROOT / rel
         if not root.is_dir():
             continue
         for f in root.rglob("*.py"):
-            if "__pycache__" in f.parts:
+            if _SKIP_DIR_PARTS.intersection(f.parts):
                 continue
             try:
                 chunks.append(f.read_text(encoding="utf-8", errors="ignore"))
             except OSError:
                 continue
-    return "\n".join(chunks)
+    source = "\n".join(chunks)
+    _source_cache[roots] = source
+    return source
 
 
 def main() -> int:
@@ -96,9 +122,8 @@ def main() -> int:
             continue
 
         # ── Tool names must appear in the subsystem's real source ────────
-        matched_prefix = next(
-            (p for p in _SUBSYSTEM_ROOTS if cap.id.startswith(p)), None
-        )
+        _matches = [p for p in _SUBSYSTEM_ROOTS if cap.id.startswith(p)]
+        matched_prefix = max(_matches, key=len) if _matches else None
         source = _subsystem_source(cap.id)
         if source is None:
             # No CorvinOS source tree to check against (externally-wired

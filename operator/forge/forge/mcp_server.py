@@ -102,6 +102,8 @@ from ._compute_discovery import (
 )
 _COMPUTE_TOOL_DEFS: list[dict] | None = None
 _COMPUTE_TOOL_NAMES: frozenset[str] = frozenset()
+_COMPUTE_ENGINE_TOOL_DEFS: list[dict] | None = None
+_COMPUTE_ENGINE_TOOLS_NAMES: frozenset[str] = frozenset()
 try:
     # Lazy resolution — the plugin tree exposes `corvin_compute` only
     # when bootstrapped. We add its parent dir to sys.path so the
@@ -114,12 +116,24 @@ try:
     from corvin_compute.mcp_bridge import (  # type: ignore[import]
         COMPUTE_TOOL_NAMES as _COMPUTE_TOOL_NAMES,
         compute_tool_definitions as _compute_tool_definitions,
+        COMPUTE_ENGINE_TOOLS_NAMES as _COMPUTE_ENGINE_TOOLS_NAMES,
+        compute_engine_tool_definitions as _compute_engine_tool_definitions,
     )
     from corvin_compute.client import (  # type: ignore[import]
         WorkerClient as _ComputeWorkerClient,
         WorkerClientError as _ComputeWorkerClientError,
     )
+    # ADR-0190 M3 — General Availability datasource registration. Register()
+    # is pure filesystem + audit_writer (no compute-worker socket needed),
+    # so this import is independent of worker reachability.
+    from corvin_compute.fabric.datasources.registry import (  # type: ignore[import]
+        DataSourceRegistry as _DataSourceRegistry,
+    )
     _COMPUTE_TOOL_DEFS = list(_compute_tool_definitions())
+    # ADR-0029 — pipeline/HAC engines (compute_submit/compute_gate). Fully
+    # coded in mcp_bridge.py since ADR-0029 but never imported here until
+    # ADR-0190 M2 — this was dead code from the MCP server's perspective.
+    _COMPUTE_ENGINE_TOOL_DEFS = list(_compute_engine_tool_definitions())
     # ADR-0017/ADR-0013 — license gate; imported here so the path extension
     # above makes corvin_compute reachable before the import.
     from corvin_compute.license_gate import (  # type: ignore[import]
@@ -142,6 +156,8 @@ try:
         _FABRIC_NOT_ENABLED: dict = {"status": "error", "error": "FabricNotEnabled"}
 except ImportError:
     _COMPUTE_TOOL_DEFS = None
+    _COMPUTE_ENGINE_TOOL_DEFS = None
+    _DataSourceRegistry = None  # type: ignore[assignment]
     _ComputeWorkerClient = None  # type: ignore[assignment]
     _ComputeWorkerClientError = None  # type: ignore[assignment]
     _check_compute_access = None  # type: ignore[assignment]
@@ -150,6 +166,55 @@ except ImportError:
     _FABRIC_TOOL_DEFS = None
     _FABRIC_TOOL_NAMES = frozenset()
     _FABRIC_NOT_ENABLED = {"status": "error", "error": "FabricNotEnabled"}
+
+# ADR-0190 M3 — General Availability datasource-adapter license gate. This is
+# the EXACT same three-level defensive fallback chain as
+# core/console/corvin_console/routes/data_sources.py's ``_lic_get_limit`` —
+# both surfaces must resolve "datasource_adapters_allowed" identically, so
+# any change to this chain must be mirrored there (and vice versa). Kept as
+# a local copy rather than a cross-import because forge/mcp_server.py must
+# not depend on the console webapp package (heavy FastAPI/DB import graph,
+# wrong direction of coupling for a stdio MCP subprocess).
+#
+# Verification finding: an earlier version of this block imported
+# license.validator without first putting operator/ on sys.path (unlike
+# data_sources.py, which does `sys.path.insert(0, str(_OPERATOR))` before
+# its own identical import) — the import silently failed every time and
+# EVERY datasource_connect call fell through to the hardcoded free-tier
+# fallback regardless of the tenant's real license tier. The path insertion
+# below is required, not cosmetic.
+_DS_FREE_TIER_FALLBACK: dict = {"datasource_adapters_allowed": ["local_file"]}
+_DS_OPERATOR_ROOT = Path(__file__).resolve().parents[2]  # operator/
+if _DS_OPERATOR_ROOT.is_dir() and str(_DS_OPERATOR_ROOT) not in sys.path:
+    sys.path.insert(0, str(_DS_OPERATOR_ROOT))
+try:
+    from license.validator import get_limit as _lic_get_limit  # type: ignore[import]
+except ImportError:
+    try:
+        from license.limits import FREE_TIER as _DS_FREE_TIER  # type: ignore[import]
+        _lic_get_limit = _DS_FREE_TIER.get  # type: ignore[assignment]
+    except ImportError:
+        _lic_get_limit = _DS_FREE_TIER_FALLBACK.get  # type: ignore[assignment]
+
+_DATASOURCE_CONNECT_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "manifest": {
+            "type": "object",
+            "description": (
+                "AdapterManifest dict for the new connection — same shape as "
+                "the console's Data Sources > Register form. Must include at "
+                "least 'adapter' (e.g. 'postgresql', 'mysql', 's3_parquet', "
+                "'local_file', ...) and 'name'. Free tier: only "
+                "adapter='local_file' is allowed; Member+ unlocks all 13 "
+                "built-in adapters."
+            ),
+        },
+        "tenant_id": {"type": ["string", "null"]},
+    },
+    "required": ["manifest"],
+    "additionalProperties": False,
+}
 
 
 PROTOCOL_VERSION = "2024-11-05"
@@ -699,6 +764,12 @@ class MCPServer:
             except Exception:
                 # Discovery failure must never crash tools/list.
                 pass
+        # ADR-0029/ADR-0190 M2 — pipeline/HAC engine tools (compute_submit,
+        # compute_gate). General Availability, same worker-reachability
+        # gate as the flat compute_* tools — no separate license/fabric
+        # gate needed at list-time (that happens in _call_compute_tool).
+        if _worker_up and _COMPUTE_ENGINE_TOOL_DEFS is not None:
+            tools.extend(_COMPUTE_ENGINE_TOOL_DEFS)
         # ADR-0026 — Compute Fabric tools (opt-in per tenant).
         # Advertised only when: (a) worker is reachable AND (b) fabric_enabled=true
         # in the tenant config. Failure to read tenant config silently omits tools.
@@ -708,6 +779,22 @@ class MCPServer:
                     tools.extend(_FABRIC_TOOL_DEFS)
             except Exception:
                 pass
+        # ADR-0190 M3 — General Availability datasource_connect. Unlike the
+        # Fabric datasource_* tools above (Enterprise-only, routed through the
+        # worker socket), this calls DataSourceRegistry.register() in-process
+        # and needs no worker — advertised whenever the compute plugin (which
+        # ships DataSourceRegistry) is importable at all.
+        if _DataSourceRegistry is not None:
+            tools.append({
+                "name": "datasource_connect",
+                "description": (
+                    "Register a typed database/warehouse connection (Postgres, "
+                    "MySQL, Snowflake, BigQuery, S3, ...) for later agentic-"
+                    "compute jobs. General Availability — gated by your license "
+                    "tier's adapter allowlist (Free tier: local_file only)."
+                ),
+                "inputSchema": _DATASOURCE_CONNECT_SCHEMA,
+            })
         # Union with shadowing across all four workspace scopes plus the
         # legacy single-root registry. Higher scope (task > session >
         # project > user) wins; the single root counts as fallback after
@@ -881,12 +968,19 @@ class MCPServer:
             self._call_data_tool(msgid, _call_data_unregister, args)
             return
         # ADR-0013 — route compute_* tools to the worker (if reachable).
-        if name in _COMPUTE_TOOL_NAMES:
+        # ADR-0029/ADR-0190 M2 — compute_submit/compute_gate (pipeline/HAC
+        # engines) share the exact same worker-routing + license/quota gate
+        # path as the flat compute_* tools.
+        if name in _COMPUTE_TOOL_NAMES or name in _COMPUTE_ENGINE_TOOLS_NAMES:
             self._call_compute_tool(msgid, name, args)
             return
         # ADR-0026 — route Fabric tools; check fabric_enabled gate first.
         if name in _FABRIC_TOOL_NAMES:
             self._call_fabric_tool(msgid, name, args)
+            return
+        # ADR-0190 M3 — General Availability datasource registration.
+        if name == "datasource_connect":
+            self._call_datasource_connect(msgid, args)
             return
         # ADR-0116 M2 — Worker Audit Gateway
         if name == "audit.write_event":
@@ -930,9 +1024,12 @@ class MCPServer:
             )
             return
 
-        # ── License gate — compute_run only ──────────────────────────────
+        # ── License gate — compute_run + compute_submit (both spend compute
+        # quota; compute_gate/status/result/abort act on an existing run and
+        # stay ungated here, matching the pre-existing compute_run-only scope
+        # for those) ──────────────────────────────────────────────────────
         _access = None
-        if name == "compute_run" and _check_compute_access is not None:
+        if name in ("compute_run", "compute_submit") and _check_compute_access is not None:
             try:
                 from forge import paths as _forge_paths  # local import; forge is always on path
                 _home = _forge_paths.corvin_home()
@@ -963,7 +1060,24 @@ class MCPServer:
                     return
                 if _access.mode == "trial" and _enforce_trial_strategy is not None:
                     try:
-                        args = _enforce_trial_strategy(args, corvin_home=_home)
+                        # ADR-0190 verification finding: enforce_trial_strategy()
+                        # reads a top-level args["strategy"] — correct for
+                        # compute_run, but compute_submit's engine="flat" carries
+                        # the same field nested under extra.strategy instead (see
+                        # COMPUTE_SUBMIT_SCHEMA), and engine="pipeline"/"hac" has
+                        # no strategy concept at all. Without this, a trial user
+                        # submitting engine="flat" extra={"strategy":"bayesian"}
+                        # via compute_submit would silently get the wrong (more
+                        # generous) TRIAL_ITERATION_CAP instead of the tighter
+                        # TRIAL_BAYESIAN_CAP, since args.get("strategy") always
+                        # defaults to "grid" for compute_submit's own shape.
+                        _trial_args = args
+                        if name == "compute_submit" and args.get("engine") == "flat":
+                            _flat_strategy = (args.get("extra") or {}).get("strategy")
+                            if _flat_strategy:
+                                _trial_args = dict(args)
+                                _trial_args["strategy"] = _flat_strategy
+                        args = _enforce_trial_strategy(_trial_args, corvin_home=_home)
                     except ValueError as exc:
                         self._respond(msgid, {
                             "content": [{
@@ -989,7 +1103,9 @@ class MCPServer:
         # ADR-0094 M2 / ADR-0095 M3 — daily compute-unit quota gate.
         # Tries server-side permit first; falls back to local counter.
         # Fail-open: I/O / network errors never block compute.
-        if name == "compute_run":
+        # ADR-0190 M2 — compute_submit spends compute the same way compute_run
+        # does, so it shares the same quota gate.
+        if name in ("compute_run", "compute_submit"):
             _cq_blocked = False
             _cq_msg = ""
 
@@ -1000,8 +1116,8 @@ class MCPServer:
             _server_result = "no_credentials"
             try:
                 _server_result = _request_server_compute_permit(
-                    job_id=str(params.get("id", "forge")),
-                    tenant_id=str(params.get("tenant_id", "_default")),
+                    job_id=str(args.get("id", "forge")),
+                    tenant_id=str(args.get("tenant_id", "_default")),
                 )
             except Exception as _srv_exc:
                 import urllib.error as _ue
@@ -1057,8 +1173,8 @@ class MCPServer:
                         # increment_and_check raises LicenseLimitError or returns None
                         _cq_check(
                             _cq_paths.corvin_home(),
-                            channel=params.get("channel", ""),
-                            chat_key=params.get("chat_key", ""),
+                            channel=args.get("channel", ""),
+                            chat_key=args.get("chat_key", ""),
                         )
                     except Exception as _cq_exc:
                         if _CQLimitError is not None and isinstance(_cq_exc, _CQLimitError):
@@ -1114,6 +1230,23 @@ class MCPServer:
                                            wait_s=wait_s)
             elif name == "compute_abort":
                 result = client.abort_run(args["compute_handle"])
+            elif name == "compute_submit":
+                # ADR-0029/ADR-0190 M2 — unified submit for pipeline/HAC engines.
+                result = client.submit_engine_run(
+                    engine=args["engine"],
+                    budget=args["budget"],
+                    extra=args.get("extra") or {},
+                    tenant_id=args.get("tenant_id"),
+                )
+            elif name == "compute_gate":
+                # COMPUTE_GATE_SCHEMA nests action_type/payload under "action";
+                # WorkerClient.gate_action() takes them as flat params.
+                _gate_action = args.get("action") or {}
+                result = client.gate_action(
+                    args["compute_handle"],
+                    _gate_action.get("action_type"),
+                    payload=_gate_action.get("payload"),
+                )
             else:
                 self._error(msgid, METHOD_NOT_FOUND,
                             f"unknown compute tool: {name}")
@@ -1209,6 +1342,96 @@ class MCPServer:
             except Exception:
                 return False
         return False
+
+    def _call_datasource_connect(self, msgid: Any, args: dict) -> None:
+        """ADR-0190 M3 — General Availability datasource registration.
+
+        Applies the SAME ``license.validator.get_limit("datasource_adapters_
+        allowed")`` gate already enforced on ``POST /v1/console/data-sources``
+        (core/console/corvin_console/routes/data_sources.py) — same feature
+        key, same fail-closed FREE_TIER fallback — so the console and chat
+        surfaces stay authorization-consistent. Unlike the Fabric
+        ``datasource_*`` tools (Enterprise-only, routed through the compute
+        worker socket), this calls ``DataSourceRegistry.register()``
+        in-process — register() is pure filesystem + audit_writer, so no
+        worker needs to be running.
+        """
+        if _DataSourceRegistry is None:
+            self._error(
+                msgid, METHOD_NOT_FOUND,
+                "compute plugin not installed (core/compute/)",
+            )
+            return
+
+        manifest = args.get("manifest") or {}
+        adapter = manifest.get("adapter", "")
+
+        # ── License gate — identical decision to the console REST route ────
+        allowed_adapters = _lic_get_limit("datasource_adapters_allowed")
+        if allowed_adapters is not None and adapter not in allowed_adapters:
+            self._respond(msgid, {
+                "content": [{
+                    "type": "text",
+                    "text": json.dumps({
+                        "status": "error",
+                        "error": "license_limit",
+                        "feature": "datasource_adapters_allowed",
+                        "adapter": adapter,
+                        "message": (
+                            f"Adapter '{adapter}' requires a Member licence or "
+                            "higher. Only 'local_file' connections are "
+                            "available on the Free tier."
+                        ),
+                        "upgrade": "https://corvin-labs.com/pricing",
+                    }, ensure_ascii=False),
+                }],
+                "isError": True,
+            })
+            self._log_security_event(
+                "datasource.license_denied",
+                tool="datasource_connect",
+                details={"adapter": adapter},
+            )
+            return
+
+        try:
+            from .paths import corvin_home as _forge_corvin_home
+            from .tenants import current_tenant as _current_tenant
+            from .security_events import write_event as _write_event
+
+            tenant_id = _current_tenant(args.get("tenant_id"))
+            audit_path = _forge_corvin_home() / "tenants" / tenant_id / "audit.jsonl"
+
+            def _audit_writer(event_type: str, severity: str, details: dict) -> None:
+                _write_event(audit_path, event_type, severity=severity, details=details)
+
+            reg = _DataSourceRegistry()
+            registered = reg.register(manifest, tenant_id, audit_writer=_audit_writer)
+        except (KeyError, ValueError) as exc:
+            self._error(msgid, INVALID_PARAMS, f"invalid datasource manifest: {exc}")
+            return
+        except PermissionError as exc:
+            self._error(msgid, INVALID_PARAMS, f"datasource connect not permitted: {exc}")
+            return
+        except Exception as exc:  # noqa: BLE001
+            self._error(msgid, INTERNAL_ERROR, f"datasource connect failed: {exc}")
+            return
+
+        self._log_security_event(
+            "datasource.connected",
+            tool="datasource_connect",
+            details={"adapter": adapter, "name": getattr(registered, "name", "")},
+        )
+        self._respond(msgid, {
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "status": "ok",
+                    "name": getattr(registered, "name", ""),
+                    "adapter": adapter,
+                }, ensure_ascii=False),
+            }],
+        })
 
     def _call_fabric_tool(self, msgid: Any, name: str, args: dict) -> None:
         """Route ADR-0026 Fabric tool calls.

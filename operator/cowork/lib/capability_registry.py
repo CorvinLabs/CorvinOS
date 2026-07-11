@@ -188,65 +188,120 @@ CAPABILITIES: tuple[Capability, ...] = (
         ),
     ),
 
-    # ── Planned (ADR-0190 M2-M8) — not yet chat-reachable. Registered so
+    # ── Planned (ADR-0190 M7) — not yet chat-reachable. Registered so
     # the capability map can disclose "not available yet" honestly instead
     # of staying silent, which reads as "doesn't exist" — worse than a
     # clear "coming soon, here's why" for anyone planning around it.
+    # (M2-M6 below this comment used to live here as "planned" — all now
+    # flipped to "wired" further up; M8 is a research-spike milestone with
+    # no new user-facing capability of its own, so it has no registry entry.)
+    Capability(
+        id="license.status",
+        domain="License",
+        status="planned",
+        not_yet_note=(
+            "Reading your current license tier / feature limits from chat "
+            "(e.g. 'what's my compute quota today'). Today this is console-"
+            "only (Settings -> License). Tracked: ADR-0190 M7."
+        ),
+        service_fn="operator.license.validator.active_tier",
+    ),
+    Capability(
+        id="rag.query",
+        domain="Knowledge Base (RAG)",
+        status="planned",
+        not_yet_note=(
+            "Querying the tenant's ingested-document knowledge base from "
+            "chat as a distinct tool call (retrieval today happens only as "
+            "an implicit context-injection step, not as something you can "
+            "invoke directly and inspect). Tracked: ADR-0190 M7."
+        ),
+        service_fn="operator.bridges.shared.rag_query_engine.RAGQueryEngine",
+    ),
+    Capability(
+        id="a2a.peers",
+        domain="A2A (instance-to-instance)",
+        status="planned",
+        not_yet_note=(
+            "Listing/inspecting configured A2A peer pairings and friendship "
+            "state from chat (distinct from a2a.send/a2a_list_endpoints, "
+            "which only see YOUR OWN sender-side endpoint configs, not the "
+            "richer bidirectional pairing state). Today this is console-only "
+            "(the /remote-trigger/pair/friendship/connections REST route). "
+            "Tracked: ADR-0190 M7."
+        ),
+        service_fn="core.console.corvin_console.routes.a2a_pair",
+    ),
+
     Capability(
         id="compute.pipeline",
         domain="Agentic Compute",
-        status="planned",
-        not_yet_note=(
-            "Multi-stage pipeline / hierarchical (HAC) compute jobs — the code "
-            "already exists (core/compute/corvin_compute/mcp_bridge.py::"
-            "compute_engine_tool_definitions) but is not yet wired into the "
-            "MCP server. Tracked: ADR-0190 M2."
-        ),
+        status="wired",
+        one_liner="Submit a multi-stage pipeline or hierarchical (HAC) compute job with forge/backprop gates; steer, resume, or abort it mid-run via compute_gate.",
+        persona_flag="forge_enabled",
+        mcp_server="forge.mcp_server",
+        tool_names=("mcp__forge__compute_submit", "mcp__forge__compute_gate"),
+        gate_fn="operator.forge.forge.mcp_server._check_compute_access",
         service_fn="core.compute.corvin_compute.mcp_bridge.compute_engine_tool_definitions",
+        test_file="operator/forge/tests/test_compute_engine_tools.py",
     ),
     Capability(
         id="data.sources",
         domain="Data Sources",
-        status="planned",
-        not_yet_note=(
-            "Registering a typed database/warehouse connection (Postgres, "
-            "MySQL, Snowflake, BigQuery, S3, ...) from chat. Today this is "
-            "console-only (Settings -> Data Sources). Tracked: ADR-0190 M3."
-        ),
+        status="wired",
+        one_liner="Register a typed database/warehouse connection (Postgres, MySQL, Snowflake, BigQuery, S3, ...); adapter access follows your license tier (Free: local_file only).",
+        persona_flag="forge_enabled",
+        mcp_server="forge.mcp_server",
+        tool_names=("mcp__forge__datasource_connect",),
+        gate_fn="operator.forge.forge.mcp_server._lic_get_limit",
         service_fn="core.compute.corvin_compute.fabric.datasources.registry.DataSourceRegistry",
+        test_file="operator/forge/tests/test_datasource_connect.py",
     ),
     Capability(
         id="a2a.send",
         domain="A2A (instance-to-instance)",
-        status="planned",
-        not_yet_note=(
-            "Sending a task to another paired CorvinOS instance. Pairing is "
-            "already console-managed; the send action itself has no chat "
-            "tool yet. Tracked: ADR-0190 M4."
-        ),
+        status="wired",
+        one_liner="Send a signed task instruction to an already-paired CorvinOS instance, or list configured endpoints.",
+        persona_flag="orchestration_enabled",
+        mcp_server="corvin_orchestration.mcp_server",
+        tool_names=("mcp__corvin_orchestration__a2a_send", "mcp__corvin_orchestration__a2a_list_endpoints"),
         service_fn="operator.bridges.shared.remote_trigger_sender.RemoteTriggerSender.send",
+        test_file="core/orchestration/tests/test_mcp_server.py",
     ),
     Capability(
         id="workflows.awp",
         domain="Workflows",
-        status="planned",
-        not_yet_note=(
-            "Creating, running, or resuming a full AWP workflow (with code/"
-            "merge/route/ask_human nodes) from chat. Today this requires the "
-            "corvin-flow CLI or the console. Tracked: ADR-0190 M5."
+        status="wired",
+        one_liner="Run, resume, or list paused AWP DAG-workflows (code/merge/route/ask_human nodes) already registered under Settings -> Workflows.",
+        persona_flag="orchestration_enabled",
+        mcp_server="corvin_orchestration.mcp_server",
+        tool_names=(
+            "mcp__corvin_orchestration__workflow_run",
+            "mcp__corvin_orchestration__workflow_resume",
+            "mcp__corvin_orchestration__workflow_list_paused",
         ),
         service_fn="core.workflows.corvin_workflows.runner.DAGRunner",
+        test_file="core/orchestration/tests/test_mcp_server.py",
     ),
+    # NOTE (ADR-0190 M6 scope note, not shown to the LLM): the NEW acs_delegate
+    # MCP tool below is wired and calls run_acs_workflow() directly — zero
+    # regression risk to the existing console feature. The SEPARATE,
+    # originally-scoped refactor of the console's own chat_runtime.py ACS
+    # bypass onto this same run_acs_workflow() path was deliberately DEFERRED
+    # — that bypass is a live, working console feature relying on
+    # run_acs_workflow()-unsupported kwargs (manager_model/worker_model/
+    # session_debug_log) and a different run-directory convention; refactoring
+    # it needs its own carefully-tested pass, not a rushed side-effect here.
     Capability(
         id="compute.delegation_loop",
         domain="Agentic Compute",
-        status="planned",
-        not_yet_note=(
-            "Autonomous recursive delegation loops (ACS). Today triggered "
-            "only by an internal heuristic inside the console's own chat "
-            "runtime, not callable directly. Tracked: ADR-0190 M6."
-        ),
+        status="wired",
+        one_liner="Delegate an open-ended task to the Autonomous Compute Shell's manager/worker loop (ADR-0104) — distinct from a fixed workflow_run DAG.",
+        persona_flag="orchestration_enabled",
+        mcp_server="corvin_orchestration.mcp_server",
+        tool_names=("mcp__corvin_orchestration__acs_delegate",),
         service_fn="operator.bridges.shared.acs_engine_adapter.run_acs_workflow",
+        test_file="core/orchestration/tests/test_mcp_server.py",
     ),
 )
 

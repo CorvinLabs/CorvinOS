@@ -13,6 +13,7 @@
   "zero_config": true,
   "forge_enabled": true,
   "skill_forge_enabled": true,
+  "orchestration_enabled": true,
   "capability_aware": true,
   "tool_namespace": "code",
   "memory_recall_enabled": true,

@@ -17,6 +17,7 @@
   "delegate_inject_skills": true,
   "delegate_forge_enabled": true,
   "delegate_skill_forge_enabled": true,
+  "orchestration_enabled": true,
   "capability_aware": true,
   "inject_skills": true,
   "outcome_grading": true,

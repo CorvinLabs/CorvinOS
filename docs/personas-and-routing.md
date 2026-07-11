@@ -51,17 +51,18 @@ The fields fall into five groups:
 | **Routing** | `routing_anchors`, `routing_exclude` | Used only by layer 4 (auto-router), see below |
 | **LDD discipline** (Layer 14) | `ldd_preset`, `ldd_layers`, `ldd_enabled` | Which LDD disciplines the persona runs by default — preset (default/strict/quick/off) + delta + master flag. Resolved by `cowork.resolver._resolve_ldd_section`; `chat_profile` overrides win |
 | **Self-awareness** (ADR-0190) | `capability_aware` | Opt-in flag: when `true`, the resolver injects a generated "what CorvinOS can do" capability map into `append_system` — see below |
+| **Orchestration** (ADR-0190 M4/M5/M6) | `orchestration_enabled` | Opt-in flag, separate from `forge_enabled`/`delegate_enabled`: wires the `corvin_orchestration` MCP server (AWP workflow run/resume/list-paused, A2A send/list-endpoints, ACS delegation) — see below |
 
 ### Bundled personas
 
 | Name | One-line role | Notable tools / MCP | Generation capability | LDD profile (Layer 14) |
 |---|---|---|---|---|
-| `assistant` | Generalist, fallback for the router | All standard tools; `routing_exclude: true` | Forge tools + skills (zero_config) | `quick` (4 / 12) |
-| `coder` | Default coder for engineering chats | `--dangerously-skip-permissions`, full tools | Forge tools + skills (`code.*` namespace) | `default` (12 / 12) |
+| `assistant` | Generalist, fallback for the router | All standard tools; `routing_exclude: true` | Forge tools + skills (zero_config); orchestration (workflows/A2A/ACS) | `quick` (4 / 12) |
+| `coder` | Default coder for engineering chats | `--dangerously-skip-permissions`, full tools | Forge tools + skills (`code.*` namespace); orchestration (workflows/A2A/ACS) | `default` (12 / 12) |
 | `research` | Web research + browser automation via Playwright MCP | WebSearch, WebFetch, Playwright MCP, file write into `~/cowork/research/` | Forge tools (with shared network) + skills | `quick` + `+reproducibility_first` (5 / 12) |
 | `inbox` | Gmail + Google Calendar | `gmail-helper` shell tool, `mcp__claude_ai_Gmail*`, calendar MCP | Forge tools + skills | `off` + `+dialectical_reasoning` (1 / 12) |
 | `homeassistant` | Smart-home control | HASS MCP, opt-in only (`routing_exclude: true`) | None by default — operator opts in by setting `forge_enabled` / `skill_forge_enabled` | `off` (0 / 12) |
-| `orchestrator` | Delegation hub — routes sub-tasks to worker engines | Five delegate MCP tools (`delegate_claude_code`, `delegate_codex`, `delegate_opencode`, `delegate_hermes`, `delegate_copilot`) | Forge tools + skills | `off` (0 / 12) |
+| `orchestrator` | Delegation hub — routes sub-tasks to worker engines | Five delegate MCP tools (`delegate_claude_code`, `delegate_codex`, `delegate_opencode`, `delegate_hermes`, `delegate_copilot`) | Forge tools + skills; orchestration (workflows/A2A/ACS) | `off` (0 / 12) |
 | `forge` | Unified runtime-generation specialist (tools AND skills) | `mcp__forge__*`, `mcp__skill_forge__*`, no Bash/Edit/Write | Native — the persona itself is the generator. Historic name `skill-forge` resolves here via alias | `quick` + `+reproducibility_first` (5 / 12) |
 | `os` | Corvin sysadmin (pin-only, `routing_exclude: true`) | Read-heavy, no Edit/Write/Bash | None | `off` + `+dialectical_reasoning, +drift_detection, +docs_as_dod, +method_evolution, +reproducibility_first, +root_cause_by_layer` (6 / 12) |
 
@@ -73,10 +74,26 @@ A fresh CorvinOS install has no built-in knowledge of what CorvinOS itself can d
 
 - Set on the bundled `assistant`, `coder`, and `orchestrator` personas. **Not** set on `os` (deliberately constrained sysadmin persona) or `homeassistant` (single-purpose) — capability-awareness is a per-persona opt-in, not a global default.
 - The brief only lists a capability as available if the resolved persona's own gating flag is actually satisfied (e.g. a `capability_aware` persona without `forge_enabled` will not see Forge listed) — it never over-claims for a persona that lacks the underlying tool wiring.
-- Capabilities not yet reachable from chat (see ADR-0190 milestones M2–M8: compute pipelines, general-availability data-source registration, A2A send, AWP workflows, ACS) are still disclosed, explicitly marked "not yet available via chat" with the tracking milestone — silence would read as "doesn't exist," which is worse than an honest "not yet."
+- Capabilities not yet reachable from chat (see ADR-0190 milestone M7: license-tier reads, RAG knowledge-base query, A2A peer/friendship listing) are still disclosed, explicitly marked "not yet available via chat" with the tracking milestone — silence would read as "doesn't exist," which is worse than an honest "not yet."
 - Enforced by `operator/cowork/test/test_capability_registry_matches_reality.py`, which fails the build if a registry entry marked `status="wired"` doesn't correspond to a real tool name in its subsystem's source, or if a `persona_flag` doesn't correspond to a flag the resolver actually propagates.
 
 Adding a new chat-reachable capability in a future milestone means adding an entry to `capability_registry.py` first — the capability map and the enforcement test both read from that one file.
+
+### Orchestration — `orchestration_enabled` (ADR-0190 M4/M5/M6)
+
+Consolidates three previously chat-unreachable subsystems behind one MCP server (`core/orchestration/corvin_orchestration/mcp_server.py`), all gated by a single `orchestration_enabled: true` flag:
+
+- **`workflow_run` / `workflow_resume` / `workflow_list_paused`** — run an AWP DAG-workflow already registered under Settings → Workflows by its `workflow_id`, driven by the real `DAGRunner` engine (code/merge/route/ask_human nodes all supported) — NOT the console's separate hand-rolled chat-mode executor.
+- **`a2a_send` / `a2a_list_endpoints`** — send a signed task instruction to an already-paired CorvinOS instance, or list configured sender-side endpoints.
+- **`acs_delegate`** — hand an open-ended task to the Autonomous Compute Shell's manager/worker `delegation_loop` engine (ADR-0104), distinct from `workflow_run`'s fixed DAG.
+
+Set on the bundled `assistant`, `coder`, and `orchestrator` personas. **Not** set on `os` or `homeassistant` — deliberately a *separate* flag from `forge_enabled`/`delegate_enabled` rather than silently piggy-backing on one already broadly granted, since A2A-send (network egress, spends a peer's quota) and ACS-delegation (recursive, potentially expensive autonomous compute) carry materially higher blast radius than tool-forging or worker delegation.
+
+Every orchestration call carries a wall-clock watchdog (`budget_s`, clamped [10,600]s depending on the tool) — a call that exceeds it returns a typed `{"status": "timeout"}` envelope rather than hanging the chat turn; the underlying run is not killed (best-effort, matches the `delegate_*` budget pattern).
+
+**Known limitation (ADR-0190 M6):** the console's own `chat_runtime.py` still drives ACS delegation via a separate, pre-existing internal bypass (not `run_acs_workflow()`) for local-model pinning and live worker-trace streaming that `run_acs_workflow()` doesn't yet support. `acs_delegate` is a **new, additive** tool calling `run_acs_workflow()` directly — it does not touch or replace that console code path. Unifying them is deliberately deferred to a separately-scoped, carefully-tested follow-up rather than risking a live console feature.
+
+**Verification finding (ADR-0190 M2/M3):** building `compute_submit`/`compute_gate`/`datasource_connect` surfaced two pre-existing bugs, both fixed in the same pass — (1) `_call_compute_tool`'s quota gate referenced an undefined `params` variable (should have been `args`), making every `compute_run`/`compute_submit` call fail closed with a spurious quota-exceeded error; (2) `_inject_forge_capability` only ever added 3 literal tool names (`forge_tool`/`forge_promote`/`forge_list`) to `allowed_tools`, silently excluding every other tool the forge MCP server hosts — now uses the same `mcp__forge__*` wildcard convention `skill-forge`'s own persona already relies on.
 
 ### Adding your own
 

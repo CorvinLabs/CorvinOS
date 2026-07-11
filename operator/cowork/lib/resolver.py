@@ -451,6 +451,8 @@ def resolve(name: str, overrides: dict | None = None) -> dict:
               "default_engine", "awp_enabled",
               # Layer 29 — delegation capability flag.
               "delegate_enabled",
+              # ADR-0190 M4/M5/M6 — orchestration (workflows/A2A/ACS) opt-in.
+              "orchestration_enabled",
               # ADR-0190 — self-aware capability-map opt-in.
               "capability_aware"):
         if k in overrides and overrides[k] is not None:
@@ -495,10 +497,11 @@ def resolve(name: str, overrides: dict | None = None) -> dict:
     out = _inject_forge_capability(out, name)
     out = _inject_skill_forge_capability(out, name)
     out = _inject_delegate_capability(out, name)
-    # ADR-0190 — runs LAST of the four injectors so it can read the
-    # resolved forge_enabled/skill_forge_enabled/delegate_enabled flags
-    # off `out` and describe only what THIS persona actually has, not a
-    # one-size-fits-all map.
+    out = _inject_orchestration_capability(out, name)
+    # ADR-0190 — runs LAST of the five injectors so it can read the
+    # resolved forge_enabled/skill_forge_enabled/delegate_enabled/
+    # orchestration_enabled flags off `out` and describe only what THIS
+    # persona actually has, not a one-size-fits-all map.
     out = _inject_capability_awareness(out, name)
 
     # Layer-14 LDD section: persona preset/delta + chat-profile overrides.
@@ -538,8 +541,20 @@ def _inject_forge_capability(merged: dict, persona_name: str) -> dict:
     if not persona.get("forge_enabled"):             return merged
     out = dict(merged)
     allowed = list(out.get("allowed_tools") or [])
+    # ADR-0190 verification finding: this used to enumerate only 3 literal
+    # tool names (forge_tool/forge_promote/forge_list), silently excluding
+    # every other tool the forge MCP server actually hosts —
+    # data_register/data_snapshot/data_unregister, compute_run/status/
+    # result/abort, compute_submit/compute_gate (ADR-0190 M2),
+    # datasource_connect (ADR-0190 M3), artifact_*, and any freshly-forged
+    # custom tool (whose name isn't knowable ahead of time at all). A
+    # forge_enabled persona under a non-bypassPermissions mode would have
+    # had those silently blocked by --allowedTools. Mirror skill-forge's
+    # own persona convention (operator/skill-forge/personas/skill-forge.json
+    # uses "mcp__skill_forge__*") — a wildcard is the only pattern that
+    # stays correct as the server's tool surface grows.
     for t in ("mcp__forge__forge_tool", "mcp__forge__forge_promote",
-              "mcp__forge__forge_list"):
+              "mcp__forge__forge_list", "mcp__forge__*"):
         if t not in allowed:
             allowed.append(t)
     out["allowed_tools"] = allowed
@@ -660,6 +675,79 @@ _DELEGATE_BRIEF = (
     "Sandbox+output-judge+prompt-safety floors set by operator are "
     "uncloseable from your tool-args."
 )
+
+
+_ORCHESTRATION_BRIEF = (
+    "**Orchestration (ADR-0190 M4/M5/M6):**\n"
+    "- `mcp__corvin_orchestration__workflow_run` / `workflow_resume` / "
+    "`workflow_list_paused` — run an AWP DAG-workflow already registered "
+    "under Settings -> Workflows by its workflow_id (code/merge/route/"
+    "ask_human nodes all supported). A run may pause at an ask_human node; "
+    "resume it with the human's reply once you have it.\n"
+    "- `mcp__corvin_orchestration__a2a_send` / `a2a_list_endpoints` — send "
+    "a signed task instruction to an already-paired CorvinOS instance. "
+    "List endpoints first to see what's configured; this tool does not "
+    "pair new instances (console-managed).\n"
+    "- `mcp__corvin_orchestration__acs_delegate` — hand an open-ended task "
+    "to the Autonomous Compute Shell's manager/worker loop (ADR-0104), "
+    "distinct from workflow_run's fixed DAG. Spends compute quota unless "
+    "dry_run=true.\n"
+    "- All three groups carry a wall-clock watchdog (budget_s) — a call "
+    "that exceeds it returns a typed timeout, it does not hang your turn."
+)
+
+
+def _inject_orchestration_capability(merged: dict, persona_name: str) -> dict:
+    """ADR-0190 M4/M5/M6 — inject workflow_run/resume/list_paused,
+    a2a_send/list_endpoints, and acs_delegate MCP tools when persona has
+    orchestration_enabled=True. Mirror of _inject_delegate_capability.
+
+    Deliberately a SEPARATE flag from forge_enabled/delegate_enabled — A2A
+    send (network egress to another org's paired instance, consuming their
+    quota) and ACS delegation (recursive, potentially expensive autonomous
+    compute) carry materially higher blast radius than tool-forging or
+    worker delegation, so they must not silently piggyback onto a flag
+    that's already broadly granted (ADR-0190 "don't silently expand blast
+    radius", same principle as capability_aware in M1).
+    """
+    if not persona_name:
+        return merged
+    persona = load(persona_name)
+    if not persona:
+        return merged
+    if not persona.get("orchestration_enabled"):
+        return merged
+    out = dict(merged)
+    allowed = list(out.get("allowed_tools") or [])
+    for t in (
+        "mcp__corvin_orchestration__workflow_run",
+        "mcp__corvin_orchestration__workflow_resume",
+        "mcp__corvin_orchestration__workflow_list_paused",
+        "mcp__corvin_orchestration__a2a_send",
+        "mcp__corvin_orchestration__a2a_list_endpoints",
+        "mcp__corvin_orchestration__acs_delegate",
+    ):
+        if t not in allowed:
+            allowed.append(t)
+    out["allowed_tools"] = allowed
+    mcp = dict(out.get("mcp_servers") or {})
+    if "corvin_orchestration" not in mcp:
+        mcp["corvin_orchestration"] = {
+            "command": sys.executable,
+            "args": ["-m", "corvin_orchestration.mcp_server"],
+            "env": {
+                "PYTHONPATH": (
+                    "{{REPO_ROOT}}/core/orchestration"
+                    ":{{REPO_ROOT}}/core/workflows"
+                    ":{{REPO_ROOT}}/operator/bridges/shared"
+                    ":{{REPO_ROOT}}/operator/forge"
+                ),
+                "CORVIN_CALLER_PERSONA": persona_name,
+            },
+        }
+    out["mcp_servers"] = mcp
+    _ensure_brief(out, _ORCHESTRATION_BRIEF)
+    return out
 
 
 def _inject_delegate_capability(merged: dict, persona_name: str) -> dict:
@@ -788,6 +876,7 @@ def _inject_capability_awareness(merged: dict, persona_name: str) -> dict:
         forge_enabled=bool(out.get("forge_enabled")),
         skill_forge_enabled=bool(out.get("skill_forge_enabled")),
         delegate_enabled=bool(out.get("delegate_enabled")),
+        orchestration_enabled=bool(out.get("orchestration_enabled")),
     )
     _ensure_brief(out, brief)
     return out

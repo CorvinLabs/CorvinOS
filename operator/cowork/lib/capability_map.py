@@ -38,6 +38,7 @@ def render_capability_map(
     forge_enabled: bool = False,
     skill_forge_enabled: bool = False,
     delegate_enabled: bool = False,
+    orchestration_enabled: bool = False,
 ) -> str:
     """Build the capability-map brief for a resolved persona profile.
 
@@ -64,6 +65,7 @@ def render_capability_map(
         "forge_enabled": bool(forge_enabled),
         "skill_forge_enabled": bool(skill_forge_enabled),
         "delegate_enabled": bool(delegate_enabled),
+        "orchestration_enabled": bool(orchestration_enabled),
     }
 
     wired_lines: list[str] = []
