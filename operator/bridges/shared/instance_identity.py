@@ -53,12 +53,6 @@ except ImportError:
     _CRYPTO_OK = False
 
 try:
-    import jwt as _jwt
-    _JWT_OK = True
-except ImportError:
-    _JWT_OK = False
-
-try:
     from .paths import corvin_home  # type: ignore[import-not-found]
 except ImportError:
     _here = Path(__file__).resolve().parent
@@ -92,7 +86,39 @@ _lock = threading.RLock()
 _INSTANCE_KEY_FILE = "instance_key.pem"
 _INSTANCE_PUBKEY_FILE = "instance_pubkey.pem"
 _IBC_FILE = "instance_cert.jwt"
-_IBC_BIND_URL = "https://api.corvin-labs.com/v1/instance/bind"
+
+# The live Corvin-Features server (Paddle/license/A2A-permit backend, ADR-0093
+# M3). Earlier drafts of this module pointed at "api.corvin-labs.com", a
+# domain that was never actually provisioned — every IBC call silently failed
+# in production. Fixed to the real, already-live domain used everywhere else
+# in operator/license/ (session_refresh.py, validator.py).
+_FEATURES_SERVER_PROD = "https://corvin-features-production.up.railway.app"
+
+# ADR-0144 Fix B1 pattern (see session_refresh.py): snapshot at import time so
+# a post-boot env mutation from in-process code cannot redirect IBC traffic to
+# an attacker-controlled server. CORVIN_FEATURES_URL is honoured ONLY under
+# CORVIN_TEST_MODE=1.
+_TEST_MODE_SNAPSHOT: str = os.environ.get("CORVIN_TEST_MODE", "")
+_FEATURES_URL_SNAPSHOT: str = os.environ.get("CORVIN_FEATURES_URL", _FEATURES_SERVER_PROD)
+
+
+def _features_server() -> str:
+    if _TEST_MODE_SNAPSHOT == "1":
+        return _FEATURES_URL_SNAPSHOT
+    return _FEATURES_SERVER_PROD
+
+
+# IBC signature trust anchor. The server reuses its existing Ed25519
+# session-signing keypair (kid "ibc-vN") instead of a separate RS256 trust
+# anchor — see ADR-0145 "Relationship to ADR-0153" / deviation note. This is
+# the SAME DER-b64 public key as SESSION_SERVER_KEY_RING["sess-v1"] in
+# operator/license/validator.py; kept as a local literal (public key, not a
+# secret) so this module has no import dependency on operator/license/.
+# Rotation checklist: whenever validator.py's SESSION_SERVER_KEY_RING gains a
+# new kid, add the same entry here too (see validator.py's rotation comment).
+_IBC_TRUST_KEY_RING: dict[str, str] = {
+    "sess-v1": "MCowBQYDK2VwAyEAGd/9rorTQ+kWfYsablfa4eD6RYl1MKhANivIRjozCK4=",
+}
 
 
 class IBCError(RuntimeError):
@@ -474,83 +500,196 @@ def build_canonical_payload(
     return hashlib.sha256(inner.encode("utf-8")).digest()
 
 
-def bind_instance(sest_token: str, license_fp: str) -> dict:
-    """Call the Corvin Labs IBC bind endpoint and store the returned IBC JWT.
+def _b64url_pad_decode(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * ((4 - len(s) % 4) % 4))
 
-    URL override for testing: CORVIN_IBC_BIND_URL env var.
 
-    Returns the decoded IBC payload dict on success.
-    Raises IBCError on any failure.
+def _decode_corvin_claims_unverified(token: str) -> dict:
+    """Decode a CORVIN-<header>.<payload>.<sig> token's payload WITHOUT
+    verifying the signature. Raises ValueError on malformed input."""
+    if not isinstance(token, str) or not token.startswith("CORVIN-"):
+        raise ValueError("not a CORVIN-format token")
+    parts = token[len("CORVIN-"):].split(".")
+    if len(parts) != 3:
+        raise ValueError("malformed CORVIN token: expected 3 segments")
+    payload = json.loads(_b64url_pad_decode(parts[1]))
+    if not isinstance(payload, dict):
+        raise ValueError("CORVIN token payload is not a JSON object")
+    return payload
+
+
+def _verify_ibc_signature(ibc_token: str) -> dict:
+    """Verify a CORVIN-format IBC's Ed25519 signature and expiry.
+
+    Returns the decoded claims dict on success. Raises IBCError on any
+    failure (bad format, bad signature, expired, unknown kid).
     """
-    if not _JWT_OK:
-        raise IBCError("pyjwt not installed — cannot parse IBC JWT")
+    if not _CRYPTO_OK:
+        raise IBCError("cryptography package not installed")
+    if not isinstance(ibc_token, str) or not ibc_token.startswith("CORVIN-"):
+        raise IBCError("IBC token format invalid: expected CORVIN-<header>.<payload>.<sig>")
+    parts = ibc_token[len("CORVIN-"):].split(".")
+    if len(parts) != 3:
+        raise IBCError("IBC token format invalid: expected 3 segments after CORVIN-")
+    header_b64, payload_b64, sig_b64 = parts
 
-    instance_id = get_instance_id()
-    pubkey_b64 = get_instance_pubkey_b64()
+    try:
+        header = json.loads(_b64url_pad_decode(header_b64))
+        kid = str(header.get("kid", ""))
+    except Exception as exc:  # noqa: BLE001
+        raise IBCError(f"IBC header malformed: {exc}") from exc
 
-    bind_url = os.environ.get("CORVIN_IBC_BIND_URL", _IBC_BIND_URL)
+    lookup_kid = "sess-" + kid[len("ibc-"):] if kid.startswith("ibc-") else kid
+    pubkey_der_b64 = _IBC_TRUST_KEY_RING.get(lookup_kid)
+    if not pubkey_der_b64:
+        env_key = os.environ.get("CORVIN_IBC_PUBKEY_DER_B64")
+        if env_key and _TEST_MODE_SNAPSHOT == "1":
+            pubkey_der_b64 = env_key
+        else:
+            raise IBCError(f"IBC signed with unknown kid={kid!r} — cannot verify")
 
-    body = {
-        "instance_id": instance_id,
-        "instance_pubkey": pubkey_b64,
-        "license_fingerprint": license_fp,
-        "sest_token": sest_token,
-    }
-    import json as _json
-    body_bytes = _json.dumps(body).encode("utf-8")
+    try:
+        from cryptography.hazmat.primitives.serialization import load_der_public_key
+        pub = load_der_public_key(base64.b64decode(pubkey_der_b64))
+        sig = _b64url_pad_decode(sig_b64)
+        signing_input = f"{header_b64}.{payload_b64}".encode()
+        pub.verify(sig, signing_input)
+    except Exception as exc:  # noqa: BLE001
+        raise IBCError(f"IBC signature invalid: {exc}") from exc
 
-    req = urllib.request.Request(
-        bind_url,
-        data=body_bytes,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST",
-    )
+    try:
+        claims = json.loads(_b64url_pad_decode(payload_b64))
+    except Exception as exc:  # noqa: BLE001
+        raise IBCError(f"IBC payload malformed: {exc}") from exc
+
+    exp = claims.get("exp")
+    if exp is not None and exp < _dt.datetime.now(_dt.timezone.utc).timestamp():
+        raise IBCError("IBC has expired")
+
+    return claims
+
+
+def _authenticated_features_request(path: str, body: dict) -> dict:
+    """POST to Corvin-Features with the standard license + HMAC auth headers.
+
+    Reuses the SAME activation credentials (~/.config/corvin-voice/features.json,
+    written by 'corvin-license activate') and helper functions as
+    operator/license/session_refresh.py, rather than re-implementing the HMAC
+    scheme a second time. Raises IBCError on any failure.
+    """
+    try:
+        here = Path(__file__).resolve()
+        lic_dir = None
+        for parent in here.parents:
+            candidate = parent / "operator" / "license"
+            if candidate.is_dir():
+                lic_dir = candidate
+                break
+        if lic_dir is None:
+            raise ImportError("operator/license directory not found")
+        if str(lic_dir) not in sys.path:
+            sys.path.insert(0, str(lic_dir))
+        import session_refresh as _sr  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise IBCError(f"Cannot import session_refresh: {exc}") from exc
+
+    features = _sr.load_features()
+    if features is None:
+        raise IBCError(
+            "No activated license found — run 'corvin-license activate <key>' first."
+        )
+    api_key = features.get("api_key", "")
+    if not api_key:
+        raise IBCError("features.json missing api_key — re-run license activation.")
+    license_token = _sr._find_license_token()
+    if not license_token:
+        raise IBCError(
+            "No license token found — run 'corvin-license activate <key>' first."
+        )
+
+    body_bytes = json.dumps(body).encode("utf-8")
+    ts, sig = _sr._sign_request(body_bytes, api_key)
+    try:
+        device_fp = _sr._get_device_fp()
+    except Exception:  # noqa: BLE001
+        device_fp = ""
+
+    url = f"{_features_server()}{path}"
+    req = urllib.request.Request(url, data=body_bytes, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Authorization", f"Bearer {license_token}")
+    req.add_header("X-Corvin-Ts", ts)
+    req.add_header("X-Corvin-Sig", sig)
+    if device_fp:
+        req.add_header("X-Corvin-Device-Fp", device_fp)
+
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             resp_body = resp.read()
     except urllib.error.HTTPError as exc:
-        raise IBCError(f"IBC bind request failed: HTTP {exc.code}") from exc
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")[:200]
+        except Exception:  # noqa: BLE001
+            pass
+        raise IBCError(f"Corvin-Features request failed: HTTP {exc.code} {detail}") from exc
     except urllib.error.URLError as exc:
-        raise IBCError(f"IBC bind request failed: {exc.reason}") from exc
+        raise IBCError(f"Corvin-Features request failed: {exc.reason}") from exc
 
     try:
-        resp_data = _json.loads(resp_body)
+        resp_data = json.loads(resp_body)
     except ValueError as exc:
-        raise IBCError(f"IBC bind response was not valid JSON: {exc}") from exc
+        raise IBCError(f"Corvin-Features response was not valid JSON: {exc}") from exc
     if not isinstance(resp_data, dict):
-        raise IBCError("IBC bind response was not a JSON object")
-    ibc_jwt = resp_data.get("ibc")
-    if not ibc_jwt:
-        raise IBCError("IBC bind response missing 'ibc' field")
+        raise IBCError("Corvin-Features response was not a JSON object")
+    return resp_data
 
-    # Verify the IBC RS256 signature against the embedded a2a_network_pubkey.pem
-    _verify_ibc_signature(ibc_jwt)
 
-    # Decode and validate
-    decoded = _jwt.decode(ibc_jwt, options={"verify_signature": False})
-    if decoded.get("sub") != instance_id:
-        raise IBCError(
-            f"IBC sub mismatch: expected {instance_id!r}, got {decoded.get('sub')!r}"
-        )
-    # R1 finding: also verify the IBC binds OUR public key. Without this, a
-    # signature-valid IBC issued for a different key (issuer bug, or a swapped
-    # response) would be silently persisted — a latent identity mismatch (A2A
-    # attestation would later present a cert whose bound key we don't hold).
-    # The IBC carries an `instance_pubkey` claim (ADR-0145); it must equal ours.
-    if decoded.get("instance_pubkey") != pubkey_b64:
-        raise IBCError(
-            "IBC instance_pubkey does not bind this instance's public key"
-        )
-
-    # Store
+def _store_cert(ibc_token: str) -> None:
     cert_path = instance_cert_path()
     with _lock:
         cert_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = cert_path.with_suffix(".tmp")
-        tmp.write_text(ibc_jwt, encoding="utf-8")
+        tmp.write_text(ibc_token, encoding="utf-8")
         os.chmod(tmp, 0o600)
         os.replace(tmp, cert_path)
 
+
+def bind_instance() -> dict:
+    """Bind this instance to the caller's activated Corvin Labs license.
+
+    Requires the installation to already be activated ('corvin-license
+    activate <key>' — see operator/license/session_refresh.py). Authenticates
+    to Corvin-Features with the same license token + HMAC api_key as every
+    other authenticated endpoint; no separate SesT concept.
+
+    Returns the decoded IBC claims dict on success. Raises IBCError on any
+    failure.
+    """
+    instance_id = get_instance_id()
+    pubkey_b64 = get_instance_pubkey_b64()
+
+    resp_data = _authenticated_features_request(
+        "/v1/instance/bind",
+        {"instance_id": instance_id, "instance_pubkey": pubkey_b64},
+    )
+    ibc_token = resp_data.get("ibc")
+    if not ibc_token:
+        raise IBCError("IBC bind response missing 'ibc' field")
+
+    decoded = _verify_ibc_signature(ibc_token)
+    if decoded.get("sub") != instance_id:
+        raise IBCError(
+            f"IBC sub mismatch: expected {instance_id!r}, got {decoded.get('sub')!r}"
+        )
+    # R1 finding (carried over from the original design): also verify the IBC
+    # binds OUR public key. Without this, a signature-valid IBC issued for a
+    # different key (issuer bug, or a swapped response) would be silently
+    # persisted — a latent identity mismatch.
+    if decoded.get("instance_pubkey") != pubkey_b64:
+        raise IBCError("IBC instance_pubkey does not bind this instance's public key")
+
+    _store_cert(ibc_token)
     _audit_ibc(
         "instance.ibc_issued", "INFO",
         {"ibc_jti": (decoded.get("jti", "") or "")[:16]},
@@ -558,67 +697,23 @@ def bind_instance(sest_token: str, license_fp: str) -> dict:
     return decoded
 
 
-def _verify_ibc_signature(ibc_jwt: str) -> None:
-    """Verify IBC RS256 signature against a2a_network_pubkey.pem.
-
-    Raises IBCError if signature is invalid.
-    """
-    if not _JWT_OK:
-        raise IBCError("pyjwt not installed")
-
-    # Find the pubkey relative to this module
-    here = Path(__file__).resolve()
-    pubkey_pem = None
-    for parent in here.parents:
-        candidate = parent / "operator" / "license" / "a2a_network_pubkey.pem"
-        if candidate.exists():
-            pubkey_pem = candidate.read_text()
-            break
-        candidate2 = parent / "license" / "a2a_network_pubkey.pem"
-        if candidate2.exists():
-            pubkey_pem = candidate2.read_text()
-            break
-
-    if pubkey_pem is None:
-        # Fallback: env override for tests
-        env_key = os.environ.get("CORVIN_IBC_PUBKEY_PEM")
-        if env_key:
-            pubkey_pem = env_key
-        else:
-            raise IBCError("Cannot locate a2a_network_pubkey.pem — IBC signature unverifiable")
-
-    try:
-        _jwt.decode(
-            ibc_jwt,
-            pubkey_pem,
-            algorithms=["RS256"],
-            options={"verify_exp": True},
-        )
-    except _jwt.ExpiredSignatureError as exc:
-        raise IBCError("IBC has expired") from exc
-    except _jwt.InvalidTokenError as exc:
-        raise IBCError(f"IBC signature invalid: {exc}") from exc
-
-
 def get_ibc() -> dict | None:
-    """Load and validate the current IBC. Returns None if absent or expired."""
+    """Load and validate the current IBC. Returns None if absent or expired.
+
+    Local read only — the signature was already verified at bind time and
+    the file is trusted at mode 0600; this only checks expiry.
+    """
     cert_path = instance_cert_path()
     if not cert_path.exists():
         return None
-    if not _JWT_OK:
-        return None
     try:
-        ibc_jwt = cert_path.read_text(encoding="utf-8").strip()
-        # Quick expiry check without signature verification (signature was
-        # already verified at bind time; we trust the local file's mode 0600)
-        decoded = _jwt.decode(
-            ibc_jwt,
-            options={"verify_signature": False, "verify_exp": True},
-        )
-        return decoded
-    except _jwt.ExpiredSignatureError:
-        _audit_ibc("instance.ibc_expired", "WARNING", {})
-        return None
+        ibc_token = cert_path.read_text(encoding="utf-8").strip()
+        claims = _decode_corvin_claims_unverified(ibc_token)
+        exp = claims.get("exp")
+        if exp is not None and exp < _dt.datetime.now(_dt.timezone.utc).timestamp():
+            _audit_ibc("instance.ibc_expired", "WARNING", {})
+            return None
+        return claims
     except Exception:  # noqa: BLE001
         return None
 
@@ -642,9 +737,10 @@ def get_ibc_jwt() -> str | None:
         return None
     try:
         ibc = cert_path.read_text(encoding="utf-8").strip()
-        # Quick expiry guard
-        if _JWT_OK:
-            _jwt.decode(ibc, options={"verify_signature": False, "verify_exp": True})
+        claims = _decode_corvin_claims_unverified(ibc)
+        exp = claims.get("exp")
+        if exp is not None and exp < _dt.datetime.now(_dt.timezone.utc).timestamp():
+            return None
         if revocation_status_cached() == "revoked":
             return None
         return ibc
@@ -749,17 +845,14 @@ def compute_hardware_fp() -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-_HARDWARE_BIND_URL = "https://api.corvin-labs.com/v1/instance/bind-hardware"
-
-
 def bind_hardware() -> dict:
     """Tether the current IBC to this machine's hardware fingerprint (M3).
 
-    Requires an existing IBC (call ``bind_instance`` first). Signs the
-    freshly computed hardware fingerprint with the instance Ed25519 key
-    and POSTs it alongside the current IBC JTI; the server re-issues the
-    IBC with a ``hardware_fp`` claim added, which this function verifies
-    and stores exactly like ``bind_instance`` does.
+    Requires an existing IBC (call ``bind_instance`` first) and an activated
+    license (same auth as ``bind_instance``). Signs the freshly computed
+    hardware fingerprint with the instance Ed25519 key and POSTs it; the
+    server re-issues the IBC with a ``hardware_fp`` claim added, which this
+    function verifies and stores exactly like ``bind_instance`` does.
 
     This is an explicit, operator-initiated, opt-in step — never run
     automatically at boot or on every spawn (ADR-0145 "what not to do").
@@ -767,9 +860,6 @@ def bind_hardware() -> dict:
     Raises IBCError on any failure (no IBC yet, empty fingerprint,
     network error, signature mismatch).
     """
-    if not _JWT_OK:
-        raise IBCError("pyjwt not installed — cannot parse IBC JWT")
-
     current = get_ibc()
     if current is None:
         raise IBCError(
@@ -788,42 +878,20 @@ def bind_hardware() -> dict:
     jti = current.get("jti", "")
     sig = sign_payload(hardware_fp.encode("utf-8"))
 
-    body = {
-        "instance_id": instance_id,
-        "ibc_jti": jti,
-        "hardware_fp": hardware_fp,
-        "hardware_fp_sig": sig,
-    }
-    import json as _json
-    body_bytes = _json.dumps(body).encode("utf-8")
-
-    bind_url = os.environ.get("CORVIN_HARDWARE_BIND_URL", _HARDWARE_BIND_URL)
-    req = urllib.request.Request(
-        bind_url,
-        data=body_bytes,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST",
+    resp_data = _authenticated_features_request(
+        "/v1/instance/bind-hardware",
+        {
+            "instance_id": instance_id,
+            "ibc_jti": jti,
+            "hardware_fp": hardware_fp,
+            "hardware_fp_sig": sig,
+        },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resp_body = resp.read()
-    except urllib.error.HTTPError as exc:
-        raise IBCError(f"Hardware bind request failed: HTTP {exc.code}") from exc
-    except urllib.error.URLError as exc:
-        raise IBCError(f"Hardware bind request failed: {exc.reason}") from exc
-
-    try:
-        resp_data = _json.loads(resp_body)
-    except ValueError as exc:
-        raise IBCError(f"Hardware bind response was not valid JSON: {exc}") from exc
-    if not isinstance(resp_data, dict):
-        raise IBCError("Hardware bind response was not a JSON object")
-    ibc_jwt = resp_data.get("ibc")
-    if not ibc_jwt:
+    ibc_token = resp_data.get("ibc")
+    if not ibc_token:
         raise IBCError("Hardware bind response missing 'ibc' field")
 
-    _verify_ibc_signature(ibc_jwt)
-    decoded = _jwt.decode(ibc_jwt, options={"verify_signature": False})
+    decoded = _verify_ibc_signature(ibc_token)
     if decoded.get("sub") != instance_id:
         raise IBCError(
             f"IBC sub mismatch after hardware bind: expected {instance_id!r}, "
@@ -832,14 +900,7 @@ def bind_hardware() -> dict:
     if decoded.get("hardware_fp") != hardware_fp:
         raise IBCError("Re-issued IBC does not carry the hardware fingerprint we sent")
 
-    cert_path = instance_cert_path()
-    with _lock:
-        cert_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = cert_path.with_suffix(".tmp")
-        tmp.write_text(ibc_jwt, encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, cert_path)
-
+    _store_cert(ibc_token)
     _audit_ibc(
         "instance.hardware_bound", "INFO",
         {"ibc_jti": (decoded.get("jti", "") or "")[:16]},
@@ -875,7 +936,6 @@ def check_hardware_binding() -> dict:
 
 # ── M3: Certificate Revocation List (CRL) ──────────────────────────────────────
 
-_CRL_URL = "https://api.corvin-labs.com/v1/instance/revoked"
 _CRL_CACHE_FILE = "ibc_crl_cache.json"
 _CRL_TTL_SECONDS = 24 * 3600
 _CRL_GRACE_SECONDS = 7 * 24 * 3600  # serve a stale cache up to 7 days offline
@@ -889,7 +949,7 @@ def _crl_cache_path() -> Path:
 
 
 def _fetch_crl_remote() -> list[str]:
-    url = os.environ.get("CORVIN_CRL_URL", _CRL_URL)
+    url = f"{_features_server()}/v1/instance/revoked"
     req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
     with urllib.request.urlopen(req, timeout=15) as resp:
         body = resp.read()

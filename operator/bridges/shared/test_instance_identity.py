@@ -1,6 +1,7 @@
 """Tests for instance_identity.py — Layer 38 stable instance UUID."""
 from __future__ import annotations
 
+import base64
 import json
 import os
 import stat
@@ -20,31 +21,25 @@ if str(_here) not in sys.path:
 import instance_identity  # type: ignore[import-not-found]
 
 try:
-    import jwt as _pyjwt
     from cryptography.hazmat.primitives import serialization as _ser
-    from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     _M3_DEPS_OK = True
 except ImportError:
     _M3_DEPS_OK = False
 
 
-def _make_rsa_test_keypair() -> tuple[str, str]:
-    """Generate a throwaway RSA keypair for RS256 IBC signing in tests."""
-    key = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    priv_pem = key.private_bytes(
-        encoding=_ser.Encoding.PEM,
-        format=_ser.PrivateFormat.PKCS8,
-        encryption_algorithm=_ser.NoEncryption(),
-    ).decode()
-    pub_pem = key.public_key().public_bytes(
-        encoding=_ser.Encoding.PEM,
-        format=_ser.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
-    return priv_pem, pub_pem
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
-def _sign_test_ibc(priv_pem: str, claims: dict) -> str:
-    return _pyjwt.encode(claims, priv_pem, algorithm="RS256")
+def _sign_test_ibc(priv_key: "Ed25519PrivateKey", claims: dict, kid: str = "ibc-v1") -> str:
+    """Build a CORVIN-<header>.<payload>.<sig> Ed25519 test token, mirroring
+    Corvin-Features signing.py's issue_ibc_jwt() wire format."""
+    header_b64 = _b64url(json.dumps({"alg": "EdDSA", "typ": "JWT", "kid": kid}).encode())
+    payload_b64 = _b64url(json.dumps(claims).encode())
+    signing_input = f"{header_b64}.{payload_b64}".encode()
+    sig = priv_key.sign(signing_input)
+    return f"CORVIN-{header_b64}.{payload_b64}.{_b64url(sig)}"
 
 
 class _TempHomeMixin:
@@ -192,7 +187,10 @@ class TestEnvLabel(_TempHomeMixin, unittest.TestCase):
 
 
 class _TempIBCHomeMixin(_TempHomeMixin):
-    """Adds key/cert/CRL-cache path isolation and a throwaway RS256 trust anchor."""
+    """Adds key/cert/CRL-cache path isolation and a throwaway Ed25519 trust
+    anchor, patched into instance_identity._IBC_TRUST_KEY_RING under
+    "sess-v1" — the same kid the real client resolves "ibc-v1" tokens
+    against (see _verify_ibc_signature's ibc- -> sess- kid mapping)."""
 
     def setUp(self) -> None:  # type: ignore[override]
         super().setUp()
@@ -208,9 +206,15 @@ class _TempIBCHomeMixin(_TempHomeMixin):
         os.environ.update(self._env_overrides)
 
         if _M3_DEPS_OK:
-            self.rsa_priv_pem, self.rsa_pub_pem = _make_rsa_test_keypair()
-            self._prev_pubkey_env = os.environ.get("CORVIN_IBC_PUBKEY_PEM")
-            os.environ["CORVIN_IBC_PUBKEY_PEM"] = self.rsa_pub_pem
+            self.ibc_signing_key = Ed25519PrivateKey.generate()
+            pub_der = self.ibc_signing_key.public_key().public_bytes(
+                _ser.Encoding.DER, _ser.PublicFormat.SubjectPublicKeyInfo
+            )
+            self.ibc_trust_pubkey_b64 = base64.b64encode(pub_der).decode()
+            self._trust_ring_patch = mock.patch.object(
+                instance_identity, "_IBC_TRUST_KEY_RING", {"sess-v1": self.ibc_trust_pubkey_b64}
+            )
+            self._trust_ring_patch.start()
 
     def tearDown(self) -> None:  # type: ignore[override]
         for k, v in self._prev_overrides.items():
@@ -219,20 +223,19 @@ class _TempIBCHomeMixin(_TempHomeMixin):
             else:
                 os.environ.pop(k, None)
         if _M3_DEPS_OK:
-            if self._prev_pubkey_env is not None:
-                os.environ["CORVIN_IBC_PUBKEY_PEM"] = self._prev_pubkey_env
-            else:
-                os.environ.pop("CORVIN_IBC_PUBKEY_PEM", None)
+            self._trust_ring_patch.stop()
         super().tearDown()
 
     def _write_local_ibc(self, **extra_claims) -> dict:
-        """Write a locally-valid, RS256-signed IBC to self.cert_path and return its claims."""
+        """Write a locally-valid, Ed25519-signed IBC to self.cert_path and
+        return its claims."""
         instance_id = instance_identity.get_instance_id()
         claims = {
-            "iss": "Corvin Labs",
+            "iss": "corvinlabs.io",
+            "type": "instance_binding",
             "sub": instance_id,
             "email": "test@example.com",
-            "license_id": "lic_test",
+            "customer_fp": "test-customer-fp",
             "plan": "member",
             "instance_pubkey": instance_identity.get_instance_pubkey_b64(),
             "iat": int(time.time()),
@@ -240,13 +243,13 @@ class _TempIBCHomeMixin(_TempHomeMixin):
             "jti": "test-jti-0001",
         }
         claims.update(extra_claims)
-        token = _sign_test_ibc(self.rsa_priv_pem, claims)
+        token = _sign_test_ibc(self.ibc_signing_key, claims)
         self.cert_path.write_text(token, encoding="utf-8")
         os.chmod(self.cert_path, 0o600)
         return claims
 
 
-@unittest.skipUnless(_M3_DEPS_OK, "pyjwt/cryptography not installed")
+@unittest.skipUnless(_M3_DEPS_OK, "cryptography not installed")
 class TestHardwareFingerprint(_TempHomeMixin, unittest.TestCase):
     def test_tpm_absence_does_not_break_fingerprint(self) -> None:
         with mock.patch.object(instance_identity, "_read_tpm_pcr0", return_value=""):
@@ -262,88 +265,219 @@ class TestHardwareFingerprint(_TempHomeMixin, unittest.TestCase):
         self.assertNotEqual(fp_a, fp_b)
 
 
-@unittest.skipUnless(_M3_DEPS_OK, "pyjwt/cryptography not installed")
-class TestBindInstance(_TempIBCHomeMixin, unittest.TestCase):
-    """bind_instance() (M1) had no direct test coverage before this session."""
+@unittest.skipUnless(_M3_DEPS_OK, "cryptography not installed")
+class TestVerifyIbcSignature(_TempIBCHomeMixin, unittest.TestCase):
+    """Direct coverage of the Ed25519 CORVIN-token verifier."""
 
-    def _fake_resp(self, body: bytes):
-        fake_resp = mock.Mock()
-        fake_resp.read.return_value = body
-        fake_resp.__enter__ = mock.Mock(return_value=fake_resp)
-        fake_resp.__exit__ = mock.Mock(return_value=False)
-        return fake_resp
-
-    def test_success_stores_cert(self) -> None:
-        instance_id = instance_identity.get_instance_id()
-        claims = {
-            "sub": instance_id, "email": "a@b.com", "license_id": "lic",
-            "plan": "member", "instance_pubkey": instance_identity.get_instance_pubkey_b64(),
-            "iat": int(time.time()), "exp": int(time.time()) + 3600, "jti": "bind-jti",
-        }
-        token = _sign_test_ibc(self.rsa_priv_pem, claims)
-        resp = self._fake_resp(json.dumps({"ibc": token}).encode())
-        with mock.patch("urllib.request.urlopen", return_value=resp):
-            with mock.patch.object(instance_identity, "_verify_ibc_signature", return_value=None):
-                decoded = instance_identity.bind_instance("sest-tok", "fp-123")
-        self.assertEqual(decoded["sub"], instance_id)
-        self.assertTrue(self.cert_path.exists())
-
-    def test_malformed_json_response_raises_ibcerror(self) -> None:
-        resp = self._fake_resp(b"not json {{{")
-        with mock.patch("urllib.request.urlopen", return_value=resp):
-            with self.assertRaises(instance_identity.IBCError):
-                instance_identity.bind_instance("sest-tok", "fp-123")
-
-    def test_non_object_json_response_raises_ibcerror(self) -> None:
-        resp = self._fake_resp(json.dumps(["not", "a", "dict"]).encode())
-        with mock.patch("urllib.request.urlopen", return_value=resp):
-            with self.assertRaises(instance_identity.IBCError):
-                instance_identity.bind_instance("sest-tok", "fp-123")
-
-    def test_missing_ibc_field_raises_ibcerror(self) -> None:
-        resp = self._fake_resp(json.dumps({"not_ibc": "x"}).encode())
-        with mock.patch("urllib.request.urlopen", return_value=resp):
-            with self.assertRaises(instance_identity.IBCError):
-                instance_identity.bind_instance("sest-tok", "fp-123")
-
-    def test_http_error_raises_ibcerror(self) -> None:
-        import urllib.error
-        with mock.patch(
-            "urllib.request.urlopen",
-            side_effect=urllib.error.HTTPError("url", 403, "Forbidden", {}, None),
-        ):
-            with self.assertRaises(instance_identity.IBCError):
-                instance_identity.bind_instance("sest-tok", "fp-123")
-
-    def test_sub_mismatch_raises_ibcerror(self) -> None:
-        claims = {
-            "sub": "someone-elses-instance-id",
+    def _claims(self, **extra) -> dict:
+        base = {
+            "sub": instance_identity.get_instance_id(),
             "instance_pubkey": instance_identity.get_instance_pubkey_b64(),
             "iat": int(time.time()), "exp": int(time.time()) + 3600, "jti": "x",
         }
-        token = _sign_test_ibc(self.rsa_priv_pem, claims)
-        resp = self._fake_resp(json.dumps({"ibc": token}).encode())
-        with mock.patch("urllib.request.urlopen", return_value=resp):
-            with mock.patch.object(instance_identity, "_verify_ibc_signature", return_value=None):
+        base.update(extra)
+        return base
+
+    def test_valid_token_verifies(self) -> None:
+        token = _sign_test_ibc(self.ibc_signing_key, self._claims())
+        claims = instance_identity._verify_ibc_signature(token)
+        self.assertEqual(claims["sub"], instance_identity.get_instance_id())
+
+    def test_wrong_key_rejected(self) -> None:
+        other_key = Ed25519PrivateKey.generate()
+        token = _sign_test_ibc(other_key, self._claims())
+        with self.assertRaises(instance_identity.IBCError):
+            instance_identity._verify_ibc_signature(token)
+
+    def test_expired_rejected(self) -> None:
+        token = _sign_test_ibc(self.ibc_signing_key, self._claims(exp=int(time.time()) - 10))
+        with self.assertRaises(instance_identity.IBCError):
+            instance_identity._verify_ibc_signature(token)
+
+    def test_malformed_prefix_rejected(self) -> None:
+        with self.assertRaises(instance_identity.IBCError):
+            instance_identity._verify_ibc_signature("not-a-corvin-token")
+
+    def test_malformed_segments_rejected(self) -> None:
+        with self.assertRaises(instance_identity.IBCError):
+            instance_identity._verify_ibc_signature("CORVIN-onlyoneseg")
+
+    def test_unknown_kid_rejected(self) -> None:
+        token = _sign_test_ibc(self.ibc_signing_key, self._claims(), kid="ibc-v99")
+        with self.assertRaises(instance_identity.IBCError):
+            instance_identity._verify_ibc_signature(token)
+
+    def test_lic_and_sess_kid_share_same_trust_entry(self) -> None:
+        # The trust ring is keyed by "sess-v1"; both "sess-" and bare kids
+        # resolve directly, "ibc-" strips its prefix onto "sess-".
+        token_sess = _sign_test_ibc(self.ibc_signing_key, self._claims(), kid="sess-v1")
+        instance_identity._verify_ibc_signature(token_sess)  # must not raise
+
+
+@unittest.skipUnless(_M3_DEPS_OK, "cryptography not installed")
+class TestAuthenticatedFeaturesRequest(_TempIBCHomeMixin, unittest.TestCase):
+    """The license+HMAC auth glue shared by bind_instance()/bind_hardware()."""
+
+    def setUp(self) -> None:  # type: ignore[override]
+        super().setUp()
+        here = Path(__file__).resolve()
+        lic_dir = None
+        for parent in here.parents:
+            candidate = parent / "operator" / "license"
+            if candidate.is_dir():
+                lic_dir = candidate
+                break
+        assert lic_dir is not None, "operator/license not found relative to test file"
+        if str(lic_dir) not in sys.path:
+            sys.path.insert(0, str(lic_dir))
+        import session_refresh as _sr  # type: ignore[import-not-found]
+        self._sr = _sr
+
+    def test_raises_when_not_activated(self) -> None:
+        with mock.patch.object(self._sr, "load_features", return_value=None):
+            with self.assertRaises(instance_identity.IBCError):
+                instance_identity._authenticated_features_request("/v1/instance/bind", {"a": 1})
+
+    def test_raises_when_api_key_missing(self) -> None:
+        with mock.patch.object(self._sr, "load_features", return_value={"token_fp": "x", "api_key": ""}):
+            with self.assertRaises(instance_identity.IBCError):
+                instance_identity._authenticated_features_request("/v1/instance/bind", {"a": 1})
+
+    def test_raises_when_no_license_token(self) -> None:
+        with mock.patch.object(self._sr, "load_features", return_value={"token_fp": "x", "api_key": "k"}):
+            with mock.patch.object(self._sr, "_find_license_token", return_value=None):
                 with self.assertRaises(instance_identity.IBCError):
-                    instance_identity.bind_instance("sest-tok", "fp-123")
+                    instance_identity._authenticated_features_request("/v1/instance/bind", {"a": 1})
+
+    def test_success_returns_parsed_json_and_sends_auth_header(self) -> None:
+        fake_resp = mock.Mock()
+        fake_resp.read.return_value = json.dumps({"ok": True}).encode()
+        fake_resp.__enter__ = mock.Mock(return_value=fake_resp)
+        fake_resp.__exit__ = mock.Mock(return_value=False)
+
+        captured = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured["req"] = req
+            return fake_resp
+
+        with mock.patch.object(self._sr, "load_features", return_value={"token_fp": "x", "api_key": "k"}):
+            with mock.patch.object(self._sr, "_find_license_token", return_value="CORVIN-fake.lic.tok"):
+                with mock.patch.object(self._sr, "_sign_request", return_value=("123", "deadbeef")):
+                    with mock.patch.object(self._sr, "_get_device_fp", return_value="devfp"):
+                        with mock.patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+                            result = instance_identity._authenticated_features_request(
+                                "/v1/instance/bind", {"a": 1}
+                            )
+        self.assertEqual(result, {"ok": True})
+        req = captured["req"]
+        self.assertEqual(req.get_header("Authorization"), "Bearer CORVIN-fake.lic.tok")
+        self.assertEqual(json.loads(req.data), {"a": 1})
+        self.assertTrue(req.full_url.endswith("/v1/instance/bind"))
+
+    def test_http_error_raises_ibcerror(self) -> None:
+        import urllib.error
+        with mock.patch.object(self._sr, "load_features", return_value={"token_fp": "x", "api_key": "k"}):
+            with mock.patch.object(self._sr, "_find_license_token", return_value="CORVIN-fake.lic.tok"):
+                with mock.patch.object(self._sr, "_sign_request", return_value=("123", "deadbeef")):
+                    with mock.patch.object(self._sr, "_get_device_fp", return_value=""):
+                        with mock.patch(
+                            "urllib.request.urlopen",
+                            side_effect=urllib.error.HTTPError("url", 403, "Forbidden", {}, None),
+                        ):
+                            with self.assertRaises(instance_identity.IBCError):
+                                instance_identity._authenticated_features_request(
+                                    "/v1/instance/bind", {"a": 1}
+                                )
+
+    def test_malformed_json_response_raises_ibcerror(self) -> None:
+        fake_resp = mock.Mock()
+        fake_resp.read.return_value = b"not json {{{"
+        fake_resp.__enter__ = mock.Mock(return_value=fake_resp)
+        fake_resp.__exit__ = mock.Mock(return_value=False)
+        with mock.patch.object(self._sr, "load_features", return_value={"token_fp": "x", "api_key": "k"}):
+            with mock.patch.object(self._sr, "_find_license_token", return_value="CORVIN-fake.lic.tok"):
+                with mock.patch.object(self._sr, "_sign_request", return_value=("123", "deadbeef")):
+                    with mock.patch.object(self._sr, "_get_device_fp", return_value=""):
+                        with mock.patch("urllib.request.urlopen", return_value=fake_resp):
+                            with self.assertRaises(instance_identity.IBCError):
+                                instance_identity._authenticated_features_request(
+                                    "/v1/instance/bind", {"a": 1}
+                                )
+
+
+@unittest.skipUnless(_M3_DEPS_OK, "cryptography not installed")
+class TestBindInstance(_TempIBCHomeMixin, unittest.TestCase):
+    """bind_instance() (M1) — rewritten for the real Ed25519/CORVIN-token
+    server contract; no more sest_token/license_fp (never a real concept)."""
+
+    def _claims(self, **extra) -> dict:
+        base = {
+            "sub": instance_identity.get_instance_id(),
+            "type": "instance_binding",
+            "email": "a@b.com", "customer_fp": "fp1", "plan": "member",
+            "instance_pubkey": instance_identity.get_instance_pubkey_b64(),
+            "iat": int(time.time()), "exp": int(time.time()) + 3600, "jti": "bind-jti",
+        }
+        base.update(extra)
+        return base
+
+    def test_success_stores_cert(self) -> None:
+        instance_id = instance_identity.get_instance_id()
+        token = _sign_test_ibc(self.ibc_signing_key, self._claims())
+        with mock.patch.object(
+            instance_identity, "_authenticated_features_request", return_value={"ibc": token}
+        ) as mock_req:
+            decoded = instance_identity.bind_instance()
+        self.assertEqual(decoded["sub"], instance_id)
+        self.assertTrue(self.cert_path.exists())
+        self.assertEqual(self.cert_path.read_text(encoding="utf-8").strip(), token)
+        mock_req.assert_called_once()
+        self.assertEqual(mock_req.call_args[0][0], "/v1/instance/bind")
+
+    def test_missing_ibc_field_raises_ibcerror(self) -> None:
+        with mock.patch.object(
+            instance_identity, "_authenticated_features_request", return_value={"not_ibc": "x"}
+        ):
+            with self.assertRaises(instance_identity.IBCError):
+                instance_identity.bind_instance()
+
+    def test_auth_failure_propagates(self) -> None:
+        with mock.patch.object(
+            instance_identity, "_authenticated_features_request",
+            side_effect=instance_identity.IBCError("not activated"),
+        ):
+            with self.assertRaises(instance_identity.IBCError):
+                instance_identity.bind_instance()
+
+    def test_sub_mismatch_raises_ibcerror(self) -> None:
+        token = _sign_test_ibc(self.ibc_signing_key, self._claims(sub="someone-elses-instance-id"))
+        with mock.patch.object(
+            instance_identity, "_authenticated_features_request", return_value={"ibc": token}
+        ):
+            with self.assertRaises(instance_identity.IBCError):
+                instance_identity.bind_instance()
 
     def test_pubkey_mismatch_raises_ibcerror(self) -> None:
         """R1 finding: an IBC signed for a DIFFERENT pubkey must be rejected."""
-        instance_id = instance_identity.get_instance_id()
-        claims = {
-            "sub": instance_id, "instance_pubkey": "not-our-pubkey-b64",
-            "iat": int(time.time()), "exp": int(time.time()) + 3600, "jti": "x",
-        }
-        token = _sign_test_ibc(self.rsa_priv_pem, claims)
-        resp = self._fake_resp(json.dumps({"ibc": token}).encode())
-        with mock.patch("urllib.request.urlopen", return_value=resp):
-            with mock.patch.object(instance_identity, "_verify_ibc_signature", return_value=None):
-                with self.assertRaises(instance_identity.IBCError):
-                    instance_identity.bind_instance("sest-tok", "fp-123")
+        token = _sign_test_ibc(self.ibc_signing_key, self._claims(instance_pubkey="not-our-pubkey-b64"))
+        with mock.patch.object(
+            instance_identity, "_authenticated_features_request", return_value={"ibc": token}
+        ):
+            with self.assertRaises(instance_identity.IBCError):
+                instance_identity.bind_instance()
+
+    def test_wrong_signing_key_rejected(self) -> None:
+        other_key = Ed25519PrivateKey.generate()
+        token = _sign_test_ibc(other_key, self._claims())
+        with mock.patch.object(
+            instance_identity, "_authenticated_features_request", return_value={"ibc": token}
+        ):
+            with self.assertRaises(instance_identity.IBCError):
+                instance_identity.bind_instance()
 
 
-@unittest.skipUnless(_M3_DEPS_OK, "pyjwt/cryptography not installed")
+@unittest.skipUnless(_M3_DEPS_OK, "cryptography not installed")
 class TestBindHardware(_TempIBCHomeMixin, unittest.TestCase):
     def test_bind_hardware_without_existing_ibc_raises(self) -> None:
         with self.assertRaises(instance_identity.IBCError):
@@ -354,42 +488,44 @@ class TestBindHardware(_TempIBCHomeMixin, unittest.TestCase):
         instance_id = instance_identity.get_instance_id()
 
         reissued_claims = {
-            "iss": "Corvin Labs", "sub": instance_id, "email": "test@example.com",
-            "license_id": "lic_test", "plan": "member",
+            "iss": "corvinlabs.io", "type": "instance_binding", "sub": instance_id,
+            "email": "test@example.com", "customer_fp": "test-customer-fp", "plan": "member",
             "instance_pubkey": instance_identity.get_instance_pubkey_b64(),
             "hardware_fp": "deadbeef" * 8,
             "iat": int(time.time()), "exp": int(time.time()) + 3600,
             "jti": "test-jti-0002",
         }
-        reissued_jwt = _sign_test_ibc(self.rsa_priv_pem, reissued_claims)
-
-        fake_resp = mock.Mock()
-        fake_resp.read.return_value = json.dumps({"ibc": reissued_jwt}).encode()
-        fake_resp.__enter__ = mock.Mock(return_value=fake_resp)
-        fake_resp.__exit__ = mock.Mock(return_value=False)
+        reissued_token = _sign_test_ibc(self.ibc_signing_key, reissued_claims)
 
         with mock.patch.object(instance_identity, "compute_hardware_fp", return_value="deadbeef" * 8):
-            with mock.patch("urllib.request.urlopen", return_value=fake_resp):
-                # The real repo checkout ships a2a_network_pubkey.pem, which takes
-                # precedence over CORVIN_IBC_PUBKEY_PEM — bypass real-signature
-                # verification here since this test only exercises the
-                # store/decode/mismatch-guard logic, not RS256 verification itself.
-                with mock.patch.object(instance_identity, "_verify_ibc_signature", return_value=None):
-                    decoded = instance_identity.bind_hardware()
+            with mock.patch.object(
+                instance_identity, "_authenticated_features_request",
+                return_value={"ibc": reissued_token},
+            ) as mock_req:
+                decoded = instance_identity.bind_hardware()
 
         self.assertEqual(decoded["hardware_fp"], "deadbeef" * 8)
         on_disk = self.cert_path.read_text(encoding="utf-8").strip()
-        self.assertEqual(on_disk, reissued_jwt)
+        self.assertEqual(on_disk, reissued_token)
+        self.assertEqual(mock_req.call_args[0][0], "/v1/instance/bind-hardware")
+        sent_body = mock_req.call_args[0][1]
+        self.assertEqual(sent_body["instance_id"], instance_id)
+        self.assertEqual(sent_body["hardware_fp"], "deadbeef" * 8)
+        # Signature must verify against OUR local instance pubkey.
+        self.assertTrue(
+            instance_identity.verify_instance_sig(
+                sent_body["hardware_fp_sig"],
+                sent_body["hardware_fp"].encode("utf-8"),
+                instance_identity.get_instance_pubkey_b64(),
+            )
+        )
 
-    def test_bind_hardware_rejects_malformed_json_response(self) -> None:
+    def test_bind_hardware_rejects_missing_ibc_field(self) -> None:
         self._write_local_ibc()
-        fake_resp = mock.Mock()
-        fake_resp.read.return_value = b"not valid json {{{"
-        fake_resp.__enter__ = mock.Mock(return_value=fake_resp)
-        fake_resp.__exit__ = mock.Mock(return_value=False)
-
         with mock.patch.object(instance_identity, "compute_hardware_fp", return_value="fp"):
-            with mock.patch("urllib.request.urlopen", return_value=fake_resp):
+            with mock.patch.object(
+                instance_identity, "_authenticated_features_request", return_value={}
+            ):
                 with self.assertRaises(instance_identity.IBCError):
                     instance_identity.bind_hardware()
 
@@ -401,20 +537,24 @@ class TestBindHardware(_TempIBCHomeMixin, unittest.TestCase):
             "hardware_fp": "wrong-fp", "iat": int(time.time()), "exp": int(time.time()) + 3600,
             "jti": "test-jti-0003",
         }
-        reissued_jwt = _sign_test_ibc(self.rsa_priv_pem, reissued_claims)
-        fake_resp = mock.Mock()
-        fake_resp.read.return_value = json.dumps({"ibc": reissued_jwt}).encode()
-        fake_resp.__enter__ = mock.Mock(return_value=fake_resp)
-        fake_resp.__exit__ = mock.Mock(return_value=False)
+        reissued_token = _sign_test_ibc(self.ibc_signing_key, reissued_claims)
 
         with mock.patch.object(instance_identity, "compute_hardware_fp", return_value="expected-fp"):
-            with mock.patch("urllib.request.urlopen", return_value=fake_resp):
-                with mock.patch.object(instance_identity, "_verify_ibc_signature", return_value=None):
-                    with self.assertRaises(instance_identity.IBCError):
-                        instance_identity.bind_hardware()
+            with mock.patch.object(
+                instance_identity, "_authenticated_features_request",
+                return_value={"ibc": reissued_token},
+            ):
+                with self.assertRaises(instance_identity.IBCError):
+                    instance_identity.bind_hardware()
+
+    def test_bind_hardware_no_fingerprint_available(self) -> None:
+        self._write_local_ibc()
+        with mock.patch.object(instance_identity, "compute_hardware_fp", return_value=""):
+            with self.assertRaises(instance_identity.IBCError):
+                instance_identity.bind_hardware()
 
 
-@unittest.skipUnless(_M3_DEPS_OK, "pyjwt/cryptography not installed")
+@unittest.skipUnless(_M3_DEPS_OK, "cryptography not installed")
 class TestCheckHardwareBinding(_TempIBCHomeMixin, unittest.TestCase):
     def test_no_ibc_reports_not_bound(self) -> None:
         result = instance_identity.check_hardware_binding()
@@ -442,7 +582,7 @@ class TestCheckHardwareBinding(_TempIBCHomeMixin, unittest.TestCase):
         self.assertFalse(result["matches"])
 
 
-@unittest.skipUnless(_M3_DEPS_OK, "pyjwt/cryptography not installed")
+@unittest.skipUnless(_M3_DEPS_OK, "cryptography not installed")
 class TestRevocationList(_TempIBCHomeMixin, unittest.TestCase):
     def _fake_crl_response(self, revoked_jti: list[str]):
         fake_resp = mock.Mock()
@@ -533,7 +673,7 @@ class TestRevocationList(_TempIBCHomeMixin, unittest.TestCase):
             self.assertIsNotNone(instance_identity.get_ibc_jwt())
 
 
-@unittest.skipUnless(_M3_DEPS_OK, "pyjwt/cryptography not installed")
+@unittest.skipUnless(_M3_DEPS_OK, "cryptography not installed")
 class TestRevocationStatusCached(_TempIBCHomeMixin, unittest.TestCase):
     def test_no_ibc_is_unknown(self) -> None:
         self.assertEqual(instance_identity.revocation_status_cached(), "unknown")

@@ -4,6 +4,7 @@ Mirrors the ``_sandbox`` TestClient pattern from test_license_http_gates.py.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sys
@@ -13,6 +14,21 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _fake_corvin_token(claims: dict) -> str:
+    """An unsigned CORVIN-<header>.<payload>.<sig> token.
+
+    get_ibc() only base64url-decodes the payload (signature was already
+    verified once at bind time) — no crypto needed to exercise the route.
+    """
+    header = _b64url(json.dumps({"alg": "EdDSA", "typ": "JWT", "kid": "ibc-v1"}).encode())
+    payload = _b64url(json.dumps(claims).encode())
+    return f"CORVIN-{header}.{payload}.unsigned"
 
 _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parents[2]
@@ -111,21 +127,17 @@ class TestInstanceIdentityRoute(unittest.TestCase):
     def test_ibc_bound_reflects_local_cert(self):
         with _sandbox(Path(self._tmp)) as (client, home, tid):
             # Prime instance_id + keypair, then plant a locally-valid-shaped
-            # (unsigned-check-bypassed) cert file — get_ibc() only checks
-            # expiry locally, never re-verifies the RS256 signature.
+            # (unsigned) cert file — get_ibc() only checks expiry locally,
+            # the signature was already verified once at bind time.
             import instance_identity  # type: ignore[import-not-found]
             instance_id = instance_identity.get_instance_id()
             pubkey_b64 = instance_identity.get_instance_pubkey_b64()
-            try:
-                import jwt as _pyjwt
-            except ImportError:
-                self.skipTest("pyjwt not installed")
             claims = {
                 "sub": instance_id, "email": "owner@example.com", "plan": "member",
                 "instance_pubkey": pubkey_b64, "iat": int(time.time()),
                 "exp": int(time.time()) + 3600, "jti": "route-test-jti",
             }
-            token = _pyjwt.encode(claims, "unused-secret", algorithm="HS256")
+            token = _fake_corvin_token(claims)
             cert_path = Path(os.environ["CORVIN_INSTANCE_CERT_PATH"])
             cert_path.parent.mkdir(parents=True, exist_ok=True)
             cert_path.write_text(token, encoding="utf-8")
@@ -142,16 +154,12 @@ class TestInstanceIdentityRoute(unittest.TestCase):
             import instance_identity  # type: ignore[import-not-found]
             instance_id = instance_identity.get_instance_id()
             pubkey_b64 = instance_identity.get_instance_pubkey_b64()
-            try:
-                import jwt as _pyjwt
-            except ImportError:
-                self.skipTest("pyjwt not installed")
             claims = {
                 "sub": instance_id, "instance_pubkey": pubkey_b64,
                 "iat": int(time.time()), "exp": int(time.time()) + 3600,
                 "jti": "revoked-jti",
             }
-            token = _pyjwt.encode(claims, "unused-secret", algorithm="HS256")
+            token = _fake_corvin_token(claims)
             Path(os.environ["CORVIN_INSTANCE_CERT_PATH"]).write_text(token, encoding="utf-8")
             Path(os.environ["CORVIN_CRL_CACHE_PATH"]).write_text(
                 json.dumps({"fetched_at": time.time(), "revoked_jti": ["revoked-jti"]}),

@@ -2,8 +2,12 @@
 
 Commands:
   init [--email EMAIL] [--name NAME]  Bind this instance to a CorvinID account.
+                                       Requires an already-activated license
+                                       ('corvin-license activate <key>') — auth
+                                       is implicit via the stored activation
+                                       credentials, no separate token needed.
   show                                 Display current cert + instance_id + pubkey.
-  verify                               Check cert validity (expiry + RS256 sig).
+  verify                               Check cert validity (expiry + Ed25519 sig).
   renew                                Renew cert (same as init but updates existing).
   rotate                               Rotate keypair then renew.
   resolve <instance_id>                Deanonymize: look up instance_id in the
@@ -78,28 +82,20 @@ def _die(msg: str, code: int = 1) -> None:
 # ── Command implementations ───────────────────────────────────────────────────
 
 def cmd_init(args: argparse.Namespace) -> int:
-    """Bind this instance to a CorvinID account via the Corvin Labs IBC endpoint."""
+    """Bind this instance to a CorvinID account via the Corvin Labs IBC endpoint.
+
+    Requires an already-activated license (run 'corvin-license activate <key>'
+    first) — authentication reuses that installation's stored credentials
+    (~/.config/corvin-voice/features.json), the same license token + HMAC
+    api_key every other Corvin-Features call uses. There is no separate
+    SesT/license-fingerprint step.
+    """
     (bind_instance, ensure_instance_key, get_ibc, get_instance_id,
      get_instance_pubkey_b64, instance_cert_path, instance_key_path,
      rotate_fn, IBCError) = _import_instance_identity()
 
     email = getattr(args, "email", None) or os.environ.get("CORVIN_ID_EMAIL", "")
     name = getattr(args, "name", None) or os.environ.get("CORVIN_ID_NAME", "")
-
-    # Require a SesT token and license fingerprint from env or flags
-    sest_token = getattr(args, "sest_token", None) or os.environ.get("CORVIN_SEST_TOKEN", "")
-    license_fp = getattr(args, "license_fp", None) or os.environ.get("CORVIN_LICENSE_FP", "")
-
-    if not sest_token:
-        _die(
-            "SesT token required for bind. Set CORVIN_SEST_TOKEN env var or "
-            "pass --sest-token. Obtain a SesT from your Corvin Labs account."
-        )
-    if not license_fp:
-        _die(
-            "License fingerprint required for bind. Set CORVIN_LICENSE_FP env var or "
-            "pass --license-fp."
-        )
 
     # Ensure keypair exists before bind
     try:
@@ -111,7 +107,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     print(f"Binding instance {instance_id} to CorvinID ...")
 
     try:
-        decoded = bind_instance(sest_token, license_fp)
+        decoded = bind_instance()
     except IBCError as exc:
         _die(f"IBC bind failed: {exc}")
 
@@ -180,7 +176,7 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    """Check cert validity (expiry + RS256 sig)."""
+    """Check cert validity (expiry + Ed25519 sig)."""
     (bind_instance, ensure_instance_key, get_ibc, get_instance_id,
      get_instance_pubkey_b64, instance_cert_path, instance_key_path,
      rotate_fn, IBCError) = _import_instance_identity()
@@ -190,7 +186,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print("FAIL: cert file absent")
         return 1
 
-    # Perform RS256 signature verification
+    # Perform Ed25519 signature verification
     try:
         try:
             from instance_identity import _verify_ibc_signature  # type: ignore[import-not-found]
@@ -477,23 +473,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    # init / renew share the same flags
+    # init / renew share the same flags. Auth is implicit — reuses the
+    # installation's stored license-activation credentials, no separate
+    # token/fingerprint flags needed (see cmd_init docstring).
     for cmd_name in ("init", "renew"):
         p = sub.add_parser(cmd_name, help=f"{'Bind' if cmd_name == 'init' else 'Renew'} CorvinID cert")
         p.add_argument("--email", default="", help="Operator email (stored in identity registry)")
         p.add_argument("--name", default="", help="Operator name (stored in identity registry)")
-        p.add_argument("--sest-token", dest="sest_token", default="", help="SesT token from Corvin Labs")
-        p.add_argument("--license-fp", dest="license_fp", default="", help="License fingerprint")
 
     sub.add_parser("show", help="Display current cert + instance_id + pubkey")
-    sub.add_parser("verify", help="Check cert validity (expiry + RS256 sig)")
+    sub.add_parser("verify", help="Check cert validity (expiry + Ed25519 sig)")
 
     # rotate: same flags as init/renew for rebind after key rotation
     p_rotate = sub.add_parser("rotate", help="Rotate keypair then renew cert")
     p_rotate.add_argument("--email", default="")
     p_rotate.add_argument("--name", default="")
-    p_rotate.add_argument("--sest-token", dest="sest_token", default="")
-    p_rotate.add_argument("--license-fp", dest="license_fp", default="")
 
     p_resolve = sub.add_parser("resolve", help="Deanonymize an instance_id (CRITICAL audit event emitted)")
     p_resolve.add_argument("instance_id", help="Instance UUID to resolve")

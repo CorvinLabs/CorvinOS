@@ -83,10 +83,16 @@ except ImportError:
     from instance_identity import get_instance_id  # type: ignore[import-not-found]
 
 # ── IBC verification helpers (ADR-0145 Protocol v7) ──────────────────────
+# _verify_ibc_ed25519 verifies+decodes the IBC in one call: the IBC is now
+# signed with Corvin-Features' Ed25519 session-signing keypair under kid
+# "ibc-vN" (reused, not a separate RS256 trust anchor — see ADR-0145's
+# "Known deviation" note), matching instance_identity.py's own client-side
+# verification of the same certificate format.
 try:
     from instance_identity import (  # type: ignore[import-not-found]
         verify_instance_sig as _verify_ibc_sig,
         build_canonical_payload as _build_ibc_canonical,
+        _verify_ibc_signature as _verify_ibc_ed25519,
     )
     _IBC_VERIFY_AVAILABLE = True
 except ImportError:
@@ -1457,44 +1463,6 @@ class RemoteTriggerReceiver:
         env_key = os.environ.get("CORVIN_IBC_PUBKEY_PEM")
         return env_key or None
 
-    def _verify_ibc_rsa(
-        self,
-        ibc_jwt_str: str,
-        recv_key: bytes | None = None,
-        *,
-        strict: bool = False,
-    ) -> None:
-        """Verify the RS256 signature of an IBC JWT against the A2A network trust anchor.
-
-        Raises ValidationError (with recv_key when available) on any failure so
-        the caller can produce a signed rejection per ADR-0077 C-5.
-        Grace when the public key is unavailable and strict=False (pre-rollout
-        deployments that haven't yet provisioned the key should not hard-fail).
-        When strict=True (require_ibc=True origin), missing deps or missing
-        pubkey are immediate hard rejects — grace would allow RS256 bypass.
-        """
-        if not _IBC_JWT_OK:
-            if strict:
-                raise ValidationError("ibc_jwt_lib_unavailable", recv_key)
-            return  # PyJWT not installed — grace for non-strict origins
-        pubkey_pem = self._load_a2a_network_pubkey()
-        if not pubkey_pem:
-            if strict:
-                raise ValidationError("ibc_trust_anchor_not_provisioned", recv_key)
-            return  # key not provisioned — grace for non-strict origins
-        try:
-            _ibc_jwt.decode(
-                ibc_jwt_str,
-                pubkey_pem,
-                algorithms=["RS256"],
-                options={"verify_exp": True},
-            )
-        except Exception as exc:
-            raise ValidationError(
-                f"instance_attestation_failed:ibc_rsa_invalid",
-                recv_key,
-            ) from exc
-
     def _validate(self, d: dict) -> tuple[TaskEnvelope, dict]:
         # Step 1: Schema
         env = TaskEnvelope.from_dict(d)
@@ -1716,8 +1684,9 @@ class RemoteTriggerReceiver:
         # Step 6.9: Verify instance_attestation if present (ADR-0145 Protocol v7).
         # The IBC (Instance Binding Certificate) lets the receiver cryptographically
         # confirm that the sender_instance_id was issued to the expected entity by
-        # the Corvin Labs RS256 trust anchor, and that the sender signed this exact
-        # envelope with the Ed25519 key embedded in that IBC.
+        # Corvin-Features (Ed25519, kid "ibc-vN" — reuses the session-signing
+        # keypair, no separate trust anchor), and that the sender signed this
+        # exact envelope with the Ed25519 key embedded in that IBC.
         # Runs AFTER HMAC (sender_instance_id is HMAC-covered) and AFTER the
         # network/layer checks so only fully-authenticated envelopes spend cycles here.
         instance_att = env.instance_attestation
@@ -1727,25 +1696,20 @@ class RemoteTriggerReceiver:
         # libraries are absent, a truthy-but-unverifiable attestation block would
         # skip both the if-branch (deps absent) and the elif (instance_att truthy).
         # Fail-closed: missing deps with require_ibc=True is always a hard reject.
-        if require_ibc and (not _IBC_VERIFY_AVAILABLE or not _IBC_JWT_OK):
+        if require_ibc and not _IBC_VERIFY_AVAILABLE:
             raise ValidationError("ibc_library_unavailable", recv_key)
 
-        if instance_att and _IBC_VERIFY_AVAILABLE and _IBC_JWT_OK:
+        if instance_att and _IBC_VERIFY_AVAILABLE:
             try:
                 ibc_snapshot = instance_att.get("ibc_snapshot", "")
                 ed25519_sig = instance_att.get("ed25519_sig", "")
                 ibc_jti = instance_att.get("ibc_jti", "")
 
-                # Decode IBC claims without re-verifying RS256 here (done below);
-                # expiry IS verified so expired IBCs are rejected.
-                ibc_decoded = _ibc_jwt.decode(
-                    ibc_snapshot,
-                    options={"verify_signature": False, "verify_exp": True},
-                )
-
-                # Verify RS256 signature of IBC against the A2A network trust anchor.
-                # strict=require_ibc: missing trust anchor fails-closed when required.
-                self._verify_ibc_rsa(ibc_snapshot, recv_key, strict=require_ibc)
+                # Verify the IBC's own Ed25519 signature and decode its claims
+                # in one step (also enforces expiry). Raises IBCError on any
+                # failure — caught by the except-Exception below, which audits
+                # CRITICAL and only hard-rejects when require_ibc=True.
+                ibc_decoded = _verify_ibc_ed25519(ibc_snapshot)
 
                 # Assert IBC.sub == sender_instance_id (binds the cert to this sender).
                 # An IBC belonging to a different instance is always invalid — an

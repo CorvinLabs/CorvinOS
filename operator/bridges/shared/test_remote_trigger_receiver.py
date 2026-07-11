@@ -1168,22 +1168,21 @@ class TestIBCGates(unittest.TestCase):
     def test_ibc_sub_mismatch_always_rejects(self):
         """ADR-0145 iter-2: IBC sub != sender_instance_id must reject even require_ibc=False."""
         import remote_trigger_receiver as rtr
-        import jwt as _jwt_mod
-        orig_avail, orig_jwt_ok = rtr._IBC_VERIFY_AVAILABLE, rtr._IBC_JWT_OK
+        orig_avail = rtr._IBC_VERIFY_AVAILABLE
         rtr._IBC_VERIFY_AVAILABLE = True
-        rtr._IBC_JWT_OK = True
-        # Patch _verify_ibc_rsa to skip RS256 (no real trust anchor in tests)
-        orig_rsa = rtr.RemoteTriggerReceiver._verify_ibc_rsa
-        rtr.RemoteTriggerReceiver._verify_ibc_rsa = lambda self, *a, **kw: None
+        # Patch _verify_ibc_ed25519 to skip real Ed25519 verification (no real
+        # trust anchor in tests) and hand back forged-but-well-formed claims —
+        # the point is to exercise the sub-mismatch gate, not the crypto
+        # primitive (tested directly in instance_identity's own test suite).
+        orig_verify = rtr._verify_ibc_ed25519
+        rtr._verify_ibc_ed25519 = lambda *a, **kw: {
+            "sub": "DIFFERENT_INSTANCE", "instance_pubkey": "abc",
+            "jti": "jti1", "exp": int(time.time()) + 3600,
+        }
         origins_dir = self._make_origins_dir(require_ibc=False)
         try:
             # IBC sub is "DIFFERENT_INSTANCE", sender_instance_id is "sender-iid"
-            fake_ibc = _jwt_mod.encode(
-                {"sub": "DIFFERENT_INSTANCE", "instance_pubkey": "abc",
-                 "jti": "jti1", "exp": int(time.time()) + 3600},
-                "secret", algorithm="HS256",
-            )
-            att = {"ibc_jti": "jti1", "ed25519_sig": "sig", "ibc_snapshot": fake_ibc}
+            att = {"ibc_jti": "jti1", "ed25519_sig": "sig", "ibc_snapshot": "CORVIN-fake"}
             env = self._signed_envelope(origins_dir, extra={"instance_attestation": att})
             recv = rtr.RemoteTriggerReceiver(
                 origins_dir=origins_dir, engine_factory=lambda: mock.MagicMock()
@@ -1193,9 +1192,91 @@ class TestIBCGates(unittest.TestCase):
                              "IBC sub-mismatch must always reject, even require_ibc=False")
         finally:
             rtr._IBC_VERIFY_AVAILABLE = orig_avail
-            rtr._IBC_JWT_OK = orig_jwt_ok
-            rtr.RemoteTriggerReceiver._verify_ibc_rsa = orig_rsa
+            rtr._verify_ibc_ed25519 = orig_verify
             shutil.rmtree(str(origins_dir), ignore_errors=True)
+
+    # Positive path: a genuinely valid Ed25519-signed IBC + envelope signature
+    # must be ACCEPTED — the negative-path tests above only cover rejection,
+    # so this is the one test proving the receiver's new Ed25519 verification
+    # (instance_identity._verify_ibc_signature, reused via _verify_ibc_ed25519)
+    # is actually compatible with what a real sender produces, not just that
+    # it rejects forged input.
+    def test_valid_ed25519_ibc_and_envelope_signature_accepted(self):
+        import base64
+        import instance_identity as iid
+        from cryptography.hazmat.primitives import serialization as _ser
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        tmp = Path(tempfile.mkdtemp(prefix="ibc-valid-"))
+        prev_env = {
+            k: os.environ.get(k) for k in (
+                "CORVIN_INSTANCE_ID_PATH", "CORVIN_INSTANCE_KEY_PATH",
+                "CORVIN_INSTANCE_CERT_PATH",
+            )
+        }
+        os.environ["CORVIN_INSTANCE_ID_PATH"] = str(tmp / "instance_id.json")
+        os.environ["CORVIN_INSTANCE_KEY_PATH"] = str(tmp / "instance_key.pem")
+        os.environ["CORVIN_INSTANCE_CERT_PATH"] = str(tmp / "instance_cert.jwt")
+
+        origins_dir = self._make_origins_dir(require_ibc=True)
+        trust_key = Ed25519PrivateKey.generate()
+        pub_der = trust_key.public_key().public_bytes(
+            _ser.Encoding.DER, _ser.PublicFormat.SubjectPublicKeyInfo
+        )
+        trust_pub_b64 = base64.b64encode(pub_der).decode()
+
+        import remote_trigger_receiver as rtr
+        orig_ring = dict(iid._IBC_TRUST_KEY_RING)
+        iid._IBC_TRUST_KEY_RING.clear()
+        iid._IBC_TRUST_KEY_RING["sess-v1"] = trust_pub_b64
+        try:
+            sender_instance_id = iid.get_instance_id()
+            instance_pubkey_b64 = iid.get_instance_pubkey_b64()
+
+            def _b64url(data: bytes) -> str:
+                return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+            claims = {
+                "sub": sender_instance_id, "instance_pubkey": instance_pubkey_b64,
+                "jti": "valid-jti-1", "exp": int(time.time()) + 3600,
+            }
+            header_b64 = _b64url(json.dumps({"alg": "EdDSA", "typ": "JWT", "kid": "ibc-v1"}).encode())
+            payload_b64 = _b64url(json.dumps(claims).encode())
+            sig = trust_key.sign(f"{header_b64}.{payload_b64}".encode())
+            ibc_snapshot = f"CORVIN-{header_b64}.{payload_b64}.{_b64url(sig)}"
+
+            task_id, nonce, issued_at = str(uuid.uuid4()), secrets.token_hex(32), time.time()
+            instruction = "hello"
+            canonical = iid.build_canonical_payload(
+                task_id=task_id, origin_id="ibc-test", issued_at=issued_at,
+                nonce=nonce, instruction=instruction,
+            )
+            ed25519_sig = iid.sign_payload(canonical)
+
+            att = {"ibc_jti": "valid-jti-1", "ed25519_sig": ed25519_sig, "ibc_snapshot": ibc_snapshot}
+            env = self._signed_envelope(origins_dir, extra={
+                "task_id": task_id, "nonce": nonce, "issued_at": issued_at,
+                "instruction": instruction, "sender_instance_id": sender_instance_id,
+                "instance_attestation": att,
+            })
+            recv = rtr.RemoteTriggerReceiver(
+                origins_dir=origins_dir, engine_factory=lambda: mock.MagicMock()
+            )
+            resp = recv.receive(env)
+            self.assertNotEqual(
+                resp.status, "rejected",
+                f"genuinely valid Ed25519 IBC + envelope sig must be accepted, got: {resp}"
+            )
+        finally:
+            iid._IBC_TRUST_KEY_RING.clear()
+            iid._IBC_TRUST_KEY_RING.update(orig_ring)
+            for k, v in prev_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            shutil.rmtree(str(origins_dir), ignore_errors=True)
+            shutil.rmtree(str(tmp), ignore_errors=True)
 
 
 # ── CI lint test ──────────────────────────────────────────────────────────

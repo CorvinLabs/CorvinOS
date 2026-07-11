@@ -61,7 +61,7 @@ except ImportError:
         ErasureLayerResult, LayerStatus,
     )
 
-_REVOKE_URL = "https://api.corvin-labs.com/v1/instance/revoke"
+_REVOKE_URL = "https://corvin-features-production.up.railway.app/v1/instance/revoke"
 _IDENTITY_REGISTRY_FILE = "identity_registry.json"
 _IBC_FILE = "instance_cert.jwt"
 _GLOBAL_DIR = "global"
@@ -105,12 +105,31 @@ def _audit_emit(event_type: str, severity: str, details: dict[str, Any]) -> None
 def _fire_and_forget_revoke(instance_id: str) -> None:
     """POST to the Corvin Labs revocation endpoint in a daemon thread.
 
-    Never blocks erasure. Network errors are silently swallowed.
+    Signed with the instance's own Ed25519 key over "instance_id:ts" —
+    the server endpoint is deliberately unauthenticated (no license/HMAC
+    context required, since local credentials may already be gone by the
+    time this fires) but requires proof of possession of the instance
+    private key so an unrelated caller cannot revoke someone else's binding
+    by guessing/enumerating instance_ids (ADR-0145).
+
+    Never blocks erasure. Network errors — and a failure to produce a
+    signature — are silently swallowed; the local deletion already
+    happened regardless of remote outcome.
     """
     def _do_revoke() -> None:
         revoke_url = os.environ.get("CORVIN_IBC_REVOKE_URL", _REVOKE_URL)
         try:
-            body = json.dumps({"instance_id": instance_id}).encode("utf-8")
+            ts = str(int(time.time()))
+            sig = ""
+            try:
+                try:
+                    from .instance_identity import sign_payload  # type: ignore
+                except ImportError:
+                    from instance_identity import sign_payload  # type: ignore
+                sig = sign_payload(f"{instance_id}:{ts}".encode("utf-8"))
+            except Exception:  # noqa: BLE001
+                pass  # no local key (or crypto lib missing) — server will no-op
+            body = json.dumps({"instance_id": instance_id, "ts": ts, "sig": sig}).encode("utf-8")
             req = urllib.request.Request(
                 revoke_url,
                 data=body,
