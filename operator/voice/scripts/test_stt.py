@@ -647,11 +647,14 @@ class ProviderStatusTests(unittest.TestCase):
     def test_local_ready_when_package_and_model_present(self):
         model_dir = Path(self._tmpdir) / "whisper-models"
         model_dir.mkdir(parents=True)
-        # Filename must match local_whisper._DEFAULT_MODEL — this test leaves
-        # CORVIN_STT_LOCAL_MODEL unset (see setUp), so provider_status() falls
-        # through to the module default.
-        from stt.local_whisper import _DEFAULT_MODEL
-        (model_dir / f"ggml-{_DEFAULT_MODEL}.bin").write_bytes(b"fake-model-bytes")
+        # Filename must match the model provider_status() actually probes for.
+        # This test leaves CORVIN_STT_LOCAL_MODEL unset (see setUp), so the
+        # status falls through to the RAM-adaptive default — which is NOT the
+        # frozen _DEFAULT_MODEL alias on a low-RAM (< 3 GB) or high-tier
+        # (>= 16 GB + >= 8 CPU) box. Use _default_local_model() so the fixture
+        # name tracks the real pick on every host.
+        from stt.local_whisper import _default_local_model
+        (model_dir / f"ggml-{_default_local_model()}.bin").write_bytes(b"fake-model-bytes")
         fake_pywhispercpp = mock.MagicMock()
         with mock.patch.dict(sys.modules, {
             "pywhispercpp": fake_pywhispercpp,

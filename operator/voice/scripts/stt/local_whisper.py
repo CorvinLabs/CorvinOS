@@ -13,13 +13,18 @@ Lazy-imports ``pywhispercpp.model.Model``. If the package is missing,
 required — CPU works fine for short voice notes.
 
 Model selection: ``CORVIN_STT_LOCAL_MODEL`` env overrides everything. With no
-override the default is RAM-aware (``_default_local_model``): ``small-q5_1`` on
-a normal machine, ``base-q5_1`` on a low-RAM box (< ~3 GB). History: the
-default rose tiny→base (2026-07-09) then base→small (2026-07-10) — ``tiny`` and
+override the default is RAM-aware across THREE tiers (``_default_local_model``):
+``base-q5_1`` on a low-RAM box (< ~3 GB), ``small-q5_1`` on a normal machine
+(3–16 GB), and ``medium-q5_0`` on a capable box (≥ 16 GB usable RAM AND ≥ 8
+CPUs — RAM is cgroup-aware, and CPU is gated too because RAM alone is not a
+proxy for decode speed) as an automatic accuracy upgrade. History: the default
+rose tiny→base (2026-07-09) then
+base→small (2026-07-10), and the high tier was added (2026-07-11) — ``tiny`` and
 ``base`` both mis-transcribed real German/accented voice notes often enough to
 be a recurring support issue, even though both pass ``corvin-voice doctor``'s
 clean-fixture round-trip; ``small`` is the accuracy floor for the zero-config
-promise while still fitting a 4 GB machine. Other options: any name from
+promise while still fitting a 4 GB machine, and ``medium`` lifts accuracy
+further where the hardware allows. Other options: any name from
 ``pywhispercpp.constants.AVAILABLE_MODELS``, e.g. ``"tiny-q5_1"``,
 ``"small"``, ``"medium"``, ``"large-v3"``, and their ``.en``-only variants.
 Model files cache under
@@ -64,55 +69,119 @@ from .base import (
 # still fits a 4 GB machine. On genuinely RAM-starved boxes we fall back to
 # `base-q5_1` automatically (see `_default_local_model`). `medium` is
 # deliberately NOT the floor default — too heavy for the "unknown grandma
-# machine" guarantee. Override either way with CORVIN_STT_LOCAL_MODEL.
-_STT_MODEL_QUALITY = "small-q5_1"
-_STT_MODEL_LOWRAM = "base-q5_1"
+# machine" guarantee — but a capable, high-RAM box DOES get it as an automatic
+# accuracy upgrade (see `_STT_MODEL_HIGH` below). Override any tier with
+# CORVIN_STT_LOCAL_MODEL.
+_STT_MODEL_HIGH = "medium-q5_0"     # ~539 MB disk / ~1.5 GB peak — best accuracy
+_STT_MODEL_QUALITY = "small-q5_1"   # ~190 MB disk / ~500 MB peak — the default
+_STT_MODEL_LOWRAM = "base-q5_1"     # ~57 MB — weakest-hardware floor
 
-# Below this much total RAM, prefer the lighter model so a low-end box stays
-# responsive instead of swapping. ~3 GB: a 2–4 GB machine still gets `base`,
-# a typical 8 GB+ machine gets `small`.
+# Three automatic tiers by available RAM (multilingual q5 models only — never
+# `.en`, we must transcribe German). Explicit CORVIN_STT_LOCAL_MODEL wins.
+#   < 3 GB   → base   (stay responsive on a 2–4 GB box instead of swapping)
+#   3–16 GB  → small  (the zero-config quality default)
+#   ≥ 16 GB AND ≥ 8 CPUs → medium (best accuracy, but ONLY on a box that can
+#                      also decode it inside the STT budget — RAM alone is not a
+#                      proxy for CPU speed: a 16 GB / 4-slow-core mini-PC would
+#                      time out on medium and return NOTHING, strictly worse
+#                      than small's "poor but present" transcription).
+# The RAM figure is cgroup-aware (see `_total_ram_mb`): a memory-limited
+# container reports its LIMIT, not the host's physical RAM, so a 2 GB container
+# on a 64 GB host never picks the ~1.5 GB-peak medium model and gets OOM-killed.
 _STT_LOWRAM_THRESHOLD_MB = 3000
+_STT_HIGHRAM_THRESHOLD_MB = 16000
+_STT_HIGH_MIN_CPUS = 8
 
 
-def _total_ram_mb() -> "int | None":
-    """Best-effort total physical RAM in MB, cross-platform, no hard deps.
-
-    POSIX: os.sysconf. Windows: GlobalMemoryStatusEx via ctypes. Returns None
-    when it can't be determined — callers then assume "enough" (pick quality),
-    matching the installer's conservative-default posture.
-    """
-    try:
-        import os as _os
-        if hasattr(_os, "sysconf") and "SC_PHYS_PAGES" in _os.sysconf_names and "SC_PAGE_SIZE" in _os.sysconf_names:
-            return int(_os.sysconf("SC_PHYS_PAGES") * _os.sysconf("SC_PAGE_SIZE") / (1024 * 1024))
-    except (ValueError, OSError, AttributeError):
-        pass
-    try:
-        import ctypes
-
-        class _MEMSTAT(ctypes.Structure):
-            _fields_ = [
-                ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
-                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
-                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
-                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
-                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-            ]
-
-        stat = _MEMSTAT()
-        stat.dwLength = ctypes.sizeof(_MEMSTAT)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):  # type: ignore[attr-defined]
-            return int(stat.ullTotalPhys / (1024 * 1024))
-    except (AttributeError, OSError):
-        pass
+def _cgroup_limit_mb() -> "int | None":
+    """Linux cgroup memory limit in MB (v2 `memory.max`, then v1
+    `memory.limit_in_bytes`), or None when unlimited / not containerized / not
+    Linux. `SC_PHYS_PAGES` is blind to cgroup limits, so without this a
+    memory-capped container would read the host's full RAM and pick a model
+    too big for its limit (OOM). Values at/above the host total (the "max"
+    sentinel) are treated as unlimited by the caller's min()."""
+    for path, is_v2 in (("/sys/fs/cgroup/memory.max", True),
+                        ("/sys/fs/cgroup/memory/memory.limit_in_bytes", False)):
+        try:
+            with open(path, "r", encoding="ascii", errors="ignore") as fh:
+                raw = fh.read().strip()
+        except OSError:
+            continue
+        if is_v2 and raw == "max":
+            return None
+        try:
+            val = int(raw)
+        except ValueError:
+            continue
+        # v1 uses a huge sentinel (~PAGE_COUNTER_MAX) for "unlimited"; anything
+        # in the exabyte range is not a real limit.
+        if val <= 0 or val >= (1 << 62):
+            continue
+        return int(val / (1024 * 1024))
     return None
 
 
+def _total_ram_mb() -> "int | None":
+    """Best-effort usable RAM in MB, cross-platform, no hard deps.
+
+    POSIX: os.sysconf. Windows: GlobalMemoryStatusEx via ctypes. On Linux the
+    host figure is clamped to the cgroup memory limit (`_cgroup_limit_mb`) so a
+    containerized bridge sizes the model to its container, not the host.
+    Returns None when it can't be determined — callers then assume "enough"
+    (pick quality), matching the installer's conservative-default posture.
+    """
+    host: "int | None" = None
+    try:
+        import os as _os
+        if hasattr(_os, "sysconf") and "SC_PHYS_PAGES" in _os.sysconf_names and "SC_PAGE_SIZE" in _os.sysconf_names:
+            host = int(_os.sysconf("SC_PHYS_PAGES") * _os.sysconf("SC_PAGE_SIZE") / (1024 * 1024))
+    except (ValueError, OSError, AttributeError):
+        host = None
+    if host is None:
+        try:
+            import ctypes
+
+            class _MEMSTAT(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = _MEMSTAT()
+            stat.dwLength = ctypes.sizeof(_MEMSTAT)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):  # type: ignore[attr-defined]
+                host = int(stat.ullTotalPhys / (1024 * 1024))
+        except (AttributeError, OSError):
+            host = None
+    limit = _cgroup_limit_mb()
+    if host is None:
+        return limit
+    if limit is None:
+        return host
+    return min(host, limit)
+
+
 def _default_local_model() -> str:
-    """The shipped default model, downshifted on low-RAM machines."""
+    """The shipped default model, adapted to the host (3 tiers).
+
+    Gated on BOTH usable RAM and CPU count so the heavy `medium` tier is only
+    picked where the box can actually decode it inside the STT budget. Unknown
+    RAM → the quality default (never the heavy tier): matches the installer's
+    conservative-default posture and never strands a box we couldn't measure on
+    a model too big for it.
+    """
+    import os as _os
     ram = _total_ram_mb()
-    if ram is not None and ram < _STT_LOWRAM_THRESHOLD_MB:
+    if ram is None:
+        return _STT_MODEL_QUALITY
+    if ram < _STT_LOWRAM_THRESHOLD_MB:
         return _STT_MODEL_LOWRAM
+    cpus = _os.cpu_count() or 1
+    if ram >= _STT_HIGHRAM_THRESHOLD_MB and cpus >= _STT_HIGH_MIN_CPUS:
+        return _STT_MODEL_HIGH
     return _STT_MODEL_QUALITY
 
 

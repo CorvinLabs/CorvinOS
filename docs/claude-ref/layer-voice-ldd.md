@@ -871,7 +871,7 @@ endpoint that burns the budget must still fall through to the local model
 rather than hard-failing STT (fixed 2026-07-09).
 
 The **local** provider is additionally offline-safe: if the configured default
-model file (`base-q5_1` since 453f026) is absent but another model is already
+model file (RAM-adaptive — see the tier table below) is absent but another model is already
 downloaded, it uses that instead of an in-band download that an offline/air-
 gapped box can never complete; and the per-call language hint is always passed
 explicitly (`auto` when no hint) so a previous call's `language=de` cannot stick
@@ -929,7 +929,7 @@ extended with `timeout`, `provider-error`, `package-unreachable`.
 |---|---|
 | `CORVIN_STT_PROVIDER` | Pin one provider (no fallback) |
 | `CORVIN_STT_CHAIN` | Override default chain, e.g. `local,openai` for local-first |
-| `CORVIN_STT_LOCAL_MODEL` | pywhispercpp GGML model name (`tiny-q5_1` / `base` / `base-q5_1` / `small` / `medium` / `large-v3`, ...); default `base-q5_1`, Q5_1-quantized (raised from `tiny-q5_1` 2026-07-09 — `tiny` mis-transcribed real voice notes too often) |
+| `CORVIN_STT_LOCAL_MODEL` | pywhispercpp GGML model name (`tiny-q5_1` / `base-q5_1` / `small-q5_1` / `medium-q5_0` / `large-v3-q5_0`, ...). Unset ⇒ **RAM-adaptive** default (`_default_local_model()`): `base-q5_1` < 3 GB, `small-q5_1` 3–16 GB, `medium-q5_0` ≥ 16 GB. History: `tiny`→`base` (2026-07-09), `base`→`small` (2026-07-10), high tier `medium` added (2026-07-11) — `tiny`/`base` mis-transcribed real German voice notes too often. Installer prefetches whatever this resolves to (`corvinOS/installer/steps/stt.py` delegates to the same SSOT). |
 | `CORVIN_STT_LOCAL_ENGINE` | Opt-in: `faster-whisper` switches the `local` provider to the legacy CTranslate2 engine when it's installed (`corvinos[voice]` extra); never the default |
 | `BRIDGE_TRANSCRIBE_TIMEOUT` | Per-provider budget in seconds (unchanged from pre-Layer-23) |
 

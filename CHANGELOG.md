@@ -6,6 +6,10 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — voice (local STT accuracy)
+- **Local STT model ladder gained a high tier:** on a capable box (≥ 16 GB usable RAM **and** ≥ 8 CPUs) the keyless local default is now `medium-q5_0` — an automatic accuracy upgrade over `small-q5_1`, especially for German/accented audio. Below that it stays `small-q5_1` (3–16 GB) and `base-q5_1` (< 3 GB). Runtime provider and installer prefetch pick the SAME file (Single Source of Truth: `operator/voice/scripts/stt/local_whisper.py::_default_local_model`; the installer step now delegates to it). Explicit `CORVIN_STT_LOCAL_MODEL` still overrides every tier.
+- **The high tier is gated safely** after an adversarial review found RAM alone was an unsafe signal: RAM is now **cgroup-aware** (a memory-limited container reports its limit, not the host's physical RAM — so a 2 GB container on a 64 GB host is not OOM-killed loading the ~1.5 GB-peak `medium`), and the tier **also requires ≥ 8 CPUs** (a 16 GB / 4-slow-core mini-PC would exceed the STT budget decoding `medium` and return *nothing* — strictly worse than `small`'s poor-but-present transcription; it stays on `small`). Unmeasurable RAM falls back to `small`, never the heavy tier. New regression tests: `tests/test_stt_model_tiers.py`.
+
 ## [0.10.26] — 2026-07-11 — Adversarial-review hardening (workflows/awpkg, voice model ladder, chat command-center, fresh-install UX)
 
 Overnight full-repo adversarial review (workflows/awpkg, voice, console/chat, install/update) plus fresh-install E2E on Linux + a Windows VM. The install completed end-to-end on both platforms (console up, healthz green, voice provisioned, autostart via fallback); the fixes below close the real defects the review and the E2E runs surfaced.

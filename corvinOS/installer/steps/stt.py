@@ -10,41 +10,100 @@ from .dependencies import pip_install as _pip_install
 # must load the exact model this step downloaded, or a fresh install pays a
 # silent first-use download delay instead of the visible one below (ADR-0185
 # Decision 3: models are fetched once during install, not on first use).
-# Default is the quality model `small-q5_1` (`base` mis-transcribes German/
-# accented audio); low-RAM machines get `base-q5_1`. Mirrors the provider's
-# `_default_local_model()` RAM downshift so both pick the SAME file.
+# Three RAM tiers (mirror the provider): `base-q5_1` < 3 GB, `small-q5_1`
+# 3–16 GB (the quality default — `base` mis-transcribes German/accented audio),
+# `medium-q5_0` ≥ 16 GB. Prefetching whatever `_default_model()` resolves keeps
+# install-time download and runtime load on the SAME file.
+# Mirror of operator/voice/scripts/stt/local_whisper.py's tier constants. The
+# runtime provider is the Single Source of Truth (`_default_model()` below
+# delegates to it); these locals are only the offline fallback used when the
+# provider module can't be imported in this install layout. The test
+# tests/test_stt_model_tiers.py fails if they ever drift apart.
+_STT_MODEL_HIGH = "medium-q5_0"
 _STT_MODEL_QUALITY = "small-q5_1"
 _STT_MODEL_LOWRAM = "base-q5_1"
 _STT_LOWRAM_THRESHOLD_MB = 3000
+_STT_HIGHRAM_THRESHOLD_MB = 16000
+_STT_HIGH_MIN_CPUS = 8
+
+
+def _provider_default_model() -> "str | None":
+    """Ask the runtime STT provider which model this host should prefetch —
+    the Single Source of Truth, so install-time download and first-use load
+    can never target different files. Returns None if the provider module
+    isn't importable in this install layout (then the caller falls back to the
+    self-contained RAM check below)."""
+    import os
+    import sys
+    try:
+        from corvin_console._operator_bootstrap import ensure_operator_on_path
+        ensure_operator_on_path()
+    except Exception:  # noqa: BLE001
+        pass
+    # Repo layout: <root>/corvinOS/installer/steps/ → <root>/operator/voice/scripts
+    scripts = os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..", "..", "..", "operator", "voice", "scripts",
+    ))
+    if os.path.isdir(scripts) and scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    try:
+        from stt.local_whisper import _default_local_model  # type: ignore
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        model = _default_local_model()
+    except Exception:  # noqa: BLE001
+        return None
+    return model or None
 
 
 def _default_model() -> str:
-    """Quality model by default; the lighter one on a RAM-starved box."""
+    """RAM-adaptive default model. Delegates to the provider SSOT; the
+    self-contained 3-tier RAM check below is only the offline fallback."""
+    model = _provider_default_model()
+    if model:
+        return model
+    # Fallback: self-contained RAM detection (no cross-package import). Kept
+    # in lock-step with the provider's ladder via the mirror test above.
+    ram_mb = None
     try:
         import os
         if hasattr(os, "sysconf") and "SC_PHYS_PAGES" in os.sysconf_names:
             ram_mb = int(os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / (1024 * 1024))
-            if ram_mb < _STT_LOWRAM_THRESHOLD_MB:
-                return _STT_MODEL_LOWRAM
     except (ValueError, OSError, AttributeError):
-        pass
+        ram_mb = None
+    if ram_mb is None:
+        try:
+            import ctypes
+
+            class _MEMSTAT(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+            stat = _MEMSTAT()
+            stat.dwLength = ctypes.sizeof(_MEMSTAT)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):  # type: ignore[attr-defined]
+                ram_mb = int(stat.ullTotalPhys / (1024 * 1024))
+        except (AttributeError, OSError):
+            ram_mb = None
+    if ram_mb is None:
+        return _STT_MODEL_QUALITY
+    if ram_mb < _STT_LOWRAM_THRESHOLD_MB:
+        return _STT_MODEL_LOWRAM
+    # Mirror the provider's RAM+CPU gate for the heavy tier (this fallback runs
+    # only when the provider module can't be imported; it omits cgroup-awareness
+    # but keeps the CPU gate so a many-RAM/few-core box still prefetches small).
     try:
-        import ctypes
-
-        class _MEMSTAT(ctypes.Structure):
-            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
-                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
-                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
-                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
-                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
-
-        stat = _MEMSTAT()
-        stat.dwLength = ctypes.sizeof(_MEMSTAT)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):  # type: ignore[attr-defined]
-            if int(stat.ullTotalPhys / (1024 * 1024)) < _STT_LOWRAM_THRESHOLD_MB:
-                return _STT_MODEL_LOWRAM
-    except (AttributeError, OSError):
-        pass
+        import os as _os2
+        cpus = _os2.cpu_count() or 1
+    except Exception:  # noqa: BLE001
+        cpus = 1
+    if ram_mb >= _STT_HIGHRAM_THRESHOLD_MB and cpus >= _STT_HIGH_MIN_CPUS:
+        return _STT_MODEL_HIGH
     return _STT_MODEL_QUALITY
 
 
