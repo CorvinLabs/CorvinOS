@@ -58,8 +58,8 @@ class _FakeManager:
     def status(self, name):
         return self._status
 
-    def install_service(self, name, command, description="", env_vars=None):
-        self.installed_with = (name, command, description)
+    def install_service(self, name, command, description="", env_vars=None, pre_exec=None):
+        self.installed_with = (name, command, description, pre_exec)
         self._status = "active"
 
     def uninstall_service(self, name):
@@ -129,7 +129,7 @@ def test_put_service_tier_enable_with_elevation_installs(monkeypatch, _neutralis
     assert out["applied"] is True
     assert out["always_on"] is True
     assert manager.installed_with is not None
-    name, command, description = manager.installed_with
+    name, command, description, pre_exec = manager.installed_with
     assert name == "webui"
     assert "uvicorn" in command
     assert len(calls["performed"]) == 1

@@ -156,8 +156,13 @@ class ProfileGetTests(unittest.TestCase):
             self.assertEqual(body["tenant_id"], "_default")
             self.assertIn("profile", body)
             self.assertIn("schema", body)
-            self.assertEqual(body["preview_de"], "")
-            self.assertEqual(body["preview_en"], "")
+            # Fresh install seeds the friendly-voice defaults
+            # (metaphors=on, learning=3) — see commit 4708dfa — so the
+            # TTS-audience preview renders a non-empty block even before the
+            # user configures anything. The chat-render system block stays
+            # empty by default (voice_audience_chat_render is off).
+            self.assertIn("HÖRER-PROFIL", body["preview_de"])
+            self.assertIn("AUDIENCE", body["preview_en"])
             self.assertEqual(body["system_block"], "")
             self.assertIn("audience", body["schema"])
             self.assertIn("level", body["schema"]["audience"])
@@ -303,9 +308,14 @@ class ProfilePreviewTests(unittest.TestCase):
             )
             self.assertEqual(r.status_code, 200, r.text)
             self.assertFalse(r.json()["empty"])
-            # Disk-side profile must remain empty.
+            # The preview POST must not persist: the disk profile must carry
+            # no user-set audience level. (We can't proxy this via preview_de
+            # anymore — a fresh profile renders the seeded friendly-voice
+            # defaults, so preview_de is non-empty even with nothing saved.)
             r2 = ctx["client"].get("/v1/console/profile")
-            self.assertEqual(r2.json()["preview_de"], "")
+            self.assertIsNone(
+                r2.json()["profile"]["audience"]["voice_audience_level"]
+            )
 
     def test_preview_empty_audience_returns_empty_block(self):
         with _sandbox() as ctx:
