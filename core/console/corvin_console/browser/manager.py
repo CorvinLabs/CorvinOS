@@ -276,14 +276,24 @@ class BrowserSessionManager:
         live = self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint)
         if live.agent_task is not None and not live.agent_task.done():
             return False
-        if not live.last_task:
+        base_task = live.last_task   # the clean, un-noted original
+        if not base_task:
             return False
         note = ("\n\n[The human has just completed a manual step you paused "
                 "for (login or an approval) — continue the task from the "
                 "CURRENT page state; do not repeat steps already done.]")
-        return self.start_agent(tenant_id, sid, live.last_task + note,
-                                max_steps=max_steps, auto_close=live.last_auto_close,
-                                owner_fingerprint=owner_fingerprint)
+        started = self.start_agent(tenant_id, sid, base_task + note,
+                                   max_steps=max_steps, auto_close=live.last_auto_close,
+                                   owner_fingerprint=owner_fingerprint)
+        if started:
+            # start_agent() just overwrote live.last_task with the
+            # note-appended text — restore the clean original so a SECOND
+            # pause->continue cycle (e.g. needs_approval, then later
+            # needs_login) appends the note once more, not on top of an
+            # already-noted string that would otherwise grow with every
+            # resume.
+            live.last_task = base_task
+        return started
 
     def agent_running(self, tenant_id: str, sid: str) -> bool:
         live = self.get(tenant_id, sid)

@@ -19,9 +19,12 @@ buttons, read results — while **you watch live** and can pause or take over.
   (`key`) to submit a search or form — filling a field never submits it on its
   own — pick native `select` dropdown options, follow a link that opens in a
   **new tab** (it switches automatically), go **back**, and pull a table out as
-  structured rows (`extract_table`). Password fields are surfaced as
-  `fill_secret` targets so a real login flow works (their typed value is still
-  never read back into perception).
+  structured rows (`extract_table`). `fill_secret` types a vault-resolved value
+  into a *non-password* field (their typed value is still never read back into
+  perception) — since ADR-0189, neither `fill` nor `fill_secret` can target a
+  live password field at all (the login-moment pause below takes over before
+  either action reaches one; a TOCTOU backstop refuses it even if a field
+  flips to `type="password"` after the last `observe()`).
 - **Live view.** The console **Browser** page streams the driven browser as a
   live image, shows every action in real time, prompts you to approve sensitive
   actions, and has **Pause / Take over**.

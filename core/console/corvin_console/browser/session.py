@@ -86,20 +86,26 @@ class StaleMarkError(BrowserActionError):
 
 def _host_task_scoped(host: str, task_hosts: list[str]) -> bool:
     """ADR-0189: True if `host` is one of the hosts the user's own task text
-    named, or in a direct subdomain relationship with one (task said
-    "example.com", a login/OAuth redirect lands on "accounts.example.com" or
-    "www.example.com"). Deliberately narrower than "same registrable
+    named, or a SUBDOMAIN of one (task said "example.com", a login/OAuth
+    redirect lands on "accounts.example.com" or "www.example.com").
+
+    Deliberately one-directional and narrower than "same registrable
     domain" — that needs a public-suffix-list dependency to do correctly
     (co.uk-style multi-part TLDs) and getting it wrong in the permissive
-    direction would silently widen the auto-approved surface. A sibling
-    subdomain that isn't in a subdomain relationship with a named task host
-    still requires the normal confirm — the safe failure direction."""
+    direction would silently widen the auto-approved surface. In
+    particular this must NOT also trust the bare PARENT of a task-named
+    subdomain (task said "sub.example.com" -> do NOT auto-approve
+    "example.com"): on shared apex hosting (*.vercel.app, *.s3.amazonaws.com,
+    *.github.io, ...) the apex the user never named can be someone else's
+    content entirely, so that direction would auto-approve a host the human
+    never typed. A sibling subdomain that isn't a subdomain of a named task
+    host still requires the normal confirm — the safe failure direction."""
     host = host.lower().rstrip(".")
     for th in task_hosts:
         th = (th or "").lower().rstrip(".")
         if not th:
             continue
-        if host == th or host.endswith("." + th) or th.endswith("." + host):
+        if host == th or host.endswith("." + th):
             return True
     return False
 
@@ -639,6 +645,26 @@ class BrowserSession:
                         f"call observe() again")
         return el
 
+    async def _refuse_if_live_password(self, el, index: int, action: str) -> None:
+        """ADR-0189 defense-in-depth: fill()/fill_secret() must never type into
+        a LIVE password-type element, even if the mark captured at the last
+        observe() said otherwise. Under normal operation the agent-loop's
+        needs_login pause already stops the whole loop before the planner is
+        ever asked to plan against a password mark — this is the backstop for
+        the narrow TOCTOU window where a field flips from a plain textbox to
+        type="password" (e.g. a progressive-disclosure login step) DURING the
+        planner's own decision latency, between the last observe() and this
+        call. Never raises on a resolution hiccup — defaults to "not a
+        password field" rather than blocking unrelated fills on an eval error."""
+        try:
+            is_pw = bool(await el.evaluate("el => (el.type || '').toLowerCase() === 'password'"))
+        except Exception:  # noqa: BLE001
+            is_pw = False
+        if is_pw:
+            raise StaleMarkError(
+                f"{action} target [{index}] is a password field — the agent may never "
+                f"type into it; log in manually in the live view, then /browser continue")
+
     async def _form_sensitive_hint(self, index: int) -> bool:
         """Best-effort: does the <form> enclosing mark ``index`` contain a
         password or card-number field? (Sensitivity model v2, ADR-0183 S1.)
@@ -734,6 +760,7 @@ class BrowserSession:
         async with self._page_lock:
             host = _cmp._host(self._require_page().url)
             el = await self._resolve(index)
+            await self._refuse_if_live_password(el, index, "fill")
             await el.fill(text)
         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
                           action="fill", host=host, role=role, index=index, ok=True,
@@ -754,6 +781,14 @@ class BrowserSession:
         async with self._page_lock:
             host = _cmp._host(self._require_page().url)
             el = await self._resolve(index)
+            # ADR-0189: autofilling a LIVE password field via the vault is an
+            # explicit non-goal of the login-pause design — the human types
+            # their own password, always, in this phase. Under normal
+            # operation the needs_login pause already stops the loop before
+            # the planner is ever asked to plan against a password mark;
+            # this is the TOCTOU backstop for a field that flips to
+            # type="password" during the planner's own decision latency.
+            await self._refuse_if_live_password(el, index, "fill_secret")
             await el.fill(value)
         del value      # drop the secret from this frame promptly
         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,

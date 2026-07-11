@@ -459,16 +459,22 @@ def test_agent_loop_drives_browser(server_no_password):
     asyncio.run(run())
 
 
-def test_agent_can_press_enter_to_submit(server):
+def test_agent_can_press_enter_to_submit(server_no_password):
     """Capability regression: the agent can now press Enter to SUBMIT after
     filling a field — previously there was no submit path and search tasks
-    stalled. The `key` action must reach the session and drive a real key press."""
+    stalled. The `key` action must reach the session and drive a real key press.
+
+    Uses server_no_password (not server): a page with a password field now
+    correctly pauses agent.run() with needs_login at step 0 before this
+    scripted fill/key/done scenario ever gets to run — unrelated to what
+    this test exercises. Previously this test's `run()` coroutine was
+    defined but never passed to asyncio.run(), so it silently never executed."""
     async def run():
         from corvin_console.browser import BrowserSession
         from corvin_console.browser.agent import BrowserAgent
         s = BrowserSession("enter", "_default", home=Path(tempfile.mkdtemp()), headless=True)
         await s.start()
-        await s.navigate(server)
+        await s.navigate(server_no_password)
         plans = []
         script = iter([
             {"action": "fill", "index": 0, "text": "widgets", "reason": "type query"},
@@ -486,16 +492,22 @@ def test_agent_can_press_enter_to_submit(server):
         assert result["status"] == "done"
         assert "key" in plans, "the agent must be able to press Enter to submit"
 
+    asyncio.run(run())
 
-def test_agent_unknown_action_does_not_abort_run(server):
+
+def test_agent_unknown_action_does_not_abort_run(server_no_password):
     """F4 regression: a hallucinated action name must be fed back as an error and
-    the loop must continue — one bad verb no longer kills the whole task."""
+    the loop must continue — one bad verb no longer kills the whole task.
+
+    Uses server_no_password — see test_agent_can_press_enter_to_submit's
+    docstring. Previously this test's `run()` coroutine was defined but
+    never passed to asyncio.run(), so it silently never executed."""
     async def run():
         from corvin_console.browser import BrowserSession
         from corvin_console.browser.agent import BrowserAgent
         s = BrowserSession("unk", "_default", home=Path(tempfile.mkdtemp()), headless=True)
         await s.start()
-        await s.navigate(server)
+        await s.navigate(server_no_password)
         errors = []
         script = iter([
             {"action": "frobnicate", "reason": "nonsense"},
@@ -511,6 +523,8 @@ def test_agent_unknown_action_does_not_abort_run(server):
         await s.close()
         assert result["status"] == "done", "unknown action must not abort the run"
         assert any("unknown action" in (e.get("error") or "") for e in errors)
+
+    asyncio.run(run())
 
 
 def test_agent_planner_transport_failure_reports_error(server_no_password):
@@ -724,6 +738,63 @@ def test_stale_mark_after_dom_mutation_raises(server):
         )
         with pytest.raises(StaleMarkError):
             await s.click(help_btn)
+        await s.close()
+
+    asyncio.run(run())
+
+
+def test_fill_refuses_field_that_became_password_since_observe(server_no_password):
+    """Adversarial-review regression (ADR-0189): the needs_login pause only
+    stops the agent LOOP before the planner is asked to plan; it can't cover
+    the window between the last observe() and this fill() call, during which
+    the planner's own decision latency elapses. If a field flips from a
+    plain textbox to type="password" in that window (e.g. a progressive-
+    disclosure login step), fill() must refuse — not silently type into a
+    live password field just because the cached mark still says textbox."""
+    async def run():
+        from corvin_console.browser import BrowserSession
+        from corvin_console.browser.session import StaleMarkError
+        s = BrowserSession("pwflip", "_default", home=Path(tempfile.mkdtemp()), headless=True)
+        await s.start()
+        obs = await s.navigate(server_no_password)
+        q = next(m.index for m in obs.marks if m.name.lower() == "search products")
+        assert obs.marks[0].role != "password"
+
+        # Flip the SAME element to type="password" without touching its
+        # placeholder/name — isolates this check from the pre-existing
+        # accessible-name staleness guard in _resolve().
+        await s._require_page().evaluate(
+            "(i) => document.querySelector(`[data-corvin-mark=\"${i}\"]`)"
+            ".setAttribute('type', 'password')",
+            q,
+        )
+        with pytest.raises(StaleMarkError, match="password field"):
+            await s.fill(q, "whatever the planner hallucinated")
+        await s.close()
+
+    asyncio.run(run())
+
+
+def test_fill_secret_refuses_field_that_became_password_since_observe(server_no_password):
+    """Same TOCTOU backstop as fill(), for fill_secret() — autofilling a
+    login form via the vault is an explicit non-goal of ADR-0189; the human
+    types their own password, always, in this phase."""
+    async def run():
+        from corvin_console.browser import BrowserSession
+        from corvin_console.browser.session import StaleMarkError
+        s = BrowserSession("pwflip2", "_default", home=Path(tempfile.mkdtemp()), headless=True,
+                           vault_resolve=lambda k: "vault-secret-value")
+        await s.start()
+        obs = await s.navigate(server_no_password)
+        q = next(m.index for m in obs.marks if m.name.lower() == "search products")
+
+        await s._require_page().evaluate(
+            "(i) => document.querySelector(`[data-corvin-mark=\"${i}\"]`)"
+            ".setAttribute('type', 'password')",
+            q,
+        )
+        with pytest.raises(StaleMarkError, match="password field"):
+            await s.fill_secret(q, "some-vault-key")
         await s.close()
 
     asyncio.run(run())
@@ -1162,12 +1233,16 @@ def test_host_task_scoped_exact_and_subdomain_match():
     from corvin_console.browser.session import _host_task_scoped
     assert _host_task_scoped("example.com", ["example.com"])
     assert _host_task_scoped("accounts.example.com", ["example.com"])   # subdomain of task host
-    assert _host_task_scoped("example.com", ["www.example.com"])        # task host is subdomain of dest
     assert not _host_task_scoped("evil.com", ["example.com"])
     assert not _host_task_scoped("notexample.com", ["example.com"]), \
         "must not match on bare substring — 'example.com' is not a suffix component of 'notexample.com'"
     assert not _host_task_scoped("example.com.evil.com", ["example.com"]), \
         "a host that merely CONTAINS the task host as a prefix, not a real subdomain, must not match"
+    assert not _host_task_scoped("example.com", ["www.example.com"]), \
+        "must NOT trust the bare parent of a task-named subdomain — on shared apex hosting " \
+        "(*.vercel.app etc.) the untamed apex can be someone else's content entirely"
+    assert not _host_task_scoped("vercel.app", ["myproject.vercel.app"]), \
+        "shared-apex regression guard: naming one tenant's subdomain must never auto-approve the apex"
 
 
 def test_task_scoped_host_navigates_without_confirm(server):
@@ -1344,6 +1419,58 @@ def test_manager_continue_agent_resumes_paused_session(server_no_password):
                 await asyncio.sleep(0.05)
             assert len(calls) >= 2
             assert "original task" in calls[-1]
+        finally:
+            agent_mod.BrowserAgent = orig
+            await mgr.close("_default", sid)
+
+    asyncio.run(run())
+
+
+def test_manager_continue_agent_note_does_not_accumulate_across_resumes(server_no_password):
+    """Adversarial-review regression: a session that pauses twice (e.g.
+    needs_approval, then later needs_login) must get the "human just
+    completed a manual step" note appended exactly once per resume, not
+    duplicated on top of an already-noted task string that would otherwise
+    grow linearly with every pause/continue cycle."""
+    async def run():
+        from corvin_console.browser import BrowserSessionManager
+        home = Path(tempfile.mkdtemp())
+        mgr = BrowserSessionManager(home_resolver=lambda t: home / t,
+                                    allowlist_resolver=lambda t: (None, None))
+        sid = await mgr.create("_default", headless=True)
+        s = mgr.session("_default", sid)
+        await s.navigate(server_no_password)
+
+        calls = []
+
+        async def planner(task, obs, transcript):
+            calls.append(task)
+            return {"action": "done", "reason": "ok"}
+
+        import corvin_console.browser.agent as agent_mod
+        orig = agent_mod.BrowserAgent
+        try:
+            agent_mod.BrowserAgent = lambda session, **kw: orig(session, planner=planner, **{
+                k: v for k, v in kw.items() if k != "planner"})
+            started = mgr.start_agent("_default", sid, "original task", auto_close=False)
+            assert started
+            for _ in range(100):
+                if not mgr.agent_running("_default", sid):
+                    break
+                await asyncio.sleep(0.05)
+
+            for _ in range(3):
+                resumed = mgr.continue_agent("_default", sid)
+                assert resumed
+                for _ in range(100):
+                    if not mgr.agent_running("_default", sid):
+                        break
+                    await asyncio.sleep(0.05)
+
+            assert len(calls) == 4  # 1 initial + 3 resumes
+            for task_text in calls[1:]:
+                assert task_text.count("[The human has just completed") == 1, \
+                    f"note must appear exactly once, got: {task_text!r}"
         finally:
             agent_mod.BrowserAgent = orig
             await mgr.close("_default", sid)

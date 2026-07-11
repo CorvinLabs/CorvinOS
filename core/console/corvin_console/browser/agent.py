@@ -284,14 +284,23 @@ class BrowserAgent:
                 elif act == "read":
                     txt = await self._s.read(action.get("index"))
                     action["result"] = txt[:500]
+                    # ADR-0189: refresh obs even on a read-only action — the
+                    # top-of-loop needs_login check only ever sees whatever
+                    # `obs` currently holds, so a password field injected by
+                    # client-side JS between observes (no navigate/click/fill
+                    # in between) would otherwise stay invisible to the gate
+                    # for as long as the planner keeps chaining reads.
+                    obs = await self._s.observe()
                 elif act == "extract_table":
                     data = await self._s.extract_table(int(action["index"]))
                     action["result"] = json.dumps(data)[:1500]
+                    obs = await self._s.observe()
                 elif act == "back":
                     obs = await self._s.back()
                     known_tabs = 1
                 elif act == "tabs":
                     action["result"] = json.dumps(await self._s.tabs())[:800]
+                    obs = await self._s.observe()
                 elif act == "switch_tab":
                     obs = await self._s.switch_tab(int(action["index"]))
                 else:
