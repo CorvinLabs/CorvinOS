@@ -254,6 +254,68 @@ def test_invalid_runtime():
             t("rejects unknown runtime", True)
 
 
+def test_windows_preexec_fn_skipped():
+    """Adversarial-review regression (fresh Windows 11 install): `preexec_fn`
+    is a POSIX-only Popen kwarg — CPython raises ValueError synchronously
+    inside Popen.__init__ on Windows, before any process is spawned, if it's
+    not None. bwrap is unavailable on Windows too, so every forge tool call
+    fell through to the "rlimits" sandbox_label, which unconditionally
+    passed `preexec_fn=lambda: apply_rlimits(limits)` — crashing every
+    single Windows forge invocation (mcp__forge__forge_exec), not just
+    intermittently.
+
+    subprocess.mswindows is fixed at import time from the REAL sys.platform,
+    so monkeypatching sys.platform here can't make a genuine Popen(..,
+    preexec_fn=...) raise on this (Linux) test host the way it would on
+    real Windows — that would need an actual Windows run, out of scope for
+    a unit test. What we CAN and must verify precisely is the one thing our
+    fix actually controls: that runner.py computes preexec_fn=None when
+    sys.platform says Windows, before it ever reaches Popen — captured by
+    wrapping the real subprocess.Popen so the tool still genuinely runs."""
+    print("\n[windows preexec_fn skipped]")
+    import subprocess as _sp
+    from forge import runner as _runner_mod
+
+    captured: dict = {}
+    real_popen = _sp.Popen
+
+    def _capturing_popen(*args, **kwargs):
+        captured["preexec_fn"] = kwargs.get("preexec_fn")
+        return real_popen(*args, **kwargs)
+
+    orig_platform = _runner_mod.sys.platform
+    orig_popen = _runner_mod.subprocess.Popen
+    _runner_mod.sys.platform = "win32"
+    _runner_mod.subprocess.Popen = _capturing_popen
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            reg = Registry(Path(td))
+            reg.create("echo", "echo tool", ECHO_SCHEMA, ECHO_IMPL)
+            r = run_tool(reg, "echo", {"msg": "hi"}, permission_mode="yes")
+        t("tool still runs correctly under simulated Windows", r.ok)
+        t("preexec_fn is None when sys.platform == 'win32'",
+          captured.get("preexec_fn") is None,
+          detail=f"got {captured.get('preexec_fn')!r}")
+    finally:
+        _runner_mod.sys.platform = orig_platform
+        _runner_mod.subprocess.Popen = orig_popen
+
+    # Sanity: confirm the SAME tool call on the real (non-Windows) platform
+    # still uses the rlimit preexec_fn — proves the fix is conditional, not
+    # a blanket removal of the POSIX sandbox path.
+    captured.clear()
+    _runner_mod.subprocess.Popen = _capturing_popen
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            reg = Registry(Path(td))
+            reg.create("echo", "echo tool", ECHO_SCHEMA, ECHO_IMPL)
+            run_tool(reg, "echo", {"msg": "hi"}, permission_mode="yes")
+        t("preexec_fn still set on the real (non-Windows) platform",
+          captured.get("preexec_fn") is not None)
+    finally:
+        _runner_mod.subprocess.Popen = orig_popen
+
+
 def test_promote_layout():
     print("\n[promote layout]")
     with tempfile.TemporaryDirectory() as td:
@@ -281,6 +343,7 @@ def main() -> int:
     test_manifest_corruption()
     test_audit_integrity()
     test_invalid_runtime()
+    test_windows_preexec_fn_skipped()
     test_promote_layout()
 
     print(f"\n{PASS} passed, {FAIL} failed")

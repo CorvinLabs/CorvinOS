@@ -934,19 +934,38 @@ def run_tool(
     # which makes the child the leader of a new process group. That pgid
     # equals proc.pid, so killpg(proc.pid, ...) tears down the whole tree
     # — including bwrap's nested python — without touching our own pgrp.
+    #
+    # Windows fresh-install fix: `preexec_fn` is a POSIX-only Popen kwarg —
+    # CPython raises `ValueError("preexec_fn is not supported on Windows
+    # platforms")` synchronously inside Popen.__init__, before any process
+    # is even spawned. bwrap is unavailable on Windows too (Linux-only), so
+    # `sandbox_label` always falls through to "rlimits" there — meaning
+    # EVERY forge tool call (mcp__forge__forge_exec, the L6 runtime-tool-
+    # generation feature) crashed deterministically on every Windows
+    # install, not intermittently. The rlimit sandbox (setrlimit + setsid)
+    # is inherently POSIX-only by design — Windows has no equivalent syscalls
+    # — so this skips it there rather than attempting a partial port; bwrap
+    # remains the real sandbox boundary where it's available, exactly as
+    # today, on every platform that has it.
+    _is_windows = sys.platform == "win32"
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
-        preexec_fn=lambda: apply_rlimits(limits),
+        preexec_fn=None if _is_windows else (lambda: apply_rlimits(limits)),
     )
     try:
         stdout_b, stderr_b = proc.communicate(input=payload_bytes, timeout=timeout)
     except subprocess.TimeoutExpired:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            if _is_windows:
+                # No process-group leader was created (setsid() never ran)
+                # — a plain kill() is the correct/only Windows equivalent.
+                proc.kill()
+            else:
+                os.killpg(proc.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
         try:
