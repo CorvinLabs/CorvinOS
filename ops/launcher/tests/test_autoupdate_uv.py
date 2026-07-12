@@ -476,5 +476,35 @@ class SpawnWindowsSelfUpdaterScriptGenTests(unittest.TestCase):
         self.assertNotIn('-FilePath "corvin-serve"', script)
 
 
+class VersionComparisonTests(unittest.TestCase):
+    """The auto-updater must upgrade ONLY to a strictly-newer release.
+
+    Regression: the old ``latest != current`` check DOWNGRADED on any
+    transient PyPI CDN lag (index still reporting the previous release for a
+    few minutes after an upload) or a yanked-newer release. Observed live: a
+    fresh 0.10.28 install auto-'upgraded' to 0.10.27 on first boot, un-doing
+    the release it had just installed and corrupting its vendored tree."""
+
+    def test_newer_upgrades(self) -> None:
+        self.assertTrue(sb._pypi_version_is_newer("0.10.28", "0.10.27"))
+        self.assertTrue(sb._pypi_version_is_newer("0.11.0", "0.10.28"))
+        self.assertTrue(sb._pypi_version_is_newer("1.0.0", "0.10.28"))
+
+    def test_older_never_downgrades(self) -> None:
+        self.assertFalse(sb._pypi_version_is_newer("0.10.27", "0.10.28"))
+
+    def test_equal_is_noop(self) -> None:
+        self.assertFalse(sb._pypi_version_is_newer("0.10.28", "0.10.28"))
+
+    def test_tuple_compare_not_string(self) -> None:
+        # "0.10.9" < "0.10.10" numerically, though string-greater.
+        self.assertFalse(sb._pypi_version_is_newer("0.10.9", "0.10.10"))
+        self.assertTrue(sb._pypi_version_is_newer("0.10.10", "0.10.9"))
+
+    def test_unparseable_never_upgrades(self) -> None:
+        # Ambiguous compare must fail safe toward "do nothing" (no downgrade).
+        self.assertFalse(sb._pypi_version_is_newer("garbage", "0.10.28"))
+
+
 if __name__ == "__main__":
     unittest.main()

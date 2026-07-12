@@ -313,6 +313,31 @@ def _spawn_windows_self_updater(cmd: list[str], relaunch_argv: list[str]) -> boo
         return False
 
 
+def _pypi_version_is_newer(latest: str, current: str) -> bool:
+    """True iff ``latest`` is a strictly newer release than ``current``.
+
+    Prefers ``packaging.version`` (a real dependency) for full PEP 440
+    semantics; falls back to a numeric-tuple compare if it is somehow
+    unavailable. On any parse failure, returns False — never upgrade on an
+    ambiguous comparison, since the failure mode we are guarding against is a
+    silent DOWNGRADE.
+    """
+    try:
+        from packaging.version import Version  # noqa: PLC0415
+        return Version(latest) > Version(current)
+    except Exception:  # noqa: BLE001
+        def _parts(v: str) -> tuple[int, ...]:
+            out: list[int] = []
+            for chunk in v.split("."):
+                num = "".join(ch for ch in chunk if ch.isdigit())
+                out.append(int(num) if num else 0)
+            return tuple(out)
+        try:
+            return _parts(latest) > _parts(current)
+        except Exception:  # noqa: BLE001
+            return False
+
+
 def maybe_pypi_autoupdate(relaunch_argv: list[str] | None = None) -> bool:
     """Upgrade corvinos to the latest PyPI release if auto_update is enabled.
 
@@ -359,14 +384,20 @@ def maybe_pypi_autoupdate(relaunch_argv: list[str] | None = None) -> bool:
             "https://pypi.org/pypi/corvinos/json", timeout=10
         ) as _r:
             latest = __import__("json").loads(_r.read())["info"]["version"]
-        if latest == current:
-            # Converged (installed == latest) — clear the handoff guard so a
-            # future, genuinely-newer release isn't mistaken for a loop.
+        # Only upgrade when PyPI's reported version is STRICTLY NEWER than the
+        # installed one. A bare ``latest != current`` check (the old logic)
+        # DOWNGRADES on any transient PyPI CDN lag — where the JSON index still
+        # reports the previous release for a few minutes right after an upload —
+        # or permanently if a newer release is ever yanked. Observed live: a
+        # fresh 0.10.28 install auto-"upgraded" to 0.10.27 on first boot,
+        # un-doing the release it had just installed. Version-tuple compare, so
+        # equal AND older both mean "do nothing".
+        if not _pypi_version_is_newer(latest, current):
             _clear_update_convergence_marker()
             print(f"up to date ({current})")
             return False
-        # Step 2: a newer version exists — attempt upgrade with the command that
-        # matches this install flavour (uv tool vs pip).
+        # Step 2: a genuinely newer version exists — attempt upgrade with the
+        # command that matches this install flavour (uv tool vs pip).
         print(f"upgrading {current} → {latest} …", end=" ", flush=True)
         cmd, manual = _pick_upgrade_command(latest)
         if cmd is None:

@@ -6,6 +6,20 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.29] — 2026-07-12 — Auto-updater downgrade fix (critical)
+
+- **The auto-updater could DOWNGRADE the install.** It compared `latest != current`
+  and upgraded to whatever version PyPI's JSON index reported — so a transient
+  PyPI CDN lag right after an upload (index still reporting the previous release
+  for a few minutes), or a yanked newer release, caused it to install an OLDER
+  version. Caught live: a fresh `pip install corvinos==0.10.28` auto-"upgraded"
+  to 0.10.27 on its first `corvinos-serve` boot, un-doing the release it had just
+  installed and corrupting its vendored tree (the older PyPI build lacks the
+  imagegen seeding module). Now upgrades only when PyPI's version is strictly
+  newer (PEP 440 version compare via `packaging.version`, tuple-compare fallback,
+  fail-safe to no-op on any parse ambiguity). Regression tests in
+  `ops/launcher/tests/test_autoupdate_uv.py`.
+
 ## [0.10.28] — 2026-07-12 — Fresh-install command-center fixes (5-axis adversarial review, real E2E)
 
 A 5-axis adversarial review (ADR-0190 chat command center, ADR-0191 image
