@@ -1118,6 +1118,176 @@ def test_engine(
     }
 
 
+# ── Welcome check: first-boot spoken onboarding self-check (Concept 2) ─────
+#
+# docs/first-run-language-and-voice-onboarding.md §2. Runs the health-check
+# building blocks that already exist elsewhere in this codebase — the L44
+# classifier boot probe, Hermes warm-up, the REAL (non-mocked) STT/TTS
+# round-trip voice_doctor.py implements, and the existing engine
+# connectivity probe (test_engine, above) — behind ONE endpoint the
+# WelcomeStep screen calls once on mount. Runs as a background job (same
+# async-job/poll pattern as the WhatsApp bridge start above) because a
+# Hermes warm-up or a cold STT model load can take tens of seconds — too
+# slow to hold a synchronous HTTP request open. Per the concept doc's
+# dialectical pass: this NEVER blocks onboarding, it only changes the
+# greeting's wording — "Let's go" always works regardless of outcome.
+
+_WELCOME_CHECK_LOCK = threading.Lock()
+_WELCOME_CHECK_STATE: dict[str, Any] = {"state": "idle"}  # idle|running|done
+_WELCOME_STT_TIMEOUT_S = 45.0
+
+
+def _welcome_check_lang() -> str:
+    """Resolve the greeting language: profile.display_language (seeded at
+    install time per Concept 1, or set later via /lang set) -> 'en'."""
+    try:
+        if str(_SHARED) not in sys.path:
+            sys.path.insert(0, str(_SHARED))
+        import i18n as _i18n  # noqa: PLC0415
+        import profile as _profile  # noqa: PLC0415
+        return _i18n.resolve(_profile.get("display_language"), default="en")
+    except Exception:
+        return "en"
+
+
+def _welcome_check_component(status: str, detail: str) -> dict[str, str]:
+    return {"status": status, "detail": (detail or "")[:300]}
+
+
+def _run_welcome_check_job(engine_id: str, rec: session_auth.SessionRecord) -> None:
+    lang = _welcome_check_lang()
+    components: dict[str, dict[str, str]] = {}
+
+    # (a) L44 classifier boot probe — a logging-only API; capture whatever
+    # it would have logged to turn it into a structured status.
+    try:
+        if str(_SHARED) not in sys.path:
+            sys.path.insert(0, str(_SHARED))
+        import house_rules as _house_rules  # noqa: PLC0415
+        messages: list[str] = []
+        _house_rules.house_rules_boot_health_check(log_fn=messages.append)
+        components["house_rules"] = (
+            _welcome_check_component("ok", "") if not messages
+            else _welcome_check_component("degraded", messages[-1])
+        )
+    except Exception as exc:  # noqa: BLE001
+        components["house_rules"] = _welcome_check_component("unavailable", str(exc))
+
+    # (b) Hermes warm-up — only when hermes is the configured/fallback engine.
+    if engine_id == "hermes":
+        try:
+            from agents.hermes_engine import ensure_hermes_ready  # noqa: PLC0415
+            base_url = os.environ.get("CORVIN_HERMES_URL", "http://localhost:11434")
+            model = os.environ.get("CORVIN_HERMES_MODEL", "").strip() or "qwen3:8b"
+            ok, detail = ensure_hermes_ready(base_url, model, timeout=60.0)
+            components["hermes"] = _welcome_check_component("ok" if ok else "degraded", detail)
+        except Exception as exc:  # noqa: BLE001
+            components["hermes"] = _welcome_check_component("unavailable", str(exc))
+
+    # (c) STT + TTS round-trip — voice_doctor.py's real, non-mocked checks
+    # (call its functions directly, not the CLI).
+    try:
+        voice_scripts = _REPO / "operator" / "voice" / "scripts"
+        if str(voice_scripts) not in sys.path:
+            sys.path.insert(0, str(voice_scripts))
+        import voice_doctor as _vd  # noqa: PLC0415
+        stt_ok, stt_detail = _vd._check_stt(_WELCOME_STT_TIMEOUT_S)
+        components["stt"] = _welcome_check_component("ok" if stt_ok else "degraded", stt_detail)
+        tts_ok, tts_detail, _tts_path = _vd._check_tts(_vd._DOCTOR_TTS_TEXT)
+        components["tts"] = _welcome_check_component("ok" if tts_ok else "degraded", tts_detail)
+    except Exception as exc:  # noqa: BLE001
+        components.setdefault("stt", _welcome_check_component("unavailable", str(exc)))
+        components.setdefault("tts", _welcome_check_component("unavailable", str(exc)))
+
+    # (d) cheap connectivity/auth test turn against the primary engine — the
+    # closest thing to a "warm-up" a cloud API has. Reuses the SAME probe
+    # the Setup "Test" button uses (test_engine, above), not a second
+    # hand-rolled implementation.
+    try:
+        result = test_engine(EngineTestRequest(engine_id=engine_id), rec)
+        components["engine"] = _welcome_check_component(
+            "ok" if result.get("ok") else "degraded", str(result.get("detail", "")),
+        )
+    except Exception as exc:  # noqa: BLE001
+        components["engine"] = _welcome_check_component("unavailable", str(exc))
+
+    greeting = _build_welcome_greeting(lang, components)
+
+    with _WELCOME_CHECK_LOCK:
+        _WELCOME_CHECK_STATE.update({
+            "state": "done",
+            "lang": lang,
+            "components": components,
+            "greeting": greeting,
+        })
+
+
+def _build_welcome_greeting(lang: str, components: dict[str, dict[str, str]]) -> str:
+    """Assemble the spoken/written greeting from i18n `welcome.*` strings.
+
+    Reflects the ACTUAL check outcome (never a canned line regardless of
+    result) — a degraded component swaps in the matching "bad" fragment
+    instead of silently claiming everything is healthy. Always includes the
+    capabilities/actions clause so the user hears what Corvin can do and
+    what they can do with it, not just a health report."""
+    if str(_SHARED) not in sys.path:
+        sys.path.insert(0, str(_SHARED))
+    import i18n as _i18n  # noqa: PLC0415
+
+    def tr(key: str) -> str:
+        return _i18n.t(f"welcome.{key}", lang)
+
+    stt_ok = components.get("stt", {}).get("status") == "ok"
+    tts_ok = components.get("tts", {}).get("status") == "ok"
+    engine_ok = components.get("engine", {}).get("status") == "ok"
+
+    parts = [
+        tr("intro"),
+        tr("checks_intro"),
+        tr("check_stt_ok") if stt_ok else tr("check_stt_bad"),
+        tr("check_tts_ok") if tts_ok else tr("check_tts_bad"),
+        tr("check_engine_ok") if engine_ok else tr("check_engine_bad"),
+        tr("control"),
+        tr("capabilities"),
+        tr("closing"),
+    ]
+    return " ".join(p for p in parts if p)
+
+
+@router.post("/setup/welcome-check")
+def start_welcome_check(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Kick off the first-boot self-check + greeting build as a background
+    job (same async-job/poll shape as /setup/whatsapp/start above — a
+    Hermes warm-up or cold STT model load can take tens of seconds).
+    Idempotent: a second call while one is already running returns the
+    in-flight state instead of starting a duplicate. Poll via
+    GET /setup/welcome-check/status."""
+    with _WELCOME_CHECK_LOCK:
+        if _WELCOME_CHECK_STATE.get("state") == "running":
+            return dict(_WELCOME_CHECK_STATE)
+        _WELCOME_CHECK_STATE.clear()
+        _WELCOME_CHECK_STATE.update({"state": "running"})
+
+    engine_id = "hermes" if _default_engine(rec.tenant_id) == "hermes" else "claude_code"
+    threading.Thread(
+        target=_run_welcome_check_job, args=(engine_id, rec), daemon=True,
+    ).start()
+    with _WELCOME_CHECK_LOCK:
+        return dict(_WELCOME_CHECK_STATE)
+
+
+@router.get("/setup/welcome-check/status")
+def welcome_check_status(
+    _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Poll target for the SPA: {state: "running"} or {state: "done",
+    lang, components, greeting}."""
+    with _WELCOME_CHECK_LOCK:
+        return dict(_WELCOME_CHECK_STATE)
+
+
 class EngineKeyUpdate(BaseModel):
     value: str = Field(..., max_length=500)
     re_auth_token: str | None = None

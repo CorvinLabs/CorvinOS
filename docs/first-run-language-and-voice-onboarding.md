@@ -1,4 +1,4 @@
-# First Run — Install-Time Language Default + Spoken Onboarding (Concept)
+# First Run — Install-Time Language Default + Spoken Onboarding
 
 Two related but independent asks, covered together because both live in the "very first
 experience with CorvinOS" window: (1) the CLI installer should ask the user's language once,
@@ -6,9 +6,15 @@ so voice and text default correctly from turn one; (2) the very first time the w
 opens, Corvin should introduce itself out loud, warm up the models, and run a real self-check
 — turning a silent, potentially-broken cold start into an audible, verified "I'm ready" moment.
 
-**Status: concept only.** No ADR filed — write one if this moves to implementation (it touches
-a compliance-adjacent default-language flow and a new spoken-content surface, plausible
-ADR-gate triggers).
+**Status: implemented.** No ADR filed — evaluated against the repo's ADR gate at
+implementation time: a real design choice was made (async job/poll for the health-check,
+greeting text composed from the existing `i18n` bundle), but none of the structural triggers
+fire — no new protocol/wire-format shared across repos, no new security/compliance mechanism,
+no irreversible fail-open/closed default (the check is designed to never block), no cross-repo
+binding. Reason to skip: this connects existing pieces behind one new endpoint and one new
+installer call, it doesn't introduce a new structural contract. The design below is unchanged
+from the original concept pass; "Implementation notes" blocks mark where the shipped code
+differs from what was originally sketched.
 
 ## 1. Concept 1 — install-time language default
 
@@ -57,6 +63,20 @@ controls default reply language.
 - No attempt to seed per-chat (Discord/WhatsApp) language independently — those already
   resolve through bridge-supplied locale first, ahead of `profile.display_language`, per the
   existing `i18n.resolve()` order.
+
+### Implementation notes
+Shipped exactly as designed. `piper.py::_save_model_config` calls a new
+`_seed_profile_display_language(lang)` right after writing `config.json`. One wrinkle not
+anticipated in the original design: `operator/` has no `__init__.py` (the name collides with
+the stdlib `operator` module, which is essentially always already cached in `sys.modules`), so
+`import operator.bridges.shared.profile` is not actually importable from the installer's
+process in practice. `_seed_profile_display_language` therefore tries `corvin_console.profile`
+first (a new force-include wheel shim added in `pyproject.toml`, mirroring the existing
+`hermes_bootstrap.py`/`engine_detection.py` shims) and falls back to putting
+`operator/bridges/shared/` on `sys.path` and importing the bare `profile` module — the same
+pattern `lang_cli.py` and `adapter.py` already use. Best-effort: wrapped in `try/except
+Exception: pass`, voice setup never fails because of it. Tests:
+`tests/test_installer_piper.py`.
 
 ## 2. Concept 2 — first-boot spoken onboarding + warm-up + self-check
 
@@ -150,11 +170,44 @@ first real request — not that it acts as a pass/fail gate.
   persistent local model state to preload) — the cheap test turn there is a **connectivity/
   auth check**, described as such, not oversold as a performance warm-up.
 
-## 3. Phased delivery (proposed)
+### Implementation notes
+Shipped as `POST /setup/welcome-check` (start, idempotent while running) +
+`GET /setup/welcome-check/status` (poll) in `core/console/corvin_console/routes/setup.py` —
+the same async-job/poll shape as the existing `/setup/whatsapp/start` endpoint in the same
+file, chosen because a Hermes warm-up or a cold STT model load can take tens of seconds, too
+slow for a synchronous request. The background job runs `house_rules_boot_health_check`
+(captured via its `log_fn` callback, since it's a logging-only API — any message it would have
+logged becomes a `"degraded"` component), `ensure_hermes_ready()` only when Hermes is the
+resolved default engine, `voice_doctor._check_stt`/`_check_tts` directly (a 45s STT budget,
+not the CLI's patient 180s default — this runs unattended, not with a human watching a
+terminal), and the existing `test_engine` route handler reused directly as a plain Python call
+(FastAPI route decorators don't wrap the function, so it's callable as-is). The greeting is
+assembled from new `welcome.*` keys added to `operator/voice/i18n/{de,en}.json` — short,
+independent per-component clauses (`check_stt_ok`/`check_stt_bad`, etc.) joined together,
+rather than one grammatically-joined "A, B and C" sentence, so no per-language list-join logic
+was needed. **Per the user's explicit follow-up ask**, the greeting also always includes a
+`welcome.capabilities` clause — what Corvin can do (code, web research, browser automation,
+image generation, email/calendar, automation) and how to ask for it in plain language — not
+just a health report.
 
-1. Concept 1 (language propagation) — small, isolated, no UI change, ship independently.
-2. Concept 2 backend (`/setup/welcome-check` running the reused health-check functions,
-   returning structured status + localized greeting text) — testable without any frontend
-   change.
-3. Concept 2 frontend (`WelcomeStep` mount effect, shared TTS-playback hook, degraded-greeting
-   text variants) — depends on 2.
+On the frontend, the `ttsBlob`/`audioRef`/autoplay-block mechanism was extracted from
+`chat.tsx` into a shared `useVoicePlayback` hook (`web-next/src/lib/useVoicePlayback.ts`), and
+`chat.tsx` itself was refactored to use it (no behavior change — verified via `tsc -b` and a
+full `npm run build`) — closing the "factor it into a shared hook" gap this design flagged
+instead of leaving chat.tsx's copy as a second, diverging implementation. `WelcomeStep` in
+`SetupGate.tsx` calls the check on mount (guarded against React StrictMode's double-invoke),
+shows the loading/greeting/fallback text depending on check state, and attempts playback via
+the hook; on autoplay block it shows a "Tap to hear Corvin" pill, matching the existing
+tap-to-play pattern. "Let's go" is never disabled by check state. Tests:
+`core/console/tests/test_setup_welcome_check.py`.
+
+## 3. Delivery
+
+1. Concept 1 (language propagation) — `corvinOS/installer/steps/piper.py`, `pyproject.toml`.
+2. Concept 2 backend (`/setup/welcome-check` + status poll, localized greeting with
+   capabilities clause) — `core/console/corvin_console/routes/setup.py`,
+   `operator/voice/i18n/{de,en}.json`.
+3. Concept 2 frontend (`WelcomeStep` mount effect, shared `useVoicePlayback` hook used by both
+   `SetupGate.tsx` and `chat.tsx`) — `web-next/src/lib/useVoicePlayback.ts`,
+   `web-next/src/components/setup/SetupGate.tsx`, `web-next/src/pages/chat.tsx`,
+   `web-next/src/lib/api.ts`.

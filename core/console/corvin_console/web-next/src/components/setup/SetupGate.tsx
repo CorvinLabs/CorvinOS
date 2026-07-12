@@ -19,6 +19,7 @@ import {
   MessageSquare,
   QrCode,
   Send,
+  Volume2,
   Wifi,
   WifiOff,
 } from "lucide-react";
@@ -40,10 +41,12 @@ import {
   postSetupComplete,
   postTestEngine,
   bootstrapHermes,
+  runWelcomeCheck,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
+import { useVoicePlayback } from "@/lib/useVoicePlayback";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -130,7 +133,45 @@ const OLLAMA_INSTALL: Record<OSKind, { label: string; steps: string[] }> = {
 
 // ── Step 1: Welcome ───────────────────────────────────────────────────────
 
-function WelcomeStep({ onNext }: { onNext: () => void }) {
+// First-boot spoken onboarding self-check (docs/first-run-language-and-
+// voice-onboarding.md §2). Fires once on mount: runs the server-side
+// health-check (L44 classifier, Hermes warm-up, real STT/TTS round-trip,
+// engine connectivity) and speaks the resulting, honestly-worded greeting
+// through the shared TTS playback hook. Per the concept's dialectical pass,
+// this NEVER gates "Let's go" — a degraded/unreachable check only changes
+// the wording, it never disables the button below.
+function WelcomeStep({ onNext, csrf }: { onNext: () => void; csrf: string }) {
+  const [checkState, setCheckState] = React.useState<"running" | "done" | "error">("running");
+  const [greeting, setGreeting] = React.useState<string | null>(null);
+  const { voiceState, playTts, playBlocked } = useVoicePlayback(csrf);
+  const startedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    // Guards against React 18 StrictMode's double-invoke in dev, which
+    // would otherwise fire two overlapping checks (and two spoken greetings)
+    // on a single mount.
+    if (startedRef.current) return;
+    startedRef.current = true;
+
+    runWelcomeCheck(csrf)
+      .then((result) => {
+        if (result.state !== "done" || !result.greeting) {
+          setCheckState("error");
+          return;
+        }
+        setGreeting(result.greeting);
+        setCheckState("done");
+        // Autoplay is expected to be blocked on a genuinely first-ever page
+        // load (no prior user gesture exists yet) — that's a browser policy
+        // to respect, not a bug. useVoicePlayback surfaces it as
+        // voiceState === "blocked" and the banner below lets the user tap
+        // to hear it; the written greeting above is visible either way.
+        playTts(result.greeting, result.lang ?? "en").catch(() => {});
+      })
+      .catch(() => setCheckState("error"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="flex flex-col items-center gap-6 py-4 text-center">
       <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-accent/15">
@@ -138,13 +179,33 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
       </div>
       <div className="space-y-2">
         <h2 className="font-serif text-3xl font-light tracking-tight">Corvin</h2>
-        <p className="text-base text-muted-foreground">
-          Your AI operating system is ready.
-        </p>
-        <p className="text-sm text-muted-foreground">
-          Set up in 3 steps — takes less than 2 minutes.
-        </p>
+        {checkState === "done" && greeting ? (
+          <p className="text-sm text-muted-foreground">{greeting}</p>
+        ) : checkState === "running" ? (
+          <p className="flex items-center justify-center gap-1.5 text-sm text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Checking voice, engine and pipeline…
+          </p>
+        ) : (
+          <>
+            <p className="text-base text-muted-foreground">
+              Your AI operating system is ready.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Set up in 3 steps — takes less than 2 minutes.
+            </p>
+          </>
+        )}
       </div>
+      {voiceState === "blocked" && (
+        <button
+          onClick={playBlocked}
+          className="flex animate-pulse items-center gap-1.5 rounded-full bg-amber-500/15 px-3 py-1 text-xs text-amber-700 hover:bg-amber-500/25 dark:text-amber-300"
+        >
+          <Volume2 className="h-3 w-3" />
+          Tap to hear Corvin
+        </button>
+      )}
       <div className="flex flex-col gap-2 pt-2 w-full">
         <Button variant="accent" size="lg" className="w-full gap-2" onClick={onNext}>
           Let's go
@@ -1115,7 +1176,7 @@ export function SetupGate() {
           {/* Step content */}
           <div className="px-6 py-6">
             {step === "welcome" && (
-              <WelcomeStep onNext={() => setStep("engine")} />
+              <WelcomeStep onNext={() => setStep("engine")} csrf={session?.csrf_token ?? ""} />
             )}
             {step === "engine" && (
               <EngineStep

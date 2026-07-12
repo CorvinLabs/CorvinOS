@@ -132,6 +132,60 @@ def test_install_piper_is_a_noop_when_binary_already_present(monkeypatch: pytest
     m_pip.assert_not_called()
 
 
+# ── _save_model_config: language propagation into profile.display_language ──
+#
+# Concept: docs/first-run-language-and-voice-onboarding.md §1. Before this
+# fix, the installer's language picker only fed `piper_model_<lang>` /
+# `lang_default` in config.json (the Piper *voice accent*) — it never
+# touched `profile.display_language`, the setting `i18n.resolve()` actually
+# uses to pick the LLM's default reply language. A fresh install where the
+# user picked "Deutsch" got German-sounding TTS but English text replies
+# until the user manually ran `/lang set de`.
+
+def _shared_profile_module():
+    """Import the real, bare-name `profile` module the same way
+    `_seed_profile_display_language` (and lang_cli.py / adapter.py) do —
+    `operator.bridges.shared.profile` is never actually importable as a
+    dotted path (no `operator/__init__.py`, name collides with stdlib)."""
+    shared_dir = Path(__file__).resolve().parent.parent / "operator" / "bridges" / "shared"
+    if str(shared_dir) not in sys.path:
+        sys.path.insert(0, str(shared_dir))
+    import profile as _profile_mod  # type: ignore  # noqa: PLC0415
+    return _profile_mod
+
+
+def test_save_model_config_seeds_profile_display_language(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_mod = _shared_profile_module()
+
+    profile_file = tmp_path / "profile_config" / "profile.json"
+    monkeypatch.setattr(profile_mod, "PROFILE_FILE", profile_file)
+    monkeypatch.setattr(profile_mod, "_cache", None, raising=False)
+    monkeypatch.setattr(profile_mod, "_cache_mtime", 0.0, raising=False)
+
+    config_file = tmp_path / "config.json"
+    piper_mod._save_model_config(config_file, "de", "/fake/model/path.onnx")
+
+    assert profile_mod.get("display_language") == "de", (
+        "the installer's chosen voice language must propagate to "
+        "profile.display_language, not just config.json's piper_model_<lang>"
+    )
+
+
+def test_save_model_config_never_fails_when_profile_write_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Voice setup must never fail because the (best-effort) language
+    propagation into profile.json failed — e.g. an unwritable profile dir."""
+    profile_mod = _shared_profile_module()
+
+    monkeypatch.setattr(profile_mod, "set_value", mock.Mock(side_effect=OSError("disk full")))
+    config_file = tmp_path / "config.json"
+
+    piper_mod._save_model_config(config_file, "de", "/fake/model/path.onnx")
+
+    assert json.loads(config_file.read_text())["piper_model_de"] == "/fake/model/path.onnx"
+
+
 # ── ensure_piper: end-to-end orchestration ──────────────────────────────────
 
 def test_ensure_piper_downloads_model_unconditionally_when_binary_present(tmp_path: Path) -> None:

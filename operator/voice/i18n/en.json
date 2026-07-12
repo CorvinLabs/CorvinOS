@@ -12,5 +12,18 @@
     "ack_durable": "Granted. Your messages in this chat will be visible to the assistant until you /consent off.",
     "ack_off": "Revoked. Your messages will not reach the assistant from now on.",
     "drop_first": "Note: this chat has read-only mode. Your messages will not reach the assistant. Type /consent on to share."
+  },
+  "welcome": {
+    "intro": "Hi, I'm Corvin.",
+    "checks_intro": "Your installation is complete, and I just ran a self-check:",
+    "check_stt_ok": "Voice input works.",
+    "check_stt_bad": "Voice input is currently limited.",
+    "check_tts_ok": "Voice output works.",
+    "check_tts_bad": "Voice output is currently limited — that's why you're reading this instead of hearing it.",
+    "check_engine_ok": "And the connection to my AI models is up.",
+    "check_engine_bad": "The connection to my AI models is currently down — take a quick look at your engine settings.",
+    "control": "From now on you can talk or type to me — here in the web chat, but just the same on Discord, WhatsApp or Telegram once you set those up.",
+    "capabilities": "I can write and edit code for you, research the web, drive your browser, generate images, manage email and your calendar, and automate recurring tasks. Just tell me in plain language what you need — for example \"check my inbox\" or \"generate an image of a fox in the forest\" — and I'll take care of it.",
+    "closing": "Just tell me what you need."
   }
 }

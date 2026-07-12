@@ -45,7 +45,6 @@ import {
   getProfile,
   listChatSessions,
   transcribeAudio,
-  ttsBlob,
   updateChatSessionTitle,
   openSessionWorkdir,
   uploadAttachments,
@@ -84,8 +83,7 @@ import {
   clearStreamState,
   useStreamStates,
 } from "@/lib/streaming-state";
-
-type VoiceState = "idle" | "loading" | "playing" | "blocked";
+import { useVoicePlayback, type VoiceState } from "@/lib/useVoicePlayback";
 
 /**
  * Detect the language of a text for TTS playback and return a BCP-47 code.
@@ -793,9 +791,11 @@ function ChatPane({
   // toggle in the chat header, the choice is then session-local.
   // Voice-out default ON; the choice persists across page reloads.
   const [voiceOut, setVoiceOut] = usePersistedBool(PREF_KEYS.voiceOut, true);
-  const [voiceState, setVoiceState] = React.useState<VoiceState>("idle");
   const [recording, setRecording] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const { voiceState, playTts, playBlocked, stopVoice } = useVoicePlayback(csrf, (msg) =>
+    setError(msg),
+  );
   // Last completed TTS text + detected language — used for the replay button.
   const [lastTts, setLastTts] = React.useState<{ text: string; lang: string } | null>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -811,11 +811,6 @@ function ChatPane({
   // the conversation. Tracking intent from actual scroll input sidesteps
   // that race entirely.
   const stickToBottom = React.useRef(true);
-  // Persistent audio element — one across the chat's lifetime to avoid
-  // browser quirks where a fresh Audio() per turn can lose autoplay
-  // grant from the original user gesture.
-  const audioRef = React.useRef<HTMLAudioElement | null>(null);
-  const blobUrlRef = React.useRef<string | null>(null);
 
   // Read TTS language from the operator's profile (display_language).
   // Falls back to "en" (console UI default); detectTtsLang still auto-detects
@@ -1148,26 +1143,6 @@ function ChatPane({
     registryCancel(sid);
   };
 
-  const stopVoice = React.useCallback(() => {
-    const a = audioRef.current;
-    if (a) {
-      try {
-        a.pause();
-        a.currentTime = 0;
-      } catch {
-        /* ignore */
-      }
-    }
-    if (blobUrlRef.current) {
-      URL.revokeObjectURL(blobUrlRef.current);
-      blobUrlRef.current = null;
-    }
-    setVoiceState("idle");
-  }, []);
-
-  // Clean up the audio element on unmount.
-  React.useEffect(() => () => stopVoice(), [stopVoice]);
-
   const handleOpenWorkdir = React.useCallback(async () => {
     try {
       const { path } = await openSessionWorkdir(sid, csrf, true);
@@ -1179,60 +1154,6 @@ function ChatPane({
       setTimeout(() => setWorkdirInfo(null), 4_000);
     }
   }, [sid, csrf]);
-
-  const playTts = async (text: string, lang?: string) => {
-    // Latest answer wins — stop any in-flight playback first.
-    stopVoice();
-    if (!text.trim()) return;
-    setVoiceState("loading");
-    // Use the provided lang (auto-detected at call site) or fall back to the
-    // profile-driven language stored in the ref.
-    const ttsLanguage = lang ?? ttsLangRef.current;
-    let blob: Blob;
-    try {
-      blob = await ttsBlob(text, ttsLanguage, csrf);
-    } catch (e) {
-      setVoiceState("idle");
-      setError(e instanceof Error ? `TTS failed: ${e.message}` : "TTS failed");
-      return;
-    }
-    if (!blob.size) { setVoiceState("idle"); return; }
-    const url = URL.createObjectURL(blob);
-    blobUrlRef.current = url;
-    let audio = audioRef.current;
-    if (!audio) {
-      audio = new Audio();
-      audioRef.current = audio;
-    }
-    audio.onended = () => {
-      if (blobUrlRef.current === url) {
-        URL.revokeObjectURL(url);
-        blobUrlRef.current = null;
-      }
-      setVoiceState("idle");
-    };
-    audio.onerror = () => setVoiceState("idle");
-    audio.src = url;
-    try {
-      await audio.play();
-      setVoiceState("playing");
-    } catch {
-      // Browser blocked autoplay (no user gesture in scope). The audio
-      // is ready; show a banner so the user can tap to start it.
-      setVoiceState("blocked");
-    }
-  };
-
-  const playBlocked = async () => {
-    const a = audioRef.current;
-    if (!a) return;
-    try {
-      await a.play();
-      setVoiceState("playing");
-    } catch {
-      // Still blocked — leave state as-is so the banner stays visible.
-    }
-  };
 
   // ── Voice recording ──────────────────────────────────────────────
   const mediaRef = React.useRef<MediaRecorder | null>(null);

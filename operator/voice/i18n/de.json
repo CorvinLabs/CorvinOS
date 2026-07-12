@@ -12,5 +12,18 @@
     "ack_durable": "Zustimmung gespeichert. Deine Nachrichten in diesem Chat sind für den Assistenten sichtbar, bis du /consent off schreibst.",
     "ack_off": "Zustimmung zurückgezogen. Deine Nachrichten landen ab jetzt nicht mehr beim Assistenten.",
     "drop_first": "Hinweis: dieser Chat ist im Read-only-Modus. Deine Nachrichten erreichen den Assistenten nicht. /consent on schaltet das Mitlesen für dich frei."
+  },
+  "welcome": {
+    "intro": "Hallo, ich bin Corvin.",
+    "checks_intro": "Deine Installation ist fertig, und ich habe mich gerade selbst durchgecheckt:",
+    "check_stt_ok": "Spracheingabe funktioniert.",
+    "check_stt_bad": "Spracheingabe ist gerade eingeschränkt.",
+    "check_tts_ok": "Sprachausgabe funktioniert.",
+    "check_tts_bad": "Sprachausgabe ist gerade eingeschränkt — du liest diese Nachricht gerade deshalb, statt sie zu hören.",
+    "check_engine_ok": "Und die Verbindung zu meinen KI-Modellen steht.",
+    "check_engine_bad": "Die Verbindung zu meinen KI-Modellen ist gerade gestört — wirf kurz einen Blick auf deine Engine-Einstellungen.",
+    "control": "Ab jetzt kannst du mit mir sprechen oder schreiben — hier im Web-Chat, aber genauso über Discord, WhatsApp oder Telegram, wenn du das einrichtest.",
+    "capabilities": "Ich kann für dich programmieren und Dateien bearbeiten, im Web recherchieren, deinen Browser bedienen, Bilder erzeugen, E-Mails und deinen Kalender verwalten und wiederkehrende Aufgaben automatisieren. Sag einfach in normaler Sprache, was du brauchst — zum Beispiel „schau in mein Postfach\" oder „erstelle mir ein Bild von einem Fuchs im Wald\" — und ich kümmere mich darum.",
+    "closing": "Sag mir einfach, was du brauchst."
   }
 }

@@ -282,6 +282,10 @@ path = "hatch_build.py"
 # (source-tree mode uses the sys.path injection in engine.py as before).
 "operator/bridges/shared/engine_detection.py" = "corvin_console/engine_detection.py"
 "operator/bridges/shared/hermes_bootstrap.py" = "corvin_console/hermes_bootstrap.py"
+# First-run language propagation (install-time Piper language -> profile
+# display_language): installer needs profile.set_value() in a pure wheel
+# install, same shim pattern as the two entries above.
+"operator/bridges/shared/profile.py" = "corvin_console/profile.py"
 # Operator runtime-dependency vendoring (wheel-only) is performed by the
 # custom build hook in hatch_build.py (VendorOperatorHook). 56 console modules
 # reach into operator/* via repo-relative sys.path injection, which resolves

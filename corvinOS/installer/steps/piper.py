@@ -423,6 +423,45 @@ def _save_model_config(config_file: Path, lang: str, onnx_path: str) -> None:
     config_file.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
     print(f"  ✓ Saved piper_model_{lang} in config.json")
 
+    _seed_profile_display_language(lang)
+
+
+def _seed_profile_display_language(lang: str) -> None:
+    """Propagate the install-time voice-language choice into
+    ``profile.display_language`` — the setting that actually controls the
+    LLM's default reply language (``i18n.resolve()``'s fallback chain).
+
+    Without this, a fresh install where the user picks "Deutsch" gets
+    German-sounding TTS but replies still default to English until the user
+    manually runs ``/lang set de``. Reuses the exact same write path
+    ``/lang set`` uses (``profile.set_value``) so there is no second source
+    of truth — this only ever seeds a default, never locks it; the runtime
+    override chain (`/lang set`, per-chat, per-turn auto-detect) is untouched.
+
+    Best-effort: voice setup must never fail because this propagation step
+    did.
+    """
+    try:
+        try:
+            from corvin_console.profile import set_value as _set_value  # noqa: PLC0415
+        except ImportError:
+            # Source-tree / dev-checkout mode: `operator/` has no
+            # `__init__.py` (it can't — the name collides with the stdlib
+            # `operator` module, which is almost always already cached in
+            # sys.modules by the time this runs), so `operator.bridges.shared`
+            # is never actually importable as a dotted path here. The
+            # established, working pattern (see lang_cli.py, adapter.py) is
+            # to put `operator/bridges/shared/` itself on sys.path and import
+            # `profile` as a bare top-level module.
+            shared_dir = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+            if str(shared_dir) not in sys.path:
+                sys.path.insert(0, str(shared_dir))
+            import profile as _profile_mod  # type: ignore  # noqa: PLC0415
+            _set_value = _profile_mod.set_value
+        _set_value("display_language", lang)
+    except Exception:
+        pass
+
 
 def _write_bin_env(voice_config_dir: Path, piper_bin: str) -> None:
     """Write PIPER_BIN (and FFMPEG_BIN if found) to service.env.
