@@ -1124,9 +1124,16 @@ export function SetupGate() {
   const completeMutation = useMutation({
     mutationFn: () => postSetupComplete(session?.csrf_token ?? ""),
     onSuccess: () => {
-      // Re-fetch rather than trust a local flag — the server just recorded
-      // completion, so its next answer for THIS query key already reflects
-      // that; no need for a second, independent "am I done" cache.
+      // Regression: relying solely on invalidateQueries() made the gate
+      // wait on a full refetch round-trip before disappearing — a visible
+      // stall on "Open dashboard" versus the previous instant dismissal.
+      // Update the cache immediately (the server call that just succeeded
+      // IS the source of truth for this field) so the gate hides right
+      // away, then invalidate to reconcile the rest of the cached status
+      // (engine_connected, bridges_configured, ...) in the background.
+      queryClient.setQueryData(["setup-status"], (prev: unknown) =>
+        prev && typeof prev === "object" ? { ...prev, setup_complete: true } : prev,
+      );
       queryClient.invalidateQueries({ queryKey: ["setup-status"] });
     },
   });

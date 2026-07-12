@@ -786,7 +786,7 @@ function ChatPane({
   React.useEffect(() => { setCccActions([]); }, [sid]);
   const [auditOpen, setAuditOpen] = React.useState(false);
   const [auditTab, setAuditTab] = React.useState<"single" | "dual-track">("single");
-  const [workdirInfo, setWorkdirInfo] = React.useState<{ path: string; opened: boolean } | null>(null);
+  const [workdirInfo, setWorkdirInfo] = React.useState<{ path: string; opened: boolean; error?: string } | null>(null);
   // Voice-out is on by default — the operator can flip it off via the
   // toggle in the chat header, the choice is then session-local.
   // Voice-out default ON; the choice persists across page reloads.
@@ -1154,7 +1154,13 @@ function ChatPane({
       // Auto-dismiss after 8 s so the banner doesn't linger forever.
       setTimeout(() => setWorkdirInfo(null), 8_000);
     } catch {
-      setWorkdirInfo({ path: "Could not open artifacts folder.", opened: false });
+      // A request-level failure (network error, expired session, CSRF
+      // rejection) — distinct from the server answering with opened=false.
+      // Regression: this used to overload the same `path` field the success
+      // path uses for a real filesystem path, so the banner showed a
+      // nonsensical duplicated sentence and "Copy" copied the error text
+      // instead of a usable path.
+      setWorkdirInfo({ path: "", opened: false, error: "Could not reach the server to open the artifacts folder." });
       setTimeout(() => setWorkdirInfo(null), 4_000);
     }
   }, [sid, csrf]);
@@ -1509,19 +1515,25 @@ function ChatPane({
       {workdirInfo && (
         <div className="flex items-center gap-2 border-b border-amber-400/30 bg-amber-50/60 px-4 py-1.5 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
           <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-          {workdirInfo.opened ? (
+          {workdirInfo.error ? (
+            <span className="shrink-0 font-semibold">{workdirInfo.error}</span>
+          ) : workdirInfo.opened ? (
             <span className="shrink-0">Opened in file manager:</span>
           ) : (
             <span className="shrink-0 font-semibold">Could not open file manager — copy path manually:</span>
           )}
-          <span className="font-mono truncate flex-1">{workdirInfo.path}</span>
-          <button
-            onClick={() => { void navigator.clipboard.writeText(workdirInfo.path); }}
-            className="rounded px-1.5 py-0.5 hover:bg-amber-200/60 dark:hover:bg-amber-800/40"
-            title="Copy path"
-          >
-            Copy
-          </button>
+          {!workdirInfo.error && (
+            <>
+              <span className="font-mono truncate flex-1">{workdirInfo.path}</span>
+              <button
+                onClick={() => { void navigator.clipboard.writeText(workdirInfo.path); }}
+                className="rounded px-1.5 py-0.5 hover:bg-amber-200/60 dark:hover:bg-amber-800/40"
+                title="Copy path"
+              >
+                Copy
+              </button>
+            </>
+          )}
           <button onClick={() => setWorkdirInfo(null)} title="Dismiss">
             <X className="h-3.5 w-3.5" />
           </button>

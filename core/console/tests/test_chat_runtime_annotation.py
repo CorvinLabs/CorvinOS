@@ -105,7 +105,11 @@ def test_annotation_subprocess_is_latency_bounded(monkeypatch):
     asyncio.run(cr._compute_web_annotation_suffix("The cache stores results.", "_default"))
     assert seen_kwargs, "expected at least one annotation subprocess"
     for kw in seen_kwargs:
-        assert kw.get("timeout") == cr._ANN_CALL_TIMEOUT_S, (
+        # The metaphor pass's own timeout is shrunk to whatever remains of a
+        # single _ANN_CALL_TIMEOUT_S-sized window since turn start (so a slow
+        # appendix call can't add a full fresh 8s on top) — so it may be
+        # slightly UNDER the constant, but must never exceed it.
+        assert 0 < kw.get("timeout") <= cr._ANN_CALL_TIMEOUT_S, (
             f"annotation subprocess must be hard-capped at "
             f"_ANN_CALL_TIMEOUT_S={cr._ANN_CALL_TIMEOUT_S}, got {kw.get('timeout')}"
         )
@@ -143,6 +147,37 @@ def test_metaphor_runs_when_within_budget(monkeypatch):
     asyncio.run(cr._compute_web_annotation_suffix("The cache stores results.", "_default"))
     invoked = [a[-1] for a in calls]
     assert "--appendix-mode" in invoked and "--metapher-mode" in invoked
+
+
+def test_metaphor_timeout_shrinks_to_remaining_window(monkeypatch):
+    """Regression: the metaphor pass used to always get a fresh, full
+    _ANN_CALL_TIMEOUT_S even when the appendix call had already spent most of
+    the annotation budget — so a 4.9s appendix call (just under the 5s
+    _ANN_TOTAL_BUDGET_S gate) plus a full 8s metaphor timeout could still
+    freeze the composer for ~13s, well past what "total budget" implies. The
+    metaphor call's own timeout must shrink to what's left of a single
+    _ANN_CALL_TIMEOUT_S-sized window since turn start."""
+    seen_kwargs = []
+    _stub_summarizer(monkeypatch, kwargs_sink=seen_kwargs)
+    _fake_profile(monkeypatch, voice_audience_learning=3, voice_audience_metaphors="on")
+
+    # t0=0.0; appendix call took 4.9s (just under the 5s budget gate, so the
+    # metaphor pass still runs); the remaining-budget calc reads the same
+    # elapsed time again.
+    ticks = iter([0.0, 4.9, 4.9])
+    fake_time = types.SimpleNamespace(monotonic=lambda: next(ticks))
+    monkeypatch.setattr(cr, "time", fake_time)
+
+    asyncio.run(cr._compute_web_annotation_suffix("The cache stores results.", "_default"))
+    # The metaphor call always runs second when both appendix and metaphor
+    # fire, so seen_kwargs[1] is the metaphor call's kwargs.
+    assert len(seen_kwargs) == 2, "expected both appendix and metaphor calls"
+    metaphor_timeout = seen_kwargs[1]["timeout"]
+    assert metaphor_timeout <= cr._ANN_CALL_TIMEOUT_S - 4.9 + 0.01, (
+        f"metaphor timeout must shrink to the remaining window (~3.1s), "
+        f"got {metaphor_timeout}"
+    )
+    assert metaphor_timeout >= 1.0, "must never shrink below the 1.0s floor"
 
 
 def test_missing_profile_module_is_safe(monkeypatch):

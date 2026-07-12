@@ -43,8 +43,20 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
   // it user-activated — then every later programmatic play() is allowed. Runs
   // once; idempotent no-op after the first success. Best-effort: a failed prime
   // (no active gesture yet) leaves unlockedRef false so the NEXT gesture retries.
+  //
+  // Regression guard: this MUST NOT touch the element while it holds real TTS
+  // content (blobUrlRef set — loaded, playing, or blocked-awaiting-a-tap). The
+  // capture-phase pointerdown below fires BEFORE any bubble-phase onClick, so
+  // the exact "tap to hear Corvin" gesture on a blocked first-boot greeting
+  // used to hit this function first, overwrite audio.src with the silent
+  // priming clip, and then its own .then() paused/reset the element and let
+  // the stale onended handler revoke the greeting's blob URL — the user taps
+  // "hear it" and hears nothing, on the one screen this must never happen on.
+  // If real content is already loaded, that content's own play()/play-blocked
+  // affordance already IS the activation-consuming attempt; skip priming and
+  // let the next gesture (after this element frees up) retry.
   const unlock = React.useCallback(() => {
-    if (unlockedRef.current) return;
+    if (unlockedRef.current || blobUrlRef.current) return;
     const a = ensureAudioEl();
     try {
       a.muted = true;
@@ -52,7 +64,14 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
       const p = a.play();
       if (p && typeof p.then === "function") {
         p.then(() => {
-          try { a.pause(); a.currentTime = 0; } catch { /* ignore */ }
+          // Narrow residual race: real content can be loaded onto this same
+          // element by playTts() while this priming play() was in flight
+          // (blobUrlRef was null when unlock() started, so its guard above
+          // let it through). If so, don't pause/reset what's now playing —
+          // just record that priming succeeded; the real playback continues.
+          if (!blobUrlRef.current) {
+            try { a.pause(); a.currentTime = 0; } catch { /* ignore */ }
+          }
           a.muted = false;
           unlockedRef.current = true;
         }).catch(() => { a.muted = false; });
@@ -148,6 +167,12 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
       try {
         await audio.play();
         setVoiceState("playing");
+        // A successful play() on this element — whether autoplayed within
+        // the send gesture's activation window, or (see playBlocked below)
+        // resumed from a direct tap — is itself definitive proof the
+        // element is unlocked. Mark it so the priming listeners in the
+        // effect above stop doing redundant work.
+        unlockedRef.current = true;
       } catch {
         // Browser blocked autoplay (no user gesture in scope). The audio
         // is ready; the caller shows a "tap to hear" affordance that calls
@@ -164,6 +189,7 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
     try {
       await a.play();
       setVoiceState("playing");
+      unlockedRef.current = true;
     } catch {
       // Still blocked — leave state as-is so the "tap to hear" affordance stays visible.
     }

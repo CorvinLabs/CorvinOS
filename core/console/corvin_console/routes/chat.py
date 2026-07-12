@@ -443,7 +443,11 @@ def get_session_workdir_path(
             # Never silently drop this — a failed reveal with no server log
             # is unreproducible from a bug report alone (this is exactly how
             # the bug above went undiagnosed until the frontend was checked).
-            logger.warning("workdir-path reveal failed for sid=%s path=%s", sid, workdir, exc_info=True)
+            # sid only, no path: workdir sits under the OS home directory and
+            # typically embeds the operator's account name — logging it would
+            # leak PII into the server log (CLAUDE.md: never leak PII into
+            # audit details or log lines). exc_info carries the exception.
+            logger.warning("workdir-path reveal failed for sid=%s", sid, exc_info=True)
     return {"ok": True, "path": str(workdir), "opened": opened}
 
 _ATTACH_MAX_BYTES = 20 * 1024 * 1024   # 20 MB per file

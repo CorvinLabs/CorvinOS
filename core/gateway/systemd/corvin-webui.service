@@ -49,7 +49,7 @@ ExecStartPre=/bin/bash -c 'test -x __REPO_ROOT__/core/console/.venv/bin/python |
 # connect means something is still listening: on failure (connection
 # refused) the port is free and we proceed immediately, so the common case
 # (previous instance already gone) adds no startup delay at all.
-ExecStartPre=/bin/bash -c 'for i in $(seq 1 15); do if ! (exec 3<>/dev/tcp/127.0.0.1/8765) 2>/dev/null; then exit 0; fi; exec 3>&-; sleep 1; done; exit 0'
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 15); do if ! timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/8765" 2>/dev/null; then exit 0; fi; sleep 1; done; exit 0'
 ExecStart=__REPO_ROOT__/core/console/.venv/bin/python -m uvicorn corvin_gateway.app:app --host 127.0.0.1 --port 8765 --log-level info
 Restart=always
 # Exponential backoff (systemd >=254): 5s, 10s, 20s, ... capped at 60s.

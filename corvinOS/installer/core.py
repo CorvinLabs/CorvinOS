@@ -1184,7 +1184,13 @@ class CorvinInstaller:
                         doc = yaml.safe_load(tenant_yaml.read_text("utf-8")) or {}
                         spec = doc.get("spec") if isinstance(doc, dict) else None
                         if isinstance(spec, dict) and spec.pop("default_engine", None) is not None:
-                            tenant_yaml.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+                            # Atomic write (mirrors the console's own
+                            # _save_tenant_yaml): this file is read on every
+                            # adapter turn, so a crash/Ctrl-C/AV-lock mid-write
+                            # must never leave a truncated file behind.
+                            tmp = tenant_yaml.with_suffix(".yaml.tmp")
+                            tmp.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+                            tmp.replace(tenant_yaml)
                             print(f"  ✓ Cleared default_engine in {tenant_yaml}")
                             removed_any = True
                     except Exception as e:
@@ -1232,7 +1238,7 @@ class CorvinInstaller:
         else:
             print("  ℹ Not found — nothing to remove")
 
-        # ── Step 9: Remove Corvin home (~/.corvin/) ────────────────────────
+        # ── Step 10: Remove Corvin home (~/.corvin/) ───────────────────────
         print("\n[10/11] Removing Corvin home directory...")
         print(f"  Path: {self.corvin_home}")
         if self.corvin_home.exists():
@@ -1267,7 +1273,7 @@ class CorvinInstaller:
         else:
             print(f"  ℹ {self.corvin_home} not found")
 
-        # ── Step 10: Remove in-repo .corvin/ ──────────────────────────────
+        # ── Step 11: Remove in-repo .corvin/ ──────────────────────────────
         print("\n[11/11] Removing in-repo Corvin directory...")
         repo_corvin = self.repo_root / ".corvin"
         if repo_corvin.exists():

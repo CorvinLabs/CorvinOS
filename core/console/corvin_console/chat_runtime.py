@@ -377,11 +377,19 @@ async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
         if not any(m in tail for m in _METAPHER_MARKERS):
             try:
                 _in = annotated
+                # Cap this call's OWN timeout to what's left of a single
+                # _ANN_CALL_TIMEOUT_S-sized window since turn start, not a
+                # fresh full _ANN_CALL_TIMEOUT_S on top of whatever the
+                # appendix call already spent — otherwise a 4.9s appendix call
+                # (just under the 5s gate above) plus a full 8s metaphor
+                # timeout could still freeze the composer for ~13s, well past
+                # what "total budget" implies.
+                _remaining = max(1.0, _ANN_CALL_TIMEOUT_S - (time.monotonic() - _t0))
                 out = await asyncio.to_thread(
                     lambda: subprocess.run(
                         [sys.executable, str(summarizer), "--lang", "de", "--metapher-mode"],
                         input=_in, capture_output=True, text=True,
-                        env=env, timeout=_ANN_CALL_TIMEOUT_S, check=True,
+                        env=env, timeout=_remaining, check=True,
                     )
                 )
                 if out.stdout.strip():

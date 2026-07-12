@@ -164,8 +164,10 @@ first real request — not that it acts as a pass/fail gate.
   user-facing pass at a specific moment, the Boot-Healer keeps running independently.
 - Not a new TTS/STT provider or audio pipeline — reuses `synthesize_voice_note` and the
   existing browser playback mechanism unchanged.
-- No autoplay workaround/hack — respects the browser's policy, reuses the existing
-  tap-to-play fallback that already exists for this exact scenario elsewhere in the console.
+- No bespoke autoplay workaround for this screen specifically — it reuses the shared
+  `useVoicePlayback` mechanism (gesture-priming + tap-to-play fallback) that every
+  console page speaking TTS relies on, added 2026-07-12 to fix later chat turns going
+  silent after the first; this screen gets it for free, it isn't a special case here.
 - Does not attempt to "warm up" the Claude Code engine the way Hermes is warmed (no
   persistent local model state to preload) — the cheap test turn there is a **connectivity/
   auth check**, described as such, not oversold as a performance warm-up.
