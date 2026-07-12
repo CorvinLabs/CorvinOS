@@ -282,16 +282,22 @@ else
     SERVER_PID=$!
 fi
 
-# Wait for server to be ready
+# Wait for server to be ready. Live "still working" feedback -- a cold
+# Python import + Gatekeeper/AV scanning a freshly spawned process can push
+# this well past a few seconds with zero output otherwise, which reads as a
+# hang. Same dot-per-second convention as _await above.
+printf '  %s waiting for server to come up ' "$(_dim '⏳')"
 while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
     if curl -fs -m 2 http://localhost:8765/v1/console/healthz >/dev/null 2>&1; then
-        printf '  %s Server is ready!\n' "$(_green '✓')"
+        printf ' %s Server is ready! (%ss)\n' "$(_green '✓')" "$RETRY_COUNT"
         SERVER_READY=1
         break
     fi
     RETRY_COUNT=$((RETRY_COUNT + 1))
+    printf '.'
     sleep 1
 done
+[ "$SERVER_READY" -ne 1 ] && printf '\n'
 
 # Open the console no matter what. If the probe timed out the server is still
 # coming up in the background, so the tab will connect on reload a few seconds

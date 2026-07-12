@@ -518,12 +518,16 @@ try {
     Write-Warn "Could not create a Desktop shortcut ($_)."
 }
 
-# Wait for server to be ready
+# Wait for server to be ready. Live "still working" feedback on one
+# self-overwriting line -- a cold Python import + Windows Defender scanning
+# a freshly spawned python.exe can push this well past 30s with zero output
+# otherwise, which read as a hang to a user watching the terminal (confirmed
+# via a screenshot showing this exact step frozen with no further line
+# printed).
 while ($RetryCount -lt $MaxRetries) {
     try {
         $response = Invoke-WebRequest -Uri "http://localhost:8765/v1/console/healthz" -UseBasicParsing -TimeoutSec 2 -ErrorAction SilentlyContinue
         if ($response -and $response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
-            Write-Ok "Server is ready!"
             $ServerReady = $true
             break
         }
@@ -531,7 +535,12 @@ while ($RetryCount -lt $MaxRetries) {
         # Server not ready yet
     }
     $RetryCount++
+    Write-Host "`r  waiting for server to come up... ($RetryCount/${MaxRetries}s)" -NoNewline -ForegroundColor DarkGray
     Start-Sleep -Seconds 1
+}
+Write-Host ("`r" + (" " * 60) + "`r") -NoNewline
+if ($ServerReady) {
+    Write-Ok "Server is ready! (${RetryCount}s)"
 }
 
 # Open the console no matter what. If the probe timed out the server is still
