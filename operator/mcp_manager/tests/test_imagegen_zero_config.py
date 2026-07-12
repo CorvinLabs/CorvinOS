@@ -339,6 +339,71 @@ def test_broken_tier1_key_falls_back_to_tier0(monkeypatch, tmp_path):
     assert any(isinstance(b, str) and "fell back" in b for b in blocks)
 
 
+# ── _save_image_bytes + CORVIN_IMAGE_OUTDIR ────────────────────────────────
+# Bug report 2026-07-12: generated images not showing inline in chat. This
+# function's own docstring already documents that it relies on implicit
+# Path.cwd() inheritance through the claude CLI subprocess when no explicit
+# outdir is given -- exactly the class of cross-process assumption this
+# server's env vars (CORVIN_HOME/CORVIN_TENANT_ID) already needed an
+# explicit workaround for. get_active_mcp_servers() now sets
+# CORVIN_IMAGE_OUTDIR explicitly (see operator/mcp_manager/tests/
+# test_mcp_m4.py::TestImageOutdirInjection) -- these tests prove the WRITE
+# side actually honours it, closing the round trip end to end.
+
+def test_save_image_bytes_honours_corvin_image_outdir(monkeypatch, tmp_path):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    explicit_outdir = tmp_path / "session-workdir" / "outputs"
+    monkeypatch.setenv("CORVIN_IMAGE_OUTDIR", str(explicit_outdir))
+    import main as m
+
+    saved = m._save_image_bytes(b"\xff\xd8\xff\xe0fake-jpeg-bytes", "jpeg")
+    assert saved is not None
+    saved_path = Path(saved)
+    assert saved_path.parent == explicit_outdir
+    assert saved_path.exists()
+    assert saved_path.read_bytes() == b"\xff\xd8\xff\xe0fake-jpeg-bytes"
+
+
+def test_save_image_bytes_falls_back_to_cwd_outputs_without_env(monkeypatch, tmp_path):
+    """Regression guard: the pre-existing cwd-relative behavior must survive
+    unchanged for callers that don't set the new env var (e.g. the messenger
+    bridges before this fix's rollout reaches them, or a future MCP host
+    that doesn't wire it)."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.delenv("CORVIN_IMAGE_OUTDIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    import main as m
+
+    saved = m._save_image_bytes(b"\xff\xd8\xff\xe0fake-jpeg-bytes", "jpeg")
+    assert saved is not None
+    assert Path(saved).parent == tmp_path / "outputs"
+
+
+def test_save_image_bytes_produces_a_file_chat_runtime_classifies_as_image(monkeypatch, tmp_path):
+    """The other half of the round trip: chat_runtime.py's post-turn scan
+    calls _artifact_mime() on every new file under the session workdir. This
+    proves a file _save_image_bytes actually writes (under CORVIN_IMAGE_OUTDIR
+    pointed at a session workdir's outputs/, exactly what the new
+    get_active_mcp_servers(image_outdir=...) wiring provides) is classified
+    as image/jpeg by that exact function -- not a synthetic path, the real
+    saved file."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    workdir = tmp_path / "session-workdir"
+    monkeypatch.setenv("CORVIN_IMAGE_OUTDIR", str(workdir / "outputs"))
+    import main as m
+
+    saved = m._save_image_bytes(b"\xff\xd8\xff\xe0fake-jpeg-bytes", "jpeg")
+    assert saved is not None
+
+    _console_root = Path(__file__).resolve().parents[3] / "core" / "console"
+    if str(_console_root) not in sys.path:
+        sys.path.insert(0, str(_console_root))
+    from corvin_console import chat_runtime
+
+    mime = chat_runtime._artifact_mime(Path(saved))
+    assert mime == "image/jpeg"
+
+
 def test_disclosure_survives_readonly_store(monkeypatch, tmp_path):
     """ensure_disclosed's 'never raises' contract: a storage failure must
     degrade to 'shown again next time', not fail the tool call after the

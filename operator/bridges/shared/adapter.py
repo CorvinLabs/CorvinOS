@@ -3028,10 +3028,23 @@ def _resolve_spawn_inputs(
             # session-scope and project-scope activations are merged in.
             _session_key = str(chat_key) if chat_key else None
             _project_dir = os.environ.get("CORVIN_PROJECT_DIR") or None
+            # Bug report 2026-07-12: generated images not showing inline in
+            # chat. The imagegen MCP server writes to Path.cwd()/outputs by
+            # default, relying on implicit cwd inheritance through the
+            # claude CLI subprocess — the same class of unverified
+            # cross-process assumption that already needed an explicit
+            # CORVIN_HOME/CORVIN_TENANT_ID workaround for this exact server
+            # (see get_active_mcp_servers's docstring). Pass the real,
+            # known chat workdir explicitly instead of leaving it to guess.
+            _img_outdir = (
+                str(_session_dir(channel, chat_key, _tid) / "outputs")
+                if chat_key else None
+            )
             _catalog_mcp = _mcp_manager_activate.get_active_mcp_servers(
                 _tid,
                 session_key=_session_key,
                 project_dir=_project_dir,
+                image_outdir=_img_outdir,
             )
             if _catalog_mcp:
                 # M3 Persona ACL: filter catalog tools if mcp_plugins_allowed is set

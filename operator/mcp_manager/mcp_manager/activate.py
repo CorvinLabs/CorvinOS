@@ -298,6 +298,7 @@ def get_active_mcp_servers(
     *,
     session_key: str | None = None,
     project_dir: str | None = None,
+    image_outdir: str | None = None,
 ) -> dict[str, Any]:
     """Return an mcp_servers dict (ready for cowork materialize_mcp) for all active tools.
 
@@ -308,6 +309,18 @@ def get_active_mcp_servers(
 
     M4: merges session-scope and project-scope activations on top of the
     global (user/tenant) scopes.
+
+    ``image_outdir`` (bug report 2026-07-12: generated images not rendering
+    inline in chat): when given, overrides ``CORVIN_IMAGE_OUTDIR`` on the
+    ``imagegen-zero-config`` catalog entry's env to this exact, caller-known
+    path (the session/chat workdir's ``outputs/`` subdirectory) instead of
+    leaving the image server to guess its own write location from
+    ``Path.cwd()`` — an implicit cwd-inheritance-through-the-claude-CLI
+    assumption this same server's code comments already flag as unverified
+    for this exact spawn chain (the identical class of gap that needed an
+    explicit ``CORVIN_HOME``/``CORVIN_TENANT_ID`` workaround below). Per-call,
+    not cached, since it is session-specific and the mtime cache is keyed
+    only on tenant-global state.
     """
     active_ids = get_active_tool_ids(
         tid, session_key=session_key, project_dir=project_dir,
@@ -353,6 +366,9 @@ def get_active_mcp_servers(
 
         servers[tool_id] = server_cfg
         tool_entries[tool_id] = entry
+
+    if image_outdir and "imagegen-zero-config" in servers:
+        servers["imagegen-zero-config"].setdefault("env", {})["CORVIN_IMAGE_OUTDIR"] = image_outdir
 
     # M2 — spawn-time compliance filter (SHA256, secrets, L34, L35)
     return _compliance.filter_compliant_servers(servers, tool_entries, tid)

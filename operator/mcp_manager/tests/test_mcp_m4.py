@@ -256,6 +256,56 @@ class TestGetActiveMcpServersScoped:
         assert "tool-a" not in servers
 
 
+# ── image_outdir (bug report 2026-07-12: generated images not showing inline) ──
+
+
+class TestImageOutdirInjection:
+    """The imagegen-zero-config MCP server writes to Path.cwd()/outputs by
+    default -- an implicit cwd-inheritance-through-the-claude-CLI assumption
+    the server's own code comments flag as unverified. get_active_mcp_servers
+    now accepts image_outdir to set CORVIN_IMAGE_OUTDIR explicitly on that
+    one catalog entry, mirroring the existing CORVIN_HOME/CORVIN_TENANT_ID
+    plaintext-env pattern used for the same reliability reason."""
+
+    def test_sets_corvin_image_outdir_on_imagegen_entry(self, tmp_corvin, tmp_path):
+        catalog.add_tool(TID, {
+            "id": "imagegen-zero-config",
+            "source": "builtin:/fake/main.py",
+            "installed_at": "2026-07-12T00:00:00+00:00",
+            "runtime": {"command": "python", "args": ["/fake/main.py"],
+                        "env": {"CORVIN_HOME": "/fake/home"}},
+            "secrets": [],
+            "compliance": {"locality": "local", "network_egress": "none"},
+        })
+        activate.activate(TID, "imagegen-zero-config", "tenant")
+        outdir = str(tmp_path / "session-workdir" / "outputs")
+        servers = activate.get_active_mcp_servers(TID, image_outdir=outdir)
+        assert servers["imagegen-zero-config"]["env"]["CORVIN_IMAGE_OUTDIR"] == outdir
+        # Pre-existing plaintext env entries must survive the injection.
+        assert servers["imagegen-zero-config"]["env"]["CORVIN_HOME"] == "/fake/home"
+
+    def test_no_image_outdir_leaves_env_unset(self, tmp_corvin):
+        catalog.add_tool(TID, {
+            "id": "imagegen-zero-config",
+            "source": "builtin:/fake/main.py",
+            "installed_at": "2026-07-12T00:00:00+00:00",
+            "runtime": {"command": "python", "args": ["/fake/main.py"]},
+            "secrets": [],
+            "compliance": {"locality": "local", "network_egress": "none"},
+        })
+        activate.activate(TID, "imagegen-zero-config", "tenant")
+        servers = activate.get_active_mcp_servers(TID)
+        assert "CORVIN_IMAGE_OUTDIR" not in servers["imagegen-zero-config"].get("env", {})
+
+    def test_other_tools_unaffected_by_image_outdir(self, tmp_corvin, tmp_path):
+        _add_local_tool(TID, "tool-a")
+        activate.activate(TID, "tool-a", "tenant")
+        servers = activate.get_active_mcp_servers(
+            TID, image_outdir=str(tmp_path / "outputs"),
+        )
+        assert "CORVIN_IMAGE_OUTDIR" not in servers["tool-a"].get("env", {})
+
+
 # ── Docker installer ──────────────────────────────────────────────────────────
 
 

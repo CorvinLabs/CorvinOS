@@ -922,7 +922,7 @@ def _persona_prompt_block() -> str:
         return ""
 
 
-def _persona_mcp_config(tenant_id: str = "_default") -> str | None:
+def _persona_mcp_config(tenant_id: str = "_default", workdir: "Path | None" = None) -> str | None:
     """Materialize the web-chat persona's MCP servers into an ``--mcp-config``
     file path, mirroring the bridge adapter's spawn wiring (adapter.py
     ``_resolve_spawn_inputs``): resolver-injected servers (forge, skill_forge,
@@ -954,7 +954,10 @@ def _persona_mcp_config(tenant_id: str = "_default") -> str | None:
             _mcp_activate = None
         if _mcp_activate is not None:
             try:
-                catalog_mcp = _mcp_activate.get_active_mcp_servers(tenant_id)
+                catalog_mcp = _mcp_activate.get_active_mcp_servers(
+                    tenant_id,
+                    image_outdir=str(workdir / "outputs") if workdir else None,
+                )
                 if catalog_mcp:
                     allowed_plugins = merged.get("mcp_plugins_allowed")
                     if isinstance(allowed_plugins, list):
@@ -1144,7 +1147,7 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None)
     # catalog tools, exactly like the bridge adapter's spawn path. Without
     # this the console chat advertised capabilities (via the injected
     # capability map) that no attached server could actually serve.
-    mcp_config_path = _persona_mcp_config(sess.tenant_id)
+    mcp_config_path = _persona_mcp_config(sess.tenant_id, sess.workdir)
     if mcp_config_path:
         args += ["--mcp-config", mcp_config_path]
 
