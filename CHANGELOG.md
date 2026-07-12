@@ -6,6 +6,54 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.32] — 2026-07-12 — Uninstall clean-slate + critical voice-playback regression fix
+
+- **`corvin-uninstall` now always resets onboarding + engine selection.** A plain
+  run (every prompt declined, the `[y/N]` default) used to keep the
+  onboarding-complete markers and the tenant's selected engine, so a
+  subsequent `corvin-install` silently skipped onboarding and reused the old
+  engine. These are UI/session state, not secrets, so they're reset
+  unconditionally now (API keys and audit logs stay behind their existing
+  confirmation prompts). The frontend's `SetupGate` had a related bug: it
+  cached "setup complete" in `localStorage` and used that cache to disable
+  the server status check entirely — so a flag left over from a previous
+  install permanently skipped onboarding in that browser even after a real
+  server-side wipe. The server is now the sole source of truth.
+- **Critical: the gesture-unlock mechanism (2026-07-12, "every later chat
+  turn goes silent") could break the spoken first-boot welcome message
+  itself** — confirmed by 5 of 10 independent review angles. It reused the
+  same `<audio>` element real TTS playback uses and touched it
+  unconditionally on the very first click/keypress/tap anywhere on the page
+  — including the click on "Tap to hear Corvin" (the autoplay-blocked
+  fallback), whose own handler was about to resume playback on that exact
+  element. `unlock()` now bails whenever real content is already loaded on
+  the element (loaded, playing, or blocked-awaiting-a-tap), and a related
+  async race (real content arriving while the priming clip's own play was
+  still in flight) is closed too. Fix in
+  `core/console/corvin_console/web-next/src/lib/useVoicePlayback.ts`, with
+  new regression tests verified to fail without the fix.
+- `corvinOS/installer/core.py`: the engine-selection reset writes
+  `tenant.corvin.yaml` atomically (tmp+replace) instead of a bare write that
+  could leave a truncated file behind on a crash/AV-lock mid-write.
+- `chat.tsx`: the "open artifacts folder" banner no longer shows a
+  nonsensical duplicated message (and copies the wrong text) when the
+  request itself fails, as opposed to the server successfully answering
+  "could not open".
+- `routes/chat.py`: the workdir-reveal-failure log line no longer includes
+  the full path, which leaked the operator's OS account name via the home
+  directory prefix.
+- `chat_runtime.py`: the metaphor annotation pass's subprocess timeout now
+  shrinks to what's left of a single 8s window since turn start instead of
+  always getting a fresh 8s, tightening the composer-freeze bound closer to
+  what it's documented to be.
+- `corvin-webui.service`: removed dead shell fd-cleanup code and added a
+  per-attempt timeout to the port-liveness probe so a single hung connect
+  can't exceed the documented 15s startup-wait bound.
+
+Verified: 75 Python + 829 frontend tests green (12 new regression tests). The
+uninstall/onboarding and voice-playback fixes were adversarially re-reviewed
+in a dedicated 10-angle pass before release.
+
 ## [0.10.31] — 2026-07-12 — Adversarial review: fresh-install + voice-welcome correctness
 
 10-angle adversarial review of the last 3 days of commits, prioritized on the
