@@ -6,6 +6,64 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.33] — 2026-07-12 — Voice-fallback correctness sweep: TTS content, language selection, i18n coverage
+
+Prompted by a live report ("the welcome voice summary came out in Chinese
+instead of German") — traced through the whole voice pipeline instead of
+patching the one symptom. Four real, independently-verified fixes:
+
+- **TTS no longer reads raw CLI syntax aloud.** Every engine-unreachable
+  fallback string (`call_claude()`, the primary Claude streaming path, Codex,
+  OpenCode, Hermes, and the `ClaudeCodeEngine`-unavailable guard — all in
+  `operator/bridges/shared/adapter.py`) used to double as both the visible
+  chat text and the *unmodified* spoken text, so a fresh install with no
+  reachable engine yet got backticks, `--flags` and `ALL_CAPS_ENV_VARS` read
+  aloud verbatim. Fixed via a new shared helper,
+  `voice_tag.with_voice_override(visible, spoken)`, which also neutralizes
+  any literal `<`/`>` in the visible text so untrusted subprocess stderr /
+  provider error bodies can never smuggle a stray `<voice>` tag that hijacks
+  the extraction. `completion_notify.mark_done()` now strips the tag at the
+  one choke point every background-task producer already calls, closing a
+  worse regression an adversarial review caught: a `/task` completion could
+  otherwise leak the raw `<voice>...</voice>` markup straight into the
+  visible chat message.
+- **Voice summaries no longer force-translate an already-German/English
+  reply.** `build_voice_summary`/`_resolve_audience_block` used to read
+  `profile.display_language` directly and unconditionally pin
+  `summarize.py`'s output to it — a persona configured with a non-de/en
+  static default produced e.g. a Chinese voice-summary audio for a
+  German-language reply. A confident per-turn de/en detection
+  (`_detect_confident_de_en`, reusing the existing STT-locale-hint
+  heuristic) now wins over the static pin when the text being spoken this
+  turn is unambiguously de/en; a genuinely non-Latin-script profile default
+  is untouched.
+- **Root-caused why the welcome greeting itself could still be wrong even
+  after the fix above**: two write paths for `profile.display_language` —
+  the generic in-chat `/profile set display_language=<value>`
+  (`operator/voice/scripts/profile_cli.py`) and the console's
+  `PUT /v1/console/profile` — never validated what they stored, unlike the
+  purpose-built `/lang set`. A bare, un-normalized `"zh"` (instead of the
+  canonical `"zh-Hans"`) written through either path broke every downstream
+  `i18n.t()` lookup. Both paths now normalize/reject through the same
+  `i18n.normalise()` call `/lang set` already uses.
+- **Added a real `zh-Hans.json` i18n bundle** (`operator/voice/i18n/`) —
+  previously only `de.json`/`en.json` existed, so ANY non-de/en
+  `display_language` silently fell back to an English welcome greeting,
+  regardless of what the profile said. A genuinely Chinese-preferring user
+  now gets a real, fully-translated greeting instead.
+
+Also closed two previously-untested blind spots along the way: sequential
+multi-task voice delivery (N concurrent background-task completions each
+getting their own correctly-matched voice note, no cross-contamination) —
+proven correct, was already working, just unverified; and the web console's
+single-`<audio>`-element "latest request wins" playback behavior — confirmed
+intentional by its own regression-guard comments, not a gap.
+
+Verified: real invocation tests (not just source inspection) for the TTS
+fallback fix, an adversarial hijack-regression test for the tag-neutralization
+mechanism, and end-to-end language-resolution tests against the actual live
+profile — 65+ tests green across the touched surface.
+
 ## [0.10.32] — 2026-07-12 — Uninstall clean-slate + critical voice-playback regression fix
 
 - **`corvin-uninstall` now always resets onboarding + engine selection.** A plain
