@@ -1441,6 +1441,19 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
 
     _backend = os.environ.get("VOICE_SUMMARIZE_BACKEND", "auto")
 
+    # Short-circuit: a reply that ALREADY fits the spoken budget needs no LLM
+    # summary. Spawning `claude -p` / Hermes here is pure latency — the dominant
+    # voice-reply delay (a cold `claude -p` first-spawn is ~tens of seconds) —
+    # AND it risks the model DRIFTING: e.g. a 3-word "Erledigt, alles gut." was
+    # being rewritten into a DIFFERENT sentence ("Prima, gerne! Falls noch mehr
+    # anliegt …"), inventing content the source never had. Speak it verbatim
+    # (the same faithful structural path Backend 3 uses) — instant and exact.
+    # Only genuinely-too-long replies pay for a real LLM summary below. Explicit
+    # backend pins (cli/hermes, used by tests) still exercise the LLM path.
+    if _backend == "auto" and len(text.strip()) <= max_chars:
+        body = naive_truncate(text, target)
+        return _task_prefix(task, lang) + body if task.strip() else body
+
     # Backend 1: CLI — preferred for users with Claude Max who don't want
     # to manage a separate API key.
     if _backend in ("auto", "cli"):
