@@ -7513,6 +7513,14 @@ def _try_openai_tts(
         if now < _voice_engine_state.get("quota_until", 0.0):
             return None  # still inside quota backoff
 
+    # ADR-0193: CORVIN_TTS_OPENAI_KEY is the canonical name — deliberately
+    # separate from OPENAI_API_KEY so this never collides with (or gets
+    # confused for) the claude CLI's own auth source. Bug found 2026-07-12:
+    # this lookup checked only the legacy OPENAI_API_KEY/OPENAI_APIKEY names
+    # and never the canonical one, so a service.env carrying ONLY
+    # CORVIN_TTS_OPENAI_KEY (the documented, intended setup) silently never
+    # matched — every OpenAI TTS attempt fell through to edge-tts/Piper (or
+    # text-only) with no error, no log line, nothing actionable surfaced.
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         # Canonical key file is ~/.config/corvin-voice/service.env (WA-22 SSOT;
@@ -7520,7 +7528,7 @@ def _try_openai_tts(
         # consulted — reading them here shadowed a rotated service.env key and,
         # via the old os.environ injection below, silently flipped STT to the
         # cloud provider using a key the operator believed retired).
-        for key in ("OPENAI_API_KEY", "OPENAI_APIKEY"):
+        for key in ("CORVIN_TTS_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY"):
             api_key = _load_env_value(key, _VOICE_CONFIG_DIR / "service.env")
             if api_key:
                 break
