@@ -11,8 +11,10 @@ These tests lock in the robust, disk-sourced channel:
   * It is empty when there are no uploads (a normal turn is unaffected).
   * Hidden / non-regular entries are ignored; the file count is capped.
   * ``_turn_system_prompt`` folds the manifest onto the base prompt, and
-    ``_build_args`` carries it into the ``--append-system-prompt`` argv slot for
-    EVERY turn (so a follow-up question still sees the file).
+    ``_build_args`` carries it into the ``--append-system-prompt-file`` argv
+    slot for EVERY turn (so a follow-up question still sees the file) — a
+    file, not an inline argument (Windows fresh-install fix: a multi-KB
+    inline prompt blows past cmd.exe's ~8191-char command-line buffer).
 """
 from __future__ import annotations
 
@@ -107,10 +109,19 @@ class AttachmentManifestTests(unittest.TestCase):
         f = ad / "data.csv"
         f.write_text("x,y\n")
         args = self.cr._build_args(self.sess, resume=True)
-        # --append-system-prompt is the argv slot right after the flag
-        idx = args.index("--append-system-prompt")
-        injected = args[idx + 1]
+        # --append-system-prompt-file is the argv slot right after the flag —
+        # a short path, not the (multi-KB-capable) prompt text itself.
+        idx = args.index("--append-system-prompt-file")
+        prompt_file = Path(args[idx + 1])
+        self.assertTrue(prompt_file.is_absolute())
+        injected = prompt_file.read_text(encoding="utf-8")
         self.assertIn(str(f), injected)
+
+    def test_build_args_prompt_file_is_hidden_from_artifact_scan(self) -> None:
+        args = self.cr._build_args(self.sess, resume=False)
+        idx = args.index("--append-system-prompt-file")
+        prompt_file = Path(args[idx + 1])
+        self.assertTrue(prompt_file.name.startswith("."))
 
 
 if __name__ == "__main__":

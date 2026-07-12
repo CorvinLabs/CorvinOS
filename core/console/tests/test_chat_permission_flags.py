@@ -102,9 +102,11 @@ class PermissionFlagTests(unittest.TestCase):
 
     def test_no_cmd_c_prefix_in_argv(self) -> None:
         # BatBadBut RCE fix: _build_args must NOT prepend a `cmd /c` wrapper to
-        # the argv. The untrusted --append-system-prompt content must never
-        # reach cmd.exe's re-parser as a list2cmdline-quoted argv element; the
-        # spawn site wraps a Windows .cmd shim through _win_shim quoting and
+        # the argv. Untrusted argv content (attachment paths, memory/profile
+        # text — the system prompt itself now goes via --append-system-prompt-
+        # file, a short path, not inline text) must never reach cmd.exe's
+        # re-parser as a list2cmdline-quoted argv element; the spawn site
+        # wraps a Windows .cmd shim through _win_shim quoting and
         # create_subprocess_shell instead.
         args = self.cr._build_args(self.sess, resume=False)
         self.assertNotIn("cmd", args[:1])

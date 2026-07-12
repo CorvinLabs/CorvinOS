@@ -1044,12 +1044,39 @@ def _web_workspace_roots(tenant_id: str) -> list[str]:
     return out
 
 
+def _write_turn_system_prompt(sess: WebChatSession) -> Path:
+    """Write this turn's merged system prompt to a file in the session
+    workdir and return its path.
+
+    Windows fresh-install fix: ``--append-system-prompt <text>`` used to pass
+    the FULL merged prompt (persona + attachment manifest + user profile +
+    memory index + voice-audience block — routinely several KB) as one raw
+    CLI argument. On Windows the ``claude`` binary resolves to a ``.cmd``
+    shim, which (per the RCE-safe rewrite below) must be launched via a
+    SINGLE ``cmd /c "<command line>"`` string — but cmd.exe's own internal
+    command-line buffer is capped at ~8191 characters, far below the ~32767
+    ``CreateProcess`` allows for a direct ``.exe`` launch. A multi-KB system
+    prompt blows past that every time, and every turn failed immediately
+    with cmd.exe's own "command line too long" error before ``claude`` ever
+    started — reported live on a fresh Windows 11 install, first turn.
+    ``--append-system-prompt-file <path>`` (an alias documented in
+    ``claude --help``: "--append-system-prompt[-file]") takes a short path
+    instead, keeping every platform's argv small regardless of prompt size —
+    strictly safer everywhere, not just a Windows workaround. A dot-prefixed
+    filename keeps it out of every artifact-scan site in this module (all of
+    which already skip ``name.startswith(".")``).
+    """
+    path = sess.workdir / ".corvin-system-prompt.txt"
+    path.write_text(_turn_system_prompt(sess), encoding="utf-8")
+    return path
+
+
 def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None) -> list[str]:
     """Build a ``claude -p`` invocation for this turn.
 
     Resume mode uses ``--continue`` so the per-workdir session state
     carries across turns. First turn falls back to a fresh subprocess.
-    The --append-system-prompt ensures output files land in the session
+    The --append-system-prompt-file ensures output files land in the session
     workdir (not the playground repo) so artifact detection works.
 
     Permission handling (the fresh-install hang fix): the web console has no
@@ -1064,11 +1091,11 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None)
     # On Windows, shutil.which() may resolve the npm-installed claude to a
     # .cmd shim (e.g. claude.cmd). asyncio.create_subprocess_exec cannot start
     # a .cmd directly, so it has to run through cmd.exe. We resolve the shim
-    # path here but do NOT prepend ``cmd /c`` in the argv: the untrusted
-    # ``--append-system-prompt`` content (user profile/memory) must never cross
-    # the cmd.exe re-parse boundary as a list2cmdline-quoted argv element — cmd
-    # treats the ``\"`` escape as a quote toggle, so ``" & powershell … & "``
-    # would break out and execute (BatBadBut host RCE). The spawn site instead
+    # path here but do NOT prepend ``cmd /c`` in the argv: untrusted argv
+    # content (e.g. a memory/profile path) must never cross the cmd.exe
+    # re-parse boundary as a list2cmdline-quoted argv element — cmd treats
+    # the ``\"`` escape as a quote toggle, so ``" & powershell … & "`` would
+    # break out and execute (BatBadBut host RCE). The spawn site instead
     # wraps a .cmd shim through _win_shim's cmd.exe-safe quoting. argv[0] stays
     # the resolved .cmd path so the spawn can detect the shim case.
     if sys.platform == "win32" and not os.path.isabs(binary):
@@ -1079,7 +1106,7 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None)
     args += ["-p",
              "--output-format", "stream-json",
              "--verbose",
-             "--append-system-prompt", _turn_system_prompt(sess)]
+             "--append-system-prompt-file", str(_write_turn_system_prompt(sess))]
 
     # MCP servers — the persona's resolver-injected servers + mcp_manager
     # catalog tools, exactly like the bridge adapter's spawn path. Without
