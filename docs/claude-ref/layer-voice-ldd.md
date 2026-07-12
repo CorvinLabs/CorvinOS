@@ -476,6 +476,31 @@ no-annotation-this-turn instead of a frozen chat; a healthy machine (fast Haiku
 ~3s/call) stays well under budget and produces both suffixes as before. Regression
 guard: `core/console/tests/test_chat_runtime_annotation.py`.
 
+**Annex must never double (`build_voice_summary` dedup).** The bridge backfills
+the LERN-ZUGABE / METAPHER onto the spoken text on every path, each guarded by
+`_has_lern_zugabe_suffix` / `_has_metapher_suffix` so an annex the summarizer (or
+a `<voice>` author-override) already produced is not re-added. Two bugs let it
+double anyway — both fixed: (1) the **override** and **short-text** paths appended
+the LERN-ZUGABE UNCONDITIONALLY (`if want_appendix:` with no suffix guard), unlike
+every other path and unlike the metapher check right beside them; a `<voice>`
+block that already ended in a LERN-ZUGABE got a second one. (2) `_has_lern_zugabe_
+suffix`'s tail window was 400 chars — too narrow: with a metapher bridge sitting
+AFTER the annex opener, "Und zur Einordnung," lands ~400-700 chars from the end and
+fell outside the window, so the guard missed it AND the spurious annex then pushed
+the original metapher out of ITS window → a second metapher too (the reported
+"Learning und Metapher doppelt"). Window widened to 900. Regression guard:
+`operator/bridges/shared/test_adapter_voice_annex_dedup.py`.
+
+**Chat-render is voice-ONLY by default.** The annex rides the TTS path only; it
+enters the visible chat/DM text solely when the user opts in via
+`voice_audience_chat_render=on` (`adapter.py` gates the audience-block injection
+on `_voice_profile.chat_render_enabled()`). With it OFF, `build_voice_summary`
+still backfills the annex into the spoken note (driven by the profile's
+`voice_audience_learning`/`_metaphors`, independent of chat-render), so the
+listener keeps the LERN-ZUGABE while the reader sees a clean reply. Turning
+chat-render ON means the model authors the annex into the reply text AND the TTS
+backfill would re-add it — which is exactly why the dedup guards above must hold.
+
 ### User-facing commands (in `bridges/shared/js/in_chat_commands.js`)
 
 | Command                          | Effect                                |

@@ -6931,16 +6931,24 @@ _LERN_ZUGABE_SENTENCE_MARKERS = (
 )
 
 
-def _has_lern_zugabe_suffix(text: str, window: int = 400) -> bool:
+def _has_lern_zugabe_suffix(text: str, window: int = 900) -> bool:
     """Return True iff *text* already contains a learning-annex sentence.
 
     Mirror of :func:`_has_metapher_suffix` for the LERN-ZUGABE. Without this the
     long-text path had no deterministic fallback for the learning annex — when
     the LLM summarizer skipped the --audience learning instruction (which it
     does as often as it skips the metaphor one) the annex silently vanished,
-    while the metaphor was always backfilled. The window is a touch wider than
-    the metaphor one because the annex can be one-to-two sentences AND the
-    metaphor bridge may sit after it.
+    while the metaphor was always backfilled.
+
+    The window must be wide enough that an ALREADY-present LERN-ZUGABE is still
+    seen when a metaphor bridge follows it: the annex opener ("Und zur
+    Einordnung,") sits BEFORE the metaphor sentence, so annex(1-2 sentences) +
+    metaphor(1 sentence) can push the opener ~400-700 chars from the end. A
+    400-char window missed it and the override/short paths then appended a
+    SECOND annex (and, by pushing the original metaphor out of ITS window, a
+    second metaphor too — the reported "Learning und Metapher doppelt"). The
+    markers are distinctive annex openers, so a wider window cannot false-match
+    ordinary prose.
     """
     tail = text[-window:] if len(text) > window else text
     return any(m in tail for m in _LERN_ZUGABE_SENTENCE_MARKERS)
@@ -7195,7 +7203,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
     _MIN_OVERRIDE_CHARS = 10
     if override is not None and len(override.strip()) >= _MIN_OVERRIDE_CHARS:
         spoken = _strip_for_speech(override.strip())
-        if want_appendix:
+        if want_appendix and not _has_lern_zugabe_suffix(spoken):
             spoken = _strip_for_speech(
                 _append_lern_zugabe(spoken, lang=appendix_lang)
             )
@@ -7215,7 +7223,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
         # when the listener-profile demands it; otherwise byte-identical to
         # the pre-Layer-12 fast path.
         spoken = _strip_for_speech(text)
-        if want_appendix:
+        if want_appendix and not _has_lern_zugabe_suffix(spoken):
             spoken = _strip_for_speech(
                 _append_lern_zugabe(spoken, lang=appendix_lang)
             )
