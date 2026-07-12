@@ -3,6 +3,15 @@ import { ttsBlob } from "@/lib/api";
 
 export type VoiceState = "idle" | "loading" | "playing" | "blocked";
 
+// A 1-frame SILENT WAV. Played (muted) inside a real user gesture to satisfy
+// every browser's autoplay policy ONCE, so all later programmatic playTts()
+// calls — which run AFTER an async summarize/tts fetch, far from any gesture —
+// are allowed. Without this, browsers (Firefox strictest) auto-play the FIRST
+// turn (it still falls inside the send gesture's activation window) but BLOCK
+// every turn after it, so the second task onward is silently never spoken.
+const _SILENT_WAV =
+  "data:audio/wav;base64,UklGRjIAAABXQVZFZm10IBIAAAABAAEAQB8AAEAfAAABAAgAAABmYWN0BAAAAAAAAABkYXRhAAAAAA==";
+
 /**
  * Shared TTS playback engine — extracted from chat.tsx's original inline
  * implementation so any page (chat, the first-boot Welcome screen, …) can
@@ -23,6 +32,56 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
   // Each call captures the current generation and only applies its result if
   // it's still the latest one once the async fetch resolves.
   const requestIdRef = React.useRef(0);
+  const unlockedRef = React.useRef(false);
+
+  const ensureAudioEl = React.useCallback(() => {
+    if (!audioRef.current) audioRef.current = new Audio();
+    return audioRef.current;
+  }, []);
+
+  // Prime the (reused) audio element inside a user gesture so the browser marks
+  // it user-activated — then every later programmatic play() is allowed. Runs
+  // once; idempotent no-op after the first success. Best-effort: a failed prime
+  // (no active gesture yet) leaves unlockedRef false so the NEXT gesture retries.
+  const unlock = React.useCallback(() => {
+    if (unlockedRef.current) return;
+    const a = ensureAudioEl();
+    try {
+      a.muted = true;
+      a.src = _SILENT_WAV;
+      const p = a.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => {
+          try { a.pause(); a.currentTime = 0; } catch { /* ignore */ }
+          a.muted = false;
+          unlockedRef.current = true;
+        }).catch(() => { a.muted = false; });
+      } else {
+        a.muted = false;
+        unlockedRef.current = true;
+      }
+    } catch {
+      a.muted = false;
+    }
+  }, [ensureAudioEl]);
+
+  // Default-ON, zero-config: the FIRST user interaction anywhere on the page
+  // primes audio, so voice works from turn 1 on every browser/OS with no caller
+  // wiring. Listeners stay until the prime succeeds (unlock() self-no-ops after),
+  // so a gesture that arrives before React is ready still catches the next one.
+  React.useEffect(() => {
+    if (unlockedRef.current) return;
+    const h = () => unlock();
+    const opts = { capture: true } as const;
+    window.addEventListener("pointerdown", h, opts);
+    window.addEventListener("keydown", h, opts);
+    window.addEventListener("touchstart", h, opts);
+    return () => {
+      window.removeEventListener("pointerdown", h, opts);
+      window.removeEventListener("keydown", h, opts);
+      window.removeEventListener("touchstart", h, opts);
+    };
+  }, [unlock]);
 
   const stopVoice = React.useCallback(() => {
     const a = audioRef.current;
@@ -73,11 +132,10 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
       }
       const url = URL.createObjectURL(blob);
       blobUrlRef.current = url;
-      let audio = audioRef.current;
-      if (!audio) {
-        audio = new Audio();
-        audioRef.current = audio;
-      }
+      // Reuse the ONE (gesture-unlocked) element — a fresh `new Audio()` per turn
+      // would not carry the user-activation and would be autoplay-blocked.
+      const audio = ensureAudioEl();
+      audio.muted = false;
       audio.onended = () => {
         if (blobUrlRef.current === url) {
           URL.revokeObjectURL(url);
@@ -97,7 +155,7 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
         setVoiceState("blocked");
       }
     },
-    [csrf, onError, stopVoice],
+    [csrf, onError, stopVoice, ensureAudioEl],
   );
 
   const playBlocked = React.useCallback(async () => {
@@ -111,5 +169,5 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
     }
   }, []);
 
-  return { voiceState, playTts, playBlocked, stopVoice };
+  return { voiceState, playTts, playBlocked, stopVoice, unlock };
 }
