@@ -174,8 +174,16 @@ if (-not $SkipHermes) {
     # ensure Ollama is installed (winget)
     if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
         if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Step "Installing Ollama ..."
+            # --silent suppresses winget's own GUI/progress window, so without
+            # this message the download (~100+ MB) gave no indication it was
+            # still working -- looked like a hung installer on a slower
+            # connection. Kept synchronous (no background job) here, unlike
+            # install.sh's dot-heartbeat -- winget's interaction with a
+            # background PowerShell job is untested and a broken install step
+            # would be worse than a plain "please wait".
+            Write-Step "Downloading Ollama (~100 MB, one-time) -- this can take a minute, please wait ..."
             winget install --silent --accept-package-agreements --accept-source-agreements Ollama.Ollama
+            if ($LASTEXITCODE -ne 0) { Write-Warn "Ollama install failed -- install manually: https://ollama.com/download/windows" }
             $env:Path = "$env:LOCALAPPDATA\Programs\Ollama;$env:Path"
         } else {
             Write-Warn "winget not found -- install Ollama from https://ollama.com/download/windows"

@@ -144,10 +144,15 @@ if [ "$SKIP_HERMES" != "1" ]; then
 
     # ensure Ollama is installed
     if ! command -v ollama >/dev/null 2>&1 && [ ! -x /usr/local/bin/ollama ]; then
-        echo "  Installing Ollama ..."
         case "$OS" in
-            Linux)  curl -fsSL https://ollama.com/install.sh | sh || printf '  %s Ollama install failed\n' "$(_yellow '⚠')" ;;
-            Darwin) if command -v brew >/dev/null 2>&1; then brew install ollama
+            # `curl -fsSL ... | sh` is a SILENT download (-s suppresses curl's own
+            # meter) of the Ollama binary + runtime (~100+ MB) — with no heartbeat
+            # this looked exactly like a hung installer on a slower connection.
+            Linux)  _await "Downloading Ollama (~100 MB, one-time)" \
+                        sh -c 'curl -fsSL https://ollama.com/install.sh | sh' \
+                        || printf '  %s Ollama install failed — install manually: https://ollama.com/download\n' "$(_yellow '⚠')" ;;
+            Darwin) echo "  Installing Ollama ..."
+                    if command -v brew >/dev/null 2>&1; then brew install ollama
                     else printf '  %s Install Ollama from https://ollama.com/download\n' "$(_yellow '⚠')"; fi ;;
             *)      printf '  %s Install Ollama from https://ollama.com/download\n' "$(_yellow '⚠')" ;;
         esac
