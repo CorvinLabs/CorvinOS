@@ -17,6 +17,7 @@ HERE = Path(__file__).resolve().parent
 SHARED = HERE.parent.parent / "bridges" / "shared"
 sys.path.insert(0, str(SHARED))
 
+import i18n as _i18n    # noqa: E402
 import profile as prof  # noqa: E402
 
 
@@ -51,6 +52,23 @@ def cmd_set(args: list[str]) -> int:
         print("Error: empty key.")
         return 2
     val = prof.parse_value(raw)
+    if key == "display_language" and val is not None:
+        # Route through the SAME BCP-47 validator `/lang set` uses
+        # (i18n.normalise) instead of storing raw input verbatim.
+        # Confirmed live bug (2026-07-12): a bare "zh" (not the canonical
+        # "zh-Hans") stored here silently broke every downstream i18n.t()
+        # lookup (welcome greeting, voice-summary language pin), which
+        # fall through their own fallback chain to English -- neither the
+        # configured language nor the user's actual one. See
+        # docs/troubleshooting.md #34. Use `/lang set <code>` for a
+        # friendlier native-name confirmation; this generic command now
+        # just refuses an unrecognisable code instead of accepting it.
+        normalised = _i18n.normalise(str(val))
+        if not normalised:
+            print(f"Error: {val!r} is not a recognised language code. "
+                  f"Try `/lang set <code>` (e.g. de, en, fr).")
+            return 2
+        val = normalised
     prof.set_value(key, val)
     if val is None:
         print(f"Removed {key}.")

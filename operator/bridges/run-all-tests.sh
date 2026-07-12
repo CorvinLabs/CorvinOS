@@ -90,6 +90,7 @@ run "Python: voice audience"     python3 shared/test_adapter_voice_audience.py >
 run "Python: voice override"     python3 shared/test_adapter_voice_override.py >/dev/null || fails=$((fails+1))
 run "Python: engine-fallback voice text (2026-07-12)" python3 shared/test_adapter_engine_fallback_voice.py >/dev/null || fails=$((fails+1))
 run "Python: voice output-language escape hatch (2026-07-12)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_adapter_voice_lang_detect.py -q >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: profile display_language validation (2026-07-12)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" ../voice/scripts/test_profile_cli_lang.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: progress dedup"     python3 shared/test_adapter_progress.py >/dev/null   || fails=$((fails+1))
 run "Python: completion notify (bg done→messenger)" python3 shared/test_completion_notify.py >/dev/null || fails=$((fails+1))
 run "Python: completion E2E (done→outbox→daemon send)" python3 shared/test_completion_e2e.py >/dev/null || fails=$((fails+1))

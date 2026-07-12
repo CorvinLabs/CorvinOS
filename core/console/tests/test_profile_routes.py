@@ -198,6 +198,38 @@ class ProfileWriteIdentityTests(unittest.TestCase):
             r2 = ctx["client"].get("/v1/console/profile")
             self.assertEqual(r2.json()["profile"]["identity"]["name"], "Silvio")
 
+    def test_display_language_is_normalised_through_bcp47(self):
+        """Regression (2026-07-12): PUT /v1/console/profile used to store
+        `identity.display_language` verbatim (only max_length=8 capped) --
+        a bare "zh" (not the canonical "zh-Hans") persisted unnormalised and
+        silently broke every downstream i18n.t() lookup that expects a
+        normalised BCP-47 code (welcome greeting, voice-summary language
+        pin). Root cause traced to this route + profile_cli.py's `/profile
+        set` both skipping the i18n.normalise() step `/lang set` already
+        does. See docs/troubleshooting.md #34."""
+        with _sandbox() as ctx:
+            r = ctx["client"].put(
+                "/v1/console/profile",
+                headers=_auth_headers(ctx),
+                json={"identity": {"display_language": "zh"},
+                      "re_auth_token": ctx["token"]},
+            )
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(
+                r.json()["profile"]["identity"]["display_language"], "zh-Hans",
+                "bare 'zh' must be normalised to the canonical BCP-47 form",
+            )
+
+    def test_display_language_rejects_unrecognisable_code(self):
+        with _sandbox() as ctx:
+            r = ctx["client"].put(
+                "/v1/console/profile",
+                headers=_auth_headers(ctx),
+                json={"identity": {"display_language": "!!!not-a-lang"},
+                      "re_auth_token": ctx["token"]},
+            )
+            self.assertEqual(r.status_code, 422, r.text)
+
     def test_write_with_wrong_reauth_token_returns_401(self):
         """verify_reauth rejects tokens that do not match sid_fingerprint."""
         with _sandbox() as ctx:

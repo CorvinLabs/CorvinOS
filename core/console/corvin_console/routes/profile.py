@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status as http_status
-from pydantic import BaseModel, Field, conint
+from pydantic import BaseModel, Field, conint, field_validator
 
 from .. import auth as session_auth
 from .. import audit as console_audit
@@ -48,6 +48,7 @@ _VOICE_SHARED = _REPO / "operator" / "bridges" / "shared"
 if str(_VOICE_SHARED) not in sys.path:
     sys.path.insert(0, str(_VOICE_SHARED))
 
+import i18n as _i18n        # noqa: E402 — voice/bridges/shared/i18n.py
 import profile as _profile  # noqa: E402 — voice/bridges/shared/profile.py
 
 
@@ -71,6 +72,29 @@ class IdentityFields(BaseModel):
     custom_instructions:      str | None = Field(None, max_length=500)
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("display_language")
+    @classmethod
+    def _normalise_display_language(cls, v: str | None) -> str | None:
+        """Route through the SAME BCP-47 validator the `/lang set` slash
+        command uses (i18n.normalise) instead of storing raw client input.
+
+        Confirmed live bug (2026-07-12): this field previously had no
+        validation beyond a max_length cap, so a value like a bare "zh"
+        (not the canonical "zh-Hans") was stored verbatim. Every downstream
+        i18n.t() lookup (the welcome greeting, voice-summary language pin)
+        then silently fell through its own fallback chain to English —
+        neither the configured language nor the user's actual language.
+        See docs/troubleshooting.md #34.
+        """
+        if v is None:
+            return None
+        normalised = _i18n.normalise(v)
+        if not normalised:
+            raise ValueError(
+                f"{v!r} is not a recognised BCP-47 language code"
+            )
+        return normalised
 
 
 class AudienceFields(BaseModel):

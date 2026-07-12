@@ -346,8 +346,20 @@ behavior with a real test rather than leave it unverified. Two gaps closed:
    language and not the user's actual language either. This code path can't
    use the de/en escape hatch above (no per-turn text exists to detect — the
    greeting is assembled fresh from templates). See troubleshooting.md #34.
-   Not fixed — it's a data/preference call (is `zh` even the intended
-   `display_language`?), pinned by test instead of silently patched.
+   Root-caused the same day (user confirmed a language IS picked at install
+   time, prompting a re-investigation): the installer seeds `display_language`
+   correctly (`corvinOS/installer/steps/piper.py::_seed_profile_display_language`),
+   but two other write paths — `/profile set display_language=<value>`
+   (`profile_cli.py::cmd_set`) and the console's `PUT /v1/console/profile`
+   (`routes/profile.py`) — stored the raw value with zero validation, unlike
+   the purpose-built `/lang set` (always runs `i18n.normalise()`). A bare
+   un-normalized `"zh"` written through either path is what broke this
+   deployment's greeting. **Fixed**: both paths now normalize/reject through
+   `i18n.normalise()` the same way `/lang set` does; live profile corrected.
+   Tests: `test_profile_cli_lang.py` (5 cases), 2 new cases in
+   `test_profile_routes.py`. The missing-`zh-Hans`-bundle gap itself (a
+   genuinely Chinese-preferring user still gets an English greeting) is a
+   separate, still-open translation-content gap — not this validation bug.
 2. **Sequential multi-task voice delivery** — whether N concurrent
    `want_voice=True` background-task completions each get delivered with
    their OWN correct voice note (no drop, no cross-contamination) had no
