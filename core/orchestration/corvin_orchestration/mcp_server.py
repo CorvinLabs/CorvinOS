@@ -141,6 +141,53 @@ except ImportError:
 _ACTIVE_WORKFLOW_RUNS = 0
 _ACTIVE_WORKFLOW_LOCK = threading.Lock()
 
+# Node types whose executor NEVER calls engine.spawn() (see
+# corvin_workflows/node_types.py). A workflow built only from these runs with
+# NO LLM engine — so it must not require the `claude` CLI on PATH. This is the
+# Hermes-only / no-Claude fresh-install path (and CI, which ships no CLI): a
+# pure code/compute/merge workflow has to execute regardless. Any node type
+# NOT in this set is treated as engine-requiring and fails fast up front with a
+# clean engine_unavailable envelope rather than an opaque mid-run node failure.
+_ENGINE_FREE_NODE_TYPES = frozenset(
+    {"code", "compute", "merge", "static", "ask_human", "deliver"}
+)
+
+
+class _NullEngine:
+    """Placeholder engine for workflows with no engine-requiring node. Its
+    spawn() must never be reached; if it is, that is a routing bug and we raise
+    loudly rather than silently returning an empty result."""
+
+    name = "null"
+
+    def spawn(self, call):  # noqa: ANN001, ANN201
+        raise RuntimeError(
+            "internal: engine-free workflow reached engine.spawn — node-type "
+            f"classification is wrong for agent={getattr(call, 'agent', '?')!r}"
+        )
+
+
+_NULL_ENGINE = _NullEngine()
+
+
+class _LazyClaudeEngine:
+    """Constructs the real ClaudeCliEngine on the FIRST spawn(). A workflow
+    resume whose remaining nodes never reach an agent — or an unknown-run
+    lookup that fails before any spawn — then needs no `claude` CLI on PATH.
+    Deferring construction here is what keeps `workflow_resume` on a Hermes-only
+    / no-Claude install (and in CI) from masking a clean 'no paused run found'
+    behind an engine_unavailable envelope."""
+
+    name = "claude"
+
+    def __init__(self) -> None:
+        self._engine: Any = None
+
+    def spawn(self, call):  # noqa: ANN001, ANN201
+        if self._engine is None:
+            self._engine = _ClaudeCliEngine()
+        return self._engine.spawn(call)
+
 
 def _count_console_running(tenant_id: str) -> int:
     """Best-effort count of console-started runs currently 'running'
@@ -617,20 +664,36 @@ class OrchestrationServer:
             self._error(msgid, INVALID_PARAMS, f"invalid workflow: {exc}")
             return
 
-        try:
-            engine = _ClaudeCliEngine()
-        except _ClaudeEngineError as exc:
-            self._respond(msgid, self._text_result(
-                {"status": "engine_unavailable", "error": str(exc)}, is_error=True,
-            ))
-            return
-
+        # Concurrency gate runs BEFORE engine construction: it is a cheap,
+        # engine-independent licensing check, and at the limit we must refuse
+        # without paying to instantiate an engine. Ordering also keeps the
+        # refusal deterministic in environments where the `claude` CLI is
+        # absent (CI) — otherwise engine_unavailable would mask the refusal.
         refusal = _workflow_concurrency_refusal(tenant_id)
         if refusal:
             self._respond(msgid, self._text_result(
                 {"status": "refused", "error": refusal}, is_error=True,
             ))
             return
+
+        # Construct the LLM engine ONLY when a node actually needs it. A pure
+        # code/compute/merge workflow must run without the `claude` CLI on PATH
+        # (Hermes-only / no-Claude fresh install, and CI). An engine-requiring
+        # workflow with no CLI fails fast here with a clean engine_unavailable
+        # envelope instead of an opaque mid-run node failure.
+        needs_engine = any(
+            str(node.get("type", "agent")) not in _ENGINE_FREE_NODE_TYPES
+            for node in doc.graph
+        )
+        engine: Any = _NULL_ENGINE
+        if needs_engine:
+            try:
+                engine = _ClaudeCliEngine()
+            except _ClaudeEngineError as exc:
+                self._respond(msgid, self._text_result(
+                    {"status": "engine_unavailable", "error": str(exc)}, is_error=True,
+                ))
+                return
 
         budget_s = _clamp(args.get("budget_s"), lo=10, hi=600, default=120)
         sink = _audit_sink_for(tenant_id, "workflow")
@@ -667,7 +730,10 @@ class OrchestrationServer:
             result = _run_with_budget(
                 lambda: _resume_workflow(
                     run_id, reply,
-                    engine=_ClaudeCliEngine(),
+                    # Lazy: an unknown run_id (or a resume whose remaining nodes
+                    # never spawn an agent) must not require the `claude` CLI —
+                    # construction is deferred to the first real agent spawn.
+                    engine=_LazyClaudeEngine(),
                     tenant_id=tenant_id,
                     # Chat-tool caller is the persona's own privileged turn —
                     # same posture as the console's operator caller

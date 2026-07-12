@@ -278,6 +278,23 @@ it under `FORGE_PERSONA=research` (succeeds, body matches) and under
 skips with a clear marker when `bwrap` is missing — without a real
 namespace there is no enforcement to test.
 
+**Interpreter binding on uv installs.** The sandbox runs the tool with
+`sys.executable`, so that interpreter must be visible inside the jail.
+`runner.py` binds the venv root read-only, but a **uv-managed** venv
+symlinks `bin/python3` through several hops to an interpreter that lives
+OUTSIDE the venv (e.g. `~/.local/share/uv/python/cpython-3.11-…` →
+`cpython-3.11.15-…`). Binding only the venv root left an intermediate hop
+dangling — `bwrap: execvp …/python3: No such file` — which silently broke
+**every** forged tool on the default `uv`/`pip`-into-uv-venv install path.
+The runner now also binds the interpreter version STORE (the parent that
+holds both the short-name symlink dir and the real `cpython-X.Y.Z` dir)
+read-only, guarded so it never binds a system-wide or home-root directory.
+A classic `python -m venv` (whose `bin/python` resolves under `/usr`) is
+unaffected. Regression coverage lands via the whole forge sandbox suite
+(`test_forge.py`, `test_output_streaming.py`, `test_persona_sandbox.py`,
+`test_cache.py`, `test_envelope.py`), which only executes real tools when
+this binding is correct.
+
 **Output streaming on truncation (S8).** When a forged tool's stdout
 exceeds `output_cap` (default 4 MiB, policy-clamped), runner.py:
 preserves the full stdout as `<run_id>/artifacts/full_stdout.bin`

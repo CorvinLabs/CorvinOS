@@ -71,6 +71,15 @@ block. `error_strategy: fail_branch` contains a failure to that node's downstrea
 (marked `skipped`, not executed) instead of aborting the whole run; the default `abort`
 preserves the original all-or-nothing behavior.
 
+**No LLM CLI required for engine-free workflows.** The `workflow_run` MCP tool
+constructs the `claude` engine only when the graph actually contains an
+engine-requiring node (the `LLM call? = Yes`/`classify`/`× N` rows above). A
+workflow built purely from `code` / `compute` / `merge` / `static` / `ask_human`
+/ `deliver` nodes runs with **no `claude` CLI on PATH** — so a Hermes-only or
+otherwise no-Claude install (and CI) can still execute deterministic pipelines.
+An engine-requiring workflow with no CLI fails fast with a clean
+`engine_unavailable` result instead of an opaque mid-run node error.
+
 ### Chatflow (`orchestration.engine: chat`) and human-in-the-loop
 
 Setting `orchestration.engine: chat` (instead of `dag`) marks a workflow as turn-based. It

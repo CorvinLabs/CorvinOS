@@ -349,6 +349,16 @@ def case_summarize_judge_cli_corrects() -> None:
 # ─────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    # The cli-judge cases mock ``dialectic.subprocess.run`` and assert it
+    # fires, but ``_run_cli_judge`` short-circuits on ``_claude_authenticated()``
+    # BEFORE the spawn when no OAuth session / ANTHROPIC_API_KEY exists (the
+    # intended fresh-install fast-fail). On a CI box with no credentials the
+    # judge would never reach the mocked subprocess and three cases would fail
+    # spuriously. Establish the 'authenticated' precondition these cases assume;
+    # the mode=off cases are unaffected (auth gates nothing when the judge is
+    # inert). Restored below so the process env is not mutated for later suites.
+    _orig_api_key = os.environ.get("ANTHROPIC_API_KEY")
+    os.environ["ANTHROPIC_API_KEY"] = "stub-key-for-judge-spawn"
     cases = [
         case_judge_off_returns_candidate,
         case_judge_cli_faithful,
@@ -370,6 +380,10 @@ def main() -> int:
             import traceback
             traceback.print_exc()
             failures += 1
+    if _orig_api_key is None:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+    else:
+        os.environ["ANTHROPIC_API_KEY"] = _orig_api_key
     if failures:
         print(f"\n{failures} of {len(cases)} cases failed.")
         return 1

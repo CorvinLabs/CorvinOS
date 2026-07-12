@@ -6,6 +6,44 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.30] — 2026-07-12 — Forge sandbox on uv installs + engine-free workflows (fresh-install robustness)
+
+Two fresh-install robustness fixes surfaced by running the CI suite the way a
+genuinely fresh box runs it (no `claude` CLI on PATH, a `uv`-managed venv), plus
+the test-harness fixes that let CI exercise those paths on a credential-less box.
+
+- **Forge sandbox was broken on every `uv` install (the default installer path).**
+  The bwrap jail runs the tool with `sys.executable`, but a `uv`-managed venv
+  symlinks `bin/python3` through several hops to an interpreter OUTSIDE the venv
+  (`~/.local/share/uv/python/cpython-3.11-…` → `cpython-3.11.15-…`). The runner
+  bound only the venv root, so an intermediate hop dangled inside the jail —
+  `bwrap: execvp …/python3: No such file` — and **every** forged tool failed to
+  execute. The runner now also binds the interpreter version store read-only
+  (guarded against system-wide / home-root dirs). A classic `python -m venv`
+  (interpreter under `/usr`) is unaffected. Fix in `operator/forge/forge/runner.py`;
+  proven by the full forge sandbox suite now executing real tools end-to-end.
+
+- **`workflow_run` required the `claude` CLI even for code-only workflows.** The
+  orchestration MCP server eagerly constructed the LLM engine before running any
+  node, so a Hermes-only / no-Claude install (and CI) could not run a pure
+  `code`/`compute`/`merge` pipeline at all. The engine is now built only when the
+  graph contains an engine-requiring node; engine-free workflows run with no CLI,
+  and an engine-requiring workflow with no CLI still fails fast with a clean
+  `engine_unavailable` result. `workflow_resume` likewise defers engine
+  construction so an unknown run-id returns its real error instead of masking it.
+  Fix in `core/orchestration/corvin_orchestration/mcp_server.py`.
+
+- **Test-harness (CI, no credentials): four suites now establish their own
+  preconditions.** The helper-model and voice-summary-judge sites gate on
+  `_claude_authenticated()` and short-circuit before spawning `claude` when no
+  OAuth session / `ANTHROPIC_API_KEY` exists — so on a credential-less CI box the
+  mocked-subprocess assertions never fired. Those suites now set the
+  authenticated precondition they assume. `say.py`'s key-precedence probe was
+  updated to write `service.env` (the single provider-key file since WA-22), not
+  the retired `.env`. `test_voice_persona` now asserts the forge MCP `command` is
+  an absolute interpreter path (the `{{PYTHON}}` template), not the bare
+  `python3` that broke under the adapter's stripped-PATH spawn.
+
 ## [0.10.29] — 2026-07-12 — Auto-updater downgrade fix (critical)
 
 - **The auto-updater could DOWNGRADE the install.** It compared `latest != current`

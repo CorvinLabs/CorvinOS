@@ -116,7 +116,15 @@ def test_mcp_servers_materialize_with_expanded_paths():
     servers = cfg.get("mcpServers", {})
     t("forge server present",         "forge" in servers)
     forge = servers["forge"]
-    t("command = python3",            forge.get("command") == "python3")
+    # forge.json now uses the {{PYTHON}} template var → resolves to the
+    # running interpreter's ABSOLUTE path (sys.executable), not the bare
+    # "python3". Bare "python3" broke under the adapter's stripped-PATH spawn
+    # (engine-autodetect class): the sandbox could not find an interpreter.
+    # The command must be an absolute path to a python executable.
+    _cmd = forge.get("command", "")
+    t("command is an absolute python interpreter path",
+      _cmd.startswith("/") and "python" in Path(_cmd).name,
+      detail=f"command={_cmd!r}")
     t("args[0] is absolute path",
       forge["args"][0].startswith("/"),
       detail=f"args[0]={forge['args'][0]}")

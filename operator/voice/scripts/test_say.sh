@@ -84,18 +84,20 @@ RC=$?
   || bad "empty text → expected silent skip, got rc=$RC stdout='$STDOUT'"
 [[ ! -e "$TMP/empty.ogg" ]] && ok "empty text → no file" || bad "empty text → wrote file"
 
-# ── 4. .env lookup precedence (sandboxed) ────────────────────────────────
-# A bogus key in the sandboxed VOICE_CONFIG_DIR/.env must be picked up by
-# _load_key_from_env_files. We can't actually call OpenAI, but we can
-# verify the resolver reaches the openai-import branch instead of the
-# "no key" branch.
-echo "=== say.py: .env precedence ==="
-echo 'OPENAI_API_KEY=sk-test-bogus-key-for-resolver-test' >"$VOICE_CONFIG_DIR/.env"
-chmod 600 "$VOICE_CONFIG_DIR/.env"
+# ── 4. service.env key precedence (sandboxed) ────────────────────────────
+# A bogus key in the sandboxed VOICE_CONFIG_DIR/service.env must be picked up
+# by _load_key_from_env_files. Post WA-22 (fac8baf) service.env is the ONE
+# provider-key config file; the second ~/.config/corvin-voice/.env was retired
+# (nothing writes to it), so this probe must target service.env — the .env
+# variant is never read. We can't actually call OpenAI, but we can verify the
+# resolver reaches the openai-import branch instead of the "no key" branch.
+echo "=== say.py: service.env precedence ==="
+echo 'OPENAI_API_KEY=sk-test-bogus-key-for-resolver-test' >"$VOICE_CONFIG_DIR/service.env"
+chmod 600 "$VOICE_CONFIG_DIR/service.env"
 "$SAY" "$TMP/probe.ogg" "Probe" de >/dev/null 2>"$TMP/err2.log"
 RC=$?
-[[ $RC -eq 0 ]] && ok ".env path: still exit 0 (silent skip on bad key)" \
-  || bad ".env path: expected exit 0, got $RC"
+[[ $RC -eq 0 ]] && ok "service.env path: still exit 0 (silent skip on bad key)" \
+  || bad "service.env path: expected exit 0, got $RC"
 # Should NOT carry the "no OPENAI_API_KEY" diagnostic — the resolver
 # found the key and went past it. Either openai is missing (different
 # diagnostic) or the call failed (different diagnostic).

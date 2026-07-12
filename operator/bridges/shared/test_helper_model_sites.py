@@ -80,6 +80,14 @@ class _StubPathFixture:
         os.environ["PATH"] = f"{self._stub_dir}:{self._orig_path}"
         self._env_snapshot = {k: os.environ.pop(k) for k in list(os.environ)
                               if k.startswith("CORVIN_HELPER_MODEL")}
+        # The summarize/dialectic sites gate on ``_claude_authenticated()`` and
+        # short-circuit BEFORE spawning ``claude`` when no OAuth session /
+        # ANTHROPIC_API_KEY exists (the intended fresh-install fast-fail). This
+        # E2E asserts the *argv* the site would build, so we must satisfy that
+        # precondition explicitly — otherwise the run never happens on a CI box
+        # with no credentials and the capture stays empty (KeyError: 'args').
+        self._orig_api_key = os.environ.get("ANTHROPIC_API_KEY")
+        os.environ["ANTHROPIC_API_KEY"] = "stub-key-for-argv-capture"
 
     def _teardown_stub(self) -> None:
         os.environ["PATH"] = self._orig_path
@@ -87,6 +95,10 @@ class _StubPathFixture:
             if k.startswith("CORVIN_HELPER_MODEL"):
                 del os.environ[k]
         os.environ.update(self._env_snapshot)
+        if self._orig_api_key is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = self._orig_api_key
         shutil.rmtree(self._tmp, ignore_errors=True)
 
 
