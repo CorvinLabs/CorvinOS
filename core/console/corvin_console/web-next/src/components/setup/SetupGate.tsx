@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
 import {
   BookOpen,
@@ -1103,47 +1103,39 @@ function StatusRow({
 
 export function SetupGate() {
   const { status, session } = useAuth();
-  const [dismissed, setDismissed] = React.useState(() => {
-    try {
-      return localStorage.getItem("corvin_setup_complete") === "1";
-    } catch {
-      return false;
-    }
-  });
 
+  // The server (GET /setup/status) is the single source of truth. A prior
+  // version cached its answer in localStorage and, worse, used the cached
+  // value to DISABLE the query entirely — so a "corvin_setup_complete=1"
+  // left over from a previous install permanently skipped onboarding in
+  // that browser, even after a full uninstall+reinstall wiped the server
+  // state (there is no way for a server-side uninstall to reach into a
+  // browser's localStorage). The query now always runs while authenticated;
+  // nothing here second-guesses its result.
   const statusQuery = useQuery({
     queryKey: ["setup-status"],
     queryFn: ({ signal }) => getSetupStatus(signal),
-    enabled: status === "authenticated" && !dismissed,
+    enabled: status === "authenticated",
     staleTime: 60_000,
     retry: 1,
   });
 
+  const queryClient = useQueryClient();
   const completeMutation = useMutation({
     mutationFn: () => postSetupComplete(session?.csrf_token ?? ""),
     onSuccess: () => {
-      try {
-        localStorage.setItem("corvin_setup_complete", "1");
-      } catch { /* ignore */ }
-      setDismissed(true);
+      // Re-fetch rather than trust a local flag — the server just recorded
+      // completion, so its next answer for THIS query key already reflects
+      // that; no need for a second, independent "am I done" cache.
+      queryClient.invalidateQueries({ queryKey: ["setup-status"] });
     },
   });
 
   const [step, setStep] = React.useState<Step>("welcome");
 
-  // Server already flagged setup_complete — skip gate
-  React.useEffect(() => {
-    if (statusQuery.data?.setup_complete) {
-      try {
-        localStorage.setItem("corvin_setup_complete", "1");
-      } catch { /* ignore */ }
-      setDismissed(true);
-    }
-  }, [statusQuery.data?.setup_complete]);
-
-  // Not authenticated or already done → render nothing
-  if (status !== "authenticated" || dismissed) return null;
-  // Still loading the status check → render nothing (no flicker)
+  // Not authenticated → render nothing
+  if (status !== "authenticated") return null;
+  // Still loading the status check, or it errored → render nothing (no flicker)
   if (statusQuery.isLoading || statusQuery.isError) return null;
   // Server says already complete → render nothing
   if (statusQuery.data?.setup_complete) return null;

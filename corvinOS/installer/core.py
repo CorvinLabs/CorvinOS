@@ -788,7 +788,7 @@ class CorvinInstaller:
         print("=" * 60)
 
     def uninstall(self, purge: bool = False) -> None:
-        """Remove all services, plugins, runtime data, and config (10 steps).
+        """Remove all services, plugins, runtime data, and config (11 steps).
 
         Args:
             purge: When True, delete all data directories without prompting.
@@ -814,7 +814,7 @@ class CorvinInstaller:
             self.selected_bridges = self.BRIDGES.copy()
 
         # ── Step 1: Stop + remove services via service manager ────────────
-        print("\n[1/10] Stopping and removing services...")
+        print("\n[1/11] Stopping and removing services...")
         # "webui" included: step_14 registers it on Linux AND macOS — leaving
         # it out kept the console LaunchAgent/user-unit alive after
         # "uninstall" (macOS relaunched it at every login; WA-7 class).
@@ -834,7 +834,7 @@ class CorvinInstaller:
         # ── Step 2: Remove remaining systemd unit files ────────────────────
         # Covers units installed by bridge.sh / corvin-install that may
         # not be tracked by the service manager (timers, watchdog, etc.).
-        print("\n[2/10] Removing autostart entries (systemd units / Scheduled Task)...")
+        print("\n[2/11] Removing autostart entries (systemd units / Scheduled Task)...")
         if sys.platform != "win32":
             systemd_user = self.systemd_user_dir
             bridge_units = [
@@ -1038,7 +1038,7 @@ class CorvinInstaller:
             print("  ℹ Not on Linux or Windows — skipping autostart cleanup")
 
         # ── Step 3: Unregister Claude Code plugins ─────────────────────────
-        print("\n[3/10] Unregistering Claude Code plugins...")
+        print("\n[3/11] Unregistering Claude Code plugins...")
         _claude = shutil.which("claude")
         if _claude:
             for plugin_id in (
@@ -1062,7 +1062,7 @@ class CorvinInstaller:
             print("  ℹ claude CLI not found — plugin entries left as-is")
 
         # ── Step 4: Remove Claude Code plugin cache ────────────────────────
-        print("\n[4/10] Removing Claude Code plugin cache...")
+        print("\n[4/11] Removing Claude Code plugin cache...")
         plugin_cache = self.claude_plugins_dir / "cache" / "corvin-voice-local"
         if plugin_cache.exists():
             try:
@@ -1086,7 +1086,7 @@ class CorvinInstaller:
             print("  ℹ Plugin cache not found — nothing to remove")
 
         # ── Step 5: Remove Claude Code marketplace registration ────────────
-        print("\n[5/10] Removing Claude Code marketplace registration...")
+        print("\n[5/11] Removing Claude Code marketplace registration...")
         known_marketplaces = self.claude_plugins_dir / "known_marketplaces.json"
         if known_marketplaces.exists():
             try:
@@ -1103,7 +1103,7 @@ class CorvinInstaller:
             print("  ℹ Marketplace file not found")
 
         # ── Step 6: Remove Web Console build artifacts ─────────────────────
-        print("\n[6/10] Removing Web Console build artifacts...")
+        print("\n[6/11] Removing Web Console build artifacts...")
         if _IS_WHEEL_INSTALL:
             print("  ℹ pip-wheel install — SPA is inside the wheel, not a build artifact to remove")
             print("  ℹ To remove the package:  pip uninstall corvinos")
@@ -1124,7 +1124,7 @@ class CorvinInstaller:
                     print(f"  ℹ Not found: {artifact_dir.name}")
 
         # ── Step 7: Remove bridge virtual environments ─────────────────────
-        print("\n[7/10] Removing bridge virtual environments...")
+        print("\n[7/11] Removing bridge virtual environments...")
         for bridge in self.selected_bridges:
             try:
                 self.bridge_manager.cleanup_venv(bridge)
@@ -1145,8 +1145,55 @@ class CorvinInstaller:
                     except Exception as e:
                         print(f"  ⚠ {e}")
 
-        # ── Step 8: Remove voice config (~/.config/corvin-voice/) ─────────
-        print("\n[8/10] Removing voice config directory...")
+        # ── Step 8: Reset onboarding + engine selection (always, not gated
+        # behind purge/prompts below) ──────────────────────────────────────
+        # Review finding (2026-07-12): a plain `corvin-uninstall` keeps the
+        # onboarding-complete marker and the tenant's selected engine unless
+        # the user opts into the Step 9/10 purge prompts below — so a
+        # subsequent reinstall silently skips onboarding and reuses the old
+        # engine, even though the whole point of uninstall+reinstall is a
+        # clean slate. Unlike API keys/audit logs (genuinely worth protecting
+        # behind a confirmation prompt), these are just UI/session state with
+        # nothing to lose, so they are reset unconditionally.
+        print("\n[8/11] Resetting onboarding + engine selection...")
+        removed_any = False
+        setup_complete_flag = self.voice_config / ".corvin_setup_complete"
+        if setup_complete_flag.exists():
+            try:
+                setup_complete_flag.unlink()
+                print(f"  ✓ Removed {setup_complete_flag}")
+                removed_any = True
+            except OSError as e:
+                print(f"  ⚠ Could not remove {setup_complete_flag}: {e}")
+        tenants_dir = self.corvin_home / "tenants"
+        if tenants_dir.is_dir():
+            for tenant_dir in sorted(tenants_dir.iterdir()):
+                global_dir = tenant_dir / "global"
+                onboarding_json = global_dir / "onboarding.json"
+                if onboarding_json.exists():
+                    try:
+                        onboarding_json.unlink()
+                        print(f"  ✓ Removed {onboarding_json}")
+                        removed_any = True
+                    except OSError as e:
+                        print(f"  ⚠ Could not remove {onboarding_json}: {e}")
+                tenant_yaml = global_dir / "tenant.corvin.yaml"
+                if tenant_yaml.exists():
+                    try:
+                        import yaml  # type: ignore[import-not-found]
+                        doc = yaml.safe_load(tenant_yaml.read_text("utf-8")) or {}
+                        spec = doc.get("spec") if isinstance(doc, dict) else None
+                        if isinstance(spec, dict) and spec.pop("default_engine", None) is not None:
+                            tenant_yaml.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+                            print(f"  ✓ Cleared default_engine in {tenant_yaml}")
+                            removed_any = True
+                    except Exception as e:
+                        print(f"  ⚠ Could not reset engine selection in {tenant_yaml}: {e}")
+        if not removed_any:
+            print("  ℹ Nothing to reset — no prior onboarding/engine state found")
+
+        # ── Step 9: Remove voice config (~/.config/corvin-voice/) ──────────
+        print("\n[9/11] Removing voice config directory...")
         print(f"  Path: {self.voice_config}")
         if self.voice_config.exists():
             try:
@@ -1186,7 +1233,7 @@ class CorvinInstaller:
             print("  ℹ Not found — nothing to remove")
 
         # ── Step 9: Remove Corvin home (~/.corvin/) ────────────────────────
-        print("\n[9/10] Removing Corvin home directory...")
+        print("\n[10/11] Removing Corvin home directory...")
         print(f"  Path: {self.corvin_home}")
         if self.corvin_home.exists():
             try:
@@ -1221,7 +1268,7 @@ class CorvinInstaller:
             print(f"  ℹ {self.corvin_home} not found")
 
         # ── Step 10: Remove in-repo .corvin/ ──────────────────────────────
-        print("\n[10/10] Removing in-repo Corvin directory...")
+        print("\n[11/11] Removing in-repo Corvin directory...")
         repo_corvin = self.repo_root / ".corvin"
         if repo_corvin.exists():
             print(f"  Path: {repo_corvin}")

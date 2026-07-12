@@ -88,7 +88,11 @@ corvin-uninstall
 This will:
 - Stop all services
 - Unregister services from your OS
-- Optionally remove Corvin data files
+- Reset onboarding and engine selection (always — so a subsequent
+  `corvin-install` goes through first-boot onboarding again, even if you
+  decline the prompts below)
+- Optionally remove Corvin data files, API keys/secrets, and audit logs
+  (asks separately for each — nothing sensitive is deleted without confirming)
 
 ## Service Management
 
