@@ -36,6 +36,9 @@
   <a href="https://aiagentsdirectory.com" target="_blank" rel="noopener" title="Discover AI Agents Directory">
     <img src="https://aiagentsdirectory.com/featured-badge.svg?v=2024" alt="Featured on AI Agents Directory" width="200" height="50" />
   </a>
+  <a href="https://www.deepnlp.org/store/ai-agent/workflow-agent/pub-corvinlabs/corvinos" target="_blank" rel="noopener" title="CorvinOS on the DeepNLP AI Agent Marketplace">
+    <img src="https://www.deepnlp.org/api/ai_agent_marketplace/svg?name=corvinlabs/corvinos" alt="AI Agent Marketplace — CorvinOS" />
+  </a>
 </p>
 
 ---
