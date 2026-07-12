@@ -204,6 +204,13 @@ orchestration:
     )
     old_home = os.environ.get("CORVIN_HOME")
     os.environ["CORVIN_HOME"] = str(home)
+    # The invoice_total workflow runs a trivial deterministic `code` node.
+    # A code node fails closed without bwrap (correct security default, NOT
+    # weakened in the product); CI runners ship no bwrap, so opt THIS
+    # controlled arithmetic payload into the rlimits-only fallback. No-op
+    # wherever bwrap exists (bwrap always wins — see code_exec.py).
+    old_unsandboxed = os.environ.get("CORVIN_ALLOW_UNSANDBOXED_CODE")
+    os.environ["CORVIN_ALLOW_UNSANDBOXED_CODE"] = "1"
     try:
         server = OrchestrationServer(stdin=io.StringIO(), stdout=io.StringIO(), stderr=io.StringIO())
         stdout = io.StringIO()
@@ -228,6 +235,10 @@ orchestration:
             os.environ["CORVIN_HOME"] = old_home
         else:
             os.environ.pop("CORVIN_HOME", None)
+        if old_unsandboxed is not None:
+            os.environ["CORVIN_ALLOW_UNSANDBOXED_CODE"] = old_unsandboxed
+        else:
+            os.environ.pop("CORVIN_ALLOW_UNSANDBOXED_CODE", None)
 
 
 def main() -> int:

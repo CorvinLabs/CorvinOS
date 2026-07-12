@@ -55,6 +55,14 @@ class TestOrchestrationServerBase(unittest.TestCase):
         self.env_patch = mock.patch.dict(os.environ, {
             "CORVIN_HOME": str(self.home),
             "REMOTE_ENDPOINTS_DIR": self.endpoints_tmp.name,
+            # The smoke workflows here run a trivial deterministic `code` node
+            # (def main(a, b): return {"sum": a + b}). A `code` node fails closed
+            # when bwrap is absent — the correct security default, which we do
+            # NOT weaken in the product. CI runners have no bwrap ("sandbox tier:
+            # docker (bwrap unavailable)"), so this test opts THIS controlled
+            # arithmetic payload into the rlimits-only fallback. No-op wherever
+            # bwrap exists (bwrap always takes precedence — see code_exec.py).
+            "CORVIN_ALLOW_UNSANDBOXED_CODE": "1",
         })
         self.env_patch.start()
 
