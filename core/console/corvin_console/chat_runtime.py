@@ -287,12 +287,32 @@ _METAPHER_MARKERS = (
 )
 
 
+# Voice-annotation latency budget. The LERN-ZUGABE / METAPHER suffix spawns
+# `claude -p` (Haiku) once per requested mode. On a COLD / fresh install that
+# call burns its full internal timeout + Hermes fallback (~50s each) — and,
+# because it used to sit on the critical path BEFORE the turn's `done` event,
+# it froze the composer + mic (`disabled={streaming}`) for 1-2 minutes after
+# EVERY turn. Symptom (verified via live browser E2E): turn 1 is spoken, then
+# the UI appears stuck and no further turn can be sent/spoken. We now HARD-CAP
+# each subprocess and skip the (secondary) metaphor once the budget is spent,
+# so a slow machine degrades to no-annotation-this-turn instead of a frozen UI.
+# A healthy machine (fast Haiku ~3s/call) stays well under budget and is
+# unaffected. See the annotation call sites in the claude / hermes turn paths.
+_ANN_CALL_TIMEOUT_S = 8   # per subprocess.run — hard-killed past this
+_ANN_TOTAL_BUDGET_S = 5   # skip any remaining call once elapsed exceeds this
+
+
 async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
     """Append LERN-ZUGABE and/or METAPHER suffix mirroring the voice pipeline.
 
     Reads voice_audience_* from the tenant voice profile.  Returns the raw
     suffix string (no leading separator) or "" when annotations are not
     requested or any step fails.  Never raises.
+
+    Latency-bounded: each spawned ``claude -p`` is hard-capped at
+    ``_ANN_CALL_TIMEOUT_S`` and the metaphor pass is skipped once the running
+    turn has already spent ``_ANN_TOTAL_BUDGET_S`` on annotation, so a cold
+    engine never freezes the chat composer waiting on the annotation.
     """
     if not text or not text.strip():
         return ""
@@ -332,6 +352,7 @@ async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
     annotated = text
+    _t0 = time.monotonic()
 
     if want_appendix:
         try:
@@ -340,7 +361,7 @@ async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
                 lambda: subprocess.run(
                     [sys.executable, str(summarizer), "--lang", "de", "--appendix-mode"],
                     input=_in, capture_output=True, text=True,
-                    env=env, timeout=60, check=True,
+                    env=env, timeout=_ANN_CALL_TIMEOUT_S, check=True,
                 )
             )
             if out.stdout.strip():
@@ -348,7 +369,10 @@ async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
         except Exception:  # noqa: BLE001
             pass
 
-    if want_metapher:
+    # Skip the (secondary) metaphor pass once the turn has already spent the
+    # annotation budget — a cold appendix call must not chain into a second slow
+    # spawn and double the composer freeze. The learning appendix is primary.
+    if want_metapher and (time.monotonic() - _t0) < _ANN_TOTAL_BUDGET_S:
         tail = annotated[-300:] if len(annotated) > 300 else annotated
         if not any(m in tail for m in _METAPHER_MARKERS):
             try:
@@ -357,7 +381,7 @@ async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
                     lambda: subprocess.run(
                         [sys.executable, str(summarizer), "--lang", "de", "--metapher-mode"],
                         input=_in, capture_output=True, text=True,
-                        env=env, timeout=60, check=True,
+                        env=env, timeout=_ANN_CALL_TIMEOUT_S, check=True,
                     )
                 )
                 if out.stdout.strip():

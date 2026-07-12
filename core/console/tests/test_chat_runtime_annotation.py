@@ -14,11 +14,13 @@ import pytest
 from corvin_console import chat_runtime as cr
 
 
-def _stub_summarizer(monkeypatch):
+def _stub_summarizer(monkeypatch, kwargs_sink=None):
     calls = []
 
     def fake_run(argv, **kw):
         calls.append(argv)
+        if kwargs_sink is not None:
+            kwargs_sink.append(kw)
         mode = ("APPENDIX" if "--appendix-mode" in argv
                 else "METAPHER" if "--metapher-mode" in argv else "?")
         inp = kw.get("input", "")
@@ -89,6 +91,58 @@ def test_chat_render_off_suppresses_suffix_even_with_features_on(monkeypatch):
     suffix = asyncio.run(cr._compute_web_annotation_suffix("The cache stores results.", "_default"))
     assert suffix == "", "chat_render=off must keep the annex out of the chat text"
     assert calls == [], "no annotation subprocess when chat_render is off"
+
+
+def test_annotation_subprocess_is_latency_bounded(monkeypatch):
+    """Every annotation spawn must carry the tight per-call timeout, NOT the old
+    60s. On a cold engine that 60s (× 2, plus Hermes fallback) sat on the turn's
+    critical path before `done`, freezing the chat composer for 1-2 minutes after
+    EVERY turn (verified via live browser E2E). The hard cap keeps a slow machine
+    responsive by degrading to no-annotation-this-turn."""
+    seen_kwargs = []
+    _stub_summarizer(monkeypatch, kwargs_sink=seen_kwargs)
+    _fake_profile(monkeypatch, voice_audience_learning=3, voice_audience_metaphors="on")
+    asyncio.run(cr._compute_web_annotation_suffix("The cache stores results.", "_default"))
+    assert seen_kwargs, "expected at least one annotation subprocess"
+    for kw in seen_kwargs:
+        assert kw.get("timeout") == cr._ANN_CALL_TIMEOUT_S, (
+            f"annotation subprocess must be hard-capped at "
+            f"_ANN_CALL_TIMEOUT_S={cr._ANN_CALL_TIMEOUT_S}, got {kw.get('timeout')}"
+        )
+    assert cr._ANN_CALL_TIMEOUT_S <= 12, "per-call cap must stay tight (composer freeze ceiling)"
+
+
+def test_metaphor_skipped_once_budget_spent(monkeypatch):
+    """A slow appendix call must NOT chain into a second slow spawn and double
+    the composer freeze: once the turn has spent _ANN_TOTAL_BUDGET_S on
+    annotation, the (secondary) metaphor pass is skipped."""
+    calls = _stub_summarizer(monkeypatch)
+    _fake_profile(monkeypatch, voice_audience_learning=3, voice_audience_metaphors="on")
+
+    # Simulate a slow appendix: monotonic jumps past the budget between calls.
+    ticks = iter([0.0, cr._ANN_TOTAL_BUDGET_S + 1.0, cr._ANN_TOTAL_BUDGET_S + 2.0,
+                  cr._ANN_TOTAL_BUDGET_S + 3.0])
+    fake_time = types.SimpleNamespace(monotonic=lambda: next(ticks))
+    monkeypatch.setattr(cr, "time", fake_time)
+
+    asyncio.run(cr._compute_web_annotation_suffix("The cache stores results.", "_default"))
+    invoked = [a[-1] for a in calls]
+    assert "--appendix-mode" in invoked, "appendix (primary) must still run"
+    assert "--metapher-mode" not in invoked, "metaphor must be skipped once budget is spent"
+
+
+def test_metaphor_runs_when_within_budget(monkeypatch):
+    """The healthy path is unchanged: a fast appendix leaves budget, so the
+    metaphor pass still runs and both suffixes are produced."""
+    calls = _stub_summarizer(monkeypatch)
+    _fake_profile(monkeypatch, voice_audience_learning=3, voice_audience_metaphors="on")
+    # monotonic barely advances — well within budget.
+    ticks = iter([0.0, 0.1, 0.2, 0.3])
+    fake_time = types.SimpleNamespace(monotonic=lambda: next(ticks))
+    monkeypatch.setattr(cr, "time", fake_time)
+    asyncio.run(cr._compute_web_annotation_suffix("The cache stores results.", "_default"))
+    invoked = [a[-1] for a in calls]
+    assert "--appendix-mode" in invoked and "--metapher-mode" in invoked
 
 
 def test_missing_profile_module_is_safe(monkeypatch):

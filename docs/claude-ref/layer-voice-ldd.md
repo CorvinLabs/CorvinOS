@@ -380,6 +380,22 @@ helper) — previously they had no fallback at all, so a Hermes-only install
 LERN-ZUGABE/METAPHER annex; now `generate_appendix`/`generate_metapher` try
 CLI (if authenticated) then Hermes before giving up.
 
+**Console critical-path latency cap (`chat_runtime._compute_web_annotation_suffix`).**
+The web-console mirrors the same LERN-ZUGABE / METAPHER annex, spawning
+`summarize.py --appendix-mode` / `--metapher-mode` after the turn's answer. This
+call sits on the critical path BEFORE the turn's `done` event, and the chat
+composer + mic are `disabled` while the turn streams (`disabled={streaming}` in
+`chat.tsx`; `streaming` clears only on `done`). On a cold engine each annex spawn
+burns its CLI timeout + Hermes fallback (~50s), so the annex used to freeze the
+composer for 1–2 minutes after EVERY turn — verified via live browser E2E: the
+FIRST turn is spoken, then the UI appears stuck and no further turn can be
+sent/spoken. The console now hard-caps each spawn at `_ANN_CALL_TIMEOUT_S` (8s)
+and skips the secondary metaphor pass once the turn has spent
+`_ANN_TOTAL_BUDGET_S` (5s) on annotation, so a slow machine degrades to
+no-annotation-this-turn instead of a frozen chat; a healthy machine (fast Haiku
+~3s/call) stays well under budget and produces both suffixes as before. Regression
+guard: `core/console/tests/test_chat_runtime_annotation.py`.
+
 ### User-facing commands (in `bridges/shared/js/in_chat_commands.js`)
 
 | Command                          | Effect                                |
