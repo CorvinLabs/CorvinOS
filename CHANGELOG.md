@@ -6,11 +6,29 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.10.33] — 2026-07-12 — Voice-fallback correctness sweep: TTS content, language selection, i18n coverage
+## [0.10.33] — 2026-07-12 — Voice-fallback correctness sweep: TTS content, language selection, i18n coverage, packaging
 
 Prompted by a live report ("the welcome voice summary came out in Chinese
 instead of German") — traced through the whole voice pipeline instead of
-patching the one symptom. Four real, independently-verified fixes:
+patching the one symptom.
+
+- **CRITICAL packaging bug, found while verifying this very release's build
+  artifact: `operator/voice/i18n/` (the `/lang`, `/consent` and
+  welcome-greeting translation bundles) was never vendored into the wheel.**
+  `hatch_build.py`'s `_VENDOR_MAP` had no entry for it — every PyPI release
+  to date shipped with zero bundle files on disk, so `i18n.t()` always fell
+  through its entire fallback chain to the literal-key tier: `/lang`,
+  `/consent` and the welcome greeting showed/spoke raw dotted keys (e.g.
+  `welcome.intro`) verbatim, in every language, on every real pip install —
+  never caught locally because dev/source-tree checkouts always find the
+  file directly. Fixed by adding the missing vendor-map entry; verified by
+  actually installing the built wheel into a fresh venv and confirming
+  `i18n.t()` resolves real German/Chinese text from the vendored path (not
+  just "file present in the zip"). New regression test locks in the vendor
+  map entry itself, since that's exactly the gap that let this slip through
+  unnoticed for 40+ prior releases.
+
+Four further real, independently-verified fixes:
 
 - **TTS no longer reads raw CLI syntax aloud.** Every engine-unreachable
   fallback string (`call_claude()`, the primary Claude streaming path, Codex,

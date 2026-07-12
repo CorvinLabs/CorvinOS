@@ -57,6 +57,17 @@ _VENDOR_MAP: tuple[tuple[str, str], ...] = (
     # absent in a wheel install → CAP_PATH_GATE unregistered → "mandatory security
     # layer missing" fail-closed block of every request on a fresh install.
     ("operator/voice/hooks", "corvin_console/_vendor/operator/voice/hooks"),
+    # Bug found 2026-07-12 while verifying the 0.10.33 build: i18n.py's
+    # _BUNDLE_DIR resolves to _repo_root()/operator/voice/i18n (de.json,
+    # en.json, zh-Hans.json — the /lang, /consent and welcome-greeting
+    # strings). Without vendoring this dir, _load_bundle() finds no file
+    # on EVERY wheel install, so i18n.t() always falls through to its
+    # final "return the literal key" tier — every /lang, /consent and
+    # welcome-greeting string showed/spoke the raw dotted key (e.g.
+    # "welcome.intro") verbatim, in every language, on every pip install
+    # to date. Never caught because dev/source-tree checkouts always find
+    # the file directly via the repo-relative path.
+    ("operator/voice/i18n", "corvin_console/_vendor/operator/voice/i18n"),
     ("operator/mcp_manager", "corvin_console/_vendor/operator/mcp_manager"),
     ("operator/skill-forge", "corvin_console/_vendor/operator/skill-forge"),
     ("operator/cowork", "corvin_console/_vendor/operator/cowork"),

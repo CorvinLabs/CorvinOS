@@ -62,6 +62,39 @@ def test_real_source_packages_named_agents_teb_eci_are_not_excluded():
     assert not hb._is_test_path(Path("bridges/shared/eci/dispatcher.py"))
 
 
+def test_voice_i18n_bundle_dir_is_vendored():
+    """Regression (found 2026-07-12 verifying the 0.10.33 build): i18n.py's
+    _BUNDLE_DIR resolves to _repo_root()/operator/voice/i18n (de.json,
+    en.json, zh-Hans.json). Without a _VENDOR_MAP entry, EVERY wheel install
+    to date shipped with no bundle files on disk at all -- i18n.t() always
+    fell through its full fallback chain (exact locale -> base locale ->
+    English -> literal key) to the LAST tier, so /lang, /consent and the
+    welcome-greeting strings showed/spoke the raw dotted key (e.g.
+    "welcome.intro") verbatim, in every language, on every real pip
+    install. Never caught because dev/source-tree checkouts always find the
+    file directly via the repo-relative path -- this asserts the vendor
+    map entry exists so a wheel install does too."""
+    sources = [src for src, _dest in hb._VENDOR_MAP]
+    assert "operator/voice/i18n" in sources, (
+        f"operator/voice/i18n missing from _VENDOR_MAP -- wheel installs "
+        f"ship with no i18n bundle files at all. Current sources: {sources}"
+    )
+    # Mirror layout must be exact -- i18n.py's _BUNDLE_DIR computes its path
+    # via Path(__file__).resolve().parent.parent.parent / "voice" / "i18n"
+    # relative to the vendored operator/bridges/shared/i18n.py, so the
+    # destination must land at .../_vendor/operator/voice/i18n exactly.
+    dest = dict(hb._VENDOR_MAP)["operator/voice/i18n"]
+    assert dest == "corvin_console/_vendor/operator/voice/i18n", dest
+
+
+def test_voice_i18n_bundle_files_present_on_disk_for_the_vendored_source():
+    """The vendor map entry alone doesn't prove the files exist -- confirm
+    the real de/en/zh-Hans bundles are actually there to be copied."""
+    i18n_dir = _REPO / "operator" / "voice" / "i18n"
+    names = {p.name for p in i18n_dir.glob("*.json")}
+    assert {"de.json", "en.json", "zh-Hans.json"}.issubset(names), names
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])
