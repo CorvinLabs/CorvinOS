@@ -305,6 +305,31 @@ coverage in `test_adapter_voice_audience.py` (3 cases: learning=3 →
 LERN-ZUGABE in argv; empty profile → no `--audience`; profile module
 unavailable → graceful no-op).
 
+**Per-turn de/en language escape hatch** (bugfix, 2026-07-12): `build_voice_summary`
+and `_resolve_audience_block` used to read `profile.display_language` directly and,
+whenever it was a non-de/en locale (e.g. `zh-Hans`), unconditionally passed
+`--output-language <locale>` to `summarize.py` — which force-translates the summary via
+`i18n.language_directive()`'s "OUTPUT LANGUAGE OVERRIDE" directive, deliberately
+engineered to beat even a "match the user's actual language" rule. There was no
+per-turn signal anywhere in this path, so a persona configured with a non-de/en
+static default produced e.g. a Chinese voice-summary audio for a German-language
+reply, even though the main chat-text reply correctly matched German. Fixed via
+`_resolve_voice_output_language(candidate_text)`: it still defaults to the static
+profile pin, but when that default is non-de/en AND `_detect_confident_de_en`
+(a thin wrapper around `operator/voice/scripts/detect_lang.py`'s existing
+function-word heuristic) confidently recognizes the actual text as de or en, the
+per-turn detection wins. Ambiguous/non-Latin-script text still falls through to
+the profile default unchanged — the pin keeps working for its actual use case
+(a genuine zh-Hans/ja/ar user). `synthesize_voice_note`'s TTS voice/engine
+selection (previously hardcoded `lang="de"` regardless of what language the
+summary ended up in) now uses the same resolved language. Both `build_voice_summary`
+and `_resolve_audience_block` (and the appendix/LERN-ZUGABE marker-language
+choice it drives) share the one resolver so they can't drift apart again.
+Tests: `test_adapter_voice_lang_detect.py` (10 cases: detector unit tests,
+resolver unit tests, and two full `build_voice_summary` end-to-end
+reproductions — the exact bug scenario, and a regression guard that a genuine
+non-Latin-script profile default still gets pinned).
+
 **Pre-strip fallback logic** (M3.1 resilience): `build_voice_summary` applies
 a two-stage pipeline: (1) `strip_for_tts.py --mode code-only` removes code
 blocks and raw HTML so `summarize.py` sees clean prose, (2) `summarize.py`

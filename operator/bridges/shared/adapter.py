@@ -6894,20 +6894,93 @@ def _has_lern_zugabe_suffix(text: str, window: int = 400) -> bool:
     return any(m in tail for m in _LERN_ZUGABE_SENTENCE_MARKERS)
 
 
-def _resolve_audience_block() -> tuple[str, str]:
+def _detect_confident_de_en(text: str) -> str | None:
+    """Best-effort de/en detection for text that's about to be spoken.
+
+    Used as a per-turn override of the profile's STATIC display_language
+    pin (see `_resolve_voice_output_language`). Returns None whenever the
+    signal is weak or absent (a tie, no function words, non-Latin script)
+    so a genuine non-de/en profile default (zh-Hans, ja, ar, ...) keeps
+    applying unchanged — this must never mask an actual non-Latin-script
+    user, only correct the case where the text is confidently de/en but
+    the static profile default says otherwise.
+
+    Reuses operator/voice/scripts/detect_lang.py's tiny, dependency-free
+    function-word heuristic (already used for STT locale hints) rather
+    than adding a new detector — same "good enough to pick a TTS voice"
+    bar applies here.
+    """
+    try:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        from detect_lang import score as _dl_score  # type: ignore  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        de_count, en_count = _dl_score(text[:2000])
+    except Exception:  # noqa: BLE001
+        return None
+    if de_count == 0 and en_count == 0:
+        return None
+    if de_count > en_count:
+        return "de"
+    if en_count > de_count:
+        return "en"
+    return None
+
+
+def _resolve_voice_output_language(candidate_text: str) -> str:
+    """Resolve the language voice summaries / the audience-appendix should
+    be generated in.
+
+    Default: the profile's static `display_language`. Escape hatch (the
+    fix for a confirmed bug): when that default is a non-de/en locale
+    (e.g. zh-Hans) AND the text actually being spoken this turn is
+    confidently de/en per `_detect_confident_de_en`, the per-turn
+    detection wins over the static pin.
+
+    Without this, `summarize.py --output-language <profile default>`
+    force-translates EVERY long voice summary into the profile's static
+    language via `i18n.language_directive()` — which is deliberately
+    engineered to override even a "match the user's actual language"
+    instruction (see i18n.py's OUTPUT LANGUAGE OVERRIDE directive). A
+    persona configured with a non-de/en default therefore produced e.g. a
+    Chinese voice summary of a German-language reply, even though the main
+    chat-text reply correctly matched German. Ambiguous/non-Latin text
+    still falls through to the profile default unchanged — that's the
+    actual use case the pin exists for.
+    """
+    output_language = ""
+    if _voice_profile is not None and _i18n is not None:
+        try:
+            raw = _voice_profile.load().get("display_language") or ""
+            output_language = _i18n.normalise(raw) if raw else ""
+        except Exception:  # noqa: BLE001
+            output_language = ""
+    if output_language and output_language not in ("de", "en"):
+        detected = _detect_confident_de_en(candidate_text)
+        if detected:
+            output_language = detected
+    return output_language
+
+
+def _resolve_audience_block(candidate_text: str = "") -> tuple[str, str]:
     """Render the audience block and pick the matching lang.
 
+    `candidate_text` is the text that's actually about to be spoken this
+    turn (the <voice> override if present, else the raw reply) — passed
+    through `_resolve_voice_output_language` so this can't drift from the
+    same per-turn de/en escape hatch `build_voice_summary` uses for the
+    long-text summarizer path.
+
     Returns (block, lang). Empty block → ("", "de"). lang is "en" iff
-    the active display_language is non-de; the appendix-LLM uses it
+    the resolved output language is non-de; the appendix-LLM uses it
     to pick the marker language ("Und zur Einordnung" vs "For context").
     """
     if _voice_profile is None:
         return "", "de"
     try:
-        output_language = ""
-        if _i18n is not None:
-            raw = _voice_profile.load().get("display_language") or ""
-            output_language = _i18n.normalise(raw) if raw else ""
+        output_language = _resolve_voice_output_language(candidate_text)
         audience_lang = output_language or "de"
         block = _voice_profile.for_tts_audience(audience_lang) or ""
         appendix_lang = "en" if audience_lang.startswith("en") else "de"
@@ -7060,7 +7133,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
         except Exception:  # noqa: BLE001
             pass  # custom-provider failure → fall through to existing pipeline
 
-    audience_block, appendix_lang = _resolve_audience_block()
+    audience_block, appendix_lang = _resolve_audience_block(override or text)
     want_appendix = _audience_demands_appendix(audience_block)
     want_metapher = _audience_demands_metapher(audience_block)
 
@@ -7149,15 +7222,13 @@ def build_voice_summary(text: str, max_chars: int = 400,
         env["VOICE_HOOK_RECURSION"] = "1"
         # i18n — read display_language from the bridge-wide profile to pin
         # the spoken summary to a non-de/non-en locale (zh-Hans, ja, ar,
-        # ...). Empty / `de` / `en` keep the legacy argv shape so existing
-        # snapshot tests stay byte-identical.
-        output_language = ""
-        if _voice_profile is not None and _i18n is not None:
-            try:
-                raw = _voice_profile.load().get("display_language") or ""
-                output_language = _i18n.normalise(raw) if raw else ""
-            except Exception:  # noqa: BLE001
-                output_language = ""
+        # ...), UNLESS the text actually being summarized (`pre`) is
+        # confidently de/en, in which case that wins (see
+        # _resolve_voice_output_language — this is the fix for a confirmed
+        # bug where a non-de/en profile default force-translated an
+        # already-German/English reply). Empty / `de` / `en` keep the
+        # legacy argv shape so existing snapshot tests stay byte-identical.
+        output_language = _resolve_voice_output_language(pre)
         # Audience block: render in the user's pivot locale (de keeps
         # German, every other code uses English block).
         audience_lang = output_language or "de"
@@ -9400,6 +9471,15 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 task=_voice_task or "",
             )
             if spoken:
+                # Resolve the TTS voice/engine language the SAME way the
+                # content language was just resolved (profile default,
+                # unless `spoken` is confidently de/en — see
+                # _resolve_voice_output_language) — this used to be
+                # hardcoded to "de" regardless of what language `spoken`
+                # actually ended up in, so a non-de/en voice summary was
+                # read aloud with a German voice/accent (a second,
+                # independent half of the same language-mismatch bug).
+                _tts_lang = _resolve_voice_output_language(spoken) or "de"
                 # Resolve per-persona TTS voice from the chat profile.
                 # tts_voice_<lang> wins over tts_voice (lang-agnostic);
                 # missing → synthesize_voice_note falls back to
@@ -9407,11 +9487,11 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 _persona_voice = None
                 if isinstance(profile, dict):
                     _persona_voice = (
-                        profile.get("tts_voice_de")
+                        profile.get(f"tts_voice_{_tts_lang}")
                         or profile.get("tts_voice")
                     )
                 voice_path = synthesize_voice_note(
-                    spoken, lang="de", voice=_persona_voice,
+                    spoken, lang=_tts_lang, voice=_persona_voice,
                 )
 
     # If voice was expected (mode + length / always) but the synth path
