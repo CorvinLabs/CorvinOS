@@ -5,8 +5,14 @@
 Description=Corvin WebUI — gateway + console (uvicorn)
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=60
-StartLimitBurst=5
+# Wider budget than the old 60s/5 — see the ExecStartPre port-wait below for
+# why: a bind failure right after a restart is usually the PREVIOUS instance
+# not having released the port 8765 socket yet (bug report 2026-07-12: 5
+# rapid retries at RestartSec=5 exhausted the old budget in ~40s, tripping
+# systemd's "start request repeated too quickly" — a PERMANENT failed state
+# with no further auto-retry, needing a manual `systemctl reset-failed`).
+StartLimitIntervalSec=120
+StartLimitBurst=8
 
 [Service]
 Type=simple
@@ -32,9 +38,27 @@ Environment=PYTHONPATH=__REPO_ROOT__/core/console:__REPO_ROOT__/core/gateway:__R
 # clean, or first boot after install). Skipped instantly when the venv already
 # exists, so the normal reboot path has zero overhead.
 ExecStartPre=/bin/bash -c 'test -x __REPO_ROOT__/core/console/.venv/bin/python || bash __REPO_ROOT__/core/console/bootstrap.sh'
+# Root-cause fix (bug report 2026-07-12): TimeoutStopSec gives the OUTGOING
+# instance up to 15s to shut down, but RestartSec=5 let the INCOMING instance
+# try to bind port 8765 again after only 5s -- if the previous process (or
+# the kernel releasing its socket) took longer than that, every retry hit
+# [Errno 98] address already in use until the burst limit tripped. Actively
+# wait for the port to be free (bounded to 15s, matching TimeoutStopSec)
+# instead of hoping the fixed RestartSec gap happens to be long enough.
+# /dev/tcp is a bash builtin (no ss/lsof/fuser/nc dependency): a successful
+# connect means something is still listening: on failure (connection
+# refused) the port is free and we proceed immediately, so the common case
+# (previous instance already gone) adds no startup delay at all.
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 15); do if ! (exec 3<>/dev/tcp/127.0.0.1/8765) 2>/dev/null; then exit 0; fi; exec 3>&-; sleep 1; done; exit 0'
 ExecStart=__REPO_ROOT__/core/console/.venv/bin/python -m uvicorn corvin_gateway.app:app --host 127.0.0.1 --port 8765 --log-level info
 Restart=always
+# Exponential backoff (systemd >=254): 5s, 10s, 20s, ... capped at 60s.
+# Ignored gracefully (unit still loads, just without backoff) on older
+# systemd -- the ExecStartPre wait above is the primary fix and needs no
+# minimum systemd version.
 RestartSec=5
+RestartSteps=4
+RestartMaxDelaySec=60
 TimeoutStartSec=300
 TimeoutStopSec=15
 StandardOutput=journal
