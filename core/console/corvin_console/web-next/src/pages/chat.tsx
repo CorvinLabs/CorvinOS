@@ -786,7 +786,7 @@ function ChatPane({
   React.useEffect(() => { setCccActions([]); }, [sid]);
   const [auditOpen, setAuditOpen] = React.useState(false);
   const [auditTab, setAuditTab] = React.useState<"single" | "dual-track">("single");
-  const [workdirInfo, setWorkdirInfo] = React.useState<string | null>(null);
+  const [workdirInfo, setWorkdirInfo] = React.useState<{ path: string; opened: boolean } | null>(null);
   // Voice-out is on by default — the operator can flip it off via the
   // toggle in the chat header, the choice is then session-local.
   // Voice-out default ON; the choice persists across page reloads.
@@ -1145,12 +1145,16 @@ function ChatPane({
 
   const handleOpenWorkdir = React.useCallback(async () => {
     try {
-      const { path } = await openSessionWorkdir(sid, csrf, true);
-      setWorkdirInfo(path);
+      // `opened` used to be silently discarded here, so the banner looked
+      // identical whether the OS file manager genuinely launched or the
+      // server-side reveal failed -- a Windows install where explorer.exe
+      // never actually opened had no way to tell the two apart from the UI.
+      const { path, opened } = await openSessionWorkdir(sid, csrf, true);
+      setWorkdirInfo({ path, opened });
       // Auto-dismiss after 8 s so the banner doesn't linger forever.
       setTimeout(() => setWorkdirInfo(null), 8_000);
     } catch {
-      setWorkdirInfo("Could not open artifacts folder.");
+      setWorkdirInfo({ path: "Could not open artifacts folder.", opened: false });
       setTimeout(() => setWorkdirInfo(null), 4_000);
     }
   }, [sid, csrf]);
@@ -1497,13 +1501,22 @@ function ChatPane({
         </div>
       </header>
 
-      {/* Artifacts workdir path banner — auto-dismissed after 8 s */}
+      {/* Artifacts workdir path banner — auto-dismissed after 8 s. When the
+          server couldn't actually launch the OS file manager (opened=false),
+          say so explicitly instead of showing a banner indistinguishable
+          from the success case — that silence is what hid this bug on
+          Windows installs where explorer.exe never actually opened. */}
       {workdirInfo && (
         <div className="flex items-center gap-2 border-b border-amber-400/30 bg-amber-50/60 px-4 py-1.5 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
           <FolderOpen className="h-3.5 w-3.5 shrink-0" />
-          <span className="font-mono truncate flex-1">{workdirInfo}</span>
+          {workdirInfo.opened ? (
+            <span className="shrink-0">Opened in file manager:</span>
+          ) : (
+            <span className="shrink-0 font-semibold">Could not open file manager — copy path manually:</span>
+          )}
+          <span className="font-mono truncate flex-1">{workdirInfo.path}</span>
           <button
-            onClick={() => { void navigator.clipboard.writeText(workdirInfo); }}
+            onClick={() => { void navigator.clipboard.writeText(workdirInfo.path); }}
             className="rounded px-1.5 py-0.5 hover:bg-amber-200/60 dark:hover:bg-amber-800/40"
             title="Copy path"
           >

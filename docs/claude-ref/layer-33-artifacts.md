@@ -277,7 +277,7 @@ opens it in the OS file manager.
 
 | Query param | Type | Default | Description |
 |---|---|---|---|
-| `reveal` | bool | `false` | If `true`, launches `xdg-open` / `open` / `explorer.exe` on the server |
+| `reveal` | bool | `false` | If `true`, opens the workdir in the OS file manager on the server: `os.startfile()` on Windows, `open` on macOS, `xdg-open` elsewhere |
 
 Response (JSON):
 ```json
@@ -285,10 +285,21 @@ Response (JSON):
 ```
 
 **Important:** `reveal=true` opens the file manager on the **server machine**,
-not the user's browser.  On a cloud/remote deploy the call is harmless (no
-useful window opens) but `opened` will still be `true` if the subprocess
-launch succeeds.  Set `CORVIN_REVEAL_WORKDIR=0` to disable the OS-open
-behaviour entirely.
+not the user's browser. On a cloud/remote deploy the call is harmless (no
+useful window opens). `opened` reflects whether the OS-level launch actually
+succeeded — a failure (e.g. no shell handler registered) is logged
+server-side (`logger.warning`, not silently swallowed) and reported back as
+`opened: false`; the frontend banner then tells the user to copy the path
+manually instead of implying a window opened when it didn't.
+
+**Windows note (fixed 2026-07-12):** the win32 branch used to shell out to
+`explorer.exe` directly via `subprocess.Popen`, which depends on it being
+resolvable on the launching process's PATH and could fail without raising
+anything the bare `except: pass` surfaced anywhere — the failure mode this
+whole route exists to avoid. It now uses `os.startfile()`, the standard
+ShellExecute-backed stdlib call for "open this path with its default
+handler", which is what Explorer itself uses internally and doesn't depend
+on a PATH lookup.
 
 ---
 

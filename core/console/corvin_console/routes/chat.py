@@ -418,16 +418,32 @@ def get_session_workdir_path(
     opened = False
     if reveal:
         try:
-            import subprocess  # noqa: PLC0415
             if sys.platform == "win32":
-                subprocess.Popen(["explorer.exe", str(workdir)], creationflags=getattr(subprocess, "DETACHED_PROCESS", 8))
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", str(workdir)])
+                # os.startfile() (Windows-only stdlib call) goes through the
+                # same ShellExecute path Explorer itself uses to open a
+                # folder — more robust than spawning explorer.exe via
+                # subprocess (which depends on it being resolvable on the
+                # launching process's PATH, and has had reports of not
+                # reliably raising a window when invoked this way for some
+                # service/session contexts). Bug report: a Windows install
+                # only ever showed the path banner, never an Explorer
+                # window — the prior subprocess.Popen(["explorer.exe", ...])
+                # call could fail silently (bare except swallowed it with no
+                # server-side log at all, see below).
+                import os as _os  # noqa: PLC0415
+                _os.startfile(str(workdir))  # type: ignore[attr-defined]
             else:
-                subprocess.Popen(["xdg-open", str(workdir)])
+                import subprocess  # noqa: PLC0415
+                if sys.platform == "darwin":
+                    subprocess.Popen(["open", str(workdir)])
+                else:
+                    subprocess.Popen(["xdg-open", str(workdir)])
             opened = True
         except Exception:
-            pass
+            # Never silently drop this — a failed reveal with no server log
+            # is unreproducible from a bug report alone (this is exactly how
+            # the bug above went undiagnosed until the frontend was checked).
+            logger.warning("workdir-path reveal failed for sid=%s path=%s", sid, workdir, exc_info=True)
     return {"ok": True, "path": str(workdir), "opened": opened}
 
 _ATTACH_MAX_BYTES = 20 * 1024 * 1024   # 20 MB per file
