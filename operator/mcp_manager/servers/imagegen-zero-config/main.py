@@ -48,6 +48,36 @@ _MAX_IMAGE_BYTES = 20 * 1024 * 1024
 # reply 414/handshake errors instead of a useful message.
 _MAX_PROMPT_CHARS = 4000
 
+def _save_image_bytes(data: bytes, fmt: str) -> "str | None":
+    """ALSO persist the generated image to a file so the user actually SEES it.
+
+    The MCP ``Image`` block alone only reaches the calling MODEL's context — it
+    is never surfaced to the user's chat view. The web console DISPLAYS any new
+    image file that appears in the session workdir (it scans ``workdir.rglob('*')``
+    after each turn, cwd == workdir), and the messenger bridges attach
+    ``./outputs/``. Writing the bytes to ``./outputs/`` (relative to the engine's
+    cwd) makes the image show up on BOTH surfaces — closing the ADR-0191 display
+    gap where a generation reported "done" but nothing was shown. Best-effort:
+    never raises, so a write failure can't break the tool.
+
+    Directory: ``CORVIN_IMAGE_OUTDIR`` if set, else ``./outputs`` under cwd.
+    """
+    try:
+        import time  # noqa: PLC0415
+        import secrets  # noqa: PLC0415
+        if not data:
+            return None
+        ext = (fmt or "png").lower().lstrip(".") or "png"
+        outdir = os.environ.get("CORVIN_IMAGE_OUTDIR", "").strip()
+        base = Path(outdir) if outdir else (Path.cwd() / "outputs")
+        base.mkdir(parents=True, exist_ok=True)
+        fpath = base / f"corvin-image-{int(time.time())}-{secrets.token_hex(3)}.{ext}"
+        fpath.write_bytes(data)
+        return str(fpath)
+    except Exception:  # noqa: BLE001 — display persistence is best-effort, never fatal
+        return None
+
+
 mcp = FastMCP("corvin-imagegen")
 
 
@@ -189,7 +219,17 @@ def generate_image(prompt: str) -> list:
     openai_key = resolve_key("openai_api_key")
     if openai_key:
         try:
-            return [_generate_openai(prompt, openai_key)]
+            img = _generate_openai(prompt, openai_key)
+            blocks: list = []
+            saved = _save_image_bytes(getattr(img, "data", None),
+                                      getattr(img, "_format", None) or "png")
+            if saved:
+                blocks.append(
+                    f"Generated the image and saved it to `{saved}` — it is shown "
+                    "inline in the chat above (no separate window needed)."
+                )
+            blocks.append(img)
+            return blocks
         except Exception:  # noqa: BLE001 — a broken/expired BYOK key must not
             # leave the user WORSE off than having no key at all: degrade to
             # Tier 0 with an explicit note instead of a raw provider error.
@@ -208,11 +248,18 @@ def generate_image(prompt: str) -> list:
     # provider call happens to succeed.
     disclosure = ensure_disclosed(tid)
     image = _generate_pollinations(prompt)
-    blocks: list = []
+    blocks = []
     if disclosure:
         blocks.append(disclosure)
     if tier1_note:
         blocks.append(tier1_note)
+    saved = _save_image_bytes(getattr(image, "data", None),
+                              getattr(image, "_format", None) or "png")
+    if saved:
+        blocks.append(
+            f"Generated the image and saved it to `{saved}` — it is shown inline "
+            "in the chat above (no separate window needed)."
+        )
     blocks.append(image)
     return blocks
 
