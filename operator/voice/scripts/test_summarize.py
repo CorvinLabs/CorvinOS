@@ -421,6 +421,78 @@ def test_hermes_backend_tried_when_cli_unavailable() -> None:
     assert out == "A concise Hermes summary."
 
 
+def test_short_reply_short_circuits_verbatim_without_persona_or_audience(monkeypatch) -> None:
+    """The 'auto' backend's fast path: an already-in-budget reply with no
+    persona/audience configured is spoken back verbatim, with NO LLM backend
+    invoked (instant, and immune to the model inventing/paraphrasing content
+    it shouldn't touch)."""
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    short_text = "Erledigt, alles gut."
+    with (
+        patch.object(summarize, "_summarize_via_cli") as cli,
+        patch.object(summarize, "_summarize_via_hermes") as herm,
+    ):
+        out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5")
+    cli.assert_not_called()
+    herm.assert_not_called()
+    assert out == short_text
+
+
+def test_short_reply_with_persona_still_gets_llm_styling(monkeypatch) -> None:
+    """Regression: the verbatim short-circuit used to skip the LLM pass for
+    EVERY short reply, silently dropping persona tone-modulation for anyone
+    who configured one — persona/audience opt in to an LLM pass on every
+    reply, short or long, same as before the short-circuit existed."""
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    short_text = "Erledigt, alles gut."
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value="Arr, all done, matey!") as cli,
+        patch.object(summarize, "_summarize_via_hermes") as herm,
+    ):
+        out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5", persona="pirate")
+    cli.assert_called_once()
+    herm.assert_not_called()
+    assert out == "Arr, all done, matey!"
+
+
+def test_short_reply_with_audience_still_gets_llm_styling(monkeypatch) -> None:
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    short_text = "HTTP 429."
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value="Rate limited, try again soon.") as cli,
+        patch.object(summarize, "_summarize_via_hermes") as herm,
+    ):
+        out = summarize.summarize(
+            short_text, "en", 400, "claude-haiku-4-5", audience="child, low jargon-tolerance",
+        )
+    cli.assert_called_once()
+    assert out == "Rate limited, try again soon."
+
+
+def test_short_circuit_falls_through_to_llm_when_task_prefix_overruns_budget(monkeypatch) -> None:
+    """Regression: the short-circuit checked only the reply body against
+    max_chars, then unconditionally prepended a task-prefix (up to ~140
+    chars) with no re-check — silently exceeding the caller's spoken-length
+    budget. A prefixed text that overruns the budget must fall through to a
+    real (budget-enforcing) summary pass instead."""
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    # Body alone fits max_chars, but task + body together would exceed it.
+    max_chars = 40
+    body = "x" * max_chars
+    task = "a fairly long question that pushes the prefixed text over budget"
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value="a properly shortened summary") as cli,
+        patch.object(summarize, "_summarize_via_hermes") as herm,
+    ):
+        out = summarize.summarize(body, "en", max_chars, "claude-haiku-4-5", task=task)
+    cli.assert_called_once()
+    assert out == "a properly shortened summary"
+
+
 def test_hermes_backend_strips_think_block() -> None:
     """qwen3 emits <think>…</think> reasoning — it must never be spoken."""
     from unittest.mock import patch

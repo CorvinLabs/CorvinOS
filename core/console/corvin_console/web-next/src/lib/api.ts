@@ -3583,7 +3583,11 @@ export async function getWelcomeCheckStatus(signal?: AbortSignal): Promise<Welco
 export async function runWelcomeCheck(csrf: string): Promise<WelcomeCheckResult> {
   await postWelcomeCheck(csrf);
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  for (let i = 0; i < 60; i++) {
+  // Backend runs its checks concurrently (bounded by the slowest single
+  // check — a cold Hermes warm-up at up to 60s), not sequentially. Poll for
+  // 100s, comfortably above that worst case, so a cold/default install
+  // doesn't give up here and silently lose the spoken greeting.
+  for (let i = 0; i < 100; i++) {
     const s = await getWelcomeCheckStatus();
     if (s.state === "done") return s;
     await sleep(1_000);

@@ -218,6 +218,40 @@ class TestWindowsSystemServiceManager:
         assert "-Execute 'C:\\corvin.exe'" in ps
         assert "-Argument '-m uvicorn app'" in ps
 
+    def test_install_with_pre_exec_warns_it_is_not_wired(self, capsys):
+        """Regression: pre_exec (WA-19 auto-update) used to be silently
+        accepted-and-discarded on Windows with zero operator-visible signal
+        that the always-on Stufe-2 service never gets the boot-time PyPI
+        update check Linux/macOS get. Must now print a warning."""
+        mgr = WindowsSystemServiceManager()
+        with mock.patch(
+            "corvinOS.installer.system_service_manager.is_elevated",
+            return_value=True,
+        ), mock.patch(
+            "corvinOS.installer.system_service_manager.current_user",
+            return_value="silvio",
+        ), mock.patch("subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=0, stderr="", stdout="")
+            mgr.install_service(
+                name="webui", command="C:\\corvin.exe", pre_exec="uv tool upgrade corvinos",
+            )
+        out = capsys.readouterr().out
+        assert "does not" in out and "auto-update" in out
+
+    def test_install_without_pre_exec_prints_no_warning(self, capsys):
+        mgr = WindowsSystemServiceManager()
+        with mock.patch(
+            "corvinOS.installer.system_service_manager.is_elevated",
+            return_value=True,
+        ), mock.patch(
+            "corvinOS.installer.system_service_manager.current_user",
+            return_value="silvio",
+        ), mock.patch("subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=0, stderr="", stdout="")
+            mgr.install_service(name="webui", command="C:\\corvin.exe")
+        out = capsys.readouterr().out
+        assert "auto-update" not in out
+
     def test_install_refuses_to_register_as_root_via_current_user(self):
         """WA-1: current_user() refuses root, so an install run directly as
         root (no SUDO_USER) never writes a root-owned always-on task."""

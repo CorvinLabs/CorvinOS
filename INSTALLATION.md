@@ -9,7 +9,7 @@
 | **Python** | not required up front — the installer bootstraps its own via `uv` (3.10+ if you install manually) |
 | **OS** | Linux (Ubuntu 22.04+ recommended), macOS 12+ (Monterey), Windows 10 build 19041+ or Windows 11 |
 | **Disk** | 2–7 GB (the local Hermes model is 1.4–5.2 GB; plus the Whisper STT + Piper TTS voice models) |
-| **RAM** | 4 GB minimum. The installer picks the local model by available RAM — under ~6 GB it installs the lighter `qwen3:1.7b`, otherwise `qwen3:8b`; the running engine automatically uses whichever model is actually installed. |
+| **RAM** | 4 GB minimum. The installer picks the local model by available RAM — under ~6 GB it installs the lighter `qwen3:1.7b`, 6–12 GB gets the mid-size `qwen3:4b`, and ≥12 GB gets `qwen3:8b`; the running engine automatically uses whichever model is actually installed. |
 
 > **Bridges only** (Discord, WhatsApp, Telegram, Slack, Email) additionally require Node.js 20+
 > and systemd (Linux) or launchd (macOS). On Windows, bridges require WSL2.

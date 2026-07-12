@@ -48,3 +48,19 @@ def test_strips_known_nonspeech_markers(raw, expected):
 def test_keeps_legitimate_bracketed_content(raw):
     # Only the closed artifact set is stripped; genuine bracketed speech stays.
     assert strip(raw) == raw
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "(BLANK_AUDIO] HELLO",   # mismatched brackets — never emitted by any backend
+        "HELLO [music) world",
+        "test (silence] test",
+    ],
+)
+def test_keeps_mismatched_brackets(raw):
+    # Regression: an independent open/close character class used to strip
+    # mismatched pairs like "(BLANK_AUDIO]" just as readily as well-formed
+    # markers — neither whisper.cpp nor faster-whisper ever emit a mismatched
+    # pair, so this text is never a real artifact and must be left alone.
+    assert strip(raw) == raw

@@ -9,6 +9,7 @@ Routes:
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json as _json
 import os
 import re
@@ -1133,8 +1134,14 @@ def test_engine(
 # greeting's wording — "Let's go" always works regardless of outcome.
 
 _WELCOME_CHECK_LOCK = threading.Lock()
-_WELCOME_CHECK_STATE: dict[str, Any] = {"state": "idle"}  # idle|running|done
+# ADR-0007: keyed by tenant_id — a single shared dict here would let one
+# tenant's in-flight/finished check clobber or leak into another's poll.
+_WELCOME_CHECK_STATE: dict[str, dict[str, Any]] = {}
 _WELCOME_STT_TIMEOUT_S = 45.0
+
+
+def _welcome_state_for(tenant_id: str) -> dict[str, Any]:
+    return _WELCOME_CHECK_STATE.setdefault(tenant_id, {"state": "idle"})
 
 
 def _welcome_check_lang() -> str:
@@ -1154,10 +1161,7 @@ def _welcome_check_component(status: str, detail: str) -> dict[str, str]:
     return {"status": status, "detail": (detail or "")[:300]}
 
 
-def _run_welcome_check_job(engine_id: str, rec: session_auth.SessionRecord) -> None:
-    lang = _welcome_check_lang()
-    components: dict[str, dict[str, str]] = {}
-
+def _welcome_check_house_rules() -> dict[str, str]:
     # (a) L44 classifier boot probe — a logging-only API; capture whatever
     # it would have logged to turn it into a structured status.
     try:
@@ -1166,24 +1170,29 @@ def _run_welcome_check_job(engine_id: str, rec: session_auth.SessionRecord) -> N
         import house_rules as _house_rules  # noqa: PLC0415
         messages: list[str] = []
         _house_rules.house_rules_boot_health_check(log_fn=messages.append)
-        components["house_rules"] = (
+        return (
             _welcome_check_component("ok", "") if not messages
             else _welcome_check_component("degraded", messages[-1])
         )
     except Exception as exc:  # noqa: BLE001
-        components["house_rules"] = _welcome_check_component("unavailable", str(exc))
+        return _welcome_check_component("unavailable", str(exc))
 
+
+def _welcome_check_hermes(engine_id: str) -> dict[str, str] | None:
     # (b) Hermes warm-up — only when hermes is the configured/fallback engine.
-    if engine_id == "hermes":
-        try:
-            from agents.hermes_engine import ensure_hermes_ready  # noqa: PLC0415
-            base_url = os.environ.get("CORVIN_HERMES_URL", "http://localhost:11434")
-            model = os.environ.get("CORVIN_HERMES_MODEL", "").strip() or "qwen3:8b"
-            ok, detail = ensure_hermes_ready(base_url, model, timeout=60.0)
-            components["hermes"] = _welcome_check_component("ok" if ok else "degraded", detail)
-        except Exception as exc:  # noqa: BLE001
-            components["hermes"] = _welcome_check_component("unavailable", str(exc))
+    if engine_id != "hermes":
+        return None
+    try:
+        from agents.hermes_engine import ensure_hermes_ready  # noqa: PLC0415
+        base_url = os.environ.get("CORVIN_HERMES_URL", "http://localhost:11434")
+        model = os.environ.get("CORVIN_HERMES_MODEL", "").strip() or "qwen3:8b"
+        ok, detail = ensure_hermes_ready(base_url, model, timeout=60.0)
+        return _welcome_check_component("ok" if ok else "degraded", detail)
+    except Exception as exc:  # noqa: BLE001
+        return _welcome_check_component("unavailable", str(exc))
 
+
+def _welcome_check_stt_tts() -> tuple[dict[str, str], dict[str, str]]:
     # (c) STT + TTS round-trip — voice_doctor.py's real, non-mocked checks
     # (call its functions directly, not the CLI).
     try:
@@ -1192,29 +1201,57 @@ def _run_welcome_check_job(engine_id: str, rec: session_auth.SessionRecord) -> N
             sys.path.insert(0, str(voice_scripts))
         import voice_doctor as _vd  # noqa: PLC0415
         stt_ok, stt_detail = _vd._check_stt(_WELCOME_STT_TIMEOUT_S)
-        components["stt"] = _welcome_check_component("ok" if stt_ok else "degraded", stt_detail)
         tts_ok, tts_detail, _tts_path = _vd._check_tts(_vd._DOCTOR_TTS_TEXT)
-        components["tts"] = _welcome_check_component("ok" if tts_ok else "degraded", tts_detail)
+        return (
+            _welcome_check_component("ok" if stt_ok else "degraded", stt_detail),
+            _welcome_check_component("ok" if tts_ok else "degraded", tts_detail),
+        )
     except Exception as exc:  # noqa: BLE001
-        components.setdefault("stt", _welcome_check_component("unavailable", str(exc)))
-        components.setdefault("tts", _welcome_check_component("unavailable", str(exc)))
+        unavailable = _welcome_check_component("unavailable", str(exc))
+        return unavailable, unavailable
 
+
+def _welcome_check_engine(engine_id: str, rec: session_auth.SessionRecord) -> dict[str, str]:
     # (d) cheap connectivity/auth test turn against the primary engine — the
     # closest thing to a "warm-up" a cloud API has. Reuses the SAME probe
     # the Setup "Test" button uses (test_engine, above), not a second
     # hand-rolled implementation.
     try:
         result = test_engine(EngineTestRequest(engine_id=engine_id), rec)
-        components["engine"] = _welcome_check_component(
+        return _welcome_check_component(
             "ok" if result.get("ok") else "degraded", str(result.get("detail", "")),
         )
     except Exception as exc:  # noqa: BLE001
-        components["engine"] = _welcome_check_component("unavailable", str(exc))
+        return _welcome_check_component("unavailable", str(exc))
+
+
+def _run_welcome_check_job(engine_id: str, rec: session_auth.SessionRecord) -> None:
+    lang = _welcome_check_lang()
+
+    # The four checks below are mutually independent (each only fills its own
+    # `components[...]` slot) but individually slow — a cold Hermes warm-up
+    # (up to 60s) and a cold STT model load (up to 45s) used to run back to
+    # back, serializing to 100s+ against the frontend's much shorter poll
+    # budget and silently losing the spoken greeting. Running them concurrently
+    # bounds the wall-clock time to the SLOWEST single check instead of their
+    # sum.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        house_rules_fut = pool.submit(_welcome_check_house_rules)
+        hermes_fut = pool.submit(_welcome_check_hermes, engine_id)
+        stt_tts_fut = pool.submit(_welcome_check_stt_tts)
+        engine_fut = pool.submit(_welcome_check_engine, engine_id, rec)
+
+        components: dict[str, dict[str, str]] = {"house_rules": house_rules_fut.result()}
+        hermes_result = hermes_fut.result()
+        if hermes_result is not None:
+            components["hermes"] = hermes_result
+        components["stt"], components["tts"] = stt_tts_fut.result()
+        components["engine"] = engine_fut.result()
 
     greeting = _build_welcome_greeting(lang, components)
 
     with _WELCOME_CHECK_LOCK:
-        _WELCOME_CHECK_STATE.update({
+        _welcome_state_for(rec.tenant_id).update({
             "state": "done",
             "lang": lang,
             "components": components,
@@ -1268,27 +1305,34 @@ def start_welcome_check(
     in-flight state instead of starting a duplicate. Poll via
     GET /setup/welcome-check/status."""
     with _WELCOME_CHECK_LOCK:
-        if _WELCOME_CHECK_STATE.get("state") == "running":
-            return dict(_WELCOME_CHECK_STATE)
-        _WELCOME_CHECK_STATE.clear()
-        _WELCOME_CHECK_STATE.update({"state": "running"})
+        state = _welcome_state_for(rec.tenant_id)
+        if state.get("state") == "running":
+            return dict(state)
+        state.clear()
+        state.update({"state": "running"})
 
-    engine_id = "hermes" if _default_engine(rec.tenant_id) == "hermes" else "claude_code"
+    # Pass through the tenant's actual configured engine (hermes, opencode,
+    # anthropic, ...) instead of collapsing anything non-hermes to
+    # "claude_code" — test_engine() already has a dedicated branch per known
+    # engine plus a benign generic fallback for the rest, so forcing
+    # "claude_code" only mislabeled e.g. an opencode-only install as "claude
+    # CLI not found".
+    engine_id = _default_engine(rec.tenant_id) or "claude_code"
     threading.Thread(
         target=_run_welcome_check_job, args=(engine_id, rec), daemon=True,
     ).start()
     with _WELCOME_CHECK_LOCK:
-        return dict(_WELCOME_CHECK_STATE)
+        return dict(_welcome_state_for(rec.tenant_id))
 
 
 @router.get("/setup/welcome-check/status")
 def welcome_check_status(
-    _rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
     """Poll target for the SPA: {state: "running"} or {state: "done",
     lang, components, greeting}."""
     with _WELCOME_CHECK_LOCK:
-        return dict(_WELCOME_CHECK_STATE)
+        return dict(_welcome_state_for(rec.tenant_id))
 
 
 class EngineKeyUpdate(BaseModel):

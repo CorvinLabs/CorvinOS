@@ -67,10 +67,17 @@ from .base import (
 # voice note surfaces to the model — and the user — as literal "[BLANK_AUDIO]"
 # (the reported "[BLANK_AUDIO] HELLO"). Strip ONLY this known, closed set of
 # artifact tokens (never free-form bracketed text the user actually spoke).
-_NONSPEECH_MARKER_RE = re.compile(
-    r"[\[(]\s*(?:blank[\s_]?audio|silence|no[\s_]?speech|music|sound|noise|"
+_NONSPEECH_MARKER_WORDS = (
+    r"blank[\s_]?audio|silence|no[\s_]?speech|music|sound|noise|"
     r"inaudible|unintelligible|applause|laughter|pause|beep|click|typing|"
-    r"footsteps|coughing|breathing)\s*[\])]",
+    r"footsteps|coughing|breathing"
+)
+# Brackets must match ([...] or (...), never mismatched like "(BLANK_AUDIO]")
+# — an independent open/close character class would also strip a literal
+# user-dictated "(laughter)" typed as well-formed parens, which is exactly
+# the free-form bracketed speech this is supposed to leave alone.
+_NONSPEECH_MARKER_RE = re.compile(
+    rf"\[\s*(?:{_NONSPEECH_MARKER_WORDS})\s*\]|\(\s*(?:{_NONSPEECH_MARKER_WORDS})\s*\)",
     re.IGNORECASE,
 )
 
@@ -558,26 +565,33 @@ def _plan_model_heal(size: str, model_file: Path, now: float) -> "tuple[bool, st
     """Decide whether a failed model load warrants a quarantine+re-download
     self-heal (VOICE-F3).
 
-    Returns ``(healable, detail)``. Heals ONLY when the file is present, looks
-    TRUNCATED for its family, AND we haven't already healed it inside the
-    current ``_HEAL_COOLDOWN_S`` window — bounding downloads to
-    ``_HEAL_MAX_HEALS`` per window so a full-size-but-unloadable model (malloc
-    failure, ABI/CPU mismatch, ggml version drift) is never re-fetched on every
-    voice note. When it returns True it has ALREADY recorded the attempt, so a
-    crash mid-download still consumes the window's budget. ``detail`` explains
-    the give-up reason for the surfaced error. Callers hold ``_load_lock``, so
-    the ``_heal_attempts`` read-modify-write is already serialized."""
+    Returns ``(healable, detail)``. Heals when the file is present AND we
+    haven't already healed it inside the current ``_HEAL_COOLDOWN_S`` window —
+    bounding downloads to ``_HEAL_MAX_HEALS`` per window so a
+    full-size-but-unloadable model (malloc failure, ABI/CPU mismatch, ggml
+    version drift) is never re-fetched on EVERY voice note. A truncated file
+    (implausibly small for its family) and a full-size-but-corrupt file both
+    get that same single bounded attempt: truncation is almost certainly
+    fixed by a redownload, and a full-size file that still won't load is
+    usually NOT fixed by one (systemic malloc/ABI/version drift) — but rare
+    single-bit corruption IS, and the shared ``_HEAL_MAX_HEALS`` budget
+    already caps the cost of being wrong to one extra download per window,
+    not one per voice note. When it returns True it has ALREADY recorded the
+    attempt, so a crash mid-download still consumes the window's budget.
+    ``detail`` explains the give-up reason for the surfaced error. Callers
+    hold ``_load_lock``, so the ``_heal_attempts`` read-modify-write is
+    already serialized."""
     heal_count, heal_ts = _heal_attempts.get(size, (0, 0.0))
     if now - heal_ts > _HEAL_COOLDOWN_S:
         heal_count = 0  # cooldown elapsed → window resets
-    if model_file.exists() and _looks_truncated(model_file, size) and heal_count < _HEAL_MAX_HEALS:
-        _heal_attempts[size] = (heal_count + 1, now)
-        return True, ""
     if not model_file.exists():
         return False, " (model file absent)"
-    if not _looks_truncated(model_file, size):
-        return False, " (full-size file; not a truncated download)"
-    return False, " (already re-downloaded once this window)"
+    if heal_count >= _HEAL_MAX_HEALS:
+        return False, " (already re-downloaded once this window; load still fails — likely not a corruption issue)"
+    _heal_attempts[size] = (heal_count + 1, now)
+    if _looks_truncated(model_file, size):
+        return True, ""
+    return True, " (full-size but unloadable — attempting one redownload in case of corruption)"
 
 
 def _prefer_faster_whisper() -> bool:

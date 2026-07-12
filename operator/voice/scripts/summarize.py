@@ -1450,14 +1450,33 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
     # (the same faithful structural path Backend 3 uses) — instant and exact.
     # Only genuinely-too-long replies pay for a real LLM summary below. Explicit
     # backend pins (cli/hermes, used by tests) still exercise the LLM path.
-    if _backend == "auto" and len(text.strip()) <= max_chars:
+    #
+    # Gated on persona/audience both being unset: a user who explicitly
+    # configured either wants that tone/steering applied to EVERY reply, not
+    # just long ones — the pre-existing behavior before this short-circuit was
+    # added. Skipping the LLM pass for those users silently dropped the
+    # feature they opted into, so they still pay the LLM-latency cost here
+    # (same as before this fix existed); everyone else gets the instant,
+    # faithful verbatim path.
+    if (
+        _backend == "auto"
+        and not persona.strip()
+        and not audience.strip()
+        and len(text.strip()) <= max_chars
+    ):
         # Text already fits the budget → return it TRULY VERBATIM. NOT via
         # naive_truncate: that runs per-line first-clause compression which drops
         # the description sentence of each item in a short multi-sentence list
         # ("choices are sacred" violation, caught in review). Verbatim is exact
         # AND in-budget (len <= max_chars), so nothing needs shortening.
         body = text.strip()
-        return _task_prefix(task, lang) + body if task.strip() else body
+        prefixed = _task_prefix(task, lang) + body if task.strip() else body
+        # The task-prefix check above only verified `body` alone fits the
+        # budget — re-check AFTER prefixing, since _task_prefix can add up to
+        # ~140 chars. Only fall through to a real summary pass (which DOES
+        # enforce the budget) if the prefixed text overruns it.
+        if len(prefixed) <= max_chars:
+            return prefixed
 
     # Backend 1: CLI — preferred for users with Claude Max who don't want
     # to manage a separate API key.

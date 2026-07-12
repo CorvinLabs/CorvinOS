@@ -48,6 +48,10 @@ try:
 except ImportError:  # pragma: no cover
     _process_table = None
 
+# WA-22 canonical provider-key resolver — same directory, always present
+# (not an optional plugin like process_table above), so a plain import.
+import provider_keys as _provider_keys  # type: ignore
+
 # Layer-20 Phase-4.3 — context budget pre-flight gate. Optional like
 # process_table. Default REJECT-quota is generous (100k tokens) so the
 # gate is a safety net, not a constant inconvenience. Operators tune
@@ -7513,25 +7517,19 @@ def _try_openai_tts(
         if now < _voice_engine_state.get("quota_until", 0.0):
             return None  # still inside quota backoff
 
-    # ADR-0193: CORVIN_TTS_OPENAI_KEY is the canonical name — deliberately
-    # separate from OPENAI_API_KEY so this never collides with (or gets
-    # confused for) the claude CLI's own auth source. Bug found 2026-07-12:
-    # this lookup checked only the legacy OPENAI_API_KEY/OPENAI_APIKEY names
-    # and never the canonical one, so a service.env carrying ONLY
-    # CORVIN_TTS_OPENAI_KEY (the documented, intended setup) silently never
-    # matched — every OpenAI TTS attempt fell through to edge-tts/Piper (or
-    # text-only) with no error, no log line, nothing actionable surfaced.
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        # Canonical key file is ~/.config/corvin-voice/service.env (WA-22 SSOT;
-        # the retired ~/.config/corvin-voice/.env and the repo-root .env are NOT
-        # consulted — reading them here shadowed a rotated service.env key and,
-        # via the old os.environ injection below, silently flipped STT to the
-        # cloud provider using a key the operator believed retired).
-        for key in ("CORVIN_TTS_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY"):
-            api_key = _load_env_value(key, _VOICE_CONFIG_DIR / "service.env")
-            if api_key:
-                break
+    # ADR-0193 / WA-22: resolve through the single canonical resolver
+    # (provider_keys.resolve_key) instead of a hand-rolled copy of its
+    # candidate list + precedence order. The hand-rolled copy here still had
+    # a gap even after the 2026-07-12 fix: it only checked the bare
+    # OPENAI_API_KEY env var (not CORVIN_TTS_OPENAI_KEY) before falling
+    # through to file-only lookups for the other candidates — an operator
+    # who set CORVIN_TTS_OPENAI_KEY as a pure env var (never written to
+    # service.env) was silently never matched. provider_keys.resolve_key
+    # checks every candidate against env first, then service.env, in the
+    # documented precedence order, and is the same resolver the
+    # tests/test_secrets_ssot.py parity guard verifies say.py/openai_whisper
+    # against.
+    api_key = _provider_keys.resolve_key("tts_openai_api_key")
     if api_key:
         try:
             api_key.encode("ascii")

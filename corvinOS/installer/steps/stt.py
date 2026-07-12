@@ -35,6 +35,15 @@ def _provider_default_model() -> "str | None":
     self-contained RAM check below)."""
     import os
     import sys
+    # Honor an operator-pinned model FIRST, exactly like the runtime provider's
+    # own _load_model() does (`os.environ.get("CORVIN_STT_LOCAL_MODEL", "") or
+    # _default_local_model()`) — without this, prefetching the RAM-tier
+    # default here while the provider loads the pinned model at first use
+    # re-introduces the install-time/runtime-load mismatch this function
+    # exists to prevent.
+    pinned = os.environ.get("CORVIN_STT_LOCAL_MODEL", "").strip()
+    if pinned:
+        return pinned
     try:
         from corvin_console._operator_bootstrap import ensure_operator_on_path
         ensure_operator_on_path()
@@ -92,6 +101,26 @@ def _default_model() -> str:
             ram_mb = None
     if ram_mb is None:
         return _STT_MODEL_QUALITY
+    # Clamp to a cgroup memory limit if one is set (Linux containers) — this
+    # fallback previously read only host-wide RAM, so a memory-constrained
+    # container (MemoryMax=/--memory=) could prefetch a model sized for the
+    # FULL host instead of the container's actual budget, risking OOM at
+    # first real transcription. Best-effort / never raises: an unreadable or
+    # absent cgroup file just means "no limit", same as before this check.
+    try:
+        import os as _os3
+        for _path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+            if not _os3.path.isfile(_path):
+                continue
+            with open(_path, encoding="utf-8") as _f:
+                _raw = _f.read().strip()
+            if _raw and _raw != "max":
+                _limit_mb = int(_raw) // (1024 * 1024)
+                if 0 < _limit_mb < ram_mb:
+                    ram_mb = _limit_mb
+            break
+    except (OSError, ValueError):
+        pass
     if ram_mb < _STT_LOWRAM_THRESHOLD_MB:
         return _STT_MODEL_LOWRAM
     # Mirror the provider's RAM+CPU gate for the heavy tier (this fallback runs

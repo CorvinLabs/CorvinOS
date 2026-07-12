@@ -222,6 +222,59 @@ class TestWelcomeCheckEndpoint(unittest.TestCase):
         self.assertEqual(r1.status_code, 200)
         self.assertEqual(r2.status_code, 200)
 
+    def test_non_hermes_engine_passed_through_not_collapsed_to_claude_code(self):
+        """Regression: engine_id used to be forced to "claude_code" for any
+        non-hermes engine, so an opencode-only install got probed for the
+        `claude` CLI and could be mislabeled as broken. It must now reach
+        test_engine() with the tenant's actual configured engine id."""
+        _install_fake_house_rules(warn=None)
+        _install_fake_voice_doctor(stt_ok=True, tts_ok=True)
+
+        seen_engine_ids = []
+
+        def _fake_test_engine(body, rec):
+            seen_engine_ids.append(body.engine_id)
+            return {"ok": True, "detail": "no probe available"}
+
+        with _sandbox(self._tmp_path) as tc:
+            with (
+                patch("corvin_console.routes.setup._default_engine", return_value="opencode"),
+                patch("corvin_console.routes.setup.test_engine", side_effect=_fake_test_engine),
+            ):
+                tc.post("/v1/console/setup/welcome-check")
+                data = _poll_welcome_check(tc)
+
+        self.assertEqual(seen_engine_ids, ["opencode"])
+        self.assertNotIn("hermes", data["components"])  # hermes warm-up only runs for engine_id == "hermes"
+
+    def test_two_tenants_do_not_clobber_each_others_welcome_check_state(self):
+        """Regression: _WELCOME_CHECK_STATE used to be one shared process-wide
+        dict, so tenant B's poll could read tenant A's in-flight/finished
+        check (engine id, STT/TTS status). Must be tenant_id-scoped."""
+        _install_fake_house_rules(warn=None)
+        _install_fake_voice_doctor(stt_ok=True, tts_ok=True)
+
+        with _sandbox(self._tmp_path) as tc:
+            from corvin_console.routes import setup as setup_module
+
+            with (
+                patch("corvin_console.routes.setup._default_engine", return_value="claude_code"),
+                patch(
+                    "corvin_console.routes.setup.test_engine",
+                    return_value={"ok": True, "detail": ""},
+                ),
+            ):
+                tc.post("/v1/console/setup/welcome-check")
+                _poll_welcome_check(tc)
+
+                # A second tenant polling status must NOT see tenant A's
+                # finished check — it must still be "idle" for a tenant that
+                # never started one.
+                other_state = setup_module._welcome_state_for("other_tenant")
+                self.assertEqual(other_state.get("state"), "idle")
+                # And tenant A's own state must still be independently "done".
+                self.assertEqual(setup_module._welcome_state_for("_default").get("state"), "done")
+
 
 if __name__ == "__main__":
     unittest.main()

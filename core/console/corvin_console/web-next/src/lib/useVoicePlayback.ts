@@ -15,6 +15,14 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
   const [voiceState, setVoiceState] = React.useState<VoiceState>("idle");
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
   const blobUrlRef = React.useRef<string | null>(null);
+  // Regression guard: two overlapping playTts() calls used to race — a
+  // slower, OLDER request's ttsBlob() could resolve AFTER a newer request
+  // already started playing, unconditionally clobbering blobUrlRef/audio.src
+  // with its own (stale) blob. The newer blob's object URL was then never
+  // revoked (leaked) and playback silently jumped back to the older audio.
+  // Each call captures the current generation and only applies its result if
+  // it's still the latest one once the async fetch resolves.
+  const requestIdRef = React.useRef(0);
 
   const stopVoice = React.useCallback(() => {
     const a = audioRef.current;
@@ -38,6 +46,7 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
 
   const playTts = React.useCallback(
     async (text: string, lang: string) => {
+      const myRequestId = ++requestIdRef.current;
       // Latest request wins — stop any in-flight playback first.
       stopVoice();
       if (!text.trim()) return;
@@ -46,8 +55,16 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
       try {
         blob = await ttsBlob(text, lang, csrf);
       } catch (e) {
+        if (myRequestId !== requestIdRef.current) return; // superseded meanwhile
         setVoiceState("idle");
         onError?.(e instanceof Error ? `TTS failed: ${e.message}` : "TTS failed");
+        return;
+      }
+      if (myRequestId !== requestIdRef.current) {
+        // A newer playTts() call started while this fetch was in flight —
+        // it has already set up its own blobUrlRef/audio.src; applying this
+        // stale response now would clobber that and leak the never-revoked
+        // object URL this call is about to create, so bail out first.
         return;
       }
       if (!blob.size) {

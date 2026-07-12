@@ -36,6 +36,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -107,6 +108,35 @@ class _TimeoutProvider:
 
     def transcribe(self, audio_path, *, lang=None, timeout_s=None):
         raise STTTimeout("stub_timeout simulated")
+
+
+class _SlowTimeoutProvider:
+    """Times out like _TimeoutProvider, but burns real wall-clock time first
+    so a decremented downstream budget is observable in a test."""
+    name = "stub_slow_timeout"
+    sleep_s = 0.2
+
+    def is_available(self) -> bool:
+        return True
+
+    def transcribe(self, audio_path, *, lang=None, timeout_s=None):
+        time.sleep(self.sleep_s)
+        raise STTTimeout("stub_slow_timeout simulated")
+
+
+class _RecordingProvider:
+    """Records the timeout_s it was actually called with, then succeeds."""
+    name = "stub_recording"
+    received_timeout_s: object = "unset"
+
+    def is_available(self) -> bool:
+        return True
+
+    def transcribe(self, audio_path, *, lang=None, timeout_s=None):
+        type(self).received_timeout_s = timeout_s
+        return TranscriptResult(
+            text="hello world", provider=self.name, lang="de", duration_s=0.1,
+        )
 
 
 @contextmanager
@@ -557,6 +587,43 @@ class ChainSemanticsTests(unittest.TestCase):
             os.environ["CORVIN_STT_CHAIN"] = "nonexistent,stub_ok"
             result = stt_transcribe(audio)
             self.assertEqual(result.provider, "stub_ok")
+
+    def test_explicit_budget_decremented_not_reissued_fresh_after_fallthrough(self):
+        # Regression: an explicit timeout_s used to be re-issued UNCHANGED to
+        # every provider after a non-terminal timeout, so total wait could
+        # multiply by chain length (e.g. BRIDGE_TRANSCRIBE_TIMEOUT=10 could
+        # become ~20s across a 2-provider chain) instead of respecting the
+        # caller's budget for the WHOLE chain.
+        audio = _tmp_audio()
+        _RecordingProvider.received_timeout_s = "unset"
+        with _patched_registry({
+            "stub_slow_timeout": _SlowTimeoutProvider,
+            "stub_recording": _RecordingProvider,
+        }):
+            os.environ["CORVIN_STT_CHAIN"] = "stub_slow_timeout,stub_recording"
+            result = stt_transcribe(audio, timeout_s=10.0)
+            self.assertEqual(result.provider, "stub_recording")
+            received = _RecordingProvider.received_timeout_s
+            self.assertIsInstance(received, float)
+            # Must be reduced by roughly the ~0.2s the first provider burned —
+            # NOT the full, unchanged 10.0s budget.
+            self.assertLess(received, 10.0)
+            self.assertGreater(received, 9.0)
+
+    def test_no_explicit_budget_each_provider_keeps_its_own_default(self):
+        # When the caller passes no timeout_s at all, there is no caller
+        # budget to protect — every provider still gets timeout_s=None (its
+        # own built-in default), unchanged from before this fix.
+        audio = _tmp_audio()
+        _RecordingProvider.received_timeout_s = "unset"
+        with _patched_registry({
+            "stub_timeout": _TimeoutProvider,
+            "stub_recording": _RecordingProvider,
+        }):
+            os.environ["CORVIN_STT_CHAIN"] = "stub_timeout,stub_recording"
+            result = stt_transcribe(audio)
+            self.assertEqual(result.provider, "stub_recording")
+            self.assertIsNone(_RecordingProvider.received_timeout_s)
 
 
 # ── Available providers probe ────────────────────────────────────────

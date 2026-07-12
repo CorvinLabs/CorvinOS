@@ -196,13 +196,27 @@ def test_installer_mirrors_provider_tier_constants():
     assert installer_stt._STT_HIGH_MIN_CPUS == lw._STT_HIGH_MIN_CPUS
 
 
-def test_installer_default_model_delegates_to_provider():
+def test_installer_default_model_delegates_to_provider(monkeypatch):
     """When the provider module is importable, the installer must return the
     provider's pick verbatim (true Single Source of Truth)."""
+    monkeypatch.delenv("CORVIN_STT_LOCAL_MODEL", raising=False)
     with mock.patch.object(lw, "_total_ram_mb", return_value=16000), \
          mock.patch.object(lw, "_cgroup_cpu_quota", return_value=None), \
          mock.patch.object(lw.os, "cpu_count", return_value=16):
         assert installer_stt._default_model() == "medium-q5_0"
+
+
+def test_installer_honors_pinned_model_env_override(monkeypatch):
+    """Regression: the installer used to prefetch the RAM-tier default even
+    when CORVIN_STT_LOCAL_MODEL was explicitly pinned, so install-time
+    download and the provider's first-use load (which DOES honor the pin)
+    could target different files. The installer must return the pinned
+    model verbatim, without even trying the RAM-tier resolution."""
+    monkeypatch.setenv("CORVIN_STT_LOCAL_MODEL", "tiny-q5_1")
+    with mock.patch.object(lw, "_total_ram_mb", return_value=32000), \
+         mock.patch.object(lw, "_cgroup_cpu_quota", return_value=None), \
+         mock.patch.object(lw.os, "cpu_count", return_value=16):
+        assert installer_stt._default_model() == "tiny-q5_1"
 
 
 def test_installer_fallback_is_three_tier_with_cpu_gate(monkeypatch):

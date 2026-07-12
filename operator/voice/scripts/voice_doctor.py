@@ -85,31 +85,19 @@ def _tts_provider_rows() -> list[tuple[str, bool, str]]:
     second decision path: the round-trip check below is what actually
     decides pass/fail; this table only explains *why* to a human.
     """
-    import adapter  # local import — only needed for this diagnostic table
+    import provider_keys  # local import — same canonical resolver as adapter.py
 
     rows: list[tuple[str, bool, str]] = []
 
-    # WA-22: mirrors say.py's actual TTS key resolution — dedicated var
-    # first, then general, then legacy alias; service.env is the ONE
-    # canonical file (the second, retired .env is no longer consulted by
-    # anything, so this diagnostic must not check it either).
-    _tts_candidates = ("CORVIN_TTS_OPENAI_KEY", "OPENAI_API_KEY", "OPENAI_APIKEY")
-    key = None
-    for env_key in _tts_candidates:
-        value = (os.environ.get(env_key) or "").strip()
-        if value:
-            key = value
-            break
-    if not key:
-        env_file = adapter._VOICE_CONFIG_DIR / "service.env"
-        for env_key in _tts_candidates:
-            try:
-                value = adapter._load_env_value(env_key, env_file)
-            except Exception:  # noqa: BLE001 — diagnostics must never crash
-                value = None
-            if value:
-                key = value
-                break
+    # WA-22: delegate to the single canonical resolver instead of a hand-
+    # rolled copy of its candidate list/precedence order — a duplicate copy
+    # here was itself uncovered by the tests/test_secrets_ssot.py parity
+    # guard, so it could silently drift from what say.py/adapter.py actually
+    # use, defeating the point of a diagnostic tool.
+    try:
+        key = provider_keys.resolve_key("tts_openai_api_key")
+    except Exception:  # noqa: BLE001 — diagnostics must never crash
+        key = None
     if not key:
         rows.append(("openai (cloud TTS)", False, "no API key (OPENAI_API_KEY unset)"))
     else:

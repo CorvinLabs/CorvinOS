@@ -19,10 +19,19 @@ sending audio off-box even when a key exists) set
 ``CORVIN_STT_CHAIN=local,openai`` (or pin via ``CORVIN_STT_PROVIDER=local``).
 
 A failed ``transcribe()`` call falls through to the next provider in
-the chain ONLY when the failure was provider-side
-(``STTProviderUnavailable`` or ``STTTranscriptionFailed``).
-``STTTimeout`` is a structural failure that re-raises to the caller —
-falling back on timeout would multiply the user's wait time.
+the chain for ``STTProviderUnavailable`` / ``STTTranscriptionFailed``,
+and also for ``STTTimeout`` as long as another provider remains in the
+chain — a blackholed/slow leading provider (e.g. ``openai``) must not
+strand a healthy on-box ``local`` model. Only a timeout on the LAST
+provider re-raises.
+
+When the caller passes an explicit ``timeout_s``, that budget is a
+ceiling on the WHOLE chain, not a fresh allowance per provider: the
+remaining budget (original minus elapsed wall-clock time) is what gets
+passed to each subsequent provider, so falling through on timeout
+cannot multiply the caller's intended wait. When ``timeout_s`` is
+``None`` (no caller-specified budget), each provider still falls back
+to its own built-in default — there is no caller intent to violate.
 """
 from __future__ import annotations
 
@@ -244,6 +253,7 @@ def transcribe(
     chain = _chain_from_env()
     failures: list[str] = []
     last_error: Optional[Exception] = None
+    start = time.monotonic()
     for idx, n in enumerate(chain):
         cls = _PROVIDERS.get(n)
         if cls is None:
@@ -257,9 +267,26 @@ def transcribe(
         if not instance.is_available():
             failures.append(f"{n}: not available")
             continue
+        # An explicit caller budget is a ceiling on the WHOLE chain: charge
+        # elapsed wall-clock time against it so a fallthrough after an earlier
+        # provider's timeout can't multiply the caller's intended wait (e.g.
+        # BRIDGE_TRANSCRIBE_TIMEOUT=30 must not turn into up to 60s across a
+        # 2-provider chain). No explicit budget (timeout_s is None) → each
+        # provider keeps using its own built-in default; there's no caller
+        # intent to violate in that case.
+        if timeout_s is None:
+            provider_timeout = None
+        else:
+            provider_timeout = timeout_s - (time.monotonic() - start)
+            if provider_timeout <= 0:
+                failures.append(f"{n}: skipped — chain timeout budget exhausted")
+                last_error = last_error or STTTimeout(
+                    f"chain timeout budget ({timeout_s}s) exhausted before {n}"
+                )
+                continue
         try:
             return instance.transcribe(
-                audio_path, lang=lang, timeout_s=timeout_s,
+                audio_path, lang=lang, timeout_s=provider_timeout,
             )
         except STTTimeout as exc:
             # A timeout on the LAST provider is terminal — don't multiply the

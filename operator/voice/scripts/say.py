@@ -64,26 +64,24 @@ _PROVIDER_TIMEOUT_S = float(os.environ.get("CORVIN_TTS_PROVIDER_TIMEOUT_S", "10"
 # ── OpenAI helpers ────────────────────────────────────────────────────
 
 def _clean_env_value(v: str) -> str:
-    """Normalise a dotenv value: strip an unquoted trailing ` # comment`,
-    then surrounding whitespace and matching quotes.
+    """Normalise a dotenv value: strip a trailing ` # comment`, then
+    surrounding whitespace and matching quotes.
 
-    Mirrors stt/openai_whisper._load_env_value (hardened in 6ba0610) so the
-    TTS side no longer diverges: `OPENAI_API_KEY=sk-x # prod` yielded a
-    broken `sk-x # prod` key on the TTS path while STT read it correctly.
+    MUST stay byte-identical to provider_keys._clean_env_value — this used to
+    be a from-scratch reimplementation that stripped ALL leading/trailing
+    quote characters (`str.strip(chars)` semantics) instead of a single
+    matched leading+trailing pair, so e.g. a value ending in one stray
+    apostrophe (`sk-test'`) was cleaned differently by the two "must match"
+    implementations. Mirrored verbatim now; see the parity guard in
+    tests/test_secrets_ssot.py.
     """
     v = v.strip()
-    if v[:1] in ('"', "'"):
-        # Quoted value: a '#' inside quotes is literal — strip quotes only.
-        q = v[0]
-        end = v.find(q, 1)
-        if end != -1:
-            return v[1:end]
-        return v.strip(q)
-    # Unquoted: an inline comment starts at ` #`.
-    hash_idx = v.find(" #")
-    if hash_idx != -1:
-        v = v[:hash_idx]
-    return v.strip().strip('"').strip("'")
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        return v[1:-1]
+    v = v.split(" #", 1)[0].split("\t#", 1)[0].strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+        v = v[1:-1]
+    return v
 
 
 # WA-22: single canonical source of truth (operator/bridges/shared/secrets.py)

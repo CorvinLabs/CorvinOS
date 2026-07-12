@@ -358,6 +358,17 @@ class WindowsSystemServiceManager(SystemServiceManager):
                 "Registering a boot-time Scheduled Task requires an elevated "
                 "PowerShell. Re-run from an admin PowerShell: corvin-service install"
             )
+        if pre_exec:
+            # Surfaced to the operator rather than silently dropped (WA-19 gap
+            # found in review): unlike systemd/launchd, this always-on path
+            # gets no boot-time PyPI auto-update check at all.
+            print(
+                "  Note: the always-on (Stufe 2) service on Windows does not "
+                "yet run the boot-time auto-update check that Linux/macOS get "
+                "here — it still updates once per interactive logon via "
+                "corvin-supervisor.ps1. Run 'uv tool upgrade corvinos' "
+                "manually to update a headless always-on install."
+            )
         # Windows Scheduled Task actions have no native per-task environment
         # variable mechanism (unlike systemd Environment= / launchd
         # EnvironmentVariables) — env_vars is accepted for interface parity

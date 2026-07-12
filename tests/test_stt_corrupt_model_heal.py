@@ -70,15 +70,26 @@ def test_truncated_download_heals_once(tmp_path):
     assert lw._heal_attempts["medium-q5_0"][0] == 1
 
 
-def test_full_size_failure_never_re_downloads(tmp_path):
-    """THE regression: a full-size file that still fails to load (malloc / ABI /
-    version drift) must NOT be re-downloaded — heal must decline."""
+def test_full_size_failure_heals_once_then_declines(tmp_path):
+    """A full-size file that still fails to load (malloc / ABI / version
+    drift, OR rare single-bit corruption) gets exactly ONE bounded redownload
+    attempt — not zero (that would strand a corrupted-but-full-size file
+    forever with no repair path) and not unbounded (that was THE original
+    regression: a systemic malloc/ABI issue re-downloading on EVERY voice
+    note). The shared _HEAL_MAX_HEALS budget caps it to one attempt per
+    cooldown window either way."""
     f = tmp_path / "ggml-medium-q5_0.bin"
     _write(f, 450 * 1024 * 1024)  # plausibly full (> 400 MiB floor)
     healable, detail = lw._plan_model_heal("medium-q5_0", f, now=1000.0)
-    assert healable is False
+    assert healable is True
     assert "full-size" in detail
-    assert "medium-q5_0" not in lw._heal_attempts  # nothing recorded
+    assert lw._heal_attempts["medium-q5_0"][0] == 1
+
+    # A second failure for the SAME file within the same cooldown window must
+    # NOT trigger another download — this is the actual regression guard.
+    healable2, detail2 = lw._plan_model_heal("medium-q5_0", f, now=1000.0 + 5)
+    assert healable2 is False
+    assert "already re-downloaded" in detail2
 
 
 def test_second_heal_within_window_is_refused(tmp_path):
