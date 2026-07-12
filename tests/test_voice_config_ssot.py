@@ -66,6 +66,20 @@ def _resolvers():
     bm = importlib.import_module("bridge_manager")  # operator/bridges on sys.path
     resolvers["bridge_manager"] = bm._voice_config_dir
 
+    # profile/memory/vault stores (V-2 audit finding 2026-07-12): these three
+    # resolved XDG-only and ignored the VOICE_CONFIG_DIR pin, so a pinned
+    # launcher moved config/models but left profile/memory/BYOK-vault behind
+    # (reader!=writer). They resolve a FILE/SUBDIR under the config dir, so
+    # normalize back to the dir for the agreement check.
+    import profile as voice_profile  # type: ignore  # bridges/shared on sys.path
+    resolvers["profile"] = lambda: voice_profile._profile_path().parent
+
+    import memory as voice_memory  # type: ignore
+    resolvers["memory"] = lambda: voice_memory._memory_root().parent
+
+    import vault as voice_vault  # type: ignore
+    resolvers["vault"] = voice_vault._vault_root
+
     return resolvers
 
 

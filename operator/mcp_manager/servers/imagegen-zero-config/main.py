@@ -40,6 +40,13 @@ from imagegen_disclosure import ensure_disclosed  # type: ignore  # noqa: E402
 
 POLLINATIONS_HOST = "image.pollinations.ai"
 _HTTP_TIMEOUT = 60.0
+# Hard byte cap on any provider response relayed as an MCP image block —
+# the block is base64-embedded into the tool result, so an unbounded body
+# would balloon the calling model's context.
+_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+# Pollinations carries the prompt in the URL path; beyond a few KB servers
+# reply 414/handshake errors instead of a useful message.
+_MAX_PROMPT_CHARS = 4000
 
 mcp = FastMCP("corvin-imagegen")
 
@@ -68,9 +75,39 @@ class Tier0RateLimited(RuntimeError):
     generic client-error string)."""
 
 
+def _detected_image_format(content: bytes) -> str | None:
+    """Sniff the real image format from magic bytes. Pollinations serves
+    JPEG despite the .png-ish URL scheme (verified live) — declaring the
+    wrong format puts a wrong mimeType on the MCP image content block,
+    which strict clients refuse to render."""
+    if content.startswith(b"\x89PNG"):
+        return "png"
+    if content.startswith(b"\xff\xd8"):
+        return "jpeg"
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "webp"
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    return None
+
+
+_TIER0_UNAVAILABLE_MSG = (
+    "The free image service (Pollinations) is unavailable right now — it's a "
+    "best-effort community service with no uptime guarantee. Try again in a "
+    "bit, or add your own OpenAI API key for reliable, higher-quality "
+    "generation."
+)
+
+
 def _generate_pollinations(prompt: str) -> Image:
-    url = f"https://{POLLINATIONS_HOST}/prompt/{urllib.parse.quote(prompt)}"
-    with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
+    # quote(safe="") — the prompt must stay ONE path segment; the default
+    # safe='/' would let a prompt containing slashes span segments.
+    url = f"https://{POLLINATIONS_HOST}/prompt/{urllib.parse.quote(prompt, safe='')}"
+    # follow_redirects stays False: the prompt travels in the URL path, so a
+    # provider redirect would re-send user content to a host L35 never saw
+    # declared (the 0.10.25 ping-redirect-leak class). A redirect is treated
+    # as "service unavailable" rather than followed.
+    with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=False) as client:
         try:
             resp = client.get(url, params={"nologo": "true"})
             resp.raise_for_status()
@@ -82,8 +119,28 @@ def _generate_pollinations(prompt: str) -> Image:
                     "guarantee. Try again in a bit, or add your own OpenAI API "
                     "key for unlimited, higher-quality generation."
                 ) from e
+            if e.response.status_code >= 300:
+                # 3xx (redirect refused, see above) and the remaining 4xx/5xx
+                # family degrade to the same friendly message instead of a raw
+                # stack trace — the ADR-0191-promised behavior for a community
+                # service without an SLA.
+                raise Tier0RateLimited(_TIER0_UNAVAILABLE_MSG) from e
             raise
-        return Image(data=resp.content, format="png")
+        except (httpx.TimeoutException, httpx.TransportError) as e:
+            raise Tier0RateLimited(_TIER0_UNAVAILABLE_MSG) from e
+        if len(resp.content) > _MAX_IMAGE_BYTES:
+            raise Tier0RateLimited(_TIER0_UNAVAILABLE_MSG)
+        fmt = _detected_image_format(resp.content)
+        if fmt is None:
+            # A 200 that isn't an image (e.g. an HTML error page from the
+            # community service) must not be relayed as a broken image block.
+            raise Tier0RateLimited(
+                "The free image service (Pollinations) returned an unexpected "
+                "non-image response — it's a best-effort community service with "
+                "no uptime guarantee. Try again in a bit, or add your own "
+                "OpenAI API key for reliable, higher-quality generation."
+            )
+        return Image(data=resp.content, format=fmt)
 
 
 def _generate_openai(prompt: str, api_key: str) -> Image:
@@ -115,24 +172,49 @@ def generate_image(prompt: str) -> list:
     """
     tid = _tenant_id()
 
+    prompt = (prompt or "").strip()
+    if not prompt:
+        raise ImageGenRefused("Empty prompt — describe the image you want.")
+    if len(prompt) > _MAX_PROMPT_CHARS:
+        raise ImageGenRefused(
+            f"Prompt too long ({len(prompt)} chars, max {_MAX_PROMPT_CHARS}) — "
+            "please shorten the description."
+        )
+
     refusal = check_l44(prompt, tid, persona="assistant", engine_id="imagegen_mcp")
     if refusal:
         raise ImageGenRefused(refusal)
 
+    tier1_note: str | None = None
     openai_key = resolve_key("openai_api_key")
     if openai_key:
-        return [_generate_openai(prompt, openai_key)]
+        try:
+            return [_generate_openai(prompt, openai_key)]
+        except Exception:  # noqa: BLE001 — a broken/expired BYOK key must not
+            # leave the user WORSE off than having no key at all: degrade to
+            # Tier 0 with an explicit note instead of a raw provider error.
+            tier1_note = (
+                "Note: your configured OpenAI API key failed (expired/invalid/"
+                "over quota?) — fell back to the free community image service."
+            )
 
-    # Tier 0 (Pollinations): a text content block placed BEFORE the image
-    # block is what actually makes the one-time disclosure visible to the
+    # Tier 0 (Pollinations): text content blocks placed BEFORE the image
+    # block are what actually makes the one-time disclosure visible to the
     # end user — FastMCP converts a returned list into multiple content
     # blocks in order, and the calling model relays text content in its
     # own reply, so this is a real disclosure, not just a server log line.
-    image = _generate_pollinations(prompt)
+    # The disclosure store is marked BEFORE the prompt leaves the machine
+    # (ADR-0191 Decision 3 — "before a prompt first leaves"), not after the
+    # provider call happens to succeed.
     disclosure = ensure_disclosed(tid)
+    image = _generate_pollinations(prompt)
+    blocks: list = []
     if disclosure:
-        return [disclosure, image]
-    return [image]
+        blocks.append(disclosure)
+    if tier1_note:
+        blocks.append(tier1_note)
+    blocks.append(image)
+    return blocks
 
 
 if __name__ == "__main__":

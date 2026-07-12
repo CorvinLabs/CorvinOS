@@ -1,160 +1,108 @@
-# ImageGen MCP Tool Integration
+# Image Generation — Zero-Config Tier (ADR-0191)
 
 ## Overview
 
-CorvinOS ships with **ImageGen MCP Server** as a standard tool for AI-powered image generation. It integrates seamlessly with the OpenAI API (using the same key configured for Whisper/TTS) and supports multiple image generation models:
+CorvinOS ships a **first-party image-generation MCP server**,
+`imagegen-zero-config` (`operator/mcp_manager/servers/imagegen-zero-config/`),
+registered as a governed `mcp_manager` catalog entry and seeded automatically
+on boot. It exposes ONE tool, `generate_image`, with two tiers:
 
-- **DALL-E 3** (OpenAI) — primary, highest quality
-- **Flux 1.1** (Replicate) — state-of-the-art, cost-effective
-- **Google Imagen 4** (Google Cloud) — alternative option
+- **Tier 0 (default, zero-config):** [Pollinations.ai](https://pollinations.ai) —
+  free, no key, no signup. Best-effort community service, no uptime SLA
+  (explicitly disclosed to the user, once per tenant).
+- **Tier 1 (automatic upgrade):** the user's own OpenAI key (the SAME key
+  already configured for Whisper/TTS), resolved via the canonical
+  `provider_keys.resolve_key("openai_api_key")` chain — process env →
+  `~/.config/corvin-voice/service.env`. If the configured key fails
+  (expired/invalid/quota), the call degrades to Tier 0 with an explanatory
+  note instead of erroring out.
+
+The pre-ADR-0191 integration (persona-hardcoded `npx imagegen-mcp-server`)
+has been **removed** from `assistant.json`/`forge.json`/`research.json`: it
+was BYOK-only (broken without a key — the `${OPENAI_API_KEY}` template is
+never resolved in MCP env, so it 401'd even WITH a key), and its
+`api.openai.com` egress was invisible to L34/L35 governance.
 
 ## Architecture
 
-### MCP Server Configuration
+### Catalog entry, not persona JSON
 
-The ImageGen MCP tool is configured in the persona definitions:
+`mcp_manager/seed_builtin.py::ensure_imagegen_zero_config()` registers the
+tool in the mcp_manager catalog with:
 
-**File:** `operator/cowork/personas/assistant.json` and `operator/cowork/personas/forge.json`
+- `runtime.command = sys.executable` (never bare `python3` — PATH of the
+  spawning process is not this venv's PATH)
+- absolute `runtime.args` path to `main.py` (survives any cwd)
+- `runtime.env = {CORVIN_HOME, CORVIN_TENANT_ID}` plaintext passthrough
+  (an MCP subprocess does not reliably inherit these)
+- `compliance.hosts = ["image.pollinations.ai", "api.openai.com"]` — so L35
+  egress lockdown and L34 data classification gate it at activation AND
+  spawn time like every other governed tool.
 
-```json
-{
-  "mcp_servers": {
-    "imagegen": {
-      "command": "npx",
-      "args": ["-y", "imagegen-mcp-server@latest"],
-      "env": {
-        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
-      }
-    }
-  }
-}
-```
+### Seeding — every boot path, operator intent respected
 
-### API Key Reuse
+Seeding runs on BOTH server entry paths:
 
-The tool **automatically reuses the OpenAI API key** configured for Whisper/TTS (stored in `~/.config/corvin-voice/.env`). No additional configuration is needed.
+- gateway lifespan (`core/gateway/corvin_gateway/app.py`) — systemd/service
+  path
+- `corvin-serve` / `corvinos-serve` (`ops/launcher/corvin/serve_backend.py::
+  _seed_builtin_tools`) — the primary pip/uv install path, which has no
+  gateway lifespan (same class as the startup-ping/heartbeat workaround)
 
-- **Environment Variable:** `${OPENAI_API_KEY}` (automatically injected from the voice config)
-- **Fallback:** If not set, the tool will check for `OPENAI_API_KEY` in the system environment
-- **Scope:** Only applied when using the `imagegen` MCP server within a persona
+Seeding is marker-based (`<catalog_dir>/builtin-seeded.json`):
+
+- first seed → install + tenant-activate + marker
+- later boots → refresh stale interpreter/script paths only (upgrade case);
+  **never** re-activate a tool the user deactivated, never clobber operator
+  catalog edits, never re-install after an operator uninstall
+- `_SEED_VERSION` bump → re-apply entry shape (still without forcing
+  re-activation)
+
+### Safety and compliance in `main.py`
+
+- Every prompt passes the **L44 house-rules gate** (`check_l44`) BEFORE any
+  provider sees it. Without a reachable classifier backend, L44 degrades to
+  its deterministic Tier-0 regex floor (see Layer 44) — zero-config installs
+  without Ollama still generate images.
+- One-time **per-tenant disclosure** (`imagegen_disclosure.py`) marks its
+  store BEFORE the prompt first leaves the machine and returns the notice as
+  a real MCP text content block ahead of the image. English text (repo
+  language policy); the relaying assistant localizes.
+- Tier-0 hardening: prompt is a single URL path segment
+  (`quote(safe="")`), 4 000-char prompt cap, 20 MB response cap, image
+  format sniffed from magic bytes (Pollinations serves JPEG — never trust a
+  hardcoded mime), non-image 200s rejected, redirects NOT followed (prompt
+  travels in the URL; a redirect would leak it to an undeclared host),
+  429/5xx/timeouts/connect errors all surface a friendly no-SLA message,
+  never a raw stack trace.
 
 ## Usage
 
-### In Claude Code (Assistant Persona)
-
-When a user asks for an image or illustration, the assistant automatically invokes the ImageGen MCP tool:
-
 ```
 User: "Generate an image of a surreal mouth floating in cosmic space"
-
-Claude: [Calls imagegen MCP tool with DALL-E 3]
-→ Image saved to ./outputs/image-<hash>.png
-→ Automatically attached to Discord/email/etc.
+Assistant: [calls generate_image] → relays the one-time disclosure (first
+           use only) + the image
 ```
 
-### In Forge Persona
+No setup, no key, works on a genuinely fresh install. Configure
+`OPENAI_API_KEY` in `~/.config/corvin-voice/service.env` (or process env) to
+upgrade to DALL-E 3 automatically.
 
-When forging tools that generate images as part of their output:
+## Testing
 
-```python
-# Inside a forged tool
-import json
-import urllib.request
-
-# The imagegen MCP tool is available via the forge MCP server
-# Request image generation from the running MCP server
-```
-
-### Model Selection
-
-Default model: **DALL-E 3** (via OpenAI)
-
-To use alternative models, pass the provider in the prompt or configure in the MCP tool settings:
-
-- `provider: "openai"` → DALL-E 3
-- `provider: "replicate"` → Flux 1.1 (requires Replicate API token in `REPLICATE_API_TOKEN`)
-- `provider: "google"` → Imagen 4 (requires Google Cloud credentials)
-
-## First Use Setup
-
-When the ImageGen MCP tool is invoked for the first time in a chat:
-
-1. **npx downloads** the latest `imagegen-mcp-server` package (~50 MB)
-2. **One-time installation** — subsequent invocations reuse the cached binary
-3. **API key validation** — confirms the OpenAI API key is valid (if using DALL-E)
-4. **Service startup** — the MCP server runs as a subprocess during that chat session
-
-**Expected first-use latency:** ~5–15 seconds (network + npm install)
-
-## Configuration
-
-### Per-Chat Override
-
-To change the default provider for a specific chat, set an environment variable:
-
-```bash
-IMAGEGEN_PROVIDER=replicate claude code
-```
-
-### Persona-Level Override
-
-To add ImageGen to a custom persona:
-
-1. Edit `operator/cowork/personas/<name>.json`
-2. Add to `mcp_servers`:
-   ```json
-   "imagegen": {
-     "command": "npx",
-     "args": ["-y", "imagegen-mcp-server@latest"],
-     "env": {
-       "OPENAI_API_KEY": "${OPENAI_API_KEY}",
-       "IMAGEGEN_PROVIDER": "openai"
-     }
-   }
-   ```
-3. Restart the adapter or let hot-reload pick up the change
-
-### Troubleshooting
-
-**"Unknown model: 'dall-e-3'"**
-- The OpenAI API key may not have access to Images API
-- Verify the account has active billing and is not rate-limited
-- Check: `curl https://api.openai.com/v1/images/generations -H "Authorization: Bearer $OPENAI_API_KEY" -d '{}' 2>&1 | jq .error`
-
-**"OPENAI_API_KEY not set"**
-- Verify `~/.config/corvin-voice/.env` contains `OPENAI_API_KEY=sk-...`
-- Or export `OPENAI_API_KEY` in your shell before starting the adapter
-- Check permissions: `ls -la ~/.config/corvin-voice/.env` (should be mode 0600)
-
-**ImageGen MCP server crashes**
-- Check for npm/Node.js version conflicts: `node --version` (should be ≥16)
-- Clear npm cache: `npm cache clean --force`
-- Try explicit version: `"args": ["-y", "imagegen-mcp-server@0.1.9"]`
-
-## Repository Structure
-
-```
-operator/
-└── cowork/
-    └── personas/
-        ├── assistant.json         ← ImageGen configured
-        ├── forge.json             ← ImageGen configured
-        └── ...
-
-docs/
-└── claude-ref/
-    └── imagegen-mcp.md            ← This file
-```
-
-## References
-
-- **Repository:** [writingmate/imagegen-mcp](https://github.com/writingmate/imagegen-mcp)
-- **NPM Package:** [imagegen-mcp-server](https://www.npmjs.com/package/imagegen-mcp-server)
-- **OpenAI Images API:** [docs.openai.com/api/images](https://platform.openai.com/docs/api-reference/images)
+`operator/mcp_manager/tests/test_imagegen_zero_config.py` — seeding
+idempotency + operator-intent (deactivation/uninstall/edit survival), stale
+path refresh, disclosure once-per-tenant + path-injection + read-only-store
+degradation, Tier-0 error taxonomy (429/500/redirect/non-image/connect),
+MIME sniffing, prompt guards, broken-Tier-1-key fallback.
 
 ## Must NOT do
 
-- Don't change the `env` variable name from `OPENAI_API_KEY` — it must match the voice config key name
-- Don't add hard-coded API keys to persona JSON files (always use `${OPENAI_API_KEY}`)
-- Don't add ImageGen to the `os` (admin) or `forge` personas without explicit ADR reasoning
-- Don't fallback to deprecated script paths — ImageGen MCP is the only supported image-gen path going forward
+- Don't declare `OPENAI_API_KEY` as a catalog `secrets` entry — the
+  `${VAR}` template is injected literally into the server env and breaks
+  Tier-1 detection (`provider_keys` would treat the literal as a real key).
+- Don't route any prompt to a provider before `check_l44` passes.
+- Don't re-activate the tool on boot when the operator deactivated it.
+- Don't follow provider redirects (prompt-in-URL leak class).
+- Don't add hosts to the running entry without updating
+  `compliance.hosts` in `seed_builtin.py` (L35 must see every egress host).

@@ -1337,20 +1337,6 @@ def _build_worker_system(subtask: dict, ctx: RunContext, depth: int, can_delegat
     return system
 
 
-def _worker_mcp_config(ctx: RunContext) -> list[dict]:
-    """M3: build MCP server config for workers — includes forge + skill_forge."""
-    servers: list[dict] = []
-    # Add forge MCP if available
-    forge_mcp = Path(__file__).resolve().parents[2] / "forge" / "mcp_server.py"
-    if forge_mcp.exists():
-        servers.append({
-            "command": sys.executable,
-            "args": [str(forge_mcp)],
-            "env": {"CORVIN_TENANT_ID": ctx.tenant_id},
-        })
-    return servers
-
-
 class _WorkerProcessHolder:
     """Mutable holder so the async caller can kill the subprocess spawned
     inside _call_worker_sync's executor thread if the awaiting Task is

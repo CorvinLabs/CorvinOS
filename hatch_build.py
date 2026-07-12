@@ -39,6 +39,13 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 # _BRIDGE_RUNTIME_SKIP and _BRIDGE_WHEEL_SKIP below.
 _VENDOR_MAP: tuple[tuple[str, str], ...] = (
     ("operator/forge/forge", "corvin_console/_vendor/operator/forge/forge"),
+    # The forge CLI/MCP entry SCRIPT (not the inner package): resolver.py
+    # spawns the forge MCP server as `<python> {{REPO_ROOT}}/operator/forge/
+    # forge.py mcp ...`. Vendoring only the inner package left every wheel
+    # install with a dead forge MCP server ("can't open file ..._vendor/
+    # operator/forge/forge.py") — which also killed ADR-0190 M2/M3
+    # (compute_submit/compute_gate/datasource_connect) on fresh installs.
+    ("operator/forge/forge.py", "corvin_console/_vendor/operator/forge/forge.py"),
     ("operator/bridges", "corvin_console/_vendor/operator/bridges"),
     ("operator/license", "corvin_console/_vendor/operator/license"),
     ("operator/agent", "corvin_console/_vendor/operator/agent"),
@@ -216,15 +223,19 @@ class VendorOperatorHook(BuildHookInterface):
         force_include = build_data.setdefault("force_include", {})
         for src_rel, dest_rel in _VENDOR_MAP:
             src = root / src_rel
-            if not src.is_dir():
-                continue
             staged = self._stage / dest_rel
-            shutil.copytree(
-                src,
-                staged,
-                ignore=self._ignore,
-                dirs_exist_ok=True,
-            )
+            if src.is_file():
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, staged)
+            elif src.is_dir():
+                shutil.copytree(
+                    src,
+                    staged,
+                    ignore=self._ignore,
+                    dirs_exist_ok=True,
+                )
+            else:
+                continue
             force_include[str(staged)] = dest_rel
 
     @staticmethod

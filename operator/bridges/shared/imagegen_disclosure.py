@@ -25,16 +25,32 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
 
+# Same shape contract as forge.tenants.validate_tenant_id (not importable
+# from this MCP-subprocess context without sys.path surgery): tenant ids are
+# path components here, so an unvalidated value would be a path-injection
+# vector (and a ':'-in-path crasher on Windows).
+_TENANT_ID_RE = re.compile(r"^[a-z0-9_][a-z0-9_-]{0,62}$")
+
+
+def _safe_tenant(tenant_id: str) -> str:
+    if not isinstance(tenant_id, str) or tenant_id.startswith("__") \
+            or not _TENANT_ID_RE.match(tenant_id):
+        return "_default"
+    return tenant_id
+
+# English per the repo language policy (user-facing runtime text defaults to
+# English); the relaying assistant answers in the user's own language and
+# will render this notice accordingly.
 DISCLOSURE_TEXT = (
-    "Bildgenerierung nutzt standardmäßig Pollinations.ai, einen kostenlosen, "
-    "schlüssellosen Community-Dienst — dein Text-Prompt wird dafür an "
-    "image.pollinations.ai übertragen. Diese Nachricht erscheint nur einmal. "
-    "Hinterlege einen eigenen OpenAI-Schlüssel, um stattdessen den bezahlten "
-    "OpenAI-Bilddienst zu nutzen."
+    "Image generation uses Pollinations.ai by default — a free, keyless "
+    "community service. Your text prompt is sent to image.pollinations.ai "
+    "for this. This notice appears only once. Configure your own OpenAI "
+    "API key to use the paid OpenAI image service instead."
 )
 
 
@@ -58,10 +74,12 @@ def _corvin_home() -> Path:
 
 
 def _store_path(tenant_id: str) -> Path:
+    tenant_id = _safe_tenant(tenant_id)
     return _corvin_home() / "tenants" / tenant_id / "global" / "imagegen-disclosure.json"
 
 
 def _audit_path(tenant_id: str) -> Path:
+    tenant_id = _safe_tenant(tenant_id)
     return _corvin_home() / "tenants" / tenant_id / "global" / "forge" / "audit.jsonl"
 
 
@@ -106,9 +124,15 @@ def ensure_disclosed(tenant_id: str) -> str | None:
     path = _store_path(tenant_id)
     if has_disclosed(tenant_id):
         return None
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"disclosed_at": time.time()}), encoding="utf-8")
-    tmp.replace(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"disclosed_at": time.time()}), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        # Storage failure (read-only home, quota, ...) degrades to "shown
+        # again next time" — the docstring's contract. Raising here would
+        # fail the tool call AFTER work was done, over a bookkeeping write.
+        pass
     _audit(tenant_id)
     return DISCLOSURE_TEXT

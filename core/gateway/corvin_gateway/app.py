@@ -141,11 +141,22 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # at startup so operators know BEFORE users hit fail-closed blocks.
     try:
         import sys as _sys, os as _os
+        # Importing corvin_console first is load-bearing: its
+        # _operator_bootstrap puts the operator/ subtrees on sys.path in BOTH
+        # layouts (repo checkout and wheel-install _vendor). The explicit
+        # repo-relative insert below is only the fallback for a checkout
+        # without the console package installed. (A previous version used
+        # four ".." — one directory above the repo root — so this import
+        # only ever worked by sys.path luck.)
+        try:
+            import corvin_console  # noqa: F401 — sys.path bootstrap side effect
+        except Exception:
+            pass
         _bridges = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                                 "..", "..", "..", "..",
+                                 "..", "..", "..",
                                  "operator", "bridges", "shared")
         _bridges = _os.path.normpath(_bridges)
-        if _bridges not in _sys.path:
+        if _bridges not in _sys.path and _os.path.isdir(_bridges):
             _sys.path.insert(0, _bridges)
         from house_rules import house_rules_boot_health_check as _hr_boot  # type: ignore
         import logging as _logging
@@ -173,16 +184,22 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ADR-0191 — idempotently seed the zero-config image-generation tool into
     # the mcp_manager catalog on every boot, so a genuinely fresh install has
     # it active with no manual registration step (the whole point of "zero
-    # config"). Safe to re-run every startup: add_tool overwrites with
-    # identical content, activate() is a no-op if already active.
+    # config"). Marker-based (seed_builtin): first boot installs + activates;
+    # later boots only refresh stale interpreter paths and NEVER override an
+    # operator's deactivation/uninstall/edits. corvin_console import first —
+    # see the health-check block above (wheel-install _vendor bootstrap).
     try:
         import os as _os2
         import sys as _sys2
+        try:
+            import corvin_console  # noqa: F401 — sys.path bootstrap side effect
+        except Exception:
+            pass
         _mcp_mgr_root = _os2.path.normpath(_os2.path.join(
             _os2.path.dirname(_os2.path.abspath(__file__)),
             "..", "..", "..", "operator", "mcp_manager",
         ))
-        if _mcp_mgr_root not in _sys2.path:
+        if _mcp_mgr_root not in _sys2.path and _os2.path.isdir(_mcp_mgr_root):
             _sys2.path.insert(0, _mcp_mgr_root)
         from mcp_manager.seed_builtin import ensure_imagegen_zero_config as _seed_imagegen
         _seed_imagegen("_default")

@@ -331,18 +331,25 @@ def get_active_mcp_servers(
             "args": list(runtime.get("args") or []),
         }
 
+        # Plaintext env passthrough declared on the catalog entry itself
+        # (ADR-0191: CORVIN_HOME / CORVIN_TENANT_ID for builtin servers —
+        # an MCP subprocess does not reliably inherit these from its
+        # spawning process, and unlike secrets these are non-sensitive
+        # literal values, so no ${VAR} template indirection is needed).
+        env: dict[str, str] = {}
+        runtime_env = runtime.get("env")
+        if isinstance(runtime_env, dict):
+            env.update({str(k): str(v) for k, v in runtime_env.items()})
+
         # Build env from secrets: {"SECRET_NAME": "${SECRET_NAME}"}
         # The vault has already injected the values into the process env;
         # the ${VAR} template is resolved by cowork materialize_mcp at spawn time.
-        secrets = entry.get("secrets") or []
-        if secrets:
-            env: dict[str, str] = {}
-            for secret in secrets:
-                name = secret.get("name")
-                if name:
-                    env[name] = f"${{{name}}}"
-            if env:
-                server_cfg["env"] = env
+        for secret in entry.get("secrets") or []:
+            name = secret.get("name")
+            if name:
+                env[name] = f"${{{name}}}"
+        if env:
+            server_cfg["env"] = env
 
         servers[tool_id] = server_cfg
         tool_entries[tool_id] = entry

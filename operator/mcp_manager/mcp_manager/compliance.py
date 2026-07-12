@@ -31,7 +31,9 @@ class ComplianceError(Exception):
 
 
 # Locality → set of DataClassification levels that may flow to that locality.
-# Mirrors DEFAULT_MATRIX in data_classification.py (ADR-0042).
+# Intentionally STRICTER than the live DEFAULT_MATRIX in
+# data_classification.py (permissive since ADR-0173): this dict is only the
+# fail-closed fallback used when the tenant matrix cannot be loaded at all.
 _DEFAULT_LOCALITY_ALLOWED_LEVELS: dict[str, frozenset[str]] = {
     "local":    frozenset({"PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET"}),
     "eu_cloud": frozenset({"PUBLIC", "INTERNAL"}),

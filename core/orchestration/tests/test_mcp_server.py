@@ -172,6 +172,54 @@ orchestration:
         resp = _drive(server, [_call("workflow_resume", {"run_id": "nope", "reply": "ok"})])
         self.assertIn("no paused run found", resp[0]["error"]["message"])
 
+    def test_workflow_run_refused_at_concurrency_limit(self):
+        """ADR-0190 gate-reuse rule: workflow_run must enforce the SAME
+        workflows_concurrent license limit the console REST route enforces —
+        previously a chat turn could start unlimited parallel runs
+        (adversarial-review finding, 2026-07-12)."""
+        import corvin_orchestration.mcp_server as m
+        self._write_smoke_workflow()
+        server = self._server()
+        with mock.patch.object(m, "_lic_get_limit", lambda key: 1), \
+             mock.patch.object(m, "_count_console_running", lambda tid: 1):
+            resp = _drive(server, [_call("workflow_run", {
+                "workflow_id": "m5_smoke", "inputs": {"a": 1, "b": 2},
+            })])
+        payload = json.loads(resp[0]["result"]["content"][0]["text"])
+        self.assertTrue(resp[0]["result"]["isError"])
+        self.assertEqual(payload["status"], "refused")
+        self.assertIn("workflows_concurrent", payload["error"])
+
+    def test_workflow_run_concurrency_gate_fails_closed(self):
+        """An unreadable runs registry must refuse, not grant unlimited."""
+        import corvin_orchestration.mcp_server as m
+        self._write_smoke_workflow()
+        server = self._server()
+
+        def _boom(tid):
+            raise OSError("runs tree unreadable")
+
+        with mock.patch.object(m, "_lic_get_limit", lambda key: 5), \
+             mock.patch.object(m, "_count_console_running", _boom):
+            resp = _drive(server, [_call("workflow_run", {
+                "workflow_id": "m5_smoke", "inputs": {"a": 1, "b": 2},
+            })])
+        payload = json.loads(resp[0]["result"]["content"][0]["text"])
+        self.assertTrue(resp[0]["result"]["isError"])
+        self.assertIn("fail-closed", payload["error"])
+
+    def test_workflow_run_unlimited_tier_skips_gate(self):
+        import corvin_orchestration.mcp_server as m
+        self._write_smoke_workflow()
+        server = self._server()
+        with mock.patch.object(m, "_lic_get_limit", lambda key: None):
+            resp = _drive(server, [_call("workflow_run", {
+                "workflow_id": "m5_smoke", "inputs": {"a": 3, "b": 4},
+            })])
+        payload = json.loads(resp[0]["result"]["content"][0]["text"])
+        self.assertFalse(resp[0]["result"]["isError"], payload)
+        self.assertEqual(payload["status"], "complete")
+
 
 class TestA2ATools(TestOrchestrationServerBase):
     def _write_endpoint(self, endpoint_id: str = "test-peer", label: str = "Test Peer") -> None:

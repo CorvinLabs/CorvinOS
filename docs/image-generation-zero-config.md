@@ -28,10 +28,26 @@ disclosure text appeared alongside it). Three bugs surfaced only by that live te
   `provider_keys.resolve_key("openai_api_key")` (which reads `service.env` from disk), no
   env-var passthrough needed.
 
-The tool is seeded automatically on every gateway boot (`core/gateway/corvin_gateway/app.py`'s
-lifespan, mirroring the L44 boot-health-check/ACO-boot-healer precedent) — verified by removing
-the catalog entry and restarting the live service, confirming it re-registers with zero manual
-steps, which is the actual "zero-config" claim this ADR makes.
+The tool is seeded automatically on BOTH server boot paths (adversarial-review
+finding 2026-07-12: the gateway-lifespan-only version never ran on the primary
+pip/uv path, because `corvin-serve` uses `corvin_console.standalone`, which has
+no gateway lifespan — the identical class as the earlier startup-ping and
+heartbeat findings):
+
+- gateway lifespan (`core/gateway/corvin_gateway/app.py`) — systemd/service path
+- `corvin-serve`/`corvinos-serve` (`ops/launcher/corvin/serve_backend.py::
+  _seed_builtin_tools`) — the pip/uv install path
+
+Seeding is marker-based (`builtin-seeded.json`, `seed_builtin._SEED_VERSION`):
+first boot installs + tenant-activates; later boots only refresh stale
+interpreter/venv paths (upgrade case) and NEVER override an operator's
+deactivation, uninstall, or catalog edits (the original unconditional
+`add_tool`+`activate` silently undid all three on every boot — for a tool that
+sends user prompts to a third party, a non-respectable opt-out is also a
+compliance problem). Verified E2E on a real fresh venv install: catalog +
+activation + marker appear after a plain `corvinos-serve` boot, a real
+`generate_image` call returns a real Pollinations image with the one-time
+disclosure text block first.
 
 ## 1. Problem
 
@@ -182,8 +198,45 @@ L35 already fails closed on that.
 
 ## 10. Governance note
 
-Formalized as `Corvin-ADR/decisions/0191-zero-config-image-generation-tier.md` (Proposed,
+Formalized as `Corvin-ADR/decisions/0191-zero-config-image-generation-tier.md` (Accepted,
 2026-07-12) — it introduces a new default external dependency (an egress path) plus a new
 compliance-relevant mechanism (the disclosure gate), exactly this repo's own ADR-gate
 triggers. `docs/claude-ref/imagegen-mcp.md`'s existing "don't broaden this without an ADR"
-line anticipated that. Implementation (§9's phased plan) has not started.
+line anticipated that. §9 steps 1–3 are shipped; step 4 (Tier 0b local/offline)
+remains an explicit non-default stretch goal.
+
+## 11. Shipped hardening (adversarial review + fresh-install E2E, 2026-07-12)
+
+Beyond the initial implementation, the following landed after a 5-axis
+adversarial review with real fresh-venv/fresh-HOME E2E runs (real Pollinations
+images generated over a real MCP stdio handshake):
+
+- **Seeding on both boot paths + operator-intent markers** — see the note in
+  the header section; `corvin-serve` (the pip/uv path) never seeded before.
+- **Old persona-hardcoded `imagegen` blocks removed** from
+  `assistant.json`/`forge.json`/`research.json` (§9 step 3 executed): the npx
+  server was BYOK-only, always-401 (unresolved `${OPENAI_API_KEY}` template),
+  and invisible to L34/L35.
+- **MIME sniffing:** Pollinations serves JPEG; the image block's format is now
+  detected from magic bytes instead of hardcoded `png` (strict clients refuse
+  mislabeled blocks). Non-image 200 responses (HTML error pages) are rejected
+  with the friendly no-SLA message instead of relayed as broken image blocks.
+- **Error taxonomy:** 429/5xx/timeouts/connect errors all degrade to the
+  friendly "best-effort community service" message; raw stack traces never
+  reach the chat.
+- **Redirects are refused** (`follow_redirects=False`): the prompt travels in
+  the URL path, so following a redirect would re-send user content to a host
+  L35 never saw declared (the 0.10.25 ping-redirect-leak class).
+- **Prompt guards:** single URL path segment (`quote(safe="")`), 4 000-char
+  cap, empty-prompt refusal; 20 MB response cap (image blocks are
+  base64-embedded into the model context).
+- **Broken Tier-1 key degrades to Tier 0** with an explanatory note — a user
+  with an expired OpenAI key is no longer worse off than one with no key.
+- **Disclosure**: marked BEFORE the prompt first leaves the machine (ADR
+  Decision 3 wording), text now English (repo language policy; the relaying
+  assistant localizes), storage failures degrade to "shown again next time"
+  instead of failing the call, tenant ids are shape-validated before becoming
+  path components.
+- **`CORVIN_HOME`/`CORVIN_TENANT_ID` threaded into the server env** via the
+  catalog entry's plaintext `runtime.env` (new mcp_manager capability) — an
+  MCP subprocess does not reliably inherit them (reader≠writer class).

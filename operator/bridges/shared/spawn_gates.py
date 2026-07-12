@@ -293,10 +293,14 @@ def check_l44(
     console (which delegates here).
 
     Fail-CLOSED contract (unlike L34/L35): a missing ``house_rules`` /
-    ``egress_gate`` module, a tampered/unparseable policy, or ANY gate /
-    classifier error all REFUSE the turn — an acceptable-use guarantee must
-    never fail-open. (The ADR-0141 Tier-3 capability gate asserts house-rules
-    presence independently.)
+    ``egress_gate`` module or a tampered/unparseable policy REFUSES the turn —
+    an acceptable-use guarantee must never fail-open. (The ADR-0141 Tier-3
+    capability gate asserts house-rules presence independently.) A classifier
+    BACKEND failure (Ollama down / cloud unreachable) is the one deliberate
+    exception (commit 254a5a6, maintainer decision): it degrades to the
+    deterministic Tier-0 regex floor — prohibited-class patterns still block,
+    benign requests still work — so a fresh zero-config install without a
+    reachable classifier is not dead on arrival.
 
     Audit-first: ``gate.classify`` emits exactly one ``house_rules.{allowed,
     warned,escalated,denied}`` L16 event synchronously (via the injected

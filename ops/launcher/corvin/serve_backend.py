@@ -520,6 +520,31 @@ def _start_heartbeat() -> None:
     threading.Thread(target=_hb, daemon=True).start()
 
 
+def _seed_builtin_tools() -> None:
+    """Seed the ADR-0191 builtin MCP tools into the mcp_manager catalog.
+
+    The gateway's app.py lifespan already does this on the systemd/gateway
+    path — but corvin-serve uses corvin_console.standalone, which has no
+    FastAPI lifespan, so on the primary pip/uv install path the hook never
+    ran and a fresh install had NO image generation despite ADR-0191's
+    zero-config promise (verified on a real fresh venv + fresh HOME: the
+    catalog stayed empty after a full corvin-serve boot). Same failure
+    class as the startup-ping finding above. Importing corvin_console
+    first is load-bearing: its _operator_bootstrap puts the vendored
+    operator/ subtrees (wheel install) or the repo operator/ paths
+    (source tree) on sys.path so ``mcp_manager`` resolves in both modes.
+    Fail-soft: seeding problems must never block the console from starting.
+    """
+    def _seed() -> None:
+        try:
+            import corvin_console  # noqa: F401,PLC0415 — sys.path bootstrap side effect
+            from mcp_manager.seed_builtin import ensure_imagegen_zero_config  # noqa: PLC0415
+            ensure_imagegen_zero_config("_default")
+        except Exception:                                        # noqa: BLE001
+            pass
+    threading.Thread(target=_seed, daemon=True).start()
+
+
 # ── Start ─────────────────────────────────────────────────────────────────────
 
 
@@ -550,6 +575,7 @@ def start(
     _show_telemetry_notice_once()
     _fire_startup_ping()
     _start_heartbeat()
+    _seed_builtin_tools()
 
     if open_browser:
         _schedule_browser_open(url.rstrip("/") + open_path, delay=1.6)

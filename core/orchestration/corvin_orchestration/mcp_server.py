@@ -99,6 +99,96 @@ def _clamp(value: Any, *, lo: int, hi: int, default: int) -> int:
     return max(lo, min(hi, n))
 
 
+# ---------------------------------------------------------------------------
+# License gate — workflows_concurrent (ADR-0190 "a new MCP tool must call the
+# exact gate already enforced on the equivalent REST path"). The console's
+# POST /workflows/{id}/runs enforces license.validator.get_limit(
+# "workflows_concurrent") against its run registry; without this gate a chat
+# turn could start unlimited parallel runs the console would refuse
+# (adversarial-review finding, 2026-07-12). Same import + fail-closed
+# FREE_TIER fallback chain as forge/mcp_server.py's datasource gate — the
+# resolver's PYTHONPATH does not carry operator/, so put it on sys.path
+# first (the datasource_connect lesson: an unguarded import silently fell
+# back to free-tier for every licensed tenant).
+# ---------------------------------------------------------------------------
+_WF_FREE_TIER_FALLBACK: dict = {"workflows_concurrent": 1}
+try:
+    _operator_root = Path(__file__).resolve().parents[3] / "operator"
+    if not _operator_root.is_dir() and _FORGE_AVAILABLE:
+        # Wheel install: this file lives at site-packages/core/orchestration/
+        # corvin_orchestration/, where parents[3]/operator does not exist —
+        # but the forge package (already imported via the resolver's
+        # PYTHONPATH) sits at <operator-root>/forge/forge/, in BOTH layouts.
+        try:
+            import forge as _forge_pkg  # type: ignore[import]
+            _operator_root = Path(_forge_pkg.__file__).resolve().parents[2]
+        except Exception:  # noqa: BLE001
+            pass
+    if _operator_root.is_dir() and str(_operator_root) not in sys.path:
+        sys.path.insert(0, str(_operator_root))
+    from license.validator import get_limit as _lic_get_limit  # type: ignore[import]
+except ImportError:
+    try:
+        from license.limits import FREE_TIER as _WF_FREE_TIER  # type: ignore[import]
+        _lic_get_limit = _WF_FREE_TIER.get  # type: ignore[assignment]
+    except ImportError:
+        _lic_get_limit = _WF_FREE_TIER_FALLBACK.get  # type: ignore[assignment]
+
+# In-process running-workflow counter (chat-path runs). The console's runs
+# are counted separately via their on-disk *.meta.json registry; this
+# counter covers the DAGRunner invocations this server itself started,
+# which never appear in that registry.
+_ACTIVE_WORKFLOW_RUNS = 0
+_ACTIVE_WORKFLOW_LOCK = threading.Lock()
+
+
+def _count_console_running(tenant_id: str) -> int:
+    """Best-effort count of console-started runs currently 'running'
+    (mirrors routes/workflows.py::_count_running_workflows). Fail-closed:
+    an unreadable runs TREE raises (caller refuses), a single unreadable
+    meta file is a bounded under-count."""
+    wf_root = _tenant_home(tenant_id) / "workflows"
+    if not wf_root.exists():
+        return 0
+    count = 0
+    for wf_dir in wf_root.iterdir():
+        runs_dir = wf_dir / "runs"
+        if not runs_dir.is_dir():
+            continue
+        for meta_file in runs_dir.glob("*.meta.json"):
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                if meta.get("status") == "running":
+                    count += 1
+            except Exception:  # noqa: BLE001
+                pass
+    return count
+
+
+def _workflow_concurrency_refusal(tenant_id: str) -> str | None:
+    """None if a new run may start; a user-facing refusal string otherwise.
+    Fail-closed: if the limit or the current count cannot be determined,
+    refuse rather than granting unlimited concurrency."""
+    try:
+        limit = _lic_get_limit("workflows_concurrent")
+    except Exception:  # noqa: BLE001
+        limit = _WF_FREE_TIER_FALLBACK["workflows_concurrent"]
+    if limit is None:
+        return None  # unlimited tier
+    try:
+        with _ACTIVE_WORKFLOW_LOCK:
+            active = _ACTIVE_WORKFLOW_RUNS
+        running = active + _count_console_running(tenant_id)
+    except Exception:  # noqa: BLE001
+        return ("cannot determine current workflow concurrency — refusing "
+                "to start a new run (fail-closed)")
+    if running >= int(limit):
+        return (f"license limit reached: {running} workflow run(s) already "
+                f"active, workflows_concurrent={limit}. Wait for a run to "
+                "finish or upgrade at https://corvin-labs.com/pricing")
+    return None
+
+
 def _run_with_budget(fn: Callable[[], Any], *, budget_s: int) -> Any:
     """Run *fn* on a daemon thread, joined with a wall-clock timeout.
 
@@ -318,11 +408,9 @@ def _tool_definitions() -> list[dict[str, Any]]:
                     "supported, unlike the console's separate chat-mode "
                     "executor. May pause and return paused_at_node/paused_prompt "
                     "if the workflow hits an ask_human node; resume via "
-                    "workflow_resume. NOTE: concurrent-run quota "
-                    "(workflows_concurrent) is enforced on the console's own "
-                    "run-tracking today but NOT YET unified with this chat "
-                    "path (ADR-0190 known limitation) — only a wall-clock "
-                    "watchdog (budget_s) bounds this call."
+                    "workflow_resume. Enforces the same workflows_concurrent "
+                    "license limit as the console (fail-closed); a wall-clock "
+                    "watchdog (budget_s) additionally bounds this call."
                 ),
                 "inputSchema": _WORKFLOW_RUN_SCHEMA,
             },
@@ -537,9 +625,19 @@ class OrchestrationServer:
             ))
             return
 
+        refusal = _workflow_concurrency_refusal(tenant_id)
+        if refusal:
+            self._respond(msgid, self._text_result(
+                {"status": "refused", "error": refusal}, is_error=True,
+            ))
+            return
+
         budget_s = _clamp(args.get("budget_s"), lo=10, hi=600, default=120)
         sink = _audit_sink_for(tenant_id, "workflow")
         runner = _DAGRunner(doc, engine=engine, audit_sink=sink, tenant_id=tenant_id)
+        global _ACTIVE_WORKFLOW_RUNS
+        with _ACTIVE_WORKFLOW_LOCK:
+            _ACTIVE_WORKFLOW_RUNS += 1
         try:
             result = _run_with_budget(
                 lambda: runner.run(inputs=args.get("inputs") or {}), budget_s=budget_s,
@@ -547,6 +645,9 @@ class OrchestrationServer:
         except Exception as exc:  # noqa: BLE001
             self._error(msgid, INTERNAL_ERROR, f"workflow run failed: {exc}")
             return
+        finally:
+            with _ACTIVE_WORKFLOW_LOCK:
+                _ACTIVE_WORKFLOW_RUNS -= 1
         self._respond(msgid, self._run_result_envelope(result))
 
     def _call_workflow_resume(self, msgid: Any, args: dict) -> None:

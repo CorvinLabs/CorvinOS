@@ -110,6 +110,25 @@ Write-SupervisorLog "supervisor starting -- target=$Target child: $FilePath $($A
 $RestartTimestamps = @()
 
 while ($true) {
+    # Port-collision standby (console target only) -- mirrors the guard in
+    # install.ps1's generated supervisor: if anything already answers HTTP on
+    # the console port, launching the child just burns the restart budget on
+    # instant bind failures. Stand by instead; standby cycles do not consume
+    # restart budget. Parity is load-bearing (test_windows_supervisor_parity).
+    if ($Target -eq "console") {
+        $portBusy = $false
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8765/healthz" -TimeoutSec 3 -ErrorAction Stop | Out-Null
+            $portBusy = $true
+        } catch {
+            if ($_.Exception.Response) { $portBusy = $true }
+        }
+        if ($portBusy) {
+            Write-SupervisorLog "port 8765 already serving (another instance) -- standing by, re-check in 30s"
+            Start-Sleep -Seconds 30
+            continue
+        }
+    }
     $Now = Get-Date
     $RestartTimestamps = @($RestartTimestamps | Where-Object { ($Now - $_).TotalSeconds -le $RestartWindowSec })
     if ($RestartTimestamps.Count -ge $MaxRestarts) {

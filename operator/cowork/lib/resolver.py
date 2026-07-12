@@ -36,6 +36,30 @@ BUNDLE_DIR = Path(__file__).resolve().parent.parent / "personas"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
+def _compute_core_root() -> Path:
+    """Root directory holding the ``core/`` package tree, for {{CORE_ROOT}}.
+
+    Source checkout: same as REPO_ROOT (core/ sits next to operator/).
+    Wheel install: this module lives under corvin_console/_vendor/operator/
+    cowork/lib, so REPO_ROOT resolves to .../_vendor — which contains the
+    vendored operator/ subtrees but NOT core/ (core ships as a top-level
+    package tree directly in site-packages). Pointing PYTHONPATH at
+    ``_vendor/core/...`` was the adversarial-review CRITICAL that made every
+    orchestration/delegate MCP spawn a ModuleNotFoundError on every pip/uv
+    installation while the capability map still advertised the tools.
+    """
+    if (REPO_ROOT / "core").is_dir():
+        return REPO_ROOT
+    if REPO_ROOT.name == "_vendor":
+        site_packages = REPO_ROOT.parent.parent
+        if (site_packages / "core").is_dir():
+            return site_packages
+    return REPO_ROOT
+
+
+CORE_ROOT = _compute_core_root()
+
+
 # Lazy import keeps module-load cheap and tolerant of test environments
 # that pre-set COWORK_USER_DIR / COWORK_MCP_CACHE without paths.py being
 # importable. paths.py sits next to resolver.py in operator/cowork/lib/.
@@ -627,9 +651,11 @@ def _inject_skill_forge_capability(merged: dict, persona_name: str) -> dict:
             # imports `forge.policy` for the namespace gate. Both packages
             # need to be importable when claude spawns the subprocess, so
             # we inject the two plugin roots onto PYTHONPATH explicitly —
-            # PATH-style paths use ":" separator on POSIX.
-            "PYTHONPATH": ("{{REPO_ROOT}}/operator/skill-forge"
-                           ":{{REPO_ROOT}}/operator/forge"),
+            # joined with os.pathsep (';' on Windows, ':' on POSIX).
+            "PYTHONPATH": os.pathsep.join((
+                "{{REPO_ROOT}}/operator/skill-forge",
+                "{{REPO_ROOT}}/operator/forge",
+            )),
         }
         mcp["skill_forge"] = {
             # sys.executable — see the forge branch above. Same interpreter
@@ -736,12 +762,18 @@ def _inject_orchestration_capability(merged: dict, persona_name: str) -> dict:
             "command": sys.executable,
             "args": ["-m", "corvin_orchestration.mcp_server"],
             "env": {
-                "PYTHONPATH": (
-                    "{{REPO_ROOT}}/core/orchestration"
-                    ":{{REPO_ROOT}}/core/workflows"
-                    ":{{REPO_ROOT}}/operator/bridges/shared"
-                    ":{{REPO_ROOT}}/operator/forge"
-                ),
+                # {{CORE_ROOT}} (not REPO_ROOT) for core/* — in a wheel
+                # install core/ ships in site-packages, not under _vendor.
+                # os.pathsep (not a hard ':') — Windows splits PYTHONPATH
+                # on ';'; a ':'-joined string with drive-letter colons is
+                # one unusable path (third incarnation of this class in
+                # this file — now centralized via os.pathsep everywhere).
+                "PYTHONPATH": os.pathsep.join((
+                    "{{CORE_ROOT}}/core/orchestration",
+                    "{{CORE_ROOT}}/core/workflows",
+                    "{{REPO_ROOT}}/operator/bridges/shared",
+                    "{{REPO_ROOT}}/operator/forge",
+                )),
                 "CORVIN_CALLER_PERSONA": persona_name,
             },
         }
@@ -783,11 +815,12 @@ def _inject_delegate_capability(merged: dict, persona_name: str) -> dict:
     mcp = dict(out.get("mcp_servers") or {})
     if "corvin_delegate" not in mcp:
         env: dict[str, str] = {
-            "PYTHONPATH": (
-                "{{REPO_ROOT}}/core/delegate"
-                ":{{REPO_ROOT}}/operator/forge"
-                ":{{REPO_ROOT}}/operator/bridges/shared"
-            ),
+            # {{CORE_ROOT}} + os.pathsep — see _inject_orchestration_capability.
+            "PYTHONPATH": os.pathsep.join((
+                "{{CORE_ROOT}}/core/delegate",
+                "{{REPO_ROOT}}/operator/forge",
+                "{{REPO_ROOT}}/operator/bridges/shared",
+            )),
             "CORVIN_CALLER_PERSONA": persona_name,
         }
         # Layer 29.3a — output-judge env-floor (uncloseable by LLM
@@ -872,11 +905,38 @@ def _inject_capability_awareness(merged: dict, persona_name: str) -> dict:
         from capability_map import render_capability_map  # type: ignore[import-not-found]
 
     out = dict(merged)
+    # Which MCP servers does THIS persona actually attach? Persona/resolver-
+    # injected servers live in out["mcp_servers"]; catalog tools (ADR-0096/
+    # 0191, e.g. imagegen-zero-config) are merged at spawn time by the
+    # adapter/console, so query the tenant's active set best-effort. The map
+    # uses this to stop claiming persona-hardcoded capabilities (Playwright)
+    # for personas that never attach them.
+    available: set[str] = set((out.get("mcp_servers") or {}).keys())
+    try:
+        try:
+            import mcp_manager.activate as _mcp_activate  # type: ignore
+        except ImportError:
+            # REPO_ROOT/operator/mcp_manager exists in BOTH layouts (repo
+            # checkout, and _vendor/operator/mcp_manager in a wheel where
+            # REPO_ROOT == _vendor).
+            _mm_root = REPO_ROOT / "operator" / "mcp_manager"
+            if str(_mm_root) not in sys.path and _mm_root.is_dir():
+                sys.path.insert(0, str(_mm_root))
+            import mcp_manager.activate as _mcp_activate  # type: ignore
+        _tid = os.environ.get("CORVIN_TENANT_ID") or "_default"
+        allowed_plugins = out.get("mcp_plugins_allowed")
+        for tool_id in _mcp_activate.get_active_tool_ids(_tid):
+            if isinstance(allowed_plugins, list) and tool_id not in allowed_plugins:
+                continue
+            available.add(tool_id)
+    except Exception:  # noqa: BLE001 — catalog unavailable → persona servers only
+        pass
     brief = render_capability_map(
         forge_enabled=bool(out.get("forge_enabled")),
         skill_forge_enabled=bool(out.get("skill_forge_enabled")),
         delegate_enabled=bool(out.get("delegate_enabled")),
         orchestration_enabled=bool(out.get("orchestration_enabled")),
+        available_servers=available,
     )
     _ensure_brief(out, brief)
     return out
@@ -887,6 +947,14 @@ def _expand_template_vars(value, *, persona=None):
 
     Supported tokens:
       {{REPO_ROOT}}             absolute path to the voice-skill repo
+      {{CORE_ROOT}}             directory holding the core/ package tree
+                                (== REPO_ROOT in a checkout; site-packages
+                                in a wheel install — see _compute_core_root)
+      {{PYTHON}}                sys.executable — the interpreter that can
+                                import this package's deps (a persona JSON
+                                cannot express sys.executable itself, and a
+                                bare "python3" breaks on Windows / resolves
+                                via the SPAWNING process's PATH)
       {{HOME}}                  $HOME of the running user
       {{ALLOWED_FORGED_TOOLS}}  comma-joined persona.allowed_forged_tools,
                                 "" if absent (the forge MCP server reads
@@ -899,6 +967,8 @@ def _expand_template_vars(value, *, persona=None):
     if isinstance(value, str):
         out = (value
                .replace("{{REPO_ROOT}}", str(REPO_ROOT))
+               .replace("{{CORE_ROOT}}", str(CORE_ROOT))
+               .replace("{{PYTHON}}", sys.executable)
                .replace("{{HOME}}", str(Path.home())))
         if "{{ALLOWED_FORGED_TOOLS}}" in out:
             allowed = (persona or {}).get("allowed_forged_tools") or []

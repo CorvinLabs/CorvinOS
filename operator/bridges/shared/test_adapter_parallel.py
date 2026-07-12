@@ -93,6 +93,14 @@ def main() -> int:
     env["ADAPTER_INBOX"]         = str(INBOX)
     env["ADAPTER_OUTBOX"]        = str(OUTBOX)
     env["ADAPTER_PROCESSED"]     = str(PROCESSED)
+    # Isolate from the LIVE deployment config — a real operator's
+    # bridges/discord/settings.json whitelist otherwise leaks in and this
+    # test's discord senders get SPG-dropped as private (same contamination
+    # class ADAPTER_BRIDGES_DIR was introduced for in test_adapter_btw).
+    settings = SANDBOX / "settings.json"
+    settings.write_text("{}")
+    env["ADAPTER_SETTINGS"]      = str(settings)
+    env["ADAPTER_BRIDGES_DIR"]   = str(SANDBOX / "bridges")
     env["ADAPTER_FAKE_CLAUDE"]   = "1"
     env["ADAPTER_FAKE_DELAY"]    = str(FAKE_DELAY)
     env["ADAPTER_MAX_PARALLEL"]  = str(MAX_PARALLEL)

@@ -6,6 +6,98 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.28] — 2026-07-12 — Fresh-install command-center fixes (5-axis adversarial review, real E2E)
+
+A 5-axis adversarial review (ADR-0190 chat command center, ADR-0191 image
+generation, Windows/macOS install, voice zero-config, fresh-install Linux)
+driven by REAL end-to-end runs: fresh venv + fresh HOME installs of the built
+wheel, real MCP stdio handshakes, real images generated. Focus: what is
+different on a genuinely fresh installation vs. the maintainer's checkout.
+
+### Fixed — critical (fresh installs / command center)
+- **Every ADR-0190 orchestration/delegate MCP server was unstartable on every
+  pip/uv installation:** resolver PYTHONPATH templates pointed at
+  `_vendor/core/*`, which does not exist in a wheel (core/ ships top-level in
+  site-packages). New wheel-aware `{{CORE_ROOT}}` template; verified by real
+  spawns (cwd=/) on a fresh venv: corvin_orchestration (6 tools), forge (14),
+  skill_forge (7), corvin_delegate (5) all handshake.
+- **Forge MCP was dead on every wheel install (pre-existing):** the spawn
+  script `operator/forge/forge.py` was never vendored. Now shipped; this also
+  un-kills `compute_submit`/`compute_gate`/`datasource_connect` (ADR-0190
+  M2/M3) on fresh installs.
+- **The console web-chat — the designated command center — attached NO MCP
+  servers** while advertising the full capability map in its system prompt.
+  `chat_runtime` now materializes the persona's servers + mcp_manager catalog
+  into `--mcp-config` (bridge parity); `--allowedTools` under strict
+  permission modes.
+- **Windows: PYTHONPATH was ':'-joined in three resolver injectors** — one
+  unusable path on Windows for ALL default personas (third incarnation of
+  this class). Now `os.pathsep` everywhere; new `{{PYTHON}}` template replaces
+  the last bare `python3` persona command.
+- **Image generation (ADR-0191) was never seeded on the primary pip/uv start
+  path:** the catalog seeding lived only in the gateway lifespan;
+  `corvinos-serve` has none. Now seeded on both paths — a plain
+  `pip install corvinos && corvinos-serve` has working image generation
+  (verified with a real generated image on a fresh venv).
+
+### Fixed — image generation hardening (ADR-0191)
+- Seeding is marker-based and respects operator intent: user deactivation,
+  uninstall, and catalog edits survive reboots (previously silently
+  overridden every boot); stale venv paths are refreshed on upgrade.
+- Old persona-hardcoded `imagegen` npx server removed from
+  assistant/forge/research (BYOK-only, always-401 via unresolved `${VAR}`
+  template, invisible to L34/L35).
+- MIME type sniffed from magic bytes (Pollinations serves JPEG; blocks were
+  mislabeled `image/png`); non-image 200s rejected; full
+  429/5xx/timeout/connect taxonomy → friendly no-SLA message; redirects
+  refused (prompt-in-URL leak class); `quote(safe="")` + prompt/response
+  caps; broken Tier-1 OpenAI key degrades to Tier 0 with a note; disclosure
+  marked before first egress, English text, never-raises storage, tenant-id
+  shape validation; `CORVIN_HOME`/`CORVIN_TENANT_ID` threaded via new
+  plaintext `runtime.env` catalog passthrough.
+
+### Fixed — capability honesty & gates (ADR-0190)
+- Capability map no longer claims persona-hardcoded capabilities (Playwright)
+  for personas that never attach them; catalog-attached tools counted via the
+  tenant's active set.
+- `workflow_run` now enforces the console's `workflows_concurrent` license
+  limit (fail-closed), closing the ADR's own gate-reuse rule violation.
+- The ADR-promised CI reverse-check now exists: every tool advertised by any
+  `mcp_server.py` (AST-scanned) must be registry-tracked; unmapped server
+  files fail CI. `core/pipe` is now honestly tracked as `planned`
+  (`pipes.sessions`) instead of invisible; `forge_exec` registered.
+- Dead `acs_runtime._worker_mcp_config` (wrong path, zero callers) removed.
+
+### Fixed — install / platform
+- Windows: installer-wizard vs. autostart-supervisor port-8765 collision no
+  longer burns the crash-loop budget and kills supervision — the supervisor
+  (install.ps1-generated + dev `corvin-supervisor.ps1`, parity-tested) stands
+  by while another healthy instance serves.
+- Windows PS 5.1: unguarded `2>$null` under `$ErrorActionPreference=Stop`
+  could abort the install at the uv version probe — wrapped.
+- Gateway lifespan L44 boot-health-check used a wrong repo-relative path
+  (4× `..`) and only worked by sys.path luck; both lifespan hooks now
+  bootstrap via `corvin_console` (works in checkout AND wheel).
+
+### Fixed — voice
+- The three TTS synth writers honored `ADAPTER_OUTBOX` again (were hardcoded
+  to the package dir — broken on read-only site-packages installs).
+- `profile.json`/`memory/`/BYOK-vault resolvers now honor the
+  `VOICE_CONFIG_DIR` pin like every other voice-config consumer (SSOT test
+  extended to 9 resolvers).
+
+### Fixed — tests / docs
+- 5 stale L34 tests updated to ADR-0173 opt-in-residency semantics (blocking
+  now asserted via the strict-matrix opt-in; live-`~/.corvin` reads isolated).
+- Stale L44 spawn-gates test updated to the 254a5a6 degrade-to-Tier-0-floor
+  semantics (benign allowed + prohibited still blocked with classifier down);
+  `check_l44` docstring corrected accordingly.
+- `mcp` dependency floor raised to `>= 1.2` (`mcp.server.fastmcp` first
+  shipped there).
+- New regression suites: wheel-layout (`test_resolver_wheel_layout.py`),
+  console MCP wiring (`test_chat_mcp_wiring.py`), imagegen (22 tests),
+  workflow concurrency gate (3 tests).
+
 ## [0.10.27] — 2026-07-11 — Big-release security & correctness hardening (8-agent adversarial review)
 
 A full 8-agent adversarial review of CorvinOS + Corvin-Features (install ×2, voice,

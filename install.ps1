@@ -69,7 +69,14 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Fail "uv is not on PATH after install. Open a new terminal and re-run."
 }
-Write-Ok ("uv " + (((uv --version) 2>$null) -split " ")[1] + " -- OK")
+# PS 5.1: stderr redirection of a native command under EAP=Stop turns any
+# stray uv stderr line into a terminating error that kills the whole install
+# at its very first step -- wrap in EAP=Continue (same guard as the
+# `uv tool update-shell` call below).
+$prevEAP = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+$uvVersion = try { (((uv --version) 2>$null) -split " ")[1] } catch { "?" }
+$ErrorActionPreference = $prevEAP
+Write-Ok ("uv " + $uvVersion + " -- OK")
 
 # ── 2. install CorvinOS as an isolated tool (uv fetches Python if needed) ─────
 # INST-2: on a re-run/update, a previously-installed CorvinOS-Console task is
@@ -373,6 +380,26 @@ if (Get-CorvinAutoUpdate) {
 `$RestartTimestamps = @()
 
 while (`$true) {
+    # Port-collision standby (adversarial finding, 2026-07-12): the install
+    # wizard leaves a transient gateway process serving the port until the
+    # installer window closes. Launching corvinos-serve over it makes every
+    # attempt exit immediately, burns the 5-restart budget in seconds, and
+    # the supervisor then stops -- leaving NO console once the wizard process
+    # dies. If anything already answers HTTP on the port, stand by and
+    # re-check instead of launching a doomed process (mirrors install.sh's
+    # pre-start healthz guard). Standby cycles do not consume restart budget.
+    `$portBusy = `$false
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8765/healthz" -TimeoutSec 3 -ErrorAction Stop | Out-Null
+        `$portBusy = `$true
+    } catch {
+        if (`$_.Exception.Response) { `$portBusy = `$true }
+    }
+    if (`$portBusy) {
+        Write-Log "port 8765 already serving (install wizard or another instance) -- standing by, re-check in 30s"
+        Start-Sleep -Seconds 30
+        continue
+    }
     `$Now = Get-Date
     `$RestartTimestamps = @(`$RestartTimestamps | Where-Object { (`$Now - `$_).TotalSeconds -le `$RestartWindowSec })
     if (`$RestartTimestamps.Count -ge `$MaxRestarts) {

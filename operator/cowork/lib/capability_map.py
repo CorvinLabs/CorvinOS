@@ -33,25 +33,42 @@ _HEADER = (
 )
 
 
+def _server_key_from_tool_names(tool_names: tuple[str, ...]) -> str | None:
+    """Derive the mcp_servers dict key from a capability's tool names —
+    ``mcp__<server>__<tool>`` → ``<server>``. None if no tool follows the
+    MCP naming convention."""
+    for name in tool_names:
+        if name.startswith("mcp__"):
+            rest = name[len("mcp__"):]
+            if "__" in rest:
+                return rest.split("__", 1)[0]
+    return None
+
+
 def render_capability_map(
     *,
     forge_enabled: bool = False,
     skill_forge_enabled: bool = False,
     delegate_enabled: bool = False,
     orchestration_enabled: bool = False,
+    available_servers: set[str] | None = None,
 ) -> str:
     """Build the capability-map brief for a resolved persona profile.
 
     A ``wired`` capability whose ``persona_flag`` is set but not satisfied
     by this profile is omitted — it genuinely is not available to THIS
-    persona, and showing it would be misleading. A ``wired`` capability
-    with no ``persona_flag`` (externally-wired tools like Playwright/
-    ImageGen, which are baked directly into specific persona JSON files
-    rather than resolver-gated) is always shown, since this function has
-    no way to know whether the caller's persona hardcodes those servers —
-    callers whose persona doesn't should simply never see the corresponding
-    tool calls succeed, which is a pre-existing property of those personas,
-    not something this brief needs to gate.
+    persona, and showing it would be misleading.
+
+    A ``wired`` capability with no ``persona_flag`` (persona-hardcoded or
+    catalog-attached servers like Playwright / imagegen-zero-config) is
+    gated against ``available_servers`` — the set of MCP server keys the
+    caller's resolved profile actually attaches (persona mcp_servers plus
+    tenant-activated mcp_manager catalog ids). Without that gate the map
+    claimed Browser Automation for personas that never attach Playwright —
+    a direct violation of ADR-0190's "never claim a capability that isn't
+    actually reachable" rule (adversarial-review finding, 2026-07-12).
+    ``available_servers=None`` (legacy callers) preserves the old
+    always-show behavior.
 
     ``planned`` capabilities are always shown — they are equally
     unavailable to every persona today, and disclosure matters more than
@@ -72,6 +89,10 @@ def render_capability_map(
     for cap in _reg.capabilities_by_status("wired"):
         if cap.persona_flag is not None and not flags.get(cap.persona_flag, False):
             continue
+        if cap.persona_flag is None and available_servers is not None:
+            key = _server_key_from_tool_names(cap.tool_names)
+            if key is not None and key not in available_servers:
+                continue
         wired_lines.append(f"- **{cap.domain}** — {cap.one_liner}")
 
     planned_lines: list[str] = []

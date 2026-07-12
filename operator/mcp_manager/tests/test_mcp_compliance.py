@@ -33,6 +33,37 @@ def tmp_corvin(monkeypatch, tmp_path):
     return corvin
 
 
+# ADR-0173 made data-residency opt-in: the DEFAULT matrix is permissive
+# (us_cloud allowed for PUBLIC/INTERNAL/CONFIDENTIAL). Blocking behavior now
+# requires an explicit strict tenant matrix, which this fixture opts into.
+STRICT_RESIDENCY_YAML = """\
+spec:
+  data_classification:
+    matrix:
+      PUBLIC: [local, eu_cloud, us_cloud]
+      INTERNAL: [local, eu_cloud]
+      CONFIDENTIAL: [local]
+      SECRET: [local]
+"""
+
+
+@pytest.fixture()
+def strict_residency(tmp_corvin):
+    """Opt-in strict data-residency tenant (ADR-0173): us_cloud blocked for INTERNAL."""
+    g = tmp_corvin / "tenants" / TID / "global"
+    g.mkdir(parents=True)
+    (g / "tenant.corvin.yaml").write_text(STRICT_RESIDENCY_YAML, encoding="utf-8")
+    return tmp_corvin
+
+
+_STRICT_MATRIX = {
+    "local": frozenset({"PUBLIC", "INTERNAL", "CONFIDENTIAL", "SECRET"}),
+    "eu_cloud": frozenset({"PUBLIC", "INTERNAL"}),
+    "us_cloud": frozenset({"PUBLIC"}),
+    "unknown": frozenset({"PUBLIC"}),
+}
+
+
 def _add_tool(tid, tool_id, **overrides):
     entry = {
         "id": tool_id,
@@ -163,46 +194,49 @@ class TestSecretVault:
 
 
 class TestL34Locality:
-    def test_local_tool_allowed(self):
+    def test_local_tool_allowed(self, tmp_corvin):
         entry = {"id": "t", "compliance": {"locality": "local"}}
         ok, _ = compliance.check_locality(entry, TID)
         assert ok is True
 
-    def test_eu_cloud_allowed_by_default(self):
+    def test_eu_cloud_allowed_by_default(self, tmp_corvin):
         # Default matrix allows eu_cloud for INTERNAL
         entry = {"id": "t", "compliance": {"locality": "eu_cloud"}}
         ok, _ = compliance.check_locality(entry, TID)
         assert ok is True
 
-    def test_us_cloud_allowed_for_public_data(self):
-        # Default matrix allows us_cloud for PUBLIC only — not INTERNAL → blocked
-        # But with the default matrix in compliance.py, us_cloud only has PUBLIC.
-        # check_locality blocks if INTERNAL is not in allowed_levels for the locality.
+    def test_us_cloud_allowed_for_internal_by_default(self, tmp_corvin):
+        # ADR-0173: default matrix is permissive — us_cloud allowed for INTERNAL.
         entry = {"id": "t", "compliance": {"locality": "us_cloud"}}
         ok, _ = compliance.check_locality(entry, TID)
-        # us_cloud maps to PUBLIC only → INTERNAL not in set → blocked
+        assert ok is True
+
+    def test_us_cloud_blocked_with_strict_residency_opt_in(self, strict_residency):
+        # Opt-in strict matrix (ADR-0173): us_cloud has PUBLIC only → INTERNAL blocked.
+        entry = {"id": "t", "compliance": {"locality": "us_cloud"}}
+        ok, _ = compliance.check_locality(entry, TID)
         assert ok is False
 
-    def test_unknown_locality_blocked(self):
+    def test_unknown_locality_blocked(self, tmp_corvin):
         entry = {"id": "t", "compliance": {"locality": "unknown"}}
         ok, _ = compliance.check_locality(entry, TID)
         # unknown has PUBLIC only → INTERNAL not in set → blocked
         assert ok is False
 
-    def test_missing_compliance_field(self):
+    def test_missing_compliance_field(self, tmp_corvin):
         entry = {"id": "t"}
         ok, _ = compliance.check_locality(entry, TID)
         # No compliance → locality defaults to "unknown" → blocked
         assert ok is False
 
-    def test_activation_blocked_on_l34_violation(self, tmp_corvin):
+    def test_activation_blocked_on_l34_violation(self, strict_residency):
         _add_tool(TID, "us-cloud-tool",
                   compliance={"locality": "us_cloud", "network_egress": "required"})
         from mcp_manager.compliance import ComplianceError
         with pytest.raises(ComplianceError, match="L34"):
             activate.activate(TID, "us-cloud-tool")
 
-    def test_spawn_blocked_on_l34_after_bypass(self, tmp_corvin, monkeypatch):
+    def test_spawn_blocked_on_l34_after_bypass(self, strict_residency, monkeypatch):
         _add_tool(TID, "us-cloud-tool2",
                   compliance={"locality": "us_cloud"})
         # Bypass activation check to simulate a tool activated before policy tightened
@@ -368,34 +402,37 @@ class TestGithubInstaller:
 
 
 class TestFilterCompliantServers:
-    def test_local_tool_passes(self):
+    def test_local_tool_passes(self, tmp_corvin):
         servers = {"local-tool": {"command": "npx", "args": []}}
         entries = {"local-tool": {"compliance": {"locality": "local"},
                                   "secrets": []}}
         result = compliance.filter_compliant_servers(servers, entries, TID)
         assert "local-tool" in result
 
-    def test_eu_cloud_tool_passes(self):
+    def test_eu_cloud_tool_passes(self, tmp_corvin):
         servers = {"eu-tool": {"command": "npx", "args": []}}
         entries = {"eu-tool": {"compliance": {"locality": "eu_cloud"},
                                "secrets": []}}
         result = compliance.filter_compliant_servers(servers, entries, TID)
         assert "eu-tool" in result
 
-    def test_us_cloud_tool_blocked(self):
+    def test_us_cloud_tool_blocked(self, monkeypatch, tmp_corvin):
+        # Blocking requires the strict opt-in matrix (ADR-0173).
+        monkeypatch.setattr(compliance, "_load_tenant_matrix", lambda tid: _STRICT_MATRIX)
         servers = {"us-tool": {"command": "npx", "args": []}}
         entries = {"us-tool": {"compliance": {"locality": "us_cloud"},
                                "secrets": []}}
         result = compliance.filter_compliant_servers(servers, entries, TID)
         assert "us-tool" not in result
 
-    def test_tool_without_catalog_entry_passes(self):
+    def test_tool_without_catalog_entry_passes(self, tmp_corvin):
         # Unknown tool (no entry) passes through — defensive
         servers = {"unknown-tool": {"command": "npx", "args": []}}
         result = compliance.filter_compliant_servers(servers, {}, TID)
         assert "unknown-tool" in result
 
-    def test_multiple_tools_mixed_compliance(self, monkeypatch, tmp_path):
+    def test_multiple_tools_mixed_compliance(self, monkeypatch, tmp_path, tmp_corvin):
+        monkeypatch.setattr(compliance, "_load_tenant_matrix", lambda tid: _STRICT_MATRIX)
         vault = tmp_path / "secrets.json"
         vault.write_text(json.dumps({}))
         monkeypatch.setenv("CORVIN_SECRET_VAULT", str(vault))

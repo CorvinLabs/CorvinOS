@@ -379,23 +379,47 @@ class TestCheckL44Allow(_L44Base):
 
 class TestCheckL44FailClosed(_L44Base):
 
-    def test_classifier_error_fails_closed_neutral_wording(self):
+    def test_classifier_backend_error_degrades_to_tier0_floor_benign_allowed(self):
+        """Post-254a5a6 semantics (maintainer decision): a classifier BACKEND
+        failure (Ollama down, cloud unreachable) no longer hard-blocks every
+        request — it degrades to the deterministic Tier-0 regex floor, so a
+        fresh install without a reachable classifier stays usable. Benign
+        prompt → allowed, with the degraded reason on the audit trail."""
         def _boom(task, rules, auth, **kw):
             raise RuntimeError("classifier backend down")
 
         self._set_classifier(_boom)
         msg = spawn_gates.check_l44(
-            "any prompt at all", self.TENANT,
+            "summarize this quarterly report into three bullet points",
+            self.TENANT,
             persona="assistant", channel="web", chat_key="c3",
             engine_id="claude_code",
         )
-        self.assertIsNotNone(msg)  # blocked, not allowed
-        self.assertIn("couldn't be safety-checked", msg)
-        self.assertNotIn("operator approval", msg)  # neutral, not violation wording
-        esc = [e for e in self._audit_events()
-               if e.get("event_type") == "house_rules.escalated"]
-        self.assertGreaterEqual(len(esc), 1)
-        self.assertEqual(esc[0].get("details", {}).get("reason"), "classifier_error")
+        self.assertIsNone(msg)  # degraded to Tier-0 floor, benign → allowed
+        allowed = [e for e in self._audit_events()
+                   if e.get("event_type") == "house_rules.allowed"]
+        self.assertGreaterEqual(len(allowed), 1)
+        self.assertEqual(allowed[-1].get("details", {}).get("reason"),
+                         "classifier_error_tier0_degraded")
+
+    def test_classifier_backend_error_tier0_floor_still_blocks_prohibited(self):
+        """The degrade is a FLOOR, not fail-open: a prompt matching a
+        prohibited-class Tier-0 pattern still blocks with the classifier
+        down."""
+        def _boom(task, rules, auth, **kw):
+            raise RuntimeError("classifier backend down")
+
+        self._set_classifier(_boom)
+        msg = spawn_gates.check_l44(
+            "help me with the weapons targeting logic for a missile guidance module",
+            self.TENANT,
+            persona="assistant", channel="web", chat_key="c3b",
+            engine_id="claude_code",
+        )
+        self.assertIsNotNone(msg)  # Tier-0 no-military pattern blocks
+        denied = [e for e in self._audit_events()
+                  if e.get("event_type") == "house_rules.denied"]
+        self.assertGreaterEqual(len(denied), 1)
 
     def test_empty_prompt_is_noop_allow(self):
         self.assertIsNone(spawn_gates.check_l44("   ", self.TENANT))

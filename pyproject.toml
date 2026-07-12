@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "corvinos"
-version = "0.10.27"
+version = "0.10.28"
 description = "CorvinOS — universal, self-contained, cross-platform AI assistant framework"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -78,7 +78,9 @@ dependencies = [
     # rather than a third-party npm package fetched on first use — keeps the
     # dependency footprint auditable and installer-time, matching the
     # zero-config philosophy already established for voice.
-    "mcp >= 1.0",
+    # Floor 1.2: main.py imports mcp.server.fastmcp, which first shipped in
+    # 1.2.0 — a 1.0/1.1 resolution would install fine and crash at runtime.
+    "mcp >= 1.2",
     # Forge (L6): JSON-Schema validation of generated tool I/O — a core safety
     # gate, not optional. corvin-a2a pair emits a QR code for the friendship token.
     "jsonschema >= 4.0",

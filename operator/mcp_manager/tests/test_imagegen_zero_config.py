@@ -63,7 +63,11 @@ def test_seed_builtin_declares_no_secrets(monkeypatch, tmp_path):
     — claude does not resolve that template, so the literal string lands in
     this server's own env and provider_keys.resolve_key() (which checks
     process env first) treats it as a genuinely-configured key, always
-    attempting (and failing) Tier 1 instead of correctly using Tier 0."""
+    attempting (and failing) Tier 1 instead of correctly using Tier 0.
+
+    The seeded entry DOES carry a plaintext runtime.env (CORVIN_HOME /
+    CORVIN_TENANT_ID passthrough) — the invariant is: no secrets, and no
+    unresolved ${VAR} template values."""
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     from mcp_manager import seed_builtin, catalog, activate
 
@@ -73,19 +77,83 @@ def test_seed_builtin_declares_no_secrets(monkeypatch, tmp_path):
 
     servers = activate.get_active_mcp_servers("_default")
     assert "imagegen-zero-config" in servers
-    assert "env" not in servers["imagegen-zero-config"]
+    env = servers["imagegen-zero-config"].get("env") or {}
+    assert "OPENAI_API_KEY" not in env
+    assert not any("${" in v for v in env.values())
+    assert env.get("CORVIN_HOME") == str(tmp_path)
+    assert env.get("CORVIN_TENANT_ID") == "_default"
 
 
 def test_seed_builtin_idempotent(monkeypatch, tmp_path):
-    """Calling ensure_ twice (mirrors it running on every gateway boot)
-    must not error or duplicate anything."""
+    """Calling ensure_ twice (mirrors it running on every boot) must not
+    error, duplicate anything, or flip activation state."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog, activate
+
+    r1 = seed_builtin.ensure_imagegen_zero_config("_default")
+    assert r1["installed"] is True and r1["activated"] is True
+    r2 = seed_builtin.ensure_imagegen_zero_config("_default")
+    assert r2["installed"] is True and r2["error"] is None
+    assert len(catalog.list_tools("_default")) == 1
+    assert "imagegen-zero-config" in activate.get_active_tool_ids("_default")
+
+
+def test_seed_builtin_respects_user_deactivation(monkeypatch, tmp_path):
+    """Adversarial-review finding: the previous unconditional seed re-
+    activated the tool on every boot, silently overriding an explicit
+    user/operator deactivation of a tool that sends prompts to a third
+    party — a non-respectable opt-out is also a compliance problem."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, activate
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    assert activate.deactivate("_default", "imagegen-zero-config", scope="tenant")
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    assert "imagegen-zero-config" not in activate.get_active_tool_ids("_default")
+
+
+def test_seed_builtin_respects_operator_uninstall(monkeypatch, tmp_path):
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
     from mcp_manager import seed_builtin, catalog
 
-    r1 = seed_builtin.ensure_imagegen_zero_config("_default")
-    r2 = seed_builtin.ensure_imagegen_zero_config("_default")
-    assert r1 == r2
-    assert len(catalog.list_tools("_default")) == 1
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    assert catalog.remove_tool("_default", "imagegen-zero-config")
+    r = seed_builtin.ensure_imagegen_zero_config("_default")
+    assert r["installed"] is False
+    assert catalog.get_tool("_default", "imagegen-zero-config") is None
+
+
+def test_seed_builtin_preserves_operator_compliance_edit(monkeypatch, tmp_path):
+    """An operator who tightened the entry (e.g. removed api.openai.com from
+    hosts) must not get clobbered back to the shipped shape on next boot."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry = catalog.get_tool("_default", "imagegen-zero-config")
+    entry["compliance"]["hosts"] = ["image.pollinations.ai"]
+    catalog.add_tool("_default", entry)
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry2 = catalog.get_tool("_default", "imagegen-zero-config")
+    assert entry2["compliance"]["hosts"] == ["image.pollinations.ai"]
+
+
+def test_seed_builtin_refreshes_stale_interpreter_path(monkeypatch, tmp_path):
+    """Upgrade case: the recorded venv interpreter no longer exists (new
+    venv after a version upgrade) — the runtime block must be refreshed to
+    the current interpreter without touching activation state."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry = catalog.get_tool("_default", "imagegen-zero-config")
+    entry["runtime"]["command"] = str(tmp_path / "gone-venv" / "bin" / "python")
+    catalog.add_tool("_default", entry)
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry2 = catalog.get_tool("_default", "imagegen-zero-config")
+    assert entry2["runtime"]["command"] == sys.executable
 
 
 def test_seed_builtin_args_path_is_absolute(monkeypatch, tmp_path):
@@ -155,7 +223,9 @@ def test_pollinations_429_raises_friendly_message_not_raw_http_error(monkeypatch
     assert "OpenAI" in str(exc_info.value)
 
 
-def test_pollinations_500_propagates_as_generic_http_error(monkeypatch):
+def test_pollinations_500_degrades_to_friendly_message(monkeypatch):
+    """502/504/500 are routine for a community CDN — they must surface the
+    same friendly no-SLA message as 429/503, not a raw httpx stack trace."""
     import httpx
     import main as m
 
@@ -165,5 +235,133 @@ def test_pollinations_500_propagates_as_generic_http_error(monkeypatch):
     )
     monkeypatch.setattr(httpx.Client, "get", lambda self, *a, **k: fake_resp)
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(m.Tier0RateLimited):
         m._generate_pollinations("x")
+
+
+def test_pollinations_connect_error_degrades_to_friendly_message(monkeypatch):
+    import httpx
+    import main as m
+
+    def _boom(self, *a, **k):
+        raise httpx.ConnectError("dns down")
+
+    monkeypatch.setattr(httpx.Client, "get", _boom)
+    with pytest.raises(m.Tier0RateLimited):
+        m._generate_pollinations("x")
+
+
+def test_pollinations_redirect_not_followed(monkeypatch):
+    """The prompt travels in the URL path — a redirect would re-send user
+    content to an undeclared host (the 0.10.25 ping-redirect-leak class).
+    Redirects must be refused, not followed."""
+    import httpx
+    import main as m
+
+    fake_resp = httpx.Response(
+        302, request=httpx.Request("GET", "https://image.pollinations.ai/prompt/x"),
+        headers={"location": "https://evil.example/prompt/x"},
+    )
+    monkeypatch.setattr(httpx.Client, "get", lambda self, *a, **k: fake_resp)
+    with pytest.raises(m.Tier0RateLimited):
+        m._generate_pollinations("x")
+
+
+def test_pollinations_non_image_200_rejected(monkeypatch):
+    """A 200 whose body is an HTML error page must not be relayed as a
+    broken image content block."""
+    import httpx
+    import main as m
+
+    fake_resp = httpx.Response(
+        200, request=httpx.Request("GET", "https://image.pollinations.ai/prompt/x"),
+        text="<html>maintenance</html>",
+    )
+    monkeypatch.setattr(httpx.Client, "get", lambda self, *a, **k: fake_resp)
+    with pytest.raises(m.Tier0RateLimited):
+        m._generate_pollinations("x")
+
+
+def test_pollinations_mime_matches_actual_bytes(monkeypatch):
+    """Regression (live finding): Pollinations serves JPEG; the old code
+    stamped format="png" on it, producing a wrong mimeType on the MCP image
+    block. The declared format must be sniffed from the real bytes."""
+    import httpx
+    import main as m
+
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 32
+    fake_resp = httpx.Response(
+        200, request=httpx.Request("GET", "https://image.pollinations.ai/prompt/x"),
+        content=jpeg,
+    )
+    monkeypatch.setattr(httpx.Client, "get", lambda self, *a, **k: fake_resp)
+    img = m._generate_pollinations("x")
+    assert img._format == "jpeg" or getattr(img, "format", None) == "jpeg" or \
+        img._mime_type == "image/jpeg"
+
+
+def test_prompt_stays_single_path_segment():
+    """quote(safe='') — a prompt containing '/' must not span URL path
+    segments (path-traversal shape / silently altered request)."""
+    import urllib.parse
+    assert "/" not in urllib.parse.quote("a cat / a dog", safe="")
+
+
+def test_generate_image_rejects_empty_and_overlong_prompt(monkeypatch, tmp_path):
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import main as m
+
+    with pytest.raises(m.ImageGenRefused):
+        m.generate_image("   ")
+    with pytest.raises(m.ImageGenRefused):
+        m.generate_image("x" * (m._MAX_PROMPT_CHARS + 1))
+
+
+def test_broken_tier1_key_falls_back_to_tier0(monkeypatch, tmp_path):
+    """A configured-but-broken OpenAI key must not leave the user worse off
+    than having no key: degrade to Tier 0 with an explanatory note."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import main as m
+
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: None)
+    monkeypatch.setattr(m, "resolve_key", lambda name: "sk-broken")
+
+    def _openai_boom(prompt, key):
+        raise RuntimeError("401 invalid key")
+
+    sentinel = object()
+    monkeypatch.setattr(m, "_generate_openai", _openai_boom)
+    monkeypatch.setattr(m, "_generate_pollinations", lambda prompt: sentinel)
+    monkeypatch.setattr(m, "ensure_disclosed", lambda tid: None)
+
+    blocks = m.generate_image("a nice tree")
+    assert sentinel in blocks
+    assert any(isinstance(b, str) and "fell back" in b for b in blocks)
+
+
+def test_disclosure_survives_readonly_store(monkeypatch, tmp_path):
+    """ensure_disclosed's 'never raises' contract: a storage failure must
+    degrade to 'shown again next time', not fail the tool call after the
+    image was already generated."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import imagegen_disclosure as d
+
+    target = tmp_path / "tenants" / "_default" / "global"
+    target.mkdir(parents=True)
+    target.chmod(0o500)
+    try:
+        text = d.ensure_disclosed("_default")
+        assert text == d.DISCLOSURE_TEXT
+    finally:
+        target.chmod(0o700)
+
+
+def test_disclosure_rejects_path_injection_tenant(monkeypatch, tmp_path):
+    """Tenant ids are path components — a crafted value must fall back to
+    _default instead of escaping the tenants dir (or crashing on ':' under
+    Windows)."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import imagegen_disclosure as d
+
+    p = d._store_path("../../../etc")
+    assert "tenants/_default" in str(p).replace("\\", "/")

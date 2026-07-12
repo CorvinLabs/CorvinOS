@@ -108,10 +108,102 @@ def _subsystem_source(capability_id: str) -> str | None:
     return source
 
 
+# ── Reverse direction (ADR-0190 CI promise): every tool any MCP server in
+# the repo actually advertises must appear in SOME registry entry —
+# the orphaned-core/pipe class of bug (a fully built server nobody can
+# discover because no registry entry says it exists).
+#
+# repo-relative mcp-server file → the mcp__<server>__ prefix its tools are
+# published under. A NEW mcp_server.py that isn't in this map fails the
+# check with an explicit "add it here + add a registry entry" message.
+_MCP_SERVER_FILES: dict[str, str] = {
+    "operator/forge/forge/mcp_server.py": "forge",
+    "operator/skill-forge/skill_forge/mcp_server.py": "skill_forge",
+    "core/delegate/corvin_delegate/mcp_server.py": "corvin_delegate",
+    "core/orchestration/corvin_orchestration/mcp_server.py": "corvin_orchestration",
+    "core/pipe/mcp_server.py": "corvin_pipe",
+    "operator/mcp_manager/servers/imagegen-zero-config/main.py": "imagegen-zero-config",
+}
+
+# Infra-level tools deliberately NOT user-facing capabilities (never shown
+# in the capability map, not meaningful chat verbs) — documented here
+# instead of silently skipped.
+_INTERNAL_TOOLS = frozenset({
+    "audit.write_event",  # forge audit-chain writer for engines without native audit
+})
+
+
+def _advertised_tool_names(path: Path) -> set[str]:
+    """AST-extract the tool names an MCP server file advertises: dict
+    literals shaped like {"name": ..., "inputSchema"/"input_schema": ...}
+    (the stdio-server tool tables) plus @*.tool()-decorated functions
+    (FastMCP servers)."""
+    import ast
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
+    except SyntaxError:
+        return set()
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            keys = [k.value for k in node.keys
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+            if "name" in keys and ("inputSchema" in keys or "input_schema" in keys):
+                for k, v in zip(node.keys, node.values):
+                    if (isinstance(k, ast.Constant) and k.value == "name"
+                            and isinstance(v, ast.Constant) and isinstance(v.value, str)):
+                        names.add(v.value)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for dec in node.decorator_list:
+                fn = dec.func if isinstance(dec, ast.Call) else dec
+                if isinstance(fn, ast.Attribute) and fn.attr == "tool":
+                    names.add(node.name)
+    return names
+
+
+def _check_reverse_direction(reg) -> None:
+    registry_names: set[str] = set()
+    wildcards: set[str] = set()
+    for cap in reg.CAPABILITIES:
+        for tn in cap.tool_names:
+            if tn.endswith("__*"):
+                wildcards.add(tn[:-1])  # "mcp__forge__"
+            else:
+                registry_names.add(tn)
+
+    # 1. Every known server file's advertised tools are registry-tracked.
+    for rel, server_key in _MCP_SERVER_FILES.items():
+        f = REPO_ROOT / rel
+        if not f.is_file():
+            continue  # partial checkout — the forward checks still run
+        for bare in sorted(_advertised_tool_names(f)):
+            if bare in _INTERNAL_TOOLS:
+                continue
+            full = f"mcp__{server_key}__{bare}"
+            covered = (full in registry_names
+                       or any(full.startswith(w) for w in wildcards))
+            expect(covered,
+                   f"reverse: {rel} tool {bare!r} is tracked in the registry",
+                   f"expected {full!r} in some capability's tool_names")
+
+    # 2. No unmapped mcp_server.py anywhere in the tree.
+    skip_parts = _SKIP_DIR_PARTS | {"tests", "test"}
+    for base in ("operator", "core"):
+        for f in (REPO_ROOT / base).rglob("mcp_server.py"):
+            if skip_parts.intersection(f.parts):
+                continue
+            rel = str(f.relative_to(REPO_ROOT))
+            expect(rel in _MCP_SERVER_FILES,
+                   f"reverse: MCP server file {rel} is known to this check",
+                   "add it to _MCP_SERVER_FILES and give it a registry entry")
+
+
 def main() -> int:
     import capability_registry as reg  # type: ignore
 
     resolver_src = (HERE.parent / "lib" / "resolver.py").read_text(encoding="utf-8")
+
+    _check_reverse_direction(reg)
 
     ids_seen: set[str] = set()
     for cap in reg.CAPABILITIES:

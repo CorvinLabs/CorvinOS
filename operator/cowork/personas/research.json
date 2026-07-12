@@ -10,13 +10,6 @@
     "playwright": {
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest"]
-    },
-    "imagegen": {
-      "command": "npx",
-      "args": ["-y", "imagegen-mcp-server@latest"],
-      "env": {
-        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
-      }
     }
   },
   "add_dirs": [
@@ -24,7 +17,7 @@
   ],
   "needs_keys": [],
   "needs_oauth": [],
-  "setup_hint": "On first call, npx installs Playwright browser binaries (~150 MB) and ImageGen MCP server. One-time wait of a few seconds each.",
+  "setup_hint": "On first call, npx installs Playwright browser binaries (~150 MB). One-time wait of a few seconds.",
   "forge_enabled": true,
   "skill_forge_enabled": true,
   "tool_namespace": "research",

@@ -96,7 +96,8 @@ CAPABILITIES: tuple[Capability, ...] = (
         one_liner="Forge a new sandboxed, deterministic tool from a description, run it, or promote it to a wider scope.",
         persona_flag="forge_enabled",
         mcp_server="forge.mcp_server",
-        tool_names=("mcp__forge__forge_tool", "mcp__forge__forge_promote", "mcp__forge__forge_list"),
+        tool_names=("mcp__forge__forge_tool", "mcp__forge__forge_promote",
+                    "mcp__forge__forge_list", "mcp__forge__forge_exec"),
         service_fn="operator.forge.forge.mcp_server",
         test_file="operator/forge/tests/test_mcp_server.py",
     ),
@@ -179,13 +180,17 @@ CAPABILITIES: tuple[Capability, ...] = (
         id="image.generation",
         domain="Image Generation",
         status="wired",
-        one_liner="Generate an image from a text prompt.",
-        persona_flag=None,  # persona-hardcoded (assistant/research/forge)
-        mcp_server="imagegen (external npx imagegen-mcp-server)",
-        tool_names=(
-            "mcp__imagegen__image_generate_openai", "mcp__imagegen__image_generate_google",
-            "mcp__imagegen__image_generate_gemini", "mcp__imagegen__image_generate_replicate",
+        one_liner=(
+            "Generate an image from a text prompt — zero-config free tier by "
+            "default, auto-upgrades to the user's own OpenAI key when configured."
         ),
+        # ADR-0191: first-class mcp_manager catalog entry (seeded on boot,
+        # attached via the catalog/spawn path) — replaced the persona-hardcoded
+        # npx imagegen-mcp-server, which was BYOK-only, broken without a key,
+        # and invisible to L34/L35 governance.
+        persona_flag=None,
+        mcp_server="mcp_manager catalog: imagegen-zero-config",
+        tool_names=("mcp__imagegen-zero-config__generate_image",),
     ),
 
     # ── Planned (ADR-0190 M7) — not yet chat-reachable. Registered so
@@ -231,6 +236,33 @@ CAPABILITIES: tuple[Capability, ...] = (
             "Tracked: ADR-0190 M7."
         ),
         service_fn="core.console.corvin_console.routes.a2a_pair",
+    ),
+    Capability(
+        id="pipes.sessions",
+        domain="Inter-Session Pipes (Layer 18)",
+        status="planned",
+        not_yet_note=(
+            "Piping one persona session's output into another's input via "
+            "named pipes. A fully-built MCP server exists (core/pipe/"
+            "mcp_server.py: pipe_create/write/read/subscribe/...) but has "
+            "NO resolver injector and is referenced nowhere — genuinely "
+            "orphaned. ADR-0190 M8 recommendation: wire it (persona "
+            "composition is a real use case) or formally remove it; not "
+            "decided yet. Registered here so the CI reverse-check knows the "
+            "orphan is tracked instead of silently invisible."
+        ),
+        # Inert metadata while status="planned": the intended server key +
+        # tool names, so the CI reverse-check (every tool advertised by any
+        # mcp_server.py must be registry-tracked) can account for the file.
+        mcp_server="core.pipe.mcp_server",
+        tool_names=(
+            "mcp__corvin_pipe__pipe_create", "mcp__corvin_pipe__pipe_write",
+            "mcp__corvin_pipe__pipe_read", "mcp__corvin_pipe__pipe_list",
+            "mcp__corvin_pipe__pipe_remove", "mcp__corvin_pipe__pipe_get_meta",
+            "mcp__corvin_pipe__pipe_subscribe", "mcp__corvin_pipe__pipe_unsubscribe",
+            "mcp__corvin_pipe__pipe_queue_depth",
+        ),
+        service_fn="core.pipe.mcp_server",
     ),
 
     Capability(

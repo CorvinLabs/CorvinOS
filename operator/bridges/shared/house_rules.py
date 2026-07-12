@@ -954,10 +954,12 @@ def _house_rules_classify_hermes(chunk: str, rules_block: str, auth_str: str,
     # configured model makes "the engine that's running does the check" literal.
     #
     # CORVIN_HOUSE_RULES_MODEL (highest priority) pins the L44 classifier to a
-    # DEDICATED model independent of the chat engine — the installer sets it to
-    # qwen3:1.7b (pulled + pre-warmed at install), so a fresh box gets a fast, warm
-    # safety-check on the very first message instead of a cold ~22 s 8b model load
-    # (the fresh-install block this closes). Unset → the configured chat model.
+    # DEDICATED model independent of the chat engine. NOTE: nothing in the
+    # shipped installers sets this today — qwen3:1.7b was evaluated for the
+    # role and rejected (0/5 valid classifier JSON, commit 9a29643); the
+    # installers pre-warm the auto-picked installed qwen3 tag instead. The
+    # override exists for operators pinning an explicit classifier model.
+    # Unset → the configured chat model.
     hermes_model = os.environ.get("CORVIN_HOUSE_RULES_MODEL", "").strip() \
         or _house_rules_tenant_hermes_model(tenant_id)
     if not hermes_model:

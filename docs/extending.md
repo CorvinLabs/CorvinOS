@@ -105,19 +105,36 @@ without touching the global config:
   "name": "research",
   "mcp_servers": {
     "acme-kb": {
-      "command": "python3",
+      "command": "{{PYTHON}}",
       "args": ["/opt/acme/kb_server.py"]
     },
-    "imagegen": {
+    "acme-cloud": {
       "command": "npx",
-      "args": ["-y", "@anthropic-ai/mcp-server-imagegen"],
+      "args": ["-y", "@acme/mcp-server-example"],
       "env": {
-        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
+        "ACME_API_KEY": "${ACME_API_KEY}"
       }
     }
   }
 }
 ```
+
+Template variables are expanded in `command`/`args`/`env` values before the
+config is materialized:
+
+- `{{PYTHON}}` — `sys.executable`, the interpreter that can import CorvinOS's
+  own packages. Use this instead of a bare `python3`, which does not exist on
+  Windows PATH and resolves via the *spawning* process's PATH on POSIX
+  (usually a system interpreter without your dependencies).
+- `{{REPO_ROOT}}` — the directory holding `operator/` (the repo checkout, or
+  the vendored tree inside a wheel install).
+- `{{CORE_ROOT}}` — the directory holding the `core/` package tree (equals
+  `{{REPO_ROOT}}` in a checkout; `site-packages` in a wheel install).
+- `{{HOME}}` — the running user's home directory.
+
+Note: image generation no longer needs a persona-level `mcp_servers` entry —
+the built-in `imagegen-zero-config` catalog tool (ADR-0191) is seeded and
+active on every installation.
 
 ### Pinning a persona to a chat
 

@@ -59,11 +59,18 @@ def _vault_root() -> Path:
     route (XDG set → ~/.config) AND the systemd adapter (XDG unset → previously
     voice_dir()/tenant-home), so a BYOK key stored via one was invisible to the
     other (same reader!=writer split as the voice profile). CLAUDE.md pins
-    ~/.config/corvin-voice/ as the canonical voice/secret config root."""
-    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+    ~/.config/corvin-voice/ as the canonical voice/secret config root.
+
+    VOICE_CONFIG_DIR (highest priority) mirrors forge.paths.voice_config_dir /
+    say.py's SSOT — without it, a launcher pinning the dir moved config/models
+    but left the vault behind (reader!=writer split, V-2 audit finding)."""
+    override = os.environ.get("VOICE_CONFIG_DIR", "").strip()
+    if override:
+        return Path(os.path.expanduser(os.path.expandvars(override)))
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip() or os.path.join(
         os.path.expanduser("~"), ".config"
     )
-    return Path(xdg) / "corvin-voice"
+    return Path(os.path.expanduser(xdg)) / "corvin-voice"
 
 
 def _vault_cache_root() -> Path:

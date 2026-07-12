@@ -37,11 +37,17 @@ def _profile_path() -> Path:
     while the systemd bridges (XDG unset) read ``<corvin_home>/tenants/_default/
     voice/profile.json`` — reader != writer, so Learning/Metaphern set in the
     console never reached the runtime. CLAUDE.md pins ``~/.config/corvin-voice/``
-    as canonical; resolve there unconditionally."""
-    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+    as canonical; resolve there unconditionally.
+
+    VOICE_CONFIG_DIR (highest priority) mirrors forge.paths.voice_config_dir /
+    say.py's SSOT — see vault.py::_vault_root (V-2 audit finding)."""
+    override = os.environ.get("VOICE_CONFIG_DIR", "").strip()
+    if override:
+        return Path(os.path.expanduser(os.path.expandvars(override))) / "profile.json"
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip() or os.path.join(
         os.path.expanduser("~"), ".config"
     )
-    return Path(xdg) / "corvin-voice" / "profile.json"
+    return Path(os.path.expanduser(xdg)) / "corvin-voice" / "profile.json"
 
 
 PROFILE_FILE = _profile_path()

@@ -181,7 +181,12 @@ ROOT = Path(__file__).resolve().parent
 INBOX     = Path(os.environ.get("ADAPTER_INBOX")     or (ROOT / "inbox"))
 OUTBOX    = Path(os.environ.get("ADAPTER_OUTBOX")    or (ROOT / "outbox"))
 PROCESSED = Path(os.environ.get("ADAPTER_PROCESSED") or (ROOT / "processed"))
-SETTINGS_FILE = ROOT / "settings.json"
+# Same sandboxing story for settings: without this override, every sandboxed
+# test adapter still read the LIVE repo settings.json — a real deployment's
+# discord whitelist leaked into the test run and its senders were dropped via
+# the SPG private-session path (adapter-parallel/audit suites red on any
+# machine with a configured live bridge; the "test reads live config" class).
+SETTINGS_FILE = Path(os.environ.get("ADAPTER_SETTINGS") or (ROOT / "settings.json"))
 
 # Test-hygiene: when ADAPTER_INBOX is set explicitly (= sandboxed test
 # run; every test_adapter_*.py does that), and no explicit
@@ -7396,7 +7401,7 @@ def _try_edge_tts(text: str, lang: str = "de") -> Path | None:
     voice = _edge_voice_for(lang)
     import tempfile as _tmp
     mp3_fd, mp3_path_str = _tmp.mkstemp(suffix=".mp3")
-    out_path = ROOT / "outbox" / f"voice_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}.ogg"
+    out_path = OUTBOX / f"voice_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}.ogg"
     try:
         os.close(mp3_fd)
 
@@ -7489,7 +7494,7 @@ def _try_openai_tts(
     if not voice:
         voice = "nova"  # Default voice for all languages
     # Use UUID to prevent filename collisions when multiple chats run in parallel
-    out_path = ROOT / "outbox" / f"voice_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}.ogg"
+    out_path = OUTBOX / f"voice_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}.ogg"
     capped = _cap_for_openai_tts(text)
     if capped is not text:
         log(f"synth: input {len(text)} > {_OPENAI_TTS_HARD_CAP} — truncated "
@@ -7573,7 +7578,7 @@ def _try_piper_tts(text: str, lang: str = "de") -> Path | None:
     import subprocess as _sp
     import tempfile as _tmp
     wav_fd, wav_path_str = _tmp.mkstemp(suffix=".wav")
-    out_path = ROOT / "outbox" / f"voice_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}.ogg"
+    out_path = OUTBOX / f"voice_{uuid.uuid4().hex[:8]}_{int(time.time()*1000)}.ogg"
     try:
         os.close(wav_fd)
         r = _sp.run(
@@ -7630,7 +7635,7 @@ def synthesize_voice_note(
     # tiers against a missing directory and reported misleading per-tier
     # failures (review finding).
     try:
-        (ROOT / "outbox").mkdir(parents=True, exist_ok=True)
+        OUTBOX.mkdir(parents=True, exist_ok=True)
     except OSError as _e:
         log(f"synth: outbox dir unavailable: {_e}")
 

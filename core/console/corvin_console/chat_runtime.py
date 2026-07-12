@@ -890,6 +890,59 @@ def _persona_prompt_block() -> str:
         return ""
 
 
+def _persona_mcp_config(tenant_id: str = "_default") -> str | None:
+    """Materialize the web-chat persona's MCP servers into an ``--mcp-config``
+    file path, mirroring the bridge adapter's spawn wiring (adapter.py
+    ``_resolve_spawn_inputs``): resolver-injected servers (forge, skill_forge,
+    corvin_orchestration, corvin_delegate, ...) merged over the mcp_manager
+    catalog's tenant-activated tools (imagegen-zero-config, ...), persona
+    winning on key conflicts.
+
+    Adversarial-review CRITICAL (ADR-0190 pass, 2026-07-12): the console
+    web-chat — the designated command center — injected the full capability
+    map ("you can call workflow_run / a2a_send / ...") into the system prompt
+    but attached NO MCP servers to the ``claude -p`` subprocess, so every
+    advertised capability was a confidently-wrong claim on this path. The
+    messenger path was wired correctly all along; this brings the console to
+    parity.
+
+    Never raises; returns None when nothing is available (fail-safe)."""
+    if _cowork is None:
+        return None
+    try:
+        merged = _cowork.resolve(_WEB_CHAT_PERSONA, overrides={})
+        if not isinstance(merged, dict):
+            return None
+        mcp = merged.get("mcp_servers")
+
+        # mcp_manager catalog tools (ADR-0096/0191), persona wins on conflict.
+        try:
+            import mcp_manager.activate as _mcp_activate  # type: ignore
+        except ImportError:
+            _mcp_activate = None
+        if _mcp_activate is not None:
+            try:
+                catalog_mcp = _mcp_activate.get_active_mcp_servers(tenant_id)
+                if catalog_mcp:
+                    allowed_plugins = merged.get("mcp_plugins_allowed")
+                    if isinstance(allowed_plugins, list):
+                        catalog_mcp = {k: v for k, v in catalog_mcp.items()
+                                       if k in allowed_plugins}
+                    combined = dict(catalog_mcp)
+                    if isinstance(mcp, dict):
+                        combined.update(mcp)
+                    mcp = combined
+            except Exception:  # noqa: BLE001
+                pass
+        if not isinstance(mcp, dict) or not mcp:
+            return None
+        return _cowork.materialize_mcp({"mcp_servers": mcp, **{
+            k: merged[k] for k in ("allowed_forged_tools",) if k in merged
+        }})
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _voice_audience_block() -> str:
     """Layer-12 voice-profile audience block, mirroring adapter.py:2463-2470.
     TTS-only by default; only injected into the (text) console prompt when the
@@ -1028,12 +1081,30 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None)
              "--verbose",
              "--append-system-prompt", _turn_system_prompt(sess)]
 
+    # MCP servers — the persona's resolver-injected servers + mcp_manager
+    # catalog tools, exactly like the bridge adapter's spawn path. Without
+    # this the console chat advertised capabilities (via the injected
+    # capability map) that no attached server could actually serve.
+    mcp_config_path = _persona_mcp_config(sess.tenant_id)
+    if mcp_config_path:
+        args += ["--mcp-config", mcp_config_path]
+
     # Permission mode: None → skip prompts (default); else a real mode.
     perm_mode = _web_permission_mode(sess.tenant_id)
     if perm_mode is None or perm_mode == "bypassPermissions":
         args.append("--dangerously-skip-permissions")
     else:
         args += ["--permission-mode", perm_mode]
+        # Under a prompting permission mode the persona's allowed_tools list
+        # is what pre-approves the MCP tools (mirrors adapter.py/_build_args
+        # in claude_code.py — space-joined single argv element).
+        try:
+            _merged = _cowork.resolve(_WEB_CHAT_PERSONA, overrides={}) if _cowork else None
+            _allowed = (_merged or {}).get("allowed_tools") or []
+            if _allowed:
+                args += ["--allowedTools", " ".join(str(t) for t in _allowed)]
+        except Exception:  # noqa: BLE001
+            pass
 
     # Always allow the session's own working directory, plus any tenant-
     # configured workspace roots, for both the file-tool and Bash sandbox layers.

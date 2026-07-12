@@ -71,6 +71,9 @@ def test_message_received_event_emitted():
         "ADAPTER_FAKE_CLAUDE": "1",     # don't actually call claude
         "ADAPTER_ROUTING_MODE": "off",   # don't try the router
         "VOICE_AUDIT_PATH":  str(audit_path),
+        # Isolate from a live operator's bridges/<channel>/settings.json —
+        # its whitelist otherwise SPG-drops this test's senders as private.
+        "ADAPTER_BRIDGES_DIR": str(base / "bridges"),
     }
     try:
         adapter = _fresh_adapter(env_overrides)
@@ -126,6 +129,7 @@ def test_cancel_envelope_emits_bridge_cancel():
         "ADAPTER_PROCESSED": str(processed),
         "VOICE_AUDIT_PATH":  str(audit_path),
         "ADAPTER_ROUTING_MODE": "off",
+            "ADAPTER_BRIDGES_DIR": str(base / "bridges"),
     }
     try:
         adapter = _fresh_adapter(env_overrides)
@@ -178,6 +182,7 @@ def test_chain_is_continuous_across_two_messages():
         "ADAPTER_FAKE_CLAUDE": "1",
         "ADAPTER_ROUTING_MODE": "off",
         "VOICE_AUDIT_PATH":  str(audit_path),
+            "ADAPTER_BRIDGES_DIR": str(base / "bridges"),
     }
     try:
         adapter = _fresh_adapter(env_overrides)

@@ -39,11 +39,17 @@ def _memory_root() -> Path:
     is unset — NOT ``voice_dir()``. The old voice_dir() fallback flipped the topic
     store between the XDG location (console / interactive shells, XDG set) and the
     tenant-home location (systemd --user bridges, XDG unset), so a note written via
-    one was invisible to the other (same reader!=writer split as the voice profile)."""
-    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+    one was invisible to the other (same reader!=writer split as the voice profile).
+
+    VOICE_CONFIG_DIR (highest priority) mirrors forge.paths.voice_config_dir /
+    say.py's SSOT — see vault.py::_vault_root (V-2 audit finding)."""
+    override = os.environ.get("VOICE_CONFIG_DIR", "").strip()
+    if override:
+        return Path(os.path.expanduser(os.path.expandvars(override))) / "memory"
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip() or os.path.join(
         os.path.expanduser("~"), ".config"
     )
-    return Path(xdg) / "corvin-voice" / "memory"
+    return Path(os.path.expanduser(xdg)) / "corvin-voice" / "memory"
 
 
 MEMORY_DIR = _memory_root()
