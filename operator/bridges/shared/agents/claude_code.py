@@ -38,6 +38,7 @@ import os
 import shutil
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from collections import deque
@@ -231,6 +232,7 @@ class ClaudeCodeEngine:
         # PATH changes between turns (rare, but cheap to harden against).
         self.binary = _resolve_claude_bin(binary or _configured_claude_bin())
         self._proc: subprocess.Popen | None = None
+        self._system_prompt_tmp_path: str | None = None
         self._stdin: IO | None = None
         self._stdin_guard = threading.Lock()
         self._stderr_buf: deque[str] = deque()
@@ -248,6 +250,7 @@ class ClaudeCodeEngine:
         *,
         binary: str = "claude",
         system: str | None = None,
+        system_prompt_file: str | None = None,
         mode: str = "unrestricted",
         permission_mode: str | None = None,
         dangerously_skip_permissions: bool | None = None,
@@ -289,6 +292,11 @@ class ClaudeCodeEngine:
 
         `streaming=True`: append `--output-format stream-json --verbose`
         and (when `prompt_via_stdin=True`) `--input-format stream-json`.
+
+        `system_prompt_file`, when given, wins over `system` and appends
+        `--append-system-prompt-file <path>` instead of the inline
+        `--append-system-prompt <text>` form — see `spawn()`'s docstring
+        for why (Windows cmd.exe command-line-length fresh-install bug).
         """
         if continue_session and resume_session_id:
             raise ValueError(
@@ -303,7 +311,9 @@ class ClaudeCodeEngine:
         if not prompt_via_stdin:
             args.append(prompt)
 
-        if system:
+        if system_prompt_file:
+            args += ["--append-system-prompt-file", str(system_prompt_file)]
+        elif system:
             args += ["--append-system-prompt", system]
 
         # Permission-Mode + Tool-Caps. Media-modes "read" / "restricted"
@@ -389,10 +399,50 @@ class ClaudeCodeEngine:
             raise ValueError(
                 "continue_session and resume_session_id are mutually exclusive"
             )
+
+        # Windows fresh-install fix (mirrors corvin_console/chat_runtime.py):
+        # the merged system prompt (persona + user profile + memory index +
+        # active-skills block — routinely 10k+ characters in real use) used
+        # to go inline as a single --append-system-prompt argv element. When
+        # `claude` resolves to an npm .cmd shim on Windows, the existing
+        # BatBadBut-RCE-safe rewrite (_win_shim.windows_shim_command) must
+        # launch it via one `cmd /c "<command line>"` STRING — but cmd.exe's
+        # own internal command-line buffer caps at ~8191 characters, far
+        # below the ~32767 CreateProcess allows for a direct .exe launch.
+        # Every bridge turn (Discord/WhatsApp/Telegram — this is the primary
+        # `_call_claude_streaming_via_engine` path in adapter.py) hit the
+        # identical "command line too long" failure the console web-chat
+        # path already had fixed. `--append-system-prompt-file <path>` (a
+        # documented alias: `claude --help` lists "--system-prompt[-file],
+        # --append-system-prompt[-file]") takes a short path instead,
+        # written into `working_dir` when available (matches the session's
+        # own lifecycle) or the OS temp dir otherwise, cleaned up in
+        # `_cleanup_proc`.
+        self._system_prompt_tmp_path = None
+        system_prompt_file: str | None = None
+        if system:
+            prompt_dir = working_dir if working_dir is not None else Path(tempfile.gettempdir())
+            try:
+                prompt_dir.mkdir(parents=True, exist_ok=True)
+                fd, tmp_path = tempfile.mkstemp(
+                    suffix=".txt", prefix=".corvin-sysprompt-", dir=str(prompt_dir),
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(system)
+                system_prompt_file = tmp_path
+                self._system_prompt_tmp_path = tmp_path
+            except OSError:
+                # Best-effort — an unwritable workdir/temp dir falls back to
+                # the historical inline argument rather than failing the
+                # whole spawn (matches this module's existing best-effort
+                # posture elsewhere, e.g. _emit/_audit-style guards).
+                system_prompt_file = None
+
         args = self._build_args(
             prompt,
             binary=self.binary,
-            system=system,
+            system=None if system_prompt_file else system,
+            system_prompt_file=system_prompt_file,
             mode=mode,
             permission_mode=permission_mode,
             dangerously_skip_permissions=dangerously_skip_permissions,
@@ -417,10 +467,13 @@ class ClaudeCodeEngine:
         # spawn and emits a synthetic event sequence so the adapter's
         # streaming path can be exercised without API credits.
         if os.environ.get("ADAPTER_FAKE_CLAUDE") == "1":
-            yield from self._fake_stream(
-                args=args, prompt=prompt,
-                channel=channel, chat_key=chat_key,
-            )
+            try:
+                yield from self._fake_stream(
+                    args=args, prompt=prompt,
+                    channel=channel, chat_key=chat_key,
+                )
+            finally:
+                self._cleanup_system_prompt_tmp_file()
             return
 
         cwd = str(working_dir) if working_dir else None
@@ -463,6 +516,7 @@ class ClaudeCodeEngine:
                 bufsize=1,
             )
         except FileNotFoundError:
+            self._cleanup_system_prompt_tmp_file()
             yield StreamEvent(
                 type="error",
                 error=_format_binary_not_found_error(self.binary),
@@ -552,7 +606,20 @@ class ClaudeCodeEngine:
             except Exception:
                 pass
 
+    def _cleanup_system_prompt_tmp_file(self) -> None:
+        """Best-effort unlink of the temp file spawn() wrote the system
+        prompt into (Windows fresh-install fix — see spawn()'s docstring).
+        Idempotent; safe to call even when no temp file was written."""
+        path = self._system_prompt_tmp_path
+        self._system_prompt_tmp_path = None
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
     def _cleanup_proc(self) -> None:
+        self._cleanup_system_prompt_tmp_file()
         self.close_stdin()
         proc = self._proc
         if proc is None:

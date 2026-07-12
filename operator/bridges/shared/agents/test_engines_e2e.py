@@ -418,7 +418,20 @@ class FakeClaudeStreamTests(unittest.TestCase):
             dump = Path(td) / "args.jsonl"
             os.environ["ADAPTER_FAKE_ARGS_DUMP"] = str(dump)
             engine = ClaudeCodeEngine()
-            result = collect(engine.spawn(
+            # NOTE: spawn() now (Windows cmd.exe 8191-char fix) always writes
+            # a non-empty `system` prompt to a temp file and appends
+            # `--append-system-prompt-file <path>` instead of the inline
+            # `--append-system-prompt <text>` form — see claude_code.py's
+            # spawn() docstring. That temp file is unlinked in a `finally`
+            # the instant this generator is fully drained (spawn()'s
+            # `_cleanup_system_prompt_tmp_file`), which is exactly what
+            # `collect()`'s draining `for` loop triggers. So the content
+            # must be captured DURING iteration, before the generator is
+            # exhausted — reading it after `collect()` returns would hit a
+            # FileNotFoundError (the same file collect() would drain past).
+            events: list[StreamEvent] = []
+            sys_prompt_content: str | None = None
+            for ev in engine.spawn(
                 "hello world",
                 system="terse",
                 channel="ch", chat_key="ck",
@@ -426,8 +439,16 @@ class FakeClaudeStreamTests(unittest.TestCase):
                 allowed_tools=["Read"],
                 streaming=True,
                 prompt_via_stdin=True,
-            ))
-            self.assertIsNone(result.error)
+            ):
+                events.append(ev)
+                if sys_prompt_content is None and engine._system_prompt_tmp_path:
+                    sys_prompt_content = Path(
+                        engine._system_prompt_tmp_path
+                    ).read_text(encoding="utf-8")
+                if ev.type in ("turn_completed", "error"):
+                    break
+            error = next((e.error for e in events if e.type == "error"), None)
+            self.assertIsNone(error)
             with open(dump) as fh:
                 lines = [ln for ln in fh.read().splitlines() if ln.strip()]
             self.assertEqual(len(lines), 1)
@@ -437,10 +458,18 @@ class FakeClaudeStreamTests(unittest.TestCase):
             self.assertEqual(payload["chat_key"], "ck")
             self.assertEqual(payload["engine"], "claude_code")
             args = payload["args"]
-            self.assertIn("--append-system-prompt", args)
-            self.assertEqual(
-                args[args.index("--append-system-prompt") + 1], "terse",
-            )
+            if "--append-system-prompt-file" in args:
+                self.assertIsNotNone(
+                    sys_prompt_content,
+                    "system-prompt temp file was already cleaned up before "
+                    "its content could be captured mid-stream",
+                )
+                self.assertEqual(sys_prompt_content, "terse")
+            else:
+                self.assertIn("--append-system-prompt", args)
+                self.assertEqual(
+                    args[args.index("--append-system-prompt") + 1], "terse",
+                )
             self.assertIn("--permission-mode", args)
             self.assertEqual(args[args.index("--permission-mode") + 1], "plan")
             self.assertIn("--input-format", args)
