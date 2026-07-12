@@ -156,6 +156,10 @@ class TestWelcomeCheckEndpoint(unittest.TestCase):
         # asked for "what Corvin can do and what the user can do with it",
         # not just a health report.
         self.assertIn("programmieren", data["greeting"])
+        # "Voice to action" framing clause — a follow-up ask: explain that
+        # voice controls the whole digital life (computer/browser/internet
+        # access), not just capabilities as a bullet list.
+        self.assertIn("Voice to Action", data["greeting"])
 
     def test_degraded_tts_reflects_in_greeting_but_never_blocks(self):
         _install_fake_house_rules(warn="ollama down")

@@ -1227,9 +1227,11 @@ def _build_welcome_greeting(lang: str, components: dict[str, dict[str, str]]) ->
 
     Reflects the ACTUAL check outcome (never a canned line regardless of
     result) — a degraded component swaps in the matching "bad" fragment
-    instead of silently claiming everything is healthy. Always includes the
-    capabilities/actions clause so the user hears what Corvin can do and
-    what they can do with it, not just a health report."""
+    instead of silently claiming everything is healthy. Always includes a
+    "voice to action" framing clause (you speak, Corvin acts — computer,
+    browser, internet access) plus the capabilities/actions clause, so the
+    user hears both the underlying idea and concrete examples, not just a
+    health report."""
     if str(_SHARED) not in sys.path:
         sys.path.insert(0, str(_SHARED))
     import i18n as _i18n  # noqa: PLC0415
@@ -1248,6 +1250,7 @@ def _build_welcome_greeting(lang: str, components: dict[str, dict[str, str]]) ->
         tr("check_tts_ok") if tts_ok else tr("check_tts_bad"),
         tr("check_engine_ok") if engine_ok else tr("check_engine_bad"),
         tr("control"),
+        tr("voice_to_action"),
         tr("capabilities"),
         tr("closing"),
     ]

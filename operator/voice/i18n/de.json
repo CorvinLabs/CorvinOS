@@ -23,6 +23,7 @@
     "check_engine_ok": "Und die Verbindung zu meinen KI-Modellen steht.",
     "check_engine_bad": "Die Verbindung zu meinen KI-Modellen ist gerade gestört — wirf kurz einen Blick auf deine Engine-Einstellungen.",
     "control": "Ab jetzt kannst du mit mir sprechen oder schreiben — hier im Web-Chat, aber genauso über Discord, WhatsApp oder Telegram, wenn du das einrichtest.",
+    "voice_to_action": "Das nennt man Voice to Action: Du sprichst einfach aus, was du willst, und ich verwandle das in echtes Handeln — ich habe Zugriff auf deinen Rechner, kann im Internet surfen und deinen Browser bedienen, als würde ich selbst die Maus in der Hand halten. Dadurch lässt sich im Grunde dein gesamtes digitales Leben allein über deine Stimme steuern.",
     "capabilities": "Ich kann für dich programmieren und Dateien bearbeiten, im Web recherchieren, deinen Browser bedienen, Bilder erzeugen, E-Mails und deinen Kalender verwalten und wiederkehrende Aufgaben automatisieren. Sag einfach in normaler Sprache, was du brauchst — zum Beispiel „schau in mein Postfach\" oder „erstelle mir ein Bild von einem Fuchs im Wald\" — und ich kümmere mich darum.",
     "closing": "Sag mir einfach, was du brauchst."
   }

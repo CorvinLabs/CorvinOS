@@ -188,7 +188,10 @@ rather than one grammatically-joined "A, B and C" sentence, so no per-language l
 was needed. **Per the user's explicit follow-up ask**, the greeting also always includes a
 `welcome.capabilities` clause — what Corvin can do (code, web research, browser automation,
 image generation, email/calendar, automation) and how to ask for it in plain language — not
-just a health report.
+just a health report. A second follow-up ask added `welcome.voice_to_action`, inserted between
+`control` and `capabilities`: a short framing clause explaining the underlying idea — "you
+speak, Corvin acts," with real computer/browser/internet access, so the whole digital life can
+be steered through voice alone — before the concrete capability examples land.
 
 On the frontend, the `ttsBlob`/`audioRef`/autoplay-block mechanism was extracted from
 `chat.tsx` into a shared `useVoicePlayback` hook (`web-next/src/lib/useVoicePlayback.ts`), and

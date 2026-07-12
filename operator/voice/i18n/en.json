@@ -23,6 +23,7 @@
     "check_engine_ok": "And the connection to my AI models is up.",
     "check_engine_bad": "The connection to my AI models is currently down — take a quick look at your engine settings.",
     "control": "From now on you can talk or type to me — here in the web chat, but just the same on Discord, WhatsApp or Telegram once you set those up.",
+    "voice_to_action": "That's what's called voice to action: you say what you want, and I turn it into real action — I have access to your computer, I can browse the internet, and I can drive your browser as if I were holding the mouse myself. That means your entire digital life can, in principle, be controlled through your voice alone.",
     "capabilities": "I can write and edit code for you, research the web, drive your browser, generate images, manage email and your calendar, and automate recurring tasks. Just tell me in plain language what you need — for example \"check my inbox\" or \"generate an image of a fox in the forest\" — and I'll take care of it.",
     "closing": "Just tell me what you need."
   }
