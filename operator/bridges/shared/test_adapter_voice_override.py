@@ -155,12 +155,38 @@ def test_build_voice_summary_uses_override_skips_llm() -> None:
         print("  OK — override returned verbatim, no LLM call")
 
 
+def test_literal_voice_mention_does_not_hijack_real_block() -> None:
+    _section("literal <voice> mention earlier must NOT swallow the real block")
+    for m in ("adapter", "profile"):
+        sys.modules.pop(m, None)
+    import adapter  # type: ignore
+    # Reproduces 2026-07-13: a reply that EXPLAINS the mechanism mentions the
+    # literal token `<voice>` in its prose, then appends its real block. The old
+    # leftmost-match paired the stray mention with the real closing tag and
+    # truncated the visible reply at the mention.
+    text = (
+        "Zweitens der Code-Bug: Der `<voice>`-Override-Pfad hängte die Zugabe "
+        "ohne Guard an.\n\n"
+        "Drittens: das Dedup-Fenster war zu klein, jetzt geweitet.\n\n"
+        "<voice>Kurz gesprochen: zwei Fixes, jetzt sauber.</voice>"
+    )
+    chat, voice = adapter.extract_voice_override(text)
+    assert voice == "Kurz gesprochen: zwei Fixes, jetzt sauber.", f"voice={voice!r}"
+    # The whole visible body must survive — this is the regression.
+    assert "Zweitens der Code-Bug" in chat, f"body truncated: {chat!r}"
+    assert "Drittens" in chat, f"body truncated after the mention: {chat!r}"
+    assert "`<voice>`-Override-Pfad" in chat, "literal mention must stay as text"
+    assert "</voice>" not in chat, "the real block must be stripped from chat"
+    print("  OK — real block extracted, visible body intact, mention preserved")
+
+
 def main() -> int:
     test_no_tag_returns_unchanged()
     test_single_tag_extracts_and_strips()
     test_empty_tag_falls_through()
     test_multiline_tag_dotall()
     test_build_voice_summary_uses_override_skips_llm()
+    test_literal_voice_mention_does_not_hijack_real_block()
     print("\nAll voice-override adapter tests passed.")
     return 0
 

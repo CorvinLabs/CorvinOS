@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import re
 
-_VOICE_TAG_RE = re.compile(r"<voice>\s*(.+?)\s*</voice>", re.DOTALL | re.IGNORECASE)
+_OPEN = "<voice>"
+_CLOSE = "</voice>"
 
 
 def extract_voice_override(text: str) -> tuple[str, str | None]:
@@ -32,14 +33,27 @@ def extract_voice_override(text: str) -> tuple[str, str | None]:
     block is used verbatim as the spoken text — summarize.py is skipped
     entirely. Whitespace artifacts from the cut-out tag are cleaned up so the
     chat-text doesn't end up with weird gaps.
+
+    Pairing is LAST-open-to-LAST-close, NOT leftmost-match. The producer
+    appends exactly one real block, but the VISIBLE prose can legitimately
+    *mention* the literal token ``<voice>`` (e.g. a reply explaining this very
+    mechanism, or code in backticks). A leftmost `<voice>…</voice>` search would
+    pair that stray earlier mention with the real block's closing tag and swallow
+    everything in between as the "override" — the visible reply then truncated at
+    the stray mention (reported 2026-07-13: a reply cut off mid-section because it
+    said "the `<voice>` path" before its real block). Anchoring on the LAST
+    `</voice>` and the nearest preceding `<voice>` extracts the real trailing
+    block and leaves any earlier literal mention untouched in the chat text.
     """
-    if "<voice>" not in text.lower() or "</voice>" not in text.lower():
+    low = text.lower()
+    close = low.rfind(_CLOSE)
+    if close == -1:
         return text, None
-    m = _VOICE_TAG_RE.search(text)
-    if not m:
+    open_ = low.rfind(_OPEN, 0, close)
+    if open_ == -1:
         return text, None
-    voice_text = m.group(1).strip()
-    stripped = _VOICE_TAG_RE.sub("", text, count=1)
+    voice_text = text[open_ + len(_OPEN):close].strip()
+    stripped = text[:open_] + text[close + len(_CLOSE):]
     stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
     return stripped, voice_text or None
 
@@ -49,12 +63,13 @@ def with_voice_override(visible: str, spoken: str) -> str:
 
     *visible* may contain untrusted content (subprocess stderr, an HTTP error
     body, ...). Neutralizing any literal `<`/`>` in it — not just around a
-    known-untrusted suffix — is what stops that content from ever containing
-    a stray `<voice>`/`</voice>` sequence that could hijack
-    extract_voice_override()'s leftmost-match regex (it always matches from
-    the FIRST `<voice>` it finds to the NEXT `</voice>`, so an earlier stray
-    opening tag would otherwise pair with OUR closing tag instead of its
-    own). *spoken* is always a static, developer-authored sentence — never
+    known-untrusted suffix — is defense-in-depth so that content can never
+    contain a stray `<voice>`/`</voice>` sequence that interacts with
+    extract_voice_override() at all. (The extractor now pairs the LAST
+    `</voice>` with the nearest preceding `<voice>`, so a stray EARLIER opening
+    tag no longer hijacks OUR trailing block — but escaping the visible half
+    keeps a stray CLOSING tag in untrusted content from truncating our block
+    either.) *spoken* is always a static, developer-authored sentence — never
     untrusted — so it is used as-is.
     """
     safe_visible = visible.replace("<", "‹").replace(">", "›")
