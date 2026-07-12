@@ -328,38 +328,31 @@ class TestWelcomeCheckLanguageResolution(unittest.TestCase):
         self.assertIn(" I ", f" {greeting} ", "greeting should read like English prose")
         self.assertNotIn("welcome.", greeting)
 
-    def test_zh_profile_greeting_is_actually_english_not_chinese_or_german(self):
-        """CONFIRMED FINDING (2026-07-12), not a hypothesis: this repo's i18n
-        bundle directory (operator/voice/i18n/) contains ONLY de.json and
-        en.json — there is no zh-Hans.json. i18n.t()'s fallback chain (exact
-        locale -> base locale -> English -> literal key, see i18n.py::t)
-        therefore falls all the way through to English for ANY profile
-        whose display_language isn't de/en, SILENTLY — no warning is logged
-        anywhere in this path. A user whose profile.display_language is
-        "zh" (this repo's own live default in this exact deployment) gets
-        an ENGLISH welcome greeting, not Chinese and not their actual
-        spoken/written language. This test pins that CURRENT behavior so a
-        future bundle addition or fallback-language change is a deliberate,
-        visible diff here — not a silent flip. It does not assert this is
-        correct; see the accompanying chat report for the recommendation
-        (fix the profile's display_language default, or make the i18n
-        fallback distinguish "explicitly English" from "no bundle for this
-        locale, defaulted")."""
+    def test_zh_profile_greeting_is_now_real_chinese(self):
+        """Was a CONFIRMED bug (2026-07-12): this repo's i18n bundle
+        directory (operator/voice/i18n/) used to contain ONLY de.json and
+        en.json — no zh-Hans.json — so i18n.t()'s fallback chain (exact
+        locale -> base locale -> English -> literal key) silently produced
+        an ENGLISH greeting for a "zh"/"zh-Hans" profile. Closed the same
+        day by adding a real, fully-translated operator/voice/i18n/zh-Hans.json.
+        This test now proves the fix: the assembled greeting is real Chinese
+        prose, not an English or German fallback."""
         lang, greeting = self._lang_and_greeting("zh")
         self.assertEqual(lang, "zh-Hans", "i18n.resolve() itself still reports zh-Hans")
-        # ... but the ASSEMBLED TEXT is English prose, not Chinese, because
-        # no zh-Hans bundle exists for the `welcome.*` keys.
-        self.assertIn(" I ", f" {greeting} ")
-        self.assertNotIn("你", greeting, "no actual Chinese characters were produced")
+        self.assertIn("你好，我是 Corvin。", greeting, "greeting must open with the real zh-Hans intro")
+        self.assertNotIn("welcome.", greeting, "a raw i18n key leaked into the greeting")
+        self.assertNotIn(" I ", f" {greeting} ", "must not silently be English prose")
         self.assertNotIn(" ich ", f" {greeting} ".lower().replace("ich", " ich "),
-                          "not German either -- silently became English")
+                          "must not silently be German prose")
 
     def test_unsupported_locale_greeting_still_fully_assembled_no_missing_parts(self):
-        """Even though test_zh_profile_... above shows the LANGUAGE choice is
-        wrong, the greeting must still be a complete, well-formed sentence
-        (no empty/missing template parts) -- a partial silent failure would
-        be worse than an all-English fallback."""
-        _, greeting = self._lang_and_greeting("zh")
+        """A genuinely unsupported locale (no bundle at all, e.g. Japanese —
+        this repo ships de/en/zh-Hans only) must still produce a complete,
+        well-formed English-fallback sentence -- a partial silent failure
+        would be worse than an all-English fallback. zh-Hans itself is no
+        longer the example here since it has real content now (see
+        test_zh_profile_greeting_is_now_real_chinese above)."""
+        _, greeting = self._lang_and_greeting("ja")
         self.assertGreater(len(greeting), 80, f"greeting looks truncated: {greeting!r}")
         # every part join is a period/space-separated sentence; a dropped
         # part would show up as a double space or an obviously short result

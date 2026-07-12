@@ -358,8 +358,12 @@ behavior with a real test rather than leave it unverified. Two gaps closed:
    `i18n.normalise()` the same way `/lang set` does; live profile corrected.
    Tests: `test_profile_cli_lang.py` (5 cases), 2 new cases in
    `test_profile_routes.py`. The missing-`zh-Hans`-bundle gap itself (a
-   genuinely Chinese-preferring user still gets an English greeting) is a
-   separate, still-open translation-content gap — not this validation bug.
+   genuinely Chinese-preferring user still got an English greeting) was
+   ALSO closed the same day: `operator/voice/i18n/zh-Hans.json` now ships
+   real Simplified Chinese translations for every `lang`/`consent`/`welcome`
+   key, matching the `de.json`/`en.json` key set exactly. Proven by
+   `test_zh_profile_greeting_is_now_real_chinese`; the genuinely-unbundled
+   case is now covered via `ja` instead.
 2. **Sequential multi-task voice delivery** — whether N concurrent
    `want_voice=True` background-task completions each get delivered with
    their OWN correct voice note (no drop, no cross-contamination) had no
