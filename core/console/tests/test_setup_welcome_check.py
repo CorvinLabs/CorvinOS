@@ -276,5 +276,95 @@ class TestWelcomeCheckEndpoint(unittest.TestCase):
                 self.assertEqual(setup_module._welcome_state_for("_default").get("state"), "done")
 
 
+class TestWelcomeCheckLanguageResolution(unittest.TestCase):
+    """Blind spot closed (2026-07-12): every existing test above mocks
+    `_welcome_check_lang` to return "de" directly — the resolution function
+    itself (which reads the LIVE profile and picks the greeting language)
+    had zero coverage. These tests call it for real, plus exercise
+    `_build_welcome_greeting` for the two languages this repo's i18n bundles
+    actually ship (`operator/voice/i18n/{de,en}.json` — no others exist)."""
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self._prev_xdg = os.environ.get("XDG_CONFIG_HOME")
+        os.environ["XDG_CONFIG_HOME"] = self._tmp
+        for m in ("profile", "i18n"):
+            sys.modules.pop(m, None)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+        if self._prev_xdg is None:
+            os.environ.pop("XDG_CONFIG_HOME", None)
+        else:
+            os.environ["XDG_CONFIG_HOME"] = self._prev_xdg
+        for m in ("profile", "i18n", "corvin_console.routes.setup"):
+            sys.modules.pop(m, None)
+
+    def _set_display_language(self, value: str) -> None:
+        import profile as _profile  # type: ignore
+        _profile.set_value("display_language", value)
+
+    def _lang_and_greeting(self, display_language: str) -> tuple[str, str]:
+        self._set_display_language(display_language)
+        from corvin_console.routes import setup as setup_module
+        lang = setup_module._welcome_check_lang()
+        components = {
+            "stt": {"status": "ok"}, "tts": {"status": "ok"}, "engine": {"status": "ok"},
+        }
+        greeting = setup_module._build_welcome_greeting(lang, components)
+        return lang, greeting
+
+    def test_de_profile_resolves_to_de_and_greeting_is_german(self):
+        lang, greeting = self._lang_and_greeting("de")
+        self.assertEqual(lang, "de")
+        # cheap function-word check, same bar adapter.py's own detector uses
+        self.assertIn(" ich ", f" {greeting} ")
+        self.assertNotIn("welcome.", greeting, "a raw i18n key leaked into the greeting")
+
+    def test_en_profile_resolves_to_en_and_greeting_is_english(self):
+        lang, greeting = self._lang_and_greeting("en")
+        self.assertEqual(lang, "en")
+        self.assertIn(" I ", f" {greeting} ", "greeting should read like English prose")
+        self.assertNotIn("welcome.", greeting)
+
+    def test_zh_profile_greeting_is_actually_english_not_chinese_or_german(self):
+        """CONFIRMED FINDING (2026-07-12), not a hypothesis: this repo's i18n
+        bundle directory (operator/voice/i18n/) contains ONLY de.json and
+        en.json — there is no zh-Hans.json. i18n.t()'s fallback chain (exact
+        locale -> base locale -> English -> literal key, see i18n.py::t)
+        therefore falls all the way through to English for ANY profile
+        whose display_language isn't de/en, SILENTLY — no warning is logged
+        anywhere in this path. A user whose profile.display_language is
+        "zh" (this repo's own live default in this exact deployment) gets
+        an ENGLISH welcome greeting, not Chinese and not their actual
+        spoken/written language. This test pins that CURRENT behavior so a
+        future bundle addition or fallback-language change is a deliberate,
+        visible diff here — not a silent flip. It does not assert this is
+        correct; see the accompanying chat report for the recommendation
+        (fix the profile's display_language default, or make the i18n
+        fallback distinguish "explicitly English" from "no bundle for this
+        locale, defaulted")."""
+        lang, greeting = self._lang_and_greeting("zh")
+        self.assertEqual(lang, "zh-Hans", "i18n.resolve() itself still reports zh-Hans")
+        # ... but the ASSEMBLED TEXT is English prose, not Chinese, because
+        # no zh-Hans bundle exists for the `welcome.*` keys.
+        self.assertIn(" I ", f" {greeting} ")
+        self.assertNotIn("你", greeting, "no actual Chinese characters were produced")
+        self.assertNotIn(" ich ", f" {greeting} ".lower().replace("ich", " ich "),
+                          "not German either -- silently became English")
+
+    def test_unsupported_locale_greeting_still_fully_assembled_no_missing_parts(self):
+        """Even though test_zh_profile_... above shows the LANGUAGE choice is
+        wrong, the greeting must still be a complete, well-formed sentence
+        (no empty/missing template parts) -- a partial silent failure would
+        be worse than an all-English fallback."""
+        _, greeting = self._lang_and_greeting("zh")
+        self.assertGreater(len(greeting), 80, f"greeting looks truncated: {greeting!r}")
+        # every part join is a period/space-separated sentence; a dropped
+        # part would show up as a double space or an obviously short result
+        self.assertNotIn("  ", greeting, "a missing template part left a double space")
+
+
 if __name__ == "__main__":
     unittest.main()

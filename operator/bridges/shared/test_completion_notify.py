@@ -366,6 +366,75 @@ def test_mark_done_no_tag_unaffected() -> None:
         print("PASS: plain text with no <voice> tag passes through unchanged")
 
 
+def test_sequential_multi_task_voice_delivery_preserves_order_and_distinct_paths() -> None:
+    """Blind spot closed (2026-07-12): the "does voice-note delivery work
+    correctly across several sequential background tasks" question had zero
+    test coverage anywhere in this repo -- every existing want_voice test
+    above uses exactly one record. completion_notify.deliver_ready delivers
+    one outbox envelope PER ready record, each carrying its OWN voice_path
+    -- this test proves 3 concurrently-ready want_voice tasks each get
+    their own distinct, correctly-matched voice note, delivered in
+    registration order, with no cross-contamination (task A's audio never
+    ends up on task B's envelope) and the synthesizer called exactly once
+    per task with THAT task's own text."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+
+        tasks = [
+            ("t1-first-task", "backtest finished, Sharpe 1.8"),
+            ("t2-second-task", "deploy finished, 3 services updated"),
+            ("t3-third-task", "report generated, 12 pages"),
+        ]
+        for tid, text in tasks:
+            cn.register(task_id=tid, channel="discord", chat_id="1", sender="u1",
+                       tenant_id="acme", label=tid, want_voice=True)
+        # mark_done in the SAME order they were registered -- the realistic
+        # case of 3 /task instructions finishing one after another.
+        for tid, text in tasks:
+            assert cn.mark_done(tid, text=text, ok=True) is True
+
+        synth_calls: list[str] = []
+
+        def synth(text: str) -> str:
+            synth_calls.append(text)
+            # a distinct, DETERMINISTIC path per text so cross-contamination
+            # (task A's envelope carrying task B's audio) is detectable.
+            return f"/tmp/voice-{len(synth_calls)}.ogg"
+
+        n = cn.deliver_ready(outbox, synthesize_voice=synth)
+        assert n == 3, f"expected all 3 tasks delivered in one deliver_ready() call, got {n}"
+
+        envelopes = sorted(outbox.glob("cn_*.json"), key=lambda p: p.stat().st_mtime)
+        assert len(envelopes) == 3
+
+        delivered_texts = []
+        for env_path in envelopes:
+            env = json.loads(env_path.read_text())
+            assert "voice_path" in env, f"envelope missing voice_path: {env}"
+            delivered_texts.append(env["text"])
+
+        # Every original task's text made it to exactly one envelope --
+        # nothing dropped, nothing duplicated, nothing merged together.
+        for _tid, text in tasks:
+            matches = [t for t in delivered_texts if text in t]
+            assert len(matches) == 1, (
+                f"expected exactly 1 envelope containing {text!r}, found {len(matches)}: "
+                f"{delivered_texts!r}"
+            )
+
+        # The synthesizer saw each task's OWN text exactly once -- no task's
+        # text was fed to the synthesizer more than once, none skipped.
+        assert len(synth_calls) == 3
+        for _tid, text in tasks:
+            assert sum(1 for c in synth_calls if text in c) == 1, (
+                f"synthesizer call count for {text!r} was not exactly 1: {synth_calls!r}"
+            )
+
+        print("PASS: 3 sequential want_voice tasks each deliver their own distinct, "
+              "correctly-matched voice note -- no drops, no cross-contamination")
+
+
 def main() -> int:
     tests = [
         test_register_done_deliver_roundtrip,
@@ -385,6 +454,7 @@ def main() -> int:
         test_synthesis_failure_degrades_to_text_only_not_blocked,
         test_mark_done_strips_voice_tag_from_visible_text,
         test_mark_done_no_tag_unaffected,
+        test_sequential_multi_task_voice_delivery_preserves_order_and_distinct_paths,
     ]
     failed = 0
     for t in tests:

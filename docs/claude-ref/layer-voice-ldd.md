@@ -330,6 +330,45 @@ resolver unit tests, and two full `build_voice_summary` end-to-end
 reproductions — the exact bug scenario, and a regression guard that a genuine
 non-Latin-script profile default still gets pinned).
 
+**Voice test-coverage audit** (2026-07-12, same day, following a user request
+to verify "everything voice-related" including untested blind spots):
+concept was to enumerate every voice code path NOT exercised by the escape
+hatch above and either prove it correct or pin the current (possibly wrong)
+behavior with a real test rather than leave it unverified. Two gaps closed:
+1. **Welcome-greeting language resolution** — `_welcome_check_lang()` /
+   `_build_welcome_greeting()` (`core/console/corvin_console/routes/setup.py`)
+   had ZERO real coverage; every existing test mocked the language away.
+   `TestWelcomeCheckLanguageResolution` in `test_setup_welcome_check.py` calls
+   both functions unmocked for `de`/`en`/`zh` profiles. Finding: this repo's
+   i18n bundle dir (`operator/voice/i18n/`) ships only `de.json`/`en.json` —
+   a `zh` (or any other) `display_language` silently produces an ENGLISH
+   greeting via `i18n.t()`'s own fallback chain, not the profile's configured
+   language and not the user's actual language either. This code path can't
+   use the de/en escape hatch above (no per-turn text exists to detect — the
+   greeting is assembled fresh from templates). See troubleshooting.md #34.
+   Not fixed — it's a data/preference call (is `zh` even the intended
+   `display_language`?), pinned by test instead of silently patched.
+2. **Sequential multi-task voice delivery** — whether N concurrent
+   `want_voice=True` background-task completions each get delivered with
+   their OWN correct voice note (no drop, no cross-contamination) had no
+   test anywhere; every existing `completion_notify.py` want_voice test used
+   exactly one record.
+   `test_sequential_multi_task_voice_delivery_preserves_order_and_distinct_paths`
+   (`test_completion_notify.py`) registers 3 tasks, marks them done in order,
+   delivers once, and asserts each of the 3 envelopes carries its own
+   distinct `voice_path` matched to its own text. Passes as-is — this path
+   was already correct, just unverified.
+3. **Web-console single-audio "latest wins"** (`useVoicePlayback.ts`) was
+   investigated too: a new `playTts()` call always stops/replaces
+   whatever is currently playing. Confirmed INTENTIONAL (there is exactly
+   one shared `<audio>` element; the source comment documents the exact
+   race — an older, slower in-flight request resolving after a newer one
+   started — this guards against) and not the same thing as #2 above (that
+   scenario is Discord/completion_notify delivery, a separate pipeline that
+   sends one message + voice attachment per task, not this single-element
+   web player). No change made; existing `useVoicePlayback.test.tsx`
+   already covers the adjacent gesture-unlock/clobber regression.
+
 **Pre-strip fallback logic** (M3.1 resilience): `build_voice_summary` applies
 a two-stage pipeline: (1) `strip_for_tts.py --mode code-only` removes code
 blocks and raw HTML so `summarize.py` sees clean prose, (2) `summarize.py`
