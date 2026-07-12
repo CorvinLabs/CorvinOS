@@ -42,6 +42,9 @@ import time
 from pathlib import Path
 from typing import Callable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from voice_tag import extract_voice_override  # type: ignore  # noqa: E402
+
 # Delivered records are kept briefly for idempotency/forensics, then pruned.
 CN_DELIVERED_TTL = float(os.environ.get("CN_DELIVERED_TTL", str(24 * 3600)))
 # A pending record never marked done is pruned after this — a producer that
@@ -213,6 +216,7 @@ def register(
         "want_voice": bool(want_voice),
         "state": _STATE_PENDING,
         "text": None,
+        "voice_text": None,
         "ok": None,
         "created_at": time.time(),
         "ready_at": None,
@@ -264,6 +268,16 @@ def mark_done(task_id: str, *, text: str, ok: bool = True) -> bool:
     Idempotent: a second call updates the text but never resurrects an
     already-delivered record. Returns False if no such pending record exists
     (e.g. the producer never called register).
+
+    ``text`` may carry a `<voice>…</voice>` override (the same mechanism the
+    adapter's main turn handler strips before displaying/speaking a reply —
+    see voice_tag.py) — a producer like bg_task_worker.py passes through
+    whatever call_claude_streaming() returned verbatim, and that can include
+    an engine-fallback string with such a tag. Stripping it HERE, once, at
+    the single choke point every producer already calls, means no producer
+    needs to remember to do it itself: the visible text (``rec["text"]``)
+    never carries the raw tag, and the spoken override (``rec["voice_text"]``)
+    is available for deliver_ready's synthesize_voice callback.
     """
     path = _record_path(task_id)
     rec = _read(path)
@@ -271,8 +285,10 @@ def mark_done(task_id: str, *, text: str, ok: bool = True) -> bool:
         return False
     if rec.get("state") == _STATE_DELIVERED:
         return False
+    visible, spoken = extract_voice_override(str(text))
     rec["state"] = _STATE_READY
-    rec["text"] = str(text)
+    rec["text"] = visible
+    rec["voice_text"] = spoken
     rec["ok"] = bool(ok)
     rec["ready_at"] = time.time()
     _atomic_write(path, rec)
@@ -470,7 +486,9 @@ def deliver_ready(
             voice_path = None
             if synthesize_voice is not None and rec.get("want_voice"):
                 try:
-                    voice_path = synthesize_voice(rec.get("text") or "")
+                    voice_path = synthesize_voice(
+                        rec.get("voice_text") or rec.get("text") or ""
+                    )
                 except Exception as ve:  # noqa: BLE001 — never let a TTS failure
                     # block the (already-ready) text delivery this record is
                     # about to get; log and fall through voice-less.

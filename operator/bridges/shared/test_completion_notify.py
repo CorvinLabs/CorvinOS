@@ -313,6 +313,59 @@ def test_synthesis_failure_degrades_to_text_only_not_blocked() -> None:
         print("PASS: a raising synthesizer degrades to text-only, delivery still succeeds")
 
 
+def test_mark_done_strips_voice_tag_from_visible_text() -> None:
+    """Regression (2026-07-12 adversarial review, Angles B+C): bg_task_worker.py
+    passes call_claude_streaming()'s raw return value straight to mark_done()
+    without ever calling extract_voice_override() — so an engine-fallback
+    string carrying a `<voice>...</voice>` override (see voice_tag.py) used to
+    leak the raw tag into the visible chat text delivered to the user, worse
+    than the original bug this whole mechanism was built to fix. Fixed by
+    stripping the tag inside mark_done() itself — the one choke point every
+    producer already calls — instead of relying on each producer to remember."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        raw = (
+            "install the claude CLI / set CORVIN_OS_ENGINE.\n\n"
+            "<voice>I can't reach any AI engine right now.</voice>"
+        )
+        tid = cn.register(channel="discord", chat_id="1", sender="u1",
+                          tenant_id="acme", label="background task", want_voice=True)
+        assert cn.mark_done(tid, text=raw, ok=False) is True
+
+        spoken_calls: list[str] = []
+        n = cn.deliver_ready(
+            outbox, synthesize_voice=lambda t: spoken_calls.append(t) or "x.ogg",
+        )
+        assert n == 1
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        assert "<voice>" not in env["text"].lower(), (
+            f"raw tag leaked into visible chat text: {env['text']!r}"
+        )
+        assert "CORVIN_OS_ENGINE" in env["text"], "visible technical detail must survive"
+        assert spoken_calls == ["I can't reach any AI engine right now."], (
+            f"synthesizer must receive the extracted spoken override, not the raw "
+            f"tag-carrying text: {spoken_calls!r}"
+        )
+        print("PASS: mark_done() strips <voice> tag from visible text and routes "
+              "the spoken override to the synthesizer")
+
+
+def test_mark_done_no_tag_unaffected() -> None:
+    """Plain text with no `<voice>` block must be completely unaffected — the
+    fix must not change behavior for the overwhelming common case."""
+    with tempfile.TemporaryDirectory() as td:
+        home, outbox = Path(td) / "home", Path(td) / "outbox"
+        cn = _fresh(home)
+        tid = cn.register(channel="discord", chat_id="1", sender="u1", tenant_id="acme")
+        assert cn.mark_done(tid, text="all good, no voice tag here", ok=True) is True
+        n = cn.deliver_ready(outbox)
+        assert n == 1
+        env = json.loads(next(outbox.glob("cn_*.json")).read_text())
+        assert "all good, no voice tag here" in env["text"]
+        print("PASS: plain text with no <voice> tag passes through unchanged")
+
+
 def main() -> int:
     tests = [
         test_register_done_deliver_roundtrip,
@@ -330,6 +383,8 @@ def main() -> int:
         test_no_synthesizer_delivers_text_only_even_with_want_voice,
         test_want_voice_false_never_calls_synthesizer,
         test_synthesis_failure_degrades_to_text_only_not_blocked,
+        test_mark_done_strips_voice_tag_from_visible_text,
+        test_mark_done_no_tag_unaffected,
     ]
     failed = 0
     for t in tests:

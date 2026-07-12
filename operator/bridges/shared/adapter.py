@@ -4211,17 +4211,30 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         return out.stdout.strip()
     except subprocess.CalledProcessError as e:
         log(f"claude failed (rc={e.returncode}): {e.stderr[:500]}")
-        return f"Claude API call failed: {e.stderr[:200]}"
+        # e.stderr is arbitrary CLI output — never assume it's speakable
+        # (bug report 2026-07-12: raw technical text used to be read aloud
+        # verbatim by TTS instead of a natural sentence).
+        return with_voice_override(
+            f"Claude API call failed: {e.stderr[:200]}",
+            "The call to Claude Code failed.",
+        )
     except subprocess.TimeoutExpired:
         # Only reachable when CLAUDE_BRIDGE_TIMEOUT is set. Give a neutral hint
         # rather than an apology, since by default we never time out.
         log(f"claude exceeded CLAUDE_BRIDGE_TIMEOUT={run_timeout}s")
-        return ("The request is still running and exceeded the configured "
-                f"time limit ({int(run_timeout) if run_timeout else 0}s). "
-                "Try again in a moment – or raise CLAUDE_BRIDGE_TIMEOUT.")
+        return with_voice_override(
+            "The request is still running and exceeded the configured "
+            f"time limit ({int(run_timeout) if run_timeout else 0}s). "
+            "Try again in a moment – or raise CLAUDE_BRIDGE_TIMEOUT.",
+            "The request is still running and has exceeded the time limit. "
+            "Try again in a moment.",
+        )
     except FileNotFoundError:
         log("claude CLI not found in PATH")
-        return "[adapter] claude CLI nicht gefunden."
+        return with_voice_override(
+            "[adapter] claude CLI nicht gefunden.",
+            "I can't find the Claude Code command line. Please check your installation.",
+        )
     finally:
         if _sysprompt_tmp_path:
             try:
@@ -5059,14 +5072,18 @@ def _call_claude_streaming_via_engine(
             ):
                 return ""
             if timed_out:
-                return (
+                return with_voice_override(
                     "⏱️ Request cancelled — Claude did not deliver stream events for too long. "
-                    "(Session was reset; the next message starts fresh.)"
+                    "(Session was reset; the next message starts fresh.)",
+                    "The request was cancelled because Claude took too long to respond. "
+                    "Your session was reset, so the next message starts fresh.",
                 )
+            # error_text is arbitrary provider/transport text — never assume
+            # it's speakable (same bug class as the Hermes fallback above).
             error_msg = f"Claude API call failed: {error_text[:200]}"
             if "429" in error_text:
                 error_msg += "\n⚠️ Rate limit exceeded — please wait a moment and try again."
-            return error_msg
+            return with_voice_override(error_msg, "The call to Claude Code failed.")
 
         if rc != 0 and not final_text:
             stderr = (proc.stderr.read() if proc.stderr else "") or ""
@@ -5080,10 +5097,14 @@ def _call_claude_streaming_via_engine(
             ):
                 return ""
             if timed_out:
-                return (
-                    "⏱️ Request cancelled — Claude did not deliver stream events for too long."
+                return with_voice_override(
+                    "⏱️ Request cancelled — Claude did not deliver stream events for too long.",
+                    "The request was cancelled because Claude took too long to respond.",
                 )
-            return f"Claude API call failed (rc={rc})."
+            return with_voice_override(
+                f"Claude API call failed (rc={rc}).",
+                "The call to Claude Code failed.",
+            )
 
         try:
             _budget_account_turn(
@@ -5473,10 +5494,16 @@ def _call_codex_streaming_via_engine(
                      "error_class": "TimeoutError" if timed_out else "StreamError"},
         )
         if timed_out:
-            return "⏱️ Request cancelled — Codex did not deliver stream events for too long."
+            return with_voice_override(
+                "⏱️ Request cancelled — Codex did not deliver stream events for too long.",
+                "The request was cancelled because Codex took too long to respond.",
+            )
         if proc is not None and rc < 0 and abs(rc) in (signal.SIGTERM, signal.SIGKILL):
             return ""
-        return f"Codex CLI call failed: {error_text[:200]}"
+        return with_voice_override(
+            f"Codex CLI call failed: {error_text[:200]}",
+            "The call to Codex failed.",
+        )
 
     _audit_event("codex.turn_end",
                  channel=channel, chat_key=str(chat_key),
@@ -5765,12 +5792,16 @@ def _call_opencode_streaming_via_engine(
                      "error_class": "TimeoutError" if timed_out else "StreamError"},
         )
         if timed_out:
-            return (
-                "⏱️ Request cancelled — OpenCode did not deliver stream events for too long."
+            return with_voice_override(
+                "⏱️ Request cancelled — OpenCode did not deliver stream events for too long.",
+                "The request was cancelled because OpenCode took too long to respond.",
             )
         if rc < 0 and abs(rc) in (signal.SIGTERM, signal.SIGKILL):
             return ""
-        return f"OpenCode API call failed: {error_text[:200]}"
+        return with_voice_override(
+            f"OpenCode API call failed: {error_text[:200]}",
+            "The call to OpenCode failed.",
+        )
 
     # ADR-0067 M2.2 — success audit event
     _audit_event("opencode.turn_end",
@@ -6122,24 +6153,46 @@ def _call_hermes_streaming_via_engine(
                     _audit_event("hermes.ollama_unavailable",
                                  channel=channel, chat_key=str(chat_key),
                                  details={"engine_id": "hermes", "error_class": "Unreachable"})
-                    return (
+                    # Bug report 2026-07-12: this string used to be spoken
+                    # VERBATIM (backticks, flags, env-var names and all) —
+                    # a naive TTS reading of CLI syntax sounds like "reading
+                    # out the command line" instead of a sentence. The
+                    # visible text stays technical/actionable (an operator
+                    # debugging this wants the exact commands); the voice-tag
+                    # override below gives TTS a natural spoken alternative
+                    # instead — extract_voice_override() strips that tag from
+                    # what's shown and uses its content as the spoken text
+                    # (same mechanism the model itself uses to author a
+                    # distinct spoken reply).
+                    return with_voice_override(
                         "⚠ No engine reachable: the claude CLI is not installed and "
                         "Hermes/Ollama did not respond (engine spawn failed — no stream "
                         "events). Start `ollama serve` and pull a model, or install the "
-                        "claude CLI / set CORVIN_OS_ENGINE."
+                        "claude CLI / set CORVIN_OS_ENGINE.",
+                        "I can't reach any AI engine right now — neither Claude Code "
+                        "nor the local Hermes model are responding. Please check your "
+                        "engine settings.",
                     )
-                return (
-                    "⏱️ Request cancelled — Hermes/Ollama did not deliver stream events for too long."
+                return with_voice_override(
+                    "⏱️ Request cancelled — Hermes/Ollama did not deliver stream events for too long.",
+                    "The request was cancelled because Hermes took too long to respond.",
                 )
             if "ollama" in error_text.lower() or "unavailable" in error_text.lower():
                 _audit_event("hermes.ollama_unavailable",
                              channel=channel, chat_key=str(chat_key),
                              details={"engine_id": "hermes", "error_class": "URLError"})
-                return (
+                return with_voice_override(
                     "Hermes/Ollama is unreachable. "
-                    "Please start `ollama serve` or check CORVIN_OLLAMA_BASE_URL."
+                    "Please start `ollama serve` or check CORVIN_OLLAMA_BASE_URL.",
+                    "Hermes is currently unreachable. Please check whether Ollama is running.",
                 )
-            return f"Hermes API call failed: {error_text[:200]}"
+            # error_text is arbitrary provider/transport text (stack fragments,
+            # URLs, raw JSON) — never assume it's speakable. A generic natural
+            # sentence for TTS; the technical detail stays in the visible text.
+            return with_voice_override(
+                f"Hermes API call failed: {error_text[:200]}",
+                "The call to the Hermes model failed.",
+            )
 
         # ADR-0067 M2.2 — success audit event
         _audit_event("hermes.turn_end",
@@ -6779,7 +6832,10 @@ def call_claude_streaming(
         # ADR-0002 Phase 2.5 — legacy direct-spawn path deleted (14-day soak complete).
         # Engine layer is now the sole code path; CORVIN_USE_ENGINE_LAYER env var removed.
         if _ClaudeCodeEngine is None:
-            return "[adapter] ClaudeCodeEngine not available — check claude CLI installation."
+            return with_voice_override(
+                "[adapter] ClaudeCodeEngine not available — check claude CLI installation.",
+                "I can't find the Claude Code command line. Please check your installation.",
+            )
         return _call_claude_streaming_via_engine(
             prompt, channel, chat_key, mode, add_dir, profile,
             on_status, status_mode, _retry_count,
@@ -6789,27 +6845,10 @@ def call_claude_streaming(
     finally:
         _mark_turn_done(chat_key)
 
-_VOICE_TAG_RE = re.compile(r"<voice>\s*(.+?)\s*</voice>", re.DOTALL | re.IGNORECASE)
-
-
-def extract_voice_override(text: str) -> tuple[str, str | None]:
-    """Pull the optional `<voice>…</voice>` block out of an assistant reply.
-
-    Returns (chat_text_without_tag, voice_text_or_None). When the assistant
-    authored a custom voice version, summarize.py is skipped entirely — the
-    block is used verbatim. Whitespace artifacts from the cut-out tag are
-    cleaned up so the chat-text doesn't end up with weird gaps.
-    """
-    if "<voice>" not in text.lower() or "</voice>" not in text.lower():
-        return text, None
-    m = _VOICE_TAG_RE.search(text)
-    if not m:
-        return text, None
-    voice_text = m.group(1).strip()
-    stripped = _VOICE_TAG_RE.sub("", text, count=1)
-    stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
-    return stripped, voice_text or None
-
+# extract_voice_override / with_voice_override moved to voice_tag.py so
+# completion_notify.py can use the same mechanism without importing all of
+# adapter.py (which would be circular).
+from voice_tag import extract_voice_override, with_voice_override  # type: ignore  # noqa: E402
 
 _LERN_ZUGABE_MARKERS = ("LERN-ZUGABE", "LEARNING ANNEX")
 # Include both the standalone (METAPHER-ZUGABE / METAPHOR APPENDIX) and the
