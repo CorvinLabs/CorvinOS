@@ -157,7 +157,10 @@ def install_tool(
     tid = rec.tenant_id
     try:
         entry = _ins.install(body.source, tid, allow_unpin=body.allow_unpin)
-    except (ValueError, RuntimeError, ComplianceError) as exc:
+    except (ValueError, RuntimeError, ComplianceError, OSError) as exc:
+        # OSError/FileNotFoundError: `_ins.install` may shell out to npm/git/pip,
+        # which can be absent under a fresh-install stripped systemd PATH — turn
+        # that into a clean 400 instead of an unhandled 500.
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
             detail="internal error",
