@@ -6,6 +6,66 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.31] — 2026-07-12 — Adversarial review: fresh-install + voice-welcome correctness
+
+10-angle adversarial review of the last 3 days of commits, prioritized on the
+fresh-install and spoken first-boot welcome experience. 17 confirmed findings, fixed:
+
+- **Welcome-message onboarding could silently lose the spoken greeting.** The
+  first-boot self-check ran 4 independent checks (house-rules probe, Hermes
+  warm-up, STT/TTS round-trip, engine test) sequentially — worst case 105s+ —
+  against the frontend's 60s poll budget, so a cold/default install fell back
+  to the generic non-voice greeting even though the check finished correctly
+  moments later. The checks now run concurrently (bounded by the single
+  slowest one), and the frontend poll budget was raised to 100s for margin.
+  Also fixed in the same mechanism: the check state was a single process-wide
+  dict (cross-tenant clobbering/leak), and every non-hermes engine (e.g.
+  opencode) was collapsed to "claude_code", mislabeling a healthy install as
+  broken. Fix in `core/console/corvin_console/routes/setup.py`.
+- **STT provider-chain timeout could multiply the caller's wait.** An explicit
+  timeout budget was reissued unchanged to each provider after a non-terminal
+  timeout instead of being decremented — up to ~180s+ across the default
+  2-provider chain instead of the intended ceiling. Fix in
+  `operator/voice/scripts/stt/resolver.py`.
+- **Non-speech-marker stripping matched mismatched brackets** (e.g.
+  `(BLANK_AUDIO]`) and could strip legitimate dictated bracketed words; model
+  self-heal now grants one bounded redownload attempt for a full-size-but-
+  corrupt model file too (was a permanent, unrecoverable failure), still
+  capped by the existing per-window heal budget. Fix in
+  `operator/voice/scripts/stt/local_whisper.py`.
+- **Installer ignored `CORVIN_STT_LOCAL_MODEL`** at install time (install-time
+  prefetch and first-use load could target different model files); the
+  offline RAM-detection fallback now also clamps to a cgroup memory limit.
+  Fix in `corvinOS/installer/steps/stt.py`.
+- **WA-22 key-resolution follow-through:** `say.py`'s quote-stripping now
+  matches `provider_keys.py` byte-for-byte (a stray trailing quote character
+  was cleaned differently by the two "must stay identical" implementations);
+  `adapter.py` and `voice_doctor.py` now delegate to the canonical
+  `provider_keys.resolve_key()` instead of two more hand-rolled, untested
+  copies of the same candidate/precedence logic.
+- **Voice summarizer's verbatim short-circuit** (added 2026-07-12) now only
+  fires when no persona/audience is configured — it was silently skipping the
+  LLM styling pass for users who explicitly opted into one on every short
+  reply. It also now re-checks length after prepending the task-prefix
+  (could exceed the caller's spoken-length budget with no truncation).
+  Fix in `operator/voice/scripts/summarize.py`.
+- **Console TTS playback race:** overlapping `playTts()` calls could let an
+  older, slower request's response resolve after a newer one already started
+  playing, clobbering it and leaking the newer blob's object URL. Fix in
+  `useVoicePlayback.ts`.
+- Windows Stufe-2 (always-on) service install now prints an operator-visible
+  warning that the boot-time PyPI auto-update check is not yet wired for that
+  platform (was silently accepted-and-discarded).
+- `INSTALLATION.md`'s RAM/model table updated for the 3-tier ladder shipped
+  in 0.10.25 (was still describing the old 2-tier split).
+
+Verified on a genuinely fresh, isolated install (`install.sh --editable . --no-hermes`
+in a clean `$HOME`, zero ambient env/API keys): zero errors end to end, and the
+fixed welcome-check produces a real, valid Opus/OGG greeting audio file within
+17s — comfortably inside the new poll budget. 244 tests green (14 new regression
+tests added); one pre-existing, unrelated failure in `test_corvin_erasure.py`
+reproduces identically on a clean checkout.
+
 ## [0.10.30] — 2026-07-12 — Forge sandbox on uv installs + engine-free workflows (fresh-install robustness)
 
 Two fresh-install robustness fixes surfaced by running the CI suite the way a
