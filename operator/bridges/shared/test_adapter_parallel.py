@@ -41,11 +41,18 @@ ITEMS = [
     ("05_discordB_second", "discord",  "chatB"),
 ]
 
-# 1.0s (not 0.5s): a larger per-item delay raises the signal/jitter ratio so
-# the fixed overhead (subprocess startup, poll cadence, thread scheduling) is a
-# small fraction of elapsed. With 0.5s the overhead dominated and the test
-# flaked under machine load — the fix is a better ratio, not a looser margin.
-FAKE_DELAY    = 1.0
+# 2.0s (was 0.5s → 1.0s → 2.0s): a larger per-item delay raises the signal/
+# jitter ratio so the fixed overhead (subprocess startup, poll cadence, thread
+# scheduling) is a small fraction of elapsed. The parallelism margin that must
+# absorb that overhead is `target - parallel_base = 0.9·N·D - 2·D = D·2.5`, so
+# it scales LINEARLY with D: at D=1.0s the margin was only 2.5s and the test
+# still flaked on heavily-loaded CI runners (green one run, red the next commit
+# that never touched it). D=2.0s gives a 5.0s margin. This can never false-pass
+# a sequential run: sequential wall-clock has a HARD floor of N·D=10.0s (each of
+# the 5 items sleeps D back-to-back), so any elapsed below the 0.9·floor=9.0s
+# target is dispositive proof of parallelism regardless of how much overhead
+# inflated it. Widening the margin is therefore sound, not a looser assertion.
+FAKE_DELAY    = 2.0
 MAX_PARALLEL  = 4
 POLL_INTERVAL = 0.1
 SEQ_FLOOR     = len(ITEMS) * FAKE_DELAY        # 5.0 s
@@ -135,10 +142,11 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             proc.kill()
 
-    # 90% headroom — best case (parallel) is 2.0s vs 5.0s sequential floor, so
-    # a target of 4.5s leaves margin for subprocess startup + poll latency
-    # + thread scheduling jitter when the full test suite runs concurrently,
-    # while still firmly proving parallelism occurred (4.5s << 5.0s sequential).
+    # 90% headroom — best case (parallel) is 4.0s (2 batches × 2.0s) vs the
+    # 10.0s sequential floor, so a target of 9.0s leaves a 5.0s margin for
+    # subprocess startup + poll latency + thread scheduling jitter when the full
+    # test suite runs concurrently, while still firmly proving parallelism
+    # occurred (9.0s << 10.0s sequential hard floor).
     target = SEQ_FLOOR * 0.9
     print(f"\n[result] {len(processed_files)}/{len(ITEMS)} processed in {elapsed:.2f}s "
           f"({len(files)} outbox files; seq floor {SEQ_FLOOR:.2f}s, "
@@ -150,8 +158,8 @@ def main() -> int:
         return 1
 
     # --- 1. Wall-clock parallelism --------------------------------------
-    # 5 items, 4 workers, 1.0s each. Two chats hold 2 items, one chat 1.
-    # Best case: 2 batches = 2.0s. Allow up to 90% of seq floor (4.5s)
+    # 5 items, 4 workers, 2.0s each. Two chats hold 2 items, one chat 1.
+    # Best case: 2 batches = 4.0s. Allow up to 90% of seq floor (9.0s)
     # to absorb subprocess startup + poll latency + thread scheduling
     # + full-suite concurrent load jitter.
     if elapsed >= target:
