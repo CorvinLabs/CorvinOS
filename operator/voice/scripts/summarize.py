@@ -1451,7 +1451,12 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
     # Only genuinely-too-long replies pay for a real LLM summary below. Explicit
     # backend pins (cli/hermes, used by tests) still exercise the LLM path.
     if _backend == "auto" and len(text.strip()) <= max_chars:
-        body = naive_truncate(text, target)
+        # Text already fits the budget → return it TRULY VERBATIM. NOT via
+        # naive_truncate: that runs per-line first-clause compression which drops
+        # the description sentence of each item in a short multi-sentence list
+        # ("choices are sacred" violation, caught in review). Verbatim is exact
+        # AND in-budget (len <= max_chars), so nothing needs shortening.
+        body = text.strip()
         return _task_prefix(task, lang) + body if task.strip() else body
 
     # Backend 1: CLI — preferred for users with Claude Max who don't want
