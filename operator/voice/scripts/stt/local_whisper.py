@@ -48,6 +48,7 @@ on every platform.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -59,6 +60,26 @@ from .base import (
     STTTranscriptionFailed,
     TranscriptResult,
 )
+
+
+# whisper.cpp emits bracketed NON-SPEECH markers for silence/noise segments
+# (``[BLANK_AUDIO]``, ``[ Silence ]``, ``[MUSIC]`` …). Left in, an empty/near-empty
+# voice note surfaces to the model — and the user — as literal "[BLANK_AUDIO]"
+# (the reported "[BLANK_AUDIO] HELLO"). Strip ONLY this known, closed set of
+# artifact tokens (never free-form bracketed text the user actually spoke).
+_NONSPEECH_MARKER_RE = re.compile(
+    r"[\[(]\s*(?:blank[\s_]?audio|silence|no[\s_]?speech|music|sound|noise|"
+    r"inaudible|unintelligible|applause|laughter|pause|beep|click|typing|"
+    r"footsteps|coughing|breathing)\s*[\])]",
+    re.IGNORECASE,
+)
+
+
+def _strip_nonspeech_markers(text: str) -> str:
+    """Remove whisper.cpp non-speech artifact tokens, collapse the whitespace
+    they leave behind. Faithful: only the closed marker set above is touched."""
+    cleaned = _NONSPEECH_MARKER_RE.sub(" ", text)
+    return re.sub(r"[ \t]{2,}", " ", cleaned).strip()
 
 
 # Default local STT model, chosen for TRANSCRIPTION QUALITY on the fresh,
@@ -990,7 +1011,7 @@ class LocalWhisperProvider:
             if aborted:
                 raise STTTimeout(f"local whisper exceeded budget {remaining}s")
 
-            text = "".join(seg.text for seg in segments).strip()
+            text = _strip_nonspeech_markers("".join(seg.text for seg in segments))
 
             detected_lang = lang if (lang and lang != "auto") else None
             if detected_lang is None:
@@ -1051,7 +1072,7 @@ class LocalWhisperProvider:
                 f"local whisper (faster-whisper) failed: {exc}"
             ) from exc
 
-        text = "".join(pieces).strip()
+        text = _strip_nonspeech_markers("".join(pieces))
         detected_lang = getattr(info, "language", None) or lang or None
         duration = getattr(info, "duration", None)
         return TranscriptResult(
