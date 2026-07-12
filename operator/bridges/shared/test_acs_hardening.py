@@ -66,7 +66,7 @@ def _run_worker_capture(monkeypatch, engine_id="claude_code"):
             captured["env"] = kwargs.get("env")
             self._pid = 4242
 
-        def communicate(self, timeout=None):
+        def communicate(self, input=None, timeout=None):
             return ("", "")
 
         def poll(self):
@@ -153,7 +153,7 @@ def test_h2_strip_happens_before_provider_redirect(monkeypatch):
         def __init__(self, *a, **k):
             pass
 
-        def communicate(self, timeout=None):
+        def communicate(self, input=None, timeout=None):
             return ("", "")
 
         def poll(self):

@@ -128,6 +128,81 @@ def test_call_manager_sync_still_works_without_a_proc_holder():
 
 
 # ---------------------------------------------------------------------------
+# Windows fresh-install fix — adversarial review MEDIUM finding
+# ---------------------------------------------------------------------------
+# _call_worker_sync's system prompt (unbounded dynamic-tools list) and
+# prompt (unbounded subtask instructions + up to 3000 chars of context
+# state) both used to go inline in argv — the same cmd.exe ~8191-char
+# command-line-length bug already fixed for chat_runtime.py / claude_code.py
+# / codex_cli.py / opencode_cli.py / the legacy call_claude() fallback, just
+# lower-probability here (usually small, but can grow large under legitimate
+# multi-tool ACS runs). Fixed the same way: system via
+# --append-system-prompt-file, prompt via stdin.
+
+def _fake_claude_reads_stdin(tmp_path) -> str:
+    """A real (not mocked) tiny script standing in for `claude`: echoes back
+    a JSON envelope shaped like --output-format json, with the ACTUAL stdin
+    content embedded — proves delivery end-to-end, not just "some process
+    ran". Real subprocess, matching this file's existing echo-based tests."""
+    import json as _json
+    import stat
+    script = tmp_path / "fake_claude.py"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, json\n"
+        "stdin_text = sys.stdin.read()\n"
+        "print(json.dumps({'result': 'ECHO:' + stdin_text}))\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return str(script)
+
+
+def test_call_worker_sync_prompt_delivered_via_stdin(tmp_path):
+    fake_bin = _fake_claude_reads_stdin(tmp_path)
+    with (
+        patch.object(_rt, "_resolve_worker_engine", return_value=("claude_code", "test-model")),
+        patch.object(_rt, "_assert_engine_licensed", return_value=None),
+        patch.object(_rt, "_claude_binary", return_value=fake_bin),
+        patch.object(_rt, "_apply_provider_redirect", return_value=None),
+        patch.object(_rt.shutil, "which", return_value=fake_bin),
+    ):
+        out, tok, attestation = _rt._call_worker_sync(
+            "UNIQUE-WORKER-PROMPT-9182", "system", "test-model",
+            {"timeout_seconds": 30, "max_worker_turns": 20},
+        )
+    assert "UNIQUE-WORKER-PROMPT-9182" in out
+
+
+def test_call_worker_sync_system_prompt_file_cleaned_up_after_call(monkeypatch, tmp_path):
+    """The temp file _write_system_prompt_tmp_file creates must not survive
+    the call — verified by capturing the path via the real helper, then
+    checking it's gone once _call_worker_sync returns."""
+    captured_path = {}
+    real_writer = _rt._write_system_prompt_tmp_file
+
+    def _spy(system, tenant_id):
+        path = real_writer(system, tenant_id)
+        captured_path["path"] = path
+        return path
+
+    monkeypatch.setattr(_rt, "_write_system_prompt_tmp_file", _spy)
+    fake_bin = _fake_claude_reads_stdin(tmp_path)
+    with (
+        patch.object(_rt, "_resolve_worker_engine", return_value=("claude_code", "test-model")),
+        patch.object(_rt, "_assert_engine_licensed", return_value=None),
+        patch.object(_rt, "_claude_binary", return_value=fake_bin),
+        patch.object(_rt, "_apply_provider_redirect", return_value=None),
+        patch.object(_rt.shutil, "which", return_value=fake_bin),
+    ):
+        _rt._call_worker_sync(
+            "p", "s" * 500, "test-model",
+            {"timeout_seconds": 30, "max_worker_turns": 20},
+        )
+    assert captured_path.get("path") is not None
+    assert not Path(captured_path["path"]).exists()
+
+
+# ---------------------------------------------------------------------------
 # BudgetEnvelope tests
 # ---------------------------------------------------------------------------
 

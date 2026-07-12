@@ -149,10 +149,18 @@ class SystemPromptInjector:
         """
         try:
             if engine_id == "claude_code":
-                # Check for --append-system-prompt flag in command/argv
+                # Check for --append-system-prompt (inline) OR
+                # --append-system-prompt-file (the Windows fresh-install
+                # fix's file-based form — see _inject_claude_code's
+                # docstring). Missing the -file form here would make this
+                # guard blind to an already-injected prompt and silently
+                # double-inject on the next spawn.
                 if isinstance(transport, dict):
                     cmd = transport.get("command", [])
-                    return "--append-system-prompt" in cmd
+                    return (
+                        "--append-system-prompt" in cmd
+                        or "--append-system-prompt-file" in cmd
+                    )
                 return False
 
             elif engine_id == "hermes":
@@ -182,7 +190,7 @@ class SystemPromptInjector:
 
     def _inject_claude_code(self, system_prompt: str, transport: Dict) -> Dict:
         """
-        Inject into Claude Code transport: add --append-system-prompt flag.
+        Inject into Claude Code transport: add --append-system-prompt-file.
 
         Transport format (dict with "argv" or "command" key):
             {"command": ["claude", "-p", ...], "system_prompt": None}
@@ -191,6 +199,25 @@ class SystemPromptInjector:
 
         Raises:
             ValueError: If system_prompt too large or invalid
+
+        Windows fresh-install fix: this used to insert the prompt TEXT
+        inline via --append-system-prompt. On Windows `claude` resolves to
+        an npm .cmd shim, launched through a single `cmd /c "<line>"`
+        string — cmd.exe's own internal command-line buffer caps at
+        ~8191 characters, well under the 8 KB this method already allowed
+        through its own size gate (a `len()==8192` prompt plus the rest of
+        argv reliably exceeds it). Writes the prompt to a temp file and
+        uses --append-system-prompt-file (a documented alias — `claude
+        --help` lists "--append-system-prompt[-file]") instead — the exact
+        pattern already applied to every real spawn site in this codebase
+        (chat_runtime.py, agents/claude_code.py, agents/codex_cli.py,
+        agents/opencode_cli.py, adapter.py's legacy call_claude()
+        fallback, acs_runtime.py's manager/worker spawns). A temp-file
+        write failure falls back to the historical inline form rather than
+        raising — this module has no subprocess lifecycle of its own to
+        hook a guaranteed cleanup into, so the caller (once/if this module
+        is ever wired into a live spawn path) owns cleaning up the
+        returned path the same way acs_runtime.py's callers do.
         """
         if not isinstance(transport, dict):
             raise ValueError("Claude Code transport must be a dict")
@@ -202,14 +229,41 @@ class SystemPromptInjector:
         cmd = result.get("command", [])
 
         if isinstance(cmd, list):
+            flag_pair = ["--append-system-prompt", system_prompt]
+            tmp_path = self._write_system_prompt_tmp_file(system_prompt)
+            if tmp_path:
+                flag_pair = ["--append-system-prompt-file", tmp_path]
             # Insert flag before positional args
             result["command"] = (
                 cmd[:1] +  # Keep first element (program name)
-                ["--append-system-prompt", system_prompt] +
+                flag_pair +
                 cmd[1:]  # Rest of args
             )
 
         return result
+
+    def _write_system_prompt_tmp_file(self, system_prompt: str) -> Optional[str]:
+        """Best-effort temp-file write for the Windows fresh-install fix.
+        Returns None on any failure so the caller falls back to the
+        historical inline argument instead of raising over a temp-dir
+        permission issue."""
+        try:
+            import os
+            import tempfile
+            from pathlib import Path
+
+            home_env = os.environ.get("CORVIN_HOME")
+            home = Path(home_env).expanduser() if home_env else (Path.home() / ".corvin")
+            tmp_dir = home / "tenants" / self.tenant_id / "global" / "acs_tmp"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            fd, path = tempfile.mkstemp(
+                suffix=".txt", prefix=".corvin-sysprompt-", dir=str(tmp_dir),
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(system_prompt)
+            return path
+        except OSError:
+            return None
 
     def _inject_hermes(self, system_prompt: str, transport: Dict) -> Dict:
         """

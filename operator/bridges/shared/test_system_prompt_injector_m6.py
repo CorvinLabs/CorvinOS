@@ -8,6 +8,8 @@ Tier-3: E2E with real engine spawns (verify prompt applied)
 Test Standard (from M1–M4): All new features must pass Tier-1/2/3.
 """
 
+from pathlib import Path
+
 import pytest
 from engines.system_prompt_injector import (
     SystemPromptInjector,
@@ -110,12 +112,24 @@ class TestInjectSystemPromptTier2:
         assert result == transport
 
     def test_inject_claude_code_flag_format(self):
-        """Claude Code: flag inserted"""
+        """Claude Code: file-based flag inserted (Windows fresh-install
+        fix — see _inject_claude_code's docstring: an inline
+        --append-system-prompt blows past cmd.exe's ~8191-char buffer once
+        routed through the .cmd-shim spawn path on Windows)."""
         injector = SystemPromptInjector()
         transport = {"command": ["claude", "-p"]}
         result = injector.inject_system_prompt("You are helpful", transport, "claude_code")
-        assert "--append-system-prompt" in result["command"]
-        assert "You are helpful" in result["command"]
+        assert "--append-system-prompt-file" in result["command"]
+        assert "--append-system-prompt" not in [
+            a for a in result["command"] if a != "--append-system-prompt-file"
+        ]
+        idx = result["command"].index("--append-system-prompt-file")
+        path = Path(result["command"][idx + 1])
+        try:
+            assert path.is_absolute()
+            assert path.read_text(encoding="utf-8") == "You are helpful"
+        finally:
+            path.unlink(missing_ok=True)
 
     def test_inject_hermes_message_role_format(self):
         """Hermes: system role prepended"""
@@ -248,7 +262,9 @@ class TestSystemPromptInjectionE2E:
         Tier-3: Claude Code system prompt injection.
         Given: Claude Code transport with command, system_prompt="You are a Python expert"
         When: inject_system_prompt() called
-        Then: --append-system-prompt flag inserted correctly
+        Then: --append-system-prompt-file flag inserted correctly (Windows
+        fresh-install fix — an inline --append-system-prompt blows past
+        cmd.exe's ~8191-char buffer on the real .cmd-shim spawn path).
         """
         injector = SystemPromptInjector()
         transport = {"command": ["claude", "-p", "--model", "opus"]}
@@ -256,10 +272,14 @@ class TestSystemPromptInjectionE2E:
 
         result = injector.inject_system_prompt(system_prompt, transport, "claude_code")
 
-        # Verify flag inserted
-        assert "--append-system-prompt" in result["command"]
-        flag_idx = result["command"].index("--append-system-prompt")
-        assert result["command"][flag_idx + 1] == system_prompt
+        # Verify file-based flag inserted
+        assert "--append-system-prompt-file" in result["command"]
+        flag_idx = result["command"].index("--append-system-prompt-file")
+        path = Path(result["command"][flag_idx + 1])
+        try:
+            assert path.read_text(encoding="utf-8") == system_prompt
+        finally:
+            path.unlink(missing_ok=True)
         # Original args preserved
         assert "claude" in result["command"]
         assert "-p" in result["command"]
@@ -365,6 +385,16 @@ class TestSystemPromptInjectionE2E:
             result = injector.inject_system_prompt("new prompt", transport, engine_id)
             # Should return unchanged
             assert result == transport, f"Idempotency failed for {engine_id}"
+
+    def test_claude_code_idempotent_with_file_based_form(self):
+        """The detection guard must also recognise an already-injected
+        --append-system-prompt-file (the Windows fresh-install fix's own
+        output shape), not just the legacy inline form — otherwise a
+        second inject_system_prompt() call would double-inject."""
+        injector = SystemPromptInjector()
+        transport = {"command": ["claude", "--append-system-prompt-file", "/tmp/old.txt"]}
+        result = injector.inject_system_prompt("new prompt", transport, "claude_code")
+        assert result == transport
 
     def test_e2e_capability_matrix_frozen(self):
         """

@@ -1220,6 +1220,25 @@ def _apply_provider_redirect(env: dict, tenant_id: str) -> None:
         return
 
 
+def _write_system_prompt_tmp_file(system: str, tenant_id: str) -> str | None:
+    """Write a system-prompt string to a temp file for
+    --append-system-prompt-file, shared by the manager and worker spawn
+    paths (Windows fresh-install fix — see _call_manager_sync's docstring
+    for the full rationale). Returns None on any I/O failure so the caller
+    can fall back to the historical inline --append-system-prompt argument
+    rather than crashing the spawn over a temp-dir permission issue."""
+    try:
+        import tempfile as _tmp
+        home = _corvin_home() / "tenants" / tenant_id / "global" / "acs_tmp"
+        home.mkdir(parents=True, exist_ok=True)
+        fd, path = _tmp.mkstemp(suffix=".txt", prefix=".corvin-sysprompt-", dir=str(home))
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(system)
+        return path
+    except OSError:
+        return None
+
+
 def _call_manager_sync(
     prompt: str, model: str, tenant_id: str = "_default",
     proc_holder: "_WorkerProcessHolder | None" = None,
@@ -1254,14 +1273,31 @@ def _call_manager_sync(
     env["VOICE_HOOK_RECURSION"] = "1"
     _strip_worker_secrets(env)  # full secret/PII strip (round-2)
     _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
+    # Windows fresh-install fix (adversarial-review finding, same bug class
+    # already fixed in chat_runtime.py / agents/claude_code.py / codex_cli.py
+    # / opencode_cli.py / the legacy call_claude() fallback): `_MANAGER_SYSTEM`
+    # is a small fixed constant today, but passing it inline via
+    # --append-system-prompt is still the pattern that breaks the moment ANY
+    # argv element grows past cmd.exe's ~8191-char internal buffer once
+    # routed through windows_shim_command's `cmd /c "<line>"` for the .cmd
+    # shim — fixed here for consistency/defense-in-depth, not because this
+    # specific constant is large today. `prompt` moves to stdin too (verified
+    # live: plain `claude -p` with no positional reads stdin, same as `-p`
+    # combined with --output-format json) — proc.communicate(input=...)
+    # writes it and closes stdin atomically, no separate write/close step
+    # needed since this function doesn't stream (single blocking call).
+    system_tmp_path = _write_system_prompt_tmp_file(_MANAGER_SYSTEM, tenant_id)
     _argv = [
-        binary, "-p", prompt,
-        "--append-system-prompt", _MANAGER_SYSTEM,
+        binary, "-p",
         "--model", model,
         "--disallowedTools", "*",
         "--max-turns", "1",
         "--output-format", "json",  # extract text from envelope so parse never sees CLI wrapper
     ]
+    if system_tmp_path:
+        _argv += ["--append-system-prompt-file", system_tmp_path]
+    else:
+        _argv += ["--append-system-prompt", _MANAGER_SYSTEM]
     # Windows: npm ships `claude` as a .cmd shim — CreateProcess can't launch
     # it directly (WinError 193). windows_shim_command returns a cmd.exe-SAFE
     # command string (a bare ["cmd","/c",*_argv] list lets a user-prompt
@@ -1271,20 +1307,27 @@ def _call_manager_sync(
     _argv = windows_shim_command(_argv)
     proc = subprocess.Popen(
         _argv,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", env=env,
-        stdin=subprocess.DEVNULL,
     )
     if proc_holder is not None:
         with proc_holder.lock:
             proc_holder.popen = proc
     try:
-        stdout, _stderr = proc.communicate(timeout=_MANAGER_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        # Mirror subprocess.run()'s own timeout handling: kill, drain, re-raise.
-        proc.kill()
-        proc.communicate()
-        raise
+        try:
+            stdout, _stderr = proc.communicate(input=prompt, timeout=_MANAGER_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            # Mirror subprocess.run()'s own timeout handling: kill, drain, re-raise.
+            proc.kill()
+            proc.communicate()
+            raise
+    finally:
+        if system_tmp_path:
+            try:
+                os.unlink(system_tmp_path)
+            except OSError:
+                pass
     raw = stdout.strip()
     output = raw  # fallback: pass through if not a JSON envelope
     if raw.startswith("{"):
@@ -1418,17 +1461,35 @@ def _call_worker_sync(
     # status="partial", confidence=0.0, causing every delegated web-console
     # turn to fail with "Delegation fehlgeschlagen: unknown error".
     worker_max_turns = str(budget.get("max_worker_turns", 20))
+    # Windows fresh-install fix (adversarial-review finding — this was the
+    # actually-flagged MEDIUM risk, unlike the manager spawn's small fixed
+    # constant): `system` includes an UNBOUNDED dynamic-tools list
+    # (_build_worker_system) and `prompt` includes an unbounded subtask
+    # instruction plus up to 3000 chars of context state
+    # (_build_worker_prompt) — a verbose subtask + several forged tools can
+    # realistically approach/exceed cmd.exe's ~8191-char internal buffer
+    # once routed through windows_shim_command for the .cmd shim. Both move
+    # off argv: `system` via --append-system-prompt-file, `prompt` via
+    # stdin (verified live: plain `claude -p` with no positional argument
+    # reads the prompt from stdin, same convention codex_cli.py's fix
+    # relies on) — proc.communicate(input=...) writes + closes stdin
+    # atomically, no separate write/close step needed since this function
+    # doesn't stream.
+    system_tmp_path = _write_system_prompt_tmp_file(system, tenant_id)
     # subprocess.Popen (not .run()) so proc_holder can expose a live handle:
     # if the awaiting asyncio Task gets cancelled while this call is blocked
     # in the executor thread, the caller kills THIS exact process via
     # proc_holder.kill() instead of leaving it running to completion.
     _argv = [
-        binary, "-p", prompt,
-        "--append-system-prompt", system,
+        binary, "-p",
         "--model", model,
         "--max-turns", worker_max_turns,
         "--output-format", "json",
     ]
+    if system_tmp_path:
+        _argv += ["--append-system-prompt-file", system_tmp_path]
+    else:
+        _argv += ["--append-system-prompt", system]
     # Windows .cmd-shim: cmd.exe-safe command string + pinned UTF-8 decode —
     # same rationale as the manager spawn above (WinError 193 / cp1252 mojibake
     # / metachar-breakout RCE via a bare cmd /c list).
@@ -1436,20 +1497,27 @@ def _call_worker_sync(
     _argv = windows_shim_command(_argv)
     proc = subprocess.Popen(
         _argv,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", env=env,
-        stdin=subprocess.DEVNULL,
     )
     if proc_holder is not None:
         with proc_holder.lock:
             proc_holder.popen = proc
     try:
-        stdout, _stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        # Mirror subprocess.run()'s own timeout handling: kill, drain, re-raise.
-        proc.kill()
-        proc.communicate()
-        raise
+        try:
+            stdout, _stderr = proc.communicate(input=prompt, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Mirror subprocess.run()'s own timeout handling: kill, drain, re-raise.
+            proc.kill()
+            proc.communicate()
+            raise
+    finally:
+        if system_tmp_path:
+            try:
+                os.unlink(system_tmp_path)
+            except OSError:
+                pass
     raw = stdout.strip()
     attestation: dict = {
         "engine_id": "claude_code",
