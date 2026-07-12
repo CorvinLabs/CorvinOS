@@ -170,7 +170,20 @@ class CodexCliEngine:
         else:
             full_prompt = user_prompt
 
-        args.append(full_prompt)
+        # Windows fresh-install fix (same bug class as ClaudeCodeEngine —
+        # see claude_code.py's spawn() docstring): `full_prompt` carries the
+        # same merged system prompt content (persona + memory + skills,
+        # routinely 10k+ characters in real bridge usage) that broke every
+        # Claude-engine turn on Windows once passed inline through
+        # windows_shim_command's single `cmd /c "<line>"` string — cmd.exe's
+        # own ~8191-char internal buffer, far below what CreateProcess
+        # allows directly. `codex exec --help` documents that the [PROMPT]
+        # positional is read from STDIN when omitted or given as `-` — no
+        # length ceiling at all, not just a higher one, and it sidesteps
+        # argv/cmd.exe entirely rather than needing a temp file. Using it
+        # unconditionally (not just for large prompts) keeps this one
+        # code path correct regardless of content size.
+        args.append("-")
 
         spawn_env = os.environ.copy()
         if env:
@@ -187,6 +200,8 @@ class CodexCliEngine:
                 # a cmd.exe-SAFE command string (a bare ["cmd","/c",*args] list
                 # lets a user-prompt metachar break out → RCE); no-op on POSIX.
                 windows_shim_command(args),
+                stdin=subprocess.PIPE,   # the prompt goes via stdin — see the
+                                          # "-" positional arg comment above.
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=cwd,
@@ -203,6 +218,18 @@ class CodexCliEngine:
                 error=f"codex binary not found: {self.binary!r}",
             )
             return
+
+        # Write the full prompt (system block + user turn) to stdin and
+        # close it — codex reads until EOF since the positional arg is "-".
+        # A write/close failure here means the child died immediately
+        # (e.g. sandbox rejection); let the stream/stderr-tail path below
+        # surface the real error instead of raising here.
+        if self._proc.stdin is not None:
+            try:
+                self._proc.stdin.write(full_prompt.encode("utf-8"))
+                self._proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
 
         # Honour a /stop that arrived in the register→spawn window: _proc now
         # exists, so terminate it and emit the same aborted signal a mid-stream

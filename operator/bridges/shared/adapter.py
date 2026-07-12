@@ -3189,6 +3189,34 @@ def _build_claude_args(prompt: str, mode: str, profile: dict | None,
     )
     # ADR-0165: pop _ato_plan before splatting into _build_args (not an engine arg).
     resolved.pop("_ato_plan", None)
+
+    # Windows fresh-install fix (same bug class ClaudeCodeEngine.spawn()
+    # fixes for the engine-driven path — see its docstring): `resolved
+    # ["system"]` carries the same merged, routinely 10k+ character system
+    # prompt. This legacy argv builder has no generator lifecycle to hook
+    # a temp-file cleanup into (unlike spawn()), so it writes the file
+    # itself and leaves cleanup to the caller — call_claude() (the sole
+    # real spawn site reaching this function) removes it once the process
+    # has actually exited. The two ADAPTER_FAKE_CLAUDE dump-only call
+    # sites (test fixtures that never spawn a real process) accept a
+    # small leaked temp file as a negligible, test-mode-only cost rather
+    # than threading cleanup through code that never runs a subprocess.
+    system_text = resolved.get("system")
+    if system_text:
+        try:
+            import tempfile as _tmp
+            workdir = _session_dir(channel, chat_key or "anon")
+            workdir.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = _tmp.mkstemp(
+                suffix=".txt", prefix=".corvin-sysprompt-", dir=str(workdir),
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(system_text)
+            resolved["system"] = None
+            resolved["system_prompt_file"] = tmp_path
+        except OSError:
+            pass  # best-effort — falls back to the historical inline arg
+
     return _ClaudeCodeEngine._build_args(
         prompt,
         binary="claude",
@@ -4091,6 +4119,14 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         env.pop("ANTHROPIC_API_BASE", None)
 
     base_args = _build_claude_args(prompt, mode, profile, add_dir, channel=channel, chat_key=chat_key)
+    # Track the temp file _build_claude_args wrote the system prompt into
+    # (if any — see its docstring) so it's cleaned up once this function is
+    # done with it, regardless of which return/exception path is taken.
+    _sysprompt_tmp_path: str | None = None
+    if "--append-system-prompt-file" in base_args:
+        _idx = base_args.index("--append-system-prompt-file")
+        if _idx + 1 < len(base_args):
+            _sysprompt_tmp_path = base_args[_idx + 1]
 
     has_session = any(workdir.glob(".claude*")) or (workdir / ".session_started").exists()
     log_debug(
@@ -4114,10 +4150,18 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         run_timeout = None
 
     def _run(args: list[str]) -> subprocess.CompletedProcess:
+        # Windows fresh-install fix: this path never wrapped .cmd-shim argv
+        # through windows_shim_command, unlike every other spawn site in
+        # this codebase (ClaudeCodeEngine.spawn, CodexCliEngine.spawn,
+        # OpenCodeEngine.spawn) — CreateProcess can't launch a .cmd/.bat
+        # directly (WinError 193), so on Windows this crashed regardless of
+        # argv content the moment `claude` resolved to the npm shim. No-op
+        # on POSIX / non-.cmd binaries (returns `args` unchanged).
+        from agents._win_shim import windows_shim_command
         # Popen with start_new_session=True so /cancel can kill the whole
         # process group (claude + tool-use children) via killpg.
         proc = subprocess.Popen(
-            args, cwd=workdir,
+            windows_shim_command(args), cwd=workdir,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=env, start_new_session=True,
         )
@@ -4174,6 +4218,12 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
     except FileNotFoundError:
         log("claude CLI not found in PATH")
         return "[adapter] claude CLI nicht gefunden."
+    finally:
+        if _sysprompt_tmp_path:
+            try:
+                os.unlink(_sysprompt_tmp_path)
+            except OSError:
+                pass
 
 
 # Tool-Use → kompakte 1-Zeilen-Statusmessage für den Messenger.

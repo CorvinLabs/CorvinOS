@@ -163,11 +163,23 @@ class OpenCodeEngine:
         if extra_args:
             args += list(extra_args)
 
-        # Prompt is the trailing positional. opencode also accepts
-        # `--prompt`, but the positional form is the documented happy
-        # path and survives shell-quirks better.
-        if prompt:
-            args.append(prompt)
+        # Windows fresh-install fix (same bug class as ClaudeCodeEngine and
+        # CodexCliEngine — see claude_code.py's spawn() docstring): the
+        # prompt (system block + user turn, routinely 10k+ characters in
+        # real bridge usage) used to go as a trailing positional argv
+        # element, which blows past cmd.exe's ~8191-char internal buffer
+        # once routed through windows_shim_command's `cmd /c "<line>"` for
+        # the Windows .cmd shim. `opencode run` has no documented
+        # `--message-file`/stdin flag, but empirically (verified live,
+        # 2026-07-12): with an empty stdin it fails immediately with
+        # "You must provide a message or a command"; with content piped to
+        # stdin it proceeds to a real model call instead — i.e. the
+        # [message..] positional IS read from stdin when omitted, the same
+        # yargs-family convention codex's CLI documents explicitly. Omit
+        # the positional entirely; spawn() writes `prompt` to stdin instead.
+        # A future opencode release that silently drops this convention
+        # fails LOUD (the same "must provide a message" error), never
+        # silently misbehaves.
 
         return args
 
@@ -232,6 +244,9 @@ class OpenCodeEngine:
                 # ["cmd","/c",*args] list lets a user-prompt metachar break out
                 # → RCE). No-op on POSIX. See agents/_win_shim.py.
                 windows_shim_command(args),
+                stdin=subprocess.PIPE,   # the message goes via stdin — see
+                                          # _build_args' comment on why the
+                                          # positional is omitted.
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=cwd,
@@ -248,6 +263,17 @@ class OpenCodeEngine:
                 error=f"opencode binary not found: {self.binary!r}",
             )
             return
+
+        # Write the message (system block + user turn) to stdin and close
+        # it. A write/close failure means the child died immediately or
+        # doesn't read stdin (e.g. a test double) — best-effort, let the
+        # stream/stderr-tail path below surface the real outcome.
+        if self._proc.stdin is not None:
+            try:
+                self._proc.stdin.write(full_prompt.encode("utf-8"))
+                self._proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
 
         # Honour a /stop that arrived in the register→spawn window.
         if self._cancel_requested:
@@ -303,6 +329,11 @@ class OpenCodeEngine:
         proc = self._proc
         if proc is None:
             return
+        if proc.stdin is not None:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
         if proc.poll() is None:
             try:
                 proc.terminate()

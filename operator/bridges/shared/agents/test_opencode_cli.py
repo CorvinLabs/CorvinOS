@@ -172,6 +172,9 @@ class CapabilityFlagTests(unittest.TestCase):
 class BuildArgsTests(unittest.TestCase):
 
     def test_minimal(self) -> None:
+        # Windows fresh-install fix: the message is no longer a trailing
+        # argv element (it goes via stdin instead — see spawn()) so the
+        # golden argv shape now ends at the last flag, not the prompt text.
         argv = OpenCodeEngine._build_args(
             binary="opencode",
             prompt="hello",
@@ -179,7 +182,6 @@ class BuildArgsTests(unittest.TestCase):
         self.assertEqual(argv, [
             "opencode", "run", "--format", "json",
             "--dangerously-skip-permissions",
-            "hello",
         ])
 
     def test_with_model_and_dir(self) -> None:
@@ -194,7 +196,6 @@ class BuildArgsTests(unittest.TestCase):
             "--dangerously-skip-permissions",
             "--model", "ollama/qwen3:8b",
             "--dir", "/tmp/sandbox",
-            "say hi",
         ])
 
     def test_with_agent_overrides_default(self) -> None:
@@ -207,7 +208,6 @@ class BuildArgsTests(unittest.TestCase):
             "opencode", "run", "--format", "json",
             "--dangerously-skip-permissions",
             "--agent", "build",
-            "audit this",
         ])
 
     def test_permission_mode_plan_uses_plan_agent(self) -> None:
@@ -480,6 +480,49 @@ class FakeOpencodeStreamTests(unittest.TestCase):
         result = collect(engine.spawn("x", timeout=2.0))
         self.assertIsNotNone(result.error)
         self.assertIn("not found", (result.error or "").lower())
+
+    def test_prompt_delivered_via_stdin_not_argv(self) -> None:
+        """Windows fresh-install fix regression: the message must reach the
+        child via stdin, not as a trailing argv element (which blew past
+        cmd.exe's ~8191-char buffer on Windows once routed through
+        windows_shim_command for the .cmd shim). This fake binary actually
+        reads stdin (unlike the canned-output scripts above) and echoes it
+        back as the text event, proving delivery end-to-end."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            bin_path = tmp / "opencode"
+            # Reads whatever spawn() wrote to stdin and echoes it back as
+            # the session's text — proves the content actually arrived,
+            # not just that SOME process ran.
+            script = (
+                "#!/usr/bin/env bash\n"
+                "set -e\n"
+                "msg=$(cat)\n"
+                'echo \'{"type":"step_start","sessionID":"ses_1","part":{}}\'\n'
+                'python3 -c "import json,sys; print(json.dumps('
+                '{\'type\':\'text\',\'sessionID\':\'ses_1\','
+                '\'part\':{\'type\':\'text\',\'text\':sys.argv[1],'
+                '\'time\':{\'start\':1,\'end\':2}}}))" "$msg"\n'
+                'echo \'{"type":"step_finish","sessionID":"ses_1","part":{}}\'\n'
+            )
+            bin_path.write_text(script)
+            bin_path.chmod(0o755)
+
+            engine = OpenCodeEngine(binary=str(bin_path))
+            result = collect(engine.spawn(
+                "what is the codeword", system="the codeword is XKCD-4242",
+                timeout=5.0,
+            ))
+            self.assertIsNone(result.error)
+            self.assertIn("XKCD-4242", result.final_text)
+            self.assertIn("what is the codeword", result.final_text)
+            # And prove it did NOT also leak into argv (defense in depth —
+            # a regression that reintroduces the positional AND keeps the
+            # stdin write would still "work" but reopen the Windows bug).
+            argv = OpenCodeEngine._build_args(binary=str(bin_path),
+                                              prompt="what is the codeword")
+            self.assertNotIn("what is the codeword", argv)
 
 
 # ---------------------------------------------------------------------------
