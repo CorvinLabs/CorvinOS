@@ -309,3 +309,100 @@ def test_installer_output_resolves_via_say_py_for_every_language(
         if "say" in sys.modules:
             importlib.reload(sys.modules["say"])
         sys.path.remove(str(scripts_dir))
+
+
+# ── display_language MUST be seeded on EVERY branch (fresh-install language) ──
+# Root cause (2026-07-13, LDD): display_language was seeded ONLY as a side effect
+# of a successful Piper model download (_save_model_config → _seed). Skip, invalid
+# choice, download failure, a prefetched (already-present) model, or a non-Piper
+# TTS install all returned WITHOUT seeding it → the console welcome greeting then
+# fell back to English while the bridge TTS fell back to German (divergent
+# hardcoded defaults), i.e. "the language is not preset from the install". The fix
+# seeds display_language unconditionally, decoupled from the download.
+
+def _patch_setup(monkeypatch, *, detected="de", input_val="1", existing=None):
+    seeded: list[str] = []
+    monkeypatch.setattr(piper_mod, "_seed_profile_display_language", lambda l: seeded.append(l))
+    monkeypatch.setattr(piper_mod, "_detect_language", lambda: detected)
+    monkeypatch.setattr(piper_mod, "_find_existing_model", lambda cf: existing)
+    monkeypatch.setattr(piper_mod, "_download_model", lambda *a, **k: None)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: input_val)
+    return seeded
+
+
+def test_seeds_language_before_download_interactive(tmp_path, monkeypatch) -> None:
+    vc = tmp_path / "vc"; vc.mkdir()
+    seeded = _patch_setup(monkeypatch, detected="de", input_val="1")
+    piper_mod._setup_model(vc, interactive=True)
+    assert seeded == ["de"], f"language must be seeded on the normal path, got {seeded!r}"
+
+
+def test_seeds_language_even_when_download_fails(tmp_path, monkeypatch) -> None:
+    """A Windows CDN reset / offline box fails the ONNX fetch — the reply
+    language must still be preset because the seed runs BEFORE the download."""
+    vc = tmp_path / "vc"; vc.mkdir()
+    seeded = _patch_setup(monkeypatch, detected="de", input_val="1")
+    def boom(*a, **k):
+        raise RuntimeError("simulated download failure")
+    monkeypatch.setattr(piper_mod, "_download_model", boom)
+    with pytest.raises(RuntimeError):
+        piper_mod._setup_model(vc, interactive=True)
+    assert seeded == ["de"], "seed must happen before the (failing) download"
+
+
+def test_seeds_language_on_skip_choice(tmp_path, monkeypatch) -> None:
+    vc = tmp_path / "vc"; vc.mkdir()
+    seeded = _patch_setup(monkeypatch, detected="de", input_val="0")
+    piper_mod._setup_model(vc, interactive=True)
+    assert seeded == ["de"], "skipping the voice MODEL must not skip the language"
+
+
+def test_seeds_language_on_invalid_choice(tmp_path, monkeypatch) -> None:
+    vc = tmp_path / "vc"; vc.mkdir()
+    seeded = _patch_setup(monkeypatch, detected="de", input_val="99")
+    piper_mod._setup_model(vc, interactive=True)
+    assert seeded == ["de"], "an unparseable menu choice must still preset the language"
+
+
+def test_seeds_language_non_interactive(tmp_path, monkeypatch) -> None:
+    vc = tmp_path / "vc"; vc.mkdir()
+    seeded = _patch_setup(monkeypatch, detected="de")
+    piper_mod._setup_model(vc, interactive=False)
+    assert seeded == ["de"]
+
+
+def test_seeds_language_from_prefetched_model(tmp_path, monkeypatch) -> None:
+    """A model prefetched by install.sh/.ps1 makes _setup_model early-return —
+    it must still seed display_language from config.json's lang_default."""
+    vc = tmp_path / "vc"; vc.mkdir()
+    (vc / "config.json").write_text(json.dumps({"lang_default": "de",
+                                                 "piper_model_de": "/x/de.onnx"}))
+    seeded = _patch_setup(monkeypatch, detected="en", existing=(vc / "fake.onnx"))
+    piper_mod._setup_model(vc, interactive=True)
+    assert seeded == ["de"], "prefetched-model path must seed from config lang_default, not the OS locale"
+
+
+def test_seed_writes_normalised_display_language(tmp_path, monkeypatch) -> None:
+    """The seed writes a NORMALISED code (bare 'zh' → 'zh-Hans') so i18n.resolve
+    at read time can't reject it and fall back to English (troubleshooting #34)."""
+    vc = tmp_path / "vc"
+    monkeypatch.setenv("VOICE_CONFIG_DIR", str(vc))
+    for m in ("profile", "corvin_console.profile", "i18n"):
+        sys.modules.pop(m, None)
+    piper_mod._seed_profile_display_language("zh")
+    prof = json.loads((vc / "profile.json").read_text())
+    assert prof.get("display_language") == "zh-Hans", prof
+    for m in ("profile", "corvin_console.profile", "i18n"):
+        sys.modules.pop(m, None)
+
+
+def test_seed_ignores_empty_language(tmp_path, monkeypatch) -> None:
+    called: list[str] = []
+    monkeypatch.setattr(piper_mod, "_seed_profile_display_language",
+                        piper_mod._seed_profile_display_language)
+    # empty / whitespace must be a no-op (never write "" as the language)
+    monkeypatch.setenv("VOICE_CONFIG_DIR", str(tmp_path / "vc2"))
+    for m in ("profile", "corvin_console.profile", "i18n"):
+        sys.modules.pop(m, None)
+    piper_mod._seed_profile_display_language("   ")
+    assert not (tmp_path / "vc2" / "profile.json").exists()

@@ -191,6 +191,11 @@ def _setup_model(voice_config_dir: Path, interactive: bool) -> None:
     existing = _find_existing_model(config_file)
     if existing:
         print(f"  ✓ Piper model already configured: {existing.name}")
+        # A PREFETCHED model (install.sh/.ps1 download it BEFORE the wizard) would
+        # otherwise return here having NEVER seeded display_language — leaving the
+        # greeting/reply language unset. Seed it from the model's own language so
+        # the profile language is set even on the prefetch path.
+        _seed_profile_display_language(_config_lang_default(config_file) or _detect_language())
         return
 
     sys_lang = _detect_language()
@@ -205,6 +210,10 @@ def _setup_model(voice_config_dir: Path, interactive: bool) -> None:
         # out of a non-interactive `corvin-install`, not silently fall back to
         # English (ADR-0185 M2 — sys_lang is always a valid _MODELS key,
         # _detect_language() itself defaults to "en" when unrecognized).
+        # Seed the language FIRST — display_language must be set even if the
+        # model download later fails (Windows CDN reset, offline, …); it drives
+        # the reply/greeting language independent of whether a TTS model lands.
+        _seed_profile_display_language(sys_lang)
         label, rel_path = _MODELS[sys_lang]
         print(f"  Non-interactive: downloading {label.strip()} model...")
         _download_model(sys_lang, rel_path, model_dir, config_file)
@@ -223,6 +232,9 @@ def _setup_model(voice_config_dir: Path, interactive: bool) -> None:
 
     raw = input("  Download voice model? [1]: ").strip() or "1"
     if raw == "0":
+        # Skipping the voice MODEL must NOT skip the language: display_language is
+        # about the reply/greeting language, not TTS assets. Seed the detected one.
+        _seed_profile_display_language(sys_lang)
         print("  ⚠ Skipping — set piper_model_<lang> in config.json later")
         return
 
@@ -230,9 +242,14 @@ def _setup_model(voice_config_dir: Path, interactive: bool) -> None:
         choice = int(raw)
         chosen_lang = ordered[choice - 1]
     except (ValueError, IndexError):
+        _seed_profile_display_language(sys_lang)
         print(f"  ⚠ Unknown choice '{raw}' — skipping model download")
         return
 
+    # Seed BEFORE the download so a failed/partial fetch still leaves the reply
+    # language correctly preset (the seed is idempotent — _save_model_config
+    # re-affirms it on success).
+    _seed_profile_display_language(chosen_lang)
     _, rel_path = _MODELS[chosen_lang]
     _download_model(chosen_lang, rel_path, model_dir, config_file)
 
@@ -251,6 +268,18 @@ def _find_existing_model(config_file: Path) -> Path | None:
     return None
 
 
+def _config_lang_default(config_file: Path) -> str:
+    """Return the voice language (``lang_default``) recorded in config.json, or "".
+
+    Lets the prefetch path (model already on disk → early return in
+    ``_setup_model``) recover the language to seed into ``display_language``."""
+    try:
+        cfg = json.loads(config_file.read_text())
+        return str(cfg.get("lang_default") or "").strip()
+    except Exception:
+        return ""
+
+
 def _detect_language() -> str:
     """Detect the system language — checks POSIX locale vars, then Windows locale."""
     supported = set(_MODELS.keys())
@@ -261,12 +290,26 @@ def _detect_language() -> str:
             if m and m.group(1).lower() in supported:
                 return m.group(1).lower()
 
-    # Windows: POSIX env vars are typically absent; use locale module instead.
+    # Windows: POSIX env vars are typically absent; query the OS locale directly.
     if sys.platform == "win32":
+        # GetUserDefaultLocaleName is the reliable, NON-deprecated source and
+        # returns a BCP-47 tag like "de-DE". locale.getdefaultlocale() is
+        # DEPRECATED since Python 3.11 and returns (None, None) on some Windows
+        # configs — which silently defaulted a German box to "en" (part of the
+        # fresh-install "language not preset" bug). Try kernel32 first, then the
+        # deprecated helper as a fallback.
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(85)  # LOCALE_NAME_MAX_LENGTH
+            if ctypes.windll.kernel32.GetUserDefaultLocaleName(buf, 85):  # type: ignore[attr-defined]
+                prefix = buf.value.replace("_", "-").split("-")[0].lower()
+                if prefix in supported:
+                    return prefix
+        except Exception:
+            pass
         try:
             import locale as _locale
-            # Returns e.g. ('de_DE', 'cp1252') or (None, None)
-            lang_code, _ = _locale.getdefaultlocale()
+            lang_code, _ = _locale.getdefaultlocale()  # deprecated fallback only
             if lang_code:
                 prefix = lang_code.split("_")[0].lower()
                 if prefix in supported:
@@ -441,21 +484,29 @@ def _seed_profile_display_language(lang: str) -> None:
     Best-effort: voice setup must never fail because this propagation step
     did.
     """
+    lang = (lang or "").strip()
+    if not lang:
+        return
     try:
+        # `operator/` has no `__init__.py` (the name collides with the stdlib
+        # `operator` module), so put `operator/bridges/shared/` on sys.path and
+        # import bare top-level modules — the established pattern (lang_cli.py,
+        # adapter.py). Needed for both the profile writer AND i18n below.
+        shared_dir = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        if str(shared_dir) not in sys.path:
+            sys.path.insert(0, str(shared_dir))
+        # Normalise through the SAME guard `/lang set` and the console PUT
+        # validator use, so this THIRD write path can't persist a non-canonical
+        # code (e.g. bare "zh" instead of "zh-Hans") that i18n.resolve() would
+        # later reject → silent English fallback (troubleshooting #34).
+        try:
+            import i18n as _i18n  # type: ignore  # noqa: PLC0415
+            lang = _i18n.normalise(lang) or lang
+        except Exception:  # noqa: BLE001
+            pass
         try:
             from corvin_console.profile import set_value as _set_value  # noqa: PLC0415
         except ImportError:
-            # Source-tree / dev-checkout mode: `operator/` has no
-            # `__init__.py` (it can't — the name collides with the stdlib
-            # `operator` module, which is almost always already cached in
-            # sys.modules by the time this runs), so `operator.bridges.shared`
-            # is never actually importable as a dotted path here. The
-            # established, working pattern (see lang_cli.py, adapter.py) is
-            # to put `operator/bridges/shared/` itself on sys.path and import
-            # `profile` as a bare top-level module.
-            shared_dir = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
-            if str(shared_dir) not in sys.path:
-                sys.path.insert(0, str(shared_dir))
             import profile as _profile_mod  # type: ignore  # noqa: PLC0415
             _set_value = _profile_mod.set_value
         _set_value("display_language", lang)
