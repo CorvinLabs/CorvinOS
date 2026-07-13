@@ -10,7 +10,8 @@ operator/bridges/shared/provider_keys.py).
 
 Key name rules (per ADR-0047):
   Allowed:  anthropic_api_key, openai_api_key, stt_openai_api_key,
-            stt_local_whisper_api_key, custom_<slug> (slug: [a-z0-9_-], ≤32)
+            stt_local_whisper_api_key, openrouter_api_key, ollama_api_key,
+            custom_<slug> (slug: [a-z0-9_-], ≤32)
   Forbidden names containing: audit, vault, path_gate, policy, license
 """
 from __future__ import annotations
@@ -29,6 +30,11 @@ _KNOWN_KEY_NAMES = frozenset({
     "openai_api_key",
     "stt_openai_api_key",
     "stt_local_whisper_api_key",
+    # ADR-0181 provider routing: openrouter/ollama_cloud both need a
+    # credential_env the console can actually let an operator set (was
+    # previously only settable by hand-editing service.env).
+    "openrouter_api_key",
+    "ollama_api_key",
 })
 
 _FORBIDDEN_SUBSTRINGS = ("audit", "vault", "path_gate", "policy", "license")
@@ -48,6 +54,9 @@ _SHAPE_PATTERNS: dict[str, re.Pattern[str]] = {
     "anthropic_api_key": re.compile(r"^sk-ant-"),
     "openai_api_key": re.compile(r"^sk-"),
     "stt_openai_api_key": re.compile(r"^sk-"),
+    "openrouter_api_key": re.compile(r"^sk-or-"),
+    # No shape check for ollama_api_key: Ollama Cloud key formatting isn't a
+    # documented, stable prefix the way sk-*/sk-ant-*/sk-or-* are.
 }
 
 

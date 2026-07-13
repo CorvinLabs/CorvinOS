@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""test_openrouter_ollama_keys.py — OpenRouter/Ollama BYOK + provider-routing wiring.
+
+Feature request: an operator must be able to save an OpenRouter or Ollama
+Cloud API key under Settings -> API Keys, and then run the "Claude Code"
+engine through that provider (Engines page -> Provider dropdown, ADR-0181).
+
+Before this fix:
+  - "openrouter_api_key"/"ollama_api_key" were not valid BYOK key names
+    (operator/agent/byok.py::validate_key_name rejected them), and the
+    console's API Keys page had no fields for them at all.
+  - Even if a value ended up in service.env by hand, adapter.py's
+    claude_code provider-routing read the credential via bare
+    os.environ.get(...) — a key saved live through the console (which
+    writes to service.env, not the running bridge daemon's os.environ)
+    would be invisible until the daemon was restarted.
+
+This file covers the key-storage half end-to-end. It does NOT cover (and
+this fix does NOT build) the Anthropic-Messages<->OpenAI-format translating
+proxy that OpenRouter/raw-Ollama would still need for Claude Code to
+actually authenticate a real request — see ADR-0181's own "HONEST REMAINING
+REQUIREMENT" note; that's a separate, larger piece of work.
+"""
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+from unittest import mock
+
+import pytest
+
+_REPO = Path(__file__).resolve().parents[1]
+for _p in (
+    _REPO,
+    _REPO / "operator",
+    _REPO / "operator" / "bridges",
+    _REPO / "operator" / "bridges" / "shared",
+):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+from agent import byok as agent_byok  # type: ignore  # operator/agent/byok.py
+import provider_keys  # type: ignore  # operator/bridges/shared/provider_keys.py
+
+
+# ── byok.py: the new key names are now valid ───────────────────────────────
+
+
+def test_openrouter_key_name_is_valid():
+    agent_byok.validate_key_name("openrouter_api_key")  # must not raise
+
+
+def test_ollama_key_name_is_valid():
+    agent_byok.validate_key_name("ollama_api_key")  # must not raise
+
+
+def test_openrouter_key_shape_enforced():
+    with pytest.raises(ValueError):
+        agent_byok._check_key_shape("openrouter_api_key", "not-a-real-key")
+    agent_byok._check_key_shape("openrouter_api_key", "sk-or-v1-abc123")  # must not raise
+
+
+def test_ollama_key_has_no_shape_restriction():
+    # Ollama Cloud has no single documented key prefix — any non-empty
+    # value must be accepted (mirrors stt_local_whisper_api_key today).
+    agent_byok._check_key_shape("ollama_api_key", "anything-goes-here")
+
+
+# ── provider_keys.py: round-trip through service.env with the EXACT env-var
+# names engine_model_registry.yaml's credential_env fields expect ─────────
+
+
+def _isolated_service_env(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("VOICE_CONFIG_DIR", str(tmp_path))
+    for var in ("OPENROUTER_API_KEY", "OLLAMA_API_KEY", "XDG_CONFIG_HOME"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_openrouter_key_round_trips_to_canonical_env_var(tmp_path, monkeypatch):
+    _isolated_service_env(tmp_path, monkeypatch)
+    service_env = tmp_path / "service.env"
+    provider_keys.write_key("openrouter_api_key", "sk-or-v1-test123", path_override=service_env)
+    assert "OPENROUTER_API_KEY=sk-or-v1-test123" in service_env.read_text()
+    assert provider_keys.resolve_key("openrouter_api_key") == "sk-or-v1-test123"
+
+
+def test_ollama_key_round_trips_to_canonical_env_var(tmp_path, monkeypatch):
+    _isolated_service_env(tmp_path, monkeypatch)
+    service_env = tmp_path / "service.env"
+    provider_keys.write_key("ollama_api_key", "ollama-cloud-secret", path_override=service_env)
+    assert "OLLAMA_API_KEY=ollama-cloud-secret" in service_env.read_text()
+    assert provider_keys.resolve_key("ollama_api_key") == "ollama-cloud-secret"
+
+
+def test_resolve_by_env_var_matches_credential_env_names(tmp_path, monkeypatch):
+    """These exact strings ("OPENROUTER_API_KEY", "OLLAMA_API_KEY") are what
+    operator/bundle/config-templates/engine_model_registry.yaml declares as
+    credential_env for the openrouter / ollama_cloud providers — the whole
+    point of resolve_by_env_var is that adapter.py can look a value up by
+    THAT string without knowing the logical BYOK key name."""
+    _isolated_service_env(tmp_path, monkeypatch)
+    service_env = tmp_path / "service.env"
+    provider_keys.write_key("openrouter_api_key", "sk-or-v1-abc", path_override=service_env)
+    assert provider_keys.resolve_by_env_var("OPENROUTER_API_KEY") == "sk-or-v1-abc"
+    assert provider_keys.resolve_by_env_var("OLLAMA_API_KEY") is None  # not written yet
+
+
+def test_resolve_by_env_var_unknown_name_returns_none():
+    assert provider_keys.resolve_by_env_var("SOME_RANDOM_ENV_VAR") is None
+
+
+def test_resolve_by_env_var_prefers_live_process_env_over_file(tmp_path, monkeypatch):
+    """A key saved moments ago via the console (service.env) must be picked
+    up even though the bridge daemon's own os.environ still lacks it — but
+    an EXPLICIT env var override (operator-set, e.g. in a systemd unit) must
+    still win, matching resolve_key's documented precedence."""
+    _isolated_service_env(tmp_path, monkeypatch)
+    service_env = tmp_path / "service.env"
+    provider_keys.write_key("openrouter_api_key", "from-file", path_override=service_env)
+    assert provider_keys.resolve_by_env_var("OPENROUTER_API_KEY") == "from-file"
+    monkeypatch.setenv("OPENROUTER_API_KEY", "from-env")
+    assert provider_keys.resolve_by_env_var("OPENROUTER_API_KEY") == "from-env"
+
+
+# ── console route: /byok/secrets now reports presence for both new keys ──
+
+
+def test_console_byok_route_lists_openrouter_and_ollama():
+    import importlib
+    byok_route = importlib.import_module("corvin_console.routes.byok")
+    src = Path(byok_route.__file__).read_text()
+    assert '"openrouter_api_key"' in src
+    assert '"ollama_api_key"' in src
+
+
+# ── adapter.py: claude_code provider routing resolves the LIVE value ─────
+
+
+def test_build_spawn_env_resolves_provider_credential_via_resolve_by_env_var(monkeypatch):
+    """Regression: _build_spawn_env used to read os.environ.get(credential_env)
+    directly. A key saved live through the console (which writes to
+    service.env) would be invisible to an already-running bridge daemon
+    until it was restarted. It must now go through
+    provider_keys.resolve_by_env_var, which re-reads service.env every call."""
+    with tempfile.TemporaryDirectory(prefix="adapter-provider-route-") as tmp:
+        home = Path(tmp)
+        prev_home = os.environ.get("CORVIN_HOME")
+        os.environ["CORVIN_HOME"] = str(home)
+        try:
+            try:
+                import adapter  # type: ignore  # noqa: PLC0415
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f"adapter import unavailable: {e}")
+
+            class _FakeProviderSpec:
+                proxy_base_url = "http://localhost:9999"
+                base_url = "http://localhost:9999"
+                credential_env = "OPENROUTER_API_KEY"
+
+            with (
+                mock.patch.object(
+                    adapter, "_provider_keys",
+                    mock.Mock(resolve_by_env_var=mock.Mock(return_value="sk-or-v1-live-value")),
+                ),
+            ):
+                # Patch the lazily-imported engine_models functions the way
+                # _build_spawn_env imports them (`from engine_models import ...`).
+                import engine_models  # type: ignore  # noqa: PLC0415
+                with (
+                    mock.patch.object(engine_models, "get_tenant_engine_provider", return_value="openrouter"),
+                    mock.patch.object(engine_models, "load_providers", return_value={"openrouter": _FakeProviderSpec()}),
+                ):
+                    env = adapter._build_spawn_env(
+                        bridge="discord", chat_key="chat-provider-test",
+                        base={"PATH": "/usr/bin"},
+                        profile=None,
+                    )
+            assert env.get("ANTHROPIC_API_KEY") == "sk-or-v1-live-value", (
+                "must use the LIVE-resolved credential, not a stale/absent os.environ read"
+            )
+            assert env.get("CORVIN_CC_PROVIDER") == "openrouter"
+            assert env.get("ANTHROPIC_BASE_URL") == "http://localhost:9999"
+        finally:
+            if prev_home is None:
+                os.environ.pop("CORVIN_HOME", None)
+            else:
+                os.environ["CORVIN_HOME"] = prev_home
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__, "-v"]))

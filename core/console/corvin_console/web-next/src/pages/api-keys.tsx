@@ -124,6 +124,16 @@ const KNOWN_KEYS: Array<{ name: string; label: string; hint: string }> = [
     label: "Local Whisper Key",
     hint: "Reserved for future local-provider authentication",
   },
+  {
+    name: "openrouter_api_key",
+    label: "OpenRouter API Key",
+    hint: "sk-or-… — lets engines that support the OpenRouter provider (Engines page) route through it",
+  },
+  {
+    name: "ollama_api_key",
+    label: "Ollama API Key",
+    hint: "Only needed for Ollama Cloud — a local Ollama server needs no key, just Ollama running",
+  },
 ];
 
 // ── KeyCard — row used for both system and custom keys ────────────────────

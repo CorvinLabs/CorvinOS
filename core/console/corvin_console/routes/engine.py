@@ -645,10 +645,13 @@ def _egress_denied(base_url: str, tenant_id: str) -> str | None:
 def _assess_model_compliance(engine_models: dict, tenant_id: str) -> list[str]:
     """ADR-0181 — non-blocking advisories when an engine is pointed at a CLOUD
     provider. HONEST about the runtime: the ``provider`` field records the choice
-    and drives the model picker/live-fetch; actual cloud egress happens only when
-    the engine runs a cloud MODEL STRING at spawn (e.g. OpenCode's 'provider/model'
-    routing), where the pre-spawn L34/L35 gates apply. Cross-engine PROXY routing
-    (e.g. Claude Code → OpenRouter) is not yet runtime-wired (ADR-0181 M3)."""
+    and drives the model picker/live-fetch; cloud egress happens both when the
+    engine runs a cloud MODEL STRING at spawn (e.g. OpenCode's 'provider/model'
+    routing) and via cross-engine PROXY routing (e.g. Claude Code -> OpenRouter,
+    ADR-0181 M3, wired since 2026-07-04) — either way the pre-spawn L34/L35 gates
+    apply. What's still NOT built: a translating proxy for providers that don't
+    speak the Anthropic Messages API natively (OpenRouter, raw Ollama) — see
+    ADR-0181's "HONEST REMAINING REQUIREMENT"."""
     warnings: list[str] = []
     try:
         from engine_models import load_providers  # type: ignore[import]
@@ -665,9 +668,11 @@ def _assess_model_compliance(engine_models: dict, tenant_id: str) -> list[str]:
             warnings.append(f"{eid}: {denied}")
         warnings.append(
             f"{eid}: '{spec.label}' is a cloud provider. Store your API key under "
-            f"{spec.credential_env or 'the provider env var'} in the vault. Cloud egress "
-            f"occurs when the engine runs a cloud model at spawn, where L34/L35 apply; "
-            f"cross-engine proxy routing to this provider is not yet runtime-wired (M3).")
+            f"{spec.credential_env or 'the provider env var'} in Settings -> API Keys. Cloud "
+            f"egress occurs when the engine runs a cloud model or is proxy-routed to this "
+            f"provider at spawn, where L34/L35 apply. Note: an engine that doesn't natively "
+            f"speak this provider's API format (e.g. Claude Code -> OpenRouter/Ollama) also "
+            f"needs a translating proxy configured — see ADR-0181.")
     return warnings
 
 

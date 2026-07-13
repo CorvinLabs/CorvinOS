@@ -257,6 +257,8 @@ def list_secrets(
         "openai_api_key",
         "stt_openai_api_key",
         "stt_local_whisper_api_key",
+        "openrouter_api_key",
+        "ollama_api_key",
     ]
 
     key_map: dict[str, Any] = {}

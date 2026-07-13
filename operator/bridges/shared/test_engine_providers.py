@@ -87,6 +87,28 @@ def test_fetch_credential_read_from_env_name(monkeypatch):
     assert captured["bearer"] == "sk-or-secret"   # read from the NAMED env var
 
 
+def test_fetch_credential_read_from_service_env_not_just_process_env(tmp_path, monkeypatch):
+    """Regression: fetch_models used to read bare os.environ[credential_env]
+    only — a key an operator just saved through Settings -> API Keys (which
+    writes to service.env) was invisible to an already-running console
+    process until it was restarted. It must resolve via provider_keys
+    (env override first, then service.env) instead."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("VOICE_CONFIG_DIR", str(tmp_path))
+    import provider_keys  # type: ignore
+    provider_keys.write_key("openrouter_api_key", "sk-or-from-service-env",
+                            path_override=tmp_path / "service.env")
+
+    captured = {}
+    def cap(url, *, bearer="", **k):
+        captured["bearer"] = bearer
+        return {"data": []}
+    monkeypatch.setattr(EP, "_get_json", cap)
+    EP.fetch_models("openrouter", base_url="https://openrouter.ai/api/v1",
+                    model_source="openrouter", credential_env="OPENROUTER_API_KEY")
+    assert captured["bearer"] == "sk-or-from-service-env"
+
+
 def test_bad_reload_does_not_wipe_good_cache(tmp_path):
     """Review MEDIUM: a transient unreadable file on force_reload must not clobber
     a previously-good cache."""

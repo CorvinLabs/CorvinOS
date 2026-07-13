@@ -6,9 +6,11 @@ actually offers right now:
   * ``openrouter`` → GET {base_url}/models                 (public catalogue)
   * ``static``     → no live list (use the curated registry entries)
 
-Credentials: the provider's ``credential_env`` names an env var; its value (the
-API key) is injected into the process env from the L16 vault. We read
-``os.environ[credential_env]`` at request time — the key value never lives in
+Credentials: the provider's ``credential_env`` names an env var; its value
+(the API key) is resolved via provider_keys.resolve_by_env_var at request
+time (env override first, then service.env — so a key an operator just
+saved through Settings -> API Keys is picked up immediately, without
+needing the console process restarted) — the key value never lives in
 config, code, logs, or audit. Cloud fetches are network egress; the provider
 ``base_url`` host must be on the L35 allowlist (the caller/route enforces).
 
@@ -17,10 +19,16 @@ stdlib only (urllib) — no new dependency. Never raises; returns a status dict.
 from __future__ import annotations
 
 import json
-import os
+import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
+
+_SHARED_DIR = Path(__file__).resolve().parent
+if str(_SHARED_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHARED_DIR))
+import provider_keys as _provider_keys  # type: ignore  # noqa: E402
 
 
 def _get_json(url: str, *, bearer: str = "", timeout: float = 8.0) -> Any:
@@ -55,7 +63,7 @@ def fetch_models(
         result["note"] = "static provider — use the curated model list"
         return result
 
-    key = os.environ.get(credential_env, "") if credential_env else ""
+    key = (_provider_keys.resolve_by_env_var(credential_env) or "") if credential_env else ""
     base = base_url.rstrip("/")
     try:
         if model_source == "ollama":

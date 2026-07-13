@@ -74,7 +74,18 @@ CANONICAL_ENV_VAR: dict[str, str] = {
     "tts_openai_api_key": "CORVIN_TTS_OPENAI_KEY",
     "stt_openai_api_key": "CORVIN_STT_OPENAI_KEY",
     "stt_local_whisper_api_key": "CORVIN_STT_LOCAL_WHISPER_KEY",
+    # ADR-0181 provider routing — names MUST match the `credential_env`
+    # fields in operator/bundle/config-templates/engine_model_registry.yaml
+    # (openrouter / ollama_cloud providers) exactly, or a saved key silently
+    # never matches what the engine-spawn code looks up.
+    "openrouter_api_key": "OPENROUTER_API_KEY",
+    "ollama_api_key": "OLLAMA_API_KEY",
 }
+
+# Reverse lookup for resolve_by_env_var — only the canonical (dedicated)
+# name round-trips; a general key reached only via _PARENT_KEY fallback
+# has no single canonical env var of its own to be looked up BY.
+_ENV_VAR_TO_KEY: dict[str, str] = {v: k for k, v in CANONICAL_ENV_VAR.items()}
 
 # Checked ONLY after every dedicated/canonical name comes up empty. Never
 # written to by anything post-consolidation — kept so a pre-existing
@@ -149,6 +160,22 @@ def _load_from_file(env_var: str, path: Path) -> str | None:
 
 def service_env_path() -> Path:
     return voice_config_dir() / SERVICE_ENV_FILENAME
+
+
+def resolve_by_env_var(env_var: str) -> str | None:
+    """Resolve a value by the CANONICAL env-var name (e.g. "OPENROUTER_API_KEY")
+    instead of the logical key name, going through the same
+    env-then-service.env precedence chain as ``resolve_key``.
+
+    For callers that only know a provider's declared ``credential_env`` (e.g.
+    ADR-0181's engine_model_registry.yaml providers) and would otherwise be
+    tempted to read ``os.environ`` directly — which misses a key an operator
+    just saved through the console while the bridge daemon is still running,
+    since only ``resolve_key``/this function re-read service.env live."""
+    key_name = _ENV_VAR_TO_KEY.get(env_var)
+    if key_name is None:
+        return None
+    return resolve_key(key_name)
 
 
 def resolve_key(key_name: str) -> str | None:

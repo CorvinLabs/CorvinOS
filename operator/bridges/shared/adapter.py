@@ -3623,7 +3623,13 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
                     _ps = load_providers().get(_prov)
                     _base = (_ps.proxy_base_url or _ps.base_url) if _ps else ""
                     if _base:
-                        _key = (os.environ.get(_ps.credential_env, "")
+                        # Resolve through provider_keys (env, THEN service.env)
+                        # rather than bare os.environ — a key an operator just
+                        # saved via Settings -> API Keys lands in service.env
+                        # immediately, but this bridge daemon's own os.environ
+                        # was only populated once, at process spawn; reading
+                        # os.environ directly would miss it until a restart.
+                        _key = (_provider_keys.resolve_by_env_var(_ps.credential_env) or ""
                                 if _ps.credential_env else "")
                         if _ps.credential_env and not _key:
                             # A credential env-var is declared but not present in
