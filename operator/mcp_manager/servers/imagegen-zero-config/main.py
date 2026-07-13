@@ -56,8 +56,72 @@ _MAX_PROMPT_CHARS = 4000
 # session workdir, both common on Windows), and nothing downstream (the
 # console's stdout-reading loop, the bridge's subprocess.communicate()) ever
 # times out a hanging turn either — so a stuck write here was invisible and
-# unbounded all the way up to the user's screen. _SAVE_TIMEOUT_S bounds it.
-_SAVE_TIMEOUT_S = 15.0
+# unbounded all the way up to the user's screen.
+#
+# _SAVE_TIMEOUT_S / _TOTAL_TIMEOUT_S bound it, on a plain daemon=True
+# threading.Thread — deliberately NOT concurrent.futures.ThreadPoolExecutor.
+# operator/voice/scripts/stt/local_whisper.py::_load_model() already hit
+# this exact same "bound a blocking call, cross-platform, no signal.alarm on
+# Windows" problem and its docstring documents why ThreadPoolExecutor was
+# rejected there after a review found two real races in it: (a) releasing a
+# lock from a Future done-callback can race the calling thread publishing a
+# result, since Future.set_result() notifies waiters BEFORE invoking
+# callbacks; (b) ThreadPoolExecutor's process-wide atexit hook joins every
+# worker thread ever created, so one stalled call can hang the whole
+# long-lived server at shutdown. Both were reason enough to use the same
+# plain-Thread pattern here rather than reach for the "obvious" stdlib tool.
+# A genuinely cross-package shared helper (operator/bridges/shared/ would be
+# the natural home) is a reasonable follow-up, out of scope for this fix.
+#
+# _run_bounded() below is the ONE local implementation both call sites use
+# (they used to be two hand-duplicated copies) — result/exception are always
+# published by the WORKER thread itself in `outcome`, in that order, same
+# reasoning as local_whisper.py's ordering guarantee above. A still-stuck
+# call is ABANDONED (not awaited) past the timeout: daemon=True means it can
+# never block process exit, and it holds no lock/resource the rest of the
+# server needs, so it's harmless whether it eventually finishes or stays
+# stuck forever.
+#
+# Known limitation (adversarial review, 2026-07-14): FastMCP dispatches a
+# sync @mcp.tool() function directly on its own asyncio event loop thread,
+# not via an executor — so the outer generate_image() call's t.join() below
+# blocks THIS SERVER PROCESS from handling any other concurrent tool call
+# for up to _TOTAL_TIMEOUT_S. This is not a new regression: ANY blocking
+# call in a sync FastMCP tool already had this property (unbounded, before
+# this fix). Bounding it converts "blocks forever" into "blocks at most
+# _TOTAL_TIMEOUT_S", which is strictly better, but per-call concurrency
+# isolation would need an async tool implementation or a separate worker
+# process — tracked as a follow-up, out of scope here.
+_SAVE_TIMEOUT_S = 30.0
+_TOTAL_TIMEOUT_S = 240.0  # comfortably above the legitimate worst case:
+# L44 gate ~100s worst case (spawn_gates/house_rules, 3 retries + backoff)
+# + provider HTTP call up to 60s (openai/pollinations httpx timeout)
+# + save up to _SAVE_TIMEOUT_S -- so a slow-but-genuinely-working call is
+# never mistaken for a hang; this is a backstop for TRUE infinite hangs.
+
+
+def _run_bounded(fn, timeout_s: float, thread_name: str):
+    """Run ``fn()`` on a background daemon thread; return ``(outcome, timed_out)``.
+
+    ``outcome`` is ``{"ok": value}`` on success or ``{"error": exc}`` if
+    ``fn`` raised — never both, and always published by the worker thread
+    itself before it returns, so a caller that finds ``timed_out is False``
+    can trust ``outcome`` is fully populated (no partial-publish race). See
+    the module-level comment above for why this is a plain Thread, not a
+    ThreadPoolExecutor.
+    """
+    outcome: dict = {}
+
+    def _worker() -> None:
+        try:
+            outcome["ok"] = fn()
+        except Exception as exc:  # noqa: BLE001 — captured for the caller to re-raise
+            outcome["error"] = exc
+
+    t = threading.Thread(target=_worker, daemon=True, name=thread_name)
+    t.start()
+    t.join(timeout=timeout_s)
+    return outcome, t.is_alive()
 
 
 def _save_image_bytes(data: bytes, fmt: str) -> "str | None":
@@ -75,41 +139,34 @@ def _save_image_bytes(data: bytes, fmt: str) -> "str | None":
 
     Directory: ``CORVIN_IMAGE_OUTDIR`` if set, else ``./outputs`` under cwd.
 
-    Runs the actual mkdir+write on a background daemon thread with a bounded
-    join(): threading.Thread has no cross-platform way to force-kill a stuck
-    thread (signal.alarm doesn't exist on Windows), so a still-stuck write is
-    ABANDONED rather than awaited — daemon=True guarantees it can never block
-    process exit either. That abandoned thread either eventually finishes
-    (harmless, its result is just never used) or stays stuck forever on a
-    genuinely broken filesystem (also harmless — it holds no lock the rest of
-    the server needs). Either way, generate_image() itself is never held
-    hostage by it.
+    The ENTIRE body (path/env construction included, not just the mkdir/write)
+    is covered by the outer try/except — a prior version moved that setup
+    outside the guard, so a malformed CORVIN_IMAGE_OUTDIR value (or any other
+    path-construction error) propagated uncaught and turned a cosmetic
+    display-persistence failure into a hard failure of the whole
+    generate_image() call (adversarial review, 2026-07-14). Persistence is
+    best-effort; it must never be able to break the tool, full stop.
     """
-    if not data:
-        return None
-    import time  # noqa: PLC0415
-    import secrets  # noqa: PLC0415
-    ext = (fmt or "png").lower().lstrip(".") or "png"
-    outdir = os.environ.get("CORVIN_IMAGE_OUTDIR", "").strip()
-    base = Path(outdir) if outdir else (Path.cwd() / "outputs")
-    fpath = base / f"corvin-image-{int(time.time())}-{secrets.token_hex(3)}.{ext}"
+    try:
+        if not data:
+            return None
+        import time  # noqa: PLC0415
+        import secrets  # noqa: PLC0415
+        ext = (fmt or "png").lower().lstrip(".") or "png"
+        outdir = os.environ.get("CORVIN_IMAGE_OUTDIR", "").strip()
+        base = Path(outdir) if outdir else (Path.cwd() / "outputs")
+        fpath = base / f"corvin-image-{int(time.time())}-{secrets.token_hex(3)}.{ext}"
 
-    outcome: dict = {}
-
-    def _write() -> None:
-        try:
+        def _write() -> None:
             base.mkdir(parents=True, exist_ok=True)
             fpath.write_bytes(data)
-            outcome["ok"] = True
-        except Exception as exc:  # noqa: BLE001 — display persistence is best-effort
-            outcome["error"] = exc
 
-    t = threading.Thread(target=_write, daemon=True, name="imagegen-save")
-    t.start()
-    t.join(timeout=_SAVE_TIMEOUT_S)
-    if not outcome.get("ok"):
+        outcome, timed_out = _run_bounded(_write, _SAVE_TIMEOUT_S, "imagegen-save")
+        if timed_out or "error" in outcome:
+            return None
+        return str(fpath)
+    except Exception:  # noqa: BLE001 — display persistence is best-effort, never fatal
         return None
-    return str(fpath)
 
 
 mcp = FastMCP("corvin-imagegen")
@@ -128,7 +185,18 @@ def _tenant_id() -> str:
 class ImageGenRefused(ValueError):
     """Raised when the L44 house-rules gate refuses the prompt. Message text
     is the user-facing refusal string check_l44() already produced — never
-    a raw exception/stack trace."""
+    a raw exception/stack trace. Also (pre-existing) reused for the
+    empty/overlong-prompt input-validation refusals below — NOT for a
+    timeout; see ImageGenTimeout for that distinct failure mode."""
+
+
+class ImageGenTimeout(RuntimeError):
+    """Raised when generate_image() hits its overall _TOTAL_TIMEOUT_S —
+    an infrastructural hang (stalled network drive, provider gone silent),
+    never a content-policy decision. Deliberately NOT an ImageGenRefused
+    subclass: any current/future code that classifies by exception type
+    (e.g. EU AI Act Art. 50 refusal-rate accounting) must not be able to
+    mistake "the tool was too slow" for "the prompt was refused."""
 
 
 class Tier0RateLimited(RuntimeError):
@@ -225,21 +293,6 @@ def _generate_openai(prompt: str, api_key: str) -> Image:
         return Image(data=base64.b64decode(b64), format="png")
 
 
-# Bug report 2026-07-13 (Windows 11): a generate_image() call hung forever
-# with no result, no error, no timeout anywhere in the whole chain
-# (confirmed: neither this server's own code nor the console/bridge callers
-# ever bound a single turn). _save_image_bytes's write got the targeted fix
-# above; this is the holistic safety net -- if literally anything else in
-# this function's call graph (a provider HTTP client that ignores its own
-# timeout under some edge case, a future code change, an unknown OS quirk)
-# ever hangs, the tool still returns within _TOTAL_TIMEOUT_S instead of
-# leaving the user staring at a spinner indefinitely. Same daemon-thread +
-# bounded-join pattern as _save_image_bytes, for the same reason
-# (signal.alarm-based timeouts don't exist on Windows, so this must be
-# thread-based to actually be cross-platform).
-_TOTAL_TIMEOUT_S = 150.0
-
-
 @mcp.tool()
 def generate_image(prompt: str) -> list:
     """Generate an image from a text prompt.
@@ -248,22 +301,30 @@ def generate_image(prompt: str) -> list:
     community image service. If you've configured an OpenAI API key (the
     same one used for voice), that's used automatically instead for
     higher quality — no extra configuration needed either way.
+
+    Bug report 2026-07-13 (Windows 11): a call hung forever with no result,
+    no error, no timeout anywhere in the whole chain (confirmed: neither
+    this server's own code nor the console/bridge callers ever bound a
+    single turn). _save_image_bytes's write got a targeted fix; this is the
+    holistic safety net — if literally anything else in the call graph (a
+    provider HTTP client that ignores its own timeout under some edge case,
+    a future code change, an unknown OS quirk) ever hangs, the tool still
+    returns within _TOTAL_TIMEOUT_S instead of leaving the user staring at
+    a spinner indefinitely. See _run_bounded's docstring for why this is a
+    plain daemon Thread, not ThreadPoolExecutor.
     """
-    outcome: dict = {}
-
-    def _run() -> None:
-        try:
-            outcome["value"] = _generate_image_impl(prompt)
-        except BaseException as exc:  # noqa: BLE001 — re-raised on the caller's
-            # thread below so ImageGenRefused/Tier0RateLimited etc. keep their
-            # real type instead of being swallowed here.
-            outcome["error"] = exc
-
-    t = threading.Thread(target=_run, daemon=True, name="imagegen-generate")
-    t.start()
-    t.join(timeout=_TOTAL_TIMEOUT_S)
-    if t.is_alive():
-        raise ImageGenRefused(
+    outcome, timed_out = _run_bounded(
+        lambda: _generate_image_impl(prompt), _TOTAL_TIMEOUT_S, "imagegen-generate",
+    )
+    if timed_out:
+        # A DISTINCT exception type from ImageGenRefused (the L44
+        # content-policy refusal) — adversarial review, 2026-07-14: reusing
+        # ImageGenRefused for an infrastructural timeout would let any
+        # current/future internal code that classifies by exception type
+        # (e.g. EU AI Act Art. 50 refusal-rate accounting, which this
+        # repo's compliance baseline treats as load-bearing) misclassify a
+        # stalled network drive as a content-policy block.
+        raise ImageGenTimeout(
             f"Image generation timed out after {int(_TOTAL_TIMEOUT_S)}s without "
             "responding — this can happen if a background component hangs "
             "(e.g. a stalled network drive or synced folder backing your "
@@ -271,7 +332,7 @@ def generate_image(prompt: str) -> list:
         )
     if "error" in outcome:
         raise outcome["error"]
-    return outcome["value"]
+    return outcome["ok"]
 
 
 def _generate_image_impl(prompt: str) -> list:

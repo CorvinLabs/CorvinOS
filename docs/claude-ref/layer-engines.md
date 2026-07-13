@@ -1893,3 +1893,101 @@ All 141 tests in the delegate plugin (Layer 29 + 29.1 + 29.2 +
 - Layer 6 (Forge), Layer 7 (SkillForge) — the persisted engine capabilities
 - Layer 29 / 29.1 / 29.2 / 29.3a — delegation substrate + hardening
 - L23 / L24 / L25 / L28 — metadata-only-audit precedent
+
+## ADR-0181 M3 — Local translating proxy for provider-based Claude Code routing (2026-07-14)
+
+> Diagram: `docs/diagrams/22-anthropic-openai-bridge.svg` (placeholder per the
+> "Creating New Diagrams" convention in testing-and-docs.md — refine with a
+> real flow illustration as a follow-up).
+
+ADR-0181 lets a tenant assign a non-Anthropic provider (`ollama_local`,
+`ollama_cloud`, `openrouter`) to the `claude_code` engine. Claude Code (the
+`claude` CLI) only ever speaks the Anthropic Messages API
+(`POST /v1/messages`, Anthropic's own SSE event sequence) — pointing
+`ANTHROPIC_BASE_URL` straight at an OpenAI-compatible endpoint fails
+immediately, even with a perfectly valid key, because the request/response
+shape and streaming protocol are both wrong. ADR-0181's own text flagged this
+as the "HONEST REMAINING REQUIREMENT": an operator-run external proxy
+(LiteLLM-style) was the only way to close the gap.
+
+M3 (2026-07-14) closes it **in-process**, built in rather than left as an
+operator deployment:
+
+- **`operator/bridges/shared/anthropic_openai_bridge.py`** — a lightweight
+  `ThreadingHTTPServer` that translates Anthropic Messages API requests to
+  OpenAI Chat Completions requests and back, including streaming (SSE) and
+  tool use. Started lazily, on demand, per `(chat_completions_url, model,
+  api_key, disable_reasoning)` tuple via `ensure_proxy()` — never a separate
+  process to install or manage; one daemon thread per distinct target,
+  reused across spawns via a keyed singleton (`_servers`, never actively
+  evicted — a process restart clears it; see the module's own comment for
+  why that trade-off is accepted).
+  - Scope (deliberately not "every possible Anthropic API feature"): text
+    content blocks, tool_use / tool_result blocks, system prompt,
+    stop_reason / finish_reason mapping, best-effort usage token counts.
+    Not implemented: vision/image content blocks, prompt caching
+    directives, extended thinking blocks — none load-bearing for Claude
+    Code's own coding-agent loop against a text + tool-use backend.
+  - `ProxyTarget.disable_reasoning` sends `"think": false` to Ollama's
+    OpenAI-compat endpoint for qwen3-style thinking models (harmless no-op
+    on servers that ignore the field) — same latency fix already applied to
+    Hermes/`summarize.py`'s native-API calls.
+- **`operator/bridges/shared/adapter.py::_build_spawn_env`** — the
+  provider-routing branch (search `ADR-0181 M3` in the file) resolves the
+  effective base URL in priority order: an operator-configured
+  `ProviderSpec.proxy_base_url` (external proxy) first, else — for
+  `model_source in ("ollama", "openrouter")` — the built-in bridge above,
+  else the provider's raw `base_url` (assumed already Anthropic-compatible).
+  When no model is configured for `claude_code` and the provider is
+  `openrouter` (no safe default exists, unlike `ollama`'s `qwen3:8b`
+  fallback), the proxy is **not** started — `"auto"` is not a valid
+  OpenRouter model id (the real slug is `"openrouter/auto"`), so starting it
+  anyway would make every turn fail with an opaque upstream 400 instead of
+  falling through to Claude Code's existing routing.
+  - Provider keys are resolved via `provider_keys.resolve_by_env_var(credential_env)`
+    — never bare `os.environ.get` — so a key an operator just saved through
+    Settings → API Keys is visible to an already-running bridge daemon
+    immediately (only `resolve_key`/`resolve_by_env_var` re-read
+    `service.env` live; the daemon's own `os.environ` was populated once, at
+    process spawn).
+
+**BYOK key types** (`operator/bridges/shared/provider_keys.py::CANONICAL_ENV_VAR`):
+`openrouter_api_key` → `OPENROUTER_API_KEY`, `ollama_api_key` →
+`OLLAMA_API_KEY` (Ollama Cloud's bearer token; local Ollama needs none).
+Names MUST match the `credential_env` fields in
+`operator/bundle/config-templates/engine_model_registry.yaml`'s
+`openrouter`/`ollama_cloud` provider entries exactly, or a saved key
+silently never matches what the engine-spawn code looks up. Written via the
+same `provider_keys.write_key()` every other BYOK key uses — Settings → API
+Keys is the one place that writes, `resolve_key`/`resolve_by_env_var` the
+one place that reads.
+
+### Test surface
+
+- `operator/bridges/shared/test_anthropic_openai_bridge.py` — request/response
+  translation (non-streaming + streaming), the real HTTP server end-to-end
+  against a fake upstream, `disable_reasoning`, cache-key isolation, and a
+  stalled-upstream-mid-stream regression (must close gracefully within the
+  configured `request_timeout`, not hang the client).
+- `operator/bridges/shared/test_provider_keys.py` — `resolve_by_env_var`
+  falls back to the literal env-var name (process env, then `service.env`)
+  for any `credential_env` not in the small `CANONICAL_ENV_VAR` set, so a
+  provider outside that hardcoded list still resolves a genuinely-set key
+  instead of silently losing it.
+- `operator/bridges/shared/test_adapter_openrouter_routing.py` — the
+  no-model-configured OpenRouter edge case: `ensure_proxy` must not be
+  called with a bogus model, and `ANTHROPIC_BASE_URL` must stay unset so CC
+  falls through instead of being redirected to a guaranteed-broken endpoint.
+
+### What you, as Claude Code, must NOT do (ADR-0181 M3)
+
+- **Don't call `ensure_proxy()` with an unresolved/placeholder model.**
+  There is no such thing as a safe "auto" OpenAI-Chat-Completions model
+  across every provider — leave `ANTHROPIC_BASE_URL` unset instead and let
+  the existing routing (or the already-logged operator warning) handle it.
+- **Don't read provider credentials via bare `os.environ.get`.** Always go
+  through `provider_keys.resolve_by_env_var()` — it is the only path that
+  sees a key an operator just saved without requiring a daemon restart.
+- **Don't omit any field that changes the effective proxy target from
+  `_target_key()`.** A stale cached server silently serving the wrong
+  model/flag combination is worse than the cost of one extra daemon thread.

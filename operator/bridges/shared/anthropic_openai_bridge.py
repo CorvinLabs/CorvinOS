@@ -175,6 +175,13 @@ def anthropic_request_to_openai(body: dict, *, model: str) -> dict:
         "messages": messages,
         "stream": bool(body.get("stream", False)),
     }
+    if out["stream"]:
+        # Without this, most OpenAI-compatible servers omit `usage` from
+        # every streamed chunk, so AnthropicSSETranslator's output_tokens
+        # stays 0 for the whole turn -- token-usage/cost/budget accounting
+        # silently reports every streamed call as free (adversarial review,
+        # 2026-07-14). Harmless to send to servers that ignore it.
+        out["stream_options"] = {"include_usage": True}
     if "max_tokens" in body:
         out["max_tokens"] = body["max_tokens"]
     if "temperature" in body:
@@ -350,7 +357,12 @@ class AnthropicSSETranslator:
         return "".join(p for p in out if p)
 
     def finalize(self) -> str:
-        out: list[str] = []
+        # Guarantee message_start precedes message_delta/message_stop even if
+        # the upstream SSE stream never yielded a single parseable chunk (a
+        # zero-content response, or an upstream that closes before sending
+        # anything) -- otherwise the client sees a malformed Anthropic event
+        # sequence (adversarial review, 2026-07-14).
+        out: list[str] = [self._ensure_started()]
         if self._text_block_open:
             out.append(self._sse("content_block_stop", {
                 "type": "content_block_stop", "index": self._text_block_index,
@@ -542,6 +554,18 @@ def _make_handler(target: ProxyTarget) -> type[BaseHTTPRequestHandler]:
                         if piece:
                             self.wfile.write(piece.encode("utf-8"))
                             self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return  # client (claude CLI) disconnected — nothing to clean up
+            except (TimeoutError, OSError, urllib.error.URLError) as exc:
+                # Upstream stalled mid-stream (a stuck network drive, a
+                # provider that stopped responding without closing the
+                # connection) -- previously uncaught here, so the client saw
+                # nothing at all with no diagnostic (adversarial review,
+                # 2026-07-14). Still emit a well-formed close via finalize()
+                # below so the client gets a terminated-but-valid stream
+                # instead of hanging on a connection that never ends.
+                log.warning("anthropic_openai_bridge: upstream stream stalled: %s", exc)
+            try:
                 self.wfile.write(translator.finalize().encode("utf-8"))
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
@@ -558,9 +582,14 @@ _servers_lock = threading.Lock()
 
 def _target_key(target: ProxyTarget) -> str:
     # A new key (new server) whenever the effective target changes (model,
-    # URL, or key rotates) — cheap to spin up a fresh thread, and this way a
-    # provider/key switch can never keep talking to a stale target.
-    return f"{target.chat_completions_url}|{target.model}|{hash(target.api_key)}"
+    # URL, key, or disable_reasoning rotates) — cheap to spin up a fresh
+    # thread, and this way a provider/key/flag switch can never keep talking
+    # to a stale target. disable_reasoning was previously omitted here
+    # (adversarial review, 2026-07-14): a second ensure_proxy() call for the
+    # same url/model/key but a different disable_reasoning would silently
+    # reuse the wrong cached server instead of starting a fresh one.
+    return (f"{target.chat_completions_url}|{target.model}|"
+            f"{hash(target.api_key)}|{target.disable_reasoning}")
 
 
 def ensure_proxy(target: ProxyTarget) -> str:

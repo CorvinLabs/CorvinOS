@@ -3657,15 +3657,22 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
                                     or ("qwen3:8b" if _ps.model_source == "ollama" else "")
                                 )
                                 if not _model:
+                                    # "auto" is not a valid OpenRouter model id (the
+                                    # real slug is "openrouter/auto") — starting the
+                                    # proxy anyway would make every turn fail with an
+                                    # opaque upstream 400 instead of the clear error
+                                    # already logged below. Leave _base unset so CC
+                                    # falls through to its existing routing instead.
                                     log(f"[provider] {_prov}: no model selected for "
                                         f"claude_code and no safe default exists for "
                                         f"OpenRouter — pick a model on the Engines page.")
-                                _base = ensure_proxy(ProxyTarget(
-                                    chat_completions_url=chat_completions_url_for(
-                                        _ps.base_url, _ps.model_source),
-                                    api_key=_key, model=_model or "auto",
-                                    disable_reasoning=(_ps.model_source == "ollama"),
-                                ))
+                                else:
+                                    _base = ensure_proxy(ProxyTarget(
+                                        chat_completions_url=chat_completions_url_for(
+                                            _ps.base_url, _ps.model_source),
+                                        api_key=_key, model=_model,
+                                        disable_reasoning=(_ps.model_source == "ollama"),
+                                    ))
                             except Exception:  # noqa: BLE001 — never break the spawn
                                 log(f"[provider] {_prov}: failed to start the local "
                                     f"translating proxy — falling back to base_url "

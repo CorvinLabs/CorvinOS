@@ -116,6 +116,16 @@ def test_stream_flag_passed_through():
     assert out2["stream"] is False
 
 
+def test_streaming_request_asks_for_usage():
+    """Without stream_options.include_usage, most OpenAI-compatible servers
+    omit `usage` from every streamed chunk, so token-usage accounting always
+    reports 0 for streamed turns (adversarial review, 2026-07-14)."""
+    out = bridge.anthropic_request_to_openai({"messages": [], "stream": True}, model="m")
+    assert out["stream_options"] == {"include_usage": True}
+    out2 = bridge.anthropic_request_to_openai({"messages": []}, model="m")
+    assert "stream_options" not in out2
+
+
 # ─── Response translation (non-streaming) ──────────────────────────────────
 
 def test_plain_text_response_translates():
@@ -211,6 +221,18 @@ def test_streaming_text_then_tool_call_gets_two_content_blocks():
     text_stop_pos = full.index('"content_block_stop", "index": 0')
     tool_start_pos = full.index('"content_block_start", "index": 1')
     assert text_stop_pos < tool_start_pos
+
+
+def test_finalize_alone_emits_message_start():
+    """Regression (adversarial review, 2026-07-14): if the upstream SSE
+    stream never yields a single parseable chunk (empty response, upstream
+    closes early), finalize() must still emit message_start before
+    message_delta/message_stop -- otherwise the client sees a malformed
+    Anthropic event sequence."""
+    t = bridge.AnthropicSSETranslator(message_id="msg_4", model="m")
+    full = t.finalize()
+    assert full.index("event: message_start") < full.index("event: message_delta")
+    assert "event: message_stop" in full
 
 
 # ─── chat_completions_url_for ───────────────────────────────────────────────
@@ -384,6 +406,74 @@ def test_no_disable_reasoning_omits_think_field():
         api_key="", model="claude-sonnet-5", disable_reasoning=False,
     )
     assert target.disable_reasoning is False
+
+
+def test_target_key_distinguishes_disable_reasoning():
+    """Regression (adversarial review, 2026-07-14): the proxy cache key
+    previously omitted disable_reasoning, so a second ensure_proxy() call
+    for the same url/model/key but a different disable_reasoning silently
+    reused the wrong cached server instead of starting a fresh one."""
+    target_a = bridge.ProxyTarget(
+        chat_completions_url="http://example.invalid/chat/completions",
+        api_key="k", model="m", disable_reasoning=False,
+    )
+    target_b = bridge.ProxyTarget(
+        chat_completions_url="http://example.invalid/chat/completions",
+        api_key="k", model="m", disable_reasoning=True,
+    )
+    try:
+        base_a = bridge.ensure_proxy(target_a)
+        base_b = bridge.ensure_proxy(target_b)
+        assert base_a != base_b, "distinct disable_reasoning must get distinct proxy instances"
+    finally:
+        bridge.shutdown_all()
+
+
+class _FakeUpstreamStallsMidStream(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        chunk = {"choices": [{"index": 0, "delta": {"content": "Hel"}, "finish_reason": None}]}
+        self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
+        self.wfile.flush()
+        time.sleep(2.0)  # stall past the client's short request_timeout
+
+
+def test_streaming_upstream_stall_closes_gracefully_instead_of_hanging():
+    """Regression (adversarial review, 2026-07-14): the streaming forward
+    loop only caught BrokenPipeError/ConnectionResetError, not a TimeoutError
+    from a stalled upstream read -- so a provider that stopped responding
+    mid-stream without closing the connection left the client hanging with
+    zero feedback (the same failure class task #73 fixed for the tool-call
+    layer, here at the proxy layer)."""
+    upstream, u_thread, upstream_url = _start_fake_upstream(_FakeUpstreamStallsMidStream)
+    try:
+        target = bridge.ProxyTarget(
+            chat_completions_url=f"{upstream_url}/chat/completions",
+            api_key="test-key", model="qwen3:8b", request_timeout=0.3,
+        )
+        base = bridge.ensure_proxy(target)
+
+        req_body = json.dumps({
+            "messages": [{"role": "user", "content": "hi"}], "stream": True,
+        }).encode("utf-8")
+        req = urllib.request.Request(f"{base}/v1/messages", data=req_body,
+                                      headers={"Content-Type": "application/json"}, method="POST")
+        t0 = time.monotonic()
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw = resp.read().decode("utf-8")
+        elapsed = time.monotonic() - t0
+        assert elapsed < 1.5, f"must not wait for the full 2s stall — took {elapsed:.2f}s"
+        assert "event: message_start" in raw
+        assert "event: message_stop" in raw
+    finally:
+        bridge.shutdown_all()
+        upstream.shutdown()
+        u_thread.join(timeout=2)
 
 
 def test_health_endpoint():

@@ -488,7 +488,7 @@ def test_generate_image_returns_timeout_error_instead_of_hanging_forever(monkeyp
     monkeypatch.setattr(m, "_generate_image_impl", _stuck_impl)
 
     t0 = _time.monotonic()
-    with pytest.raises(m.ImageGenRefused) as exc_info:
+    with pytest.raises(m.ImageGenTimeout) as exc_info:
         m.generate_image("a nice tree")
     elapsed = _time.monotonic() - t0
 
@@ -497,6 +497,38 @@ def test_generate_image_returns_timeout_error_instead_of_hanging_forever(monkeyp
         f"generate_image() must return within _TOTAL_TIMEOUT_S (0.3s) even "
         f"though the implementation hangs for 5s -- took {elapsed:.2f}s"
     )
+
+
+def test_generate_image_timeout_is_not_an_image_gen_refused(monkeypatch, tmp_path):
+    """Adversarial review (2026-07-14): a timeout must be a DISTINCT
+    exception type from ImageGenRefused (the L44 content-policy refusal) --
+    reusing ImageGenRefused for an infrastructural hang would let any
+    exception-type-based refusal-rate accounting misclassify a stalled
+    network drive as a content-policy block."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import main as m
+
+    assert not issubclass(m.ImageGenTimeout, m.ImageGenRefused)
+    assert not issubclass(m.ImageGenRefused, m.ImageGenTimeout)
+
+
+def test_save_image_bytes_never_raises_even_if_path_construction_fails(monkeypatch, tmp_path):
+    """Regression (adversarial review, 2026-07-14): a prior version moved
+    the path/env construction (os.environ.get, Path(), the f-string) OUTSIDE
+    the try/except into the calling thread, so an error in THAT setup code
+    (not just the background write) propagated uncaught -- turning a
+    cosmetic display-persistence failure into a hard crash of the whole
+    generate_image() call. The whole function body must be covered."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setenv("CORVIN_IMAGE_OUTDIR", str(tmp_path / "outputs"))
+    import main as m
+
+    def _boom(*a, **k):
+        raise ValueError("simulated path-construction failure")
+
+    monkeypatch.setattr(m, "Path", _boom)
+    result = m._save_image_bytes(b"\xff\xd8\xff\xe0fake-jpeg-bytes", "jpeg")
+    assert result is None, "a path-construction failure must degrade to 'not saved', never raise"
 
 
 def test_generate_image_still_works_normally_through_the_timeout_wrapper(monkeypatch, tmp_path):

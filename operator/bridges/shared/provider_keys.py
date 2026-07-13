@@ -171,11 +171,24 @@ def resolve_by_env_var(env_var: str) -> str | None:
     ADR-0181's engine_model_registry.yaml providers) and would otherwise be
     tempted to read ``os.environ`` directly — which misses a key an operator
     just saved through the console while the bridge daemon is still running,
-    since only ``resolve_key``/this function re-read service.env live."""
+    since only ``resolve_key``/this function re-read service.env live.
+
+    ``env_var`` need not be one of the small set of names registered in
+    ``CANONICAL_ENV_VAR`` — a provider can declare any ``credential_env`` name
+    in its own config. When it isn't registered there is no logical key to
+    route through ``resolve_key``, so this falls back to the same
+    env-then-service.env chain for the literal name itself (adversarial
+    review, 2026-07-14: an earlier version returned None here, silently
+    losing key resolution for any provider outside the hardcoded set even
+    though the env var was genuinely set)."""
     key_name = _ENV_VAR_TO_KEY.get(env_var)
-    if key_name is None:
-        return None
-    return resolve_key(key_name)
+    if key_name is not None:
+        return resolve_key(key_name)
+
+    value = (os.environ.get(env_var) or "").strip()
+    if value:
+        return value
+    return _load_from_file(env_var, service_env_path())
 
 
 def resolve_key(key_name: str) -> str | None:
