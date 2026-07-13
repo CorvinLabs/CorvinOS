@@ -3610,19 +3610,23 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
             # provider is assigned to claude_code for this tenant (and it is not
             # native anthropic), redirect Claude Code to it via ANTHROPIC_BASE_URL
             # + the vault-injected key. The endpoint MUST speak the Anthropic
-            # Messages API: set the provider's ``proxy_base_url`` to an
-            # Anthropic-compatible proxy (e.g. LiteLLM) for OpenAI-format providers
-            # like OpenRouter; ``base_url`` is used directly only when it is
-            # already Anthropic-native. Egress goes to that host (L35 resolves it
-            # via resolve_engine_egress_host — same source of truth).
+            # Messages API: an operator-configured ``proxy_base_url`` (e.g. an
+            # externally-run LiteLLM) is honored first if set; otherwise, for a
+            # provider whose own API is OpenAI-format (ollama_local/ollama_cloud/
+            # openrouter — never anthropic-native), the built-in local translating
+            # proxy (anthropic_openai_bridge, 2026-07-14) is started on demand and
+            # used instead — no external proxy deployment required. Egress goes to
+            # that host (L35 resolves it via resolve_engine_egress_host — same
+            # source of truth).
             try:
                 from engine_models import (  # type: ignore
-                    get_tenant_engine_provider, load_providers)
+                    get_tenant_engine_model, get_tenant_engine_provider, load_providers)
                 _prov = get_tenant_engine_provider(_tid, "claude_code")
                 if _prov and _prov != "anthropic":
                     _ps = load_providers().get(_prov)
-                    _base = (_ps.proxy_base_url or _ps.base_url) if _ps else ""
-                    if _base:
+                    _base = ""
+                    _key = ""
+                    if _ps is not None:
                         # Resolve through provider_keys (env, THEN service.env)
                         # rather than bare os.environ — a key an operator just
                         # saved via Settings -> API Keys lands in service.env
@@ -3639,8 +3643,36 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
                             # never the value — per the audit/PII red-line.)
                             log(f"[provider] {_prov}: credential env "
                                 f"'{_ps.credential_env}' is not set — Claude Code "
-                                f"will fail to authenticate against {_base}. "
+                                f"will fail to authenticate against {_ps.label}. "
                                 f"Load the vault key into the bridge environment.")
+
+                        if _ps.proxy_base_url:
+                            _base = _ps.proxy_base_url
+                        elif _ps.model_source in ("ollama", "openrouter"):
+                            try:
+                                from anthropic_openai_bridge import (  # type: ignore
+                                    ProxyTarget, chat_completions_url_for, ensure_proxy)
+                                _model = (
+                                    get_tenant_engine_model(_tid, "claude_code", "os_model")
+                                    or ("qwen3:8b" if _ps.model_source == "ollama" else "")
+                                )
+                                if not _model:
+                                    log(f"[provider] {_prov}: no model selected for "
+                                        f"claude_code and no safe default exists for "
+                                        f"OpenRouter — pick a model on the Engines page.")
+                                _base = ensure_proxy(ProxyTarget(
+                                    chat_completions_url=chat_completions_url_for(
+                                        _ps.base_url, _ps.model_source),
+                                    api_key=_key, model=_model or "auto",
+                                ))
+                            except Exception:  # noqa: BLE001 — never break the spawn
+                                log(f"[provider] {_prov}: failed to start the local "
+                                    f"translating proxy — falling back to base_url "
+                                    f"directly (will not speak the Anthropic API).")
+                                _base = _ps.base_url
+                        else:
+                            _base = _ps.base_url
+                    if _base:
                         env["ANTHROPIC_BASE_URL"] = _base
                         env["ANTHROPIC_API_KEY"] = _key or "provider"
                         env["ANTHROPIC_AUTH_TOKEN"] = _key or "provider"

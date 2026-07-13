@@ -189,5 +189,96 @@ def test_build_spawn_env_resolves_provider_credential_via_resolve_by_env_var(mon
                 os.environ["CORVIN_HOME"] = prev_home
 
 
+def test_build_spawn_env_auto_starts_local_proxy_when_no_proxy_base_url_configured():
+    """The actual feature ask: with NO operator-configured proxy_base_url, an
+    OpenAI-format provider (ollama_local/ollama_cloud/openrouter) must get the
+    built-in translating proxy auto-started and used — not base_url directly
+    (which doesn't speak the Anthropic Messages API at all) and not a no-op."""
+    import http.server
+    import json as _json
+    import threading
+    import urllib.request
+
+    class _FakeOllama(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            body = _json.loads(self.rfile.read(length) or b"{}")
+            assert body["model"] == "qwen3:8b"
+            resp = {"choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+            payload = _json.dumps(resp).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    fake = http.server.HTTPServer(("127.0.0.1", 0), _FakeOllama)
+    fake_thread = threading.Thread(target=fake.serve_forever, daemon=True)
+    fake_thread.start()
+    fake_base = f"http://127.0.0.1:{fake.server_address[1]}"
+
+    with tempfile.TemporaryDirectory(prefix="adapter-auto-proxy-") as tmp:
+        home = Path(tmp)
+        prev_home = os.environ.get("CORVIN_HOME")
+        os.environ["CORVIN_HOME"] = str(home)
+        try:
+            try:
+                import adapter  # type: ignore  # noqa: PLC0415
+                import anthropic_openai_bridge  # type: ignore  # noqa: PLC0415
+            except Exception as e:  # noqa: BLE001
+                pytest.skip(f"adapter/bridge import unavailable: {e}")
+
+            class _FakeOllamaLocalSpec:
+                proxy_base_url = ""  # no operator override — must auto-start
+                base_url = fake_base
+                model_source = "ollama"
+                credential_env = ""  # ollama_local needs no key
+
+            import engine_models  # type: ignore  # noqa: PLC0415
+            with (
+                mock.patch.object(engine_models, "get_tenant_engine_provider", return_value="ollama_local"),
+                mock.patch.object(engine_models, "get_tenant_engine_model", return_value=""),
+                mock.patch.object(engine_models, "load_providers", return_value={"ollama_local": _FakeOllamaLocalSpec()}),
+            ):
+                env = adapter._build_spawn_env(
+                    bridge="discord", chat_key="chat-auto-proxy-test",
+                    base={"PATH": "/usr/bin"},
+                    profile=None,
+                )
+
+            base_url = env.get("ANTHROPIC_BASE_URL", "")
+            assert base_url.startswith("http://127.0.0.1:"), (
+                f"expected a local auto-started proxy URL, got {base_url!r}"
+            )
+            assert base_url != fake_base, "must NOT be the raw Ollama base_url (wrong API format)"
+
+            # Prove the returned base URL is a genuinely working Anthropic-format
+            # endpoint by sending it a real Anthropic-shaped request.
+            req_body = _json.dumps({
+                "model": "claude-sonnet-5", "max_tokens": 50,
+                "messages": [{"role": "user", "content": "hi"}],
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                f"{base_url}/v1/messages", data=req_body,
+                headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                out = _json.loads(resp.read().decode("utf-8"))
+            assert out["type"] == "message"
+            assert out["content"] == [{"type": "text", "text": "hi"}]
+        finally:
+            anthropic_openai_bridge.shutdown_all()
+            fake.shutdown()
+            fake_thread.join(timeout=2)
+            if prev_home is None:
+                os.environ.pop("CORVIN_HOME", None)
+            else:
+                os.environ["CORVIN_HOME"] = prev_home
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

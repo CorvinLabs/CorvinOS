@@ -649,9 +649,10 @@ def _assess_model_compliance(engine_models: dict, tenant_id: str) -> list[str]:
     engine runs a cloud MODEL STRING at spawn (e.g. OpenCode's 'provider/model'
     routing) and via cross-engine PROXY routing (e.g. Claude Code -> OpenRouter,
     ADR-0181 M3, wired since 2026-07-04) — either way the pre-spawn L34/L35 gates
-    apply. What's still NOT built: a translating proxy for providers that don't
-    speak the Anthropic Messages API natively (OpenRouter, raw Ollama) — see
-    ADR-0181's "HONEST REMAINING REQUIREMENT"."""
+    apply. An engine that doesn't natively speak the target's API format (Claude
+    Code -> OpenRouter/Ollama) is translated by the built-in local proxy
+    (anthropic_openai_bridge, 2026-07-14), auto-started on demand — no operator
+    proxy deployment required unless they want to override it with their own."""
     warnings: list[str] = []
     try:
         from engine_models import load_providers  # type: ignore[import]
@@ -670,9 +671,7 @@ def _assess_model_compliance(engine_models: dict, tenant_id: str) -> list[str]:
             f"{eid}: '{spec.label}' is a cloud provider. Store your API key under "
             f"{spec.credential_env or 'the provider env var'} in Settings -> API Keys. Cloud "
             f"egress occurs when the engine runs a cloud model or is proxy-routed to this "
-            f"provider at spawn, where L34/L35 apply. Note: an engine that doesn't natively "
-            f"speak this provider's API format (e.g. Claude Code -> OpenRouter/Ollama) also "
-            f"needs a translating proxy configured — see ADR-0181.")
+            f"provider at spawn, where L34/L35 apply.")
     return warnings
 
 

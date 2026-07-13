@@ -72,10 +72,13 @@ engines:
         note: ""
       - provider: "ollama_local"
         native: false
-        note: "via claude_code_local redirect (ANTHROPIC_BASE_URL → local proxy)"
+        note: "via built-in local translating proxy (anthropic_openai_bridge, auto-started)"
+      - provider: "ollama_cloud"
+        native: false
+        note: "via built-in local translating proxy (anthropic_openai_bridge, auto-started)"
       - provider: "openrouter"
         native: false
-        note: "via Anthropic-compatible base-URL proxy"
+        note: "via built-in local translating proxy (anthropic_openai_bridge, auto-started)"
     os_models:
       - id: ""
         label: "Adaptive — Haiku ≤60K chars, Sonnet above (default)"

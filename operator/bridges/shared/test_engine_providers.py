@@ -27,8 +27,9 @@ def test_supported_providers_per_engine():
     reg = EM.registry_as_dict(force_reload=True)
     cc = {p["provider"]: p for p in reg["claude_code"]["supported_providers"]}
     assert cc["anthropic"]["native"] is True
-    assert cc["ollama_local"]["native"] is False   # via redirect
-    assert cc["openrouter"]["native"] is False      # via proxy
+    assert cc["ollama_local"]["native"] is False   # via built-in translating proxy
+    assert cc["ollama_cloud"]["native"] is False   # via built-in translating proxy
+    assert cc["openrouter"]["native"] is False      # via built-in translating proxy
     oc = [p["provider"] for p in reg["opencode"]["supported_providers"]]
     assert set(oc) == {"anthropic", "openai", "ollama_local", "ollama_cloud", "openrouter"}
     assert reg["copilot"]["supported_providers"] == []
