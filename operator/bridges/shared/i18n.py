@@ -217,6 +217,44 @@ def resolve(*candidates: str | None, default: str = "en") -> str:
     return normalise(default) or "en"
 
 
+def system_language() -> str:
+    """Best-effort OS/user locale as a normalised BCP-47 code, or "".
+
+    Used as a resolution tier BELOW an explicit ``profile.display_language`` but
+    ABOVE the hard-coded English/German constants, so a surface whose profile
+    value was somehow never seeded still greets/speaks in the user's ACTUAL OS
+    language — instead of the divergent per-surface defaults (console welcome
+    → English vs bridge TTS → German on the same box). This is the defence-in-
+    depth tier beneath the installer's now-unconditional `display_language`
+    seed; on the reported platform (Windows) `GetUserDefaultLocaleName` makes
+    every surface agree on the OS language. Never raises; returns "" when the
+    locale is unknown/stripped (e.g. a systemd --user bridge with no LANG), so
+    the caller's own final constant still applies.
+    """
+    import os as _os  # noqa: PLC0415
+    import sys as _sys  # noqa: PLC0415
+    for var in ("LC_ALL", "LANG", "LANGUAGE"):
+        raw = _os.environ.get(var, "").strip()
+        if raw and raw.split(".")[0] not in ("", "C", "POSIX"):
+            code = normalise(raw.split(".")[0])  # "de_DE.UTF-8" → "de-DE"
+            if code:
+                return code
+    if _sys.platform == "win32":
+        # GetUserDefaultLocaleName is non-deprecated and returns e.g. "de-DE"
+        # (unlike locale.getdefaultlocale(), removed/None-prone on modern
+        # Python). Mirrors the installer's _detect_language Windows path.
+        try:
+            import ctypes  # noqa: PLC0415
+            buf = ctypes.create_unicode_buffer(85)  # LOCALE_NAME_MAX_LENGTH
+            if ctypes.windll.kernel32.GetUserDefaultLocaleName(buf, 85):  # type: ignore[attr-defined]
+                code = normalise(buf.value)
+                if code:
+                    return code
+        except Exception:  # noqa: BLE001
+            pass
+    return ""
+
+
 # ─── LLM directive ────────────────────────────────────────────────────────
 
 def language_directive(bcp47: str, *, audience: str = "general") -> str:

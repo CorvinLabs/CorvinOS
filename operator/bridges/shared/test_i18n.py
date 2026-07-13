@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -409,6 +410,44 @@ class ProfileAudienceTests(unittest.TestCase):
         # Regional German dialect → still German block (base-locale rule).
         out = self.p.for_tts_audience("de-AT")
         self.assertIn("HÖRER-PROFIL", out)
+
+
+class SystemLanguageTests(unittest.TestCase):
+    """`system_language()` — the OS-locale defence-in-depth tier that keeps the
+    console welcome (was hard 'en') and the bridge TTS (was hard 'de') agreeing
+    on the user's ACTUAL language when display_language was never seeded."""
+
+    def test_posix_lang_env(self):
+        with unittest.mock.patch.dict(
+            os.environ, {"LANG": "de_DE.UTF-8", "LC_ALL": "", "LANGUAGE": ""}, clear=False
+        ):
+            self.assertEqual(i18n.system_language(), "de-DE")
+
+    def test_lc_all_takes_precedence_over_lang(self):
+        with unittest.mock.patch.dict(
+            os.environ, {"LC_ALL": "fr_FR.UTF-8", "LANG": "de_DE.UTF-8"}, clear=False
+        ):
+            self.assertEqual(i18n.system_language(), "fr-FR")
+
+    def test_c_and_posix_locale_ignored(self):
+        with unittest.mock.patch.dict(
+            os.environ, {"LC_ALL": "C", "LANG": "POSIX", "LANGUAGE": ""}, clear=False
+        ):
+            if sys.platform != "win32":
+                self.assertEqual(i18n.system_language(), "")
+
+    def test_unset_returns_empty_non_windows(self):
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            if sys.platform != "win32":
+                self.assertEqual(i18n.system_language(), "")
+
+    def test_resolve_chain_prefers_profile_then_system_then_default(self):
+        # explicit profile pin wins over the system-locale tier
+        self.assertEqual(i18n.resolve("es", "de-DE", default="en"), "es")
+        # unseeded profile → system-locale tier is used
+        self.assertEqual(i18n.resolve("", "de-DE", default="en"), "de-DE")
+        # nothing known → hard default
+        self.assertEqual(i18n.resolve("", "", default="en"), "en")
 
 
 if __name__ == "__main__":

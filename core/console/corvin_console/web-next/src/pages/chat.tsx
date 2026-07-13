@@ -813,8 +813,11 @@ function ChatPane({
   const stickToBottom = React.useRef(true);
 
   // Read TTS language from the operator's profile (display_language).
-  // Falls back to "en" (console UI default); detectTtsLang still auto-detects
-  // the response language per turn, so this only matters for neutral text.
+  // Falls back to the BROWSER language (navigator.language), not a hard "en":
+  // on the very first reply the profile query may not have resolved yet, and a
+  // neutral-text reply would otherwise be mis-spoken in English before the
+  // profile loads. detectTtsLang still auto-detects the response language per
+  // turn, so this fallback only matters for language-neutral text.
   const profileQ = useQuery({
     queryKey: ["profile"],
     queryFn: ({ signal }) => getProfile(signal),
@@ -842,7 +845,13 @@ function ChatPane({
   // signal is ambiguous (e.g. very short or language-neutral text).
   const ttsLang: string = React.useMemo(() => {
     const raw = profileQ.data?.profile?.identity?.display_language ?? "";
-    return raw.trim() || "en";
+    if (raw.trim()) return raw.trim();
+    // Profile not loaded yet / display_language unset → the browser's own UI
+    // language (the user's actual language) instead of a hard "en", base subtag
+    // only ("de-DE" → "de"). Mirrors the backend OS-locale fallback tier so the
+    // console and the bridge agree on an unseeded box.
+    const nav = (typeof navigator !== "undefined" && navigator.language) || "";
+    return nav.split("-")[0].toLowerCase() || "en";
   }, [profileQ.data]);
 
   // The WebSocket onmessage handler is bound once per `sid` mount.

@@ -1152,7 +1152,14 @@ def _welcome_check_lang() -> str:
             sys.path.insert(0, str(_SHARED))
         import i18n as _i18n  # noqa: PLC0415
         import profile as _profile  # noqa: PLC0415
-        return _i18n.resolve(_profile.get("display_language"), default="en")
+        # Tier chain: explicit profile pin → OS locale (defence-in-depth so an
+        # unseeded install still greets in the user's actual language instead of
+        # a hard English default that diverges from the bridge's German one) → en.
+        return _i18n.resolve(
+            _profile.get("display_language"),
+            _i18n.system_language(),
+            default="en",
+        )
     except Exception:
         return "en"
 

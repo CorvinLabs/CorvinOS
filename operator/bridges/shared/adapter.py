@@ -7017,6 +7017,16 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
             output_language = _i18n.normalise(raw) if raw else ""
         except Exception:  # noqa: BLE001
             output_language = ""
+    # Defence-in-depth: when display_language was never seeded, fall back to the
+    # OS locale (the user's actual language) BEFORE the caller's `or "de"` — so an
+    # unseeded box speaks its real language and matches the console welcome tier,
+    # instead of the two surfaces diverging (welcome→en vs TTS→de). "" on a
+    # stripped-env service keeps the caller's existing constant.
+    if not output_language and _i18n is not None:
+        try:
+            output_language = _i18n.system_language()
+        except Exception:  # noqa: BLE001
+            output_language = ""
     if output_language and output_language not in ("de", "en"):
         detected = _detect_confident_de_en(candidate_text)
         if detected:
