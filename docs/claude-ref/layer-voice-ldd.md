@@ -460,6 +460,28 @@ helper) — previously they had no fallback at all, so a Hermes-only install
 LERN-ZUGABE/METAPHER annex; now `generate_appendix`/`generate_metapher` try
 CLI (if authenticated) then Hermes before giving up.
 
+**Hermes calls MUST disable qwen3 reasoning (`think: false`).** The default
+zero-config engine is a qwen3 model (`hermes_engine._DEFAULT_MODEL`), which is a
+*thinking* model: left to its own devices it emits a `<think>…</think>` monologue
+BEFORE the answer. `summarize.py` strips that block, but stripping-after doesn't
+help latency — the model still spends the whole budget generating reasoning
+tokens. On a FRESH install (Hermes/Ollama path, no Claude login) this blew both
+timeouts: the summary ladder (`_summarize_via_hermes`, 60 s) fell back to the
+VERBATIM un-summarized text, and the annex ladder (`_ollama_generate`, 30 s)
+never produced the LERN-ZUGABE / METAPHER marker in time → no learning/metaphor at
+all. Both Ollama `/api/generate` payloads now send `"think": false`, so the answer
+(and the marker) come out directly. Verified end-to-end with `claude` stripped
+from PATH (fresh-install simulation): with reasoning ON the annex timed out with
+no marker; with `think: false` the LERN-ZUGABE and METAPHER came back in ~6 s each
+WITH their markers. Note the model must be WARM — in the real turn flow the answer
+generation loads the qwen3 weights before the voice summary runs (same model), so
+the summary call is warm; a cold first-load of the largest tier (`qwen3:8b`,
+~5 GB) can still exceed the budget on its own, which is why the model tier is
+RAM-gated at install (`install.sh`: <6 GB→1.7b, <12 GB→4b, ≥12 GB→8b). Summary
+COMPRESSION quality still scales with the tier — the 1.7b tier summarizes weakly;
+the annex (a single templated sentence) is reliable across tiers. Regression:
+`test_summarize.py::test_hermes_payloads_disable_thinking`.
+
 **Console critical-path latency cap (`chat_runtime._compute_web_annotation_suffix`).**
 The web-console mirrors the same LERN-ZUGABE / METAPHER annex, spawning
 `summarize.py --appendix-mode` / `--metapher-mode` after the turn's answer. This

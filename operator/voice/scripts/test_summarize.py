@@ -516,6 +516,50 @@ def test_hermes_backend_strips_think_block() -> None:
     assert "<think>" not in (out or "")
 
 
+def test_hermes_payloads_disable_thinking() -> None:
+    """Both Hermes calls (summary + annex) MUST set think=False.
+
+    qwen3-style reasoning models otherwise spend the whole latency budget
+    emitting <think>…</think> BEFORE the answer, blowing the 60s/30s timeout —
+    on a fresh install (cold Ollama) this made the summary fall back to the
+    verbatim un-summarized text AND dropped the LERN-ZUGABE / METAPHER annex
+    entirely (marker never produced in time). Verified end-to-end: qwen3:8b
+    dropped from >60s/>30s timeouts to ~10s with a real summary + marker.
+    """
+    from unittest.mock import patch
+    import json as _j
+
+    captured: dict = {}
+
+    class _Resp:
+        def getcode(self):
+            return 200
+
+        def read(self):
+            return b'{"response": "Und zur Einordnung, ok."}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, *a, **k):
+        captured["data"] = req.data
+        return _Resp()
+
+    with patch("urllib.request.urlopen", _fake_urlopen):
+        summarize._summarize_via_hermes("some long text to summarize", "", "de", 200, "m")
+    body = _j.loads(captured["data"].decode("utf-8"))
+    assert body.get("think") is False, f"summary payload must disable thinking: {body}"
+
+    captured.clear()
+    with patch("urllib.request.urlopen", _fake_urlopen):
+        summarize._ollama_generate("system prompt", "user input")
+    body2 = _j.loads(captured["data"].decode("utf-8"))
+    assert body2.get("think") is False, f"annex payload must disable thinking: {body2}"
+
+
 def test_claude_authenticated_true_with_api_key(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
     assert summarize._claude_authenticated() is True

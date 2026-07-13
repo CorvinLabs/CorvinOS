@@ -1018,6 +1018,14 @@ def _summarize_via_hermes(text: str, task: str, lang: str, target_chars: int, mo
         "system": system_prompt,
         "prompt": user_input,
         "stream": False,
+        # Disable qwen3-style reasoning: a thinking model would spend the entire
+        # latency budget emitting <think>…</think> tokens BEFORE the summary and
+        # blow the timeout — on a fresh install (cold Ollama) this made the
+        # summary silently fall back to the verbatim (un-summarized) text. We
+        # already strip any <think> below; NOT generating it is what keeps the
+        # call inside budget. Ignored by non-thinking models. (Verified: qwen3:8b
+        # dropped from >60s timeout to ~10s and produced a real summary.)
+        "think": False,
         # Voice summaries must be concise + deterministic — low temperature keeps
         # the model from padding the spoken reply.
         "options": {"temperature": 0.2},
@@ -1158,6 +1166,13 @@ def _ollama_generate(system_prompt: str, user_input: str, timeout: int = _ANNEX_
         "system": system_prompt,
         "prompt": user_input,
         "stream": False,
+        # Disable qwen3-style reasoning so the annex (LERN-ZUGABE / METAPHER) is
+        # emitted DIRECTLY instead of after a <think> block that eats the whole
+        # 30s timeout — on a fresh install (cold Ollama) the annex silently
+        # vanished (marker never produced in time → verbatim fallback). Ignored
+        # by non-thinking models. (Verified: qwen3:8b dropped >30s→~10s and
+        # produced the "Und zur Einordnung," marker.)
+        "think": False,
         "options": {"temperature": 0.4},
     }).encode("utf-8")
     try:
