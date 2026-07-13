@@ -331,6 +331,61 @@ def test_proxy_end_to_end_streaming():
         u_thread.join(timeout=2)
 
 
+class _FakeOllamaCapturingThink(BaseHTTPRequestHandler):
+    captured: dict = {}
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(length) or b"{}")
+        type(self).captured["think"] = body.get("think")
+        resp = {"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+        payload = json.dumps(resp).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+def test_disable_reasoning_sends_think_false_for_ollama():
+    """qwen3-style thinking models otherwise spend real latency generating a
+    separate 'reasoning' field even when the visible answer is what's wanted
+    (verified live against a real running Ollama during development) — the
+    same class of issue already fixed for Hermes/summarize.py's calls."""
+    _FakeOllamaCapturingThink.captured = {}
+    upstream, u_thread, upstream_url = _start_fake_upstream(_FakeOllamaCapturingThink)
+    try:
+        target = bridge.ProxyTarget(
+            chat_completions_url=f"{upstream_url}/chat/completions",
+            api_key="", model="qwen3:8b", disable_reasoning=True,
+        )
+        base = bridge.ensure_proxy(target)
+        req_body = json.dumps({
+            "messages": [{"role": "user", "content": "hi"}],
+        }).encode("utf-8")
+        req = urllib.request.Request(f"{base}/v1/messages", data=req_body,
+                                      headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=5):
+            pass
+        assert _FakeOllamaCapturingThink.captured.get("think") is False
+    finally:
+        bridge.shutdown_all()
+        upstream.shutdown()
+        u_thread.join(timeout=2)
+
+
+def test_no_disable_reasoning_omits_think_field():
+    target = bridge.ProxyTarget(
+        chat_completions_url="http://example.invalid/chat/completions",
+        api_key="", model="claude-sonnet-5", disable_reasoning=False,
+    )
+    assert target.disable_reasoning is False
+
+
 def test_health_endpoint():
     target = bridge.ProxyTarget(chat_completions_url="http://example.invalid/chat/completions",
                                 api_key="", model="m")

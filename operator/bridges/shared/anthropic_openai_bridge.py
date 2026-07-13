@@ -414,11 +414,21 @@ class ProxyTarget:
     which real model name to substitute for whatever Claude Code asked for."""
 
     def __init__(self, *, chat_completions_url: str, api_key: str, model: str,
-                 request_timeout: float = 120.0) -> None:
+                 request_timeout: float = 120.0, disable_reasoning: bool = False) -> None:
         self.chat_completions_url = chat_completions_url
         self.api_key = api_key
         self.model = model
         self.request_timeout = request_timeout
+        # qwen3-style thinking models emit a separate "reasoning" field
+        # (correctly ignored by our own response translation either way) but
+        # still spend real latency generating it — same issue already fixed
+        # for Hermes/summarize.py's calls to Ollama's NATIVE /api/generate
+        # (see summarize.py's own "think": False, "Verified: qwen3:8b dropped
+        # from >60s timeout to ~10s"). Ollama's OpenAI-compat endpoint accepts
+        # the same non-standard "think" field; harmless to omit for providers
+        # that don't recognise it (OpenRouter — most OpenAI-compatible
+        # servers ignore unknown top-level fields).
+        self.disable_reasoning = disable_reasoning
 
 
 def _make_handler(target: ProxyTarget) -> type[BaseHTTPRequestHandler]:
@@ -454,6 +464,8 @@ def _make_handler(target: ProxyTarget) -> type[BaseHTTPRequestHandler]:
                 return
 
             openai_req = anthropic_request_to_openai(body, model=target.model)
+            if target.disable_reasoning:
+                openai_req["think"] = False
             message_id = f"msg_{uuid.uuid4().hex[:24]}"
 
             if openai_req.get("stream"):

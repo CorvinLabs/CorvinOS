@@ -207,6 +207,11 @@ def test_build_spawn_env_auto_starts_local_proxy_when_no_proxy_base_url_configur
             length = int(self.headers.get("Content-Length", "0"))
             body = _json.loads(self.rfile.read(length) or b"{}")
             assert body["model"] == "qwen3:8b"
+            # qwen3-style reasoning must be disabled for ollama targets — a
+            # real, live-verified issue: without this, the model can spend
+            # the entire visible response budget on a separate "reasoning"
+            # field before ever answering.
+            assert body.get("think") is False
             resp = {"choices": [{"message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
             payload = _json.dumps(resp).encode("utf-8")

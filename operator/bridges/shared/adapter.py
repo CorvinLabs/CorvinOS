@@ -3664,6 +3664,7 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
                                     chat_completions_url=chat_completions_url_for(
                                         _ps.base_url, _ps.model_source),
                                     api_key=_key, model=_model or "auto",
+                                    disable_reasoning=(_ps.model_source == "ollama"),
                                 ))
                             except Exception:  # noqa: BLE001 — never break the spawn
                                 log(f"[provider] {_prov}: failed to start the local "
