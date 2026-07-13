@@ -52,6 +52,14 @@ CorvinOS is a self-hosted agentic OS that connects **Claude Code, Codex, Hermes,
 - **Compliance by architecture** — EU AI Act 2026 + GDPR enforced in code, not policy documents.
 - **Multi-tenant** — one instance, multiple users, personas, and teams, all isolated.
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=NyROKmJqTYI" target="_blank" rel="noopener noreferrer" title="Watch the CorvinOS demo on YouTube">
+    <img src="https://img.youtube.com/vi/NyROKmJqTYI/maxresdefault.jpg" alt="CorvinOS demo video" width="720">
+  </a>
+  <br>
+  <a href="https://www.youtube.com/watch?v=NyROKmJqTYI">▶ Watch the demo on YouTube</a>
+</p>
+
 ---
 
 ## Quick Start
