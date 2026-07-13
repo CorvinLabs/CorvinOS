@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import os
 import sys
+import threading
 import urllib.parse
 from pathlib import Path
 
@@ -48,6 +49,17 @@ _MAX_IMAGE_BYTES = 20 * 1024 * 1024
 # reply 414/handshake errors instead of a useful message.
 _MAX_PROMPT_CHARS = 4000
 
+# Bug report 2026-07-13 (Windows 11): generate_image() hung forever with no
+# result. Root cause (confirmed): _save_image_bytes's mkdir/write_bytes had
+# no timeout — a try/except cannot interrupt a syscall stuck INSIDE the
+# kernel (a stalled OneDrive-synced or network-mapped folder backing the
+# session workdir, both common on Windows), and nothing downstream (the
+# console's stdout-reading loop, the bridge's subprocess.communicate()) ever
+# times out a hanging turn either — so a stuck write here was invisible and
+# unbounded all the way up to the user's screen. _SAVE_TIMEOUT_S bounds it.
+_SAVE_TIMEOUT_S = 15.0
+
+
 def _save_image_bytes(data: bytes, fmt: str) -> "str | None":
     """ALSO persist the generated image to a file so the user actually SEES it.
 
@@ -58,24 +70,46 @@ def _save_image_bytes(data: bytes, fmt: str) -> "str | None":
     ``./outputs/``. Writing the bytes to ``./outputs/`` (relative to the engine's
     cwd) makes the image show up on BOTH surfaces — closing the ADR-0191 display
     gap where a generation reported "done" but nothing was shown. Best-effort:
-    never raises, so a write failure can't break the tool.
+    never raises AND never blocks longer than _SAVE_TIMEOUT_S, so a write
+    failure OR a stuck filesystem can't break/hang the tool.
 
     Directory: ``CORVIN_IMAGE_OUTDIR`` if set, else ``./outputs`` under cwd.
+
+    Runs the actual mkdir+write on a background daemon thread with a bounded
+    join(): threading.Thread has no cross-platform way to force-kill a stuck
+    thread (signal.alarm doesn't exist on Windows), so a still-stuck write is
+    ABANDONED rather than awaited — daemon=True guarantees it can never block
+    process exit either. That abandoned thread either eventually finishes
+    (harmless, its result is just never used) or stays stuck forever on a
+    genuinely broken filesystem (also harmless — it holds no lock the rest of
+    the server needs). Either way, generate_image() itself is never held
+    hostage by it.
     """
-    try:
-        import time  # noqa: PLC0415
-        import secrets  # noqa: PLC0415
-        if not data:
-            return None
-        ext = (fmt or "png").lower().lstrip(".") or "png"
-        outdir = os.environ.get("CORVIN_IMAGE_OUTDIR", "").strip()
-        base = Path(outdir) if outdir else (Path.cwd() / "outputs")
-        base.mkdir(parents=True, exist_ok=True)
-        fpath = base / f"corvin-image-{int(time.time())}-{secrets.token_hex(3)}.{ext}"
-        fpath.write_bytes(data)
-        return str(fpath)
-    except Exception:  # noqa: BLE001 — display persistence is best-effort, never fatal
+    if not data:
         return None
+    import time  # noqa: PLC0415
+    import secrets  # noqa: PLC0415
+    ext = (fmt or "png").lower().lstrip(".") or "png"
+    outdir = os.environ.get("CORVIN_IMAGE_OUTDIR", "").strip()
+    base = Path(outdir) if outdir else (Path.cwd() / "outputs")
+    fpath = base / f"corvin-image-{int(time.time())}-{secrets.token_hex(3)}.{ext}"
+
+    outcome: dict = {}
+
+    def _write() -> None:
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            fpath.write_bytes(data)
+            outcome["ok"] = True
+        except Exception as exc:  # noqa: BLE001 — display persistence is best-effort
+            outcome["error"] = exc
+
+    t = threading.Thread(target=_write, daemon=True, name="imagegen-save")
+    t.start()
+    t.join(timeout=_SAVE_TIMEOUT_S)
+    if not outcome.get("ok"):
+        return None
+    return str(fpath)
 
 
 mcp = FastMCP("corvin-imagegen")
@@ -191,6 +225,21 @@ def _generate_openai(prompt: str, api_key: str) -> Image:
         return Image(data=base64.b64decode(b64), format="png")
 
 
+# Bug report 2026-07-13 (Windows 11): a generate_image() call hung forever
+# with no result, no error, no timeout anywhere in the whole chain
+# (confirmed: neither this server's own code nor the console/bridge callers
+# ever bound a single turn). _save_image_bytes's write got the targeted fix
+# above; this is the holistic safety net -- if literally anything else in
+# this function's call graph (a provider HTTP client that ignores its own
+# timeout under some edge case, a future code change, an unknown OS quirk)
+# ever hangs, the tool still returns within _TOTAL_TIMEOUT_S instead of
+# leaving the user staring at a spinner indefinitely. Same daemon-thread +
+# bounded-join pattern as _save_image_bytes, for the same reason
+# (signal.alarm-based timeouts don't exist on Windows, so this must be
+# thread-based to actually be cross-platform).
+_TOTAL_TIMEOUT_S = 150.0
+
+
 @mcp.tool()
 def generate_image(prompt: str) -> list:
     """Generate an image from a text prompt.
@@ -200,6 +249,32 @@ def generate_image(prompt: str) -> list:
     same one used for voice), that's used automatically instead for
     higher quality — no extra configuration needed either way.
     """
+    outcome: dict = {}
+
+    def _run() -> None:
+        try:
+            outcome["value"] = _generate_image_impl(prompt)
+        except BaseException as exc:  # noqa: BLE001 — re-raised on the caller's
+            # thread below so ImageGenRefused/Tier0RateLimited etc. keep their
+            # real type instead of being swallowed here.
+            outcome["error"] = exc
+
+    t = threading.Thread(target=_run, daemon=True, name="imagegen-generate")
+    t.start()
+    t.join(timeout=_TOTAL_TIMEOUT_S)
+    if t.is_alive():
+        raise ImageGenRefused(
+            f"Image generation timed out after {int(_TOTAL_TIMEOUT_S)}s without "
+            "responding — this can happen if a background component hangs "
+            "(e.g. a stalled network drive or synced folder backing your "
+            "session directory). Please try again."
+        )
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
+
+
+def _generate_image_impl(prompt: str) -> list:
     tid = _tenant_id()
 
     prompt = (prompt or "").strip()

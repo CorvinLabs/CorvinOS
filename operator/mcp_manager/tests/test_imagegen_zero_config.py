@@ -430,3 +430,87 @@ def test_disclosure_rejects_path_injection_tenant(monkeypatch, tmp_path):
 
     p = d._store_path("../../../etc")
     assert "tenants/_default" in str(p).replace("\\", "/")
+
+
+# ── Bounded timeouts (bug report 2026-07-13: hangs forever on Windows) ─────
+# Root cause confirmed by investigation: _save_image_bytes's mkdir/write_bytes
+# had no timeout (a try/except cannot interrupt a syscall stuck inside the
+# kernel -- e.g. a stalled OneDrive-synced or network-mapped folder backing
+# the session workdir, both common on Windows), and NOTHING downstream (the
+# console's stdout-reading loop, the bridge's subprocess.communicate()) ever
+# times out a hanging turn either. These tests simulate a genuinely stuck
+# write / a stuck implementation and prove the tool now returns within a
+# bounded time instead of hanging -- using real threading.Thread.join()
+# timeouts, not just asserting the constant exists.
+
+def test_save_image_bytes_abandons_a_stuck_write_instead_of_hanging(monkeypatch, tmp_path):
+    import time as _time
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setenv("CORVIN_IMAGE_OUTDIR", str(tmp_path / "outputs"))
+    import main as m
+
+    monkeypatch.setattr(m, "_SAVE_TIMEOUT_S", 0.3)
+
+    real_mkdir = Path.mkdir
+
+    def _stuck_mkdir(self, *a, **k):
+        _time.sleep(5)  # simulate a hung/offline synced or mapped drive
+        return real_mkdir(self, *a, **k)
+
+    monkeypatch.setattr(Path, "mkdir", _stuck_mkdir)
+
+    t0 = _time.monotonic()
+    result = m._save_image_bytes(b"\xff\xd8\xff\xe0fake-jpeg-bytes", "jpeg")
+    elapsed = _time.monotonic() - t0
+
+    assert result is None, "a stuck write must degrade to 'not saved', not hang"
+    assert elapsed < 2.0, (
+        f"_save_image_bytes must return promptly after _SAVE_TIMEOUT_S "
+        f"(0.3s) even though the write itself takes 5s -- took {elapsed:.2f}s"
+    )
+
+
+def test_generate_image_returns_timeout_error_instead_of_hanging_forever(monkeypatch, tmp_path):
+    """The holistic safety net: even if something OTHER than the save step
+    hangs (a future bug, an unknown OS quirk), generate_image() itself must
+    still return -- with a clear, catchable error -- instead of leaving the
+    caller waiting forever with zero feedback (the exact reported symptom)."""
+    import time as _time
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import main as m
+
+    monkeypatch.setattr(m, "_TOTAL_TIMEOUT_S", 0.3)
+
+    def _stuck_impl(prompt):
+        _time.sleep(5)
+        return ["never gets here"]
+
+    monkeypatch.setattr(m, "_generate_image_impl", _stuck_impl)
+
+    t0 = _time.monotonic()
+    with pytest.raises(m.ImageGenRefused) as exc_info:
+        m.generate_image("a nice tree")
+    elapsed = _time.monotonic() - t0
+
+    assert "timed out" in str(exc_info.value).lower()
+    assert elapsed < 2.0, (
+        f"generate_image() must return within _TOTAL_TIMEOUT_S (0.3s) even "
+        f"though the implementation hangs for 5s -- took {elapsed:.2f}s"
+    )
+
+
+def test_generate_image_still_works_normally_through_the_timeout_wrapper(monkeypatch, tmp_path):
+    """Regression guard: wrapping generate_image() in a timeout must not
+    change its behavior on the normal (fast, successful) path."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    import main as m
+
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: None)
+    monkeypatch.setattr(m, "resolve_key", lambda name: None)
+    monkeypatch.setattr(m, "ensure_disclosed", lambda tid: None)
+    sentinel = object()
+    monkeypatch.setattr(m, "_generate_pollinations", lambda prompt: sentinel)
+    monkeypatch.setattr(m, "_save_image_bytes", lambda data, fmt: None)
+
+    blocks = m.generate_image("a nice tree")
+    assert sentinel in blocks
