@@ -6,6 +6,40 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.36] — 2026-07-13 — Fresh-install voice language is preset for everything
+
+### Fixed
+
+- **Fresh install (especially Windows): the welcome greeting and the first
+  chat voice came out in the wrong / inconsistent language** — the welcome
+  spoke English while the bridge TTS spoke German on the same box. The language
+  SSOT `profile.display_language` (read by the console welcome, the bridge TTS,
+  and the console chat) was seeded ONLY as a side effect of a *successful* Piper
+  voice-model download. Every other path returned without seeding it: the user
+  skipping the voice model, an unparseable menu choice, a failed/partial ONNX
+  fetch (Windows CDN reset / offline), or a model *prefetched* by the installer
+  (early-return on "already configured"). Unseeded, the three surfaces fell back
+  to three different hardcoded defaults. Compounded on Windows by
+  `_detect_language()` using the deprecated `locale.getdefaultlocale()`, which
+  returns `(None, None)` on some configs → a German box detected as English.
+  `_setup_model` now seeds `display_language` **unconditionally and before the
+  download**, on every branch (including the prefetched-model early-return,
+  seeded from `config.json`'s `lang_default`); `_detect_language()` uses the
+  non-deprecated `GetUserDefaultLocaleName` on Windows; the seed is normalised
+  through `i18n.normalise()`.
+
+### Changed
+
+- **Defence-in-depth: a consistent OS-locale fallback for the language.** When
+  `display_language` is somehow still unset, all surfaces now resolve the user's
+  actual OS locale via the new `i18n.system_language()` (POSIX `LC_ALL`/`LANG`,
+  else Windows `GetUserDefaultLocaleName`), inserted below the explicit profile
+  pin and above each surface's constant — so the console welcome and the bridge
+  TTS agree instead of diverging (English vs German). The console web chat's
+  first-reply race is closed too: `ttsLang` falls back to `navigator.language`
+  (the browser's UI language) instead of a hard `"en"` before the profile query
+  resolves.
+
 ## [0.10.35] — 2026-07-13 — Fix chat artifact display/download for nested paths (images, ACS output)
 
 ### Fixed
