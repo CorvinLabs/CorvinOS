@@ -6,6 +6,28 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.35] — 2026-07-13 — Fix chat artifact display/download for nested paths (images, ACS output)
+
+### Fixed
+
+- **Chat artifact cards (generated images, ACS analysis output) could render
+  as a broken-image icon with a non-functional download button.** Any
+  artifact nested one directory level below the session workdir —
+  `imagegen-zero-config`'s generated images (`outputs/corvin-image-….jpeg`)
+  and ACS output files (`acs/runs/<id>/output/chart.png`) both do this
+  routinely — had its relative path serialized via `str(Path)` in
+  `chat_runtime.py`'s artifact-event emitters, which renders with the
+  **OS-native separator**. On a Windows-hosted console this embedded a
+  literal backslash into the `"path"` field sent to the browser; the
+  frontend's `filePath.split("/")` and the serving route's forward-slash-only
+  `_SAFE_SUBPATH` regex both then rejected it. Since the chat UI's `<img>`
+  and download link share the exact same URL, both failed identically with
+  no visible error beyond the broken-image placeholder. Fixed by using
+  `Path.as_posix()` at every artifact-path emission site instead of
+  `str(Path)`. Added the confirmed-missing regression coverage: every
+  existing `test_workdir_route.py` case only ever served a file sitting flat
+  at workdir root, never a nested one.
+
 ## [0.10.34] — 2026-07-13 — Adversarial security/reliability sweep: WF-A3 approver binding, packaging git-awareness, cross-daemon sticky progress
 
 Triggered by an automated blind-spot sweep plus a 5-dimension adversarial code
