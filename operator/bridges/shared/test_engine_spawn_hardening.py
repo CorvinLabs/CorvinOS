@@ -25,7 +25,11 @@ Run:
 from __future__ import annotations
 
 import os
+import signal
 import sys
+import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -36,8 +40,13 @@ from agents import collect  # noqa: E402
 from agents import claude_code as claude_code_mod  # noqa: E402
 from agents import codex_cli as codex_mod  # noqa: E402
 from agents import opencode_cli as opencode_mod  # noqa: E402
-from agents.claude_code import ClaudeCodeEngine, _configured_claude_bin  # noqa: E402
+from agents.claude_code import (  # noqa: E402
+    ClaudeCodeEngine,
+    _configured_claude_bin,
+    _resolve_claude_bin,
+)
 from agents.codex_cli import CodexCliEngine  # noqa: E402
+from agents.copilot_cli import CopilotCliEngine  # noqa: E402
 from agents.opencode_cli import OpenCodeEngine  # noqa: E402
 
 
@@ -268,6 +277,333 @@ class CorvinClaudeBinTests(unittest.TestCase):
         os.environ["CORVIN_CLAUDE_BIN"] = "/pinned/bin/claude"
         eng = ClaudeCodeEngine(binary="/explicit/claude")
         self.assertEqual(eng.binary, "/explicit/claude")
+
+    def test_whitespace_only_env_values_are_treated_as_unset(self):
+        # A stray-space typo in a service.env / systemd EnvironmentFile is
+        # a plausible real-world misconfiguration. bash's own `[[ -z ]]`
+        # guard in bridge.sh does NOT catch whitespace-only values either,
+        # so this must be handled at the Python layer — same contract as
+        # the literal empty-string case above (docstring: "Empty-string
+        # AND whitespace-only env values ... are treated as unset").
+        os.environ["CORVIN_CLAUDE_BIN"] = "   "
+        os.environ["CLAUDE_BIN"] = "/legacy/bin/claude"
+        self.assertEqual(_configured_claude_bin(), "/legacy/bin/claude")
+
+        os.environ.pop("CLAUDE_BIN")
+        self.assertEqual(_configured_claude_bin(), "claude")
+
+    def test_whitespace_only_configured_bin_resolves_like_bare_default(self):
+        # End-to-end: with CORVIN_CLAUDE_BIN whitespace-only and no
+        # CLAUDE_BIN set, _configured_claude_bin() must fall through to
+        # the bare "claude" default, and _resolve_claude_bin() must then
+        # run the normal PATH / fallback search for it — NOT hand a
+        # literal " " to Popen (which would raise a confusing
+        # FileNotFoundError naming binary ' ').
+        os.environ["CORVIN_CLAUDE_BIN"] = " "
+        configured = _configured_claude_bin()
+        self.assertEqual(configured, "claude")
+        self.assertEqual(
+            _resolve_claude_bin(configured),
+            _resolve_claude_bin("claude"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fixed blind spot — cancel()/_cleanup_proc() used to leak tool-use
+# grandchild processes
+#
+# ClaudeCodeEngine spawns with start_new_session=True (see
+# StartNewSessionTests above) specifically so the WHOLE process tree — the
+# CLI plus any Bash/MCP-server/curl child it forks for tool use — can be
+# reaped as one process group. adapter.py's user-triggered _cancel_chat()
+# does exactly that: os.killpg(os.getpgid(pid), SIGTERM). But
+# ClaudeCodeEngine.cancel() and _cleanup_proc() — the two call sites hit by
+# the internal per-turn timeout and the streaming idle-timeout — used to
+# only call proc.terminate()/proc.kill() on the single DIRECT child. If a
+# tool-use grandchild was alive at that moment, it was orphaned (reparented,
+# never reaped) and kept running.
+#
+# These tests exercise a REAL process tree (a tiny fake-`claude` shell
+# script that forks a detached grandchild) — not the mocked-Popen fixtures
+# above — so the leak is observed exactly as it would occur on a live
+# bridge host.
+#
+# Fixed: cancel()/_cleanup_proc() (and the equivalent methods in
+# codex_cli.py / opencode_cli.py / copilot_cli.py) now route through the
+# shared agents/__init__.py::terminate_process_tree() helper, which
+# killpg's the whole process group the same way adapter.py._cancel_chat()
+# already does. Both tests below pass against the current implementation —
+# they now guard against a regression, not document an open bug.
+# ---------------------------------------------------------------------------
+
+_FAKE_CLAUDE_WITH_GRANDCHILD = """\
+#!/usr/bin/env bash
+echo '{"type":"system","subtype":"init","session_id":"x"}'
+sleep 300 </dev/null >/dev/null 2>&1 &
+echo $! > "$GRANDCHILD_PID_FILE"
+sleep 300
+"""
+
+
+def _process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+class GrandchildLeakTests(unittest.TestCase):
+    """Regression guard: cancel()/_cleanup_proc() must killpg the whole
+    process group, or a live tool-use grandchild spawned by the CLI would
+    outlive its parent's cancellation instead of being reaped with it."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="engine-grandchild-")
+        self._grandchild_pid: int | None = None
+
+    def tearDown(self):
+        if self._grandchild_pid is not None:
+            try:
+                os.kill(self._grandchild_pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        self._tmp.cleanup()
+
+    def _make_fake_claude(self) -> str:
+        script_path = os.path.join(self._tmp.name, "fake_claude.sh")
+        with open(script_path, "w") as fh:
+            fh.write(_FAKE_CLAUDE_WITH_GRANDCHILD)
+        os.chmod(script_path, 0o755)
+        return script_path
+
+    def _wait_for_grandchild_pid(self, pidfile: str, timeout: float = 5.0) -> int:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if os.path.exists(pidfile):
+                try:
+                    content = open(pidfile).read().strip()
+                except OSError:
+                    content = ""
+                if content:
+                    return int(content)
+            time.sleep(0.05)
+        raise AssertionError(f"grandchild pidfile {pidfile} never appeared")
+
+    def _drain_quietly(self, gen) -> None:
+        try:
+            for _ in gen:
+                pass
+        except Exception:
+            pass
+
+    def test_cancel_reaps_tool_use_grandchild(self):
+        """cancel() must kill the WHOLE process group (killpg), not just
+        the direct child, or a live tool-use grandchild (Bash, MCP
+        server, curl, ...) is orphaned and keeps running after /stop /
+        the per-turn timeout fires."""
+        script = self._make_fake_claude()
+        pidfile = os.path.join(self._tmp.name, "grandchild.pid")
+        eng = ClaudeCodeEngine(binary=script)
+
+        gen = eng.spawn(
+            "hi", timeout=30, prompt_via_stdin=False,
+            env={"GRANDCHILD_PID_FILE": pidfile},
+        )
+        try:
+            first = next(gen)  # drives the real Popen + first stdout line
+            self.assertEqual(first.type, "session_started")
+
+            grandchild_pid = self._wait_for_grandchild_pid(pidfile)
+            self._grandchild_pid = grandchild_pid
+            self.assertTrue(
+                _process_alive(grandchild_pid),
+                "test setup broken: grandchild not alive before cancel()",
+            )
+
+            eng.cancel()
+            deadline = time.time() + 2.0
+            while eng._proc.poll() is None and time.time() < deadline:
+                time.sleep(0.05)
+            self.assertIsNotNone(
+                eng._proc.poll(),
+                "direct child should be dead after cancel()",
+            )
+
+            time.sleep(0.3)  # let the OS deliver/process the signal
+            self.assertFalse(
+                _process_alive(grandchild_pid),
+                "BUG: cancel() only proc.terminate()s the direct child "
+                "(no os.killpg) — a live tool-use grandchild survives "
+                "its parent's cancellation and keeps running (leaked).",
+            )
+        finally:
+            self._drain_quietly(gen)
+
+    def test_cleanup_proc_reaps_tool_use_grandchild_on_generator_close(self):
+        """The streaming idle-timeout path (adapter.py) stops iterating
+        and drops the generator, which drives spawn()'s
+        `finally: self._cleanup_proc()`. That must ALSO killpg the whole
+        tree, not just terminate()/kill() the direct child."""
+        script = self._make_fake_claude()
+        pidfile = os.path.join(self._tmp.name, "grandchild2.pid")
+        eng = ClaudeCodeEngine(binary=script)
+
+        gen = eng.spawn(
+            "hi", timeout=30, prompt_via_stdin=False,
+            env={"GRANDCHILD_PID_FILE": pidfile},
+        )
+        first = next(gen)
+        self.assertEqual(first.type, "session_started")
+
+        grandchild_pid = self._wait_for_grandchild_pid(pidfile)
+        self._grandchild_pid = grandchild_pid
+        self.assertTrue(_process_alive(grandchild_pid))
+
+        gen.close()  # GeneratorExit -> spawn()'s finally -> _cleanup_proc()
+
+        deadline = time.time() + 2.0
+        while eng._proc.poll() is None and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertIsNotNone(
+            eng._proc.poll(), "direct child should be dead after close()",
+        )
+
+        time.sleep(0.3)
+        self.assertFalse(
+            _process_alive(grandchild_pid),
+            "BUG: _cleanup_proc() only terminate()/kill()s the direct "
+            "child (no os.killpg) — a live tool-use grandchild survives "
+            "generator close / idle-timeout cleanup and keeps running.",
+        )
+
+
+# ---------------------------------------------------------------------------
+# copilot_cli.py — the TimeoutExpired path in spawn() had the SAME blind
+# spot as GrandchildLeakTests above, but via a different code path.
+#
+# copilot_cli.py's spawn() uses a single blocking proc.communicate(timeout=
+# ...) instead of a streaming read loop. Before the fix, its
+# `except subprocess.TimeoutExpired` handler called a bare proc.kill() on
+# only the direct child, and — worse — spawn() also sets
+# start_new_session=True, so the child sits in its own detached session.
+# A grandchild leaked via THIS path no longer even shares the bridge's own
+# session/pgid, making it strictly harder to clean up after the fact than
+# before start_new_session=True was added (adversarial review finding).
+# Fixed by routing through the same terminate_process_tree() helper
+# cancel() already uses.
+# ---------------------------------------------------------------------------
+
+_FAKE_COPILOT_WITH_GRANDCHILD = """\
+#!/usr/bin/env bash
+sleep 300 </dev/null >/dev/null 2>&1 &
+echo $! > "$GRANDCHILD_PID_FILE"
+sleep 300
+"""
+
+
+class CopilotTimeoutGrandchildLeakTests(unittest.TestCase):
+    """Regression guard: the `except subprocess.TimeoutExpired` branch in
+    CopilotCliEngine.spawn() must killpg the whole process group, or a live
+    tool-use grandchild forked by the `copilot` binary outlives the
+    timeout cleanup instead of being reaped with it."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="copilot-grandchild-")
+        self._grandchild_pid: int | None = None
+        self._saved_bin = os.environ.get("CORVIN_COPILOT_BIN")
+
+    def tearDown(self):
+        if self._grandchild_pid is not None:
+            try:
+                os.kill(self._grandchild_pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        if self._saved_bin is None:
+            os.environ.pop("CORVIN_COPILOT_BIN", None)
+        else:
+            os.environ["CORVIN_COPILOT_BIN"] = self._saved_bin
+        self._tmp.cleanup()
+
+    def _make_fake_copilot(self) -> str:
+        script_path = os.path.join(self._tmp.name, "fake_copilot.sh")
+        with open(script_path, "w") as fh:
+            fh.write(_FAKE_COPILOT_WITH_GRANDCHILD)
+        os.chmod(script_path, 0o755)
+        return script_path
+
+    def _wait_for_grandchild_pid(self, pidfile: str, timeout: float = 5.0) -> int:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if os.path.exists(pidfile):
+                try:
+                    content = open(pidfile).read().strip()
+                except OSError:
+                    content = ""
+                if content:
+                    return int(content)
+            time.sleep(0.05)
+        raise AssertionError(f"grandchild pidfile {pidfile} never appeared")
+
+    def test_timeout_path_reaps_tool_use_grandchild(self):
+        """spawn()'s TimeoutExpired handler must kill the WHOLE process
+        group (killpg), not just the direct child via a bare proc.kill(),
+        or a live tool-use grandchild the `copilot` binary forked is
+        orphaned — and, because spawn() uses start_new_session=True, fully
+        detached from the bridge's own session as well."""
+        script = self._make_fake_copilot()
+        os.environ["CORVIN_COPILOT_BIN"] = script
+        pidfile = os.path.join(self._tmp.name, "grandchild.pid")
+
+        eng = CopilotCliEngine(timeout_s=10)
+        gen = eng.spawn(
+            "hi", timeout=1.0, env={"GRANDCHILD_PID_FILE": pidfile},
+        )
+
+        first = next(gen)  # yielded before Popen() runs
+        self.assertEqual(first.type, "session_started")
+
+        # The second next() call synchronously runs Popen() + blocks on
+        # communicate(timeout=1.0) until TimeoutExpired fires and the
+        # cleanup path runs — drive it on a background thread so this test
+        # can poll for the grandchild pidfile concurrently.
+        result: dict = {}
+
+        def _drive() -> None:
+            try:
+                result["event"] = next(gen)
+            except StopIteration:
+                result["event"] = None
+
+        t = threading.Thread(target=_drive)
+        t.start()
+
+        grandchild_pid = self._wait_for_grandchild_pid(pidfile)
+        self._grandchild_pid = grandchild_pid
+        self.assertTrue(
+            _process_alive(grandchild_pid),
+            "test setup broken: grandchild not alive before the timeout fires",
+        )
+
+        t.join(timeout=5)
+        self.assertFalse(t.is_alive(), "spawn() timeout path did not return in time")
+
+        ev = result.get("event")
+        self.assertIsNotNone(ev, "spawn() must yield an error event on timeout")
+        self.assertEqual(ev.type, "error")
+        self.assertIn("timed out", ev.error or "")
+
+        time.sleep(0.3)  # let the OS deliver/process the signal
+        self.assertFalse(
+            _process_alive(grandchild_pid),
+            "BUG: the TimeoutExpired handler only proc.kill()s the direct "
+            "child (no killpg) — a live tool-use grandchild survives the "
+            "timeout cleanup and keeps running, fully detached from the "
+            "bridge's own session (start_new_session=True) and effectively "
+            "unkillable short of a cgroup-level kill.",
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover

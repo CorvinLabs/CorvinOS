@@ -448,6 +448,155 @@ def test_process_one_cancel_during_race_window_before_registration() -> None:
         shutil.rmtree(inbox.parent, ignore_errors=True)
 
 
+def test_late_popen_after_spawn_timeout_orphans_subprocess() -> None:
+    """Blind-spot regression: _call_claude_streaming_via_engine's daemon
+    _stream_thread calls engine.spawn(...), and the caller polls
+    engine.proc for at most 5s (proc_wait_deadline) before giving up with
+    '[adapter] engine spawn timed out before producing a process'.
+    _register_subproc/_register_engine only happen AFTER that wait loop,
+    on the success path. If engine.spawn()'s subprocess.Popen() is simply
+    slow (disk/fork/mkstemp stall under load) and materializes a moment
+    AFTER the 5s deadline already elapsed, the resulting live subprocess
+    is never registered anywhere — invisible to /cancel, the idle-timeout
+    loop, and TaskManager. It runs fully unsupervised.
+
+    This is the exact bug class already fixed for the sibling codex_cli /
+    opencode_cli engines (WA-10: register the engine BEFORE the spawn
+    thread starts, specifically to close this window) but never applied
+    to the primary claude_code path. This test documents the CURRENT
+    (buggy) behavior — if a future fix registers the engine before the
+    proc-wait loop (mirroring WA-10), this test's assertions about "not
+    registered" / "_cancel_chat can't reach it" should be flipped to
+    assert the fixed, reachable behavior instead.
+    """
+    _section("late-materializing Popen after spawn-timeout is an orphaned, unreachable subprocess")
+    work = Path(tempfile.mkdtemp(prefix="adapter-late-popen-"))
+    saved_home = os.environ.get("CORVIN_HOME")
+    saved_use_engine = os.environ.get("CORVIN_USE_ENGINE_LAYER")
+    saved_fake_claude = os.environ.get("ADAPTER_FAKE_CLAUDE")
+    try:
+        os.environ["CORVIN_HOME"] = str(work / "corvinos")
+        os.environ["CORVIN_USE_ENGINE_LAYER"] = "1"
+        os.environ.pop("ADAPTER_FAKE_CLAUDE", None)
+
+        adapter = _fresh_adapter()
+        # Same test-local double used by test_adapter_engine_path.py — these
+        # tests fake the engine entirely and cannot answer the L44 gate's
+        # real `claude -p` classifier call.
+        adapter._house_rules_classifier = lambda task, rules, auth, **_kw: ("", 1.0, "test-benign")
+
+        from agents import StreamEvent  # type: ignore
+
+        spawned: dict[str, subprocess.Popen] = {}
+
+        class _FakeSlowPopenEngine:
+            """Stands in for ClaudeCodeEngine: spawn() stalls for 6s (past
+            the adapter's 5s proc_wait_deadline) before subprocess.Popen()
+            actually succeeds and self._proc is set."""
+
+            name = "claude_code"
+
+            def __init__(self, *, binary: str | None = None) -> None:
+                self._proc: subprocess.Popen | None = None
+
+            @property
+            def proc(self):
+                return self._proc
+
+            def cancel(self) -> None:
+                if self._proc and self._proc.poll() is None:
+                    try:
+                        self._proc.terminate()
+                    except Exception:
+                        pass
+
+            def spawn(self, prompt, **kwargs):
+                time.sleep(6.0)  # simulate a slow fork/mkstemp/disk stall
+                proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
+                self._proc = proc
+                spawned["proc"] = proc
+                yield StreamEvent(type="text_delta", text="late")
+
+        adapter._ClaudeCodeEngine = _FakeSlowPopenEngine
+
+        chat_key = "chat-late-popen"
+        t0 = time.time()
+        result = adapter.call_claude_streaming(
+            prompt="hi",
+            channel="test",
+            chat_key=chat_key,
+            profile={"permission_mode": "bypassPermissions"},
+        )
+        elapsed = time.time() - t0
+
+        assert "timed out before producing a process" in result, \
+            f"unexpected result: {result!r}"
+        assert elapsed < 5.5, \
+            f"caller should give up at the ~5s deadline, took {elapsed:.1f}s"
+        print(f"PASS: adapter reported spawn-timeout after {elapsed:.2f}s: {result!r}")
+
+        # Give the fake engine's background spawn thread time to actually
+        # reach Popen() — it sleeps 6s total from the call above.
+        deadline = time.time() + 10.0
+        while "proc" not in spawned and time.time() < deadline:
+            time.sleep(0.05)
+        assert "proc" in spawned, \
+            "fake engine never reached Popen() — test setup is broken"
+        proc = spawned["proc"]
+        try:
+            with adapter._running_subprocs_guard:
+                in_subprocs = chat_key in adapter._running_subprocs
+            with adapter._running_engines_guard:
+                in_engines = chat_key in adapter._running_engines
+
+            # THE BUG: the process that materialized after the timeout
+            # branch already returned is invisible to both registries.
+            assert not in_subprocs, (
+                "BUG APPEARS FIXED: the late Popen is now in _running_subprocs — "
+                "flip this assertion (and the _cancel_chat check below) to "
+                "assert it's reachable instead of orphaned"
+            )
+            assert not in_engines, (
+                "BUG APPEARS FIXED: the late engine is now in _running_engines — "
+                "flip this assertion to assert it's reachable instead of orphaned"
+            )
+
+            # Prove the orphan is unreachable via the adapter's only
+            # cancellation entry point: /cancel finds nothing to kill.
+            n = adapter._cancel_chat(chat_key)
+            assert n == 0, f"expected 0 (nothing registered to kill), got {n}"
+            assert proc.poll() is None, (
+                "orphaned subprocess should still be alive — _cancel_chat "
+                "has no registry entry through which to reach it"
+            )
+            print(
+                f"CONFIRMED BUG: late-materializing Popen pid={proc.pid} is "
+                f"unregistered in both registries; _cancel_chat killed 0 "
+                f"processes and the orphan is still alive (poll()={proc.poll()!r})"
+            )
+        finally:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+    finally:
+        if saved_home is not None:
+            os.environ["CORVIN_HOME"] = saved_home
+        else:
+            os.environ.pop("CORVIN_HOME", None)
+        if saved_use_engine is not None:
+            os.environ["CORVIN_USE_ENGINE_LAYER"] = saved_use_engine
+        else:
+            os.environ.pop("CORVIN_USE_ENGINE_LAYER", None)
+        if saved_fake_claude is not None:
+            os.environ["ADAPTER_FAKE_CLAUDE"] = saved_fake_claude
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def main() -> int:
     tests = [
         test_register_unregister,
@@ -462,6 +611,7 @@ def main() -> int:
         test_sigterm_handler_only_flags_no_exit,
         test_killed_turn_leaves_inbox_file_for_rerun,
         test_process_one_cancel_during_race_window_before_registration,
+        test_late_popen_after_spawn_timeout_orphans_subprocess,
     ]
     failed = 0
     for t in tests:

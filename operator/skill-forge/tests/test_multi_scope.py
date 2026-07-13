@@ -155,6 +155,81 @@ def test_promote_low_mean_blocked():
         _cleanup_task(tid)
 
 
+def test_promote_score_exactly_zero_blocked():
+    print("\n[task->session blocked when the only grade score is exactly 0.0]")
+    with tempfile.TemporaryDirectory() as td:
+        _clean_env(td)
+        tid = _fresh_task_id()
+        mr = MultiSkillRegistry(channel_id="ch", task_id=tid)
+        mr.create(scope="task", name="p3", type="domain",
+                  body_md=GOOD_BODY, description="d", claim={})
+        # A real grade (not "no grades at all") but the score is exactly
+        # 0.0 — must hit the `score <= 0` boundary, not the "no grades" path.
+        mr.grade("p3", "r1", 0.0)
+        from skill_forge.registry import PromotionGateError
+        try:
+            mr.promote("p3", to="session")
+            t("score==0.0 blocks task->session", False)
+            raise AssertionError(
+                "promote() should have raised PromotionGateError "
+                "for a single grade with score==0.0"
+            )
+        except PromotionGateError as e:
+            t("score==0.0 blocks task->session", True, detail=str(e))
+        assert mr.find_scope("p3") == "task", "must not have been promoted"
+        _cleanup_task(tid)
+
+
+def test_promote_n_grades_exactly_two_blocked():
+    print("\n[session->project blocked when n_grades is exactly 2]")
+    with tempfile.TemporaryDirectory() as td:
+        _clean_env(td)
+        tid = _fresh_task_id()
+        mr = MultiSkillRegistry(channel_id="ch", task_id=tid)
+        mr.create(scope="session", name="p4", type="domain",
+                  body_md=GOOD_BODY, description="d", claim={})
+        # mean is comfortably >= 0.5 — only the n_grades<3 edge is at play.
+        mr.grade("p4", "r1", 1.0)
+        mr.grade("p4", "r2", 1.0)
+        from skill_forge.registry import PromotionGateError
+        try:
+            mr.promote("p4", to="project")
+            t("n_grades==2 blocks session->project", False)
+            raise AssertionError(
+                "promote() should have raised PromotionGateError "
+                "for n_grades==2 (< 3 required)"
+            )
+        except PromotionGateError as e:
+            t("n_grades==2 blocks session->project", True, detail=str(e))
+        assert mr.find_scope("p4") == "session", "must not have been promoted"
+        _cleanup_task(tid)
+
+
+def test_promote_mean_exactly_half_allowed():
+    print("\n[session->project allowed when mean_score is exactly 0.5 (n=3)]")
+    with tempfile.TemporaryDirectory() as td:
+        _clean_env(td)
+        tid = _fresh_task_id()
+        mr = MultiSkillRegistry(channel_id="ch", task_id=tid)
+        mr.create(scope="session", name="p5", type="domain",
+                  body_md=GOOD_BODY, description="d", claim={})
+        mr.grade("p5", "r1", 0.5)
+        mr.grade("p5", "r2", 0.5)
+        mr.grade("p5", "r3", 0.5)
+        spec = mr.get("p5")
+        assert abs(spec.mean_score - 0.5) < 1e-9, (
+            f"fixture broken: expected mean==0.5 exactly, got {spec.mean_score}"
+        )
+        spec = mr.promote("p5", to="project")
+        ok = spec is not None and mr.find_scope("p5") == "project"
+        t("mean==0.5 (n=3) allows session->project", ok)
+        assert ok, (
+            "promote() should have SUCCEEDED for mean_score==0.5 exactly "
+            "(gate requires mean_score >= 0.5, so equality must pass)"
+        )
+        _cleanup_task(tid)
+
+
 def test_invalid_target_scope():
     print("\n[invalid target scope]")
     with tempfile.TemporaryDirectory() as td:
@@ -174,6 +249,9 @@ def main() -> int:
     test_audit_shared_at_scope_root()
     test_promote_gates()
     test_promote_low_mean_blocked()
+    test_promote_score_exactly_zero_blocked()
+    test_promote_n_grades_exactly_two_blocked()
+    test_promote_mean_exactly_half_allowed()
     test_invalid_target_scope()
     print(f"\n{PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1

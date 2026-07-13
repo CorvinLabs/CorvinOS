@@ -669,6 +669,156 @@ def test_adapter_parent_caps_match_summarize_contract() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Marker-literal sync: summarize.py's _APPENDIX_MARKERS / _METAPHER_MARKERS
+# are hand-duplicated (no shared import) as adapter.py's
+# _LERN_ZUGABE_SENTENCE_MARKERS / _METAPHER_SENTENCE_MARKERS and as
+# chat_runtime.py's _METAPHER_MARKERS. All three files must agree, or the
+# "already has an annex/metaphor, skip the second call" dedup checks in the
+# two DOWNSTREAM files silently stop recognising a wording drift that only
+# touched summarize.py's prompts/markers — the exact bug class fixed once
+# already in f2b6584 ("LERN-ZUGABE / METAPHER annex spoken twice").
+# ---------------------------------------------------------------------------
+
+
+def _extract_str_tuple_const(source: str, name: str) -> tuple[str, ...]:
+    """Statically pull a top-level ``NAME = (...)`` string-tuple constant out
+    of *source* without importing the module.
+
+    Mirrors test_adapter_parent_caps_match_summarize_contract's "read the
+    source text instead of importing the (heavy) module" approach, but uses
+    the `ast` module instead of a regex so quoting/formatting drift in the
+    defining file can't silently break the extraction.
+    """
+    import ast
+
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id == name:
+                value = ast.literal_eval(node.value)
+                assert isinstance(value, tuple), (
+                    f"{name} is not a tuple literal: {value!r}"
+                )
+                return value
+    raise AssertionError(f"top-level constant {name!r} not found in source")
+
+
+def _adapter_source() -> str:
+    return (
+        Path(summarize.__file__).resolve().parent.parent.parent
+        / "bridges" / "shared" / "adapter.py"
+    ).read_text(encoding="utf-8")
+
+
+def _chat_runtime_source() -> str:
+    return (
+        Path(summarize.__file__).resolve().parent.parent.parent.parent
+        / "core" / "console" / "corvin_console" / "chat_runtime.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_metapher_markers_agree_across_summarize_adapter_chat_runtime() -> None:
+    """summarize._METAPHER_MARKERS is the literal the METAPHER prompt is told
+    to emit. adapter._METAPHER_SENTENCE_MARKERS and chat_runtime._METAPHER_MARKERS
+    are independent hand-copies used to detect it. All three must be set-equal."""
+    adapter_markers = _extract_str_tuple_const(_adapter_source(), "_METAPHER_SENTENCE_MARKERS")
+    chat_runtime_markers = _extract_str_tuple_const(_chat_runtime_source(), "_METAPHER_MARKERS")
+
+    assert set(adapter_markers) == set(summarize._METAPHER_MARKERS), (
+        "adapter.py::_METAPHER_SENTENCE_MARKERS drifted from "
+        "summarize.py::_METAPHER_MARKERS — adapter's _has_metapher_suffix "
+        "dedup check will stop recognising a wording change made only in "
+        "summarize.py's METAPHER prompt/marker list"
+    )
+    assert set(chat_runtime_markers) == set(summarize._METAPHER_MARKERS), (
+        "chat_runtime.py::_METAPHER_MARKERS drifted from "
+        "summarize.py::_METAPHER_MARKERS — the console web-chat annotation "
+        "dedup check will stop recognising a wording change made only in "
+        "summarize.py's METAPHER prompt/marker list"
+    )
+
+
+def test_appendix_markers_agree_between_summarize_and_adapter_lern_zugabe() -> None:
+    """summarize._APPENDIX_MARKERS is the literal the LERN-ZUGABE appendix
+    prompt is told to emit. adapter._LERN_ZUGABE_SENTENCE_MARKERS is a
+    hand-copy (its own comment says 'kept in sync ... by hand') used to
+    detect it. The two must be set-equal."""
+    adapter_markers = _extract_str_tuple_const(_adapter_source(), "_LERN_ZUGABE_SENTENCE_MARKERS")
+
+    assert set(adapter_markers) == set(summarize._APPENDIX_MARKERS), (
+        "adapter.py::_LERN_ZUGABE_SENTENCE_MARKERS drifted from "
+        "summarize.py::_APPENDIX_MARKERS — adapter's _has_lern_zugabe_suffix "
+        "dedup check will stop recognising a wording change made only in "
+        "summarize.py's appendix prompt/marker list"
+    )
+
+
+def _load_adapter_module():
+    """Import operator/bridges/shared/adapter.py by path, mirroring the
+    isolation pattern used by test_adapter_voice_annex_dedup.py in that same
+    directory (pop cached module first so re-imports pick up any monkeypatch
+    of sys.path)."""
+    import sys as _sys
+
+    shared_dir = str(
+        Path(summarize.__file__).resolve().parent.parent.parent / "bridges" / "shared"
+    )
+    if shared_dir not in _sys.path:
+        _sys.path.insert(0, shared_dir)
+    _sys.modules.pop("adapter", None)
+    import adapter  # type: ignore
+    return adapter
+
+
+def test_adapter_metapher_dedup_recognizes_summarize_actual_marker() -> None:
+    """End-to-end: run a synthetic METAPHER-CLI response through summarize's
+    REAL extraction (_extract_metapher), then feed the resulting text into
+    adapter's REAL detection function (_has_metapher_suffix). This proves the
+    emit -> detect chain agrees today, not just that the two literal tuples
+    happen to look alike."""
+    adapter = _load_adapter_module()
+    raw = "Bildlich gesprochen, das ist wie ein gut sortiertes Regal."
+    extracted = summarize._extract_metapher(raw)
+    assert extracted, "summarize._extract_metapher rejected its own marker output"
+    assert adapter._has_metapher_suffix(extracted) is True
+
+
+def test_marker_wording_drift_in_summarize_breaks_adapter_dedup_silently() -> None:
+    """Regression-class demonstration for the bug fixed once in f2b6584
+    ("LERN-ZUGABE / METAPHER annex spoken twice"): if summarize.py's METAPHER
+    marker list is ever changed WITHOUT updating adapter.py's hand-copied
+    _METAPHER_SENTENCE_MARKERS in lockstep, adapter's "already has a metaphor,
+    skip the second call" check silently stops firing — even though
+    summarize.py itself still recognises its own (new) marker fine. This test
+    simulates exactly that one-sided drift via monkeypatch and asserts the
+    downstream dedup check goes blind, to make the coupling concrete rather
+    than hypothetical."""
+    from unittest.mock import patch
+
+    adapter = _load_adapter_module()
+    drifted_marker = "Um es bildlich auszudrücken,"
+    assert drifted_marker not in summarize._METAPHER_MARKERS
+    assert drifted_marker not in adapter._METAPHER_SENTENCE_MARKERS
+
+    with patch.object(summarize, "_METAPHER_MARKERS", (drifted_marker,)):
+        raw = f"{drifted_marker} das ist wie ein gut sortiertes Regal."
+        extracted = summarize._extract_metapher(raw)
+        # summarize.py itself, updated, still recognises its own new phrasing.
+        assert extracted, "summarize.py's own (updated) marker check should still match"
+
+    # adapter.py was NOT updated (no import relationship exists) — its
+    # detection of the drifted phrasing silently fails, which is exactly the
+    # double-annex bug class: adapter thinks no metaphor is present yet and
+    # appends a second one.
+    assert adapter._has_metapher_suffix(extracted) is False, (
+        "adapter.py detected the drifted marker even though its own literal "
+        "tuple was never updated — this test's premise (independent, "
+        "unsynced copies) no longer holds and should be re-checked"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -700,6 +850,10 @@ def main() -> int:
         test_audience_does_not_double_render_when_called_twice,
         test_voice_summary_timeout_budgets_fit_parent_caps,
         test_adapter_parent_caps_match_summarize_contract,
+        test_metapher_markers_agree_across_summarize_adapter_chat_runtime,
+        test_appendix_markers_agree_between_summarize_and_adapter_lern_zugabe,
+        test_adapter_metapher_dedup_recognizes_summarize_actual_marker,
+        test_marker_wording_drift_in_summarize_breaks_adapter_dedup_silently,
     ]
     failed = 0
     for t in tests:

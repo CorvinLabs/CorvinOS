@@ -24,6 +24,7 @@ overall outcome.
 | L28 recall | FTS5 row per chat turn | `DELETE FROM turns WHERE user_id = ?` |
 | L28.2 user-model | Distilled JSON at `<tenant>/global/memory/user_model/*.json` | File deletion |
 | L33 artifacts | Files in `<session>/artifacts/` and `<global>/artifacts/` | Unpinned: purge; pinned: operator-ACK required |
+| Workflow checkpoints (ADR-0188 M5) | Paused Task-Engine runs at `<tenant>/workflow_runs/<run_id>.json` (raw `chat_id`/`approver` + full `inputs`/`state`) | `WorkflowCheckpointHandler` deletes any checkpoint (+ `.claimed` sidecar) whose `chat_id`/`approver` matches subject_id |
 | L16 identity-mapping | subject_id → real-world identity link | Delete the mapping (audit chain preserved per EDPB) |
 
 ---
@@ -310,6 +311,9 @@ silent.
   * `L28RecallHandler` (full SQL DELETE)
   * `L28UserModelHandler` (full FS purge, ADR-0072 V-001) — deletes distilled user model JSON files for the subject
   * `L33ArtifactHandler` (full FS purge of unpinned session artifacts)
+  * `WorkflowCheckpointHandler` (full FS purge of paused Task-Engine
+    checkpoints under `<tenant>/workflow_runs/`, matched on
+    `chat_id`/`approver`, ADR-0188 M5)
   * `L7SkillForgeHandler` + `L24DataSnapshotHandler` as documented
     stubs (operator subclasses / replaces)
   * `IdentityMappingHandlerBase` for the operator-owned subject_id ↔

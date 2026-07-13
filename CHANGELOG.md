@@ -6,6 +6,145 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.34] — 2026-07-13 — Adversarial security/reliability sweep: WF-A3 approver binding, packaging git-awareness, cross-daemon sticky progress
+
+Triggered by an automated blind-spot sweep plus a 5-dimension adversarial code
+review of the resulting changes (security/authz, concurrency/correctness, JS
+messenger daemons, test-suite honesty, release mechanics) — every finding
+below was independently verified, and every fix was itself re-reviewed before
+landing.
+
+### Security / compliance
+
+- **Packaging-hygiene gap: both the wheel and the sdist could ship whatever
+  UNTRACKED files happened to be sitting in a developer's working tree at
+  build time** — an adversarial release-readiness review found that the
+  already-published `corvinos-0.10.33` wheel carries a stray untracked audio
+  file (`operator/voice/scripts/Testnachricht mit Nova.`, left over in
+  someone's working tree at build time) inside its vendored
+  `corvin_console/_vendor/operator/voice/scripts/` copy, and the sdist —
+  built straight from the raw working tree with no git-awareness at all —
+  picked up further untracked scratch files the same way. `hatch_build.py`'s
+  vendor-copy step only ever had a DENYLIST of recognized test-file patterns
+  (`test_*`, `conftest.py`, `tests/`, `__pycache__`, `.pyc`), never an
+  allowlist of what git actually tracks, so anything else on disk — a stray
+  secret-bearing file some day — would ship to every real `pip install`
+  regardless. Fixed by making `git ls-files` the single source of truth for
+  "would actually ship": `hatch_build.py` now installs a git-tracked-only
+  filter for BOTH targets — a `path_is_excluded` monkeypatch for Hatchling's
+  default project-file walk, used by both the wheel and the new
+  `[tool.hatch.build.targets.sdist.hooks.custom]` hook in `pyproject.toml`,
+  plus the same tracked-file check wired into the vendor-copy step's own
+  `shutil.copytree` `ignore=` callback (a separate code path Hatchling's file
+  selection never sees). The filter only ever tightens exclusion — it can
+  never loosen it, and the intentional gitignored-on-purpose force-include
+  (the pre-built `web-next/dist` SPA) is unaffected. Building a wheel FROM an
+  already-extracted sdist tarball (no `.git` present at all) correctly skips
+  the filter rather than wrongly treating "no git repo" as "nothing is
+  tracked" — verified by building a wheel from an extracted sdist and
+  confirming byte-identical file counts to a live-checkout build. Verified
+  end-to-end against the real stray-file shapes found in this session's own
+  working tree.
+- **New GDPR Art. 17 erasure layer for paused Task-Engine workflow checkpoints
+  (ADR-0188 M5).** A human-in-the-loop workflow run (`ask_human`/`answer`)
+  checkpoints to `<tenant>/workflow_runs/<run_id>.json` with no TTL while it
+  waits for a reply — the file stores the raw `chat_id`/`approver` plus the
+  entire `inputs`/`state` dict verbatim. Previously the only removal path was
+  the run reaching a terminal state, so an erasure request against a subject
+  with a paused run in flight would silently miss it. New
+  `WorkflowCheckpointHandler` matches on the same raw identifier
+  `L28RecallHandler` already uses and deletes both the canonical checkpoint
+  and any in-flight `.json.claimed` sidecar.
+- **`workflow_resume` MCP tool bypassed the WF-A3 per-approver binding.** An
+  `ask_human` checkpoint pauses a workflow for a specific chat's approval, but
+  `_call_workflow_resume()` always called `resume_workflow(..., replier=None)`,
+  which is the always-authorized posture reserved for genuinely privileged
+  callers (the local console/CLI). Since this MCP tool is chat-reachable by
+  design (ADR-0190), any chat participant with access to the persona could
+  resolve an approval directed at a different chat. Fixed: the resume path now
+  derives `replier` from `CORVIN_CHANNEL_ID` (set by the bridge adapter at
+  process-spawn time, not spoofable via tool-call arguments) and rejects a
+  mismatch against the checkpoint's recorded approver.
+- **WDAT datasource-embed gate disagreed with the encryption-at-rest write
+  path on key validity.** `_resolve_acs_datasources()` decided whether to embed
+  a live CONFIDENTIAL/SECRET snapshot using a presence-only
+  `bool(os.environ.get("CORVIN_WDAT_KEY"))` check, while the write path
+  validated a real 64-hex/32-byte key. An invalid or whitespace-only key value
+  passed the embed gate while the write path silently fell back to storing
+  that data unencrypted. Both sides now use the same real key validator.
+- **ADR-0137 (audit-chain external anchor) status corrected.** Re-audit found
+  the keyed-MAC anchor (M2) already fully implemented and tested in
+  `security_events.py` — the ADR's own status was stale ("Proposed"). Updated
+  to Accepted; M1 (chain_dna/NBAC genesis wiring into the default verify path)
+  and anchor-key rotation remain open, documented in the ADR.
+
+### Reliability
+
+- **AWP-DAG workflows launched via the orchestration MCP server (`workflow_run`/
+  `workflow_resume`) had no recovery path once they outlived their wall-clock
+  budget** — no `run_id` was returned on timeout, and nothing registered the
+  run with the durable completion-notify queue that the scheduler/`/task`/ACS/
+  compute-worker already use. A long-running workflow launched from a
+  messenger bridge was silently unrecoverable once the originating per-turn
+  process exited. Fixed: timeout responses now include `run_id`, and an
+  orphaned run registers with `completion_notify` so its result still reaches
+  the originating chat once it finishes. See ADR-0192.
+- **Concurrency race in `profile.py::set_value()`/`save()`** — concurrent
+  writers could crash (`FileNotFoundError`) racing on a shared temp path, or
+  silently lose an update. Fixed with a write lock spanning the full
+  load-mutate-save cycle plus a per-call-unique temp filename.
+- **Cross-chat TTS skip-reason leak** — `_voice_engine_state["last_skip_reason"]`
+  was pure process-wide state; one chat's TTS call could overwrite the skip
+  notice a concurrent chat was about to read. Fixed with a thread-local mirror
+  alongside the shared state; no public API changed.
+- **Engine `cancel()`/`_cleanup_proc()` never killed the process group** in any
+  of the 4 engine adapters (`claude_code`, `codex_cli`, `opencode_cli`,
+  `copilot_cli`) despite `start_new_session=True` being set specifically to
+  enable that — grandchild processes survived cancellation. Ported the
+  existing `killpg`-based cleanup from `adapter.py::_cancel_chat` into all 4;
+  `copilot_cli.py` was additionally missing `start_new_session=True` itself.
+- **Messenger status heartbeats were Discord-only in UX quality.** Telegram,
+  Slack, WhatsApp, Signal and Teams sent every progress/tool-status update as
+  a brand-new message with no guard against a stale update landing after the
+  final answer. All 5 now get the same sticky edit-in-place + finalize guard
+  Discord already had, via a shared `sticky_progress.js` helper.
+
+### Voice
+
+- Hermes/Ollama calls now send `"think": false` — a fresh install (no Claude
+  login, Hermes/qwen3 fallback path) previously blew the summary/annex
+  timeouts on reasoning tokens before ever emitting the answer, silently
+  degrading to verbatim text with no LERN-ZUGABE/METAPHER annex.
+- A literal `<voice>` mention in a reply's visible prose could pair with a
+  model's real trailing `<voice>…</voice>` block and truncate the chat text;
+  the last `</voice>` now pairs with the nearest preceding `<voice>`.
+- Fixed the LERN-ZUGABE/METAPHER annex being spoken twice on the `<voice>`-
+  override and short-text paths (missing dedup guard) and widened the
+  dedup lookback window (400→900 chars) so a metapher bridge sitting after
+  the annex opener no longer pushes it out of range.
+
+### Other
+
+- `imagegen`'s `_save_image_bytes()` now receives an explicit
+  `CORVIN_IMAGE_OUTDIR` instead of relying on cwd inheritance through the
+  `claude` CLI subprocess, closing a cross-process assumption that could
+  leave a generated image showing only as a download card instead of inline.
+- Installer's bridge-service auto-discovery scan read a re-hardcoded local
+  `~/.config/systemd/user` instead of `self.systemd_user_dir`, so tests that
+  sandboxed the instance attribute were silently ignored and the scan always
+  hit the real host's systemd directory. Now reads the instance attribute.
+- The DSI v1 datasource-manifest validator crashed on a non-string `name`
+  field instead of raising the intended `DSIv1PolicyError`; now checked
+  explicitly before the regex match.
+- The console's `_resolve_safe()` path helper raised an unhandled 500 instead
+  of the intended 400 when `rel` contained an embedded null byte (raised by
+  `Path.resolve()` itself, before the traversal check's `try` began); the
+  `resolve()` call now runs inside the same `try`.
+- `useVoicePlayback`'s `audio.onerror` handler now revokes the blob URL and
+  clears `blobUrlRef`, mirroring `onended`'s cleanup — previously a playback
+  error left a stale, unrevoked blob URL referenced until the next
+  `stopVoice()`/`playTts()` call happened to clean it up incidentally.
+
 ## [0.10.33] — 2026-07-12 — Voice-fallback correctness sweep: TTS content, language selection, i18n coverage, packaging
 
 Prompted by a live report ("the welcome voice summary came out in Chinese

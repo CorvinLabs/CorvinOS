@@ -162,7 +162,18 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
         }
         setVoiceState("idle");
       };
-      audio.onerror = () => setVoiceState("idle");
+      audio.onerror = () => {
+        // Mirror onended's cleanup: without this, a playback error left
+        // blobUrlRef pointing at a URL that was never revoked (leaked) and
+        // out of sync with voiceState ("idle" while a stale blob URL/src was
+        // still referenced) until the next stopVoice()/playTts() happened to
+        // clean it up incidentally.
+        if (blobUrlRef.current === url) {
+          URL.revokeObjectURL(url);
+          blobUrlRef.current = null;
+        }
+        setVoiceState("idle");
+      };
       audio.src = url;
       try {
         await audio.play();

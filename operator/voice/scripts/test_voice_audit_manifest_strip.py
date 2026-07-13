@@ -12,7 +12,7 @@ import pytest
 @pytest.fixture
 def sealed_env(monkeypatch):
     import sys
-    shared = Path(__file__).resolve().parents[1] / "bridges" / "shared"
+    shared = Path(__file__).resolve().parents[2] / "bridges" / "shared"
     if str(shared) not in sys.path:
         sys.path.insert(0, str(shared))
     key = Path(tempfile.mkdtemp()) / "anchor.key"

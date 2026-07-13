@@ -703,9 +703,12 @@ class CorvinInstaller:
         # Also pick up any bridge services registered via bridge.sh / manually
         # that aren't tracked in installer.json (e.g. installed before manifest existed).
         if sys.platform != "win32":
-            systemd_user_dir = Path.home() / ".config" / "systemd" / "user"
-            if systemd_user_dir.exists():
-                for unit_file in sorted(systemd_user_dir.glob("corvin-voice-bridge-*.service")):
+            # self.systemd_user_dir (not a re-hardcoded local) so tests can
+            # sandbox this scan — a shadowing local here previously made this
+            # path always hit the REAL host's systemd dir regardless of the
+            # instance attribute set up for testing.
+            if self.systemd_user_dir.exists():
+                for unit_file in sorted(self.systemd_user_dir.glob("corvin-voice-bridge-*.service")):
                     bridge_id = unit_file.stem.removeprefix("corvin-voice-bridge-")
                     if bridge_id not in self.selected_bridges:
                         self.selected_bridges.append(bridge_id)

@@ -260,10 +260,23 @@ def test_voice_tts_pinned_provider_reset_clears_unusable_provider(tmp_path, monk
     _cache: dict = {}
 
     class _FakeProfileModule:
-        def load(self):
+        def load(self, force=False):
             return _j.loads(profile_path.read_text())
         def save(self, data):
             profile_path.write_text(_j.dumps(data), encoding="utf-8")
+        def set_value(self, key, value):
+            # Mirrors the real profile.py's single-key contract closely
+            # enough for this test double: VoiceTtsPinnedProviderReset now
+            # routes its writes through set_value() (2026-07-13 fix) so it
+            # shares profile.py's real _write_lock instead of calling
+            # load()/save() unlocked.
+            d = self.load(force=True)
+            if value is None:
+                d.pop(key, None)
+            else:
+                d[key] = value
+            self.save(d)
+            return d
 
     fake_mod = _FakeProfileModule()
 

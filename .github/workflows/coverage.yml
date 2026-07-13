@@ -30,10 +30,22 @@ jobs:
 
       - name: Run tests with coverage
         run: |
+          # --import-mode=importlib: core/compute/tests/__init__.py makes that
+          # dir a package, but core/compute/ itself has no __init__.py, so
+          # pytest's default "prepend" import mode resolves its fully-
+          # qualified module names as `tests.<name>` — the same top-level
+          # name the repo-root tests/ package already owns. Whichever loads
+          # first wins sys.modules["tests"], and every file under the other
+          # tests/ dir then fails collection with
+          # "ModuleNotFoundError: No module named 'tests.<name>'".
+          # importlib mode keys modules by file path instead of by short
+          # package name, so the two same-named `tests/` dirs stop colliding.
           pytest \
             tests/ \
             operator/bridges/shared/ \
             core/console/tests/ \
+            core/compute/tests/ \
+            --import-mode=importlib \
             --cov=operator \
             --cov=core \
             --cov-report=term-missing:skip-covered \

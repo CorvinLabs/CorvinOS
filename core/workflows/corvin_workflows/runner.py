@@ -209,6 +209,7 @@ class DAGRunner:
         inputs: dict[str, Any] | None = None,
         *,
         resume: "ResumeContext | None" = None,
+        run_id: str | None = None,
     ) -> RunResult:
         import time as _time
 
@@ -218,12 +219,18 @@ class DAGRunner:
         levels = _topo_levels(graph)
         dependents = _direct_dependents(graph)
 
+        # `run_id` lets a caller (e.g. the orchestration MCP server's
+        # wall-clock-budget wrapper) pre-assign the run's id BEFORE calling
+        # run() — so a timeout response returned before this method returns
+        # can still hand back a real, later-pollable run_id under the SAME
+        # value a background completion-notification gets registered under.
+        # Falls back to the original random id when the caller doesn't care.
         run = RunResult(
             workflow=self.doc.name,
             state="complete",
             inputs=inputs,
             audit=self._audit_buffer,
-            run_id=resume.run_id if resume else secrets.token_hex(8),
+            run_id=resume.run_id if resume else (run_id or secrets.token_hex(8)),
         )
         if resume:
             state: dict[str, Any] = dict(resume.state)

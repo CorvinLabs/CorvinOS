@@ -29,6 +29,7 @@ Subject_id resolution policy:
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -72,7 +73,21 @@ def _tenant_sessions(tenant_id: str = "_default") -> Path:
     new = home / "tenants" / tenant_id / "sessions"
     if new.is_dir() or not (home / "sessions").is_dir():
         return new
-    return home / "sessions"
+    return home / "sessions"  # legacy single-tenant layout
+
+
+def _tenant_workflow_runs(tenant_id: str = "_default") -> Path:
+    """Resolve ``<tenant>/workflow_runs`` (ADR-0188 M5 paused-run checkpoints).
+
+    Mirrors ``corvinOS.shared.paths.tenant_workflow_runs_dir`` (the resolver
+    ``checkpoint.py`` itself uses) without importing across the repo-root
+    boundary — same pattern as ``_tenant_global`` / ``_tenant_sessions``.
+    """
+    home = _corvin_home()
+    new = home / "tenants" / tenant_id / "workflow_runs"
+    if new.is_dir() or not (home / "workflow_runs").is_dir():
+        return new
+    return home / "workflow_runs"  # legacy single-tenant layout
 
 
 # ── L28 recall handler ──────────────────────────────────────────────
@@ -800,6 +815,103 @@ class L42OrgHandler:
         )
 
 
+# ── workflow-checkpoint handler (ADR-0188 M5) ───────────────────────
+
+
+@dataclass
+class WorkflowCheckpointHandler:
+    """GDPR Art. 17 erasure for paused Task-Engine workflow checkpoints.
+
+    A human-in-the-loop workflow run (``ask_human``/``answer`` under
+    ``orchestration.engine: chat``) is checkpointed to
+    ``<tenant>/workflow_runs/<run_id>.json`` (see
+    ``core/workflows/corvin_workflows/checkpoint.py::save()``) while it
+    waits for a reply. That JSON file stores the raw ``chat_id`` /
+    ``approver`` plus the *entire* ``inputs``/``state`` dict verbatim —
+    arbitrary user-submitted content (e.g. an expense amount, an IT-ticket
+    body). There is no TTL; the only prior removal path was the run
+    reaching a terminal state (``checkpoint.delete()``, called by the
+    runner on completion). A paused run can sit indefinitely, so without
+    this handler an erasure request would silently miss it.
+
+    ``subject_id`` is treated as the raw ``chat_id``/``approver`` string
+    the bridge passed into ``checkpoint.save()`` — the same identifier
+    ``L28RecallHandler`` matches against ``chat_key``.
+
+    Matches and deletes both the canonical ``<run_id>.json`` checkpoint
+    and any ``<run_id>.json.claimed`` sidecar left by an in-flight
+    ``checkpoint.claim()`` (a resume racing the erasure request).
+    """
+    layer_id: str = "L-workflow-checkpoints"
+    tenant_id: str = "_default"
+
+    def _runs_dir(self) -> Path:
+        return _tenant_workflow_runs(self.tenant_id)
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        runs_dir = self._runs_dir()
+        if not runs_dir.is_dir():
+            return ErasureLayerResult(
+                layer_id=self.layer_id,
+                status=LayerStatus.SKIPPED,
+                count=0,
+                reason=f"no workflow_runs dir at {runs_dir}",
+                code=ReasonCode.STORE_ABSENT.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+
+        removed = 0
+        try:
+            candidates = list(runs_dir.glob("*.json")) + list(
+                runs_dir.glob("*.json.claimed")
+            )
+            for checkpoint_path in candidates:
+                try:
+                    payload = json.loads(
+                        checkpoint_path.read_text(encoding="utf-8")
+                    )
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if (
+                    payload.get("chat_id") == subject_id
+                    or payload.get("approver") == subject_id
+                ):
+                    checkpoint_path.unlink(missing_ok=True)
+                    removed += 1
+        except Exception as exc:
+            return ErasureLayerResult(
+                layer_id=self.layer_id,
+                status=LayerStatus.FAILED,
+                count=removed,
+                reason=(
+                    f"workflow checkpoint purge error: "
+                    f"{type(exc).__name__}: {str(exc)[:200]}"
+                ),
+                code=ReasonCode.STORE_ERROR.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+
+        if removed == 0:
+            return ErasureLayerResult(
+                layer_id=self.layer_id,
+                status=LayerStatus.SKIPPED,
+                count=0,
+                reason="no paused workflow checkpoints matched subject",
+                code=ReasonCode.STORE_EMPTY.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+
+        return ErasureLayerResult(
+            layer_id=self.layer_id,
+            status=LayerStatus.APPLIED,
+            count=removed,
+            reason=f"removed {removed} paused workflow checkpoint(s) for subject",
+            code=ReasonCode.DELETED.value,
+            duration_ms=int((time.time() - t0) * 1000),
+        )
+
+
 # ── default chain factory ────────────────────────────────────────────
 
 
@@ -814,6 +926,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
       * L39SocialParticipationHandler — fully implemented (FS purge)
       * L41GrantHandler — fully implemented (SQL delete, ADR-0054)
       * L42OrgHandler — fully implemented (FS purge, ADR-0055)
+      * WorkflowCheckpointHandler — fully implemented (FS purge, ADR-0188 M5)
       * L7SkillForgeHandler — documented stub (operator overrides)
       * L24DataSnapshotHandler — documented stub (operator overrides)
       * IdentityMappingHandlerBase — documented stub (operator subclasses)
@@ -833,6 +946,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         L39SocialParticipationHandler(tenant_id=tenant_id),
         L41GrantHandler(tenant_id=tenant_id),
         L42OrgHandler(tenant_id=tenant_id),
+        WorkflowCheckpointHandler(tenant_id=tenant_id),
         L7SkillForgeHandler(tenant_id=tenant_id),
         L24DataSnapshotHandler(tenant_id=tenant_id),
         IdentityMappingHandlerBase(),

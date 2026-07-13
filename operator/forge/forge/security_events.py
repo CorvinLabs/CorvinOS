@@ -1775,6 +1775,17 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
                 problems.append({"line": line_no, "issue": "invalid_json"})
                 continue
 
+            if not isinstance(rec, dict):
+                # Syntactically valid JSON (json.loads succeeded) but not an
+                # object — a bare number, null, bool, string, or list. Route
+                # through the same "malformed line" reporting path as a
+                # JSON decode error instead of falling through to `"hash"
+                # not in rec`, which raises an uncaught TypeError for
+                # int/None/bool (and silently mis-skips str/list, since
+                # membership-testing a string or list never raises).
+                problems.append({"line": line_no, "issue": "invalid_json"})
+                continue
+
             if "hash" not in rec:
                 # Pre-chain or hash_chain-disabled entry; not part of integrity
                 continue

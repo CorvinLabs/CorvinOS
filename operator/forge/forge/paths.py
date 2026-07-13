@@ -20,7 +20,16 @@ def _resolve_env() -> str | None:
     # CORVIN_HOME env is read when explicitly set (e.g. in tests and CI).
     # The Phase 7 note referred to removing legacy aliases like ATELIER_HOME —
     # those are gone. CORVIN_HOME itself remains the canonical override knob.
-    return os.environ.get("CORVIN_HOME")
+    new = os.environ.get("CORVIN_HOME")
+    if new is None:
+        return None
+    new = new.strip()
+    # A whitespace-only value (" ", "\t", "\n") is not a real override —
+    # treat it the same as unset rather than resolving to a bogus path like
+    # Path(" ") relative to the cwd.
+    if not new:
+        return None
+    return new
 
 
 def _repo_root() -> Path | None:

@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import sys
 import threading
 import time
@@ -97,6 +98,28 @@ def _clamp(value: Any, *, lo: int, hi: int, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(lo, min(hi, n))
+
+
+def _replier_from_channel_id(channel_id: str) -> str:
+    """Derive the WF-A3 `replier` identity from a trusted `CORVIN_CHANNEL_ID`
+    value ("<bridge>:<chat_key>", set by the bridge adapter at spawn time —
+    see operator/bridges/shared/adapter.py::_build_spawn_env). Strips the
+    bridge prefix because a workflow checkpoint's recorded `approver` is
+    always a bare chat_id (corvin_workflows/node_types.py::_execute_ask_human
+    stores `pause.chat_id` verbatim, never bridge-prefixed) — the same split
+    already used by operator/bridges/shared/phase3_cli.py's debug-channel
+    identity check.
+
+    Always returns a string, never None: an empty/missing channel_id yields
+    ``""``, which correctly FAILS to match any real approver in
+    resume_workflow()'s WF-A3 check rather than being treated as the
+    `replier=None` privileged-owner bypass. Passing None here would silently
+    re-open the exact vulnerability this function exists to close.
+    """
+    if not channel_id:
+        return ""
+    _, _, chat_key = channel_id.partition(":")
+    return chat_key or channel_id
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +259,14 @@ def _workflow_concurrency_refusal(tenant_id: str) -> str | None:
     return None
 
 
-def _run_with_budget(fn: Callable[[], Any], *, budget_s: int) -> Any:
+def _run_with_budget(
+    fn: Callable[[], Any],
+    *,
+    budget_s: int,
+    run_id_hint: str | None = None,
+    on_timeout: Callable[[], None] | None = None,
+    on_finish: Callable[[Any, BaseException | None], None] | None = None,
+) -> Any:
     """Run *fn* on a daemon thread, joined with a wall-clock timeout.
 
     ADR-0029/ADR-0190 watchdog pattern — DAGRunner.run() / resume_workflow()
@@ -245,29 +275,271 @@ def _run_with_budget(fn: Callable[[], Any], *, budget_s: int) -> Any:
     thread is NOT killed (Python has no safe thread-kill primitive) — it
     keeps running in the background and this call returns a typed timeout
     envelope rather than blocking the MCP server forever.
+
+    ADR-0192 (background-completion contract): a bare timeout envelope with no
+    handle at all left a caller unable to ever learn the outcome of a run that
+    outlived this call — worse, the calling `claude -p` subprocess (and this
+    MCP server, its child) is reliably killed minutes later by the per-turn
+    bridge adapter, so "still running in the background" was frequently a
+    polite fiction. Two optional hooks close that gap without coupling this
+    generic helper to completion_notify directly:
+
+    - ``run_id_hint``: echoed into the timeout envelope's ``run_id`` field —
+      a stable identifier the caller can use to correlate a later
+      completion-notification or (for AWP workflows) a `workflow_list_paused`
+      lookup, even though *fn* has not returned yet.
+    - ``on_timeout``: called synchronously, ONCE, from the caller's thread,
+      exactly when a timeout is detected (i.e. strictly before *fn* has
+      finished) — the natural place to register a completion notification,
+      since this is the one moment we know the caller is about to lose its
+      only synchronous handle on the result.
+    - ``on_finish``: called from the background thread once *fn* actually
+      completes (successfully or not), always — including the common case
+      where *fn* finished well within budget_s. Deliberately unconditional
+      instead of gated on "did we time out": the callback itself is the
+      no-op when nothing was registered (mark_done on an unregistered id is
+      a safe no-op), which avoids a redundant duplicate notification on top
+      of the normal synchronous reply for the (overwhelmingly common) case
+      where a run finishes in time.
+
+    Both hooks are best-effort: an exception raised inside either is caught
+    and swallowed here so a notification failure can never crash the
+    (possibly already-detached) worker thread or mask the real result/error.
+
+    Register/mark_done ordering race (closed below): ``t.is_alive()`` only
+    goes False once ``_target`` fully RETURNS from its ``finally`` clause —
+    it can still read True while the background thread is midway through
+    that ``finally`` (i.e. already inside ``on_finish``, e.g. blocked on the
+    file I/O ``completion_notify.mark_done`` does). That means "``on_finish``
+    fires before ``on_timeout`` has registered anything" is possible even
+    though this function only takes the timeout branch when ``t.is_alive()``
+    reads True. When that happens, ``on_finish``'s ``mark_done`` no-ops
+    (nothing registered yet), ``on_timeout``'s ``register`` then creates the
+    record fresh, and — with no further signal — it would stay ``pending``
+    forever even though the run already finished. ``hook_lock`` below makes
+    the two sides observe each other deterministically instead of racing:
+    whichever of {the background thread's ``finally``, the timeout branch}
+    acquires the lock first decides the outcome, and the loser (if it
+    already ran) triggers a rescue re-fire of ``on_finish`` — safe because
+    ``completion_notify.mark_done`` is idempotent (a second call just
+    updates an already-ready record; it never resurrects a delivered one).
     """
     box: dict[str, Any] = {}
+    hook_lock = threading.Lock()
+    finished = {"done": False}
+
+    def _fire_on_finish() -> None:
+        if on_finish is None:
+            return
+        try:
+            on_finish(box.get("value"), box.get("error"))
+        except Exception:  # noqa: BLE001 — never let a notification
+            # failure crash the (already detached) worker thread, nor the
+            # caller thread when this runs as part of the rescue re-fire.
+            pass
 
     def _target() -> None:
         try:
             box["value"] = fn()
         except BaseException as exc:  # noqa: BLE001
             box["error"] = exc
+        finally:
+            with hook_lock:
+                finished["done"] = True
+                _fire_on_finish()
 
     t = threading.Thread(target=_target, daemon=True)
     t.start()
     t.join(timeout=budget_s)
     if t.is_alive():
+        hooks_registered = on_timeout is not None
+        with hook_lock:
+            already_finished = finished["done"]
+            if on_timeout is not None:
+                try:
+                    on_timeout()
+                except Exception:  # noqa: BLE001
+                    pass
+            if already_finished:
+                # The background thread's `finally` already ran on_finish
+                # BEFORE on_timeout's register() just above — the ordering
+                # race described in the docstring. Fire it again now that a
+                # record exists: mark_done is idempotent, so this either
+                # rescues the orphaned record (the common case this closes)
+                # or is a harmless repeat no-op (nothing was registered).
+                _fire_on_finish()
+        delivery_note = (
+            f" It will be delivered to the originating chat when it "
+            f"finishes (run_id={run_id_hint})."
+            if hooks_registered else
+            " No automatic delivery is configured for this caller."
+        )
         return {
             "status": "timeout",
+            "run_id": run_id_hint,
             "error": (
                 f"exceeded budget_s={budget_s}s — the underlying run may "
                 "still be executing in the background; it was not killed."
+                + delivery_note
             ),
         }
     if "error" in box:
         raise box["error"]
     return box.get("value")
+
+
+# ---------------------------------------------------------------------------
+# Background-completion contract (ADR-0192) — lets a run that outlives
+# _run_with_budget's timeout still notify the originating messenger, the same
+# way the scheduler / `/task` / console task-worker-pool / L25 compute worker
+# already do via operator/bridges/shared/completion_notify.py. This MCP
+# server is spawned as a child of the per-turn `claude -p` subprocess
+# (docs/personas-and-routing.md) and does not itself know the originating
+# channel/chat_id/sender as tool-call arguments — instead it recovers them
+# from the SAME env vars the adapter's spawn already injects into every
+# child process (`_build_spawn_env`, operator/bridges/shared/adapter.py),
+# mirroring core/compute/corvin_compute/worker.py's `notify={channel,
+# chat_id, sender}` gate but sourced from env instead of an explicit submit
+# param (this MCP server has no such param in its tool schemas).
+# ---------------------------------------------------------------------------
+
+# Channels the completion-notify outbox knows how to route to (mirrors
+# core/compute/corvin_compute/worker.py::_MESSENGER_CHANNELS).
+_MESSENGER_CHANNELS = frozenset(
+    {"discord", "telegram", "whatsapp", "slack", "signal", "email", "teams"}
+)
+
+
+def _notify_origin_from_env() -> dict[str, str] | None:
+    """Best-effort messenger origin for background completion notification.
+
+    ``CORVIN_CHANNEL_ID`` is ``"<bridge>:<chat_key>"`` and ``CORVIN_ORIGIN_
+    SENDER`` is the sender uid — both set by the adapter's `_build_spawn_env`
+    for every `claude -p` turn that carried messenger context, and inherited
+    by this MCP server as its child process's environment. Returns None (not
+    a partial dict) when the origin can't be established — e.g. a console/
+    REST-originated call, or a channel completion_notify doesn't route to —
+    so callers degrade to today's synchronous-only behavior rather than
+    registering a notification nobody can ever deliver. A non-empty sender is
+    REQUIRED: completion_notify.purge_user (GDPR Art. 17) matches records on
+    sender, so an empty sender would leave an un-erasable record.
+    """
+    raw_channel_id = os.environ.get("CORVIN_CHANNEL_ID") or ""
+    channel, _sep, chat_id = raw_channel_id.partition(":")
+    sender = (os.environ.get("CORVIN_ORIGIN_SENDER") or "").strip()
+    if channel not in _MESSENGER_CHANNELS or not chat_id or not sender:
+        return None
+    return {"channel": channel, "chat_id": chat_id, "sender": sender}
+
+
+def _load_completion_notify() -> Any:
+    """Best-effort import of the bridge-side completion_notify backbone.
+
+    Reuses the already-resolved ``_operator_root`` (handles both a source
+    checkout and a wheel install layout — see the license-gate import
+    above), rather than re-deriving the path a second way.
+    """
+    try:
+        shared = _operator_root / "bridges" / "shared"
+        if shared.is_dir() and str(shared) not in sys.path:
+            sys.path.insert(0, str(shared))
+        import completion_notify as _cn  # type: ignore[import]
+        return _cn
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _notify_result_text(label: str, result: Any) -> tuple[str, bool]:
+    """Render a finished AWP ``RunResult`` as plain completion-notify text.
+
+    The messenger delivery path renders plain text (see completion_notify.
+    _envelope_for), not the JSON-RPC tool envelope this server otherwise
+    returns — so this is a separate, human-readable rendering, not a reuse
+    of ``_run_result_envelope``.
+    """
+    state = getattr(result, "state", None)
+    if state == "paused":
+        prompt = getattr(result, "paused_prompt", "") or ""
+        text = (
+            f"{label} paused at node {getattr(result, 'paused_at_node', '?')!r} "
+            f"awaiting a reply (run_id={getattr(result, 'run_id', '?')}). {prompt}"
+        ).strip()
+        return text, True
+    if state == "failed":
+        return f"{label} failed: {getattr(result, 'error', '') or 'unknown error'}", False
+    return f"{label} completed.", True
+
+
+def _completion_notify_hooks(
+    run_id: str, tenant_id: str, label: str,
+) -> tuple[Callable[[], None] | None, Callable[[Any, BaseException | None], None] | None]:
+    """Build the (on_timeout, on_finish) pair `_run_with_budget` wires up for
+    an AWP workflow run/resume, per the background-completion contract above.
+
+    Returns (None, None) when no messenger origin is available — the caller
+    then passes no hooks at all and behavior is exactly as before this
+    contract existed.
+
+    Registration is deliberately deferred to ``on_timeout`` (i.e. the moment
+    a run has ACTUALLY outlived its budget) rather than performed eagerly
+    before the run starts: the overwhelming common case is a run finishing
+    within budget_s, and eagerly registering would mean every such run also
+    gets a redundant completion-notify message on top of the normal
+    synchronous tools/call reply the caller already received. Deferring to
+    the timeout moment means the notification exists ONLY for the case a
+    caller has no other way to learn the outcome.
+    """
+    cn = _load_completion_notify()
+    origin = _notify_origin_from_env()
+    if cn is None or origin is None:
+        return None, None
+
+    def _on_timeout() -> None:
+        try:
+            cn.register(
+                run_id,
+                channel=origin["channel"], chat_id=origin["chat_id"],
+                sender=origin["sender"], tenant_id=tenant_id, label=label,
+            )
+            # Stamp THIS process as the record's producer, exactly as a
+            # correct producer does (mirrors bg_task_worker.py's cn.claim()
+            # right after it picks up a spec). The background thread that
+            # will eventually call on_finish/mark_done lives in this SAME
+            # process, so this process's pid is the right producer to
+            # record. Without this, the record's producer_pid stays None
+            # forever, and completion_notify.deliver_ready's dead-producer
+            # reap explicitly SKIPS pid=None records (they look identical to
+            # a long-running compute worker that legitimately hasn't claimed
+            # yet) — so if this MCP server process is killed (e.g. by the
+            # per-turn bridge adapter minutes after the turn ends, per the
+            # ADR-0192 docstring above) before the background thread finishes,
+            # the record would be invisible to the 30-minute dead-producer
+            # reap and stay "pending" for the full 7-day CN_PENDING_MAX_AGE
+            # instead of being turned into a "worker stopped" notification.
+            cn.claim(run_id)
+        except Exception:  # noqa: BLE001 — best-effort; must not block the
+            # timeout response this runs synchronously ahead of.
+            pass
+
+    def _on_finish(value: Any, error: BaseException | None) -> None:
+        # mark_done is a documented no-op (returns False) when no record was
+        # ever registered under this id — i.e. this fires on EVERY run
+        # (including the common in-budget case) but only actually delivers
+        # anything for a run _on_timeout already registered.
+        try:
+            if error is not None:
+                cn.mark_done(
+                    run_id,
+                    text=f"{label} crashed: {type(error).__name__}: {error}",
+                    ok=False,
+                )
+                return
+            text, ok = _notify_result_text(label, value)
+            cn.mark_done(run_id, text=text, ok=ok)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return _on_timeout, _on_finish
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +796,13 @@ class OrchestrationServer:
         self._initialized = False
         self._shutting_down = False
         self.caller_persona = (os.environ.get("CORVIN_CALLER_PERSONA") or "").strip()
+        # WF-A3: the identity of the chat this server process is actually
+        # running inside, set by the bridge adapter at spawn time — NOT
+        # something a `tools/call` argument can carry, because a chat
+        # participant could then simply claim to be whoever they like. See
+        # `_replier_from_channel_id()` for how this is turned into a
+        # `resume_workflow(replier=...)` value.
+        self.caller_channel_id = (os.environ.get("CORVIN_CHANNEL_ID") or "").strip()
 
     # -- transport -----------------------------------------------------
 
@@ -698,12 +977,26 @@ class OrchestrationServer:
         budget_s = _clamp(args.get("budget_s"), lo=10, hi=600, default=120)
         sink = _audit_sink_for(tenant_id, "workflow")
         runner = _DAGRunner(doc, engine=engine, audit_sink=sink, tenant_id=tenant_id)
+
+        # Pre-assign the run's id (rather than letting DAGRunner.run() pick
+        # one internally) so a timeout response — returned before run()
+        # itself returns — can still hand back a real, later-pollable
+        # run_id, and so a background completion notification (registered
+        # only if the run actually outlives budget_s, see
+        # _completion_notify_hooks) is keyed under the SAME id.
+        run_id_hint = secrets.token_hex(8)
+        on_timeout, on_finish = _completion_notify_hooks(
+            run_id_hint, tenant_id, f"workflow {workflow_id!r}",
+        )
+
         global _ACTIVE_WORKFLOW_RUNS
         with _ACTIVE_WORKFLOW_LOCK:
             _ACTIVE_WORKFLOW_RUNS += 1
         try:
             result = _run_with_budget(
-                lambda: runner.run(inputs=args.get("inputs") or {}), budget_s=budget_s,
+                lambda: runner.run(inputs=args.get("inputs") or {}, run_id=run_id_hint),
+                budget_s=budget_s, run_id_hint=run_id_hint,
+                on_timeout=on_timeout, on_finish=on_finish,
             )
         except Exception as exc:  # noqa: BLE001
             self._error(msgid, INTERNAL_ERROR, f"workflow run failed: {exc}")
@@ -726,6 +1019,15 @@ class OrchestrationServer:
         budget_s = _clamp(args.get("budget_s"), lo=10, hi=600, default=120)
         sink = _audit_sink_for(tenant_id, "workflow")
 
+        # Unlike workflow_run, the run_id already exists (it's the caller's
+        # own argument) — reuse it as-is for the completion-notify hooks, so
+        # a resume that outlives its budget notifies under the same id the
+        # caller already has, and any subsequent resume attempt on the same
+        # run_id shares one notification lineage.
+        on_timeout, on_finish = _completion_notify_hooks(
+            run_id, tenant_id, f"workflow resume {run_id!r}",
+        )
+
         try:
             result = _run_with_budget(
                 lambda: _resume_workflow(
@@ -735,15 +1037,22 @@ class OrchestrationServer:
                     # construction is deferred to the first real agent spawn.
                     engine=_LazyClaudeEngine(),
                     tenant_id=tenant_id,
-                    # Chat-tool caller is the persona's own privileged turn —
-                    # same posture as the console's operator caller
-                    # (replier=None is always authorized; the per-approver
-                    # WF-A3 binding is for the bridge's specific-participant
-                    # reply path, not this MCP tool).
-                    replier=None,
+                    # WF-A3: this tool is chat-reachable by design (ADR-0190 —
+                    # any persona participant with this MCP server exposed can
+                    # call it), so it must NEVER take the `replier=None`
+                    # privileged-owner shortcut reserved for genuinely
+                    # privileged callers (e.g. the console). The real caller
+                    # identity comes from `CORVIN_CHANNEL_ID`, set by the
+                    # bridge adapter at process-spawn time and therefore not
+                    # spoofable via the tool call's own arguments.
+                    # resume_workflow() rejects a mismatch against the
+                    # checkpoint's recorded `approver` with
+                    # UnauthorizedReplier, handled below.
+                    replier=_replier_from_channel_id(self.caller_channel_id),
                     audit_sink=sink,
                 ),
-                budget_s=budget_s,
+                budget_s=budget_s, run_id_hint=run_id,
+                on_timeout=on_timeout, on_finish=on_finish,
             )
         except _ClaudeEngineError as exc:
             self._respond(msgid, self._text_result(

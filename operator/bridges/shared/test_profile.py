@@ -5,7 +5,9 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
+import unittest.mock
 from pathlib import Path
 
 # Sandbox before importing.
@@ -132,6 +134,160 @@ class CacheTests(unittest.TestCase):
         os.utime(prof.PROFILE_FILE, None)
         # Without force, mtime change still re-reads.
         self.assertEqual(prof.load()["name"], "second")
+
+    def test_corrupt_profile_is_cached_not_reread_every_call(self):
+        # Confirmed blind spot: load()'s `except json.JSONDecodeError` branch
+        # never bumps `_cache_mtime` (only the successful-parse branch does),
+        # so a corrupt profile.json is re-read + re-parsed from disk on every
+        # single load() call instead of being cached once the corruption is
+        # detected. Write invalid JSON directly (bypassing save()) and count
+        # Path.read_text calls across three back-to-back load()s with the
+        # file left untouched in between.
+        prof.PROFILE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        prof.PROFILE_FILE.write_text("{not json")
+        # Reset the in-memory cache so the corrupt file is the first thing
+        # load() sees (setUp's prof.reset() already did this, but be explicit
+        # about the precondition here).
+        prof._cache = None
+        prof._cache_mtime = 0.0
+
+        calls = {"n": 0}
+        real_read_text = Path.read_text
+
+        def counting_read_text(self_path, *a, **kw):
+            if self_path == prof.PROFILE_FILE:
+                calls["n"] += 1
+            return real_read_text(self_path, *a, **kw)
+
+        with unittest.mock.patch.object(Path, "read_text", counting_read_text):
+            prof.load()
+            prof.load()
+            prof.load()
+
+        self.assertEqual(
+            calls["n"], 1,
+            f"load() re-read the corrupt profile.json {calls['n']} times "
+            "across 3 calls with the file unchanged on disk; expected 1 "
+            "(the corrupt-file outcome should be cached, not retried on "
+            "every call — _cache_mtime is never bumped on the "
+            "JSONDecodeError branch).",
+        )
+
+
+class ConcurrencyTests(unittest.TestCase):
+    """Confirmed blind spot (fixed by `_write_lock`): set_value()/save() had
+    no lock spanning the load(force=True) -> mutate -> save() read-modify-
+    write cycle, and save() always wrote to the same fixed temp filename
+    (`profile.json.tmp`) regardless of caller/thread. Under real concurrent
+    set_value() callers WITHIN THIS PROCESS (e.g. two console requests
+    dispatched onto FastAPI's anyio threadpool) this caused both uncaught
+    `FileNotFoundError` crashes (two threads racing on the same .tmp path)
+    and silently lost updates (classic RMW race). Corrected 2026-07-13: the
+    previous wording here named "the console's PUT /profile route" and
+    "adapter.py's ThreadPoolExecutor" as the races closed by this test —
+    neither was accurate at the time (the PUT route bypassed the lock
+    entirely until a separate fix, and adapter.py never calls set_value()
+    at all). See `profile.py`'s `_write_lock` docstring for the current,
+    accurate scope note (intra-process only; cross-process is out of
+    scope by deliberate choice)."""
+
+    def setUp(self):
+        prof.reset()
+
+    def test_concurrent_set_value_no_crash_no_lost_writes(self):
+        n = 150
+        errors: list[BaseException] = []
+        errors_lock = threading.Lock()
+
+        def worker(i):
+            try:
+                prof.set_value(f"k{i}", i)
+            except BaseException as exc:  # noqa: BLE001 - must catch every crash
+                with errors_lock:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(
+            errors, [],
+            f"{len(errors)}/{n} threads raised out of set_value() "
+            f"(first: {errors[0]!r})" if errors else "no errors",
+        )
+
+        extra = (prof.load(force=True).get("_extra") or {})
+        missing = [f"k{i}" for i in range(n) if f"k{i}" not in extra]
+        self.assertEqual(
+            missing, [],
+            f"{len(missing)}/{n} concurrent writes were silently lost to "
+            "the unlocked read-modify-write race in set_value()/save()",
+        )
+
+
+class MutateConcurrencyTests(unittest.TestCase):
+    """`mutate()` is the escape hatch `set_value()` now shares its lock
+    through — added for callers whose write doesn't fit a single-key shape
+    (the console's PUT /profile route merges a whole identity+audience
+    section per request via `_apply_section`, which mutates the passed dict
+    in place, exactly like the `fn` callback `mutate()` expects). Proves
+    concurrent multi-key mutate() callers within this process don't lose
+    each other's writes, mirroring
+    `test_concurrent_set_value_no_crash_no_lost_writes` above but for the
+    multi-key shape instead of the single-key one."""
+
+    def setUp(self):
+        prof.reset()
+
+    def test_concurrent_mutate_no_crash_no_lost_writes(self):
+        n = 150
+        errors: list[BaseException] = []
+        errors_lock = threading.Lock()
+
+        def worker(i):
+            def _apply(d):
+                # Mirrors routes/profile.py's _apply_write: several keys
+                # touched in one locked read-modify-write-save cycle.
+                d[f"m{i}_a"] = i
+                d[f"m{i}_b"] = i * 2
+
+            try:
+                prof.mutate(_apply)
+            except BaseException as exc:  # noqa: BLE001 - must catch every crash
+                with errors_lock:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(
+            errors, [],
+            f"{len(errors)}/{n} threads raised out of mutate() "
+            f"(first: {errors[0]!r})" if errors else "no errors",
+        )
+
+        d = prof.load(force=True)
+        missing = [
+            k for i in range(n) for k in (f"m{i}_a", f"m{i}_b")
+            if d.get(k) is None
+        ]
+        self.assertEqual(
+            missing, [],
+            f"{len(missing)}/{n * 2} concurrent multi-key mutate() writes "
+            "were silently lost to an unlocked read-modify-write race",
+        )
+        # Every pair must be internally consistent too (both-or-neither) —
+        # a genuinely atomic mutate() cycle can never persist "m{i}_a" from
+        # one round mixed with a DIFFERENT round's "m{i}_b" since each
+        # worker only ever runs once per key pair here.
+        for i in range(n):
+            self.assertEqual(d.get(f"m{i}_a"), i)
+            self.assertEqual(d.get(f"m{i}_b"), i * 2)
 
 
 class TtsAudienceTests(unittest.TestCase):

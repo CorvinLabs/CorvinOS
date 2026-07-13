@@ -261,6 +261,97 @@ class ProfileWriteIdentityTests(unittest.TestCase):
             self.assertEqual(r.status_code, 403)
 
 
+class ProfileWriteConcurrencyTests(unittest.TestCase):
+    """Confirmed blind spot (fixed 2026-07-13): PUT /profile used to do
+    ``profile.load(force=True) -> merge -> profile.save()`` with NO lock
+    spanning the cycle. FastAPI runs sync routes (this one included) on
+    anyio's threadpool, so two concurrent PUT requests in the SAME console
+    process are a genuine intra-process race: both read the same base
+    dict, both merge their own field in, and whichever save() lands second
+    silently clobbers the first request's field. The route now goes
+    through ``profile.mutate()``, which shares ``profile._write_lock``
+    with every other in-process writer.
+
+    Drives several concurrent PUT bursts, each burst setting a distinct
+    field per thread (mirroring the plain read-modify-write shape the bug
+    actually hit — different keys, same underlying file), then asserts
+    every field survived every burst with no lost updates.
+    """
+
+    # (section, key, value-factory(round) -> JSON-safe value)
+    _FIELDS = [
+        ("identity", "name",                     lambda r: f"Name-r{r}"),
+        ("identity", "tone",                     lambda r: f"tone-r{r}"),
+        ("identity", "timezone",                 lambda r: f"Europe/Berlin-r{r}"),
+        ("identity", "default_persona",          lambda r: f"persona-r{r}"),
+        ("identity", "custom_instructions",      lambda r: f"custom-r{r}"),
+        ("identity", "voice_note_max_sentences", lambda r: (r % 10) + 1),
+        ("audience", "voice_audience_background", lambda r: f"bg-r{r}"),
+    ]
+
+    def test_concurrent_put_requests_lose_no_field(self):
+        import threading as _threading
+
+        with _sandbox() as ctx:
+            client = ctx["client"]
+            headers = _auth_headers(ctx)
+            token = ctx["token"]
+            n_rounds = 8
+            errors: list[BaseException] = []
+            errors_lock = _threading.Lock()
+
+            for rnd in range(n_rounds):
+                def worker(section: str, key: str, value_fn, _rnd=rnd):
+                    try:
+                        resp = client.put(
+                            "/v1/console/profile",
+                            headers=headers,
+                            json={section: {key: value_fn(_rnd)},
+                                  "re_auth_token": token},
+                        )
+                        if resp.status_code != 200:
+                            raise AssertionError(
+                                f"PUT {section}.{key} round {_rnd} -> "
+                                f"{resp.status_code}: {resp.text}"
+                            )
+                    except BaseException as exc:  # noqa: BLE001
+                        with errors_lock:
+                            errors.append(exc)
+
+                threads = [
+                    _threading.Thread(target=worker, args=(section, key, value_fn))
+                    for section, key, value_fn in self._FIELDS
+                ]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+
+                self.assertEqual(
+                    errors, [],
+                    f"round {rnd}: {len(errors)} PUT requests raised/failed "
+                    f"(first: {errors[0]!r})" if errors else "no errors",
+                )
+
+                # After every field-thread in this round has landed, ALL
+                # of them must be present with THIS round's value — an
+                # unlocked read-modify-write race would show some fields
+                # reverted to a PREVIOUS round's value (lost update) here.
+                snap = client.get("/v1/console/profile").json()["profile"]
+                lost = []
+                for section, key, value_fn in self._FIELDS:
+                    expected = value_fn(rnd)
+                    actual = snap[section].get(key)
+                    if actual != expected:
+                        lost.append((section, key, expected, actual))
+                self.assertEqual(
+                    lost, [],
+                    f"round {rnd}: {len(lost)}/{len(self._FIELDS)} fields lost "
+                    f"to an unlocked read-modify-write race in PUT /profile: "
+                    f"{lost}",
+                )
+
+
 class ProfileWriteAudienceTests(unittest.TestCase):
     def test_audience_round_trip_renders_preview(self):
         with _sandbox() as ctx:

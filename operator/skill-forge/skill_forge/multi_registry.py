@@ -13,6 +13,7 @@ Failed gate -> PromotionGateError with reason.
 """
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -303,7 +304,17 @@ class MultiSkillRegistry:
                     f"(have {spec.n_grades} grades)"
                 )
         elif gate == ("session", "project"):
-            if spec.n_grades < 3 or spec.mean_score < 0.5:
+            # Defense-in-depth: grade() already rejects NaN scores, but a
+            # NaN could still reach storage through another path (direct
+            # meta.json edit, legacy-data migration, a future grade()
+            # regression). NaN comparisons are always False, so an
+            # unguarded `mean_score < 0.5` would let a corrupted skill
+            # silently satisfy the gate — reject explicitly instead.
+            if (
+                spec.n_grades < 3
+                or math.isnan(spec.mean_score)
+                or spec.mean_score < 0.5
+            ):
                 raise PromotionGateError(
                     f"session->project needs >=3 grades and mean>=0.5 "
                     f"(have {spec.n_grades} grades, mean={spec.mean_score:.2f})"

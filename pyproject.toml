@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "corvinos"
-version = "0.10.33"
+version = "0.10.34"
 description = "CorvinOS — universal, self-contained, cross-platform AI assistant framework"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -203,6 +203,19 @@ corvin-voice = "ops.launcher.voice_entry:main"
 # `npm ci` in the isolated sdist dir (no node_modules, no lockfile) and the
 # build hard-fails. dist/ is gitignored, so it must be built before packaging.
 "core/console/corvin_console/web-next/dist" = "core/console/corvin_console/web-next/dist"
+
+# Git-tracked-only file selection: without a build hook, hatchling's sdist
+# target is built straight from the raw working tree (gitignore-pattern
+# pruning only -- see hatch_build.py's module docstring), so any UNTRACKED
+# file sitting in the tree at build time (scratch/test files, a stray
+# credential-bearing settings.json) ships in the sdist just because it was on
+# disk. Reuses the SAME hatch_build.py / VendorOperatorHook as the wheel
+# target (see its `initialize()`): for the sdist target it installs the
+# git-tracked filter and creates the dist/ placeholder if needed, but never
+# reaches the vendor-copy staging below (that section is gated on
+# `is_real_wheel`, which is always False for the sdist target).
+[tool.hatch.build.targets.sdist.hooks.custom]
+path = "hatch_build.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["corvinOS", "core", "ops"]

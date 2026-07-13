@@ -37,6 +37,7 @@ const { newMsgId }              = require('../shared/js/msg-id');
 const inChatCmds                = require('../shared/js/in_chat_commands');
 const chatToggle                = require('../shared/js/chat_toggle');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
+const { makeStickyProgress }    = require('../shared/js/sticky_progress');
 
 const ROOT = __dirname;
 const PLUGIN_ROOT = path.resolve(ROOT, '..', '..');
@@ -99,6 +100,15 @@ const activeChannels = new Map();
 // remove our ⏳ reaction once the real reply ships (heartbeats don't count).
 const pendingReactions = new Map();
 let botUserId = null;
+
+// Sticky-progress + finalize-guard state for _progress/_heartbeat outbox
+// payloads. Mirrors the Discord/Telegram daemons (shared/js/sticky_progress.js):
+// the first _progress payload for a turn posts a new message; every
+// subsequent one edits it in place via chat.update() instead of flooding the
+// channel with one message per tool call. Once the real reply lands, any
+// stale _progress/_heartbeat file for the same msg_id (outbox
+// alphabetical-sort race) is dropped silently.
+const sticky = makeStickyProgress({ ttlMs: 60_000 });
 
 function writeInbox(payload) {
   const id = newMsgId();
@@ -362,6 +372,80 @@ app.event('message', async ({ event, client }) => {
 async function sendSlack(payload, _fpath) {
   const chId = payload.chat_id;
   if (!chId) { log(`no chat_id, skipping`); return; }
+
+  // Stale-finalize gate — same race as the other daemons: the outbox dir is
+  // processed in alphabetical order, so `{msg_id}_00.json` (real reply) can
+  // sort BEFORE `{msg_id}_hb.json` / `{msg_id}_sNN.json` (heartbeat/progress).
+  // Once the real reply for a msg_id has been delivered, drop every other
+  // file for that msg_id silently.
+  const msgId = payload.msg_id;
+  if ((payload._progress || payload._heartbeat) && sticky.isFinalized(msgId)) {
+    log(`drop stale ${payload._progress ? 'progress' : 'heartbeat'} for finalized ${msgId}`);
+    return;
+  }
+
+  // Progress updates: edit a single sticky message instead of flooding the
+  // channel with one message per tool call. On the first _progress payload
+  // we post a new message and remember its ts; every subsequent one edits
+  // it via chat.update. When the real reply arrives the sticky message is
+  // deleted first.
+  if (payload._progress && payload.text) {
+    const existing = sticky.getProgress(chId);
+    if (existing) {
+      try {
+        await app.client.chat.update({ channel: chId, ts: existing.ts, text: payload.text });
+        return;
+      } catch (e) {
+        // Edit failed (message deleted externally or a Slack API error).
+        // Delete the old sticky explicitly so it does not remain visible
+        // alongside the new one.
+        log(`sticky update failed, falling back to new message: ${e && e.message || e}`);
+        try { await app.client.chat.delete({ channel: chId, ts: existing.ts }); } catch {}
+        sticky.clearProgress(chId);
+      }
+    }
+    try {
+      const sent = await app.client.chat.postMessage({ channel: chId, text: payload.text });
+      sticky.setProgress(chId, { ts: sent.ts });
+    } catch {}
+    return;
+  }
+
+  // Heartbeat: slot into the sticky system so it gets deleted when the real
+  // reply arrives. If a progress update already claimed the sticky slot,
+  // skip silently — the progress message is more informative anyway.
+  if (payload._heartbeat && payload.text) {
+    if (!sticky.hasProgress(chId)) {
+      try {
+        const sent = await app.client.chat.postMessage({ channel: chId, text: payload.text });
+        sticky.setProgress(chId, { ts: sent.ts });
+      } catch {}
+    }
+    return;
+  }
+
+  // Real reply incoming — delete the sticky progress message first so the
+  // channel shows the answer cleanly without a stale status line above it.
+  if (sticky.hasProgress(chId)) {
+    const prog = sticky.getProgress(chId);
+    try {
+      await app.client.chat.delete({ channel: chId, ts: prog.ts });
+    } catch (e) {
+      // First delete attempt failed — retry once after a short pause, same
+      // belt-and-braces approach as the Discord daemon.
+      log(`sticky delete failed (will retry): ${e && e.message || e}`);
+      await new Promise((r) => setTimeout(r, 400));
+      try { await app.client.chat.delete({ channel: chId, ts: prog.ts }); } catch (e2) {
+        log(`sticky delete retry also failed: ${e2 && e2.message || e2}`);
+      }
+    }
+    sticky.clearProgress(chId);
+  }
+
+  // Mark this turn finalized BEFORE we touch Slack so any racing
+  // progress/heartbeat that arrives mid-send is correctly classified.
+  sticky.markFinalized(msgId);
+
   // Slack text limit per message is 4000 chars; we split conservatively.
   if (payload.text) {
     const TEXT_LIMIT = 3500;

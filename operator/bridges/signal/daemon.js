@@ -80,6 +80,19 @@ async function apiPost(urlPath, body) {
   return res.status === 204 ? null : res.json().catch(() => null);
 }
 
+async function apiDelete(urlPath, body) {
+  const res = await fetch(`${SIGNAL_API_URL}${urlPath}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`signal-cli DELETE ${urlPath} → HTTP ${res.status}: ${txt}`);
+  }
+  return res.status === 204 ? null : res.json().catch(() => null);
+}
+
 async function receiveMessages() {
   // signal-cli REST API v1: GET /v1/receive/<number>
   // Returns array of envelope objects.
@@ -87,12 +100,30 @@ async function receiveMessages() {
   return Array.isArray(envelopes) ? envelopes : [];
 }
 
-async function sendMessage(recipient, message) {
-  // signal-cli REST API v2: POST /v2/send
-  await apiPost('/v2/send', {
+async function sendMessage(recipient, message, opts = {}) {
+  // signal-cli REST API v2: POST /v2/send. Passing `edit_timestamp` (the
+  // `timestamp` returned by a previous send) makes this an in-place edit of
+  // that earlier message instead of a new one — used for the sticky
+  // progress mechanism (shared/js/sticky_progress.js). Returns the parsed
+  // response ({ timestamp }) so the caller can remember it for a later edit
+  // or remote-delete.
+  const body = {
     message:    String(message),
     number:     SIGNAL_NUMBER,
     recipients: [String(recipient)],
+  };
+  if (opts.editTimestamp) body.edit_timestamp = Number(opts.editTimestamp);
+  return apiPost('/v2/send', body);
+}
+
+async function remoteDeleteMessage(recipient, timestamp) {
+  // signal-cli REST API: DELETE /v1/remote-delete/<number>. Deletes (for
+  // everyone) a message this account previously sent, identified by its
+  // send timestamp — used to remove the sticky progress message once the
+  // real reply is ready to ship.
+  return apiDelete(`/v1/remote-delete/${encodeURIComponent(SIGNAL_NUMBER)}`, {
+    recipient: String(recipient),
+    timestamp: Number(timestamp),
   });
 }
 
@@ -116,6 +147,7 @@ const { handleEnvelope, processOutboxPayload } = makeHandler({
   auth,
   logger:          log,
   sendSignal:      sendMessage,
+  deleteSignal:    remoteDeleteMessage,
 });
 
 // ── Inbound polling loop ──────────────────────────────────────────────────────

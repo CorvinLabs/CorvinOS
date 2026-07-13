@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+import tempfile
 import unicodedata
 import unittest
 import unittest.mock as mock
@@ -405,6 +407,228 @@ class TestSpawnA2AWorker(unittest.TestCase):
         )
         timeout = captures[0]["kwargs"].get("timeout", 0)
         self.assertEqual(timeout, 42.0)
+
+
+# ── Workspace cleanup invariant ───────────────────────────────────────────
+#
+# spawn_a2a_worker creates a private scratch workspace via
+# `tempfile.mkdtemp(prefix="a2a-worker-")` (see the "2. Build a private
+# scratch workspace" step) and currently repeats
+# `shutil.rmtree(workspace, ignore_errors=True)` by hand at every one of 8
+# separate return/raise sites instead of a single try/finally. This section
+# pins the invariant "the scratch workspace is always removed, regardless of
+# which exit path is taken" across every one of those 8 sites so a future
+# contributor who adds a new early-return between the mkdtemp and the final
+# cleanup gets caught by CI instead of silently leaking a 0700 workspace that
+# may hold decoded inbound attachments.
+
+
+class _WorkspaceCapture:
+    """Records every dir a2a_worker creates via tempfile.mkdtemp(prefix=
+    "a2a-worker-") during the `with` block, by wrapping the real stdlib
+    tempfile.mkdtemp. a2a_worker.py does `import tempfile` locally inside
+    spawn_a2a_worker, but that just rebinds the name to the same already-
+    imported module object, so patching the real `tempfile.mkdtemp`
+    attribute is observed there too."""
+
+    def __init__(self) -> None:
+        self.paths: list[str] = []
+        self._real_mkdtemp = tempfile.mkdtemp
+        self._patcher = mock.patch("tempfile.mkdtemp", side_effect=self._spy)
+
+    def _spy(self, *a, **kw):
+        p = self._real_mkdtemp(*a, **kw)
+        self.paths.append(p)
+        return p
+
+    def __enter__(self) -> "_WorkspaceCapture":
+        self._patcher.start()
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        self._patcher.stop()
+        return False
+
+
+class _RaisingEngine:
+    """Fake engine whose spawn() raises a plain (non-timeout) exception —
+    exercises the generic `except Exception` branch around engine.spawn,
+    distinct from _FakeEngine (which only ever raises TimeoutError or
+    returns an in-band error event)."""
+    name = "raising-engine"
+    capabilities: dict = {}
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def spawn(self, prompt, **kwargs):
+        raise self._exc
+
+    def cancel(self):
+        pass
+
+
+class _StaleThenRaisingEngine:
+    """Pinnable engine: first spawn (with resume_session_id set) returns a
+    'session not found' error, triggering ADR-0049 stale-session eviction
+    and a one-shot re-spawn; the re-spawn then raises `second_exc`."""
+    name = "claude_code"
+    capabilities: dict = {"session_pinning": True}
+
+    def __init__(self, second_exc: Exception) -> None:
+        self._second_exc = second_exc
+        self.calls = 0
+
+    def spawn(self, prompt, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return iter([_FakeEvent(type="error", error="session not found: ses_stale")])
+        raise self._second_exc
+
+    def cancel(self):
+        pass
+
+
+class TestSpawnA2AWorkerWorkspaceCleanup(unittest.TestCase):
+    """Every exit path out of spawn_a2a_worker must remove the scratch
+    workspace it created — regardless of *which* of the 8 manual
+    `shutil.rmtree` call sites (or the final one) fires."""
+
+    def test_workspace_removed_on_normal_success(self):
+        factory = lambda: _FakeEngine(output="hello back")
+        with _WorkspaceCapture() as cap:
+            result = w.spawn_a2a_worker(
+                instruction="say hi", origin_id="o1", task_id="t1",
+                persona="assistant", ttl_s=30, engine_factory=factory,
+            )
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(len(cap.paths), 1)
+        self.assertFalse(Path(cap.paths[0]).exists())
+
+    def test_workspace_removed_on_attachment_drop_failed(self):
+        class _BadAttachment:
+            def decode(self) -> bytes:
+                return b"data"
+
+            @property
+            def name(self) -> str:
+                raise RuntimeError("boom")
+
+        factory = lambda: _FakeEngine(output="unused")
+        with _WorkspaceCapture() as cap:
+            result = w.spawn_a2a_worker(
+                instruction="task", origin_id="o1", task_id="t1",
+                persona="assistant", ttl_s=10, engine_factory=factory,
+                inbound_attachments=[_BadAttachment()],
+            )
+        self.assertEqual(result.status, "rejected")
+        self.assertEqual(result.error, "attachment_drop_failed")
+        self.assertEqual(len(cap.paths), 1)
+        self.assertFalse(Path(cap.paths[0]).exists())
+
+    def test_workspace_removed_on_engine_init_failed(self):
+        def bad_factory():
+            raise RuntimeError("engine binary not found")
+
+        with _WorkspaceCapture() as cap:
+            result = w.spawn_a2a_worker(
+                instruction="task", origin_id="o1", task_id="t1",
+                persona="assistant", ttl_s=10, engine_factory=bad_factory,
+            )
+        self.assertEqual(result.status, "rejected")
+        self.assertTrue(result.error.startswith("engine_init_failed:"))
+        self.assertEqual(len(cap.paths), 1)
+        self.assertFalse(Path(cap.paths[0]).exists())
+
+    def test_workspace_removed_on_capability_gate_rejection(self):
+        from agents import CapabilityError  # type: ignore[import-not-found]
+
+        factory = lambda: _FakeEngine()  # capabilities={} -> no session_pinning
+        with _WorkspaceCapture() as cap:
+            with self.assertRaises(CapabilityError):
+                w.spawn_a2a_worker(
+                    instruction="task", origin_id="o1", task_id="t1",
+                    persona="assistant", ttl_s=10, engine_factory=factory,
+                    pin_session=True, scope_label="test",
+                )
+        self.assertEqual(len(cap.paths), 1)
+        self.assertFalse(Path(cap.paths[0]).exists())
+
+    def test_workspace_removed_on_timeout(self):
+        factory = lambda: _FakeEngine(raise_timeout=True)
+        with _WorkspaceCapture() as cap:
+            result = w.spawn_a2a_worker(
+                instruction="task", origin_id="o1", task_id="t1",
+                persona="assistant", ttl_s=1, engine_factory=factory,
+            )
+        self.assertEqual(result.status, "timeout")
+        self.assertEqual(len(cap.paths), 1)
+        self.assertFalse(Path(cap.paths[0]).exists())
+
+    def test_workspace_removed_on_generic_spawn_exception(self):
+        factory = lambda: _RaisingEngine(RuntimeError("boom"))
+        with _WorkspaceCapture() as cap:
+            result = w.spawn_a2a_worker(
+                instruction="task", origin_id="o1", task_id="t1",
+                persona="assistant", ttl_s=10, engine_factory=factory,
+            )
+        self.assertEqual(result.status, "rejected")
+        self.assertTrue(result.error.startswith("spawn_failed:"))
+        self.assertEqual(len(cap.paths), 1)
+        self.assertFalse(Path(cap.paths[0]).exists())
+
+    def test_workspace_removed_on_eviction_respawn_timeout(self):
+        from worker_session_store import save_session, worker_sessions_dir  # type: ignore[import-not-found]
+
+        tmp = Path(tempfile.mkdtemp(prefix="test-a2a-ws-cleanup-"))
+        try:
+            session_home = tmp / "sessions" / "discord:999"
+            session_home.mkdir(parents=True)
+            ws_dir = worker_sessions_dir(session_home)
+            save_session(ws_dir, "review", "ses_stale", "assistant")
+
+            engine = _StaleThenRaisingEngine(TimeoutError("simulated"))
+            with _WorkspaceCapture() as cap:
+                result = w.spawn_a2a_worker(
+                    instruction="task", origin_id="o1", task_id="t1",
+                    persona="assistant", ttl_s=10,
+                    engine_factory=lambda: engine,
+                    pin_session=True, scope_label="review",
+                    session_home=session_home,
+                )
+            self.assertEqual(result.status, "timeout")
+            self.assertEqual(engine.calls, 2)  # stale spawn + one re-spawn
+            self.assertEqual(len(cap.paths), 1)
+            self.assertFalse(Path(cap.paths[0]).exists())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_workspace_removed_on_eviction_respawn_generic_exception(self):
+        from worker_session_store import save_session, worker_sessions_dir  # type: ignore[import-not-found]
+
+        tmp = Path(tempfile.mkdtemp(prefix="test-a2a-ws-cleanup-"))
+        try:
+            session_home = tmp / "sessions" / "discord:999"
+            session_home.mkdir(parents=True)
+            ws_dir = worker_sessions_dir(session_home)
+            save_session(ws_dir, "review", "ses_stale", "assistant")
+
+            engine = _StaleThenRaisingEngine(RuntimeError("boom"))
+            with _WorkspaceCapture() as cap:
+                result = w.spawn_a2a_worker(
+                    instruction="task", origin_id="o1", task_id="t1",
+                    persona="assistant", ttl_s=10,
+                    engine_factory=lambda: engine,
+                    pin_session=True, scope_label="review",
+                    session_home=session_home,
+                )
+            self.assertEqual(result.status, "rejected")
+            self.assertTrue(result.error.startswith("spawn_failed_after_eviction:"))
+            self.assertEqual(engine.calls, 2)  # stale spawn + one re-spawn
+            self.assertEqual(len(cap.paths), 1)
+            self.assertFalse(Path(cap.paths[0]).exists())
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ── CI lint ──────────────────────────────────────────────────────────────

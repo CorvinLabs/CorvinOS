@@ -21,6 +21,7 @@ import json
 import os
 import shutil
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -143,6 +144,49 @@ _cache: dict[str, Any] | None = None
 _cache_mtime: float = 0.0
 _cache_lock = threading.Lock()
 
+# Confirmed blind spot (profile concurrency race): set_value() did
+# load(force=True) -> mutate -> save() with no lock spanning the whole
+# cycle, so two concurrent writers within the SAME process (the clearest
+# real example: the console's PUT /profile route handling two overlapping
+# requests — FastAPI runs its sync routes on anyio's threadpool, so two
+# browser tabs, or one double-click, genuinely land on different threads
+# at the same time) hit a classic read-modify-write race — both read the
+# same base dict, both mutate their own key, and the second save() silently
+# clobbers the first writer's key.
+#
+# `_write_lock` serialises the entire read-modify-write-save cycle for
+# concurrent writers within this process. `set_value()` below uses it
+# directly for its single-key shape; `mutate()` exposes the SAME lock for
+# callers whose write doesn't fit that shape (the console PUT /profile
+# route merges a whole identity+audience section per request; the
+# TTS-provider repair action in `aco/repair_actions.py` swaps one key but
+# wants the same guarantee) so no code path in the console process writes
+# profile.json without holding this lock any more.
+#
+# Scope note — corrected 2026-07-13: this closes the INTRA-process race
+# only. Earlier wording here claimed "the console's PUT /profile route, or
+# two chats racing via adapter.py's ThreadPoolExecutor" were the races
+# being closed — neither was literally accurate: the console is a
+# SEPARATE OS process from the bridge adapter (a `threading.Lock` cannot
+# serialise two processes), and `adapter.py` itself never writes
+# profile.json at all — it only reads it for the system prompt; the
+# bridge-side `/profile set` command instead shells out to
+# `operator/voice/scripts/profile_cli.py` as its own short-lived
+# subprocess. So a genuine CROSS-process race does exist in principle
+# (a console PUT racing a `profile_cli.py` invocation from a chat), but it
+# is not addressed here — deliberately. `save()`'s atomic tmp+rename
+# already rules out file corruption from that race; the worst case is one
+# lost field update, self-correcting on the next save. Closing it for real
+# would need a portable cross-process file lock: `fcntl.flock` is
+# POSIX-only and was already rejected once by an earlier fix pass to avoid
+# breaking the Windows build (see the platform-independence constraint in
+# CLAUDE.md) — the reasoning still holds, so it is rejected again here
+# rather than reopened. If simultaneous multi-surface profile edits become
+# a real product requirement, add a portable file-lock (e.g. the
+# `filelock` package, which already abstracts POSIX/Windows) as its own
+# deliberate change, not folded into this bugfix.
+_write_lock = threading.Lock()
+
 
 def load(force: bool = False) -> dict[str, Any]:
     """Read the profile file. mtime-cached so repeat calls in the same poll
@@ -166,15 +210,33 @@ def load(force: bool = False) -> dict[str, Any]:
         except json.JSONDecodeError:
             # Corrupt — keep last good copy if any, otherwise empty.
             _cache = _cache or {}
-        else:
-            _cache_mtime = st.st_mtime
+        if not isinstance(_cache, dict):
+            # profile.json held valid-but-non-dict JSON (a bare list, number,
+            # or string) — every caller (`.get(...)`, `set_value()`'s
+            # `d[key] = value`) assumes a dict and would crash with
+            # AttributeError/TypeError otherwise.
+            _cache = {}
+        # Bump the cache mtime unconditionally (not just on successful parse)
+        # — otherwise a corrupt profile.json is re-read + re-parsed from disk
+        # on every single load() call indefinitely instead of being cached
+        # once, since the mtime never advances between calls.
+        _cache_mtime = st.st_mtime
         return _cache or {}
 
 
 def save(data: dict[str, Any]) -> None:
-    """Atomic write: tmp + rename. Bumps mtime which invalidates the cache."""
+    """Atomic write: tmp + rename. Bumps mtime which invalidates the cache.
+
+    The tmp filename is suffixed with the pid + thread-ident so concurrent
+    callers never race on the same fixed ``profile.json.tmp`` path (that
+    collision made `shutil.move` raise `FileNotFoundError` for whichever
+    thread's tmp file the other thread's write/move already consumed —
+    confirmed blind spot). This is defense-in-depth alongside `_write_lock`
+    below: `set_value()` already serialises callers within this process,
+    but a unique tmp name keeps `save()` itself collision-safe even if
+    called directly, from another process, or the lock is bypassed."""
     PROFILE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = PROFILE_FILE.with_suffix(".json.tmp")
+    tmp = PROFILE_FILE.with_suffix(f".json.tmp.{os.getpid()}.{threading.get_ident()}")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
     shutil.move(str(tmp), str(PROFILE_FILE))
     try:
@@ -192,24 +254,47 @@ def get(key: str) -> Any:
     return (d.get("_extra") or {}).get(key)
 
 
+def mutate(fn: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+    """Run an arbitrary read-modify-write cycle under the SAME `_write_lock`
+    `set_value()` uses. `fn` receives the freshly loaded (`force=True`)
+    profile dict and mutates it in place; `mutate()` then calls `save()`
+    and returns the resulting dict.
+
+    This is the escape hatch for callers whose write doesn't fit
+    `set_value()`'s single-key shape — e.g. the console's PUT /profile
+    route, which merges a whole identity+audience section (many keys) per
+    request. If `fn` raises, `save()` is never reached and the exception
+    propagates to the caller with the lock released, so a validation
+    failure never partially persists a half-applied update.
+    """
+    with _write_lock:
+        d = load(force=True)
+        fn(d)
+        save(d)
+        return d
+
+
 def set_value(key: str, value: Any) -> dict[str, Any]:
     """Set a single key. Known keys go top-level; everything else under _extra.
-    `value=None` removes the entry. Returns the full profile after the change."""
-    d = load(force=True)
-    if key in KNOWN_KEYS:
-        if value is None:
-            d.pop(key, None)
+    `value=None` removes the entry. Returns the full profile after the change.
+
+    Thread-safe: shares `_write_lock` (via `mutate()`) with every other
+    writer in this process so concurrent callers can't race each other's
+    read-modify-write (see `_write_lock` docstring above)."""
+    def _apply(d: dict[str, Any]) -> None:
+        if key in KNOWN_KEYS:
+            if value is None:
+                d.pop(key, None)
+            else:
+                d[key] = value
         else:
-            d[key] = value
-    else:
-        extra = dict(d.get("_extra") or {})
-        if value is None:
-            extra.pop(key, None)
-        else:
-            extra[key] = value
-        d["_extra"] = extra
-    save(d)
-    return d
+            extra = dict(d.get("_extra") or {})
+            if value is None:
+                extra.pop(key, None)
+            else:
+                extra[key] = value
+            d["_extra"] = extra
+    return mutate(_apply)
 
 
 def reset() -> None:

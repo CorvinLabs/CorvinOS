@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import contextmanager
@@ -97,6 +98,60 @@ def _sandbox(tmp_path: Path):
             yield tc
     finally:
         for k, v in [(("CORVIN_HOME"), prev_home), ("CORVIN_TENANT_ID", prev_tid)]:
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        _reset_modules()
+
+
+@contextmanager
+def _sandbox_two_tenants(tmp_path: Path):
+    """Two TestClients, two tenants, ONE import of corvin_console — so both
+    clients hit the exact same module-level ``_BOOTSTRAP_STATE`` dict object
+    (the thing under test). Mirrors ``_sandbox`` but authenticates each
+    client as a different tenant instead of resetting modules per client."""
+    home = tmp_path / "corvin_home"
+    tenant_a, tenant_b = "tenant_a", "tenant_b"
+    for tid in (tenant_a, tenant_b):
+        (home / "tenants" / tid / "global" / "forge").mkdir(parents=True)
+        (home / "tenants" / tid / "global" / "console" / "sessions").mkdir(parents=True)
+
+    prev_home = os.environ.get("CORVIN_HOME")
+    prev_tid = os.environ.get("CORVIN_TENANT_ID")
+    os.environ["CORVIN_HOME"] = str(home)
+    os.environ["CORVIN_TENANT_ID"] = tenant_a
+
+    try:
+        _reset_modules()
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from corvin_console.app import router as console_router
+        from corvin_console.deps import require_csrf, require_session
+
+        def _make_client(tenant_id: str) -> TestClient:
+            app = FastAPI()
+            app.include_router(console_router, prefix="/v1/console")
+            mock_session = MagicMock()
+            mock_session.username = f"test_{tenant_id}"
+            mock_session.tenant_id = tenant_id
+            mock_session.role = "admin"
+            mock_session.sid_fingerprint = f"test_fp_{tenant_id}"
+            app.dependency_overrides[require_session] = lambda ms=mock_session: ms
+            app.dependency_overrides[require_csrf] = lambda: "csrf-ok"
+            return TestClient(app, raise_server_exceptions=False)
+
+        tc_a = _make_client(tenant_a)
+        tc_b = _make_client(tenant_b)
+        try:
+            with tc_a, tc_b:
+                yield tc_a, tc_b
+        finally:
+            tc_a.close()
+            tc_b.close()
+    finally:
+        for k, v in [("CORVIN_HOME", prev_home), ("CORVIN_TENANT_ID", prev_tid)]:
             if v is None:
                 os.environ.pop(k, None)
             else:
@@ -341,6 +396,148 @@ class TestBootstrapEndpoint(unittest.TestCase):
         finally:
             os.environ.pop("CORVIN_HOME", None)
             _reset_modules()
+
+
+# ---------------------------------------------------------------------------
+# Cross-tenant isolation — _BOOTSTRAP_STATE / _BOOTSTRAP_LOCK (ADR-0007)
+# ---------------------------------------------------------------------------
+
+class TestBootstrapCrossTenantIsolation(unittest.TestCase):
+    """`_BOOTSTRAP_STATE`/`_BOOTSTRAP_LOCK` (routes/engine.py, ~line 802) are a
+    single process-wide dict, NOT keyed by tenant_id — even though
+    `_run_bootstrap_job(tenant_id)` runs per-caller and writes tenant-specific
+    config via `_save_tenant_yaml(tenant_id, ...)`. Both ``POST /bootstrap``
+    and ``GET /bootstrap/status`` read/write this same unscoped dict for
+    every tenant.
+
+    This is the same bug class already found + fixed for
+    `_WELCOME_CHECK_STATE` in routes/setup.py (converted to a tenant-keyed
+    dict via `_welcome_state_for(tenant_id)`, with a dedicated regression
+    test `test_two_tenants_do_not_clobber_each_others_welcome_check_state`
+    in test_setup_welcome_check.py) — `_BOOTSTRAP_STATE` was never swept.
+
+    These tests PIN the *actual* (buggy, leaky) behavior rather than the
+    desired isolated behavior, so the suite stays green while the bug is
+    documented for a human fix decision (tenant-keying `_BOOTSTRAP_STATE`
+    touches the dict shape, `_run_bootstrap_job`, and both endpoints — not a
+    safe one-line change to make inline here). Once fixed, these two tests
+    must be rewritten to assert isolation instead, mirroring the welcome-check
+    fix and its regression test.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self._tmp_path = Path(self._tmp)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_tenant_b_status_poll_leaks_tenant_as_running_job(self):
+        """Tenant B calls GET /bootstrap/status WITHOUT ever calling POST
+        itself, yet observes tenant A's in-flight job — proving the state
+        dict is shared process-wide rather than scoped per tenant."""
+        release = threading.Event()
+        started = threading.Event()
+
+        def _slow_bootstrap(progress=None):
+            started.set()
+            release.wait(timeout=5)
+            return {
+                "model_selected": "qwen3:8b",
+                "ram_gb": 8.0,
+                "ollama_installed": True,
+                "model_pulled": True,
+                "error": None,
+            }
+
+        try:
+            with _sandbox_two_tenants(self._tmp_path) as (tc_a, tc_b):
+                with patch("hermes_bootstrap.bootstrap_hermes", side_effect=_slow_bootstrap):
+                    resp_a = tc_a.post("/v1/console/settings/engine/bootstrap")
+                    self.assertEqual(resp_a.status_code, 200)
+                    self.assertTrue(
+                        started.wait(timeout=5),
+                        "tenant A's bootstrap job never started",
+                    )
+
+                    # Tenant B never POSTed — but its GET returns a "running"
+                    # job anyway, because _BOOTSTRAP_STATE is not tenant-scoped.
+                    status_b = tc_b.get("/v1/console/settings/engine/bootstrap/status")
+                    self.assertEqual(status_b.status_code, 200)
+                    data_b = status_b.json()
+                    self.assertEqual(
+                        data_b["state"], "running",
+                        "documented bug: tenant B observed a job it never "
+                        "started (see _BOOTSTRAP_STATE cross-tenant leak)",
+                    )
+
+                    release.set()
+                    final_b = _poll_bootstrap(tc_b)
+        finally:
+            release.set()  # never leave the worker thread blocked past the test
+
+        # B's own poll resolves to A's result — a false "done" outcome for a
+        # job B never ran.
+        self.assertEqual(final_b["state"], "done")
+        self.assertEqual(final_b["result"]["model_selected"], "qwen3:8b")
+
+    def test_tenant_b_post_while_tenant_a_running_never_starts_tenant_bs_own_job(self):
+        """Tenant B's POST /bootstrap, issued while tenant A's job is still
+        running, short-circuits into A's in-flight state instead of starting
+        a job for B — so B's own tenant config is never touched even though
+        B is later told the (shared) job is "done"."""
+        release = threading.Event()
+        started = threading.Event()
+
+        def _slow_bootstrap(progress=None):
+            started.set()
+            release.wait(timeout=5)
+            return {
+                "model_selected": "qwen3:8b",
+                "ram_gb": 8.0,
+                "ollama_installed": True,
+                "model_pulled": True,
+                "error": None,
+            }
+
+        try:
+            with _sandbox_two_tenants(self._tmp_path) as (tc_a, tc_b):
+                home = self._tmp_path / "corvin_home"
+                with patch("hermes_bootstrap.bootstrap_hermes", side_effect=_slow_bootstrap):
+                    resp_a = tc_a.post("/v1/console/settings/engine/bootstrap")
+                    self.assertEqual(resp_a.status_code, 200)
+                    self.assertTrue(
+                        started.wait(timeout=5),
+                        "tenant A's bootstrap job never started",
+                    )
+
+                    # Tenant B POSTs while A's job is running — per the buggy
+                    # process-wide short-circuit, this returns A's in-flight
+                    # state and does NOT spawn a job for tenant B at all.
+                    resp_b = tc_b.post("/v1/console/settings/engine/bootstrap")
+                    self.assertEqual(resp_b.status_code, 200)
+                    self.assertEqual(resp_b.json()["state"], "running")
+
+                    release.set()
+                    _poll_bootstrap(tc_b)
+        finally:
+            release.set()
+
+        # Tenant A's config was updated by the (single) real worker thread...
+        tenant_a_yaml = home / "tenants" / "tenant_a" / "global" / "tenant.corvin.yaml"
+        self.assertTrue(tenant_a_yaml.exists())
+        self.assertIn("hermes", tenant_a_yaml.read_text())
+
+        # ...but tenant B's own config was never touched, even though B's
+        # poll reported state "done" — a false-positive "configured" outcome.
+        tenant_b_yaml = home / "tenants" / "tenant_b" / "global" / "tenant.corvin.yaml"
+        self.assertFalse(
+            tenant_b_yaml.exists(),
+            "documented bug: tenant B was told bootstrap finished, but no "
+            "tenant.corvin.yaml was ever written for tenant B — the worker "
+            "thread only ever ran with tenant A's tenant_id",
+        )
 
 
 if __name__ == "__main__":

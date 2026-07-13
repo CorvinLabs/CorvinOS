@@ -19,14 +19,119 @@ so the wheel carries only runtime code.
 Source-tree mode is untouched: the hook only runs at wheel-build time and writes
 into a temp staging dir; the live checkout never gains a ``_vendor/`` dir, so
 ``_operator_bootstrap.ensure_operator_on_path()`` stays a no-op there.
+
+Git-tracked-only file selection (both wheel AND sdist)
+-------------------------------------------------------
+A denylist of *known* test-file patterns (``test_*``, ``conftest.py``,
+``tests/``, ``__pycache__``, ``.pyc``, ...) is necessarily incomplete: whatever
+else happens to be sitting UNTRACKED in a developer's working tree at build
+time -- scratch files, a stray audio file dragged in from another task, an
+untracked ``settings.json`` with real credentials -- ships to every real
+``pip install`` simply because it was present on disk. This was demonstrated
+in practice in the published 0.10.33 wheel/sdist (adversarial release-
+readiness review, 2026-07-13): a stray untracked
+``operator/voice/scripts/Testnachricht mit Nova.`` file rode along inside the
+vendored copy, and the sdist -- built straight from the raw working tree --
+picked up several more untracked scratch files that were simply sitting in
+the tree.
+
+The fix: ``_install_git_tracked_filter`` makes ``git ls-files`` the single
+source of truth for "would actually ship" and wires it into BOTH targets'
+default project-file walk via a monkeypatch of the per-build
+``BuilderConfig.path_is_excluded`` (the same choke point Hatchling's own
+``recurse_project_files`` already calls for every candidate file). It only
+ever TIGHTENS exclusion -- an already-excluded path stays excluded, and a
+git-tracked path is never force-included by this filter, it just stops being
+force-EXCLUDED. Intentional, gitignored-on-purpose force-includes (e.g. the
+pre-built ``web-next/dist`` SPA, which is generated at packaging time and
+never committed) are untouched because ``force_include`` bypasses
+``path_is_excluded``/``recurse_project_files`` entirely.
+
+This deliberately only fires when building FROM a live git checkout (``.git``
+present and ``git`` on PATH). Building a wheel FROM an already-extracted sdist
+tarball has no ``.git`` at all -- there is no working-tree contamination risk
+to filter in that case, because the sdist's own file list (decided when the
+sdist itself was built from a live checkout) already IS the source of truth.
+Treating "no .git" as "nothing is tracked" would wrongly gut such a build, so
+``_load_git_tracked_files`` returns ``None`` (meaning "skip the filter",
+not "everything is untracked") whenever there is no git repo to ask.
 """
 from __future__ import annotations
 
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
+
+
+def _load_git_tracked_files(root: Path) -> frozenset[str] | None:
+    """Return the set of git-tracked (repo-relative, POSIX-style) paths under
+    ``root``, or ``None`` if there is no live git checkout to consult.
+
+    ``None`` is a distinct signal from "empty set": it means "this is not a
+    git checkout at all" (e.g. building a wheel from an extracted sdist
+    tarball, which has no ``.git``), and callers must treat that as "nothing
+    to filter", never as "exclude everything".
+    """
+    if not (root / ".git").exists():
+        return None
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        result = subprocess.run(
+            [git, "-C", str(root), "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        # Corrupt repo, git too old for a flag, etc. -- fail safe by NOT
+        # filtering rather than risking a false "nothing is tracked" wipeout.
+        return None
+    raw = result.stdout.decode("utf-8", "surrogateescape")
+    return frozenset(p for p in raw.split("\0") if p)
+
+
+def _tracked_dir_prefixes(tracked: frozenset[str]) -> frozenset[str]:
+    """All ancestor directory paths (POSIX-style, no trailing slash) implied
+    by ``tracked`` file paths, so "is this directory worth descending into"
+    is an O(1) set lookup instead of an O(n) scan per directory."""
+    prefixes: set[str] = set()
+    for path in tracked:
+        parts = path.split("/")
+        for i in range(1, len(parts)):
+            prefixes.add("/".join(parts[:i]))
+    return frozenset(prefixes)
+
+
+def _install_git_tracked_filter(config: object, root: Path) -> None:
+    """Monkeypatch ``config.path_is_excluded`` so Hatchling's default
+    project-file walk (``recurse_project_files`` -> ``include_path`` ->
+    ``path_is_excluded``) rejects any path that is not actually tracked by
+    git, on top of whatever the static include/exclude glob config in
+    pyproject.toml already decides. No-op (returns without patching anything)
+    when there is no live git checkout -- see ``_load_git_tracked_files``.
+
+    Does NOT affect ``recurse_forced_files`` (force-include): that is an
+    explicit, intentional inclusion list (e.g. the gitignored, pre-built
+    ``web-next/dist`` SPA) and must keep shipping even though it is untracked.
+    """
+    tracked = _load_git_tracked_files(root)
+    if tracked is None:
+        return
+    tracked_dirs = _tracked_dir_prefixes(tracked)
+    original_path_is_excluded = config.path_is_excluded
+
+    def _git_aware_path_is_excluded(relative_path: str) -> bool:
+        if original_path_is_excluded(relative_path):
+            return True
+        rel = relative_path.replace("\\", "/").rstrip("/")
+        return rel not in tracked and rel not in tracked_dirs
+
+    config.path_is_excluded = _git_aware_path_is_excluded
+
 
 # (source subtree relative to repo root, destination relative to wheel root).
 # Mirror layout EXACTLY so the bootstrap's relative paths resolve. ``forge`` is
@@ -194,6 +299,17 @@ class VendorOperatorHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict) -> None:  # noqa: D401
         root = Path(self.root)
 
+        # Applies to BOTH the wheel and sdist targets' default project-file
+        # walk (see the module docstring's "Git-tracked-only file selection"
+        # section). Must run unconditionally and before any early return below
+        # -- the sdist target has no vendor-copy step of its own, so this is
+        # its ENTIRE fix; it still needs to fall through to the placeholder
+        # `dist_dir.mkdir()` a few lines down (the sdist's own force-include
+        # of web-next/dist raises `FileNotFoundError` at sdist-build time if
+        # that directory doesn't exist yet in a dev checkout with no built
+        # SPA -- returning early here instead would reintroduce that crash).
+        _install_git_tracked_filter(self.build_config, root)
+
         dist_dir = root / "core/console/corvin_console/web-next/dist"
         spa_index = dist_dir / "index.html"
 
@@ -231,6 +347,16 @@ class VendorOperatorHook(BuildHookInterface):
 
         self._stage = Path(tempfile.mkdtemp(prefix="corvin_vendor_"))
 
+        # Same git-tracked-only policy as `_install_git_tracked_filter`, wired
+        # into the vendor-copy step separately because `shutil.copytree`'s
+        # `ignore=` walk here is entirely independent of Hatchling's own file
+        # selection (`recurse_project_files`) -- the general monkeypatch above
+        # never sees these paths at all. `None` (no live git checkout) means
+        # "don't filter", handled by `_ignore` treating `tracked=None` as
+        # "skip the git check" -- see its docstring.
+        tracked = _load_git_tracked_files(root)
+        tracked_dirs = _tracked_dir_prefixes(tracked) if tracked is not None else None
+
         force_include = build_data.setdefault("force_include", {})
         for src_rel, dest_rel in _VENDOR_MAP:
             src = root / src_rel
@@ -242,7 +368,9 @@ class VendorOperatorHook(BuildHookInterface):
                 shutil.copytree(
                     src,
                     staged,
-                    ignore=self._ignore,
+                    ignore=lambda d, n, _root=root, _tracked=tracked, _tracked_dirs=tracked_dirs: (
+                        self._ignore(d, n, root=_root, tracked=_tracked, tracked_dirs=_tracked_dirs)
+                    ),
                     dirs_exist_ok=True,
                 )
             else:
@@ -273,12 +401,49 @@ class VendorOperatorHook(BuildHookInterface):
             raise RuntimeError(f"console SPA build failed: {exc}") from exc
 
     @staticmethod
-    def _ignore(directory: str, names: list[str]) -> set[str]:
+    def _ignore(
+        directory: str,
+        names: list[str],
+        *,
+        root: Path | None = None,
+        tracked: frozenset[str] | None = None,
+        tracked_dirs: frozenset[str] | None = None,
+    ) -> set[str]:
+        """`shutil.copytree`'s ignore callback for vendoring. `tracked`/
+        `tracked_dirs`/`root` are optional keyword-only extras (default
+        `None`, i.e. "no git-tracked filtering") so existing callers that
+        only care about the test-path denylist -- including the plain
+        2-positional-arg call this project's regression tests already make --
+        keep working unchanged.
+
+        When `tracked` IS provided (a live git checkout), any entry that is
+        neither a git-tracked file nor a directory containing git-tracked
+        content is skipped too -- this is what keeps a stray UNTRACKED file
+        sitting in the vendored source subtree (e.g. the
+        `operator/voice/scripts/Testnachricht mit Nova.` audio file found in
+        the published 0.10.33 wheel) out of the copy, regardless of whether
+        any denylist pattern happens to match its name.
+        """
         skip: set[str] = set()
         base = Path(directory)
         for n in names:
             if _is_test_path(Path(n)) or _is_test_path(base / n) or _is_runtime_path(n):
                 skip.add(n)
+                continue
+            if tracked is not None and root is not None:
+                entry = base / n
+                try:
+                    rel_posix = entry.resolve().relative_to(root.resolve()).as_posix()
+                except ValueError:
+                    # Outside the repo root entirely -- not expected for any
+                    # `_VENDOR_MAP` source, but fail safe: don't trust it.
+                    skip.add(n)
+                    continue
+                if entry.is_dir():
+                    if rel_posix not in (tracked_dirs or frozenset()):
+                        skip.add(n)
+                elif rel_posix not in tracked:
+                    skip.add(n)
         return skip
 
     def finalize(self, version: str, build_data: dict, artifact_path: str) -> None:

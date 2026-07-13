@@ -29,6 +29,7 @@ const { newMsgId }              = require('../shared/js/msg-id');
 const inChatCmds                = require('../shared/js/in_chat_commands');
 const chatToggle                = require('../shared/js/chat_toggle');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
+const { makeStickyProgress }    = require('../shared/js/sticky_progress');
 
 const ROOT = __dirname;
 const PLUGIN_ROOT = path.resolve(ROOT, '..', '..');
@@ -84,6 +85,15 @@ if (!TOKEN) {
 }
 
 const activeChats = new Map(); // chatId -> Date.now() for typing-indicator refresh
+
+// Sticky-progress + finalize-guard state for _progress/_heartbeat outbox
+// payloads. Mirrors the Discord daemon's mechanism (see
+// shared/js/sticky_progress.js): the first _progress payload for a turn
+// sends a new message; every subsequent one edits it in place via
+// bot.editMessageText() instead of flooding the chat with one message per
+// tool call. Once the real reply lands, any stale _progress/_heartbeat file
+// for the same msg_id (outbox alphabetical-sort race) is dropped silently.
+const sticky = makeStickyProgress({ ttlMs: 60_000 });
 
 function writeInbox(payload) {
   const id = newMsgId();
@@ -363,6 +373,79 @@ async function sendTelegram(payload, _fpath) {
     log(`no chat_id, skipping`);
     return; // returnt → poller deletes das File (analog zu vorherigem unlink)
   }
+
+  // Stale-finalize gate — same race as Discord: the outbox dir is processed
+  // in alphabetical order, so `{msg_id}_00.json` (real reply) can sort
+  // BEFORE `{msg_id}_hb.json` / `{msg_id}_sNN.json` (heartbeat/progress).
+  // Once the real reply for a msg_id has been delivered, drop every other
+  // file for that msg_id silently.
+  const msgId = payload.msg_id;
+  if ((payload._progress || payload._heartbeat) && sticky.isFinalized(msgId)) {
+    log(`drop stale ${payload._progress ? 'progress' : 'heartbeat'} for finalized ${msgId}`);
+    return;
+  }
+
+  // Progress updates: edit a single sticky message instead of flooding the
+  // chat with one message per tool call. On the first _progress payload we
+  // send a new message and remember its message_id; every subsequent one
+  // edits it via editMessageText. When the real reply arrives the sticky
+  // message is deleted first.
+  if (payload._progress && payload.text) {
+    const existing = sticky.getProgress(chatId);
+    if (existing) {
+      try {
+        await bot.editMessageText(payload.text, { chat_id: chatId, message_id: existing.messageId });
+        return;
+      } catch {
+        // Edit failed (message deleted externally, too old to edit, or a
+        // Telegram API error). Delete the old sticky explicitly so it does
+        // not remain visible alongside the new one.
+        try { await bot.deleteMessage(chatId, existing.messageId); } catch {}
+        sticky.clearProgress(chatId);
+      }
+    }
+    try {
+      const sent = await bot.sendMessage(chatId, payload.text);
+      sticky.setProgress(chatId, { messageId: sent.message_id });
+    } catch {}
+    return;
+  }
+
+  // Heartbeat: slot into the sticky system so it gets deleted when the real
+  // reply arrives. If a progress update already claimed the sticky slot,
+  // skip silently — the progress message is more informative anyway.
+  if (payload._heartbeat && payload.text) {
+    if (!sticky.hasProgress(chatId)) {
+      try {
+        const sent = await bot.sendMessage(chatId, payload.text);
+        sticky.setProgress(chatId, { messageId: sent.message_id });
+      } catch {}
+    }
+    return;
+  }
+
+  // Real reply incoming — delete the sticky progress message first so the
+  // chat shows the answer cleanly without a stale status line above it.
+  if (sticky.hasProgress(chatId)) {
+    const prog = sticky.getProgress(chatId);
+    try {
+      await bot.deleteMessage(chatId, prog.messageId);
+    } catch (e) {
+      // First delete attempt failed — retry once after a short pause, same
+      // belt-and-braces approach as the Discord daemon.
+      log(`sticky delete failed (will retry): ${e && e.message || e}`);
+      await new Promise((r) => setTimeout(r, 400));
+      try { await bot.deleteMessage(chatId, prog.messageId); } catch (e2) {
+        log(`sticky delete retry also failed: ${e2 && e2.message || e2}`);
+      }
+    }
+    sticky.clearProgress(chatId);
+  }
+
+  // Mark this turn finalized BEFORE we touch Telegram so any racing
+  // progress/heartbeat that arrives mid-send is correctly classified.
+  sticky.markFinalized(msgId);
+
   if (payload.text) {
     await bot.sendMessage(chatId, payload.text);
   }

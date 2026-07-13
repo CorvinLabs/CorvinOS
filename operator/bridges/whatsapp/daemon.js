@@ -48,6 +48,7 @@ const SAY_HELPER = path.resolve(ROOT, '..', '..', 'voice', 'scripts', 'say.py');
 
 const inChatCmds = require('../shared/js/in_chat_commands');
 const chatState = require('./chat_state');
+const { makeStickyProgress } = require('../shared/js/sticky_progress');
 
 // ── say.py TTS helper ─────────────────────────────────────────────────────
 // Spawns operator/voice/scripts/say.py to produce an OGG-Opus voice-note.
@@ -252,6 +253,17 @@ const activeSenders = new Map();
 // real reply (not the heartbeat) goes out, so the user gets immediate visual
 // feedback that the bridge picked up their request.
 const pendingReactions = new Map();
+
+// Sticky-progress + finalize-guard state for _progress/_heartbeat outbox
+// payloads. Mirrors the Discord/Telegram/Slack daemons
+// (shared/js/sticky_progress.js): the first _progress payload for a turn
+// sends a new message and remembers its Baileys message key; every
+// subsequent one edits it in place via the WhatsApp message-edit feature
+// (sendMessage({..., edit: key})) instead of flooding the chat with one
+// message per tool call. Once the real reply lands, any stale
+// _progress/_heartbeat file for the same msg_id (outbox alphabetical-sort
+// race) is dropped silently.
+const sticky = makeStickyProgress({ ttlMs: 60_000 });
 
 // Message IDs we sent ourselves (replies, acks, heartbeats, etc.). Needed
 // because our own outbound messages bounce back via messages.upsert with
@@ -511,6 +523,16 @@ async function processOutbox() {
       }
       continue;
     }
+    // Stale-finalize gate — same race as the Discord/Telegram/Slack daemons:
+    // the outbox dir is processed in alphabetical order, so `{msg_id}_00.json`
+    // (real reply) can sort BEFORE `{msg_id}_hb.json` / `{msg_id}_sNN.json`
+    // (heartbeat/progress). Once the real reply for a msg_id has been
+    // delivered, drop every other file for that msg_id silently.
+    if ((payload._progress || payload._heartbeat) && sticky.isFinalized(payload.msg_id)) {
+      log(`outbox: drop stale ${payload._progress ? 'progress' : 'heartbeat'} for finalized ${payload.msg_id}`);
+      try { fs.unlinkSync(fpath); } catch {}
+      continue;
+    }
     try {
       if (MOCK) {
         const kinds = [];
@@ -519,9 +541,73 @@ async function processOutbox() {
         if (payload.image_path) kinds.push('image');
         if (payload.document_path) kinds.push('doc');
         if (payload.video_path) kinds.push('video');
+        if (payload._progress) kinds.push('progress');
+        if (payload._heartbeat) kinds.push('heartbeat');
         log(`outbox MOCK: would send to=${payload.to} kinds=[${kinds.join(',')}] text="${(payload.text||'').slice(0,60)}"`);
+        if (!payload._progress && !payload._heartbeat) sticky.markFinalized(payload.msg_id);
       } else {
         if (!waSocket) { log('outbox: socket not ready, retrying later'); return; }
+
+        // Progress updates: edit a single sticky message instead of flooding
+        // the chat with one message per tool call. On the first _progress
+        // payload for a chat we send a new message and remember its Baileys
+        // message key; every subsequent one edits it in place via the
+        // WhatsApp message-edit feature (`edit: key`). When the real reply
+        // arrives the sticky message is deleted first.
+        if (payload._progress && payload.text) {
+          const existing = sticky.getProgress(payload.to);
+          if (existing) {
+            try {
+              await safeSend(waSocket, payload.to, { text: payload.text, edit: existing.key });
+              fs.unlinkSync(fpath);
+              continue;
+            } catch (e) {
+              log(`sticky edit failed, falling back to new message: ${e.message}`);
+              try { await safeSend(waSocket, payload.to, { delete: existing.key }); } catch {}
+              sticky.clearProgress(payload.to);
+            }
+          }
+          const sent = await safeSend(waSocket, payload.to, { text: payload.text });
+          if (sent && sent.key) sticky.setProgress(payload.to, { key: sent.key });
+          fs.unlinkSync(fpath);
+          continue;
+        }
+
+        // Heartbeat: slot into the sticky system so it gets deleted when the
+        // real reply arrives. If a progress update already claimed the
+        // sticky slot, skip silently — the progress message is more
+        // informative anyway.
+        if (payload._heartbeat && payload.text) {
+          if (!sticky.hasProgress(payload.to)) {
+            const sent = await safeSend(waSocket, payload.to, { text: payload.text });
+            if (sent && sent.key) sticky.setProgress(payload.to, { key: sent.key });
+          }
+          fs.unlinkSync(fpath);
+          continue;
+        }
+
+        // Real reply incoming — delete the sticky progress message first so
+        // the chat shows the answer cleanly without a stale status line
+        // above it.
+        if (sticky.hasProgress(payload.to)) {
+          const prog = sticky.getProgress(payload.to);
+          try {
+            await safeSend(waSocket, payload.to, { delete: prog.key });
+          } catch (e) {
+            // First delete attempt failed — retry once after a short pause,
+            // same belt-and-braces approach as the Discord daemon.
+            log(`sticky delete failed (will retry): ${e && e.message || e}`);
+            await new Promise((r) => setTimeout(r, 400));
+            try { await safeSend(waSocket, payload.to, { delete: prog.key }); } catch (e2) {
+              log(`sticky delete retry also failed: ${e2 && e2.message || e2}`);
+            }
+          }
+          sticky.clearProgress(payload.to);
+        }
+        // Mark this turn finalized BEFORE we touch WhatsApp so any racing
+        // progress/heartbeat that arrives mid-send is correctly classified.
+        sticky.markFinalized(payload.msg_id);
+
         // Send order: text first (header), then voice/image/doc/video.
         if (payload.text) {
           await safeSend(waSocket, payload.to, { text: payload.text });

@@ -710,8 +710,14 @@ def _dir_at_or_under_corvin_home(d: str) -> bool:
     Downloads/x` and `cd <repo> && rm -rf dist` (round-5 over-block fix)."""
     try:
         abs_d = _abs(d)
-    except Exception:  # noqa: BLE001
-        return False
+    except Exception:  # noqa: BLE001 — unresolvable → fail closed (mirrors
+        # _touches_corvin_tree). An unresolvable cd-target (e.g. a NUL byte
+        # that _abs()/Path.resolve() chokes on) must NOT be silently treated
+        # as "not chdir'd into the tree" — the real shell can still land
+        # inside the corvin home once such poisoning is stripped/normalised
+        # at execution time, so treating "unresolvable" as "cd'd into the
+        # tree" is the only safe default here.
+        return True
     if is_protected_path(abs_d):
         return True
     sep = os.sep

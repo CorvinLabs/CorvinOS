@@ -280,12 +280,18 @@ def profile_write(
         )
 
     try:
-        current = _profile.load(force=True)
-        merged = dict(current)
-        merged = _apply_section(merged, body.identity, _IDENTITY_KEYS)
-        merged = _apply_section(merged, body.audience, _AUDIENCE_KEYS)
-        _profile._validate_tts_voices(merged)
-        _profile.save(merged)
+        def _apply_write(d: dict[str, Any]) -> None:
+            # `profile.mutate()` calls this with the freshly-loaded
+            # (force=True), lock-held dict and only calls save() if we
+            # return without raising — so a validation failure below never
+            # partially persists a half-applied identity/audience update.
+            # `_apply_section` already mutates `d` in place and returns the
+            # same object, so no separate merge/save step is needed here.
+            _apply_section(d, body.identity, _IDENTITY_KEYS)
+            _apply_section(d, body.audience, _AUDIENCE_KEYS)
+            _profile._validate_tts_voices(d)
+
+        _profile.mutate(_apply_write)
     except ValueError as e:
         console_audit.action_failed(
             tenant_id=rec.tenant_id,

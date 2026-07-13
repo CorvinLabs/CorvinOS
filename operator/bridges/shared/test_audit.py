@@ -198,10 +198,139 @@ def test_audit_silent_noop_when_forge_missing(monkeypatch=None):
             sys.modules["audit"] = saved
 
 
+# ---------- (4) — broken forge import is indistinguishable from absence ---
+
+def _load_audit_copy(tmp_root: Path, *, forge_present_but_broken: bool, name: str):
+    """Load a fresh copy of audit.py whose ``__file__`` lives under
+    ``tmp_root``, so its own ``parents[2]`` forge-root resolution points at
+    our sandbox instead of the real ``operator/forge/``.
+
+    When ``forge_present_but_broken`` is True, a real (non-empty) ``forge``
+    package directory exists in the sandbox, but its ``security_events``
+    submodule raises a non-ImportError exception on import — simulating a
+    packaging regression (syntax error, broken transitive dependency, etc.),
+    as opposed to forge being genuinely absent (no such directory at all).
+    """
+    import importlib.util
+
+    audit_src = (Path(__file__).resolve().parent / "audit.py").read_text()
+    shared_dir = tmp_root / "operator" / "bridges" / "shared"
+    shared_dir.mkdir(parents=True, exist_ok=True)
+    audit_copy = shared_dir / "audit.py"
+    audit_copy.write_text(audit_src)
+
+    if forge_present_but_broken:
+        forge_pkg = tmp_root / "operator" / "forge" / "forge"
+        forge_pkg.mkdir(parents=True, exist_ok=True)
+        (forge_pkg / "__init__.py").write_text("")
+        (forge_pkg / "security_events.py").write_text(
+            "raise RuntimeError("
+            "'simulated packaging regression: broken transitive dependency')\n"
+        )
+    # else: leave tmp_root/operator/forge entirely absent -> genuine absence
+
+    saved_forge = sys.modules.pop("forge", None)
+    saved_forge_se = sys.modules.pop("forge.security_events", None)
+    saved_path = list(sys.path)
+    saved_env = os.environ.get("FORGE_ROOT")
+    # FORGE_ROOT short-circuits _forge_workspace_root() so the sandboxed
+    # copy never needs a sibling paths.py module to compute DEFAULT_AUDIT_PATH.
+    os.environ["FORGE_ROOT"] = str(tmp_root / "unused_forge_root")
+    try:
+        spec = importlib.util.spec_from_file_location(name, audit_copy)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        return mod
+    finally:
+        sys.path[:] = saved_path
+        if saved_env is None:
+            os.environ.pop("FORGE_ROOT", None)
+        else:
+            os.environ["FORGE_ROOT"] = saved_env
+        sys.modules.pop("forge", None)
+        sys.modules.pop("forge.security_events", None)
+        if saved_forge is not None:
+            sys.modules["forge"] = saved_forge
+        if saved_forge_se is not None:
+            sys.modules["forge.security_events"] = saved_forge_se
+
+
+def test_forge_broken_import_indistinguishable_from_absent():
+    print("\n[forge present-but-broken import collapses to the SAME "
+          "'all clear' as forge genuinely absent -- no CRITICAL differentiation]")
+    import logging
+
+    class _Cap(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.records: list = []
+
+        def emit(self, record):
+            self.records.append(record)
+
+    logger = logging.getLogger("corvin.audit")
+
+    cap_absent = _Cap()
+    with tempfile.TemporaryDirectory() as td_absent:
+        logger.addHandler(cap_absent)
+        try:
+            mod_absent = _load_audit_copy(
+                Path(td_absent), forge_present_but_broken=False,
+                name="audit_sandbox_absent",
+            )
+        finally:
+            logger.removeHandler(cap_absent)
+
+    cap_broken = _Cap()
+    with tempfile.TemporaryDirectory() as td_broken:
+        logger.addHandler(cap_broken)
+        try:
+            mod_broken = _load_audit_copy(
+                Path(td_broken), forge_present_but_broken=True,
+                name="audit_sandbox_broken",
+            )
+        finally:
+            logger.removeHandler(cap_broken)
+
+    t("genuinely-absent forge -> _se is None (expected, legitimate standalone mode)",
+      mod_absent._se is None)
+    t("present-but-broken forge -> _se is None (SAME outward state as absence)",
+      mod_broken._se is None)
+
+    # The bug: a genuine packaging regression (forge dir present, import
+    # raises RuntimeError) is NOT flagged any differently than the
+    # legitimate "forge was never installed" case -- no CRITICAL/distinct
+    # signal exists anywhere to tell the two apart.
+    t("genuinely-absent forge logs NO warning at all (silent by design)",
+      len(cap_absent.records) == 0)
+    t("present-but-broken forge logs the SAME reassuring "
+      "'not an error in standalone mode' message -- a real regression is "
+      "mislabeled as intentional standalone behaviour",
+      len(cap_broken.records) == 1
+      and "not an error in standalone mode" in cap_broken.records[0].getMessage())
+
+    # Downstream consumers collapse both causes to an identical "all clear".
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "audit.jsonl"
+        result_absent = mod_absent.verify_audit(p)
+        result_broken = mod_broken.verify_audit(p)
+        t("verify_audit() gives an IDENTICAL 'all clear' result for both "
+          "causes (genuine absence vs. broken import) -- no differentiation",
+          result_absent == result_broken == (True, []))
+
+        health_absent = mod_absent.audit_health_check(p)
+        health_broken = mod_broken.audit_health_check(p)
+        t("audit_health_check() also gives an IDENTICAL clean result for "
+          "both causes -- a broken forge install never surfaces as CRITICAL",
+          health_absent == health_broken == (True, 0))
+
+
 def main() -> int:
     test_bridge_events_chain_verifies_clean()
     test_tampered_audit_fails_verify()
     test_audit_silent_noop_when_forge_missing()
+    test_forge_broken_import_indistinguishable_from_absent()
     print(f"\n{PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 

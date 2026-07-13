@@ -482,6 +482,90 @@ class TestClassifierOrdering:
         assert adp._house_rules_cloud_egress_allowed("_default") is False
         assert adp._house_rules_resolve_order("_default") == "local_only"
 
+    def test_egress_config_read_exception_fails_open_to_cloud_KNOWN_BUG(
+        self, adp, monkeypatch, hr, tmp_path
+    ):
+        """KNOWN BUG (documented, not yet fixed): ``_house_rules_cloud_egress_allowed``
+        wraps the ENTIRE tenant.corvin.yaml read+parse+EgressGate-eval in a bare
+        ``except Exception: return True``. For a tenant with an explicit residency
+        deny (``forbidden_hosts: [api.anthropic.com]``), a *transient* read/parse
+        failure (mid-write race, disk hiccup, corrupted YAML) silently flips the
+        resolved order from ``local_only`` to ``cloud_first`` -- i.e. the classifier
+        will then transmit the user's raw task text via ``claude -p`` to
+        ``api.anthropic.com`` despite the tenant's still-intended deny policy. The
+        cloud classifier subprocess call has no L35 gate of its own (only the
+        primary engine spawn is gated), so this ordering IS the enforcement for
+        that call site.
+
+        This test locks in and documents the CURRENT (undesired) behavior so any
+        change to it is a conscious decision, not an accidental regression in
+        either direction. Fixing it requires care: the same except-block also
+        covers legitimate no-policy-at-all scenarios elsewhere in this class, so a
+        fail-closed default here needs a human design decision (see review
+        finding), not a blind flip."""
+        self._wire(adp, monkeypatch, hr)
+        tcfg = tmp_path / "tenants" / "_default" / "global"
+        tcfg.mkdir(parents=True, exist_ok=True)
+        (tcfg / "tenant.corvin.yaml").write_text(
+            "spec:\n"
+            "  egress:\n"
+            "    enabled: true\n"
+            "    default_action: deny\n"
+            "    forbidden_hosts:\n"
+            "      - api.anthropic.com\n",
+            encoding="utf-8",
+        )
+        # Sanity: a healthy read of the same deny-policy config correctly
+        # resolves to local_only (this is the already-covered happy path).
+        assert adp._house_rules_cloud_egress_allowed("_default") is False
+        assert adp._house_rules_resolve_order("_default") == "local_only"
+
+        # Now simulate a transient read/parse failure on the SAME on-disk
+        # deny-policy config (corrupted mid-write, disk hiccup, bad edit).
+        import yaml as _yaml
+
+        def _raise(*_a, **_kw):
+            raise ValueError("simulated corrupt/partial yaml read")
+
+        monkeypatch.setattr(_yaml, "safe_load", _raise)
+
+        # BUG: the bare `except Exception: return True` treats a read failure
+        # identically to "no policy configured at all" -- the residency-deny
+        # intent on disk is silently discarded and cloud is reopened.
+        assert adp._house_rules_cloud_egress_allowed("_default") is True
+        assert adp._house_rules_resolve_order("_default") == "cloud_first"
+
+    def test_egress_config_corrupted_yaml_on_disk_fails_open_to_cloud_KNOWN_BUG(
+        self, adp, monkeypatch, hr, tmp_path
+    ):
+        """Same bug as above, reproduced with a genuinely malformed YAML file on
+        disk (no monkeypatching of ``yaml.safe_load`` itself) -- i.e. the
+        realistic "someone's manual edit left invalid indentation" / "mid-write
+        torn file" scenario, not just a synthetic exception injection."""
+        self._wire(adp, monkeypatch, hr)
+        tcfg = tmp_path / "tenants" / "_default" / "global"
+        tcfg.mkdir(parents=True, exist_ok=True)
+        # Deliberately broken YAML (bad indentation / tab mix) that still
+        # clearly *intends* a deny policy but fails to parse.
+        (tcfg / "tenant.corvin.yaml").write_text(
+            "spec:\n"
+            "  egress:\n"
+            "  enabled: true\n"
+            "      default_action: deny\n"
+            "    forbidden_hosts: [api.anthropic.com\n",
+            encoding="utf-8",
+        )
+        # Confirm the file really is unparsable (guards against the test
+        # accidentally exercising the happy path if YAML tolerates the typo).
+        import yaml as _yaml
+        with pytest.raises(_yaml.YAMLError):
+            _yaml.safe_load((tcfg / "tenant.corvin.yaml").read_text("utf-8"))
+
+        # BUG: corrupted-on-disk deny policy still resolves as if no policy
+        # existed at all -- cloud reopens despite the residency intent.
+        assert adp._house_rules_cloud_egress_allowed("_default") is True
+        assert adp._house_rules_resolve_order("_default") == "cloud_first"
+
     def test_unknown_order_value_defaults_to_auto(self, adp, monkeypatch, hr):
         self._wire(adp, monkeypatch, hr)
         monkeypatch.setenv("CORVIN_HOUSE_RULES_CLASSIFIER_ORDER", "garbage")

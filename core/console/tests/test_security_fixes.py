@@ -243,6 +243,214 @@ class TestInputConstraints(unittest.TestCase):
                 print(f"⚠ Large inputs not rejected (status {resp.status_code})")
 
 
+@contextmanager
+def _isolated_voice_config_dir(tmp_path: Path):
+    """Point ``forge.paths.voice_config_dir()`` (and therefore setup.py's
+    module-level ``_SERVICE_ENV`` constant) at an isolated per-test
+    directory, so these tests never touch a developer's real
+    ``~/.config/corvin-voice/service.env``.
+
+    ``_SERVICE_ENV`` is resolved once at import time, so the env var must
+    be set BEFORE ``corvin_console.routes.setup`` is (re-)imported —
+    callers should enter this context before ``_sandbox`` triggers the
+    fresh import (``_sandbox`` -> ``from corvin_console.app import router``
+    -> imports ``routes.setup``).
+    """
+    prev = os.environ.get("VOICE_CONFIG_DIR")
+    os.environ["VOICE_CONFIG_DIR"] = str(tmp_path / "corvin-voice")
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("VOICE_CONFIG_DIR", None)
+        else:
+            os.environ["VOICE_CONFIG_DIR"] = prev
+
+
+class TestEngineKeyConcurrentWrites(unittest.TestCase):
+    """Blind spot #1: setup.py's ``_write_env_key`` read-modify-writes
+    ``service.env`` with NO file lock (contrast with chat_settings.py's
+    ``_save_channel``, which wraps the identical class of read-modify-write
+    in ``fcntl.flock`` — see the "Tier 2 fix" comment there). Reachable from
+    ``PUT /setup/engines/{engine_id}``.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self._tmp_path = Path(self._tmp)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    @unittest.expectedFailure
+    def test_concurrent_write_env_key_for_two_different_keys_loses_an_update(self):
+        """Two near-simultaneous saves of two DIFFERENT provider keys (e.g.
+        the Setup UI saving ANTHROPIC_API_KEY then OPENAI_API_KEY back to
+        back) must both survive. Today they do not: whichever writer's
+        read-modify-write cycle finishes last silently clobbers the other's
+        key because there is no lock around the read .. os.replace section
+        of ``_write_env_key``.
+
+        This test is marked ``expectedFailure`` on purpose: it documents a
+        REAL, reproduced bug (silent API-key data loss) rather than
+        asserting a tautology. It should start passing — and the
+        ``expectedFailure`` decorator should be removed — the day
+        ``_write_env_key`` gets the same ``fcntl.flock`` treatment
+        ``chat_settings.py._save_channel`` already has.
+        """
+        with _isolated_voice_config_dir(self._tmp_path):
+            with _sandbox(self._tmp_path) as (client, home, tenant_id):
+                _reset_modules()
+                from corvin_console.routes.setup import _write_env_key, _SERVICE_ENV
+
+                _SERVICE_ENV.parent.mkdir(parents=True, exist_ok=True)
+                _SERVICE_ENV.write_text("EXISTING=1\n", encoding="utf-8")
+
+                # Deterministically interleave the two read-modify-write
+                # cycles: thread "writer-A" is paused right after its
+                # read_text() call (i.e. exactly where the real race
+                # window is) until thread "writer-B" has fully completed
+                # its own read -> write -> os.replace cycle.
+                ready_event = threading.Event()
+                proceed_event = threading.Event()
+                orig_read_text = Path.read_text
+
+                def patched_read_text(self_path, *a, **kw):
+                    text = orig_read_text(self_path, *a, **kw)
+                    if self_path == _SERVICE_ENV and threading.current_thread().name == "writer-A":
+                        ready_event.set()
+                        proceed_event.wait(timeout=5)
+                    return text
+
+                errors = []
+
+                def run_a():
+                    try:
+                        _write_env_key("ANTHROPIC_API_KEY", "sk-ant-A")
+                    except Exception as e:
+                        errors.append(f"A: {e}")
+
+                def run_b():
+                    try:
+                        _write_env_key("OPENAI_API_KEY", "sk-openai-B")
+                    except Exception as e:
+                        errors.append(f"B: {e}")
+
+                with patch.object(Path, "read_text", patched_read_text):
+                    t_a = threading.Thread(target=run_a, name="writer-A")
+                    t_b = threading.Thread(target=run_b, name="writer-B")
+
+                    t_a.start()
+                    assert ready_event.wait(timeout=5), "writer-A never reached its read point"
+                    t_b.start()
+                    t_b.join(timeout=5)
+                    proceed_event.set()
+                    t_a.join(timeout=5)
+
+                assert not errors, f"writer threads raised: {errors}"
+
+                final_text = _SERVICE_ENV.read_text(encoding="utf-8")
+                # Desired (currently unmet) invariant: BOTH keys saved by
+                # the two racing writers must be present in the final file.
+                assert "ANTHROPIC_API_KEY=sk-ant-A" in final_text, final_text
+                assert "OPENAI_API_KEY=sk-openai-B" in final_text, final_text
+
+
+class TestEngineSetupMalformedBodies(unittest.TestCase):
+    """Blind spot #2: ``EngineTestRequest``/``EngineKeyUpdate`` are the only
+    Pydantic-validated bodies in setup.py (``extra='forbid'`` + length
+    caps) but nothing exercised their 422 path — or even their happy path.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self._tmp_path = Path(self._tmp)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_test_engine_rejects_unexpected_extra_field(self):
+        with _isolated_voice_config_dir(self._tmp_path):
+            with _sandbox(self._tmp_path) as (client, home, tenant_id):
+                resp = client.post(
+                    "/v1/console/setup/test-engine",
+                    json={"engine_id": "anthropic", "unexpected_field": "x"},
+                )
+                assert resp.status_code == 422, resp.text
+
+    def test_test_engine_requires_engine_id(self):
+        with _isolated_voice_config_dir(self._tmp_path):
+            with _sandbox(self._tmp_path) as (client, home, tenant_id):
+                resp = client.post("/v1/console/setup/test-engine", json={})
+                assert resp.status_code == 422, resp.text
+
+    def test_test_engine_rejects_oversized_engine_id(self):
+        with _isolated_voice_config_dir(self._tmp_path):
+            with _sandbox(self._tmp_path) as (client, home, tenant_id):
+                resp = client.post(
+                    "/v1/console/setup/test-engine",
+                    json={"engine_id": "x" * 33},
+                )
+                assert resp.status_code == 422, resp.text
+
+    def test_update_engine_key_rejects_oversized_value(self):
+        with _isolated_voice_config_dir(self._tmp_path):
+            with _sandbox(self._tmp_path) as (client, home, tenant_id):
+                resp = client.put(
+                    "/v1/console/setup/engines/anthropic",
+                    json={"value": "a" * 501},
+                )
+                assert resp.status_code == 422, resp.text
+
+    def test_update_engine_key_rejects_extra_field(self):
+        with _isolated_voice_config_dir(self._tmp_path):
+            with _sandbox(self._tmp_path) as (client, home, tenant_id):
+                resp = client.put(
+                    "/v1/console/setup/engines/anthropic",
+                    json={"value": "sk-ant-ok", "surprise_field": "x"},
+                )
+                assert resp.status_code == 422, resp.text
+
+    def test_update_engine_key_rejects_non_string_value_int(self):
+        with _isolated_voice_config_dir(self._tmp_path):
+            with _sandbox(self._tmp_path) as (client, home, tenant_id):
+                resp = client.put(
+                    "/v1/console/setup/engines/anthropic",
+                    json={"value": 12345},
+                )
+                assert resp.status_code == 422, resp.text
+
+    def test_update_engine_key_rejects_null_value(self):
+        with _isolated_voice_config_dir(self._tmp_path):
+            with _sandbox(self._tmp_path) as (client, home, tenant_id):
+                resp = client.put(
+                    "/v1/console/setup/engines/anthropic",
+                    json={"value": None},
+                )
+                assert resp.status_code == 422, resp.text
+
+    def test_update_engine_key_happy_path_persists_to_service_env(self):
+        """Positive control: there was previously no test at all — not even
+        a happy-path one — for this endpoint. A valid body must be
+        accepted (200) and the key must actually land in service.env."""
+        with _isolated_voice_config_dir(self._tmp_path):
+            with _sandbox(self._tmp_path) as (client, home, tenant_id):
+                _reset_modules()
+                from corvin_console.routes.setup import _SERVICE_ENV
+
+                resp = client.put(
+                    "/v1/console/setup/engines/anthropic",
+                    json={"value": "sk-ant-real-value"},
+                )
+                assert resp.status_code == 200, resp.text
+                assert resp.json()["ok"] is True
+
+                final_text = _SERVICE_ENV.read_text(encoding="utf-8")
+                assert "ANTHROPIC_API_KEY=sk-ant-real-value" in final_text
+
+
 class TestJSONLIntegrity(unittest.TestCase):
     """Test JSONL append integrity (Problem #5)."""
 

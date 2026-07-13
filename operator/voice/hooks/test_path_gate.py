@@ -403,6 +403,31 @@ def main() -> int:
         expect(f"Bash overblock {_label} → ALLOW", {"tool_name": "Bash",
                 "tool_input": {"command": _cmd}}, blocked=False)
 
+    # 9q. cd-context fail-direction symmetry — _dir_at_or_under_corvin_home
+    # must fail CLOSED (like its sibling _touches_corvin_tree) when the cd
+    # target is unresolvable, e.g. poisoned with an embedded NUL byte. Before
+    # this fix _dir_at_or_under_corvin_home returned False (fail-OPEN) on an
+    # _abs()-raising target, silently reporting "not chdir'd into the tree"
+    # and letting `cd <poisoned-home> && rm -rf tenants` sail through as an
+    # ordinary unprotected relative rm.
+    _poisoned_cd = f"{HOME}\x00/x"
+    t("_dir_at_or_under_corvin_home fails CLOSED on a NUL-poisoned target",
+      path_gate._dir_at_or_under_corvin_home(_poisoned_cd) is True,
+      detail=f"expected True (fail-closed), got "
+             f"{path_gate._dir_at_or_under_corvin_home(_poisoned_cd)!r}")
+    t("_touches_corvin_tree also fails CLOSED on the same target "
+      "(symmetry check)",
+      path_gate._touches_corvin_tree(_poisoned_cd) is True,
+      detail=f"expected True, got "
+             f"{path_gate._touches_corvin_tree(_poisoned_cd)!r}")
+    expect(
+        "Bash cd(NUL-poisoned)-target && rm -rf tenants → DENY "
+        "(cd-context fail-closed backstop)",
+        {"tool_name": "Bash",
+         "tool_input": {"command": f"cd {_poisoned_cd} && rm -rf tenants"}},
+        blocked=True,
+    )
+
     # 10. sed -i on protected policy → DENY
     expect(
         "sed -i on policy.json",
@@ -833,6 +858,50 @@ def main() -> int:
       detail=f"got {proc2.returncode}; stderr={proc2.stderr[:80]!r}")
     t("subprocess does NOT write audit on allow",
       not (Path(audit_home2) / "global" / "forge" / "audit.jsonl").exists())
+
+    # ------------------------------------------------------------------
+    # KNOWN BUG (documented, NOT fixed here — see WRITE_RESULT.bugsDiscovered):
+    # main() (path_gate.py) calls `allow, reason = check(payload)` with NO
+    # enclosing try/except, and check() itself has no top-level guard either.
+    # A payload engineered to make a reachable helper raise (e.g. a NUL byte
+    # in file_path, which makes Path.resolve() inside _abs() raise
+    # ValueError, uncaught by is_protected_path/check) crashes the whole
+    # process with Python's default uncaught-exception exit code — NOT the
+    # module's own documented "exit 0 -> allow, exit 2 -> deny, fail closed"
+    # contract, and none of the deny-side effects (_emit_audit,
+    # _emit_dialectic, stderr deny message) ever run. This pins the CURRENT
+    # (unsafe) behavior so the gap is visible in the suite; when main() gets
+    # a top-level fail-closed backstop, this test's assertions must be
+    # updated to expect returncode == 2 and a written audit event.
+    # ------------------------------------------------------------------
+    crash_home = tempfile.mkdtemp(prefix="path-gate-crash-")
+    crash_audit_jsonl = Path(crash_home) / "global" / "forge" / "audit.jsonl"
+    # NUL byte in file_path makes Path.resolve() (inside _abs(), called from
+    # is_protected_path <- check) raise ValueError, uncaught anywhere on the
+    # path from main() down to _abs().
+    crash_payload = {"tool_name": "Write",
+                      "tool_input": {"file_path": "/tmp/evil\x00.py",
+                                     "content": "..."}}
+    proc3 = subprocess.run(
+        [sys.executable, str(HOOK_DIR / "path_gate.py")],
+        input=json.dumps(crash_payload),
+        capture_output=True, text=True,
+        env={**os.environ, "CORVIN_HOME": crash_home},
+    )
+    t("BUG-PIN: NUL-byte file_path crashes main() with an exit code that "
+      "is NEITHER the documented allow (0) NOR deny (2) contract",
+      proc3.returncode not in (0, 2),
+      detail=f"got {proc3.returncode}; expected an undocumented/uncaught-"
+             f"exception exit code (currently {proc3.returncode}), proving "
+             f"there is no top-level fail-closed backstop in main()")
+    t("BUG-PIN: the crash is an uncaught Python traceback, not the "
+      "module's own deny message",
+      "Traceback" in proc3.stderr and "ValueError" in proc3.stderr,
+      detail=f"stderr[:200]={proc3.stderr[:200]!r}")
+    t("BUG-PIN: no audit event is written when check() crashes (the "
+      "_emit_audit deny-side-effect never runs on an uncaught exception)",
+      not crash_audit_jsonl.exists(),
+      detail=f"audit path: {crash_audit_jsonl}")
 
     # ----- Roadmap F13 — boot-time self-test --------------------------------
     print("\n[F13] path-gate self-test on boot")

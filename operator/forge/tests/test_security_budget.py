@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_mcp import MCPClient
+from forge.policy import Policy
 
 
 PASS = 0
@@ -77,6 +78,15 @@ adir = p["_artifacts_dir"]
 with open(os.path.join(adir, "big.bin"), "wb") as fh:
     fh.write(b"x" * 200_000)   # 200 KB
 print(json.dumps({"data": {"wrote": 200_000}}))
+'''
+
+# Returns immediately, does no work at all — used to prove that a timeout
+# fires (or doesn't) purely because of the *budget*, not because the tool
+# is actually slow.
+INSTANT_IMPL = '''#!/usr/bin/env python3
+import json, sys
+json.loads(sys.stdin.read())
+print(json.dumps({"data": {"ok": True}}))
 '''
 
 NOOP = {"type": "object", "properties": {}}
@@ -264,6 +274,94 @@ def test_wall_budget_exceeded_times_out():
           elapsed < 3.0, detail=f"elapsed={elapsed:.2f}s")
 
 
+def test_clamp_budget_applies_no_floor_to_zero_or_negative_wall_seconds():
+    """Policy.clamp_budget() only narrows a requested budget towards
+    max_budget (``min(req, max)``) — it has no lower bound. This test pins
+    down that gap directly against the Policy class (no subprocess involved)
+    so the boundary is unambiguous, not inferred from timing.
+
+    KNOWN BUG (documented here, not fixed): a caller-supplied
+    ``wall_seconds: 0`` (or a negative value) is *not* clamped up to a safe
+    minimum before it is handed to runner.py's subprocess timeout.
+    """
+    print("\n[clamp_budget: zero/negative wall_seconds pass through unfloored]")
+    policy = Policy()  # built-in strict defaults, no policy.json needed
+
+    applied_zero, clamp_zero = policy.clamp_budget({
+        "cpu_seconds": 5, "wall_seconds": 0,
+        "output_bytes": 1_000, "artifact_bytes": 1_000,
+    })
+    t("wall_seconds=0 requested -> applied stays 0 (no floor)",
+      applied_zero.wall_seconds == 0)
+    assert applied_zero.wall_seconds == 0, (
+        "Policy.clamp_budget() started floor-clamping wall_seconds=0 to a "
+        "positive minimum. If this is an intentional fix, update this test "
+        "(and test_zero_wall_budget_causes_spurious_instant_timeout below) "
+        "to assert the new floor instead of documenting its absence."
+    )
+    t("wall_seconds=0 is not reported as clamped in clamp_info",
+      "wall_seconds" not in clamp_zero)
+    assert "wall_seconds" not in clamp_zero
+
+    applied_neg, clamp_neg = policy.clamp_budget({
+        "cpu_seconds": 5, "wall_seconds": -5,
+        "output_bytes": 1_000, "artifact_bytes": 1_000,
+    })
+    t("wall_seconds=-5 requested -> applied stays -5 (no floor, no clamp)",
+      applied_neg.wall_seconds == -5)
+    assert applied_neg.wall_seconds == -5
+
+
+def test_zero_wall_budget_causes_spurious_instant_timeout():
+    """A tool that does zero work (returns immediately) but declares
+    ``meta.budget.wall_seconds: 0`` must, per the current (buggy) contract,
+    ALWAYS be reported as timed out — regardless of how fast it actually
+    runs. This is a real self-inflicted denial-of-service: any forged tool
+    (or persona-requested budget) that declares wall_seconds<=0 becomes
+    permanently unusable.
+
+    We call the tool three times to prove this is a deterministic outcome
+    of the zero budget (not a flaky race that only sometimes loses), and we
+    assert the call returns near-instantly — proving the timeout fires
+    because of the budget, not because the tool is actually slow.
+    """
+    print("\n[wall_seconds=0 + instant no-op tool -> deterministic spurious timeout]")
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        client = MCPClient(td)
+        try:
+            client.initialize()
+            _forge(client, name="instant", impl=INSTANT_IMPL, schema=NOOP,
+                   meta={"budget": {"cpu_seconds": 30, "wall_seconds": 0,
+                                     "output_bytes": 100_000,
+                                     "artifact_bytes": 100_000}})
+            for i in range(3):
+                t0 = time.monotonic()
+                resp = client.request("tools/call",
+                                       {"name": "instant", "arguments": {}},
+                                       timeout=10.0)
+                elapsed = time.monotonic() - t0
+                is_error = resp["result"].get("isError") is True
+                text = resp["result"]["content"][0]["text"].lower() if is_error else ""
+                t(f"call {i}: isError=True despite zero-work tool",
+                  is_error, detail=f"elapsed={elapsed:.3f}s")
+                assert is_error, (
+                    "A no-op tool with wall_seconds=0 returned isError=False. "
+                    "Either a floor got added upstream (update this test to "
+                    "match the new contract), or run_tool's timeout handling "
+                    "changed — investigate before assuming this is fixed."
+                )
+                t(f"call {i}: error names it a timeout",
+                  "timed out" in text)
+                assert "timed out" in text
+                t(f"call {i}: fired near-instantly (proves it's the budget, "
+                  f"not a slow tool)", elapsed < 2.0,
+                  detail=f"elapsed={elapsed:.3f}s")
+                assert elapsed < 2.0
+        finally:
+            client.close()
+
+
 def test_artifact_budget_exceeded_after_run():
     print("\n[artifact_bytes budget tiny + tool writes 200KB → reject]")
     with tempfile.TemporaryDirectory() as td:
@@ -293,6 +391,8 @@ def main() -> int:
     test_no_meta_budget_uses_policy_default()
     test_cpu_budget_exceeded_kills_tool()
     test_wall_budget_exceeded_times_out()
+    test_clamp_budget_applies_no_floor_to_zero_or_negative_wall_seconds()
+    test_zero_wall_budget_causes_spurious_instant_timeout()
     test_artifact_budget_exceeded_after_run()
     print(f"\n{PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1

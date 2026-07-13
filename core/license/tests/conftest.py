@@ -89,6 +89,10 @@ def make_token(
     issuer: str | None = None,
     feature_flags: list[str] | None = None,
     algorithm: str = "RS256",
+    trial_type: str | None = None,
+    trial_expires_at: int | None = None,
+    trial_id: str | None = None,
+    machine_fp: str | None = None,
 ) -> str:
     """Sign a test license JWT.
 
@@ -96,6 +100,11 @@ def make_token(
     canonical flag set for ``tier`` is used so the produced token
     passes the verifier's Tier→Flag check. Tests that explicitly want
     to probe drift / unknown-flag paths pass an explicit list.
+
+    ``trial_type``/``trial_expires_at``/``trial_id``/``machine_fp`` are
+    optional trial claims (see verifier._validate_claims' "Optional
+    trial claims" block). Omitted entirely unless a caller passes at
+    least ``trial_type``.
     """
     import jwt as _pyjwt
     from corvin_license import tier_flags as _tier_flags
@@ -112,6 +121,15 @@ def make_token(
         "seats": seats,
         "feature_flags": feature_flags or [],
     }
+    if trial_type is not None:
+        payload["trial_type"] = trial_type
+        payload["trial_expires_at"] = (
+            trial_expires_at if trial_expires_at is not None
+            else now + valid_seconds - 60
+        )
+        payload["trial_id"] = trial_id if trial_id is not None else "t_abc123"
+        if machine_fp is not None:
+            payload["machine_fp"] = machine_fp
     return _pyjwt.encode(payload, priv_pem, algorithm=algorithm)
 
 

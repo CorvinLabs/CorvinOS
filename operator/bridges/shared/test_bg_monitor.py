@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -210,3 +213,70 @@ def test_tenant_id_captured_in_wakeup(tmp_path, monkeypatch):
     m.run_once()
     files = list((tmp_path / "inbox").glob("zz_bgw_*.json"))
     assert json.loads(files[0].read_text())["tenant_id"] == "acme"
+
+
+# ─── BGW_IDLE_GRACE / BGW_MAX_AGE raw env-var parsing ──────────────────────
+#
+# The tests above only ever exercise the *parsed* module attributes via
+# monkeypatch.setattr(m, "BGW_IDLE_GRACE", ...) on an already-imported
+# module — they never feed a raw env-var value through the real
+# `float(os.environ.get(...))` call at module scope (bg_monitor.py lines
+# 45-46). The tests below close that gap: one confirms the happy path
+# (a valid override actually parses through the real code path), the other
+# two document the crash on an invalid value. A crashing module-level import
+# cannot be captured with plain monkeypatch/importlib.reload from inside the
+# same pytest process (a partial import leaves sys.modules in a broken state
+# for every later test in the session), so a subprocess is used to import
+# bg_monitor fresh and observe the failure in isolation.
+
+
+def _run_bg_monitor_import(env_overrides: dict) -> subprocess.CompletedProcess:
+    """Import bg_monitor fresh in a subprocess with the given env overrides."""
+    shared_dir = Path(__file__).resolve().parent
+    env = dict(os.environ)
+    env.update(env_overrides)
+    return subprocess.run(
+        [sys.executable, "-c", "import bg_monitor"],
+        cwd=str(shared_dir),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def test_import_parses_valid_raw_env_overrides(monkeypatch):
+    """A valid BGW_IDLE_GRACE/BGW_MAX_AGE env var actually parses through
+    the real module-level `float(os.environ.get(...))` call (not just the
+    post-import monkeypatch.setattr shortcut used everywhere else in this
+    file)."""
+    monkeypatch.setenv("BGW_IDLE_GRACE", "123.5")
+    monkeypatch.setenv("BGW_MAX_AGE", "999")
+    m = _import()
+    assert m.BGW_IDLE_GRACE == 123.5
+    assert m.BGW_MAX_AGE == 999.0
+
+
+def test_import_crashes_on_empty_idle_grace_env():
+    """KNOWN BUG (see bugsDiscovered): BGW_IDLE_GRACE="" (e.g. an unresolved
+    systemd EnvironmentFile interpolation that expands to empty) crashes the
+    module import with a bare ValueError instead of falling back to the
+    documented default (480s) or raising a clearly-typed config error. This
+    test locks in the CURRENT (broken) behaviour so a future fix shows up as
+    an intentional test change rather than silent drift."""
+    result = _run_bg_monitor_import({"BGW_IDLE_GRACE": ""})
+    assert result.returncode != 0
+    assert "ValueError" in result.stderr
+    assert "could not convert string to float" in result.stderr
+    assert "bg_monitor.py" in result.stderr
+
+
+def test_import_crashes_on_non_numeric_max_age_env():
+    """KNOWN BUG (see bugsDiscovered): same unguarded float() parse crash,
+    but for BGW_MAX_AGE with a non-numeric value (e.g. a stray unit like
+    "1d" or a typo) instead of an empty string."""
+    result = _run_bg_monitor_import({"BGW_MAX_AGE": "abc"})
+    assert result.returncode != 0
+    assert "ValueError" in result.stderr
+    assert "could not convert string to float" in result.stderr
+    assert "bg_monitor.py" in result.stderr

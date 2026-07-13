@@ -45,7 +45,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, IO, Iterator
 
-from . import StreamEvent, parse_jsonl_line
+from . import StreamEvent, parse_jsonl_line, terminate_process_tree
 
 # ── debug logging ───────────────────────────────────────────────────────
 # Engine traces (argv, spawn, stderr-tail, naked-error enrichment) go to
@@ -80,11 +80,13 @@ def _configured_claude_bin() -> str:
 
     Read fresh (not the import-time ``CLAUDE_BIN`` constant) so a pin
     exported after import — or set by a test before constructing the
-    engine — is honoured. Empty-string env values are treated as unset.
+    engine — is honoured. Empty-string AND whitespace-only env values
+    (e.g. a stray-space typo in a ``service.env`` / systemd
+    ``EnvironmentFile``) are treated as unset.
     """
     return (
-        os.environ.get("CORVIN_CLAUDE_BIN")
-        or os.environ.get("CLAUDE_BIN")
+        (os.environ.get("CORVIN_CLAUDE_BIN") or "").strip()
+        or (os.environ.get("CLAUDE_BIN") or "").strip()
         or "claude"
     )
 
@@ -624,15 +626,11 @@ class ClaudeCodeEngine:
         proc = self._proc
         if proc is None:
             return
-        if proc.poll() is None:
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+        # killpg the whole process group, not just the direct child — a
+        # live tool-use grandchild (Bash call, MCP server) shares the pgid
+        # (spawn() uses start_new_session=True) and must not outlive the
+        # turn just because this cleanup path only reaped the parent.
+        terminate_process_tree(proc)
         # Stderr-drain thread exits naturally on EOF after proc dies;
         # join with a small deadline so it can't outlive the caller.
         t = self._stderr_thread
@@ -758,10 +756,9 @@ class ClaudeCodeEngine:
 
     def cancel(self) -> None:
         if self._proc and self._proc.poll() is None:
-            try:
-                self._proc.terminate()
-            except Exception:
-                pass
+            # killpg the whole process group (see _cleanup_proc) so a live
+            # tool-use grandchild doesn't survive a user-triggered cancel.
+            terminate_process_tree(self._proc)
 
     @property
     def proc(self) -> subprocess.Popen | None:

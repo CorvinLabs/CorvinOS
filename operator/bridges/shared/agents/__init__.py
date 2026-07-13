@@ -30,9 +30,49 @@ Design notes
 from __future__ import annotations
 
 import json
+import os
+import signal
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Protocol, runtime_checkable
+
+
+def terminate_process_tree(proc: "subprocess.Popen", *, grace: float = 5.0) -> None:
+    """Terminate *proc* AND its whole process group, not just the direct
+    child — every engine spawns with ``start_new_session=True`` specifically
+    so a live tool-use grandchild (a Bash call, an MCP server, a long curl)
+    shares the parent's pgid and can be reaped together via ``killpg``.
+
+    Before this helper existed, ``cancel()``/``_cleanup_proc()`` across the
+    engine modules called only ``proc.terminate()``/``proc.kill()`` on the
+    direct child — the grandchild silently outlived the turn the adapter
+    believed was cancelled. Mirrors the SIGTERM-then-SIGKILL-after-grace
+    pattern ``adapter.py``'s ``_cancel_chat`` already uses correctly.
+    Windows has no process groups; falls back to a single-process
+    terminate()/kill() there.
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        else:  # Windows — no process groups
+            proc.terminate()
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+    if proc.poll() is None:
+        try:
+            if hasattr(os, "killpg"):
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            else:
+                proc.kill()
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
 
 
 # ---------------------------------------------------------------------------

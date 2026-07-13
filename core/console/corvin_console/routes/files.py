@@ -91,10 +91,13 @@ def _resolve_safe(root: Path, rel: str) -> Path:
     """Resolve rel within root, raising 400 on traversal attempt."""
     if not rel:
         return root
-    candidate = (root / rel).resolve()
     try:
+        candidate = (root / rel).resolve()
         candidate.relative_to(root.resolve())
     except ValueError:
+        # Also catches Path.resolve() itself raising ValueError for an
+        # embedded null byte in rel — previously that ValueError escaped
+        # this handler (resolve() ran before the try) as an unhandled 500.
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
             detail="path escapes tenant root",

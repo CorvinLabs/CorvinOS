@@ -181,5 +181,117 @@ class ConsentStoreCorruptionTests(unittest.TestCase):
         self.assertEqual(reason, "durable")
 
 
+class ConsentStoreTypeConfusionTests(unittest.TestCase):
+    """Blind-spot coverage: a syntactically-valid-JSON consent entry with a
+    type-confused shape (e.g. a non-numeric ``expires_at``) is NOT caught by
+    _prune()'s ``isinstance(exp, (int, float))`` guard (consent.py line ~373),
+    so the entry survives pruning and is handed straight back to is_granted(),
+    which today crashes with an uncaught TypeError at
+    ``remaining = max(0, int(exp - time.time()))`` (consent.py line ~484).
+
+    Unlike the ConsentStoreCorrupted (invalid-JSON-text) path exercised in
+    ConsentStoreCorruptionTests above, is_granted() has no defense-in-depth
+    for this second corruption class. These tests currently document the bug
+    by asserting the CRASH (xfail-style, via assertRaises) rather than a
+    tautological pass, so the suite goes red the moment this is fixed and a
+    human notices the contract changed — see bugsDiscovered in the task
+    write-up for the recommended fix (treat as deny + audit, matching the
+    ConsentStoreCorrupted contract).
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp(prefix="consent-typeconfusion-test-")
+        os.environ["CORVIN_HOME"] = self._tmp
+
+    def tearDown(self) -> None:
+        os.environ.pop("CORVIN_HOME", None)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _store_path(self, channel: str, chat_key: str) -> Path:
+        return consent._store_path(channel, chat_key)
+
+    def test_string_expires_at_survives_prune_unneutralized(self):
+        """_prune()'s isinstance guard must not silently keep a type-confused
+        time_bounded entry as-if it were still valid — but today it does:
+        the entry is neither expired-and-dropped nor coerced/rejected, it is
+        just passed through into ``kept`` unchanged."""
+        channel = "discord"
+        chat_key = "chat-typeconfusion-1"
+        uid = "user-typeconfusion"
+
+        data = {
+            uid: {
+                "mode": "time_bounded",
+                "granted_at": 1778204770.0,
+                "expires_at": "not-a-number",
+                "channel": channel,
+                "granted_via": "slash",
+            }
+        }
+        kept, expired_uids = consent._prune(data)
+
+        self.assertNotIn(uid, expired_uids,
+                          "type-confused expires_at must not be treated as "
+                          "silently 'expired' by the isinstance guard")
+        self.assertIn(uid, kept,
+                      "documents current (unsafe) behavior: the type-confused "
+                      "entry survives _prune() unneutralized and is handed "
+                      "back to is_granted()")
+
+    def test_is_granted_crashes_on_string_expires_at(self):
+        """REGRESSION-DOCUMENTING TEST for a confirmed bug: is_granted() must
+        never raise for any syntactically-valid consent-store shape -- it
+        should behave like the ConsentStoreCorrupted path (deny + audit),
+        not blow up. Today it raises TypeError. This test currently asserts
+        the (buggy) crash; when the bug is fixed, replace this assertion with
+        the intended contract: ``self.assertEqual(consent.is_granted(...),
+        (False, "entry-corrupted"))`` (or whatever tag the fix picks) and
+        additionally assert a 'consent.entry_corrupted'-style audit event.
+        """
+        channel = "discord"
+        chat_key = "chat-typeconfusion-2"
+        uid = "user-typeconfusion-2"
+
+        store_path = self._store_path(channel, chat_key)
+        store_path.parent.mkdir(parents=True, exist_ok=True)
+        store_path.write_text(json.dumps({
+            uid: {
+                "mode": "time_bounded",
+                "granted_at": 1778204770.0,
+                "expires_at": "not-a-number",
+                "channel": channel,
+                "granted_via": "slash",
+            }
+        }))
+
+        with self.assertRaises(TypeError):
+            consent.is_granted(channel, chat_key, uid)
+
+    def test_is_granted_crashes_on_string_granted_at_with_time_bounded(self):
+        """Same class of bug via a different type-confused field: a
+        non-numeric expires_at combined with a missing/garbage granted_at
+        must not be able to sneak an entry through cleanly either -- confirm
+        the crash is specifically keyed to the expires_at arithmetic and not
+        accidentally masked by some other field."""
+        channel = "discord"
+        chat_key = "chat-typeconfusion-3"
+        uid = "user-typeconfusion-3"
+
+        store_path = self._store_path(channel, chat_key)
+        store_path.parent.mkdir(parents=True, exist_ok=True)
+        store_path.write_text(json.dumps({
+            uid: {
+                "mode": "time_bounded",
+                "granted_at": "also-not-a-number",
+                "expires_at": ["nested", "garbage"],
+                "channel": channel,
+                "granted_via": "slash",
+            }
+        }))
+
+        with self.assertRaises(TypeError):
+            consent.is_granted(channel, chat_key, uid)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

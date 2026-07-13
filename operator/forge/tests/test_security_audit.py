@@ -138,6 +138,45 @@ def test_invalid_json_line_does_not_crash_verifier():
               for pr in problems))
 
 
+def test_non_dict_json_line_does_not_crash_verifier():
+    print("\n[verify: JSON-valid-but-non-dict line surfaces as invalid_json, doesn't crash]")
+    # A line can be syntactically valid JSON (json.loads succeeds, no
+    # JSONDecodeError) while not being an object at all -- a bare number,
+    # null, bool, string, or list. verify_chain used to do
+    # `if "hash" not in rec:` on the parsed value with no isinstance guard,
+    # which raises an uncaught TypeError for int/None/bool (and silently
+    # mis-skips str/list) instead of returning a controlled (False, problems).
+    for bad_line in ("42", "null", "true", '"just a string"', "[1, 2, 3]"):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "audit.jsonl"
+            write_event(p, "tool.created", tool="x")
+            with p.open("a") as fh:
+                fh.write(bad_line + "\n")
+            # A hand-crafted tampered record AFTER the bad line -- this must
+            # still be reached and reported, not swallowed by an aborted scan.
+            with p.open("a") as fh:
+                fh.write(json.dumps({
+                    "ts": time.time(), "event_type": "tool.created",
+                    "severity": "INFO", "tool": "ghost",
+                    "details": {}, "prev_hash": "deadbeef00000000",
+                    "hash": "feedface11111111",
+                }) + "\n")
+
+            try:
+                ok, problems = verify_chain(p)
+            except Exception as exc:  # noqa: BLE001 - this is exactly what we assert against
+                t(f"verify_chain does not raise on bad line {bad_line!r}",
+                  False, detail=f"raised {type(exc).__name__}: {exc}")
+                continue
+
+            t(f"verify_chain returns cleanly for bad line {bad_line!r}", True)
+            t(f"verify NOT ok for bad line {bad_line!r}", ok is False)
+            t(f"invalid_json (or equivalent) flagged on line 2 for {bad_line!r}",
+              any(pr["line"] == 2 for pr in problems))
+            t(f"tampering on line 3 AFTER {bad_line!r} is still detected",
+              any(pr["line"] == 3 for pr in problems))
+
+
 def test_hash_chain_disabled_records_dont_break_verify():
     print("\n[hash_chain=False: events without hash are skipped silently]")
     with tempfile.TemporaryDirectory() as td:
@@ -261,6 +300,7 @@ def main() -> int:
     test_verify_detects_deleted_record()
     test_verify_detects_appended_fake()
     test_invalid_json_line_does_not_crash_verifier()
+    test_non_dict_json_line_does_not_crash_verifier()
     test_hash_chain_disabled_records_dont_break_verify()
     test_mcp_audit_chain_intact_after_typical_session()
     test_mcp_audit_detects_tamper()

@@ -10,8 +10,11 @@ Covers:
 """
 from __future__ import annotations
 
+import multiprocessing
+import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -104,6 +107,85 @@ def test_pip_failure_returns_none(capsys):
             result = ensure_requirements(reqs, cache_root)
 
         assert result is None
+
+
+def _concurrent_worker(reqs, cache_root, counter_path, results_path, delay):
+    """Runs in a forked child: races real siblings for the per-key flock.
+
+    Patches ``subprocess.run`` *inside this child only* (post-fork, so the
+    patch never touches parent/sibling memory) with a fake pip that sleeps
+    to widen the race window and appends one byte to a shared counter file
+    each time it actually runs. If the flock + sentinel re-check in
+    ``ensure_requirements`` is broken, more than one sibling can slip into
+    the "run pip" branch concurrently and the counter file will end up with
+    more than one byte.
+    """
+    def fake_pip_run(cmd, **kwargs):
+        time.sleep(delay)
+        fd = os.open(str(counter_path), os.O_WRONLY | os.O_APPEND)
+        os.write(fd, b"x")
+        os.close(fd)
+        result = mock.MagicMock()
+        result.returncode = 0
+        return result
+
+    with mock.patch("forge.sandbox.subprocess.run", side_effect=fake_pip_run):
+        result = ensure_requirements(reqs, cache_root)
+
+    fd = os.open(str(results_path), os.O_WRONLY | os.O_APPEND)
+    os.write(fd, f"{result}\n".encode())
+    os.close(fd)
+
+
+def test_ensure_requirements_concurrent_processes_serialize_pip():
+    """Real concurrent OS processes racing for the same requirement set must
+    take the per-key flock and only invoke pip once (double-checked-locking
+    sentinel re-check at sandbox.py:87-88 must hold under real contention).
+    """
+    if sys.platform == "win32":
+        import pytest
+        pytest.skip("fcntl-based locking is POSIX-only")
+
+    with tempfile.TemporaryDirectory() as td:
+        cache_root = Path(td)
+        reqs = ["concurrent-race-pkg==1.0"]
+        counter_path = cache_root / "pip_calls.log"
+        results_path = cache_root / "results.log"
+        counter_path.touch()
+        results_path.touch()
+
+        ctx = multiprocessing.get_context("fork")
+        n = 6
+        procs = [
+            ctx.Process(
+                target=_concurrent_worker,
+                args=(reqs, cache_root, counter_path, results_path, 0.3),
+            )
+            for _ in range(n)
+        ]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(timeout=30)
+            assert not p.is_alive(), "worker process hung (possible deadlock in flock)"
+            assert p.exitcode == 0, f"worker process crashed with exit code {p.exitcode}"
+
+        pip_call_count = len(counter_path.read_bytes())
+        assert pip_call_count == 1, (
+            f"pip should run exactly once across {n} concurrent callers for "
+            f"the same requirement set, but ran {pip_call_count} times "
+            "(flock/double-checked-locking is not mutually exclusive)"
+        )
+
+        key = _reqs_cache_key(reqs)
+        target = cache_root / "req_cache" / key
+        assert (target / ".installed").exists()
+
+        result_lines = [l for l in results_path.read_text().splitlines() if l]
+        assert len(result_lines) == n
+        assert all(line == str(target) for line in result_lines), (
+            "every concurrent caller must observe the same completed target path"
+        )
 
 
 # ── build_bwrap_cmd with extra_pythonpath ─────────────────────────────────────

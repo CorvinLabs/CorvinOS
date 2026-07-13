@@ -7425,12 +7425,47 @@ _voice_engine_state: dict = {
 }
 _voice_engine_lock = threading.Lock()  # Protects _voice_engine_state from race conditions
 
+# Confirmed blind spot (voice-quota concurrency race): the caller pattern
+# ``voice_path = synthesize_voice_note(...)`` followed by a SEPARATE later
+# ``reason = voice_skip_reason()`` (see ~9560 below) is not one atomic
+# operation. Any other thread's own synthesize_voice_note() call landing in
+# that gap (adapter.main() dispatches concurrent chats via a
+# ThreadPoolExecutor) overwrites the process-wide ``last_skip_reason`` first
+# — a cross-request leak where one user's chat reports another user's
+# unrelated TTS-failure reason. Fixed by mirroring the reason into a
+# thread-local alongside the shared dict: voice_skip_reason() prefers the
+# calling thread's OWN most-recent outcome, so a concurrent chat's later
+# call can never clobber what gets surfaced back to the thread whose call
+# it actually was. The shared dict is kept (and still populated) so
+# single-threaded callers that never call synthesize_voice_note themselves
+# on their own thread (there are none in this codebase today) still see the
+# last known global outcome — purely a safety net, not load-bearing.
+_voice_local = threading.local()
+_UNSET = object()
+
+
+def _set_voice_skip_reason(reason: str | None) -> None:
+    """Record the outcome of a synthesize_voice_note() call — writes both
+    the process-wide dict AND this thread's own thread-local mirror. See
+    the race-condition note above _voice_local for why both are needed."""
+    with _voice_engine_lock:
+        _voice_engine_state["last_skip_reason"] = reason
+    _voice_local.last_skip_reason = reason
+
 
 def voice_skip_reason() -> str | None:
     """Latest user-facing reason voice synthesis was skipped, or None.
     Cleared when a successful synth happens; kept across replies otherwise.
 
-    Thread-safe: returns a snapshot of the current skip reason."""
+    Thread-safe: prefers THIS thread's own most-recent outcome (set by the
+    last synthesize_voice_note() call made on this same thread) over the
+    process-wide dict, so a concurrent chat's own synth call can never
+    clobber the reason surfaced back to the caller whose call it was. Falls
+    back to the shared dict only when this thread has never itself called
+    synthesize_voice_note()."""
+    local_reason = getattr(_voice_local, "last_skip_reason", _UNSET)
+    if local_reason is not _UNSET:
+        return local_reason
     with _voice_engine_lock:
         return _voice_engine_state.get("last_skip_reason")
 
@@ -7828,38 +7863,126 @@ def synthesize_voice_note(
 
     path = _try_openai_tts(text, lang, voice)
     if path is not None:
-        with _voice_engine_lock:
-            _voice_engine_state["last_skip_reason"] = None
+        _set_voice_skip_reason(None)
         return path
 
     path = _try_edge_tts(text, lang)
     if path is not None:
-        with _voice_engine_lock:
-            _voice_engine_state["last_skip_reason"] = None
+        _set_voice_skip_reason(None)
         return path
 
     path = _try_piper_tts(text, lang)
     if path is not None:
-        with _voice_engine_lock:
-            _voice_engine_state["last_skip_reason"] = None
+        _set_voice_skip_reason(None)
         return path
 
     # All engines failed — set a user-facing notice explaining why.
     now = time.time()
     with _voice_engine_lock:
-        if now < _voice_engine_state.get("quota_until", 0.0):
-            _voice_engine_state["last_skip_reason"] = (
-                "Voice note unavailable — OpenAI hit rate limit, "
-                "edge-tts unavailable (no internet / ffmpeg), "
-                "and Piper is not installed. OpenAI will retry in about 1 hour."
-            )
-        else:
-            _voice_engine_state["last_skip_reason"] = (
-                "Voice note unavailable — no TTS engine available. "
-                "edge-tts (no API key needed) requires internet + ffmpeg. "
-                "Or add OPENAI_API_KEY to ~/.config/corvin-voice/service.env."
-            )
+        in_backoff = now < _voice_engine_state.get("quota_until", 0.0)
+    if in_backoff:
+        reason = (
+            "Voice note unavailable — OpenAI hit rate limit, "
+            "edge-tts unavailable (no internet / ffmpeg), "
+            "and Piper is not installed. OpenAI will retry in about 1 hour."
+        )
+    else:
+        reason = (
+            "Voice note unavailable — no TTS engine available. "
+            "edge-tts (no API key needed) requires internet + ffmpeg. "
+            "Or add OPENAI_API_KEY to ~/.config/corvin-voice/service.env."
+        )
+    _set_voice_skip_reason(reason)
     return None
+
+
+def _synthesize_voice_for_turn(
+    answer: str,
+    settings: dict,
+    voice_override: str | None,
+    voice_task: str,
+    profile: dict | None,
+) -> tuple[Path | None, bool]:
+    """Decide whether this turn should get a spoken voice-note and, if so,
+    run the synth pipeline. Returns ``(voice_path, voice_was_expected)``.
+
+    Extracted out of ``process_one`` so the "no summary attempted" branch
+    below is independently unit-testable — see
+    ``test_voice_quota.py::test_no_summary_attempt_resets_skip_reason_across_chats``.
+
+    Confirmed blind spot (thread-local skip-reason leak, residual half):
+    the earlier thread-local fix on ``voice_skip_reason()`` (see
+    ``_voice_local`` above) closes the cross-chat clobber for calls that
+    DO reach ``synthesize_voice_note`` — but that function is the ONLY
+    thing that ever writes ``_voice_local``. When ``voice_was_expected`` is
+    True (mode ``always``, or the answer crossed the length threshold) but
+    ``build_voice_summary`` returns an empty string, synthesis is never
+    attempted THIS turn at all, so ``_voice_local`` still holds whatever a
+    DIFFERENT chat's turn left there the last time THIS SAME pooled thread
+    ran a real synth call (adapter.py dispatches turns onto a
+    ``ThreadPoolExecutor``, so thread reuse across chats is real and
+    confirmed) — a stale, unrelated notice would otherwise get appended to
+    this turn's reply. Resetting to ``None`` at the exact point synthesis
+    is determined to be skipped (right after the empty ``build_voice_summary``
+    result) closes that gap.
+
+    This reset deliberately does NOT run when voice isn't expected at all
+    (mode ``never`` / answer under threshold): that path never reads
+    ``voice_skip_reason()`` downstream (see the caller in ``process_one``),
+    so leaving the thread-local untouched there correctly preserves it for
+    any OTHER consumer that intentionally reads it across turns (e.g. a
+    status command) — that cross-turn persistence is a feature, not a bug,
+    for the case where a synth attempt genuinely didn't happen because
+    voice wasn't wanted this turn.
+    """
+    voice_mode = settings.get("voice_summary_mode", "always")  # always | long_only | never
+    # test hook: deenabled die TTS-Synthese komplett, um Tests von echter
+    # OpenAI/Piper-Latenz zu entkoppeln. Siehe test_adapter_parallel.py.
+    if os.environ.get("ADAPTER_DISABLE_VOICE") == "1":
+        voice_mode = "never"
+    if voice_mode == "never":
+        return None, False
+    if not (voice_mode == "always" or len(answer) > settings.get("voice_threshold_chars", 200)):
+        return None, False
+
+    voice_was_expected = True
+    spoken = build_voice_summary(
+        answer,
+        override=voice_override,
+        # Use the user's raw text, NOT the full system-wrapped prompt.
+        # For images: caption only. For docs: caption or filename.
+        # For text/audio: the original message before observer prepend.
+        # This prevents the voice anchor from reading out file paths
+        # and internal instructions instead of the user's actual words.
+        task=voice_task or "",
+    )
+    if not spoken:
+        # Synthesis will NOT be attempted this turn — see the docstring
+        # above for why this reset is required.
+        _set_voice_skip_reason(None)
+        return None, voice_was_expected
+
+    # Resolve the TTS voice/engine language the SAME way the content
+    # language was just resolved (profile default, unless `spoken` is
+    # confidently de/en — see _resolve_voice_output_language) — this used
+    # to be hardcoded to "de" regardless of what language `spoken`
+    # actually ended up in, so a non-de/en voice summary was read aloud
+    # with a German voice/accent (a second, independent half of the same
+    # language-mismatch bug).
+    _tts_lang = _resolve_voice_output_language(spoken) or "de"
+    # Resolve per-persona TTS voice from the chat profile. tts_voice_<lang>
+    # wins over tts_voice (lang-agnostic); missing → synthesize_voice_note
+    # falls back to the hardcoded language default.
+    _persona_voice = None
+    if isinstance(profile, dict):
+        _persona_voice = (
+            profile.get(f"tts_voice_{_tts_lang}")
+            or profile.get("tts_voice")
+        )
+    voice_path = synthesize_voice_note(
+        spoken, lang=_tts_lang, voice=_persona_voice,
+    )
+    return voice_path, voice_was_expected
 
 
 CHUNK_LIMIT = 3500  # WhatsApp text limit is 4096 chars; 3500 leaves headroom
@@ -9509,50 +9632,11 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # Voice-note: synthesize a SHORT spoken summary (1-3 sentences) instead
     # of reading the full answer aloud. Uses summarize.py to compress when
     # the answer is long; passes through unchanged when short. Mode-controlled.
-    voice_mode = settings.get("voice_summary_mode", "always")  # always | long_only | never
-    # test hook: deenabled die TTS-Synthese komplett, um Tests von echter
-    # OpenAI/Piper-Latenz zu entkoppeln. Siehe test_adapter_parallel.py.
-    if os.environ.get("ADAPTER_DISABLE_VOICE") == "1":
-        voice_mode = "never"
-    voice_path = None
-    voice_was_expected = False
-    spoken: str | None = None
-    if voice_mode != "never":
-        if voice_mode == "always" or len(answer) > settings.get("voice_threshold_chars", 200):
-            voice_was_expected = True
-            spoken = build_voice_summary(
-                answer,
-                override=voice_override,
-                # Use the user's raw text, NOT the full system-wrapped prompt.
-                # For images: caption only. For docs: caption or filename.
-                # For text/audio: the original message before observer prepend.
-                # This prevents the voice anchor from reading out file paths
-                # and internal instructions instead of the user's actual words.
-                task=_voice_task or "",
-            )
-            if spoken:
-                # Resolve the TTS voice/engine language the SAME way the
-                # content language was just resolved (profile default,
-                # unless `spoken` is confidently de/en — see
-                # _resolve_voice_output_language) — this used to be
-                # hardcoded to "de" regardless of what language `spoken`
-                # actually ended up in, so a non-de/en voice summary was
-                # read aloud with a German voice/accent (a second,
-                # independent half of the same language-mismatch bug).
-                _tts_lang = _resolve_voice_output_language(spoken) or "de"
-                # Resolve per-persona TTS voice from the chat profile.
-                # tts_voice_<lang> wins over tts_voice (lang-agnostic);
-                # missing → synthesize_voice_note falls back to
-                # the hardcoded language default.
-                _persona_voice = None
-                if isinstance(profile, dict):
-                    _persona_voice = (
-                        profile.get(f"tts_voice_{_tts_lang}")
-                        or profile.get("tts_voice")
-                    )
-                voice_path = synthesize_voice_note(
-                    spoken, lang=_tts_lang, voice=_persona_voice,
-                )
+    # See _synthesize_voice_for_turn() for why the "no summary attempted"
+    # branch resets the thread-local skip-reason mirror.
+    voice_path, voice_was_expected = _synthesize_voice_for_turn(
+        answer, settings, voice_override, _voice_task, profile,
+    )
 
     # If voice was expected (mode + length / always) but the synth path
     # returned None — surface the reason in the chat text so the user

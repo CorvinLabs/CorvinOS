@@ -321,6 +321,111 @@ async function run() {
     assert.strictEqual(ok, false);
   });
 
+  // ── 3b. Sticky progress (edit-in-place) + finalize guard ───────────────────
+  console.log('\nSticky progress + finalize guard');
+
+  function mockAdapterWithCtx() {
+    const sent = [];
+    const updated = [];
+    const deleted = [];
+    let nextId = 1;
+    const adapter = {
+      continueConversation: async (_ref, _appId, fn) => {
+        const ctx = {
+          sendActivity: async (a) => {
+            const id = `act-${nextId++}`;
+            sent.push({ id, activity: a });
+            return { id };
+          },
+          updateActivity: async (a) => { updated.push(a); },
+          deleteActivity: async (id) => { deleted.push(id); },
+        };
+        await fn(ctx);
+      },
+    };
+    return { adapter, sent, updated, deleted };
+  }
+
+  await test('first _progress: sends a new activity and remembers its id', async () => {
+    const conversationRefs = new Map();
+    conversationRefs.set('conv-p1', {});
+    const { adapter, sent, updated } = mockAdapterWithCtx();
+    const { sendTeams } = require('./handler').makeHandler({
+      inboxDir: INBOX_DIR, settingsFile: SETTINGS_FILE, currentSettings,
+      auth: { authOk: () => true, readOnlyOk: () => ({ isReadOnly: false }), rateAllow: () => true },
+      logger: null, conversationRefs,
+    });
+    const ok = await sendTeams({ channel: 'teams', chat_id: 'conv-p1', msg_id: 'turn-1', _progress: true, text: 'thinking…' }, adapter, 'app');
+    assert.strictEqual(ok, true);
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(updated.length, 0);
+  });
+
+  await test('second _progress for the same chat: updates the same activity id', async () => {
+    const conversationRefs = new Map();
+    conversationRefs.set('conv-p2', {});
+    const { adapter, sent, updated } = mockAdapterWithCtx();
+    const { sendTeams } = require('./handler').makeHandler({
+      inboxDir: INBOX_DIR, settingsFile: SETTINGS_FILE, currentSettings,
+      auth: { authOk: () => true, readOnlyOk: () => ({ isReadOnly: false }), rateAllow: () => true },
+      logger: null, conversationRefs,
+    });
+    await sendTeams({ channel: 'teams', chat_id: 'conv-p2', msg_id: 'turn-2', _progress: true, text: 'step 1' }, adapter, 'app');
+    await sendTeams({ channel: 'teams', chat_id: 'conv-p2', msg_id: 'turn-2', _progress: true, text: 'step 2' }, adapter, 'app');
+    assert.strictEqual(sent.length, 1, 'only the first progress opens a new activity');
+    assert.strictEqual(updated.length, 1, 'the second progress must update in place');
+    assert.strictEqual(updated[0].id, sent[0].id);
+  });
+
+  await test('_heartbeat does not open a second sticky slot when progress already owns it', async () => {
+    const conversationRefs = new Map();
+    conversationRefs.set('conv-p3', {});
+    const { adapter, sent } = mockAdapterWithCtx();
+    const { sendTeams } = require('./handler').makeHandler({
+      inboxDir: INBOX_DIR, settingsFile: SETTINGS_FILE, currentSettings,
+      auth: { authOk: () => true, readOnlyOk: () => ({ isReadOnly: false }), rateAllow: () => true },
+      logger: null, conversationRefs,
+    });
+    await sendTeams({ channel: 'teams', chat_id: 'conv-p3', msg_id: 'turn-3', _progress: true, text: 'progress' }, adapter, 'app');
+    await sendTeams({ channel: 'teams', chat_id: 'conv-p3', msg_id: 'turn-3', _heartbeat: true, text: 'still working' }, adapter, 'app');
+    assert.strictEqual(sent.length, 1, 'heartbeat must not send a second activity while progress owns the slot');
+  });
+
+  await test('real reply: deletes the sticky activity and marks the turn finalized', async () => {
+    const conversationRefs = new Map();
+    conversationRefs.set('conv-p4', {});
+    const { adapter, sent, deleted } = mockAdapterWithCtx();
+    const { sendTeams } = require('./handler').makeHandler({
+      inboxDir: INBOX_DIR, settingsFile: SETTINGS_FILE, currentSettings,
+      auth: { authOk: () => true, readOnlyOk: () => ({ isReadOnly: false }), rateAllow: () => true },
+      logger: null, conversationRefs,
+    });
+    await sendTeams({ channel: 'teams', chat_id: 'conv-p4', msg_id: 'turn-4', _progress: true, text: 'working…' }, adapter, 'app');
+    await sendTeams({ channel: 'teams', chat_id: 'conv-p4', msg_id: 'turn-4', text: 'Here is your answer.' }, adapter, 'app');
+    assert.strictEqual(deleted.length, 1, 'sticky activity must be deleted before the real reply');
+    assert.strictEqual(deleted[0], sent[0].id);
+    // sent[0] = progress activity, sent[1] = real reply.
+    assert.strictEqual(sent.length, 2);
+  });
+
+  await test('late progress/heartbeat for an already-finalized msg_id is dropped silently', async () => {
+    const conversationRefs = new Map();
+    conversationRefs.set('conv-p5', {});
+    const { adapter, sent } = mockAdapterWithCtx();
+    const { sendTeams } = require('./handler').makeHandler({
+      inboxDir: INBOX_DIR, settingsFile: SETTINGS_FILE, currentSettings,
+      auth: { authOk: () => true, readOnlyOk: () => ({ isReadOnly: false }), rateAllow: () => true },
+      logger: null, conversationRefs,
+    });
+    await sendTeams({ channel: 'teams', chat_id: 'conv-p5', msg_id: 'turn-5', text: 'The real answer.' }, adapter, 'app');
+    const beforeLateDrop = sent.length;
+    // Simulates the outbox alphabetical-sort race: a _hb.json for the same
+    // msg_id is processed after the real reply already shipped.
+    const ok = await sendTeams({ channel: 'teams', chat_id: 'conv-p5', msg_id: 'turn-5', _heartbeat: true, text: 'still working' }, adapter, 'app');
+    assert.strictEqual(ok, true, 'stale drop still reports handled=true');
+    assert.strictEqual(sent.length, beforeLateDrop, 'no activity must be sent for the stale heartbeat');
+  });
+
   // ── 4. Inbox envelope shape ────────────────────────────────────────────────
   console.log('\nInbox envelope shape');
 

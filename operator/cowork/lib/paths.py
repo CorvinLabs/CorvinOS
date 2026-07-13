@@ -14,9 +14,15 @@ from pathlib import Path
 
 def _resolve_env() -> str | None:
     new = os.environ.get("CORVIN_HOME")
-    if new:
-        return new
-    return None
+    if new is None:
+        return None
+    new = new.strip()
+    # A whitespace-only value (" ", "\t", "\n") is not a real override —
+    # treat it the same as unset rather than resolving to a bogus path like
+    # Path(" ") relative to the cwd.
+    if not new:
+        return None
+    return new
 
 
 def _repo_root() -> Path | None:

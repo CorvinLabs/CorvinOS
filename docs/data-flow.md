@@ -75,7 +75,7 @@ If the agent decides it wants a *new* tool that does not exist yet, it calls `mc
 The adapter parses Claude's JSONL output stream. The final assistant message is captured. Two side-effects in parallel:
 
 1. **Stop hook fires** in Claude Code itself. If running at the desk, the voice plugin's Stop hook intercepts and starts the read-aloud pipeline (summarize → TTS → audio output). This pipeline does *not* go through the adapter; it uses the same hook system Claude Code provides for any plugin.
-2. **Adapter writes the outbox.** A JSON envelope with `text`, optional `attachments[]` (files Claude wrote), optional `audio_path` (if `voice_summary_mode` says to attach a voice note) is written to `/tmp/corvin-voice-bridge/whatsapp/outbox/<id>.json`.
+2. **Adapter writes the outbox.** A JSON envelope with `text`, optional `attachments[]` (files Claude wrote), optional `audio_path` (if `voice_summary_mode` says to attach a voice note) is written to `/tmp/corvin-voice-bridge/whatsapp/outbox/<id>.json`. While the turn is still running, the adapter also writes interim `_progress`/`_heartbeat` envelopes (same `msg_id`) so the daemon can show a live status — see `claude-ref/adapter-runtime.md` §Sticky progress messages for how every daemon renders those as one edited-in-place message instead of a flood.
 
 ### Stage 7 — audit append
 

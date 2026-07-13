@@ -96,6 +96,155 @@ def test_poison_quarantine() -> None:
             os.environ.pop(k, None)
 
 
+def test_process_one_non_dict_top_level_json() -> None:
+    """Blind spot: process_one()'s `json.loads(inbox_file.read_text())` is
+    only guarded against `json.JSONDecodeError`. A syntactically valid but
+    non-object top-level JSON payload — an int, a bare string, or a list —
+    parses fine, and the very next line, `msg.get("id")`, raises an
+    unguarded AttributeError. There is a second internal call site for
+    process_one() besides submit_inbox_item(); this test calls it directly
+    to prove process_one() itself has no defense of its own against the
+    non-dict shape (today's safety net, if any, lives strictly in the
+    caller — see test_submit_inbox_item_non_dict_json_is_not_quarantined
+    below for why that caller-side net is weaker than it looks)."""
+    _section("process_one-non-dict-top-level-json")
+    tmp = Path(tempfile.mkdtemp(prefix="adapter-nondict-"))
+    try:
+        _set_sandbox(tmp)
+        os.environ["ADAPTER_FAKE_CLAUDE"] = "1"
+        os.environ["ADAPTER_DISABLE_VOICE"] = "1"
+        for mod in list(sys.modules):
+            if mod == "adapter":
+                del sys.modules[mod]
+        import adapter  # type: ignore
+
+        for label, payload in (
+            ("int", "42"),
+            ("string", '"just a string"'),
+            ("list", "[1, 2, 3]"),
+        ):
+            inbox_path = Path(adapter.INBOX) / f"nondict_{label}.json"
+            inbox_path.write_text(payload)
+            try:
+                adapter.process_one(inbox_path, {})
+            except AttributeError as e:
+                print(f"PASS(documents bug): process_one({label}) raised "
+                      f"unguarded AttributeError: {e}")
+            else:
+                raise AssertionError(
+                    f"process_one({label!r}) did NOT raise — has an "
+                    f"isinstance(msg, dict) guard been added to "
+                    f"process_one()? If so, update this test to assert "
+                    f"graceful quarantine/skip instead of documenting the "
+                    f"crash."
+                )
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        for k in ("ADAPTER_INBOX", "ADAPTER_OUTBOX", "ADAPTER_PROCESSED",
+                  "ADAPTER_FAKE_CLAUDE", "ADAPTER_DISABLE_VOICE"):
+            os.environ.pop(k, None)
+
+
+def test_submit_inbox_item_non_dict_json_is_not_quarantined() -> None:
+    """Blind spot, worse than the plain AttributeError above: the real
+    production entry point, submit_inbox_item(), calls _route_key() and
+    _peek_side_channel() on the raw inbox file BEFORE _runner()'s
+    try/except is even constructed. Both helpers only catch
+    (OSError, json.JSONDecodeError) around their own json.loads() — the
+    following msg.get(...) call raises AttributeError for a non-dict
+    top-level JSON payload, and that exception propagates all the way out
+    of submit_inbox_item() itself, never touching process_one()'s poison-
+    quarantine machinery at all. Only main()'s generic per-tick
+    `except Exception as e: log(f"loop error: {e}")` — two frames further
+    out — would catch it, and that handler neither quarantines nor deletes
+    the file. Worse, submit_inbox_item() had already written a pre-submit
+    `_in_flight[msg_id] = (time.time(), None)` bookkeeping entry just
+    before the crash; that entry is only ever popped in _runner()'s
+    `finally`, which never runs here. So the poison file survives on disk,
+    is never quarantined, and every subsequent poll tick silently no-ops
+    it (`if msg_id in _in_flight: return`) until IN_FLIGHT_TTL (default 1h)
+    reaps the stale entry — at which point the identical crash recurs.
+    Net effect: a single malformed inbox message becomes a permanently
+    stuck, periodically recrashing poison pill that is never quarantined."""
+    _section("submit_inbox_item-non-dict-json-poison-pill")
+    tmp = Path(tempfile.mkdtemp(prefix="adapter-poisonpill-"))
+    try:
+        _set_sandbox(tmp)
+        os.environ["ADAPTER_FAKE_CLAUDE"] = "1"
+        os.environ["ADAPTER_DISABLE_VOICE"] = "1"
+        for mod in list(sys.modules):
+            if mod == "adapter":
+                del sys.modules[mod]
+        import adapter  # type: ignore
+        from concurrent.futures import ThreadPoolExecutor
+        adapter._executor = ThreadPoolExecutor(max_workers=2)
+        adapter._sidechannel_executor = ThreadPoolExecutor(max_workers=2)
+
+        inbox_path = Path(adapter.INBOX) / "poisonpill_01.json"
+        inbox_path.write_text(json.dumps([1, 2, 3]))
+
+        raised = None
+        try:
+            adapter.submit_inbox_item(inbox_path, {})
+        except AttributeError as e:
+            raised = e
+        else:
+            raise AssertionError(
+                "submit_inbox_item() did NOT raise for a non-dict "
+                "top-level JSON payload — has _route_key()/"
+                "_peek_side_channel() grown an isinstance(msg, dict) "
+                "guard? If so, update this test to assert the file is "
+                "quarantined instead of documenting the crash."
+            )
+        print(f"PASS(documents bug): submit_inbox_item raised unguarded "
+              f"{type(raised).__name__}: {raised}")
+
+        # Worse than a caught-and-quarantined poison file: the file is
+        # still sitting in inbox/, unmoved and undeleted.
+        assert inbox_path.exists(), (
+            "inbox file vanished — was it (silently) quarantined after "
+            "all? If a fix landed, this documents SAFE behavior now; "
+            "update this test to assert that positively."
+        )
+        poison_dir = Path(adapter.PROCESSED) / "poison"
+        assert not (poison_dir / inbox_path.name).exists(), (
+            "poison file unexpectedly present in processed/poison/ — the "
+            "crash path must have grown a quarantine step; good news, but "
+            "update this test to assert that positively instead of "
+            "documenting its absence."
+        )
+        print("PASS(documents bug): poison file left in place in inbox/, "
+              "never quarantined")
+
+        # And the pre-submit _in_flight bookkeeping entry is never popped
+        # (that only happens in _runner's finally, which never ran) — so
+        # it silently no-ops every following poll tick.
+        assert "poisonpill_01" in adapter._in_flight, (
+            "the pre-submit _in_flight entry was already cleared — either "
+            "the crash path changed, or unrelated cleanup ran; verify "
+            "before trusting this assertion"
+        )
+        _ts, fut = adapter._in_flight["poisonpill_01"]
+        assert fut is None, (
+            "a Future got attached despite the crash happening before "
+            "pool.submit() ran — investigate before trusting this test"
+        )
+        print("PASS(documents bug): stale _in_flight entry left dangling "
+              "with fut=None — every future poll tick will silently "
+              "no-op this msg_id until IN_FLIGHT_TTL reaps it, at which "
+              "point the identical crash recurs")
+
+        # Cleanup so this doesn't leak into later tests in the same
+        # process (fresh adapter import gives a fresh _in_flight dict, but
+        # be defensive anyway).
+        adapter._in_flight.pop("poisonpill_01", None)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        for k in ("ADAPTER_INBOX", "ADAPTER_OUTBOX", "ADAPTER_PROCESSED",
+                  "ADAPTER_FAKE_CLAUDE", "ADAPTER_DISABLE_VOICE"):
+            os.environ.pop(k, None)
+
+
 def test_env_parser() -> None:
     _section("env-parser")
     # Re-import auch hier, damit we die function sehen.
@@ -293,6 +442,8 @@ def test_streaming_recursion_counter() -> None:
 
 def main() -> int:
     test_poison_quarantine()
+    test_process_one_non_dict_top_level_json()
+    test_submit_inbox_item_non_dict_json_is_not_quarantined()
     test_env_parser()
     test_system_prompt_per_channel()
     test_streaming_recursion_counter()

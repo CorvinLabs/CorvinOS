@@ -15,6 +15,7 @@ const { newMsgId }   = require('../shared/js/msg-id');
 const inChatCmds     = require('../shared/js/in_chat_commands');
 const chatToggle      = require('../shared/js/chat_toggle');
 const cards          = require('./cards');
+const { makeStickyProgress } = require('../shared/js/sticky_progress');
 
 const READ_ONLY_ACK =
   '🔒 You are read-only in this chat — you can follow along, but you ' +
@@ -39,6 +40,16 @@ const AUTH_DENY_TPL = (email) =>
 function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, conversationRefs }) {
   const log = logger || (() => {});
   const { rateAllow, authOk, readOnlyOk } = auth;
+
+  // Sticky-progress + finalize-guard state for _progress/_heartbeat outbox
+  // payloads. Mirrors the Discord/Telegram/Slack/WhatsApp/Signal daemons
+  // (shared/js/sticky_progress.js): the first _progress payload for a turn
+  // sends a new activity and remembers its activity id; every subsequent
+  // one edits it in place via TurnContext.updateActivity() instead of
+  // flooding the chat with one message per tool call. Once the real reply
+  // lands, any stale _progress/_heartbeat file for the same msg_id (outbox
+  // alphabetical-sort race) is dropped silently.
+  const sticky = makeStickyProgress({ ttlMs: 60_000 });
 
   function writeInbox(payload) {
     const id = newMsgId();
@@ -233,8 +244,68 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, co
       return false;
     }
 
+    // Stale-finalize gate — same race as the other daemons: the outbox dir
+    // is processed in alphabetical order, so `{msg_id}_00.json` (real
+    // reply) can sort BEFORE `{msg_id}_hb.json` / `{msg_id}_sNN.json`
+    // (heartbeat/progress). Once the real reply for a msg_id has been
+    // delivered, drop every other file for that msg_id silently.
+    const msgId = payload.msg_id;
+    if ((payload._progress || payload._heartbeat) && sticky.isFinalized(msgId)) {
+      log(`outbox: drop stale ${payload._progress ? 'progress' : 'heartbeat'} for finalized ${msgId}`);
+      return true;
+    }
+
     try {
       await adapter.continueConversation(ref, teamsAppId, async (ctx) => {
+        // Progress updates: edit a single sticky activity instead of
+        // flooding the chat with one message per tool call. On the first
+        // _progress payload we send a new activity and remember its id;
+        // every subsequent one edits it in place via updateActivity().
+        if (payload._progress && payload.text) {
+          const existing = sticky.getProgress(chatKey);
+          if (existing) {
+            try {
+              await ctx.updateActivity({ ...cards.fromText(payload.text), id: existing.activityId });
+              return;
+            } catch (e) {
+              log(`sticky update failed, falling back to new activity: ${e && e.message || e}`);
+              try { await ctx.deleteActivity(existing.activityId); } catch {}
+              sticky.clearProgress(chatKey);
+            }
+          }
+          const res = await ctx.sendActivity(cards.fromText(payload.text));
+          if (res && res.id) sticky.setProgress(chatKey, { activityId: res.id });
+          return;
+        }
+
+        // Heartbeat: slot into the sticky system so it gets deleted when
+        // the real reply arrives. If a progress update already claimed the
+        // sticky slot, skip silently — the progress message is more
+        // informative anyway.
+        if (payload._heartbeat && payload.text) {
+          if (!sticky.hasProgress(chatKey)) {
+            const res = await ctx.sendActivity(cards.fromText(payload.text));
+            if (res && res.id) sticky.setProgress(chatKey, { activityId: res.id });
+          }
+          return;
+        }
+
+        // Real reply incoming — delete the sticky progress activity first
+        // so the chat shows the answer cleanly without a stale status line
+        // above it.
+        if (sticky.hasProgress(chatKey)) {
+          const prog = sticky.getProgress(chatKey);
+          try {
+            await ctx.deleteActivity(prog.activityId);
+          } catch (e) {
+            log(`sticky delete failed: ${e && e.message || e}`);
+          }
+          sticky.clearProgress(chatKey);
+        }
+        // Mark this turn finalized BEFORE we touch Teams so any racing
+        // progress/heartbeat that arrives mid-send is correctly classified.
+        sticky.markFinalized(msgId);
+
         if (payload.text) {
           const card = cards.fromText(payload.text);
           await ctx.sendActivity(card);

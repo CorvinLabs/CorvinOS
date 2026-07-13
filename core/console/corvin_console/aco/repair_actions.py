@@ -844,8 +844,14 @@ class VoiceTtsPinnedProviderReset(RepairAction):
     repair removes the stale pin so the user doesn't have to open Settings to
     fix it manually.
 
-    Uses profile.py's own save API directly — it handles atomic writes and
-    caching internally, so no ``_assert_within_home`` is needed here.
+    Uses profile.py's own ``set_value()`` API directly for both apply() and
+    undo() — it handles atomic writes, caching, AND serialises the whole
+    read-modify-write-save cycle through ``profile._write_lock`` (confirmed
+    blind spot, fixed 2026-07-13: this action used to call ``mod.load()``
+    without ``force=True`` — meaning it could act on a stale mtime-cached
+    dict — and then ``mod.save()`` unlocked, bypassing the same lock
+    ``set_value()`` uses elsewhere). No ``_assert_within_home`` is needed
+    here either way.
 
     Risk: safe — only clears a field in the user's profile; does not touch any
     system file, secret, or audit chain entry. Reversible via undo()."""
@@ -905,10 +911,10 @@ class VoiceTtsPinnedProviderReset(RepairAction):
         if mod is None:
             return 0
         try:
-            profile = mod.load()
-            self._prev_provider = profile.get("tts_provider")
-            profile["tts_provider"] = None
-            mod.save(profile)
+            # force=True: this bookkeeping read must not act on a stale
+            # mtime-cached dict (the confirmed blind spot this fix closes).
+            self._prev_provider = mod.load(force=True).get("tts_provider")
+            mod.set_value("tts_provider", None)
             logger.info("VoiceTtsPinnedProviderReset: cleared tts_provider (was %r)", self._prev_provider)
             return 1
         except Exception as exc:  # noqa: BLE001
@@ -920,8 +926,6 @@ class VoiceTtsPinnedProviderReset(RepairAction):
         if mod is None:
             return
         try:
-            profile = mod.load()
-            profile["tts_provider"] = getattr(self, "_prev_provider", None)
-            mod.save(profile)
+            mod.set_value("tts_provider", getattr(self, "_prev_provider", None))
         except Exception:  # noqa: BLE001
             pass

@@ -197,3 +197,109 @@ def test_public_dict_redacts_customer_id(rs256_keypair, make_jwt):
     assert "customer_id_fingerprint" in pub
     assert pub["customer_id_fingerprint"] == verifier.fingerprint_customer_id("should-not-leak")
     assert "should-not-leak" not in str(pub)
+
+
+# ── Trial-claim validation (community single-machine binding) ─────────
+# _validate_claims lines ~427-473: trial_type/trial_expires_at/trial_id
+# shape checks + machine_fp binding enforced ONLY for trial_type=="community".
+
+def test_verify_rejects_community_trial_machine_fp_mismatch(
+    rs256_keypair, make_jwt, monkeypatch,
+):
+    """A community trial JWT bound to machine A must not verify on machine B."""
+    from corvin_license import trial as _trial
+    _priv, pub_pem, _, _ = rs256_keypair
+    monkeypatch.setattr(_trial, "machine_fingerprint", lambda: "a" * 32)
+    token = make_jwt(
+        trial_type="community",
+        machine_fp="b" * 32,  # deliberately mismatched, valid shape
+    )
+    with pytest.raises(verifier.LicenseClaimError) as exc:
+        verifier.verify_token(token, pubkey_pem=pub_pem)
+    assert "machine_fp-mismatch" in str(exc.value)
+
+
+def test_verify_accepts_community_trial_machine_fp_match(
+    rs256_keypair, make_jwt, monkeypatch,
+):
+    """The same community trial JWT verifies fine on the machine it was issued for."""
+    from corvin_license import trial as _trial
+    _priv, pub_pem, _, _ = rs256_keypair
+    monkeypatch.setattr(_trial, "machine_fingerprint", lambda: "a" * 32)
+    token = make_jwt(trial_type="community", machine_fp="a" * 32)
+    lic = verifier.verify_token(token, pubkey_pem=pub_pem)
+    assert lic.trial_type == "community"
+    assert lic.machine_fp == "a" * 32
+
+
+def test_verify_accepts_business_trial_machine_fp_mismatch(
+    rs256_keypair, make_jwt, monkeypatch,
+):
+    """Business trials are intentionally multi-machine — mismatch is NOT enforced.
+
+    Locks in the asymmetry documented in verifier.py so a future 'fix'
+    can't silently tighten business trials to single-machine too.
+    """
+    from corvin_license import trial as _trial
+    _priv, pub_pem, _, _ = rs256_keypair
+    monkeypatch.setattr(_trial, "machine_fingerprint", lambda: "a" * 32)
+    token = make_jwt(trial_type="business", machine_fp="b" * 32)
+    lic = verifier.verify_token(token, pubkey_pem=pub_pem)
+    assert lic.trial_type == "business"
+    # machine_fp is stored for operator inspection but never checked.
+    assert lic.machine_fp == "b" * 32
+
+
+def test_verify_rejects_trial_expires_at_beyond_exp(rs256_keypair, make_jwt):
+    """trial_expires_at must not exceed the token's own exp claim."""
+    _priv, pub_pem, _, _ = rs256_keypair
+    now = int(time.time())
+    token = make_jwt(
+        trial_type="community",
+        valid_seconds=3600,
+        trial_expires_at=now + 3600 + 100,  # past exp
+    )
+    with pytest.raises(verifier.LicenseClaimError) as exc:
+        verifier.verify_token(token, pubkey_pem=pub_pem)
+    assert "trial_expires_at-exceeds-exp" in str(exc.value)
+
+
+def test_verify_rejects_malformed_trial_id(rs256_keypair, make_jwt):
+    _priv, pub_pem, _, _ = rs256_keypair
+    token = make_jwt(trial_type="community", trial_id="not-a-valid-id!")
+    with pytest.raises(verifier.LicenseClaimError) as exc:
+        verifier.verify_token(token, pubkey_pem=pub_pem)
+    assert "trial_id-shape" in str(exc.value)
+
+
+# ── Clock-rollback guard (anti clock-manipulation / future-iat) ───────
+# _validate_claims lines ~422-425: `now < issued_at - 300` → LicenseClaimError.
+
+def test_verify_rejects_clock_before_issuance(rs256_keypair, make_jwt):
+    """Verifying with `now` more than 300s before the token's iat is refused."""
+    _priv, pub_pem, _, _ = rs256_keypair
+    iat = int(time.time())
+    token = make_jwt()
+    with pytest.raises(verifier.LicenseClaimError) as exc:
+        verifier.verify_token(token, pubkey_pem=pub_pem, now=iat - 301)
+    assert "clock-before-issuance" in str(exc.value)
+
+
+def test_verify_accepts_clock_within_ntp_drift_leeway(rs256_keypair, make_jwt):
+    """A now inside the 300s NTP-drift leeway before iat still verifies."""
+    _priv, pub_pem, _, _ = rs256_keypair
+    iat = int(time.time())
+    token = make_jwt()
+    lic = verifier.verify_token(token, pubkey_pem=pub_pem, now=iat - 299)
+    assert lic.customer_id == "cust-01HG-XYZ"
+
+
+# ── seats bound (independent twin of employee_count_max-out-of-range) ─
+
+@pytest.mark.parametrize("bad_seats", [0, 100_001])
+def test_verify_rejects_seats_out_of_range(rs256_keypair, make_jwt, bad_seats):
+    _priv, pub_pem, _, _ = rs256_keypair
+    token = make_jwt(seats=bad_seats)
+    with pytest.raises(verifier.LicenseClaimError) as exc:
+        verifier.verify_token(token, pubkey_pem=pub_pem)
+    assert "seats-out-of-range" in str(exc.value)

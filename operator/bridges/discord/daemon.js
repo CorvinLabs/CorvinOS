@@ -36,6 +36,7 @@ const { isNetworkError, networkUp } = require('../shared/js/net_probe');
 const { startHealthServer }     = require('../shared/js/health-server');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
+const { makeStickyProgress }    = require('../shared/js/sticky_progress');
 const inChatCmds                = require('../shared/js/in_chat_commands');
 const chatToggle                = require('../shared/js/chat_toggle');
 const slashCommands             = require('./slash_commands');
@@ -179,29 +180,14 @@ const pendingReactions = new Map();
 // message. _progress / _heartbeat payloads edit this message in-place instead
 // of flooding the chat with individual tool-call updates. Cleared when the
 // real reply arrives.
-const progressMessages = new Map();
-// msg_id → finalizedAt-ts. Once a real reply has been delivered for a given
-// turn, any further _progress / _heartbeat outbox files we still encounter
-// for that same msg_id are stale (sort-order race between `_00.json` and
-// `_sNN.json` / `_hb.json`) and we drop them silently. TTL keeps the map
-// bounded.
-const finalizedMsgIds = new Map();
-const FINALIZED_TTL_MS = 60_000;
-function _isFinalized(msgId) {
-  if (!msgId) return false;
-  const ts = finalizedMsgIds.get(String(msgId));
-  return !!ts && (Date.now() - ts) < FINALIZED_TTL_MS;
-}
-function _markFinalized(msgId) {
-  if (!msgId) return;
-  finalizedMsgIds.set(String(msgId), Date.now());
-}
-setInterval(() => {
-  const cutoff = Date.now() - FINALIZED_TTL_MS;
-  for (const [k, ts] of finalizedMsgIds.entries()) {
-    if (ts < cutoff) finalizedMsgIds.delete(k);
-  }
-}, 30_000).unref?.();
+//
+// Also tracks the "finalized" TTL-map: once a real reply has been delivered
+// for a given turn, any further _progress / _heartbeat outbox files we still
+// encounter for that same msg_id are stale (sort-order race between
+// `_00.json` and `_sNN.json` / `_hb.json`) and we drop them silently. This
+// bookkeeping is shared with every other messenger bridge — see
+// shared/js/sticky_progress.js for the platform-agnostic guard semantics.
+const sticky = makeStickyProgress({ ttlMs: 60_000 });
 
 function writeInbox(payload) {
   const id = newMsgId();
@@ -803,7 +789,7 @@ async function sendDiscord(payload, _fpath) {
   // ("agent writes itself messages"). Once we've sent the final reply for
   // a given msg_id, drop every other file for that msg_id silently.
   const msgId = payload.msg_id;
-  if ((payload._progress || payload._heartbeat) && _isFinalized(msgId)) {
+  if ((payload._progress || payload._heartbeat) && sticky.isFinalized(msgId)) {
     log(`drop stale ${payload._progress ? 'progress' : 'heartbeat'} for finalized ${msgId}`);
     return;
   }
@@ -816,7 +802,7 @@ async function sendDiscord(payload, _fpath) {
   // send a new message and remember it; every subsequent one edits it.
   // When the real reply arrives the sticky message is deleted first.
   if (payload._progress && payload.text) {
-    const existing = progressMessages.get(chId);
+    const existing = sticky.getProgress(chId);
     if (existing && existing.msg) {
       try { await existing.msg.edit(payload.text); return; } catch {
         // Edit failed (message deleted externally or Discord error). Delete the
@@ -824,12 +810,12 @@ async function sendDiscord(payload, _fpath) {
         // one — without this the original heartbeat would linger as a ghost
         // message and the user sees two messages.
         try { await existing.msg.delete(); } catch {}
-        progressMessages.delete(chId);
+        sticky.clearProgress(chId);
       }
     }
     try {
       const sent = await ch.send(payload.text);
-      progressMessages.set(chId, { msg: sent, msgId: msgId || null });
+      sticky.setProgress(chId, { msg: sent, msgId: msgId || null });
     } catch {}
     return;
   }
@@ -838,10 +824,10 @@ async function sendDiscord(payload, _fpath) {
   // reply arrives. If a progress update already claimed the sticky slot,
   // skip silently — the progress message is more informative anyway.
   if (payload._heartbeat && payload.text) {
-    if (!progressMessages.has(chId)) {
+    if (!sticky.hasProgress(chId)) {
       try {
         const sent = await ch.send(payload.text);
-        progressMessages.set(chId, { msg: sent, msgId: msgId || null });
+        sticky.setProgress(chId, { msg: sent, msgId: msgId || null });
       } catch {}
     }
     return;
@@ -849,8 +835,8 @@ async function sendDiscord(payload, _fpath) {
 
   // Real reply incoming — delete the sticky progress message first so the
   // chat shows the answer cleanly without a stale status line above it.
-  if (progressMessages.has(chId)) {
-    const prog = progressMessages.get(chId);
+  if (sticky.hasProgress(chId)) {
+    const prog = sticky.getProgress(chId);
     if (prog && prog.msg) {
       try {
         await prog.msg.delete();
@@ -865,12 +851,12 @@ async function sendDiscord(payload, _fpath) {
         }
       }
     }
-    progressMessages.delete(chId);
+    sticky.clearProgress(chId);
   }
 
   // Mark this turn finalized BEFORE we touch Discord so any racing
   // progress/heartbeat that arrives mid-send is correctly classified.
-  _markFinalized(msgId);
+  sticky.markFinalized(msgId);
 
   // Send text and voice as a single Discord message when both are present.
   // The adapter already chunks below Discord's 2000-char limit for us, so

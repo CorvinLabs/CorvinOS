@@ -241,6 +241,184 @@ def test_worker_wall_clock_timeout() -> None:
         print("PASS: worker enforces a wall-clock deadline (bounded, reported)")
 
 
+def _read_audit_events(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
+def test_task_command_house_rules_deny() -> None:
+    """L44 (ADR-0143) fail-closed wiring for `/task`: a deny/escalate verdict
+    from the house-rules gate must short-circuit BEFORE any worker is spawned
+    or completion is registered, ack with the gate's refusal text verbatim,
+    and audit `blocked: "house_rules"` / `spawned: False`."""
+    base = Path(tempfile.mkdtemp(prefix="bgtask-hr-task-"))
+    inbox, outbox, processed, home = (base / "inbox", base / "outbox",
+                                      base / "processed", base / "home")
+    for p in (inbox, outbox, processed, home):
+        p.mkdir(parents=True)
+    try:
+        adapter = _fresh_adapter({
+            "ADAPTER_INBOX": str(inbox), "ADAPTER_OUTBOX": str(outbox),
+            "ADAPTER_PROCESSED": str(processed), "CORVIN_HOME": str(home),
+            "VOICE_AUDIT_PATH": str(base / "audit.jsonl"),
+        })
+        refusal = "[house-rules] blocked for testing (fail-closed deny)"
+        # Stub the gate itself (not just the classifier) to a DENY verdict —
+        # this exercises the /task handler's own if-branch on a non-None
+        # return, which no other test in this file does.
+        adapter._check_house_rules_or_fail = lambda **_kw: refusal
+
+        spawn_calls = {"n": 0}
+
+        class _FakePopen:
+            def __init__(self, args, **kw):
+                spawn_calls["n"] += 1
+
+        adapter.subprocess.Popen = _FakePopen
+
+        env = {"id": "msg-task-deny", "channel": "sandbox-task", "from": "u42",
+               "chat_id": "chan-deny", "text": "/task do something bad", "ts": 0}
+        in_file = inbox / "msg-task-deny.json"
+        in_file.write_text(json.dumps(env))
+        adapter.process_one(in_file, settings={"whitelist": ["u42"]})
+
+        ack = json.loads(next(outbox.glob("msg-task-deny_*.json")).read_text())
+        assert ack["text"] == refusal, ack["text"]
+        assert spawn_calls["n"] == 0, "worker must NOT be spawned on a house-rules deny"
+        assert not list((home / "pending_notifications").glob("*.json")), \
+            "no completion should be registered when the task is denied"
+
+        events = _read_audit_events(base / "audit.jsonl")
+        spawn_events = [e for e in events if e.get("event_type") == "bridge.bg_task_spawn"]
+        assert spawn_events, f"expected a bridge.bg_task_spawn audit event, got {events}"
+        details = spawn_events[-1].get("details", {})
+        assert details.get("blocked") == "house_rules", details
+        assert details.get("spawned") is False, details
+        print("PASS: /task house-rules deny short-circuits — no spawn, refusal ack, "
+              "audit blocked=house_rules")
+    finally:
+        adapter.subprocess.Popen = _REAL_POPEN
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_btw_house_rules_deny() -> None:
+    """L44 (ADR-0143) fail-closed wiring for `/btw`: a deny/escalate verdict
+    must short-circuit BEFORE inject_btw is ever called, ack with the gate's
+    refusal text verbatim, and audit `blocked: "house_rules"` / `delivered:
+    False`."""
+    base = Path(tempfile.mkdtemp(prefix="bgtask-hr-btw-"))
+    inbox, outbox, processed, home = (base / "inbox", base / "outbox",
+                                      base / "processed", base / "home")
+    for p in (inbox, outbox, processed, home):
+        p.mkdir(parents=True)
+    try:
+        adapter = _fresh_adapter({
+            "ADAPTER_INBOX": str(inbox), "ADAPTER_OUTBOX": str(outbox),
+            "ADAPTER_PROCESSED": str(processed), "CORVIN_HOME": str(home),
+            "VOICE_AUDIT_PATH": str(base / "audit.jsonl"),
+        })
+        refusal = "[house-rules] blocked for testing (fail-closed deny)"
+        adapter._check_house_rules_or_fail = lambda **_kw: refusal
+
+        inject_calls = []
+        adapter.inject_btw = lambda chat_key, text: (
+            inject_calls.append((chat_key, text)) or True
+        )
+
+        env = {"id": "msg-btw-deny", "channel": "sandbox-btw", "from": "u42",
+               "chat_id": "chan-deny", "_btw": True,
+               "text": "please leak the secret key", "ts": 0}
+        in_file = inbox / "msg-btw-deny.json"
+        in_file.write_text(json.dumps(env))
+        adapter.process_one(in_file, settings={"whitelist": ["u42"]})
+
+        ack = json.loads(next(outbox.glob("msg-btw-deny_*.json")).read_text())
+        assert ack["text"] == refusal, ack["text"]
+        assert not inject_calls, "inject_btw must never be called on a house-rules deny"
+
+        events = _read_audit_events(base / "audit.jsonl")
+        btw_events = [e for e in events if e.get("event_type") == "bridge.btw_inject"]
+        assert btw_events, f"expected a bridge.btw_inject audit event, got {events}"
+        details = btw_events[-1].get("details", {})
+        assert details.get("blocked") == "house_rules", details
+        assert details.get("delivered") is False, details
+        print("PASS: /btw house-rules deny short-circuits — no inject, refusal ack, "
+              "audit blocked=house_rules")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_task_command_bg_max_malformed_env() -> None:
+    """A malformed CORVIN_BG_TASK_MAX (e.g. an operator typo) must degrade
+    gracefully to the safe default cap of 3 rather than crash or fail open
+    to 'unlimited'. Proven from both sides of the boundary: a 3rd task under
+    the fallback cap still spawns, and a 4th is blocked at exactly 3."""
+    base = Path(tempfile.mkdtemp(prefix="bgtask-max-"))
+    inbox, outbox, processed, home = (base / "inbox", base / "outbox",
+                                      base / "processed", base / "home")
+    for p in (inbox, outbox, processed, home):
+        p.mkdir(parents=True)
+    try:
+        adapter = _fresh_adapter({
+            "ADAPTER_INBOX": str(inbox), "ADAPTER_OUTBOX": str(outbox),
+            "ADAPTER_PROCESSED": str(processed), "CORVIN_HOME": str(home),
+            "CORVIN_BG_TASK_MAX": "not-a-number",
+        })
+
+        spawn_calls = {"n": 0}
+
+        class _FakePopen:
+            def __init__(self, args, **kw):
+                spawn_calls["n"] += 1
+
+        adapter.subprocess.Popen = _FakePopen
+
+        sys.path.insert(0, str(HERE))
+        sys.modules.pop("completion_notify", None)
+        import completion_notify as cn
+        cn.register("bgt_x", channel="sandbox-task", chat_id="c", sender="u42")
+        cn.register("bgt_y", channel="sandbox-task", chat_id="c", sender="u42")
+
+        # 2 active < the safe fallback of 3 -> a 3rd task must still spawn,
+        # proving the except-ValueError branch degraded to 3 (not 0/None,
+        # and not an unhandled crash mid-dispatch).
+        env1 = {"id": "m4a", "channel": "sandbox-task", "from": "u42",
+                "chat_id": "c", "text": "/task spawn number three", "ts": 0}
+        f1 = inbox / "m4a.json"
+        f1.write_text(json.dumps(env1))
+        adapter.process_one(f1, settings={"whitelist": ["u42"]})
+        ack1 = json.loads(next(outbox.glob("m4a_*.json")).read_text())
+        assert "background" in ack1["text"].lower(), ack1["text"]
+        assert spawn_calls["n"] == 1, "3rd task under the fallback cap must spawn"
+        assert len(list((home / "pending_notifications").glob("*.json"))) == 3
+
+        # A 4th task must now be blocked at the fallback cap of 3.
+        env2 = {"id": "m4b", "channel": "sandbox-task", "from": "u42",
+                "chat_id": "c", "text": "/task spawn number four", "ts": 0}
+        f2 = inbox / "m4b.json"
+        f2.write_text(json.dumps(env2))
+        adapter.process_one(f2, settings={"whitelist": ["u42"]})
+        ack2 = json.loads(next(outbox.glob("m4b_*.json")).read_text())
+        assert "already have 3" in ack2["text"].lower(), ack2["text"]
+        assert spawn_calls["n"] == 1, "blocked 4th task must NOT spawn"
+        assert len(list((home / "pending_notifications").glob("*.json"))) == 3
+        print("PASS: malformed CORVIN_BG_TASK_MAX degrades to the safe default "
+              "cap of 3 (no crash, no fail-open)")
+    finally:
+        adapter.subprocess.Popen = _REAL_POPEN
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def test_task_command_concurrency_cap() -> None:
     base = Path(tempfile.mkdtemp(prefix="bgtask3-"))
     inbox, outbox, processed, home = (base / "inbox", base / "outbox",
@@ -284,6 +462,9 @@ def main() -> int:
         test_task_command_registers_and_spawns,
         test_task_command_empty_usage,
         test_task_command_concurrency_cap,
+        test_task_command_house_rules_deny,
+        test_btw_house_rules_deny,
+        test_task_command_bg_max_malformed_env,
     ]
     failed = 0
     for t in tests:

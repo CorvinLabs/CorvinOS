@@ -8,8 +8,10 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
+import unittest.mock
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -164,6 +166,89 @@ class MaterialiseTests(unittest.TestCase):
         # → de-dupe should skip it.
         fired = scheduler.materialize_due(self.inbox)
         self.assertEqual(len(fired), 0)
+
+
+class MaterialiseConcurrencyTests(unittest.TestCase):
+    """Two overlapping `materialize_due()` callers racing the same
+    schedule.json (e.g. two bridge/adapter processes alive against one
+    CORVIN_HOME during a manual double-launch or a restart overlap).
+
+    `materialize_due()` only holds `_SCHEDULE_LOCK` around the initial
+    `load()` and the final reload+merge+`save()` — the due-check, the 30s
+    `last_fire` de-dupe check, and the actual side effect (writing the
+    inbox envelope / running the workflow) all happen *outside* the lock,
+    against a stale in-memory snapshot. If two callers both load the
+    snapshot before either has saved its post-fire state, both can decide
+    the same task is due-and-not-yet-deduped and both fire it.
+    """
+
+    def setUp(self):
+        if scheduler.SCHEDULE_FILE.exists():
+            scheduler.SCHEDULE_FILE.unlink()
+        self.inbox = Path(tempfile.mkdtemp(prefix="sched_inbox_concurrent_"))
+
+    def test_two_concurrent_callers_both_fire_same_due_task(self):
+        item = scheduler.add_task(
+            channel="telegram", chat_id="99", sender="99",
+            text="dup?", when="in 0s",
+        )
+        items = scheduler.load()
+        items[0]["next_run"] = time.time() - 5
+        scheduler.save(items)
+
+        # Rendezvous point: both threads must reach the inbox envelope write
+        # (the side effect, which happens AFTER the unprotected due-check /
+        # de-dupe read) before either is allowed to proceed. This forces both
+        # threads to make their "is this task due?" decision from the same
+        # pre-fire snapshot (last_fire == 0), exactly like two independent
+        # processes racing within the same ~30s poll tick.
+        barrier = threading.Barrier(2, timeout=5)
+        orig_write_text = Path.write_text
+        inbox_prefix = str(self.inbox)
+
+        def synced_write_text(self_path, *a, **kw):
+            if str(self_path).startswith(inbox_prefix):
+                barrier.wait()
+            return orig_write_text(self_path, *a, **kw)
+
+        results: list[list[dict] | None] = [None, None]
+        errors: list[Exception] = []
+
+        def call_materialize(idx):
+            try:
+                results[idx] = scheduler.materialize_due(self.inbox)
+            except Exception as e:  # pragma: no cover - surfaced via errors list
+                errors.append(e)
+
+        with unittest.mock.patch.object(Path, "write_text", synced_write_text):
+            t1 = threading.Thread(target=call_materialize, args=(0,))
+            t2 = threading.Thread(target=call_materialize, args=(1,))
+            t1.start()
+            t2.start()
+            t1.join(timeout=10)
+            t2.join(timeout=10)
+
+        self.assertFalse(errors, f"materialize_due raised: {errors}")
+        self.assertIsNotNone(results[0])
+        self.assertIsNotNone(results[1])
+
+        # BUG (documented, not fixed here — see bugsDiscovered): the in-process
+        # lock does not cover the due-check/de-dupe/side-effect window, so
+        # BOTH callers independently believe they are the one firing this
+        # task, i.e. it gets double-materialized (double-sent reminder /
+        # double-executed workflow) instead of exactly once.
+        self.assertEqual(
+            len(results[0]), 1,
+            "expected caller #1 to report the task as fired",
+        )
+        self.assertEqual(
+            len(results[1]), 1,
+            "expected caller #2 to ALSO report the task as fired (reproduces "
+            "the double-fire race); if this now fails with an empty list, "
+            "the race has been fixed by a cross-process lock — update this test",
+        )
+        self.assertEqual(results[0][0]["id"], item["id"])
+        self.assertEqual(results[1][0]["id"], item["id"])
 
 
 class WorkflowOutboxTargetTests(unittest.TestCase):

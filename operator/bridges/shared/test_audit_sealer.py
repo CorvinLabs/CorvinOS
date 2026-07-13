@@ -584,6 +584,115 @@ class TestUnseal(unittest.TestCase):
         self.assertEqual(events, [])
 
 
+class TestUnsealTempdirLeak(unittest.TestCase):
+    """BUG (documented, not fixed here): unseal_to_temp() creates
+    ``td = Path(tempfile.mkdtemp(prefix="corvin-unseal-"))`` and returns
+    only ``plaintext = td / <name>`` (a file *inside* td). Every real
+    caller (voice_audit.py's --include-sealed verify loop and
+    cmd_unseal) only ever does ``plaintext.unlink()`` in their cleanup
+    path; nothing ever rmtree/rmdir's the enclosing tempdir itself, so
+    it leaks permanently on every unseal. These tests exercise the real
+    decrypt-success code path (subprocess.run mocked so they don't
+    depend on the `age` binary being installed) and pin down that
+    behaviour so a real fix has a red/green target. Any leaked
+    directories created here are cleaned up in the test itself (via
+    shutil.rmtree) so the test suite doesn't itself pollute /tmp."""
+
+    @staticmethod
+    def _fake_successful_run(cmd, *, stdout=None, stderr=None, check=False):
+        import subprocess as _subprocess
+        stdout.write(b"decrypted-plaintext-content\n")
+        return _subprocess.CompletedProcess(cmd, 0, stdout=None, stderr=b"")
+
+    def test_unseal_to_temp_leaves_parent_tempdir_after_caller_cleanup(self):
+        """Reproduces the leak: after unseal_to_temp() + the exact
+        cleanup every real caller performs (plaintext.unlink()), the
+        enclosing tempdir is still present on disk. This documents the
+        current (buggy) behaviour; once fixed, this assertion should be
+        inverted."""
+        import shutil
+
+        with tempfile.TemporaryDirectory() as td:
+            sealed = Path(td) / "audit.2026-01-01T000000Z.jsonl.age"
+            sealed.write_bytes(b"sealed-bytes-not-really-encrypted")
+
+            with mock.patch.object(_mod.subprocess, "run", side_effect=self._fake_successful_run):
+                plaintext = unseal_to_temp(sealed)
+
+            tmpdir = plaintext.parent
+            try:
+                self.assertTrue(plaintext.is_file())
+                self.assertTrue(tmpdir.is_dir())
+                self.assertTrue(str(tmpdir.name).startswith("corvin-unseal-"))
+
+                # Exactly what both real callers (voice_audit.py's
+                # --include-sealed loop and cmd_unseal) do in their
+                # `finally:` cleanup block.
+                plaintext.unlink()
+
+                self.assertFalse(plaintext.exists(), "plaintext file itself is cleaned up")
+                # BUG: the enclosing tempdir is never removed by any
+                # caller — it leaks permanently. This is the blind spot.
+                self.assertTrue(
+                    tmpdir.exists(),
+                    "documents the known leak: corvin-unseal-* tempdir "
+                    "survives the caller's plaintext.unlink() cleanup",
+                )
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_unseal_to_temp_repeated_calls_accumulate_leaked_dirs(self):
+        """Simulates the daily `voice-audit verify --include-sealed`
+        job unsealing multiple sealed segments in one run: each call
+        leaks its own tempdir, so N unseals leave N empty directories
+        behind (unbounded growth over time), not just one."""
+        import shutil
+
+        with tempfile.TemporaryDirectory() as td:
+            sealed = Path(td) / "audit.2026-01-01T000000Z.jsonl.age"
+            sealed.write_bytes(b"sealed-bytes-not-really-encrypted")
+
+            leaked_dirs: list[Path] = []
+            try:
+                with mock.patch.object(_mod.subprocess, "run", side_effect=self._fake_successful_run):
+                    for _ in range(3):
+                        plaintext = unseal_to_temp(sealed)
+                        leaked_dirs.append(plaintext.parent)
+                        # Caller-side cleanup, same as production code.
+                        plaintext.unlink()
+
+                # Three distinct tempdirs, all still present.
+                self.assertEqual(len(set(leaked_dirs)), 3)
+                for d in leaked_dirs:
+                    self.assertTrue(d.exists(), f"{d} should have leaked but is gone")
+            finally:
+                for d in leaked_dirs:
+                    shutil.rmtree(d, ignore_errors=True)
+
+    def test_unseal_to_temp_with_caller_supplied_tmpdir_does_not_leak(self):
+        """Sanity check / contrast case: when the caller passes its own
+        ``tmpdir=`` (which none of the real callers currently do), the
+        caller retains a reference and CAN clean up both the file and
+        the directory itself. This confirms the leak is specific to the
+        ``tmpdir=None`` (mkdtemp-internal) branch, not to unseal_to_temp
+        in general."""
+        with tempfile.TemporaryDirectory() as td:
+            sealed = Path(td) / "audit.2026-01-01T000000Z.jsonl.age"
+            sealed.write_bytes(b"sealed-bytes-not-really-encrypted")
+            caller_owned_dir = Path(td) / "caller-owned-unseal-dir"
+
+            with mock.patch.object(_mod.subprocess, "run", side_effect=self._fake_successful_run):
+                plaintext = unseal_to_temp(sealed, tmpdir=caller_owned_dir)
+
+            self.assertEqual(plaintext.parent, caller_owned_dir)
+            self.assertTrue(plaintext.is_file())
+
+            # Caller owns the dir it passed in, so it can remove both.
+            import shutil
+            shutil.rmtree(caller_owned_dir)
+            self.assertFalse(caller_owned_dir.exists())
+
+
 class TestAuditAllowList(unittest.TestCase):
 
     def test_keys_match_spec(self):

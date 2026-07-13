@@ -19,6 +19,7 @@ const path = require('path');
 const { newMsgId }   = require('../shared/js/msg-id');
 const inChatCmds     = require('../shared/js/in_chat_commands');
 const chatToggle     = require('../shared/js/chat_toggle');
+const { makeStickyProgress } = require('../shared/js/sticky_progress');
 
 const READ_ONLY_ACK =
   '🔒 You are read-only in this chat — you can follow along, but you ' +
@@ -40,12 +41,32 @@ function normPhone(num) {
  * @param {function} cfg.currentSettings
  * @param {object}   cfg.auth              — { authOk, readOnlyOk, rateAllow }
  * @param {function} cfg.logger
- * @param {function} cfg.sendSignal        — async (recipient, message) => void
- *                                           injected so tests can mock it
+ * @param {function} cfg.sendSignal        — async (recipient, message, opts?) => {timestamp}
+ *                                           injected so tests can mock it.
+ *                                           `opts.editTimestamp` requests an
+ *                                           in-place edit of a previous send
+ *                                           (sticky progress messages).
+ * @param {function} [cfg.deleteSignal]    — async (recipient, timestamp) => void
+ *                                           remote-deletes a previously sent
+ *                                           message (sticky cleanup before
+ *                                           the real reply ships). Optional —
+ *                                           defaults to a no-op so callers
+ *                                           that don't wire it up don't crash.
  */
-function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, sendSignal }) {
+function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, sendSignal, deleteSignal }) {
   const log = logger || (() => {});
   const { rateAllow, authOk, readOnlyOk } = auth;
+  const doDeleteSignal = deleteSignal || (async () => {});
+
+  // Sticky-progress + finalize-guard state for _progress/_heartbeat outbox
+  // payloads. Mirrors the Discord/Telegram/Slack/WhatsApp daemons
+  // (shared/js/sticky_progress.js): the first _progress payload for a turn
+  // sends a new message and remembers its Signal send `timestamp`; every
+  // subsequent one edits it in place via `edit_timestamp` instead of
+  // flooding the chat with one message per tool call. Once the real reply
+  // lands, any stale _progress/_heartbeat file for the same msg_id (outbox
+  // alphabetical-sort race) is dropped silently.
+  const sticky = makeStickyProgress({ ttlMs: 60_000 });
 
   function writeInbox(payload) {
     const id = newMsgId();
@@ -227,7 +248,70 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, se
   async function processOutboxPayload(payload) {
     const recipient = payload.chat_id;
     if (!recipient) { log('outbox: missing chat_id, dropping'); return false; }
+
+    // Stale-finalize gate — same race as the other daemons: the outbox dir
+    // is processed in alphabetical order, so `{msg_id}_00.json` (real
+    // reply) can sort BEFORE `{msg_id}_hb.json` / `{msg_id}_sNN.json`
+    // (heartbeat/progress). Once the real reply for a msg_id has been
+    // delivered, drop every other file for that msg_id silently.
+    const msgId = payload.msg_id;
+    if ((payload._progress || payload._heartbeat) && sticky.isFinalized(msgId)) {
+      log(`outbox: drop stale ${payload._progress ? 'progress' : 'heartbeat'} for finalized ${msgId}`);
+      return true;
+    }
+
     try {
+      // Progress updates: edit a single sticky message instead of flooding
+      // the chat with one message per tool call. On the first _progress
+      // payload we send a new message and remember its send timestamp;
+      // every subsequent one edits it in place via edit_timestamp.
+      if (payload._progress && payload.text) {
+        const existing = sticky.getProgress(recipient);
+        if (existing) {
+          try {
+            await sendSignal(recipient, payload.text, { editTimestamp: existing.timestamp });
+            return true;
+          } catch (e) {
+            log(`sticky edit failed, falling back to new message: ${e.message}`);
+            try { await doDeleteSignal(recipient, existing.timestamp); } catch {}
+            sticky.clearProgress(recipient);
+          }
+        }
+        const res = await sendSignal(recipient, payload.text);
+        const ts = res && (res.timestamp ?? res.Timestamp);
+        if (ts) sticky.setProgress(recipient, { timestamp: ts });
+        return true;
+      }
+
+      // Heartbeat: slot into the sticky system so it gets deleted when the
+      // real reply arrives. If a progress update already claimed the
+      // sticky slot, skip silently — the progress message is more
+      // informative anyway.
+      if (payload._heartbeat && payload.text) {
+        if (!sticky.hasProgress(recipient)) {
+          const res = await sendSignal(recipient, payload.text);
+          const ts = res && (res.timestamp ?? res.Timestamp);
+          if (ts) sticky.setProgress(recipient, { timestamp: ts });
+        }
+        return true;
+      }
+
+      // Real reply incoming — remote-delete the sticky progress message
+      // first so the chat shows the answer cleanly without a stale status
+      // line above it.
+      if (sticky.hasProgress(recipient)) {
+        const prog = sticky.getProgress(recipient);
+        try {
+          await doDeleteSignal(recipient, prog.timestamp);
+        } catch (e) {
+          log(`sticky delete failed: ${e && e.message || e}`);
+        }
+        sticky.clearProgress(recipient);
+      }
+      // Mark this turn finalized BEFORE we touch Signal so any racing
+      // progress/heartbeat that arrives mid-send is correctly classified.
+      sticky.markFinalized(msgId);
+
       if (payload.text) await sendSignal(recipient, payload.text);
       if (payload.voice_path && fs.existsSync(payload.voice_path))
         await sendSignal(recipient, '🔊 _(Voice note not supported in Signal via REST API)_');

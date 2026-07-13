@@ -66,6 +66,35 @@ def _register_stub_session(home: Path, session_id: str,
     )
 
 
+def _write_channel_settings(bridges_dir: Path, channel: str, settings: dict) -> None:
+    """Write bridges/<channel>/settings.json under a SANDBOXED bridges dir
+    (ADAPTER_BRIDGES_DIR), never the live repo's operator/bridges/<channel>/
+    settings.json. This avoids the test-vs-real-config contamination class
+    (adapter.py's _load_channel_settings docstring documents this exact
+    failure mode from a prior incident) — a real discord_token/whitelist
+    configured for the operator's own deployment must never leak into a
+    test run's authorization decisions."""
+    chan_dir = bridges_dir / channel
+    chan_dir.mkdir(parents=True, exist_ok=True)
+    (chan_dir / "settings.json").write_text(json.dumps(settings))
+
+
+def _read_audit_events(home: Path) -> list[dict]:
+    path = home / "audit.jsonl"
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return out
+
+
 def _run_cli(*args: str, home: Path, inbox: Path | None = None,
              extra_env: dict | None = None) -> subprocess.CompletedProcess:
     env = os.environ.copy()
@@ -259,6 +288,210 @@ def case_adapter_rejects_unsupported_signal(home, inbox, outbox,
     print(f"  PASS ack: {ack['text']}")
 
 
+def case_signal_kill_cross_chat_denied(home, inbox, outbox, processed) -> None:
+    """KILL targeting a session in a DIFFERENT chat than the sender's own
+    must be gated by _inbox_sender_authorized(channel, sender, target_chat)
+    — not just the sender's own-chat authorization. Here the sender passes
+    the general per-message authz for their own chat (via an audience='all'
+    chat profile) but is NOT whitelisted for the target chat, so the
+    cross-chat KILL must be denied and _cancel_chat must never run."""
+    _section("_signal KILL cross-chat: sender unauthorized for target chat -> denied")
+
+    os.environ["ADAPTER_INBOX"] = str(inbox)
+    os.environ["ADAPTER_OUTBOX"] = str(outbox)
+    os.environ["ADAPTER_PROCESSED"] = str(processed)
+    os.environ["CORVIN_HOME"] = str(home)
+    os.environ["ADAPTER_BRIDGES_DIR"] = str(home)
+    os.environ["VOICE_AUDIT_PATH"] = str(home / "audit.jsonl")
+
+    # Sender "mallory" is authorized in their OWN chat ("chat-a") via an
+    # audience='all' profile, but the global whitelist excludes them, and
+    # the target chat ("chat-b") has no audience='all' override — so
+    # mallory is unauthorized for chat-b specifically.
+    _write_channel_settings(home, "discord", {
+        "whitelist": ["someone-else"],
+        "chat_profiles": {"chat-a": {"audience": "all"}},
+    })
+
+    sys.modules.pop("process_table", None)
+    sys.modules.pop("paths", None)
+    import process_table  # type: ignore
+    process_table.register_session(
+        "s_kill_target_b", chat_key="chat-b", persona="coder", pid=555,
+    )
+
+    for mod in ("adapter", "process_table", "paths"):
+        sys.modules.pop(mod, None)
+    import adapter  # type: ignore
+
+    calls: list[str] = []
+    adapter._cancel_chat = lambda chat_key: (calls.append(chat_key) or 0)
+
+    msg_id = "sig_kill_cross_deny"
+    envelope = {
+        "msg_id": msg_id, "channel": "discord", "from": "mallory",
+        "chat_id": "chat-a", "_signal": True,
+        "session_id": "s_kill_target_b", "signal": "KILL", "ts": 0,
+    }
+    inbox_file = inbox / f"{msg_id}.json"
+    inbox_file.write_text(json.dumps(envelope))
+
+    adapter.process_one(inbox_file, {"whitelist": []})
+
+    assert calls == [], (
+        f"_cancel_chat must NOT run on a denied cross-chat KILL, got calls={calls}"
+    )
+
+    out_files = list(outbox.glob(f"{msg_id}*"))
+    assert len(out_files) == 1, out_files
+    ack = json.loads(out_files[0].read_text())
+    assert "cross-chat KILL denied" in ack["text"], ack
+    print(f"  PASS ack denies cross-chat KILL: {ack['text']}")
+
+    events = _read_audit_events(home)
+    sig_events = [e for e in events if e.get("event_type") == "bridge.signal_inject"]
+    assert sig_events, [e.get("event_type") for e in events]
+    details = sig_events[-1].get("details", {})
+    assert details.get("delivered") is False, details
+    assert "cross-chat KILL denied" in details.get("reason", ""), details
+    print("  PASS audit event bridge.signal_inject delivered=false, reason cross-chat")
+
+    os.environ.pop("ADAPTER_BRIDGES_DIR", None)
+
+
+def case_signal_kill_cross_chat_authorized(home, inbox, outbox, processed) -> None:
+    """Companion positive case: sender IS whitelisted (so authorized for
+    ANY chat on that channel, including the cross-chat target) -> the
+    cross-chat KILL must be allowed and _cancel_chat must run."""
+    _section("_signal KILL cross-chat: sender whitelisted for target chat -> allowed")
+
+    os.environ["ADAPTER_INBOX"] = str(inbox)
+    os.environ["ADAPTER_OUTBOX"] = str(outbox)
+    os.environ["ADAPTER_PROCESSED"] = str(processed)
+    os.environ["CORVIN_HOME"] = str(home)
+    os.environ["ADAPTER_BRIDGES_DIR"] = str(home)
+    os.environ["VOICE_AUDIT_PATH"] = str(home / "audit.jsonl")
+
+    _write_channel_settings(home, "discord", {"whitelist": ["root-op"]})
+
+    sys.modules.pop("process_table", None)
+    sys.modules.pop("paths", None)
+    import process_table  # type: ignore
+    process_table.register_session(
+        "s_kill_target_ok", chat_key="chat-b2", persona="coder", pid=777,
+    )
+
+    for mod in ("adapter", "process_table", "paths"):
+        sys.modules.pop(mod, None)
+    import adapter  # type: ignore
+
+    calls: list[str] = []
+    adapter._cancel_chat = lambda chat_key: (calls.append(chat_key) or 1)
+
+    msg_id = "sig_kill_cross_ok"
+    envelope = {
+        "msg_id": msg_id, "channel": "discord", "from": "root-op",
+        "chat_id": "chat-a2", "_signal": True,
+        "session_id": "s_kill_target_ok", "signal": "KILL", "ts": 0,
+    }
+    inbox_file = inbox / f"{msg_id}.json"
+    inbox_file.write_text(json.dumps(envelope))
+
+    adapter.process_one(inbox_file, {"whitelist": []})
+
+    assert calls == ["chat-b2"], (
+        f"_cancel_chat must run against the target chat, got calls={calls}"
+    )
+
+    out_files = list(outbox.glob(f"{msg_id}*"))
+    assert len(out_files) == 1, out_files
+    ack = json.loads(out_files[0].read_text())
+    assert "delivered" in ack["text"], ack
+    assert "s_kill_target_ok" in ack["text"], ack
+    print(f"  PASS ack confirms authorized cross-chat KILL: {ack['text']}")
+
+    events = _read_audit_events(home)
+    sig_events = [e for e in events if e.get("event_type") == "bridge.signal_inject"]
+    assert sig_events, [e.get("event_type") for e in events]
+    details = sig_events[-1].get("details", {})
+    assert details.get("delivered") is True, details
+    print("  PASS audit event bridge.signal_inject delivered=true")
+
+    os.environ.pop("ADAPTER_BRIDGES_DIR", None)
+
+
+def case_signal_session_race_guard_blocks_kill(home, inbox, outbox, processed) -> None:
+    """Stale-session-window guard: the registry (process_table) resolves
+    the session to a chat_key whose LIVE subprocess pid no longer matches
+    the registry record's pid (a newer session started in the same chat
+    meanwhile). The signal must be refused with 'session race' and must
+    NOT act (no _cancel_chat) against the newer live process."""
+    _section("_signal session-race guard: stale registry pid vs newer live pid -> refused")
+
+    os.environ["ADAPTER_INBOX"] = str(inbox)
+    os.environ["ADAPTER_OUTBOX"] = str(outbox)
+    os.environ["ADAPTER_PROCESSED"] = str(processed)
+    os.environ["CORVIN_HOME"] = str(home)
+    os.environ["ADAPTER_BRIDGES_DIR"] = str(home)
+    os.environ["VOICE_AUDIT_PATH"] = str(home / "audit.jsonl")
+    # No settings.json written -> _load_channel_settings returns {} ->
+    # fail-open ("no-settings"); irrelevant here, the race guard fires
+    # before the KILL/cross-chat authz branch is ever reached.
+
+    sys.modules.pop("process_table", None)
+    sys.modules.pop("paths", None)
+    import process_table  # type: ignore
+    process_table.register_session(
+        "s_race", chat_key="chat-race", persona="coder", pid=111,
+    )
+
+    for mod in ("adapter", "process_table", "paths"):
+        sys.modules.pop(mod, None)
+    import adapter  # type: ignore
+
+    class _FakeProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+    with adapter._running_subprocs_guard:
+        adapter._running_subprocs["chat-race"] = [_FakeProc(222)]
+
+    calls: list[str] = []
+    adapter._cancel_chat = lambda chat_key: (calls.append(chat_key) or 1)
+
+    msg_id = "sig_race"
+    envelope = {
+        "msg_id": msg_id, "channel": "discord", "from": "_test",
+        "chat_id": "chat-race", "_signal": True,
+        "session_id": "s_race", "signal": "KILL", "ts": 0,
+    }
+    inbox_file = inbox / f"{msg_id}.json"
+    inbox_file.write_text(json.dumps(envelope))
+
+    adapter.process_one(inbox_file, {"whitelist": []})
+
+    assert calls == [], (
+        f"_cancel_chat must NOT run when the session-race guard trips, got {calls}"
+    )
+
+    out_files = list(outbox.glob(f"{msg_id}*"))
+    assert len(out_files) == 1, out_files
+    ack = json.loads(out_files[0].read_text())
+    assert "session race" in ack["text"], ack
+    assert "111" in ack["text"] and "222" in ack["text"], ack
+    print(f"  PASS ack refuses stale-pid signal: {ack['text']}")
+
+    events = _read_audit_events(home)
+    sig_events = [e for e in events if e.get("event_type") == "bridge.signal_inject"]
+    assert sig_events, [e.get("event_type") for e in events]
+    details = sig_events[-1].get("details", {})
+    assert details.get("delivered") is False, details
+    assert "session race" in details.get("reason", ""), details
+    print("  PASS audit event bridge.signal_inject delivered=false, reason session race")
+
+    os.environ.pop("ADAPTER_BRIDGES_DIR", None)
+
+
 def case_help_text_lists_sig(home, inbox, outbox, processed) -> None:
     _section("help text mentions sig subcommand")
     r = _run_cli("help", home=home)
@@ -276,7 +509,8 @@ def case_help_text_lists_sig(home, inbox, outbox, processed) -> None:
 def main() -> None:
     saved_env = {k: os.environ.get(k) for k in
                  ("CORVIN_HOME", "ADAPTER_INBOX", "ADAPTER_OUTBOX",
-                  "ADAPTER_PROCESSED", "CORVIN_CHANNEL_ID")}
+                  "ADAPTER_PROCESSED", "CORVIN_CHANNEL_ID",
+                  "ADAPTER_BRIDGES_DIR", "VOICE_AUDIT_PATH")}
     cases = [
         case_sig_writes_envelope,
         case_sig_rejects_invalid_signal,
@@ -285,6 +519,9 @@ def main() -> None:
         case_adapter_handles_signal_envelope,
         case_adapter_handles_unknown_session_signal,
         case_adapter_rejects_unsupported_signal,
+        case_signal_kill_cross_chat_denied,
+        case_signal_kill_cross_chat_authorized,
+        case_signal_session_race_guard_blocks_kill,
         case_help_text_lists_sig,
     ]
     failures = 0

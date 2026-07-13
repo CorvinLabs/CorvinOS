@@ -41,7 +41,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Iterator
 
-from . import StreamEvent, parse_jsonl_line
+from . import StreamEvent, parse_jsonl_line, terminate_process_tree
 
 
 # Stderr tail buffer cap (chars). Mirrors ClaudeCodeEngine: large enough
@@ -253,15 +253,9 @@ class CodexCliEngine:
         proc = self._proc
         if proc is None:
             return
-        if proc.poll() is None:
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+        # killpg the whole process group (spawn() uses start_new_session=True)
+        # — a live tool-use grandchild otherwise outlives this cleanup.
+        terminate_process_tree(proc)
         # Stderr-drain thread exits on EOF once the proc dies; join with a
         # small deadline so it can't outlive the caller.
         t = self._stderr_thread
@@ -344,10 +338,7 @@ class CodexCliEngine:
         # spawn() checks _cancel_requested right after creating _proc.
         self._cancel_requested = True
         if self._proc and self._proc.poll() is None:
-            try:
-                self._proc.terminate()
-            except Exception:
-                pass
+            terminate_process_tree(self._proc)
 
     # ECI manifest (ADR-0069 M2+M6)
     @property

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -814,3 +815,140 @@ def test_build_worker_system_with_dynamic_tools():
         system = _rt._build_worker_system({}, ctx, depth=0, can_delegate=False)
         assert "analysis.compute_stats" in system
         assert "DYNAMIC TOOLS AVAILABLE" in system
+
+
+# ---------------------------------------------------------------------------
+# _resolve_acs_datasources — L34 sensitive-datasource WDAT gate
+# ---------------------------------------------------------------------------
+# `wdat_key_set = _wdat_load_key() is not None` decides whether a
+# CONFIDENTIAL/SECRET datasource gets a LIVE plaintext snapshot embedded
+# into the worker prompt/trace. This now calls the SAME real hex-decode +
+# 32-byte-length validator the Tier-2 content-store write path
+# (`_wdat_record_completion`) uses to decide .json vs .json.enc for that
+# same trace — so an invalid or whitespace-only CORVIN_WDAT_KEY is treated
+# as "no key" consistently on both sides (previously the gate used a bare
+# `bool(os.environ.get("CORVIN_WDAT_KEY"))` presence check, which disagreed
+# with the write path's real validator on exactly this class of value —
+# fixed here).
+
+def _write_datasource_conn(conn_dir: Path, name: str, *, adapter: str,
+                            classification: str, config: dict | None = None) -> None:
+    conn_dir.mkdir(parents=True, exist_ok=True)
+    (conn_dir / f"{name}.json").write_text(json.dumps({
+        "adapter": adapter,
+        "data_classification": classification,
+        "config": config or {"host": "localhost", "port": 5432, "dbname": "db", "user": "u"},
+    }))
+
+
+def test_resolve_acs_datasources_withholds_sensitive_snapshot_with_no_key(monkeypatch):
+    """Baseline: no CORVIN_WDAT_KEY at all -> sensitive datasource snapshot
+    must be withheld, and the audit event must record that."""
+    monkeypatch.delenv("CORVIN_WDAT_KEY", raising=False)
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td)
+        conn_dir = home / "tenants" / "_test" / "datasource_connections"
+        _write_datasource_conn(conn_dir, "custdb", adapter="postgresql", classification="CONFIDENTIAL")
+        with patch.object(_rt, "_corvin_home", return_value=home), \
+             patch.object(_rt, "_write_audit") as mock_audit, \
+             patch.object(_rt, "_pg_live_snapshot") as mock_snap:
+            text, _env = _rt._resolve_acs_datasources("_test", ["custdb"], run_id="r1")
+    mock_snap.assert_not_called()
+    assert "withheld" in text
+    audit_call = mock_audit.call_args_list[0]
+    assert audit_call.args[1] == "acs.datasource_snapshot"
+    assert audit_call.args[2]["withheld_sensitive"] is True
+    assert audit_call.args[2]["snapshot_taken"] is False
+
+
+def test_resolve_acs_datasources_allows_live_snapshot_with_valid_key(monkeypatch):
+    """Sanity counterpart: a genuinely valid 32-byte-hex key allows the live
+    snapshot to proceed -- proves the gate isn't just always-deny, and that
+    the gate and the real loader AGREE when the key is actually valid."""
+    monkeypatch.setenv("CORVIN_WDAT_KEY", "11" * 32)  # 64 hex chars -> 32 bytes
+    assert _rt._wdat_load_key() is not None  # loader agrees this key is valid
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td)
+        conn_dir = home / "tenants" / "_test" / "datasource_connections"
+        _write_datasource_conn(conn_dir, "custdb", adapter="postgresql", classification="CONFIDENTIAL")
+        with patch.object(_rt, "_corvin_home", return_value=home), \
+             patch.object(_rt, "_write_audit") as mock_audit, \
+             patch.object(_rt, "_pg_live_snapshot", return_value="LIVE DATA sentinel-rows"):
+            text, _env = _rt._resolve_acs_datasources("_test", ["custdb"], run_id="r1")
+    assert "LIVE DATA sentinel-rows" in text
+    audit_call = mock_audit.call_args_list[0]
+    assert audit_call.args[2]["withheld_sensitive"] is False
+    assert audit_call.args[2]["snapshot_taken"] is True
+
+
+def test_resolve_acs_datasources_invalid_key_treated_as_no_key(monkeypatch):
+    """BUG FIXED: an invalid-but-non-empty CORVIN_WDAT_KEY
+    ("not-hex-and-wrong-length") must now be treated by the embed-gate in
+    `_resolve_acs_datasources` exactly as `_wdat_load_key()` (the real
+    hex-decode + 32-byte-length validator used by `_wdat_record_completion`
+    to decide .json vs .json.enc) treats it: as "no key configured". Before
+    the fix, the gate used a bare `bool(os.environ.get("CORVIN_WDAT_KEY"))`
+    presence check, which believed this invalid value meant a key WAS
+    configured -- taking a LIVE snapshot of CONFIDENTIAL data that the write
+    path would then silently store UNENCRYPTED (the two checks disagreeing
+    on the exact same value). The gate now calls `_wdat_load_key()` directly
+    so both sides of the encryption-at-rest guarantee agree."""
+    monkeypatch.setenv("CORVIN_WDAT_KEY", "not-hex-and-wrong-length")
+    # The real key loader rejects this value outright...
+    assert _rt._wdat_load_key() is None
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td)
+        conn_dir = home / "tenants" / "_test" / "datasource_connections"
+        _write_datasource_conn(conn_dir, "custdb", adapter="postgresql", classification="CONFIDENTIAL")
+        with patch.object(_rt, "_corvin_home", return_value=home), \
+             patch.object(_rt, "_write_audit") as mock_audit, \
+             patch.object(_rt, "_pg_live_snapshot", return_value="LIVE DATA sentinel-rows") as mock_snap:
+            text, _env = _rt._resolve_acs_datasources("_test", ["custdb"], run_id="r1")
+    # ...and the gate now agrees: no live snapshot is taken, the sensitive
+    # rows are withheld, and the worker context never sees them.
+    mock_snap.assert_not_called()
+    audit_call = mock_audit.call_args_list[0]
+    assert audit_call.args[2]["withheld_sensitive"] is True
+    assert audit_call.args[2]["snapshot_taken"] is False
+    assert "LIVE DATA sentinel-rows" not in text
+    assert "withheld" in text
+
+
+def test_resolve_acs_datasources_whitespace_key_also_treated_as_no_key(monkeypatch):
+    """A whitespace-only CORVIN_WDAT_KEY is non-empty (truthy) for a naive
+    `bool(os.environ.get(...))` presence check, but `.strip()`s to an empty
+    string inside `_wdat_load_key()`. The fixed gate must agree with the real
+    loader here too, reproduced with a second concrete value on a
+    SECRET-classified datasource."""
+    monkeypatch.setenv("CORVIN_WDAT_KEY", "   ")
+    assert bool(os.environ.get("CORVIN_WDAT_KEY"))  # a naive presence check would say "configured"
+    assert _rt._wdat_load_key() is None  # the real loader sees nothing usable
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td)
+        conn_dir = home / "tenants" / "_test" / "datasource_connections"
+        _write_datasource_conn(conn_dir, "custdb", adapter="postgresql", classification="SECRET")
+        with patch.object(_rt, "_corvin_home", return_value=home), \
+             patch.object(_rt, "_write_audit") as mock_audit, \
+             patch.object(_rt, "_pg_live_snapshot", return_value="LIVE DATA sentinel-rows") as mock_snap:
+            _rt._resolve_acs_datasources("_test", ["custdb"], run_id="r1")
+    mock_snap.assert_not_called()
+    audit_call = mock_audit.call_args_list[0]
+    assert audit_call.args[2]["withheld_sensitive"] is True  # gate now withholds
+
+
+def test_resolve_acs_datasources_non_sensitive_snapshots_regardless_of_key(monkeypatch):
+    """Sanity/regression guard: an INTERNAL (non-sensitive) datasource must
+    take its live snapshot whether or not CORVIN_WDAT_KEY is set -- the gate
+    only applies to CONFIDENTIAL/SECRET."""
+    monkeypatch.delenv("CORVIN_WDAT_KEY", raising=False)
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td)
+        conn_dir = home / "tenants" / "_test" / "datasource_connections"
+        _write_datasource_conn(conn_dir, "custdb", adapter="postgresql", classification="INTERNAL")
+        with patch.object(_rt, "_corvin_home", return_value=home), \
+             patch.object(_rt, "_write_audit") as mock_audit, \
+             patch.object(_rt, "_pg_live_snapshot", return_value="LIVE DATA sentinel-rows"):
+            text, _env = _rt._resolve_acs_datasources("_test", ["custdb"], run_id="r1")
+    assert "LIVE DATA sentinel-rows" in text
+    audit_call = mock_audit.call_args_list[0]
+    assert audit_call.args[2]["withheld_sensitive"] is False

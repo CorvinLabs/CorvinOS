@@ -240,7 +240,7 @@ def validate_dsiv1_manifest(raw: dict) -> DSIv1ConnectionManifest:
         )
 
     name = raw.get("name", "")
-    if not _DSI_NAME_RE.match(name):
+    if not isinstance(name, str) or not _DSI_NAME_RE.match(name):
         raise DSIv1PolicyError(
             f"DSI v1 manifest name {name!r} invalid. "
             "Must match [a-z][a-z0-9_-]{0,63}."

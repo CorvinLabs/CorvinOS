@@ -44,6 +44,58 @@ def test_under_quota_passes(monkeypatch):
     G.enforce_compute_quota("_default", "fp123456", audit_action="acs.run_submit")
 
 
+def test_cross_tenant_compute_quota_is_not_isolated_bug(monkeypatch, tmp_path):
+    """BLIND-SPOT / BUG (ADR-0007 multi-tenant isolation, ADR-0094 M2 spec):
+    enforce_compute_quota() takes a tenant_id and threads it into the audit
+    chat_key, but the storage path it hands to license.compute_quota is the
+    GLOBAL install root (`_forge_paths.corvin_home()`), never
+    `tenant_home(tenant_id)`. ADR-0094 M2 specifies the counter must live at
+    `<corvin_home>/tenants/<tid>/global/license/compute_quota.json`; the
+    shipped code writes `<corvin_home>/global/license/compute_quota.json` —
+    ONE file shared by every tenant.
+
+    This test pins `_forge_paths.corvin_home` to a tmp dir, exhausts the
+    free-tier 1/day cap for tenant 'acme', and shows a completely unrelated
+    tenant 'beta' is ALSO rejected — a cross-tenant quota exhaustion / DoS.
+    If this is ever intentionally fixed to be per-tenant, this test's second
+    assertion must flip to "beta is NOT blocked" and the docstring above
+    must be updated to say so explicitly.
+    """
+    import license.validator as _v
+
+    _v._set_active_license(None)  # free tier: compute_units_per_day == 1
+
+    home = tmp_path / "corvin_home"
+    monkeypatch.setattr(G._forge_paths, "corvin_home", lambda: home)
+
+    # tenant 'acme' consumes the ONLY unit of the shared daily cap.
+    G.enforce_compute_quota("acme", "fpAAAAAA", audit_action="acs.run_submit")
+
+    # tenant 'beta' is a totally different tenant_id -> must be independent,
+    # but currently is NOT: it hits the same global counter file and is
+    # rejected with 402, even though it never spent any quota of its own.
+    with pytest.raises(HTTPException) as ei:
+        G.enforce_compute_quota("beta", "fpBBBBBB", audit_action="acs.run_submit")
+    assert ei.value.status_code == 402
+    assert ei.value.detail["feature"] == "compute_units_per_day"
+
+    # Confirm root cause: only ONE quota file exists on disk, with no
+    # tenant-scoped path component anywhere under it — 'acme' and 'beta'
+    # both wrote/read the exact same file.
+    quota_files = list(home.rglob("compute_quota.json"))
+    assert len(quota_files) == 1, (
+        "expected exactly one global compute_quota.json shared across "
+        f"tenants (found {quota_files}) — proves the counter is NOT "
+        "tenant-scoped"
+    )
+    assert quota_files[0] == home / "global" / "license" / "compute_quota.json"
+    assert "tenants" not in quota_files[0].parts, (
+        "compute_quota.json must not live under a tenant-scoped directory "
+        "today (this is the bug) — per ADR-0094 M2 it SHOULD, at "
+        "<corvin_home>/tenants/<tid>/global/license/compute_quota.json"
+    )
+
+
 def test_all_compute_entrypoints_call_the_shared_gate():
     """ADR-0147 R3-CON-RUNS-DRIFT-01: every compute-execution entrypoint must
     route through the ONE fail-closed helper so they cannot drift — submit_run
@@ -253,6 +305,96 @@ def test_pipeline_detail_derives_stage_state_from_pipeline_summary(tmp_path):
     assert stages["s1"]["best_loss"] == 0.5038
     assert stages["s2"]["state"] == "complete"
     assert stages["s2"]["best_loss"] == 0.1042
+
+
+def test_enforce_compute_quota_leaks_across_tenants_cross_tenant_dos(monkeypatch, tmp_path):
+    """BLIND SPOT (ADR-0007 tenant isolation, documented in ADR-0094 M2 as
+    ``<corvin_home>/tenants/<tid>/global/license/compute_quota.json``):
+    enforce_compute_quota() takes a tenant_id argument and threads it into the
+    audit chat_key, but the actual counter storage path passed to
+    _cq_increment is the GLOBAL install root (_forge_paths.corvin_home()),
+    never a tenant-scoped path. This test proves the counter is presently
+    SHARED across tenants: exhausting tenant 'acme's free-tier 1/day cap also
+    blocks a totally unrelated tenant 'beta' — a cross-tenant quota-exhaustion
+    DoS. This is a KNOWN BUG (spec/implementation drift vs. ADR-0094); the
+    assertions below pin the CURRENT (buggy) behaviour so a future fix that
+    makes the storage path tenant-scoped will make this test fail and must be
+    updated together with the fix.
+    """
+    import sys as _s
+    _s.path.insert(0, str(_CONSOLE.parents[1] / "operator"))
+    import license.validator as _v
+
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    _v._set_active_license(None)  # free tier: compute_units_per_day == 1
+    monkeypatch.setattr(G, "_COMPUTE_QUOTA_OK", True)
+
+    # tenant 'acme': first call is under quota (1/day) → must not raise.
+    G.enforce_compute_quota("acme", "fpacme000", audit_action="test.compute")
+
+    # tenant 'acme': second call exceeds its own 1/day cap → 402.
+    with pytest.raises(HTTPException) as ei_acme:
+        G.enforce_compute_quota("acme", "fpacme000", audit_action="test.compute")
+    assert ei_acme.value.status_code == 402
+
+    # A completely different tenant, 'beta', has never called compute before.
+    # If the quota were correctly tenant-scoped this call would succeed (beta's
+    # own daily budget is untouched). Instead the shared global counter file
+    # is already at its cap, so 'beta' is ALSO refused — proving the leak.
+    with pytest.raises(HTTPException) as ei_beta:
+        G.enforce_compute_quota("beta", "fpbeta0000", audit_action="test.compute")
+    assert ei_beta.value.status_code == 402
+
+    # Only ONE counter file exists — the tenant-blind global path — confirming
+    # there is no per-tenant counter anywhere on disk.
+    global_quota = tmp_path / "global" / "license" / "compute_quota.json"
+    assert global_quota.exists(), "quota is written to the global (not tenant-scoped) path"
+    tenant_quota_acme = tmp_path / "tenants" / "acme" / "global" / "license" / "compute_quota.json"
+    tenant_quota_beta = tmp_path / "tenants" / "beta" / "global" / "license" / "compute_quota.json"
+    assert not tenant_quota_acme.exists(), "no per-tenant counter file was ever created for acme"
+    assert not tenant_quota_beta.exists(), "no per-tenant counter file was ever created for beta"
+
+
+def test_enforce_chat_turns_leaks_across_tenants_cross_tenant_dos(monkeypatch, tmp_path):
+    """Same underlying storage bug as enforce_compute_quota, exercised via
+    enforce_chat_turns()'s counter path (chat_quota.json). chat_turns_per_day
+    resolves to None (unlimited) on every shipped tier, so this axis never
+    actually blocks in production today — but the code path exists and shares
+    the identical tenant-blind ``_forge_paths.corvin_home()`` storage call.
+    We force a finite limit via monkeypatch to exercise that path directly and
+    confirm the SAME cross-tenant leak class applies here too.
+    """
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setattr(G, "_COMPUTE_QUOTA_OK", True)
+    monkeypatch.setattr(G, "_lic_get_limit", lambda feature: 1 if feature == "chat_turns_per_day" else None)
+
+    import sys as _s
+    _s.path.insert(0, str(_CONSOLE.parents[1] / "operator"))
+    import license.validator as _v
+    _v._set_active_license(None)
+    # compute_quota._do_increment_and_check calls `.validator.get_limit` directly
+    # (not the G._lic_get_limit re-export), so it must be patched too to force a
+    # finite chat_turns_per_day limit for this test — every shipped tier leaves
+    # it None (unlimited), which is why chat is not gated in production today.
+    monkeypatch.setattr(
+        _v, "get_limit",
+        lambda feature: 1 if feature == "chat_turns_per_day" else None,
+    )
+
+    # tenant 'acme': first chat turn is under the (forced) 1/day cap.
+    G.enforce_chat_turns("acme", "fpacme000", audit_action="test.chat")
+
+    # tenant 'acme': second turn exceeds its own cap → 402.
+    with pytest.raises(HTTPException):
+        G.enforce_chat_turns("acme", "fpacme000", audit_action="test.chat")
+
+    # tenant 'beta' has never chatted, but the shared global chat_quota.json
+    # counter is already exhausted → also refused, proving the same leak.
+    with pytest.raises(HTTPException):
+        G.enforce_chat_turns("beta", "fpbeta0000", audit_action="test.chat")
+
+    global_chat_quota = tmp_path / "global" / "license" / "chat_quota.json"
+    assert global_chat_quota.exists(), "chat quota is written to the global (not tenant-scoped) path"
 
 
 def test_acs_chokepoint_charges_daily_quota():

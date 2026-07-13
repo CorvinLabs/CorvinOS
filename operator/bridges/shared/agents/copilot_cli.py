@@ -44,7 +44,7 @@ import threading
 from pathlib import Path
 from typing import Any, Iterator
 
-from . import StreamEvent
+from . import StreamEvent, terminate_process_tree
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +262,13 @@ class CopilotCliEngine:
                 # never the isolated sandbox the docstring promises
                 # (adversarial review finding).
                 cwd=str(working_dir) if working_dir is not None else None,
+                # Own process group so cancel() can killpg() the whole tree
+                # (copilot -p may fork tool-use children) instead of only
+                # reaping the direct child — mirrors claude_code.py /
+                # codex_cli.py / opencode_cli.py (see terminate_process_tree
+                # in agents/__init__.py). No-op on Windows (no process
+                # groups there).
+                start_new_session=True,
             )
         except FileNotFoundError:
             yield StreamEvent(
@@ -284,11 +291,14 @@ class CopilotCliEngine:
         try:
             stdout, stderr = proc.communicate(timeout=effective_timeout)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            try:
-                proc.wait()
-            except Exception:  # noqa: BLE001
-                pass
+            # killpg the whole process group (spawn() uses start_new_session=
+            # True) instead of a bare proc.kill() on just the direct child.
+            # Now that this process has its own session, a plain kill() would
+            # leave any tool-use grandchild copilot forked fully detached
+            # from the bridge's own session — unkillable short of a
+            # cgroup-level kill (adversarial review finding). Mirrors
+            # cancel() in this same file.
+            terminate_process_tree(proc)
             self._proc = None
             yield StreamEvent(
                 type="error",
@@ -329,14 +339,14 @@ class CopilotCliEngine:
         )
 
     def cancel(self) -> None:
-        """Cancel an in-flight spawn(). Terminates the subprocess."""
+        """Cancel an in-flight spawn(). killpg's the whole process group
+        (spawn() uses start_new_session=True) so a live child the copilot
+        CLI forked for tool use doesn't outlive its parent's cancellation —
+        mirrors claude_code.py / codex_cli.py / opencode_cli.py."""
         self._cancel.set()
         proc = self._proc
         if proc is not None:
-            try:
-                proc.terminate()
-            except Exception:  # noqa: BLE001
-                pass
+            terminate_process_tree(proc)
 
 
 __all__ = [

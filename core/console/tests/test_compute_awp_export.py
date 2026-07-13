@@ -14,6 +14,7 @@ Covers:
 """
 from __future__ import annotations
 
+import gc
 import json
 import os
 import sys
@@ -1093,6 +1094,173 @@ class TestAWPImporterRoundTrip(unittest.TestCase):
         stage_ids = [s.stage_id for s in pm.stages]
         self.assertIn("stage_1", stage_ids)
         self.assertIn("stage_2", stage_ids)
+
+
+# ---------------------------------------------------------------------------
+# 9b. TestAWPImporterTempdirCleanup
+# ---------------------------------------------------------------------------
+
+
+class TestAWPImporterTempdirCleanup(unittest.TestCase):
+    """Blind spot: AWPImporter's unpacked tempdir is cleaned up only via
+    __del__/GC — there is no __enter__/__exit__/close()/cleanup() and no
+    try/finally around install_* calls.  These tests pin down the *current*
+    (gap-exposing) behavior so a future fix (context-manager + deterministic
+    close()) has a red->green target instead of silent regression risk.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.tid = "_default"
+        _reset_modules()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+        _reset_modules()
+
+    def _make_zip_bundle(self) -> Path:
+        """Minimal importer-layout zip: src/workflow.awp.yaml + awpkg.yaml."""
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("pyyaml not installed")
+
+        workflow_doc = {
+            "workflow": {"id": "pipe1", "name": "T", "version": "1.0.0"},
+            "dag": {
+                "nodes": [
+                    {
+                        "id": "s1",
+                        "type": "compute",
+                        "tool_name": "code_ingest",
+                        "params": {},
+                        "budget": {},
+                    }
+                ]
+            },
+        }
+        zip_path = Path(self.tmpdir) / "bundle.awpkg.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr(
+                "src/workflow.awp.yaml",
+                yaml.dump(workflow_doc, sort_keys=False, allow_unicode=True),
+            )
+            zf.writestr(
+                "awpkg.yaml",
+                yaml.dump(
+                    {"spec_version": "v1.1", "package_id": "t", "version": "1.0.0"},
+                    sort_keys=False,
+                ),
+            )
+        return zip_path
+
+    def test_unpack_creates_tempdir_with_awpkg_prefix(self):
+        """Sanity baseline: zip input does unpack into a mkdtemp(prefix='awpkg_')."""
+        zip_path = self._make_zip_bundle()
+        from compute_awp_importer import AWPImporter  # type: ignore
+        importer = AWPImporter(zip_path)
+        self.assertIsNotNone(importer._tmpdir)
+        self.assertTrue(importer._tmpdir.exists())
+        self.assertTrue(
+            importer._tmpdir.name.startswith("awpkg_"),
+            f"expected mkdtemp prefix 'awpkg_', got {importer._tmpdir.name!r}",
+        )
+        del importer
+
+    def test_tempdir_removed_only_after_del_and_gc(self):
+        """Cleanup happens via __del__ + GC — the only path that exists today."""
+        zip_path = self._make_zip_bundle()
+        from compute_awp_importer import AWPImporter  # type: ignore
+        importer = AWPImporter(zip_path)
+        tmp_path = importer._tmpdir
+        self.assertTrue(tmp_path.exists())
+        del importer
+        gc.collect()
+        self.assertFalse(
+            tmp_path.exists(),
+            "tempdir should be removed once __del__ runs via GC",
+        )
+
+    def test_tempdir_survives_while_a_reference_is_still_held(self):
+        """Demonstrates the actual blind spot: as long as *anything* holds a
+        strong reference to the AWPImporter (e.g. it got stashed on an
+        exception object or a traceback frame), the extracted package
+        contents remain on disk — there is no deterministic release that is
+        independent of refcounting/GC.
+        """
+        zip_path = self._make_zip_bundle()
+        from compute_awp_importer import AWPImporter  # type: ignore
+        importer = AWPImporter(zip_path)
+        tmp_path = importer._tmpdir
+        holder = [importer]  # simulates a lingering reference (e.g. in a traceback)
+        del importer
+        gc.collect()
+        self.assertTrue(
+            tmp_path.exists(),
+            "tempdir was removed even though a live reference to the importer "
+            "still exists — cleanup should not have run yet",
+        )
+        holder.clear()
+        gc.collect()
+        self.assertFalse(tmp_path.exists(), "tempdir should be gone once the last ref drops")
+
+    def test_tempdir_not_cleaned_up_when_install_call_raises(self):
+        """No try/finally guards install_* calls: an exception mid-install
+        leaves the unpacked (potentially sensitive) package contents on disk
+        for as long as the caller happens to hold the AWPImporter instance.
+        """
+        zip_path = self._make_zip_bundle()
+        from compute_awp_importer import AWPImporter  # type: ignore
+        importer = AWPImporter(zip_path)
+        tmp_path = importer._tmpdir
+        with patch.object(
+            importer, "install_rag_manifests", side_effect=RuntimeError("boom")
+        ):
+            with self.assertRaises(RuntimeError):
+                importer.install_rag_manifests(self.tid)
+        # The exception did not trigger any cleanup — tempdir still there.
+        self.assertTrue(
+            tmp_path.exists(),
+            "tempdir was cleaned up on an exception path with no try/finally to do so",
+        )
+        del importer
+        gc.collect()
+        self.assertFalse(tmp_path.exists())
+
+    def test_no_context_manager_or_explicit_close_exists(self):
+        """Pins the missing-API gap. If this test ever fails because
+        __enter__/__exit__/close()/cleanup() were added, that's the fix
+        landing — update this test (and the recorded blind-spot note)
+        alongside it rather than deleting it outright.
+        """
+        from compute_awp_importer import AWPImporter  # type: ignore
+        self.assertFalse(hasattr(AWPImporter, "__enter__"))
+        self.assertFalse(hasattr(AWPImporter, "__exit__"))
+        self.assertFalse(hasattr(AWPImporter, "close"))
+        self.assertFalse(hasattr(AWPImporter, "cleanup"))
+
+    def test_directory_input_never_creates_a_tempdir(self):
+        """Only zip inputs go through the GC-dependent tempdir path; a
+        directory package_path leaves self._tmpdir at None (nothing to leak).
+        """
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("pyyaml not installed")
+
+        pkg_dir = Path(self.tmpdir) / "unpacked_bundle"
+        (pkg_dir / "src").mkdir(parents=True)
+        (pkg_dir / "src" / "workflow.awp.yaml").write_text(
+            yaml.dump({"dag": {"nodes": []}}), encoding="utf-8"
+        )
+        (pkg_dir / "awpkg.yaml").write_text(
+            yaml.dump({"spec_version": "v1.1"}), encoding="utf-8"
+        )
+
+        from compute_awp_importer import AWPImporter  # type: ignore
+        importer = AWPImporter(pkg_dir)
+        self.assertIsNone(importer._tmpdir)
 
 
 # ---------------------------------------------------------------------------

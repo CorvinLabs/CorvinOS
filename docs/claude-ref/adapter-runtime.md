@@ -113,6 +113,51 @@ E2E coverage: `test_adapter_stream_idle.py` —
 2 s token-idle) and `test_tool_backstop_kills_genuinely_hung_tool` (a
 never-returning tool still dies at the backstop).
 
+### Sticky progress messages + finalize guard (all channels)
+
+`adapter.py`'s `_emit_status()` (`~L9319`) writes `_progress: true` outbox
+envelopes while a turn is running (tool-call status lines), and the
+heartbeat thread writes `_heartbeat: true` envelopes (`~L3921`) if nothing
+else has fired yet. Both carry the turn's `msg_id` so a daemon can
+correlate them with the eventual real-reply envelope.
+
+Every bridge daemon (`operator/bridges/<channel>/daemon.js`, or
+`handler.js` for Signal/Teams) applies the same two-part mechanism instead
+of relaying each envelope as a brand-new message:
+
+1. **Sticky edit-in-place** — the first `_progress`/`_heartbeat` envelope
+   for a chat sends one message/activity and remembers a platform ref
+   (message object, `message_id`, `ts`, Signal send `timestamp`, or Bot
+   Framework `activityId`); every subsequent one **edits that same
+   message** instead of sending a new one (Discord `Message.edit()`,
+   Telegram `editMessageText`, Slack `chat.update`, WhatsApp/Baileys
+   `sendMessage({..., edit: key})`, Signal `edit_timestamp` on `/v2/send`,
+   Teams `TurnContext.updateActivity()`). When the real reply is ready,
+   the sticky message is deleted/remote-deleted first so the chat shows a
+   clean final answer.
+2. **Finalize guard** — the shared outbox dir is processed in alphabetical
+   order, so `{msg_id}_00.json` (the real reply) can sort **before**
+   `{msg_id}_hb.json` / `{msg_id}_sNN.json` (heartbeat/progress). Once a
+   daemon has delivered the real reply for a `msg_id`, it marks that
+   `msg_id` finalized (60 s TTL) and silently drops any further
+   `_progress`/`_heartbeat` file for the same `msg_id` — otherwise a late
+   status line could land in the chat *after* the answer, reading as the
+   agent talking to itself.
+
+Both pieces of bookkeeping (the sticky-ref map and the finalized-TTL map)
+are the same primitive across every daemon:
+`operator/bridges/shared/js/sticky_progress.js` (`makeStickyProgress()`).
+Each daemon supplies its own platform I/O (edit/send/delete); the module
+itself does none. Unit tests: `shared/js/test_sticky_progress.js`. Per-daemon
+wiring is covered by `<channel>/test_sticky_progress_wiring.js` (structural,
+for the daemons that construct a live client at require-time) or exercised
+directly against `handler.js` (Signal, Teams — `test_signal_daemon.js`,
+`test_teams_e2e.js`).
+
+**Must NOT do:** drop the finalize-guard check before the edit/send
+dispatch · let a daemon fall back to "one new message per heartbeat"
+instead of sticky-editing · let the finalized-TTL map grow unbounded.
+
 ---
 
 ## Transient HTTP-error reset (adapter-self-heal)

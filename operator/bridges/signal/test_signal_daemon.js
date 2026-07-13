@@ -297,6 +297,111 @@ async function run() {
     );
   });
 
+  // ── Sticky progress (edit-in-place) + finalize guard ──────────────────────
+  console.log('\nSticky progress + finalize guard');
+
+  await test('first _progress: sends a new message and remembers its timestamp', async () => {
+    const auth = makeAuth({ settingsFile: SETTINGS_FILE, currentSettings, loadSettings: currentSettings, channel: 'signal', normalize: normPhone });
+    const calls = [];
+    const { processOutboxPayload } = makeHandler({
+      inboxDir: INBOX_DIR, settingsFile: SETTINGS_FILE, currentSettings, auth,
+      logger: null,
+      sendSignal: async (r, m, opts) => { calls.push({ r, m, opts }); return { timestamp: '1000' }; },
+    });
+    const ok = await processOutboxPayload({
+      channel: 'signal', chat_id: '+491234567890', msg_id: 'turn-1',
+      _progress: true, text: 'thinking…',
+    });
+    assert.strictEqual(ok, true);
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].opts, undefined, 'first progress must NOT pass editTimestamp');
+  });
+
+  await test('second _progress for the same chat: edits in place via edit_timestamp', async () => {
+    const auth = makeAuth({ settingsFile: SETTINGS_FILE, currentSettings, loadSettings: currentSettings, channel: 'signal', normalize: normPhone });
+    const calls = [];
+    const { processOutboxPayload } = makeHandler({
+      inboxDir: INBOX_DIR, settingsFile: SETTINGS_FILE, currentSettings, auth,
+      logger: null,
+      sendSignal: async (r, m, opts) => { calls.push({ r, m, opts }); return { timestamp: '2000' }; },
+    });
+    await processOutboxPayload({ channel: 'signal', chat_id: '+491111111111', msg_id: 'turn-2', _progress: true, text: 'step 1' });
+    await processOutboxPayload({ channel: 'signal', chat_id: '+491111111111', msg_id: 'turn-2', _progress: true, text: 'step 2' });
+    assert.strictEqual(calls.length, 2);
+    assert.strictEqual(calls[1].m, 'step 2');
+    assert.deepStrictEqual(calls[1].opts, { editTimestamp: '2000' }, 'second progress must edit the first message');
+  });
+
+  await test('_heartbeat does not open a second sticky slot when progress already owns it', async () => {
+    const auth = makeAuth({ settingsFile: SETTINGS_FILE, currentSettings, loadSettings: currentSettings, channel: 'signal', normalize: normPhone });
+    const calls = [];
+    const { processOutboxPayload } = makeHandler({
+      inboxDir: INBOX_DIR, settingsFile: SETTINGS_FILE, currentSettings, auth,
+      logger: null,
+      sendSignal: async (r, m, opts) => { calls.push({ r, m, opts }); return { timestamp: '3000' }; },
+    });
+    await processOutboxPayload({ channel: 'signal', chat_id: '+492222222222', msg_id: 'turn-3', _progress: true, text: 'progress' });
+    await processOutboxPayload({ channel: 'signal', chat_id: '+492222222222', msg_id: 'turn-3', _heartbeat: true, text: 'still working' });
+    // Only the initial progress send — the heartbeat must not fire a second send.
+    assert.strictEqual(calls.length, 1);
+  });
+
+  await test('real reply: remote-deletes the sticky and marks the turn finalized', async () => {
+    const auth = makeAuth({ settingsFile: SETTINGS_FILE, currentSettings, loadSettings: currentSettings, channel: 'signal', normalize: normPhone });
+    const sendCalls = [];
+    const deleteCalls = [];
+    const { processOutboxPayload } = makeHandler({
+      inboxDir: INBOX_DIR, settingsFile: SETTINGS_FILE, currentSettings, auth,
+      logger: null,
+      sendSignal: async (r, m, opts) => { sendCalls.push({ r, m, opts }); return { timestamp: '4000' }; },
+      deleteSignal: async (r, ts) => { deleteCalls.push({ r, ts }); },
+    });
+    await processOutboxPayload({ channel: 'signal', chat_id: '+493333333333', msg_id: 'turn-4', _progress: true, text: 'working…' });
+    await processOutboxPayload({ channel: 'signal', chat_id: '+493333333333', msg_id: 'turn-4', text: 'Here is your answer.' });
+    assert.strictEqual(deleteCalls.length, 1, 'sticky must be remote-deleted before the real reply');
+    assert.strictEqual(deleteCalls[0].ts, '4000');
+    assert.strictEqual(sendCalls[sendCalls.length - 1].m, 'Here is your answer.');
+  });
+
+  await test('late progress/heartbeat for an already-finalized msg_id is dropped silently', async () => {
+    const auth = makeAuth({ settingsFile: SETTINGS_FILE, currentSettings, loadSettings: currentSettings, channel: 'signal', normalize: normPhone });
+    const calls = [];
+    const { processOutboxPayload } = makeHandler({
+      inboxDir: INBOX_DIR, settingsFile: SETTINGS_FILE, currentSettings, auth,
+      logger: null,
+      sendSignal: async (r, m, opts) => { calls.push({ r, m, opts }); return { timestamp: '5000' }; },
+      deleteSignal: async () => {},
+    });
+    await processOutboxPayload({ channel: 'signal', chat_id: '+494444444444', msg_id: 'turn-5', text: 'The real answer.' });
+    const beforeLateDrop = calls.length;
+    // Simulates the outbox alphabetical-sort race: a _hb.json for the same
+    // msg_id is processed after the real reply already shipped.
+    const ok = await processOutboxPayload({ channel: 'signal', chat_id: '+494444444444', msg_id: 'turn-5', _heartbeat: true, text: 'still working' });
+    assert.strictEqual(ok, true, 'stale drop still reports handled=true (file must be treated as consumed)');
+    assert.strictEqual(calls.length, beforeLateDrop, 'no Signal call must be made for the stale heartbeat');
+  });
+
+  await test('sticky edit failure falls back to remote-delete + fresh send', async () => {
+    const auth = makeAuth({ settingsFile: SETTINGS_FILE, currentSettings, loadSettings: currentSettings, channel: 'signal', normalize: normPhone });
+    let sendCount = 0;
+    const deleteCalls = [];
+    const { processOutboxPayload } = makeHandler({
+      inboxDir: INBOX_DIR, settingsFile: SETTINGS_FILE, currentSettings, auth,
+      logger: null,
+      sendSignal: async (r, m, opts) => {
+        sendCount += 1;
+        if (opts && opts.editTimestamp) throw new Error('edit window expired');
+        return { timestamp: `ts-${sendCount}` };
+      },
+      deleteSignal: async (r, ts) => { deleteCalls.push(ts); },
+    });
+    await processOutboxPayload({ channel: 'signal', chat_id: '+495555555555', msg_id: 'turn-6', _progress: true, text: 'step 1' });
+    await processOutboxPayload({ channel: 'signal', chat_id: '+495555555555', msg_id: 'turn-6', _progress: true, text: 'step 2' });
+    // call 1: initial send (1). call 2: failed edit attempt (2) + fallback fresh send (3).
+    assert.strictEqual(sendCount, 3, 'initial send + failed edit attempt + fallback fresh send');
+    assert.strictEqual(deleteCalls.length, 1, 'failed edit must remote-delete the stale sticky before sending fresh');
+  });
+
   // ── Inbox envelope shape ───────────────────────────────────────────────────
   console.log('\nInbox envelope shape');
 

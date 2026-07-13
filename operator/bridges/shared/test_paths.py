@@ -51,6 +51,22 @@ def test_env_override():
     os.environ.pop("CORVIN_HOME", None)
 
 
+def test_env_override_whitespace():
+    print("\n[CORVIN_HOME whitespace-only override falls back to default]")
+    os.environ.pop("CORVIN_HOME", None)
+    p = _import(REPO / "operator" / "bridges" / "shared")
+    default_home = p.corvin_home()
+    for bogus in (" ", "   ", "\t", "\n"):
+        os.environ["CORVIN_HOME"] = bogus
+        p = _import(REPO / "operator" / "bridges" / "shared")
+        home = p.corvin_home()
+        t(f"CORVIN_HOME={bogus!r} does not resolve to Path({bogus!r})",
+          home != Path(bogus), detail=f"got {home}")
+        t(f"CORVIN_HOME={bogus!r} falls back to the same default as unset",
+          home == default_home, detail=f"got {home}, expected {default_home}")
+    os.environ.pop("CORVIN_HOME", None)
+
+
 def test_all_three_plugins_agree():
     print("\n[all three plugins resolve to same root]")
     os.environ.pop("CORVIN_HOME", None)
@@ -64,6 +80,7 @@ def test_all_three_plugins_agree():
 def main() -> int:
     test_default_resolution()
     test_env_override()
+    test_env_override_whitespace()
     test_all_three_plugins_agree()
     print(f"\n{PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1

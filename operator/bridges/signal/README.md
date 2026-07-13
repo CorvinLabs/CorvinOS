@@ -22,6 +22,18 @@ or Discord.
   Install via your distro's package manager or from
   [Adoptium](https://adoptium.net).
 - **signal-cli ≥ 0.13** — see installation section below.
+- **[signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) ≥ commit
+  [`#740`](https://github.com/bbernhard/signal-cli-rest-api/pull/740) (merged
+  2025-09-10)** — the bridge talks to signal-cli through this REST wrapper
+  (`SIGNAL_API_URL`, default `http://localhost:8080`), not to signal-cli
+  directly. Sticky-progress message editing/deletion (`edit_timestamp` on
+  `POST /v2/send`, `DELETE /v1/remote-delete/{number}`) requires a build at
+  or after that PR. An older build silently ignores the unknown
+  `edit_timestamp` field instead of erroring — every "edit" then posts a
+  brand-new message and the sticky progress display never collapses, with
+  no crash or log line to point at the real cause. If progress messages look
+  like they're spamming instead of updating in place, this is the first
+  thing to check.
 - **A dedicated phone number** — the number used as the bot identity must
   **not** already be an active Signal account on another device. A virtual
   SIM (e.g. from a VoIP provider) or a dedicated physical SIM works best.

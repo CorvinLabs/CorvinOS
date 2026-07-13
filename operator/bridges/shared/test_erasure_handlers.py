@@ -1,6 +1,7 @@
 """Tests for the per-layer ErasureHandler implementations."""
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import sys
@@ -16,9 +17,15 @@ from erasure_handlers import (  # noqa: E402
     L24DataSnapshotHandler,
     L28RecallHandler,
     L33ArtifactHandler,
+    WorkflowCheckpointHandler,
     real_handler_chain,
 )
 from erasure_orchestrator import LayerStatus  # noqa: E402
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_WORKFLOWS_SRC = _REPO_ROOT / "core" / "workflows"
+if str(_WORKFLOWS_SRC) not in sys.path:
+    sys.path.insert(0, str(_WORKFLOWS_SRC))
 
 
 # ── L28 ──────────────────────────────────────────────────────────────
@@ -158,6 +165,197 @@ class TestL33ArtifactHandler(unittest.TestCase):
         self.assertEqual(h.layer_id, "L33-artifacts")
 
 
+# ── Workflow checkpoints (ADR-0188 M5) ────────────────────────────────
+
+
+class TestWorkflowCheckpointHandler(unittest.TestCase):
+    """GDPR Art. 17 coverage for paused Task-Engine workflow checkpoints.
+
+    Uses the real ``corvin_workflows.checkpoint`` module to write the
+    checkpoint (not a hand-rolled JSON fixture) so the test breaks if the
+    on-disk schema the handler parses ever drifts from what the runner
+    actually writes.
+    """
+
+    def _corvin_home(self) -> tempfile.TemporaryDirectory:
+        return tempfile.TemporaryDirectory(prefix="erasure-wf-")
+
+    def test_purge_deletes_matching_checkpoint(self):
+        with self._corvin_home() as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                import importlib
+                from corvin_workflows import checkpoint as cp  # noqa: E402
+                importlib.reload(cp)  # pick up the CORVIN_HOME just set
+
+                cp.save(
+                    "run-subject",
+                    workflow_path="wf.yaml",
+                    workflow_name="expense-approval",
+                    inputs={"amount": 500, "requester_email": "alice@example.com"},
+                    state={"step": "await_manager"},
+                    completed_ids=["start"],
+                    paused_at_node="ask_human",
+                    prompt="Approve $500 expense?",
+                    channel="discord",
+                    chat_id="discord_user_42",
+                    expect=None,
+                )
+                cp.save(
+                    "run-other",
+                    workflow_path="wf.yaml",
+                    workflow_name="expense-approval",
+                    inputs={"amount": 10},
+                    state={},
+                    completed_ids=[],
+                    paused_at_node="ask_human",
+                    prompt="Approve $10 expense?",
+                    channel="discord",
+                    chat_id="discord_user_99",
+                    expect=None,
+                )
+
+                runs_dir = Path(td) / "tenants" / "_default" / "workflow_runs"
+                self.assertTrue((runs_dir / "run-subject.json").exists())
+                self.assertTrue((runs_dir / "run-other.json").exists())
+
+                handler = WorkflowCheckpointHandler()
+                result = handler.purge("discord_user_42", "er-test")
+
+                self.assertEqual(result.status, LayerStatus.APPLIED)
+                self.assertEqual(result.count, 1)
+                # The subject's checkpoint (and its raw chat_id + PII-bearing
+                # inputs) is gone ...
+                self.assertFalse((runs_dir / "run-subject.json").exists())
+                # ... but the other user's paused run is untouched.
+                self.assertTrue((runs_dir / "run-other.json").exists())
+                still_there = json.loads(
+                    (runs_dir / "run-other.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(still_there["chat_id"], "discord_user_99")
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
+    def test_purge_matches_on_approver_when_not_chat_id(self):
+        with self._corvin_home() as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                import importlib
+                from corvin_workflows import checkpoint as cp  # noqa: E402
+                importlib.reload(cp)
+
+                # Approver differs from the chat_id that paused the run —
+                # e.g. a manager approving on behalf of a requester's ticket.
+                cp.save(
+                    "run-approver",
+                    workflow_path="wf.yaml",
+                    workflow_name="it-ticket",
+                    inputs={},
+                    state={},
+                    completed_ids=[],
+                    paused_at_node="ask_human",
+                    prompt="Approve ticket?",
+                    channel="discord",
+                    chat_id="discord_requester_1",
+                    expect=None,
+                    approver="discord_manager_7",
+                )
+
+                handler = WorkflowCheckpointHandler()
+                result = handler.purge("discord_manager_7", "er-test")
+
+                self.assertEqual(result.status, LayerStatus.APPLIED)
+                self.assertEqual(result.count, 1)
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
+    def test_purge_no_match_returns_skipped(self):
+        with self._corvin_home() as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                import importlib
+                from corvin_workflows import checkpoint as cp  # noqa: E402
+                importlib.reload(cp)
+
+                cp.save(
+                    "run-untouched",
+                    workflow_path="wf.yaml",
+                    workflow_name="expense-approval",
+                    inputs={},
+                    state={},
+                    completed_ids=[],
+                    paused_at_node="ask_human",
+                    prompt="Approve?",
+                    channel="discord",
+                    chat_id="discord_user_99",
+                    expect=None,
+                )
+
+                handler = WorkflowCheckpointHandler()
+                result = handler.purge("discord_user_42", "er-test")
+
+                self.assertEqual(result.status, LayerStatus.SKIPPED)
+                self.assertEqual(result.count, 0)
+                # Nothing was deleted for the non-matching subject.
+                runs_dir = Path(td) / "tenants" / "_default" / "workflow_runs"
+                self.assertTrue((runs_dir / "run-untouched.json").exists())
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
+    def test_missing_runs_dir_returns_skipped(self):
+        with self._corvin_home() as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                handler = WorkflowCheckpointHandler()
+                result = handler.purge("discord_user_42", "er-test")
+                self.assertEqual(result.status, LayerStatus.SKIPPED)
+                self.assertIn("no workflow_runs dir", result.reason)
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
+    def test_purge_also_deletes_claimed_sidecar(self):
+        """A resume in flight parks the checkpoint under `.json.claimed`
+        (checkpoint.claim()) — erasure must still find and remove it."""
+        with self._corvin_home() as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                import importlib
+                from corvin_workflows import checkpoint as cp  # noqa: E402
+                importlib.reload(cp)
+
+                cp.save(
+                    "run-claimed",
+                    workflow_path="wf.yaml",
+                    workflow_name="expense-approval",
+                    inputs={},
+                    state={},
+                    completed_ids=[],
+                    paused_at_node="ask_human",
+                    prompt="Approve?",
+                    channel="discord",
+                    chat_id="discord_user_42",
+                    expect=None,
+                )
+                cp.claim("run-claimed")
+
+                runs_dir = Path(td) / "tenants" / "_default" / "workflow_runs"
+                self.assertFalse((runs_dir / "run-claimed.json").exists())
+                self.assertTrue((runs_dir / "run-claimed.json.claimed").exists())
+
+                handler = WorkflowCheckpointHandler()
+                result = handler.purge("discord_user_42", "er-test")
+
+                self.assertEqual(result.status, LayerStatus.APPLIED)
+                self.assertEqual(result.count, 1)
+                self.assertFalse((runs_dir / "run-claimed.json.claimed").exists())
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
+    def test_layer_id_default(self):
+        h = WorkflowCheckpointHandler()
+        self.assertEqual(h.layer_id, "L-workflow-checkpoints")
+
+
 # ── L7 + L24 stubs ───────────────────────────────────────────────────
 
 
@@ -213,6 +411,7 @@ class TestRealHandlerChain(unittest.TestCase):
         # was added (ADR-0127 review) to purge plaintext WDAT worker traces
         # under GDPR Art. 17 — assert it is wired into the default chain.
         for required in ("L28-recall", "L33-artifacts", "ACS-traces",
+                         "L-workflow-checkpoints",
                          "L7-skill-forge", "L24-data-snapshot"):
             self.assertIn(required, layer_ids, f"missing handler: {required}")
         # No duplicate layer ids in the default chain.

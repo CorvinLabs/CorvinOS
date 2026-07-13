@@ -7,6 +7,9 @@ redirected to a tempdir) and verifies:
   - register / account / check / working_set / evict / set_quota /
     set_oom_policy / unregister round-trip
   - check_budget action ladder: ok at <90%, warn at >=90%, oom at >100%
+  - check_budget at the EXACT 100% quota boundary under reject policy
+    (used == quota is a documented current-behavior boundary: `warn`,
+    not `reject`, since the over-quota check is strict `>`)
   - eviction drops oldest until target reached, returns turn_ids in
     order, updates used, increments evictions counter
   - reject policy: action=reject, allowed=False
@@ -116,6 +119,35 @@ def case_check_budget_reject_policy_blocks(home: Path) -> None:
     assert d["action"] == "reject"
     assert d["allowed"] is False
     print(f"  PASS over-quota with reject: allowed={d['allowed']}")
+
+
+def case_check_budget_reject_policy_exact_quota_boundary(home: Path) -> None:
+    _section("reject policy at EXACT 100% quota boundary (used == quota)")
+    cb = _fresh_module(home)
+    cb.register_session_budget("boundary", quota=200, oom_policy="reject")
+    cb.account_turn("boundary", "t1", 200)  # used == quota exactly, 100%
+    d = cb.check_budget("boundary")
+    assert d["used"] == 200 and d["quota"] == 200, d
+    # NOTE: check_budget's over-quota branch is `if used > quota` (strict),
+    # so at used == quota exactly it falls through to the warn branch
+    # instead of triggering the reject policy. This locks in that
+    # (surprising, possibly unintended) current behavior: a reject-policy
+    # session sitting at exactly 100% usage is still allowed to proceed.
+    assert d["action"] == "warn", d
+    assert d["allowed"] is True, d
+    print(
+        "  PASS at exactly 100% under reject policy: "
+        f"action={d['action']} allowed={d['allowed']} "
+        "(boundary is > not >=, one token over is required to actually reject)"
+    )
+
+    # One token over the quota DOES trigger the reject policy.
+    cb.account_turn("boundary", "t2", 1)  # used = 201, 100.5%
+    d2 = cb.check_budget("boundary")
+    assert d2["used"] == 201, d2
+    assert d2["action"] == "reject", d2
+    assert d2["allowed"] is False, d2
+    print(f"  PASS at 201/200 (just over): action={d2['action']} allowed={d2['allowed']}")
 
 
 def case_check_budget_pending_tokens(home: Path) -> None:
@@ -342,6 +374,7 @@ def main() -> None:
         case_account_turn_adds_to_used,
         case_check_budget_action_ladder,
         case_check_budget_reject_policy_blocks,
+        case_check_budget_reject_policy_exact_quota_boundary,
         case_check_budget_pending_tokens,
         case_evict_drops_oldest_to_target,
         case_evict_target_used_absolute,

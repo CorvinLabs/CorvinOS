@@ -1006,12 +1006,24 @@ def _resolve_acs_datasources(tenant_id: str, names: list[str],
     plaintext snapshot of CONFIDENTIAL/SECRET data unless an at-rest WDAT key
     is configured — otherwise real sensitive rows would land plaintext in the
     Tier-2 worker-trace store.
+
+    The "is a WDAT key configured" check MUST use ``_wdat_load_key()`` — the
+    same real hex-decode + 32-byte-length validator the Tier-2 content-store
+    write path (``_wdat_record_completion``) uses to decide `.json` vs
+    `.json.enc`. A bare ``bool(os.environ.get("CORVIN_WDAT_KEY"))`` presence
+    check would treat an invalid or whitespace-only value as "configured"
+    here, embed a live CONFIDENTIAL/SECRET snapshot into the worker
+    prompt/trace on that belief, while the write path's real validator
+    independently rejects the same value and silently falls back to writing
+    that exact content UNENCRYPTED to disk — a GDPR Art. 32 encryption-at-rest
+    gap where the embed-gate and the write-path disagree about the same env
+    var (adversarial review finding).
     """
     if not names:
         return "", {}
     home = _corvin_home()
     conn_dir = (home / "tenants" / tenant_id / "datasource_connections").resolve()
-    wdat_key_set = bool(os.environ.get("CORVIN_WDAT_KEY"))
+    wdat_key_set = _wdat_load_key() is not None
     blocks: list[str] = []
     env: dict[str, str] = {}
     for name in names:
