@@ -76,6 +76,34 @@ class WorkdirRouteTests(unittest.TestCase):
         resp = self._serve("data.csv")
         self.assertIn("data.csv", resp.headers["content-disposition"])
 
+    def test_nested_subdirectory_image_served_inline(self) -> None:
+        """Regression: imagegen-zero-config writes generated images one level
+        deep (`<workdir>/outputs/corvin-image-...jpeg`), and ACS output files
+        nest even deeper (`acs/runs/<id>/output/chart.png`, per this route's
+        own docstring) — but every other test in this file only ever served a
+        file sitting flat at workdir root, so a break specific to nested
+        paths (e.g. chat_runtime emitting the "path" field with the wrong
+        separator) went uncaught. This proves the full nested-path request
+        actually resolves and serves inline, matching what the frontend's
+        <img src="…/workdir/outputs/…"> constructs from the WS artifact
+        event's forward-slash "path" field."""
+        (self.workdir / "outputs").mkdir()
+        (self.workdir / "outputs" / "corvin-image-123-abcdef.jpeg").write_bytes(
+            b"\xff\xd8\xff\xe0JFIF"
+        )
+        resp = self._serve("outputs/corvin-image-123-abcdef.jpeg")
+        self.assertIn("inline", resp.headers["content-disposition"])
+        self.assertEqual(resp.media_type, "image/jpeg")
+
+    def test_deeply_nested_acs_output_served_inline(self) -> None:
+        (self.workdir / "acs" / "runs" / "run-1" / "output").mkdir(parents=True)
+        (self.workdir / "acs" / "runs" / "run-1" / "output" / "chart.png").write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+        )
+        resp = self._serve("acs/runs/run-1/output/chart.png")
+        self.assertIn("inline", resp.headers["content-disposition"])
+        self.assertEqual(resp.media_type, "image/png")
+
     def test_path_traversal_blocked(self) -> None:
         (self.tmp / "secret.txt").write_bytes(b"top secret")
         with self.assertRaises(HTTPException) as ctx:

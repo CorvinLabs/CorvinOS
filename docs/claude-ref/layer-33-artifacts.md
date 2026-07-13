@@ -243,6 +243,7 @@ from the first 4 KB of the artifact.
 | `artifact.session_purged` missing on /reset | Reset happened before the audit-first hook | Bug; file issue with chain dump |
 | FTS5 search misses obvious matches | recall.db not indexed by adapter | Adapter restart triggers `_reindex_artifacts_on_boot` |
 | `manifest_lock_timeout_ms` hit | Another writer holding lock | Inspect `lsof <manifest.lock>`; usually a stuck PostToolUse hook |
+| Chat artifact card shows a broken-image icon, download also fails | Nested artifact path (imagegen's `outputs/…`, ACS's `acs/runs/.../output/…`) serialized with the OS-native separator (`str(Path)` on Windows → backslash) instead of forward slashes | Fixed 2026-07-13 via `Path.as_posix()` in `chat_runtime.py`'s artifact emitters — see the workdir-route section below |
 
 ---
 
@@ -269,6 +270,24 @@ These console routes expose the session's working directory to the web UI.
 Serves a file from the session workdir.  Authentication: `require_session`
 (session cookie, `SameSite=Strict`).  All MIME types are served; the
 `Content-Disposition` header enables browser download for binary types.
+
+**Nested-path fix (2026-07-13):** `filepath` may contain forward-slash
+subdirectories (imagegen's `outputs/…`, ACS's `acs/runs/<id>/output/…`) — the
+route already supported this (`{filepath:path}` + a forward-slash-inclusive
+`_SAFE_SUBPATH` regex), but `chat_runtime.py`'s artifact-event emitter
+serialized the relative path via `str(Path)`, which uses the **OS-native**
+separator. On a Windows-hosted console this embedded a literal backslash in
+the `"path"` field sent to the browser — the frontend's `filePath.split("/")`
+and the route's own forward-slash-only regex both then rejected it, so the
+artifact card rendered (the file *was* found by the workdir scan) but its
+`<img>`/download URL 404'd with no visible error beyond a broken-image icon.
+Fixed by using `Path.as_posix()` instead of `str(Path)` at every artifact-path
+emission site in `chat_runtime.py` (the direct subprocess path, the ACS live
+path, and the ACS post-run scan). Regression coverage:
+`core/console/tests/test_workdir_route.py::test_nested_subdirectory_image_served_inline`
+and `::test_deeply_nested_acs_output_served_inline` — the confirmed gap before
+this fix was that every existing test in that file served a file sitting flat
+at workdir root, never a nested one.
 
 ### `GET /v1/console/chat/sessions/{sid}/workdir-path`
 

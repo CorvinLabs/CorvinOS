@@ -2587,7 +2587,7 @@ async def stream_turn(
                     _live_label = _acs_artifact_label(_fp, run_dir)
                     _evt: dict[str, Any] = {
                         "type": "artifact", "name": _fp.name,
-                        "path": str(_relpath), "mime": _mime, "size": _sz,
+                        "path": _relpath.as_posix(), "mime": _mime, "size": _sz,
                     }
                     if _live_label:
                         _evt["label"] = _live_label
@@ -2597,7 +2597,7 @@ async def stream_turn(
                     # Persist alongside the text turn so the artifact survives reload.
                     _persist: dict[str, Any] = {
                         "kind": "artifact", "name": _fp.name,
-                        "path": str(_relpath), "mime": _mime, "size": _sz,
+                        "path": _relpath.as_posix(), "mime": _mime, "size": _sz,
                     }
                     if _live_label:
                         _persist["label"] = _live_label
@@ -2830,7 +2830,7 @@ async def stream_turn(
                     _part: dict[str, Any] = {
                         "kind": "artifact",
                         "name": _fpath.name,
-                        "path": str(_rel),
+                        "path": _rel.as_posix(),
                         "mime": _mime,
                         "size": _size,
                     }
@@ -3161,18 +3161,27 @@ async def stream_turn(
         for fpath in new_files:
             mime = _artifact_mime(fpath)
             if mime:
+                # .as_posix(), not str() — the artifact-generating tool most
+                # commonly nests one level deep (e.g. imagegen's outputs/,
+                # ACS's acs/runs/<id>/output/), and str(Path) renders with the
+                # OS-NATIVE separator. On a Windows-hosted console that embeds
+                # a literal backslash in this JSON "path", which the frontend
+                # (chat.tsx splits on "/") and the serving route's
+                # _SAFE_SUBPATH regex (forward-slash only) both then reject —
+                # the artifact card renders but its <img>/download URL 404s,
+                # with no user-visible error beyond a broken-image icon.
                 rel = fpath.relative_to(sess.workdir)
                 artifact_event = {
                     "type": "artifact",
                     "name": fpath.name,
-                    "path": str(rel),
+                    "path": rel.as_posix(),
                     "mime": mime,
                     "size": fpath.stat().st_size,
                 }
                 _artifact_parts_buf.append({
                     "kind": "artifact",
                     "name": fpath.name,
-                    "path": str(rel),
+                    "path": rel.as_posix(),
                     "mime": mime,
                     "size": fpath.stat().st_size,
                 })
