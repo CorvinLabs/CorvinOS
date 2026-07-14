@@ -6,6 +6,28 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.40] — 2026-07-14 — Console voice summary parity + imagegen budget fix
+
+### Fixed
+
+- **Console web chat's voice output spoke the raw, full answer verbatim**
+  (truncated blindly at 4000 chars) instead of a real, condensed voice
+  summary — every messenger bridge (Discord, WhatsApp, ...) already spoke a
+  proper summary via `build_voice_summary()`. A fully-working, tested
+  `POST /voice/summarize` endpoint existed but the frontend never called
+  it. `POST /voice/tts` now summarizes server-side before speaking (same
+  `summarize.py` script bridges use), with a safe fallback to the old
+  raw-truncated behavior if summarization is unavailable — no frontend
+  change needed.
+- **Three consecutive image-generation calls each hit the generic
+  "please try again" timeout** instead of a specific, actionable message.
+  The L44 house-rules safety gate's real worst-case latency (cloud
+  classifier retries + local Hermes fallback, up to ~93s) was not
+  accounted for in the image tool's own step-budget math. The provider
+  call now runs against a deadline-aware budget that correctly reserves
+  time for the gate, surfacing the real per-step failure reason instead of
+  a generic timeout.
+
 ## [0.10.39] — 2026-07-14 — Fresh-install image generator + Claude Code auth + ACS Windows path
 
 ### Fixed
