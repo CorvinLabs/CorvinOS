@@ -91,6 +91,17 @@ async function postSecret(keyName: string, value: string, pubkey: CryptoKey, csr
   });
 }
 
+interface RevealResponse {
+  key_name: string;
+  value: string;
+  ts: number;
+}
+
+async function fetchSecretValue(keyName: string): Promise<string> {
+  const resp = await api<RevealResponse>(`/byok/secrets/${keyName}/value`);
+  return resp.value;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 function isValidCustomSlug(slug: string): boolean {
@@ -150,10 +161,30 @@ interface KeyCardProps {
 
 function KeyCard({ keyName, label, hint, present, pubkey, csrf, onRotated }: KeyCardProps) {
   const [value, setValue] = React.useState("");
+  const [revealed, setRevealed] = React.useState<string | null>(null);
   const [showValue, setShowValue] = React.useState(false);
+  const [revealing, setRevealing] = React.useState(false);
+  const [revealError, setRevealError] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState<RotateResult | null>(null);
+
+  async function handleToggleReveal() {
+    if (showValue) { setShowValue(false); return; }
+    if (present && revealed === null && !value.trim()) {
+      setRevealing(true); setRevealError(null);
+      try {
+        const v = await fetchSecretValue(keyName);
+        setRevealed(v);
+      } catch (err) {
+        setRevealError(err instanceof Error ? err.message : "Could not load saved value");
+        setRevealing(false);
+        return;
+      }
+      setRevealing(false);
+    }
+    setShowValue(true);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -165,6 +196,8 @@ function KeyCard({ keyName, label, hint, present, pubkey, csrf, onRotated }: Key
       setSuccess(result);
       onRotated();
       setValue("");
+      setRevealed(null);
+      setShowValue(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -209,8 +242,8 @@ function KeyCard({ keyName, label, hint, present, pubkey, csrf, onRotated }: Key
             <Input
               type={showValue ? "text" : "password"}
               placeholder={`Paste ${label}…`}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
+              value={value || revealed || ""}
+              onChange={(e) => { setValue(e.target.value); setRevealed(null); }}
               autoComplete="new-password"
               autoCorrect="off"
               spellCheck={false}
@@ -221,11 +254,18 @@ function KeyCard({ keyName, label, hint, present, pubkey, csrf, onRotated }: Key
             />
             <button
               type="button"
-              onClick={() => setShowValue((v) => !v)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              onClick={handleToggleReveal}
+              disabled={revealing}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground disabled:opacity-50"
               aria-label={showValue ? "Hide" : "Show"}
             >
-              {showValue ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              {revealing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : showValue ? (
+                <EyeOff className="h-4 w-4" />
+              ) : (
+                <Eye className="h-4 w-4" />
+              )}
             </button>
           </div>
           <Button type="submit" disabled={loading || !pubkey || !value.trim()} size="sm">
@@ -238,6 +278,17 @@ function KeyCard({ keyName, label, hint, present, pubkey, csrf, onRotated }: Key
           </Button>
         </div>
 
+        {revealed !== null && !error && (
+          <p className="text-xs text-muted-foreground">
+            Showing the currently saved value — edit the field above to rotate it.
+          </p>
+        )}
+        {revealError && (
+          <div className="flex items-center gap-1.5 text-xs text-destructive">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            {revealError}
+          </div>
+        )}
         {error && (
           <div className="flex items-center gap-1.5 text-xs text-destructive">
             <AlertCircle className="h-3.5 w-3.5 shrink-0" />

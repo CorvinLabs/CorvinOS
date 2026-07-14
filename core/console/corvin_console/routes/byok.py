@@ -4,6 +4,9 @@ Routes:
   GET  /byok/pubkey                        — instance RSA public key PEM
   POST /byok/secrets/{key_name}            — store encrypted secret (proxy to agent)
   GET  /byok/secrets                       — list BYOK key metadata (no values)
+  GET  /byok/secrets/{key_name}/value      — reveal a saved secret's plaintext
+                                              (self-hosted only; explicit user
+                                              request 2026-07-14, see get_secret_value)
 
 In hosted mode (CORVIN_HOSTED_MODE=true) these routes proxy to the
 Management API.  In self-hosted mode they speak directly to the local
@@ -14,6 +17,12 @@ Security invariants:
   - plaintext API key values are NEVER stored or logged here
   - key_name is validated against ADR-0047 allow-list
   - audit console.byok_updated emitted on every successful store
+  - audit console.byok_secret_revealed emitted on every plaintext read-back
+    (get_secret_value) — the one intentional exception to "no plaintext
+    leaves storage": the authenticated owner of a self-hosted instance can
+    read back their own previously-saved key, same as any password manager
+    lets its owner view a saved secret. Requires an active session; never
+    proxied in hosted mode (CORVIN_HOSTED_MODE=true returns 501).
 """
 from __future__ import annotations
 
@@ -314,3 +323,82 @@ def list_secrets(
         "note": "ciphertext and plaintext values are never returned by this endpoint",
         "ts": time.time(),
     }
+
+
+# ── GET /byok/secrets/{key_name}/value ──────────────────────────────────
+
+@router.get("/secrets/{key_name}/value")
+def get_secret_value(
+    key_name: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Reveal a previously-saved secret's plaintext value.
+
+    Explicit user request (2026-07-14): the "eye" button on Settings -> API
+    Keys only ever toggled visibility of a NEW value being typed — clicking
+    it never showed an already-saved key, because list_secrets() (above)
+    deliberately never returns values. That write-only stance was a policy
+    choice, not a crypto necessity: the server already holds the plaintext
+    the moment a key is saved (RSA-OAEP only protects it in transit from the
+    browser; apply_byok_secret decrypts it server-side and writes it in the
+    clear to both service.env and the vault, which are read back live by
+    provider_keys.resolve_key / vault.get_item every time an engine spawns).
+
+    Self-hosted only — the authenticated owner reading back their OWN key on
+    their OWN instance is the same trust model as any password manager
+    letting its owner view a saved secret; a third party never gets this
+    without first holding a valid session. Hosted mode has no agent-side
+    equivalent yet and returns 501 rather than silently guessing at one.
+
+    Every reveal is audited (console.byok_secret_revealed) with key_name
+    only — never the value itself — mirroring post_secret's audit above.
+    """
+    if _is_hosted():
+        raise HTTPException(
+            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+            detail="revealing a saved key is not yet supported in hosted mode",
+        )
+
+    try:
+        from agent.byok import validate_key_name  # type: ignore
+        validate_key_name(key_name)
+    except ImportError:
+        pass
+    except Exception as exc:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    value: str | None
+    if key_name.startswith("custom_"):
+        try:
+            _shared = str(_REPO / "operator" / "bridges" / "shared")
+            if _shared not in sys.path:
+                sys.path.insert(0, _shared)
+            import vault as _vault_mod  # type: ignore
+            value = _vault_mod.get_item(key_name, source="console.byok_reveal")
+        except KeyError:
+            value = None
+        except PermissionError as exc:
+            raise HTTPException(status_code=http_status.HTTP_423_LOCKED, detail=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            )
+    else:
+        value = provider_keys.resolve_key(key_name)
+
+    # Audit the reveal itself — key_name only, never the value.
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="byok.secret_revealed",
+        target_kind="api_key",
+        target_id=key_name,
+    )
+
+    if value is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"no value stored for {key_name!r}",
+        )
+
+    return {"key_name": key_name, "value": value, "ts": time.time()}

@@ -285,5 +285,35 @@ def test_build_spawn_env_auto_starts_local_proxy_when_no_proxy_base_url_configur
                 os.environ["CORVIN_HOME"] = prev_home
 
 
+# ── adapter.py: codex_cli/opencode also get the LIVE credential ──────────
+
+
+def test_build_spawn_env_refreshes_openai_key_for_non_claude_code_engines(tmp_path, monkeypatch):
+    """Regression (2026-07-14): the claude_code provider-routing fix only
+    covers claude_code. codex_cli and opencode build their subprocess env
+    by copying os.environ verbatim with no engine-specific credential
+    refresh of their own — so an OPENAI_API_KEY rotated live via
+    Settings -> API Keys (which writes to service.env) stayed invisible to
+    an already-running bridge daemon spawning codex_cli until restart,
+    the exact same staleness bug class as the claude_code case. Fixed by
+    refreshing ANTHROPIC_API_KEY/OPENAI_API_KEY from provider_keys at the
+    top of _build_spawn_env, before any engine-specific branch."""
+    _isolated_service_env(tmp_path, monkeypatch)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    service_env = tmp_path / "service.env"
+    provider_keys.write_key("openai_api_key", "sk-live-from-file", path_override=service_env)
+
+    import adapter  # type: ignore
+
+    # A stale value baked into `base` (simulating the daemon's boot-time
+    # os.environ, which predates the key rotation) must be overridden.
+    env = adapter._build_spawn_env(
+        bridge="discord", chat_key="chat-codex-test",
+        base={"PATH": "/usr/bin", "OPENAI_API_KEY": "sk-stale-boot-time-value"},
+        profile=None,
+    )
+    assert env.get("OPENAI_API_KEY") == "sk-live-from-file"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

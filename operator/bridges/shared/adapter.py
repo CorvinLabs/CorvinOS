@@ -3515,6 +3515,21 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
     ``_persona`` field).
     """
     env = dict(base if base is not None else os.environ)
+    # Refresh the primary provider credentials from the live vault-aware
+    # resolver instead of trusting whatever os.environ/`base` already carried.
+    # os.environ was populated once at daemon boot; codex_cli and opencode
+    # have no engine-specific credential injection of their own (unlike
+    # claude_code's provider-routing block below), so without this a key
+    # rotated via Settings -> API Keys while the bridge keeps running stayed
+    # invisible to them until a restart — same staleness bug class already
+    # fixed for claude_code's provider routing and engine_providers.fetch_models.
+    for _cred_key, _cred_env in (
+        ("anthropic_api_key", "ANTHROPIC_API_KEY"),
+        ("openai_api_key", "OPENAI_API_KEY"),
+    ):
+        _cred_val = _provider_keys.resolve_key(_cred_key)
+        if _cred_val:
+            env[_cred_env] = _cred_val
     safe = re.sub(r"[/\\]", "_", str(chat_key))
     channel_value = f"{bridge}:{safe}"
     env["CORVIN_CHANNEL_ID"] = channel_value
