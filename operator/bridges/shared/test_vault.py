@@ -23,16 +23,19 @@ import vault as v  # noqa: E402
 
 
 def _wipe():
-    if v.VAULT_DIR.exists():
-        for p in v.VAULT_DIR.iterdir():
+    vault_dir = v._vault_dir()
+    if vault_dir.exists():
+        for p in vault_dir.iterdir():
             try:
                 p.unlink()
             except IsADirectoryError:
                 shutil.rmtree(p)
-    if v.UNLOCK_FILE.exists():
-        v.UNLOCK_FILE.unlink()
-    if v.LOG_FILE.exists():
-        v.LOG_FILE.unlink()
+    unlock_file = v._unlock_file()
+    if unlock_file.exists():
+        unlock_file.unlink()
+    log_file = v._log_file()
+    if log_file.exists():
+        log_file.unlink()
 
 
 class NameValidation(unittest.TestCase):

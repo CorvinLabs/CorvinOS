@@ -489,24 +489,21 @@ _GLOBAL_COMMANDS: dict[str, list[dict[str, Any]]] = {
 }
 
 
-def _read_service_env() -> dict[str, str]:
-    # WA-22: a second, repo-relative candidate (operator/bridges/shared/
-    # service.env) was checked here too, but never existed on any real
-    # install (no writer ever targeted it, no git history) — dead weight
-    # that just implied a second file was in play. _SERVICE_ENV (via
-    # forge.paths.voice_config_dir()) is the ONE canonical file.
-    result: dict[str, str] = {}
-    if _SERVICE_ENV.exists():
-        try:
-            for line in _SERVICE_ENV.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, _, v = line.partition("=")
-                result[k.strip()] = v.strip()
-        except Exception:
-            pass
-    return result
+def _resolve_key(env_var: str) -> str:
+    """Resolve *env_var*'s current value through provider_keys — the SAME
+    single source of truth the actual engine-spawn code uses (env, THEN
+    service.env; quote/inline-comment normalised) — instead of re-parsing
+    service.env by hand here with reversed (file-before-env) precedence and
+    no normalisation. Adversarial review, 2026-07-14: this route's own
+    hand-rolled reader was a fourth, drifted copy of the same "is this
+    engine key configured" logic provider_keys.py's own docstring already
+    names as the exact bug class it was built to close for OTHER
+    call sites — the Setup wizard's "configured"/masked-value display could
+    silently disagree with what an engine actually authenticates with."""
+    if str(_SHARED) not in sys.path:
+        sys.path.insert(0, str(_SHARED))
+    import provider_keys  # type: ignore
+    return provider_keys.resolve_by_env_var(env_var) or ""
 
 
 def _write_env_key(key: str, value: str) -> None:
@@ -749,8 +746,6 @@ def whatsapp_start_status(
 def list_engines(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
-    env = _read_service_env()
-
     # Check Claude Code login status
     claude_ok = False
     try:
@@ -783,7 +778,7 @@ def list_engines(
             engines.append({**e, "configured": copilot_ok,
                             "value_masked": copilot_version if copilot_ok else None})
         elif key_name:
-            val = env.get(key_name, "") or os.environ.get(key_name, "")
+            val = _resolve_key(key_name)
             masked = ("****" + val[-4:]) if val and len(val) > 8 else ("set" if val else None)
             engines.append({**e, "configured": bool(val), "value_masked": masked})
         else:
@@ -799,9 +794,8 @@ def setup_status(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> dict[str, Any]:
     """Return first-run status for the SetupGate overlay."""
-    env = _read_service_env()
-    anthropic_key = env.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "")
-    openai_key = env.get("OPENAI_API_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
+    anthropic_key = _resolve_key("ANTHROPIC_API_KEY")
+    openai_key = _resolve_key("OPENAI_API_KEY")
     engine_connected = bool(anthropic_key or openai_key)
 
     # Lightweight claude CLI probe (no spawn, just check executable exists)
@@ -1048,8 +1042,7 @@ def test_engine(
             return {"ok": False, "detail": "Claude CLI test failed"}
 
     if body.engine_id == "anthropic":
-        env = _read_service_env()
-        key = env.get("ANTHROPIC_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "")
+        key = _resolve_key("ANTHROPIC_API_KEY")
         if not key:
             return {"ok": False, "detail": "ANTHROPIC_API_KEY not set"}
         try:

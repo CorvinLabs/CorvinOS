@@ -159,14 +159,20 @@ def test_build_spawn_env_resolves_provider_credential_via_resolve_by_env_var(mon
                 base_url = "http://localhost:9999"
                 credential_env = "OPENROUTER_API_KEY"
 
+            # _build_spawn_env delegates the whole redirect to
+            # engine_models.resolve_claude_code_provider_env — the single
+            # source of truth also used by acs_runtime.py's manager/worker
+            # spawns (see test_acs_manager_worker_redirect_shares_adapter_ssot
+            # in test_adapter_openrouter_routing.py). Patch provider_keys
+            # itself (the real shared module engine_models imports), not
+            # adapter's own module-level alias — that alias is no longer on
+            # the path this credential resolution takes.
             with (
                 mock.patch.object(
-                    adapter, "_provider_keys",
-                    mock.Mock(resolve_by_env_var=mock.Mock(return_value="sk-or-v1-live-value")),
+                    provider_keys, "resolve_by_env_var",
+                    mock.Mock(return_value="sk-or-v1-live-value"),
                 ),
             ):
-                # Patch the lazily-imported engine_models functions the way
-                # _build_spawn_env imports them (`from engine_models import ...`).
                 import engine_models  # type: ignore  # noqa: PLC0415
                 with (
                     mock.patch.object(engine_models, "get_tenant_engine_provider", return_value="openrouter"),

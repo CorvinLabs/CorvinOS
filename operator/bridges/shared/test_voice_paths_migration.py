@@ -69,10 +69,18 @@ def test_vault_default_xdg_canonical() -> None:
         _purge_modules("paths", "vault")
         import vault  # noqa: E402
 
-        cand = (
-            getattr(vault, "VAULT_DIR", None)
-            or getattr(vault, "_VAULT_DIR", None)
-        )
+        # vault.py resolves its path via a FUNCTION (_vault_dir()), not a
+        # module-level constant — a module-level VAULT_DIR was itself a
+        # path-audit-class bug (2026-07-14): computed once at import time,
+        # a later env-var change (like the CORVIN_HOME override this test
+        # sets) could never retarget it, so any long-lived process (or a
+        # test suite importing vault.py before this test ran) got it wrong
+        # for good. Calling the function on every check is the fix.
+        cand = None
+        if hasattr(vault, "_vault_dir"):
+            cand = vault._vault_dir()
+        elif hasattr(vault, "VAULT_DIR"):
+            cand = vault.VAULT_DIR
         if cand is not None:
             t(
                 "vault dir under XDG-canonical corvin-voice root",
@@ -81,9 +89,9 @@ def test_vault_default_xdg_canonical() -> None:
             )
         else:
             t(
-                "vault module exposes path constant",
+                "vault module exposes a path resolver",
                 False,
-                detail="no VAULT_DIR / _VAULT_DIR attribute",
+                detail="no _vault_dir() function / VAULT_DIR attribute",
             )
     os.environ.pop("CORVIN_HOME", None)
 

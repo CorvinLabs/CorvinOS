@@ -278,6 +278,113 @@ def get_tenant_engine_provider(tenant_id: str, engine_id: str) -> str | None:
     return val.strip() if isinstance(val, str) and val.strip() else None
 
 
+def resolve_claude_code_provider_env(tenant_id: str) -> dict[str, str]:
+    """ADR-0181 M3 — the ONE place that computes the ANTHROPIC_* redirect env
+    for pointing the claude_code engine at a non-anthropic provider. Returns
+    {} when claude_code should keep its default (native Anthropic) routing
+    for this tenant.
+
+    Every spawn site (adapter.py's OS-turn path, acs_runtime.py's ACS
+    manager/worker paths) MUST call this instead of re-deriving the redirect
+    itself. Before this consolidation (adversarial review, 2026-07-14),
+    acs_runtime.py's own copy read the credential via a bare
+    ``os.environ.get`` (missing a key an operator just saved through
+    Settings -> API Keys until the daemon restarted) and never started the
+    translating proxy for ollama/openrouter providers — it pointed
+    ANTHROPIC_BASE_URL straight at their OpenAI-format ``base_url``, which
+    claude_code cannot speak, breaking every ACS-delegated (manager/worker)
+    turn for exactly the providers this function exists to support.
+
+    The endpoint MUST speak the Anthropic Messages API: an operator-configured
+    ``proxy_base_url`` (e.g. an externally-run LiteLLM) is honored first if
+    set; otherwise, for a provider whose own API is OpenAI-format
+    (ollama_local/ollama_cloud/openrouter — never anthropic-native), the
+    built-in local translating proxy (anthropic_openai_bridge) is started on
+    demand and used instead — no external proxy deployment required.
+    """
+    prov = get_tenant_engine_provider(tenant_id, "claude_code")
+    if not prov or prov == "anthropic":
+        return {}
+    ps = load_providers().get(prov)
+    if ps is None:
+        return {}
+
+    import sys
+    _shared = str(Path(__file__).resolve().parent)
+    if _shared not in sys.path:
+        sys.path.insert(0, _shared)
+    import provider_keys as _provider_keys  # type: ignore
+
+    # Resolve through provider_keys (env, THEN service.env) rather than bare
+    # os.environ — a key an operator just saved via Settings -> API Keys lands
+    # in service.env immediately, but a long-running daemon's own os.environ
+    # was only populated once, at process spawn; reading os.environ directly
+    # would miss it until a restart.
+    key = (_provider_keys.resolve_by_env_var(ps.credential_env) or ""
+           if ps.credential_env else "")
+    if ps.credential_env and not key:
+        # A credential env-var is declared but not present — CC would be
+        # redirected to the provider with a placeholder key and fail auth.
+        # Surface the misconfig instead of failing silently. (Name only —
+        # never the value — per the audit/PII red-line.)
+        import logging
+        logging.getLogger(__name__).warning(
+            "[provider] %s: credential env %r is not set — claude_code will "
+            "fail to authenticate against %s. Load the vault key into the "
+            "process environment.", prov, ps.credential_env, ps.label,
+        )
+
+    base = ""
+    if ps.proxy_base_url:
+        base = ps.proxy_base_url
+    elif ps.model_source in ("ollama", "openrouter"):
+        try:
+            from anthropic_openai_bridge import (  # type: ignore
+                ProxyTarget, chat_completions_url_for, ensure_proxy)
+            model = (
+                get_tenant_engine_model(tenant_id, "claude_code", "os_model")
+                or ("qwen3:8b" if ps.model_source == "ollama" else "")
+            )
+            if not model:
+                # "auto" is not a valid OpenRouter model id (the real slug is
+                # "openrouter/auto") — starting the proxy anyway would make
+                # every turn fail with an opaque upstream 400 instead of a
+                # clear error. Leave base unset so CC falls through to its
+                # existing routing instead.
+                import logging
+                logging.getLogger(__name__).warning(
+                    "[provider] %s: no model selected for claude_code and no "
+                    "safe default exists for OpenRouter — pick a model on the "
+                    "Engines page.", prov,
+                )
+            else:
+                base = ensure_proxy(ProxyTarget(
+                    chat_completions_url=chat_completions_url_for(
+                        ps.base_url, ps.model_source),
+                    api_key=key, model=model,
+                    disable_reasoning=(ps.model_source == "ollama"),
+                ))
+        except Exception:  # noqa: BLE001 — never break the spawn
+            import logging
+            logging.getLogger(__name__).warning(
+                "[provider] %s: failed to start the local translating proxy "
+                "— falling back to base_url directly (will not speak the "
+                "Anthropic API).", prov,
+            )
+            base = ps.base_url
+    else:
+        base = ps.base_url
+
+    if not base:
+        return {}
+    return {
+        "ANTHROPIC_BASE_URL": base,
+        "ANTHROPIC_API_KEY": key or "provider",
+        "ANTHROPIC_AUTH_TOKEN": key or "provider",
+        "CORVIN_CC_PROVIDER": prov,
+    }
+
+
 def resolve_engine_egress(tenant_id: str, engine_id: str) -> "ProviderSpec | None":
     """ADR-0181 M3 — the effective provider an engine egresses to for this tenant
     (or None to fall back to the engine's default host). The single source of

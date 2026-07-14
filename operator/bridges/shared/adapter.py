@@ -3624,82 +3624,14 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
             # ADR-0181 M3 — provider-based routing for Claude Code. When a
             # provider is assigned to claude_code for this tenant (and it is not
             # native anthropic), redirect Claude Code to it via ANTHROPIC_BASE_URL
-            # + the vault-injected key. The endpoint MUST speak the Anthropic
-            # Messages API: an operator-configured ``proxy_base_url`` (e.g. an
-            # externally-run LiteLLM) is honored first if set; otherwise, for a
-            # provider whose own API is OpenAI-format (ollama_local/ollama_cloud/
-            # openrouter — never anthropic-native), the built-in local translating
-            # proxy (anthropic_openai_bridge, 2026-07-14) is started on demand and
-            # used instead — no external proxy deployment required. Egress goes to
-            # that host (L35 resolves it via resolve_engine_egress_host — same
-            # source of truth).
+            # + the vault-injected key. resolve_claude_code_provider_env is the
+            # single source of truth for this redirect — acs_runtime.py's
+            # manager/worker spawns call the exact same function, so the two
+            # spawn paths can never disagree about where claude_code egresses
+            # (adversarial review, 2026-07-14: they used to, silently).
             try:
-                from engine_models import (  # type: ignore
-                    get_tenant_engine_model, get_tenant_engine_provider, load_providers)
-                _prov = get_tenant_engine_provider(_tid, "claude_code")
-                if _prov and _prov != "anthropic":
-                    _ps = load_providers().get(_prov)
-                    _base = ""
-                    _key = ""
-                    if _ps is not None:
-                        # Resolve through provider_keys (env, THEN service.env)
-                        # rather than bare os.environ — a key an operator just
-                        # saved via Settings -> API Keys lands in service.env
-                        # immediately, but this bridge daemon's own os.environ
-                        # was only populated once, at process spawn; reading
-                        # os.environ directly would miss it until a restart.
-                        _key = (_provider_keys.resolve_by_env_var(_ps.credential_env) or ""
-                                if _ps.credential_env else "")
-                        if _ps.credential_env and not _key:
-                            # A credential env-var is declared but not present in
-                            # this process — CC would be redirected to the provider
-                            # with a placeholder key and fail auth. Surface the
-                            # misconfig instead of failing silently. (Name only —
-                            # never the value — per the audit/PII red-line.)
-                            log(f"[provider] {_prov}: credential env "
-                                f"'{_ps.credential_env}' is not set — Claude Code "
-                                f"will fail to authenticate against {_ps.label}. "
-                                f"Load the vault key into the bridge environment.")
-
-                        if _ps.proxy_base_url:
-                            _base = _ps.proxy_base_url
-                        elif _ps.model_source in ("ollama", "openrouter"):
-                            try:
-                                from anthropic_openai_bridge import (  # type: ignore
-                                    ProxyTarget, chat_completions_url_for, ensure_proxy)
-                                _model = (
-                                    get_tenant_engine_model(_tid, "claude_code", "os_model")
-                                    or ("qwen3:8b" if _ps.model_source == "ollama" else "")
-                                )
-                                if not _model:
-                                    # "auto" is not a valid OpenRouter model id (the
-                                    # real slug is "openrouter/auto") — starting the
-                                    # proxy anyway would make every turn fail with an
-                                    # opaque upstream 400 instead of the clear error
-                                    # already logged below. Leave _base unset so CC
-                                    # falls through to its existing routing instead.
-                                    log(f"[provider] {_prov}: no model selected for "
-                                        f"claude_code and no safe default exists for "
-                                        f"OpenRouter — pick a model on the Engines page.")
-                                else:
-                                    _base = ensure_proxy(ProxyTarget(
-                                        chat_completions_url=chat_completions_url_for(
-                                            _ps.base_url, _ps.model_source),
-                                        api_key=_key, model=_model,
-                                        disable_reasoning=(_ps.model_source == "ollama"),
-                                    ))
-                            except Exception:  # noqa: BLE001 — never break the spawn
-                                log(f"[provider] {_prov}: failed to start the local "
-                                    f"translating proxy — falling back to base_url "
-                                    f"directly (will not speak the Anthropic API).")
-                                _base = _ps.base_url
-                        else:
-                            _base = _ps.base_url
-                    if _base:
-                        env["ANTHROPIC_BASE_URL"] = _base
-                        env["ANTHROPIC_API_KEY"] = _key or "provider"
-                        env["ANTHROPIC_AUTH_TOKEN"] = _key or "provider"
-                        env["CORVIN_CC_PROVIDER"] = _prov
+                from engine_models import resolve_claude_code_provider_env  # type: ignore
+                env.update(resolve_claude_code_provider_env(_tid))
             except Exception:  # noqa: BLE001 — routing is best-effort, never fatal
                 pass
     return env

@@ -92,6 +92,19 @@ _MAX_PROMPT_CHARS = 4000
 # _TOTAL_TIMEOUT_S", which is strictly better, but per-call concurrency
 # isolation would need an async tool implementation or a separate worker
 # process — tracked as a follow-up, out of scope here.
+#
+# Second known limitation (adversarial review, 2026-07-14): a still-stuck
+# worker thread is ABANDONED, not killed — Python cannot force-terminate a
+# thread blocked inside a syscall. That is harmless for any ONE stuck call,
+# but if the SAME permanently-broken resource (a stalled network/synced
+# drive, a provider that never returns) is retried repeatedly, abandoned
+# threads accumulate for the life of this long-running server process. A
+# proper fix needs a killable child PROCESS instead of a thread for the
+# stuck step — a larger change tracked as a follow-up, not done here.
+# _run_bounded (below) at least converts the worst case — the OS refusing
+# to create a new thread once the process's thread budget is exhausted —
+# into the same clean timeout error the caller already handles, instead of
+# an unhandled RuntimeError that would crash this MCP server process.
 _SAVE_TIMEOUT_S = 30.0
 _TOTAL_TIMEOUT_S = 240.0  # comfortably above the legitimate worst case:
 # L44 gate ~100s worst case (spawn_gates/house_rules, 3 retries + backoff)
@@ -119,7 +132,14 @@ def _run_bounded(fn, timeout_s: float, thread_name: str):
             outcome["error"] = exc
 
     t = threading.Thread(target=_worker, daemon=True, name=thread_name)
-    t.start()
+    try:
+        t.start()
+    except RuntimeError:
+        # The OS refused to create a new thread — the accumulated-leak worst
+        # case documented above (see the module comment). Report it exactly
+        # like a hang instead of letting a raw RuntimeError crash the whole
+        # MCP server process over one call.
+        return {}, True
     t.join(timeout=timeout_s)
     return outcome, t.is_alive()
 

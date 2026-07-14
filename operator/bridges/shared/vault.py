@@ -81,10 +81,33 @@ def _vault_cache_root() -> Path:
     return voice_dir() / "cache"
 
 
-VAULT_DIR = _vault_root() / "vault"
-INDEX_FILE = VAULT_DIR / "INDEX.json"
-LOG_FILE = _vault_root() / "vault.log"
-UNLOCK_FILE = _vault_cache_root() / "vault-unlocks.json"
+def _vault_dir() -> Path:
+    return _vault_root() / "vault"
+
+
+def _index_file() -> Path:
+    return _vault_dir() / "INDEX.json"
+
+
+def _log_file() -> Path:
+    return _vault_root() / "vault.log"
+
+
+def _unlock_file() -> Path:
+    return _vault_cache_root() / "vault-unlocks.json"
+
+
+# path-audit-class bug (2026-07-14): these used to be module-level constants
+# computed ONCE at import time from _vault_root()/_vault_cache_root(). Any
+# code (or test) that imported vault.py before VOICE_CONFIG_DIR/XDG_CONFIG_HOME
+# was set to an isolated dir got these bound to the REAL
+# ~/.config/corvin-voice/vault permanently for the life of the process —
+# sys.modules caching meant a later monkeypatch of the env var could never
+# retarget them. A test suite run in the "wrong" file order silently wrote
+# live BYOK secrets into the real vault on the machine running the tests.
+# Functions (mirroring provider_keys.py's service_env_path()) re-resolve the
+# path on every call, so env-var isolation always takes effect regardless of
+# import order. Do NOT reintroduce these as module-level path constants.
 
 # Item names: lowercase, [a-z0-9_-], 1-40 chars, no path traversal.
 _VALID_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
@@ -100,13 +123,14 @@ GPG_RECIPIENT_ENV = "VAULT_GPG_RECIPIENT"
 # ─── helpers ───────────────────────────────────────────────────────────────
 
 def _ensure_dirs() -> None:
-    VAULT_DIR.mkdir(parents=True, exist_ok=True)
+    vault_dir = _vault_dir()
+    vault_dir.mkdir(parents=True, exist_ok=True)
     try:
-        VAULT_DIR.chmod(0o700)
+        vault_dir.chmod(0o700)
     except OSError:
         pass
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    UNLOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _log_file().parent.mkdir(parents=True, exist_ok=True)
+    _unlock_file().parent.mkdir(parents=True, exist_ok=True)
 
 
 def _normalise_name(name: str) -> str:
@@ -122,7 +146,7 @@ def _normalise_name(name: str) -> str:
 
 def _item_path(name: str, *, encrypted: bool) -> Path:
     suffix = ".json.gpg" if encrypted else ".json"
-    return VAULT_DIR / f"{_normalise_name(name)}{suffix}"
+    return _vault_dir() / f"{_normalise_name(name)}{suffix}"
 
 
 def _has_gpg() -> bool:
@@ -144,10 +168,11 @@ def audit(event: str, name: str, *, source: str = "?", ok: bool = True,
         line = f"[{ts}] {status} {event} name={name} from={source}"
         if extra:
             line += f" {extra}"
-        with LOG_FILE.open("a") as f:
+        log_file = _log_file()
+        with log_file.open("a") as f:
             f.write(line + "\n")
         try:
-            LOG_FILE.chmod(0o600)
+            log_file.chmod(0o600)
         except OSError:
             pass
     except OSError:
@@ -169,10 +194,11 @@ def audit(event: str, name: str, *, source: str = "?", ok: bool = True,
 
 
 def read_audit(n: int = 20) -> list[str]:
-    if not LOG_FILE.exists():
+    log_file = _log_file()
+    if not log_file.exists():
         return []
     try:
-        lines = LOG_FILE.read_text().splitlines()
+        lines = log_file.read_text().splitlines()
     except OSError:
         return []
     return lines[-n:]
@@ -182,18 +208,19 @@ def read_audit(n: int = 20) -> list[str]:
 
 def _load_index() -> list[dict[str, Any]]:
     try:
-        return json.loads(INDEX_FILE.read_text())
+        return json.loads(_index_file().read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return []
 
 
 def _save_index(items: list[dict[str, Any]]) -> None:
     _ensure_dirs()
-    tmp = INDEX_FILE.with_suffix(".json.tmp")
+    index_file = _index_file()
+    tmp = index_file.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(items, indent=2, ensure_ascii=False))
-    shutil.move(str(tmp), str(INDEX_FILE))
+    shutil.move(str(tmp), str(index_file))
     try:
-        INDEX_FILE.chmod(0o600)
+        index_file.chmod(0o600)
     except OSError:
         pass
 
@@ -225,18 +252,19 @@ def _index_get(name: str) -> dict[str, Any] | None:
 
 def _load_unlocks() -> dict[str, float]:
     try:
-        return json.loads(UNLOCK_FILE.read_text())
+        return json.loads(_unlock_file().read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
 
 def _save_unlocks(d: dict[str, float]) -> None:
-    UNLOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = UNLOCK_FILE.with_suffix(".json.tmp")
+    unlock_file = _unlock_file()
+    unlock_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp = unlock_file.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(d))
-    shutil.move(str(tmp), str(UNLOCK_FILE))
+    shutil.move(str(tmp), str(unlock_file))
     try:
-        UNLOCK_FILE.chmod(0o600)
+        unlock_file.chmod(0o600)
     except OSError:
         pass
 

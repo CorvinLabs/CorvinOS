@@ -1932,9 +1932,11 @@ operator deployment:
     OpenAI-compat endpoint for qwen3-style thinking models (harmless no-op
     on servers that ignore the field) — same latency fix already applied to
     Hermes/`summarize.py`'s native-API calls.
-- **`operator/bridges/shared/adapter.py::_build_spawn_env`** — the
-  provider-routing branch (search `ADR-0181 M3` in the file) resolves the
-  effective base URL in priority order: an operator-configured
+- **`operator/bridges/shared/engine_models.py::resolve_claude_code_provider_env(tenant_id)`**
+  is the **single source of truth** for the whole redirect, called by both
+  `adapter.py::_build_spawn_env` (OS-turn path) and
+  `acs_runtime.py::_apply_provider_redirect` (ACS manager/worker paths — see
+  note below). It resolves the effective base URL in priority order: an operator-configured
   `ProviderSpec.proxy_base_url` (external proxy) first, else — for
   `model_source in ("ollama", "openrouter")` — the built-in bridge above,
   else the provider's raw `base_url` (assumed already Anthropic-compatible).
@@ -1950,6 +1952,18 @@ operator deployment:
     immediately (only `resolve_key`/`resolve_by_env_var` re-read
     `service.env` live; the daemon's own `os.environ` was populated once, at
     process spawn).
+  - **Two call sites, one function** (adversarial review, 2026-07-14):
+    before this consolidation, `acs_runtime.py` had its OWN copy of this
+    logic (added same day as the adapter.py fix, ADR-0181 M3 review finding
+    #6) that read the credential via a bare `os.environ.get(ps.credential_env,
+    "")` and never started the translating proxy for ollama/openrouter — it
+    pointed `ANTHROPIC_BASE_URL` straight at their OpenAI-format `base_url`,
+    which Claude Code cannot speak. Every ACS-delegated (manager decision or
+    worker task) turn silently failed for exactly the providers this feature
+    exists to support, while the OS-turn path worked correctly. **Any future
+    third spawn site for `claude_code` MUST call
+    `resolve_claude_code_provider_env` too** — do not re-derive the redirect
+    inline again.
 
 **BYOK key types** (`operator/bridges/shared/provider_keys.py::CANONICAL_ENV_VAR`):
 `openrouter_api_key` → `OPENROUTER_API_KEY`, `ollama_api_key` →
@@ -1978,6 +1992,14 @@ one place that reads.
   no-model-configured OpenRouter edge case: `ensure_proxy` must not be
   called with a bogus model, and `ANTHROPIC_BASE_URL` must stay unset so CC
   falls through instead of being redirected to a guaranteed-broken endpoint.
+  Also `test_acs_manager_worker_redirect_shares_adapter_ssot` — proves
+  `acs_runtime._apply_provider_redirect` goes through the exact same
+  `resolve_claude_code_provider_env` the OS-turn path uses (live credential
+  resolution + proxy auto-start), so the two spawn paths can't silently
+  re-drift apart. All tests in this file monkeypatch
+  `adapter._read_cc_local_cfg` to return `None` — without it they are not
+  hermetic against a host with a real ADR-0126 `claude_code_local` redirect
+  configured in `~/.corvin`.
 
 ### What you, as Claude Code, must NOT do (ADR-0181 M3)
 
@@ -1991,3 +2013,10 @@ one place that reads.
 - **Don't omit any field that changes the effective proxy target from
   `_target_key()`.** A stale cached server silently serving the wrong
   model/flag combination is worse than the cost of one extra daemon thread.
+- **Don't re-derive the claude_code provider redirect at a new spawn site.**
+  Call `engine_models.resolve_claude_code_provider_env(tenant_id)` and merge
+  the result into the spawn env — this is the exact bug class that broke
+  every ACS-delegated turn for ollama/openrouter providers until the
+  2026-07-14 consolidation (see above). A second hand-rolled copy WILL drift
+  (stale credential read, missing proxy auto-start) even if it looks
+  identical at the moment you write it.
