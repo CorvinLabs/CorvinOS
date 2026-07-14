@@ -524,6 +524,39 @@ no-annotation-this-turn instead of a frozen chat; a healthy machine (fast Haiku
 ~3s/call) stays well under budget and produces both suffixes as before. Regression
 guard: `core/console/tests/test_chat_runtime_annotation.py`.
 
+**Console `/voice/tts` never actually summarized the core answer (2026-07-14).**
+The annex mechanism just above (`_compute_web_annotation_suffix`) only ever
+APPENDS a LERN-ZUGABE/METAPHER suffix — it never condenses the primary
+answer itself. Before this fix, `POST /v1/console/voice/tts`
+(`core/console/corvin_console/routes/voice.py`) spoke `body.text` truncated
+blindly at 4000 chars — the raw, full answer (plus the annex suffix, once
+the second `{"type": "result", ...}` WS frame above lands and re-triggers
+`playTts` — see `chat.tsx`'s `evt.type === "result"` handler). Every
+messenger bridge, by contrast, speaks a real CONDENSED summary via
+`adapter.py::build_voice_summary()`. A fully-working, tested
+`POST /voice/summarize` endpoint already existed for exactly this — the
+frontend simply never called it (confirmed via grep: zero references to
+`"voice/summarize"` under `web-next/src`). Reported as "voice summary
+works via Discord, not in the console chat."
+
+Fixed server-side, no frontend change needed: `voice_tts()` now calls a new
+`_summarize_for_speech()` helper (shells out to `summarize.py`, same script
+`/voice/summarize` and `build_voice_summary()` use) BEFORE truncating,
+falling back to the old raw-truncated behaviour only if summarization is
+unavailable or fails. Timeout matches `build_voice_summary`'s own 120s
+parent cap (`summarize.py`'s internal CLI+Hermes budget is up to 105s).
+
+Known follow-up, not fixed here (efficiency, not correctness): because the
+WS stream yields TWO `"result"` frames per turn when an annex suffix is
+computed (once without, once with), and `chat.tsx` calls `playTts()` on
+EVERY `"result"` frame, a turn WITH an annex now runs `summarize.py`
+**twice** — the first (pre-annex) response is thrown away once the second
+`playTts()` call supersedes it (`useVoicePlayback`'s request-id "latest
+wins" guard already handles this correctly, so it's wasted compute, not a
+correctness bug). A cleaner fix would have the frontend only call
+`playTts()` once, after the annex is known — out of scope for this pass.
+Regression: `core/console/tests/test_voice_tts_summarize.py` (8 cases).
+
 **Annex must never double (`build_voice_summary` dedup).** The bridge backfills
 the LERN-ZUGABE / METAPHER onto the spoken text on every path, each guarded by
 `_has_lern_zugabe_suffix` / `_has_metapher_suffix` so an annex the summarizer (or

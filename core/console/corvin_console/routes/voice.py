@@ -427,6 +427,67 @@ def _resolve_tts_voice(lang: str) -> str | None:
 
 
 _TTS_PROVIDER_CHAR_LIMIT = 4000  # OpenAI TTS-1 hard cap is 4096; stay under it
+_TTS_SUMMARIZE_MAX_CHARS = 400   # same default build_voice_summary() uses for bridges
+# summarize.py's OWN internal budget is CLI (45s) + Hermes (60s) = up to 105s
+# worst case (see summarize.py's _SUMMARY_CLI_TIMEOUT_S/_SUMMARY_HERMES_TIMEOUT_S).
+# A shorter wrapper timeout here would routinely cut off a legitimate
+# in-progress CLI attempt before summarize.py's own fallback chain even runs —
+# matches adapter.py::build_voice_summary's identical 120s parent-cap
+# convention for the exact same subprocess (bridge/console parity).
+_TTS_SUMMARIZE_TIMEOUT_S = float(os.environ.get("CORVIN_TTS_SUMMARIZE_TIMEOUT_S", "120"))
+
+
+def _summarize_for_speech(text: str, lang: str) -> str | None:
+    """Best-effort condensation of *text* into a real, faithful spoken
+    summary (learnings/metaphor annex included, per the user's audience
+    settings) via ``summarize.py`` — the SAME script the standalone
+    ``/voice/summarize`` endpoint and every messenger bridge's
+    ``adapter.py::build_voice_summary()`` already use. Returns ``None`` on
+    any failure (missing script, timeout, empty output) so the caller can
+    fall back to the raw text — this must never break TTS, only improve it.
+
+    Before this helper existed, ``POST /voice/tts`` spoke the raw, full
+    answer text (truncated blindly at ``_TTS_PROVIDER_CHAR_LIMIT``) —
+    ``/voice/summarize`` was a fully-working, tested endpoint that the
+    frontend never called (confirmed via grep: zero references to
+    "voice/summarize" anywhere under web-next/src). Every messenger bridge
+    (Discord, WhatsApp, ...) speaks a real condensed summary; the console
+    read the raw text word-for-word — this is the console-specific gap
+    behind that discrepancy (found 2026-07-14, reported as "voice summary
+    works in Discord but not in the console chat").
+    """
+    summarize_path = _VOICE_SCRIPTS / "summarize.py"
+    if not summarize_path.exists():
+        return None
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(summarize_path),
+             "--lang", lang if lang in ("de", "en") else "de",
+             "--max-chars", str(_TTS_SUMMARIZE_MAX_CHARS)],
+            input=text, capture_output=True, text=True,
+            timeout=_TTS_SUMMARIZE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        _log.warning("voice_tts: summarize.py timed out after %.0fs — "
+                     "speaking the raw (truncated) text instead",
+                     _TTS_SUMMARIZE_TIMEOUT_S)
+        return None
+    except OSError as exc:
+        _log.warning("voice_tts: could not start summarize.py (%s) — "
+                     "speaking the raw (truncated) text instead", exc)
+        return None
+    if proc.returncode != 0:
+        _log.warning("voice_tts: summarize.py exited %d — speaking the raw "
+                     "(truncated) text instead. stderr tail: %s",
+                     proc.returncode, proc.stderr.strip()[-400:])
+        return None
+    summary = proc.stdout.strip()
+    if not summary:
+        return None
+    if "[summarize] degraded:" in proc.stderr:
+        _log.info("voice_tts: summarize.py used its degraded (near-verbatim) "
+                  "fallback this turn — both LLM backends were unavailable.")
+    return summary
 
 
 class TtsRequest(BaseModel):
@@ -450,11 +511,13 @@ def voice_tts(
         raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE,
                             "say.py not found")
 
-    # Truncate silently to the provider character limit. TTS providers (OpenAI
-    # TTS-1: 4096 chars, edge-tts: ~8000) reject oversized input. Long responses
-    # should go through /voice/summarize first; if the caller skips that step we
-    # degrade gracefully (partial audio) instead of returning a 422.
-    tts_text = body.text[:_TTS_PROVIDER_CHAR_LIMIT]
+    # Speak a real, condensed summary (learnings/metaphor annex included, same
+    # as every messenger bridge via adapter.py::build_voice_summary) instead of
+    # the raw answer text — see _summarize_for_speech's docstring for why this
+    # was previously missing here. Falls back to a blind truncation at the
+    # provider character limit (OpenAI TTS-1: 4096 chars, edge-tts: ~8000) if
+    # summarization is unavailable or fails; this must never block TTS.
+    tts_text = _summarize_for_speech(body.text, body.lang) or body.text[:_TTS_PROVIDER_CHAR_LIMIT]
 
     with tempfile.NamedTemporaryFile(prefix="corvin_tts_", suffix=".opus", delete=False) as fh:
         out_path = Path(fh.name)
