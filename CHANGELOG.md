@@ -6,6 +6,58 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.37] — 2026-07-14 — Image-generator hang fix + provider-routing hardening
+
+### Fixed
+
+- **Image generator tool could hang forever** on some systems (reported on
+  Windows 11) with zero feedback to the user. Root cause: no timeout anywhere
+  in the call chain from the MCP tool down to the file-save step. Both the
+  file-save and the overall tool call now run on a bounded daemon thread
+  (`_run_bounded()`), abandoning a stuck call after a generous timeout
+  instead of blocking indefinitely; a stuck write or a stuck generation now
+  surfaces a clear, catchable `ImageGenTimeout` instead of silence.
+- **OpenRouter provider routing could redirect Claude Code to a guaranteed-
+  broken endpoint.** When no model was configured for OpenRouter, the local
+  translating proxy used to start anyway with the invalid model id `"auto"`
+  — every subsequent turn then failed with an opaque upstream 400. It now
+  falls through to the existing routing instead, and the same fix now lives
+  in one shared place (`engine_models.resolve_claude_code_provider_env`)
+  used by both the OS-turn spawn path and the ACS manager/worker spawn path,
+  closing a second, independent copy of the same class of bug in the latter
+  (which also never started the translating proxy for ollama/openrouter and
+  read its credential via a bare `os.environ.get`, missing a key an operator
+  just saved through Settings → API Keys until the daemon restarted).
+- **Local Anthropic↔OpenAI translating proxy streaming gaps**: a
+  `message_start` event could be missing from an otherwise-empty SSE stream
+  (malformed Anthropic protocol output), a stalled upstream mid-stream was
+  not caught (client would hang instead of getting a clean close), streamed
+  responses never requested `stream_options.include_usage` (token-usage
+  accounting silently reported 0 for every streamed turn), and the proxy's
+  server-reuse cache key omitted `disable_reasoning` (could silently reuse
+  the wrong cached proxy instance for a rotated flag).
+- **BYOK key resolution silently failed for any provider credential name
+  outside the small hardcoded canonical set** — `resolve_by_env_var()` now
+  falls back to resolving the literal env-var name (process env, then
+  `service.env`) instead of returning `None`.
+- **codex_cli / opencode engine spawns used stale credentials** until the
+  bridge daemon restarted — they had no credential-refresh of their own
+  (unlike Claude Code's provider-routing path). `_build_spawn_env` now
+  refreshes `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` from the live vault-aware
+  resolver on every spawn.
+- **`_save_image_bytes` lost its "never raises" guarantee** in an earlier
+  refactor (path/env construction had moved outside the try/except) —
+  restored so a malformed output-directory value degrades to "not saved"
+  instead of crashing the whole tool call.
+
+### Added
+
+- Settings → API Keys: the "eye" button on a saved key now reveals its
+  actual saved value on first click (self-hosted only) instead of only
+  toggling visibility of a new, not-yet-saved value being typed. Every
+  reveal is audited (`byok.secret_revealed`, key name only, never the
+  value).
+
 ## [0.10.36] — 2026-07-13 — Fresh-install voice language is preset for everything
 
 ### Fixed
