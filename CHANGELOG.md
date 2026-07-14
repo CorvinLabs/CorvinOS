@@ -6,6 +6,25 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.41] — 2026-07-15 — ACS delegation: unbounded-memory crash fix
+
+### Fixed
+
+- **A very large ACS (Autonomous Compute Shell) delegation workflow could
+  crash with unbounded memory growth**, especially noticeable on Windows.
+  Manager/worker subprocess calls buffered their ENTIRE stdout/stderr in
+  memory with no size limit (the constants that looked like a cap were
+  never actually wired in). Compounded by two further gaps: the total
+  worker-count budget was only enforced between dispatch batches, not
+  within one (a single manager decision could burst up to 100 concurrent,
+  unbounded-output worker subprocesses), and the wall-clock budget had no
+  upper ceiling, giving a run more time to compound both. Subprocess
+  output is now drained continuously (never blocking the child on a full
+  pipe) but only retained up to a size cap; a dispatch batch is now
+  clamped to the actually-remaining worker budget before any subprocess is
+  started; and the wall-clock budget is now bounded like every other
+  budget field.
+
 ## [0.10.40] — 2026-07-14 — Console voice summary parity + imagegen budget fix
 
 ### Fixed
