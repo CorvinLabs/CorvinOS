@@ -2398,6 +2398,13 @@ async def stream_turn(
     if _del_will_delegate:
         task_text = _task_text
         _acs = None
+        # Fallback flag: any "no ACS run possible" condition — runtime import
+        # failure, empty task, an un-creatable run dir (the Windows ':' path bug),
+        # or an exhausted ACS quota below — routes this turn to the NORMAL Claude
+        # Code OS-turn instead of failing it. The normal path does its own
+        # Task-tool delegation, so the user still gets delegated work, just not
+        # via the ACS fan-out. (User requirement: robust — no ACS → normal.)
+        _quota_fallback = False
         try:
             # Ensure operator/bridges/shared is in path for spawn_gates and other deps
             # Path: core/console/corvin_console/chat_runtime.py → CorvinOS/operator/bridges/shared
@@ -2406,14 +2413,15 @@ async def stream_turn(
                 sys.path.insert(0, str(_bridge_shared))
             import acs_runtime as _acs  # type: ignore  # noqa: PLC0415
         except Exception as _import_err:  # noqa: BLE001
-            _log.warning("[delegation] Failed to import ACS runtime: %s", _import_err)
+            _log.warning("[delegation] ACS runtime import failed (%s) — falling back to "
+                         "normal Claude Code turn", _import_err)
             _acs = None
         if _acs is None or not task_text:
             reason = "empty task" if not task_text else "ACS runtime unavailable"
-            _dbg(sess.workdir, "delegation.skipped", reason=reason)
-            yield {"type": "error", "message": f"delegation skipped: {reason}"}
-            yield {"type": "done"}
-            return
+            _dbg(sess.workdir, "delegation.fallback_to_normal", reason=reason)
+            # Do NOT fail the turn — skip the ACS fan-out and let the normal
+            # Claude Code OS-turn below handle the prompt.
+            _quota_fallback = True
 
         # ADR-0150 LIC-WEBCHAT-DELEGATE-COMPUTE-01: this branch fans out to ACS
         # workers (1 manager + up to 4 worker `claude -p`) but constructs ACSRuntime
@@ -2421,24 +2429,43 @@ async def stream_turn(
         # compute_units_per_day HERE (orthogonal to the route's enforce_chat_turns,
         # which only covers the single OS-turn framing). Fail-CLOSED: a missing
         # license module or an over-quota both deny the fan-out before any spawn.
+        # All ACS-specific setup is skipped when we already fell back above.
+        _cq_inc = _CQErr = _cq_home = None
+        if not _quota_fallback:
+            try:
+                from license.compute_quota import increment_and_check as _cq_inc  # type: ignore  # noqa: PLC0415
+                from license.limits import LicenseLimitError as _CQErr  # type: ignore  # noqa: PLC0415
+            except ImportError:
+                yield {"type": "error", "code": 402,
+                       "message": "compute quota enforcement unavailable (fail-closed)"}
+                yield {"type": "done"}
+                return
+            # Use the CANONICAL resolver (CORVIN_HOME → service.env pin → repo marker
+            # → ~/.corvin), NOT a hand-rolled env-or-~/.corvin: the deny-by-default
+            # compute gate (ADR-0094) writes the counter via forge.paths.corvin_home()
+            # in _compute_license_gate / mcp_server. A direct-env resolver returns
+            # ~/.corvin inside a repo where canonical returns <repo>/.corvin → the
+            # reader (this counter) and the writer diverge → quota silently miscounted.
+            _cq_home = _forge_paths.corvin_home()
+            # Robustness pre-flight: the ACS run writes its tree under
+            # sess.workdir/acs/runs. If that can't be created (filesystem /
+            # permission — including the Windows ':' chat_key path, now fixed at
+            # source in acs_runtime._run_dir), fall back to the normal Claude Code
+            # OS-turn instead of failing the whole turn.
+            try:
+                (sess.workdir / "acs" / "runs").mkdir(parents=True, exist_ok=True)
+            except OSError as _pf_err:
+                _quota_fallback = True
+                _log.warning("[delegation] ACS run tree not creatable (%s) — falling back "
+                             "to normal Claude Code turn", _pf_err)
+                _dbg(sess.workdir, "delegation.fallback_to_normal",
+                     reason=f"acs_dir_uncreatable:{type(_pf_err).__name__}")
+                yield {"type": "notice", "subtype": "acs_fallback",
+                       "message": "ACS-Run nicht möglich — der Task läuft direkt über "
+                                  "Claude Code.\n\n"}
         try:
-            from license.compute_quota import increment_and_check as _cq_inc  # type: ignore  # noqa: PLC0415
-            from license.limits import LicenseLimitError as _CQErr  # type: ignore  # noqa: PLC0415
-        except ImportError:
-            yield {"type": "error", "code": 402,
-                   "message": "compute quota enforcement unavailable (fail-closed)"}
-            yield {"type": "done"}
-            return
-        # Use the CANONICAL resolver (CORVIN_HOME → service.env pin → repo marker
-        # → ~/.corvin), NOT a hand-rolled env-or-~/.corvin: the deny-by-default
-        # compute gate (ADR-0094) writes the counter via forge.paths.corvin_home()
-        # in _compute_license_gate / mcp_server. A direct-env resolver returns
-        # ~/.corvin inside a repo where canonical returns <repo>/.corvin → the
-        # reader (this counter) and the writer diverge → quota silently miscounted.
-        _cq_home = _forge_paths.corvin_home()
-        _quota_fallback = False
-        try:
-            _cq_inc(_cq_home, channel="web-chat-acs", chat_key=f"web:{sess.tenant_id}:{sess.sid}")
+            if not _quota_fallback:
+                _cq_inc(_cq_home, channel="web-chat-acs", chat_key=f"web:{sess.tenant_id}:{sess.sid}")
         except _CQErr:  # type: ignore[misc]
             _quota_fallback = True
             # L34/L35 fix: re-gate with the ACTUAL fallback engine.  The initial

@@ -321,12 +321,21 @@ def _claude_binary() -> str:
 
 
 def _run_dir(tenant_id: str, bridge: str, chat: str, run_id: str) -> Path:
-    return (
-        _corvin_home()
-        / "tenants" / tenant_id
-        / "sessions" / f"{bridge}:{chat}"
-        / "acs" / "runs" / run_id
-    )
+    # The session component is the chat_key ``<bridge>:<chat>`` (e.g. "web:<sid>").
+    # The ``:`` is legal on POSIX but ILLEGAL in a Windows path component → a raw
+    # ``sessions/web:<sid>`` made os.mkdir raise ``WinError 123`` and killed every
+    # ACS run on Windows 11. Route it through the SAME SSOT the main web session
+    # workdir uses (chat_runtime._workdir → safe_session_subdir), so the ACS run
+    # dir lands UNDER the real (sanitised ``web_<sid>``) session dir instead of a
+    # divergent one — sanitises the ``:`` on Windows AND stays a POSIX no-op that
+    # honours any pre-existing legacy ``web:<sid>`` dir (no reader≠writer drift).
+    sessions_base = _corvin_home() / "tenants" / tenant_id / "sessions"
+    try:
+        from forge import paths as _fp  # type: ignore[import-untyped]
+        session_dir = _fp.safe_session_subdir(sessions_base, f"{bridge}:{chat}")
+    except Exception:  # noqa: BLE001 — forge.paths always present in a live instance
+        session_dir = sessions_base / f"{bridge}:{chat}"
+    return session_dir / "acs" / "runs" / run_id
 
 
 def _audit_path(tenant_id: str) -> Path:
@@ -1204,30 +1213,25 @@ def _strip_worker_secrets(env: dict) -> None:
 
 def _apply_provider_redirect(env: dict, tenant_id: str) -> None:
     """ADR-0181 M3 (review finding #6) — mirror the OS-turn provider redirect for
-    claude_code WORKER spawns. When a non-anthropic provider is assigned to
-    claude_code for this tenant, point the worker CLI at the provider/proxy via
-    ANTHROPIC_BASE_URL + the vault-injected credential, exactly like the OS turn
-    in adapter._build_spawn_env.
+    claude_code WORKER/manager spawns. Delegates to
+    engine_models.resolve_claude_code_provider_env, the single source of truth
+    also used by adapter._build_spawn_env for the OS turn — this used to be a
+    separate, drifted copy that (a) read the credential via a bare
+    os.environ.get instead of provider_keys.resolve_by_env_var, missing a key
+    an operator just saved through Settings -> API Keys until the daemon
+    restarted, and (b) never started the translating proxy for
+    ollama/openrouter providers, pointing ANTHROPIC_BASE_URL straight at their
+    OpenAI-format base_url — which claude_code cannot speak — breaking every
+    ACS-delegated turn for exactly those providers (adversarial review,
+    2026-07-14).
 
     Without this the worker egressed to the DEFAULT anthropic host while
     spawn_gates.check_l35 validated the PROVIDER host — enforcement and actual
     egress disagreed. Call AFTER stripping the real Anthropic creds; in the
     default (no-provider) case this is a no-op. Best-effort, never fatal."""
     try:
-        from engine_models import (  # type: ignore
-            get_tenant_engine_provider, load_providers)
-        prov = get_tenant_engine_provider(tenant_id, "claude_code")
-        if not prov or prov == "anthropic":
-            return
-        ps = load_providers().get(prov)
-        base = (ps.proxy_base_url or ps.base_url) if ps else ""
-        if not base:
-            return
-        key = os.environ.get(ps.credential_env, "") if ps.credential_env else ""
-        env["ANTHROPIC_BASE_URL"] = base
-        env["ANTHROPIC_API_KEY"] = key or "provider"
-        env["ANTHROPIC_AUTH_TOKEN"] = key or "provider"
-        env["CORVIN_CC_PROVIDER"] = prov
+        from engine_models import resolve_claude_code_provider_env  # type: ignore
+        env.update(resolve_claude_code_provider_env(tenant_id))
     except Exception:  # noqa: BLE001 — routing is best-effort, never fatal
         return
 
