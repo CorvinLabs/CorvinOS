@@ -6,6 +6,36 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.38] — 2026-07-14 — Setup-wizard key drift + vault test-isolation fix
+
+### Fixed
+
+- **Settings/Setup-wizard engine-key display could disagree with what an
+  engine actually authenticates with.** `GET /setup/engines`, `GET
+  /setup/status` and `POST /setup/test-engine` had their own hand-rolled
+  `service.env` reader (reversed file-before-env precedence, no
+  quote/inline-comment handling) — a fourth, independent copy of logic the
+  canonical `provider_keys` resolver already centralises for every other
+  reader. Now delegates to `provider_keys.resolve_by_env_var`, so the
+  Setup page's "configured" indicator for Anthropic/OpenAI/OpenRouter/Ollama
+  keys always matches what the engine spawn path actually uses.
+- **Local secrets vault could silently write into the real, live
+  `~/.config/corvin-voice/vault`** instead of an isolated path during test
+  runs — the vault's storage paths were computed once at import time
+  instead of re-read on every access, so any code that imported the vault
+  module before an isolated config directory was configured got permanently
+  bound to the real path for the rest of the process's life. Paths are now
+  resolved fresh on every access.
+- **Image-generator MCP server** could raise an unhandled `RuntimeError`
+  instead of a clean timeout error if the OS ever refused to create a new
+  worker thread (the tail end of the 0.10.37 timeout-hardening fix).
+
+### Added
+
+- New regression test proving the Claude Code provider-redirect used by
+  ACS-delegated (manager/worker) turns and the one used by the primary
+  OS-turn spawn path can never independently drift apart again.
+
 ## [0.10.37] — 2026-07-14 — Image-generator hang fix + provider-routing hardening
 
 ### Fixed
