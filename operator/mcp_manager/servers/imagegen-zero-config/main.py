@@ -106,11 +106,20 @@ _MAX_PROMPT_CHARS = 4000
 # into the same clean timeout error the caller already handles, instead of
 # an unhandled RuntimeError that would crash this MCP server process.
 _SAVE_TIMEOUT_S = 30.0
-_TOTAL_TIMEOUT_S = 240.0  # comfortably above the legitimate worst case:
-# L44 gate ~100s worst case (spawn_gates/house_rules, 3 retries + backoff)
-# + provider HTTP call up to 60s (openai/pollinations httpx timeout)
-# + save up to _SAVE_TIMEOUT_S -- so a slow-but-genuinely-working call is
-# never mistaken for a hang; this is a backstop for TRUE infinite hangs.
+# Per-PROVIDER hard bound. The reported 240s "hang" (fresh install, 2026-07-14)
+# was the Pollinations HTTP call stuck past its own httpx timeout (the socket-
+# level edge this module already documents). httpx.timeout can't be trusted to
+# interrupt it, so the provider call runs inside its OWN _run_bounded thread with
+# this deadline — a stuck free-tier request now degrades to the friendly
+# "service unavailable, add an OpenAI key" message in ~75s instead of a generic
+# 4-minute timeout the model then blindly retries. Pollinations legitimately
+# takes ~15-40s, so 75s still clears a slow-but-working generation.
+_PROVIDER_TIMEOUT_S = 75.0
+_TOTAL_TIMEOUT_S = 180.0  # ULTIMATE backstop for TRUE infinite hangs, above the
+# legitimate worst case: L44 gate ~35s (house_rules qwen3 classifier now runs
+# think=False so a cold classify doesn't burn its retry budget) + provider
+# _PROVIDER_TIMEOUT_S + save _SAVE_TIMEOUT_S. Down from 240s; the provider bound
+# above is what actually makes a stuck generation fail fast.
 
 
 def _run_bounded(fn, timeout_s: float, thread_name: str):
@@ -375,7 +384,17 @@ def _generate_image_impl(prompt: str) -> list:
     openai_key = resolve_key("openai_api_key")
     if openai_key:
         try:
-            img = _generate_openai(prompt, openai_key)
+            # Same per-provider hard bound as Pollinations below — a stuck
+            # OpenAI request degrades (via the except) to the free tier rather
+            # than hanging the whole call.
+            _ai, _ai_timed = _run_bounded(
+                lambda: _generate_openai(prompt, openai_key),
+                _PROVIDER_TIMEOUT_S, "imagegen-openai")
+            if _ai_timed:
+                raise RuntimeError("OpenAI image request timed out")
+            if "error" in _ai:
+                raise _ai["error"]
+            img = _ai["ok"]
             blocks: list = []
             saved = _save_image_bytes(getattr(img, "data", None),
                                       getattr(img, "_format", None) or "png")
@@ -403,7 +422,17 @@ def _generate_image_impl(prompt: str) -> list:
     # (ADR-0191 Decision 3 — "before a prompt first leaves"), not after the
     # provider call happens to succeed.
     disclosure = ensure_disclosed(tid)
-    image = _generate_pollinations(prompt)
+    # Hard per-provider bound: the free community endpoint can get stuck past its
+    # own httpx timeout (documented socket edge), so run it on its own bounded
+    # thread and degrade a stuck request to the friendly unavailable message in
+    # ~_PROVIDER_TIMEOUT_S instead of waiting out the whole-call backstop.
+    _pv, _pv_timed = _run_bounded(
+        lambda: _generate_pollinations(prompt), _PROVIDER_TIMEOUT_S, "imagegen-pollinations")
+    if _pv_timed:
+        raise Tier0RateLimited(_TIER0_UNAVAILABLE_MSG)
+    if "error" in _pv:
+        raise _pv["error"]
+    image = _pv["ok"]
     blocks = []
     if disclosure:
         blocks.append(disclosure)

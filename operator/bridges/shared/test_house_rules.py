@@ -402,3 +402,39 @@ def test_no_json_retry_reinforces_prompt_and_recovers(monkeypatch):
     assert len(calls) == 2, "must recover on the second attempt, not exhaust all retries"
     assert "REMINDER" not in calls[0], "first attempt must use the plain prompt"
     assert "REMINDER" in calls[1], "retry after no_json must reinforce the JSON-only instruction"
+
+
+def test_hermes_classifier_payload_disables_thinking(monkeypatch):
+    """The L44 local (Ollama/qwen3) classifier MUST send think=False.
+
+    A thinking model otherwise emits a long <think> monologue before the JSON
+    verdict and blows the 30s classifier timeout on a COLD fresh-install model —
+    every retry then times out (~90s), and because this gate runs IN FRONT of
+    image generation it was a contributor to the reported 240s imagegen "hang"
+    on a fresh install (2026-07-14). format:"json" already forces a clean verdict,
+    so reasoning only adds latency."""
+    import json as _json
+    import urllib.request as _urlreq
+    captured: dict = {}
+
+    class _Resp:
+        def read(self):
+            return b'{"verdict": "allow", "confidence": 0.9, "reason": "ok"}'
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, timeout=None):
+        captured["data"] = getattr(req, "data", None)
+        return _Resp()
+
+    monkeypatch.setattr(_urlreq, "urlopen", _fake_urlopen)
+    try:
+        H._house_rules_classify_hermes("hello world", "rules", "auth", "_default")
+    except Exception:
+        pass  # any parse/verdict handling AFTER the request is irrelevant here
+    assert captured.get("data"), "classifier never issued an Ollama request"
+    body = _json.loads(captured["data"].decode())
+    assert body.get("think") is False, f"classifier payload must disable thinking: {body}"
+    assert body.get("format") == "json", body

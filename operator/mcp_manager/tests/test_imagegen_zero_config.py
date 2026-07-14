@@ -546,3 +546,23 @@ def test_generate_image_still_works_normally_through_the_timeout_wrapper(monkeyp
 
     blocks = m.generate_image("a nice tree")
     assert sentinel in blocks
+
+
+def test_provider_hang_is_bounded_not_whole_call_timeout(monkeypatch):
+    """A provider stuck past its own httpx timeout (the reported 240s fresh-install
+    hang) must fail at ~_PROVIDER_TIMEOUT_S via the friendly unavailable message —
+    NOT wait out the whole-call _TOTAL_TIMEOUT_S backstop."""
+    import time
+    import main as m
+
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: None)      # no refusal
+    monkeypatch.setattr(m, "resolve_key", lambda *a, **k: None)    # no OpenAI key → Tier 0
+    monkeypatch.setattr(m, "ensure_disclosed", lambda *a, **k: None)
+    monkeypatch.setattr(m, "_generate_pollinations", lambda prompt: time.sleep(30))
+    monkeypatch.setattr(m, "_PROVIDER_TIMEOUT_S", 0.4)
+
+    t0 = time.monotonic()
+    with pytest.raises(m.Tier0RateLimited):
+        m._generate_image_impl("a queen bee")
+    elapsed = time.monotonic() - t0
+    assert elapsed < 5.0, f"provider bound did not fire fast (took {elapsed:.1f}s)"

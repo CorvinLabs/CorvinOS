@@ -985,6 +985,16 @@ def _house_rules_classify_hermes(chunk: str, rules_block: str, auth_str: str,
         "prompt": prompt,
         "stream": False,
         "format": "json",
+        # Disable qwen3-style reasoning: a thinking model would emit a long
+        # <think> monologue BEFORE the classification JSON and blow the 30s
+        # timeout on a COLD fresh-install model — every retry then times out
+        # (~90s total), and this L44 gate sits IN FRONT of image generation, so
+        # the whole imagegen call hit its 240s hang-backstop before a picture was
+        # ever requested (reported 2026-07-14, fresh Windows install). Direct JSON
+        # with think=False keeps the safety check fast; format:"json" already
+        # forces a clean verdict, so reasoning adds latency, not accuracy. Ignored
+        # by non-thinking models; the gate stays fail-closed on any parse failure.
+        "think": False,
         # Keep the classifier model RESIDENT between messages so the next
         # safety-check is not a cold model load (fresh-install cold-start was
         # ~22 s on 8b). "30m" balances warmth against idle RAM on a small box;
@@ -1028,6 +1038,7 @@ def _house_rules_classify_hermes(chunk: str, rules_block: str, auth_str: str,
                     "prompt": prompt,
                     "stream": False,
                     "format": "json",
+                    "think": False,  # see the primary payload — no reasoning latency
                 }).encode()
                 req2 = _ur.Request(
                     f"{hermes_url}/api/generate",
