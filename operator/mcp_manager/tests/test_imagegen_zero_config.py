@@ -542,7 +542,7 @@ def test_generate_image_still_works_normally_through_the_timeout_wrapper(monkeyp
     monkeypatch.setattr(m, "ensure_disclosed", lambda tid: None)
     sentinel = object()
     monkeypatch.setattr(m, "_generate_pollinations", lambda prompt: sentinel)
-    monkeypatch.setattr(m, "_save_image_bytes", lambda data, fmt: None)
+    monkeypatch.setattr(m, "_save_image_bytes", lambda data, fmt, timeout_s=None: None)
 
     blocks = m.generate_image("a nice tree")
     assert sentinel in blocks
@@ -566,3 +566,83 @@ def test_provider_hang_is_bounded_not_whole_call_timeout(monkeypatch):
         m._generate_image_impl("a queen bee")
     elapsed = time.monotonic() - t0
     assert elapsed < 5.0, f"provider bound did not fire fast (took {elapsed:.1f}s)"
+
+
+# ── deadline-aware step budgets (2026-07-14) ────────────────────────────────
+#
+# Bug report: three consecutive generate_image() calls each hit EXACTLY
+# _TOTAL_TIMEOUT_S (the generic "please try again" backstop) instead of one
+# of the specific, more actionable per-step friendly messages. Root cause:
+# check_l44() had no bound of its own inside this module (its real worst case
+# chains a cloud classifier spawn — 3 attempts x 20s + backoff — THEN a local
+# Hermes/Ollama fallback, up to ~93s, not the "~35s" this module used to
+# assume), and each provider step was handed its own FULL static budget
+# regardless of how much of the shared total the earlier steps had already
+# spent — so the legitimate (non-infinite) worst-case sum of every step could
+# exceed the old 180s ultimate backstop even with no true hang anywhere.
+
+def test_l44_hang_is_bounded_by_l44_timeout_not_the_whole_call(monkeypatch):
+    """A stuck/slow check_l44() must degrade to its OWN "couldn't be
+    safety-checked" message at ~_L44_TIMEOUT_S — not silently consume most of
+    _TOTAL_TIMEOUT_S before the provider steps even get a turn."""
+    import time
+    import main as m
+
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: time.sleep(30))
+    monkeypatch.setattr(m, "_L44_TIMEOUT_S", 0.4)
+
+    t0 = time.monotonic()
+    with pytest.raises(m.ImageGenRefused, match="safety-checked"):
+        m._generate_image_impl("a queen bee")
+    elapsed = time.monotonic() - t0
+    assert elapsed < 5.0, f"L44 bound did not fire fast (took {elapsed:.1f}s)"
+
+
+def test_provider_budget_shrinks_by_how_much_l44_already_spent(monkeypatch):
+    """The total budget is shared, not per-step-independent: if the L44 gate
+    (bounded, but genuinely slow) already consumed most of _TOTAL_TIMEOUT_S,
+    the provider step below it must only get what's actually left — proving
+    the steps are deadline-aware, not each given their own fresh full budget
+    regardless of what already elapsed (which is exactly how the old code let
+    the legitimate worst-case sum exceed the outer backstop)."""
+    import time
+    import main as m
+
+    monkeypatch.setattr(m, "_TOTAL_TIMEOUT_S", 10.0)
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: (time.sleep(2.0), None)[1])
+    monkeypatch.setattr(m, "resolve_key", lambda *a, **k: None)
+    monkeypatch.setattr(m, "ensure_disclosed", lambda *a, **k: None)
+
+    seen_timeout = {}
+    _real_run_bounded = m._run_bounded
+
+    def _fake_run_bounded(fn, timeout_s, thread_name):
+        if thread_name == "imagegen-pollinations":
+            seen_timeout["value"] = timeout_s
+        return _real_run_bounded(fn, timeout_s, thread_name)
+
+    monkeypatch.setattr(m, "_generate_pollinations", lambda prompt: None)
+    monkeypatch.setattr(m, "_run_bounded", _fake_run_bounded)
+
+    m._generate_image_impl("a queen bee")
+
+    assert "value" in seen_timeout, "pollinations step never ran"
+    # _PROVIDER_TIMEOUT_S defaults to 75s, but only ~8s of the 10s total
+    # budget remains after L44's 2s — the clamp must reflect that, not 75.
+    assert seen_timeout["value"] < 75.0, (
+        f"pollinations was handed {seen_timeout['value']:.2f}s — a fresh full "
+        "provider budget, not the actual remainder of the shared deadline"
+    )
+    assert seen_timeout["value"] < 9.5, (
+        f"pollinations was handed {seen_timeout['value']:.2f}s, too close to "
+        "the full 10s total to prove the L44 step's 2s was actually deducted"
+    )
+
+
+def test_remaining_never_goes_below_the_floor(monkeypatch):
+    import time
+    import main as m
+
+    deadline = time.monotonic() - 100  # already long past
+    assert m._remaining(deadline) == 5.0
+    assert m._remaining(deadline, floor=1.0) == 1.0

@@ -75,6 +75,19 @@ Seeding is marker-based (`<catalog_dir>/builtin-seeded.json`):
   travels in the URL; a redirect would leak it to an undeclared host),
   429/5xx/timeouts/connect errors all surface a friendly no-SLA message,
   never a raw stack trace.
+- **Deadline-aware step budgets** (2026-07-14): `generate_image()` computes one
+  shared deadline (`_TOTAL_TIMEOUT_S`, an ULTIMATE backstop for a true
+  infinite hang) at the start of the call. Every bounded step below it — the
+  L44 gate (`_L44_TIMEOUT_S`, its own bound since `check_l44()` takes none of
+  its own and is shared by other callers with no analogous total budget),
+  OpenAI, Pollinations, and the save step — is clamped to
+  `min(its own default bound, time actually left before the deadline)`. Before
+  this, each step got its own FULL static budget regardless of how much the
+  earlier steps had already spent, so the legitimate (non-infinite) worst-case
+  sum of every step could exceed the outer backstop on its own — three
+  consecutive real calls hit exactly `_TOTAL_TIMEOUT_S`'s generic "please try
+  again" message instead of one of the specific, more actionable per-step
+  friendly messages (see `_remaining()` in `main.py`).
 
 ## Usage
 

@@ -23,6 +23,7 @@ import base64
 import os
 import sys
 import threading
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -115,11 +116,31 @@ _SAVE_TIMEOUT_S = 30.0
 # 4-minute timeout the model then blindly retries. Pollinations legitimately
 # takes ~15-40s, so 75s still clears a slow-but-working generation.
 _PROVIDER_TIMEOUT_S = 75.0
-_TOTAL_TIMEOUT_S = 180.0  # ULTIMATE backstop for TRUE infinite hangs, above the
-# legitimate worst case: L44 gate ~35s (house_rules qwen3 classifier now runs
-# think=False so a cold classify doesn't burn its retry budget) + provider
-# _PROVIDER_TIMEOUT_S + save _SAVE_TIMEOUT_S. Down from 240s; the provider bound
-# above is what actually makes a stuck generation fail fast.
+# Own explicit bound for the L44 house-rules gate call (spawn_gates.check_l44).
+# Bug report 2026-07-14: repeated EXACT _TOTAL_TIMEOUT_S hits (not the friendly
+# per-provider messages) traced to a wrong budget assumption below. check_l44's
+# real worst case chains a cloud classifier spawn (3 attempts x 20s + backoff
+# ~= 63s, house_rules.py's _HOUSE_RULES_RETRIES/_HOUSE_RULES_ADJ_TIMEOUT_S) THEN
+# falls back to the local Hermes/Ollama classifier (30s,
+# _HOUSE_RULES_HERMES_TIMEOUT_S) — up to ~93s, not the "~35s" this module used
+# to assume. check_l44() itself takes no timeout parameter (it's shared by the
+# bridge adapter and ACS runtime, whose call sites have no analogous total
+# budget to protect), so it is wrapped in its own _run_bounded call here rather
+# than changing its shared retry/timeout constants for every caller.
+_L44_TIMEOUT_S = 100.0
+_TOTAL_TIMEOUT_S = 300.0  # ULTIMATE backstop for TRUE infinite hangs — must
+# exceed the real worst-case SUM of every bounded step below (L44 ~100s +
+# OpenAI attempt 75s + Pollinations fallback 75s + save 30s + gate/disclosure
+# overhead), not just the largest single step. The previous 180s value was
+# smaller than that legitimate worst-case sum, so a merely-slow-but-not-hung
+# double-provider-degradation routinely tripped the "TRUE infinite hang"
+# backstop and returned the generic "try again" message instead of the
+# specific, more actionable per-step friendly message each component already
+# produces. Real protection against genuine infinite hangs now comes from the
+# deadline-aware step budgets in _generate_image_impl (each remaining step
+# gets AT MOST what's left of this total, so the sum can never itself exceed
+# _TOTAL_TIMEOUT_S even before this backstop would fire) — this constant is a
+# last-resort ceiling, not the primary defense.
 
 
 def _run_bounded(fn, timeout_s: float, thread_name: str):
@@ -153,7 +174,7 @@ def _run_bounded(fn, timeout_s: float, thread_name: str):
     return outcome, t.is_alive()
 
 
-def _save_image_bytes(data: bytes, fmt: str) -> "str | None":
+def _save_image_bytes(data: bytes, fmt: str, timeout_s: "float | None" = None) -> "str | None":
     """ALSO persist the generated image to a file so the user actually SEES it.
 
     The MCP ``Image`` block alone only reaches the calling MODEL's context — it
@@ -179,7 +200,6 @@ def _save_image_bytes(data: bytes, fmt: str) -> "str | None":
     try:
         if not data:
             return None
-        import time  # noqa: PLC0415
         import secrets  # noqa: PLC0415
         ext = (fmt or "png").lower().lstrip(".") or "png"
         outdir = os.environ.get("CORVIN_IMAGE_OUTDIR", "").strip()
@@ -190,7 +210,11 @@ def _save_image_bytes(data: bytes, fmt: str) -> "str | None":
             base.mkdir(parents=True, exist_ok=True)
             fpath.write_bytes(data)
 
-        outcome, timed_out = _run_bounded(_write, _SAVE_TIMEOUT_S, "imagegen-save")
+        # timeout_s=None (the default for every pre-existing call site) resolves
+        # the module global at CALL time, not at def time, so tests/operators
+        # that monkeypatch/tune _SAVE_TIMEOUT_S still take effect.
+        actual_timeout = timeout_s if timeout_s is not None else _SAVE_TIMEOUT_S
+        outcome, timed_out = _run_bounded(_write, actual_timeout, "imagegen-save")
         if timed_out or "error" in outcome:
             return None
         return str(fpath)
@@ -364,8 +388,19 @@ def generate_image(prompt: str) -> list:
     return outcome["ok"]
 
 
+def _remaining(deadline: float, floor: float = 5.0) -> float:
+    """Seconds left before ``deadline`` (monotonic clock), never below ``floor``.
+
+    A non-zero floor means a step that's given almost no time left still gets
+    a genuine, if short, attempt rather than being handed a 0/negative budget
+    that would fail instantly and misleadingly look like the step itself is
+    broken. The overall call is still bounded by _TOTAL_TIMEOUT_S regardless."""
+    return max(floor, deadline - time.monotonic())
+
+
 def _generate_image_impl(prompt: str) -> list:
     tid = _tenant_id()
+    deadline = time.monotonic() + _TOTAL_TIMEOUT_S
 
     prompt = (prompt or "").strip()
     if not prompt:
@@ -376,7 +411,23 @@ def _generate_image_impl(prompt: str) -> list:
             "please shorten the description."
         )
 
-    refusal = check_l44(prompt, tid, persona="assistant", engine_id="imagegen_mcp")
+    # The L44 gate has no timeout parameter of its own — it's shared by the
+    # bridge adapter and ACS runtime, neither of which has an analogous total
+    # budget to protect — so it is bounded here instead. min(..., remaining)
+    # means a slow-but-not-hung classify still degrades to the gate's OWN
+    # "couldn't be safety-checked" message rather than silently eating most
+    # of the budget the provider calls below still need.
+    _l44, _l44_timed = _run_bounded(
+        lambda: check_l44(prompt, tid, persona="assistant", engine_id="imagegen_mcp"),
+        min(_L44_TIMEOUT_S, _remaining(deadline)), "imagegen-l44")
+    if _l44_timed:
+        raise ImageGenRefused(
+            "[house-rules] This request couldn't be safety-checked in time — "
+            "try again in a moment."
+        )
+    if "error" in _l44:
+        raise _l44["error"]
+    refusal = _l44["ok"]
     if refusal:
         raise ImageGenRefused(refusal)
 
@@ -386,10 +437,12 @@ def _generate_image_impl(prompt: str) -> list:
         try:
             # Same per-provider hard bound as Pollinations below — a stuck
             # OpenAI request degrades (via the except) to the free tier rather
-            # than hanging the whole call.
+            # than hanging the whole call. Clamped to whatever budget the L44
+            # gate above left behind, so this step can never itself push the
+            # total past _TOTAL_TIMEOUT_S.
             _ai, _ai_timed = _run_bounded(
                 lambda: _generate_openai(prompt, openai_key),
-                _PROVIDER_TIMEOUT_S, "imagegen-openai")
+                min(_PROVIDER_TIMEOUT_S, _remaining(deadline)), "imagegen-openai")
             if _ai_timed:
                 raise RuntimeError("OpenAI image request timed out")
             if "error" in _ai:
@@ -397,7 +450,8 @@ def _generate_image_impl(prompt: str) -> list:
             img = _ai["ok"]
             blocks: list = []
             saved = _save_image_bytes(getattr(img, "data", None),
-                                      getattr(img, "_format", None) or "png")
+                                      getattr(img, "_format", None) or "png",
+                                      min(_SAVE_TIMEOUT_S, _remaining(deadline)))
             if saved:
                 blocks.append(
                     f"Generated the image and saved it to `{saved}` — it is shown "
@@ -422,12 +476,14 @@ def _generate_image_impl(prompt: str) -> list:
     # (ADR-0191 Decision 3 — "before a prompt first leaves"), not after the
     # provider call happens to succeed.
     disclosure = ensure_disclosed(tid)
-    # Hard per-provider bound: the free community endpoint can get stuck past its
+    # Hard per-provider bound, clamped to whatever's left of the total budget
+    # (see _remaining) — the free community endpoint can get stuck past its
     # own httpx timeout (documented socket edge), so run it on its own bounded
-    # thread and degrade a stuck request to the friendly unavailable message in
-    # ~_PROVIDER_TIMEOUT_S instead of waiting out the whole-call backstop.
+    # thread and degrade a stuck request to the friendly unavailable message
+    # instead of waiting out the whole-call backstop.
     _pv, _pv_timed = _run_bounded(
-        lambda: _generate_pollinations(prompt), _PROVIDER_TIMEOUT_S, "imagegen-pollinations")
+        lambda: _generate_pollinations(prompt),
+        min(_PROVIDER_TIMEOUT_S, _remaining(deadline)), "imagegen-pollinations")
     if _pv_timed:
         raise Tier0RateLimited(_TIER0_UNAVAILABLE_MSG)
     if "error" in _pv:
@@ -439,7 +495,8 @@ def _generate_image_impl(prompt: str) -> list:
     if tier1_note:
         blocks.append(tier1_note)
     saved = _save_image_bytes(getattr(image, "data", None),
-                              getattr(image, "_format", None) or "png")
+                              getattr(image, "_format", None) or "png",
+                              min(_SAVE_TIMEOUT_S, _remaining(deadline)))
     if saved:
         blocks.append(
             f"Generated the image and saved it to `{saved}` — it is shown inline "
