@@ -6,6 +6,39 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.39] — 2026-07-14 — Fresh-install image generator + Claude Code auth + ACS Windows path
+
+### Fixed
+
+- **Fresh install: the zero-config image generator hung ~240 s, then retried.**
+  `imagegen-zero-config`'s free-tier Pollinations call could get stuck past its
+  own httpx timeout (a socket-level edge); the whole-call backstop caught it but
+  at a far-too-generous 240 s, so the model waited 4 minutes and blindly retried.
+  The provider call now runs inside its own hard `_PROVIDER_TIMEOUT_S` (75 s)
+  deadline for BOTH Pollinations and OpenAI — a stuck free-tier request degrades
+  to the friendly "service unavailable — add an OpenAI key for reliable
+  generation" message in ~75 s instead of the 4-minute generic timeout (the
+  whole-call backstop also drops 240 s → 180 s). The OpenAI key path is unchanged:
+  when a key is configured it is used first (dall-e-3), with the free tier only as
+  fallback. Secondary contributor fixed too: the L44 house-rules classifier that
+  gates image generation now sends `think:false` to the local qwen3 model so a
+  cold fresh-install safety check stays fast (same class as the summarize fix);
+  the gate is unchanged in behavior (still fail-closed / degrade-to-floor).
+- **Fresh install: the voice summary just read the raw answer word-for-word.**
+  Claude Code was left permanently unauthenticated because the installer ran the
+  stale `claude login` (the 2.x CLI only knows `claude auth login`, and the old
+  name silently became a chat prompt), and non-interactive installs skipped login
+  entirely. Fixed repo-wide; non-interactive installs now drive the OAuth login in
+  the background. `summarize.py`'s real Hermes/Ollama calls also gained
+  `keep_alive` so the classifier/summarizer model stays warm past the installer's
+  one-off prewarm window.
+- **Windows 11: every ACS delegation run died with `WinError 123`.** The ACS
+  run-dir builder used the raw chat_key `web:<sid>` as a path component — the `:`
+  is illegal on Windows. It now routes through the same `safe_session_subdir` SSOT
+  the web session workdir uses (sanitised to `web_<sid>`), and, if an ACS run
+  still can't be set up, the turn falls back to the normal Claude Code delegation
+  instead of surfacing the raw error.
+
 ## [0.10.38] — 2026-07-14 — Setup-wizard key drift + vault test-isolation fix
 
 ### Fixed
