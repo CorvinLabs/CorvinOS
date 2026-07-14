@@ -31,6 +31,32 @@ except ImportError:  # pragma: no cover - direct-run fallback
     import acs_runtime as _rt  # type: ignore[no-redef]
 
 
+class _FakeStream:
+    """Minimal stand-in for a Popen pipe (stdin/stdout/stderr), compatible
+    with _communicate_capped's direct .stdin.write()/.stdout.read()/
+    .stderr.read() usage (acs_runtime no longer calls proc.communicate()
+    directly — see _communicate_capped's docstring for why)."""
+
+    def __init__(self, initial_text: str = "") -> None:
+        self._buf = initial_text
+        self._pos = 0
+        self.written = ""
+
+    def write(self, text: str) -> None:
+        self.written += text
+
+    def close(self) -> None:
+        pass
+
+    def read(self, n: int = -1) -> str:
+        if self._pos >= len(self._buf):
+            return ""
+        end = len(self._buf) if n is None or n < 0 else min(self._pos + n, len(self._buf))
+        chunk = self._buf[self._pos:end]
+        self._pos = end
+        return chunk
+
+
 # ---------------------------------------------------------------------------
 # H5 — gate-3 critique non-zero exit must not raise NameError
 # ---------------------------------------------------------------------------
@@ -65,9 +91,15 @@ def _run_worker_capture(monkeypatch, engine_id="claude_code"):
         def __init__(self, *args, **kwargs):
             captured["env"] = kwargs.get("env")
             self._pid = 4242
+            self.stdin = _FakeStream()
+            self.stdout = _FakeStream("")
+            self.stderr = _FakeStream("")
 
         def communicate(self, input=None, timeout=None):
             return ("", "")
+
+        def wait(self, timeout=None):
+            return 0
 
         def poll(self):
             return 0
@@ -151,10 +183,15 @@ def test_h2_strip_happens_before_provider_redirect(monkeypatch):
 
     class _FakePopen:
         def __init__(self, *a, **k):
-            pass
+            self.stdin = _FakeStream()
+            self.stdout = _FakeStream("")
+            self.stderr = _FakeStream("")
 
         def communicate(self, input=None, timeout=None):
             return ("", "")
+
+        def wait(self, timeout=None):
+            return 0
 
         def poll(self):
             return 0

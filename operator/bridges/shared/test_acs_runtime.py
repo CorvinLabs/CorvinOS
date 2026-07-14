@@ -204,6 +204,91 @@ def test_call_worker_sync_system_prompt_file_cleaned_up_after_call(monkeypatch, 
 
 
 # ---------------------------------------------------------------------------
+# Output cap — Windows/64GB-RAM crash investigation (2026-07-14)
+# ---------------------------------------------------------------------------
+# _call_worker_sync/_call_manager_sync used plain proc.communicate(), which
+# reads the ENTIRE subprocess stdout/stderr into memory with NO limit.
+# _WORKER_OUTPUT_CAP/_MANAGER_OUTPUT_CAP existed as constants but were never
+# wired to anything -- dead code. _communicate_capped now enforces them by
+# draining (never blocking the child on a full pipe) but only RETAINING up
+# to the cap. These tests use a real subprocess producing far more output
+# than the cap to prove truncation actually happens end-to-end, not just
+# that the constant exists.
+
+def _fake_claude_huge_output(tmp_path, total_chars: int) -> str:
+    """A real (not mocked) script that prints a JSON envelope whose `result`
+    field is `total_chars` long -- big enough to exceed either output cap."""
+    import stat
+    script = tmp_path / "fake_claude_huge.py"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, json\n"
+        "sys.stdin.read()\n"
+        f"payload = 'X' * {total_chars}\n"
+        "sys.stdout.write(json.dumps({'result': payload}))\n"
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return str(script)
+
+
+def test_call_worker_sync_caps_huge_output(tmp_path):
+    huge = _rt._WORKER_OUTPUT_CAP * 4
+    fake_bin = _fake_claude_huge_output(tmp_path, huge)
+    with (
+        patch.object(_rt, "_resolve_worker_engine", return_value=("claude_code", "test-model")),
+        patch.object(_rt, "_assert_engine_licensed", return_value=None),
+        patch.object(_rt, "_claude_binary", return_value=fake_bin),
+        patch.object(_rt, "_apply_provider_redirect", return_value=None),
+        patch.object(_rt.shutil, "which", return_value=fake_bin),
+    ):
+        out, tok, attestation = _rt._call_worker_sync(
+            "p", "s", "test-model",
+            {"timeout_seconds": 30, "max_worker_turns": 20},
+        )
+    assert len(out) < huge, "output must be capped, not the full huge payload"
+    # Small margin over the cap for the un-parseable truncated JSON envelope
+    # itself (the cap cuts mid-JSON, so json.loads() fails and the code
+    # falls back to the raw truncated text, {"result": "XXX...) rather than
+    # the extracted field) -- what matters is boundedness, not the exact byte.
+    assert len(out) <= _rt._WORKER_OUTPUT_CAP + 64
+
+
+def test_call_manager_sync_caps_huge_output(tmp_path):
+    huge = _rt._MANAGER_OUTPUT_CAP * 4
+    fake_bin = _fake_claude_huge_output(tmp_path, huge)
+    with (
+        patch.object(_rt, "_claude_binary", return_value=fake_bin),
+        patch.object(_rt.shutil, "which", return_value=fake_bin),
+    ):
+        out, tok = _rt._call_manager_sync("prompt", "test-model")
+    assert len(out) < huge, "output must be capped, not the full huge payload"
+    assert len(out) <= _rt._MANAGER_OUTPUT_CAP + 64
+
+
+def test_communicate_capped_still_delivers_stdin_when_output_is_huge(tmp_path):
+    """Regression guard against the exact deadlock class this rewrite must
+    avoid: a large prompt written to stdin while the child is ALSO producing
+    output larger than a pipe buffer must not hang -- both sides drain
+    concurrently. Real subprocess, generous but bounded wall-clock proves
+    this actually completes rather than hanging forever."""
+    huge_out = _rt._WORKER_OUTPUT_CAP * 4
+    fake_bin = _fake_claude_huge_output(tmp_path, huge_out)
+    large_prompt = "P" * 200_000  # comfortably larger than a 64KB OS pipe buffer
+    with (
+        patch.object(_rt, "_resolve_worker_engine", return_value=("claude_code", "test-model")),
+        patch.object(_rt, "_assert_engine_licensed", return_value=None),
+        patch.object(_rt, "_claude_binary", return_value=fake_bin),
+        patch.object(_rt, "_apply_provider_redirect", return_value=None),
+        patch.object(_rt.shutil, "which", return_value=fake_bin),
+    ):
+        out, tok, attestation = _rt._call_worker_sync(
+            large_prompt, "s", "test-model",
+            {"timeout_seconds": 30, "max_worker_turns": 20},
+        )
+    assert len(out) <= _rt._WORKER_OUTPUT_CAP + 64
+
+
+# ---------------------------------------------------------------------------
 # BudgetEnvelope tests
 # ---------------------------------------------------------------------------
 
@@ -569,6 +654,111 @@ def test_budget_from_spec_max_workers_per_iteration_zero_falls_back_to_default()
     }}}}
     budget = _rt._budget_from_spec(spec)
     assert budget.max_workers_per_iteration == 6
+
+
+def test_budget_from_spec_clamps_max_wall_time_ceiling():
+    # Windows/64GB-RAM crash investigation (2026-07-14): unlike
+    # max_loops/max_total_workers/max_workers_per_iteration, max_wall_time
+    # had NO ceiling at all -- a workflow YAML (or budget_override, in
+    # _BUDGET_OVERRIDE_ALLOWED_FIELDS) could set an arbitrarily large value,
+    # giving a run more wall-clock time to compound per-worker/per-batch
+    # resource growth.
+    spec = {"orchestration": {"delegation_loop": {"budget": {
+        "max_wall_time": 999_999_999,
+    }}}}
+    budget = _rt._budget_from_spec(spec)
+    assert budget.max_wall_time == 86400
+
+
+def test_budget_from_spec_max_wall_time_zero_or_negative_falls_back_to_default():
+    spec = {"orchestration": {"delegation_loop": {"budget": {
+        "max_wall_time": -1,
+    }}}}
+    budget = _rt._budget_from_spec(spec)
+    assert budget.max_wall_time == 3600
+
+
+def test_budget_from_spec_max_wall_time_within_ceiling_passes_through():
+    spec = {"orchestration": {"delegation_loop": {"budget": {
+        "max_wall_time": 7200,
+    }}}}
+    budget = _rt._budget_from_spec(spec)
+    assert budget.max_wall_time == 7200
+
+
+# ---------------------------------------------------------------------------
+# In-batch max_total_workers enforcement — Windows/64GB-RAM crash
+# investigation (2026-07-14)
+# ---------------------------------------------------------------------------
+# max_total_workers used to be enforced only BETWEEN _dispatch_workers
+# batches (via the root_breach check) -- workers_used is incremented at the
+# END of each worker's own coroutine, so nothing stopped a SINGLE batch from
+# creating up to max_workers_per_iteration (ceiling 100) tasks regardless of
+# how few workers actually remained under max_total_workers (ceiling 64).
+# Concurrency this coarse, combined with each worker's own (now-capped, see
+# above) output, was the multiplicative factor behind the crash report.
+
+@pytest.mark.asyncio
+async def test_dispatch_workers_respects_max_total_workers_within_a_single_batch():
+    spec = _minimal_spec()
+    root_budget = _rt._budget_from_spec(spec)
+    root_budget.max_total_workers = 3
+    root_budget.workers_used = 2  # only 1 slot left under the ceiling
+    root_budget.max_workers_per_iteration = 5  # batch WOULD otherwise fit all 5
+
+    local_budget = root_budget.fraction(1.0)
+
+    subtasks = [{"id": f"t{i}", "instructions": "x"} for i in range(5)]
+
+    with tempfile.TemporaryDirectory() as td:
+        ctx = _rt.RunContext(
+            run_id="r1", workflow_id="w1", workflow_spec=spec,
+            budget=local_budget, run_dir=Path(td), root_budget=root_budget,
+        )
+        # _resolve_worker_engine raising makes each attempted worker fail
+        # fast (no real subprocess) -- _dispatch_workers still records one
+        # failed WorkerResult per task actually CREATED, so len(results)
+        # directly measures how many tasks were dispatched, independent of
+        # whether they'd have succeeded.
+        with (
+            patch.object(_rt, "_resolve_worker_engine", side_effect=RuntimeError("boom")),
+            patch.object(_rt, "_write_audit"),
+        ):
+            results = await _rt._dispatch_workers(
+                subtasks, ctx, depth=1, manager_model="m", worker_model="w",
+            )
+    assert len(results) == 1, (
+        f"only 1 worker slot remained under max_total_workers=3 "
+        f"(workers_used=2 already), but {len(results)} were dispatched"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_workers_allows_full_batch_when_workers_remain():
+    """Sanity counterpart: the new clamp must not under-dispatch when there's
+    genuinely enough room for the whole batch."""
+    spec = _minimal_spec()
+    root_budget = _rt._budget_from_spec(spec)
+    root_budget.max_total_workers = 100
+    root_budget.workers_used = 0
+    root_budget.max_workers_per_iteration = 5
+
+    local_budget = root_budget.fraction(1.0)
+    subtasks = [{"id": f"t{i}", "instructions": "x"} for i in range(5)]
+
+    with tempfile.TemporaryDirectory() as td:
+        ctx = _rt.RunContext(
+            run_id="r1", workflow_id="w1", workflow_spec=spec,
+            budget=local_budget, run_dir=Path(td), root_budget=root_budget,
+        )
+        with (
+            patch.object(_rt, "_resolve_worker_engine", side_effect=RuntimeError("boom")),
+            patch.object(_rt, "_write_audit"),
+        ):
+            results = await _rt._dispatch_workers(
+                subtasks, ctx, depth=1, manager_model="m", worker_model="w",
+            )
+    assert len(results) == 5
 
 
 # ---------------------------------------------------------------------------

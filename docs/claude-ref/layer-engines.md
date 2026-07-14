@@ -2020,3 +2020,90 @@ one place that reads.
   2026-07-14 consolidation (see above). A second hand-rolled copy WILL drift
   (stale credential read, missing proxy auto-start) even if it looks
   identical at the moment you write it.
+
+## ADR-0104 — ACS delegation: unbounded-memory hardening (2026-07-15)
+
+Investigated a reported crash: a very large ACS (Autonomous Compute Shell)
+delegation workflow on a Windows machine with 64GB RAM crashed. Root-caused
+to genuine unbounded memory growth in `operator/bridges/shared/acs_runtime.py`,
+compounded by coarse concurrency control — not a Windows-specific pipe
+deadlock (`subprocess.communicate()` is deadlock-safe by construction on
+every platform) and not a quadratic history-resend bug (prompt construction
+was already correctly bounded via `_truncate()`).
+
+**Finding 1 — subprocess output was buffered with zero size cap.**
+`_call_manager_sync`/`_call_worker_sync` used plain `proc.communicate()`,
+which — per its own documented contract — reads the ENTIRE stdout/stderr
+into memory with no limit. `_MANAGER_OUTPUT_CAP` (64KB) / `_WORKER_OUTPUT_CAP`
+(128KB) existed as constants but were never wired to anything — dead code.
+Workers run with full tool access and up to 30 minutes; a single
+legitimately-large task (many file reads/greps) can produce output large
+enough, multiplied across several concurrently-dispatched workers, to
+exhaust even a large machine's RAM.
+
+Fixed via a new `_communicate_capped()` helper: reader threads drain
+`proc.stdout`/`proc.stderr` continuously (so the child can never block on a
+full OS pipe — the same deadlock-avoidance `communicate()` provides
+internally) but only RETAIN up to the cap; excess bytes are read-and-discarded.
+Reader threads start BEFORE writing to stdin, so a large prompt write can
+never deadlock against a child already producing large output. On timeout,
+kills the process and re-raises `subprocess.TimeoutExpired` exactly like
+`communicate()`'s own contract — callers must NOT call
+`proc.communicate()`/`proc.kill()` again afterward (that cleanup now lives
+entirely inside the helper; a second read of an already-drained pipe is at
+best redundant, at worst racing the reader threads).
+
+**Finding 2 — `max_total_workers` was enforced only BETWEEN dispatch
+batches, not within one.** `ctx.budget.workers_used` is incremented at the
+END of each worker's own coroutine (after its subprocess call completes) —
+`_dispatch_workers` created ALL tasks for a batch upfront
+(`tasks = [asyncio.create_task(_run_one(st)) for st in capped]`), so a
+single manager DELEGATE decision could burst up to `max_workers_per_iteration`
+(ceiling 100) CONCURRENT full-tool-access subprocesses regardless of how
+few workers actually remained under `max_total_workers` (ceiling 64).
+Concurrency this coarse, combined with Finding 1's uncapped per-worker
+output, was the multiplicative factor.
+
+Fixed by clamping `capped` itself — against both the local (fractioned)
+budget and `root_budget` when they're distinct objects — to whatever's
+ACTUALLY still available BEFORE a single task is created. Simpler and safer
+than trying to "reserve" slots that would need releasing again on a spawn
+failure.
+
+**Finding 3 — `max_wall_time` had no ceiling.** Unlike
+`max_loops`/`max_total_workers`/`max_workers_per_iteration`, `max_wall_time`
+was applied via a bare `int(...)` with no `_clamp_positive_cap()` call — a
+workflow YAML or the caller-controllable `budget_override` (it's in
+`_BUDGET_OVERRIDE_ALLOWED_FIELDS`) could set an arbitrarily large value,
+giving a run more wall-clock time to compound Findings 1+2. Now clamped to
+`[3600s default, 86400s ceiling]` — legitimately long-running workflows
+still complete, just bounded rather than unlimited.
+
+### What you, as Claude Code, must NOT do (ADR-0104 ACS memory hardening)
+
+- **Don't call `proc.communicate()` directly in `acs_runtime.py`'s
+  manager/worker spawn paths.** Always go through `_communicate_capped()` —
+  a bare `communicate()` re-opens the exact unbounded-memory-growth gap
+  this hardening pass closed.
+- **Don't create ACS worker tasks before clamping the batch against
+  remaining budget.** `asyncio.create_task()` on an already-over-budget
+  subtask list defeats `max_total_workers` regardless of what the
+  root-breach check says — the clamp must happen on `capped` itself,
+  before the task list comprehension.
+- **Don't add a new BudgetEnvelope cap field without a `_clamp_positive_cap`
+  ceiling.** `max_wall_time` went unnoticed for this long because
+  `max_loops`/`max_total_workers`/`max_workers_per_iteration` already had
+  ceilings and it looked (from the dataclass alone) like the odd one out
+  was fine. Every field in `_BUDGET_OVERRIDE_ALLOWED_FIELDS` is
+  caller-reachable — an unclamped one is a resource-exhaustion surface by
+  default, not an oversight to fix "later."
+
+Tests: `operator/bridges/shared/test_acs_runtime.py` —
+`test_call_worker_sync_caps_huge_output`,
+`test_call_manager_sync_caps_huge_output`,
+`test_communicate_capped_still_delivers_stdin_when_output_is_huge`,
+`test_dispatch_workers_respects_max_total_workers_within_a_single_batch`,
+`test_dispatch_workers_allows_full_batch_when_workers_remain`,
+`test_budget_from_spec_clamps_max_wall_time_ceiling`,
+`test_budget_from_spec_max_wall_time_zero_or_negative_falls_back_to_default`,
+`test_budget_from_spec_max_wall_time_within_ceiling_passes_through`.
