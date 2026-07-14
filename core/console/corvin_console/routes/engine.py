@@ -73,7 +73,7 @@ _ENGINE_METADATA: dict[str, dict] = {
         "label": "Claude Code",
         "description": "Full-featured: /btw, hooks, skills, forge MCP, all permission modes. Best for complex reasoning and code tasks.",
         "local": False,
-        "requires": "Anthropic API key (claude login)",
+        "requires": "Anthropic API key (claude auth login)",
         "model_placeholder": "(default)",
         "model_examples": "Leave blank for Claude default",
         "model_aliases": [],

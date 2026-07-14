@@ -95,7 +95,7 @@ function EngineIcon({ engineId, className }: { engineId: string; className?: str
 const CRED_SETUP: Record<string, { hint: string; cmd?: string; url?: string }> = {
   claude_code: {
     hint: "Run to authenticate:",
-    cmd: "claude login",
+    cmd: "claude auth login",
     url: "https://claude.ai/code",
   },
   copilot: {
@@ -1427,7 +1427,7 @@ function EngineCard({
         {/* OAuth info — Claude Code */}
         {isOAuth && engine.configured && (
           <p className="text-xs text-muted-foreground">
-            Authenticated via <span className="font-mono">claude login</span> (OAuth). Session active.
+            Authenticated via <span className="font-mono">claude auth login</span> (OAuth). Session active.
           </p>
         )}
         {isOAuth && !engine.configured && (
@@ -1453,7 +1453,7 @@ function EngineCard({
                 <span className="shrink-0 font-mono text-[10px] bg-muted rounded px-1 py-0.5 mt-0.5">2</span>
                 <span>
                   <strong className="text-foreground">Log in</strong> — run{" "}
-                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">claude login</code>
+                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">claude auth login</code>
                   {" "}in your terminal.
                 </span>
               </li>

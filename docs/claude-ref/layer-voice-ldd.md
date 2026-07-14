@@ -444,7 +444,7 @@ suppresses the annex clause — `0` is the explicit "off" sentinel.
 **Auth-gate + Hermes fallback for the annex generators.** `_summarize_via_cli`
 already checked `shutil.which("claude")` before spawning the CLI, but not
 whether the CLI was actually *authenticated* — on a fresh install with the
-`claude` binary on PATH but no `claude login` yet, this burned the full 90s
+`claude` binary on PATH but no `claude auth login` yet, this burned the full 90s
 timeout on every call before falling through to Hermes, and on the
 short-text/override path (which never reaches the main summarizer's Hermes
 fallback) this meant the LERN-ZUGABE/METAPHER annex silently vanished for
@@ -481,6 +481,32 @@ RAM-gated at install (`install.sh`: <6 GB→1.7b, <12 GB→4b, ≥12 GB→8b). S
 COMPRESSION quality still scales with the tier — the 1.7b tier summarizes weakly;
 the annex (a single templated sentence) is reliable across tiers. Regression:
 `test_summarize.py::test_hermes_payloads_disable_thinking`.
+
+**`keep_alive` on every real Hermes call, not just the installer's prewarm
+(2026-07-14).** The "model must be WARM" note above assumes the answer
+generation itself just loaded the qwen3 weights — true only when Hermes is
+also the OS engine for the main turn. When Claude Code is the (intended)
+OS engine but unauthenticated on a fresh install (a very plausible
+combination — see `ensure_claude_login`'s rewrite in
+`corvinOS/installer/steps/dependencies.py`), the main answer may come from
+a DIFFERENT path entirely, and `summarize.py`'s own Hermes calls are the
+FIRST thing to touch the model this session — with only the installer's
+one-off 30-minute prewarm (`install.sh`/`install.ps1`) ever setting
+`keep_alive`, that window routinely lapses before a user's first real chat
+(bridge setup, Discord/WhatsApp linking, etc. happen first), so the "warm"
+assumption silently failed exactly on fresh installs. `_summarize_via_hermes`
+and `_ollama_generate` now both set `"keep_alive": "30m"` on every real
+call, not just the prewarm. Separately, `summarize()` now prints a
+`[summarize] degraded: ...` sentinel to stderr (never stdout) when BOTH
+LLM backends fail and it falls through to `naive_truncate` — previously
+indistinguishable, from the caller's side, from a real summary (exit 0,
+non-empty stdout either way), which is why the "voice summary just reads
+the raw text" symptom was invisible in CorvinOS's own logs.
+`adapter.py::build_voice_summary` now captures and logs `summarize.py`'s
+stderr instead of discarding it. Regression: `test_summarize.py::
+test_hermes_payloads_set_keep_alive`, `::test_structural_fallback_prints_
+degraded_sentinel_to_stderr`, `test_adapter_voice_stripper_fallback.py::
+test_degraded_fallback_marker_is_logged`.
 
 **Console critical-path latency cap (`chat_runtime._compute_web_annotation_suffix`).**
 The web-console mirrors the same LERN-ZUGABE / METAPHER annex, spawning

@@ -150,7 +150,7 @@ def probe_claude_code() -> EngineProbeResult:
     return EngineProbeResult(
         engine_id=engine_id, installed=True, authenticated=False,
         credential_source="none", version=version,
-        detail="Installed but not authenticated — run: claude login",
+        detail="Installed but not authenticated — run: claude auth login",
     )
 
 

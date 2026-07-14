@@ -493,6 +493,27 @@ def test_short_circuit_falls_through_to_llm_when_task_prefix_overruns_budget(mon
     assert out == "a properly shortened summary"
 
 
+def test_structural_fallback_prints_degraded_sentinel_to_stderr(monkeypatch, capsys) -> None:
+    """Regression (2026-07-14): when both LLM backends fail, summarize()
+    silently fell through to naive_truncate (near-verbatim passthrough) with
+    NO signal distinguishing it from a real summary -- exit 0, non-empty
+    stdout either way. adapter.py can't log a useful warning about a
+    degraded voice summary if summarize.py never says so. The sentinel MUST
+    go to stderr, never stdout -- stdout is the text that gets spoken."""
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    long_text = "Dies ist ein langer Text. " * 50
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value=None),
+        patch.object(summarize, "_summarize_via_hermes", return_value=None),
+    ):
+        out = summarize.summarize(long_text, "de", 200, "claude-haiku-4-5")
+    captured = capsys.readouterr()
+    assert "[summarize] degraded:" in captured.err
+    assert "[summarize] degraded:" not in out, "sentinel must never leak into the spoken text"
+    assert out  # still produces SOME output (the structural fallback itself)
+
+
 def test_hermes_backend_strips_think_block() -> None:
     """qwen3 emits <think>…</think> reasoning — it must never be spoken."""
     from unittest.mock import patch
@@ -558,6 +579,51 @@ def test_hermes_payloads_disable_thinking() -> None:
         summarize._ollama_generate("system prompt", "user input")
     body2 = _j.loads(captured["data"].decode("utf-8"))
     assert body2.get("think") is False, f"annex payload must disable thinking: {body2}"
+
+
+def test_hermes_payloads_set_keep_alive() -> None:
+    """Both real Hermes calls (summary + annex) must set keep_alive.
+
+    Regression (2026-07-14): only the installer's one-off prewarm set
+    keep_alive — the actual runtime calls never did, so a model that had
+    gone cold between install time and the user's first real chat (a very
+    common gap: bridge setup, Discord/WhatsApp linking, etc. all happen
+    first) paid a ~22s cold-load on top of real generation time, which
+    could blow _SUMMARY_HERMES_TIMEOUT_S and silently degrade the voice
+    summary to a near-verbatim passthrough of the raw answer.
+    """
+    from unittest.mock import patch
+    import json as _j
+
+    captured: dict = {}
+
+    class _Resp:
+        def getcode(self):
+            return 200
+
+        def read(self):
+            return b'{"response": "ok"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, *a, **k):
+        captured["data"] = req.data
+        return _Resp()
+
+    with patch("urllib.request.urlopen", _fake_urlopen):
+        summarize._summarize_via_hermes("some long text to summarize", "", "de", 200, "m")
+    body = _j.loads(captured["data"].decode("utf-8"))
+    assert body.get("keep_alive"), f"summary payload must set keep_alive: {body}"
+
+    captured.clear()
+    with patch("urllib.request.urlopen", _fake_urlopen):
+        summarize._ollama_generate("system prompt", "user input")
+    body2 = _j.loads(captured["data"].decode("utf-8"))
+    assert body2.get("keep_alive"), f"annex payload must set keep_alive: {body2}"
 
 
 def test_claude_authenticated_true_with_api_key(monkeypatch) -> None:

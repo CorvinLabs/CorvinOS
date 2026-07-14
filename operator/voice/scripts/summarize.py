@@ -925,7 +925,7 @@ def _claude_authenticated() -> bool:
     chat_runtime.py::_claude_authenticated() (the H4 fix, 0.10.25) so the
     voice summarizer gets the same fast-fail as the main chat engine. Without
     this, a fresh install with the `claude` CLI on PATH but not yet logged in
-    (via `claude login`) burns the full 90s CLI timeout on EVERY summarize
+    (via `claude auth login`) burns the full 90s CLI timeout on EVERY summarize
     call before falling through to Hermes — on the short-text fast path this
     also silently kills the LERN-ZUGABE/METAPHER annex (its own failure mode
     is "return text verbatim"), so the very first replies read back near-raw
@@ -1029,6 +1029,16 @@ def _summarize_via_hermes(text: str, task: str, lang: str, target_chars: int, mo
         # Voice summaries must be concise + deterministic — low temperature keeps
         # the model from padding the spoken reply.
         "options": {"temperature": 0.2},
+        # Keep the model resident for 30 minutes after this call. The installer's
+        # own one-off prewarm (install.sh / install.ps1) already sets this, but
+        # that window lapses long before most users' FIRST real chat (bridge
+        # setup, Discord/WhatsApp linking, etc. all happen first) — without it
+        # here too, that first call hits a cold model load (~22s on a fresh box)
+        # on top of real generation time, which can blow
+        # _SUMMARY_HERMES_TIMEOUT_S and silently degrade to naive_truncate
+        # (found investigating why fresh installs read the raw answer
+        # word-for-word instead of a real summary, 2026-07-14).
+        "keep_alive": "30m",
     }).encode("utf-8")
     try:
         req = _ur.Request(
@@ -1174,6 +1184,10 @@ def _ollama_generate(system_prompt: str, user_input: str, timeout: int = _ANNEX_
         # produced the "Und zur Einordnung," marker.)
         "think": False,
         "options": {"temperature": 0.4},
+        # Same rationale as _summarize_via_hermes's keep_alive above — without
+        # it, this call is just as exposed to a cold-load timeout on a fresh
+        # install as the main summary call is.
+        "keep_alive": "30m",
     }).encode("utf-8")
     try:
         req = _ur.Request(
@@ -1516,6 +1530,19 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
     # only steering signal; structural compression keeps every list item
     # verbatim and has no LLM to obey style instructions.
     if candidate is None:
+        # Both LLM backends were unavailable (or "auto" wasn't pinned to one
+        # that succeeded) — this is a DEGRADED result: for ordinary prose,
+        # naive_truncate is near-verbatim (whitespace-collapsed original,
+        # "completeness over length"), not the real learnings/metaphor-
+        # capable summary. Print a distinguishable stderr sentinel so a
+        # caller capturing stderr (adapter.py::build_voice_summary) can tell
+        # "real summary" from "degraded passthrough" instead of the two
+        # looking identical from the outside (both exit 0, both non-empty
+        # stdout) — found investigating why fresh installs read the raw
+        # answer word-for-word instead of a real summary, 2026-07-14.
+        print("[summarize] degraded: both LLM backends unavailable — "
+              "using naive_truncate (near-verbatim) structural fallback",
+              file=sys.stderr)
         body = naive_truncate(text, target)
         candidate = _task_prefix(task, lang) + body if task.strip() else body
 

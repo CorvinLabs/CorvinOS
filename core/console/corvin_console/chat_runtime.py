@@ -701,7 +701,7 @@ def _effective_os_engine(tenant_id: str) -> str:
     # killer. Fall back to Hermes here too, using the SAME credential signal the
     # rest of the product uses (~/.claude/.credentials.json + ANTHROPIC_API_KEY;
     # no macOS keychain path is used anywhere, so this introduces no new
-    # false-negative). The user can `claude login` and switch back any time.
+    # false-negative). The user can `claude auth login` and switch back any time.
     if not _claude_authenticated():
         return "hermes"
     return engine

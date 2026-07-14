@@ -7312,7 +7312,7 @@ def build_voice_summary(text: str, max_chars: int = 400,
         task_text = task.strip()
         if task_text:
             cmd += ["--task", task_text]
-        out = subprocess.run(
+        proc = subprocess.run(
             cmd,
             input=pre, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
@@ -7322,7 +7322,23 @@ def build_voice_summary(text: str, max_chars: int = 400,
             # turn. Do NOT lower below the child sum — see summarize.py::
             # _SUMMARY_* budgets.
             env=env, timeout=120, check=True,
-        ).stdout.strip()
+        )
+        out = proc.stdout.strip()
+        # summarize.py always exits 0 and prints SOMETHING even when both LLM
+        # backends failed and it fell through to its near-verbatim structural
+        # fallback — that degraded result previously looked identical, from
+        # here, to a real summary (non-empty stdout, exit 0), so nothing was
+        # ever logged and the raw-text-read-aloud symptom was invisible in
+        # CorvinOS's own logs. summarize.py now prints a distinguishable
+        # sentinel to stderr when this happens (task #84) — surface it here.
+        # This is best-effort observability only; it never changes what gets
+        # spoken (only build_voice_summary's own retry/fallback logic below
+        # does that).
+        if "[summarize] degraded:" in proc.stderr:
+            log("build_voice_summary: summarize.py used its degraded "
+                "(near-verbatim) fallback — both LLM backends were "
+                "unavailable this turn. stderr tail: "
+                + proc.stderr.strip()[-400:])
         # Sanity check: summarize.py should never return empty unless input was empty.
         # If it does, log and fall back to text head.
         if out:
@@ -7345,7 +7361,8 @@ def build_voice_summary(text: str, max_chars: int = 400,
                     _append_metapher(result, lang=appendix_lang)
                 )
             return result
-        log("build_voice_summary: summarize returned empty — using head of answer")
+        log("build_voice_summary: summarize returned empty — using head of answer"
+            + (f" — stderr tail: {proc.stderr.strip()[-400:]}" if proc.stderr.strip() else ""))
         spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
         if want_appendix and not _has_lern_zugabe_suffix(spoken):
             spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
@@ -7356,7 +7373,13 @@ def build_voice_summary(text: str, max_chars: int = 400,
         # OSError (e.g. FileNotFoundError spawning the summarizer) must degrade to
         # the answer head, not propagate out and drop the whole turn — this was
         # an uncaught crash on stripped-PATH / Windows before sys.executable.
-        log(f"build_voice_summary: summarize failed ({type(e).__name__}) — using head of answer")
+        # CalledProcessError/TimeoutExpired carry captured stderr (OSError does
+        # not — the subprocess never started) — surface it instead of just the
+        # exception type, so "CLI exited non-zero" is distinguishable from "CLI
+        # timed out because Ollama was cold" from the logs alone.
+        stderr_tail = str(getattr(e, "stderr", "") or "").strip()[-400:]
+        log(f"build_voice_summary: summarize failed ({type(e).__name__}) — using head of answer"
+            + (f" — stderr tail: {stderr_tail}" if stderr_tail else ""))
         spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
         if want_appendix and not _has_lern_zugabe_suffix(spoken):
             spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))

@@ -25,7 +25,7 @@ but you can pre-install manually:
 curl -fsSL https://claude.ai/install.sh | bash
 
 # Log in via browser (opens OAuth flow):
-claude login
+claude auth login
 ```
 
 Verify: `claude --version` must print a version string and exit 0. If you see

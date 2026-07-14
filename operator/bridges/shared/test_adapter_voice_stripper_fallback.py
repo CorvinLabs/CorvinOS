@@ -171,11 +171,53 @@ def test_summarizer_empty_fallback() -> None:
         print("  OK — fallback to text head when summarizer returns empty")
 
 
+def test_degraded_fallback_marker_is_logged() -> None:
+    """Regression (2026-07-14): summarize.py always exits 0 and always prints
+    something, even when both its LLM backends failed and it fell through to
+    naive_truncate (a near-verbatim passthrough) -- from build_voice_summary's
+    side, that used to look identical to a real summary (non-empty stdout,
+    exit 0), so the "voice summary just reads the raw text" symptom was
+    invisible in CorvinOS's own logs. summarize.py now prints a
+    "[summarize] degraded: ..." sentinel to STDERR in that case; adapter.py
+    must surface it via log()."""
+    _section("summarize.py degraded-fallback sentinel → adapter logs a warning")
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        scripts_dir, argv_dump, _ = _install_fakes(td_path, stripper_mode="normal")
+        fake_summarize = scripts_dir / "summarize.py"
+        fake_summarize.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            f"open({json.dumps(str(argv_dump))}, 'w').write("
+            "json.dumps(sys.argv[1:]))\n"
+            "input_text = sys.stdin.read()\n"
+            "print('[summarize] degraded: both LLM backends unavailable — "
+            "using naive_truncate (near-verbatim) structural fallback', "
+            "file=sys.stderr)\n"
+            "print(input_text)  # near-verbatim passthrough, like naive_truncate\n"
+        )
+        fake_summarize.chmod(0o755)
+
+        adapter = _fresh_adapter_with_scripts_dir(scripts_dir)
+        logged: list[str] = []
+        adapter.log = lambda *a: logged.append(" ".join(str(x) for x in a))  # type: ignore[assignment]
+
+        test_input = "Das ist ein Test. " * 100
+        result = adapter.build_voice_summary(test_input, max_chars=400)
+
+        assert result, "should still return SOME spoken text"
+        assert any("degraded" in line for line in logged), (
+            f"expected a 'degraded' warning in adapter's own logs, got: {logged}"
+        )
+        print("  OK — degraded-fallback sentinel surfaced via adapter.log()")
+
+
 def main() -> int:
     try:
         test_stripper_empty_fallback()
         test_stripper_timeout_fallback()
         test_summarizer_empty_fallback()
+        test_degraded_fallback_marker_is_logged()
         print("\nAll voice-stripper-fallback tests passed.")
         return 0
     except AssertionError as e:

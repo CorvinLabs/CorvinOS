@@ -112,6 +112,6 @@ def _ensure_plugin(plugin_id: str, label: str) -> bool:
 
     print(f"⚠ {label}: install returned, but plugin not in list.")
     print(f"  Output: {(result.stdout + result.stderr).strip()[:300]}")
-    print(f"  Most common cause: not logged in — run 'claude login'")
+    print(f"  Most common cause: not logged in — run 'claude auth login'")
     print(f"  Manual fix: claude plugin install {plugin_id}")
     return False

@@ -4,6 +4,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 from .platform import OS, PkgMgr, PlatformInfo, pkg_install
@@ -118,37 +120,113 @@ def ensure_claude_code(interactive: bool = True) -> bool:
     return False
 
 
+# Bounded wait for the non-interactive login attempt below — a human-paced
+# OAuth flow that never completes must never hang the installer (same
+# bounded-wait discipline as the imagegen MCP tool's timeout fix).
+_LOGIN_POLL_TIMEOUT_S = 90.0
+_LOGIN_POLL_INTERVAL_S = 2.0
+
+
 def ensure_claude_login(interactive: bool = True) -> bool:
-    """Verify Claude Code is logged in. Returns True when credentials found."""
+    """Verify Claude Code is logged in; attempt to complete login if not.
+
+    Returns True when credentials are found (already present, or completed
+    during this call).
+
+    The command is ``claude auth login`` — NOT the older bare ``claude
+    login``, which the current Claude Code CLI (2.x) no longer recognises
+    as a subcommand: it silently falls through to being treated as a chat
+    PROMPT instead, so a user (or a script) following the old instruction
+    gets no login flow and no error either. This was found while
+    investigating why voice summaries degrade to a near-verbatim passthrough
+    of the raw answer on fresh installs — with the CLI backend permanently
+    unauthenticated, ``summarize.py`` always fell through to its structural
+    fallback (see the 0.10.38 CHANGELOG entry).
+
+    Non-interactive installs (``curl | sh``, no TTY) previously skipped this
+    step unconditionally, leaving every detected-but-never-authenticated
+    Claude Code installation degraded for good — nothing ever retried it.
+    Now: ``claude auth login`` opens a browser / prints an OAuth URL and
+    polls the auth server on its own; it does not need stdin (CorvinOS's own
+    blocking ``input()`` was the only interactive-only part of this flow).
+    So the non-interactive path launches it in the background, streams its
+    output live (the OAuth URL is visible even in a piped/logged install),
+    and polls for the credential file to appear for up to
+    ``_LOGIN_POLL_TIMEOUT_S`` — bounded so it can't hang the installer if
+    nobody completes the login.
+    """
     cred_path = find_claude_creds()
     if cred_path:
         print(f"✓ Claude Code logged in ({cred_path})")
         return True
 
-    if not interactive:
-        print("⚠ Claude Code credentials not found — skipping login in non-interactive mode.")
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        print("⚠ Claude Code binary not found — skipping login.")
         return False
 
-    print()
-    print("  Claude Code is not logged in yet.")
-    print("  ┌─────────────────────────────────────────────────────────┐")
-    print("  │  Open a NEW terminal window and run:                   │")
-    print("  │                                                         │")
-    print("  │      claude login                                       │")
-    print("  │                                                         │")
-    print("  │  Opens your browser for Anthropic OAuth.               │")
-    print("  │  On headless / WSL: it prints a URL — open it.        │")
-    print("  │  When done, come back here and press ENTER.            │")
-    print("  └─────────────────────────────────────────────────────────┘")
-    input("  Press ENTER once you have completed the login... ")
+    if interactive:
+        print()
+        print("  Claude Code is not logged in yet.")
+        print("  ┌─────────────────────────────────────────────────────────┐")
+        print("  │  Open a NEW terminal window and run:                   │")
+        print("  │                                                         │")
+        print("  │      claude auth login                                  │")
+        print("  │                                                         │")
+        print("  │  Opens your browser for Anthropic OAuth.               │")
+        print("  │  On headless / WSL: it prints a URL — open it.        │")
+        print("  │  When done, come back here and press ENTER.            │")
+        print("  └─────────────────────────────────────────────────────────┘")
+        input("  Press ENTER once you have completed the login... ")
 
+        cred_path = find_claude_creds()
+        if cred_path:
+            print(f"✓ Login confirmed ({cred_path})")
+            return True
+
+        print("⚠ Credentials not found — continuing anyway.")
+        print("  Run 'claude auth login' in a separate terminal, then re-run the installer.")
+        return False
+
+    # Non-interactive: drive the login ourselves instead of skipping it —
+    # see the docstring above for why this is safe (no stdin required).
+    print("⚠ Claude Code credentials not found — attempting automatic login...")
+    try:
+        proc = subprocess.Popen(
+            [claude_bin, "auth", "login"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+    except OSError as exc:
+        print(f"⚠ Could not start 'claude auth login': {exc}")
+        print("  Run it yourself any time: claude auth login")
+        return False
+
+    def _pump() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            print(f"  [claude auth] {line.rstrip()}")
+
+    threading.Thread(target=_pump, daemon=True, name="claude-auth-pump").start()
+
+    deadline = time.monotonic() + _LOGIN_POLL_TIMEOUT_S
+    while time.monotonic() < deadline:
+        cred_path = find_claude_creds()
+        if cred_path:
+            print(f"✓ Login confirmed ({cred_path})")
+            return True
+        if proc.poll() is not None:
+            break
+        time.sleep(_LOGIN_POLL_INTERVAL_S)
+
+    # One last check — the credential file may have just been written.
     cred_path = find_claude_creds()
     if cred_path:
         print(f"✓ Login confirmed ({cred_path})")
         return True
 
-    print("⚠ Credentials not found — continuing anyway.")
-    print("  Run 'claude login' in a separate terminal, then re-run the installer.")
+    print("⚠ Login not completed within the wait window — continuing anyway.")
+    print("  It may still finish in the background, or run it yourself: claude auth login")
     return False
 
 
