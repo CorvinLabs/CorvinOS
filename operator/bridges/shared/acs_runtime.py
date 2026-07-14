@@ -543,7 +543,16 @@ def _budget_from_spec(spec: dict) -> BudgetEnvelope:
     return BudgetEnvelope(
         max_loops=_clamp_positive_cap(int(b.get("max_loops") or 100), 100, 5000),
         max_total_tokens=int(b.get("max_total_tokens") or 0),
-        max_wall_time=int(b.get("max_wall_time") or 3600),
+        # Unlike max_loops/max_total_workers/max_workers_per_iteration below,
+        # this had NO ceiling — a workflow YAML or the caller-controllable
+        # budget_override (max_wall_time IS in _BUDGET_OVERRIDE_ALLOWED_FIELDS)
+        # could set an arbitrarily large value, giving a run more wall-clock
+        # time to compound the per-worker/per-batch resource growth this
+        # module now bounds elsewhere (found investigating a Windows/64GB-RAM
+        # crash on a large ACS workflow, 2026-07-14). 86400s (24h) is
+        # generous — legitimately long-running workflows still complete,
+        # just bounded rather than unlimited.
+        max_wall_time=_clamp_positive_cap(int(b.get("max_wall_time") or 3600), 3600, 86400),
         max_total_workers=_clamp_positive_cap(int(b.get("max_total_workers") or 8), 8, 64),
         max_tool_calls=int(b.get("max_tool_calls") or 0),
         max_depth=int(b.get("max_depth") or 4),
@@ -1255,6 +1264,95 @@ def _write_system_prompt_tmp_file(system: str, tenant_id: str) -> str | None:
         return None
 
 
+def _communicate_capped(
+    proc: subprocess.Popen, *, input_text: str, timeout: float, cap_chars: int,
+) -> tuple[str, str, bool]:
+    """Like ``proc.communicate()``, but never RETAINS more than ``cap_chars``
+    of decoded text per stream — excess is read-and-discarded so the child
+    can never block on a full OS pipe (the classic subprocess deadlock this
+    function must avoid exactly like ``communicate()`` does), but this
+    process's own heap never has to hold an unbounded amount of a worker's
+    or manager's output either.
+
+    Found during investigation of a Windows/64GB-RAM crash on a large ACS
+    delegation workflow (2026-07-14): ``_call_manager_sync``/
+    ``_call_worker_sync`` used plain ``proc.communicate()``, which — per its
+    own documented contract — reads the ENTIRE stdout/stderr into memory
+    with no limit. ``_MANAGER_OUTPUT_CAP``/``_WORKER_OUTPUT_CAP`` existed as
+    constants but were never wired to anything. Workers run with full tool
+    access and up to 30 minutes; a single legitimately-large task (lots of
+    file reads/greps) can produce output that, multiplied across several
+    concurrently-dispatched workers (see ``_dispatch_workers``), is enough
+    to exhaust even a large machine's RAM.
+
+    Reader threads are started BEFORE writing to stdin (same ordering
+    ``communicate()`` uses internally) so a large prompt write can never
+    deadlock against a child that's already trying to write large output.
+
+    On timeout, kills the process and re-raises ``subprocess.TimeoutExpired``
+    — mirrors ``subprocess.run()``'s own timeout contract. Callers must NOT
+    call ``proc.communicate()``/``proc.kill()`` again in their own except
+    block on this path: this function already owns and has fully drained
+    ``proc.stdout``/``proc.stderr``, so a second read from either stream is
+    at best redundant and at worst racing this function's own reader
+    threads (undefined behaviour — two readers on one pipe).
+    """
+    truncated = {"out": False, "err": False}
+
+    def _drain(stream, sink: list, key: str) -> None:
+        total = 0
+        try:
+            while True:
+                chunk = stream.read(65536)
+                if not chunk:
+                    break
+                if total < cap_chars:
+                    take = chunk[: cap_chars - total]
+                    sink.append(take)
+                    total += len(take)
+                    if len(take) < len(chunk):
+                        truncated[key] = True
+                else:
+                    truncated[key] = True
+                # else: chunk is discarded, but read() already drained the
+                # pipe, so the child is never blocked waiting on us.
+        except (ValueError, OSError):
+            pass  # stream closed under us (process killed) — fine to stop
+
+    out_chunks: list[str] = []
+    err_chunks: list[str] = []
+    out_thread = threading.Thread(
+        target=_drain, args=(proc.stdout, out_chunks, "out"), daemon=True)
+    err_thread = threading.Thread(
+        target=_drain, args=(proc.stderr, err_chunks, "err"), daemon=True)
+    out_thread.start()
+    err_thread.start()
+
+    try:
+        if input_text:
+            proc.stdin.write(input_text)
+        proc.stdin.close()
+    except (BrokenPipeError, OSError):
+        pass  # process may have already exited / closed its own stdin
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Mirror subprocess.run()'s own timeout handling: kill, drain, re-raise.
+        # Killing closes the pipes from the child's side, so the reader
+        # threads (already blocked in stream.read()) unblock and exit almost
+        # immediately — 5s is generous headroom, not an expected wait.
+        proc.kill()
+        proc.wait()
+        out_thread.join(timeout=5.0)
+        err_thread.join(timeout=5.0)
+        raise
+    out_thread.join(timeout=5.0)
+    err_thread.join(timeout=5.0)
+
+    return "".join(out_chunks), "".join(err_chunks), (truncated["out"] or truncated["err"])
+
+
 def _call_manager_sync(
     prompt: str, model: str, tenant_id: str = "_default",
     proc_holder: "_WorkerProcessHolder | None" = None,
@@ -1299,9 +1397,8 @@ def _call_manager_sync(
     # shim — fixed here for consistency/defense-in-depth, not because this
     # specific constant is large today. `prompt` moves to stdin too (verified
     # live: plain `claude -p` with no positional reads stdin, same as `-p`
-    # combined with --output-format json) — proc.communicate(input=...)
-    # writes it and closes stdin atomically, no separate write/close step
-    # needed since this function doesn't stream (single blocking call).
+    # combined with --output-format json) — `_communicate_capped` (below)
+    # writes and closes stdin the same way `proc.communicate(input=...)` did.
     system_tmp_path = _write_system_prompt_tmp_file(_MANAGER_SYSTEM, tenant_id)
     _argv = [
         binary, "-p",
@@ -1331,13 +1428,14 @@ def _call_manager_sync(
         with proc_holder.lock:
             proc_holder.popen = proc
     try:
-        try:
-            stdout, _stderr = proc.communicate(input=prompt, timeout=_MANAGER_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            # Mirror subprocess.run()'s own timeout handling: kill, drain, re-raise.
-            proc.kill()
-            proc.communicate()
-            raise
+        stdout, _stderr, truncated = _communicate_capped(
+            proc, input_text=prompt, timeout=_MANAGER_TIMEOUT,
+            cap_chars=_MANAGER_OUTPUT_CAP,
+        )
+        if truncated:
+            log.warning("[acs] manager output truncated at %d chars (tenant=%s) "
+                        "— a legitimately larger response was cut short",
+                        _MANAGER_OUTPUT_CAP, tenant_id)
     finally:
         if system_tmp_path:
             try:
@@ -1488,9 +1586,8 @@ def _call_worker_sync(
     # off argv: `system` via --append-system-prompt-file, `prompt` via
     # stdin (verified live: plain `claude -p` with no positional argument
     # reads the prompt from stdin, same convention codex_cli.py's fix
-    # relies on) — proc.communicate(input=...) writes + closes stdin
-    # atomically, no separate write/close step needed since this function
-    # doesn't stream.
+    # relies on) — `_communicate_capped` (below) writes and closes stdin the
+    # same way `proc.communicate(input=...)` did.
     system_tmp_path = _write_system_prompt_tmp_file(system, tenant_id)
     # subprocess.Popen (not .run()) so proc_holder can expose a live handle:
     # if the awaiting asyncio Task gets cancelled while this call is blocked
@@ -1521,13 +1618,13 @@ def _call_worker_sync(
         with proc_holder.lock:
             proc_holder.popen = proc
     try:
-        try:
-            stdout, _stderr = proc.communicate(input=prompt, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            # Mirror subprocess.run()'s own timeout handling: kill, drain, re-raise.
-            proc.kill()
-            proc.communicate()
-            raise
+        stdout, _stderr, truncated = _communicate_capped(
+            proc, input_text=prompt, timeout=timeout, cap_chars=_WORKER_OUTPUT_CAP,
+        )
+        if truncated:
+            log.warning("[acs] worker output truncated at %d chars (tenant=%s) "
+                        "— a legitimately larger response was cut short",
+                        _WORKER_OUTPUT_CAP, tenant_id)
     finally:
         if system_tmp_path:
             try:
@@ -1738,6 +1835,24 @@ async def _dispatch_workers(
         })
         return []
     capped = subtasks[: ctx.budget.max_workers_per_iteration]
+    # max_total_workers is only enforced BETWEEN batches by the root_breach
+    # check above — ctx.budget.workers_used is incremented at the END of
+    # each worker's own coroutine (_run_one, after its subprocess call
+    # completes), so nothing stops a SINGLE batch from launching up to
+    # max_workers_per_iteration (ceiling 100) concurrent, full-tool-access
+    # subprocesses regardless of how few workers remain under
+    # max_total_workers (ceiling 64). Found investigating a Windows/64GB-RAM
+    # crash on a large ACS workflow (2026-07-14): concurrency this coarse,
+    # combined with each worker's own uncapped output (see
+    # _communicate_capped's docstring), was the multiplicative factor.
+    # Clamp the batch itself to whatever's ACTUALLY still available before
+    # a single task is created — simpler and safer than trying to "reserve"
+    # slots that would need releasing again on a spawn failure.
+    for _budget in ((ctx.budget, ctx.root_budget) if ctx.root_budget is not None
+                    and ctx.root_budget is not ctx.budget else (ctx.budget,)):
+        if _budget.max_total_workers > 0:
+            _remaining = max(_budget.max_total_workers - _budget.workers_used, 0)
+            capped = capped[:_remaining]
     results: list[WorkerResult] = []
     semaphore = asyncio.Semaphore(ctx.budget.max_workers_per_iteration)
 
