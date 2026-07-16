@@ -24,6 +24,20 @@ import re
 
 _OPEN = "<voice>"
 _CLOSE = "</voice>"
+_OPEN_RE = re.compile(re.escape(_OPEN), re.IGNORECASE)
+_CLOSE_RE = re.compile(re.escape(_CLOSE), re.IGNORECASE)
+
+
+def _last(pattern: "re.Pattern[str]", text: str, end: int | None = None) -> int | None:
+    """Offset of the LAST match of *pattern* in ``text[:end]``, or None.
+
+    Case-insensitive via the pattern, so offsets stay valid in the original
+    string — see extract_voice_override on why lower() must not be used here.
+    """
+    last = None
+    for m in pattern.finditer(text if end is None else text[:end]):
+        last = m.start()
+    return last
 
 
 def extract_voice_override(text: str) -> tuple[str, str | None]:
@@ -44,13 +58,19 @@ def extract_voice_override(text: str) -> tuple[str, str | None]:
     said "the `<voice>` path" before its real block). Anchoring on the LAST
     `</voice>` and the nearest preceding `<voice>` extracts the real trailing
     block and leaves any earlier literal mention untouched in the chat text.
+
+    The scan is case-insensitive but runs on the ORIGINAL string. It used to
+    rfind() on ``text.lower()`` and apply the resulting offsets to ``text`` —
+    but ``str.lower()`` is not length-preserving (U+0130 'İ' lowers to TWO
+    codepoints), so any reply containing 'İ' before the block shifted every
+    offset and both halves came out cut mid-tag: the chat text ended in
+    "<vo" and TTS spoke "prochener Text hier.</v".
     """
-    low = text.lower()
-    close = low.rfind(_CLOSE)
-    if close == -1:
+    close = _last(_CLOSE_RE, text)
+    if close is None:
         return text, None
-    open_ = low.rfind(_OPEN, 0, close)
-    if open_ == -1:
+    open_ = _last(_OPEN_RE, text, end=close)
+    if open_ is None:
         return text, None
     voice_text = text[open_ + len(_OPEN):close].strip()
     stripped = text[:open_] + text[close + len(_CLOSE):]

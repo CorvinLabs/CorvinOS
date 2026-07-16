@@ -6903,12 +6903,21 @@ def _audience_demands_metapher(audience_block: str) -> bool:
     return any(m in audience_block for m in _METAPHER_ZUGABE_MARKERS)
 
 
-def _has_metapher_suffix(text: str, window: int = 300) -> bool:
+def _has_metapher_suffix(text: str, window: int = 900) -> bool:
     """Return True iff the tail of *text* already contains a metapher sentence.
 
     Used in the long-text summarize.py path to avoid adding a second metapher
     when the LLM summarizer already followed the --audience instruction and
     included one itself.
+
+    The window must survive an annex being appended AFTER the metaphor: the
+    check runs once the LERN-ZUGABE is already in place, and profile.py
+    authorises 1-2 sentences plus a recap at learning=3 — ~350 chars is
+    routine, which pushed the marker clean out of the old 300-char window and
+    a SECOND metaphor was appended. That is the "Metapher doppelt" half of the
+    user report of 2026-07-15; only the annex half was fixed at the time (see
+    _has_lern_zugabe_suffix, same reasoning, same 900). The markers are
+    distinctive sentence openers, so a wider window cannot false-match prose.
     """
     tail = text[-window:] if len(text) > window else text
     return any(m in tail for m in _METAPHER_SENTENCE_MARKERS)
@@ -6920,6 +6929,13 @@ def _has_metapher_suffix(text: str, window: int = 300) -> bool:
 # learning annex before we add a deterministic one.
 _LERN_ZUGABE_SENTENCE_MARKERS = (
     "Und zur Einordnung,", "Wissenswert dazu,",
+    # "And to give you context," is the FIRST marker profile.py's English
+    # audience block mandates (profile.py::for_tts_audience), but it was in
+    # neither this tuple nor summarize.py::_APPENDIX_MARKERS — so whenever the
+    # model obeyed the block and picked it, detection missed the annex and a
+    # SECOND one was appended. The existing sync test only compares adapter to
+    # summarize, never to profile.py, so the gap was untested by construction.
+    "And to give you context,",
     "For context,", "Worth knowing,",
 )
 
@@ -7304,7 +7320,21 @@ def build_voice_summary(text: str, max_chars: int = 400,
         # Audience block: render in the user's pivot locale (de keeps
         # German, every other code uses English block).
         audience_lang = output_language or "de"
-        cmd = [sys.executable, str(summarizer), "--lang", "de",
+        # summarize.py's --lang picks the BASE system prompt (de|en), and it was
+        # hardcoded to "de" while --output-language was only appended for codes
+        # OUTSIDE (de, en). So a confidently-ENGLISH answer got the German base
+        # prompt — whose closing rule is literally "Form: deutscher Fließtext" —
+        # and came back summarised, and therefore SPOKEN, in German. _tts_lang
+        # then re-detects on that already-German summary and picks a German
+        # voice, so the failure is self-consistent and invisible from the
+        # outside. ADR-0194 Phase 2 ("the spoken language follows the text")
+        # thus worked only on the short/verbatim paths and silently failed for
+        # exactly the long replies it was written for.
+        # Non-de/en codes keep the German base + the OUTPUT-LANGUAGE directive
+        # they use today (that path demonstrably yields the right language);
+        # switching them to summarize.py's English pivot is a separate change.
+        base_lang = "en" if (output_language or "").split("-", 1)[0].lower() == "en" else "de"
+        cmd = [sys.executable, str(summarizer), "--lang", base_lang,
                "--max-chars", str(max_chars)]
         if _voice_profile is not None:
             try:

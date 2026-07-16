@@ -941,3 +941,52 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_every_marker_profile_mandates_is_actually_detectable() -> None:
+    """profile.py's audience block is what TELLS the model which marker to emit.
+
+    The sibling test above only compares adapter <-> summarize — two hand-copies
+    of each other. Neither is compared against profile.py, the file that
+    actually mandates the wording, so a marker could be (and was) demanded of
+    the model while being unknown to both detectors: the English block mandates
+    "And to give you context," which appeared in neither tuple. When the model
+    obeyed and picked it, _has_lern_zugabe_suffix returned False and a SECOND
+    annex was appended — the exact defect the dedup exists to prevent.
+    """
+    import re as _re
+    from pathlib import Path as _Path
+
+    src = _Path(__file__).resolve().parents[2] / "bridges" / "shared" / "profile.py"
+    text = src.read_text(encoding="utf-8")
+
+    # The block mandates markers as: begins with exactly one of these markers:
+    # "X," or "Y,". Pull every double-quoted marker out of the learning clauses.
+    clauses = _re.findall(r"(?:LERN-ZUGABE|LEARNING ANNEX).{0,600}", text, _re.S)
+    assert clauses, "could not locate the learning clause in profile.py"
+
+    mandated: set[str] = set()
+    for clause in clauses:
+        # Markers are rendered inside escaped quotes in the prompt string and are
+        # split across adjacent literals, so normalise the source concatenation first.
+        flat = _re.sub(r'"\s*\n\s*"', "", clause)
+        mandated |= {m.strip() for m in _re.findall(r'\\"([^"\\]{4,60}?,)\\"', flat)}
+
+    assert mandated, "no mandated markers parsed out of profile.py"
+
+    # profile.py mandates markers for BOTH annexes (learning + metaphor) and the
+    # clauses sit next to each other, so check against the union of the two
+    # detectors: every marker the model is TOLD to emit must be recognised by
+    # whichever detector owns it, or that annex gets appended a second time.
+    adapter_src = _adapter_source()
+    known = (
+        set(summarize._APPENDIX_MARKERS)
+        | set(_extract_str_tuple_const(adapter_src, "_LERN_ZUGABE_SENTENCE_MARKERS"))
+        | set(_extract_str_tuple_const(adapter_src, "_METAPHER_SENTENCE_MARKERS"))
+    )
+    missing = {m for m in mandated if m not in known}
+    assert not missing, (
+        f"profile.py tells the model to emit {sorted(missing)}, but no detector "
+        "knows that marker -> _has_lern_zugabe_suffix/_has_metapher_suffix will "
+        "miss the annex and a SECOND one gets appended"
+    )

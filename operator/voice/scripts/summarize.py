@@ -1241,6 +1241,9 @@ def _appendix_via_hermes(text: str, lang: str) -> str | None:
 # Curated markers we accept as evidence that the appendix is well-formed.
 _APPENDIX_MARKERS = (
     "Und zur Einordnung,", "Wissenswert dazu,",
+    # Kept in sync with adapter.py::_LERN_ZUGABE_SENTENCE_MARKERS AND with the
+    # markers profile.py's audience block actually mandates — see the note there.
+    "And to give you context,",
     "For context,", "Worth knowing,",
 )
 
