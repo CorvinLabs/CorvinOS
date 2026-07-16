@@ -9,6 +9,7 @@ import {
   FileText,
   FolderOpen,
   Hammer,
+  ListChecks,
   Loader2,
   Mic,
   MicOff,
@@ -794,7 +795,7 @@ function ChatPane({
   const [voiceOut, setVoiceOut] = usePersistedBool(PREF_KEYS.voiceOut, true);
   const [recording, setRecording] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const { voiceState, playTts, playFull, playBlocked, stopVoice } = useVoicePlayback(csrf, (msg) =>
+  const { voiceState, playTts, playFull, playSessionSummary, playBlocked, stopVoice } = useVoicePlayback(csrf, (msg) =>
     setError(msg),
   );
   // Last completed TTS text + detected language — used for the replay button.
@@ -1516,6 +1517,22 @@ function ChatPane({
               aria-label="Read the full answer aloud"
             >
               <BookOpenText className="h-4 w-4" />
+            </Button>
+          )}
+          {/* Spoken recap of the WHOLE session (goal / method / current state) —
+              not one turn. Available once there's actual history to recap.
+              Deliberately NOT idempotent: every press re-runs the summarizer
+              with a fresh framing angle, so pressing it again gives back
+              different wording on purpose (user-requested). */}
+          {voiceOut && voiceState === "idle" && !streaming && (meta?.turn_count ?? 0) > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => playSessionSummary(sid, lastTts?.lang ?? ttsLang).catch(() => {})}
+              title="Recap the whole session so far (goal, method, current state)"
+              aria-label="Recap the whole session"
+            >
+              <ListChecks className="h-4 w-4" />
             </Button>
           )}
           <Button
