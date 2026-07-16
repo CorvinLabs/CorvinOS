@@ -133,9 +133,13 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
 
   const playTts = React.useCallback(
     async (text: string, lang: string, sid?: string) => {
+      // Order matters: stopVoice() ITSELF bumps the generation (that is what
+      // makes an explicit Stop a real supersede), so the id must be captured
+      // AFTER it. Capturing first and then calling stopVoice() made every call
+      // supersede ITSELF — the guard after the ttsBlob await would compare a
+      // stale id and bail, i.e. voice would never play at all.
+      stopVoice();  // latest request wins — stop any in-flight playback first
       const myRequestId = ++requestIdRef.current;
-      // Latest request wins — stop any in-flight playback first.
-      stopVoice();
       if (!text.trim()) return;
       setVoiceState("loading");
       let blob: Blob;
@@ -194,6 +198,15 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
         // effect above stop doing redundant work.
         unlockedRef.current = true;
       } catch {
+        // pause() REJECTS a pending play() with AbortError, which is
+        // indistinguishable here from a real autoplay block. Without this
+        // guard, a Stop pressed during the ~100ms play() window left the chip
+        // stuck at "tap to hear" — and since Replay and "read the full answer
+        // aloud" both render only on voiceState === "idle", both stayed hidden
+        // until the user pressed Stop a second time. Worse, tapping the
+        // affordance called playBlocked(), which replayed the very audio the
+        // user had just silenced. A superseded call owns nothing: bail out.
+        if (myRequestId !== requestIdRef.current) return;
         // Browser blocked autoplay (no user gesture in scope). The audio
         // is ready; the caller shows a "tap to hear" affordance that calls
         // playBlocked() from within a real click handler.
@@ -220,8 +233,9 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
    */
   const playFull = React.useCallback(
     async (text: string, lang: string, sid: string) => {
-      const myRequestId = ++requestIdRef.current;
+      // See playTts: stopVoice() bumps the generation, so capture AFTER it.
       stopVoice();
+      const myRequestId = ++requestIdRef.current;
       if (!text.trim()) return;
       setVoiceState("loading");
       const audio = ensureAudioEl();
@@ -248,6 +262,13 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
           pending = index + 1 < total
             ? ttsSegment(text, lang, csrf, sid, index + 1)
             : Promise.resolve(null);
+          // Every `return` below abandons this prefetch un-awaited (Stop, a
+          // supersede, end-of-playlist). Attaching a no-op catch marks the
+          // rejection handled — otherwise a dropped connection or a 500 on the
+          // orphaned segment surfaced as "Uncaught (in promise) ApiError". This
+          // does NOT swallow it for the awaiter: `.catch()` returns a NEW
+          // promise, so `await pending` still throws into the loop's own catch.
+          pending.catch(() => { /* handled at the await, if we get there */ });
 
           const url = URL.createObjectURL(seg.blob);
           blobUrlRef.current = url;
@@ -265,10 +286,19 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
           }
           // Wait for THIS segment to finish before starting the next. onerror
           // resolves too: one undecodable segment must not strand the playlist.
+          // `pause` resolves as well because stopVoice()/a superseding play()
+          // PAUSES this element, and pause fires NEITHER `ended` NOR `error` —
+          // without it this promise never settled, so pressing Stop mid-playlist
+          // suspended the loop for the page's lifetime, permanently retaining the
+          // audio element and the already-prefetched next segment, and never
+          // revoking the current segment's object URL. The requestId check below
+          // then turns that wake-up into a clean bail-out.
           await new Promise<void>((resolve) => {
             audio.onended = () => resolve();
             audio.onerror = () => resolve();
+            audio.onpause = () => resolve();
           });
+          audio.onpause = null;
           if (blobUrlRef.current === url) {
             URL.revokeObjectURL(url);
             blobUrlRef.current = null;
