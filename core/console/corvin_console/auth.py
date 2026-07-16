@@ -109,6 +109,14 @@ class SessionRecord:
     expires_at: float
     persistent: bool = False  # "remember me" — skips IDLE_TIMEOUT_S check
     lic_proof: str = ""       # ADR-0154 M3 SDLP — "" = pre-M3 / free-tier passthrough
+    # ADR-0193 — True only for the synthetic record internal_auth.py builds for
+    # the corvin-browser MCP tool's X-Corvin-Browser-Token path; False (the
+    # default) for every real, cookie-authenticated SPA session. Lets a route
+    # tell "an LLM-driven tool call" apart from "a human's own browser tab"
+    # without a fragile string check on `sid`, e.g. to require the cross-host
+    # navigation confirm for the former but not the latter (see
+    # routes/browser.py::navigate).
+    is_internal_tool: bool = False
 
     def is_alive(self, now: float | None = None) -> bool:
         now = now if now is not None else time.time()

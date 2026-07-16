@@ -108,6 +108,22 @@ def _notify_resolver(tenant_id: str) -> tuple[str | None, str | None]:
         return (None, None)
 
 
+def _notify_fn(tenant_id: str, *, text: str) -> None:
+    """ADR-0189: best-effort proactive voice notification for a browser-agent
+    pause (needs_login / needs_approval), on top of the in-chat text delta /
+    action-log entry already recorded. No-ops silently if the tenant has no
+    notify routing configured — this is an ADDITION, never a required
+    delivery path. Wired into BrowserSessionManager itself (not a specific
+    caller's polling loop) so it fires for ANY start_agent() caller."""
+    try:
+        from ..browser import notify as _br_notify
+        channel, chat_id = _notify_resolver(tenant_id)
+        _br_notify.notify_pause(channel=channel, chat_id=chat_id, tenant_id=tenant_id,
+                                label="browser task", text=text)
+    except Exception:  # noqa: BLE001 — never let a notify failure break the agent loop
+        logger.debug("browser pause notify failed", exc_info=True)
+
+
 _manager = None
 
 def _mgr():
@@ -119,6 +135,7 @@ def _mgr():
             audit_fn=_audit_fn,
             vault_resolver=_vault_resolver,
             allowlist_resolver=_allowlist_resolver,
+            notify_fn=_notify_fn,
         )
     return _manager
 
@@ -267,7 +284,16 @@ def _owned_session(rec: session_auth.SessionRecord, sid: str):
 async def navigate(sid: str, body: NavigateReq,
                    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
-    obs = await _act(s.navigate(body.url))
+    # ADR-0193 adversarial-review finding: this route's `confirm_cross_host`
+    # was always the BrowserSession default (False) — correct for a HUMAN
+    # typing a URL into the SPA's own bar (that IS the informed consent,
+    # per BrowserSession.navigate's own docstring), but the corvin-browser
+    # MCP tool also calls this exact route for an LLM-DECIDED navigation,
+    # which is exactly the indirect-prompt-injection surface ADR-0187/0189
+    # built the confirm for. `rec.is_internal_tool` (set only for the
+    # token-authenticated MCP-tool path, never for a real cookie session)
+    # tells the two callers apart without weakening the manual-operator path.
+    obs = await _act(s.navigate(body.url, confirm_cross_host=rec.is_internal_tool))
     return obs.to_dict()
 
 @router.post("/browser/{sid}/observe")

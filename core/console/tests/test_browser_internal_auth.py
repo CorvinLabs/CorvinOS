@@ -53,6 +53,34 @@ def test_require_session_or_token_accepts_valid_bearer_with_no_cookie():
     assert rec.tier == "owner"
 
 
+def test_token_authenticated_record_is_flagged_is_internal_tool():
+    # ADR-0193 adversarial-review fix: routes/browser.py's navigate route
+    # keys the ADR-0187/0189 cross-host confirm off `rec.is_internal_tool` —
+    # a regression here (e.g. reverting the `is_internal_tool=True` kwarg)
+    # would silently re-open the "MCP tool navigation never confirms
+    # cross-host" gap with every other test still green.
+    token = internal_auth.mint("acme", "fp123")
+    rec = internal_auth.require_session_or_token(
+        corvin_console_sid=None, x_corvin_browser_token=token)
+    assert rec.is_internal_tool is True
+
+
+def test_cookie_session_record_defaults_is_internal_tool_false(monkeypatch):
+    # A real cookie-authenticated SessionRecord must NOT be flagged as the
+    # internal-tool path — that would wrongly force the cross-host confirm
+    # onto a human's own manual URL-bar navigation in the SPA.
+    from corvin_console import auth as session_auth
+    fake_rec = session_auth.SessionRecord(
+        sid="s1", sid_fingerprint="fp1", tier="owner", tenant_id="acme",
+        token_fingerprint="", csrf_secret="", created_at=0.0, last_seen_at=0.0,
+        expires_at=1e18,
+    )
+    monkeypatch.setattr(internal_auth._deps, "require_session", lambda **kw: fake_rec)
+    rec = internal_auth.require_session_or_token(
+        corvin_console_sid="some-cookie", x_corvin_browser_token=None)
+    assert rec.is_internal_tool is False
+
+
 def test_require_csrf_or_token_accepts_valid_bearer_without_csrf_header():
     token = internal_auth.mint("acme", "fp123")
     rec = internal_auth.require_csrf_or_token(

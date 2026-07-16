@@ -139,6 +139,36 @@ def test_seed_builtin_preserves_operator_compliance_edit(monkeypatch, tmp_path):
     assert entry2["compliance"]["hosts"] == ["image.pollinations.ai"]
 
 
+def test_corvin_browser_seed_version_bump_does_not_touch_imagegen(monkeypatch, tmp_path):
+    """ADR-0193 adversarial-review regression (round 2): seed_builtin used to
+    share ONE `_SEED_VERSION` constant across every builtin tool. Bumping it
+    for a corvin-browser-only shape change ALSO forced every already-seeded
+    imagegen-zero-config install through the generic "seed-shape upgrade"
+    branch, which does an unconditional `_catalog.add_tool(tid, entry)` —
+    silently discarding an operator's own compliance edit to an entry whose
+    shape never actually changed. Each builtin tool now owns its own
+    constant (`_IMAGEGEN_SEED_VERSION` / `_BROWSER_SEED_VERSION`); bumping
+    one must never re-trigger the other's re-seed path."""
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    from mcp_manager import seed_builtin, catalog
+
+    seed_builtin.ensure_imagegen_zero_config("_default")
+    entry = catalog.get_tool("_default", "imagegen-zero-config")
+    entry["compliance"]["hosts"] = ["image.pollinations.ai"]
+    catalog.add_tool("_default", entry)
+
+    seed_builtin.ensure_corvin_browser("_default")
+    # Simulate a future corvin-browser-only shape change by bumping ONLY its
+    # own constant, then re-seeding both tools on the same "boot".
+    monkeypatch.setattr(seed_builtin, "_BROWSER_SEED_VERSION",
+                        seed_builtin._BROWSER_SEED_VERSION + 1)
+    seed_builtin.ensure_corvin_browser("_default")
+    seed_builtin.ensure_imagegen_zero_config("_default")
+
+    entry2 = catalog.get_tool("_default", "imagegen-zero-config")
+    assert entry2["compliance"]["hosts"] == ["image.pollinations.ai"]
+
+
 def test_seed_builtin_refreshes_stale_interpreter_path(monkeypatch, tmp_path):
     """Upgrade case: the recorded venv interpreter no longer exists (new
     venv after a version upgrade) — the runtime block must be refreshed to

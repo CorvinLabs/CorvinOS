@@ -55,11 +55,30 @@ from . import compliance as _compliance
 
 _SERVERS_DIR = Path(__file__).resolve().parents[1] / "servers"
 
-# Bump when the seeded entry's SHAPE changes in a way that must be re-applied
-# to existing installs (new compliance hosts, new env contract, ...). A pure
-# path change (new venv after upgrade) is handled separately below and does
-# NOT need a bump.
-_SEED_VERSION = 2
+# Bump the RELEVANT tool's own constant below when ITS seeded entry's SHAPE
+# changes in a way that must be re-applied to existing installs (new
+# compliance hosts, new env contract, ...). A pure path change (new venv
+# after upgrade) is handled separately below and does NOT need a bump.
+#
+# Deliberately ONE CONSTANT PER TOOL, not a single shared version (adversarial-
+# review finding, second round: a shared `_SEED_VERSION` bump for a
+# corvin-browser-only shape change ALSO forced every already-seeded
+# imagegen-zero-config install through the "seed-shape upgrade" branch below,
+# which does an unconditional `_catalog.add_tool(tid, entry)` — reproduced
+# live: it silently discarded an operator's own edit to that entry, e.g. a
+# tightened `compliance.hosts` list, even though imagegen's own shape never
+# changed. Each tool's marker is already stored per-tool_id
+# (`marker[tool_id] = {"seed_version": ...}`); comparing it against its OWN
+# tool's constant, not a global one, is what actually scopes a re-apply to
+# only the tool whose shape genuinely changed.
+_IMAGEGEN_SEED_VERSION = 2
+# v1: corvin-browser's env gained CORVIN_HOME (adversarial-review finding —
+# it originally set only CORVIN_TENANT_ID, unlike its imagegen sibling, risking
+# a reader != writer L44 tenant-policy mismatch on a pinned CORVIN_HOME). Since
+# this tool has never shipped in a release yet, starting the counter at 1
+# (rather than "2" to mirror imagegen) is intentional — there is no prior
+# public seed_version to stay compatible with.
+_BROWSER_SEED_VERSION = 1
 
 
 def _marker_path(tid: str) -> Path:
@@ -74,9 +93,9 @@ def _load_marker(tid: str) -> dict:
         return {}
 
 
-def _write_marker(tid: str, tool_id: str) -> None:
+def _write_marker(tid: str, tool_id: str, seed_version: int) -> None:
     marker = _load_marker(tid)
-    marker[tool_id] = {"seed_version": _SEED_VERSION}
+    marker[tool_id] = {"seed_version": seed_version}
     path = _marker_path(tid)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
@@ -96,8 +115,10 @@ def ensure_imagegen_zero_config(tid: str = "_default") -> dict:
       finding: the previous unconditional add_tool+activate silently undid
       both user deactivation and operator catalog edits on every boot).
     - Marker present, entry deleted: the operator uninstalled it — do nothing.
-    - Marker seed_version older than _SEED_VERSION: re-apply the full entry
-      (but still never force re-activation of a deactivated tool).
+    - Marker seed_version older than this tool's own seed-version constant:
+      re-apply the full entry (but still never force re-activation of a
+      deactivated tool). Each builtin tool has its OWN constant — a shape
+      change in one tool's entry must never force a re-apply of another's.
 
     Returns a dict with keys: installed (bool), activated (bool), error
     (str | None) — never raises; a compliance/activation failure (e.g. a
@@ -136,7 +157,7 @@ def ensure_imagegen_zero_config(tid: str = "_default") -> dict:
         # Seeded once, later uninstalled by the operator — respect that.
         return {"installed": False, "activated": False, "error": None}
 
-    if marker and existing is not None and marker.get("seed_version") == _SEED_VERSION:
+    if marker and existing is not None and marker.get("seed_version") == _IMAGEGEN_SEED_VERSION:
         # Already seeded at this shape: refresh stale interpreter/venv paths
         # (upgrade case) but preserve every operator edit and the activation
         # state. Only rewrite when the recorded interpreter/script no longer
@@ -159,7 +180,7 @@ def ensure_imagegen_zero_config(tid: str = "_default") -> dict:
         # Pre-marker install (0.10.27 gateway seeding): adopt it without
         # re-activating; activation state is whatever the operator left.
         _catalog.add_tool(tid, entry)
-        _write_marker(tid, tool_id)
+        _write_marker(tid, tool_id, _IMAGEGEN_SEED_VERSION)
         return {"installed": True, "activated": False, "error": None}
 
     _catalog.add_tool(tid, entry)
@@ -171,7 +192,7 @@ def ensure_imagegen_zero_config(tid: str = "_default") -> dict:
             activated = True
         except _compliance.ComplianceError as e:
             error = str(e)
-    _write_marker(tid, tool_id)
+    _write_marker(tid, tool_id, _IMAGEGEN_SEED_VERSION)
     return {"installed": True, "activated": activated, "error": error}
 
 
@@ -181,13 +202,20 @@ def ensure_corvin_browser(tid: str = "_default") -> dict:
     contract as ``ensure_imagegen_zero_config`` above (read its docstring for
     the full state machine) — this is the second builtin server to use it.
 
-    ``CORVIN_TENANT_ID`` is baked into this entry's env at seed time (one
-    entry per tenant, like imagegen) so the tool's own L44 gate call knows
-    its tenant without depending on env inheritance from the spawning
-    process. The per-CHAT-TURN bearer token (``CORVIN_BROWSER_TOKEN``) is
-    NOT set here — it can't be, it doesn't exist until a turn starts — it is
-    injected dynamically by ``get_active_mcp_servers(browser_token=...)`` on
-    every spawn instead (see ``chat_runtime.py``).
+    ``CORVIN_TENANT_ID`` **and** ``CORVIN_HOME`` are baked into this entry's
+    env at seed time (one entry per tenant, like imagegen) so the tool's own
+    L44 gate call knows its tenant AND resolves the SAME ``tenant.corvin.yaml``
+    house-rules overlay the console itself uses, without depending on env
+    inheritance from the spawning process (adversarial-review finding: this
+    entry originally set only ``CORVIN_TENANT_ID``, unlike
+    ``ensure_imagegen_zero_config`` below, which already carries both for
+    exactly this reason — an operator who pins a non-default ``CORVIN_HOME``
+    would otherwise have ``check_l44()`` silently resolve the wrong tenant's
+    policy for every URL this tool navigates to). The per-CHAT-TURN bearer
+    token (``CORVIN_BROWSER_TOKEN``) is NOT set here — it can't be, it
+    doesn't exist until a turn starts — it is injected dynamically by
+    ``get_active_mcp_servers(browser_token=...)`` on every spawn instead (see
+    ``chat_runtime.py``).
 
     ``locality: local`` / ``network_egress: none``: this tool's OWN HTTP
     calls never leave the local machine (loopback to the console's own
@@ -201,7 +229,10 @@ def ensure_corvin_browser(tid: str = "_default") -> dict:
     runtime = {
         "command": sys.executable,
         "args": [str(main_py)],
-        "env": {"CORVIN_TENANT_ID": tid},
+        "env": {
+            "CORVIN_HOME": str(_catalog._corvin_home()),
+            "CORVIN_TENANT_ID": tid,
+        },
     }
     entry = {
         "id": tool_id,
@@ -220,7 +251,7 @@ def ensure_corvin_browser(tid: str = "_default") -> dict:
     if marker and existing is None:
         return {"installed": False, "activated": False, "error": None}
 
-    if marker and existing is not None and marker.get("seed_version") == _SEED_VERSION:
+    if marker and existing is not None and marker.get("seed_version") == _BROWSER_SEED_VERSION:
         rt = existing.get("runtime") or {}
         cmd = rt.get("command", "")
         args = rt.get("args") or []
@@ -235,7 +266,7 @@ def ensure_corvin_browser(tid: str = "_default") -> dict:
 
     if existing is not None and marker is None:
         _catalog.add_tool(tid, entry)
-        _write_marker(tid, tool_id)
+        _write_marker(tid, tool_id, _BROWSER_SEED_VERSION)
         return {"installed": True, "activated": False, "error": None}
 
     _catalog.add_tool(tid, entry)
@@ -247,5 +278,5 @@ def ensure_corvin_browser(tid: str = "_default") -> dict:
             activated = True
         except _compliance.ComplianceError as e:
             error = str(e)
-    _write_marker(tid, tool_id)
+    _write_marker(tid, tool_id, _BROWSER_SEED_VERSION)
     return {"installed": True, "activated": activated, "error": error}

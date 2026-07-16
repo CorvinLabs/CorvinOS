@@ -45,6 +45,7 @@ jobs:
             operator/bridges/shared/ \
             core/console/tests/ \
             core/compute/tests/ \
+            operator/mcp_manager/tests/ \
             --import-mode=importlib \
             --cov=operator \
             --cov=core \

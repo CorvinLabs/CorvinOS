@@ -76,12 +76,14 @@ class BrowserSessionManager:
         audit_fn=None,
         vault_resolver=None,           # (tenant_id, key) -> Optional[str]
         allowlist_resolver=None,       # (tenant_id) -> (allowlist, forbidden)
+        notify_fn=None,                # (tenant_id, *, text) -> None, best-effort
         now=None,                      # injectable clock (Date.now-free for tests)
     ) -> None:
         self._home_resolver = home_resolver
         self._audit_fn = audit_fn
         self._vault_resolver = vault_resolver
         self._allowlist_resolver = allowlist_resolver
+        self._notify_fn = notify_fn
         self._now = now or time.time
         self._sessions: dict[str, _Live] = {}
 
@@ -246,6 +248,25 @@ class BrowserSessionManager:
                 result = await agent.run(task)
                 status = result.get("status")
                 live.append({"action": "agent_finished", **result, "ts": self._now()})
+                # ADR-0189 proactive voice notification — adversarial-review
+                # finding: this used to be wired ONLY from the chat-text
+                # `/browser <task>` command's own polling loop (retired in
+                # ADR-0193 Phase 2), so it silently stopped firing for EVERY
+                # caller once that loop was deleted, including the still-live
+                # Browser-page-initiated agent loop. Wiring it here instead
+                # makes it fire for any start_agent() caller, chat or REST,
+                # present or future — never just the one path that happened
+                # to poll for it.
+                if self._notify_fn is not None and status in ("needs_login", "needs_approval"):
+                    if status == "needs_login":
+                        _text = ("Login required — open the live view, log in, "
+                                 "then say \"weiter\" or press the Weiter button.")
+                    else:
+                        _text = (f"Paused, waiting for your approval — {result.get('reason', '')} "
+                                 "Once approved in the Browser page, say \"weiter\" or press "
+                                 "the Weiter button to keep going.")
+                    with contextlib.suppress(Exception):
+                        self._notify_fn(tenant_id, text=_text)
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # noqa: BLE001
