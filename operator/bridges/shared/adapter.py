@@ -7003,6 +7003,24 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
     still falls through to the profile default unchanged — that's the
     actual use case the pin exists for.
     """
+    # ── TEXT FIRST (ADR-0194 Phase 2) ───────────────────────────────────────
+    # The spoken language follows the language the answer was actually WRITTEN
+    # in: German text → German voice, English text → English voice, regardless of
+    # the profile pin. This INVERTS the previous profile-first contract, where the
+    # per-turn detection only got a say when the pin happened to be non-de/en — so
+    # a de-pinned user hearing an English answer got it spoken in German.
+    # _detect_confident_de_en returns None on a weak/ambiguous/non-Latin signal,
+    # which is exactly when a static pin is the better answer than a guess.
+    detected = _detect_confident_de_en(candidate_text)
+    if detected:
+        return detected
+    # ── Ambiguous text → the static tiers ───────────────────────────────────
+    # (a) the profile pin — the right answer for a genuine non-de/en user (zh-Hans,
+    #     ja, ar, …) whose reply the de/en detector structurally cannot speak to;
+    # (b) the OS locale — defence-in-depth when display_language was never seeded,
+    #     so an unseeded box still speaks its real language and matches the console
+    #     welcome tier instead of the two surfaces diverging;
+    # (c) "" — a stripped-env service keeps the caller's own constant.
     output_language = ""
     if _voice_profile is not None and _i18n is not None:
         try:
@@ -7010,20 +7028,11 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
             output_language = _i18n.normalise(raw) if raw else ""
         except Exception:  # noqa: BLE001
             output_language = ""
-    # Defence-in-depth: when display_language was never seeded, fall back to the
-    # OS locale (the user's actual language) BEFORE the caller's `or "de"` — so an
-    # unseeded box speaks its real language and matches the console welcome tier,
-    # instead of the two surfaces diverging (welcome→en vs TTS→de). "" on a
-    # stripped-env service keeps the caller's existing constant.
     if not output_language and _i18n is not None:
         try:
             output_language = _i18n.system_language()
         except Exception:  # noqa: BLE001
             output_language = ""
-    if output_language and output_language not in ("de", "en"):
-        detected = _detect_confident_de_en(candidate_text)
-        if detected:
-            output_language = detected
     return output_language
 
 

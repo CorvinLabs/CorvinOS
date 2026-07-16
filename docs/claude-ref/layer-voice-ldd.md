@@ -460,6 +460,23 @@ helper) — previously they had no fallback at all, so a Hermes-only install
 LERN-ZUGABE/METAPHER annex; now `generate_appendix`/`generate_metapher` try
 CLI (if authenticated) then Hermes before giving up.
 
+**Voice language follows the TEXT (ADR-0194 Phase 2).** `_resolve_voice_output_language`
+used to be profile-FIRST: the per-turn `_detect_confident_de_en` check only got a say
+when the static `display_language` pin happened to be non-de/en. A user pinned to `de`
+who received an English answer therefore heard it spoken in German. The contract is now
+inverted — the text decides:
+
+  1. `_detect_confident_de_en(candidate_text)` — returns "de"/"en" only on a confident
+     signal, `None` on a tie / no function words / non-Latin script;
+  2. on `None`, the static tiers apply in order: the profile pin (the right answer for a
+     genuine zh-Hans/ja/ar user, whose reply the de/en detector structurally cannot speak
+     to), then `i18n.system_language()` (OS locale), then `""` (the caller's own constant).
+
+The console needed no change — `detectTtsLang()` (`chat.tsx`) was already text-first, with
+script-level detection (CJK/Hangul/kana/Arabic/Hebrew/Cyrillic/Devanagari), umlauts, and a
+de/en function-word scorer, using its fallback only on a tie. Regression guard:
+`operator/bridges/shared/test_adapter_voice_text_first_lang.py`.
+
 **Per-turn voice archive (ADR-0194 Phase 1).** Console voice used to be ephemeral:
 `chat.tsx` → `useVoicePlayback.playTts()` → `POST /voice/tts` → blob → played once →
 revoked. The route already summarised the reply (`_summarize_for_speech`, ≤400 chars)
