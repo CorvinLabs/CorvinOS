@@ -1,10 +1,16 @@
 # Browser Control as a Native Chat Tool (Concept)
 
-**Status: ADR filed; Phase 1 implemented (2026-07-16).** See
+**Status: ADR filed; Phases 1-3 implemented (2026-07-16).** See
 `Corvin-ADR/decisions/0193-browser-native-chat-tool-integration.md` for the
-accepted decision record — this doc is the fuller design behind it. Phases
-2-4 (retiring the classifier, regression coverage for coding-prompt
-non-misrouting, and further docs sync) are not yet started.
+accepted decision record — this doc is the fuller design behind it.
+`_BROWSE_SIGNAL_RE`, `_classify_browser_intent()`, `_handle_browser_command()`
+(and the bare-URL auto-detect + `/browser confirm|continue` sub-commands that
+existed only to serve that same retired mechanism) are gone from
+`routes/chat.py`'s per-message path — every message reaches the model's own
+turn unchanged; the native `corvin-browser` MCP tool is available to its
+ordinary tool-use reasoning, exactly like any other tool. The old REST
+agent-loop path (`POST /browser/{sid}/agent`) is untouched, per the ADR's own
+non-goals. Phase 4 (further docs sync beyond this doc) is not yet started.
 
 ## 1. Problem — why "build me a web UI" launches a live browser
 
@@ -181,15 +187,27 @@ classifier's job to enforce in the first place.
 - **Not touching the L5 cowork persona router** (`operator/bridges/shared/router.py`) — it was
   investigated and confirmed unrelated to this bug; out of scope here.
 
-## 7. Phased delivery (proposed)
+## 7. Phased delivery
 
-1. `corvin-browser` MCP server (`main.py` wrapping `BrowserSessionManager`/`BrowserTOOLS`'
-   schema) + catalog/seed_builtin registration, with the L44 gate and task-scoped-host
-   extraction moved into the tool's own entry function.
-2. Retire `_BROWSE_SIGNAL_RE` / `_classify_browser_intent()` / `_handle_browser_command()` from
-   `routes/chat.py`'s per-message path.
-3. Regression coverage: a test suite proving "build me a website" / "implement a login form"
-   style coding prompts no longer route to any browser mechanism, alongside the existing
-   `test_browser_automation.py` security-gate suite re-run unchanged (since none of those gates
-   moved).
-4. Docs sync: `docs/claude-ref/layer-*.md` (browser-automation section), `docs/browser-voice-guided-navigation.md`, an ADR for the routing-shape change.
+1. **Done.** `corvin-browser` MCP server (`main.py`, an HTTP client against the console's own
+   `/v1/console/browser/*` REST routes — see the Phase 1 implementation-detail note in §4 above
+   for why it's HTTP, not a direct `BrowserSessionManager` import) + catalog/seed_builtin
+   registration, with the L44 gate and task-scoped-host extraction moved into the tool's own
+   session-creating `navigate` call.
+2. **Done.** Retired `_BROWSE_SIGNAL_RE` / `_classify_browser_intent()` / `_handle_browser_command()`
+   from `routes/chat.py`'s per-message path — along with the bare-URL auto-detect
+   (`_detect_browser_task`/`_URL_START_RE`/`_BROWSE_INTENT_RE`) and the `/browser confirm|continue`
+   sub-commands (`_handle_browser_confirm_command`/`_handle_browser_continue_command`), which only
+   ever served that same retired agent-loop-in-chat mechanism. Every message now reaches
+   `chat_runtime.stream_turn` with its original text unchanged; `browser/notify.py`'s pause
+   notification and the REST `POST /browser/{sid}/agent` path are untouched (still serve
+   non-interactive, run-to-completion callers per the ADR's non-goals).
+3. **Done.** Regression coverage: `test_chat_ws_robustness.py::test_coding_prompt_with_former_trigger_words_reaches_stream_turn_verbatim`
+   proves the user's original bug report ("baue mir eine Web-UI mit Login-Formular") reaches
+   the model's own turn unmodified; `test_retired_classifier_and_command_handler_names_stay_gone`
+   locks in that the retired names don't silently reappear. The pre-existing
+   `test_browser_automation.py` security-gate suite still passes unchanged (none of those gates
+   moved) after trimming the tests that specifically covered the now-removed chat.py wrappers.
+4. Docs sync: this doc + the ADR are current as of Phases 1-3; `docs/claude-ref/layer-*.md` /
+   `docs/browser-voice-guided-navigation.md` still describe the pre-ADR-0193 architecture and
+   are not yet updated — tracked as remaining Phase 4 work.
