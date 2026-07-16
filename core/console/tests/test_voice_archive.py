@@ -398,3 +398,59 @@ def test_a_stale_segment_tmp_does_not_inflate_the_labels(tmp_path, monkeypatch) 
     (vd / f"{k}-f02.ogg.tmp").write_bytes(b"torn")   # never finished
     segs = cr.find_turn_voice_segments("_default", "sid1", text)
     assert [p.name for p in segs] == [f"{k}-f00.ogg", f"{k}-f01.ogg"]
+
+
+# ── the segmenter must make progress on space-free scripts ───────────────────
+#
+# Both boundary levels used to assume ASCII/spaces: the sentence regex only knew
+# [.!?] (CJK uses 。！？, and puts no space after them) and the fallback packer
+# splits on whitespace, of which CJK prose has none. A Chinese answer therefore
+# came back as ONE segment far over the cap — reproduced at 2800 chars WITH full
+# stops, 5000 without. Past the provider's 4096 limit say.py exits non-zero,
+# /voice/segment returns 204, and playFull reads 204 as end-of-playlist: no
+# read-aloud at all, silently, for exactly the users who cannot skim the text.
+
+def test_chinese_without_any_punctuation_still_respects_the_cap() -> None:
+    segs = cr.split_for_speech("汉" * 5000)
+    assert len(segs) > 1
+    assert max(len(s) for s in segs) <= cr._VOICE_SEGMENT_MAX_CHARS
+
+
+def test_cjk_full_stops_are_sentence_boundaries() -> None:
+    """。！？ split with no trailing whitespace — CJK doesn't use one."""
+    segs = cr.split_for_speech("这是一个句子。" * 400)
+    assert len(segs) > 1
+    assert max(len(s) for s in segs) <= cr._VOICE_SEGMENT_MAX_CHARS
+
+
+def test_japanese_and_korean_also_segment() -> None:
+    for src in ("これはテストです。" * 300, "이것은문장입니다。" * 300):
+        segs = cr.split_for_speech(src)
+        assert len(segs) > 1
+        assert max(len(s) for s in segs) <= cr._VOICE_SEGMENT_MAX_CHARS
+
+
+def test_cjk_coverage_is_exact() -> None:
+    """The coverage contract holds for sliced runs too: every char, once, in order."""
+    src = "这是一个句子。" * 400
+    assert "".join(cr.split_for_speech(src)).replace(" ", "") == src
+
+
+def test_an_oversized_latin_url_is_still_emitted_whole() -> None:
+    """The space-free slicing must NOT start cutting links.
+
+    Slicing CJK is safe because the script has no word spaces — there is no word
+    to cut in half. A URL is one real token: an unspeakable fragment is worse
+    than an oversized segment, so it keeps the old emit-whole behaviour.
+    """
+    url = "https://example.com/" + "a" * 3000
+    segs = cr.split_for_speech(f"Sieh hier. {url} Ende.")
+    assert any(url in s for s in segs)
+
+
+def test_space_free_detector_does_not_claim_latin() -> None:
+    assert cr._is_space_free_script("汉字文本")
+    assert cr._is_space_free_script("これはテスト")
+    assert not cr._is_space_free_script("https://example.com/a/b")
+    assert not cr._is_space_free_script("Donaudampfschifffahrtsgesellschaft")
+    assert not cr._is_space_free_script("")

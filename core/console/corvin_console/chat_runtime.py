@@ -489,6 +489,33 @@ def voice_dir(tenant_id: str, sid: str) -> Path:
 _VOICE_SEGMENT_MAX_CHARS = 1800
 
 
+# Scripts written without spaces between words. A long run in one of these is
+# NOT a "token" in the sense the oversized-token rule protects (a URL, an
+# identifier) — it is ordinary prose that simply has no space to break at, so
+# slicing it by length cuts no word in half. Deliberately narrow: CJK
+# ideographs + kana + Hangul + Thai. Latin/Cyrillic/Greek/Arabic runs are NOT
+# listed — an oversized token there really is one token and must stay whole.
+_SPACE_FREE_SCRIPT_RANGES = (
+    (0x3040, 0x30FF),   # Hiragana + Katakana
+    (0x3400, 0x4DBF),   # CJK Unified Ideographs Extension A
+    (0x4E00, 0x9FFF),   # CJK Unified Ideographs
+    (0xAC00, 0xD7AF),   # Hangul syllables
+    (0xF900, 0xFAFF),   # CJK Compatibility Ideographs
+    (0x0E00, 0x0E7F),   # Thai
+)
+
+
+def _is_space_free_script(token: str) -> bool:
+    """True iff *token* is predominantly written in a script with no word spaces."""
+    if not token:
+        return False
+    hits = sum(
+        any(lo <= ord(ch) <= hi for lo, hi in _SPACE_FREE_SCRIPT_RANGES)
+        for ch in token
+    )
+    return hits * 2 >= len(token)   # majority, so a stray ASCII quote can't flip it
+
+
 def split_for_speech(text: str, max_chars: int = _VOICE_SEGMENT_MAX_CHARS) -> list[str]:
     """Split *text* into speakable segments of at most *max_chars*.
 
@@ -513,11 +540,22 @@ def split_for_speech(text: str, max_chars: int = _VOICE_SEGMENT_MAX_CHARS) -> li
         para = para.strip()
         if not para:
             continue
-        # Split ONLY at a terminator that is followed by whitespace. A bare
+        # ASCII terminators split ONLY when followed by whitespace. A bare
         # [.!?] class also fires inside tokens — "example.com", "3.14", "z.B." —
         # tearing a URL apart into unspeakable fragments (caught by
         # test_oversized_single_token_is_emitted_whole_not_cut).
-        for part in re.split(r"(?<=[.!?])\s+", para):
+        #
+        # CJK terminators (。！？) split with NO whitespace requirement, because
+        # Chinese/Japanese don't put a space after the full stop — and they're
+        # unambiguous: unlike '.', they never occur inside a URL or a decimal.
+        # Without this the ASCII-only rule matched nothing in CJK text, the
+        # space-based word splitter below made no progress either, and a whole
+        # answer came back as ONE oversized segment (reproduced: 2800 chars for
+        # Chinese WITH full stops, 5000 without). Past the provider's 4096-char
+        # cap say.py exits non-zero, /voice/segment returns 204, and playFull
+        # reads 204 as end-of-playlist — so a CJK answer got no read-aloud at
+        # all, silently. That is the exact defect Phase 3 exists to remove.
+        for part in re.split(r"(?<=[.!?])\s+|(?<=[。！？])", para):
             part = part.strip()
             if part:
                 units.append(part)
@@ -537,6 +575,26 @@ def split_for_speech(text: str, max_chars: int = _VOICE_SEGMENT_MAX_CHARS) -> li
             _flush()
             buf = ""
             for word in unit.split():
+                if len(word) > max_chars and _is_space_free_script(word):
+                    # A single "word" over the cap that is CJK/Thai-like: the
+                    # space-based packing above cannot shrink it (the script has
+                    # no word spaces), so emitting it whole would blow the
+                    # provider limit and silently kill the whole read-aloud.
+                    # Slicing mid-run is safe here precisely BECAUSE the script
+                    # has no spaces — there is no word to cut in half. An
+                    # oversized LATIN token (a long URL) still falls through and
+                    # is emitted whole: cutting that IS destructive, and an
+                    # unspeakable URL fragment is worse than an oversized one.
+                    if buf:
+                        segments.append(buf)
+                        buf = ""
+                    for i in range(0, len(word), max_chars):
+                        chunk = word[i:i + max_chars]
+                        if len(chunk) == max_chars:
+                            segments.append(chunk)
+                        else:
+                            buf = chunk  # remainder keeps packing
+                    continue
                 if buf and len(buf) + 1 + len(word) > max_chars:
                     segments.append(buf)
                     buf = word
