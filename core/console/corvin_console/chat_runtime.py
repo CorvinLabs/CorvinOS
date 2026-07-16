@@ -670,8 +670,17 @@ _VOICE_ARCHIVE_MAX_BYTES = int(
 
 
 def prune_voice_archive(tenant_id: str, sid: str,
-                        max_bytes: int = _VOICE_ARCHIVE_MAX_BYTES) -> int:
+                        max_bytes: int = _VOICE_ARCHIVE_MAX_BYTES,
+                        keep: str | None = None) -> int:
     """Evict oldest-first until the session's voice dir fits *max_bytes*.
+
+    *keep* names one file (the turn's freshly written audio) that is never
+    evicted, so the cap may be exceeded by at most that one file. Without it a
+    cap smaller than a single file made every turn synthesise its audio and
+    immediately delete it again — no player, ever, and the TTS spend burned
+    silently on every turn. Same compromise split_for_speech already makes for
+    an oversized token: honouring the cap is not worth destroying the one thing
+    the cap exists to manage.
 
     Returns the number of files removed. Best-effort: a failure here must never
     break TTS — the archive is a convenience, the audio was already streamed to
@@ -704,6 +713,8 @@ def prune_voice_archive(tenant_id: str, sid: str,
         for _mtime, size, path in sorted(files):   # oldest first
             if total <= max_bytes:
                 break
+            if keep and path.name == keep:
+                continue
             try:
                 path.unlink()
             except OSError:

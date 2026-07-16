@@ -515,3 +515,27 @@ def test_an_evicted_turn_just_loses_its_player(tmp_path, monkeypatch) -> None:
     turn = {"role": "assistant", "parts": [{"kind": "text", "text": text}]}
     out = cr.attach_voice_artifacts("_default", "sid1", [turn])
     assert [p for p in out[0]["parts"] if p.get("kind") == "artifact"] == []
+
+
+def test_prune_never_evicts_the_file_just_written(tmp_path, monkeypatch) -> None:
+    """A mis-set tiny cap must not eat the current turn's audio.
+
+    Found by attacking the fix: with max_bytes below a single file's size, the
+    oldest-first loop happily deleted the file _persist_turn_voice had just
+    written — so every turn synthesised its audio and immediately dropped it,
+    burning the TTS spend and never rendering a player.
+    """
+    import os as _os
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    for i in range(3):
+        f = vd / f"{'%016x' % i}.ogg"
+        f.write_bytes(b"x" * 100)
+        _os.utime(f, (1000 + i, 1000 + i))
+    fresh = vd / "ffffffffffffffff.ogg"
+    fresh.write_bytes(b"x" * 100)
+
+    cr.prune_voice_archive("_default", "sid1", max_bytes=50, keep=fresh.name)
+    assert fresh.exists(), "the just-written audio must survive any cap"
+    assert sorted(p.name for p in vd.iterdir()) == [fresh.name]
