@@ -103,6 +103,15 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
   }, [unlock]);
 
   const stopVoice = React.useCallback(() => {
+    // Bump the generation FIRST. stopVoice() used to be the only playback-state
+    // mutator that left requestIdRef alone, which made an explicit user Stop
+    // indistinguishable from "nothing happened" to every in-flight call: each
+    // one tests `myRequestId !== requestIdRef.current` to detect being
+    // superseded, so a Stop pressed while a TTS fetch was still in flight was
+    // simply ignored and Corvin started speaking the answer the user had just
+    // silenced. Bumping here makes Stop a real supersede, which is also what
+    // lets playFull's segment loop notice it and bail out.
+    requestIdRef.current += 1;
     const a = audioRef.current;
     if (a) {
       try {

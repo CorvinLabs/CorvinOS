@@ -551,25 +551,34 @@ def split_for_speech(text: str, max_chars: int = _VOICE_SEGMENT_MAX_CHARS) -> li
     return segments
 
 
-def find_turn_voice(tenant_id: str, sid: str, text: str) -> Path | None:
+def find_turn_voice(tenant_id: str, sid: str, text: str,
+                    key: str | None = None) -> Path | None:
     """Return the persisted voice file for a turn's *text*, or None.
+
+    *key* pins the voice_key explicitly (the turn's persisted ``voice_key``
+    hint); *text* is only hashed as the legacy fallback when it is absent.
 
     Extension is provider-dependent (say.py emits OGG-Opus / MP3 / WAV and does
     NOT transcode), so match on the key and take whatever extension landed.
     """
     vdir = voice_dir(tenant_id, sid)
-    if not text or not text.strip():
+    k = key or (voice_key(text) if text and text.strip() else None)
+    if not k:
         return None
     try:
-        for p in sorted(vdir.glob(f"{voice_key(text)}.*")):
-            if p.is_file() and p.stat().st_size > 0:
-                return p
+        for p in sorted(vdir.glob(f"{k}.*")):
+            # A stale `<key>.<ext>.tmp` (crash / ENOSPC mid-write) also matches
+            # `{k}.*`, and would otherwise be served as if it were finished audio.
+            if p.suffix == ".tmp" or not p.is_file() or p.stat().st_size <= 0:
+                continue
+            return p
     except OSError:
         pass
     return None
 
 
-def find_turn_voice_segments(tenant_id: str, sid: str, text: str) -> list[Path]:
+def find_turn_voice_segments(tenant_id: str, sid: str, text: str,
+                             key: str | None = None) -> list[Path]:
     """Archived full-read-aloud segments for a turn's text, in PLAYBACK order.
 
     Named `<key>-f<NN>.<ext>` by /voice/segment; the zero-padded index is what makes
@@ -577,12 +586,15 @@ def find_turn_voice_segments(tenant_id: str, sid: str, text: str) -> list[Path]:
     summary lives at `<key>.<ext>` and is deliberately NOT matched here — the two
     renderings are separate archives of the same turn.
     """
-    if not text or not text.strip():
+    k = key or (voice_key(text) if text and text.strip() else None)
+    if not k:
         return []
     try:
         return sorted(
-            p for p in voice_dir(tenant_id, sid).glob(f"{voice_key(text)}-f*.*")
-            if p.is_file() and p.stat().st_size > 0
+            p for p in voice_dir(tenant_id, sid).glob(f"{k}-f*.*")
+            # A stale `-fNN.<ext>.tmp` matches this glob too, and would both be
+            # served as finished audio and inflate the "voice i/N" labels.
+            if p.suffix != ".tmp" and p.is_file() and p.stat().st_size > 0
         )
     except OSError:
         return []
@@ -622,6 +634,12 @@ def attach_voice_artifacts(tenant_id: str, sid: str,
                    and str(p.get("label") or "").startswith("voice") for p in parts):
                 continue  # already carries its player(s)
             text = _turn_text(turn)
+            # Prefer the key the writer pinned at persist time; hashing the
+            # persisted text is only correct when the turn had a single text
+            # block (see _append_turn's voice_key_hint). Legacy turns written
+            # before the hint existed carry no key and keep the old behaviour.
+            hint = turn.get("voice_key")
+            key = hint if isinstance(hint, str) and hint else None
 
             def _art(path: Path, label: str) -> dict[str, Any] | None:
                 mime = _artifact_mime(path)
@@ -636,14 +654,14 @@ def attach_voice_artifacts(tenant_id: str, sid: str,
                     "label": label,
                 }
 
-            vf = find_turn_voice(tenant_id, sid, text)
+            vf = find_turn_voice(tenant_id, sid, text, key=key)
             if vf is not None:
                 art = _art(vf, "voice")
                 if art:
                     parts.append(art)
             # Phase 3: the full read-aloud, in playback order, each segment its own
             # player. Only present for turns the user actually asked to hear in full.
-            segs = find_turn_voice_segments(tenant_id, sid, text)
+            segs = find_turn_voice_segments(tenant_id, sid, text, key=key)
             for i, seg in enumerate(segs, start=1):
                 art = _art(seg, f"voice {i}/{len(segs)}")
                 if art:
@@ -1898,14 +1916,22 @@ def _turns_path(tenant_id: str, sid: str) -> Path:
     return _store_dir(tenant_id) / f"{sid}.turns.jsonl"
 
 
-def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]]) -> None:
+def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
+                 voice_key_hint: str | None = None) -> None:
     """Append one turn (user or assistant) to the session's turns log.
+
+    ``voice_key_hint`` (ADR-0194 Phase 1) pins the voice_key of the text this
+    turn will actually be SPOKEN as, which is not always derivable from the
+    persisted parts — see the comment at the call site. Omitted for user turns
+    and for legacy records, where the reader falls back to hashing the turn text.
 
     Best-effort: a failed write does not break the stream — the user
     message is still in the WebSocket history client-side, and the
     assistant's reply was already streamed back."""
     path = _turns_path(sess.tenant_id, sess.sid)
     payload = {"role": role, "ts": time.time(), "parts": parts}
+    if voice_key_hint:
+        payload["voice_key"] = voice_key_hint
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
@@ -3387,6 +3413,21 @@ async def stream_turn(
     combined_text = "".join(final_text_parts).strip()
     if _ann_suffix:
         combined_text = (combined_text + "\n\n" + _ann_suffix).strip()
+    # ADR-0194 Phase 1: the exact string the client will hand to /voice/tts —
+    # i.e. the text of the LAST `result` event yielded above. It is NOT
+    # combined_text: `result_text` is the CLI's final assistant message, while
+    # combined_text concatenates EVERY assistant text block of the turn. On a
+    # tool-using turn ("Ich schaue nach." -> tool_use -> "Die Datei enthält X.")
+    # the two diverge, so the writer (/voice/tts, hashing what it was sent) and
+    # the reader (rehydrate, hashing the persisted turn) landed on different
+    # voice_keys and the archived audio was orphaned — no player, ever. In an
+    # agentic console tool-using turns are the COMMON case, so the Phase-1
+    # archive silently didn't rehydrate for most turns (reproduced against the
+    # live archive: every single-block turn had a player, the one browser-tool
+    # turn had none). Pinning the key at persist time — where the server holds
+    # BOTH strings — removes the guess entirely instead of trying to keep two
+    # derivations byte-identical forever.
+    _spoken_text = (result_text + "\n\n" + _ann_suffix) if _ann_suffix else result_text
     parts_persisted: list[dict[str, Any]] = []
     if combined_text:
         parts_persisted.append({"kind": "text", "text": combined_text})
@@ -3466,6 +3507,7 @@ async def stream_turn(
     # to lose context on revisit (tool-only or image-only responses).
     if not parts_persisted:
         parts_persisted = [{"kind": "text", "text": ""}]
-    _append_turn(sess, "assistant", parts_persisted)
+    _append_turn(sess, "assistant", parts_persisted,
+                 voice_key_hint=voice_key(_spoken_text) if _spoken_text.strip() else None)
 
     yield {"type": "done"}

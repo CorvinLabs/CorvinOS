@@ -332,3 +332,69 @@ def test_a_broken_profile_never_breaks_tts(monkeypatch) -> None:
     monkeypatch.setattr(voice_routes, "_PROFILE_OK", True)
     monkeypatch.setattr(voice_routes, "_profile_module", _Boom)
     assert voice_routes._tts_audience_block("de") == ""
+
+
+# ── the writer/reader must meet on TOOL-USING turns too ──────────────────────
+#
+# The writer (/voice/tts) hashes the text of the last `result` event — the CLI's
+# FINAL assistant message. The reader hashed the persisted turn, which
+# concatenates EVERY assistant text block of the turn. On a tool-using turn the
+# two diverge, so the archived audio was orphaned and no player ever appeared.
+# In an agentic console tool-using turns are the common case. Reproduced against
+# the live archive before the fix: every single-block turn had a player, the one
+# browser-tool turn had none.
+
+def test_tool_using_turn_still_finds_its_audio(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    spoken = "Die Datei enthaelt X."          # what /voice/tts was handed + archived
+    (vd / f"{cr.voice_key(spoken)}.ogg").write_bytes(b"OggS-audio")
+
+    # The turn as persisted: narration + tool card + final answer.
+    turn = {
+        "role": "assistant",
+        "voice_key": cr.voice_key(spoken),
+        "parts": [
+            {"kind": "text", "text": "Ich schaue nach.Die Datei enthaelt X."},
+            {"kind": "tool", "name": "Read"},
+        ],
+    }
+    out = cr.attach_voice_artifacts("_default", "sid1", [turn])
+    labels = [p.get("label") for p in out[0]["parts"] if p.get("kind") == "artifact"]
+    assert labels == ["voice"], "tool-using turn must rehydrate its player"
+
+
+def test_legacy_turn_without_the_hint_still_works(tmp_path, monkeypatch) -> None:
+    """Turns persisted before the hint existed must keep the old behaviour."""
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    text = "Ein einzelner Textblock."
+    (vd / f"{cr.voice_key(text)}.ogg").write_bytes(b"OggS-audio")
+    turn = {"role": "assistant", "parts": [{"kind": "text", "text": text}]}  # no voice_key
+    out = cr.attach_voice_artifacts("_default", "sid1", [turn])
+    assert [p.get("label") for p in out[0]["parts"] if p.get("kind") == "artifact"] == ["voice"]
+
+
+def test_a_stale_tmp_file_is_never_served_as_audio(tmp_path, monkeypatch) -> None:
+    """A crash/ENOSPC mid-write leaves `<key>.<ext>.tmp`, which matches the glob."""
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    text = "Halbfertig."
+    (vd / f"{cr.voice_key(text)}.ogg.tmp").write_bytes(b"half-written")
+    assert cr.find_turn_voice("_default", "sid1", text) is None
+
+
+def test_a_stale_segment_tmp_does_not_inflate_the_labels(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    text = "Langer Text."
+    k = cr.voice_key(text)
+    (vd / f"{k}-f00.ogg").write_bytes(b"OggS-1")
+    (vd / f"{k}-f01.ogg").write_bytes(b"OggS-2")
+    (vd / f"{k}-f02.ogg.tmp").write_bytes(b"torn")   # never finished
+    segs = cr.find_turn_voice_segments("_default", "sid1", text)
+    assert [p.name for p in segs] == [f"{k}-f00.ogg", f"{k}-f01.ogg"]
