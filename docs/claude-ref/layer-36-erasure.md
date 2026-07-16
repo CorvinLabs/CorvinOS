@@ -24,6 +24,7 @@ overall outcome.
 | L28 recall | FTS5 row per chat turn | `DELETE FROM turns WHERE user_id = ?` |
 | L28.2 user-model | Distilled JSON at `<tenant>/global/memory/user_model/*.json` | File deletion |
 | L33 artifacts | Files in `<session>/artifacts/` and `<global>/artifacts/` | Unpinned: purge; pinned: operator-ACK required |
+| Web chat (ADR-0194) | Voice archive at `<session>/voice/<hash>.<ext>` (+ `-fNN` read-aloud segments) — synthesised speech of every assistant reply — and the turn log at `<global>/web_chat/sessions/<sid>.turns.jsonl` | `WebChatHandler` deletes both. Note `voice/` is a SIBLING of `artifacts/` and the turn log lives outside the session dir, so neither is reachable by `L33ArtifactHandler` |
 | Workflow checkpoints (ADR-0188 M5) | Paused Task-Engine runs at `<tenant>/workflow_runs/<run_id>.json` (raw `chat_id`/`approver` + full `inputs`/`state`) | `WorkflowCheckpointHandler` deletes any checkpoint (+ `.claimed` sidecar) whose `chat_id`/`approver` matches subject_id |
 | L16 identity-mapping | subject_id → real-world identity link | Delete the mapping (audit chain preserved per EDPB) |
 
@@ -311,6 +312,14 @@ silent.
   * `L28RecallHandler` (full SQL DELETE)
   * `L28UserModelHandler` (full FS purge, ADR-0072 V-001) — deletes distilled user model JSON files for the subject
   * `L33ArtifactHandler` (full FS purge of unpinned session artifacts)
+  * `WebChatHandler` (full FS purge of the ADR-0194 per-turn voice archive
+    under `<session>/voice/` plus the turn log under
+    `<global>/web_chat/sessions/`). Added 2026-07-16 after an adversarial
+    review found the archive was erased by NO handler: `voice/` is a sibling
+    of `artifacts/`, so an Art. 17 run reported APPLIED/SKIPPED across all
+    twelve layers — writing a successful erasure receipt into the hash-chained
+    audit log — while the synthesised speech of the entire conversation
+    survived on disk. Reproduced before fixing.
   * `WorkflowCheckpointHandler` (full FS purge of paused Task-Engine
     checkpoints under `<tenant>/workflow_runs/`, matched on
     `chat_id`/`approver`, ADR-0188 M5)

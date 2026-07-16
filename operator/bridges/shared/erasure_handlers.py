@@ -461,6 +461,91 @@ class ACSTraceHandler:
         )
 
 
+# ── Web-chat handler (voice archive + turn log) ─────────────────────
+
+
+@dataclass
+class WebChatHandler:
+    """Purge the web-chat session's voice archive and its turn log.
+
+    ADR-0194 Phase 1 made the console keep the synthesised speech for every
+    assistant reply at ``<tenant>/sessions/<session_key>/voice/<hash>.<ext>``
+    (plus ``<hash>-fNN.<ext>`` read-aloud segments) so a turn keeps a replayable
+    player. That audio is a spoken rendering of the whole conversation — the
+    most directly re-identifiable form the reply takes — and NOTHING in the
+    chain erased it: ``voice/`` is a SIBLING of ``artifacts/``, so
+    L33ArtifactHandler never saw it, and ACSTraceHandler only owns ``acs/``. An
+    Art. 17 run therefore reported APPLIED across every layer and wrote a
+    successful erasure receipt into the hash-chained audit log while the audio
+    survived untouched on disk. Two comments in the console asserted the
+    opposite ("erased with the session"), which is true only of the
+    delete-session route (which rmtree's the whole workdir), not of the
+    orchestrator.
+
+    The turn log ``<global>/web_chat/sessions/<sid>.turns.jsonl`` is orphaned by
+    the exact same gap — it lives outside the session dir entirely — so it is
+    purged here too rather than left for a second follow-up handler.
+
+    ``subject_id`` is the session key as the console names it (``web:<sid>``);
+    the turn log is keyed on the bare ``<sid>``.
+
+    Returns APPLIED if anything was removed, SKIPPED if absent/empty.
+    """
+    layer_id: str = "web-chat"
+    tenant_id: str = "_default"
+
+    def purge(self, subject_id: str, request_id: str) -> ErasureLayerResult:
+        t0 = time.time()
+        targets: list[Path] = []
+
+        # The console sanitises ':' out of the dir name on Windows, so accept
+        # both spellings rather than re-deriving the rule here (a reader that
+        # disagrees with the writer is exactly how audio gets orphaned).
+        sessions = _tenant_sessions(self.tenant_id)
+        for name in {subject_id, subject_id.replace(":", "_")}:
+            vdir = sessions / name / "voice"
+            if vdir.is_dir():
+                targets.extend(p for p in vdir.rglob("*") if p.is_file())
+
+        # Turn log: `web:<sid>` -> `<sid>.turns.jsonl` under the global store.
+        sid = subject_id.split(":", 1)[1] if ":" in subject_id else subject_id
+        turns = _tenant_global(self.tenant_id) / "web_chat" / "sessions" / f"{sid}.turns.jsonl"
+        if turns.is_file():
+            targets.append(turns)
+
+        if not targets:
+            return ErasureLayerResult(
+                layer_id=self.layer_id, status=LayerStatus.SKIPPED, count=0,
+                reason=f"no web-chat voice archive or turn log for {subject_id}",
+                code=ReasonCode.STORE_ABSENT.value,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+
+        n_files = 0
+        n_bytes = 0
+        for path in targets:
+            try:
+                n_bytes += path.stat().st_size
+            except OSError:
+                pass
+            path.unlink(missing_ok=True)
+            n_files += 1
+
+        for name in {subject_id, subject_id.replace(":", "_")}:
+            vdir = sessions / name / "voice"
+            try:
+                vdir.rmdir()
+            except OSError:
+                pass  # non-empty or absent — the files are what matter
+
+        return ErasureLayerResult(
+            layer_id=self.layer_id, status=LayerStatus.APPLIED, count=n_files,
+            reason=f"removed {n_files} web-chat voice/turn file(s) ({n_bytes} bytes)",
+            code=ReasonCode.DELETED.value,
+            duration_ms=int((time.time() - t0) * 1000),
+        )
+
+
 # ── L7 skill-forge handler (stub) ───────────────────────────────────
 
 
@@ -923,6 +1008,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
       * L28RecallHandler — fully implemented (SQL delete)
       * L28UserModelHandler — fully implemented (FS purge, ADR-0072 V-001)
       * L33ArtifactHandler — fully implemented (FS purge)
+      * WebChatHandler — fully implemented (FS purge: ADR-0194 voice archive + turn log)
       * L39SocialParticipationHandler — fully implemented (FS purge)
       * L41GrantHandler — fully implemented (SQL delete, ADR-0054)
       * L42OrgHandler — fully implemented (FS purge, ADR-0055)
@@ -943,6 +1029,7 @@ def real_handler_chain(tenant_id: str = "_default") -> list:
         L28UserModelHandler(tenant_id=tenant_id),
         L33ArtifactHandler(tenant_id=tenant_id),
         ACSTraceHandler(tenant_id=tenant_id),
+        WebChatHandler(tenant_id=tenant_id),
         L39SocialParticipationHandler(tenant_id=tenant_id),
         L41GrantHandler(tenant_id=tenant_id),
         L42OrgHandler(tenant_id=tenant_id),
