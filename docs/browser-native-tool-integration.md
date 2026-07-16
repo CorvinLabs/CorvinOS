@@ -1,6 +1,6 @@
 # Browser Control as a Native Chat Tool (Concept)
 
-**Status: ADR filed; Phases 1-3 implemented (2026-07-16).** See
+**Status: ADR filed; all four phases implemented (2026-07-16).** See
 `Corvin-ADR/decisions/0193-browser-native-chat-tool-integration.md` for the
 accepted decision record — this doc is the fuller design behind it.
 `_BROWSE_SIGNAL_RE`, `_classify_browser_intent()`, `_handle_browser_command()`
@@ -10,7 +10,7 @@ existed only to serve that same retired mechanism) are gone from
 turn unchanged; the native `corvin-browser` MCP tool is available to its
 ordinary tool-use reasoning, exactly like any other tool. The old REST
 agent-loop path (`POST /browser/{sid}/agent`) is untouched, per the ADR's own
-non-goals. Phase 4 (further docs sync beyond this doc) is not yet started.
+non-goals.
 
 ## 1. Problem — why "build me a web UI" launches a live browser
 
@@ -208,6 +208,11 @@ classifier's job to enforce in the first place.
    locks in that the retired names don't silently reappear. The pre-existing
    `test_browser_automation.py` security-gate suite still passes unchanged (none of those gates
    moved) after trimming the tests that specifically covered the now-removed chat.py wrappers.
-4. Docs sync: this doc + the ADR are current as of Phases 1-3; `docs/claude-ref/layer-*.md` /
-   `docs/browser-voice-guided-navigation.md` still describe the pre-ADR-0193 architecture and
-   are not yet updated — tracked as remaining Phase 4 work.
+4. **Done.** `docs/browser-automation.md` (the primary user-facing reference) now leads with the
+   native chat tool, documents the two now-distinct drive-the-browser paths (chat tool vs. the
+   Browser page's own agent-loop task field), and its confirm/resume "Known limitations" bullets
+   no longer point at the retired chat-text commands. `docs/browser-voice-guided-navigation.md`
+   gained a dated update note pointing at the same distinction, without rewriting its historical
+   design rationale. No `docs/claude-ref/layer-*.md` file describes the retired mechanism
+   (checked directly — the two hits for "browser" there are unrelated passing mentions), so none
+   needed changing.

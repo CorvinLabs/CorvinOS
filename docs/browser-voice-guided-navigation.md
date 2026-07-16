@@ -18,6 +18,33 @@ the same external behavior:
   "weiter/continue" (resuming a `needs_login`/`needs_approval` pause) was new
   and is now wired to a new `POST /browser/{sid}/agent/continue` endpoint.
 
+**2026-07-16 update (ADR-0193 Phase 2):** every mention below of `/browser
+<task>`, `/browser confirm <sid> yes|no`, and `/browser continue <sid>` as
+**chat text commands** describes a mechanism that has since been retired —
+`routes/chat.py` no longer parses any of these out of a chat message
+(`_handle_browser_command`/`_handle_browser_confirm_command`/
+`_handle_browser_continue_command` are gone). The task-scoped-host extraction
+(§4.1) and the login/approval pause (§4.2) this doc designed are UNCHANGED in
+substance — they still exist in `browser/session.py` and the agent loop
+exactly as designed here — but they are reached two different ways now,
+depending on the caller:
+
+- **From chat:** the native `corvin-browser` MCP tool (see
+  `docs/browser-native-tool-integration.md` / ADR-0193) calls the granular
+  REST actions directly; task-scoped-host extraction now runs on the tool's
+  own session-creating `navigate` call (the URL argument itself, not a
+  separately-typed task string).
+- **From the console's Browser page directly** (its own "Aufgabe für den
+  Browser" task field, unrelated to chat): still starts the OLD agent loop
+  (`POST /browser/{sid}/agent`) exactly as this doc describes, and its
+  Weiter/voice-vocabulary buttons still call `POST /browser/{sid}/agent/continue`
+  / the confirm endpoints directly — **none of that changed**, since none of
+  it ever went through the now-retired `routes/chat.py` functions.
+
+§4.4's voice vocabulary ("weiter"/"genehmigen"/"ablehnen") is unaffected —
+it always routed through `browser.tsx` calling the REST endpoints directly,
+never through the chat-text commands.
+
 ## 1. Problem
 
 Two usability complaints from real use, both traced to the same root architecture:
