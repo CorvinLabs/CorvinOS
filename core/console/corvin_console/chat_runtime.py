@@ -626,6 +626,20 @@ def _claude_binary() -> str:
     return os.environ.get("CORVIN_CLAUDE_BIN") or "claude"
 
 
+def _console_base_url() -> str:
+    """This console's own loopback base URL — for the ADR-0193 corvin-browser
+    MCP tool subprocess to call back into the SAME running console process.
+    ``CORVIN_CONSOLE_BASE_URL`` overrides wholesale (e.g. non-default test
+    ports); otherwise defaults to the systemd/dev.sh-documented 127.0.0.1:8765,
+    optionally overridden on just the port via ``CORVIN_CONSOLE_PORT``. Always
+    127.0.0.1 — this console binds only to loopback, never a public interface."""
+    override = os.environ.get("CORVIN_CONSOLE_BASE_URL", "").strip()
+    if override:
+        return override.rstrip("/")
+    port = os.environ.get("CORVIN_CONSOLE_PORT", "8765").strip() or "8765"
+    return f"http://127.0.0.1:{port}"
+
+
 # Engine ids the console web-chat can actually drive for an OS turn.
 #   * claude_code → the direct `claude -p --output-format stream-json` subprocess
 #     path (below). This is the historical path; behaviour is byte-for-byte.
@@ -922,7 +936,8 @@ def _persona_prompt_block() -> str:
         return ""
 
 
-def _persona_mcp_config(tenant_id: str = "_default", workdir: "Path | None" = None) -> str | None:
+def _persona_mcp_config(tenant_id: str = "_default", workdir: "Path | None" = None,
+                        *, browser_token: str | None = None) -> str | None:
     """Materialize the web-chat persona's MCP servers into an ``--mcp-config``
     file path, mirroring the bridge adapter's spawn wiring (adapter.py
     ``_resolve_spawn_inputs``): resolver-injected servers (forge, skill_forge,
@@ -957,6 +972,8 @@ def _persona_mcp_config(tenant_id: str = "_default", workdir: "Path | None" = No
                 catalog_mcp = _mcp_activate.get_active_mcp_servers(
                     tenant_id,
                     image_outdir=str(workdir / "outputs") if workdir else None,
+                    browser_token=browser_token,
+                    browser_base_url=_console_base_url() if browser_token else None,
                 )
                 if catalog_mcp:
                     allowed_plugins = merged.get("mcp_plugins_allowed")
@@ -1106,7 +1123,8 @@ def _write_turn_system_prompt(sess: WebChatSession) -> Path:
     return path
 
 
-def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None) -> list[str]:
+def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
+                 browser_token: str | None = None) -> list[str]:
     """Build a ``claude -p`` invocation for this turn.
 
     Resume mode uses ``--continue`` so the per-workdir session state
@@ -1147,7 +1165,8 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None)
     # catalog tools, exactly like the bridge adapter's spawn path. Without
     # this the console chat advertised capabilities (via the injected
     # capability map) that no attached server could actually serve.
-    mcp_config_path = _persona_mcp_config(sess.tenant_id, sess.workdir)
+    mcp_config_path = _persona_mcp_config(sess.tenant_id, sess.workdir,
+                                          browser_token=browser_token)
     if mcp_config_path:
         args += ["--mcp-config", mcp_config_path]
 
@@ -2066,8 +2085,14 @@ async def _stream_hermes_turn(
 async def stream_turn(
     sess: WebChatSession,
     prompt: str,
+    *,
+    sid_fingerprint: str = "",
 ) -> AsyncIterator[dict[str, Any]]:
     """Run one turn against claude and yield normalised events.
+
+    ``sid_fingerprint`` (the caller's login SessionRecord.sid_fingerprint, when
+    known) is used ONLY to mint the ADR-0193 internal browser-tool token below
+    — it never gates or scopes anything about the turn itself.
 
     Yielded shapes:
       {type: "delta",    text: str}
@@ -2116,7 +2141,19 @@ async def stream_turn(
                 _os_model = _model_selector.autoselect_os_model(payload)
         except Exception:  # noqa: BLE001
             _os_model = None
-    args = _build_args(sess, resume=resume, model=_os_model)
+    # ADR-0193 — mint a short-lived internal bearer token so the native
+    # corvin-browser MCP tool (a SEPARATE subprocess --mcp-config spawns,
+    # which does not reliably inherit env from the claude process that
+    # spawns it — see get_active_mcp_servers()'s image_outdir precedent)
+    # can call this console's OWN /v1/console/browser/* REST API over
+    # loopback and reach the SAME live sessions the SPA live-view watches.
+    # Threaded through _build_args -> _persona_mcp_config -> the catalog's
+    # per-tool env, exactly like image_outdir. Cheap even if the turn never
+    # touches the browser tool — no browser session is created until the MCP
+    # tool's first HTTP call.
+    from .browser import internal_auth as _browser_internal_auth  # noqa: PLC0415
+    _browser_token = _browser_internal_auth.mint(sess.tenant_id, sid_fingerprint)
+    args = _build_args(sess, resume=resume, model=_os_model, browser_token=_browser_token)
 
     # First-turn auto-title: derive a readable label from the prompt so the
     # sidebar shows "Wie groß ist die Wahrscheinlichkeit, dass …" instead of

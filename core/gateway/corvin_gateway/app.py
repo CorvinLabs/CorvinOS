@@ -207,6 +207,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         pass  # best-effort — never blocks gateway startup
 
     try:
+        _mcp_mgr_root2 = _os2.path.normpath(_os2.path.join(
+            _os2.path.dirname(_os2.path.abspath(__file__)),
+            "..", "..", "..", "operator", "mcp_manager",
+        ))
+        if _mcp_mgr_root2 not in _sys2.path and _os2.path.isdir(_mcp_mgr_root2):
+            _sys2.path.insert(0, _mcp_mgr_root2)
+        from mcp_manager.seed_builtin import ensure_corvin_browser as _seed_browser
+        _seed_browser("_default")
+    except Exception:
+        pass  # best-effort — never blocks gateway startup (ADR-0193)
+
+    try:
         yield
     finally:
         if _healer_task is not None:

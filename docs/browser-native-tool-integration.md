@@ -1,7 +1,10 @@
 # Browser Control as a Native Chat Tool (Concept)
 
-**Status: ADR filed, not yet implemented.** See `Corvin-ADR/decisions/0193-browser-native-chat-tool-integration.md`
-for the accepted decision record — this doc is the fuller design behind it.
+**Status: ADR filed; Phase 1 implemented (2026-07-16).** See
+`Corvin-ADR/decisions/0193-browser-native-chat-tool-integration.md` for the
+accepted decision record — this doc is the fuller design behind it. Phases
+2-4 (retiring the classifier, regression coverage for coding-prompt
+non-misrouting, and further docs sync) are not yet started.
 
 ## 1. Problem — why "build me a web UI" launches a live browser
 
@@ -83,8 +86,34 @@ Verified directly in the repo — this is not a green-field design:
 
 1. `operator/mcp_manager/servers/corvin-browser/main.py` — a `FastMCP` server whose
    `@mcp.tool()` functions are thin wrappers translating `BROWSER_TOOLS`' schema into calls
-   against the *existing* `BrowserSessionManager`/`BrowserSession` API — no new browser-control
-   logic, just a new entry point onto the one that exists.
+   against the *existing* browser-control surface — no new browser-control logic, just a new
+   entry point onto the one that exists.
+
+   **Implementation detail found during Phase 1 (not anticipated above):**
+   `BrowserSessionManager` is strictly in-process to the console's own FastAPI server (a
+   console restart drops live sessions) — the SPA live-view polls frames/actions from that ONE
+   manager singleton. The MCP server is a *separate OS subprocess* (`--mcp-config` spawns it
+   alongside `claude` for one chat turn), so it cannot import `BrowserSessionManager` directly —
+   doing so would create a second, isolated set of browser sessions the live-view could never
+   see. Instead, `main.py`'s tool functions are an HTTP client calling the console's own
+   `/v1/console/browser/*` REST routes over loopback (127.0.0.1) — the exact same routes the SPA
+   calls — so a session the tool creates IS the session the live-view link watches.
+
+   That REST API normally requires the SPA's cookie session (`require_session`/`require_csrf`),
+   which the MCP subprocess has no way to present. `core/console/corvin_console/browser/
+   internal_auth.py` adds an **additive, non-replacing** auth path: `chat_runtime.stream_turn`
+   mints a short-lived (30 min), tenant + login-fingerprint-scoped bearer token once per chat
+   turn (in-memory only, never persisted); `routes/browser.py`'s dependencies became
+   `require_session_or_token`/`require_csrf_or_token`, which accept either the existing cookie
+   (unchanged, still what the SPA live-view uses) or a valid `X-Corvin-Browser-Token` header (NOT
+   `Authorization: Bearer` — the gateway's own `_jwt_guard` rejects any non-JWT-shaped Bearer
+   token app-wide, a different anti-downgrade gate for the cloud/OIDC path; found live during
+   Phase 1 end-to-end verification). The
+   token is threaded through the SAME per-turn, per-tool env-injection mechanism
+   `image_outdir` already used for `imagegen-zero-config` (`get_active_mcp_servers(
+   browser_token=..., browser_base_url=...)`) — an MCP subprocess does not reliably inherit env
+   from the spawning `claude` process, so a dynamic per-turn secret cannot ride the ambient
+   environment or a static catalog entry; it has to be injected explicitly on every spawn.
 2. Registered via catalog + `seed_builtin.py`-style idempotent seeding (not persona JSON), so
    L34/L35 compliance gates apply exactly like every other catalog tool, and operators can
    deactivate it the same way they can deactivate any other tool.

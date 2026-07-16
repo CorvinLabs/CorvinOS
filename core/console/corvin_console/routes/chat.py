@@ -827,7 +827,7 @@ async def chat_stream(
         try:
             async with _session_turn_lock(rec.tenant_id, sid):
                 async with contextlib.aclosing(
-                    chat_runtime.stream_turn(sess, prompt)
+                    chat_runtime.stream_turn(sess, prompt, sid_fingerprint=rec.sid_fingerprint)
                 ) as gen:
                     async for event in gen:
                         await websocket.send_json(event)

@@ -5,8 +5,14 @@ This router is BOTH:
   * the live-view backend the user watches (screencast frame + action log +
     confirm prompts + pause/take-over).
 
-Auth: reads require a session, mutations require CSRF. Tenant scoping comes from
-the authenticated SessionRecord (never an env var).
+Auth: reads require a session, mutations require CSRF — enforced via
+``require_session_or_token``/``require_csrf_or_token`` (ADR-0193), which
+accept EITHER the SPA's cookie session (unchanged) OR a short-lived internal
+bearer token (``..browser.internal_auth``) minted per chat-turn for the
+native ``corvin-browser`` MCP tool, which calls this same router over
+loopback HTTP so it drives the SAME live sessions the live-view watches.
+Tenant scoping comes from the resulting SessionRecord either way, never an
+env var.
 """
 from __future__ import annotations
 
@@ -18,7 +24,7 @@ from pydantic import BaseModel
 
 from .. import audit as console_audit
 from .. import auth as session_auth
-from ..deps import require_csrf, require_session
+from ..browser.internal_auth import require_csrf_or_token, require_session_or_token
 from .. import _bootstrap
 
 logger = logging.getLogger("corvin.routes.browser")
@@ -209,19 +215,30 @@ def _default_headless() -> bool:
 
 class CreateSessionReq(BaseModel):
     headless: bool | None = None      # None → auto (visible if a display exists)
+    # ADR-0189/ADR-0193: host(s) the CALLER already deemed in-scope (e.g. the
+    # exact site the user's own request named) get ephemeral, this-session-
+    # only navigation auto-approval — never persisted, never merged into the
+    # tenant allowlist. Previously only reachable via chat.py's direct
+    # BrowserSessionManager.create() call (bypassing this REST route
+    # entirely); the corvin-browser MCP tool has no such back door, since it
+    # must go through this same REST API as any other caller — so the field
+    # is now accepted here too. An empty/omitted list changes nothing.
+    task_scoped_hosts: list[str] | None = None
     model_config = {"extra": "forbid"}
 
 
 # ── session lifecycle ─────────────────────────────────────────────────────────
 @router.post("/browser/session")
 async def create_session(
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
     body: CreateSessionReq | None = None,
 ) -> dict[str, Any]:
     headless = body.headless if (body and body.headless is not None) else _default_headless()
+    task_scoped_hosts = (body.task_scoped_hosts or None) if body else None
     try:
         sid = await _mgr().create(rec.tenant_id, headless=headless,
-                                   owner_fingerprint=rec.sid_fingerprint)
+                                   owner_fingerprint=rec.sid_fingerprint,
+                                   task_scoped_hosts=task_scoped_hosts)
     except RuntimeError as e:   # session cap reached or allowlist config error
         raise HTTPException(status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
                             detail=str(e)) from e
@@ -233,7 +250,7 @@ async def create_session(
 
 @router.post("/browser/{sid}/close")
 async def close_session(
-    sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+    sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
 ) -> dict[str, Any]:
     await _act(_mgr().close(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint))
     return {"closed": sid}
@@ -248,54 +265,54 @@ def _owned_session(rec: session_auth.SessionRecord, sid: str):
 
 @router.post("/browser/{sid}/navigate")
 async def navigate(sid: str, body: NavigateReq,
-                   rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                   rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     obs = await _act(s.navigate(body.url))
     return obs.to_dict()
 
 @router.post("/browser/{sid}/observe")
-async def observe(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+async def observe(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     obs = await _act(s.observe())
     return obs.to_dict()
 
 @router.post("/browser/{sid}/click")
 async def click(sid: str, body: IndexReq,
-                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     await _act(s.click(body.index))
     return {"ok": True}
 
 @router.post("/browser/{sid}/fill")
 async def fill(sid: str, body: FillReq,
-               rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+               rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     await _act(s.fill(body.index, body.text))
     return {"ok": True}
 
 @router.post("/browser/{sid}/fill_secret")
 async def fill_secret(sid: str, body: FillSecretReq,
-                      rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                      rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     await _act(s.fill_secret(body.index, body.vault_key))
     return {"ok": True}
 
 @router.post("/browser/{sid}/read")
 async def read(sid: str, body: ReadReq,
-               rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+               rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     txt = await _act(s.read(body.index))
     return {"text": txt}
 
 @router.post("/browser/{sid}/scroll")
 async def scroll(sid: str, body: ScrollReq,
-                 rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                 rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     await _act(s.scroll(body.direction))
     return {"ok": True}
 
 @router.post("/browser/{sid}/back")
-async def back(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+async def back(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     obs = await _act(s.back())
     return obs.to_dict()
@@ -304,65 +321,65 @@ async def back(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(requ
 # ── ADR-0183 S2: expanded action surface ──────────────────────────────────────
 @router.post("/browser/{sid}/hover")
 async def hover(sid: str, body: IndexReq,
-                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     await _act(s.hover(body.index))
     return {"ok": True}
 
 @router.post("/browser/{sid}/key")
 async def key(sid: str, body: KeyReq,
-              rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+              rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     await _act(s.key(body.key))
     return {"ok": True}
 
 @router.post("/browser/{sid}/select_option")
 async def select_option(sid: str, body: SelectReq,
-                        rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                        rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     await _act(s.select_option(body.index, body.value))
     return {"ok": True}
 
 @router.post("/browser/{sid}/upload_file")
 async def upload_file(sid: str, body: UploadReq,
-                      rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                      rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     await _act(s.upload_file(body.index, body.filename))
     return {"ok": True}
 
 @router.post("/browser/{sid}/drag")
 async def drag(sid: str, body: DragReq,
-               rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+               rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     await _act(s.drag(body.from_index, body.to_index))
     return {"ok": True}
 
 @router.post("/browser/{sid}/tabs")
-async def tabs(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+async def tabs(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     return {"tabs": await _act(s.tabs())}
 
 @router.post("/browser/{sid}/switch_tab")
 async def switch_tab(sid: str, body: SwitchTabReq,
-                     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     obs = await _act(s.switch_tab(body.index))
     return obs.to_dict()
 
 @router.post("/browser/{sid}/extract_table")
 async def extract_table(sid: str, body: IndexReq,
-                        rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                        rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     return await _act(s.extract_table(body.index))
 
 @router.post("/browser/{sid}/extract_form_schema")
 async def extract_form_schema(sid: str,
-                              rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                              rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     s = _owned_session(rec, sid)
     return {"forms": await _act(s.extract_form_schema())}
 
 @router.post("/browser/{sid}/screenshot")
-async def screenshot(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+async def screenshot(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     """Return the current viewport as a base64 JPEG data URL (mark overlay
     painted on) — the tool-surface counterpart to the live-view frame.jpg GET,
     so a WorkerEngine driving browser.* can fetch a screenshot too."""
@@ -373,7 +390,7 @@ async def screenshot(sid: str, rec: Annotated[session_auth.SessionRecord, Depend
 
 # ── live view ─────────────────────────────────────────────────────────────────
 @router.get("/browser/{sid}/frame.jpg")
-async def frame(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_session)]):
+async def frame(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_session_or_token)]):
     try:
         png = _mgr().frame(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint)
     except KeyError as e:
@@ -384,7 +401,7 @@ async def frame(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(req
                     headers={"Cache-Control": "no-store"})
 
 @router.get("/browser/{sid}/actions")
-async def actions(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+async def actions(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_session_or_token)],
                   since: int = Query(0, ge=0)):
     try:
         items = _mgr().actions(rec.tenant_id, sid, since=since,
@@ -397,7 +414,7 @@ async def actions(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(r
 
 @router.post("/browser/{sid}/confirm")
 async def confirm(sid: str, body: ConfirmReq,
-                  rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                  rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     try:
         ok = _mgr().resolve_confirm(rec.tenant_id, sid, body.id, body.approved,
                                     owner_fingerprint=rec.sid_fingerprint)
@@ -407,7 +424,7 @@ async def confirm(sid: str, body: ConfirmReq,
 
 @router.post("/browser/{sid}/pause")
 async def pause(sid: str, body: PauseReq,
-                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     try:
         _mgr().set_paused(rec.tenant_id, sid, body.paused,
                           owner_fingerprint=rec.sid_fingerprint)
@@ -419,7 +436,7 @@ async def pause(sid: str, body: PauseReq,
 # ── agent loop (natural-language "give it a note", ADR-0182 Part A) ────────────
 @router.post("/browser/{sid}/agent")
 async def run_agent(sid: str, body: AgentReq,
-                    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+                    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     task = (body.task or "").strip()
     if not task:
         raise HTTPException(status_code=400, detail="empty task")
@@ -439,7 +456,7 @@ async def run_agent(sid: str, body: AgentReq,
 
 
 @router.post("/browser/{sid}/agent/stop")
-async def stop_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+async def stop_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     try:
         _mgr().stop_agent(rec.tenant_id, sid, owner_fingerprint=rec.sid_fingerprint)
     except KeyError as e:
@@ -448,7 +465,7 @@ async def stop_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depend
 
 
 @router.post("/browser/{sid}/agent/continue")
-async def continue_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)]):
+async def continue_agent(sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)]):
     """ADR-0189: resume a session paused on needs_login/needs_approval — the
     live-view equivalent of the chat `/browser continue <sid>` command, so
     the "weiter" voice command works from the Browser page itself."""

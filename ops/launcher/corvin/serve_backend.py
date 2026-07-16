@@ -573,6 +573,11 @@ def _seed_builtin_tools() -> None:
             ensure_imagegen_zero_config("_default")
         except Exception:                                        # noqa: BLE001
             pass
+        try:
+            from mcp_manager.seed_builtin import ensure_corvin_browser  # noqa: PLC0415
+            ensure_corvin_browser("_default")  # ADR-0193
+        except Exception:                                        # noqa: BLE001
+            pass
     threading.Thread(target=_seed, daemon=True).start()
 
 

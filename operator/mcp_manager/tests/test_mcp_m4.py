@@ -306,6 +306,57 @@ class TestImageOutdirInjection:
         assert "CORVIN_IMAGE_OUTDIR" not in servers["tool-a"].get("env", {})
 
 
+# ── browser_token (ADR-0193 — corvin-browser MCP tool) ────────────────────────
+
+
+class TestBrowserTokenInjection:
+    """The corvin-browser MCP server is a separate subprocess that cannot
+    share BrowserSessionManager's in-process state with the console — it
+    authenticates to the console's own /v1/console/browser/* REST API with a
+    per-CHAT-TURN bearer token instead. That token is minted fresh every turn
+    (chat_runtime.stream_turn), so — exactly like image_outdir — it cannot be
+    a static catalog env value and must be injected per get_active_mcp_servers
+    call."""
+
+    def test_sets_browser_token_and_base_url_on_corvin_browser_entry(self, tmp_corvin):
+        catalog.add_tool(TID, {
+            "id": "corvin-browser",
+            "source": "builtin:/fake/main.py",
+            "installed_at": "2026-07-16T00:00:00+00:00",
+            "runtime": {"command": "python", "args": ["/fake/main.py"],
+                        "env": {"CORVIN_TENANT_ID": TID}},
+            "secrets": [],
+            "compliance": {"locality": "local", "network_egress": "none"},
+        })
+        activate.activate(TID, "corvin-browser", "tenant")
+        servers = activate.get_active_mcp_servers(
+            TID, browser_token="tok-abc123", browser_base_url="http://127.0.0.1:8765")
+        env = servers["corvin-browser"]["env"]
+        assert env["CORVIN_BROWSER_TOKEN"] == "tok-abc123"
+        assert env["CORVIN_BROWSER_BASE_URL"] == "http://127.0.0.1:8765"
+        # Pre-existing plaintext env entries must survive the injection.
+        assert env["CORVIN_TENANT_ID"] == TID
+
+    def test_no_browser_token_leaves_env_unset(self, tmp_corvin):
+        catalog.add_tool(TID, {
+            "id": "corvin-browser",
+            "source": "builtin:/fake/main.py",
+            "installed_at": "2026-07-16T00:00:00+00:00",
+            "runtime": {"command": "python", "args": ["/fake/main.py"]},
+            "secrets": [],
+            "compliance": {"locality": "local", "network_egress": "none"},
+        })
+        activate.activate(TID, "corvin-browser", "tenant")
+        servers = activate.get_active_mcp_servers(TID)
+        assert "CORVIN_BROWSER_TOKEN" not in servers["corvin-browser"].get("env", {})
+
+    def test_other_tools_unaffected_by_browser_token(self, tmp_corvin):
+        _add_local_tool(TID, "tool-a")
+        activate.activate(TID, "tool-a", "tenant")
+        servers = activate.get_active_mcp_servers(TID, browser_token="tok-abc123")
+        assert "CORVIN_BROWSER_TOKEN" not in servers["tool-a"].get("env", {})
+
+
 # ── Docker installer ──────────────────────────────────────────────────────────
 
 
