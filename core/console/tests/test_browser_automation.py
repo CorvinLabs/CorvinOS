@@ -1049,6 +1049,71 @@ def test_decoupled_confirm_channel_fails_closed_for_foreign_session():
         mgr.resolve_oldest_pending("_default", "does-not-exist", True)
 
 
+# ── ADR-0193 adversarial-review fix: navigate route confirm_cross_host wiring
+
+def test_navigate_route_passes_confirm_cross_host_for_internal_tool_caller(monkeypatch):
+    """The exact production wiring point of the ADR-0193 fix: the corvin-browser
+    MCP tool's LLM-driven navigation must reach BrowserSession.navigate() with
+    confirm_cross_host=True (the same protection the autonomous agent loop
+    already had), while a real cookie-session caller (the SPA's own manual URL
+    bar) must keep confirm_cross_host=False. A prior review round found this
+    exact route untested — a regression here would silently re-open the
+    ADR-0187/0189 indirect-prompt-injection gap with the rest of the suite
+    still green."""
+    from corvin_console import auth as session_auth
+    from corvin_console.routes import browser as broutes
+
+    calls = []
+
+    class _FakeObs:
+        def to_dict(self):
+            return {"ok": True}
+
+    class _FakeSession:
+        async def navigate(self, url, *, confirm_cross_host=False):
+            calls.append(confirm_cross_host)
+            return _FakeObs()
+
+    monkeypatch.setattr(broutes, "_owned_session", lambda rec, sid: _FakeSession())
+
+    body = broutes.NavigateReq(url="https://example.com")
+
+    internal_rec = session_auth.SessionRecord(
+        sid="mcp:x", sid_fingerprint="fp1", tier="owner", tenant_id="acme",
+        token_fingerprint="", csrf_secret="", created_at=0.0, last_seen_at=0.0,
+        expires_at=1e18, is_internal_tool=True,
+    )
+    cookie_rec = session_auth.SessionRecord(
+        sid="s1", sid_fingerprint="fp1", tier="owner", tenant_id="acme",
+        token_fingerprint="", csrf_secret="", created_at=0.0, last_seen_at=0.0,
+        expires_at=1e18, is_internal_tool=False,
+    )
+
+    asyncio.run(broutes.navigate("sid1", body, internal_rec))
+    asyncio.run(broutes.navigate("sid2", body, cookie_rec))
+
+    assert calls == [True, False]
+
+
+def test_mgr_singleton_wires_notify_fn():
+    """A prior review round found that the notify_fn wiring's mechanism
+    (manager.py's _run()) was tested in isolation, but nothing asserted that
+    the PRODUCTION singleton (_mgr()) actually passes routes/browser.py's own
+    _notify_fn into BrowserSessionManager — a dropped `notify_fn=_notify_fn`
+    kwarg here (merge conflict, refactor) would silently reproduce the
+    original dead-notification bug while the isolated manager.py test stayed
+    green."""
+    from corvin_console.routes import browser as broutes
+
+    old_manager = broutes._manager
+    broutes._manager = None
+    try:
+        mgr = broutes._mgr()
+        assert mgr._notify_fn is broutes._notify_fn
+    finally:
+        broutes._manager = old_manager
+
+
 # ── Anti-drift: tool schema + REST routes must cover the session surface ──────
 
 def test_tool_surface_and_routes_cover_session_actions_no_drift():
@@ -1516,6 +1581,98 @@ def test_manager_start_agent_does_not_close_session_on_needs_login(server):
             agent_mod.BrowserAgent = orig
 
         # The session must STILL exist — auto_close must have been skipped.
+        s2 = mgr.session("_default", sid)
+        assert s2 is not None
+        await mgr.close("_default", sid)
+
+    asyncio.run(run())
+
+
+def test_manager_start_agent_calls_notify_fn_on_needs_login(server):
+    """ADR-0193 adversarial-review fix: the ADR-0189 proactive voice
+    notification used to be wired ONLY from the now-retired chat-text
+    `/browser <task>` command's own polling loop, so it silently stopped
+    firing for ANY caller once that loop was deleted in Phase 2 — including
+    the still-live Browser-page-initiated agent loop. It is now wired
+    directly into BrowserSessionManager itself, so it must fire for a plain
+    start_agent() call regardless of who started it."""
+    async def run():
+        from corvin_console.browser import BrowserSessionManager
+        home = Path(tempfile.mkdtemp())
+        calls = []
+
+        def fake_notify(tenant_id, *, text):
+            calls.append((tenant_id, text))
+
+        mgr = BrowserSessionManager(home_resolver=lambda t: home / t,
+                                    allowlist_resolver=lambda t: (None, None),
+                                    notify_fn=fake_notify)
+        sid = await mgr.create("_default", headless=True)
+        s = mgr.session("_default", sid)
+        await s.navigate(server)   # password field present -> needs_login
+
+        async def planner(task, obs, transcript):
+            return {"action": "done", "reason": "should not run"}
+
+        import corvin_console.browser.agent as agent_mod
+        orig = agent_mod.BrowserAgent
+        try:
+            agent_mod.BrowserAgent = lambda session, **kw: orig(session, planner=planner, **{
+                k: v for k, v in kw.items() if k != "planner"})
+            started = mgr.start_agent("_default", sid, "log in")
+            assert started
+            for _ in range(100):
+                if not mgr.agent_running("_default", sid):
+                    break
+                await asyncio.sleep(0.05)
+        finally:
+            agent_mod.BrowserAgent = orig
+
+        assert len(calls) == 1
+        assert calls[0][0] == "_default"
+        assert "weiter" in calls[0][1].lower()
+        await mgr.close("_default", sid)
+
+    asyncio.run(run())
+
+
+def test_manager_start_agent_notify_fn_failure_does_not_break_agent_loop(server):
+    """A broken notify_fn (e.g. notify_pause raising) must never take down
+    the agent loop itself — best-effort, same contract the old chat-side
+    wrapper had."""
+    async def run():
+        from corvin_console.browser import BrowserSessionManager
+        home = Path(tempfile.mkdtemp())
+
+        def broken_notify(tenant_id, *, text):
+            raise RuntimeError("notify backend unavailable")
+
+        mgr = BrowserSessionManager(home_resolver=lambda t: home / t,
+                                    allowlist_resolver=lambda t: (None, None),
+                                    notify_fn=broken_notify)
+        sid = await mgr.create("_default", headless=True)
+        s = mgr.session("_default", sid)
+        await s.navigate(server)
+
+        async def planner(task, obs, transcript):
+            return {"action": "done", "reason": "should not run"}
+
+        import corvin_console.browser.agent as agent_mod
+        orig = agent_mod.BrowserAgent
+        try:
+            agent_mod.BrowserAgent = lambda session, **kw: orig(session, planner=planner, **{
+                k: v for k, v in kw.items() if k != "planner"})
+            started = mgr.start_agent("_default", sid, "log in")
+            assert started
+            for _ in range(100):
+                if not mgr.agent_running("_default", sid):
+                    break
+                await asyncio.sleep(0.05)
+        finally:
+            agent_mod.BrowserAgent = orig
+
+        # The session must still be reachable — a broken notify_fn must not
+        # have crashed the agent-loop task.
         s2 = mgr.session("_default", sid)
         assert s2 is not None
         await mgr.close("_default", sid)

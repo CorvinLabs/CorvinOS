@@ -84,11 +84,14 @@ jobs:
       - name: Run browser automation tests
         shell: bash
         run: |
-          # Each file runs as its own pytest invocation — running them together
-          # pollutes a shared asyncio event-loop fixture across the two files
-          # (pre-existing test-isolation issue, unrelated to platform).
+          # test_browser_automation.py runs as its own pytest invocation —
+          # combining it with another async-heavy suite pollutes a shared
+          # asyncio event-loop fixture (pre-existing test-isolation issue,
+          # unrelated to platform). test_browser_internal_auth.py (ADR-0193)
+          # is pure sync unit tests with no such risk, but kept as its own
+          # step too for the same reason.
           python -m pytest core/console/tests/test_browser_automation.py -v
-          python -m pytest core/console/tests/test_classify_browser_intent_gating.py -v
+          python -m pytest core/console/tests/test_browser_internal_auth.py -v
 
   e2e:
     runs-on: ubuntu-latest

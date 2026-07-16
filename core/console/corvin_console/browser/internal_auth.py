@@ -45,6 +45,7 @@ Design (additive, not a replacement):
 from __future__ import annotations
 
 import secrets
+import threading
 import time
 from typing import Annotated
 
@@ -61,9 +62,20 @@ _TTL_S = 1800.0
 
 # token -> (tenant_id, sid_fingerprint, expires_at_monotonic)
 _TOKENS: dict[str, tuple[str, str, float]] = {}
+# ``require_session_or_token``/``require_csrf_or_token`` are plain (sync) def
+# FastAPI dependencies, so Starlette runs them on a threadpool-executor thread
+# per request; ``mint()`` is called from the async ``stream_turn`` on the
+# EVENT LOOP thread. Both read/mutate the same module-level `_TOKENS` dict —
+# without a lock, a verify() on a threadpool thread iterating `.items()` in
+# `_purge_expired` can race a concurrent mint()'s insert on the event-loop
+# thread and raise "dictionary changed size during iteration" (adversarial-
+# review finding). A plain (non-reentrant) Lock is enough: nothing in this
+# module ever calls back into another one of these functions while holding it.
+_LOCK = threading.Lock()
 
 
 def _purge_expired(*, now: float) -> None:
+    """Caller must hold ``_LOCK``."""
     expired = [t for t, (_, _, exp) in _TOKENS.items() if exp <= now]
     for t in expired:
         _TOKENS.pop(t, None)
@@ -77,9 +89,10 @@ def mint(tenant_id: str, sid_fingerprint: str, *, ttl_s: float = _TTL_S) -> str:
     actually makes its first HTTP call.
     """
     now = time.monotonic()
-    _purge_expired(now=now)
     token = secrets.token_urlsafe(32)
-    _TOKENS[token] = (tenant_id, sid_fingerprint, now + ttl_s)
+    with _LOCK:
+        _purge_expired(now=now)
+        _TOKENS[token] = (tenant_id, sid_fingerprint, now + ttl_s)
     return token
 
 
@@ -93,8 +106,9 @@ def verify(token: str) -> tuple[str, str] | None:
     if not token:
         return None
     now = time.monotonic()
-    _purge_expired(now=now)
-    entry = _TOKENS.get(token)
+    with _LOCK:
+        _purge_expired(now=now)
+        entry = _TOKENS.get(token)
     if entry is None:
         return None
     tenant_id, sid_fingerprint, _expires_at = entry
@@ -105,7 +119,8 @@ def revoke(token: str) -> None:
     """Best-effort early revocation (not currently called anywhere — the TTL
     is the primary defense — but kept available for a future explicit
     'end this turn' hook without needing a second mechanism)."""
-    _TOKENS.pop(token, None)
+    with _LOCK:
+        _TOKENS.pop(token, None)
 
 
 def _bearer_record(token: str | None) -> session_auth.SessionRecord | None:
@@ -140,6 +155,7 @@ def _bearer_record(token: str | None) -> session_auth.SessionRecord | None:
         expires_at=now + _TTL_S,
         persistent=False,
         lic_proof="",
+        is_internal_tool=True,
     )
 
 

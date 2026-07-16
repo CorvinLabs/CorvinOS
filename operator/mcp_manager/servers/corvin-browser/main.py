@@ -30,11 +30,19 @@ collide with (found live, during Phase 1 end-to-end verification).
 
 L44 acceptable-use gate + ADR-0189 task-scoped-host extraction (ADR-0193
 decision 3): moved here from ``routes/chat.py``'s ``_handle_browser_command``,
-which only ran them once per ``/browser <task>`` chat command. Every
-session-creating ``browser_navigate`` call now runs its own L44 check on the
-target URL — strictly more gating than before, never less (every call path
-through this tool is gated at the point of use, not once at classification
-time, per the ADR).
+which only ran them once per ``/browser <task>`` chat command. EVERY
+``browser_navigate`` call now runs its own L44 check on the target URL —
+``_gate_navigate()`` is unconditional, decoupled from session
+creation/reuse (an earlier version of this file gated only inside
+``_ensure_session``, which short-circuited for every call after the first in
+a session — an adversarial-review finding, fixed). Task-scoped-host
+extraction stays tied to session *creation* only, by design: it reflects the
+one host the model named when the session started, and correctly does not
+widen automatically if a later call in the same session names a different
+host — that still hits the normal cross-host confirm (see
+``routes/browser.py::navigate``'s ``confirm_cross_host=rec.is_internal_tool``,
+also an adversarial-review fix: this route's confirm used to default off
+for every caller, including this tool's LLM-decided navigations).
 """
 from __future__ import annotations
 
@@ -129,24 +137,36 @@ def _extract_host(url: str) -> list[str]:
     return [host] if host else []
 
 
-def _ensure_session(session_id: str, url: str) -> str:
-    """Return ``session_id`` if given (an existing session), else create a
-    new one — running the L44 gate and extracting the ADR-0189 task-scoped
-    host from ``url`` first (ADR-0193 decision 3: this used to run once per
-    ``/browser <task>`` chat command; it now runs on every session-creating
-    navigate call, which is strictly more coverage, not less)."""
-    global _current_session
-    if session_id:
-        return session_id
-    if _current_session:
-        return _current_session
-
+def _gate_navigate(url: str) -> None:
+    """L44 acceptable-use check — called on EVERY ``browser_navigate``, not
+    just the session-creating one (adversarial-review finding, ADR-0193: the
+    gate used to live inside ``_ensure_session`` and so short-circuited for
+    every call after the first in a session, since that function returns
+    early for an existing/cached session id before ever reaching the check.
+    Decoupled here so it is unconditional, matching ADR-0193 decision 3's own
+    claim: 'every call path through the tool is gated at the point of use,
+    not once at classification time.'"""
     tid = _tenant_id()
     refusal = check_l44(
         f"browse to {url}", tid, persona="assistant",
         channel="chat", chat_key=f"browser-mcp:{tid}", engine_id="claude_code")
     if refusal:
         raise BrowserToolError(refusal)
+
+
+def _ensure_session(session_id: str, url: str) -> str:
+    """Return ``session_id`` if given (an existing session), else create a
+    new one — extracting the ADR-0189 task-scoped host from ``url`` for the
+    new session (this carve-out is necessarily fixed at creation time: it
+    reflects the FIRST host the model named, per BrowserSession's own
+    immutable ``_task_scoped_hosts``; a later navigate to a different host
+    within the same session correctly falls through to the normal cross-host
+    confirm rather than silently widening the carve-out)."""
+    global _current_session
+    if session_id:
+        return session_id
+    if _current_session:
+        return _current_session
 
     body = {"task_scoped_hosts": _extract_host(url)}
     result = _request("POST", "/v1/console/browser/session", json_body=body)
@@ -163,11 +183,12 @@ def browser_navigate(url: str, session_id: str = "") -> dict:
     first call of a conversation (pass session_id="" / omit it); pass the
     returned session_id back in on later calls to keep using the SAME
     browser tab. Egress-gated by the tenant allowlist and an acceptable-use
-    check on the target URL. Returns the Set-of-Marks observation of the
-    loaded page plus the session_id — mention the session_id and the
-    `/console/app/browser?sid=<session_id>` live-view link in your reply so
-    the user can watch.
+    check on the target URL — run on every call, not just the first. Returns
+    the Set-of-Marks observation of the loaded page plus the session_id —
+    mention the session_id and the `/console/app/browser?sid=<session_id>`
+    live-view link in your reply so the user can watch.
     """
+    _gate_navigate(url)
     sid = _ensure_session(session_id, url)
     obs = _request("POST", f"/v1/console/browser/{sid}/navigate", json_body={"url": url})
     return {**obs, "session_id": sid}
@@ -316,10 +337,17 @@ def browser_close(session_id: str) -> dict:
     session cap needs the slot — but calling it when a task is finished is
     good practice."""
     global _current_session
-    result = _request("POST", f"/v1/console/browser/{session_id}/close")
-    if _current_session == session_id:
-        _current_session = None
-    return result
+    # Clear the cached session id even when the close call itself fails
+    # (adversarial-review finding: a session already reaped server-side —
+    # tenant cap, TTL — makes this raise, and without the `finally` every
+    # later browser_navigate(session_id="") kept returning the same dead
+    # id via _ensure_session's cache, wedging the tool for the rest of the
+    # turn with no way to recover except a fresh subprocess next turn).
+    try:
+        return _request("POST", f"/v1/console/browser/{session_id}/close")
+    finally:
+        if _current_session == session_id:
+            _current_session = None
 
 
 if __name__ == "__main__":

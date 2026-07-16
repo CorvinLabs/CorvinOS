@@ -199,9 +199,15 @@ classifier's job to enforce in the first place.
    (`_detect_browser_task`/`_URL_START_RE`/`_BROWSE_INTENT_RE`) and the `/browser confirm|continue`
    sub-commands (`_handle_browser_confirm_command`/`_handle_browser_continue_command`), which only
    ever served that same retired agent-loop-in-chat mechanism. Every message now reaches
-   `chat_runtime.stream_turn` with its original text unchanged; `browser/notify.py`'s pause
-   notification and the REST `POST /browser/{sid}/agent` path are untouched (still serve
-   non-interactive, run-to-completion callers per the ADR's non-goals).
+   `chat_runtime.stream_turn` with its original text unchanged; the REST `POST
+   /browser/{sid}/agent` path is untouched (still serves non-interactive, run-to-completion
+   callers per the ADR's non-goals). **Adversarial-review correction:** `browser/notify.py`'s
+   pause notification was NOT actually "untouched" as first claimed here — its only caller was
+   the retired chat polling loop, so deleting that loop silently broke it for every caller,
+   including the Browser page's own agent-loop task. Fixed by moving the notify call into
+   `BrowserSessionManager.start_agent()` itself (a `notify_fn` resolver, wired in
+   `routes/browser.py::_mgr()`), so it now fires for any `start_agent()` caller instead of only
+   the one polling loop that used to exist.
 3. **Done.** Regression coverage: `test_chat_ws_robustness.py::test_coding_prompt_with_former_trigger_words_reaches_stream_turn_verbatim`
    proves the user's original bug report ("baue mir eine Web-UI mit Login-Formular") reaches
    the model's own turn unmodified; `test_retired_classifier_and_command_handler_names_stay_gone`
