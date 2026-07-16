@@ -539,3 +539,174 @@ def test_prune_never_evicts_the_file_just_written(tmp_path, monkeypatch) -> None
     cr.prune_voice_archive("_default", "sid1", max_bytes=50, keep=fresh.name)
     assert fresh.exists(), "the just-written audio must survive any cap"
     assert sorted(p.name for p in vd.iterdir()) == [fresh.name]
+
+
+# ── say.py / summarize.py contract hardening (final review) ──────────────────
+
+def test_control_chars_are_scrubbed_from_the_say_argv() -> None:
+    """A NUL cannot travel through argv at all — subprocess raises BEFORE exec.
+
+    voice_tts catches only TimeoutExpired, so ValueError("embedded null byte")
+    escaped as a 500 and the frontend showed a red "TTS failed" banner —
+    breaking the deliberate 204-on-failure design where a TTS problem never
+    surfaces as an error.
+    """
+    cmd = voice_routes._say_cmd(Path("/tmp/x.opus"), "Hallo\x00\x07Welt\nZeile", "de")
+    spoken = cmd[3]
+    assert "\x00" not in spoken and "\x07" not in spoken
+    assert spoken == "HalloWelt\nZeile"          # newline kept, C0 dropped
+    import subprocess as _sp
+    # The real gate: this argv must be constructible without raising.
+    _sp.list2cmdline(cmd)
+
+
+def test_say_argv_keeps_ordinary_text_intact() -> None:
+    cmd = voice_routes._say_cmd(Path("/tmp/x.opus"), "Grüße, Straße — 3.14!", "de")
+    assert cmd[3] == "Grüße, Straße — 3.14!"
+
+
+def test_tts_text_is_clamped_even_when_summarize_succeeds(monkeypatch) -> None:
+    """summarize.py's degraded path returns prose IN FULL with rc=0.
+
+    naive_truncate is documented "completeness over length" and ignores
+    --max-chars (measured: 20299 chars out for --max-chars 400), and it is the
+    ZERO-CONFIG DEFAULT path — any install with no claude CLI and no
+    Hermes/Ollama degrades on every turn. The route's clamp used to sit only on
+    the `or` fallback branch, so that sailed straight into say.py.
+    """
+    huge = "Ein Satz. " * 3000
+    monkeypatch.setattr(voice_routes, "_summarize_for_speech", lambda t, l: huge)
+    clamped = (voice_routes._summarize_for_speech("x", "de") or "x")[
+        :voice_routes._TTS_PROVIDER_CHAR_LIMIT]
+    assert len(clamped) == voice_routes._TTS_PROVIDER_CHAR_LIMIT
+    assert len(huge) > voice_routes._TTS_PROVIDER_CHAR_LIMIT   # premise
+
+
+def test_tmp_name_is_unique_per_call_not_per_process() -> None:
+    """A pid suffix does not fix a same-process threadpool race.
+
+    voice_tts/voice_segment are sync `def`s, so FastAPI runs them in its
+    threadpool: the colliding writers are THREADS of one process and share the
+    pid. Two concurrent writes of the same segment would open the same .tmp in
+    "wb" with independent offsets and replace() would publish a torn file.
+    """
+    import re as _re
+    src = Path(voice_routes.__file__).read_text(encoding="utf-8")
+    m = _re.search(r'tmp = dest\.with_name\(f"\{dest\.name\}\.\{([^}]+)\}\.tmp"\)', src)
+    assert m, "the tmp name construction moved — re-check the race analysis"
+    assert "getpid" not in m.group(1), "pid is shared by threads of one process"
+    assert "uuid" in m.group(1)
+
+
+# ── prune evicts whole TURNS, never individual playlist segments ─────────────
+#
+# The Phase-5 safety claim was "an evicted turn renders without a player". That
+# held for the single-file summary and was FALSE for the `-fNN` playlist, which
+# prune ate one file at a time: the survivors got renumbered by
+# attach_voice_artifacts, so the user saw a player labelled "voice 1/3" that
+# actually began at segment 3 of 5 — the first 40% of the answer silently
+# missing, with nothing to signal it. Strictly worse than losing the audio.
+# Found by an adversarial review that attacked the fix instead of trusting it.
+
+def _seed_group(vd, text, n_segments, mtime):
+    import os as _os
+    k = cr.voice_key(text)
+    for i in range(n_segments):
+        f = vd / f"{k}-f{i:02d}.ogg"
+        f.write_bytes(b"x" * 100)
+        _os.utime(f, (mtime, mtime))
+    return k
+
+
+def test_prune_never_leaves_a_partial_playlist(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    text = "Eine lange Antwort."
+    k = _seed_group(vd, text, 5, 1000)
+    cr.prune_voice_archive("_default", "sid1", max_bytes=300)
+    turn = {"role": "assistant", "voice_key": k,
+            "parts": [{"kind": "text", "text": text}]}
+    out = cr.attach_voice_artifacts("_default", "sid1", [turn])
+    labels = [p["label"] for p in out[0]["parts"] if p.get("kind") == "artifact"]
+    assert labels == [], "a partially-evicted playlist must not render at all"
+
+
+def test_prune_evicts_the_older_turn_whole_and_leaves_the_newer_intact(
+        tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    old_t, new_t = "Alte Antwort.", "Neue Antwort."
+    _seed_group(vd, old_t, 3, 1000)
+    _seed_group(vd, new_t, 3, 2000)
+    cr.prune_voice_archive("_default", "sid1", max_bytes=350)
+    assert cr.find_turn_voice_segments("_default", "sid1", old_t) == []
+    assert len(cr.find_turn_voice_segments("_default", "sid1", new_t)) == 3
+
+
+def test_prune_keeps_the_whole_group_of_the_file_just_written(
+        tmp_path, monkeypatch) -> None:
+    """keep= exempts the current turn's ENTIRE playlist, not just one file."""
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    text = "Aktuelle Antwort."
+    k = _seed_group(vd, text, 3, 1000)
+    cr.prune_voice_archive("_default", "sid1", max_bytes=10, keep=f"{k}-f00.ogg")
+    assert len(cr.find_turn_voice_segments("_default", "sid1", text)) == 3
+
+
+def test_prune_does_not_delete_another_writers_in_flight_tmp(
+        tmp_path, monkeypatch) -> None:
+    """Unlinking it makes that writer's replace() raise and its archive vanish."""
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    (vd / "aaaaaaaaaaaaaaaa.ogg").write_bytes(b"x" * 500)
+    tmp = vd / "bbbbbbbbbbbbbbbb.ogg.deadbeef.tmp"
+    tmp.write_bytes(b"in-flight")
+    cr.prune_voice_archive("_default", "sid1", max_bytes=10)
+    assert tmp.exists()
+
+
+def test_a_group_is_as_young_as_its_newest_file(tmp_path, monkeypatch) -> None:
+    """A playlist written now must not look old because segment 0 is."""
+    import os as _os
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    old_t, new_t = "Wirklich alt.", "Gerade geschrieben."
+    _seed_group(vd, old_t, 2, 1000)
+    k = _seed_group(vd, new_t, 2, 1001)
+    _os.utime(vd / f"{k}-f01.ogg", (9000, 9000))   # newest file of the new group
+    cr.prune_voice_archive("_default", "sid1", max_bytes=250)
+    assert cr.find_turn_voice_segments("_default", "sid1", old_t) == []
+    assert len(cr.find_turn_voice_segments("_default", "sid1", new_t)) == 2
+
+
+def test_latin_heavy_cjk_is_still_sliced(tmp_path) -> None:
+    """The first CJK fix used a "majority CJK" test — wrong in the direction that hurts.
+
+    A Chinese TECHNICAL answer (CJK prose + Latin API names, no spaces, CJK
+    commas — which the ranges didn't even count) fell under 50%, stayed one
+    8000-char segment, and the route clamp then dropped HALF the answer
+    silently: a loud failure downgraded to a quiet one. Found by an adversarial
+    review of the fix itself.
+    """
+    tech = "配置useVoicePlayback和requestIdRef同步，避免race" * 200
+    segs = cr.split_for_speech(tech)
+    assert len(segs) > 1
+    assert max(len(s) for s in segs) <= cr._VOICE_SEGMENT_MAX_CHARS
+
+
+def test_cjk_punctuation_counts_as_prose_not_against_it() -> None:
+    for ch in "。、，！？":
+        assert cr._is_space_free_script(ch), f"{ch!r} is CJK prose, not a foreign char"
+
+
+def test_urlish_atoms_are_never_sliced() -> None:
+    assert not cr._is_space_free_script("https://example.com/" + "a" * 3000)
+    assert not cr._is_space_free_script("a" * 3000)          # bare identifier
+    assert not cr._is_space_free_script("/usr/share/lib/x.so")
+    assert cr._is_space_free_script("配置useVoicePlayback，")   # CJK wins over Latin

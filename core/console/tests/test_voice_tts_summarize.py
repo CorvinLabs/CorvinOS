@@ -103,7 +103,11 @@ def test_voice_tts_speaks_the_summary_not_the_raw_text(monkeypatch):
             out_path = Path(cmd[2])
             captured_say_text["text"] = cmd[3]
             out_path.write_bytes(b"RIFFfakeaudio")
-            return _completed(0)
+            # say.py signals success as rc=0 + the path on STDOUT
+            # (say.py:673/692 sys.stdout.write). The stub used to return
+            # empty stdout, which is say.py's documented "all providers
+            # failed" signal — so it modelled a FAILURE and asserted 200.
+            return _completed(0, stdout=str(out_path))
         raise AssertionError(f"unexpected subprocess call: {cmd}")
 
     monkeypatch.setattr(V.subprocess, "run", _fake_run)
@@ -136,7 +140,11 @@ def test_voice_tts_falls_back_to_raw_truncated_text_when_summarize_fails(monkeyp
             out_path = Path(cmd[2])
             captured_say_text["text"] = cmd[3]
             out_path.write_bytes(b"RIFFfakeaudio")
-            return _completed(0)
+            # say.py signals success as rc=0 + the path on STDOUT
+            # (say.py:673/692 sys.stdout.write). The stub used to return
+            # empty stdout, which is say.py's documented "all providers
+            # failed" signal — so it modelled a FAILURE and asserted 200.
+            return _completed(0, stdout=str(out_path))
         raise AssertionError(f"unexpected subprocess call: {cmd}")
 
     monkeypatch.setattr(V.subprocess, "run", _fake_run)
