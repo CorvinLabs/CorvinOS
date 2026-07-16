@@ -746,7 +746,14 @@ def voice_segment(
         out_path = Path(fh.name)
     try:
         proc = subprocess.run(
-            _say_cmd(out_path, segments[body.index], body.lang),
+            # Clamp exactly like /voice/tts does. split_for_speech is documented
+            # to emit an oversized token WHOLE rather than cut it (a sliced URL
+            # is unspeakable), so the segmenter's own cap is explicitly allowed
+            # to be exceeded — which left this route with no guard at all. A
+            # segment past the provider limit makes say.py exit non-zero -> 204,
+            # and playFull reads 204 as end-of-playlist, so ONE oversized
+            # segment silently truncates the whole read-aloud from there on.
+            _say_cmd(out_path, segments[body.index][:_TTS_PROVIDER_CHAR_LIMIT], body.lang),
             capture_output=True, text=True, timeout=_TTS_TIMEOUT_S,
         )
         if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
