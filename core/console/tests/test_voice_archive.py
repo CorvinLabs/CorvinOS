@@ -258,3 +258,77 @@ def test_no_segments_means_no_extra_players(tmp_path, monkeypatch) -> None:
     arts = [p for p in cr.attach_voice_artifacts("_default", "s1", turns)[0]["parts"]
             if p.get("kind") == "artifact"]
     assert [a["label"] for a in arts] == ["voice"]
+
+
+# ── --audience / --output-language reach summarize.py (bridge parity) ────────
+#
+# Both were promised but never passed. The docstring on _summarize_for_speech
+# claimed the "learnings/metaphor annex included, per the user's audience
+# settings" from the day it was written, yet the argv it built carried neither
+# --audience (so the console voice NEVER spoke the LERN-ZUGABE that every
+# messenger bridge speaks) nor --output-language (so a Chinese/Japanese/French
+# answer fell back to --lang de and was summarised, and therefore spoken, in
+# GERMAN — defeating ADR-0194 Phase 2's "the spoken language follows the text").
+
+def _capture_argv(monkeypatch, out: list) -> None:
+    """Run _summarize_for_speech against a stubbed subprocess, capturing argv."""
+    class _Proc:
+        returncode = 0
+        stdout = "a summary"
+        stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        out.append(cmd)
+        return _Proc()
+
+    monkeypatch.setattr(voice_routes.subprocess, "run", _fake_run)
+    monkeypatch.setattr(
+        voice_routes, "_VOICE_SCRIPTS", Path(voice_routes.__file__).parent)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+
+
+def test_audience_block_is_passed_to_the_summarizer(monkeypatch) -> None:
+    argv: list = []
+    _capture_argv(monkeypatch, argv)
+    monkeypatch.setattr(voice_routes, "_tts_audience_block", lambda lang: "LERN-ZUGABE: ja")
+    voice_routes._summarize_for_speech("some long answer", "de")
+    assert "--audience" in argv[0]
+    assert argv[0][argv[0].index("--audience") + 1] == "LERN-ZUGABE: ja"
+
+
+def test_no_audience_configured_omits_the_flag(monkeypatch) -> None:
+    argv: list = []
+    _capture_argv(monkeypatch, argv)
+    monkeypatch.setattr(voice_routes, "_tts_audience_block", lambda lang: "")
+    voice_routes._summarize_for_speech("some long answer", "de")
+    assert "--audience" not in argv[0]
+
+
+def test_third_language_gets_an_explicit_output_language(monkeypatch) -> None:
+    argv: list = []
+    _capture_argv(monkeypatch, argv)
+    monkeypatch.setattr(voice_routes, "_tts_audience_block", lambda lang: "")
+    voice_routes._summarize_for_speech("some long answer", "zh-Hans")
+    # The pivot stays de|en, so without this the summary comes back German.
+    assert argv[0][argv[0].index("--output-language") + 1] == "zh-Hans"
+
+
+def test_pivot_languages_need_no_output_language_override(monkeypatch) -> None:
+    argv: list = []
+    _capture_argv(monkeypatch, argv)
+    monkeypatch.setattr(voice_routes, "_tts_audience_block", lambda lang: "")
+    voice_routes._summarize_for_speech("some long answer", "en")
+    assert "--output-language" not in argv[0]
+    assert argv[0][argv[0].index("--lang") + 1] == "en"
+
+
+def test_a_broken_profile_never_breaks_tts(monkeypatch) -> None:
+    """The audience block is a nice-to-have; TTS is not."""
+    class _Boom:
+        @staticmethod
+        def for_tts_audience(lang):
+            raise RuntimeError("profile.json is corrupt")
+
+    monkeypatch.setattr(voice_routes, "_PROFILE_OK", True)
+    monkeypatch.setattr(voice_routes, "_profile_module", _Boom)
+    assert voice_routes._tts_audience_block("de") == ""

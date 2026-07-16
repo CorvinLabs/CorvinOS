@@ -441,6 +441,22 @@ _TTS_SUMMARIZE_MAX_CHARS = 400   # same default build_voice_summary() uses for b
 _TTS_SUMMARIZE_TIMEOUT_S = float(os.environ.get("CORVIN_TTS_SUMMARIZE_TIMEOUT_S", "120"))
 
 
+def _tts_audience_block(lang: str) -> str:
+    """The layer-12 listener-profile block for ``summarize.py --audience``,
+    resolved exactly like ``adapter.py::build_voice_summary()`` does.
+
+    Returns "" when no audience fields are set (or the profile module is
+    unavailable), which makes ``--audience`` be omitted entirely — the
+    summarizer then behaves exactly as before.
+    """
+    if not _PROFILE_OK or _profile_module is None:
+        return ""
+    try:
+        return _profile_module.for_tts_audience(lang) or ""
+    except Exception:  # noqa: BLE001 — a broken profile must never break TTS
+        return ""
+
+
 def _summarize_for_speech(text: str, lang: str) -> str | None:
     """Best-effort condensation of *text* into a real, faithful spoken
     summary (learnings/metaphor annex included, per the user's audience
@@ -463,11 +479,24 @@ def _summarize_for_speech(text: str, lang: str) -> str | None:
     summarize_path = _VOICE_SCRIPTS / "summarize.py"
     if not summarize_path.exists():
         return None
+    cmd = [sys.executable, str(summarize_path),
+           "--lang", lang if lang in ("de", "en") else "de",
+           "--max-chars", str(_TTS_SUMMARIZE_MAX_CHARS)]
+    # The docstring above promised the annex "per the user's audience settings"
+    # since this helper was written, but --audience was never actually passed:
+    # the console voice has therefore NEVER spoken the LERN-ZUGABE / metaphor
+    # annex, while every messenger bridge did (adapter.py::build_voice_summary
+    # passes it). Same profile, same block, same summarizer — bridge parity.
+    audience = _tts_audience_block(lang)
+    if audience:
+        cmd += ["--audience", audience]
+    # summarize.py's --lang is the pivot (de|en); a third language needs the
+    # explicit OUTPUT-LANGUAGE directive or the summary comes back in German.
+    if lang and lang not in ("de", "en"):
+        cmd += ["--output-language", lang]
     try:
         proc = subprocess.run(
-            [sys.executable, str(summarize_path),
-             "--lang", lang if lang in ("de", "en") else "de",
-             "--max-chars", str(_TTS_SUMMARIZE_MAX_CHARS)],
+            cmd,
             input=text, capture_output=True, text=True,
             timeout=_TTS_SUMMARIZE_TIMEOUT_S,
         )
