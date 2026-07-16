@@ -569,6 +569,25 @@ def find_turn_voice(tenant_id: str, sid: str, text: str) -> Path | None:
     return None
 
 
+def find_turn_voice_segments(tenant_id: str, sid: str, text: str) -> list[Path]:
+    """Archived full-read-aloud segments for a turn's text, in PLAYBACK order.
+
+    Named `<key>-f<NN>.<ext>` by /voice/segment; the zero-padded index is what makes
+    a plain lexical sort the correct playback order (`-f09` before `-f10`). The
+    summary lives at `<key>.<ext>` and is deliberately NOT matched here — the two
+    renderings are separate archives of the same turn.
+    """
+    if not text or not text.strip():
+        return []
+    try:
+        return sorted(
+            p for p in voice_dir(tenant_id, sid).glob(f"{voice_key(text)}-f*.*")
+            if p.is_file() and p.stat().st_size > 0
+        )
+    except OSError:
+        return []
+
+
 def _turn_text(turn: dict[str, Any]) -> str:
     """Concatenate a persisted turn's text parts — the key the audio is filed under."""
     out: list[str] = []
@@ -599,22 +618,36 @@ def attach_voice_artifacts(tenant_id: str, sid: str,
             parts = turn.get("parts")
             if not isinstance(parts, list):
                 continue
-            if any(isinstance(p, dict) and p.get("label") == "voice" for p in parts):
-                continue  # already carries its player
-            vf = find_turn_voice(tenant_id, sid, _turn_text(turn))
-            if vf is None:
-                continue
-            mime = _artifact_mime(vf)
-            if not mime:
-                continue
-            parts.append({
-                "kind": "artifact",
-                "name": vf.name,
-                "path": f"{_VOICE_SUBDIR}/{vf.name}",
-                "mime": mime,
-                "size": vf.stat().st_size,
-                "label": "voice",
-            })
+            if any(isinstance(p, dict)
+                   and str(p.get("label") or "").startswith("voice") for p in parts):
+                continue  # already carries its player(s)
+            text = _turn_text(turn)
+
+            def _art(path: Path, label: str) -> dict[str, Any] | None:
+                mime = _artifact_mime(path)
+                if not mime:
+                    return None
+                return {
+                    "kind": "artifact",
+                    "name": path.name,
+                    "path": f"{_VOICE_SUBDIR}/{path.name}",
+                    "mime": mime,
+                    "size": path.stat().st_size,
+                    "label": label,
+                }
+
+            vf = find_turn_voice(tenant_id, sid, text)
+            if vf is not None:
+                art = _art(vf, "voice")
+                if art:
+                    parts.append(art)
+            # Phase 3: the full read-aloud, in playback order, each segment its own
+            # player. Only present for turns the user actually asked to hear in full.
+            segs = find_turn_voice_segments(tenant_id, sid, text)
+            for i, seg in enumerate(segs, start=1):
+                art = _art(seg, f"voice {i}/{len(segs)}")
+                if art:
+                    parts.append(art)
         except Exception:  # noqa: BLE001 — a broken archive must not break history
             continue
     return turns

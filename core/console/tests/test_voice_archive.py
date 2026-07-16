@@ -198,3 +198,63 @@ def test_oversized_single_token_is_emitted_whole_not_cut() -> None:
     segs = cr.split_for_speech(f"Siehe hier. {url} Ende.", max_chars=100)
     assert any(url in s for s in segs), "oversized token was cut apart"
     assert _words(" ".join(segs)) == _words(f"Siehe hier. {url} Ende.")
+
+
+# ── Phase 3: full read-aloud segments are archived + replayable ───────────────
+
+def _seed_segments(tmp_path, monkeypatch, sid: str, text: str, n: int) -> None:
+    monkeypatch.setattr(cr, "_workdir", lambda tid, s: tmp_path / s)
+    vdir = tmp_path / sid / "voice"
+    vdir.mkdir(parents=True, exist_ok=True)
+    for i in range(n):
+        (vdir / f"{cr.voice_key(text)}-f{i:02d}.ogg").write_bytes(b"OggS" + b"\x00" * 32)
+
+
+def test_full_segments_rehydrate_in_playback_order(tmp_path, monkeypatch) -> None:
+    """Zero-padded indices are what make a lexical sort the right order — a
+    12-segment read-aloud must not play -f10 before -f09."""
+    text = "Lange Antwort."
+    _seed_segments(tmp_path, monkeypatch, "s1", text, 12)
+    turns = [_mk_turn("assistant", text)]
+    out = cr.attach_voice_artifacts("_default", "s1", turns)
+    arts = [p for p in out[0]["parts"] if p.get("kind") == "artifact"]
+    assert len(arts) == 12, arts
+    assert [a["label"] for a in arts][:3] == ["voice 1/12", "voice 2/12", "voice 3/12"]
+    names = [a["name"] for a in arts]
+    assert names == sorted(names), "segments must rehydrate in playback order"
+    assert names[9].endswith("-f09.ogg") and names[10].endswith("-f10.ogg")
+
+
+def test_summary_and_segments_are_separate_archives(tmp_path, monkeypatch) -> None:
+    """`<key>.ext` (summary) must not be swept up by the `<key>-f*` glob, nor vice
+    versa — they are two renderings of the same turn."""
+    text = "Beides vorhanden."
+    _seed_voice(tmp_path, monkeypatch, "s1", text)          # summary
+    _seed_segments(tmp_path, monkeypatch, "s1", text, 2)    # full read-aloud
+    assert cr.find_turn_voice("_default", "s1", text).name.endswith(f"{cr.voice_key(text)}.ogg")
+    segs = cr.find_turn_voice_segments("_default", "s1", text)
+    assert len(segs) == 2 and all("-f" in s.name for s in segs)
+    turns = [_mk_turn("assistant", text)]
+    arts = [p for p in cr.attach_voice_artifacts("_default", "s1", turns)[0]["parts"]
+            if p.get("kind") == "artifact"]
+    assert [a["label"] for a in arts] == ["voice", "voice 1/2", "voice 2/2"]
+
+
+def test_segments_attach_is_idempotent(tmp_path, monkeypatch) -> None:
+    text = "Nicht doppelt."
+    _seed_segments(tmp_path, monkeypatch, "s1", text, 3)
+    turns = [_mk_turn("assistant", text)]
+    cr.attach_voice_artifacts("_default", "s1", turns)
+    cr.attach_voice_artifacts("_default", "s1", turns)
+    arts = [p for p in turns[0]["parts"] if p.get("kind") == "artifact"]
+    assert len(arts) == 3, [a["label"] for a in arts]
+
+
+def test_no_segments_means_no_extra_players(tmp_path, monkeypatch) -> None:
+    """A turn nobody asked to hear in full keeps just its summary player."""
+    text = "Nur Zusammenfassung."
+    _seed_voice(tmp_path, monkeypatch, "s1", text)
+    turns = [_mk_turn("assistant", text)]
+    arts = [p for p in cr.attach_voice_artifacts("_default", "s1", turns)[0]["parts"]
+            if p.get("kind") == "artifact"]
+    assert [a["label"] for a in arts] == ["voice"]
