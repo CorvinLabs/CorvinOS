@@ -165,6 +165,67 @@ def enforce_chat_turns(
         ) from exc
 
 
+def enforce_voice_summaries(
+    tenant_id: str,
+    sid_fingerprint: str,
+    *,
+    audit_action: str,
+) -> None:
+    """Increment + check the daily voice-summary quota (ADR-0194); raise HTTP 402
+    when exceeded.
+
+    A SEPARATE axis from chat_turns_per_day, on purpose. Both /voice/tts and
+    /voice/summarize spawn the same paid Haiku `claude -p` (plus an optional
+    dialectic-judge second spawn = up to 2x), but only /voice/summarize was
+    metered — so the gate was one endpoint away from being routed around: a
+    caller refused on the metered route could get the identical spend from the
+    unmetered one. Metering /voice/tts on the CHAT axis was not an option: the
+    console calls it automatically once per turn, so every chat turn would have
+    been charged twice and the user's effective quota halved.
+
+    Unlimited on every tier today (limit None), exactly like chat, so this
+    returns immediately and never charges or blocks. The fail-closed path only
+    engages if a future tier sets a finite ceiling.
+    """
+    try:
+        if _lic_get_limit("voice_summaries_per_day") is None:
+            return
+    except Exception:  # noqa: BLE001
+        return  # cannot resolve a limit → never block voice
+
+    if not _COMPUTE_QUOTA_OK or _cq_increment is None:
+        _audit_failed(tenant_id, sid_fingerprint, audit_action, "quota_module_unavailable")
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "license_limit",
+                "feature": "voice_summaries_per_day",
+                "msg": "Voice-summary quota enforcement unavailable — refusing (fail-closed).",
+                "upgrade_url": "https://corvin-labs.com/pricing",
+            },
+        )
+    try:
+        _cq_increment(
+            _forge_paths.corvin_home(),
+            channel="voice",
+            chat_key=f"voice:{tenant_id}:{sid_fingerprint[:8]}",
+            feature="voice_summaries_per_day",
+            counter_file="voice_quota.json",
+        )
+    except _LicLimitError as exc:  # type: ignore[misc]
+        _audit_failed(tenant_id, sid_fingerprint, audit_action, "quota_exceeded")
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "license_limit",
+                "feature": "voice_summaries_per_day",
+                "limit": _lic_get_limit("voice_summaries_per_day"),
+                "msg": str(exc),
+                "upgrade_url": "https://corvin-labs.com/pricing",
+            },
+        ) from exc
+
+
 def _audit_failed(tenant_id: str, sid_fingerprint: str, action: str, reason: str) -> None:
     try:
         from .. import audit as _ca  # noqa: PLC0415

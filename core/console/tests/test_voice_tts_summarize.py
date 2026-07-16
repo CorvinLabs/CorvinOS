@@ -118,7 +118,9 @@ def test_voice_tts_speaks_the_summary_not_the_raw_text(monkeypatch):
     long_answer = "Dies ist eine sehr lange Antwort. " * 50
     body = V.TtsRequest(text=long_answer, lang="de")
 
-    resp = V.voice_tts(body, rec=_FakeRec())
+    # The route is an async wrapper that only bounds concurrency
+    # (_TTS_MAX_CONCURRENCY); the synthesis body under test is unchanged.
+    resp = V._voice_tts_sync(body, rec=_FakeRec())
 
     assert resp.status_code == 200
     assert len(summarize_calls) == 1, "summarize.py must be invoked before say.py"
@@ -155,7 +157,9 @@ def test_voice_tts_falls_back_to_raw_truncated_text_when_summarize_fails(monkeyp
     raw_text = "x" * 5000  # over the 4000-char provider limit
     body = V.TtsRequest(text=raw_text, lang="de")
 
-    resp = V.voice_tts(body, rec=_FakeRec())
+    # The route is an async wrapper that only bounds concurrency
+    # (_TTS_MAX_CONCURRENCY); the synthesis body under test is unchanged.
+    resp = V._voice_tts_sync(body, rec=_FakeRec())
 
     assert resp.status_code == 200
     assert captured_say_text["text"] == raw_text[:V._TTS_PROVIDER_CHAR_LIMIT]

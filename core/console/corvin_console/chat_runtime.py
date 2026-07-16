@@ -302,6 +302,30 @@ _ANN_CALL_TIMEOUT_S = 8   # per subprocess.run — hard-killed past this
 _ANN_TOTAL_BUDGET_S = 5   # skip any remaining call once elapsed exceeds this
 
 
+def _annotation_enabled() -> bool:
+    """Cheap, spawn-free "could _compute_web_annotation_suffix produce anything?".
+
+    Mirrors that function's own gates (chat-render opt-in + at least one of
+    learning/metaphors) WITHOUT running the LLM passes. Exists so the stream can
+    tell the client, at the FIRST result event, that a second one is coming:
+    the client speaks every result event it sees, so an annotated turn used to
+    fire TWO full /voice/tts syntheses — the playback of the first is superseded
+    client-side, but the server-side synthesis has already run to completion (and
+    archived an orphan file). Cancelling the request would not help either: the
+    route is a sync `def`, so a client disconnect does not stop the subprocess.
+    """
+    if _voice_profile is None:
+        return False
+    try:
+        raw: dict[str, Any] = _voice_profile.load(force=True) or {}
+        if not _voice_profile.chat_render_enabled():
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    return (int(raw.get("voice_audience_learning") or 0) > 0
+            or raw.get("voice_audience_metaphors") == "on")
+
+
 async def _compute_web_annotation_suffix(text: str, tenant_id: str) -> str:
     """Append LERN-ZUGABE and/or METAPHER suffix mirroring the voice pipeline.
 
@@ -3476,6 +3500,9 @@ async def stream_turn(
     assistant_parts: list[dict[str, Any]] = []
     last_usage: dict[str, Any] | None = None
     result_text: str = ""
+    # Set at the result event; must exist even if the turn produces none (error,
+    # kill, no output), because the final-result emit below reads it.
+    _ann_pending: bool = False
     saw_any_event = False
 
     # Flag: True only when stdout is fully drained normally. Used in the
@@ -3542,10 +3569,19 @@ async def stream_turn(
             elif etype == "result":
                 result_text = evt.get("result") or "".join(final_text_parts)
                 last_usage = evt.get("usage") or {}
+                # annotation_pending tells the client "a second, final result
+                # event is coming — render this text but do NOT speak it yet".
+                # Without it the client spoke both events and paid for two full
+                # server-side syntheses per annotated turn. Whenever this is
+                # True a final result event is GUARANTEED below, even if the
+                # annotation comes back empty — otherwise the turn would never
+                # be spoken at all.
+                _ann_pending = bool(result_text.strip()) and _annotation_enabled()
                 yield {
                     "type":   "result",
                     "text":   result_text,
                     "usage":  last_usage,
+                    "annotation_pending": _ann_pending,
                 }
         _stdout_drained_normally = True
     except (asyncio.CancelledError, GeneratorExit):
@@ -3583,8 +3619,16 @@ async def stream_turn(
         _ann_suffix = await _compute_web_annotation_suffix(result_text, sess.tenant_id)
     if _ann_suffix:
         yield {"type": "delta", "text": "\n\n" + _ann_suffix}
-        yield {"type": "result", "text": result_text + "\n\n" + _ann_suffix,
-               "usage": last_usage}
+    # Emit the FINAL result whenever the first one was flagged annotation_pending
+    # — including when the annotation came back empty (LLM skipped it, budget
+    # spent, both backends down). The client is holding its voice waiting for
+    # exactly this event; skipping it on the empty path would leave the turn
+    # permanently unspoken.
+    if _ann_pending:
+        yield {"type": "result",
+               "text": (result_text + "\n\n" + _ann_suffix) if _ann_suffix else result_text,
+               "usage": last_usage,
+               "annotation_pending": False}
 
     touch(sess, increment_turn=True)
 

@@ -986,7 +986,14 @@ function ChatPane({
         // language Claude actually answered in (not a static profile setting).
         const lang = detectTtsLang(evt.text, ttsLangRef.current);
         setLastTts({ text: evt.text, lang });
-        if (voiceOutRef.current) {
+        // An annotated turn emits TWO result events (the plain reply, then the
+        // one carrying the LERN-ZUGABE/metaphor annex). Speaking both cost two
+        // FULL server-side syntheses per turn: superseding the playback does
+        // not stop the synthesis, and the route is a sync `def` so aborting the
+        // request would not either — it also archived an orphan audio file.
+        // The server flags the non-final event and guarantees a final one
+        // follows, so waiting here can never leave the turn unspoken.
+        if (voiceOutRef.current && !evt.annotation_pending) {
           playTts(evt.text, lang, sid).catch(() => { /* surface in playTts */ });
         }
       }

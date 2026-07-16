@@ -43,6 +43,11 @@ export interface StreamEvent {
   label?: string;  // M5 (ADR-0170): provenance badge ("Graph", "live", "compute")
   session?: unknown;
   usage?: Record<string, unknown>;
+  // ADR-0194: set on a `result` event that is NOT the final one — a second,
+  // annotated result is guaranteed to follow. Consumers that act on the reply
+  // (notably TTS, which costs a real synthesis per call) must wait for the
+  // final event; consumers that only render text can use either.
+  annotation_pending?: boolean;
   // ccc_action fields (ADR-0168 M3)
   action_id?: string;
   entity_type?: string;

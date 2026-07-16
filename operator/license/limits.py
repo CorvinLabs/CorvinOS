@@ -70,6 +70,18 @@ FREE_TIER: dict[str, Any] = {
     # A2A peers, custom layers — via their own axes below, NOT the chat axis.
     "chat_turns_per_day":     None,   # unlimited — chat is always free
 
+    # Voice summaries (ADR-0194). Its OWN axis, deliberately not chat's: the
+    # console's /voice/tts spawns the same paid summarizer as /voice/summarize
+    # but runs automatically once per turn, so metering it on chat_turns_per_day
+    # would charge every chat turn twice. Unlimited by default — this exists so
+    # the two endpoints are on the same meter (previously /voice/summarize was
+    # gated and /voice/tts was not, i.e. the gate was one endpoint away from
+    # being routed around) and so a finite value can be shipped later without
+    # touching the chat axis. NOTE: an axis MUST be declared here — an unknown
+    # feature resolves to FREE_TIER.get(feature, 0), i.e. ZERO, which would
+    # 402 every voice call rather than allow it.
+    "voice_summaries_per_day": None,  # unlimited — voice follows chat
+
     # A2A (Layer 38)
     "a2a_peers_max":          1,
 
@@ -128,6 +140,7 @@ TIER_RESOURCE_LIMITS: dict[str, dict[str, Any]] = {
     "member": {
         "compute_units_per_day":        None,   # unlimited
         "chat_turns_per_day":           None,   # unlimited
+        "voice_summaries_per_day":      None,   # unlimited
         "a2a_peers_max":                None,
         "workflows_concurrent":         None,
         "workflows_max":                None,   # unlimited
