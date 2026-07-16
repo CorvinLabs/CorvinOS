@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ttsBlob } from "@/lib/api";
+import { ttsBlob, ttsSegment, type TtsSegment } from "@/lib/api";
 
 export type VoiceState = "idle" | "loading" | "playing" | "blocked";
 
@@ -194,6 +194,90 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
     [csrf, onError, stopVoice, ensureAudioEl],
   );
 
+  /**
+   * Speak the WHOLE answer as a sequential playlist (ADR-0194 Phase 3).
+   *
+   * `playTts` speaks a ≤400-char summary — by construction a long answer is never
+   * read out. This walks the server's segmentation instead, one request per
+   * segment, and PREFETCHES segment i+1 while i is playing: audio starts in
+   * seconds rather than after the whole answer is synthesised, with no background
+   * jobs or polling on either side.
+   *
+   * Shares this hook's hard-won invariants deliberately: the ONE gesture-unlocked
+   * element (a fresh `new Audio()` per segment would be autoplay-blocked from the
+   * second segment on), the requestId supersede (a newer play wins mid-playlist),
+   * and per-segment object-URL revocation (a 24-segment read-aloud leaking a blob
+   * each would be a real leak, not a rounding error).
+   */
+  const playFull = React.useCallback(
+    async (text: string, lang: string, sid: string) => {
+      const myRequestId = ++requestIdRef.current;
+      stopVoice();
+      if (!text.trim()) return;
+      setVoiceState("loading");
+      const audio = ensureAudioEl();
+      let index = 0;
+      let total = Number.POSITIVE_INFINITY;
+      let pending: Promise<TtsSegment | null> = ttsSegment(text, lang, csrf, sid, 0);
+      try {
+        while (index < total) {
+          let seg: TtsSegment | null = null;
+          try {
+            seg = await pending;
+          } catch (e) {
+            if (myRequestId === requestIdRef.current) {
+              onError?.(e instanceof Error ? `TTS failed: ${e.message}` : "TTS failed");
+            }
+            return;
+          }
+          // A newer playTts/playFull started while this fetch was in flight — it
+          // owns the element now; applying this would clobber it and leak the URL.
+          if (myRequestId !== requestIdRef.current) return;
+          if (!seg || !seg.blob.size) return;  // 204 → end of playlist
+          total = seg.total;
+          // Kick off the NEXT fetch before playing this one — the whole point.
+          pending = index + 1 < total
+            ? ttsSegment(text, lang, csrf, sid, index + 1)
+            : Promise.resolve(null);
+
+          const url = URL.createObjectURL(seg.blob);
+          blobUrlRef.current = url;
+          audio.muted = false;
+          audio.src = url;
+          try {
+            await audio.play();
+            setVoiceState("playing");
+            unlockedRef.current = true;
+          } catch {
+            // playFull always starts from a real click, so this is rare; leave the
+            // segment loaded so the caller's "tap to hear" affordance can resume it.
+            setVoiceState("blocked");
+            return;
+          }
+          // Wait for THIS segment to finish before starting the next. onerror
+          // resolves too: one undecodable segment must not strand the playlist.
+          await new Promise<void>((resolve) => {
+            audio.onended = () => resolve();
+            audio.onerror = () => resolve();
+          });
+          if (blobUrlRef.current === url) {
+            URL.revokeObjectURL(url);
+            blobUrlRef.current = null;
+          }
+          if (myRequestId !== requestIdRef.current) return;
+          index += 1;
+        }
+      } finally {
+        // Only the still-current request may reset shared state — a superseded
+        // one would yank the element out from under the request that replaced it.
+        if (myRequestId === requestIdRef.current && blobUrlRef.current === null) {
+          setVoiceState("idle");
+        }
+      }
+    },
+    [csrf, onError, stopVoice, ensureAudioEl],
+  );
+
   const playBlocked = React.useCallback(async () => {
     const a = audioRef.current;
     if (!a) return;
@@ -206,5 +290,5 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
     }
   }, []);
 
-  return { voiceState, playTts, playBlocked, stopVoice, unlock };
+  return { voiceState, playTts, playFull, playBlocked, stopVoice, unlock };
 }
