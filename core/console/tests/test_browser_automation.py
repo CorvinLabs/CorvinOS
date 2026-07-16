@@ -1049,20 +1049,6 @@ def test_decoupled_confirm_channel_fails_closed_for_foreign_session():
         mgr.resolve_oldest_pending("_default", "does-not-exist", True)
 
 
-def test_chat_browser_confirm_command_regex_and_wiring():
-    """Grep-level + import-level proof the chat command wires cleanly:
-    `/browser confirm <sid> yes|no` is recognized and dispatches to the new
-    handler without touching the existing task-agent path."""
-    from corvin_console.routes import chat as chat_routes
-    m = chat_routes._BROWSER_CONFIRM_CMD_RE.match("confirm b12-3456 yes")
-    assert m and m.group(1) == "b12-3456" and m.group(2).lower() == "yes"
-    m2 = chat_routes._BROWSER_CONFIRM_CMD_RE.match("confirm b12-3456 no")
-    assert m2 and m2.group(2).lower() == "no"
-    # a normal free-text task must NOT be mistaken for the confirm sub-command
-    assert chat_routes._BROWSER_CONFIRM_CMD_RE.match("book a flight to Berlin") is None
-    assert callable(chat_routes._handle_browser_confirm_command)
-
-
 # ── Anti-drift: tool schema + REST routes must cover the session surface ──────
 
 def test_tool_surface_and_routes_cover_session_actions_no_drift():
@@ -1724,16 +1710,6 @@ def test_notify_pause_registers_and_marks_done_with_voice(monkeypatch):
     assert calls["register"]["want_voice"] is True
     assert calls["register"]["channel"] == "discord"
     assert calls["mark_done"]["text"] == "login required"
-
-
-def test_notify_browser_pause_never_raises_when_notify_queue_missing(monkeypatch):
-    """chat._notify_browser_pause() must be fail-soft end-to-end: if the
-    underlying completion_notify module can't be imported, the WS loop must
-    keep running (the in-chat text delta already carries the information)."""
-    import sys
-    from corvin_console.routes import chat as _chat
-    monkeypatch.setitem(sys.modules, "completion_notify", None)  # forces ImportError on `import`
-    _chat._notify_browser_pause("_default", text="should not raise")
 
 
 # ── Confirmed blind spots (adversarial review) ───────────────────────────────

@@ -31,13 +31,13 @@ def _app() -> FastAPI:
     return app
 
 
-async def _gen_raises(sess, prompt):  # noqa: ANN001
+async def _gen_raises(sess, prompt, **_kw):  # noqa: ANN001
     """A turn that emits one tool_use then blows up (engine/tool/I-O hiccup)."""
     yield {"type": "tool_use", "name": "Read", "input": {}}
     raise RuntimeError("boom inside the engine turn")
 
 
-async def _gen_slow(sess, prompt):  # noqa: ANN001
+async def _gen_slow(sess, prompt, **_kw):  # noqa: ANN001
     """A turn with a long tool gap (no deltas) — exercises mid-turn keepalive."""
     yield {"type": "tool_use", "name": "Edit", "input": {}}
     await asyncio.sleep(0.4)
@@ -113,7 +113,7 @@ class ChatWsRobustnessTests(unittest.TestCase):
                 self.assertEqual(ws.receive_json()["type"], "done")
 
     def test_normal_turn_streams_and_socket_survives_for_next_turn(self) -> None:
-        async def _gen_ok(sess, prompt):  # noqa: ANN001
+        async def _gen_ok(sess, prompt, **_kw):  # noqa: ANN001
             yield {"type": "delta", "text": "hi"}
             yield {"type": "result", "text": "hi"}
             yield {"type": "done"}
@@ -153,50 +153,54 @@ class ChatWsRobustnessTests(unittest.TestCase):
                 ws.send_json({"type": "ping"})
                 self.assertEqual(ws.receive_json()["type"], "pong")
 
-    def test_browser_command_gate_import_does_not_nameerror(self) -> None:
-        """Adversarial review finding: routes/chat.py referenced `_spawn_gates`
-        in `/browser <task>` handling without ever importing it -- every call
-        raised NameError, silently caught by the broad except and reported as
-        "safety check failed", so the L44 gate never actually ran and the
-        feature was entirely non-functional. Mock the gate itself (returning
-        "permit") and the browser manager (raising an unrelated, expected
-        failure) to prove the gate import resolves and actually executes,
-        rather than the NameError short-circuit."""
-        from corvin_console import _spawn_gates
+    def test_coding_prompt_with_former_trigger_words_reaches_stream_turn_verbatim(self) -> None:
+        """ADR-0193 Phase 2/3 regression: this is the user's ORIGINAL bug report
+        ("baue mir eine Web-UI mit Login-Formular" used to get misclassified as
+        a live-browsing task and lose the whole turn to a browser subprocess,
+        because it contains "Login" -- one of the many trigger words the retired
+        `_BROWSE_SIGNAL_RE`/`_classify_browser_intent` pre-gate matched on).
+        There is no more pre-turn classification at all: EVERY prompt, however
+        browsing-flavored its wording, reaches chat_runtime.stream_turn with its
+        original text unchanged -- the model decides for itself, via ordinary
+        tool-use reasoning over the native corvin-browser MCP tool, whether a
+        browser action is actually needed."""
+        received_prompts = []
 
-        gate_calls = []
+        async def _gen_capture(sess, prompt, **_kw):  # noqa: ANN001
+            received_prompts.append(prompt)
+            yield {"type": "delta", "text": "ok, writing the component now"}
+            yield {"type": "result", "text": "ok"}
+            yield {"type": "done"}
 
-        def _fake_gate(*a, **k):
-            gate_calls.append((a, k))
-            return None  # permitted
-
+        prompt_text = "baue mir eine Web-UI mit Login-Formular"
         with (
             patch.object(chat_routes.session_auth, "load_session", return_value=self.rec),
             patch.object(chat_routes.chat_runtime, "get_session", return_value=self.sess),
-            patch.object(_spawn_gates, "check_console_spawn_or_refusal", _fake_gate),
-            patch(
-                "corvin_console.routes._compute_license_gate.enforce_chat_turns",
-                lambda *a, **k: None,
-            ),
+            patch.object(chat_routes.chat_runtime, "stream_turn", _gen_capture),
         ):
-            # browser._mgr() launches a real Playwright session -- stub it to
-            # fail with an unrelated, expected error so this test stays fast
-            # and hermetic while still proving we got PAST the gate.
-            import corvin_console.routes.browser as browser_mod
-            fake_mgr = MagicMock()
-            fake_mgr.create = MagicMock(side_effect=RuntimeError("no browser in test env"))
-            with patch.object(browser_mod, "_mgr", return_value=fake_mgr):
-                c = self._client()
-                with c.websocket_connect("/v1/console/chat/sessions/s5/stream") as ws:
-                    self.assertEqual(ws.receive_json()["type"], "ready")
-                    ws.send_json({"type": "user", "text": "/browser go to example.com"})
-                    resp = ws.receive_json()
+            c = self._client()
+            with c.websocket_connect("/v1/console/chat/sessions/s5/stream") as ws:
+                self.assertEqual(ws.receive_json()["type"], "ready")
+                ws.send_json({"type": "user", "text": prompt_text})
+                self.assertEqual(ws.receive_json()["type"], "delta")
+                self.assertEqual(ws.receive_json()["type"], "result")
+                self.assertEqual(ws.receive_json()["type"], "done")
 
-        self.assertEqual(len(gate_calls), 1, "the L44 gate must actually run, not NameError")
-        # Must be the browser-launch failure message, NOT the NameError
-        # fallback's "safety check failed" text.
-        self.assertIn("could not start browser", resp.get("message", ""))
-        self.assertNotIn("safety check failed", resp.get("message", ""))
+        self.assertEqual(received_prompts, [prompt_text])
+
+    def test_retired_classifier_and_command_handler_names_stay_gone(self) -> None:
+        """Locks in the Phase 2 removal itself: if any of these ever reappear
+        on the module, a future edit silently reintroduced the classifier-
+        routed side-channel this ADR retired."""
+        retired_names = (
+            "_BROWSE_SIGNAL_RE", "_classify_browser_intent", "_handle_browser_command",
+            "_handle_browser_confirm_command", "_handle_browser_continue_command",
+            "_detect_browser_task", "_extract_task_hosts", "_notify_browser_pause",
+            "_URL_START_RE", "_BROWSE_INTENT_RE",
+            "_BROWSER_CONFIRM_CMD_RE", "_BROWSER_CONTINUE_CMD_RE",
+        )
+        still_present = [n for n in retired_names if hasattr(chat_routes, n)]
+        self.assertEqual(still_present, [])
 
 
 if __name__ == "__main__":
