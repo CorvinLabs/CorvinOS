@@ -299,6 +299,8 @@ def get_active_mcp_servers(
     session_key: str | None = None,
     project_dir: str | None = None,
     image_outdir: str | None = None,
+    browser_token: str | None = None,
+    browser_base_url: str | None = None,
 ) -> dict[str, Any]:
     """Return an mcp_servers dict (ready for cowork materialize_mcp) for all active tools.
 
@@ -369,6 +371,17 @@ def get_active_mcp_servers(
 
     if image_outdir and "imagegen-zero-config" in servers:
         servers["imagegen-zero-config"].setdefault("env", {})["CORVIN_IMAGE_OUTDIR"] = image_outdir
+
+    # ADR-0193 — per-turn bearer token for the corvin-browser MCP tool. Not a
+    # catalog secret (it's minted fresh per chat turn, not a static credential
+    # the vault holds) — threaded through exactly like image_outdir above,
+    # since an MCP subprocess doesn't reliably inherit env from the spawning
+    # claude process either.
+    if browser_token and "corvin-browser" in servers:
+        _b_env = servers["corvin-browser"].setdefault("env", {})
+        _b_env["CORVIN_BROWSER_TOKEN"] = browser_token
+        if browser_base_url:
+            _b_env["CORVIN_BROWSER_BASE_URL"] = browser_base_url
 
     # M2 — spawn-time compliance filter (SHA256, secrets, L34, L35)
     return _compliance.filter_compliant_servers(servers, tool_entries, tid)

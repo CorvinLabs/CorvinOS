@@ -1,0 +1,28 @@
+# ADR-0193 — native browser control as a chat-tool, registered as a proper
+# mcp_manager catalog entry (not persona-hardcoded JSON) so L34/L35 actually
+# gate it. See docs/browser-native-tool-integration.md.
+#
+# NOTE: this tool is registered via mcp_manager.seed_builtin.
+# ensure_corvin_browser(), NOT via `corvin-mcp install local:...` — same
+# reason as imagegen-zero-config's manifest (see that file's comment): the
+# installer does not rewrite a relative runtime.args path, and this manifest
+# is kept as documentation of the tool's shape, not an install source.
+#
+# No `secrets` entry: the per-chat-turn bearer token (CORVIN_BROWSER_TOKEN)
+# is not a static vault-held credential — it's minted fresh every turn by
+# chat_runtime.stream_turn and injected via get_active_mcp_servers(), exactly
+# like imagegen-zero-config's CORVIN_IMAGE_OUTDIR. Declaring it as a catalog
+# secret would hit the same "claude does not resolve ${VAR} templates in MCP
+# server env" wall imagegen's manifest already documents.
+id: corvin-browser
+runtime:
+  command: python3
+  args: [main.py]
+secrets: []
+compliance:
+  # This tool's OWN HTTP calls never leave the local machine (loopback to
+  # the console's own already-running server, not a third party) — the
+  # browser's actual page-navigation egress is a separate, independently
+  # gated concern enforced inside browser/session.py + browser/compliance.py.
+  locality: local
+  network_egress: none

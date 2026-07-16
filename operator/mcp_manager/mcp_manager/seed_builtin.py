@@ -173,3 +173,79 @@ def ensure_imagegen_zero_config(tid: str = "_default") -> dict:
             error = str(e)
     _write_marker(tid, tool_id)
     return {"installed": True, "activated": activated, "error": error}
+
+
+def ensure_corvin_browser(tid: str = "_default") -> dict:
+    """Idempotently ensure the ADR-0193 native browser-control tool is
+    installed and tenant-active. Same install/upgrade/respect-deactivation
+    contract as ``ensure_imagegen_zero_config`` above (read its docstring for
+    the full state machine) — this is the second builtin server to use it.
+
+    ``CORVIN_TENANT_ID`` is baked into this entry's env at seed time (one
+    entry per tenant, like imagegen) so the tool's own L44 gate call knows
+    its tenant without depending on env inheritance from the spawning
+    process. The per-CHAT-TURN bearer token (``CORVIN_BROWSER_TOKEN``) is
+    NOT set here — it can't be, it doesn't exist until a turn starts — it is
+    injected dynamically by ``get_active_mcp_servers(browser_token=...)`` on
+    every spawn instead (see ``chat_runtime.py``).
+
+    ``locality: local`` / ``network_egress: none``: this tool's OWN HTTP
+    calls never leave the local machine (loopback to the console's own
+    already-running server) — the browser's actual page-navigation egress is
+    a completely separate, independently-gated concern enforced inside
+    ``browser/session.py``/``browser/compliance.py``, unaffected by this
+    server's own L34/L35 declaration.
+    """
+    tool_id = "corvin-browser"
+    main_py = _SERVERS_DIR / tool_id / "main.py"
+    runtime = {
+        "command": sys.executable,
+        "args": [str(main_py)],
+        "env": {"CORVIN_TENANT_ID": tid},
+    }
+    entry = {
+        "id": tool_id,
+        "source": f"builtin:{main_py}",
+        "runtime": runtime,
+        "secrets": [],
+        "compliance": {
+            "locality": "local",
+            "network_egress": "none",
+        },
+    }
+
+    marker = _load_marker(tid).get(tool_id)
+    existing = _catalog.get_tool(tid, tool_id)
+
+    if marker and existing is None:
+        return {"installed": False, "activated": False, "error": None}
+
+    if marker and existing is not None and marker.get("seed_version") == _SEED_VERSION:
+        rt = existing.get("runtime") or {}
+        cmd = rt.get("command", "")
+        args = rt.get("args") or []
+        stale = (not os.path.exists(cmd)) or any(
+            isinstance(a, str) and a.endswith("main.py") and not os.path.exists(a)
+            for a in args
+        )
+        if stale:
+            existing["runtime"] = runtime
+            _catalog.add_tool(tid, existing)
+        return {"installed": True, "activated": False, "error": None}
+
+    if existing is not None and marker is None:
+        _catalog.add_tool(tid, entry)
+        _write_marker(tid, tool_id)
+        return {"installed": True, "activated": False, "error": None}
+
+    _catalog.add_tool(tid, entry)
+    activated = False
+    error: str | None = None
+    if marker is None:
+        try:
+            _activate.activate(tid, tool_id, scope="tenant")
+            activated = True
+        except _compliance.ComplianceError as e:
+            error = str(e)
+    _write_marker(tid, tool_id)
+    return {"installed": True, "activated": activated, "error": error}
