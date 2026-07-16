@@ -710,3 +710,140 @@ def test_urlish_atoms_are_never_sliced() -> None:
     assert not cr._is_space_free_script("a" * 3000)          # bare identifier
     assert not cr._is_space_free_script("/usr/share/lib/x.so")
     assert cr._is_space_free_script("配置useVoicePlayback，")   # CJK wins over Latin
+
+
+# ── annotated turns must not pay for two syntheses ───────────────────────────
+
+def test_annotation_enabled_is_false_without_chat_render(monkeypatch) -> None:
+    class _P:
+        @staticmethod
+        def load(force=False): return {"voice_audience_learning": 3}
+        @staticmethod
+        def chat_render_enabled(): return False
+    monkeypatch.setattr(cr, "_voice_profile", _P)
+    assert cr._annotation_enabled() is False
+
+
+def test_annotation_enabled_is_true_when_learning_is_on(monkeypatch) -> None:
+    class _P:
+        @staticmethod
+        def load(force=False): return {"voice_audience_learning": 3}
+        @staticmethod
+        def chat_render_enabled(): return True
+    monkeypatch.setattr(cr, "_voice_profile", _P)
+    assert cr._annotation_enabled() is True
+
+
+def test_annotation_enabled_is_true_for_metaphors_alone(monkeypatch) -> None:
+    class _P:
+        @staticmethod
+        def load(force=False): return {"voice_audience_metaphors": "on"}
+        @staticmethod
+        def chat_render_enabled(): return True
+    monkeypatch.setattr(cr, "_voice_profile", _P)
+    assert cr._annotation_enabled() is True
+
+
+def test_annotation_enabled_never_raises(monkeypatch) -> None:
+    class _P:
+        @staticmethod
+        def load(force=False): raise RuntimeError("profile.json is corrupt")
+        @staticmethod
+        def chat_render_enabled(): return True
+    monkeypatch.setattr(cr, "_voice_profile", _P)
+    assert cr._annotation_enabled() is False
+    monkeypatch.setattr(cr, "_voice_profile", None)
+    assert cr._annotation_enabled() is False
+
+
+def test_a_final_result_is_guaranteed_after_a_pending_one() -> None:
+    """The client holds its voice on annotation_pending — so the empty-annotation
+    path MUST still emit a final event, or the turn is never spoken at all.
+
+    Pins the source: the final emit is gated on _ann_pending, NOT on _ann_suffix
+    (which is empty whenever the LLM skips the annex or both backends are down).
+    """
+    import re as _re
+    src = Path(cr.__file__).read_text(encoding="utf-8")
+    m = _re.search(r"if _ann_pending:\s*\n\s*yield \{\"type\": \"result\"", src)
+    assert m, ("the final result event must be gated on _ann_pending, not on "
+               "_ann_suffix — otherwise an empty annotation leaves the turn mute")
+
+
+# ── the paid summarizer is metered on ONE axis, on BOTH endpoints ────────────
+
+def test_voice_axis_is_unlimited_by_default_not_zero() -> None:
+    """An axis MUST be declared in limits.py before anything gates on it.
+
+    get_limit falls back to FREE_TIER.get(feature, 0) — an UNDECLARED feature
+    resolves to ZERO, not "unlimited". Gating on an undeclared axis would 402
+    every voice call and kill voice outright, which is exactly what this test
+    exists to catch if the key is ever dropped from limits.py.
+    """
+    from corvin_console.routes import _compute_license_gate as G
+    assert G._lic_get_limit("voice_summaries_per_day") is None
+
+
+def test_the_voice_gate_is_a_noop_today() -> None:
+    from corvin_console.routes import _compute_license_gate as G
+    G.enforce_voice_summaries("_default", "abcdef1234", audit_action="voice.tts")
+
+
+def test_both_paid_endpoints_are_on_the_voice_axis() -> None:
+    """The gate used to sit on /voice/summarize only, while /voice/tts spawned
+    the identical paid summarizer unmetered — i.e. one endpoint away from being
+    routed around. And /voice/tts could not join the CHAT axis: it runs once per
+    turn automatically, so that would bill every chat turn twice.
+    """
+    import ast
+    src = Path(voice_routes.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "enforce_voice_summaries" in called
+    assert "enforce_chat_turns" not in called, (
+        "the voice routes must not charge the chat axis — /voice/tts runs "
+        "automatically per turn and would double-charge every chat turn"
+    )
+    # Both paid endpoints, not just one: that asymmetry WAS the bypass.
+    gated = {
+        fn.name
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.FunctionDef)
+        and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "enforce_voice_summaries"
+                for n in ast.walk(fn))
+    }
+    assert gated == {"_voice_tts_sync", "voice_summarize"}, gated
+
+
+# ── concurrency bound on the synthesis routes ────────────────────────────────
+
+def test_tts_routes_are_async_and_bounded() -> None:
+    """Sync `def` routes held an anyio threadpool token for up to ~145s each,
+    with no cap: 40 concurrent calls drained the 40-token pool and stalled every
+    other sync route in the console."""
+    import inspect
+    assert inspect.iscoroutinefunction(voice_routes.voice_tts)
+    assert inspect.iscoroutinefunction(voice_routes.voice_segment)
+    assert voice_routes._TTS_MAX_CONCURRENCY > 0
+    # The blocking bodies still exist and are what the wrappers dispatch to.
+    assert callable(voice_routes._voice_tts_sync)
+    assert callable(voice_routes._voice_segment_sync)
+
+
+def test_the_semaphore_is_created_lazily() -> None:
+    """It must bind to the running loop — there is none at import time."""
+    import asyncio as _aio
+
+    async def _go():
+        s = voice_routes._get_tts_semaphore()
+        assert s is voice_routes._get_tts_semaphore()   # cached
+        return s._value
+
+    voice_routes._tts_sem = None
+    assert _aio.run(_go()) == voice_routes._TTS_MAX_CONCURRENCY
+    voice_routes._tts_sem = None

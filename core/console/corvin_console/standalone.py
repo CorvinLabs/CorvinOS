@@ -34,7 +34,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .app import mount_static, router
 
@@ -175,6 +175,34 @@ def create_app() -> FastAPI:
         redoc_url=None,
         lifespan=_lifespan,
     )
+
+    # Reject an oversized upload on its Content-Length, BEFORE Starlette parses
+    # the multipart body. /voice/transcribe declares a 25 MiB cap but enforced it
+    # with `if len(await audio.read()) > _MAX_AUDIO_BYTES` — after the entire body
+    # was spooled to disk AND materialised in RAM, so a 2 GB POST cost 2 GB of
+    # each before the 413 fired. The console is single-process, so that stalls
+    # every SSE chat stream with it.
+    #
+    # Deliberately PER-PATH rather than a global body cap: the file-attachment
+    # routes take legitimately large uploads and a console-wide limit would be a
+    # behaviour change well outside this fix. Paths not listed are untouched.
+    _BODY_CAPS = {"/v1/console/voice/transcribe": 25 * 1024 * 1024}
+
+    @app.middleware("http")
+    async def _cap_request_body(request, call_next):  # noqa: ANN001, ANN202
+        cap = _BODY_CAPS.get(request.url.path)
+        if cap is not None:
+            raw_len = request.headers.get("content-length")
+            if raw_len:
+                try:
+                    if int(raw_len) > cap:
+                        return JSONResponse(
+                            status_code=413,
+                            content={"detail": f"audio exceeds {cap} bytes"},
+                        )
+                except ValueError:
+                    pass  # unparseable — let the handler's own check deal with it
+        return await call_next(request)
 
     # Allow the same-origin SPA to call the API in development.
     # In production (serving SPA from the same origin) this is a no-op.

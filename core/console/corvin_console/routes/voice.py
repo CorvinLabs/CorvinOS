@@ -16,10 +16,12 @@ for TTS — only ``len(text)`` is logged.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -91,6 +93,37 @@ except Exception:  # pragma: no cover
 
 
 router = APIRouter()
+
+
+# Concurrent TTS syntheses allowed per console process. voice_tts/voice_segment
+# were plain sync `def`s, so FastAPI ran them in Starlette's anyio threadpool
+# (40 tokens, never overridden) and each held its token for up to
+# _TTS_SUMMARIZE_TIMEOUT_S + _TTS_TIMEOUT_S (~145 s worst case) with no cap.
+# 40 concurrent /voice/tts calls therefore drained the pool and stalled EVERY
+# other sync route in the console — the same "froze the whole console" class the
+# voice_transcribe comment above was written to fix, except nothing bounded who
+# else could fill the pool. They are async now: waiters park on the event loop
+# (cheap) instead of squatting a thread, and the blocking body runs in the pool
+# only once a slot is free.
+_TTS_MAX_CONCURRENCY = int(os.environ.get("CORVIN_TTS_MAX_CONCURRENCY", "4"))
+# Waiting forever would just move the queue instead of bounding it. A caller that
+# cannot get a slot in time is told "no audio" (204) — TTS is an optional
+# enhancement and degrading silently is this module's established contract.
+_TTS_SLOT_WAIT_S = float(os.environ.get("CORVIN_TTS_SLOT_WAIT_S", "20"))
+
+_tts_sem: "asyncio.Semaphore | None" = None
+_tts_sem_lock = threading.Lock()
+
+
+def _get_tts_semaphore() -> "asyncio.Semaphore":
+    """Lazily create the semaphore — it must be bound to the running loop, and
+    there is none at import time."""
+    global _tts_sem
+    if _tts_sem is None:
+        with _tts_sem_lock:
+            if _tts_sem is None:
+                _tts_sem = asyncio.Semaphore(_TTS_MAX_CONCURRENCY)
+    return _tts_sem
 
 
 def _detect_audio_mime(data: bytes) -> str:
@@ -288,14 +321,27 @@ async def voice_transcribe(
             f"unsupported audio type: {audio.content_type}",
         )
 
-    blob = await audio.read()
+    # Read in bounded chunks and stop the moment the cap is passed. `await
+    # audio.read()` materialised the WHOLE upload in RAM and only then measured
+    # it, so the 25 MiB cap cost a 2 GB allocation to enforce against a 2 GB
+    # POST. The Content-Length middleware (standalone.py) rejects the honest case
+    # earlier; this is the backstop for a missing or lying header.
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await audio.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > _MAX_AUDIO_BYTES:
+            raise HTTPException(
+                http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                f"audio exceeds {_MAX_AUDIO_BYTES} bytes",
+            )
+        chunks.append(chunk)
+    blob = b"".join(chunks)
     if not blob:
         raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "empty audio")
-    if len(blob) > _MAX_AUDIO_BYTES:
-        raise HTTPException(
-            http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            f"audio exceeds {_MAX_AUDIO_BYTES} bytes",
-        )
 
     # Persist to a tempfile — providers want a path, not a handle.
     suffix = ".webm" if base_ct.endswith("webm") else (
@@ -635,9 +681,28 @@ def _persist_turn_voice(tenant_id: str, sid: str, text: str,
 
 
 @router.post("/voice/tts")
-def voice_tts(
+async def voice_tts(
     body: TtsRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> Response:
+    """Bounded async wrapper — see _TTS_MAX_CONCURRENCY. The synthesis itself is
+    unchanged and still runs in the threadpool, but only once a slot is free."""
+    try:
+        await asyncio.wait_for(_get_tts_semaphore().acquire(), _TTS_SLOT_WAIT_S)
+    except asyncio.TimeoutError:
+        _log.warning("voice_tts: no synthesis slot within %.0fs (%d concurrent) "
+                     "— skipping playback for this turn", _TTS_SLOT_WAIT_S,
+                     _TTS_MAX_CONCURRENCY)
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+    try:
+        return await run_in_threadpool(_voice_tts_sync, body, rec)
+    finally:
+        _get_tts_semaphore().release()
+
+
+def _voice_tts_sync(
+    body: TtsRequest,
+    rec: session_auth.SessionRecord,
 ) -> Response:
     say_path = _VOICE_SCRIPTS / "say.py"
     if not say_path.exists():
@@ -650,6 +715,18 @@ def voice_tts(
     # was previously missing here. Falls back to a blind truncation at the
     # provider character limit (OpenAI TTS-1: 4096 chars, edge-tts: ~8000) if
     # summarization is unavailable or fails; this must never block TTS.
+    # ADR-0194 LIC-VOICETTS-SPAWN-01: this route spawns the SAME paid Haiku
+    # `claude -p` that /voice/summarize meters with enforce_chat_turns — and it
+    # was not metered at all, so the gate was one endpoint away from being routed
+    # around. Charged on the voice axis, NOT chat's: this route runs
+    # automatically once per turn, so the chat axis would bill every turn twice.
+    # Unlimited on every tier today, so this is a no-op until a tier says
+    # otherwise. Before the summarize spawn, fail-closed.
+    from ._compute_license_gate import enforce_voice_summaries  # noqa: PLC0415
+    enforce_voice_summaries(
+        rec.tenant_id, rec.sid_fingerprint, audit_action="voice.tts",
+    )
+
     # Clamp UNCONDITIONALLY, not just on the fallback branch. summarize.py's
     # degraded path (naive_truncate) deliberately returns prose IN FULL —
     # "completeness over length" — with rc=0 and non-empty stdout, i.e.
@@ -759,9 +836,27 @@ class VoiceSegmentRequest(BaseModel):
 
 
 @router.post("/voice/segment")
-def voice_segment(
+async def voice_segment(
     body: VoiceSegmentRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> Response:
+    """Bounded async wrapper — see _TTS_MAX_CONCURRENCY. A read-aloud fires one
+    of these per segment, so this route is the easier of the two to pile up."""
+    try:
+        await asyncio.wait_for(_get_tts_semaphore().acquire(), _TTS_SLOT_WAIT_S)
+    except asyncio.TimeoutError:
+        _log.warning("voice_segment: no synthesis slot within %.0fs — "
+                     "ending the read-aloud playlist here", _TTS_SLOT_WAIT_S)
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+    try:
+        return await run_in_threadpool(_voice_segment_sync, body, rec)
+    finally:
+        _get_tts_semaphore().release()
+
+
+def _voice_segment_sync(
+    body: VoiceSegmentRequest,
+    rec: session_auth.SessionRecord,
 ) -> Response:
     """Speak ONE segment of the FULL answer (ADR-0194 Phase 3).
 
@@ -883,13 +978,17 @@ def voice_summarize(
         )
 
     # ADR-0150 LIC-VOICESUMM-SPAWN-01: voice summarize spawns a paid Haiku
-    # `claude -p` (plus an optional dialectic-judge second spawn = up to 2x). Meter
-    # it on the chat_turns_per_day axis (interactive single-turn, same axis as the
-    # three other interactive surfaces) before the subprocess, fail-closed.
-    from ._compute_license_gate import enforce_chat_turns  # noqa: PLC0415
-    enforce_chat_turns(
-        rec.tenant_id, rec.sid_fingerprint,
-        audit_action="voice.summarize", channel="voice",
+    # `claude -p` (plus an optional dialectic-judge second spawn = up to 2x).
+    # Metered before the subprocess, fail-closed.
+    #
+    # ADR-0194: moved from the chat_turns_per_day axis to the voice axis. /voice/tts
+    # spawns the IDENTICAL summarizer and could not be put on the chat axis (it runs
+    # automatically once per turn — charging it there would bill every chat turn
+    # twice), so a chat-axis gate here meant the two endpoints had different meters
+    # and the cheaper one was simply a way around this one. Same spend, same axis.
+    from ._compute_license_gate import enforce_voice_summaries  # noqa: PLC0415
+    enforce_voice_summaries(
+        rec.tenant_id, rec.sid_fingerprint, audit_action="voice.summarize",
     )
 
     # Validate language
