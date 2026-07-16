@@ -426,6 +426,10 @@ def _resolve_tts_voice(lang: str) -> str | None:
     return None
 
 
+# ADR-0194 Phase 3 — hard cap on the full read-aloud. One click must never turn a
+# pathological wall of text into an unbounded synthesis bill; the client is told the
+# real count via X-Corvin-Voice-Segments and stops there.
+_MAX_VOICE_SEGMENTS = 24
 _TTS_PROVIDER_CHAR_LIMIT = 4000  # OpenAI TTS-1 hard cap is 4096; stay under it
 _TTS_SUMMARIZE_MAX_CHARS = 400   # same default build_voice_summary() uses for bridges
 # summarize.py's OWN internal budget is CLI (45s) + Hermes (60s) = up to 105s
@@ -523,8 +527,24 @@ _AUDIO_EXT_BY_MIME = {
 }
 
 
+def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
+    """Build say.py's argv — the ONE definition of a subtle positional contract.
+
+    say.py takes `<out_path> <text> [<lang> [<voice> [<provider>]]]`. The voice slot
+    must ALWAYS be present (empty string = "use the default") or a pinned provider
+    slides into argv[4] and is silently read as a voice NAME.
+    """
+    voice = _resolve_tts_voice(lang)
+    provider = _resolve_tts_provider()
+    cmd = [sys.executable, str(_VOICE_SCRIPTS / "say.py"),
+           str(out_path), text, lang, voice or ""]
+    if provider:
+        cmd.append(provider)
+    return cmd
+
+
 def _persist_turn_voice(tenant_id: str, sid: str, text: str,
-                        data: bytes, mime: str) -> "str | None":
+                        data: bytes, mime: str, suffix: str = "") -> "str | None":
     """Write this turn's audio into the session's voice archive. Best-effort.
 
     The extension follows the SNIFFED mime, never say.py's argv suffix: say.py
@@ -542,7 +562,7 @@ def _persist_turn_voice(tenant_id: str, sid: str, text: str,
             return None
         vdir = _cr.voice_dir(tenant_id, sid)
         vdir.mkdir(parents=True, exist_ok=True)
-        dest = vdir / f"{_cr.voice_key(text)}{_AUDIO_EXT_BY_MIME.get(mime, '.ogg')}"
+        dest = vdir / f"{_cr.voice_key(text)}{suffix}{_AUDIO_EXT_BY_MIME.get(mime, '.ogg')}"
         tmp = dest.with_name(dest.name + ".tmp")
         tmp.write_bytes(data)
         tmp.replace(dest)  # atomic — a half-written file must never be served
@@ -575,14 +595,7 @@ def voice_tts(
     try:
         # Resolve voice and provider from the user's profile.
         # say.py argv: <out_path> <text> [<lang> [<voice> [<provider>]]]
-        voice = _resolve_tts_voice(body.lang)
-        provider = _resolve_tts_provider()
-        cmd = [sys.executable, str(say_path), str(out_path), tts_text, body.lang]
-        # Always pass voice (empty string means "use default") so that the
-        # provider arg is always at argv[5] when present.
-        cmd.append(voice or "")
-        if provider:
-            cmd.append(provider)
+        cmd = _say_cmd(out_path, tts_text, body.lang)
 
         proc = subprocess.run(
             cmd,
@@ -654,6 +667,92 @@ def voice_tts(
     if _voice_file:
         _headers["X-Corvin-Voice-File"] = _voice_file
     return Response(content=data, media_type=mime, headers=_headers)
+
+
+class VoiceSegmentRequest(BaseModel):
+    # The FULL answer text — the server splits it; the client never round-trips
+    # segment text, so the split can evolve without a frontend change.
+    text: str = Field(..., min_length=1, max_length=200000)
+    lang: str = Field("de", min_length=2, max_length=10,
+                      pattern=r"^[a-zA-Z]{2,8}(-[a-zA-Z0-9]{1,8})*$")
+    sid: str = Field(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    index: int = Field(0, ge=0, le=_MAX_VOICE_SEGMENTS - 1)
+    model_config = {"extra": "forbid"}
+
+
+@router.post("/voice/segment")
+def voice_segment(
+    body: VoiceSegmentRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> Response:
+    """Speak ONE segment of the FULL answer (ADR-0194 Phase 3).
+
+    `/voice/tts` speaks a ≤400-char SUMMARY — by construction a long answer is
+    never actually read out. This serves the other rendering: the whole text, split
+    by `chat_runtime.split_for_speech`, one segment per request.
+
+    One segment per request is what makes it progressive without inventing any
+    concurrency: the client plays segment 0 while fetching segment 1, so audio
+    starts in seconds instead of after the whole answer is synthesised — and every
+    request stays inside the same bounded say.py budget /voice/tts already uses. No
+    background threads, no polling, no job state to reap.
+
+    204 = "no such segment" (index past the end) or "no audio" (provider down) —
+    the client stops the playlist. Like /voice/tts, TTS failure is never an error
+    banner: it is an optional enhancement, not the task result.
+    """
+    from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+
+    segments = _cr.split_for_speech(body.text)
+    if not segments or body.index >= len(segments):
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+    total = min(len(segments), _MAX_VOICE_SEGMENTS)
+    if body.index >= total:
+        # Bounded on purpose: a pathological wall of text must not turn one click
+        # into an unbounded synthesis bill. The client is told the real cap via
+        # X-Corvin-Voice-Segments and simply stops there.
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+
+    with tempfile.NamedTemporaryFile(prefix="corvin_seg_", suffix=".opus", delete=False) as fh:
+        out_path = Path(fh.name)
+    try:
+        proc = subprocess.run(
+            _say_cmd(out_path, segments[body.index], body.lang),
+            capture_output=True, text=True, timeout=_TTS_TIMEOUT_S,
+        )
+        if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+            return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+        data = out_path.read_bytes()
+    except subprocess.TimeoutExpired:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="voice.segment", target_kind="voice", target_id="web",
+            reason="timeout",
+        )
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+    finally:
+        try:
+            out_path.unlink()
+        except OSError:
+            pass
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+        action="voice.segment", target_kind="voice", target_id="web",
+    )
+    mime = _detect_audio_mime(data)
+    # Archived alongside the summary under the SAME turn key, suffixed by index, so
+    # the whole read-aloud is replayable later and dies with the session.
+    name = _persist_turn_voice(rec.tenant_id, body.sid, body.text, data, mime,
+                               suffix=f"-f{body.index:02d}")
+    headers = {"Content-Length": str(len(data)),
+               "X-Corvin-Lang": body.lang,
+               "X-Corvin-TTS-Format": mime,
+               "X-Corvin-Voice-Segments": str(total),
+               "X-Corvin-Voice-Index": str(body.index)}
+    if name:
+        headers["X-Corvin-Voice-File"] = name
+    return Response(content=data, media_type=mime, headers=headers)
 
 
 # ── Voice Summarize ──────────────────────────────────────────────────────────
