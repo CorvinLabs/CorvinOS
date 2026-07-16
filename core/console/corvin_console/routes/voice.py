@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -562,11 +563,23 @@ def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
     say.py takes `<out_path> <text> [<lang> [<voice> [<provider>]]]`. The voice slot
     must ALWAYS be present (empty string = "use the default") or a pinned provider
     slides into argv[4] and is silently read as a voice NAME.
+
+    The text is scrubbed of NUL and other C0 control characters (tab/newline
+    excepted) because they cannot travel through argv at all: subprocess raises
+    ValueError("embedded null byte") BEFORE exec. voice_tts catches only
+    TimeoutExpired, so that escaped as a 500 and the frontend rendered a red
+    "TTS failed" banner — breaking the deliberate design (204-on-failure
+    everywhere else) that a TTS problem never surfaces as an error to the user.
+    Control characters are unspeakable anyway; dropping them loses nothing.
     """
+    safe_text = "".join(
+        ch for ch in text
+        if ch in "\t\n" or (ord(ch) >= 0x20 and ord(ch) != 0x7F)
+    )
     voice = _resolve_tts_voice(lang)
     provider = _resolve_tts_provider()
     cmd = [sys.executable, str(_VOICE_SCRIPTS / "say.py"),
-           str(out_path), text, lang, voice or ""]
+           str(out_path), safe_text, lang, voice or ""]
     if provider:
         cmd.append(provider)
     return cmd
@@ -592,12 +605,16 @@ def _persist_turn_voice(tenant_id: str, sid: str, text: str,
         vdir = _cr.voice_dir(tenant_id, sid)
         vdir.mkdir(parents=True, exist_ok=True)
         dest = vdir / f"{_cr.voice_key(text)}{suffix}{_AUDIO_EXT_BY_MIME.get(mime, '.ogg')}"
-        # The tmp name carries the pid: it used to be a pure function of
-        # (tenant, sid, key, suffix, mime), so two concurrent writers of the
-        # SAME segment (a double-click, or the client's play-N/fetch-N+1
-        # pipeline retrying) opened the same .tmp in "wb" and could publish a
-        # torn file — replace() is atomic, but only if the source is private.
-        tmp = dest.with_name(f"{dest.name}.{os.getpid()}.tmp")
+        # The tmp name must be unique PER WRITE, not per process. It was a pure
+        # function of (tenant, sid, key, suffix, mime), so two concurrent
+        # writers of the SAME segment (a double-click, or the client's
+        # play-N/fetch-N+1 pipeline retrying) opened the same .tmp in "wb" with
+        # independent offsets and replace() atomically published a torn file —
+        # replace() is atomic only if the SOURCE is private. A pid suffix does
+        # NOT fix it: voice_tts/voice_segment are sync `def`s, so FastAPI runs
+        # them in its threadpool — the colliding writers are threads of the SAME
+        # process and share the pid. uuid4 is unique per call.
+        tmp = dest.with_name(f"{dest.name}.{uuid.uuid4().hex}.tmp")
         try:
             tmp.write_bytes(data)
             tmp.replace(dest)  # atomic — a half-written file must never be served
@@ -633,7 +650,16 @@ def voice_tts(
     # was previously missing here. Falls back to a blind truncation at the
     # provider character limit (OpenAI TTS-1: 4096 chars, edge-tts: ~8000) if
     # summarization is unavailable or fails; this must never block TTS.
-    tts_text = _summarize_for_speech(body.text, body.lang) or body.text[:_TTS_PROVIDER_CHAR_LIMIT]
+    # Clamp UNCONDITIONALLY, not just on the fallback branch. summarize.py's
+    # degraded path (naive_truncate) deliberately returns prose IN FULL —
+    # "completeness over length" — with rc=0 and non-empty stdout, i.e.
+    # indistinguishable from success: measured 20299 chars out for
+    # --max-chars 400. The clamp used to sit only on the `or` side, so a
+    # degraded summary sailed past it into say.py, where OpenAI TTS-1 rejects
+    # >4096 and edge-tts (no cap) gets killed mid-stream by its 10s budget. That
+    # path is the ZERO-CONFIG DEFAULT: any install with no claude CLI and no
+    # Hermes/Ollama degrades on every single turn. TtsRequest.text allows 50000.
+    tts_text = (_summarize_for_speech(body.text, body.lang) or body.text)[:_TTS_PROVIDER_CHAR_LIMIT]
 
     with tempfile.NamedTemporaryFile(prefix="corvin_tts_", suffix=".opus", delete=False) as fh:
         out_path = Path(fh.name)
@@ -669,8 +695,14 @@ def voice_tts(
             return Response(status_code=http_status.HTTP_204_NO_CONTENT)
 
         size = out_path.stat().st_size if out_path.exists() else 0
-        if size == 0:
-            # say.py exited 0 with no audio — all providers unavailable.
+        # An empty stdout is say.py's DOCUMENTED "all providers failed" signal
+        # ("0 + empty stdout", say.py module docstring) and had zero consumers.
+        # Size alone is not enough: a provider can fail AFTER creating the file
+        # (_try_edge's exception path returns False without unlinking out_path),
+        # leaving a PARTIAL clip with rc=0 and a non-zero size — which was then
+        # served as a successful synthesis and archived for replay.
+        if size == 0 or not proc.stdout.strip():
+            # say.py exited 0 with no (usable) audio — all providers unavailable.
             # Graceful degradation: signal the frontend to skip playback silently.
             return Response(status_code=http_status.HTTP_204_NO_CONTENT)
 
@@ -773,7 +805,15 @@ def voice_segment(
             _say_cmd(out_path, segments[body.index][:_TTS_PROVIDER_CHAR_LIMIT], body.lang),
             capture_output=True, text=True, timeout=_TTS_TIMEOUT_S,
         )
-        if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size == 0:
+        # `not proc.stdout.strip()` is say.py's DOCUMENTED failure signal
+        # ("0 + empty stdout -> silently disabled / all providers failed", say.py
+        # module docstring) and it had zero consumers. It matters because a
+        # provider can fail AFTER creating the file: _try_edge's exception path
+        # returns False without unlinking out_path, so a partial clip survives
+        # with a non-zero size and rc=0 — and was served as a successful
+        # synthesis AND archived into the session for replay.
+        if (proc.returncode != 0 or not proc.stdout.strip()
+                or not out_path.exists() or out_path.stat().st_size == 0):
             return Response(status_code=http_status.HTTP_204_NO_CONTENT)
         data = out_path.read_bytes()
     except subprocess.TimeoutExpired:

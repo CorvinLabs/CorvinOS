@@ -496,24 +496,44 @@ _VOICE_SEGMENT_MAX_CHARS = 1800
 # ideographs + kana + Hangul + Thai. Latin/Cyrillic/Greek/Arabic runs are NOT
 # listed — an oversized token there really is one token and must stay whole.
 _SPACE_FREE_SCRIPT_RANGES = (
+    (0x3000, 0x303F),   # CJK punctuation (。、，！？ …) — part of the prose
     (0x3040, 0x30FF),   # Hiragana + Katakana
     (0x3400, 0x4DBF),   # CJK Unified Ideographs Extension A
     (0x4E00, 0x9FFF),   # CJK Unified Ideographs
     (0xAC00, 0xD7AF),   # Hangul syllables
     (0xF900, 0xFAFF),   # CJK Compatibility Ideographs
+    (0xFF00, 0xFFEF),   # Fullwidth forms (！？，：ABC …)
     (0x0E00, 0x0E7F),   # Thai
 )
 
+# A token that must never be sliced: a URL / path / bare identifier is ONE atom,
+# and half of it is unspeakable noise. Deliberately narrow — everything else
+# oversized gets sliced, because respecting the provider cap matters more.
+_URLISH_RE = re.compile(r"^[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$")
+
 
 def _is_space_free_script(token: str) -> bool:
-    """True iff *token* is predominantly written in a script with no word spaces."""
+    """True iff slicing *token* by length is safe — i.e. it is prose in a script
+    with no word spaces, rather than a single unsplittable atom.
+
+    The test is NOT "is it majority CJK". That was the first attempt and it was
+    wrong in the direction that hurts: a Chinese TECHNICAL answer (CJK prose with
+    Latin API names, no spaces, and CJK punctuation — which the ranges did not
+    even count) fell under 50% and was left as one 8000-char segment, which the
+    route then clamped to 4000 and dropped HALF the answer silently. Worse than
+    the loud failure it replaced.
+
+    So: slice anything that carries real space-free-script content and is not
+    URL-ish. A URL never contains an ideograph, so the two never collide.
+    """
     if not token:
         return False
-    hits = sum(
+    if _URLISH_RE.match(token):
+        return False        # a URL/path/identifier is one atom — never cut it
+    return any(
         any(lo <= ord(ch) <= hi for lo, hi in _SPACE_FREE_SCRIPT_RANGES)
         for ch in token
     )
-    return hits * 2 >= len(token)   # majority, so a stray ASCII quote can't flip it
 
 
 def split_for_speech(text: str, max_chars: int = _VOICE_SEGMENT_MAX_CHARS) -> list[str]:
@@ -674,8 +694,17 @@ def prune_voice_archive(tenant_id: str, sid: str,
                         keep: str | None = None) -> int:
     """Evict oldest-first until the session's voice dir fits *max_bytes*.
 
-    *keep* names one file (the turn's freshly written audio) that is never
-    evicted, so the cap may be exceeded by at most that one file. Without it a
+    Eviction is per TURN (all files sharing a voice_key), never per file. A
+    turn's read-aloud is an ORDERED playlist of `<key>-fNN` files, and evicting
+    them one at a time produced something strictly worse than losing the audio:
+    the survivors were renumbered by attach_voice_artifacts, so the user got a
+    player labelled "voice 1/3" that actually started at segment 3 of 5 — the
+    first 40% of the answer silently missing, with nothing to signal it. Whole
+    groups keep the only degradation the design tolerates: no player at all,
+    re-synthesised on demand by the existing Replay / read-aloud controls.
+
+    *keep* names one file (the turn's freshly written audio); its whole group is
+    exempt, so the cap may be exceeded by at most the current turn. Without it a
     cap smaller than a single file made every turn synthesise its audio and
     immediately delete it again — no player, ever, and the TTS spend burned
     silently on every turn. Same compromise split_for_speech already makes for
@@ -699,28 +728,43 @@ def prune_voice_archive(tenant_id: str, sid: str,
         vdir = voice_dir(tenant_id, sid)
         if not vdir.is_dir():
             return 0
-        files = []
+        # Group by voice_key: `<key>.<ext>` (summary) and `<key>-fNN.<ext>`
+        # (read-aloud segments) are all one turn's audio and live or die together.
+        groups: dict[str, dict[str, Any]] = {}
         total = 0
+        keep_key: str | None = None
         for p in vdir.iterdir():
-            if not p.is_file():
+            # Skip another writer's in-flight temp file: unlinking it makes that
+            # writer's replace() raise FileNotFoundError and its archive is
+            # silently lost. Both finders already skip .tmp; this must too.
+            if not p.is_file() or p.suffix == ".tmp":
                 continue
+            key = p.name.split(".", 1)[0].split("-f", 1)[0]
             st = p.stat()
-            files.append((st.st_mtime, st.st_size, p))
+            g = groups.setdefault(key, {"mtime": st.st_mtime, "size": 0, "paths": []})
+            # A group is as young as its NEWEST file: a playlist written now must
+            # not look old just because its first segment was.
+            g["mtime"] = max(g["mtime"], st.st_mtime)
+            g["size"] += st.st_size
+            g["paths"].append(p)
             total += st.st_size
+            if keep and p.name == keep:
+                keep_key = key
         if total <= max_bytes:
             return 0
         removed = 0
-        for _mtime, size, path in sorted(files):   # oldest first
+        for key, g in sorted(groups.items(), key=lambda kv: kv[1]["mtime"]):
             if total <= max_bytes:
                 break
-            if keep and path.name == keep:
+            if key == keep_key:
                 continue
-            try:
-                path.unlink()
-            except OSError:
-                continue
-            total -= size
-            removed += 1
+            for path in g["paths"]:
+                try:
+                    path.unlink()
+                except OSError:
+                    continue
+                removed += 1
+            total -= g["size"]
         if removed:
             _log.info("voice archive for %s: evicted %d oldest file(s) to stay "
                       "under %d bytes", sid, removed, max_bytes)
@@ -2424,8 +2468,16 @@ async def _stream_hermes_turn(
     })
     emit_completed(rc)
     touch(sess, increment_turn=True)
+    # ADR-0194: pin the voice_key of what the client will actually SPEAK — the
+    # last result event's text. It is not `combined`: that one is .strip()ed
+    # while the result event is not, so a reply with edge whitespace hashed
+    # differently and the archived audio was orphaned (no player, ever). Same
+    # class as the tool-using-turn divergence on the claude path; this path was
+    # missed the first time round.
+    _spoken = (final_text + "\n\n" + _ann_suffix) if _ann_suffix else final_text
     _append_turn(sess, "assistant",
-                 [{"kind": "text", "text": combined or ""}])
+                 [{"kind": "text", "text": combined or ""}],
+                 voice_key_hint=voice_key(_spoken) if _spoken.strip() else None)
     yield {"type": "done"}
 
 

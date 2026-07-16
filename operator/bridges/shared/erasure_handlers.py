@@ -498,11 +498,29 @@ class WebChatHandler:
         t0 = time.time()
         targets: list[Path] = []
 
-        # The console sanitises ':' out of the dir name on Windows, so accept
-        # both spellings rather than re-deriving the rule here (a reader that
-        # disagrees with the writer is exactly how audio gets orphaned).
+        # Ask the WRITER's own resolver where the dir is rather than re-deriving
+        # the sanitising rule — a reader that disagrees with the writer is
+        # exactly how audio gets orphaned, and this handler exists because of
+        # that class of bug. (An earlier cut here guessed `.replace(":", "_")`,
+        # which misses fs_safe_component's other rules: it also strips trailing
+        # dots and guards Windows device names, so `web:abc.` is written to
+        # `web_abc` and the guess would have looked for `web_abc.` and reported
+        # a clean SKIPPED while the audio survived the erasure.)
+        # Erasure must be THOROUGH, so try every plausible spelling rather than
+        # the one this host would write today: the raw key, the writer's own
+        # resolved name, and the ':'->'_' form. A dir can exist under a spelling
+        # this host wouldn't produce — e.g. an archive written by a Windows
+        # install and then read on POSIX (where safe_session_subdir is a no-op),
+        # or a legacy dir. Missing one means a clean SKIPPED while the audio
+        # survives an Art. 17 erasure, which is the bug this handler exists for.
         sessions = _tenant_sessions(self.tenant_id)
-        for name in {subject_id, subject_id.replace(":", "_")}:
+        names = {subject_id, subject_id.replace(":", "_")}
+        try:
+            from forge.paths import safe_session_subdir  # noqa: PLC0415
+            names.add(safe_session_subdir(sessions, subject_id).name)
+        except Exception:  # noqa: BLE001 — forge may not be importable here
+            pass
+        for name in names:
             vdir = sessions / name / "voice"
             if vdir.is_dir():
                 targets.extend(p for p in vdir.rglob("*") if p.is_file())
@@ -531,7 +549,7 @@ class WebChatHandler:
             path.unlink(missing_ok=True)
             n_files += 1
 
-        for name in {subject_id, subject_id.replace(":", "_")}:
+        for name in names:   # same spellings we purged from
             vdir = sessions / name / "voice"
             try:
                 vdir.rmdir()
