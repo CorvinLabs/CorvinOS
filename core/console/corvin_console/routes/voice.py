@@ -592,9 +592,24 @@ def _persist_turn_voice(tenant_id: str, sid: str, text: str,
         vdir = _cr.voice_dir(tenant_id, sid)
         vdir.mkdir(parents=True, exist_ok=True)
         dest = vdir / f"{_cr.voice_key(text)}{suffix}{_AUDIO_EXT_BY_MIME.get(mime, '.ogg')}"
-        tmp = dest.with_name(dest.name + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(dest)  # atomic — a half-written file must never be served
+        # The tmp name carries the pid: it used to be a pure function of
+        # (tenant, sid, key, suffix, mime), so two concurrent writers of the
+        # SAME segment (a double-click, or the client's play-N/fetch-N+1
+        # pipeline retrying) opened the same .tmp in "wb" and could publish a
+        # torn file — replace() is atomic, but only if the source is private.
+        tmp = dest.with_name(f"{dest.name}.{os.getpid()}.tmp")
+        try:
+            tmp.write_bytes(data)
+            tmp.replace(dest)  # atomic — a half-written file must never be served
+        except Exception:
+            # Don't leave the partial behind on ENOSPC/EIO: a stale .tmp is
+            # picked up by nothing now (the finders skip it) but it would sit
+            # in the session dir forever.
+            tmp.unlink(missing_ok=True)
+            raise
+        # Keep the session's archive under its ceiling (GDPR Art. 5(1)(e)); an
+        # evicted turn simply loses its player and re-synthesises on replay.
+        _cr.prune_voice_archive(tenant_id, sid)
         return dest.name
     except Exception:  # noqa: BLE001
         return None
