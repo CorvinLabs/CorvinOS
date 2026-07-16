@@ -986,7 +986,7 @@ function ChatPane({
         const lang = detectTtsLang(evt.text, ttsLangRef.current);
         setLastTts({ text: evt.text, lang });
         if (voiceOutRef.current) {
-          playTts(evt.text, lang).catch(() => { /* surface in playTts */ });
+          playTts(evt.text, lang, sid).catch(() => { /* surface in playTts */ });
         }
       }
       if (evt.type === "session_title" && evt.title) {
@@ -1489,7 +1489,7 @@ function ChatPane({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => playTts(lastTts.text, lastTts.lang).catch(() => {})}
+              onClick={() => playTts(lastTts.text, lastTts.lang, sid).catch(() => {})}
               title={`Replay last response (${lastTts.lang.toUpperCase()})`}
               aria-label="Replay last response"
             >

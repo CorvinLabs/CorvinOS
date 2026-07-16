@@ -3706,7 +3706,8 @@ export function deleteMemoryFile(
   });
 }
 
-export async function ttsBlob(text: string, lang: string, csrf: string): Promise<Blob> {
+export async function ttsBlob(text: string, lang: string, csrf: string,
+                              sid?: string): Promise<Blob> {
   const res = await fetch("/v1/console/voice/tts", {
     method: "POST",
     credentials: "include",
@@ -3714,7 +3715,10 @@ export async function ttsBlob(text: string, lang: string, csrf: string): Promise
       "Content-Type": "application/json",
       "X-CSRF-Token": csrf,
     },
-    body: JSON.stringify({ text, lang }),
+    // ADR-0194 Phase 1: naming the session archives this audio into the session's
+    // voice/ dir, so the turn keeps a replayable player. Callers without a chat
+    // session (e.g. the first-boot greeting) omit it and get the old behaviour.
+    body: JSON.stringify(sid ? { text, lang, sid } : { text, lang }),
   });
   if (res.status === 204) return new Blob();
   if (!res.ok) {

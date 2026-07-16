@@ -460,6 +460,34 @@ helper) — previously they had no fallback at all, so a Hermes-only install
 LERN-ZUGABE/METAPHER annex; now `generate_appendix`/`generate_metapher` try
 CLI (if authenticated) then Hermes before giving up.
 
+**Per-turn voice archive (ADR-0194 Phase 1).** Console voice used to be ephemeral:
+`chat.tsx` → `useVoicePlayback.playTts()` → `POST /voice/tts` → blob → played once →
+revoked. The route already summarised the reply (`_summarize_for_speech`, ≤400 chars)
+and shelled out to `say.py <out_path> …`, which **writes an audio file** — and the
+route then deleted it. Phase 1 keeps that file: when the caller passes its chat
+`sid`, `_persist_turn_voice()` archives the bytes to
+`<session workdir>/voice/<key>.<ext>`. That makes it an ordinary chat artifact for
+free — `_artifact_mime()` already classifies `audio/*`, the workdir route serves it
+`inline`, `ArtifactCard` renders a real `<audio controls>` player, and it is erased
+with the session (Layer 33/36). Two invariants are load-bearing:
+
+  * **The key is a hash of the NORMALISED turn text** (`chat_runtime.voice_key`).
+    Writer (`/voice/tts`) and reader (history rehydrate) share no turn id — the
+    persisted turn has no identifier of its own — so they meet on the text. The
+    streamed `result` text and the persisted `combined_text` differ in whitespace,
+    which must not change the key.
+  * **The extension follows the SNIFFED mime, never say.py's argv suffix.** say.py
+    emits OGG-Opus (OpenAI) / MP3 (edge) / WAV (piper) and does **not** transcode,
+    so a hard-coded `.opus` would hand the browser a mislabelled container.
+
+The audio is written **after** the turn's `done` (the route is frontend-initiated),
+which is deliberate: it keeps TTS off the turn's critical path so the composer never
+stalls on synthesis (the freeze class fixed in 0.10.36). Because of that ordering it
+cannot live in `turns.jsonl`; `chat_runtime.attach_voice_artifacts()` resolves it at
+READ time in `get_chat_turns` instead — purely additive, idempotent, and a turn whose
+audio was never generated (voice off, TTS unavailable) simply gets no player.
+Regression guard: `core/console/tests/test_voice_archive.py`.
+
 **Hermes calls MUST disable qwen3 reasoning (`think: false`).** The default
 zero-config engine is a qwen3 model (`hermes_engine._DEFAULT_MODEL`), which is a
 *thinking* model: left to its own devices it emits a `<think>…</think>` monologue

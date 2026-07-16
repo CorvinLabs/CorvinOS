@@ -498,7 +498,57 @@ class TtsRequest(BaseModel):
     # Any BCP-47 code is accepted (e.g. "de", "en", "zh", "ja", "fr").
     lang: str = Field("de", min_length=2, max_length=10,
                       pattern=r"^[a-zA-Z]{2,8}(-[a-zA-Z0-9]{1,8})*$")
+    # ADR-0194 Phase 1 — when the caller names its chat session, the synthesised
+    # audio is ARCHIVED into that session's workdir instead of being thrown away,
+    # so the turn keeps a replayable <audio> player. Optional: every other caller
+    # (e.g. the first-boot greeting in SetupGate) simply omits it and gets today's
+    # behaviour. Pattern-bounded because it becomes a path component downstream.
+    sid: str | None = Field(None, min_length=1, max_length=128,
+                            pattern=r"^[A-Za-z0-9_-]+$")
     model_config = {"extra": "forbid"}
+
+
+# ADR-0194 Phase 1 — archive the turn's spoken audio into the session workdir.
+# say.py ALREADY wrote an audio file; this route used to read the bytes and delete
+# it. Keeping a copy under <workdir>/voice/<key>.<ext> makes it an ordinary chat
+# artifact for free: served inline by the workdir route, rendered as a real <audio>
+# player by ArtifactCard, rehydrated on reload, and erased with the session
+# (Layer 33/36). Costs no extra synthesis and no turn latency — this route runs
+# AFTER the turn's `done`.
+_AUDIO_EXT_BY_MIME = {
+    "audio/ogg": ".ogg",
+    "audio/mpeg": ".mp3",
+    "audio/wav": ".wav",
+    "audio/flac": ".flac",
+}
+
+
+def _persist_turn_voice(tenant_id: str, sid: str, text: str,
+                        data: bytes, mime: str) -> "str | None":
+    """Write this turn's audio into the session's voice archive. Best-effort.
+
+    The extension follows the SNIFFED mime, never say.py's argv suffix: say.py
+    emits OGG-Opus (OpenAI) / MP3 (edge) / WAV (piper) and does NOT transcode, so
+    a hard-coded ".opus" would hand the browser a mislabelled container.
+
+    Archiving must never break playback — any failure returns None and the caller
+    still serves the audio.
+    """
+    try:
+        from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+        # Only archive into a session that actually exists; never create stray dirs
+        # for an unknown/expired sid.
+        if not _cr._workdir(tenant_id, sid).exists():
+            return None
+        vdir = _cr.voice_dir(tenant_id, sid)
+        vdir.mkdir(parents=True, exist_ok=True)
+        dest = vdir / f"{_cr.voice_key(text)}{_AUDIO_EXT_BY_MIME.get(mime, '.ogg')}"
+        tmp = dest.with_name(dest.name + ".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(dest)  # atomic — a half-written file must never be served
+        return dest.name
+    except Exception:  # noqa: BLE001
+        return None
 
 
 @router.post("/voice/tts")
@@ -593,13 +643,17 @@ def voice_tts(
         target_id="web",
     )
     mime = _detect_audio_mime(data)
-    return Response(
-        content=data,
-        media_type=mime,
-        headers={"Content-Length": str(len(data)),
-                 "X-Corvin-Lang": body.lang,
-                 "X-Corvin-TTS-Format": mime},
-    )
+    # ADR-0194 Phase 1: keep a copy in the session's voice archive so the turn
+    # stays replayable later. Keyed off body.text (the turn text) — NOT tts_text —
+    # because history rehydrate only has the turn text to look it up by.
+    _voice_file = (_persist_turn_voice(rec.tenant_id, body.sid, body.text, data, mime)
+                   if body.sid else None)
+    _headers = {"Content-Length": str(len(data)),
+                "X-Corvin-Lang": body.lang,
+                "X-Corvin-TTS-Format": mime}
+    if _voice_file:
+        _headers["X-Corvin-Voice-File"] = _voice_file
+    return Response(content=data, media_type=mime, headers=_headers)
 
 
 # ── Voice Summarize ──────────────────────────────────────────────────────────
