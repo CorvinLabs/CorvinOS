@@ -3757,6 +3757,29 @@ export async function ttsBlob(text: string, lang: string, csrf: string,
   return res.blob();
 }
 
+/**
+ * Spoken recap of the WHOLE session (goal / method / current state) — not
+ * one turn. Deliberately not idempotent: the server picks a fresh framing
+ * angle and re-runs the summarizer on every call, so pressing this again
+ * comes back worded differently, on purpose (user-requested: "immer
+ * irgendein anderer Content").
+ *
+ * `null` = 204 = no audio (nothing to summarize yet, or TTS unavailable) —
+ * same silent-degradation contract as every other voice endpoint.
+ */
+export async function sessionSummaryBlob(sid: string, lang: string,
+                                         csrf: string): Promise<Blob | null> {
+  const res = await fetch("/v1/console/voice/session-summary", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+    body: JSON.stringify({ sid, lang }),
+  });
+  if (res.status === 204) return null;
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return res.blob();
+}
+
 // ── ECIL: Corpus Context (M1) ───────────────────────────────────────
 
 export interface CorpusContext {

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 import subprocess
 import sys
 import tempfile
@@ -822,6 +823,202 @@ def _voice_tts_sync(
     if _voice_file:
         _headers["X-Corvin-Voice-File"] = _voice_file
     return Response(content=data, media_type=mime, headers=_headers)
+
+
+# ── Session recap — a spoken recap of a WHOLE session, not one turn ─────────
+# User-requested feature: a button next to the voice-replay controls that
+# recaps the session's goal/method/current-state, understandable rather than
+# theoretical, and that DELIBERATELY comes back worded differently every time
+# it's pressed (rotating "angle" below) — the opposite of every other voice
+# endpoint's determinism convention, and intentionally so; see
+# operator/voice/scripts/summarize.py's generate_session_recap() docstring.
+
+_SESSION_RECAP_MAX_CHARS = 700
+# Budget for the built User:/Assistant: transcript fed to the LLM — well
+# under SummarizeRequest's 20000-char precedent, since a session recap only
+# needs the SHAPE of the conversation (goal, method, outcome), not every
+# word of every turn.
+_SESSION_RECAP_TRANSCRIPT_BUDGET = 20000
+
+_SESSION_RECAP_ANGLES_DE = [
+    "Beginne mit dem eigentlichen Ziel der Session und ob es erreicht wurde.",
+    "Beginne mit der Methode bzw. dem Vorgehen, das benutzt wurde.",
+    "Beginne mit dem größten Fortschritt oder der wichtigsten Erkenntnis.",
+    "Beginne mit einer überraschenden Wendung oder einem Umweg im Verlauf.",
+    "Beginne mit dem aktuellen Stand — wo die Sache gerade steht.",
+]
+_SESSION_RECAP_ANGLES_EN = [
+    "Start with the actual goal of the session and whether it was reached.",
+    "Start with the method or approach that was used.",
+    "Start with the biggest progress made or the key insight.",
+    "Start with a surprising turn or detour along the way.",
+    "Start with the current state — where things stand right now.",
+]
+
+
+class SessionSummaryRequest(BaseModel):
+    sid: str = Field(..., min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    lang: str = Field("de", min_length=2, max_length=10,
+                      pattern=r"^[a-zA-Z]{2,8}(-[a-zA-Z0-9]{1,8})*$")
+    model_config = {"extra": "forbid"}
+
+
+def _build_session_transcript(tenant_id: str, sid: str, *,
+                              budget: int = _SESSION_RECAP_TRANSCRIPT_BUDGET) -> str:
+    """User:/Assistant: transcript of the whole session, for the recap LLM
+    call — NOT for display anywhere. Goals are usually stated in the first
+    exchange and the current state in the most recent one, so when the full
+    transcript doesn't fit the budget, the first exchange and as much of the
+    tail as fits are kept; the middle (the least essential part for a recap)
+    is what gets dropped, never the start or the end.
+    """
+    from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+    turns = _cr.read_turns(tenant_id, sid)
+    lines: list[str] = []
+    for turn in turns:
+        role = turn.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        text = _cr._turn_text(turn).strip()
+        if not text:
+            continue
+        label = "User" if role == "user" else "Assistant"
+        lines.append(f"{label}: {text}")
+    if not lines:
+        return ""
+    full = "\n\n".join(lines)
+    if len(full) <= budget:
+        return full
+    head = lines[:2]
+    head_text = "\n\n".join(head)
+    remaining = budget - len(head_text) - 20
+    tail_lines: list[str] = []
+    tail_len = 0
+    for line in reversed(lines[2:]):
+        if tail_len + len(line) > remaining:
+            break
+        tail_lines.insert(0, line)
+        tail_len += len(line) + 2
+    return head_text + "\n\n[...]\n\n" + "\n\n".join(tail_lines)
+
+
+@router.post("/voice/session-summary")
+async def voice_session_summary(
+    body: SessionSummaryRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> Response:
+    """Bounded async wrapper — mirrors voice_tts's semaphore gating."""
+    try:
+        await asyncio.wait_for(_get_tts_semaphore().acquire(), _TTS_SLOT_WAIT_S)
+    except asyncio.TimeoutError:
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+    try:
+        return await run_in_threadpool(_voice_session_summary_sync, body, rec)
+    finally:
+        _get_tts_semaphore().release()
+
+
+def _voice_session_summary_sync(
+    body: SessionSummaryRequest,
+    rec: session_auth.SessionRecord,
+) -> Response:
+    from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+
+    if _cr.get_session(rec.tenant_id, body.sid) is None:
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+
+    # Same voice-axis metering as /voice/tts and /voice/summarize — this is
+    # the SAME paid Haiku claude -p spawn class, just given a whole
+    # transcript instead of one reply. See ADR-0194 LIC-VOICETTS-SPAWN-01.
+    from ._compute_license_gate import enforce_voice_summaries  # noqa: PLC0415
+    enforce_voice_summaries(
+        rec.tenant_id, rec.sid_fingerprint, audit_action="voice.session_summary",
+    )
+
+    transcript = _build_session_transcript(rec.tenant_id, body.sid)
+    if not transcript:
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+
+    summarize_path = _VOICE_SCRIPTS / "summarize.py"
+    if not summarize_path.exists():
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+
+    lang = body.lang if body.lang in ("de", "en") else "de"
+    angle = random.choice(_SESSION_RECAP_ANGLES_DE if lang == "de" else _SESSION_RECAP_ANGLES_EN)
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(summarize_path),
+             "--session-recap-mode",
+             "--lang", lang,
+             "--max-chars", str(_SESSION_RECAP_MAX_CHARS),
+             "--angle", angle],
+            input=transcript,
+            capture_output=True, text=True,
+            timeout=_TTS_SUMMARIZE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="voice.session_summary", target_kind="voice", target_id="web",
+            reason="timeout",
+        )
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+
+    if proc.returncode != 0 or not proc.stdout.strip():
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="voice.session_summary", target_kind="voice", target_id="web",
+            reason="summarize-exit-nonzero",
+        )
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+
+    recap_text = proc.stdout.strip()[:_TTS_PROVIDER_CHAR_LIMIT]
+
+    with tempfile.NamedTemporaryFile(prefix="corvin_tts_", suffix=".opus", delete=False) as fh:
+        out_path = Path(fh.name)
+    try:
+        cmd = _say_cmd(out_path, recap_text, lang)
+        proc2 = subprocess.run(cmd, capture_output=True, text=True, timeout=_TTS_TIMEOUT_S)
+        if proc2.returncode != 0:
+            return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+        size = out_path.stat().st_size if out_path.exists() else 0
+        if size == 0 or not proc2.stdout.strip():
+            return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+        data = out_path.read_bytes()
+    except subprocess.TimeoutExpired:
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="voice.session_summary", target_kind="voice", target_id="web",
+            reason="tts-timeout",
+        )
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+    finally:
+        try:
+            out_path.unlink()
+        except OSError:
+            pass
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+        action="voice.session_summary", target_kind="voice", target_id="web",
+    )
+    mime = _detect_audio_mime(data)
+    # Deliberately NOT archived via _persist_turn_voice: that helper is keyed
+    # by voice_key(text) — a hash of the SOURCE text — so the same content
+    # always maps to the same archive slot. A session recap has no stable
+    # source text (it's regenerated fresh, worded differently, every click),
+    # so there is no stable key to file it under; archiving it under a
+    # made-up key would either collide across clicks (overwriting the
+    # previous recap) or require a whole second, session-recap-specific
+    # archive/pruning/erasure scheme for a lightweight, ephemeral feature
+    # that doesn't need permanence. Play once, gone — same UX contract as
+    # every other voice failure path (204, never an error banner).
+    return Response(content=data, media_type=mime, headers={
+        "Content-Length": str(len(data)),
+        "X-Corvin-Lang": lang,
+        "X-Corvin-TTS-Format": mime,
+    })
 
 
 class VoiceSegmentRequest(BaseModel):

@@ -718,6 +718,109 @@ def test_voice_summary_timeout_budgets_fit_parent_caps() -> None:
     assert summarize._ANNEX_CLI_TIMEOUT_S + summarize._ANNEX_HERMES_TIMEOUT_S <= summarize._PARENT_CAP_ANNEX_S
 
 
+def test_session_recap_timeout_budgets_fit_the_console_route_parent_cap() -> None:
+    """routes/voice.py's session-summary endpoint wraps this ladder in a 120s
+    subprocess.run timeout (_TTS_SUMMARIZE_TIMEOUT_S, same constant the
+    per-turn summarizer already fits inside) — same reasoning as
+    test_voice_summary_timeout_budgets_fit_parent_caps above: CLI + Hermes
+    must sum to comfortably under that cap or Hermes is unreachable in
+    exactly the hang case it exists for."""
+    recap_sum = summarize._SESSION_RECAP_CLI_TIMEOUT_S + summarize._SESSION_RECAP_HERMES_TIMEOUT_S
+    assert recap_sum + 10 <= summarize._PARENT_CAP_MAIN_S, (
+        f"session-recap ladder {recap_sum}s + margin overflows the "
+        f"{summarize._PARENT_CAP_MAIN_S}s parent cap"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Session-recap mode: whole-session recap, deliberately non-deterministic.
+# ---------------------------------------------------------------------------
+
+
+def test_session_recap_falls_back_to_hermes_when_cli_unavailable() -> None:
+    from unittest.mock import patch
+    with (
+        patch.object(summarize, "_session_recap_via_cli", return_value=None) as cli,
+        patch.object(summarize, "_session_recap_via_hermes",
+                     return_value="Kurzer Recap-Text.") as herm,
+    ):
+        out = summarize.generate_session_recap("User: X\n\nAssistant: Y", lang="de",
+                                                angle="Beginne mit dem Ziel.")
+    cli.assert_called_once()
+    herm.assert_called_once()
+    assert out == "Kurzer Recap-Text."
+
+
+def test_session_recap_returns_empty_string_when_both_backends_fail() -> None:
+    """Unlike summarize()'s naive_truncate fallback, a raw User:/Assistant:
+    transcript read aloud verbatim would be unlistenable — there is no sane
+    structural fallback here, so both backends failing must return "" (the
+    console route then degrades to its usual 204, never a truncated
+    transcript played as if it were a recap)."""
+    from unittest.mock import patch
+    with (
+        patch.object(summarize, "_session_recap_via_cli", return_value=None),
+        patch.object(summarize, "_session_recap_via_hermes", return_value=None),
+    ):
+        out = summarize.generate_session_recap("User: X\n\nAssistant: Y", lang="de")
+    assert out == ""
+
+
+def test_session_recap_empty_transcript_short_circuits_without_any_backend_call() -> None:
+    from unittest.mock import patch
+    with (
+        patch.object(summarize, "_session_recap_via_cli") as cli,
+        patch.object(summarize, "_session_recap_via_hermes") as herm,
+    ):
+        out = summarize.generate_session_recap("   ", lang="de")
+    cli.assert_not_called()
+    herm.assert_not_called()
+    assert out == ""
+
+
+def test_session_recap_defaults_to_a_fallback_angle_when_none_given() -> None:
+    """--angle is optional on the CLI; an empty angle must not format-crash
+    the {angle} placeholder in the system prompt template."""
+    from unittest.mock import patch
+    with patch.object(summarize, "_session_recap_via_cli") as cli:
+        cli.return_value = "recap"
+        summarize.generate_session_recap("User: X\n\nAssistant: Y", lang="de", angle="")
+    called_angle = cli.call_args[0][3]  # (transcript, lang, model, angle, max_chars)
+    assert called_angle  # non-empty — the fallback kicked in
+
+
+def test_session_recap_fences_the_transcript_before_sending_to_the_backend() -> None:
+    """Adversarial finding (live-tested): passing the raw transcript
+    unwrapped let a `claude -p` call read imperative lines inside it (e.g.
+    "push main") as a NEW instruction and start reporting on this repo's
+    actual git status instead of summarizing. The fence + explicit
+    data-not-instructions framing in the system prompt is the fix — this
+    guards that the fence is actually applied, not just documented."""
+    transcript = "User: push main\n\nAssistant: done"
+    fenced = summarize._fence_transcript(transcript, "de")
+    assert transcript in fenced
+    assert "TRANSKRIPT-ANFANG" in fenced and "TRANSKRIPT-ENDE" in fenced
+
+    from unittest.mock import patch
+    with patch.object(summarize, "_session_recap_via_hermes", return_value=None) as herm, \
+         patch.object(summarize, "shutil") as _shutil:
+        _shutil.which.return_value = None  # force the CLI branch to bail early
+        summarize.generate_session_recap(transcript, lang="de", angle="test angle")
+    # Hermes is the reachable backend in this test double; confirm IT received
+    # the fenced payload, not the raw transcript.
+    herm.assert_called_once()
+
+
+def test_session_recap_system_prompt_tells_the_model_not_to_act_on_the_transcript() -> None:
+    """The anti-agentic-drift framing itself must be present in both prompt
+    variants — a future edit that trims this "sounds redundant" is exactly
+    the kind of change that would silently reintroduce the live-tested bug
+    above."""
+    for template in (summarize._SESSION_RECAP_SYSTEM_DE, summarize._SESSION_RECAP_SYSTEM_EN):
+        rendered = template.format(angle="x", max_chars=700)
+        assert "DATENMATERIAL" in rendered or "DATA to summarize" in rendered
+
+
 def test_adapter_parent_caps_match_summarize_contract() -> None:
     """Guard against the adapter's hard-coded subprocess caps drifting below
     the child ladder sums. Reads adapter.py source (importing it is heavy)."""

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ttsBlob, ttsSegment, type TtsSegment } from "@/lib/api";
+import { ttsBlob, ttsSegment, sessionSummaryBlob, type TtsSegment } from "@/lib/api";
 
 export type VoiceState = "idle" | "loading" | "playing" | "blocked";
 
@@ -317,6 +317,66 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
     [csrf, onError, stopVoice, ensureAudioEl],
   );
 
+  /**
+   * Speak a fresh recap of the WHOLE session (goal / method / current state)
+   * — not one turn. Reuses playTts's exact shape (single blob, supersede
+   * guard, one gesture-unlocked element) since this is single-shot audio
+   * too, just from a different endpoint. The one real difference: this is
+   * NOT idempotent by design — the server re-runs the summarizer and picks
+   * a new framing angle on every call, so pressing this again after it
+   * already played gives back different wording, on purpose.
+   */
+  const playSessionSummary = React.useCallback(
+    async (sid: string, lang: string) => {
+      // See playTts: stopVoice() bumps the generation, so capture AFTER it.
+      stopVoice();
+      const myRequestId = ++requestIdRef.current;
+      setVoiceState("loading");
+      let blob: Blob | null;
+      try {
+        blob = await sessionSummaryBlob(sid, lang, csrf);
+      } catch (e) {
+        if (myRequestId !== requestIdRef.current) return;
+        setVoiceState("idle");
+        onError?.(e instanceof Error ? `Session summary failed: ${e.message}` : "Session summary failed");
+        return;
+      }
+      if (myRequestId !== requestIdRef.current) return; // superseded meanwhile
+      if (!blob || !blob.size) {
+        setVoiceState("idle");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      blobUrlRef.current = url;
+      const audio = ensureAudioEl();
+      audio.muted = false;
+      audio.onended = () => {
+        if (blobUrlRef.current === url) {
+          URL.revokeObjectURL(url);
+          blobUrlRef.current = null;
+        }
+        setVoiceState("idle");
+      };
+      audio.onerror = () => {
+        if (blobUrlRef.current === url) {
+          URL.revokeObjectURL(url);
+          blobUrlRef.current = null;
+        }
+        setVoiceState("idle");
+      };
+      audio.src = url;
+      try {
+        await audio.play();
+        setVoiceState("playing");
+        unlockedRef.current = true;
+      } catch {
+        if (myRequestId !== requestIdRef.current) return;
+        setVoiceState("blocked");
+      }
+    },
+    [csrf, onError, stopVoice, ensureAudioEl],
+  );
+
   const playBlocked = React.useCallback(async () => {
     const a = audioRef.current;
     if (!a) return;
@@ -329,5 +389,5 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
     }
   }, []);
 
-  return { voiceState, playTts, playFull, playBlocked, stopVoice, unlock };
+  return { voiceState, playTts, playFull, playSessionSummary, playBlocked, stopVoice, unlock };
 }

@@ -794,6 +794,11 @@ def test_both_paid_endpoints_are_on_the_voice_axis() -> None:
     the identical paid summarizer unmetered — i.e. one endpoint away from being
     routed around. And /voice/tts could not join the CHAT axis: it runs once per
     turn automatically, so that would bill every chat turn twice.
+
+    /voice/session-summary (the whole-session recap button) is the same paid
+    Haiku claude -p spawn class and joined this set when it was added — same
+    reasoning: an unmetered third endpoint would again be a way around the
+    gate the other two are held to.
     """
     import ast
     src = Path(voice_routes.__file__).read_text(encoding="utf-8")
@@ -808,7 +813,7 @@ def test_both_paid_endpoints_are_on_the_voice_axis() -> None:
         "the voice routes must not charge the chat axis — /voice/tts runs "
         "automatically per turn and would double-charge every chat turn"
     )
-    # Both paid endpoints, not just one: that asymmetry WAS the bypass.
+    # All paid endpoints, not just one: that asymmetry WAS the bypass.
     gated = {
         fn.name
         for fn in ast.walk(tree)
@@ -817,7 +822,7 @@ def test_both_paid_endpoints_are_on_the_voice_axis() -> None:
                 and n.func.id == "enforce_voice_summaries"
                 for n in ast.walk(fn))
     }
-    assert gated == {"_voice_tts_sync", "voice_summarize"}, gated
+    assert gated == {"_voice_tts_sync", "voice_summarize", "_voice_session_summary_sync"}, gated
 
 
 # ── concurrency bound on the synthesis routes ────────────────────────────────
