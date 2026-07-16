@@ -25,6 +25,7 @@ import {
   Volume2,
   VolumeX,
   X,
+  BookOpenText,
 } from "lucide-react";
 import { Markdown } from "@/components/markdown";
 import { WdatAuditPanel } from "@/components/WdatAuditPanel";
@@ -793,7 +794,7 @@ function ChatPane({
   const [voiceOut, setVoiceOut] = usePersistedBool(PREF_KEYS.voiceOut, true);
   const [recording, setRecording] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const { voiceState, playTts, playBlocked, stopVoice } = useVoicePlayback(csrf, (msg) =>
+  const { voiceState, playTts, playFull, playBlocked, stopVoice } = useVoicePlayback(csrf, (msg) =>
     setError(msg),
   );
   // Last completed TTS text + detected language — used for the replay button.
@@ -1494,6 +1495,20 @@ function ChatPane({
               aria-label="Replay last response"
             >
               <RotateCcw className="h-4 w-4" />
+            </Button>
+          )}
+          {/* Read the WHOLE answer aloud (ADR-0194 Phase 3) — the automatic voice is
+              a ≤400-char summary by construction, so a long reply is never fully
+              spoken. Segments stream in: the first is audible while the rest render. */}
+          {voiceOut && voiceState === "idle" && !streaming && lastTts && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => playFull(lastTts.text, lastTts.lang, sid).catch(() => {})}
+              title={`Read the full answer aloud (${lastTts.lang.toUpperCase()})`}
+              aria-label="Read the full answer aloud"
+            >
+              <BookOpenText className="h-4 w-4" />
             </Button>
           )}
           <Button

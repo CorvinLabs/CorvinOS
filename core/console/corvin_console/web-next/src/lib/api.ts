@@ -3706,6 +3706,35 @@ export function deleteMemoryFile(
   });
 }
 
+/** One segment of the FULL read-aloud (ADR-0194 Phase 3). */
+export type TtsSegment = { blob: Blob; total: number; index: number };
+
+/**
+ * Fetch ONE segment of the full read-aloud. The server splits the text, so the
+ * client never round-trips segment text and the split can evolve without a
+ * frontend change.
+ *
+ * `null` = 204 = "no such segment" (past the end, or past the server's cap) or
+ * "no audio" (provider down). Either way the caller stops the playlist — TTS
+ * failure is an absent enhancement, never an error banner.
+ */
+export async function ttsSegment(text: string, lang: string, csrf: string,
+                                 sid: string, index: number): Promise<TtsSegment | null> {
+  const res = await fetch("/v1/console/voice/segment", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+    body: JSON.stringify({ text, lang, sid, index }),
+  });
+  if (res.status === 204) return null;
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  // The server owns the real count (it applies its own cap) — trust the header,
+  // not a client-side guess at how the text will split.
+  const total = Number(res.headers.get("X-Corvin-Voice-Segments") || "");
+  const blob = await res.blob();
+  return { blob, total: Number.isFinite(total) && total > 0 ? total : index + 1, index };
+}
+
 export async function ttsBlob(text: string, lang: string, csrf: string,
                               sid?: string): Promise<Blob> {
   const res = await fetch("/v1/console/voice/tts", {
