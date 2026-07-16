@@ -140,3 +140,61 @@ def test_persist_never_raises_on_failure(tmp_path, monkeypatch) -> None:
         raise RuntimeError("resolver down")
     monkeypatch.setattr(cr, "_workdir", _boom)
     assert voice_routes._persist_turn_voice("_default", "s1", "T", b"OggS", "audio/ogg") is None
+
+
+# ── ADR-0194 Phase 3: full read-aloud segmentation ───────────────────────────
+# The automatic voice is a SUMMARY by construction. Phase 3 speaks the WHOLE
+# answer, split into provider-sized segments. COVERAGE is the contract: a
+# splitter that silently drops a tail would reintroduce the very defect this
+# phase removes ("a big part is never actually read aloud").
+
+def _words(s: str) -> list[str]:
+    return s.split()
+
+
+def test_segments_cover_every_word_in_order() -> None:
+    """The contract. Nothing dropped, nothing reordered, nothing duplicated."""
+    text = ("Erster Satz zum Thema. Zweiter Satz mit mehr Inhalt! Dritter Satz?\n\n"
+            "Ein neuer Absatz folgt hier. " + "Fuellsatz mit ein paar Woertern. " * 200)
+    segs = cr.split_for_speech(text, max_chars=300)
+    assert len(segs) > 1, "long text must actually split"
+    assert _words(" ".join(segs)) == _words(text), "segmentation lost or reordered words"
+
+
+def test_segments_respect_the_cap() -> None:
+    text = "Ein Satz mit mehreren Woertern. " * 150
+    segs = cr.split_for_speech(text, max_chars=200)
+    assert segs and all(len(s) <= 200 for s in segs), [len(s) for s in segs]
+
+
+def test_short_text_is_one_segment() -> None:
+    assert cr.split_for_speech("Kurz und knapp.", max_chars=1800) == ["Kurz und knapp."]
+
+
+def test_empty_text_yields_no_segments() -> None:
+    assert cr.split_for_speech("") == []
+    assert cr.split_for_speech("   \n  ") == []
+
+
+def test_prefers_sentence_boundaries() -> None:
+    """Segments should end on a sentence, not mid-thought, when they can."""
+    text = "Satz eins ist hier. Satz zwei ist da. Satz drei ist dort. Satz vier endet."
+    segs = cr.split_for_speech(text, max_chars=40)
+    assert len(segs) > 1
+    assert all(s.rstrip().endswith((".", "!", "?")) for s in segs), segs
+
+
+def test_never_cuts_mid_word() -> None:
+    text = "Donaudampfschifffahrtsgesellschaftskapitaen faehrt heute. " * 40
+    segs = cr.split_for_speech(text, max_chars=120)
+    for w in _words(" ".join(segs)):
+        assert w in text, f"segmentation invented/cut a token: {w!r}"
+
+
+def test_oversized_single_token_is_emitted_whole_not_cut() -> None:
+    """A URL/hash longer than the cap must survive intact — a mid-token cut is
+    unspeakable and would corrupt the very input the cap protects."""
+    url = "https://example.com/" + "x" * 300
+    segs = cr.split_for_speech(f"Siehe hier. {url} Ende.", max_chars=100)
+    assert any(url in s for s in segs), "oversized token was cut apart"
+    assert _words(" ".join(segs)) == _words(f"Siehe hier. {url} Ende.")

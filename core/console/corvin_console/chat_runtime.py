@@ -476,6 +476,81 @@ def voice_dir(tenant_id: str, sid: str) -> Path:
     return _workdir(tenant_id, sid) / _VOICE_SUBDIR
 
 
+# ── ADR-0194 Phase 3 — full read-aloud segmentation ──────────────────────────
+# The automatic voice is a SUMMARY by construction (/voice/tts runs the reply
+# through summarize.py, ≤400 chars). Phase 3 adds the other rendering: speak the
+# WHOLE answer, split into segments a TTS provider will accept (OpenAI TTS-1 caps
+# at 4096 chars) and a listener can follow.
+#
+# The load-bearing invariant is COVERAGE: concatenating the segments must
+# reproduce every word of the input, in order. A splitter that silently drops a
+# tail would reintroduce exactly the defect this phase exists to remove — "a big
+# part is never actually read aloud".
+_VOICE_SEGMENT_MAX_CHARS = 1800
+
+
+def split_for_speech(text: str, max_chars: int = _VOICE_SEGMENT_MAX_CHARS) -> list[str]:
+    """Split *text* into speakable segments of at most *max_chars*.
+
+    Boundary preference: paragraph → sentence → word. A single "word" longer than
+    max_chars (a URL, a base64 blob, a hash) is emitted WHOLE rather than cut: a
+    mid-token cut is unspeakable anyway, and honouring the cap there would corrupt
+    the only thing the cap protects — the provider's input.
+
+    Coverage is the contract, not a nice-to-have: every word of the input appears
+    exactly once, in order, across the returned segments.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    # Sentence-ish units, each keeping its own terminator; blank lines are
+    # paragraph breaks and therefore natural segment boundaries too.
+    units: list[str] = []
+    for para in re.split(r"\n\s*\n", text):
+        para = para.strip()
+        if not para:
+            continue
+        # Split ONLY at a terminator that is followed by whitespace. A bare
+        # [.!?] class also fires inside tokens — "example.com", "3.14", "z.B." —
+        # tearing a URL apart into unspeakable fragments (caught by
+        # test_oversized_single_token_is_emitted_whole_not_cut).
+        for part in re.split(r"(?<=[.!?])\s+", para):
+            part = part.strip()
+            if part:
+                units.append(part)
+
+    segments: list[str] = []
+    cur = ""
+
+    def _flush() -> None:
+        nonlocal cur
+        if cur:
+            segments.append(cur)
+            cur = ""
+
+    for unit in units:
+        if len(unit) > max_chars:
+            # One sentence bigger than a whole segment — pack it word-wise.
+            _flush()
+            buf = ""
+            for word in unit.split():
+                if buf and len(buf) + 1 + len(word) > max_chars:
+                    segments.append(buf)
+                    buf = word
+                else:
+                    buf = f"{buf} {word}" if buf else word
+            cur = buf
+            continue
+        if cur and len(cur) + 1 + len(unit) > max_chars:
+            _flush()
+        cur = f"{cur} {unit}" if cur else unit
+    _flush()
+    return segments
+
+
 def find_turn_voice(tenant_id: str, sid: str, text: str) -> Path | None:
     """Return the persisted voice file for a turn's *text*, or None.
 
