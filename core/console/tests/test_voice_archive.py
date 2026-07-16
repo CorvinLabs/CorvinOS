@@ -454,3 +454,64 @@ def test_space_free_detector_does_not_claim_latin() -> None:
     assert not cr._is_space_free_script("https://example.com/a/b")
     assert not cr._is_space_free_script("Donaudampfschifffahrtsgesellschaft")
     assert not cr._is_space_free_script("")
+
+
+# ── retention: the archive must not grow without bound ───────────────────────
+#
+# There was no cap of any kind. _MAX_VOICE_SEGMENTS bounds segments PER TURN and
+# _MAX_SESSIONS_PER_TENANT bounds session COUNT, but one long-lived chat kept
+# speech audio for every turn forever. Beyond storage that is a GDPR Art. 5(1)(e)
+# storage-limitation problem. Eviction is oldest-first because the files are
+# keyed by a hash of the text with no back-reference, so "delete the audio for
+# turn X" is not expressible — mtime is.
+
+def test_prune_evicts_oldest_until_under_the_cap(tmp_path, monkeypatch) -> None:
+    import os as _os
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    for i in range(5):
+        f = vd / f"{'%016x' % i}.ogg"
+        f.write_bytes(b"x" * 100)
+        _os.utime(f, (1000 + i, 1000 + i))      # oldest = i0
+    removed = cr.prune_voice_archive("_default", "sid1", max_bytes=250)
+    survivors = sorted(p.name for p in vd.iterdir())
+    assert removed == 3
+    assert survivors == ["%016x.ogg" % 3, "%016x.ogg" % 4]   # newest kept
+
+
+def test_prune_is_a_noop_under_the_cap(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    (vd / "aaaaaaaaaaaaaaaa.ogg").write_bytes(b"x" * 100)
+    assert cr.prune_voice_archive("_default", "sid1", max_bytes=10_000) == 0
+    assert len(list(vd.iterdir())) == 1
+
+
+def test_prune_never_raises_on_a_missing_dir(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    assert cr.prune_voice_archive("_default", "sid1", max_bytes=1) == 0
+
+
+def test_prune_disabled_by_a_zero_cap(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    (vd / "aaaaaaaaaaaaaaaa.ogg").write_bytes(b"x" * 100)
+    assert cr.prune_voice_archive("_default", "sid1", max_bytes=0) == 0
+    assert len(list(vd.iterdir())) == 1
+
+
+def test_an_evicted_turn_just_loses_its_player(tmp_path, monkeypatch) -> None:
+    """Eviction must degrade to 'no player', never to a broken one."""
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    text = "Eine alte Antwort."
+    (vd / f"{cr.voice_key(text)}.ogg").write_bytes(b"x" * 100)
+    cr.prune_voice_archive("_default", "sid1", max_bytes=1)
+    assert cr.find_turn_voice("_default", "sid1", text) is None
+    turn = {"role": "assistant", "parts": [{"kind": "text", "text": text}]}
+    out = cr.attach_voice_artifacts("_default", "sid1", [turn])
+    assert [p for p in out[0]["parts"] if p.get("kind") == "artifact"] == []

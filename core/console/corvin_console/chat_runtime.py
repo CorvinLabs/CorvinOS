@@ -658,6 +658,66 @@ def find_turn_voice_segments(tenant_id: str, sid: str, text: str,
         return []
 
 
+# Per-session ceiling for the ADR-0194 voice archive. There was no cap of any
+# kind: _MAX_VOICE_SEGMENTS bounds segments PER TURN and _MAX_SESSIONS_PER_TENANT
+# bounds session COUNT, but a single long-lived chat accumulated speech audio for
+# every turn forever (~80 KB per summary here — 500 turns is ~40 MB before
+# read-aloud segments). Beyond storage that is a GDPR Art. 5(1)(e)
+# storage-limitation problem: audio of replies from months ago kept with no
+# purpose and no expiry.
+_VOICE_ARCHIVE_MAX_BYTES = int(
+    os.environ.get("CORVIN_VOICE_ARCHIVE_MAX_BYTES", str(64 * 1024 * 1024)))
+
+
+def prune_voice_archive(tenant_id: str, sid: str,
+                        max_bytes: int = _VOICE_ARCHIVE_MAX_BYTES) -> int:
+    """Evict oldest-first until the session's voice dir fits *max_bytes*.
+
+    Returns the number of files removed. Best-effort: a failure here must never
+    break TTS — the archive is a convenience, the audio was already streamed to
+    the caller.
+
+    Eviction is safe by construction: a turn whose audio is gone simply renders
+    without a player (find_turn_voice returns None), and the user's existing
+    Replay / read-aloud controls re-synthesise it on demand. That is also why
+    this needs no index — which matters, because the files are keyed by a hash
+    of the text with no back-reference, so "delete the audio for turn X" is not
+    expressible; oldest-first over mtime is.
+    """
+    if max_bytes <= 0:
+        return 0
+    try:
+        vdir = voice_dir(tenant_id, sid)
+        if not vdir.is_dir():
+            return 0
+        files = []
+        total = 0
+        for p in vdir.iterdir():
+            if not p.is_file():
+                continue
+            st = p.stat()
+            files.append((st.st_mtime, st.st_size, p))
+            total += st.st_size
+        if total <= max_bytes:
+            return 0
+        removed = 0
+        for _mtime, size, path in sorted(files):   # oldest first
+            if total <= max_bytes:
+                break
+            try:
+                path.unlink()
+            except OSError:
+                continue
+            total -= size
+            removed += 1
+        if removed:
+            _log.info("voice archive for %s: evicted %d oldest file(s) to stay "
+                      "under %d bytes", sid, removed, max_bytes)
+        return removed
+    except OSError:
+        return 0
+
+
 def _turn_text(turn: dict[str, Any]) -> str:
     """Concatenate a persisted turn's text parts — the key the audio is filed under."""
     out: list[str] = []
