@@ -3,6 +3,14 @@
 CorvinOS can drive a real browser — open pages, navigate, fill fields, click
 buttons, read results — while **you watch live** and can pause or take over.
 
+**From the console chat**, this is a native tool (`corvin-browser`, ADR-0193)
+the model calls directly as part of its own turn — the same way it calls
+`Bash` or `Edit` — no special command, no separate process, no pre-turn
+classifier deciding whether your message "counts" as browsing. See
+`docs/browser-native-tool-integration.md` for the design. The rest of this
+doc describes the underlying action surface, safety model, and the separate
+Browser-page UI, which apply regardless of which caller drives them.
+
 ## How it works
 
 - **Perception — Set-of-Marks.** Each `observe` returns a numbered list of the
@@ -67,14 +75,15 @@ Two usability additions layered on top of the safety model above — neither
 weakens the fail-closed default for anything the user didn't explicitly ask
 for:
 
-- **Task-scoped auto-approval.** When a `/browser <task>` chat command's own
-  task text literally names a URL (e.g. *"open https://aiagentslist.com and
-  read the listing"*), navigating to that host (or a subdomain of it) no
-  longer pauses for a confirm — the user already approved it by naming it.
-  Any OTHER cross-host hop the agent tries mid-task (something it discovered
-  on the page, not something the user asked for) still requires the normal
+- **Task-scoped auto-approval.** The host named in a session-creating
+  `browser_navigate` call (native chat tool, ADR-0193) no longer pauses for a
+  confirm the first time — the user already approved it by naming it. Any
+  OTHER cross-host hop the agent tries mid-task (something it discovered on
+  the page, not something the user asked for) still requires the normal
   confirm. This only ever *narrows* what needs approval; it never disables
-  the confirm/egress-allowlist machinery itself.
+  the confirm/egress-allowlist machinery itself. (The Browser page's own task
+  field never wired this extraction through its `POST /browser/session` call
+  — a pre-existing gap unrelated to and unchanged by ADR-0193.)
 - **Login pause (`needs_login`).** The agent loop checks for a visible
   password field *before* asking the planner what to do next. If one is
   present, the loop stops immediately — the agent can never decide to
@@ -84,10 +93,12 @@ for:
 - **Approval pause (`needs_approval`).** A cross-host confirm that's declined
   or times out ends the run cleanly with `needs_approval` instead of retrying
   the same hop every step until `max_steps`. The session likewise stays open.
-- **Resuming a pause.** `/browser continue <sid>` in chat (or the **Weiter**
-  button / saying "weiter" in the Browser page) re-runs the agent loop on the
-  *same* session — same browser, same cookies/page state — with a short note
-  telling the planner not to repeat the step it paused for.
+- **Resuming a pause.** The **Weiter** button (or saying "weiter") in the
+  Browser page re-runs the agent loop on the *same* session — same browser,
+  same cookies/page state — with a short note telling the planner not to
+  repeat the step it paused for. (This resumes the Browser page's own
+  agent-loop task, a separate mechanism from the native chat tool's granular
+  actions — see the note after "Known limitations" below.)
 - **Voice notification on pause.** If the tenant has notify routing
   configured (see `spec.browser.notify_channel`/`notify_chat_id` below), a
   proactive voice-capable notification is pushed the moment the agent pauses
@@ -138,13 +149,31 @@ wins.
 | `spec.browser.notify_channel` / `spec.browser.notify_chat_id` | ADR-0189: opt-in routing (e.g. `discord` + a chat ID) for proactive voice notifications when the agent pauses. No console UI/API yet — manual YAML edit only, same pattern as the allowlist above. Absent → no proactive notification (in-chat text + live view still apply). |
 | env `CORVIN_BROWSER_NO_SANDBOX=1` | Disable the renderer sandbox (constrained hosts only) |
 
+## Native chat tool vs. the Browser page's own agent loop
+
+Two distinct ways to drive the browser exist side by side, per ADR-0193:
+
+- **Native chat tool (`corvin-browser`, ADR-0193).** The model calls granular
+  actions (`browser_navigate`, `browser_click`, `browser_read`, …) directly
+  as part of its own turn. A sensitive action it hits parks a confirm
+  resolvable only from the live view's Approve/Decline buttons (or the
+  decoupled `POST /browser/{sid}/confirm` endpoint) — there is no chat-text
+  command for this anymore.
+- **The Browser page's own "Aufgabe für den Browser" task field** still
+  starts the older, autonomous agent loop (`POST /browser/{sid}/agent`) that
+  runs a whole natural-language task to completion in the background, with
+  its own Weiter button / voice vocabulary for `needs_login`/`needs_approval`
+  pauses — unrelated to and unaffected by the chat-tool path above.
+
 ## Known limitations
 
-- A confirm can be approved from the live-view **or** from the main chat
-  (`/browser confirm <sid> yes|no`); both resolve the same pending request.
-- A `needs_login`/`needs_approval` pause can be resumed from the live-view
-  (Weiter button or saying "weiter") **or** from the main chat
-  (`/browser continue <sid>`); both call the same `continue_agent()` path.
+- A confirm from the native chat tool's granular actions can be approved
+  **only** from the live view (Approve/Decline buttons, or the decoupled
+  `POST /browser/{sid}/confirm` endpoint) — there is no chat-text command.
+- A `needs_login`/`needs_approval` pause from the Browser page's own agent
+  loop is resumed from the live view (Weiter button or saying "weiter")
+  only — the `/browser continue <sid>` chat-text command that used to be an
+  alternative path was retired in ADR-0193 Phase 2.
 - Sensitivity detection is heuristic (element name + URL path + form context); an
   icon-only commit button on a plain-looking page may not be auto-flagged (the
   network-layer egress guard, the audit trail, and the live view are the
