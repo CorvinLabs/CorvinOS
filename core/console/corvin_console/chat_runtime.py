@@ -445,6 +445,106 @@ def _workdir(tenant_id: str, sid: str) -> Path:
         _forge_paths.tenant_sessions_dir(tenant_id), f"{CHANNEL}:{sid}")
 
 
+# ── ADR-0194 Phase 1 — per-turn voice artifact ───────────────────────────────
+# The spoken audio for a turn already exists server-side: /voice/tts summarises
+# the reply, shells out to say.py (which WRITES an audio file), returns the bytes
+# — and then deletes the file. Keeping that file inside the session workdir turns
+# it into an ordinary chat artifact for free: _artifact_mime() classifies audio/*,
+# the workdir route serves it inline, ArtifactCard renders a real <audio> player,
+# and it is erased with the session (Layer 33/36). No extra synthesis and — because
+# /voice/tts runs AFTER the turn's `done` — no added turn latency, so the composer
+# never stalls waiting for TTS (the freeze class fixed in 0.10.36).
+_VOICE_SUBDIR = "voice"
+
+
+def voice_key(text: str) -> str:
+    """Stable key for a turn's spoken audio, derived from the turn TEXT.
+
+    Writer (/voice/tts, which synthesises when the user actually hears the reply)
+    and reader (history rehydrate) never share a turn id — a persisted turn has no
+    identifier of its own. A hash of the NORMALISED text is what lets them meet:
+    the streamed `result` text and the persisted `combined_text` differ in
+    whitespace/trailing newlines, which must NOT yield a different key.
+    """
+    import hashlib  # noqa: PLC0415 — local: only this helper needs it
+    norm = re.sub(r"\s+", " ", (text or "")).strip()
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+
+
+def voice_dir(tenant_id: str, sid: str) -> Path:
+    """Session-scoped directory holding this chat's per-turn voice audio."""
+    return _workdir(tenant_id, sid) / _VOICE_SUBDIR
+
+
+def find_turn_voice(tenant_id: str, sid: str, text: str) -> Path | None:
+    """Return the persisted voice file for a turn's *text*, or None.
+
+    Extension is provider-dependent (say.py emits OGG-Opus / MP3 / WAV and does
+    NOT transcode), so match on the key and take whatever extension landed.
+    """
+    vdir = voice_dir(tenant_id, sid)
+    if not text or not text.strip():
+        return None
+    try:
+        for p in sorted(vdir.glob(f"{voice_key(text)}.*")):
+            if p.is_file() and p.stat().st_size > 0:
+                return p
+    except OSError:
+        pass
+    return None
+
+
+def _turn_text(turn: dict[str, Any]) -> str:
+    """Concatenate a persisted turn's text parts — the key the audio is filed under."""
+    out: list[str] = []
+    for p in turn.get("parts") or []:
+        if isinstance(p, dict) and p.get("kind") == "text" and p.get("text"):
+            out.append(str(p["text"]))
+    return "".join(out)
+
+
+def attach_voice_artifacts(tenant_id: str, sid: str,
+                           turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Append each assistant turn's archived voice file as an artifact part.
+
+    The audio is written by /voice/tts AFTER the turn was already persisted —
+    that ordering is deliberate (it keeps TTS off the turn's critical path, so
+    the composer never stalls on synthesis). It therefore cannot be inside
+    turns.jsonl, and rewriting history after the fact would be a second writer
+    for the same record. Resolving it at READ time instead keeps turns.jsonl the
+    single source of truth for the turn and lets the archive be purely additive:
+    a turn whose audio was never generated (voice toggled off, TTS unavailable)
+    simply gets no player, and one generated later starts appearing with no
+    migration. Never raises — history must render even if the archive is gone.
+    """
+    for turn in turns:
+        try:
+            if turn.get("role") != "assistant":
+                continue
+            parts = turn.get("parts")
+            if not isinstance(parts, list):
+                continue
+            if any(isinstance(p, dict) and p.get("label") == "voice" for p in parts):
+                continue  # already carries its player
+            vf = find_turn_voice(tenant_id, sid, _turn_text(turn))
+            if vf is None:
+                continue
+            mime = _artifact_mime(vf)
+            if not mime:
+                continue
+            parts.append({
+                "kind": "artifact",
+                "name": vf.name,
+                "path": f"{_VOICE_SUBDIR}/{vf.name}",
+                "mime": mime,
+                "size": vf.stat().st_size,
+                "label": "voice",
+            })
+        except Exception:  # noqa: BLE001 — a broken archive must not break history
+            continue
+    return turns
+
+
 def _read_meta(path: Path) -> dict[str, Any] | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))

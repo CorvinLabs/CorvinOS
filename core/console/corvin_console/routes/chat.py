@@ -172,6 +172,10 @@ def get_chat_turns(
     if sess is None:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND, "session not found")
     turns = chat_runtime.read_turns(rec.tenant_id, sid, limit=limit)
+    # ADR-0194 Phase 1: surface each turn's archived voice as an artifact part so
+    # the rehydrated bubble re-renders its <audio> player. Resolved at read time —
+    # the audio is written after the turn is persisted, by design.
+    turns = chat_runtime.attach_voice_artifacts(rec.tenant_id, sid, turns)
     return {"sid": sid, "count": len(turns), "turns": turns}
 
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

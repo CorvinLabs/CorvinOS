@@ -123,7 +123,7 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
   React.useEffect(() => () => stopVoice(), [stopVoice]);
 
   const playTts = React.useCallback(
-    async (text: string, lang: string) => {
+    async (text: string, lang: string, sid?: string) => {
       const myRequestId = ++requestIdRef.current;
       // Latest request wins — stop any in-flight playback first.
       stopVoice();
@@ -131,7 +131,7 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
       setVoiceState("loading");
       let blob: Blob;
       try {
-        blob = await ttsBlob(text, lang, csrf);
+        blob = await ttsBlob(text, lang, csrf, sid);
       } catch (e) {
         if (myRequestId !== requestIdRef.current) return; // superseded meanwhile
         setVoiceState("idle");
