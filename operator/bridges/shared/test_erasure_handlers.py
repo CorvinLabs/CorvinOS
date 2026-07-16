@@ -17,6 +17,7 @@ from erasure_handlers import (  # noqa: E402
     L24DataSnapshotHandler,
     L28RecallHandler,
     L33ArtifactHandler,
+    WebChatHandler,
     WorkflowCheckpointHandler,
     real_handler_chain,
 )
@@ -420,3 +421,71 @@ class TestRealHandlerChain(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWebChatHandler(unittest.TestCase):
+    """ADR-0194 voice archive + turn log must actually be erased on Art. 17.
+
+    Before WebChatHandler existed, an erasure run reported APPLIED across every
+    layer and wrote a successful receipt into the hash-chained audit log while
+    <tenant>/sessions/web:<sid>/voice/*.ogg — a spoken rendering of every
+    assistant reply in the chat — survived untouched: voice/ is a SIBLING of
+    artifacts/, so L33ArtifactHandler never saw it.
+    """
+
+    def _corvin_home(self) -> tempfile.TemporaryDirectory:
+        return tempfile.TemporaryDirectory(prefix="erasure-webchat-")
+
+    def _seed(self, td: str, session_key: str = "web:abc123"):
+        sid = session_key.split(":", 1)[1]
+        vdir = Path(td) / "tenants" / "_default" / "sessions" / session_key / "voice"
+        vdir.mkdir(parents=True)
+        (vdir / "deadbeefdeadbeef.ogg").write_bytes(b"OggS" + b"\0" * 96)
+        (vdir / "deadbeefdeadbeef-f00.ogg").write_bytes(b"OggS" + b"\0" * 96)
+        turns = Path(td) / "tenants" / "_default" / "global" / "web_chat" / "sessions"
+        turns.mkdir(parents=True)
+        (turns / f"{sid}.turns.jsonl").write_text('{"role":"assistant"}\n')
+        return vdir, turns / f"{sid}.turns.jsonl"
+
+    def test_purge_removes_voice_archive_and_turn_log(self):
+        with self._corvin_home() as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                vdir, turns = self._seed(td)
+                result = WebChatHandler().purge("web:abc123", "er-test")
+                self.assertEqual(result.status, LayerStatus.APPLIED)
+                self.assertEqual(result.count, 3)  # 2 audio + 1 turn log
+                self.assertEqual(list(vdir.glob("*")), [])
+                self.assertFalse(turns.exists())
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
+    def test_absent_session_returns_skipped(self):
+        with self._corvin_home() as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                result = WebChatHandler().purge("web:nothing-here", "er-test")
+                self.assertEqual(result.status, LayerStatus.SKIPPED)
+                self.assertEqual(result.count, 0)
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
+    def test_windows_sanitised_dir_name_is_also_purged(self):
+        """The console rewrites 'web:<sid>' to 'web_<sid>' on Windows."""
+        with self._corvin_home() as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                vdir = (Path(td) / "tenants" / "_default" / "sessions"
+                        / "web_abc123" / "voice")
+                vdir.mkdir(parents=True)
+                (vdir / "cafebabecafebabe.ogg").write_bytes(b"OggS")
+                result = WebChatHandler().purge("web:abc123", "er-test")
+                self.assertEqual(result.status, LayerStatus.APPLIED)
+                self.assertEqual(list(vdir.glob("*")), [])
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
+    def test_handler_is_registered_in_the_real_chain(self):
+        """A handler nobody registers erases nothing — that WAS the bug."""
+        ids = {getattr(h, "layer_id", None) for h in real_handler_chain()}
+        self.assertIn("web-chat", ids)
