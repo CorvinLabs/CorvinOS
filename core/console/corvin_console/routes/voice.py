@@ -609,7 +609,9 @@ def _persist_turn_voice(tenant_id: str, sid: str, text: str,
             raise
         # Keep the session's archive under its ceiling (GDPR Art. 5(1)(e)); an
         # evicted turn simply loses its player and re-synthesises on replay.
-        _cr.prune_voice_archive(tenant_id, sid)
+        # keep=dest.name so a mis-set tiny cap can't delete the audio we just
+        # made — that would burn a synthesis per turn and never show a player.
+        _cr.prune_voice_archive(tenant_id, sid, keep=dest.name)
         return dest.name
     except Exception:  # noqa: BLE001
         return None
