@@ -1,9 +1,7 @@
 # Browser Control as a Native Chat Tool (Concept)
 
-**Status: concept only.** No ADR filed yet — this retires an existing security-sensitive
-mechanism (ADR-0187's SSRF/indirect-injection defenses, ADR-0189's voice-guided pause/resume)
-in favor of a different integration shape, which is exactly the kind of structural,
-security-adjacent change this repo's ADR gate calls out. Write one before implementation.
+**Status: ADR filed, not yet implemented.** See `Corvin-ADR/decisions/0193-browser-native-chat-tool-integration.md`
+for the accepted decision record — this doc is the fuller design behind it.
 
 ## 1. Problem — why "build me a web UI" launches a live browser
 
