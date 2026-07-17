@@ -96,6 +96,30 @@ def _find_call(dump: list[dict], chat_key: str) -> dict | None:
     return None
 
 
+def system_prompt_from_args(args: list) -> str:
+    """Return the merged system prompt from a dumped claude argv.
+
+    Understands BOTH spawn shapes: the historical inline
+    ``--append-system-prompt <text>`` and the post-e4dec5c
+    ``--append-system-prompt-file <path>`` (Windows command-line-length
+    fix), where the text lives in a temp file inside the session dir.
+    In ADAPTER_FAKE_CLAUDE dump mode the adapter deliberately leaks that
+    temp file (see _build_claude_args docstring), so reading it here is
+    safe as long as the sandbox is still alive (assertions run BEFORE
+    each case's shutil.rmtree teardown).
+    """
+    if "--append-system-prompt" in args:
+        return args[args.index("--append-system-prompt") + 1]
+    if "--append-system-prompt-file" in args:
+        path = Path(args[args.index("--append-system-prompt-file") + 1])
+        if not path.exists():
+            raise AssertionError(
+                f"--append-system-prompt-file points at a missing file: {path}"
+            )
+        return path.read_text(encoding="utf-8")
+    raise AssertionError(f"no --append-system-prompt[-file] in argv: {args}")
+
+
 def _adapter_env(sandbox: Path, *, corvin_home: Path, plugin_slot: Path,
                  force_scope: str = "session") -> dict:
     env = os.environ.copy()
@@ -208,7 +232,7 @@ def case_no_skill_forge_no_inject(failures: list[str]) -> None:
         if e is None:
             raise AssertionError(f"no dump entry; dump={dump}")
         args = e["args"]
-        sp = args[args.index("--append-system-prompt") + 1]
+        sp = system_prompt_from_args(args)
         if "Active session skills" in sp:
             raise AssertionError("skill block injected without any skills present")
         print("PASS: no skills → no block")
@@ -251,7 +275,7 @@ def case_graded_skill_injected(failures: list[str]) -> None:
         if e is None:
             raise AssertionError(f"no dump entry; dump={dump}")
         args = e["args"]
-        sp = args[args.index("--append-system-prompt") + 1]
+        sp = system_prompt_from_args(args)
         if "Active session skills" not in sp:
             raise AssertionError(f"skill header missing — sp tail: {sp[-400:]!r}")
         if 'demo.codeword' not in sp:
@@ -312,7 +336,7 @@ def case_ungraded_default_filtered(failures: list[str]) -> None:
         if e is None:
             raise AssertionError(f"no dump entry; dump={dump}")
         args = e["args"]
-        sp = args[args.index("--append-system-prompt") + 1]
+        sp = system_prompt_from_args(args)
         if "BLUE-MARKER-77" in sp:
             raise AssertionError("ungraded skill injected by default — should be filtered")
         print("PASS: ungraded skill NOT injected by default")
@@ -340,7 +364,7 @@ def case_ungraded_default_filtered(failures: list[str]) -> None:
         if e is None:
             raise AssertionError(f"no dump entry; dump={dump}")
         args = e["args"]
-        sp = args[args.index("--append-system-prompt") + 1]
+        sp = system_prompt_from_args(args)
         if "BLUE-MARKER-77" not in sp:
             raise AssertionError(f"inject_ungraded=true did not lift gate; tail={sp[-400:]!r}")
         print("PASS: inject_ungraded=true → ungraded skill injected")
@@ -380,7 +404,7 @@ def case_inject_skills_false_disables(failures: list[str]) -> None:
         if e is None:
             raise AssertionError(f"no dump entry; dump={dump}")
         args = e["args"]
-        sp = args[args.index("--append-system-prompt") + 1]
+        sp = system_prompt_from_args(args)
         if "RED-FLAG-99" in sp or "Active session skills" in sp:
             raise AssertionError("inject_skills=false but skill block still present")
         print("PASS: inject_skills=false → no block")
@@ -426,7 +450,7 @@ def case_cap_orders_by_score(failures: list[str]) -> None:
         if e is None:
             raise AssertionError(f"no dump entry; dump={dump}")
         args = e["args"]
-        sp = args[args.index("--append-system-prompt") + 1]
+        sp = system_prompt_from_args(args)
         # Expect top-3 by score: indices 0,1,2 (CAP-VAL 95,85,75) IN; 3..6 OUT.
         for i in (0, 1, 2):
             if f"CAP-VAL-{int(scores[i]*100)}" not in sp:
@@ -483,7 +507,7 @@ def case_zero_score_filtered(failures: list[str]) -> None:
         if e is None:
             raise AssertionError(f"no dump entry; dump={dump}")
         args = e["args"]
-        sp = args[args.index("--append-system-prompt") + 1]
+        sp = system_prompt_from_args(args)
         if "CONTENT-TAG-ZG" in sp:
             raise AssertionError("mean_score=0 skill leaked into prompt")
         print("PASS: mean_score=0 → filtered")
@@ -529,8 +553,8 @@ def case_hot_reload_per_message(failures: list[str]) -> None:
         entries = [d for d in dump if d.get("chat_key") == chat_key]
         if len(entries) < 2:
             raise AssertionError(f"expected 2 calls, got {len(entries)}; dump={dump}")
-        sp1 = entries[0]["args"][entries[0]["args"].index("--append-system-prompt") + 1]
-        sp2 = entries[1]["args"][entries[1]["args"].index("--append-system-prompt") + 1]
+        sp1 = system_prompt_from_args(entries[0]["args"])
+        sp2 = system_prompt_from_args(entries[1]["args"])
         if "LATE-ARRIVAL-MARKER" in sp1:
             raise AssertionError("turn 1 saw a skill that didn't exist yet — caching bug")
         if "LATE-ARRIVAL-MARKER" not in sp2:
@@ -581,7 +605,7 @@ def case_body_cap_truncates(failures: list[str]) -> None:
         if e is None:
             raise AssertionError(f"no dump entry; dump={dump}")
         args = e["args"]
-        sp = args[args.index("--append-system-prompt") + 1]
+        sp = system_prompt_from_args(args)
         if "MARKER-START" not in sp:
             raise AssertionError(f"start-of-body missing; tail={sp[-400:]!r}")
         if "MARKER-AFTER-CAP" in sp:
@@ -646,7 +670,7 @@ def case_skill_body_escape_blocked(failures: list[str]) -> None:
         if e is None:
             raise AssertionError(f"no dump entry; dump={dump}")
         args = e["args"]
-        sp = args[args.index("--append-system-prompt") + 1]
+        sp = system_prompt_from_args(args)
         # Find the wrapper open + close. The body's escape-attempt should
         # become </auto_skill_> (sanitized) — exactly ONE real </auto_skill>
         # closes the wrapper at the end.

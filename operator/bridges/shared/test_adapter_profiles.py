@@ -104,6 +104,29 @@ def find_call(dump: list[dict], chat_key: str) -> dict | None:
     return None
 
 
+def system_prompt_from_args(args: list) -> str:
+    """Return the merged system prompt from a dumped claude argv.
+
+    Understands BOTH spawn shapes: the historical inline
+    ``--append-system-prompt <text>`` and the post-e4dec5c
+    ``--append-system-prompt-file <path>`` (Windows command-line-length
+    fix), where the text lives in a temp file inside the session dir.
+    In ADAPTER_FAKE_CLAUDE dump mode the adapter deliberately leaks that
+    temp file (see _build_claude_args docstring), so reading it here is
+    safe as long as the sandbox is still alive.
+    """
+    if "--append-system-prompt" in args:
+        return args[args.index("--append-system-prompt") + 1]
+    if "--append-system-prompt-file" in args:
+        path = Path(args[args.index("--append-system-prompt-file") + 1])
+        if not path.exists():
+            raise AssertionError(
+                f"--append-system-prompt-file points at a missing file: {path}"
+            )
+        return path.read_text(encoding="utf-8")
+    raise AssertionError(f"no --append-system-prompt[-file] in argv: {args}")
+
+
 def assert_args_contain(args: list[str], *needles: str) -> None:
     """Sucht jede Suchstring-Folge sequenziell in args. needle ist der value
     direkt nach dem Flag — z.B. assert_args_contain(args, '--model', 'claude-haiku-4-5')."""
@@ -203,10 +226,10 @@ def main() -> int:
         assert_args_contain(args, "--allowedTools", "Read")
         assert_args_contain(args, "--disallowedTools", "Bash Write Edit")
         # append_system → der system-prompt-arg muss den Suffix enthalten.
-        sys_idx = args.index("--append-system-prompt") + 1
-        if "replye especially knapp." not in args[sys_idx]:
+        sys_prompt = system_prompt_from_args(args)
+        if "replye especially knapp." not in sys_prompt:
             raise AssertionError(
-                f"append_system not in system prompt: {args[sys_idx][-200:]}"
+                f"append_system not in system prompt: {sys_prompt[-200:]}"
             )
         print("PASS: readonly-chat → default mode + tool-caps + append_system")
     except (AssertionError, ValueError, IndexError) as e:

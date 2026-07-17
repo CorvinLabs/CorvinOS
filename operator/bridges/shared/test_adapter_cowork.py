@@ -80,6 +80,29 @@ def find_call(dump: list[dict], chat_key: str) -> dict | None:
     return None
 
 
+def system_prompt_from_args(args: list) -> str:
+    """Return the merged system prompt from a dumped claude argv.
+
+    Understands BOTH spawn shapes: the historical inline
+    ``--append-system-prompt <text>`` and the post-e4dec5c
+    ``--append-system-prompt-file <path>`` (Windows command-line-length
+    fix), where the text lives in a temp file inside the session dir.
+    In ADAPTER_FAKE_CLAUDE dump mode the adapter deliberately leaks that
+    temp file (see _build_claude_args docstring), so reading it here is
+    safe as long as the sandbox is still alive.
+    """
+    if "--append-system-prompt" in args:
+        return args[args.index("--append-system-prompt") + 1]
+    if "--append-system-prompt-file" in args:
+        path = Path(args[args.index("--append-system-prompt-file") + 1])
+        if not path.exists():
+            raise AssertionError(
+                f"--append-system-prompt-file points at a missing file: {path}"
+            )
+        return path.read_text(encoding="utf-8")
+    raise AssertionError(f"no --append-system-prompt[-file] in argv: {args}")
+
+
 def run_adapter_once(env: dict) -> None:
     proc = subprocess.Popen(
         ["python3", str(ADAPTER)],
@@ -202,13 +225,13 @@ def main() -> int:
         # (bypassPermissions öffnet alles). Override muss aber im merge erscheinen.
         if "mcp__shared__listen" not in allowed:
             raise AssertionError(f"chat-override fehlte im merge — allowed={allowed}")
-        sys_idx = args.index("--append-system-prompt") + 1
-        if "especially knapp" not in args[sys_idx]:
+        sys_prompt = system_prompt_from_args(args)
+        if "especially knapp" not in sys_prompt:
             raise AssertionError("chat-spezifischer append_system nicht im prompt")
         # research persona contains "research agent" / "web research" in append_system
-        if ("research agent" not in args[sys_idx].lower()
-                and "web research" not in args[sys_idx].lower()
-                and "websearch" not in args[sys_idx].lower()):
+        if ("research agent" not in sys_prompt.lower()
+                and "web research" not in sys_prompt.lower()
+                and "websearch" not in sys_prompt.lower()):
             raise AssertionError("persona-prompt nicht im final prompt")
         print("PASS: persona + chat-overrides → tools mergen, append_system konkateniert")
     except AssertionError as e:
@@ -301,7 +324,7 @@ def main() -> int:
         mcp_doc = json.loads(Path(mcp_path).read_text())
         if "playwright" not in mcp_doc.get("mcpServers", {}):
             raise AssertionError(f"router → browser, aber kein playwright-MCP: {mcp_doc}")
-        sys_prompt = args[args.index("--append-system-prompt") + 1]
+        sys_prompt = system_prompt_from_args(args)
         # router may pick research (now carries Playwright) instead of browser
         if ("research agent" not in sys_prompt.lower()
                 and "browser automation agent" not in sys_prompt.lower()
@@ -347,7 +370,7 @@ def main() -> int:
             raise AssertionError(f"fallback erwartet bypass: {args}")
         if "--mcp-config" not in args:
             raise AssertionError(f"fallback erwartet MCP (assistant hat playwright): {args}")
-        sys_prompt = args[args.index("--append-system-prompt") + 1]
+        sys_prompt = system_prompt_from_args(args)
         # Match either the original German Allrounder marker or its
         # English translation — the persona has been migrated DE → EN.
         sp_low = sys_prompt.lower()

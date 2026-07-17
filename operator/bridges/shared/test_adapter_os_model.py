@@ -177,7 +177,32 @@ class ResolveOsModelPhase3Tests(_EnvGuard, unittest.TestCase):
 
 
 class BuildClaudeArgsPhase3Tests(_EnvGuard, unittest.TestCase):
-    """argv integration: verify --model flag is surfaced correctly."""
+    """argv integration: verify --model flag is surfaced correctly.
+
+    These tests go through the REAL _build_claude_args → estimate path,
+    and estimate_os_turn_chars adds the on-disk session-history bytes of
+    <CORVIN_HOME>/tenants/_default/sessions/voice/<channel>/<chat> to the
+    payload estimate. Against the live repo .corvin/ that directory can
+    carry hundreds of KB of leftovers from earlier live runs, silently
+    flipping "tiny prompt, no session → Haiku" into Sonnet. Sandbox
+    CORVIN_HOME per test so the "no session" premise actually holds.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        import tempfile
+        self._saved_corvin_home = os.environ.get("CORVIN_HOME")
+        self._sandbox_home = tempfile.mkdtemp(prefix="os-model-argv-")
+        os.environ["CORVIN_HOME"] = self._sandbox_home
+
+    def tearDown(self) -> None:
+        if self._saved_corvin_home is None:
+            os.environ.pop("CORVIN_HOME", None)
+        else:
+            os.environ["CORVIN_HOME"] = self._saved_corvin_home
+        import shutil
+        shutil.rmtree(self._sandbox_home, ignore_errors=True)
+        super().tearDown()
 
     def test_small_prompt_lands_haiku_in_argv(self) -> None:
         """A tiny prompt with no session → Haiku via autoselect."""
