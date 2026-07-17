@@ -47,6 +47,7 @@ export default {
           DEFAULT: "hsl(var(--destructive) / <alpha-value>)",
           foreground: "hsl(var(--destructive-foreground) / <alpha-value>)",
         },
+        "voice-accent": "hsl(var(--voice-accent) / <alpha-value>)",
         brass: {
           DEFAULT: "hsl(38 52% 53%)",
           deep: "hsl(38 46% 42%)",

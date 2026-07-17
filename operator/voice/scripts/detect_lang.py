@@ -30,6 +30,11 @@ DE = {
     "ich", "du", "er", "sie", "wir", "ihr", "es", "wurde", "worden", "ja",
     "nein", "sehr", "viel", "viele", "einen", "einer", "einem", "eines",
     "alle", "alles", "kein", "keine",
+    # Common short-answer + emotional markers (added 2026-07-17 to close False-Negative trap)
+    "danke", "super", "prima", "gut", "ok", "okay", "fertig", "bereit",
+    "möglich", "unmöglich", "richtig", "falsch", "wahr", "falsch", "stimmt",
+    "verstanden", "klar", "genau", "interessant", "wichtig", "wunderbar",
+    "schön", "schick", "toll", "hervorragend", "perfekt", "bitte", "gerne",
 }
 
 EN = {
@@ -68,9 +73,13 @@ _UMLAUT_RE = re.compile(r"[äöüÄÖÜß]")
 # (profile pin / --default) is a better answer than a guess made from two
 # or three function words. When the losing side has ZERO hits the bar
 # drops to _CONFIDENT_ONE_SIDED_MIN — see detect_confident().
+# For voice summaries (very short), the one-sided min is lower (1 instead of 2)
+# because short confirmations like "Ja, fertig!" are unlikely to contain enough
+# hits to clear the old bar, yet are definitively de/en (added 2026-07-17).
 _CONFIDENT_MARGIN = 2
 _CONFIDENT_MIN_HITS = 3
 _CONFIDENT_ONE_SIDED_MIN = 2
+_CONFIDENT_ONE_SIDED_MIN_SHORT = 1  # for text < 50 chars
 
 # Markdown code carriers. Code is keyword soup in ENGLISH by construction
 # (if/not/for/in/is/and/with/the ...), so a German answer that embeds a
@@ -88,7 +97,12 @@ _INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 def _strip_code(text: str) -> str:
     """Remove fenced + inline markdown code before language scoring."""
     text = _CODE_FENCE_RE.sub(" ", text)
-    return _INLINE_CODE_RE.sub(" ", text)
+    text = _INLINE_CODE_RE.sub(" ", text)
+    # Also remove emoji/unicode symbols to avoid blocking word extraction.
+    # Keep basic punctuation and numbers for context.
+    import unicodedata
+    text = "".join(c for c in text if unicodedata.category(c)[0] != "S")
+    return text
 
 
 def score(text: str) -> tuple[int, int]:
@@ -147,10 +161,12 @@ def detect_confident(text: str) -> str | None:
     # (Umlauts alone cannot reach this branch for "de" — zero word hits on
     # both sides already returned None above — but they do BLOCK the "en"
     # branch, which is correct: umlauts are a German-only signal.)
+    # For very short text (voice summaries), lower the bar to 1 hit instead of 2.
+    min_hits = _CONFIDENT_ONE_SIDED_MIN_SHORT if len(text) < 50 else _CONFIDENT_ONE_SIDED_MIN
     if en_count == 0:
-        return "de" if de_count >= _CONFIDENT_ONE_SIDED_MIN else None
+        return "de" if de_count >= min_hits else None
     if de_count == 0:
-        return "en" if en_count >= _CONFIDENT_ONE_SIDED_MIN else None
+        return "en" if en_count >= min_hits else None
     if de_count >= en_count + _CONFIDENT_MARGIN and de_count >= _CONFIDENT_MIN_HITS:
         return "de"
     if en_count >= de_count + _CONFIDENT_MARGIN and en_count >= _CONFIDENT_MIN_HITS:
