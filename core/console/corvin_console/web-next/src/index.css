@@ -110,6 +110,16 @@
       radial-gradient(50% 80% at 10% 20%, hsl(38 52% 53% / 0.10), transparent 60%),
       radial-gradient(50% 80% at 90% 30%, hsl(222 40% 18% / 0.6), transparent 70%);
   }
+
+  /* Audio player theme-aware styling */
+  audio {
+    accent-color: hsl(var(--accent));
+    color-scheme: light;
+  }
+
+  [data-theme="dark"] audio {
+    color-scheme: dark;
+  }
 }
 
 @layer components {
