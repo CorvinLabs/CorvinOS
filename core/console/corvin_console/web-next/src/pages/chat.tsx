@@ -1603,7 +1603,7 @@ function ChatPane({
             <Button
               variant="ghost"
               size="sm"
-              className="text-foreground/60 dark:text-voice-accent"
+              className="text-foreground"
               // notifyOnEmpty: this is an explicit click — a 204 (no TTS/LLM
               // backend) answered with pure silence reads as a dead button.
               // The automatic turn voice keeps its silent-degradation contract.
@@ -1621,7 +1621,7 @@ function ChatPane({
             <Button
               variant="ghost"
               size="sm"
-              className="text-foreground/60 dark:text-voice-accent"
+              className="text-foreground"
               onClick={() => playFull(lastTts.text, lastTts.lang, sid).catch(() => {})}
               title={`Read the full answer aloud (${lastTts.lang.toUpperCase()})`}
               aria-label="Read the full answer aloud"
@@ -1638,7 +1638,7 @@ function ChatPane({
             <Button
               variant="ghost"
               size="sm"
-              className="text-foreground/60 dark:text-voice-accent"
+              className="text-foreground"
               onClick={() => playSessionSummary(sid, lastTts?.lang ?? ttsLang).catch(() => {})}
               title="Recap the whole session so far (goal, method, current state)"
               aria-label="Recap the whole session"
@@ -2289,7 +2289,7 @@ function ArtifactCard({ artifact }: { artifact: Extract<MessagePart, { kind: "ar
 
       {/* Audio playback */}
       {isAudio && (
-        <div className="bg-black/20 px-3 py-3">
+        <div className="bg-muted px-3 py-3">
           <audio src={url} controls preload="metadata" className="w-full">
             Your browser does not support inline audio playback.
           </audio>

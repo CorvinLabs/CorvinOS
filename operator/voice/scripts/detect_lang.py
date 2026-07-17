@@ -161,12 +161,14 @@ def detect_confident(text: str) -> str | None:
     # (Umlauts alone cannot reach this branch for "de" — zero word hits on
     # both sides already returned None above — but they do BLOCK the "en"
     # branch, which is correct: umlauts are a German-only signal.)
-    # For very short text (voice summaries), lower the bar to 1 hit instead of 2.
-    min_hits = _CONFIDENT_ONE_SIDED_MIN_SHORT if len(text) < 50 else _CONFIDENT_ONE_SIDED_MIN
+    # For very short text (voice summaries), lower the German bar to 1 hit,
+    # but keep English at 2 to avoid false-positives from other Latin languages
+    # (e.g. "is"/"de" in Dutch "Dit is de test").
     if en_count == 0:
-        return "de" if de_count >= min_hits else None
+        min_de = _CONFIDENT_ONE_SIDED_MIN_SHORT if len(text) < 50 else _CONFIDENT_ONE_SIDED_MIN
+        return "de" if de_count >= min_de else None
     if de_count == 0:
-        return "en" if en_count >= min_hits else None
+        return "en" if en_count >= _CONFIDENT_ONE_SIDED_MIN else None
     if de_count >= en_count + _CONFIDENT_MARGIN and de_count >= _CONFIDENT_MIN_HITS:
         return "de"
     if en_count >= de_count + _CONFIDENT_MARGIN and en_count >= _CONFIDENT_MIN_HITS:
