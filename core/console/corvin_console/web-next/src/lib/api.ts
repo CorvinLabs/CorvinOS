@@ -3719,12 +3719,19 @@ export type TtsSegment = { blob: Blob; total: number; index: number };
  * failure is an absent enhancement, never an error banner.
  */
 export async function ttsSegment(text: string, lang: string, csrf: string,
-                                 sid: string, index: number): Promise<TtsSegment | null> {
+                                 sid: string, index: number,
+                                 signal?: AbortSignal): Promise<TtsSegment | null> {
+  // `signal` lets Stop/supersede ABORT the request instead of merely ignoring
+  // the response. Client-side effect only: it stops NEW work from queueing —
+  // a synthesis already running in the server threadpool completes and
+  // releases its slot on its own schedule (sync handlers are not cancelled
+  // on client disconnect).
   const res = await fetch("/v1/console/voice/segment", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
     body: JSON.stringify({ text, lang, sid, index }),
+    signal,
   });
   if (res.status === 204) return null;
   if (!res.ok) throw new ApiError(res.status, await res.text());
@@ -3736,7 +3743,9 @@ export async function ttsSegment(text: string, lang: string, csrf: string,
 }
 
 export async function ttsBlob(text: string, lang: string, csrf: string,
-                              sid?: string): Promise<Blob> {
+                              sid?: string, signal?: AbortSignal): Promise<Blob> {
+  // `signal`: see ttsSegment — client-side abort on Stop/supersede; an
+  // already-running server synthesis finishes on its own schedule.
   const res = await fetch("/v1/console/voice/tts", {
     method: "POST",
     credentials: "include",
@@ -3748,6 +3757,7 @@ export async function ttsBlob(text: string, lang: string, csrf: string,
     // voice/ dir, so the turn keeps a replayable player. Callers without a chat
     // session (e.g. the first-boot greeting) omit it and get the old behaviour.
     body: JSON.stringify(sid ? { text, lang, sid } : { text, lang }),
+    signal,
   });
   if (res.status === 204) return new Blob();
   if (!res.ok) {
@@ -3768,12 +3778,16 @@ export async function ttsBlob(text: string, lang: string, csrf: string,
  * same silent-degradation contract as every other voice endpoint.
  */
 export async function sessionSummaryBlob(sid: string, lang: string,
-                                         csrf: string): Promise<Blob | null> {
+                                         csrf: string,
+                                         signal?: AbortSignal): Promise<Blob | null> {
+  // `signal`: see ttsSegment — a recap runs summarizer + TTS server-side, the
+  // single longest-held voice slot, so cancelling really must abort it.
   const res = await fetch("/v1/console/voice/session-summary", {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
     body: JSON.stringify({ sid, lang }),
+    signal,
   });
   if (res.status === 204) return null;
   if (!res.ok) throw new ApiError(res.status, await res.text());

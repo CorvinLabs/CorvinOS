@@ -113,14 +113,30 @@ def test_delegation_spec_passes_acs_validator() -> None:
 def test_acs1_budget_defaults_are_sane() -> None:
     """The a47c6d3 blanket 100x scale-up (max_total_workers=400,
     max_wall_time=360000, max_loops=500, max_worker_turns=10000) was a
-    quota-defeat. The siblings must be restored to sane pre-inflation bounds so
-    one metered compute unit cannot authorize 400 workers for 100 h."""
+    quota-defeat: one metered compute unit authorized 400 workers for 100 h.
+
+    Bounds relaxed 2026-07-16 (maintainer decision) — the time/iteration knobs
+    only. A fresh install kept meeting a budget on ordinary work, which reads as
+    a failure to someone who has never seen these numbers.
+
+    What did NOT change is the thing this test is actually for. The defeat is
+    measured in WORKER-HOURS per metered unit (workers x wall-time), so that
+    product is now asserted directly instead of being implied by two separate
+    ceilings: max_total_workers stays at its pre-inflation value, and the raise
+    buys longer/deeper single-track runs, not a wider fan-out. For scale:
+    old default 8, new default 32, UI ceiling 1536, the defeat 40000.
+    """
     d = cr._DELEGATION_BUDGET_DEFAULTS
-    assert 1 <= d["max_total_workers"] <= 16, d["max_total_workers"]
-    assert d["max_wall_time"] <= 3600, d["max_wall_time"]
-    assert d["timeout_seconds"] <= 3600, d["timeout_seconds"]
+    worker_hours = d["max_total_workers"] * (d["max_wall_time"] / 3600)
+    assert worker_hours <= 32, (
+        f"{worker_hours} worker-hours per metered compute unit — the fan-out "
+        "budget grew; that is the quota-defeat axis, raise it only deliberately"
+    )
+    assert 1 <= d["max_total_workers"] <= 8, d["max_total_workers"]
+    assert d["max_wall_time"] <= 4 * 3600, d["max_wall_time"]
+    assert d["timeout_seconds"] <= 4 * 3600, d["timeout_seconds"]
     assert 1 <= d["max_loops"] <= 50, d["max_loops"]
-    assert 1 <= d["max_worker_turns"] <= 200, d["max_worker_turns"]
+    assert 1 <= d["max_worker_turns"] <= 500, d["max_worker_turns"]
     assert 1 <= d["max_depth"] <= 10, d["max_depth"]
 
 

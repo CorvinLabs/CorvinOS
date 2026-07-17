@@ -845,25 +845,6 @@ def _build_input(text: str, task: str, lang: str) -> str:
     return f"[TASK]\n{task.strip()}\n\n[{answer_label}]\n{text}"
 
 
-def _resolve_base_lang(output_language: str) -> str:
-    """Pick the base prompt (`de` or `en`) for the given BCP-47 output code.
-
-    `de` → German base prompt (no extra directive).
-    `en` → English base prompt (no extra directive).
-    anything else → English base prompt + `OUTPUT LANGUAGE` directive
-    appended last; English is the most LLM-stable pivot prompt for any
-    target language.
-    """
-    if not output_language:
-        return ""  # caller falls back to the legacy `--lang` argument
-    if _i18n is None:
-        return ""
-    code = _i18n.normalise(output_language)
-    if code in ("de", "en"):
-        return code
-    return "en"  # English pivot for every other language
-
-
 def _system_for(lang: str, target_chars: int, has_task: bool,
                 persona: str = "", audience: str = "",
                 output_language: str = "") -> str:
@@ -912,9 +893,13 @@ def _system_for(lang: str, target_chars: int, has_task: bool,
     # whole turn as a translated TTS output; back-pinning is the last
     # instruction the model sees before generating. Both fire so the
     # combined salience overrides the host-level chat-language rule.
+    # Primary-subtag comparison: normalise("de-DE") == "de-DE", and region
+    # variants of de/en need no translation directive any more than bare
+    # de/en do — the base prompts already write those languages natively
+    # (adversarial round, 2026-07-17).
     if output_language and _i18n is not None:
         code = _i18n.normalise(output_language)
-        if code and code not in ("de", "en"):
+        if code and code.split("-")[0] not in ("de", "en"):
             directive = _i18n.language_directive(code, audience="voice")
             base = directive + "\n\n" + base + "\n\n" + directive
     return base
@@ -972,8 +957,19 @@ def _summarize_via_cli(text: str, task: str, lang: str, target_chars: int, model
             timeout=_SUMMARY_CLI_TIMEOUT_S, check=True,
         )
         return out.stdout.strip() or None
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        print(f"[summarize] CLI call failed: {exc}", file=sys.stderr)
+    # OSError: the spawn itself can fail (E2BIG when the payload pushes argv
+    # past the ~128KiB kernel limit, ENOENT on a broken shim, ...). Without it
+    # the exception crashed main() with rc=1 and SKIPPED the Hermes fallback
+    # entirely instead of degrading gracefully (found 2026-07-17).
+    # Log CONTENT-FREE: CalledProcessError's str() embeds the full argv —
+    # i.e. the user's text — so only exception type + returncode + errno
+    # may go to stderr (PII invariant; errno keeps E2BIG distinguishable
+    # from EPERM etc., found 2026-07-17).
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        print(f"[summarize] CLI call failed: "
+              f"{type(exc).__name__} rc={getattr(exc, 'returncode', '')} "
+              f"errno={getattr(exc, 'errno', '')}",
+              file=sys.stderr)
         return None
 
 
@@ -1059,7 +1055,10 @@ def _summarize_via_hermes(text: str, task: str, lang: str, target_chars: int, mo
         out = re.sub(r"(?is)<think>.*?</think>", "", out).strip()
         return out or None
     except Exception as exc:  # noqa: BLE001
-        print(f"[summarize] Hermes call failed: {exc}", file=sys.stderr)
+        # CONTENT-FREE: an HTTPError/URLError str() can embed the request
+        # context; only the exception type may go to stderr (found 2026-07-17).
+        print(f"[summarize] Hermes call failed: {type(exc).__name__}",
+              file=sys.stderr)
         return None
 
 
@@ -1224,8 +1223,12 @@ def _appendix_via_cli(text: str, lang: str, model: str) -> str | None:
             timeout=_ANNEX_CLI_TIMEOUT_S, check=True,
         )
         return out.stdout.strip() or None
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        print(f"[summarize] appendix CLI call failed: {exc}", file=sys.stderr)
+    # OSError + content-free logging: see _summarize_via_cli (found 2026-07-17).
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        print(f"[summarize] appendix CLI call failed: "
+              f"{type(exc).__name__} rc={getattr(exc, 'returncode', '')} "
+              f"errno={getattr(exc, 'errno', '')}",
+              file=sys.stderr)
         return None
 
 
@@ -1384,8 +1387,12 @@ def _metapher_via_cli(text: str, lang: str, model: str) -> str | None:
             timeout=_ANNEX_CLI_TIMEOUT_S, check=True,
         )
         return out.stdout.strip() or None
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        print(f"[summarize] metapher CLI call failed: {exc}", file=sys.stderr)
+    # OSError + content-free logging: see _summarize_via_cli (found 2026-07-17).
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        print(f"[summarize] metapher CLI call failed: "
+              f"{type(exc).__name__} rc={getattr(exc, 'returncode', '')} "
+              f"errno={getattr(exc, 'errno', '')}",
+              file=sys.stderr)
         return None
 
 
@@ -1577,11 +1584,13 @@ def _session_recap_output_language_directive(output_language: str) -> str:
     an explicit OUTPUT LANGUAGE directive, since the recap templates below
     only exist in de/en and would otherwise default to German for every
     other locale (found 2026-07-16 — the session-recap endpoint never
-    adopted the output_language split summarize() already uses)."""
+    adopted the output_language split summarize() already uses).
+    Primary-subtag comparison, same as _system_for: de-DE/en-US region
+    variants need no directive either (adversarial round, 2026-07-17)."""
     if not output_language or _i18n is None:
         return ""
     code = _i18n.normalise(output_language)
-    if not code or code in ("de", "en"):
+    if not code or code.split("-")[0] in ("de", "en"):
         return ""
     return _i18n.language_directive(code, audience="voice")
 
@@ -1609,8 +1618,15 @@ def _session_recap_via_cli(transcript: str, lang: str, model: str,
             timeout=_SESSION_RECAP_CLI_TIMEOUT_S, check=True,
         )
         return out.stdout.strip() or None
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        print(f"[summarize] session-recap CLI call failed: {exc}", file=sys.stderr)
+    # OSError matters MOST here: a whole-session transcript is the payload
+    # most likely to blow the ~128KiB argv limit (E2BIG) — without it main()
+    # died with rc=1 and skipped the Hermes fallback. Content-free logging:
+    # see _summarize_via_cli (both found 2026-07-17).
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        print(f"[summarize] session-recap CLI call failed: "
+              f"{type(exc).__name__} rc={getattr(exc, 'returncode', '')} "
+              f"errno={getattr(exc, 'errno', '')}",
+              file=sys.stderr)
         return None
 
 
@@ -1704,10 +1720,29 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
     # feature they opted into, so they still pay the LLM-latency cost here
     # (same as before this fix existed); everyone else gets the instant,
     # faithful verbatim path.
+    #
+    # Also gated on output_language being empty or de/en: for any other
+    # locale the verbatim return would hand back UN-translated text — a
+    # zh-Hans/fr/ja-pinned user then hears e.g. German words read with a
+    # French TTS voice (found 2026-07-17). de/en stay on the fast path
+    # because `lang` already matches them and no translation directive would
+    # have been emitted anyway (see _system_for — de/en is a silent no-op).
+    # Compared on the PRIMARY subtag: normalise("de-DE") == "de-DE" (region
+    # variants pass through i18n untouched), and de-DE/en-US are the most
+    # common locale spellings — system_language() and raw profile pins
+    # deliver exactly those, so an exact-match gate threw the mainstream
+    # case off the fast path (adversarial round, 2026-07-17).
+    _ol_code = (output_language or "").strip()
+    if _ol_code and _i18n is not None:
+        try:
+            _ol_code = _i18n.normalise(_ol_code) or _ol_code
+        except Exception:  # noqa: BLE001 — keep the raw code, stay conservative
+            pass
     if (
         _backend == "auto"
         and not persona.strip()
         and not audience.strip()
+        and _ol_code.split("-")[0] in ("", "de", "en")
         and len(text.strip()) <= max_chars
     ):
         # Text already fits the budget → return it TRULY VERBATIM. NOT via

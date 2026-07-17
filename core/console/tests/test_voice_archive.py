@@ -508,8 +508,12 @@ def test_an_evicted_turn_just_loses_its_player(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
     vd = tmp_path / "voice"
     vd.mkdir()
+    import os as _os
     text = "Eine alte Antwort."
-    (vd / f"{cr.voice_key(text)}.ogg").write_bytes(b"x" * 100)
+    f = vd / f"{cr.voice_key(text)}.ogg"
+    f.write_bytes(b"x" * 100)
+    _os.utime(f, (1000, 1000))   # idle — inside the active-write grace window
+                                 # a group is never evicted (see prune docstring)
     cr.prune_voice_archive("_default", "sid1", max_bytes=1)
     assert cr.find_turn_voice("_default", "sid1", text) is None
     turn = {"role": "assistant", "parts": [{"kind": "text", "text": text}]}
@@ -683,6 +687,31 @@ def test_a_group_is_as_young_as_its_newest_file(tmp_path, monkeypatch) -> None:
     cr.prune_voice_archive("_default", "sid1", max_bytes=250)
     assert cr.find_turn_voice_segments("_default", "sid1", old_t) == []
     assert len(cr.find_turn_voice_segments("_default", "sid1", new_t)) == 2
+
+
+def test_prune_never_evicts_an_actively_written_playlist(
+        tmp_path, monkeypatch) -> None:
+    """keep= only exempts the CURRENT writer's group — a concurrent turn
+    pruning over the cap could evict a playlist another writer is mid-way
+    through. The still-arriving -fNN segments then formed a partial group that
+    attach_voice_artifacts renumbered from 1: exactly the renumbering defect
+    group-eviction exists to prevent. A group whose newest file is younger
+    than the grace window must survive, even over the cap."""
+    import os as _os
+    import time as _time
+    monkeypatch.setattr(cr, "_workdir", lambda t, s: tmp_path)
+    vd = tmp_path / "voice"
+    vd.mkdir()
+    active_t, own_t = "Lange Antwort, wird noch gelesen.", "Neuer paralleler Turn."
+    k_active = _seed_group(vd, active_t, 3, 1000)
+    _os.utime(vd / f"{k_active}-f02.ogg",
+              (_time.time(), _time.time()))          # segment written seconds ago
+    k_own = _seed_group(vd, own_t, 1, 1001)
+    cr.prune_voice_archive("_default", "sid1", max_bytes=10,
+                           keep=f"{k_own}-f00.ogg")
+    # neither the writer's own group nor the active playlist was touched
+    assert len(cr.find_turn_voice_segments("_default", "sid1", active_t)) == 3
+    assert len(cr.find_turn_voice_segments("_default", "sid1", own_t)) == 1
 
 
 def test_latin_heavy_cjk_is_still_sliced(tmp_path) -> None:
@@ -867,7 +896,11 @@ def test_both_paid_endpoints_are_on_the_voice_axis() -> None:
                 and n.func.id == "enforce_voice_summaries"
                 for n in ast.walk(fn))
     }
-    assert gated == {"_voice_tts_sync", "voice_summarize", "_voice_session_summary_sync"}, gated
+    # _voice_session_summary_text is the recap pipeline's FIRST phase (the
+    # LLM-spawn phase runs outside the TTS slot since 2026-07-17) — the gate
+    # sits there so it fires before any paid spawn, and the composed
+    # _voice_session_summary_sync inherits it.
+    assert gated == {"_voice_tts_sync", "voice_summarize", "_voice_session_summary_text"}, gated
 
 
 # ── concurrency bound on the synthesis routes ────────────────────────────────

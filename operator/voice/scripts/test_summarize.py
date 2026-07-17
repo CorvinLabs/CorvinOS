@@ -493,6 +493,150 @@ def test_short_circuit_falls_through_to_llm_when_task_prefix_overruns_budget(mon
     assert out == "a properly shortened summary"
 
 
+def test_short_reply_with_non_de_en_output_language_still_goes_through_llm(monkeypatch) -> None:
+    """Regression (found 2026-07-17): the short-circuit returned text
+    verbatim while IGNORING output_language — summarize("Der Bug ist
+    behoben", "de", ..., output_language="fr") handed back German that was
+    then spoken with a French TTS voice. A non-de/en target locale needs
+    the LLM pass (which carries the OUTPUT LANGUAGE directive), short or
+    not."""
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    short_text = "Der Bug ist behoben."
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value="Le bug est corrigé.") as cli,
+        patch.object(summarize, "_summarize_via_hermes") as herm,
+    ):
+        out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5",
+                                  output_language="fr")
+    cli.assert_called_once()
+    herm.assert_not_called()
+    assert out == "Le bug est corrigé."
+    # Region variants of a non-de/en locale must take the LLM path too —
+    # the primary-subtag gate relaxes de/en only.
+    with (
+        patch.object(summarize, "_summarize_via_cli", return_value="Le bug est corrigé.") as cli,
+        patch.object(summarize, "_summarize_via_hermes") as herm,
+    ):
+        out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5",
+                                  output_language="fr-FR")
+    cli.assert_called_once()
+    assert out == "Le bug est corrigé."
+
+
+def test_system_prompt_emits_no_language_directive_for_de_en_region_variants() -> None:
+    """_system_for had the same exact-match trap: normalise("de-DE") stays
+    "de-DE", so a plain German region locale got a full OUTPUT LANGUAGE
+    sandwich the bare "de" never gets (adversarial round, 2026-07-17)."""
+    for lang, ol in (("de", "de-DE"), ("en", "en-US"), ("en", "en-GB")):
+        bare = summarize._system_for(lang, 800, has_task=False)
+        with_region = summarize._system_for(lang, 800, has_task=False,
+                                            output_language=ol)
+        assert bare == with_region, (
+            f"{ol}: de/en region variant must not trigger a translation directive"
+        )
+    # Sanity: a genuinely foreign region variant still gets the directive.
+    assert summarize._system_for("de", 800, has_task=False,
+                                 output_language="fr-FR") != \
+        summarize._system_for("de", 800, has_task=False)
+
+
+def test_short_reply_with_de_en_or_empty_output_language_keeps_the_fast_path(monkeypatch) -> None:
+    """Backward-compat guard for the fix above: de/en/empty output_language
+    emits no translation directive anyway (see _system_for), so the instant
+    verbatim path must survive for them."""
+    from unittest.mock import patch
+    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
+    short_text = "Der Bug ist behoben."
+    # "german" normalises to "de"; de-DE/en-US are the MOST common locale
+    # spellings (system_language() returns them, profile pins pass through
+    # normalise() untouched) — an exact-match gate threw them off the fast
+    # path (adversarial round, 2026-07-17), hence the primary-subtag check.
+    for ol in ("", "de", "en", "german", "de-DE", "en-US"):
+        with (
+            patch.object(summarize, "_summarize_via_cli") as cli,
+            patch.object(summarize, "_summarize_via_hermes") as herm,
+        ):
+            out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5",
+                                      output_language=ol)
+        cli.assert_not_called()
+        herm.assert_not_called()
+        assert out == short_text
+
+
+def test_summarize_via_cli_oserror_falls_back_to_hermes(monkeypatch) -> None:
+    """Regression (found 2026-07-17): the CLI spawn path caught only
+    CalledProcessError/TimeoutExpired — an OSError (e.g. E2BIG when the
+    payload blows the ~128KiB argv limit) crashed main() with rc=1 and
+    SKIPPED the Hermes fallback entirely."""
+    from unittest.mock import patch
+    monkeypatch.setenv("VOICE_SUMMARIZE_BACKEND", "auto")
+    monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(summarize, "_claude_authenticated", lambda: True)
+
+    def _spawn_boom(*args, **kwargs):
+        raise OSError(7, "Argument list too long")
+
+    monkeypatch.setattr(summarize.subprocess, "run", _spawn_boom)
+    long_text = "This is a genuinely long spoken answer that must be summarised. " * 30
+    with patch.object(summarize, "_summarize_via_hermes",
+                      return_value="A concise Hermes summary.") as herm:
+        out = summarize.summarize(long_text, "en", 200, "claude-haiku-4-5")
+    herm.assert_called_once()
+    assert out == "A concise Hermes summary."
+
+
+def test_session_recap_cli_oserror_falls_back_to_hermes(monkeypatch) -> None:
+    """Same OSError gap on the session-recap CLI path — the transcript is
+    the payload MOST likely to hit E2BIG (whole-session argv)."""
+    from unittest.mock import patch
+    monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(summarize, "_claude_authenticated", lambda: True)
+
+    def _spawn_boom(*args, **kwargs):
+        raise OSError(7, "Argument list too long")
+
+    monkeypatch.setattr(summarize.subprocess, "run", _spawn_boom)
+    with patch.object(summarize, "_session_recap_via_hermes",
+                      return_value="A spoken recap.") as herm:
+        out = summarize.generate_session_recap("User: hi\nAssistant: hello", "en")
+    herm.assert_called_once()
+    assert out == "A spoken recap."
+
+
+def test_cli_failure_stderr_is_content_free(monkeypatch, capsys) -> None:
+    """PII invariant (found 2026-07-17): CalledProcessError's str() embeds
+    the full argv — i.e. the user's text/transcript. The failure log line
+    may carry the exception TYPE and returncode, never the payload."""
+    monkeypatch.setattr(summarize.shutil, "which", lambda _: "/usr/bin/claude")
+    monkeypatch.setattr(summarize, "_claude_authenticated", lambda: True)
+    secret = "GEHEIMER-BEFUND-VOM-PATIENTEN"
+
+    def _spawn_fail(cmd, **kwargs):
+        raise summarize.subprocess.CalledProcessError(returncode=1, cmd=cmd)
+
+    monkeypatch.setattr(summarize.subprocess, "run", _spawn_fail)
+    out = summarize._summarize_via_cli(secret, "", "de", 200, "claude-haiku-4-5")
+    assert out is None
+    err = capsys.readouterr().err
+    assert "[summarize] CLI call failed:" in err
+    assert secret not in err, "user text leaked into the stderr failure log"
+    assert "rc=1" in err
+
+    out = summarize._session_recap_via_cli(secret, "de", "claude-haiku-4-5",
+                                           "angle", 700)
+    assert out is None
+    err = capsys.readouterr().err
+    assert secret not in err, "transcript leaked into the stderr failure log"
+
+
+def test_resolve_base_lang_dead_code_is_gone() -> None:
+    """_resolve_base_lang had no caller repo-wide and documented an EN-pivot
+    that _system_for never implemented — removed 2026-07-17. This guards
+    against the misleading contract being reintroduced."""
+    assert not hasattr(summarize, "_resolve_base_lang")
+
+
 def test_structural_fallback_prints_degraded_sentinel_to_stderr(monkeypatch, capsys) -> None:
     """Regression (2026-07-14): when both LLM backends fail, summarize()
     silently fell through to naive_truncate (near-verbatim passthrough) with

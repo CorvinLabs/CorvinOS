@@ -70,8 +70,80 @@ _WORKER_OUTPUT_CAP = 131072   # 128 KB max worker response
 
 # ACS timeouts (in seconds) — generous to allow complex workflows
 _MANAGER_TIMEOUT = 1800   # 30 min for manager decisions
-_WORKER_TIMEOUT = 1800    # 30 min for worker execution
 _DEFAULT_BUDGET_TIMEOUT = 600  # 10 min default (can be overridden per budget)
+# Hard cap on a CONFIGURED per-worker timeout_seconds — matches the Settings
+# validation max (routes/settings.py::_BUDGET_KEYS). Until 2026-07-17 workers
+# were hard-clamped to 1800 (claude) / 3600 (hermes) regardless of the budget,
+# which silently made every raised "Worker timeout" setting a no-op — the UI
+# promised a knob the runtime threw away. The overall delegation stays bounded
+# by max_wall_time (BudgetEnvelope), so honoring the knob does not reopen the
+# worker-hours quota-defeat axis.
+_WORKER_TIMEOUT_CEILING = 86400
+
+
+def _effective_worker_timeout(budget: dict) -> int:
+    """The per-worker subprocess timeout the Settings UI promises ("Max
+    seconds a single worker subprocess may run")."""
+    return min(int(budget.get("timeout_seconds", _DEFAULT_BUDGET_TIMEOUT)),
+               _WORKER_TIMEOUT_CEILING)
+
+
+def _worker_budget_for_spawn(envelope: "BudgetEnvelope", alloc: dict,
+                             root: "BudgetEnvelope | None" = None) -> dict:
+    """Merge the manager-LLM's per-subtask ``budget_allocation`` into the
+    operator's spec budget for one worker spawn.
+
+    ``budget_allocation`` is LLM output (the same trust level as st["id"],
+    which _run_one sanitizes for traversal) — it may only LOWER the
+    operator's per-call bounds, never raise them: a prompt-injected manager
+    that emits ``timeout_seconds: 86400`` must not buy a hung worker 24 h of
+    slot + spend. The spawn is additionally deadlined against the REMAINING
+    wall time: BudgetEnvelope.check() only runs between manager loops, so
+    without this a worker spawned late in the run could overshoot
+    max_wall_time by its full own timeout (refutation finding 2026-07-17).
+    ``root`` must be the run's ROOT envelope when recursion is in play:
+    .fraction() children get a FRESH start_time, so a sub-manager spawned
+    late in the run would otherwise deadline its workers against a clock the
+    root has long exhausted (second refutation round, same date).
+    """
+    out = dict(alloc)
+
+    def _pos_int(val: Any) -> int:
+        # bool is an int subclass — a manager emitting `true` for a numeric
+        # field must read as garbage (0), not as "1 turn".
+        if isinstance(val, bool):
+            return 0
+        try:
+            n = int(val or 0)
+        except (TypeError, ValueError):
+            return 0
+        return n if n > 0 else 0
+
+    def _remaining(env: "BudgetEnvelope") -> int | None:
+        if env.max_wall_time <= 0:
+            return None
+        # floor the ELAPSED side, not the remaining side: a fresh envelope
+        # must yield remaining == max_wall_time exactly, not one second less.
+        return env.max_wall_time - int(time.monotonic() - env.start_time)
+
+    spec_timeout = envelope.timeout_seconds or _DEFAULT_BUDGET_TIMEOUT
+    alloc_timeout = _pos_int(alloc.get("timeout_seconds"))
+    timeout = min(spec_timeout, alloc_timeout) if alloc_timeout else spec_timeout
+    remainings = [r for r in (_remaining(envelope),
+                              _remaining(root) if root is not None else None)
+                  if r is not None]
+    if remainings:
+        # 60 s floor: with less wall time than that left, the run is about to
+        # budget-stop anyway — a spawn that cannot even start is worse than
+        # one that gets a final short slice.
+        timeout = min(timeout, max(60, min(remainings)))
+    out["timeout_seconds"] = max(30, timeout)
+
+    spec_turns = envelope.max_worker_turns or 20
+    alloc_turns = _pos_int(alloc.get("max_worker_turns"))
+    out["max_worker_turns"] = (min(spec_turns, alloc_turns)
+                               if alloc_turns else spec_turns)
+    return out
 
 _MANAGER_SYSTEM = """\
 You are an ACS Manager Agent running inside CorvinOS. Your role is to
@@ -158,6 +230,10 @@ _BUDGET_OVERRIDE_ALLOWED_FIELDS = frozenset({
     "max_loops", "max_total_tokens", "max_wall_time", "max_total_workers",
     "max_tool_calls", "max_depth", "max_workers_per_iteration",
     "max_rejected_completions",
+    # Per-worker-call bounds (2026-07-17) — without these here, an MCP/CLI
+    # budget_override carrying them was silently dropped: the same
+    # promised-knob-thrown-away class the BudgetEnvelope fields fix.
+    "timeout_seconds", "max_worker_turns",
 })
 
 
@@ -171,6 +247,14 @@ class BudgetEnvelope:
     max_depth: int = 4
     max_workers_per_iteration: int = 6
     max_rejected_completions: int = 2
+    # Per-worker-call bounds (NOT aggregates — check() never looks at them).
+    # Carried on the envelope so the operator's Settings values actually reach
+    # _call_worker_sync: until 2026-07-17 the worker spawn read both from the
+    # manager-LLM's per-subtask budget_allocation dict, so the Settings knobs
+    # "Worker timeout" and "max worker turns" never arrived — the runtime
+    # silently used its own defaults. 0 = "not configured, use the default".
+    timeout_seconds: int = 0
+    max_worker_turns: int = 0
 
     # Accumulated
     loops_used: int = 0
@@ -206,6 +290,10 @@ class BudgetEnvelope:
             max_depth=max(0, self.max_depth - 1),
             max_workers_per_iteration=self.max_workers_per_iteration,
             max_rejected_completions=self.max_rejected_completions,
+            # Per-call bounds don't scale with the fraction — a sub-tree's
+            # workers still make single calls of the same shape.
+            timeout_seconds=self.timeout_seconds,
+            max_worker_turns=self.max_worker_turns,
         )
 
 
@@ -566,6 +654,12 @@ def _budget_from_spec(spec: dict) -> BudgetEnvelope:
         max_workers_per_iteration=_clamp_positive_cap(
             int(b.get("max_workers_per_iteration") or 6), 6, 100),
         max_rejected_completions=int(b.get("max_rejected_completions") or 2),
+        # Per-worker-call bounds — see BudgetEnvelope. Ceilings match the
+        # Settings validation maxima (routes/settings.py::_BUDGET_KEYS).
+        timeout_seconds=_clamp_positive_cap(
+            int(b.get("timeout_seconds") or 0), 0, _WORKER_TIMEOUT_CEILING),
+        max_worker_turns=_clamp_positive_cap(
+            int(b.get("max_worker_turns") or 0), 0, 5000),
     )
 
 
@@ -1503,7 +1597,7 @@ class _WorkerProcessHolder:
     (and the `claude -p` child it spawned) keeps running to completion
     regardless (adversarial review finding: a cancelled ACS run could leave
     a live worker subprocess consuming CPU/tokens/API cost for up to
-    _WORKER_TIMEOUT more seconds after the run already returned a result)."""
+    the full worker timeout after the run already returned a result)."""
 
     def __init__(self) -> None:
         self.popen: "subprocess.Popen | None" = None
@@ -1540,7 +1634,7 @@ def _call_worker_sync(
     engine_id, resolved = _resolve_worker_engine(model, tenant_id)
     _assert_engine_licensed(engine_id)  # ADR-0150 LIC-ENG-USE-02 (fail-closed)
     if engine_id == "hermes":
-        timeout = min(int(budget.get("timeout_seconds", _DEFAULT_BUDGET_TIMEOUT)), 3600)
+        timeout = _effective_worker_timeout(budget)
         out = _ollama_chat(prompt, system, resolved, timeout=timeout)
         attestation = {"engine_id": "hermes", "model_id": resolved,
                        "attested": True, "locality": "local"}
@@ -1568,7 +1662,7 @@ def _call_worker_sync(
     # creds exfiltrable by a prompt-injected tool-capable subtask.
     _strip_worker_secrets(env)
     _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
-    timeout = min(int(budget.get("timeout_seconds", _DEFAULT_BUDGET_TIMEOUT)), _WORKER_TIMEOUT)
+    timeout = _effective_worker_timeout(budget)
     # max-turns: 20 gives workers enough headroom for multi-file explore/implement
     # tasks. 5 was too tight — workers hit the limit mid-tool-use and returned
     # error_max_turns, which _parse_worker_output silently treated as
@@ -1863,6 +1957,12 @@ async def _dispatch_workers(
             _raw_id = str(st.get("id") or secrets.token_hex(4))
             wid = re.sub(r"[^A-Za-z0-9_-]", "_", _raw_id)[:64] or secrets.token_hex(4)
             budget_alloc = st.get("budget_allocation") or {}
+            # Operator bounds win over the manager-LLM's allocation (which may
+            # only lower them), and the spawn is deadlined against remaining
+            # wall time of BOTH the local (possibly .fraction()ed, fresh-clock)
+            # envelope and the run's root — see _worker_budget_for_spawn.
+            worker_budget = _worker_budget_for_spawn(ctx.budget, budget_alloc,
+                                                     root=ctx.root_budget)
 
             # ADR-0127 — resolve the canonical engine id (hermes|claude_code)
             # for this worker; pass THAT to the L34 gate (not the raw model
@@ -1963,7 +2063,7 @@ async def _dispatch_workers(
                 _proc_holder = _WorkerProcessHolder()
                 try:
                     text, tok, attestation = await asyncio.to_thread(
-                        _call_worker_sync, prompt, system, worker_model, budget_alloc,
+                        _call_worker_sync, prompt, system, worker_model, worker_budget,
                         _worker_env, ctx.tenant_id, _proc_holder,
                     )
                 except asyncio.CancelledError:
@@ -1973,8 +2073,8 @@ async def _dispatch_workers(
                     # spawned inside _call_worker_sync kept running to
                     # completion regardless (adversarial review finding: a
                     # cancelled ACS run could leave a live worker consuming
-                    # CPU/tokens/API cost for up to _WORKER_TIMEOUT more
-                    # seconds). Kill the actual process before re-raising.
+                    # CPU/tokens/API cost for up to the full worker timeout
+                    # more seconds). Kill the actual process before re-raising.
                     _proc_holder.kill()
                     raise
             except asyncio.CancelledError:

@@ -872,6 +872,27 @@ function ChatPane({
     ttsLangRef.current = ttsLang;
   }, [ttsLang]);
 
+  // ADR-0194 annotation fallback: a result event flagged annotation_pending
+  // holds TTS back for the final (annotated) result the server guarantees will
+  // follow — but that guarantee only holds while the WebSocket lives. On a WS
+  // drop (uvicorn restart 1012, network blip) the final event is simply gone
+  // and chat-registry does not replay events, so the turn stayed silent
+  // forever. pendingSpeakRef remembers the held-back text so exactly one of
+  // three fallback paths can still speak it: a done event without a final
+  // result, the registry's streaming flag going false (WS close/error), or a
+  // ~25 s safety timer (server annotation takes at most ~16 s).
+  // fallbackSpokenRef prevents the inverse bug: if the fallback fired (timer)
+  // and the final result then trickles in late, speaking it again would
+  // double-speak the turn. firePendingSpeakRef lets effects outside the
+  // per-sid subscription (which owns playTts's closure) trigger the fallback.
+  const pendingSpeakRef = React.useRef<{
+    text: string;
+    lang: string;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  const fallbackSpokenRef = React.useRef(false);
+  const firePendingSpeakRef = React.useRef<() => void>(() => {});
+
   // Stable callbacks for useTasksWithLiveUpdates.
   // These MUST be wrapped in useCallback — inline arrow functions would create
   // a new reference on every render, causing an infinite reload loop in the
@@ -978,6 +999,23 @@ function ChatPane({
       })
       .catch(() => { /* empty chat on first visit — expected */ });
 
+    // Speak the text held back by an annotation_pending result (see the
+    // pendingSpeakRef comment above for the three trigger paths). Clears the
+    // ref FIRST, so the paths can never stack into a double-speak.
+    const firePendingSpeak = () => {
+      const pending = pendingSpeakRef.current;
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      pendingSpeakRef.current = null;
+      if (voiceOutRef.current) {
+        // Remember that this turn was already spoken so a final result that
+        // still trickles in late (timer fired early) is not spoken twice.
+        fallbackSpokenRef.current = true;
+        playTts(pending.text, pending.lang, sid).catch(() => { /* surface in playTts */ });
+      }
+    };
+    firePendingSpeakRef.current = firePendingSpeak;
+
     // Subscribe to raw stream events for TTS and React Query title updates.
     // These side-effects only apply while this ChatPane is mounted (i.e. the
     // user is actually looking at this chat).
@@ -993,10 +1031,39 @@ function ChatPane({
         // not stop the synthesis, and the route is a sync `def` so aborting the
         // request would not either — it also archived an orphan audio file.
         // The server flags the non-final event and guarantees a final one
-        // follows, so waiting here can never leave the turn unspoken.
-        if (voiceOutRef.current && !evt.annotation_pending) {
-          playTts(evt.text, lang, sid).catch(() => { /* surface in playTts */ });
+        // follows — but only for as long as the socket lives, so instead of
+        // waiting unconditionally we ARM the client-side fallback above.
+        if (evt.annotation_pending) {
+          if (pendingSpeakRef.current) clearTimeout(pendingSpeakRef.current.timer);
+          fallbackSpokenRef.current = false;
+          pendingSpeakRef.current = {
+            text: evt.text,
+            lang,
+            // ~25 s safety net: server-side annotation takes at most ~16 s, so
+            // well past that the final event is not coming on this socket.
+            timer: setTimeout(firePendingSpeak, 25_000),
+          };
+        } else {
+          // Final result: disarm the fallback and speak normally — unless the
+          // fallback already spoke this turn (its timer beat a slow final
+          // event), in which case speaking again would double-speak the turn.
+          if (pendingSpeakRef.current) {
+            clearTimeout(pendingSpeakRef.current.timer);
+            pendingSpeakRef.current = null;
+          }
+          const alreadySpoken = fallbackSpokenRef.current;
+          fallbackSpokenRef.current = false;
+          if (voiceOutRef.current && !alreadySpoken) {
+            playTts(evt.text, lang, sid).catch(() => { /* surface in playTts */ });
+          }
         }
+      }
+      if (evt.type === "done") {
+        // A done without a final result means the server broke its "a final
+        // result follows" guarantee (e.g. the annotator crashed) — speak the
+        // plain reply now instead of leaving the turn silent. No-op when the
+        // final result already arrived (the ref is empty by then).
+        firePendingSpeak();
       }
       if (evt.type === "session_title" && evt.title) {
         qc.setQueryData(["chat", "sessions"], (old: { sessions: ChatSessionSummary[] } | undefined) => {
@@ -1022,11 +1089,42 @@ function ChatPane({
     return () => {
       cancelled = true;
       unsubEvents();
+      // Disarm the annotation fallback SILENTLY: after unmount there is no
+      // playback UI left to own (or stop) the audio, so the timer must not
+      // fire a speak into a chat the user has navigated away from.
+      if (pendingSpeakRef.current) {
+        clearTimeout(pendingSpeakRef.current.timer);
+        pendingSpeakRef.current = null;
+      }
+      firePendingSpeakRef.current = () => {};
       // DO NOT close the WS here — the registry keeps it alive for background
       // streaming. The WS is only closed on explicit chat deletion (closeSession).
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sid]);
+
+  // Annotation-fallback trigger (b): the registry flips `streaming` to false
+  // on EVERY terminal path — done event, WS close, WS error — but only the
+  // done path delivers an event we can hook. If the socket dropped while a
+  // final result was still pending, this is the moment we know it will never
+  // arrive (chat-registry does not replay events), so release the held text.
+  // Explicit cancel disarms the ref BEFORE the flag flips (see cancelTurn),
+  // and the normal path cleared it when the final result arrived — in both
+  // cases this is a no-op.
+  React.useEffect(() => {
+    if (streaming) {
+      // A NEW turn can never be "already spoken". Without this reset, a turn
+      // whose fallback fired (WS drop) left fallbackSpokenRef=true standing,
+      // and the NEXT turn — if unannotated, i.e. only ONE final result with
+      // annotation_pending falsy — had its single result swallowed as
+      // "alreadySpoken": the whole turn stayed silent. The flag's only job is
+      // to dedupe WITHIN one turn (fallback fired, late final result trickles
+      // in); it must never outlive the turn it was set in.
+      fallbackSpokenRef.current = false;
+      return;
+    }
+    firePendingSpeakRef.current();
+  }, [streaming]);
 
   // ── Sync terminal errors from registry state ───────────────────────────────
   // Only TERMINAL errors (session expired / not found) surface as a destructive
@@ -1158,6 +1256,13 @@ function ChatPane({
 
   // ── Cancel a running engine turn via registry ────────────────────────────────
   const cancelTurn = () => {
+    // A cancelled turn must not speak its half-finished reply: disarm the
+    // annotation fallback BEFORE registryCancel flips streaming to false,
+    // or the streaming-effect above would fire it.
+    if (pendingSpeakRef.current) {
+      clearTimeout(pendingSpeakRef.current.timer);
+      pendingSpeakRef.current = null;
+    }
     registryCancel(sid);
   };
 
@@ -1498,7 +1603,10 @@ function ChatPane({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => playTts(lastTts.text, lastTts.lang, sid).catch(() => {})}
+              // notifyOnEmpty: this is an explicit click — a 204 (no TTS/LLM
+              // backend) answered with pure silence reads as a dead button.
+              // The automatic turn voice keeps its silent-degradation contract.
+              onClick={() => playTts(lastTts.text, lastTts.lang, sid, { notifyOnEmpty: true }).catch(() => {})}
               title={`Replay last response (${lastTts.lang.toUpperCase()})`}
               aria-label="Replay last response"
             >
@@ -1902,11 +2010,21 @@ function VoicePlaybackChip({
 }) {
   if (state === "idle") return null;
   if (state === "loading") {
+    // A button, not a passive div: a long synthesis (e.g. the session recap
+    // re-running the summarizer) otherwise traps the user with no way out.
+    // stopVoice() supersedes AND aborts the in-flight fetch — client-side
+    // only: a synthesis already running in the server threadpool completes
+    // and releases its slot on its own schedule regardless.
     return (
-      <div className="flex items-center gap-2 rounded-full bg-muted/60 px-3 py-1 text-xs text-muted-foreground">
+      <button
+        onClick={onStop}
+        className="flex items-center gap-2 rounded-full bg-muted/60 px-3 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+        title="Cancel — stop loading this audio"
+      >
         <Loader2 className="h-3 w-3 animate-spin" />
         Loading audio…
-      </div>
+        <Square className="h-3 w-3" />
+      </button>
     );
   }
   if (state === "blocked") {

@@ -692,6 +692,46 @@ it's pressed**.
   test_voice_session_summary.py` (10 cases) + `operator/voice/scripts/
   test_summarize.py` (7 new session-recap cases).
 
+**Adversarial hardening pass (2026-07-17)** — invariants added after a
+two-round refutation review of the whole ADR-0194 surface:
+
+- **Recap runs in two bounded phases.** The summarize LLM call (~120 s) runs
+  OUTSIDE the TTS slot (it starved the automatic turn voice) but INSIDE its
+  own `_RECAP_SUMMARIZE_MAX_CONCURRENCY` semaphore (default 2) — unbounded it
+  would drain the shared 40-token anyio threadpool, the documented
+  console-stall incident class. Only the say.py phase takes a TTS slot.
+- **The recap transcript head is budget-clamped** (`budget // 4` per head
+  line): an oversized first message used to eat the whole budget (recap
+  covered only the first exchange) and past ~128 KiB crashed the
+  `claude -p <payload>` argv spawn with E2BIG — which the CLI backends now
+  catch (`OSError` in every spawn's except) so the Hermes fallback still runs.
+- **The archive prune never evicts a group younger than
+  `_VOICE_PRUNE_ACTIVE_GRACE_S` (300 s).** `keep=` only exempts the current
+  writer; a concurrent turn pruning over the cap could evict a playlist
+  mid-write, recreating the renumbering defect group-eviction exists to
+  prevent. The window is sized to PLAYBACK cadence (the client prefetches one
+  segment ahead, so consecutive writes are up to a segment's spoken duration
+  apart — ~200 s for 1800 chars), not synthesis time.
+- **`annotation_pending` has a client-side fallback.** If the final result
+  event never arrives (WS drop in the up-to-16 s annotation window), the
+  client speaks the plain text on done-without-final / WS-close / a ~25 s
+  timer — and the dedupe flag resets on every new turn, so a fallback for
+  turn N can never mute an unannotated turn N+1. Server-side, both engine
+  paths compute the annex ONLY when `annotation_pending` was actually
+  emitted, so a mid-turn settings toggle cannot orphan the archived audio.
+- **Explicit voice buttons get feedback on 204.** The automatic turn voice
+  keeps the silent-204 contract, but Recap / read-aloud / Replay clicks show
+  a one-line hint ("Voice synthesis unavailable — check Settings → Voice")
+  instead of a dead button on zero-config installs without any LLM/TTS
+  backend.
+- **`say.py` refuses swapped arguments** (`say.py "<sentence>" …` used to
+  write Ogg audio into a file NAMED the sentence — trailing-dot filenames are
+  illegal on Windows and would break every checkout once committed).
+- **Language handling:** `detect_confident` strips code fences before
+  scoring (a German answer with a Python block flipped confidently to "en"),
+  and every output-language gate compares the PRIMARY subtag ("de-DE" must
+  ride the de fast-path, not get an OUTPUT-LANGUAGE directive).
+
 ### User-facing commands (in `bridges/shared/js/in_chat_commands.js`)
 
 | Command                          | Effect                                |

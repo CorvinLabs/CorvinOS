@@ -131,6 +131,15 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
         return ("To delete your data (GDPR Art. 17), use `/erase` or the "
                 "**Memory** tab — this performs the audited erasure flow.")
 
+    if cmd == "/browser":
+        # ADR-0193 retired the classifier-routed /browser dispatch in favour of
+        # the native corvin-browser tool. Long-time users still type it — a
+        # bare "Unknown command" is a dead end for a feature that still exists.
+        return ("Browser automation no longer needs a command — just describe "
+                "the browsing task in a normal message (e.g. \"open example.com "
+                "and check the pricing page\") and the assistant drives the "
+                "browser natively. Live view appears in the **Browser** tab.")
+
     if cmd in _BRIDGE_ONLY:
         return (f"`{cmd}` is a messaging-bridge command (Discord/WhatsApp) and "
                 "is not available in the web console.")

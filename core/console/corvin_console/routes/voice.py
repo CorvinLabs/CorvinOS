@@ -115,6 +115,20 @@ _TTS_SLOT_WAIT_S = float(os.environ.get("CORVIN_TTS_SLOT_WAIT_S", "20"))
 _tts_sem: "asyncio.Semaphore | None" = None
 _tts_sem_lock = threading.Lock()
 
+# Session-recap SUMMARIZE phase gets its own (smaller) bound, separate from
+# the TTS slots: it runs a ~120 s LLM subprocess in the shared anyio
+# threadpool (default 40 tokens, shared with every sync route in the
+# console). Unbounded, ~40 parallel recap clicks would drain that pool and
+# stall the whole console — the exact incident class the TTS semaphore's own
+# history documents. It must NOT hold a TTS slot for those 120 s either
+# (that starved the automatic turn voice, refutation finding 2026-07-17), so
+# it is a second, independent semaphore.
+_RECAP_SUMMARIZE_MAX_CONCURRENCY = int(
+    os.environ.get("CORVIN_RECAP_SUMMARIZE_MAX_CONCURRENCY", "2"))
+
+_recap_sem: "asyncio.Semaphore | None" = None
+_recap_sem_lock = threading.Lock()
+
 
 def _get_tts_semaphore() -> "asyncio.Semaphore":
     """Lazily create the semaphore — it must be bound to the running loop, and
@@ -125,6 +139,15 @@ def _get_tts_semaphore() -> "asyncio.Semaphore":
             if _tts_sem is None:
                 _tts_sem = asyncio.Semaphore(_TTS_MAX_CONCURRENCY)
     return _tts_sem
+
+
+def _get_recap_semaphore() -> "asyncio.Semaphore":
+    global _recap_sem
+    if _recap_sem is None:
+        with _recap_sem_lock:
+            if _recap_sem is None:
+                _recap_sem = asyncio.Semaphore(_RECAP_SUMMARIZE_MAX_CONCURRENCY)
+    return _recap_sem
 
 
 async def _run_with_tts_slot(sync_fn, *args, no_slot_log: str = "") -> Response:
@@ -905,7 +928,13 @@ def _build_session_transcript(tenant_id: str, sid: str, *,
     full = "\n\n".join(lines)
     if len(full) <= budget:
         return full
-    head = lines[:2]
+    # Head lines are clamped to a quarter of the budget each: an oversized
+    # first message (a large paste) used to consume the whole budget — or blow
+    # straight past it, since `remaining` went negative and only the TAIL was
+    # dropped. The recap then covered only the first exchange (the "current
+    # state" the docstring promises never to drop was gone), and a >128 KiB
+    # head crashed summarize.py's `claude -p <payload>` argv spawn (E2BIG).
+    head = [ln[: budget // 4] for ln in lines[:2]]
     head_text = "\n\n".join(head)
     remaining = budget - len(head_text) - 20
     tail_lines: list[str] = []
@@ -923,14 +952,50 @@ async def voice_session_summary(
     body: SessionSummaryRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> Response:
-    """Bounded async wrapper — mirrors voice_tts's semaphore gating."""
-    return await _run_with_tts_slot(_voice_session_summary_sync, body, rec)
+    """Two-phase: the summarize LLM call runs OUTSIDE the synthesis slot.
+
+    The summarize alone may take up to _TTS_SUMMARIZE_TIMEOUT_S (120 s); a
+    recap holding one of the _TTS_MAX_CONCURRENCY slots through it meant a
+    few parallel recap clicks could starve every concurrent turn's
+    /voice/tts past its 20 s slot wait — silent 204s for the automatic turn
+    voice. Only the say.py phase actually contends for TTS resources, so
+    only it takes a slot (mirroring voice_tts's semaphore gating). The
+    summarize phase is NOT unbounded either — it holds one of
+    _RECAP_SUMMARIZE_MAX_CONCURRENCY recap slots so parallel clicks cannot
+    drain the shared anyio threadpool (see the semaphore's comment).
+    """
+    try:
+        await asyncio.wait_for(_get_recap_semaphore().acquire(), _TTS_SLOT_WAIT_S)
+    except asyncio.TimeoutError:
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+    try:
+        text_result = await run_in_threadpool(_voice_session_summary_text, body, rec)
+    finally:
+        _get_recap_semaphore().release()
+    if isinstance(text_result, Response):
+        return text_result
+    recap_text, lang = text_result
+    return await _run_with_tts_slot(
+        _voice_session_summary_tts, body, rec, recap_text, lang)
 
 
 def _voice_session_summary_sync(
     body: SessionSummaryRequest,
     rec: session_auth.SessionRecord,
 ) -> Response:
+    """Both phases in one synchronous call. The slot seam lives in the async
+    route above — this composition is the full pipeline for tests and any
+    future sync caller."""
+    text_result = _voice_session_summary_text(body, rec)
+    if isinstance(text_result, Response):
+        return text_result
+    return _voice_session_summary_tts(body, rec, *text_result)
+
+
+def _voice_session_summary_text(
+    body: SessionSummaryRequest,
+    rec: session_auth.SessionRecord,
+) -> "Response | tuple[str, str]":
     from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
 
     if _cr.get_session(rec.tenant_id, body.sid) is None:
@@ -989,12 +1054,23 @@ def _voice_session_summary_sync(
         console_audit.action_failed(
             tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
             action="voice.session_summary", target_kind="voice", target_id="web",
-            reason="summarize-exit-nonzero",
+            # rc=0 + empty stdout is the "both recap LLM backends unavailable"
+            # path (generate_session_recap returns "") — labelling it
+            # exit-nonzero sent the operator debugging the wrong thing.
+            reason=("summarize-exit-nonzero" if proc.returncode != 0
+                    else "summarize-empty-output"),
         )
         return Response(status_code=http_status.HTTP_204_NO_CONTENT)
 
-    recap_text = proc.stdout.strip()[:_TTS_PROVIDER_CHAR_LIMIT]
+    return proc.stdout.strip()[:_TTS_PROVIDER_CHAR_LIMIT], lang
 
+
+def _voice_session_summary_tts(
+    body: SessionSummaryRequest,
+    rec: session_auth.SessionRecord,
+    recap_text: str,
+    lang: str,
+) -> Response:
     with tempfile.NamedTemporaryFile(prefix="corvin_tts_", suffix=".opus", delete=False) as fh:
         out_path = Path(fh.name)
     try:
