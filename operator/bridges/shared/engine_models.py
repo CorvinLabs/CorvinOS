@@ -487,7 +487,9 @@ def resolve_model_for_workload(
         workload = str(workload_type).lower().strip()
 
     # Safe fallback for unknown/uncertain workload
-    if workload != "chat" and workload != "code":
+    if workload not in ("chat", "code", "uncertain"):
+        import sys
+        print(f"[WARN] resolve_model_for_workload: unknown workload type '{workload}', falling back to user_choice", file=sys.stderr)
         return user_chosen_model
 
     # Look up the engine's tier mapping
