@@ -31,9 +31,17 @@ def _log_once(key: str, message: str) -> None:
 
 def _resolve_env() -> str | None:
     new = os.environ.get("CORVIN_HOME")
-    if new:
-        return new
-    return None
+    if new is None:
+        return None
+    new = new.strip()
+    # A whitespace-only value (" ", "\t", "\n") is not a real override —
+    # treat it the same as unset rather than resolving to a bogus path like
+    # Path(" ") relative to the cwd. Mirrors operator/cowork/lib/paths.py and
+    # operator/forge/forge/paths.py — the a111d09 sweep fixed those two but
+    # missed this third copy (found closing the red test_paths suite).
+    if not new:
+        return None
+    return new
 
 
 def _repo_root() -> Path | None:
