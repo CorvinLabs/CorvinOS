@@ -120,7 +120,11 @@
   [data-theme="dark"] audio {
     color-scheme: dark;
     accent-color: hsl(var(--accent));
-    filter: invert(1) hue-rotate(180deg) saturate(1.2);
+  }
+
+  /* Dark mode wrapper for audio player */
+  [data-theme="dark"] div:has(> audio) {
+    background: hsl(var(--card)) !important;
   }
 }
 
