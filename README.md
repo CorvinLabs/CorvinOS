@@ -1,8 +1,3 @@
-<!-- Launchpadly — CorvinOS (compact) -->
-<a href="https://launchpadly.co/startup/corvinos?ref=badge" target="_blank" rel="noopener noreferrer" data-launchpadly-badge="corvinos" data-launchpadly-badge-variant="compact">
-  <img src="https://launchpadly.co/embed/badges/startup/corvinos.svg?variant=compact" alt="Launchpadly Startup Directory" width="200" height="36" style="display:block;border:0;" />
-</a>
-
 <picture>
   <source media="(prefers-color-scheme: dark)"  srcset="docs/assets/banner.svg">
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/banner.svg">
@@ -38,6 +33,10 @@
 </p>
 
 <p align="left">
+  <!-- Launchpadly — CorvinOS (compact); grouped with the other listing badges below the award -->
+  <a href="https://launchpadly.co/startup/corvinos?ref=badge" target="_blank" rel="noopener noreferrer" data-launchpadly-badge="corvinos" data-launchpadly-badge-variant="compact">
+    <img src="https://launchpadly.co/embed/badges/startup/corvinos.svg?variant=compact" alt="Launchpadly Startup Directory" width="200" height="36" style="border:0;" />
+  </a>
   <a href="https://aiagentsdirectory.com" target="_blank" rel="noopener" title="Discover AI Agents Directory">
     <img src="https://aiagentsdirectory.com/featured-badge.svg?v=2024" alt="Featured on AI Agents Directory" width="200" height="50" />
   </a>
