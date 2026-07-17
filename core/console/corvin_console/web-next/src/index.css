@@ -120,6 +120,8 @@
   [data-theme="dark"] audio {
     color-scheme: dark;
     accent-color: hsl(var(--accent));
+    background-color: hsl(var(--card)) !important;
+    color: hsl(var(--foreground)) !important;
   }
 
   /* Dark mode wrapper for audio player */
