@@ -19,7 +19,7 @@ from pathlib import Path
 
 from corvin_console import chat_runtime as cr
 from corvin_console.routes import voice as voice_routes
-
+from fastapi import Response
 
 # ── voice_key: the writer/reader meeting point ───────────────────────────────
 
@@ -140,6 +140,116 @@ def test_persist_never_raises_on_failure(tmp_path, monkeypatch) -> None:
         raise RuntimeError("resolver down")
     monkeypatch.setattr(cr, "_workdir", _boom)
     assert voice_routes._persist_turn_voice("_default", "s1", "T", b"OggS", "audio/ogg") is None
+
+
+# ── ADR-0194 live-replay: publish_voice_event / subscribe_voice_live ────────
+# /voice/tts and /voice/segment persist their audio and return AFTER the chat
+# WS already sent "done" for the turn, so the archived player can only reach
+# the open tab through this side-channel fanout — pinned here since it has no
+# other caller in the request path a unit test would exercise.
+
+def _seed_file(tmp_path, name: str = "abc123.ogg") -> Path:
+    f = tmp_path / name
+    f.write_bytes(b"OggS" + b"\x00" * 64)
+    return f
+
+
+def test_publish_with_no_subscriber_is_a_silent_noop(tmp_path) -> None:
+    """The common case: no open tab. Must never raise."""
+    cr.publish_voice_event("s-no-subs", _seed_file(tmp_path), "voice")
+
+
+def test_subscriber_receives_the_published_event(tmp_path) -> None:
+    q, unsubscribe = cr.subscribe_voice_live("s1")
+    try:
+        f = _seed_file(tmp_path)
+        cr.publish_voice_event("s1", f, "voice")
+        event = q.get_nowait()
+        assert event["type"] == "voice"
+        assert event["name"] == f.name
+        assert event["path"] == f"voice/{f.name}"
+        assert event["label"] == "voice"
+        assert event["mime"].startswith("audio/"), event
+    finally:
+        unsubscribe()
+
+
+def test_publish_only_reaches_subscribers_of_the_same_sid(tmp_path) -> None:
+    q_other, unsub_other = cr.subscribe_voice_live("s-other")
+    try:
+        cr.publish_voice_event("s1", _seed_file(tmp_path), "voice")
+        assert q_other.empty()
+    finally:
+        unsub_other()
+
+
+def test_unsubscribe_is_idempotent_and_stops_delivery(tmp_path) -> None:
+    q, unsubscribe = cr.subscribe_voice_live("s1")
+    unsubscribe()
+    unsubscribe()  # must not raise on a second call
+    cr.publish_voice_event("s1", _seed_file(tmp_path), "voice")
+    assert q.empty()
+
+
+def test_publish_skips_unrecognised_mime(tmp_path) -> None:
+    """A path _artifact_mime() rejects (e.g. no recognisable audio header) must
+    not reach subscribers as a broken player."""
+    q, unsubscribe = cr.subscribe_voice_live("s1")
+    try:
+        junk = tmp_path / "not-audio.bin"
+        junk.write_bytes(b"\x00\x01\x02")
+        cr.publish_voice_event("s1", junk, "voice")
+        assert q.empty()
+    finally:
+        unsubscribe()
+
+
+def test_full_queue_drops_the_event_instead_of_blocking(tmp_path) -> None:
+    """Queue is maxsize=16 — a stalled/never-reconnected subscriber must never
+    make the archiving REST call hang or raise."""
+    q, unsubscribe = cr.subscribe_voice_live("s1")
+    try:
+        f = _seed_file(tmp_path)
+        for _ in range(20):
+            cr.publish_voice_event("s1", f, "voice")  # must not raise once full
+        assert q.qsize() == 16
+    finally:
+        unsubscribe()
+
+
+# ── routes/voice.py:_publish_voice_live_event — the REST-side call site ─────
+
+def test_publish_voice_live_event_forwards_the_archived_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cr, "_workdir", lambda tid, s: tmp_path / s)
+    (tmp_path / "s1" / "voice").mkdir(parents=True)
+    f = _seed_file(tmp_path / "s1" / "voice", "the-file.ogg")
+
+    q, unsubscribe = cr.subscribe_voice_live("s1")
+    try:
+        resp = Response(headers={"X-Corvin-Voice-File": f.name})
+        voice_routes._publish_voice_live_event("_default", "s1", resp, label="voice")
+        event = q.get_nowait()
+        assert event["name"] == f.name
+    finally:
+        unsubscribe()
+
+
+def test_publish_voice_live_event_is_noop_without_sid(tmp_path) -> None:
+    """Recap/summary callers never pass a sid — must not raise."""
+    resp = Response(headers={"X-Corvin-Voice-File": "x.ogg"})
+    voice_routes._publish_voice_live_event("_default", None, resp, label="voice")
+
+
+def test_publish_voice_live_event_is_noop_on_persist_failure(tmp_path) -> None:
+    """_persist_turn_voice signals failure by omitting the header — a 204
+    degrade must not surface as a broken live-attach."""
+    q, unsubscribe = cr.subscribe_voice_live("s1")
+    try:
+        resp = Response(status_code=204)
+        voice_routes._publish_voice_live_event("_default", "s1", resp, label="voice")
+        assert q.empty()
+    finally:
+        unsubscribe()
 
 
 # ── ADR-0194 Phase 3: full read-aloud segmentation ───────────────────────────

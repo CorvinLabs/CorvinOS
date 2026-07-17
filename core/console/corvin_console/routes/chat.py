@@ -422,6 +422,26 @@ async def chat_stream(
             target_id=sid,
         )
 
+    # Live voice-attach (ADR-0194): /voice/tts and /voice/segment persist their
+    # audio and publish onto this sid via chat_runtime.publish_voice_event AFTER
+    # this WS has already sent "done" for the turn — so it cannot ride the
+    # stream_turn generator below and needs its own forwarding task instead.
+    _voice_queue, _voice_unsub = chat_runtime.subscribe_voice_live(sid)
+
+    async def _forward_voice_events() -> None:
+        while True:
+            event = await _voice_queue.get()
+            with contextlib.suppress(Exception):
+                await websocket.send_json(event)
+
+    _voice_forward_task = asyncio.create_task(_forward_voice_events())
+
+    async def _cleanup_voice_forward() -> None:
+        _voice_forward_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await _voice_forward_task
+        _voice_unsub()
+
     # _stream_task holds the asyncio.Task running stream_turn while a turn is
     # in flight.  A cancel message (or a WebSocket disconnect) cancels the task,
     # which propagates CancelledError into the async generator so aclosing()
@@ -485,6 +505,7 @@ async def chat_stream(
                     _stream_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await _stream_task
+                await _cleanup_voice_forward()
                 return
             try:
                 msg = json.loads(raw)
@@ -594,6 +615,7 @@ async def chat_stream(
                                 _stream_task.cancel()
                                 with contextlib.suppress(asyncio.CancelledError):
                                     await _stream_task
+                                await _cleanup_voice_forward()
                                 return
                             try:
                                 side_msg = json.loads(side_raw)
@@ -657,6 +679,7 @@ async def chat_stream(
                 target_kind="chat",
                 target_id=sid,
             )
+        await _cleanup_voice_forward()
         return
 
 # ── Task API (ADR-0080 M1) ──────────────────────────────────────────────

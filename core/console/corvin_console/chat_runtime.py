@@ -108,7 +108,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[2]
@@ -821,6 +821,89 @@ def prune_voice_archive(tenant_id: str, sid: str,
         return 0
 
 
+def _voice_artifact_part(path: Path, label: str) -> dict[str, Any] | None:
+    """Build the artifact dict for one persisted voice file, or None if its mime
+    doesn't clear the inline-artifact gate. Single source of truth for the
+    path/mime/size shape — shared by history hydration (attach_voice_artifacts)
+    and the live WS push (publish_voice_event) so the two can never drift."""
+    mime = _artifact_mime(path)
+    if not mime:
+        return None
+    return {
+        "kind": "artifact",
+        "name": path.name,
+        "path": f"{_VOICE_SUBDIR}/{path.name}",
+        "mime": mime,
+        "size": path.stat().st_size,
+        "label": label,
+    }
+
+
+# ── Live voice stream event (out-of-band; ADR-0194 live-replay) ─────────────
+# /voice/tts and /voice/segment persist the turn's audio via _persist_turn_voice
+# and return — until now the archived file only ever became a visible player on
+# the NEXT page load, because attach_voice_artifacts() runs solely from the GET
+# .../turns route. This is a tiny per-sid fanout so those routes can push one
+# event onto the SAME session's open chat WebSocket the moment the archive
+# write lands, letting the frontend attach the player to the just-finished
+# message live. Deliberately NOT the CCCPubSub (ccc_pubsub.py) pattern —
+# that one fans out per-TENANT for cross-tab entity events; this is scoped to
+# the single tab actually viewing this chat, and a missing/slow subscriber (tab
+# closed, WS mid-reconnect) must never block the REST response that owns it.
+_voice_live_subs: dict[str, list[asyncio.Queue]] = {}
+
+
+def subscribe_voice_live(sid: str) -> tuple[asyncio.Queue, Callable[[], None]]:
+    """Subscribe to live voice-attach events for one chat session.
+
+    Returns the queue to await events from and an idempotent unsubscribe
+    callback the caller MUST invoke when the connection ends.
+    """
+    q: asyncio.Queue = asyncio.Queue(maxsize=16)
+    _voice_live_subs.setdefault(sid, []).append(q)
+
+    def _unsubscribe() -> None:
+        subs = _voice_live_subs.get(sid)
+        if not subs:
+            return
+        try:
+            subs.remove(q)
+        except ValueError:
+            pass
+        if not subs:
+            _voice_live_subs.pop(sid, None)
+
+    return q, _unsubscribe
+
+
+def publish_voice_event(sid: str, path: Path, label: str) -> None:
+    """Push a live 'voice' stream event for *path* to every open subscriber of
+    *sid*. Best-effort: no subscriber (no open tab, or the WS hasn't
+    (re)connected yet) is the common case and must stay silent — the reload
+    path (attach_voice_artifacts) still picks the file up on next load either
+    way, so this is purely an additive live-attach shortcut.
+    """
+    subs = _voice_live_subs.get(sid)
+    if not subs:
+        return
+    part = _voice_artifact_part(path, label)
+    if part is None:
+        return
+    event = {
+        "type": "voice",
+        "name": part["name"],
+        "path": part["path"],
+        "mime": part["mime"],
+        "size": part["size"],
+        "label": part["label"],
+    }
+    for q in list(subs):
+        try:
+            q.put_nowait(event)
+        except asyncio.QueueFull:
+            continue
+
+
 def _turn_text(turn: dict[str, Any]) -> str:
     """Concatenate a persisted turn's text parts — the key the audio is filed under."""
     out: list[str] = []
@@ -862,29 +945,16 @@ def attach_voice_artifacts(tenant_id: str, sid: str,
             hint = turn.get("voice_key")
             key = hint if isinstance(hint, str) and hint else None
 
-            def _art(path: Path, label: str) -> dict[str, Any] | None:
-                mime = _artifact_mime(path)
-                if not mime:
-                    return None
-                return {
-                    "kind": "artifact",
-                    "name": path.name,
-                    "path": f"{_VOICE_SUBDIR}/{path.name}",
-                    "mime": mime,
-                    "size": path.stat().st_size,
-                    "label": label,
-                }
-
             vf = find_turn_voice(tenant_id, sid, text, key=key)
             if vf is not None:
-                art = _art(vf, "voice")
+                art = _voice_artifact_part(vf, "voice")
                 if art:
                     parts.append(art)
             # Phase 3: the full read-aloud, in playback order, each segment its own
             # player. Only present for turns the user actually asked to hear in full.
             segs = find_turn_voice_segments(tenant_id, sid, text, key=key)
             for i, seg in enumerate(segs, start=1):
-                art = _art(seg, f"voice {i}/{len(segs)}")
+                art = _voice_artifact_part(seg, f"voice {i}/{len(segs)}")
                 if art:
                     parts.append(art)
         except Exception:  # noqa: BLE001 — a broken archive must not break history

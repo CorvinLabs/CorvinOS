@@ -1,3 +1,8 @@
+<!-- Launchpadly — CorvinOS (compact) -->
+<a href="https://launchpadly.co/startup/corvinos?ref=badge" target="_blank" rel="noopener noreferrer" data-launchpadly-badge="corvinos" data-launchpadly-badge-variant="compact">
+  <img src="https://launchpadly.co/embed/badges/startup/corvinos.svg?variant=compact" alt="Launchpadly Startup Directory" width="200" height="36" style="display:block;border:0;" />
+</a>
+
 <picture>
   <source media="(prefers-color-scheme: dark)"  srcset="docs/assets/banner.svg">
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/banner.svg">

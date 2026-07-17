@@ -170,6 +170,28 @@ async def _run_with_tts_slot(sync_fn, *args, no_slot_log: str = "") -> Response:
         _get_tts_semaphore().release()
 
 
+def _publish_voice_live_event(tenant_id: str, sid: str | None, resp: Response, *, label: str) -> None:
+    """Push the just-archived voice file onto the session's live WS stream.
+
+    Best-effort / must never raise: TTS itself already succeeded (or degraded
+    to 204) by the time this runs, and a live-attach hiccup must not turn that
+    into a request failure. No-op when there is no sid (recap/summary callers
+    that never pass one) or the archive write failed — ``_persist_turn_voice``
+    signals that by omitting X-Corvin-Voice-File, exactly like the existing
+    204-on-failure contract this route already follows everywhere else.
+    """
+    if not sid:
+        return
+    name = resp.headers.get("X-Corvin-Voice-File")
+    if not name:
+        return
+    try:
+        from .. import chat_runtime as _cr  # noqa: PLC0415 — avoid import cycle at module load
+        _cr.publish_voice_event(sid, _cr.voice_dir(tenant_id, sid) / name, label)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _detect_audio_mime(data: bytes) -> str:
     """Detect audio MIME type from magic bytes.
 
@@ -731,13 +753,19 @@ async def voice_tts(
 ) -> Response:
     """Bounded async wrapper — see _TTS_MAX_CONCURRENCY. The synthesis itself is
     unchanged and still runs in the threadpool, but only once a slot is free."""
-    return await _run_with_tts_slot(
+    resp = await _run_with_tts_slot(
         _voice_tts_sync, body, rec,
         no_slot_log=(
             f"voice_tts: no synthesis slot within {_TTS_SLOT_WAIT_S:.0f}s "
             f"({_TTS_MAX_CONCURRENCY} concurrent) — skipping playback for this turn"
         ),
     )
+    # Live-attach the just-archived player onto the open chat WS (ADR-0194
+    # live-replay) — additive to, and independent of, the ephemeral playTts()
+    # auto-speak-once path above; runs back on the event loop (not the sync
+    # threadpool worker), so it's safe to touch the asyncio-based pub/sub here.
+    _publish_voice_live_event(rec.tenant_id, body.sid, resp, label="voice")
+    return resp
 
 
 def _voice_tts_sync(
@@ -1137,13 +1165,21 @@ async def voice_segment(
 ) -> Response:
     """Bounded async wrapper — see _TTS_MAX_CONCURRENCY. A read-aloud fires one
     of these per segment, so this route is the easier of the two to pile up."""
-    return await _run_with_tts_slot(
+    resp = await _run_with_tts_slot(
         _voice_segment_sync, body, rec,
         no_slot_log=(
             f"voice_segment: no synthesis slot within {_TTS_SLOT_WAIT_S:.0f}s — "
             "ending the read-aloud playlist here"
         ),
     )
+    # Live-attach this segment's player, labelled the same way attach_voice_
+    # artifacts numbers it on reload ("voice i/n"), so a mid-playlist reload
+    # doesn't relabel a segment that's already visible live.
+    _idx_hdr = resp.headers.get("X-Corvin-Voice-Index")
+    _total_hdr = resp.headers.get("X-Corvin-Voice-Segments")
+    _label = f"voice {int(_idx_hdr) + 1}/{_total_hdr}" if _idx_hdr and _total_hdr else "voice"
+    _publish_voice_live_event(rec.tenant_id, body.sid, resp, label=_label)
+    return resp
 
 
 def _voice_segment_sync(

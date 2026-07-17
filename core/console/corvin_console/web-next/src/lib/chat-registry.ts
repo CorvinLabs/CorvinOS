@@ -31,7 +31,7 @@ export interface ChatMessage {
 
 export interface StreamEvent {
   type: "ready" | "delta" | "tool_use" | "result" | "error" | "done" | "info" |
-        "pong" | "session_title" | "artifact" | "ccc_action";
+        "pong" | "session_title" | "artifact" | "ccc_action" | "voice";
   text?: string;
   name?: string;
   input?: Record<string, unknown>;
@@ -124,6 +124,11 @@ export function chatDebugLog(sid: string): object[] {
 interface SessionEntry {
   ws: WebSocket | null;
   currentAssistantId: string | null;
+  // Set to currentAssistantId's value right before "done" clears it — the only
+  // way a late "voice" event (published by /voice/tts AFTER the WS already sent
+  // "done" for the turn — see chat_runtime.publish_voice_event) can still find
+  // the message to attach its player to.
+  lastAssistantId: string | null;
   historyLoaded: boolean;
   // Reconnect state
   reconnectTimer: ReturnType<typeof setTimeout> | null;
@@ -171,6 +176,7 @@ function getOrCreate(sid: string): SessionEntry {
       latestResultText: null,
       pendingTitle: null,
       currentAssistantId: null,
+      lastAssistantId: null,
       historyLoaded: false,
       reconnectTimer: null,
       reconnectDelay: 1_000,
@@ -285,8 +291,36 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
         entry.messages = entry.messages.map((m) =>
           m.id === aid ? { ...m, streaming: false } : m
         );
+        // Remember this turn's message id — /voice/tts archives and publishes
+        // its "voice" event AFTER this "done" already cleared currentAssistantId,
+        // so a late player-attach still needs somewhere to land.
+        entry.lastAssistantId = aid;
       }
       entry.currentAssistantId = null;
+      return;
+    }
+
+    case "voice": {
+      // Live counterpart of history hydration's attach_voice_artifacts: attach
+      // the just-archived audio to the CURRENT turn if it's still streaming,
+      // otherwise to the most recently completed one — /voice/tts normally
+      // resolves just after "done" already fired. Additive only: this never
+      // touches the ephemeral playTts() auto-speak-once path.
+      const aid = entry.currentAssistantId ?? entry.lastAssistantId;
+      if (aid && evt.name && evt.path && evt.mime) {
+        const part: MessagePart = {
+          kind: "artifact",
+          name: evt.name,
+          path: evt.path,
+          mime: evt.mime,
+          size: evt.size ?? 0,
+          sid,
+          ...(evt.label ? { label: evt.label } : {}),
+        };
+        entry.messages = entry.messages.map((m) =>
+          m.id === aid ? { ...m, parts: [...m.parts, part] } : m
+        );
+      }
       return;
     }
 
@@ -390,6 +424,7 @@ export function ensureConnected(sid: string): void {
         ...(payload.type === "error"    ? { message: payload.message } : {}),
         ...(payload.type === "result"   ? { chars: (payload.text ?? "").length, usage: payload.usage } : {}),
         ...(payload.type === "artifact" ? { name: payload.name, mime: payload.mime, size: payload.size } : {}),
+        ...(payload.type === "voice" ? { name: payload.name, mime: payload.mime, size: payload.size, label: payload.label } : {}),
         ...(payload.type === "session_title" ? { title: payload.title } : {}),
         ...(payload.type === "ccc_action" ? { action_id: payload.action_id, entity_type: payload.entity_type } : {}),
       });

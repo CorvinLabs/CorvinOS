@@ -94,7 +94,7 @@ class ACSQuotaFallbackTest(unittest.TestCase):
         for k in ("CORVIN_HOME", "CORVIN_TENANT_ID"):
             os.environ.pop(k, None)
         # Clean up injected fake modules
-        for mod_name in ("license", "license.compute_quota", "license.limits"):
+        for mod_name in ("license", "license.compute_quota", "license.limits", "acs_runtime"):
             sys.modules.pop(mod_name, None)
 
     def _pin_house_rules_allowed(self):
