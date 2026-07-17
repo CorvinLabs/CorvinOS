@@ -2289,7 +2289,7 @@ function ArtifactCard({ artifact }: { artifact: Extract<MessagePart, { kind: "ar
 
       {/* Audio playback */}
       {isAudio && (
-        <div className="bg-card px-3 py-3">
+        <div className="bg-card px-3 py-3 [&_audio]:w-full dark:[filter:invert(1)_brightness(0.9)]">
           <audio src={url} controls preload="metadata" className="w-full">
             Your browser does not support inline audio playback.
           </audio>

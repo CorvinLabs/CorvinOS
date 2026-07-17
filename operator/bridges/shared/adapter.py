@@ -7100,7 +7100,7 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
             pass
     # Check if text is non-Latin script (indicates non-de/en user genuinely using
     # their native language). Use a simple CJK + Cyrillic check.
-    is_non_latin = False
+    text_is_non_latin = False
     for c in candidate_text:
         c_ord = ord(c)
         if (0x4E00 <= c_ord <= 0x9FFF or  # CJK Unified Ideographs
@@ -7110,13 +7110,20 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
             0x0400 <= c_ord <= 0x04FF or  # Cyrillic
             0x0600 <= c_ord <= 0x06FF or  # Arabic
             0x0E00 <= c_ord <= 0x0E7F):   # Thai
-            is_non_latin = True
+            text_is_non_latin = True
             break
+    # Check if profile language itself is non-Latin (indicates genuine non-de/en user).
+    profile_is_non_latin = profile_lang and profile_lang.split("-")[0].lower() not in (
+        "de", "en", "fr", "es", "it", "pt", "nl", "pl", "ru", "cs", "tr", "sv", "da",
+        "no", "fi", "hu", "ro", "el", "hr", "sk", "sl", "et", "lv", "lt", "bg", "sr"
+    )
     # For non-Latin text, keep the profile pin (user genuinely using their language).
-    # For Latin-script ambiguous text with a non-de/en profile, prefer system locale.
-    if is_non_latin:
+    # For Latin-script ambiguous text with a non-de/en but LATIN profile (nl, fr, etc.),
+    # keep profile. For Latin text with a NON-LATIN profile (zh-Hans, ja, ar, etc.),
+    # prefer system locale (user likely switched language mid-session).
+    if text_is_non_latin:
         output_language = profile_lang
-    elif profile_lang and profile_lang.split("-")[0].lower() not in ("de", "en"):
+    elif profile_is_non_latin and not text_is_non_latin:
         if _i18n is not None:
             try:
                 output_language = _i18n.system_language()
