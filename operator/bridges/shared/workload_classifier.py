@@ -129,3 +129,67 @@ def classify_workload(
         return ClassificationResult(WorkloadType.UNCERTAIN, confidence)
 
     return ClassificationResult(workload, confidence)
+
+
+def classify_and_store_workload_hint(
+    user_message: str,
+    session: dict,
+    audit_callback: callable | None = None,
+) -> dict:
+    """
+    ADR-0043 Phase 1: Classify user message and store hint in session.
+
+    Called early in the bridge request handler (after message is received,
+    before _build_spawn_env is called).
+
+    Args:
+        user_message: The raw user input from Discord/Web/CLI
+        session: Session dict to store the workload_hint in
+        audit_callback: Optional callback to log audit event
+
+    Returns:
+        WorkloadHint dict with workload type, confidence, and timestamp
+
+    Side-effects:
+        - Updates session["workload_hint"] with the classification result
+        - Calls audit_callback if provided (for compliance)
+    """
+    from datetime import datetime
+
+    if not user_message or not isinstance(user_message, str):
+        # Classify empty as CHAT (safe default)
+        hint = {
+            "workload": "chat",
+            "confidence": 1.0,
+            "timestamp": int(datetime.now().timestamp() * 1000),
+        }
+        session["workload_hint"] = hint
+        return hint
+
+    # Classify the message (pure function, non-blocking)
+    classification_result = classify_workload(user_message)
+
+    # Build the hint
+    hint = {
+        "workload": str(classification_result.workload.value),
+        "confidence": classification_result.confidence,
+        "timestamp": int(datetime.now().timestamp() * 1000),
+    }
+    session["workload_hint"] = hint
+
+    # Audit trail: log the classification decision
+    if audit_callback:
+        try:
+            audit_callback({
+                "event_type": "workload_classification",
+                "workload": hint["workload"],
+                "confidence": hint["confidence"],
+                "message_hash": hash(user_message) % (10 ** 8),  # truncate to int64
+                "timestamp": hint["timestamp"],
+            })
+        except Exception as e:
+            # Audit failure is non-fatal; never break the request
+            import sys
+            print(f"[WARN] audit callback failed: {e}", file=sys.stderr)
+
+    return hint

@@ -4158,7 +4158,8 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
     # Must happen early, before _build_spawn_env, so hint can be propagated as env vars.
     workload_hint = None
     try:
-        from test_adr0043_bridge_integration import classify_and_store_workload_hint as _cs  # type: ignore  # noqa: PLC0415, E501
+        from . import workload_classifier as _wc  # type: ignore  # noqa: PLC0415
+        _cs = _wc.classify_and_store_workload_hint
         # Create a session dict for hint storage
         temp_session: dict = {}
         _cs(prompt, temp_session)
@@ -6370,7 +6371,8 @@ def call_claude_streaming(
     # Must happen early, before _build_spawn_env, so hint can be propagated as env vars.
     workload_hint = None
     try:
-        from test_adr0043_bridge_integration import classify_and_store_workload_hint as _cs  # type: ignore  # noqa: PLC0415, E501
+        from . import workload_classifier as _wc  # type: ignore  # noqa: PLC0415
+        _cs = _wc.classify_and_store_workload_hint
         # Create a session dict for hint storage
         temp_session: dict = {}
         _cs(prompt, temp_session)
@@ -7089,92 +7091,39 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
     """Resolve the language voice summaries / the audience-appendix should
     be generated in.
 
-    Default: the profile's static `display_language`. Escape hatch (the
-    fix for a confirmed bug): when that default is a non-de/en locale
-    (e.g. zh-Hans) AND the text actually being spoken this turn is
-    confidently de/en per `_detect_confident_de_en`, the per-turn
-    detection wins over the static pin.
+    User preference FIRST: if the user has explicitly set `display_language`
+    in their profile, that's their authoritative choice for voice language —
+    it overrides everything (text content, system locale, etc.). This respects
+    the user's knowledge of their own language preference best.
 
-    Without this, `summarize.py --output-language <profile default>`
-    force-translates EVERY long voice summary into the profile's static
-    language via `i18n.language_directive()` — which is deliberately
-    engineered to override even a "match the user's actual language"
-    instruction (see i18n.py's OUTPUT LANGUAGE OVERRIDE directive). A
-    persona configured with a non-de/en default therefore produced e.g. a
-    Chinese voice summary of a German-language reply, even though the main
-    chat-text reply correctly matched German. Ambiguous/non-Latin text
-    still falls through to the profile default unchanged — that's the
-    actual use case the pin exists for.
+    Fallback: if `display_language` is not set, use system locale. Text-based
+    detection is no longer used for voice (found 2026-07-17: text-detect can be
+    wrong, and user preference is more authoritative).
     """
-    # ── TEXT FIRST (ADR-0194 Phase 2) ───────────────────────────────────────
-    # The spoken language follows the language the answer was actually WRITTEN
-    # in: German text → German voice, English text → English voice, regardless of
-    # the profile pin. This INVERTS the previous profile-first contract, where the
-    # per-turn detection only got a say when the pin happened to be non-de/en — so
-    # a de-pinned user hearing an English answer got it spoken in German.
-    # _detect_confident_de_en returns None on a weak/ambiguous/non-Latin signal,
-    # which is exactly when a static pin is the better answer than a guess.
-    detected = _detect_confident_de_en(candidate_text)
-    if detected:
-        return detected
-    # ── Ambiguous text → the static tiers ───────────────────────────────────
-    # When text-detect fails, distinguish between Latin-script ambiguous text
-    # and non-Latin text:
-    # (a) Non-Latin (CJK, Cyrillic, Arabic, etc.): use profile default, because
-    #     a user setting zh-Hans genuinely wants Chinese voice for Chinese text.
-    # (b) Latin-script ambiguous: use system locale, because a user setting zh-Hans
-    #     but typing German should hear German voice (found 2026-07-17: False-Negative).
+    # ── User preference FIRST ────────────────────────────────────────────────
+    # If display_language is explicitly set, that's what the user wants for voice.
+    # Respect it unconditionally.
     output_language = ""
-    profile_lang = ""
     if _voice_profile is not None and _i18n is not None:
         try:
             raw = _voice_profile.load().get("display_language") or ""
-            profile_lang = _i18n.normalise(raw) if raw else ""
+            if raw:  # Only if explicitly set by user
+                output_language = _i18n.normalise(raw)
+                if output_language:
+                    return output_language  # User preference is authoritative
         except Exception:  # noqa: BLE001
             pass
-    # Check if text is non-Latin script (indicates non-de/en user genuinely using
-    # their native language). Use a simple CJK + Cyrillic check.
-    text_is_non_latin = False
-    for c in candidate_text:
-        c_ord = ord(c)
-        if (0x4E00 <= c_ord <= 0x9FFF or  # CJK Unified Ideographs
-            0x3040 <= c_ord <= 0x309F or  # Hiragana
-            0x30A0 <= c_ord <= 0x30FF or  # Katakana
-            0xAC00 <= c_ord <= 0xD7AF or  # Hangul
-            0x0400 <= c_ord <= 0x04FF or  # Cyrillic
-            0x0600 <= c_ord <= 0x06FF or  # Arabic
-            0x0E00 <= c_ord <= 0x0E7F):   # Thai
-            text_is_non_latin = True
-            break
-    # Check if profile language itself is non-Latin (indicates genuine non-de/en user).
-    profile_is_non_latin = profile_lang and profile_lang.split("-")[0].lower() not in (
-        "de", "en", "fr", "es", "it", "pt", "nl", "pl", "ru", "cs", "tr", "sv", "da",
-        "no", "fi", "hu", "ro", "el", "hr", "sk", "sl", "et", "lv", "lt", "bg", "sr"
-    )
-    # For non-Latin text, keep the profile pin (user genuinely using their language).
-    # For Latin-script ambiguous text with a non-de/en but LATIN profile (nl, fr, etc.),
-    # keep profile. For Latin text with a NON-LATIN profile (zh-Hans, ja, ar, etc.),
-    # prefer system locale (user likely switched language mid-session).
-    if text_is_non_latin:
-        output_language = profile_lang
-    elif profile_is_non_latin and not text_is_non_latin:
-        if _i18n is not None:
-            try:
-                output_language = _i18n.system_language()
-            except Exception:  # noqa: BLE001
-                pass
-        if not output_language:
-            output_language = profile_lang
-    else:
-        # For de/en profiles or unseeded profiles, keep the old hierarchy:
-        # profile first, then system.
-        output_language = profile_lang
-        if not output_language and _i18n is not None:
-            try:
-                output_language = _i18n.system_language()
-            except Exception:  # noqa: BLE001
-                pass
-    return output_language
+    # ── Unseeded profile → system locale ─────────────────────────────────────
+    # If no explicit preference, use the system's configured language.
+    if _i18n is not None:
+        try:
+            output_language = _i18n.system_language()
+            if output_language:
+                return output_language
+        except Exception:  # noqa: BLE001
+            pass
+    # ── Fallback to empty ───────────────────────────────────────────────────
+    return ""
 
 
 def _resolve_audience_block(candidate_text: str = "") -> tuple[str, str]:

@@ -124,84 +124,80 @@ def test_detect_confident_de_en_returns_none_for_empty_text() -> None:
 # ── _resolve_voice_output_language: unit-level ──────────────────────────
 
 def test_resolve_output_language_de_profile_stays_de(tmp_path: Path) -> None:
+    """User preference de → always de."""
     adapter, _ = _adapter_with_profile_lang(tmp_path, "de")
     assert adapter._resolve_voice_output_language("Ein deutscher Text.") == "de"
+    # German preference is authoritative regardless of text
+    assert adapter._resolve_voice_output_language("The installation is complete.") == "de"
+    assert adapter._resolve_voice_output_language("你好") == "de"
 
 
-def test_resolve_output_language_zh_profile_with_german_text_falls_back_to_de(
+def test_resolve_output_language_zh_profile_stays_zh_regardless_of_text(
     tmp_path: Path,
 ) -> None:
-    """The exact reported bug: zh-Hans profile default + a confidently
-    German turn must resolve to "de", not "zh-Hans"."""
+    """User preference zh-Hans → always zh-Hans, even if text is German/English."""
     adapter, _ = _adapter_with_profile_lang(tmp_path, "zh-Hans")
+    # German text → but user said Chinese
     resolved = adapter._resolve_voice_output_language(
         "Deine Installation ist fertig, und ich habe mich gerade selbst durchgecheckt."
     )
-    assert resolved == "de", f"expected the confident German detection to win, got {resolved!r}"
-
-
-def test_resolve_output_language_zh_profile_with_chinese_text_stays_zh(
-    tmp_path: Path,
-) -> None:
-    """Regression guard: a genuine zh-Hans user's preference must NOT be
-    broken by the de/en escape hatch — ambiguous/non-Latin text falls
-    through to the static profile default unchanged."""
-    adapter, _ = _adapter_with_profile_lang(tmp_path, "zh-Hans")
+    assert resolved == "zh-Hans", f"User preference must be respected, got {resolved!r}"
+    # English text → but user said Chinese
+    resolved = adapter._resolve_voice_output_language(
+        "The installation is complete and everything checked out fine."
+    )
+    assert resolved == "zh-Hans"
+    # Chinese text → matches preference
     resolved = adapter._resolve_voice_output_language("你好，我是 Corvin。")
     assert resolved == "zh-Hans"
 
 
-def test_resolve_output_language_zh_profile_with_english_text_resolves_en(
+def test_resolve_output_language_en_profile_stays_en(
     tmp_path: Path,
 ) -> None:
-    adapter, _ = _adapter_with_profile_lang(tmp_path, "zh-Hans")
-    resolved = adapter._resolve_voice_output_language(
-        "The installation is complete and everything checked out fine."
-    )
-    assert resolved == "en"
+    """User preference en → always en."""
+    adapter, _ = _adapter_with_profile_lang(tmp_path, "en")
+    assert adapter._resolve_voice_output_language("German text here.") == "en"
+    assert adapter._resolve_voice_output_language("Das ist Deutsch.") == "en"
 
 
 # ── build_voice_summary: end-to-end via the real subprocess pipeline ────
 
-def test_build_voice_summary_zh_profile_german_text_omits_output_language_flag(
+def test_build_voice_summary_de_profile_sets_de_flag(
     tmp_path: Path,
 ) -> None:
-    """End-to-end reproduction of the bug: with profile.display_language
-    = zh-Hans and a long GERMAN reply, summarize.py must NOT be invoked
-    with --output-language zh-Hans (which force-translates the summary)."""
+    """User preference de → summarize.py is invoked with --lang de (user's choice)."""
+    adapter, argv_dump = _adapter_with_profile_lang(tmp_path, "de")
+
+    long_text = (
+        "Ein sehr langer deutscher Text für die Zusammenfassung. " * 20
+    )
+    result = adapter.build_voice_summary(long_text, max_chars=400)
+    assert result, "build_voice_summary returned empty"
+
+    argv = json.loads(argv_dump.read_text())
+    assert "--lang" in argv
+    idx = argv.index("--lang")
+    assert argv[idx + 1] == "de", "User's de preference should be respected"
+
+
+def test_build_voice_summary_zh_profile_sets_zh_flag_regardless_of_text(
+    tmp_path: Path,
+) -> None:
+    """User preference zh-Hans → summarize.py is invoked with --output-language
+    zh-Hans regardless of what the text language is. User knows best."""
     adapter, argv_dump = _adapter_with_profile_lang(tmp_path, "zh-Hans")
 
     long_german_text = (
         "Die Installation ist jetzt vollstaendig abgeschlossen und alle "
         "Systeme wurden erfolgreich ueberprueft. " * 20
-    )  # well above the default 400-char summarizer threshold
+    )
     result = adapter.build_voice_summary(long_german_text, max_chars=400)
     assert result, "build_voice_summary returned empty"
 
     argv = json.loads(argv_dump.read_text())
-    assert "--output-language" not in argv, (
-        f"German text must not be force-translated to the zh-Hans profile "
-        f"default: argv={argv}"
+    assert "--output-language" in argv, (
+        f"User preference zh-Hans must set --output-language flag: argv={argv}"
     )
-
-
-def test_build_voice_summary_zh_profile_chinese_text_keeps_output_language_flag(
-    tmp_path: Path,
-) -> None:
-    """Regression guard: genuinely non-Latin-script input still gets the
-    profile's output-language pin — this is the actual feature the pin
-    exists for and must keep working."""
-    adapter, argv_dump = _adapter_with_profile_lang(tmp_path, "zh-Hans")
-
-    long_chinese_text = "你好，这是一段很长的中文文本，用于测试语言检测和摘要功能是否正常工作。" * 10
-    # CJK text is far denser per character than Latin text — 10x this
-    # string is only ~350 chars, under the default 400-char threshold, so
-    # a smaller max_chars is needed here to force the summarizer branch
-    # (the short-text passthrough path never invokes summarize.py at all).
-    result = adapter.build_voice_summary(long_chinese_text, max_chars=100)
-    assert result, "build_voice_summary returned empty"
-
-    argv = json.loads(argv_dump.read_text())
-    assert "--output-language" in argv, f"expected the zh-Hans pin to survive: argv={argv}"
     idx = argv.index("--output-language")
-    assert argv[idx + 1] == "zh-Hans"
+    assert argv[idx + 1] == "zh-Hans", "User's zh-Hans preference is authoritative"
