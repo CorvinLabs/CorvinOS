@@ -2590,21 +2590,31 @@ def _resolve_os_model(
             workload_confidence = os.environ.get("CORVIN_WORKLOAD_CONFIDENCE")
             # Only route if we have a classification and fast_chat is enabled
             if workload_class and workload_confidence:
+                # Feature flag: check (1) profile, (2) env var, (3) tenant YAML spec.features.fast_chat_mode
                 fast_chat_enabled = profile.get("fast_chat_mode", False) or \
                     os.environ.get("CORVIN_FAST_CHAT_ENABLED", "").lower() == "true"
-                try:
-                    conf = float(workload_confidence)
-                except (ValueError, TypeError):
-                    conf = 0.0
-                model = _em.resolve_model_for_workload(
-                    engine_id,
-                    workload_type=workload_class,
-                    user_chosen_model=explicit,  # use explicit as fallback
-                    confidence=conf,
-                    fast_chat_enabled=fast_chat_enabled,
-                )
-                if model:
-                    return model
+                if not fast_chat_enabled:
+                    # Check tenant YAML
+                    try:
+                        tenant_spec = _em._load_tenant_spec(tenant_id)
+                        fast_chat_enabled = (tenant_spec.get("features") or {}).get("fast_chat_mode", False)
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                if fast_chat_enabled:
+                    try:
+                        conf = float(workload_confidence)
+                    except (ValueError, TypeError):
+                        conf = 0.0
+                    model = _em.resolve_model_for_workload(
+                        engine_id,
+                        workload_type=workload_class,
+                        user_chosen_model=explicit,  # use explicit as fallback
+                        confidence=conf,
+                        fast_chat_enabled=True,
+                    )
+                    if model:
+                        return model
         except Exception:  # noqa: BLE001
             # Workload routing failure is non-fatal; fall through to Tier 3
             pass
