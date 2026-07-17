@@ -460,22 +460,48 @@ helper) — previously they had no fallback at all, so a Hermes-only install
 LERN-ZUGABE/METAPHER annex; now `generate_appendix`/`generate_metapher` try
 CLI (if authenticated) then Hermes before giving up.
 
-**Voice language follows the TEXT (ADR-0194 Phase 2).** `_resolve_voice_output_language`
-used to be profile-FIRST: the per-turn `_detect_confident_de_en` check only got a say
-when the static `display_language` pin happened to be non-de/en. A user pinned to `de`
-who received an English answer therefore heard it spoken in German. The contract is now
-inverted — the text decides:
+**Voice language: Smart Hybrid resolution + 20-language detector (2026-07-18,
+supersedes the pure text-first contract of ADR-0194 Phase 2 and the brief
+user-preference-first revision of 2026-07-17).** `_resolve_voice_output_language`
+resolves in three tiers:
 
-  1. `_detect_confident_de_en(candidate_text)` — returns "de"/"en" only on a confident
-     signal, `None` on a tie / no function words / non-Latin script;
-  2. on `None`, the static tiers apply in order: the profile pin (the right answer for a
-     genuine zh-Hans/ja/ar user, whose reply the de/en detector structurally cannot speak
-     to), then `i18n.system_language()` (OS locale), then `""` (the caller's own constant).
+  1. an EXPLICIT `display_language` profile pin is authoritative — a user who
+     pinned a language always hears that language, whatever the text;
+  2. with no pin, per-turn text detection decides: `_detect_confident_de_en`
+     (name kept for its callers) wraps `detect_lang.detect_confident()`, which
+     now covers 20 languages (en de es fr it pt nl pl ru ja zh ko ar tr sv da
+     no fi el cs) and returns `None` on any weak/ambiguous signal;
+  3. on `None`, `i18n.system_language()` (OS locale), then `""`.
 
-The console needed no change — `detectTtsLang()` (`chat.tsx`) was already text-first, with
-script-level detection (CJK/Hangul/kana/Arabic/Hebrew/Cyrillic/Devanagari), umlauts, and a
-de/en function-word scorer, using its fallback only on a tie. Regression guard:
-`operator/bridges/shared/test_adapter_voice_text_first_lang.py`.
+`detect_lang.py` was redesigned after an adversarial review (2026-07-18) found
+the first 20-language draft produced confident WRONG answers (Ukrainian→ru,
+Persian/Urdu→ar, Finnish→de via the umlaut bonus) that the summary pipeline
+then force-translated. Load-bearing invariants of the scorer:
+
+  * a word appearing in several languages' lists is SHARED evidence — it raises
+    absolute counts for all owners but can never create a margin (generalises
+    the old hand-maintained de/en BILINGUAL neutralisation);
+  * script bonuses (umlauts→de, Cyrillic→ru, CJK, Hangul, Arabic, Greek)
+    require ≥2 DISTINCTIVE word hits — script membership alone never names a
+    language;
+  * one-way script VETOES drop neighbour languages the word lists cannot
+    separate: Ukrainian-only letters veto `ru`, Perso-Urdu letters veto `ar`,
+    kana vetoes `zh`;
+  * word lists carry FUNCTION words only — never content words lifted from a
+    demo sentence (the draft's Norwegian pangram words collided with English
+    "late");
+  * downstream stays clamped: `build_voice_summary` collapses the resolved
+    code to a de/en `--lang` base prompt and passes every other code via
+    `--output-language` (summarize.py argv contract unchanged).
+
+The console (`detectTtsLang()` in `chat.tsx`) keeps its own text-first
+script-level detection unchanged. TTS voice coverage: `say.py`'s edge map
+now aliases `no`→`nb-NO-PernilleNeural` and adds `el-GR-AthinaNeural`, so all
+20 dropdown languages in `voice.tsx` resolve to a real voice on the keyless
+edge path (the dropdown's Chinese option stores `zh-Hans`, matching
+`i18n.normalise`'s round-trip). Regression guards:
+`operator/bridges/shared/test_adapter_voice_text_first_lang.py`,
+`test_adapter_voice_lang_detect.py`.
 
 **Per-turn voice archive (ADR-0194 Phase 1).** Console voice used to be ephemeral:
 `chat.tsx` → `useVoicePlayback.playTts()` → `POST /voice/tts` → blob → played once →

@@ -41,11 +41,12 @@ class TestBasicClassification:
         assert result.workload in [WorkloadType.CODE, WorkloadType.UNCERTAIN]
 
     def test_mixed_but_chat_dominant(self) -> None:
-        """Mostly chat with a single code keyword."""
+        """Technical topic without syntax → UNCERTAIN, never a confident
+        CHAT (asymmetric risk: a false CHAT downgrades a coding turn)."""
         msg = "I have a quick question about importing modules in Python"
         result = classify_workload(msg)
-        # Only one 'import' keyword in a ~10-word message → score ~0.1 → CHAT
-        assert result.workload == WorkloadType.CHAT
+        # "Python" is a code noun → ambiguous → UNCERTAIN (keeps user model)
+        assert result.workload == WorkloadType.UNCERTAIN
 
     def test_mixed_but_code_dominant(self) -> None:
         """Mostly code patterns."""
@@ -73,10 +74,9 @@ class TestBasicClassification:
 
     def test_uncertain_on_low_confidence(self) -> None:
         """Low confidence triggers UNCERTAIN, not forced workload type."""
-        # A message with barely any code keywords
-        msg = "Can you help import"
+        # Intent verb without a code noun → conf 0.4 < any threshold
+        msg = "Can you fix it please"
         result = classify_workload(msg, confidence_threshold=0.9)
-        # confidence will be < 0.9 → UNCERTAIN
         assert result.workload == WorkloadType.UNCERTAIN
 
     def test_confidence_bounds(self) -> None:
@@ -141,10 +141,11 @@ class TestRealWorldScenarios:
     """Real-world chat vs. code classification scenarios."""
 
     def test_api_documentation_query(self) -> None:
-        """Asking about API documentation."""
+        """Technical question mentioning API/errors → UNCERTAIN (safe:
+        keeps the user's model; must NEVER be a confident CHAT)."""
         msg = "What's the best way to handle API errors in production?"
         result = classify_workload(msg)
-        assert result.workload == WorkloadType.CHAT
+        assert result.workload in (WorkloadType.UNCERTAIN, WorkloadType.CODE)
 
     def test_architecture_discussion(self) -> None:
         """Architecture discussion, not code."""
@@ -179,11 +180,12 @@ class TestRealWorldScenarios:
         assert result.workload != WorkloadType.CHAT
 
     def test_concept_explanation_request(self) -> None:
-        """Asking to explain a concept."""
+        """Programming-concept question → UNCERTAIN is acceptable (safe
+        direction); a confident CODE would also be fine. Never asserts
+        CHAT: 'programming' is a coding-intent signal."""
         msg = "Can you explain what closures are in programming?"
         result = classify_workload(msg)
-        # No code keywords → CHAT
-        assert result.workload == WorkloadType.CHAT
+        assert result.workload in (WorkloadType.UNCERTAIN, WorkloadType.CODE)
 
     def test_sql_query_request(self) -> None:
         """Asking to write a SQL query."""

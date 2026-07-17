@@ -6,6 +6,53 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.46] — 2026-07-18 — 20-language voice detection + ADR-0043 fast-chat routing hardening
+
+### Added — Voice
+
+- **20-language voice auto-detection.** `detect_lang.py` grew from a de/en
+  binary detector to 20 languages (en de es fr it pt nl pl ru ja zh ko ar tr
+  sv da no fi el cs) with a redesigned scorer: shared words count for every
+  language that owns them (no margin from shared evidence), script bonuses
+  require ≥2 distinctive word hits, and one-way script vetoes stop confident
+  WRONG answers (Ukrainian is not `ru`, Persian/Urdu are not `ar`, kana is
+  never `zh`) — those force-translated summaries in the first draft.
+- **Smart-hybrid voice language resolution.** No pin → per-turn text
+  detection → system locale; an explicit `display_language` pin stays
+  authoritative. The console language dropdown now offers all 20 languages,
+  stores `zh-Hans` (round-trip-safe), and the voice-test button speaks the
+  actually selected language. `say.py` gained `no`→Bokmål and Greek edge
+  voices so every dropdown option resolves to a real voice keylessly.
+
+### Added — Model Routing (ADR-0043)
+
+- **Fast-chat workload routing is now actually wired** (opt-in, default off:
+  profile `fast_chat_mode` or tenant `spec.features.fast_chat_mode`). The
+  classification hint travels as a function parameter into
+  `_resolve_os_model` Tier 2.7 — the initial implementation was dead code
+  (relative-only imports swallowed by blanket excepts; producer wrote the
+  child spawn-env while the consumer read the daemon's own environ).
+- **Classifier redesigned around asymmetric risk:** CHAT (→ fast tier) is
+  only returned when a message carries NO code signal — syntax, error
+  output, file references, or EN/DE coding intent ("Schreib mir eine
+  Funktion…" was previously CHAT with confidence 1.0). Ambiguity keeps the
+  user's model. Real sliding-window rate limiting; sha256 message hashes;
+  every routing decision audited (`bridge.workload_model_selection`).
+
+### Fixed
+
+- **Voice TTS diagnostic header could 500.** `X-Corvin-Voice-Reason` carried
+  raw say.py stderr; non-latin-1 characters (`…`, `→`, CJK) raised
+  `UnicodeEncodeError` and turned the silent-204 degradation into a 500.
+- **Workload routing fail-closed hardening:** tier map pruned to real
+  registry engines (phantom `gemini`/`codex`/`ollama_local` entries with
+  retired model ids removed), unknown engines/registry failures refuse tier
+  models, out-of-range confidence counts as 0.0, empty input classifies
+  UNCERTAIN (was CHAT 1.0 → fast tier), `code`/`uncertain` turns fall
+  through to adaptive tiers instead of hard-pinning Sonnet, and the
+  process-wide `CORVIN_FAST_CHAT_ENABLED` env switch (cross-tenant, never
+  sanctioned by the ADR) was removed.
+
 ## [0.10.45] — 2026-07-17 — Live voice-attach (ADR-0194) + test-isolation fix
 
 ### Added — Voice

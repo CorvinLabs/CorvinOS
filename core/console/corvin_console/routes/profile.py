@@ -421,6 +421,22 @@ def voice_test(
         "ko": "안녕하세요! 이것은 이 목소리의 테스트 샘플입니다.",
         "fr": "Bonjour ! Ceci est un échantillon vocal de test avec cette voix.",
         "es": "¡Hola! Esta es una muestra de voz de prueba con esta voz.",
+        # Full coverage of the console language dropdown (voice.tsx) — the
+        # English fallback used to make the test button speak an English
+        # sentence for 12 of the 20 options.
+        "it": "Ciao! Questo è un campione vocale di prova con questa voce.",
+        "pt": "Olá! Esta é uma amostra de voz de teste com esta voz.",
+        "nl": "Hallo! Dit is een testspraakvoorbeeld met deze stem.",
+        "pl": "Cześć! To jest próbka głosu testowego z tym głosem.",
+        "ru": "Привет! Это тестовый образец голоса с этим голосом.",
+        "cs": "Ahoj! Toto je zkušební hlasová ukázka s tímto hlasem.",
+        "ar": "مرحباً! هذه عينة صوتية تجريبية بهذا الصوت.",
+        "tr": "Merhaba! Bu, bu sesle yapılmış bir test ses örneğidir.",
+        "sv": "Hej! Det här är ett teströstprov med den här rösten.",
+        "da": "Hej! Dette er en teststemmeprøve med denne stemme.",
+        "no": "Hei! Dette er en teststemmeprøve med denne stemmen.",
+        "fi": "Hei! Tämä on tämän äänen testinäyte.",
+        "el": "Γεια σας! Αυτό είναι ένα δοκιμαστικό δείγμα φωνής με αυτή τη φωνή.",
     }
     # Match on the BCP-47 prefix (e.g. "zh-Hans" → "zh") as a fallback.
     lang_lc = body.lang.lower()

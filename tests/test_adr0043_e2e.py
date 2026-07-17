@@ -1,12 +1,18 @@
-"""End-to-end test for ADR-0043: message → classification → routing → spawn.
+"""End-to-end tests for ADR-0043: message → classification → routing.
 
-Full path: user message enters bridge → classified → stored in session →
-propagated as env vars via _build_spawn_env → consumed by _resolve_os_model
-for model routing decision.
+These exercise the PRODUCTION path: classify_and_store_workload_hint from
+the production module (not a test copy), and adapter._resolve_os_model
+Tier 2.7 consuming the hint as a function parameter — exactly how
+call_claude / call_claude_streaming thread it. An earlier revision of this
+file hand-assembled step 4 ("simulate reading the env vars") and imported
+a duplicate implementation from the bridge-integration test file, so it
+stayed green while the feature was dead in production (adversarial review
+2026-07-18).
 """
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,186 +21,139 @@ from unittest import mock
 import pytest
 
 _REPO = Path(__file__).resolve().parents[1]
-for _p in (
-    _REPO,
-    _REPO / "operator",
-    _REPO / "operator" / "bridges",
-    _REPO / "operator" / "bridges" / "shared",
-):
+_SHARED = _REPO / "operator" / "bridges" / "shared"
+for _p in (_REPO, _REPO / "operator", _REPO / "operator" / "bridges", _SHARED):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-# Import bridge integration layer
-sys.path.insert(0, str(Path(__file__).parent))
-from test_adr0043_bridge_integration import classify_and_store_workload_hint, WorkloadHint  # type: ignore
+from workload_classifier import classify_and_store_workload_hint  # type: ignore
+
+
+def _resolve(profile: dict | None, hint: dict | None) -> "str | None":
+    """Call the real Tier-2.7 consumer hermetically: no operator override,
+    and CORVIN_HOME pinned to an empty tmp dir so Tier 2.5 cannot read the
+    LIVE machine's tenant YAML (refutation round 2026-07-18: an operator
+    os_model pin there outranks Tier 2.7 and failed these tests)."""
+    import tempfile  # noqa: PLC0415
+    import adapter  # type: ignore  # noqa: PLC0415
+    with tempfile.TemporaryDirectory() as tmp_home:
+        with mock.patch.dict(os.environ, {"CORVIN_HOME": tmp_home}, clear=False):
+            os.environ.pop("CORVIN_OS_MODEL_OVERRIDE", None)
+            return adapter._resolve_os_model(
+                profile, payload_chars=100, engine_id="claude_code",
+                tenant_id="_default", workload_hint=hint, chat_key="e2e-test",
+            )
 
 
 def test_e2e_chat_message_routes_to_fast_tier() -> None:
-    """E2E: chat message → fast tier model selection."""
-    try:
-        import adapter  # type: ignore  # noqa: PLC0415
-        from engine_models import resolve_model_for_workload  # type: ignore  # noqa: PLC0415
-    except ImportError:
-        pytest.skip("adapter or engine_models not importable")
-
-    # Step 1: User sends a chat message
-    user_message = "hey can you help me with something today?"
+    """Chat message + fast_chat_mode on → fast tier via _resolve_os_model."""
+    pytest.importorskip("adapter")
     session: dict[str, Any] = {}
+    hint = classify_and_store_workload_hint(
+        "hey how was your day, tell me something interesting", session)
+    assert hint["workload"] == "chat"
+    assert hint["confidence"] >= 0.7
 
-    # Step 2: Bridge classifies the message
-    hint = classify_and_store_workload_hint(user_message, session)
-    assert session["workload_hint"]["workload"] == "chat"
-    assert session["workload_hint"]["confidence"] > 0.5
+    model = _resolve({"fast_chat_mode": True}, hint)
+    assert model == "claude-haiku-4-5-20251001"
 
-    # Step 3: adapter propagates hint as env vars
-    env = adapter._build_spawn_env(
-        bridge="discord",
-        chat_key="ch1",
-        base={"PATH": os.environ.get("PATH", "")},
-        workload_hint=session["workload_hint"],
+
+def test_e2e_flag_off_is_fully_inert() -> None:
+    """With fast_chat_mode off (the default), a high-confidence CHAT hint
+    must change NOTHING: the result equals the no-hint result."""
+    pytest.importorskip("adapter")
+    hint = {"workload": "chat", "confidence": 0.95, "timestamp": 1}
+    assert _resolve({}, hint) == _resolve({}, None)
+    assert _resolve({"fast_chat_mode": False}, hint) == _resolve({}, None)
+
+
+def test_e2e_code_and_uncertain_fall_through() -> None:
+    """CODE/UNCERTAIN hints never touch the model decision — identical to
+    the no-hint path (adaptive tiers keep full authority)."""
+    pytest.importorskip("adapter")
+    baseline = _resolve({"fast_chat_mode": True}, None)
+    for workload in ("code", "uncertain"):
+        hint = {"workload": workload, "confidence": 0.99, "timestamp": 1}
+        assert _resolve({"fast_chat_mode": True}, hint) == baseline
+
+
+def test_e2e_coding_request_in_natural_language_never_fast_tier() -> None:
+    """The ADR's own risk section: a natural-language coding request must
+    never reach the fast tier. The old density classifier said CHAT 1.0
+    for all of these."""
+    pytest.importorskip("adapter")
+    for msg in (
+        "Schreib mir eine Python-Funktion die eine Liste sortiert",
+        "Write a bash script that backs up my home directory",
+        "Fix this bug: TypeError: 'NoneType' object is not iterable",
+        "Kannst du diese SQL-Query optimieren: SELECT * FROM users",
+        "Refactor adapter.py so _build_spawn_env takes a tenant_id parameter",
+        # Paraphrased/anaphoric work requests without any signal noun —
+        # these leaked through as CHAT 0.9 in the refutation round.
+        "mach das Ding aus Punkt 3 schneller",
+        "kannst du das von gestern nochmal anders lösen",
+        "can you redo yesterday's solution differently",
+        "automate that for me like last time",
+        "make the thing from step 3 faster please",
+    ):
+        session: dict[str, Any] = {}
+        hint = classify_and_store_workload_hint(msg, session)
+        assert hint["workload"] != "chat", f"coding request classified CHAT: {msg!r}"
+        model = _resolve({"fast_chat_mode": True}, hint)
+        assert model != "claude-haiku-4-5-20251001", f"fast tier for: {msg!r}"
+
+
+def test_e2e_explicit_model_pin_beats_workload_routing() -> None:
+    """Tier 2 (explicit pin) wins over Tier 2.7 — a pinned user is never
+    downgraded, even with the flag on and a confident CHAT hint."""
+    pytest.importorskip("adapter")
+    hint = {"workload": "chat", "confidence": 0.95, "timestamp": 1}
+    model = _resolve({"fast_chat_mode": True, "model": "claude-opus-4-8"}, hint)
+    assert model == "claude-opus-4-8"
+
+
+def test_e2e_routing_decision_is_audited() -> None:
+    """ADR-0043 §6: every fast-tier routing decision emits an audit event
+    (BUG#15 — the old code died on a NameError inside a blanket except and
+    never audited anything)."""
+    import adapter  # type: ignore  # noqa: PLC0415
+    events: list[tuple] = []
+
+    def _spy(event_type, *a, **kw):
+        events.append((event_type, kw))
+
+    hint = {"workload": "chat", "confidence": 0.95, "timestamp": 1}
+    with mock.patch.object(adapter, "_audit_event", _spy):
+        model = _resolve({"fast_chat_mode": True}, hint)
+    assert model == "claude-haiku-4-5-20251001"
+    routing = [e for e in events if e[0] == "bridge.workload_model_selection"]
+    assert len(routing) == 1
+    details = routing[0][1].get("details") or {}
+    assert details.get("selected_model") == model
+    assert routing[0][1].get("chat_key") == "e2e-test"
+    # PII rule: no message content in the audit payload
+    assert "message" not in details and "prompt" not in details
+
+
+def test_e2e_classifier_importable_as_top_level_module() -> None:
+    """Production runs adapter.py as a top-level module (__package__ '').
+    The dual import pattern used at the call sites must succeed there —
+    the old relative-only import raised and silently disabled the feature."""
+    snippet = (
+        "import sys; sys.path.insert(0, r'%s')\n"
+        "try:\n"
+        "    from . import workload_classifier as _wc\n"
+        "except ImportError:\n"
+        "    import workload_classifier as _wc\n"
+        "hint = _wc.classify_and_store_workload_hint('hello there', {})\n"
+        "assert hint['workload'] == 'chat', hint\n"
+        "print('OK')\n" % _SHARED
     )
-    assert env.get("CORVIN_WORKLOAD_CLASS") == "chat"
-    assert float(env.get("CORVIN_WORKLOAD_CONFIDENCE", 0.0)) > 0.5
-
-    # Step 4: _resolve_os_model consumes the hint for routing
-    # Simulate reading the env vars and calling resolve_model_for_workload
-    workload_class = env.get("CORVIN_WORKLOAD_CLASS")
-    workload_confidence = float(env.get("CORVIN_WORKLOAD_CONFIDENCE", 0.0))
-    model = resolve_model_for_workload(
-        "claude_code",
-        workload_class,
-        user_chosen_model=None,
-        confidence=workload_confidence,
-        fast_chat_enabled=True,
+    proc = subprocess.run(
+        [sys.executable, "-c", snippet], capture_output=True, text=True, timeout=60,
     )
-
-    # Step 5: Verify routing decision
-    assert model == "claude-haiku-4-5-20251001"  # Fast tier for CHAT
-
-
-def test_e2e_code_message_routes_to_full_tier() -> None:
-    """E2E: code message → full tier model selection."""
-    try:
-        import adapter  # type: ignore  # noqa: PLC0415
-        from engine_models import resolve_model_for_workload  # type: ignore  # noqa: PLC0415
-    except ImportError:
-        pytest.skip("adapter or engine_models not importable")
-
-    # Step 1: User sends code
-    user_message = "def fibonacci(n): return n if n <= 1 else fibonacci(n-1) + fibonacci(n-2)"
-    session: dict[str, Any] = {}
-
-    # Step 2: Bridge classifies the message
-    hint = classify_and_store_workload_hint(user_message, session)
-    # Note: May be CODE or UNCERTAIN depending on heuristic
-    workload_type = session["workload_hint"]["workload"]
-    assert workload_type in ("code", "uncertain")
-
-    # Step 3: adapter propagates hint
-    env = adapter._build_spawn_env(
-        bridge="discord",
-        chat_key="ch1",
-        base={"PATH": os.environ.get("PATH", "")},
-        workload_hint=session["workload_hint"],
-    )
-    assert "CORVIN_WORKLOAD_CLASS" in env
-
-    # Step 4: _resolve_os_model consumes the hint
-    workload_class = env.get("CORVIN_WORKLOAD_CLASS")
-    workload_confidence = float(env.get("CORVIN_WORKLOAD_CONFIDENCE", 0.0))
-    model = resolve_model_for_workload(
-        "claude_code",
-        workload_class,
-        user_chosen_model=None,
-        confidence=workload_confidence,
-        fast_chat_enabled=True,
-    )
-
-    # Step 5: Verify routing decision
-    # For CODE, should use full tier; for UNCERTAIN, should fallback to None
-    if workload_type == "code":
-        assert model == "claude-sonnet-5"
-    else:
-        assert model is None
-
-
-def test_e2e_uncertain_uses_user_choice() -> None:
-    """E2E: ambiguous message → falls back to user's model choice."""
-    try:
-        import adapter  # type: ignore  # noqa: PLC0415
-        from engine_models import resolve_model_for_workload  # type: ignore  # noqa: PLC0415
-    except ImportError:
-        pytest.skip("adapter or engine_models not importable")
-
-    # Step 1: Ambiguous message
-    user_message = "ok"
-    session: dict[str, Any] = {}
-
-    # Step 2: Bridge classifies (likely UNCERTAIN due to ambiguity)
-    hint = classify_and_store_workload_hint(user_message, session)
-
-    # Step 3: adapter propagates hint
-    env = adapter._build_spawn_env(
-        bridge="discord",
-        chat_key="ch1",
-        base={"PATH": os.environ.get("PATH", "")},
-        workload_hint=session["workload_hint"],
-    )
-
-    # Step 4: _resolve_os_model with user choice
-    workload_class = env.get("CORVIN_WORKLOAD_CLASS")
-    workload_confidence = float(env.get("CORVIN_WORKLOAD_CONFIDENCE", 0.0))
-    user_chosen_model = "claude-opus-4-1"
-    model = resolve_model_for_workload(
-        "claude_code",
-        workload_class,
-        user_chosen_model=user_chosen_model,
-        confidence=workload_confidence,
-        fast_chat_enabled=True,
-    )
-
-    # Step 5: If UNCERTAIN, should return user choice
-    if workload_class == "uncertain":
-        assert model == user_chosen_model
-
-
-def test_e2e_low_confidence_chat_still_uses_user_choice() -> None:
-    """E2E: CHAT with low confidence still uses user choice (safe fallback)."""
-    try:
-        from engine_models import resolve_model_for_workload  # type: ignore  # noqa: PLC0415
-    except ImportError:
-        pytest.skip("engine_models not importable")
-
-    # Even if classified as CHAT, low confidence should fallback
-    model = resolve_model_for_workload(
-        "claude_code",
-        "chat",
-        user_chosen_model="claude-opus-4-1",
-        confidence=0.4,  # Below 0.7 threshold
-        fast_chat_enabled=True,
-    )
-
-    # Should use user choice, not fast tier
-    assert model == "claude-opus-4-1"
-
-
-def test_e2e_feature_flag_disabled() -> None:
-    """E2E: fast_chat_enabled=False disables routing even for high-confidence CHAT."""
-    try:
-        from engine_models import resolve_model_for_workload  # type: ignore  # noqa: PLC0415
-    except ImportError:
-        pytest.skip("engine_models not importable")
-
-    model = resolve_model_for_workload(
-        "claude_code",
-        "chat",
-        user_chosen_model="claude-opus-4-1",
-        confidence=0.95,  # High confidence
-        fast_chat_enabled=False,  # Feature OFF
-    )
-
-    # Should use user choice, not fast tier
-    assert model == "claude-opus-4-1"
+    assert proc.returncode == 0, proc.stderr
+    assert "OK" in proc.stdout
 
 
 if __name__ == "__main__":

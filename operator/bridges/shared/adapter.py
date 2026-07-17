@@ -2511,6 +2511,8 @@ def _resolve_os_model(
     payload_chars: int = 0,
     engine_id: str = "claude_code",
     tenant_id: str = "_default",
+    workload_hint: dict | None = None,
+    chat_key: str | None = None,
 ) -> str | None:
     """Layer 29.5 Phase 3 (ADR-0024) / ADR-0119 / ADR-0123 — 6-Tier adaptive OS model selection.
 
@@ -2581,48 +2583,57 @@ def _resolve_os_model(
         except Exception:  # noqa: BLE001
             pass
 
-    # Tier 2.7 — ADR-0043 workload classification (hybrid CHAT/CODE routing)
-    # Reads CORVIN_WORKLOAD_CLASS, CORVIN_WORKLOAD_CONFIDENCE from env vars
-    # (set by adapter._build_spawn_env after bridge classification)
-    if _em is not None:
+    # Tier 2.7 — ADR-0043 workload classification (hybrid CHAT/CODE routing).
+    # The hint arrives as a PARAMETER threaded from the request handler
+    # (call_claude / call_claude_streaming → _resolve_spawn_inputs → here),
+    # NOT via env vars: os.environ is process-global in a daemon serving
+    # parallel chats/tenants, so an env channel is both racy and a cross-
+    # tenant leak by construction (adversarial review 2026-07-18).
+    # Only the CHAT fast-path acts here. CODE/UNCERTAIN fall through to the
+    # existing tiers (adaptive Tier 3 / subscription Tier 4) — ADR-0043 says
+    # "respect the user's model choice", and hard-pinning the full tier for
+    # CODE would bypass ADR-0112 adaptive selection.
+    if _em is not None and workload_hint:
         try:
-            workload_class = os.environ.get("CORVIN_WORKLOAD_CLASS")
-            workload_confidence = os.environ.get("CORVIN_WORKLOAD_CONFIDENCE")
-            # Only route if we have a classification and fast_chat is enabled
-            if workload_class and workload_confidence:
-                # Feature flag: check (1) profile, (2) env var, (3) tenant YAML spec.features.fast_chat_mode
-                fast_chat_enabled = profile.get("fast_chat_mode", False) or \
-                    os.environ.get("CORVIN_FAST_CHAT_ENABLED", "").lower() == "true"
+            workload_class = str(workload_hint.get("workload") or "")
+            if workload_class == "chat":
+                # Feature flag: (1) profile, (2) tenant YAML spec.features.
+                # fast_chat_mode. Deliberately NO env-var switch: a process-
+                # wide env flag would enable the feature across all tenants
+                # (CLAUDE.md multi-tenant rule) and bypass the operator's
+                # opt-in. Default false → fail-closed.
+                fast_chat_enabled = bool(profile.get("fast_chat_mode", False))
                 if not fast_chat_enabled:
-                    # Check tenant YAML
                     try:
                         tenant_spec = _em._load_tenant_spec(tenant_id)
-                        fast_chat_enabled = (tenant_spec.get("features") or {}).get("fast_chat_mode", False)
+                        fast_chat_enabled = bool(
+                            (tenant_spec.get("features") or {}).get("fast_chat_mode", False))
                     except Exception:  # noqa: BLE001
                         pass
-
                 if fast_chat_enabled:
                     try:
-                        conf = float(workload_confidence)
+                        conf = float(workload_hint.get("confidence", 0.0))
                     except (ValueError, TypeError):
                         conf = 0.0
                     model = _em.resolve_model_for_workload(
                         engine_id,
                         workload_type=workload_class,
-                        user_chosen_model=explicit,  # use explicit as fallback
+                        user_chosen_model=None,  # explicit pin already returned at Tier 2
                         confidence=conf,
                         fast_chat_enabled=True,
                     )
                     if model:
-                        # Emit audit event for model selection via workload classification (BUG#15)
+                        # ADR-0043 §6: audit every routing decision (BUG#15).
+                        # No user-message content — workload/confidence/model only.
                         try:
                             _audit_event(
                                 "bridge.workload_model_selection",
-                                chat_key=chat_key,
+                                chat_key=chat_key or "unknown",
                                 details={
                                     "workload_type": workload_class,
-                                    "confidence": workload_confidence,
+                                    "confidence": conf,
                                     "selected_model": model,
+                                    "engine": engine_id,
                                     "tier": "2.7_workload",
                                 },
                             )
@@ -2635,7 +2646,6 @@ def _resolve_os_model(
             import traceback
             print(f"[WARN] Tier 2.7 workload routing failed: {e}", file=__import__("sys").stderr)
             traceback.print_exc(file=__import__("sys").stderr, limit=3)
-            pass
 
     # Tier 3 — adaptive autoselect (the new default path)
     if _ms.autoselect_enabled():
@@ -2657,6 +2667,7 @@ def _resolve_spawn_inputs(
     add_dir: str | None, channel: str = "whatsapp",
     chat_key: str | None = None,
     msg_id: str | None = None,
+    workload_hint: dict | None = None,
 ) -> dict:
     """Resolve adapter-level inputs (system prompt, MCP path, add_dirs)
     into the keyword args `ClaudeCodeEngine._build_args` consumes.
@@ -3196,6 +3207,8 @@ def _resolve_spawn_inputs(
         payload_chars=payload_chars,
         engine_id=(profile or {}).get("default_engine") or "claude_code",
         tenant_id=os.environ.get("CORVIN_TENANT_ID", "_default"),
+        workload_hint=workload_hint,
+        chat_key=chat_key,
     )
 
     return {
@@ -3224,7 +3237,8 @@ def _build_claude_args(prompt: str, mode: str, profile: dict | None,
                        add_dir: str | None, channel: str = "whatsapp",
                        chat_key: str | None = None,
                        prompt_via_stdin: bool = False,
-                       msg_id: str | None = None) -> list[str]:
+                       msg_id: str | None = None,
+                       workload_hint: dict | None = None) -> list[str]:
     """Build the `claude -p` argv list.
 
     Phase 2.1 wrapper: the high-level orchestration (system-prompt
@@ -3259,6 +3273,7 @@ def _build_claude_args(prompt: str, mode: str, profile: dict | None,
     resolved = _resolve_spawn_inputs(
         prompt, mode, profile, add_dir,
         channel=channel, chat_key=chat_key, msg_id=msg_id,
+        workload_hint=workload_hint,
     )
     # ADR-0165: pop _ato_plan before splatting into _build_args (not an engine arg).
     resolved.pop("_ato_plan", None)
@@ -3631,14 +3646,18 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
     env["CORVIN_ENGINE_ID"] = engine_id
     env["CORVIN_CHAT_KEY"] = channel_value  # for TEB audit context
     # ADR-0043 M1 — Hybrid workload classifier for fast-chat routing (opt-in).
-    # Bridge passes workload_hint (from early classification in the request handler).
-    # We store it as env vars for _resolve_os_model to consume later (Iteration 3).
+    # Model routing consumes the hint as a function parameter in
+    # _resolve_os_model Tier 2.7 — NOT these env vars. They are exported to
+    # the child spawn env for observability/debugging only. Inherited values
+    # are stripped first so a stale daemon environment can never smuggle a
+    # classification into a later turn/session/tenant.
+    env.pop("CORVIN_WORKLOAD_CLASS", None)
+    env.pop("CORVIN_WORKLOAD_CONFIDENCE", None)
+    env.pop("CORVIN_WORKLOAD_TIMESTAMP", None)
     if workload_hint:
         try:
             env["CORVIN_WORKLOAD_CLASS"] = str(workload_hint.get("workload", "uncertain"))
             env["CORVIN_WORKLOAD_CONFIDENCE"] = str(workload_hint.get("confidence", 0.0))
-            # Timestamp in milliseconds (from classify_and_store_workload_hint).
-            # Note: Millisecond precision will overflow int64 at year 2286; use seconds if century-spanning audit needed.
             env["CORVIN_WORKLOAD_TIMESTAMP"] = str(workload_hint.get("timestamp", 0))
         except Exception:
             # workload_hint handling is best-effort; never break the spawn
@@ -4169,15 +4188,18 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
     workdir = _session_dir(channel, chat_key)
 
     # ADR-0043 — Classify workload (CHAT vs. CODE) for hybrid model routing (opt-in).
-    # Must happen early, before _build_spawn_env, so hint can be propagated as env vars.
+    # The hint is threaded as a PARAMETER through _resolve_spawn_inputs into
+    # _resolve_os_model Tier 2.7 (never via os.environ — racy + cross-tenant).
+    # Dual import: production runs adapter.py as a top-level module, where a
+    # relative-only import raises and silently disabled the whole feature
+    # (adversarial review 2026-07-18).
     workload_hint = None
     try:
-        from . import workload_classifier as _wc  # type: ignore  # noqa: PLC0415
-        _cs = _wc.classify_and_store_workload_hint
-        # Create a session dict for hint storage
-        temp_session: dict = {}
-        _cs(prompt, temp_session)
-        workload_hint = temp_session.get("workload_hint")
+        try:
+            from . import workload_classifier as _wc  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import workload_classifier as _wc  # type: ignore  # noqa: PLC0415
+        workload_hint = _wc.classify_and_store_workload_hint(prompt, {})
     except Exception:  # noqa: BLE001
         # Classification failure is non-fatal; proceed without hint
         pass
@@ -4213,7 +4235,8 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         env.pop("ANTHROPIC_AUTH_TOKEN", None)
         env.pop("ANTHROPIC_API_BASE", None)
 
-    base_args = _build_claude_args(prompt, mode, profile, add_dir, channel=channel, chat_key=chat_key)
+    base_args = _build_claude_args(prompt, mode, profile, add_dir, channel=channel, chat_key=chat_key,
+                                   workload_hint=workload_hint)
     # Track the temp file _build_claude_args wrote the system prompt into
     # (if any — see its docstring) so it's cleaned up once this function is
     # done with it, regardless of which return/exception path is taken.
@@ -4424,6 +4447,7 @@ def _call_claude_streaming_via_engine(
     workdir: Path, env: dict, has_session: bool,
     resume_session_id: str | None = None,
     msg_id: str | None = None,
+    workload_hint: dict | None = None,
 ) -> str:
     """Engine-driven streaming path (ADR-0002, Phase 2.5 — sole code path).
 
@@ -4438,6 +4462,7 @@ def _call_claude_streaming_via_engine(
     resolved = _resolve_spawn_inputs(
         prompt, mode, profile, add_dir,
         channel=channel, chat_key=chat_key, msg_id=msg_id,
+        workload_hint=workload_hint,
     )
     # ADR-0165: strip ATO plan before splatting resolved into engine args.
     # The plan was consumed (audit events emitted) in _resolve_spawn_inputs.
@@ -5011,6 +5036,7 @@ def _call_claude_streaming_via_engine(
                         workdir=workdir, env=env,
                         has_session=has_session,
                         msg_id=msg_id,
+                        workload_hint=workload_hint,
                     )
                 else:
                     # Already on the highest available model and still
@@ -5072,6 +5098,7 @@ def _call_claude_streaming_via_engine(
                     has_session=True,   # keep --continue, don't start fresh
                     resume_session_id=None,  # cleared — fall back to --continue
                     msg_id=msg_id,
+                    workload_hint=workload_hint,
                 )
 
             # Two distinct reset triggers, evaluated separately so the
@@ -6382,15 +6409,18 @@ def call_claude_streaming(
     workdir = _session_dir(channel, chat_key)
 
     # ADR-0043 — Classify workload (CHAT vs. CODE) for hybrid model routing (opt-in).
-    # Must happen early, before _build_spawn_env, so hint can be propagated as env vars.
+    # The hint is threaded as a PARAMETER through _resolve_spawn_inputs into
+    # _resolve_os_model Tier 2.7 (never via os.environ — racy + cross-tenant).
+    # Dual import: production runs adapter.py as a top-level module, where a
+    # relative-only import raises and silently disabled the whole feature
+    # (adversarial review 2026-07-18).
     workload_hint = None
     try:
-        from . import workload_classifier as _wc  # type: ignore  # noqa: PLC0415
-        _cs = _wc.classify_and_store_workload_hint
-        # Create a session dict for hint storage
-        temp_session: dict = {}
-        _cs(prompt, temp_session)
-        workload_hint = temp_session.get("workload_hint")
+        try:
+            from . import workload_classifier as _wc  # type: ignore  # noqa: PLC0415
+        except ImportError:
+            import workload_classifier as _wc  # type: ignore  # noqa: PLC0415
+        workload_hint = _wc.classify_and_store_workload_hint(prompt, {})
     except Exception:  # noqa: BLE001
         # Classification failure is non-fatal; proceed without hint
         pass
@@ -6947,6 +6977,7 @@ def call_claude_streaming(
             on_status, status_mode, _retry_count,
             workdir, env, has_session,
             resume_session_id=_resume_id, msg_id=msg_id,
+            workload_hint=workload_hint,
         )
     finally:
         _mark_turn_done(chat_key)
@@ -7064,30 +7095,25 @@ def _has_lern_zugabe_suffix(text: str, window: int = 900) -> bool:
 
 
 def _detect_confident_de_en(text: str) -> str | None:
-    """Best-effort de/en detection for text that's about to be spoken.
+    """Auto-detect language with high confidence (returns None if unsure).
 
-    Used as a per-turn override of the profile's STATIC display_language
-    pin (see `_resolve_voice_output_language`). Returns None whenever the
-    signal is weak or absent (a tie, no function words, non-Latin script)
-    so a genuine non-de/en profile default (zh-Hans, ja, ar, ...) keeps
-    applying unchanged — this must never mask an actual non-Latin-script
-    user, only correct the case where the text is confidently de/en but
-    the static profile default says otherwise.
+    Supports 20 languages via operator/voice/scripts/detect_lang.py:
+    en, de, es, fr, it, pt, nl, pl, ru, ja, zh, ko, ar, tr, sv, da, no, fi, el, cs.
+
+    Used as a per-turn auto-detection when user has NOT pinned a language
+    (see `_resolve_voice_output_language`). Returns None when the signal
+    is weak (ambiguous, insufficient function words) so the profile default
+    still applies — but can now detect any of 20 languages, not just de/en.
 
     Reuses operator/voice/scripts/detect_lang.py's tiny, dependency-free
     function-word heuristic (already used for STT locale hints) rather
     than adding a new detector — same "good enough to pick a TTS voice"
     bar applies here.
 
-    Uses detect_lang.detect_confident(), NOT the raw score() vote: a bare
-    plurality flipped short German answers to English because words like
-    "was"/"in"/"an"/one-letter "a" only count as English in the word lists
-    — score("Was war in Datei A los?") was de=1/en=3, so a de-pinned user
-    got an English voice AND an English base prompt, silently
-    self-consistent (found 2026-07-17). detect_confident() neutralises the
-    bilingual overlap words, treats umlauts/ß as a strong German signal,
-    and demands a real margin — returning None below it, which is exactly
-    the "fall back to the static pin" contract this wrapper documents.
+    Confidence strategy:
+    - Demands real margin between top candidate and second-place
+    - Returns None on weak/ambiguous signals (tie, insufficient words)
+    - Special handling for non-Latin scripts (CJK, Cyrillic, Arabic, etc.)
     """
     try:
         if str(SCRIPTS_DIR) not in sys.path:
@@ -7105,18 +7131,15 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
     """Resolve the language voice summaries / the audience-appendix should
     be generated in.
 
-    User preference FIRST: if the user has explicitly set `display_language`
-    in their profile, that's their authoritative choice for voice language —
-    it overrides everything (text content, system locale, etc.). This respects
-    the user's knowledge of their own language preference best.
-
-    Fallback: if `display_language` is not set, use system locale. Text-based
-    detection is no longer used for voice (found 2026-07-17: text-detect can be
-    wrong, and user preference is more authoritative).
+    Smart Hybrid approach (2026-07-17):
+    1. If user has explicitly set `display_language` → use that (User FIRST)
+       (Respects power users who know their preference)
+    2. If not set → auto-detect from text (Text-First for new users)
+       (Gives good out-of-box experience without requiring settings)
+    3. If detection fails → fallback to system locale
     """
-    # ── User preference FIRST ────────────────────────────────────────────────
-    # If display_language is explicitly set, that's what the user wants for voice.
-    # Respect it unconditionally.
+    # ── (1) User preference IF explicitly set ────────────────────────────────
+    # Power users can pin a language; this takes absolute precedence.
     output_language = ""
     if _voice_profile is not None and _i18n is not None:
         try:
@@ -7127,8 +7150,12 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
                     return output_language  # User preference is authoritative
         except Exception:  # noqa: BLE001
             pass
-    # ── Unseeded profile → system locale ─────────────────────────────────────
-    # If no explicit preference, use the system's configured language.
+    # ── (2) Auto-detect from text (for unseeded profiles) ────────────────────
+    # New users get good default experience without needing to visit settings.
+    detected = _detect_confident_de_en(candidate_text)
+    if detected:
+        return detected
+    # ── (3) Fallback: system locale ──────────────────────────────────────────
     if _i18n is not None:
         try:
             output_language = _i18n.system_language()
@@ -7136,7 +7163,7 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
                 return output_language
         except Exception:  # noqa: BLE001
             pass
-    # ── Fallback to empty ───────────────────────────────────────────────────
+    # ── Ultimate fallback ───────────────────────────────────────────────────
     return ""
 
 

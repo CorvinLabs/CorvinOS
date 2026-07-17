@@ -32,13 +32,13 @@ class TestModelTierMapping:
         assert claude_tiers["fast"] == "claude-haiku-4-5-20251001"
         assert claude_tiers["full"] == "claude-sonnet-5"
 
-    def test_gemini_tiers(self) -> None:
-        """Gemini has fast and full tiers."""
+    def test_no_phantom_engines(self) -> None:
+        """The tier map must only carry REAL registry engine ids. Earlier
+        revisions listed 'gemini'/'codex'/'ollama_local' with retired or
+        nonexistent models that permissive validation waved through."""
         mapping = get_model_tier_mapping()
-        gemini_tiers = mapping.get("gemini")
-        assert gemini_tiers is not None
-        assert "fast" in gemini_tiers
-        assert "full" in gemini_tiers
+        for phantom in ("gemini", "codex", "ollama_local"):
+            assert phantom not in mapping, f"phantom engine {phantom} in tier map"
 
     def test_mapping_is_copy(self) -> None:
         """get_model_tier_mapping returns a copy, not the reference."""
@@ -61,10 +61,13 @@ class TestResolveModelForWorkload:
         model = resolve_model_for_workload("claude_code", "code", "claude-opus-4-1")
         assert model == "claude-opus-4-1"
 
-    def test_code_workload_fallback_to_full_tier(self) -> None:
-        """CODE workload falls back to full tier if no user choice."""
-        model = resolve_model_for_workload("claude_code", "code", None)
-        assert model == "claude-sonnet-5"
+    def test_code_workload_returns_user_choice_only(self) -> None:
+        """CODE workload NEVER pins a tier model: the user's choice comes
+        back verbatim (None → the caller's own adaptive tiers decide).
+        Pinning 'full' here bypassed ADR-0112 adaptive selection."""
+        assert resolve_model_for_workload("claude_code", "code", None) is None
+        assert resolve_model_for_workload(
+            "claude_code", "code", "claude-opus-4-8") == "claude-opus-4-8"
 
     def test_uncertain_workload_uses_user_choice(self) -> None:
         """UNCERTAIN workload always uses user's model (safe fallback)."""
@@ -104,27 +107,15 @@ class TestResolveModelForWorkload:
         # CHAT should use fast tier, not user choice
         assert model == "claude-haiku-4-5-20251001"
 
-    def test_gemini_chat_routing(self) -> None:
-        """Gemini CHAT routes to its fast tier."""
-        model = resolve_model_for_workload("gemini", "chat", None, confidence=0.8, fast_chat_enabled=True)
-        assert model == "gemini-1.5-flash"
-
-    def test_gemini_code_routing(self) -> None:
-        """Gemini CODE uses user choice or full tier."""
-        model = resolve_model_for_workload("gemini", "code", None)
-        assert model == "gemini-2.0-pro-exp"
-
-    def test_codex_chat_routing(self) -> None:
-        """Codex CHAT routes to its fast tier."""
-        model = resolve_model_for_workload("codex", "chat", None, confidence=0.8, fast_chat_enabled=True)
-        assert model == "code-davinci-002"
-
-    def test_ollama_routing(self) -> None:
-        """Ollama local has fast/full tiers."""
-        chat_model = resolve_model_for_workload("ollama_local", "chat", None, confidence=0.8, fast_chat_enabled=True)
-        code_model = resolve_model_for_workload("ollama_local", "code", None)
-        assert chat_model == "qwen2:1.5b"
-        assert code_model == "qwen2:7b"
+    def test_unknown_engine_never_gets_tier_model(self) -> None:
+        """Engines outside the tier map / registry keep the user's choice
+        (fail-closed) — a nonexistent model id must never be returned."""
+        for engine in ("gemini", "codex", "ollama_local", "hermes", "codex_cli"):
+            assert resolve_model_for_workload(
+                engine, "chat", None, confidence=0.99, fast_chat_enabled=True) is None
+            assert resolve_model_for_workload(
+                engine, "chat", "user-model", confidence=0.99, fast_chat_enabled=True) == "user-model"
+            assert resolve_model_for_workload(engine, "code", "user-model") == "user-model"
 
 
 class TestEdgeCases:
@@ -146,11 +137,10 @@ class TestEdgeCases:
         assert model == "my-model"
 
     def test_empty_string_user_choice(self) -> None:
-        """Empty string user choice is treated as None."""
-        # Empty string is falsy in Python; CODE workload should fallback to full tier
+        """Empty-string user choice yields a falsy result (caller's own
+        tiers decide) — never a pinned tier model."""
         model = resolve_model_for_workload("claude_code", "code", "")
-        # Empty string is falsy, so fallback to full tier
-        assert model == "claude-sonnet-5"
+        assert not model
 
     def test_whitespace_only_workload_type(self) -> None:
         """Whitespace-only workload type treated as empty."""

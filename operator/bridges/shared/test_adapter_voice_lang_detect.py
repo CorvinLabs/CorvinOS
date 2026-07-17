@@ -104,14 +104,13 @@ def test_detect_confident_de_en_recognizes_english() -> None:
     assert adapter._detect_confident_de_en(text) == "en"
 
 
-def test_detect_confident_de_en_returns_none_for_chinese_script() -> None:
-    """Non-Latin script text has zero de/en function-word hits — must NOT
-    be misclassified as de or en; the profile default should still apply."""
+def test_detect_confident_de_en_recognizes_chinese() -> None:
+    """Extended language detection: Chinese text is now detected as 'zh'."""
     for m in ("adapter",):
         sys.modules.pop(m, None)
     import adapter  # type: ignore
     text = "你好，这是一段中文文本，用于测试语言检测。"
-    assert adapter._detect_confident_de_en(text) is None
+    assert adapter._detect_confident_de_en(text) == "zh"
 
 
 def test_detect_confident_de_en_returns_none_for_empty_text() -> None:
@@ -123,50 +122,58 @@ def test_detect_confident_de_en_returns_none_for_empty_text() -> None:
 
 # ── _resolve_voice_output_language: unit-level ──────────────────────────
 
-def test_resolve_output_language_de_profile_stays_de(tmp_path: Path) -> None:
-    """User preference de → always de."""
+def test_resolve_output_language_with_preference_de_stays_de(tmp_path: Path) -> None:
+    """(1) User preference de is authoritative."""
     adapter, _ = _adapter_with_profile_lang(tmp_path, "de")
-    assert adapter._resolve_voice_output_language("Ein deutscher Text.") == "de"
-    # German preference is authoritative regardless of text
-    assert adapter._resolve_voice_output_language("The installation is complete.") == "de"
-    assert adapter._resolve_voice_output_language("你好") == "de"
+    # Even with English text, user preference wins
+    assert adapter._resolve_voice_output_language("The file was updated.") == "de"
+    # Also with German
+    assert adapter._resolve_voice_output_language("Die Datei wurde aktualisiert.") == "de"
 
 
-def test_resolve_output_language_zh_profile_stays_zh_regardless_of_text(
+def test_resolve_output_language_with_preference_zh_stays_zh(
     tmp_path: Path,
 ) -> None:
-    """User preference zh-Hans → always zh-Hans, even if text is German/English."""
+    """(1) User preference zh-Hans is authoritative regardless of text."""
     adapter, _ = _adapter_with_profile_lang(tmp_path, "zh-Hans")
-    # German text → but user said Chinese
-    resolved = adapter._resolve_voice_output_language(
-        "Deine Installation ist fertig, und ich habe mich gerade selbst durchgecheckt."
-    )
-    assert resolved == "zh-Hans", f"User preference must be respected, got {resolved!r}"
-    # English text → but user said Chinese
-    resolved = adapter._resolve_voice_output_language(
-        "The installation is complete and everything checked out fine."
-    )
-    assert resolved == "zh-Hans"
-    # Chinese text → matches preference
-    resolved = adapter._resolve_voice_output_language("你好，我是 Corvin。")
-    assert resolved == "zh-Hans"
+    # German text but user said Chinese
+    assert adapter._resolve_voice_output_language(
+        "Deine Installation ist fertig."
+    ) == "zh-Hans"
+    # English text but user said Chinese
+    assert adapter._resolve_voice_output_language(
+        "The installation is complete."
+    ) == "zh-Hans"
+    # Chinese text (matches preference)
+    assert adapter._resolve_voice_output_language("你好，我是 Corvin。") == "zh-Hans"
 
 
-def test_resolve_output_language_en_profile_stays_en(
+def test_resolve_output_language_no_preference_detects_german(
     tmp_path: Path,
 ) -> None:
-    """User preference en → always en."""
-    adapter, _ = _adapter_with_profile_lang(tmp_path, "en")
-    assert adapter._resolve_voice_output_language("German text here.") == "en"
-    assert adapter._resolve_voice_output_language("Das ist Deutsch.") == "en"
+    """(2) No preference + German text → auto-detect as de."""
+    adapter, _ = _adapter_with_profile_lang(tmp_path, "")
+    assert adapter._resolve_voice_output_language(
+        "Deine Installation ist fertig, und ich habe mich gerade selbst durchgecheckt."
+    ) == "de"
+
+
+def test_resolve_output_language_no_preference_detects_english(
+    tmp_path: Path,
+) -> None:
+    """(2) No preference + English text → auto-detect as en."""
+    adapter, _ = _adapter_with_profile_lang(tmp_path, "")
+    assert adapter._resolve_voice_output_language(
+        "The installation is complete and everything checked out fine."
+    ) == "en"
 
 
 # ── build_voice_summary: end-to-end via the real subprocess pipeline ────
 
-def test_build_voice_summary_de_profile_sets_de_flag(
+def test_build_voice_summary_with_de_preference_uses_de_flag(
     tmp_path: Path,
 ) -> None:
-    """User preference de → summarize.py is invoked with --lang de (user's choice)."""
+    """(1) User sets de → summarize.py uses --lang de."""
     adapter, argv_dump = _adapter_with_profile_lang(tmp_path, "de")
 
     long_text = (
@@ -178,14 +185,35 @@ def test_build_voice_summary_de_profile_sets_de_flag(
     argv = json.loads(argv_dump.read_text())
     assert "--lang" in argv
     idx = argv.index("--lang")
-    assert argv[idx + 1] == "de", "User's de preference should be respected"
+    assert argv[idx + 1] == "de", "User's de preference is authoritative"
 
 
-def test_build_voice_summary_zh_profile_sets_zh_flag_regardless_of_text(
+def test_build_voice_summary_no_preference_detects_language(
     tmp_path: Path,
 ) -> None:
-    """User preference zh-Hans → summarize.py is invoked with --output-language
-    zh-Hans regardless of what the text language is. User knows best."""
+    """(2) No preference + German text → auto-detect and use de."""
+    adapter, argv_dump = _adapter_with_profile_lang(tmp_path, "")
+
+    long_german_text = (
+        "Die Installation ist jetzt vollstaendig abgeschlossen und alle "
+        "Systeme wurden erfolgreich ueberprueft. " * 20
+    )
+    result = adapter.build_voice_summary(long_german_text, max_chars=400)
+    assert result, "build_voice_summary returned empty"
+
+    argv = json.loads(argv_dump.read_text())
+    assert "--lang" in argv
+    idx = argv.index("--lang")
+    # Auto-detected as German, so base language is de
+    assert argv[idx + 1] == "de", "Auto-detected language should be de"
+    # No --output-language for de/en (they're handled by --lang)
+    assert "--output-language" not in argv or argv.count("--output-language") == 0
+
+
+def test_build_voice_summary_with_zh_preference_uses_zh_flag(
+    tmp_path: Path,
+) -> None:
+    """(1) User sets zh-Hans → summarize.py uses --output-language zh-Hans."""
     adapter, argv_dump = _adapter_with_profile_lang(tmp_path, "zh-Hans")
 
     long_german_text = (
@@ -196,8 +224,9 @@ def test_build_voice_summary_zh_profile_sets_zh_flag_regardless_of_text(
     assert result, "build_voice_summary returned empty"
 
     argv = json.loads(argv_dump.read_text())
+    # zh-Hans preference is set, so --output-language should be present
     assert "--output-language" in argv, (
-        f"User preference zh-Hans must set --output-language flag: argv={argv}"
+        f"User preference zh-Hans must set --output-language: argv={argv}"
     )
     idx = argv.index("--output-language")
     assert argv[idx + 1] == "zh-Hans", "User's zh-Hans preference is authoritative"
