@@ -243,7 +243,9 @@ def _load_tenant_spec(tenant_id: str) -> dict[str, Any]:
         if cfg.is_file():
             raw = yaml.safe_load(cfg.read_text("utf-8")) or {}
             return (raw.get("spec") or {})
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"[WARN] _load_tenant_spec failed for '{tenant_id}': {e}", file=sys.stderr)
         pass
     return {}
 
@@ -479,12 +481,17 @@ def resolve_model_for_workload(
     # Normalize workload type: handle both WorkloadType enum and string
     if workload_type is None:
         workload = "uncertain"
+    elif isinstance(workload_type, str):
+        # It's a string; use as-is after normalization
+        workload = workload_type.lower().strip()
     elif hasattr(workload_type, "value"):
         # It's an enum; extract the .value
         workload = str(workload_type.value).lower().strip()
     else:
-        # It's a string or other object; convert to string
-        workload = str(workload_type).lower().strip()
+        # Unknown type; log and reject
+        import sys
+        print(f"[WARN] resolve_model_for_workload: invalid workload type (not str/enum): {type(workload_type)}", file=sys.stderr)
+        return user_chosen_model
 
     # Safe fallback for unknown/uncertain workload
     if workload not in ("chat", "code", "uncertain"):
@@ -511,19 +518,33 @@ def resolve_model_for_workload(
                 return True
             # Check both os_models and worker_models
             all_models = [m.id for m in engine_spec.os_models] + [m.id for m in engine_spec.worker_models]
-            return model_id in all_models
-        except Exception:
-            # Registry load failed; be permissive
+            is_valid = model_id in all_models
+            if not is_valid:
+                import sys
+                print(f"[WARN] resolve_model_for_workload: model '{model_id}' not in engine '{engine}' registry", file=sys.stderr)
+            return is_valid
+        except Exception as e:
+            # Registry load failed; log and fall back to permissive
+            import sys
+            print(f"[WARN] resolve_model_for_workload: registry load failed ({e}), allowing model '{model_id}'", file=sys.stderr)
             return True
 
     # CHAT routing: use fast tier only if confidence is high and feature is enabled
     if workload == "chat":
         # Validate and clamp confidence to [0.0, 1.0]
+        # Reject NaN/Infinity explicitly
         if confidence is None:
             conf = 0.0
         else:
             try:
-                conf = max(0.0, min(1.0, float(confidence)))
+                conf = float(confidence)
+                # Reject NaN and Infinity
+                if conf != conf or conf == float('inf') or conf == float('-inf'):
+                    import sys
+                    print(f"[WARN] resolve_model_for_workload: invalid confidence '{confidence}' (NaN/Inf), treating as 0.0", file=sys.stderr)
+                    conf = 0.0
+                else:
+                    conf = max(0.0, min(1.0, conf))
             except (ValueError, TypeError):
                 conf = 0.0
 

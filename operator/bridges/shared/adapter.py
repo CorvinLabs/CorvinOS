@@ -2615,8 +2615,12 @@ def _resolve_os_model(
                     )
                     if model:
                         return model
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             # Workload routing failure is non-fatal; fall through to Tier 3
+            # But log the error so operators can debug
+            import traceback
+            print(f"[WARN] Tier 2.7 workload routing failed: {e}", file=__import__("sys").stderr)
+            traceback.print_exc(file=__import__("sys").stderr, limit=3)
             pass
 
     # Tier 3 — adaptive autoselect (the new default path)
