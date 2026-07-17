@@ -3742,6 +3742,18 @@ export async function ttsSegment(text: string, lang: string, csrf: string,
   return { blob, total: Number.isFinite(total) && total > 0 ? total : index + 1, index };
 }
 
+// The reason the LAST /voice/tts returned no audio (from the server's
+// X-Corvin-Voice-Reason header — e.g. "no OPENAI_API_KEY", "OpenAI TTS failed:
+// 401 …"). ttsBlob returns an empty Blob on 204 to keep the automatic turn's
+// silent-degradation contract, so the reason cannot ride on the return value;
+// a manual Replay/read-aloud click reads it here to show WHY instead of a
+// generic "unavailable". Best-effort, single-slot: only the newest call's
+// reason is kept.
+let _lastTtsReason: string | null = null;
+export function getLastTtsReason(): string | null {
+  return _lastTtsReason;
+}
+
 export async function ttsBlob(text: string, lang: string, csrf: string,
                               sid?: string, signal?: AbortSignal): Promise<Blob> {
   // `signal`: see ttsSegment — client-side abort on Stop/supersede; an
@@ -3759,11 +3771,15 @@ export async function ttsBlob(text: string, lang: string, csrf: string,
     body: JSON.stringify(sid ? { text, lang, sid } : { text, lang }),
     signal,
   });
-  if (res.status === 204) return new Blob();
+  if (res.status === 204) {
+    _lastTtsReason = res.headers.get("X-Corvin-Voice-Reason");
+    return new Blob();
+  }
   if (!res.ok) {
     const errText = await res.text();
     throw new ApiError(res.status, errText);
   }
+  _lastTtsReason = null;
   return res.blob();
 }
 
