@@ -119,11 +119,7 @@
 
   [data-theme="dark"] audio {
     color-scheme: dark;
-  }
-
-  /* Dark mode audio player controls — apply filter to wrapper div */
-  [data-theme="dark"] div:has(> audio) {
-    filter: invert(1) brightness(0.9) !important;
+    accent-color: hsl(var(--accent));
   }
 }
 
