@@ -53,6 +53,7 @@
     --accent-foreground: 222 44% 6%;
     --destructive: 0 65% 55%;
     --destructive-foreground: 36 38% 96%;
+    --voice-accent: 201 100% 50%;
   }
 
   * {
