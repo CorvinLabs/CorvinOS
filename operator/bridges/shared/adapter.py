@@ -2581,6 +2581,34 @@ def _resolve_os_model(
         except Exception:  # noqa: BLE001
             pass
 
+    # Tier 2.7 — ADR-0043 workload classification (hybrid CHAT/CODE routing)
+    # Reads CORVIN_WORKLOAD_CLASS, CORVIN_WORKLOAD_CONFIDENCE from env vars
+    # (set by adapter._build_spawn_env after bridge classification)
+    if _em is not None:
+        try:
+            workload_class = os.environ.get("CORVIN_WORKLOAD_CLASS")
+            workload_confidence = os.environ.get("CORVIN_WORKLOAD_CONFIDENCE")
+            # Only route if we have a classification and fast_chat is enabled
+            if workload_class and workload_confidence:
+                fast_chat_enabled = profile.get("fast_chat_mode", False) or \
+                    os.environ.get("CORVIN_FAST_CHAT_ENABLED", "").lower() == "true"
+                try:
+                    conf = float(workload_confidence)
+                except (ValueError, TypeError):
+                    conf = 0.0
+                model = _em.resolve_model_for_workload(
+                    engine_id,
+                    workload_type=workload_class,
+                    user_chosen_model=explicit,  # use explicit as fallback
+                    confidence=conf,
+                    fast_chat_enabled=fast_chat_enabled,
+                )
+                if model:
+                    return model
+        except Exception:  # noqa: BLE001
+            # Workload routing failure is non-fatal; fall through to Tier 3
+            pass
+
     # Tier 3 — adaptive autoselect (the new default path)
     if _ms.autoselect_enabled():
         try:
