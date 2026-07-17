@@ -181,42 +181,36 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         pass  # best-effort — never blocks startup
 
-    # ADR-0191 — idempotently seed the zero-config image-generation tool into
-    # the mcp_manager catalog on every boot, so a genuinely fresh install has
-    # it active with no manual registration step (the whole point of "zero
-    # config"). Marker-based (seed_builtin): first boot installs + activates;
-    # later boots only refresh stale interpreter paths and NEVER override an
+    # ADR-0191/ADR-0193 — idempotently seed the built-in zero-config tools
+    # (image-generation, native browser) into the mcp_manager catalog on
+    # every boot, so a genuinely fresh install has them active with no
+    # manual registration step (the whole point of "zero config").
+    # Marker-based (seed_builtin): first boot installs + activates; later
+    # boots only refresh stale interpreter paths and NEVER override an
     # operator's deactivation/uninstall/edits. corvin_console import first —
     # see the health-check block above (wheel-install _vendor bootstrap).
+    # Each seeder gets its OWN try/except (one failing must never skip the
+    # other) — an earlier revision duplicated the whole path-bootstrap block
+    # per seeder verbatim; consolidated to a loop, same independence.
+    import os as _os2
+    import sys as _sys2
     try:
-        import os as _os2
-        import sys as _sys2
+        import corvin_console  # noqa: F401 — sys.path bootstrap side effect
+    except Exception:
+        pass
+    _mcp_mgr_root = _os2.path.normpath(_os2.path.join(
+        _os2.path.dirname(_os2.path.abspath(__file__)),
+        "..", "..", "..", "operator", "mcp_manager",
+    ))
+    if _mcp_mgr_root not in _sys2.path and _os2.path.isdir(_mcp_mgr_root):
+        _sys2.path.insert(0, _mcp_mgr_root)
+    for _seed_fn_name in ("ensure_imagegen_zero_config", "ensure_corvin_browser"):
         try:
-            import corvin_console  # noqa: F401 — sys.path bootstrap side effect
+            import mcp_manager.seed_builtin as _seed_builtin
+            getattr(_seed_builtin, _seed_fn_name)("_default")
         except Exception:
-            pass
-        _mcp_mgr_root = _os2.path.normpath(_os2.path.join(
-            _os2.path.dirname(_os2.path.abspath(__file__)),
-            "..", "..", "..", "operator", "mcp_manager",
-        ))
-        if _mcp_mgr_root not in _sys2.path and _os2.path.isdir(_mcp_mgr_root):
-            _sys2.path.insert(0, _mcp_mgr_root)
-        from mcp_manager.seed_builtin import ensure_imagegen_zero_config as _seed_imagegen
-        _seed_imagegen("_default")
-    except Exception:
-        pass  # best-effort — never blocks gateway startup
-
-    try:
-        _mcp_mgr_root2 = _os2.path.normpath(_os2.path.join(
-            _os2.path.dirname(_os2.path.abspath(__file__)),
-            "..", "..", "..", "operator", "mcp_manager",
-        ))
-        if _mcp_mgr_root2 not in _sys2.path and _os2.path.isdir(_mcp_mgr_root2):
-            _sys2.path.insert(0, _mcp_mgr_root2)
-        from mcp_manager.seed_builtin import ensure_corvin_browser as _seed_browser
-        _seed_browser("_default")
-    except Exception:
-        pass  # best-effort — never blocks gateway startup (ADR-0193)
+            pass  # best-effort — never blocks gateway startup, and never
+                   # skips the remaining seeders in this loop
 
     try:
         yield
