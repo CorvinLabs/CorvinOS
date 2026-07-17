@@ -447,7 +447,7 @@ def get_model_tier_mapping() -> dict[str, dict[str, str]]:
 
 def resolve_model_for_workload(
     engine_id: str,
-    workload_type: str,  # "chat" | "code" | "uncertain"
+    workload_type: "str | object",  # Can be str "chat"/"code"/"uncertain" or WorkloadType enum
     user_chosen_model: str | None,
 ) -> str | None:
     """Resolve the actual model to use based on engine, workload classification,
@@ -457,7 +457,8 @@ def resolve_model_for_workload(
 
     Args:
         engine_id: The engine identifier (e.g., "claude_code", "gemini")
-        workload_type: Classification result ("chat", "code", "uncertain")
+        workload_type: Classification result (str or WorkloadType enum).
+                       If enum, extracted as .value first.
         user_chosen_model: The model the user pinned (if any)
 
     Returns:
@@ -468,8 +469,15 @@ def resolve_model_for_workload(
         - If workload is "chat": use engine's "fast" tier, fallback to user choice
         - If workload is "code": use user_chosen_model, fallback to "full" tier
     """
-    # Normalize workload type
-    workload = str(workload_type).lower().strip() if workload_type else "uncertain"
+    # Normalize workload type: handle both WorkloadType enum and string
+    if workload_type is None:
+        workload = "uncertain"
+    elif hasattr(workload_type, "value"):
+        # It's an enum; extract the .value
+        workload = str(workload_type.value).lower().strip()
+    else:
+        # It's a string or other object; convert to string
+        workload = str(workload_type).lower().strip()
 
     # Safe fallback for unknown workload
     if workload == "uncertain":

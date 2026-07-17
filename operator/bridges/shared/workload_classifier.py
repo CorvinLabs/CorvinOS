@@ -31,32 +31,32 @@ class ClassificationResult(NamedTuple):
 
 # Compiled regex patterns for code keywords (case-insensitive).
 # Used to compute a "code score" — ratio of matched keywords to total tokens.
+# NOTE: Avoid common English words (let, while, return, for-in). Prefer language-specific
+# patterns (def, class, import, async, await, lambda, function, => in correct context).
 _CODE_PATTERNS = [
-    r'\bdef\b',           # Python function
-    r'\bclass\b',         # Python class
-    r'\bimport\b',        # Python import
-    r'\bfrom\s+\w+\s+import\b',  # Python from-import
-    r'\basync\b',         # Python async
-    r'\bawait\b',         # Python await
-    r'\breturn\b',        # Return statement
-    r'\bfunction\b',      # JavaScript/TypeScript function
-    r'\b=>\b',            # Arrow function
-    r'\blambda\b',        # Python lambda
-    r'\bfor\s+\w+\s+in\b',   # For loop
-    r'\bwhile\b',         # While loop
-    r'\btry\b.*\bexcept\b',  # Python exception handling
-    r'\bif\s+__name__\b', # Python main guard
-    r'```',               # Code fence (markdown)
-    r'\bfunction\*',      # Generator function
-    r'\bconst\b',         # JavaScript const
-    r'\blet\b',           # JavaScript let
-    r'\bvar\b',           # JavaScript var
-    r'\btype\s+\w+\s*=',  # TypeScript type
-    r'\binterface\s+\w+', # TypeScript interface
-    r'\bswitch\b.*\bcase\b',  # Switch statement
+    r'\bdef\b',                    # Python function (no false pos: not English)
+    r'\bclass\b',                  # Python class (no false pos)
+    r'\bimport\b',                 # Python import (no false pos)
+    r'\bfrom\s+\w+\s+import\b',    # Python from-import (no false pos)
+    r'\basync\s+(?:def|function)',  # Async def/function (context required, avoid "async task")
+    r'\bawait\b',                  # Python/JS await (rare in English)
+    r'\blambda\b',                 # Python lambda (no false pos: not English)
+    r'\bfunction\s*\(|\bfunction\s*\{',  # JS function with parens/brace (context)
+    r'=>',                         # Arrow function (just =>, no word bounds — catches () => {} )
+    r'\btry\s*[:({]',             # Python try: or JS try { (context)
+    r'\bexcept\b',                # Python except (no false pos)
+    r'\bfinally\b',               # Exception handling (no false pos)
+    r'\bthrow\b',                 # Exception throwing (no false pos)
+    r'\bif\s+__name__\b',         # Python main guard (no false pos)
+    r'```',                       # Code fence (markdown, no false pos)
+    r'\bfunction\*',              # JS generator (no false pos)
+    r'\binterface\s+\w+',         # TypeScript interface (no false pos)
+    r'\btype\s+\w+\s*=',          # TypeScript type (no false pos)
 ]
 
-_COMPILED_PATTERNS = [re.compile(pat, re.IGNORECASE) for pat in _CODE_PATTERNS]
+_COMPILED_PATTERNS = [
+    re.compile(pat, re.IGNORECASE | re.DOTALL) for pat in _CODE_PATTERNS
+]
 
 
 def _count_code_keywords(message: str) -> int:
