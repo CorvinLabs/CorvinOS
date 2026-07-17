@@ -4149,8 +4149,22 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         return f"[fake] {channel}:{chat_key} :: {prompt[:60]}"
 
     workdir = _session_dir(channel, chat_key)
+
+    # ADR-0043 — Classify workload (CHAT vs. CODE) for hybrid model routing (opt-in).
+    # Must happen early, before _build_spawn_env, so hint can be propagated as env vars.
+    workload_hint = None
+    try:
+        from test_adr0043_bridge_integration import classify_and_store_workload_hint as _cs  # type: ignore  # noqa: PLC0415, E501
+        # Create a session dict for hint storage
+        temp_session: dict = {}
+        _cs(prompt, temp_session)
+        workload_hint = temp_session.get("workload_hint")
+    except Exception:  # noqa: BLE001
+        # Classification failure is non-fatal; proceed without hint
+        pass
+
     env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,
-                           sender=sender)
+                           sender=sender, workload_hint=workload_hint)
     env["VOICE_HOOK_RECURSION"] = "1"
     # ADR-0126 M2 — when claude_code_local mode sets ANTHROPIC_API_KEY='local',
     # remove it from the subprocess env so the claude CLI can authenticate via
@@ -6347,8 +6361,22 @@ def call_claude_streaming(
         return _fake_reply
 
     workdir = _session_dir(channel, chat_key)
+
+    # ADR-0043 — Classify workload (CHAT vs. CODE) for hybrid model routing (opt-in).
+    # Must happen early, before _build_spawn_env, so hint can be propagated as env vars.
+    workload_hint = None
+    try:
+        from test_adr0043_bridge_integration import classify_and_store_workload_hint as _cs  # type: ignore  # noqa: PLC0415, E501
+        # Create a session dict for hint storage
+        temp_session: dict = {}
+        _cs(prompt, temp_session)
+        workload_hint = temp_session.get("workload_hint")
+    except Exception:  # noqa: BLE001
+        # Classification failure is non-fatal; proceed without hint
+        pass
+
     env = _build_spawn_env(bridge=channel, chat_key=chat_key, profile=profile,
-                           sender=sender)
+                           sender=sender, workload_hint=workload_hint)
     env["VOICE_HOOK_RECURSION"] = "1"
 
     has_session = any(workdir.glob(".claude*")) or (workdir / ".session_started").exists()
