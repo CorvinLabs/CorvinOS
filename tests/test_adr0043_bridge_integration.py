@@ -212,3 +212,41 @@ class TestBridgeIntegrationLayer:
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_adapter_propagates_workload_hint_to_env():
+    """_build_spawn_env stores workload_hint as env vars."""
+    try:
+        import adapter  # type: ignore  # noqa: PLC0415
+    except ImportError:
+        pytest.skip("adapter module not importable")
+
+    workload_hint = {"workload": "chat", "confidence": 0.92, "timestamp": 1234567890}
+    env = adapter._build_spawn_env(
+        bridge="test",
+        chat_key="ch1",
+        base={},
+        workload_hint=workload_hint,
+    )
+
+    assert env.get("CORVIN_WORKLOAD_CLASS") == "chat"
+    assert env.get("CORVIN_WORKLOAD_CONFIDENCE") == "0.92"
+    assert env.get("CORVIN_WORKLOAD_TIMESTAMP") == "1234567890"
+
+
+def test_adapter_handles_missing_workload_hint():
+    """_build_spawn_env works without workload_hint (backwards-compat)."""
+    try:
+        import adapter  # type: ignore  # noqa: PLC0415
+    except ImportError:
+        pytest.skip("adapter module not importable")
+
+    env = adapter._build_spawn_env(
+        bridge="test",
+        chat_key="ch1",
+        base={},
+        workload_hint=None,
+    )
+
+    # No error, env is created successfully
+    assert env.get("CORVIN_CHAT_KEY") is not None
