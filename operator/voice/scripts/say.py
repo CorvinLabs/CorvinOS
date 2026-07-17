@@ -179,7 +179,12 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None) -> bool
         out_path.write_bytes(resp.read())
         return True
     except Exception as e:  # noqa: BLE001
-        sys.stderr.write(f"say.py: OpenAI TTS failed: {e}\n")
+        # CONTENT-FREE: SDK exception str()s can embed the request payload —
+        # i.e. the text being spoken. Type + HTTP status only (2026-07-17).
+        sys.stderr.write(
+            f"say.py: OpenAI TTS failed: {type(e).__name__} "
+            f"status={getattr(e, 'status_code', '')}\n"
+        )
         return False
 
 
@@ -264,7 +269,9 @@ def _try_edge(out_path: Path, text: str, lang: str) -> bool:
             return False
         return True
     except (asyncio.TimeoutError, Exception) as e:  # noqa: BLE001
-        sys.stderr.write(f"say.py: edge-tts failed: {e}\n")
+        # CONTENT-FREE: type name only — the websocket error can quote the
+        # SSML request, which carries the spoken text (2026-07-17).
+        sys.stderr.write(f"say.py: edge-tts failed: {type(e).__name__}\n")
         return False
 
 
@@ -444,7 +451,11 @@ def _try_piper(out_path: Path, text: str, lang: str) -> bool:
         # Don't give up on Piper here — the binary tier below is an independent
         # code path (older/newer API surface) and is the whole point of the
         # offline fallback. Drop the stray partial WAV and fall through.
-        sys.stderr.write(f"say.py: piper-tts Python API failed ({e}) — trying piper binary\n")
+        # CONTENT-FREE: type name only, never str(e) (2026-07-17).
+        sys.stderr.write(
+            f"say.py: piper-tts Python API failed ({type(e).__name__}) "
+            f"— trying piper binary\n"
+        )
         try:
             out_path.with_suffix(".wav").unlink(missing_ok=True)
         except OSError:
@@ -482,8 +493,12 @@ def _try_piper(out_path: Path, text: str, lang: str) -> bool:
             creationflags=_no_window,
         )
         if result.returncode != 0:
-            _err = result.stderr.decode("utf-8", "replace").strip()[:200]
-            sys.stderr.write(f"say.py: piper binary failed: {_err}\n")
+            # CONTENT-FREE: piper echoes its input line on some error paths,
+            # so forwarding stderr could leak the spoken text. Return code
+            # only (2026-07-17).
+            sys.stderr.write(
+                f"say.py: piper binary failed: rc={result.returncode}\n"
+            )
             return False
         size = wav_path.stat().st_size if wav_path.exists() else 0
         if size == 0:
@@ -492,7 +507,12 @@ def _try_piper(out_path: Path, text: str, lang: str) -> bool:
         wav_path.replace(out_path)  # replace (not rename): overwrite-safe on Windows
         return True
     except Exception as e:  # noqa: BLE001
-        sys.stderr.write(f"say.py: piper binary error: {e}\n")
+        # CONTENT-FREE: type + errno (E2BIG vs EPERM stays diagnosable)
+        # — a CalledProcessError-style str() would embed argv (2026-07-17).
+        sys.stderr.write(
+            f"say.py: piper binary error: {type(e).__name__} "
+            f"errno={getattr(e, 'errno', '')}\n"
+        )
         try:
             wav_path.unlink(missing_ok=True)  # don't accumulate orphan WAVs
         except OSError:
@@ -619,10 +639,43 @@ def provider_status() -> dict[str, dict]:
 # Ordered provider list for the "auto" chain.
 _AUTO_CHAIN = ("openai", "edge", "piper")
 
+# Extensions we accept as a plausible synthesis target. Everything the three
+# providers can actually emit, plus the common containers callers convert to.
+_AUDIO_EXTS = {
+    ".opus", ".ogg", ".oga", ".mp3", ".wav", ".m4a", ".aac", ".flac", ".webm",
+}
+
+
+def _looks_like_swapped_args(out_path_arg: str) -> bool:
+    """True when argv[1] reads like the TEXT, not the output path.
+
+    say.py's positional order is ``<out_path> <text>`` — callers who invert
+    it silently created Ogg files literally NAMED after the spoken sentence
+    ("Das ist Test Nummer 1." landed as a repo-root file, found 2026-07-17).
+    Heuristic: no known audio extension AND shaped like a sentence
+    (contains whitespace and ends in sentence punctuation — note a trailing
+    "." is NOT a suffix to pathlib, so ".opus"-style paths never match).
+    Real callers (routes/voice.py::_say_cmd, daemon.js) always pass
+    extension-carrying paths, which short-circuit on the extension check.
+    """
+    p = Path(out_path_arg)
+    if p.suffix.lower() in _AUDIO_EXTS:
+        return False
+    stripped = out_path_arg.strip()
+    has_ws = any(c.isspace() for c in stripped)
+    return has_ws and stripped.endswith((".", "!", "?", "…"))
+
 
 def main() -> int:
     if len(sys.argv) < 3:
         sys.stderr.write(
+            "usage: say.py <out_path> <text> [<lang> [<voice> [<provider>]]]\n"
+        )
+        return 2
+    if _looks_like_swapped_args(sys.argv[1]):
+        sys.stderr.write(
+            "say.py: argv[1] looks like spoken text, not an audio out-path "
+            "(no audio extension, sentence-shaped) — arguments swapped?\n"
             "usage: say.py <out_path> <text> [<lang> [<voice> [<provider>]]]\n"
         )
         return 2

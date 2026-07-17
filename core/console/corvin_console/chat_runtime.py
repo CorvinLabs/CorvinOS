@@ -711,6 +711,15 @@ def find_turn_voice_segments(tenant_id: str, sid: str, text: str,
 # purpose and no expiry.
 _VOICE_ARCHIVE_MAX_BYTES = int(
     os.environ.get("CORVIN_VOICE_ARCHIVE_MAX_BYTES", str(64 * 1024 * 1024)))
+# Idle window before a voice group may be evicted. Sized to PLAYBACK cadence,
+# not synthesis time: the client prefetches only segment i+1 while i is
+# playing, so consecutive archive writes of one live playlist are up to a full
+# segment's spoken duration apart — a 1800-char segment
+# (_VOICE_SEGMENT_MAX_CHARS) is ~200 s of audio (refutation finding
+# 2026-07-17; the first cut used 120 s ≈ 5× say.py synthesis and a live
+# playlist could look idle between writes). See prune_voice_archive.
+_VOICE_PRUNE_ACTIVE_GRACE_S = int(
+    os.environ.get("CORVIN_VOICE_PRUNE_GRACE_S", "300"))
 
 
 def prune_voice_archive(tenant_id: str, sid: str,
@@ -728,7 +737,9 @@ def prune_voice_archive(tenant_id: str, sid: str,
     re-synthesised on demand by the existing Replay / read-aloud controls.
 
     *keep* names one file (the turn's freshly written audio); its whole group is
-    exempt, so the cap may be exceeded by at most the current turn. Without it a
+    exempt — as is every group younger than the active-write grace window (see
+    _VOICE_PRUNE_ACTIVE_GRACE_S), so the cap may be exceeded transiently by the
+    current turn plus whatever was written within the grace window. Without it a
     cap smaller than a single file made every turn synthesise its audio and
     immediately delete it again — no player, ever, and the TTS spend burned
     silently on every turn. Same compromise split_for_speech already makes for
@@ -777,10 +788,23 @@ def prune_voice_archive(tenant_id: str, sid: str,
         if total <= max_bytes:
             return 0
         removed = 0
+        # Never evict a group that is still being WRITTEN: `keep` only exempts
+        # the current writer's own group, so a concurrent turn (second tab,
+        # next turn racing a long read-aloud) pruning over the cap could evict
+        # a playlist mid-write — the still-arriving `-fNN` segments then formed
+        # a partial group that attach_voice_artifacts renumbered from 1, which
+        # is exactly the renumbering defect group-eviction exists to prevent.
+        # A live playlist touches its group at least once per say.py call, so
+        # "newest file older than the grace window" is a safe idle signal; the
+        # cap may be exceeded transiently, which the docstring already accepts
+        # for the keep-group.
+        _now = time.time()
         for key, g in sorted(groups.items(), key=lambda kv: kv[1]["mtime"]):
             if total <= max_bytes:
                 break
             if key == keep_key:
+                continue
+            if _now - g["mtime"] < _VOICE_PRUNE_ACTIVE_GRACE_S:
                 continue
             for path in g["paths"]:
                 try:
@@ -1638,18 +1662,136 @@ _DELEGATION_BUDGET_DEFAULTS = {
     # here to the pre-inflation sane bounds; acs_validator R35/R36 now guards
     # max_total_workers + max_wall_time the way R32 guards max_depth, so any
     # future silent re-inflation fails LOUDLY at workflow validation.
-    "max_loops": 5,           # 3 was too tight: 1 worker-timeout burn + 2 parse-error burns = budget gone
+    # Raised 2026-07-16 (maintainer decision) so a fresh install does not meet a
+    # budget on ordinary work — meeting one reads as a failure to someone who has
+    # never seen these numbers. Generous but deliberately BELOW the ceilings in
+    # settings.py::_BUDGET_KEYS; defaulting to the ceilings would let one metered
+    # compute unit authorize 64 workers for 24 h, which is the quota-defeat the
+    # comment above describes and that R32/R35/R36 exist to prevent. MUST stay
+    # aligned with _BUDGET_KEYS (a test pins this).
+    "max_loops": 20,          # 3 was too tight: 1 worker-timeout burn + 2 parse-error burns = budget gone
     "max_depth": 4,           # recursive worker-delegation depth (M4) — NOT a loop counter like the
                               # other fields; 200 was an accidental blanket-scale-up in a47c6d3 that
                               # broke every delegation (acs_validator R32 caps this at 10). 4 matches
                               # the ACS runtime's own built-in default for recursive delegation depth.
+                              # Deliberately NOT raised with the rest: depth is the fan-out EXPONENT,
+                              # so it multiplies the worker ceiling instead of adding to it.
     "max_total_workers": 8,   # concurrent worker subprocesses per delegated turn (pre-inflation was 4)
-    "max_wall_time": 3600,    # 1 h wall-clock ceiling for the whole delegation loop
-    "timeout_seconds": 3600,  # 1 h — allows complex multi-file tasks to complete
-    "max_worker_turns": 100,  # acs_runtime default was 5 → workers hit max_turns mid-tool-use
+                              # NOT raised: parallel workers are rarely why a task stops early (loops
+                              # and wall-time are), but this knob multiplies the fan-out directly —
+                              # it is the numerator of the worker-hours-per-metered-unit figure the
+                              # quota-defeat was measured in.
+    "max_wall_time": 14400,   # 4 h wall-clock ceiling for the whole delegation loop
+    "timeout_seconds": 14400, # 4 h — allows complex multi-file tasks to complete
+    "max_worker_turns": 300,  # acs_runtime default was 5 → workers hit max_turns mid-tool-use
                               # on explore/implement tasks → error_max_turns → confidence=0.0
                               # → "Delegation fehlgeschlagen: unknown error" in web console.
 }
+
+# Plain-language names for the knobs a delegation can stop on. Keys match the
+# BudgetEnvelope.check() breach strings ("max_loops=20 reached").
+_BUDGET_LABELS = {
+    "max_loops":         {"de": "die Anzahl der Planungsrunden",
+                          "en": "the number of planning rounds"},
+    "max_total_workers": {"de": "die Anzahl paralleler Worker",
+                          "en": "the number of parallel workers"},
+    "max_wall_time":     {"de": "die Laufzeit",
+                          "en": "the wall-clock time"},
+    "max_total_tokens":  {"de": "das Token-Budget",
+                          "en": "the token budget"},
+    "max_tool_calls":    {"de": "die Anzahl der Tool-Aufrufe",
+                          "en": "the number of tool calls"},
+}
+
+# Word lists deliberately avoid every de/en-ambiguous token ("was", "in",
+# "an", "die", single-letter "a") — the same trap that flipped the voice
+# text-first language detection on short German answers (review 2026-07-17).
+_DE_HINT_WORDS = frozenset((
+    "der", "und", "nicht", "eine", "ist", "ich", "mit", "für", "auf",
+    "bitte", "mach", "erstelle", "dann", "wenn", "noch", "auch", "aber",
+    "kannst", "soll", "wird", "sind", "wie", "zu", "im", "den", "dem",
+    "einen", "aus", "bei", "nach", "über", "alle", "diese", "dieser",
+    "das", "ein", "mal", "mir", "es", "oder", "kann", "hier", "jetzt",
+    "dass", "schon", "mehr", "neu", "komplett", "baue", "analysiere",
+    "schreib", "zeig", "erklär",
+))
+_EN_HINT_WORDS = frozenset((
+    # "will" (German modal verb), "file"/"files" (Denglisch tech prompts) are
+    # deliberately absent — same ambiguity rule as above.
+    "the", "and", "not", "is", "are", "please", "create", "then", "if",
+    "also", "but", "can", "should", "how", "what", "it", "to",
+    "of", "this", "that", "with", "for", "on", "you", "from", "all",
+    "send", "email", "make", "give", "write", "run", "use", "add", "fix",
+    "check", "show", "into", "about", "report", "new",
+))
+
+
+def _prompt_is_german(prompt: str) -> bool:
+    """Pick the language for delegation status messages from the user's own
+    prompt — the one text this user is guaranteed to read.
+
+    Umlaut/ß presence is STRONG German evidence but CAPPED at +2 total, not
+    a knockout and not per-word: "Send an email to Jürgen about the Q3
+    report" is English with a German name in it, and "Can you email Jürgen
+    Müller about the Zürich meeting?" must not out-vote five English
+    stopwords just because it carries three umlaut proper nouns (two
+    refutation rounds, 2026-07-17). Everything else is a count of
+    unambiguous stopwords; German needs a strict majority, ties default to
+    English (repo rule: user-facing runtime text defaults to English). A
+    heuristic, not a detector — the failure cost is a status message in the
+    wrong-but-readable language.
+    """
+    text = (prompt or "").lower()
+    words = re.findall(r"[a-zäöüß]+", text)
+    de = 2 if any(any(ch in w for ch in "äöüß") for w in words) else 0
+    de += sum(1 for w in words if w in _DE_HINT_WORDS)
+    en = sum(1 for w in words if w in _EN_HINT_WORDS)
+    return de > en
+
+
+def _budget_stop_message(breach: str, iterations: int | None,
+                         workers: int | None, *, german: bool) -> str:
+    """Explain a bounded stop instead of reporting it as a failure.
+
+    Reaching a delegation budget is the system working as configured, but it used
+    to surface as "Delegation fehlgeschlagen: ACS workflow failed with status
+    'budget_exhausted' (N iteration(s))" — indistinguishable from a crash for
+    anyone who has never seen these numbers, which is everyone on a fresh
+    install. ACS already reports WHICH limit was met; name it, say what was done,
+    and point at the one place it can be raised. Bilingual because the final
+    result text is also SPOKEN by the voice pipeline — a hard-German message
+    made the voice switch language mid-session for English users.
+    """
+    lang = "de" if german else "en"
+    key = breach.split("=", 1)[0].strip() if breach else ""
+    labels = _BUDGET_LABELS.get(key)
+    did = []
+    if german:
+        what = labels["de"] if labels else "ein Budget-Limit"
+        if iterations:
+            did.append(f"{iterations} Runde(n)")
+        if workers:
+            did.append(f"{workers} Worker")
+        did_str = f" Bis dahin: {', '.join(did)}." if did else ""
+        return (
+            f"Budget erreicht — ich habe hier gestoppt, weil {what} aufgebraucht "
+            f"war.{did_str} Das ist kein Fehler: die Teilergebnisse oben bleiben "
+            f"gültig. Wenn die Aufgabe mehr braucht, kannst du das Limit unter "
+            f"Settings → Delegation Budget anheben ({key or 'Budget'}) und es "
+            f"erneut versuchen."
+        )
+    what = labels["en"] if labels else "a budget limit"
+    if iterations:
+        did.append(f"{iterations} round(s)")
+    if workers:
+        did.append(f"{workers} worker(s)")
+    did_str = f" Progress so far: {', '.join(did)}." if did else ""
+    return (
+        f"Budget reached — I stopped here because {what} was used up."
+        f"{did_str} This is not an error: the partial results above remain "
+        f"valid. If the task needs more, you can raise the limit under "
+        f"Settings → Delegation Budget ({key or 'budget'}) and try again."
+    )
 
 # Triage heuristic vocabulary (deterministic, 0 ms, no API — same rationale
 # as auto-routing's default heuristic mode).
@@ -3178,6 +3320,16 @@ async def stream_turn(
                     run_dir=run_dir,
                 )
             ok = res.status == "success"
+            # Reaching a budget is a BOUNDED STOP, not a failure — it gets its
+            # own outcome end-to-end (chat text, audit rc, task event, artifact
+            # scan) so the chat cannot say "not an error" while the activity
+            # views record a crash.
+            bounded_stop = res.status == "budget_exhausted"
+            # Status messages follow the language of the user's own prompt —
+            # the final result text is also SPOKEN by the voice pipeline, and a
+            # hard-German message switched the voice language mid-session for
+            # English users (review 2026-07-17).
+            _msg_de = _prompt_is_german(prompt)
             final = (res.summary or "").strip()
 
             # Safety net: raw HTML error pages (Cloudflare 50x, nginx, …) that
@@ -3186,11 +3338,30 @@ async def stream_turn(
                 import re as _re_html
                 _t = _re_html.search(r"<title[^>]*>([^<]{1,120})</title>",
                                      final, _re_html.IGNORECASE)
-                _label = _t.group(1).strip() if _t else "HTTP-Fehlerseite"
-                final = f"Fehler: Der Server hat \"{_label}\" zurückgegeben. Bitte versuche es erneut."
+                _label = _t.group(1).strip() if _t else ("HTTP-Fehlerseite" if _msg_de
+                                                         else "HTTP error page")
+                final = (f"Fehler: Der Server hat \"{_label}\" zurückgegeben. Bitte versuche es erneut."
+                         if _msg_de else
+                         f"Error: the server returned \"{_label}\". Please try again.")
                 ok = False
 
-            if not final:
+            if bounded_stop:
+                # It used to fall through to "Delegation fehlgeschlagen: ACS
+                # workflow failed with status 'budget_exhausted' (N iteration(s))",
+                # which reads as a crash to someone who has never seen these
+                # numbers. ACS already reports WHICH limit was met
+                # (budget_breach); say so, and say where to change it. Placed
+                # OUTSIDE the `if not final:` fallback so a future ACS summary
+                # on budget stops cannot silently hide the explanation — the
+                # note is appended to whatever summary exists.
+                _stop_note = _budget_stop_message(
+                    getattr(res, "budget_breach", "") or "",
+                    getattr(res, "iterations", None),
+                    getattr(res, "workers_spawned", None),
+                    german=_msg_de,
+                )
+                final = f"{final}\n\n{_stop_note}" if final else _stop_note
+            elif not final:
                 # Debug: log the actual result state
                 _log.debug(
                     "[delegation] Final result: status=%s, error=%s, summary=%s",
@@ -3211,8 +3382,11 @@ async def stream_turn(
                     detail_str = f" ({', '.join(details)})" if details else ""
                     error_msg = f"ACS workflow failed with status '{res.status}'{detail_str}"
 
-                final = ("Delegation abgeschlossen." if ok
-                         else f"Delegation fehlgeschlagen: {error_msg[:250]}")
+                if ok:
+                    final = "Delegation abgeschlossen." if _msg_de else "Delegation completed."
+                else:
+                    final = ((f"Delegation fehlgeschlagen: {error_msg[:250]}") if _msg_de
+                             else f"Delegation failed: {error_msg[:250]}")
             _dbg(sess.workdir, "acs.run.done",
                  run_id=getattr(res, "run_id", run_id),
                  status=res.status,
@@ -3321,7 +3495,12 @@ async def stream_turn(
             # _ACS_SKIP_DIRS / _ACS_SKIP_ROOT_FILES are module-level constants.
             _acs_artifact_parts: list[dict[str, Any]] = []
             _scan_root = Path(res.run_dir) if res.run_dir else run_dir
-            if ok and _scan_root.is_dir():
+            # bounded_stop included: "the partial results above remain valid"
+            # (the budget-stop message) was a lie while this gate was ok-only —
+            # files finished in the last poll window need TWO stable sightings
+            # to be live-emitted, so an abrupt budget stop routinely left the
+            # freshest artifacts undelivered and unpersisted.
+            if (ok or bounded_stop) and _scan_root.is_dir():
                 for _fpath in sorted(_scan_root.rglob("*")):
                     if not _fpath.is_file() or _fpath.name.startswith("."):
                         continue
@@ -3380,7 +3559,10 @@ async def stream_turn(
             _turn_parts.extend(_live_artifact_parts)
             _turn_parts.extend(_acs_artifact_parts)
 
-            _audit_emit(sess, "web.turn.completed", rc=0 if ok else 1,
+            # bounded_stop records rc=0 + task.completed: the chat tells the
+            # user "this is not an error", so the audit trail and activity
+            # views must not contradict it with a failed-run record.
+            _audit_emit(sess, "web.turn.completed", rc=0 if (ok or bounded_stop) else 1,
                         result_chars=len(final), usage=None, delegated_run_id=run_id,
                         artifacts=len(_live_artifact_parts) + len(_acs_artifact_parts))
             if ok:
@@ -3388,9 +3570,15 @@ async def stream_turn(
                     "event": "task.completed", "exit_code": 0,
                     "summary": f"delegated to ACS run {run_id}: {len(final)} chars output",
                 })
+            elif bounded_stop:
+                tm.record_event(task_id, {
+                    "event": "task.completed", "exit_code": 0,
+                    "summary": (f"delegated to ACS run {run_id}: bounded stop "
+                                f"({getattr(res, 'budget_breach', '') or 'budget reached'})"),
+                })
             else:
                 tm.record_event(task_id, {"event": "task.failed", "exit_code": 1})
-            _os_emit_completed(0 if ok else 1)
+            _os_emit_completed(0 if (ok or bounded_stop) else 1)
             touch(sess, increment_turn=True)
             _append_turn(sess, "assistant", _turn_parts)
             yield {"type": "done"}
@@ -3635,8 +3823,11 @@ async def stream_turn(
     # adapter.py voice pipeline used by Discord/WhatsApp.  Appended as a
     # delta so the chat bubble grows naturally; a second result event
     # updates latestResultText so TTS speaks the annotated version.
+    # Gated on _ann_pending (same rationale as the Hermes path): a suffix the
+    # client was never told to wait for would be persisted + voice_key'd but
+    # never spoken, orphaning the turn's archived audio on a mid-turn toggle.
     _ann_suffix = ""
-    if rc == 0 and result_text:
+    if rc == 0 and result_text and _ann_pending:
         _ann_suffix = await _compute_web_annotation_suffix(result_text, sess.tenant_id)
     if _ann_suffix:
         yield {"type": "delta", "text": "\n\n" + _ann_suffix}

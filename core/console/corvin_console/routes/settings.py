@@ -440,10 +440,21 @@ _BUDGET_KEYS = {
     # max_wall_time ≤ 86400s). The old values were a partially-reverted 100×
     # inflation (default 400 workers / 100h) that let one metered compute unit
     # authorize a runaway fan-out; a save above these now fails validation loudly.
-    "timeout_seconds":  {"type": int, "min": 30,    "max": 86400,   "default": 3600},
-    "max_worker_turns": {"type": int, "min": 1,     "max": 5000,    "default": 100},
-    "max_loops":        {"type": int, "min": 1,     "max": 100,     "default": 5},
-    "max_wall_time":    {"type": int, "min": 60,    "max": 86400,   "default": 3600},
+    #
+    # Defaults raised 2026-07-16 (maintainer decision): a fresh install should not
+    # hit a delegation budget on ordinary work, because hitting one READS as a
+    # failure to someone who has never seen these numbers. Deliberately raised to
+    # generous-but-bounded, NOT to the ceilings: the ceilings exist because one
+    # metered compute unit must not authorize a runaway fan-out (see above), and
+    # defaulting to them would hand every free-tier user 64 workers for 24h out of
+    # their single daily unit — re-opening the exact hole that was closed. The
+    # companion half of this change is that reaching a budget now reports itself
+    # as a bounded stop with the limit named, not as "Delegation fehlgeschlagen".
+    # max_depth stays at 4: it is the fan-out EXPONENT, not a linear knob.
+    "timeout_seconds":  {"type": int, "min": 30,    "max": 86400,   "default": 14400},
+    "max_worker_turns": {"type": int, "min": 1,     "max": 5000,    "default": 300},
+    "max_loops":        {"type": int, "min": 1,     "max": 100,     "default": 20},
+    "max_wall_time":    {"type": int, "min": 60,    "max": 86400,   "default": 14400},
     "max_total_workers":{"type": int, "min": 1,     "max": 64,      "default": 8},
     # Recursive delegation depth (M4), not a loop counter — acs_validator R32
     # hard-caps this at 10, so max must match or every save >10 fails validation.

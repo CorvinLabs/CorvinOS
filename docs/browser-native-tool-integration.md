@@ -10,7 +10,10 @@ existed only to serve that same retired mechanism) are gone from
 turn unchanged; the native `corvin-browser` MCP tool is available to its
 ordinary tool-use reasoning, exactly like any other tool. The old REST
 agent-loop path (`POST /browser/{sid}/agent`) is untouched, per the ADR's own
-non-goals.
+non-goals. Long-time users who still type `/browser <task>` are not left in a
+dead end: `slash_commands.py` answers with a pointer to the native behaviour
+("just describe the browsing task in a normal message") instead of
+`Unknown command` (added 2026-07-17).
 
 ## 1. Problem — why "build me a web UI" launches a live browser
 

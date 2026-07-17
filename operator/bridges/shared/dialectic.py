@@ -436,7 +436,11 @@ def _run_cli_judge(*, site: str, thesis: Any, antithesis: Any) -> str:
              "--output-format", "text", prompt],
             capture_output=True, text=True, timeout=_CLI_TIMEOUT_SECONDS,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
+        # OSError covers FileNotFoundError AND E2BIG: the prompt (user text)
+        # rides in argv, so an oversized turn used to crash past this handler
+        # instead of degrading — same gap class as summarize.py's CLI spawns
+        # (fixed 2026-07-17).
         return "A | (cli unavailable, falling back to thesis)"
     out = (proc.stdout or "").strip()
     if not out:
@@ -523,7 +527,8 @@ def _run_summary_judge(source: str, candidate: str, lang: str) -> str:
             capture_output=True, text=True,
             timeout=_SUMMARY_JUDGE_TIMEOUT_SECONDS,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
+        # OSError, not just FileNotFoundError — see the site above (E2BIG).
         return "FAITHFUL | (cli unavailable, shipping candidate)"
     out = (proc.stdout or "").strip()
     if not out:

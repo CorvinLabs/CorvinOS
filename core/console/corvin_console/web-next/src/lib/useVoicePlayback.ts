@@ -12,6 +12,26 @@ export type VoiceState = "idle" | "loading" | "playing" | "blocked";
 const _SILENT_WAV =
   "data:audio/wav;base64,UklGRjIAAABXQVZFZm10IBIAAAABAAEAQB8AAEAfAAABAAgAAABmYWN0BAAAAAAAAABkYXRhAAAAAA==";
 
+// Shown when an EXPLICIT click (Replay, read-full-answer, session recap) got a
+// 204 back: on a zero-config box without an LLM/TTS backend the click would
+// otherwise do nothing, silently, no matter how often it's pressed. The
+// AUTOMATIC turn voice keeps its silent-degradation contract (204 = absent
+// enhancement, never an error) — this message is for click paths only.
+const _TTS_UNAVAILABLE_MSG =
+  "Voice synthesis unavailable — check Settings → Voice (an LLM/TTS backend is needed).";
+
+// play() rejections carry the browser's verdict in `name`: ONLY
+// "NotAllowedError" means autoplay-blocked, i.e. a user tap will fix it.
+// Anything else (e.g. "NotSupportedError" on undecodable audio) must NOT
+// surface the tap-to-play affordance — tapping would re-run the same failure.
+const _isAutoplayBlock = (e: unknown): boolean =>
+  (e as { name?: string } | null)?.name === "NotAllowedError";
+
+// Fetch rejections caused by our own AbortController (Stop/supersede) — an
+// intentional cancellation, never worth an onError toast.
+const _isAbort = (e: unknown): boolean =>
+  (e as { name?: string } | null)?.name === "AbortError";
+
 /**
  * Shared TTS playback engine — extracted from chat.tsx's original inline
  * implementation so any page (chat, the first-boot Welcome screen, …) can
@@ -33,6 +53,12 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
   // it's still the latest one once the async fetch resolves.
   const requestIdRef = React.useRef(0);
   const unlockedRef = React.useRef(false);
+  // AbortController for the CURRENT generation's voice fetches. Superseding
+  // used to only IGNORE the stale response while the server kept synthesising
+  // into a held TTS slot for up to ~145 s — aborting here actually releases
+  // it. Owned by the same lifecycle as requestIdRef: created after each
+  // stopVoice(), aborted inside it.
+  const abortRef = React.useRef<AbortController | null>(null);
 
   const ensureAudioEl = React.useCallback(() => {
     if (!audioRef.current) audioRef.current = new Audio();
@@ -112,6 +138,13 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
     // silenced. Bumping here makes Stop a real supersede, which is also what
     // lets playFull's segment loop notice it and bail out.
     requestIdRef.current += 1;
+    // Abort the in-flight fetch too — the requestId bump already makes every
+    // awaiter bail on resolve, so the resulting AbortError can never reach
+    // onError (the supersede guard returns first).
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
     const a = audioRef.current;
     if (a) {
       try {
@@ -132,7 +165,8 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
   React.useEffect(() => () => stopVoice(), [stopVoice]);
 
   const playTts = React.useCallback(
-    async (text: string, lang: string, sid?: string) => {
+    async (text: string, lang: string, sid?: string,
+           opts?: { notifyOnEmpty?: boolean }) => {
       // Order matters: stopVoice() ITSELF bumps the generation (that is what
       // makes an explicit Stop a real supersede), so the id must be captured
       // AFTER it. Capturing first and then calling stopVoice() made every call
@@ -142,11 +176,14 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
       const myRequestId = ++requestIdRef.current;
       if (!text.trim()) return;
       setVoiceState("loading");
+      const ac = new AbortController();
+      abortRef.current = ac;
       let blob: Blob;
       try {
-        blob = await ttsBlob(text, lang, csrf, sid);
+        blob = await ttsBlob(text, lang, csrf, sid, ac.signal);
       } catch (e) {
         if (myRequestId !== requestIdRef.current) return; // superseded meanwhile
+        if (_isAbort(e)) return; // our own Stop — intentional, not an error
         setVoiceState("idle");
         onError?.(e instanceof Error ? `TTS failed: ${e.message}` : "TTS failed");
         return;
@@ -160,6 +197,9 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
       }
       if (!blob.size) {
         setVoiceState("idle");
+        // 204-silence is the DESIGN for the automatic turn voice, but an
+        // explicit click (Replay) opts into feedback — see _TTS_UNAVAILABLE_MSG.
+        if (opts?.notifyOnEmpty) onError?.(_TTS_UNAVAILABLE_MSG);
         return;
       }
       const url = URL.createObjectURL(blob);
@@ -197,7 +237,7 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
         // element is unlocked. Mark it so the priming listeners in the
         // effect above stop doing redundant work.
         unlockedRef.current = true;
-      } catch {
+      } catch (e) {
         // pause() REJECTS a pending play() with AbortError, which is
         // indistinguishable here from a real autoplay block. Without this
         // guard, a Stop pressed during the ~100ms play() window left the chip
@@ -207,6 +247,30 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
         // affordance called playBlocked(), which replayed the very audio the
         // user had just silenced. A superseded call owns nothing: bail out.
         if (myRequestId !== requestIdRef.current) return;
+        if (_isAbort(e)) {
+          // SAME-generation AbortError: something paused the element without
+          // going through stopVoice() (OS media key, audio-focus loss) inside
+          // the ms-wide play() window. Neither a block nor a real failure —
+          // reset quietly, no banner.
+          if (blobUrlRef.current === url) {
+            URL.revokeObjectURL(url);
+            blobUrlRef.current = null;
+          }
+          setVoiceState("idle");
+          return;
+        }
+        if (!_isAutoplayBlock(e)) {
+          // Not an autoplay block (e.g. NotSupportedError on undecodable
+          // audio) — a "tap to play" affordance would tap into the same
+          // failure forever. Reset instead, and say why.
+          if (blobUrlRef.current === url) {
+            URL.revokeObjectURL(url);
+            blobUrlRef.current = null;
+          }
+          setVoiceState("idle");
+          onError?.(e instanceof Error ? `Audio playback failed: ${e.message}` : "Audio playback failed");
+          return;
+        }
         // Browser blocked autoplay (no user gesture in scope). The audio
         // is ready; the caller shows a "tap to hear" affordance that calls
         // playBlocked() from within a real click handler.
@@ -238,17 +302,19 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
       const myRequestId = ++requestIdRef.current;
       if (!text.trim()) return;
       setVoiceState("loading");
+      const ac = new AbortController();
+      abortRef.current = ac;
       const audio = ensureAudioEl();
       let index = 0;
       let total = Number.POSITIVE_INFINITY;
-      let pending: Promise<TtsSegment | null> = ttsSegment(text, lang, csrf, sid, 0);
+      let pending: Promise<TtsSegment | null> = ttsSegment(text, lang, csrf, sid, 0, ac.signal);
       try {
         while (index < total) {
           let seg: TtsSegment | null = null;
           try {
             seg = await pending;
           } catch (e) {
-            if (myRequestId === requestIdRef.current) {
+            if (myRequestId === requestIdRef.current && !_isAbort(e)) {
               onError?.(e instanceof Error ? `TTS failed: ${e.message}` : "TTS failed");
             }
             return;
@@ -256,11 +322,19 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
           // A newer playTts/playFull started while this fetch was in flight — it
           // owns the element now; applying this would clobber it and leak the URL.
           if (myRequestId !== requestIdRef.current) return;
-          if (!seg || !seg.blob.size) return;  // 204 → end of playlist
+          if (!seg || !seg.blob.size) {
+            // 204 mid-playlist is the normal end-of-playlist signal — but on
+            // the FIRST segment it means no synthesis at all (zero-config box
+            // without a TTS/LLM backend). playFull always starts from an
+            // explicit click, and a click that does nothing, silently,
+            // arbitrarily often reads as a dead button — say why, once.
+            if (index === 0) onError?.(_TTS_UNAVAILABLE_MSG);
+            return;
+          }
           total = seg.total;
           // Kick off the NEXT fetch before playing this one — the whole point.
           pending = index + 1 < total
-            ? ttsSegment(text, lang, csrf, sid, index + 1)
+            ? ttsSegment(text, lang, csrf, sid, index + 1, ac.signal)
             : Promise.resolve(null);
           // Every `return` below abandons this prefetch un-awaited (Stop, a
           // supersede, end-of-playlist). Attaching a no-op catch marks the
@@ -278,11 +352,68 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
             await audio.play();
             setVoiceState("playing");
             unlockedRef.current = true;
-          } catch {
-            // playFull always starts from a real click, so this is rare; leave the
-            // segment loaded so the caller's "tap to hear" affordance can resume it.
+          } catch (e) {
+            // See playTts: pause() REJECTS a pending play() with AbortError,
+            // indistinguishable here from a real autoplay block. Without this
+            // guard, a Stop (or a newer playTts/playFull) that superseded this
+            // request mid-play() left the chip stuck at "tap to hear" even
+            // though playback was deliberately stopped, not blocked — a
+            // superseded call owns nothing and must not touch shared state.
+            if (myRequestId !== requestIdRef.current) return;
+            if (_isAbort(e)) {
+              // SAME-generation AbortError (see playTts): an OS-level pause in
+              // the play() window, not a block/failure. End quietly.
+              if (blobUrlRef.current === url) {
+                URL.revokeObjectURL(url);
+                blobUrlRef.current = null;
+              }
+              setVoiceState("idle");
+              return;
+            }
+            if (!_isAutoplayBlock(e)) {
+              // Undecodable/unsupported segment, not an autoplay block: the
+              // tap-to-play affordance would re-run the same failure. Reset.
+              if (blobUrlRef.current === url) {
+                URL.revokeObjectURL(url);
+                blobUrlRef.current = null;
+              }
+              setVoiceState("idle");
+              onError?.(e instanceof Error ? `Audio playback failed: ${e.message}` : "Audio playback failed");
+              return;
+            }
+            // Autoplay-blocked mid-playlist (rare — playFull starts from a real
+            // click). Returning here used to END the playlist's story: neither
+            // onended nor onpause were installed yet, so after the user's "tap
+            // to play" segment 0 finished with no state transition at all —
+            // voiceState stuck on "playing" forever, the remaining segments
+            // silently dropped, the segment's object URL never revoked. Wait
+            // for the tap instead (playBlocked() resumes THIS element, firing
+            // `playing`) and then continue the playlist loop normally.
             setVoiceState("blocked");
-            return;
+            const resumed = await new Promise<boolean>((resolve) => {
+              // stopVoice() while blocked pauses an ALREADY-paused element —
+              // no `pause` event fires — so a Stop/supersede can only be seen
+              // by polling the generation counter. playBlocked()'s failure
+              // path calls stopVoice() too, so a failed resume also wakes
+              // this wait through the same poll instead of hanging it.
+              const iv = setInterval(() => {
+                if (myRequestId !== requestIdRef.current) {
+                  cleanup();
+                  resolve(false);
+                }
+              }, 250);
+              const cleanup = () => {
+                clearInterval(iv);
+                audio.onplaying = null;
+              };
+              audio.onplaying = () => {
+                cleanup();
+                resolve(true);
+              };
+            });
+            if (!resumed || myRequestId !== requestIdRef.current) return;
+            setVoiceState("playing");
+            unlockedRef.current = true;
           }
           // Wait for THIS segment to finish before starting the next. onerror
           // resolves too: one undecodable segment must not strand the playlist.
@@ -332,11 +463,14 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
       stopVoice();
       const myRequestId = ++requestIdRef.current;
       setVoiceState("loading");
+      const ac = new AbortController();
+      abortRef.current = ac;
       let blob: Blob | null;
       try {
-        blob = await sessionSummaryBlob(sid, lang, csrf);
+        blob = await sessionSummaryBlob(sid, lang, csrf, ac.signal);
       } catch (e) {
         if (myRequestId !== requestIdRef.current) return;
+        if (_isAbort(e)) return; // our own Stop — intentional, not an error
         setVoiceState("idle");
         onError?.(e instanceof Error ? `Session summary failed: ${e.message}` : "Session summary failed");
         return;
@@ -344,6 +478,9 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
       if (myRequestId !== requestIdRef.current) return; // superseded meanwhile
       if (!blob || !blob.size) {
         setVoiceState("idle");
+        // The recap only runs from an explicit click — a 204 (zero-config box
+        // without an LLM/TTS backend) must not read as a dead button.
+        onError?.(_TTS_UNAVAILABLE_MSG);
         return;
       }
       const url = URL.createObjectURL(blob);
@@ -369,8 +506,29 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
         await audio.play();
         setVoiceState("playing");
         unlockedRef.current = true;
-      } catch {
+      } catch (e) {
         if (myRequestId !== requestIdRef.current) return;
+        if (_isAbort(e)) {
+          // SAME-generation AbortError (see playTts): an OS-level pause in
+          // the play() window, not a block/failure. Reset quietly.
+          if (blobUrlRef.current === url) {
+            URL.revokeObjectURL(url);
+            blobUrlRef.current = null;
+          }
+          setVoiceState("idle");
+          return;
+        }
+        if (!_isAutoplayBlock(e)) {
+          // See playTts: only a real autoplay block earns the tap-to-play
+          // affordance — anything else would make the tap a no-op forever.
+          if (blobUrlRef.current === url) {
+            URL.revokeObjectURL(url);
+            blobUrlRef.current = null;
+          }
+          setVoiceState("idle");
+          onError?.(e instanceof Error ? `Audio playback failed: ${e.message}` : "Audio playback failed");
+          return;
+        }
         setVoiceState("blocked");
       }
     },
@@ -380,14 +538,40 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
   const playBlocked = React.useCallback(async () => {
     const a = audioRef.current;
     if (!a) return;
+    // Capture the generation at tap time: like every other play()-catch site,
+    // this one must be able to tell "this tap was superseded" apart from
+    // "this tap genuinely failed". Without it, a Stop/voice-off/newer play*()
+    // landing inside the tap's ~100 ms play() window rejected the pending
+    // play() with AbortError and fell into the failure path below — which
+    // showed a bogus "Audio playback failed" banner, and (worse) its
+    // stopVoice() bumped the NEW generation and aborted ITS in-flight fetch,
+    // silencing the very turn that superseded this tap.
+    const gen = requestIdRef.current;
     try {
       await a.play();
-      setVoiceState("playing");
+      // A successful play() is proof of unlock regardless of generation…
       unlockedRef.current = true;
-    } catch {
-      // Still blocked — leave state as-is so the "tap to hear" affordance stays visible.
+      // …but a superseded tap owns no shared state anymore.
+      if (requestIdRef.current !== gen) return;
+      setVoiceState("playing");
+    } catch (e) {
+      // Superseded, or pause()'s AbortError on the pending play() (same
+      // intentional cancellation, seen from inside the play() call): the tap
+      // owns nothing — no banner, and above all no stopVoice() that would
+      // sabotage the generation that replaced it.
+      if (requestIdRef.current !== gen || _isAbort(e)) return;
+      // Still blocked — leave state as-is so the "tap to hear" affordance
+      // stays visible and the user can simply tap again.
+      if (_isAutoplayBlock(e)) return;
+      // A non-block failure (e.g. undecodable audio): tapping again would run
+      // the identical failure forever — a dead affordance. stopVoice() resets
+      // state and revokes the blob URL AND bumps the generation, which also
+      // wakes playFull's blocked-resume wait so a suspended playlist loop can
+      // bail out cleanly instead of hanging for the page's lifetime.
+      stopVoice();
+      onError?.(e instanceof Error ? `Audio playback failed: ${e.message}` : "Audio playback failed");
     }
-  }, []);
+  }, [onError, stopVoice]);
 
   return { voiceState, playTts, playFull, playSessionSummary, playBlocked, stopVoice, unlock };
 }

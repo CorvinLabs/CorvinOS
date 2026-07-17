@@ -92,23 +92,13 @@ describe('useVoicePlayback — gesture-unlock must not clobber real/blocked play
 });
 
 /**
- * KNOWN BUG (documented, not fixed here — see review notes): stopVoice()
- * (called by chat.tsx's handleVoiceToggle when the user flips voice OFF, and
- * by the VoicePlaybackChip's onStop) only pauses/resets the audio element and
- * revokes an ALREADY-set blobUrlRef. It never touches requestIdRef, which is
- * the ONLY guard playTts() uses to detect that it has been superseded. So a
- * playTts() call that is still awaiting ttsBlob() when stopVoice() runs has
- * no way to learn it was cancelled: once the fetch resolves, it still creates
- * a blob URL, sets audio.src, and calls audio.play() — producing audible
- * playback after the user explicitly asked for silence.
- *
- * These tests are marked `.fails` (vitest: pass IFF the assertion actually
- * throws) so the suite stays green while precisely pinning down the CURRENT,
- * broken behavior. Flip each `it.fails` to a plain `it` once stopVoice()/the
- * voice-off toggle path is fixed to invalidate an in-flight request (e.g. by
- * bumping requestIdRef too, while making sure playTts()'s own internal
- * `stopVoice()` call at the top of each new request does not immediately
- * invalidate itself).
+ * FIXED (2026-07): stopVoice() bumps requestIdRef (and since 2026-07-17 also
+ * aborts the in-flight fetch via AbortController), so a playTts() call that
+ * is still awaiting ttsBlob() when stopVoice() runs learns it was superseded
+ * and never creates a blob URL, sets audio.src, or calls audio.play() after
+ * the user asked for silence. These tests were originally written as
+ * `it.fails` to pin the then-broken behavior; they are plain `it` now and
+ * guard against a regression of exactly that race.
  */
 describe('useVoicePlayback — stopVoice() should cancel an in-flight playTts() fetch (voice-off / Stop race)', () => {
   let playMock: ReturnType<typeof vi.fn>;
@@ -120,12 +110,10 @@ describe('useVoicePlayback — stopVoice() should cancel an in-flight playTts() 
   });
 
   afterEach(() => {
-    // Important even though these tests are `.fails`: the assertion is
-    // EXPECTED to throw, so any cleanup written after it would be dead code.
     vi.restoreAllMocks();
   });
 
-  it.fails(
+  it(
     'does not call audio.play() once ttsBlob() resolves after stopVoice() was already called',
     async () => {
       const deferred = createDeferred<Blob>();
@@ -156,19 +144,13 @@ describe('useVoicePlayback — stopVoice() should cancel an in-flight playTts() 
 });
 
 /**
- * KNOWN BUG (documented, not fixed here — see review notes): chat.tsx renders
- * `<ChatPane key={activeSid} .../>`, so switching the active session fully
- * unmounts the ChatPane and its useVoicePlayback instance. The unmount
- * cleanup effect calls stopVoice(), but (per the bug above) that does not
- * invalidate requestIdRef either, and unmounting a component does not cancel
- * its still-pending async closures/promise chains. So a playTts() call that
- * is still awaiting ttsBlob() when the owning component unmounts will, once
- * the fetch resolves, still create a blob URL and call audio.play() — audio
- * from an abandoned session plays with no owning UI left to stop it.
- *
- * Marked `.fails` for the same reason as above: pins the current, broken
- * behavior without red-lining CI. Flip to a plain `it` once playTts() checks
- * an isMounted ref / AbortController after the `await ttsBlob(...)`.
+ * FIXED (2026-07): chat.tsx renders `<ChatPane key={activeSid} .../>`, so
+ * switching sessions unmounts the ChatPane and its useVoicePlayback
+ * instance. The unmount cleanup's stopVoice() now bumps requestIdRef and
+ * aborts the in-flight fetch, so a playTts() still awaiting ttsBlob() at
+ * unmount never creates a blob URL or plays audio for an abandoned session.
+ * Originally written as `it.fails` to pin the then-broken behavior; plain
+ * `it` now guards against a regression of the session-switch race.
  */
 describe('useVoicePlayback — unmounting mid-fetch should cancel a pending playTts() (session-switch race)', () => {
   let playMock: ReturnType<typeof vi.fn>;
@@ -180,12 +162,10 @@ describe('useVoicePlayback — unmounting mid-fetch should cancel a pending play
   });
 
   afterEach(() => {
-    // Important even though this test is `.fails`: the assertion is EXPECTED
-    // to throw, so any cleanup written after it would be dead code.
     vi.restoreAllMocks();
   });
 
-  it.fails(
+  it(
     'does not call audio.play() or create a blob URL after the hook has been unmounted',
     async () => {
       const deferred = createDeferred<Blob>();

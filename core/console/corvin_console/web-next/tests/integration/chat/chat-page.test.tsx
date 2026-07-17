@@ -166,8 +166,11 @@ describe('ChatPage voice wiring (real components, ADR-0185-adjacent regression c
     // auto-detected language (German, via detectTtsLang) and the real CSRF
     // token threaded down from useAuth.
     const { ttsBlob } = await import('@/lib/api');
+    // 4th/5th arg: session id (ADR-0194 voice archive) + AbortSignal
+    // (Stop/supersede releases the server TTS slot, 2026-07-17).
     await waitFor(() => expect(ttsBlob).toHaveBeenCalledWith(
       'Hallo, wie geht es dir heute?', 'de', 'test-csrf',
+      expect.anything(), expect.any(AbortSignal),
     ));
 
     // VoicePlaybackChip renders the "Speaking · DE" control while playing.
@@ -188,7 +191,10 @@ describe('ChatPage voice wiring (real components, ADR-0185-adjacent regression c
 
     await waitFor(() => expect(vi.mocked(ttsBlob).mock.calls.length).toBeGreaterThanOrEqual(2));
     const lastCall = vi.mocked(ttsBlob).mock.calls.at(-1);
-    expect(lastCall).toEqual(['Hallo, wie geht es dir heute?', 'de', 'test-csrf']);
+    expect(lastCall).toEqual([
+      'Hallo, wie geht es dir heute?', 'de', 'test-csrf',
+      'sid-voice-1', expect.any(AbortSignal),
+    ]);
 
     // Replaying re-enters the "playing" state through the same real chip.
     await screen.findByTitle('Stop playback');
@@ -259,8 +265,11 @@ describe('SetupGate WelcomeStep voice wiring (real components)', () => {
     // — this is the real useVoicePlayback hook, not a mock.
     const { runWelcomeCheck, ttsBlob } = await import('@/lib/api');
     await waitFor(() => expect(runWelcomeCheck).toHaveBeenCalledWith('test-csrf'));
+    // Welcome greeting has no session yet → sid is undefined; the AbortSignal
+    // rides on every playTts since the Stop/supersede fetch-abort fix.
     await waitFor(() => expect(ttsBlob).toHaveBeenCalledWith(
       'Hallo, ich bin Corvin.', 'de', 'test-csrf',
+      undefined, expect.any(AbortSignal),
     ));
 
     // Autoplay was blocked -> the "Tap to hear Corvin" banner is shown.

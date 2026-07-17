@@ -1710,6 +1710,60 @@ Worker model: inherits the tenant's user model (ADR-0112); when the OS
 engine is Hermes/Ollama, `chat_runtime` pins `worker_model` to the same
 local model so workers stay fully local and no Anthropic API key is needed.
 
+**Budget defaults (raised 2026-07-16, maintainer decision).** A fresh install
+kept meeting a budget on ordinary work, and meeting one read as a *failure* to
+anyone who had never seen these numbers. The knobs that actually stop work early
+were raised — `max_loops` 5 → 20, `max_worker_turns` 100 → 300, `max_wall_time`
+and `timeout_seconds` 1 h → 4 h — while the fan-out knobs were deliberately left
+alone: `max_total_workers` stays 8 and `max_depth` stays 4.
+
+The distinction is the whole point. The 2026 quota-defeat (a 100× inflation to
+400 workers / 100 h) is measured in **worker-hours per metered compute unit** —
+`max_total_workers × max_wall_time`. `max_total_workers` is that figure's
+numerator and `max_depth` its exponent, so neither may ride along with a
+UX-motivated raise. For scale: old default 8 worker-hours, new default 32, UI
+ceiling 1536, the defeat 40000. Defaulting to the ceilings (which is what "no
+limits at all" would mean) would hand every free-tier user 64 workers for 24 h
+out of their single daily compute unit — the same hole, through the front door.
+
+Defaults live in **two** places that must agree: `settings.py::_BUDGET_KEYS`
+(what a fresh install serves and the Settings UI shows) and
+`chat_runtime._DELEGATION_BUDGET_DEFAULTS` (what an unconfigured run uses).
+`_read_budget` falls back per key, so a fresh install needs no installer step
+and an existing user's saved value is never overwritten. Pinned by
+`core/console/tests/test_delegation_budget_defaults.py`, which also asserts the
+worker-hours figure directly and that the defaults survive `acs_runtime`'s clamp
+chain (a default the runtime clamps back down would be a lie in the UI).
+
+**Per-worker-call knobs actually reach the worker (fixed 2026-07-17).**
+`timeout_seconds` ("Worker timeout") and `max_worker_turns` ride on
+`BudgetEnvelope` from the spec into `_worker_budget_for_spawn()`, which merges
+them with the manager-LLM's per-subtask `budget_allocation` under a hard rule:
+**the allocation may only lower the operator's bounds, never raise them**
+(`budget_allocation` is LLM output — a prompt-injected
+`timeout_seconds: 86400` must not buy a hung worker 24 h of slot + spend).
+Each spawn is additionally deadlined against the envelope's remaining
+`max_wall_time`, because `BudgetEnvelope.check()` only runs between manager
+loops. Before this, workers read both knobs from the manager allocation —
+which never carries them — so the Settings values silently never arrived and
+the runtime hard-clamped to 1800 s (claude) / 3600 s (hermes).
+
+**Reaching a budget is a bounded stop, not a failure.** ACS already returns
+`status="budget_exhausted"` with `budget_breach` naming the limit; the console
+used to discard both and render `Delegation fehlgeschlagen: ACS workflow failed
+with status 'budget_exhausted' (N iteration(s))` — indistinguishable from a
+crash. `chat_runtime._budget_stop_message()` now names the limit in plain
+language, states what was achieved, says the partial results stand, and points
+at Settings → Delegation Budget with the exact key to raise. The message is
+bilingual — it follows the language of the user's own prompt
+(`_prompt_is_german`, ties default to English), because the final result text
+is also spoken by the voice pipeline and a hard-German message switched the
+voice language mid-session for English users. The bounded stop is consistent
+end-to-end: `web.turn.completed` records `rc=0`, the task manager records
+`task.completed`, and the post-run artifact scan runs (the partial results the
+message promises are actually delivered), instead of the chat saying "not an
+error" while every activity view recorded a crash.
+
 ### References
 
 - `Corvin-ADR: decisions/0024-adaptive-os-model-selection.md` — the ADR

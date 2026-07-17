@@ -6978,24 +6978,27 @@ def _detect_confident_de_en(text: str) -> str | None:
     function-word heuristic (already used for STT locale hints) rather
     than adding a new detector — same "good enough to pick a TTS voice"
     bar applies here.
+
+    Uses detect_lang.detect_confident(), NOT the raw score() vote: a bare
+    plurality flipped short German answers to English because words like
+    "was"/"in"/"an"/one-letter "a" only count as English in the word lists
+    — score("Was war in Datei A los?") was de=1/en=3, so a de-pinned user
+    got an English voice AND an English base prompt, silently
+    self-consistent (found 2026-07-17). detect_confident() neutralises the
+    bilingual overlap words, treats umlauts/ß as a strong German signal,
+    and demands a real margin — returning None below it, which is exactly
+    the "fall back to the static pin" contract this wrapper documents.
     """
     try:
         if str(SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(SCRIPTS_DIR))
-        from detect_lang import score as _dl_score  # type: ignore  # noqa: PLC0415
+        from detect_lang import detect_confident as _dl_confident  # type: ignore  # noqa: PLC0415
     except Exception:  # noqa: BLE001
         return None
     try:
-        de_count, en_count = _dl_score(text[:2000])
+        return _dl_confident(text[:2000])
     except Exception:  # noqa: BLE001
         return None
-    if de_count == 0 and en_count == 0:
-        return None
-    if de_count > en_count:
-        return "de"
-    if en_count > de_count:
-        return "en"
-    return None
 
 
 def _resolve_voice_output_language(candidate_text: str) -> str:
