@@ -410,3 +410,83 @@ def resolve_engine_egress_host(tenant_id: str, engine_id: str) -> str | None:
         return None
     from urllib.parse import urlparse
     return urlparse(spec.proxy_base_url or spec.base_url).hostname or None
+
+
+# ---------------------------------------------------------------------------
+# Workload-based model tier routing (ADR-0043)
+# ---------------------------------------------------------------------------
+
+# Per-engine model tier definitions: maps engine→workload→model_id
+# "fast" tier is used for CHAT workloads (fast, cheap)
+# "full" tier is used for CODE workloads (capable, slow)
+_MODEL_TIER_MAPPING: dict[str, dict[str, str]] = {
+    "claude_code": {
+        "fast": "claude-haiku-4-5-20251001",
+        "full": "claude-sonnet-5",
+    },
+    # Placeholder configs for other engines (to be filled per tenant)
+    "gemini": {
+        "fast": "gemini-1.5-flash",
+        "full": "gemini-2.0-pro-exp",
+    },
+    "codex": {
+        "fast": "code-davinci-002",
+        "full": "code-davinci-003",
+    },
+    "ollama_local": {
+        "fast": "qwen2:1.5b",
+        "full": "qwen2:7b",
+    },
+}
+
+
+def get_model_tier_mapping() -> dict[str, dict[str, str]]:
+    """Return the current model tier mapping. Can be extended at runtime."""
+    return dict(_MODEL_TIER_MAPPING)  # Return a copy
+
+
+def resolve_model_for_workload(
+    engine_id: str,
+    workload_type: str,  # "chat" | "code" | "uncertain"
+    user_chosen_model: str | None,
+) -> str | None:
+    """Resolve the actual model to use based on engine, workload classification,
+    and user's chosen model.
+
+    ADR-0043: Route CHAT workloads to the engine's fast tier, CODE to full tier.
+
+    Args:
+        engine_id: The engine identifier (e.g., "claude_code", "gemini")
+        workload_type: Classification result ("chat", "code", "uncertain")
+        user_chosen_model: The model the user pinned (if any)
+
+    Returns:
+        The resolved model ID string, or None if unable to determine.
+
+    Logic:
+        - If workload is "uncertain": always use user_chosen_model (safe fallback)
+        - If workload is "chat": use engine's "fast" tier, fallback to user choice
+        - If workload is "code": use user_chosen_model, fallback to "full" tier
+    """
+    # Normalize workload type
+    workload = str(workload_type).lower().strip() if workload_type else "uncertain"
+
+    # Safe fallback for unknown workload
+    if workload == "uncertain":
+        return user_chosen_model
+
+    # Look up the engine's tier mapping
+    tiers = _MODEL_TIER_MAPPING.get(engine_id)
+    if tiers is None:
+        # Unknown engine: use user's choice, no tier-based routing
+        return user_chosen_model
+
+    if workload == "chat":
+        # CHAT → use fast tier, fallback to user choice
+        return tiers.get("fast") or user_chosen_model
+    elif workload == "code":
+        # CODE → use user's choice, fallback to full tier
+        return user_chosen_model or tiers.get("full")
+    else:
+        # Unknown workload: fallback to user choice
+        return user_chosen_model
