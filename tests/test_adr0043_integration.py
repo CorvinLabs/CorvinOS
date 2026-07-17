@@ -68,20 +68,25 @@ def test_workload_and_model_routing_consistency() -> None:
 
 
 def test_enum_and_string_both_work() -> None:
-    """resolve_model_for_workload handles both enum and string workload types."""
+    """resolve_model_for_workload handles both enum and string workload
+    types IDENTICALLY. Under the fail-closed contract (fast_chat_enabled
+    defaults to False, no confidence given) both must return the user's
+    choice — here None. The old assertion expected a model here, encoding
+    the pre-fail-closed two-arg contract that bugfix rounds #2/#3 removed."""
     from workload_classifier import WorkloadType  # type: ignore
     from engine_models import resolve_model_for_workload  # type: ignore
 
-    # String version
     model_str = resolve_model_for_workload("claude_code", "chat", None)
-    assert model_str is not None
-
-    # Enum version
     model_enum = resolve_model_for_workload("claude_code", WorkloadType.CHAT, None)
-    assert model_enum is not None
-
-    # Both should give the same result
+    assert model_str is None  # fail-closed: flag off → user choice (None)
     assert model_str == model_enum
+
+    # With the flag on and high confidence, both forms route to the fast tier
+    kw = dict(user_chosen_model=None, confidence=0.9, fast_chat_enabled=True)
+    fast_str = resolve_model_for_workload("claude_code", "chat", **kw)
+    fast_enum = resolve_model_for_workload("claude_code", WorkloadType.CHAT, **kw)
+    assert fast_str == fast_enum
+    assert fast_str is not None
 
 
 if __name__ == "__main__":

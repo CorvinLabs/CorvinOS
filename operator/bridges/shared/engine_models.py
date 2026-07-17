@@ -422,29 +422,22 @@ def resolve_engine_egress_host(tenant_id: str, engine_id: str) -> str | None:
 # "fast" tier is used for CHAT workloads (fast, cheap)
 # "full" tier is used for CODE workloads (capable, slow)
 _MODEL_TIER_MAPPING: dict[str, dict[str, str]] = {
+    # Keys MUST be real registry engine ids (see load_registry()). Earlier
+    # revisions carried phantom entries ("gemini", "codex", "ollama_local")
+    # with retired/nonexistent model ids that _model_is_valid waved through
+    # because the engines were unknown to the registry — pruned 2026-07-18.
+    # New engines register here only together with a registry entry.
     "claude_code": {
         "fast": "claude-haiku-4-5-20251001",
         "full": "claude-sonnet-5",
-    },
-    # Placeholder configs for other engines (to be filled per tenant)
-    "gemini": {
-        "fast": "gemini-1.5-flash",
-        "full": "gemini-2.0-pro-exp",
-    },
-    "codex": {
-        "fast": "code-davinci-002",
-        "full": "code-davinci-003",
-    },
-    "ollama_local": {
-        "fast": "qwen2:1.5b",
-        "full": "qwen2:7b",
     },
 }
 
 
 def get_model_tier_mapping() -> dict[str, dict[str, str]]:
-    """Return the current model tier mapping. Can be extended at runtime."""
-    return dict(_MODEL_TIER_MAPPING)  # Return a copy
+    """Return a deep copy of the model tier mapping (callers must not be
+    able to mutate the module state through the return value)."""
+    return {engine: dict(tiers) for engine, tiers in _MODEL_TIER_MAPPING.items()}
 
 
 def resolve_model_for_workload(
@@ -474,9 +467,10 @@ def resolve_model_for_workload(
     Logic:
         - If workload is "chat" AND confidence >= 0.7 AND fast_chat_enabled:
           use engine's "fast" tier (or user choice if unavailable)
-        - If workload is "code": use user's choice (or fall back to "full" tier)
+        - If workload is "code": use user's choice (None → caller's tiers decide)
         - If workload is "uncertain" or unknown: use user's choice (safe fallback)
-        - Model IDs are validated; if invalid, fallback to user_choice
+        - Model IDs are validated FAIL-CLOSED against load_registry();
+          unknown engine / failed load / invalid id → user_choice
     """
     # Normalize workload type: handle both WorkloadType enum and string
     if workload_type is None:
@@ -505,7 +499,11 @@ def resolve_model_for_workload(
         # Unknown engine: use user's choice, no tier-based routing
         return user_chosen_model
 
-    # Helper: validate that a model_id exists in the engine's registry
+    # Helper: validate that a model_id exists in the engine's registry.
+    # FAIL-CLOSED: an unknown engine or a failed registry load returns False,
+    # which makes the caller fall back to the user's chosen model. The old
+    # permissive behaviour let phantom tier-map entries return nonexistent
+    # models (adversarial review 2026-07-18).
     def _model_is_valid(model_id: str | None, engine: str) -> bool:
         """Check if model_id is in this engine's available models."""
         if not model_id:
@@ -514,8 +512,9 @@ def resolve_model_for_workload(
             registry = load_registry()
             engine_spec = registry.get(engine)
             if not engine_spec:
-                # Engine unknown; we can't validate, so allow it
-                return True
+                import sys
+                print(f"[WARN] resolve_model_for_workload: engine '{engine}' not in registry — refusing tier model", file=sys.stderr)
+                return False
             # Check both os_models and worker_models
             all_models = [m.id for m in engine_spec.os_models] + [m.id for m in engine_spec.worker_models]
             is_valid = model_id in all_models
@@ -524,10 +523,9 @@ def resolve_model_for_workload(
                 print(f"[WARN] resolve_model_for_workload: model '{model_id}' not in engine '{engine}' registry", file=sys.stderr)
             return is_valid
         except Exception as e:
-            # Registry load failed; log and fall back to permissive
             import sys
-            print(f"[WARN] resolve_model_for_workload: registry load failed ({e}), allowing model '{model_id}'", file=sys.stderr)
-            return True
+            print(f"[WARN] resolve_model_for_workload: registry load failed ({e}) — refusing model '{model_id}'", file=sys.stderr)
+            return False
 
     # CHAT routing: use fast tier only if confidence is high and feature is enabled
     if workload == "chat":
@@ -538,13 +536,14 @@ def resolve_model_for_workload(
         else:
             try:
                 conf = float(confidence)
-                # Reject NaN and Infinity
-                if conf != conf or conf == float('inf') or conf == float('-inf'):
+                # Reject NaN/Infinity AND out-of-range values. A confidence
+                # of 5.0 is corrupt input, not "very confident" — clamping
+                # it to 1.0 routed corrupt data toward the fast tier; the
+                # safe direction for garbage is the user's model (0.0).
+                if conf != conf or not (0.0 <= conf <= 1.0):
                     import sys
-                    print(f"[WARN] resolve_model_for_workload: invalid confidence '{confidence}' (NaN/Inf), treating as 0.0", file=sys.stderr)
+                    print(f"[WARN] resolve_model_for_workload: invalid confidence '{confidence}' (NaN/Inf/out-of-range), treating as 0.0", file=sys.stderr)
                     conf = 0.0
-                else:
-                    conf = max(0.0, min(1.0, conf))
             except (ValueError, TypeError):
                 conf = 0.0
 
@@ -559,16 +558,12 @@ def resolve_model_for_workload(
             # Not confident enough, or feature not enabled: use user choice
             return user_chosen_model
 
-    # CODE routing: use user's choice, fallback to full tier
+    # CODE routing: the user's choice, period. Returning the "full" tier
+    # here hard-pinned Sonnet for every code-classified turn of un-pinned
+    # users, silently bypassing the adaptive ADR-0112 selection downstream
+    # (adversarial review 2026-07-18). None → caller's own tiers decide.
     elif workload == "code":
-        if user_chosen_model:
-            return user_chosen_model
-        full_model = tiers.get("full")
-        # Validate full tier model; fallback to user choice if invalid
-        if _model_is_valid(full_model, engine_id):
-            return full_model
-        else:
-            return None
+        return user_chosen_model
 
     else:
         # Shouldn't reach here, but be safe

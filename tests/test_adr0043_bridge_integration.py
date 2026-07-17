@@ -29,75 +29,15 @@ for _p in (
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from workload_classifier import classify_workload, WorkloadType  # type: ignore
-
-
-class WorkloadHint(TypedDict):
-    """Workload classification result stored in session."""
-    workload: str  # "chat" | "code" | "uncertain"
-    confidence: float
-    timestamp: int
-
-
-def classify_and_store_workload_hint(
-    user_message: str,
-    session: dict[str, Any],
-    audit_callback: callable | None = None,
-) -> WorkloadHint:
-    """
-    ADR-0043 Phase 1: Classify user message and store hint in session.
-
-    Called early in the bridge request handler (after message is received,
-    before _build_spawn_env is called).
-
-    Args:
-        user_message: The raw user input from Discord/Web/CLI
-        session: Session dict to store the workload_hint in
-        audit_callback: Optional callback to log audit event
-
-    Returns:
-        WorkloadHint with workload type, confidence, and timestamp
-
-    Side-effects:
-        - Updates session["workload_hint"] with the classification result
-        - Calls audit_callback if provided (for compliance)
-    """
-    if not user_message or not isinstance(user_message, str):
-        # Classify empty as CHAT (safe default)
-        hint: WorkloadHint = {
-            "workload": "chat",
-            "confidence": 1.0,
-            "timestamp": int(datetime.now().timestamp() * 1000),
-        }
-        session["workload_hint"] = hint
-        return hint
-
-    # Classify the message (pure function, non-blocking)
-    classification_result = classify_workload(user_message)
-
-    # Build the hint
-    hint = {
-        "workload": str(classification_result.workload.value),
-        "confidence": classification_result.confidence,
-        "timestamp": int(datetime.now().timestamp() * 1000),
-    }
-    session["workload_hint"] = hint
-
-    # Audit trail: log the classification decision
-    if audit_callback:
-        try:
-            audit_callback({
-                "event_type": "workload_classification",
-                "workload": hint["workload"],
-                "confidence": hint["confidence"],
-                "message_hash": hash(user_message) % (10 ** 8),  # truncate to int64
-                "timestamp": hint["timestamp"],
-            })
-        except Exception as e:
-            # Audit failure is non-fatal; never break the request
-            print(f"[WARN] audit callback failed: {e}")
-
-    return hint
+# Import the PRODUCTION implementation. An earlier revision kept a full
+# duplicate copy of classify_and_store_workload_hint in this file, so the
+# tests could stay green while the shipped function diverged (adversarial
+# review 2026-07-18).
+from workload_classifier import (  # type: ignore
+    WorkloadType,
+    classify_and_store_workload_hint,
+    classify_workload,
+)
 
 
 class TestBridgeIntegrationLayer:
@@ -127,12 +67,14 @@ class TestBridgeIntegrationLayer:
         assert session["workload_hint"]["confidence"] >= 0.0
 
     def test_classify_empty_message(self) -> None:
-        """Empty message classifies as CHAT (safe default)."""
+        """Empty message carries zero evidence → UNCERTAIN (keeps the
+        user's chosen model). The earlier 'CHAT 1.0' answer routed empty
+        prompts to the fast tier — the opposite of a safe default."""
         session: dict[str, Any] = {}
         hint = classify_and_store_workload_hint("", session)
 
-        assert hint["workload"] == "chat"
-        assert hint["confidence"] == 1.0
+        assert hint["workload"] == "uncertain"
+        assert hint["confidence"] == 0.0
 
     def test_audit_callback_called(self) -> None:
         """Audit callback is invoked with classification event."""

@@ -216,6 +216,10 @@ _EDGE_VOICES: dict[str, str] = {
     "da":    "da-DK-ChristelNeural",
     "fi":    "fi-FI-NooraNeural",
     "nb":    "nb-NO-PernilleNeural",
+    # "no" is the macro-language code the console dropdown and detect_lang
+    # emit for Norwegian — alias to the Bokmål voice (edge-tts has no "no").
+    "no":    "nb-NO-PernilleNeural",
+    "el":    "el-GR-AthinaNeural",
     "ro":    "ro-RO-AlinaNeural",
     "hu":    "hu-HU-NoemiNeural",
     "th":    "th-TH-PremwadeeNeural",

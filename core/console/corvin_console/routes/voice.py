@@ -750,6 +750,10 @@ def _tts_failed_response(proc: "subprocess.CompletedProcess[str]", stage: str) -
     reason = tail[-1][:200] if tail else f"no diagnostic ({stage})"
     _log.warning("voice_tts: no audio (%s) — say.py said: %s", stage,
                  " | ".join(t.strip() for t in tail[-4:]) or "(silent)")
+    # HTTP headers are latin-1 only (Starlette encodes strictly): a stderr
+    # line carrying '…', '→' or CJK raised UnicodeEncodeError and turned
+    # the designed silent-204 degradation into a 500. Replace instead.
+    reason = reason.encode("latin-1", "replace").decode("latin-1")
     return Response(status_code=http_status.HTTP_204_NO_CONTENT,
                     headers={"X-Corvin-Voice-Reason": reason})
 

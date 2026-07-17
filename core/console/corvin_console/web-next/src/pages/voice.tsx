@@ -77,11 +77,34 @@ const TTS_PROVIDER_OPTIONS = [
 
 type TtsProvider = "auto" | "openai" | "edge" | "piper";
 const LANG_OPTIONS = [
-  { value: "de", label: "German" },
+  // Germanic
+  { value: "de", label: "Deutsch (German)" },
   { value: "en", label: "English" },
-  { value: "es", label: "Español" },
-  { value: "fr", label: "Français" },
-  { value: "it", label: "Italiano" },
+  { value: "nl", label: "Nederlands (Dutch)" },
+  { value: "sv", label: "Svenska (Swedish)" },
+  { value: "da", label: "Dansk (Danish)" },
+  { value: "no", label: "Norsk (Norwegian)" },
+  // Romance
+  { value: "es", label: "Español (Spanish)" },
+  { value: "fr", label: "Français (French)" },
+  { value: "it", label: "Italiano (Italian)" },
+  { value: "pt", label: "Português (Portuguese)" },
+  // Slavic
+  { value: "pl", label: "Polski (Polish)" },
+  { value: "ru", label: "Русский (Russian)" },
+  { value: "cs", label: "Čeština (Czech)" },
+  // Asian
+  // Value must be "zh-Hans": the backend normalises "zh" → "zh-Hans"
+  // (i18n.normalise), so a plain "zh" option never matches the stored
+  // profile value after save+reload and the select rendered blank.
+  { value: "zh-Hans", label: "中文 (Chinese)" },
+  { value: "ja", label: "日本語 (Japanese)" },
+  { value: "ko", label: "한국어 (Korean)" },
+  // Other
+  { value: "ar", label: "العربية (Arabic)" },
+  { value: "tr", label: "Türkçe (Turkish)" },
+  { value: "fi", label: "Suomi (Finnish)" },
+  { value: "el", label: "Ελληνικά (Greek)" },
 ] as const;
 
 const DEBOUNCE_MS = 800;
@@ -174,7 +197,9 @@ export function VoicePage() {
 
   const voiceTestMutation = useMutation({
     mutationFn: async (voice: string) =>
-      testVoice(voice, identity.display_language === "de" ? "de" : "en", session!.csrf_token),
+      // Test with the ACTUAL selected language — hardcoding de|en made the
+      // test button speak the wrong voice for 18 of the 20 options.
+      testVoice(voice, identity.display_language || "en", session!.csrf_token),
     onSuccess: async (data) => {
       const audio = new Audio(`data:${data.mime_type};base64,${data.audio_base64}`);
       audio.play().catch((e) => console.error("Failed to play audio:", e));
