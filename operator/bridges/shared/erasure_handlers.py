@@ -486,6 +486,32 @@ class WebChatHandler:
     the exact same gap — it lives outside the session dir entirely — so it is
     purged here too rather than left for a second follow-up handler.
 
+    The session META file ``<sid>.json`` in the SAME directory (written by
+    chat_runtime._meta_path / _write_meta) is purged too: it carries the
+    session ``title``, which the console derives from the user's FIRST chat
+    message — i.e. verbatim user content, PII by construction. The first cut
+    of this handler removed the turn log but left the meta file sitting right
+    next to it, so an Art. 17 run reported APPLIED while the opening question
+    survived on disk (found 2026-07-17). ``<sid>.json.tmp`` — _write_meta's
+    atomic-rename staging name, left behind by a crash/ENOSPC mid-write — is
+    swept for the same reason.
+
+    Two more workdir siblings of ``voice/`` hold user content and are purged
+    with the same pattern (adversarial round, 2026-07-17):
+
+    * ``<workdir>/attachments/`` — raw user uploads (routes/chat.py
+      ``upload_attachments``), the most literal PII in the whole session;
+    * ``<workdir>/compute_inbox/`` — ``*_result.json`` notifications whose
+      ``description`` field carries the user's task text verbatim (plus the
+      ``processed/`` mirror _drain_compute_inbox moves them into).
+
+    KNOWN GAP (deliberately NOT handled here): the engine's own conversation
+    transcripts under ``~/.claude/projects/<slug>/*.jsonl`` also contain the
+    session's content, but they belong to the engine installation, not the
+    tenant store — erasing them needs a subject→slug mapping and an
+    engine-agnostic contract, i.e. its own ADR. Do not silently widen this
+    handler to reach into engine homes.
+
     ``subject_id`` is the session key as the console names it (``web:<sid>``);
     the turn log is keyed on the bare ``<sid>``.
 
@@ -520,21 +546,40 @@ class WebChatHandler:
             names.add(safe_session_subdir(sessions, subject_id).name)
         except Exception:  # noqa: BLE001 — forge may not be importable here
             pass
+        # voice/ (synthesised speech), attachments/ (raw user uploads),
+        # compute_inbox/ (task-result notifications carrying the user's task
+        # text in `description`, incl. the processed/ mirror) — all workdir
+        # siblings of artifacts/ that no other handler owns.
+        purge_dirs: list[Path] = []
         for name in names:
-            vdir = sessions / name / "voice"
-            if vdir.is_dir():
-                targets.extend(p for p in vdir.rglob("*") if p.is_file())
+            for sub in ("voice", "attachments", "compute_inbox"):
+                d = sessions / name / sub
+                if d.is_dir():
+                    purge_dirs.append(d)
+                    targets.extend(p for p in d.rglob("*") if p.is_file())
 
-        # Turn log: `web:<sid>` -> `<sid>.turns.jsonl` under the global store.
+        # Turn log + session meta: `web:<sid>` -> `<sid>.turns.jsonl` /
+        # `<sid>.json` under the global store. The meta file's `title` is
+        # derived from the user's first message (PII); the `.json.tmp`
+        # spelling is _write_meta's crash-orphaned staging file. Same
+        # thoroughness rule as the voice dir above: try both the raw sid and
+        # its ':'->'_' form in case a key ever carried a colon into the bare
+        # sid (defensive — the console strips the `web:` prefix today).
         sid = subject_id.split(":", 1)[1] if ":" in subject_id else subject_id
-        turns = _tenant_global(self.tenant_id) / "web_chat" / "sessions" / f"{sid}.turns.jsonl"
-        if turns.is_file():
-            targets.append(turns)
+        store = _tenant_global(self.tenant_id) / "web_chat" / "sessions"
+        for sid_spelling in {sid, sid.replace(":", "_")}:
+            for fname in (f"{sid_spelling}.turns.jsonl",
+                          f"{sid_spelling}.json",
+                          f"{sid_spelling}.json.tmp"):
+                candidate = store / fname
+                if candidate.is_file():
+                    targets.append(candidate)
 
         if not targets:
             return ErasureLayerResult(
                 layer_id=self.layer_id, status=LayerStatus.SKIPPED, count=0,
-                reason=f"no web-chat voice archive or turn log for {subject_id}",
+                reason=(f"no web-chat user-content stores (voice/attachments/"
+                        f"compute-inbox/turn-log/meta) for {subject_id}"),
                 code=ReasonCode.STORE_ABSENT.value,
                 duration_ms=int((time.time() - t0) * 1000),
             )
@@ -549,16 +594,23 @@ class WebChatHandler:
             path.unlink(missing_ok=True)
             n_files += 1
 
-        for name in names:   # same spellings we purged from
-            vdir = sessions / name / "voice"
-            try:
-                vdir.rmdir()
-            except OSError:
-                pass  # non-empty or absent — the files are what matter
+        # Remove the emptied dirs, deepest-first so nested subdirs
+        # (compute_inbox/processed/) fall before their parents.
+        for d in purge_dirs:   # same dirs we purged from
+            subdirs = sorted(
+                (p for p in d.rglob("*") if p.is_dir()),
+                key=lambda p: len(p.parts), reverse=True,
+            )
+            for sub in (*subdirs, d):
+                try:
+                    sub.rmdir()
+                except OSError:
+                    pass  # non-empty or absent — the files are what matter
 
         return ErasureLayerResult(
             layer_id=self.layer_id, status=LayerStatus.APPLIED, count=n_files,
-            reason=f"removed {n_files} web-chat voice/turn file(s) ({n_bytes} bytes)",
+            reason=(f"removed {n_files} web-chat file(s) (voice/attachments/"
+                    f"compute-inbox/turn-log/meta, {n_bytes} bytes)"),
             code=ReasonCode.DELETED.value,
             duration_ms=int((time.time() - t0) * 1000),
         )

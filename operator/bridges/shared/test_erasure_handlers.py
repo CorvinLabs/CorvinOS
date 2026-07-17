@@ -460,6 +460,59 @@ class TestWebChatHandler(unittest.TestCase):
             finally:
                 os.environ.pop("CORVIN_HOME", None)
 
+    def test_purge_removes_session_meta_file_with_title(self):
+        """GDPR: `<sid>.json` (chat_runtime._meta_path) carries `title`,
+        derived from the user's FIRST chat message — verbatim user content.
+        The first cut of the handler purged the turn log but left this meta
+        file sitting right next to it, so an Art. 17 run wrote an APPLIED
+        receipt while the opening question survived on disk (found
+        2026-07-17). `.json.tmp` is _write_meta's crash-orphaned staging file
+        and must be swept too."""
+        with self._corvin_home() as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                _, turns = self._seed(td)
+                store = turns.parent
+                meta = store / "abc123.json"
+                meta.write_text('{"title": "Wie lese ich meinen Befund vom 3.7.?"}')
+                meta_tmp = store / "abc123.json.tmp"
+                meta_tmp.write_text('{"title": "Wie lese ich"}')
+                result = WebChatHandler().purge("web:abc123", "er-test")
+                self.assertEqual(result.status, LayerStatus.APPLIED)
+                self.assertFalse(meta.exists(), "session meta (PII title) survived erasure")
+                self.assertFalse(meta_tmp.exists(), "stale meta .tmp survived erasure")
+                self.assertEqual(result.count, 5)  # 2 audio + 1 turn log + meta + meta.tmp
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
+    def test_purge_removes_attachments_and_compute_inbox(self):
+        """Same gap class, next siblings (adversarial round, 2026-07-17):
+        <workdir>/attachments/ holds RAW user uploads (routes/chat.py
+        upload_attachments) and <workdir>/compute_inbox/*_result.json
+        carries the user's task text in `description` (plus the processed/
+        mirror). Neither was reachable by any handler — an Art. 17 receipt
+        said APPLIED while the uploads survived."""
+        with self._corvin_home() as td:
+            os.environ["CORVIN_HOME"] = td
+            try:
+                workdir = Path(td) / "tenants" / "_default" / "sessions" / "web:abc123"
+                attach = workdir / "attachments"
+                attach.mkdir(parents=True)
+                (attach / "befund-scan.pdf").write_bytes(b"%PDF-1.4 patient data")
+                inbox = workdir / "compute_inbox"
+                (inbox / "processed").mkdir(parents=True)
+                (inbox / "t1_result.json").write_text(
+                    '{"description": "Analysiere meinen Befund vom 3.7."}')
+                (inbox / "processed" / "t0_result.json").write_text(
+                    '{"description": "alte Task-Beschreibung"}')
+                result = WebChatHandler().purge("web:abc123", "er-test")
+                self.assertEqual(result.status, LayerStatus.APPLIED)
+                self.assertEqual(result.count, 3)
+                self.assertFalse(attach.exists(), "attachments/ survived erasure")
+                self.assertFalse(inbox.exists(), "compute_inbox/ survived erasure")
+            finally:
+                os.environ.pop("CORVIN_HOME", None)
+
     def test_absent_session_returns_skipped(self):
         with self._corvin_home() as td:
             os.environ["CORVIN_HOME"] = td
