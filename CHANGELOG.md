@@ -6,45 +6,108 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.10.42] — 2026-07-17 — Adversarial review of the ADR-0193/ADR-0194 diff
+## [0.10.42] — 2026-07-17 — Voice Mode 2.0 hardening sweep + delegation budget honesty
 
-Iterative adversarial + dialectical code review of the native browser MCP
-tool (ADR-0193) and voice session archive (ADR-0194) changes, per LDD
-discipline: a 10-angle finder pass, single-vote verify, gap sweep, then a
-second adversarial pass re-attacking each proposed fix before accepting it.
-4 of the original 21 findings did not survive that second pass (deliberate
-ADR-0193 design decisions locked in by existing tests, or CPython's own
-`asyncio.Semaphore.acquire()` already closing the suspected race) and are
-documented as refuted rather than silently dropped.
+Three adversarial review/refutation rounds over the last five days of changes
+(Voice Mode 2.0 / ADR-0194, browser tool / ADR-0193, delegation budgets),
+fixing every confirmed finding. See ADR-0195 for the delegation-budget
+decision record.
 
-### Fixed
+### Fixed — Voice (the silent-bug class)
 
-- **The Hermes/Ollama engine path spoke every annotated reply twice.**
-  `_stream_hermes_turn` never set `annotation_pending` on its result
-  events, unlike the `claude_code` engine path — the frontend's
-  double-speak guard (added for exactly this class of bug) had nothing to
-  gate on for Hermes-engine turns.
-- **Stopping playback mid-read-aloud could leave the voice UI stuck showing
-  "tap to hear."** `playFull`'s `catch` block set `voiceState="blocked"`
-  unconditionally on any `audio.play()` rejection, including the
-  `AbortError` a `pause()` call raises on a superseded request — `playTts`
-  already guarded against this exact race, `playFull` did not.
-- **The session-recap voice button spoke non-German/English sessions in
-  German.** `voice/session-summary` collapsed any locale other than `de`/
-  `en` to German before both the LLM recap-generation call and the TTS
-  voice-selection call. `generate_session_recap()` now threads an
-  `output_language` BCP-47 pin through to both backends (mirroring the
-  pattern the regular summarizer already uses), and TTS voice selection
-  now gets the caller's real requested locale instead of the de/en-only
-  template selector.
+- **A turn could stay unspoken forever after a WebSocket drop** in the
+  annotation window (`annotation_pending` had no client-side fallback). The
+  client now speaks the plain text on done-without-final-result, WS close, or
+  a ~25 s timer — and the dedupe flag resets on every new turn so the
+  fallback can never mute the next turn.
+- **A blocked (autoplay) read-aloud lost the rest of its playlist** and left
+  the chip stuck on "Speaking" forever; blocked-resume is now part of the
+  playlist loop, and `playBlocked` got the same generation/abort guards as
+  every other play path (a Stop in the play() window no longer shows a false
+  error banner or kills the next turn's fetch).
+- **The session-recap button was permanently dead for a session** whose first
+  message was a huge paste (unbudgeted transcript head → `E2BIG` crash past
+  the Hermes fallback), and a zero-config install's recap click did nothing,
+  silently, forever. The head is budget-clamped, all CLI spawn paths catch
+  `OSError` (fallback chain survives), and explicitly-clicked voice buttons
+  now show a one-line hint on 204 instead of nothing.
+- **Recap synthesis starved the automatic turn voice**: the ~120 s summarize
+  phase held one of 4 TTS slots (and, after the first fix round, briefly ran
+  unbounded in the shared threadpool). It now runs under its own 2-slot
+  bound; only the say.py phase takes a TTS slot. Stop/supersede also aborts
+  the in-flight fetch client-side.
+- **Short German answers flipped the new text-first voice language to
+  English** ("Was war in Datei A los?" → English voice + English summary,
+  self-consistently wrong). `detect_confident()` now strips code fences
+  before scoring (a German answer with a Python block flipped confidently to
+  "en"), requires a confidence margin, and falls back to the profile pin.
+- **`de-DE`/`en-US` locales lost the verbatim fast-path** (and got a spurious
+  OUTPUT-LANGUAGE directive): every output-language gate now compares the
+  primary subtag. Short texts with a real foreign `output_language` (fr, …)
+  are no longer returned untranslated.
+- **A concurrently-written read-aloud playlist could be evicted mid-write**
+  by another turn's archive prune, resurrecting the renumbered-playlist
+  defect; groups younger than a playback-cadence grace window (300 s) are
+  never evicted.
+- **`say.py <sentence>` wrote Ogg audio into a file NAMED the sentence**
+  (trailing-dot filenames — illegal on Windows — had already landed in the
+  repo root); swapped arguments are now rejected with a usage error.
+- Hermes engine path re-spoke annotated turns twice (`annotation_pending`
+  was missing on its result events) and non-de/en session recaps came back
+  in German — both only fixed in-tree before, now released.
+
+### Fixed — GDPR Art. 17 erasure (compliance)
+
+- **Erasure left PII behind with an APPLIED receipt**: the session meta file
+  (`<sid>.json`, whose title is LLM-derived from the user's first message),
+  user uploads (`attachments/`) and background-task results
+  (`compute_inbox/`, carrying the task text) all survive no longer.
+  Engine-side transcripts remain a documented known gap (needs its own ADR).
+
+### Fixed — Delegation budgets (ADR-0195)
+
+- **The Settings "Worker timeout" and `max_worker_turns` knobs never reached
+  a worker spawn** (read from the manager-LLM's allocation dict, which never
+  carries them, then hard-clamped). They now ride the validated spec budget;
+  the manager-LLM allocation can only lower them, never raise them, and
+  every spawn is deadlined against remaining wall time (root-aware, so
+  recursive sub-trees cannot outlive the run).
+- **Reaching a budget no longer reads as a crash**: `budget_exhausted` is a
+  bounded stop end-to-end — plain-language bilingual chat message naming the
+  limit and where to raise it (following the user's own prompt language, so
+  the voice doesn't switch language mid-session), `rc=0` in audit,
+  `task.completed`, and the post-run artifact scan now runs so the promised
+  partial results are actually delivered. Defaults raised on the
+  time/iteration axes only; fan-out axes unchanged (worker-hours pinned by
+  test).
+
+### Fixed — Misc
+
+- Whitespace-only `CORVIN_HOME` in `operator/bridges/shared/paths.py` (the
+  third copy the 0.10.34 sweep missed) no longer resolves to a bogus path.
+- `/browser` in the web console answers with a pointer to the native browser
+  tool instead of `Unknown command` (ADR-0193 retired the command).
+- Six standalone bridge test suites red since 2026-07-12
+  (`--append-system-prompt-file` migration, opencode stdin prompt, a
+  test-isolation gap in the OS-turn-model suite) are green again; the
+  removed experimental OpenAI-key button (stored a key in localStorage that
+  nothing consumed) never shipped.
+- `dialectic.py` CLI spawns degrade on `OSError` (E2BIG) instead of
+  crashing, and no failure path prints user text to stderr any more
+  (summarize.py, say.py).
+- The compute artifact-preview endpoint 500'd on every install ("'pandas'
+  is required but it was not installed"): `routes/compute.py` uses duckdb's
+  `fetchdf()`, but the `compute` extra never declared pandas. Added to the
+  `compute` and `all` extras.
 
 ### Changed
 
-- Consolidated the triplicated acquire/run/release semaphore wrapper
-  shared by `voice_tts`, `voice_session_summary`, and `voice_segment` into
-  one `_run_with_tts_slot()` helper.
+- Consolidated the triplicated acquire/run/release semaphore wrapper shared
+  by `voice_tts`, `voice_session_summary`, and `voice_segment` into one
+  `_run_with_tts_slot()` helper.
 - Consolidated the gateway's duplicated built-in-tool-seeder path-bootstrap
-  (one copy per seeder) into a single bootstrap plus a loop.
+  (one copy per seeder) into a single bootstrap plus a loop, keeping
+  per-seeder failure isolation.
 
 ## [0.10.41] — 2026-07-15 — ACS delegation: unbounded-memory crash fix
 
