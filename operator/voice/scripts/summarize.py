@@ -1571,12 +1571,31 @@ def _fence_transcript(transcript: str, lang: str) -> str:
     return fence.format(transcript=transcript)
 
 
+def _session_recap_output_language_directive(output_language: str) -> str:
+    """Mirrors _system_for's output-language pin: empty/de/en is a silent
+    no-op (byte-identical to the pre-i18n prompt); any other BCP-47 code gets
+    an explicit OUTPUT LANGUAGE directive, since the recap templates below
+    only exist in de/en and would otherwise default to German for every
+    other locale (found 2026-07-16 — the session-recap endpoint never
+    adopted the output_language split summarize() already uses)."""
+    if not output_language or _i18n is None:
+        return ""
+    code = _i18n.normalise(output_language)
+    if not code or code in ("de", "en"):
+        return ""
+    return _i18n.language_directive(code, audience="voice")
+
+
 def _session_recap_via_cli(transcript: str, lang: str, model: str,
-                           angle: str, max_chars: int) -> str | None:
+                           angle: str, max_chars: int,
+                           output_language: str = "") -> str | None:
     if not shutil.which("claude") or not _claude_authenticated():
         return None
     template = _SESSION_RECAP_SYSTEM_EN if lang == "en" else _SESSION_RECAP_SYSTEM_DE
     sys_prompt = template.format(angle=angle, max_chars=max_chars)
+    directive = _session_recap_output_language_directive(output_language)
+    if directive:
+        sys_prompt = directive + "\n\n" + sys_prompt + "\n\n" + directive
     payload = _fence_transcript(transcript, lang)
     env = os.environ.copy()
     env["VOICE_HOOK_RECURSION"] = "1"
@@ -1596,16 +1615,19 @@ def _session_recap_via_cli(transcript: str, lang: str, model: str,
 
 
 def _session_recap_via_hermes(transcript: str, lang: str, angle: str,
-                              max_chars: int) -> str | None:
+                              max_chars: int, output_language: str = "") -> str | None:
     template = _SESSION_RECAP_SYSTEM_EN if lang == "en" else _SESSION_RECAP_SYSTEM_DE
     sys_prompt = template.format(angle=angle, max_chars=max_chars)
+    directive = _session_recap_output_language_directive(output_language)
+    if directive:
+        sys_prompt = directive + "\n\n" + sys_prompt + "\n\n" + directive
     payload = _fence_transcript(transcript, lang)
     return _ollama_generate(sys_prompt, payload, timeout=_SESSION_RECAP_HERMES_TIMEOUT_S)
 
 
 def generate_session_recap(transcript: str, lang: str = "de", max_chars: int = 700,
                            model: str = "claude-haiku-4-5-20251001",
-                           angle: str = "") -> str:
+                           angle: str = "", output_language: str = "") -> str:
     """Return a spoken recap of a whole session, or "" on any failure.
 
     `angle` is the rotating leading hook the caller chose (see routes/
@@ -1614,6 +1636,13 @@ def generate_session_recap(transcript: str, lang: str = "de", max_chars: int = 7
     variance. Falls back to "" (never to a truncated transcript — a raw
     User:/Assistant: transcript read verbatim aloud would be unlistenable,
     unlike the single-reply summarizer's naive_truncate fallback).
+
+    `output_language` mirrors summarize()'s split: `lang` (de/en) only picks
+    which of the two hand-written templates supplies the ANGLE/structure
+    instructions, `output_language` is the BCP-47 code the actual recap gets
+    spoken in — without it, a zh-Hans/fr/ja session recap silently came back
+    in German (the templates' own hardcoded language) instead of the
+    caller's requested locale.
     """
     transcript = (transcript or "").strip()
     if not transcript:
@@ -1621,9 +1650,9 @@ def generate_session_recap(transcript: str, lang: str = "de", max_chars: int = 7
     if not angle:
         angle = ("Beginne mit dem aktuellen Stand." if lang == "de"
                  else "Start with the current state.")
-    raw = _session_recap_via_cli(transcript, lang, model, angle, max_chars)
+    raw = _session_recap_via_cli(transcript, lang, model, angle, max_chars, output_language)
     if raw is None:
-        raw = _session_recap_via_hermes(transcript, lang, angle, max_chars)
+        raw = _session_recap_via_hermes(transcript, lang, angle, max_chars, output_language)
     return (raw or "").strip()
 
 
@@ -1884,7 +1913,8 @@ def main() -> int:
 
     if args.session_recap_mode:
         print(generate_session_recap(text, lang=args.lang, max_chars=args.max_chars,
-                                     model=args.model, angle=args.angle))
+                                     model=args.model, angle=args.angle,
+                                     output_language=args.output_language))
         return 0
 
     print(summarize(text, args.lang, args.max_chars, args.model, args.task,

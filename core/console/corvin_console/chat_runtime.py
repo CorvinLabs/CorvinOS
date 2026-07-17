@@ -2469,16 +2469,37 @@ async def _stream_hermes_turn(
         return
 
     rc = 0
-    yield {"type": "result", "text": final_text, "usage": last_usage}
+    # annotation_pending tells the client "a second, final result event is
+    # coming — render this text but do NOT speak it yet". Without it the
+    # client spoke both events and paid for two full server-side syntheses
+    # per annotated turn (the exact bug this field was introduced to fix for
+    # the claude_code path below — the Hermes path never got the same field
+    # on its own result events, so it silently reopened the double-speak
+    # regression for every tenant on the Hermes engine, found 2026-07-16).
+    _ann_pending = bool(final_text.strip()) and _annotation_enabled()
+    yield {"type": "result", "text": final_text, "usage": last_usage,
+           "annotation_pending": _ann_pending}
 
     # Voice annotation suffix (LERN-ZUGABE + METAPHER), mirroring the claude path.
+    # Gated on _ann_pending, not just final_text: _annotation_enabled() here and
+    # _compute_web_annotation_suffix's own gates read the profile seconds apart,
+    # so a mid-turn toggle could produce a suffix the client was never told to
+    # wait for — it would land in the persisted history and the voice_key but
+    # never in the stream, orphaning the turn's archived audio.
     _ann_suffix = ""
-    if final_text:
+    if final_text and _ann_pending:
         _ann_suffix = await _compute_web_annotation_suffix(final_text, sess.tenant_id)
-    if _ann_suffix:
-        yield {"type": "delta", "text": "\n\n" + _ann_suffix}
-        yield {"type": "result", "text": final_text + "\n\n" + _ann_suffix,
-               "usage": last_usage}
+    # Emit the FINAL result whenever the first one was flagged
+    # annotation_pending — including when the annotation came back empty
+    # (LLM skipped it, budget spent, both backends down). The client is
+    # holding its voice waiting for exactly this event; skipping it on the
+    # empty path would leave the turn permanently unspoken.
+    if _ann_pending:
+        if _ann_suffix:
+            yield {"type": "delta", "text": "\n\n" + _ann_suffix}
+        yield {"type": "result",
+               "text": (final_text + "\n\n" + _ann_suffix) if _ann_suffix else final_text,
+               "usage": last_usage, "annotation_pending": False}
 
     combined = final_text
     if _ann_suffix:

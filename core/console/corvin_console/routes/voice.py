@@ -127,6 +127,26 @@ def _get_tts_semaphore() -> "asyncio.Semaphore":
     return _tts_sem
 
 
+async def _run_with_tts_slot(sync_fn, *args, no_slot_log: str = "") -> Response:
+    """Bounded async wrapper shared by every synthesis route (voice_tts,
+    voice_session_summary, voice_segment): acquire a synthesis slot with a
+    bounded wait, run the actual (blocking) work in the threadpool, always
+    release. Each route's own log message on a slot-acquire timeout is kept
+    caller-specific (they describe what gets skipped in different terms);
+    voice_session_summary passes none, silently 204ing like the others did
+    before this was consolidated."""
+    try:
+        await asyncio.wait_for(_get_tts_semaphore().acquire(), _TTS_SLOT_WAIT_S)
+    except asyncio.TimeoutError:
+        if no_slot_log:
+            _log.warning(no_slot_log)
+        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+    try:
+        return await run_in_threadpool(sync_fn, *args)
+    finally:
+        _get_tts_semaphore().release()
+
+
 def _detect_audio_mime(data: bytes) -> str:
     """Detect audio MIME type from magic bytes.
 
@@ -688,17 +708,13 @@ async def voice_tts(
 ) -> Response:
     """Bounded async wrapper — see _TTS_MAX_CONCURRENCY. The synthesis itself is
     unchanged and still runs in the threadpool, but only once a slot is free."""
-    try:
-        await asyncio.wait_for(_get_tts_semaphore().acquire(), _TTS_SLOT_WAIT_S)
-    except asyncio.TimeoutError:
-        _log.warning("voice_tts: no synthesis slot within %.0fs (%d concurrent) "
-                     "— skipping playback for this turn", _TTS_SLOT_WAIT_S,
-                     _TTS_MAX_CONCURRENCY)
-        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
-    try:
-        return await run_in_threadpool(_voice_tts_sync, body, rec)
-    finally:
-        _get_tts_semaphore().release()
+    return await _run_with_tts_slot(
+        _voice_tts_sync, body, rec,
+        no_slot_log=(
+            f"voice_tts: no synthesis slot within {_TTS_SLOT_WAIT_S:.0f}s "
+            f"({_TTS_MAX_CONCURRENCY} concurrent) — skipping playback for this turn"
+        ),
+    )
 
 
 def _voice_tts_sync(
@@ -908,14 +924,7 @@ async def voice_session_summary(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> Response:
     """Bounded async wrapper — mirrors voice_tts's semaphore gating."""
-    try:
-        await asyncio.wait_for(_get_tts_semaphore().acquire(), _TTS_SLOT_WAIT_S)
-    except asyncio.TimeoutError:
-        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
-    try:
-        return await run_in_threadpool(_voice_session_summary_sync, body, rec)
-    finally:
-        _get_tts_semaphore().release()
+    return await _run_with_tts_slot(_voice_session_summary_sync, body, rec)
 
 
 def _voice_session_summary_sync(
@@ -943,16 +952,27 @@ def _voice_session_summary_sync(
     if not summarize_path.exists():
         return Response(status_code=http_status.HTTP_204_NO_CONTENT)
 
+    # `lang` only picks which of the two hand-written angle templates
+    # (de/en) supplies the leading hook; it is NOT the caller's requested
+    # locale. body.lang (validated BCP-47-shaped by SessionSummaryRequest)
+    # is that locale — passed through unmodified below via --output-language
+    # (mirrors _summarize_for_speech's identical split) and to _say_cmd for
+    # TTS voice selection. Collapsing body.lang itself to de/en here (as this
+    # endpoint used to) silently spoke every zh-Hans/fr/ja session recap in
+    # German — the templates' own hardcoded language (found 2026-07-16).
     lang = body.lang if body.lang in ("de", "en") else "de"
     angle = random.choice(_SESSION_RECAP_ANGLES_DE if lang == "de" else _SESSION_RECAP_ANGLES_EN)
 
+    cmd = [sys.executable, str(summarize_path),
+           "--session-recap-mode",
+           "--lang", lang,
+           "--max-chars", str(_SESSION_RECAP_MAX_CHARS),
+           "--angle", angle]
+    if body.lang and body.lang not in ("de", "en"):
+        cmd += ["--output-language", body.lang]
     try:
         proc = subprocess.run(
-            [sys.executable, str(summarize_path),
-             "--session-recap-mode",
-             "--lang", lang,
-             "--max-chars", str(_SESSION_RECAP_MAX_CHARS),
-             "--angle", angle],
+            cmd,
             input=transcript,
             capture_output=True, text=True,
             timeout=_TTS_SUMMARIZE_TIMEOUT_S,
@@ -978,8 +998,10 @@ def _voice_session_summary_sync(
     with tempfile.NamedTemporaryFile(prefix="corvin_tts_", suffix=".opus", delete=False) as fh:
         out_path = Path(fh.name)
     try:
-        cmd = _say_cmd(out_path, recap_text, lang)
-        proc2 = subprocess.run(cmd, capture_output=True, text=True, timeout=_TTS_TIMEOUT_S)
+        # body.lang, not the de/en-collapsed `lang` above: _say_cmd resolves the
+        # TTS voice from the real locale (same as voice_tts's own _say_cmd call).
+        cmd2 = _say_cmd(out_path, recap_text, body.lang)
+        proc2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=_TTS_TIMEOUT_S)
         if proc2.returncode != 0:
             return Response(status_code=http_status.HTTP_204_NO_CONTENT)
         size = out_path.stat().st_size if out_path.exists() else 0
@@ -1039,16 +1061,13 @@ async def voice_segment(
 ) -> Response:
     """Bounded async wrapper — see _TTS_MAX_CONCURRENCY. A read-aloud fires one
     of these per segment, so this route is the easier of the two to pile up."""
-    try:
-        await asyncio.wait_for(_get_tts_semaphore().acquire(), _TTS_SLOT_WAIT_S)
-    except asyncio.TimeoutError:
-        _log.warning("voice_segment: no synthesis slot within %.0fs — "
-                     "ending the read-aloud playlist here", _TTS_SLOT_WAIT_S)
-        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
-    try:
-        return await run_in_threadpool(_voice_segment_sync, body, rec)
-    finally:
-        _get_tts_semaphore().release()
+    return await _run_with_tts_slot(
+        _voice_segment_sync, body, rec,
+        no_slot_log=(
+            f"voice_segment: no synthesis slot within {_TTS_SLOT_WAIT_S:.0f}s — "
+            "ending the read-aloud playlist here"
+        ),
+    )
 
 
 def _voice_segment_sync(

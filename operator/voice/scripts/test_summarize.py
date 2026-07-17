@@ -789,6 +789,47 @@ def test_session_recap_defaults_to_a_fallback_angle_when_none_given() -> None:
     assert called_angle  # non-empty — the fallback kicked in
 
 
+def test_session_recap_threads_output_language_into_the_cli_backend() -> None:
+    """Regression (2026-07-16): generate_session_recap()/_session_recap_via_cli()
+    never accepted output_language at all, unlike summarize()'s _system_for()
+    (which has supported an arbitrary BCP-47 output-language pin since the
+    zh-Hans i18n work). A zh-Hans/fr/ja session recap silently came back in
+    German — the hardcoded template language — because there was no directive
+    to override it. Confirms the directive is actually composed into the
+    system prompt handed to the CLI backend for a non-de/en locale."""
+    from unittest.mock import patch
+    captured: dict = {}
+
+    def fake_run(argv, **kw):  # noqa: ANN001
+        captured["system_prompt"] = argv[argv.index("--append-system-prompt") + 1]
+        class _R:
+            stdout = "recap"
+        return _R()
+
+    with (
+        patch.object(summarize, "shutil") as _shutil,
+        patch.object(summarize, "_claude_authenticated", return_value=True),
+        patch.object(summarize.subprocess, "run", side_effect=fake_run),
+    ):
+        _shutil.which.return_value = "/usr/bin/claude"
+        summarize.generate_session_recap(
+            "User: X\n\nAssistant: Y", lang="de", angle="test angle",
+            output_language="zh-Hans",
+        )
+    assert "zh-Hans" in captured["system_prompt"] or "Chinese" in captured["system_prompt"], (
+        "expected an OUTPUT LANGUAGE directive naming the requested locale"
+    )
+
+
+def test_session_recap_output_language_is_a_noop_for_de_and_en() -> None:
+    """de/en must stay byte-identical to the pre-i18n prompt — the templates
+    already write in that language natively; an extra directive is dead
+    weight, not just harmless (see _system_for's own identical contract)."""
+    assert summarize._session_recap_output_language_directive("") == ""
+    assert summarize._session_recap_output_language_directive("de") == ""
+    assert summarize._session_recap_output_language_directive("en") == ""
+
+
 def test_session_recap_fences_the_transcript_before_sending_to_the_backend() -> None:
     """Adversarial finding (live-tested): passing the raw transcript
     unwrapped let a `claude -p` call read imperative lines inside it (e.g.
