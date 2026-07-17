@@ -3573,6 +3573,48 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
         engine_id = "claude_code"
     env["CORVIN_ENGINE_ID"] = engine_id
     env["CORVIN_CHAT_KEY"] = channel_value  # for TEB audit context
+    # ADR-0043 M1 — Hybrid workload classifier for fast-chat routing (opt-in).
+    # Check if fast_chat_mode is enabled in the tenant config; if so, classify the
+    # current message and route to engine's fast/full tier accordingly.
+    _fast_chat_enabled = False
+    if tenant_id or (profile and profile.get("fast_chat_mode")):
+        _tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+        try:
+            import yaml  # type: ignore
+            _tenant_cfg_path = (
+                Path(os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
+                / "tenants" / _tid / "global" / "tenant.corvin.yaml"
+            )
+            if _tenant_cfg_path.is_file():
+                _tenant_spec = (yaml.safe_load(_tenant_cfg_path.read_text("utf-8")) or {}).get("spec") or {}
+                _fast_chat_enabled = bool(_tenant_spec.get("features", {}).get("fast_chat_mode"))
+        except Exception:
+            pass
+
+    if _fast_chat_enabled:
+        try:
+            import sys
+            _shared_path = str(Path(__file__).resolve().parent)
+            if _shared_path not in sys.path:
+                sys.path.insert(0, _shared_path)
+            from workload_classifier import classify_workload  # type: ignore
+            from engine_models import resolve_model_for_workload  # type: ignore
+
+            # Get the last user message from the session (if available).
+            # For now, this is a simplified lookup; a full impl would read from chat history.
+            _user_message = profile.get("_last_user_message", "") if profile else ""
+            if _user_message:
+                _workload_result = classify_workload(_user_message)
+                _model = resolve_model_for_workload(engine_id, _workload_result.workload, profile.get("model") if profile else None)
+                if _model and _model != (profile.get("model") if profile else None):
+                    # Model was changed by classifier; log the decision
+                    env["CORVIN_WORKLOAD_CLASS"] = str(_workload_result.workload.value)
+                    env["CORVIN_WORKLOAD_CONFIDENCE"] = str(_workload_result.confidence)
+                    env["CORVIN_ROUTED_MODEL"] = _model
+                    # TODO: audit trail call here (requires _audit_event integration)
+        except Exception:
+            # Workload classification is best-effort; never break the spawn
+            pass
     # ADR-0112 M1 / ADR-0119 — per-chat ACS worker model override.
     # Resolution (highest priority first):
     #   1. profile.engine_models.<engine_id>.worker_model  (per-engine persona pin, ADR-0119)
