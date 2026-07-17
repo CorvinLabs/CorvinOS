@@ -72,17 +72,20 @@ def _count_code_keywords(message: str) -> int:
 def classify_workload(
     message: str,
     confidence_threshold: float = 0.5,
+    max_message_bytes: int = 1_000_000,  # 1 MB limit for DoS protection
 ) -> ClassificationResult:
     """Classify a user message into CHAT, CODE, or UNCERTAIN.
 
     Args:
         message: The user's input message (any length)
         confidence_threshold: Confidence bounds for uncertain classification
+        max_message_bytes: Maximum message size to process (default 1 MB for DoS protection)
 
     Returns:
         ClassificationResult with workload type and confidence ∈ [0.0, 1.0]
 
     Logic:
+      - Reject messages exceeding max_message_bytes (DoS protection)
       - Normalize Unicode (NFC) to prevent combining-mark evasion (e.g., "d​ef" → "def")
       - Count code keyword matches (regex patterns)
       - Compute code score = matches / max(total_words, 1)
@@ -94,6 +97,12 @@ def classify_workload(
       - Only return definitive if confidence >= threshold; else UNCERTAIN
     """
     if not message or not isinstance(message, str):
+        return ClassificationResult(WorkloadType.UNCERTAIN, 0.0)
+
+    # DoS protection: reject overly large messages
+    if len(message.encode("utf-8")) > max_message_bytes:
+        import sys
+        print(f"[WARN] classify_workload: message exceeds {max_message_bytes} bytes, rejecting as UNCERTAIN", file=sys.stderr)
         return ClassificationResult(WorkloadType.UNCERTAIN, 0.0)
 
     # Normalize Unicode to NFC form (prevents evasion via combining marks / zero-width chars)

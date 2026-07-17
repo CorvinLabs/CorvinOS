@@ -2614,6 +2614,20 @@ def _resolve_os_model(
                         fast_chat_enabled=True,
                     )
                     if model:
+                        # Emit audit event for model selection via workload classification (BUG#15)
+                        try:
+                            _audit_event(
+                                "bridge.workload_model_selection",
+                                chat_key=chat_key,
+                                details={
+                                    "workload_type": workload_class,
+                                    "confidence": workload_confidence,
+                                    "selected_model": model,
+                                    "tier": "2.7_workload",
+                                },
+                            )
+                        except Exception:  # noqa: BLE001
+                            pass  # Audit failure is non-fatal
                         return model
         except Exception as e:  # noqa: BLE001
             # Workload routing failure is non-fatal; fall through to Tier 3
