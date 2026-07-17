@@ -3619,6 +3619,8 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
         try:
             env["CORVIN_WORKLOAD_CLASS"] = str(workload_hint.get("workload", "uncertain"))
             env["CORVIN_WORKLOAD_CONFIDENCE"] = str(workload_hint.get("confidence", 0.0))
+            # Timestamp in milliseconds (from classify_and_store_workload_hint).
+            # Note: Millisecond precision will overflow int64 at year 2286; use seconds if century-spanning audit needed.
             env["CORVIN_WORKLOAD_TIMESTAMP"] = str(workload_hint.get("timestamp", 0))
         except Exception:
             # workload_hint handling is best-effort; never break the spawn
