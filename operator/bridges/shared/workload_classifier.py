@@ -12,6 +12,7 @@ No LLM involved in classification; pure regex on code keywords.
 from __future__ import annotations
 
 import re
+import unicodedata
 from enum import Enum
 from typing import NamedTuple
 
@@ -82,6 +83,7 @@ def classify_workload(
         ClassificationResult with workload type and confidence ∈ [0.0, 1.0]
 
     Logic:
+      - Normalize Unicode (NFC) to prevent combining-mark evasion (e.g., "d​ef" → "def")
       - Count code keyword matches (regex patterns)
       - Compute code score = matches / max(total_words, 1)
       - Dual criteria for CODE classification:
@@ -93,6 +95,9 @@ def classify_workload(
     """
     if not message or not isinstance(message, str):
         return ClassificationResult(WorkloadType.UNCERTAIN, 0.0)
+
+    # Normalize Unicode to NFC form (prevents evasion via combining marks / zero-width chars)
+    message = unicodedata.normalize("NFC", message)
 
     # Tokenize roughly: split on whitespace, count non-empty tokens
     tokens = message.split()
