@@ -6,12 +6,14 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.10.42] — 2026-07-17 — Voice Mode 2.0 hardening sweep + delegation budget honesty
+## [0.10.43] — 2026-07-17 — Voice Mode 2.0 hardening sweep + delegation budget honesty
 
 Three adversarial review/refutation rounds over the last five days of changes
 (Voice Mode 2.0 / ADR-0194, browser tool / ADR-0193, delegation budgets),
 fixing every confirmed finding. See ADR-0195 for the delegation-budget
-decision record.
+decision record. (0.10.42, published a few minutes earlier the same day from
+the then-committed tree, contains only the first batch of voice fixes below
+under its own heading — everything in this section ships with 0.10.43.)
 
 ### Fixed — Voice (the silent-bug class)
 
@@ -108,6 +110,46 @@ decision record.
 - Consolidated the gateway's duplicated built-in-tool-seeder path-bootstrap
   (one copy per seeder) into a single bootstrap plus a loop, keeping
   per-seeder failure isolation.
+
+## [0.10.42] — 2026-07-17 — Adversarial review of the ADR-0193/ADR-0194 diff
+
+Iterative adversarial + dialectical code review of the native browser MCP
+tool (ADR-0193) and voice session archive (ADR-0194) changes, per LDD
+discipline: a 10-angle finder pass, single-vote verify, gap sweep, then a
+second adversarial pass re-attacking each proposed fix before accepting it.
+4 of the original 21 findings did not survive that second pass (deliberate
+ADR-0193 design decisions locked in by existing tests, or CPython's own
+`asyncio.Semaphore.acquire()` already closing the suspected race) and are
+documented as refuted rather than silently dropped.
+
+### Fixed
+
+- **The Hermes/Ollama engine path spoke every annotated reply twice.**
+  `_stream_hermes_turn` never set `annotation_pending` on its result
+  events, unlike the `claude_code` engine path — the frontend's
+  double-speak guard (added for exactly this class of bug) had nothing to
+  gate on for Hermes-engine turns.
+- **Stopping playback mid-read-aloud could leave the voice UI stuck showing
+  "tap to hear."** `playFull`'s `catch` block set `voiceState="blocked"`
+  unconditionally on any `audio.play()` rejection, including the
+  `AbortError` a `pause()` call raises on a superseded request — `playTts`
+  already guarded against this exact race, `playFull` did not.
+- **The session-recap voice button spoke non-German/English sessions in
+  German.** `voice/session-summary` collapsed any locale other than `de`/
+  `en` to German before both the LLM recap-generation call and the TTS
+  voice-selection call. `generate_session_recap()` now threads an
+  `output_language` BCP-47 pin through to both backends (mirroring the
+  pattern the regular summarizer already uses), and TTS voice selection
+  now gets the caller's real requested locale instead of the de/en-only
+  template selector.
+
+### Changed
+
+- Consolidated the triplicated acquire/run/release semaphore wrapper
+  shared by `voice_tts`, `voice_session_summary`, and `voice_segment` into
+  one `_run_with_tts_slot()` helper.
+- Consolidated the gateway's duplicated built-in-tool-seeder path-bootstrap
+  (one copy per seeder) into a single bootstrap plus a loop.
 
 ## [0.10.41] — 2026-07-15 — ACS delegation: unbounded-memory crash fix
 
