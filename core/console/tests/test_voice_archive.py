@@ -1040,3 +1040,73 @@ def test_the_semaphore_is_created_lazily() -> None:
     voice_routes._tts_sem = None
     assert _aio.run(_go()) == voice_routes._TTS_MAX_CONCURRENCY
     voice_routes._tts_sem = None
+
+
+# ── OpenAI key reaches say.py regardless of the child's HOME/XDG ──────────────
+#
+# Reported: "saved an OpenAI key, TTS still fails". say.py resolves its key from
+# its OWN env, then from VOICE_CONFIG_DIR/service.env where VOICE_CONFIG_DIR is
+# derived from say.py's OWN HOME/XDG. Under systemd the console's HOME/XDG can
+# differ from where BYOK wrote the key, so say.py reads the wrong service.env,
+# finds nothing, and silently skips OpenAI. _say_env resolves the key on the
+# console side and injects it so the child never re-derives that path.
+
+def test_say_env_injects_the_resolved_openai_key(monkeypatch) -> None:
+    import sys as _sys
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(voice_routes.__file__).resolve().parents[3]
+                            / "operator" / "bridges" / "shared"))
+    import provider_keys as _pk
+    monkeypatch.setattr(_pk, "resolve_key",
+                        lambda kn: "sk-INJECTED" if kn == "tts_openai_api_key" else None)
+    monkeypatch.delenv("CORVIN_TTS_OPENAI_KEY", raising=False)
+    env = voice_routes._say_env()
+    assert env["CORVIN_TTS_OPENAI_KEY"] == "sk-INJECTED"
+
+
+def test_say_env_never_clobbers_an_explicit_export(monkeypatch) -> None:
+    import sys as _sys
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(voice_routes.__file__).resolve().parents[3]
+                            / "operator" / "bridges" / "shared"))
+    import provider_keys as _pk
+    monkeypatch.setattr(_pk, "resolve_key", lambda kn: "sk-FROM-VAULT")
+    monkeypatch.setenv("CORVIN_TTS_OPENAI_KEY", "sk-OPERATOR-EXPORT")
+    env = voice_routes._say_env()
+    assert env["CORVIN_TTS_OPENAI_KEY"] == "sk-OPERATOR-EXPORT"
+
+
+def test_say_env_survives_a_broken_resolver(monkeypatch) -> None:
+    """A resolver failure must never break TTS — just leave env as-is."""
+    import sys as _sys
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(voice_routes.__file__).resolve().parents[3]
+                            / "operator" / "bridges" / "shared"))
+    import provider_keys as _pk
+    def _boom(kn): raise RuntimeError("vault locked")
+    monkeypatch.setattr(_pk, "resolve_key", _boom)
+    monkeypatch.delenv("CORVIN_TTS_OPENAI_KEY", raising=False)
+    env = voice_routes._say_env()   # must not raise
+    assert "CORVIN_TTS_OPENAI_KEY" not in env or not env.get("CORVIN_TTS_OPENAI_KEY")
+
+
+def test_failed_tts_surfaces_the_reason_header() -> None:
+    """The all-providers-failed 204 must carry say.py's concrete reason, not a
+    generic banner — the console used to discard proc.stderr entirely."""
+    class _Proc:
+        returncode = 0
+        stdout = ""
+        stderr = "say.py: no OPENAI_API_KEY — skipping OpenAI TTS\nedge-tts: no network"
+    resp = voice_routes._tts_failed_response(_Proc(), "all-providers-failed")
+    assert resp.status_code == 204
+    assert "edge-tts: no network" in resp.headers["X-Corvin-Voice-Reason"]
+
+
+def test_failed_tts_reason_is_bounded_and_never_crashes_on_empty_stderr() -> None:
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = ""
+    resp = voice_routes._tts_failed_response(_Proc(), "say-exit-nonzero")
+    assert resp.status_code == 204
+    assert len(resp.headers["X-Corvin-Voice-Reason"]) <= 200
