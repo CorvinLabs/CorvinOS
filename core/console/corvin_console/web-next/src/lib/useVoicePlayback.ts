@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ttsBlob, ttsSegment, sessionSummaryBlob, type TtsSegment } from "@/lib/api";
+import { ttsBlob, ttsSegment, sessionSummaryBlob, getLastTtsReason, type TtsSegment } from "@/lib/api";
 
 export type VoiceState = "idle" | "loading" | "playing" | "blocked";
 
@@ -199,7 +199,13 @@ export function useVoicePlayback(csrf: string, onError?: (message: string) => vo
         setVoiceState("idle");
         // 204-silence is the DESIGN for the automatic turn voice, but an
         // explicit click (Replay) opts into feedback — see _TTS_UNAVAILABLE_MSG.
-        if (opts?.notifyOnEmpty) onError?.(_TTS_UNAVAILABLE_MSG);
+        // Append the server's concrete reason when it sent one (e.g. an invalid
+        // OpenAI key, a rate-limit, a missing package) so "it doesn't work"
+        // becomes actionable instead of a generic banner.
+        if (opts?.notifyOnEmpty) {
+          const reason = getLastTtsReason();
+          onError?.(reason ? `${_TTS_UNAVAILABLE_MSG} (${reason})` : _TTS_UNAVAILABLE_MSG);
+        }
         return;
       }
       const url = URL.createObjectURL(blob);

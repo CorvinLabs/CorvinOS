@@ -119,7 +119,7 @@
 
   [data-theme="dark"] audio {
     color-scheme: dark;
-    filter: invert(0.9);
+    filter: invert(1) brightness(0.9);
   }
 }
 

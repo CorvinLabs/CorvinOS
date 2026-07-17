@@ -7084,24 +7084,55 @@ def _resolve_voice_output_language(candidate_text: str) -> str:
     if detected:
         return detected
     # ── Ambiguous text → the static tiers ───────────────────────────────────
-    # (a) the profile pin — the right answer for a genuine non-de/en user (zh-Hans,
-    #     ja, ar, …) whose reply the de/en detector structurally cannot speak to;
-    # (b) the OS locale — defence-in-depth when display_language was never seeded,
-    #     so an unseeded box still speaks its real language and matches the console
-    #     welcome tier instead of the two surfaces diverging;
-    # (c) "" — a stripped-env service keeps the caller's own constant.
+    # When text-detect fails, distinguish between Latin-script ambiguous text
+    # and non-Latin text:
+    # (a) Non-Latin (CJK, Cyrillic, Arabic, etc.): use profile default, because
+    #     a user setting zh-Hans genuinely wants Chinese voice for Chinese text.
+    # (b) Latin-script ambiguous: use system locale, because a user setting zh-Hans
+    #     but typing German should hear German voice (found 2026-07-17: False-Negative).
     output_language = ""
+    profile_lang = ""
     if _voice_profile is not None and _i18n is not None:
         try:
             raw = _voice_profile.load().get("display_language") or ""
-            output_language = _i18n.normalise(raw) if raw else ""
+            profile_lang = _i18n.normalise(raw) if raw else ""
         except Exception:  # noqa: BLE001
-            output_language = ""
-    if not output_language and _i18n is not None:
-        try:
-            output_language = _i18n.system_language()
-        except Exception:  # noqa: BLE001
-            output_language = ""
+            pass
+    # Check if text is non-Latin script (indicates non-de/en user genuinely using
+    # their native language). Use a simple CJK + Cyrillic check.
+    is_non_latin = False
+    for c in candidate_text:
+        c_ord = ord(c)
+        if (0x4E00 <= c_ord <= 0x9FFF or  # CJK Unified Ideographs
+            0x3040 <= c_ord <= 0x309F or  # Hiragana
+            0x30A0 <= c_ord <= 0x30FF or  # Katakana
+            0xAC00 <= c_ord <= 0xD7AF or  # Hangul
+            0x0400 <= c_ord <= 0x04FF or  # Cyrillic
+            0x0600 <= c_ord <= 0x06FF or  # Arabic
+            0x0E00 <= c_ord <= 0x0E7F):   # Thai
+            is_non_latin = True
+            break
+    # For non-Latin text, keep the profile pin (user genuinely using their language).
+    # For Latin-script ambiguous text with a non-de/en profile, prefer system locale.
+    if is_non_latin:
+        output_language = profile_lang
+    elif profile_lang and profile_lang.split("-")[0].lower() not in ("de", "en"):
+        if _i18n is not None:
+            try:
+                output_language = _i18n.system_language()
+            except Exception:  # noqa: BLE001
+                pass
+        if not output_language:
+            output_language = profile_lang
+    else:
+        # For de/en profiles or unseeded profiles, keep the old hierarchy:
+        # profile first, then system.
+        output_language = profile_lang
+        if not output_language and _i18n is not None:
+            try:
+                output_language = _i18n.system_language()
+            except Exception:  # noqa: BLE001
+                pass
     return output_language
 
 

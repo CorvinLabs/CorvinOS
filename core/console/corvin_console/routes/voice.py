@@ -697,6 +697,63 @@ def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
     return cmd
 
 
+def _say_env() -> dict[str, str]:
+    """os.environ plus the OpenAI TTS/STT keys resolved through the console's OWN
+    canonical resolver, injected under the env-var names say.py reads.
+
+    Why this matters — the reported "I saved an OpenAI key and TTS still fails":
+    say.py resolves its key from its OWN environment and, failing that, from
+    ``VOICE_CONFIG_DIR/service.env`` — where VOICE_CONFIG_DIR is derived from
+    say.py's OWN HOME/XDG_CONFIG_HOME. When the console runs under systemd with a
+    different HOME/XDG than the shell that BYOK wrote the key from, say.py's
+    fallback reads the WRONG service.env, finds no key, and silently skips OpenAI
+    (→ edge/piper → possibly 204 "unavailable"). The console, in contrast,
+    resolves the key against the RIGHT service_env_path. Handing say.py the value
+    directly removes its dependency on re-deriving that path in a child process.
+
+    Only fills a name the environment does NOT already carry, so an operator's
+    explicit env-var export is never overridden. Best-effort: a resolver failure
+    must never break TTS, so it just leaves the env as-is.
+    """
+    env = dict(os.environ)
+    try:
+        import provider_keys as _pk  # noqa: PLC0415 — bridges/shared, on sys.path
+    except Exception:  # noqa: BLE001
+        return env
+    # say.py reads CORVIN_TTS_OPENAI_KEY / OPENAI_API_KEY; whisper reads
+    # CORVIN_STT_OPENAI_KEY / OPENAI_API_KEY. Resolve the dedicated names.
+    for key_name, env_var in (("tts_openai_api_key", "CORVIN_TTS_OPENAI_KEY"),
+                              ("stt_openai_api_key", "CORVIN_STT_OPENAI_KEY")):
+        if (env.get(env_var) or "").strip():
+            continue  # an explicit export wins — never clobber it
+        try:
+            val = _pk.resolve_key(key_name)
+        except Exception:  # noqa: BLE001
+            val = None
+        if val:
+            env[env_var] = val
+    return env
+
+
+def _tts_failed_response(proc: "subprocess.CompletedProcess[str]", stage: str) -> Response:
+    """Degrade to 204 (playback skipped), but STOP throwing away why.
+
+    say.py writes the concrete per-provider reason to stderr — "no OPENAI_API_KEY",
+    "openai package not installed", "OpenAI TTS failed: <API error>", "edge-tts:
+    <network error>". The console used to discard it, so a user who "saved a key
+    and TTS still doesn't work" — and whoever debugs it — had nothing to go on but
+    a generic banner. The reason now lands in the log AND on an
+    ``X-Corvin-Voice-Reason`` header (204 stays 204, so the silent-degradation UX
+    is unchanged; the header is diagnostic only, never rendered as an error).
+    """
+    tail = (proc.stderr or "").strip().splitlines()
+    reason = tail[-1][:200] if tail else f"no diagnostic ({stage})"
+    _log.warning("voice_tts: no audio (%s) — say.py said: %s", stage,
+                 " | ".join(t.strip() for t in tail[-4:]) or "(silent)")
+    return Response(status_code=http_status.HTTP_204_NO_CONTENT,
+                    headers={"X-Corvin-Voice-Reason": reason})
+
+
 def _persist_turn_voice(tenant_id: str, sid: str, text: str,
                         data: bytes, mime: str, suffix: str = "") -> "str | None":
     """Write this turn's audio into the session's voice archive. Best-effort.
@@ -818,6 +875,10 @@ def _voice_tts_sync(
             cmd,
             capture_output=True,
             text=True,
+            # Resolve the OpenAI key on the CONSOLE side and hand it to say.py so
+            # the child never depends on re-deriving VOICE_CONFIG_DIR/service.env
+            # from its own HOME/XDG — the reported "saved a key, TTS still fails".
+            env=_say_env(),
             # TTS is an OPTIONAL enhancement, not part of the task result. Keep
             # the wait short so a hung/misconfigured provider (e.g. a fresh
             # install with no working TTS, or edge-tts blocking on the network)
@@ -837,7 +898,7 @@ def _voice_tts_sync(
             # Optional feature failed → degrade SILENTLY (204), never surface a
             # red "TTS failed" error that looks like the task itself failed. The
             # frontend treats 204 as "no audio, skip playback".
-            return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+            return _tts_failed_response(proc, "say-exit-nonzero")
 
         size = out_path.stat().st_size if out_path.exists() else 0
         # An empty stdout is say.py's DOCUMENTED "all providers failed" signal
@@ -849,7 +910,7 @@ def _voice_tts_sync(
         if size == 0 or not proc.stdout.strip():
             # say.py exited 0 with no (usable) audio — all providers unavailable.
             # Graceful degradation: signal the frontend to skip playback silently.
-            return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+            return _tts_failed_response(proc, "all-providers-failed")
 
         data = out_path.read_bytes()
     except subprocess.TimeoutExpired:
@@ -1105,7 +1166,8 @@ def _voice_session_summary_tts(
         # body.lang, not the de/en-collapsed `lang` above: _say_cmd resolves the
         # TTS voice from the real locale (same as voice_tts's own _say_cmd call).
         cmd2 = _say_cmd(out_path, recap_text, body.lang)
-        proc2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=_TTS_TIMEOUT_S)
+        proc2 = subprocess.run(cmd2, capture_output=True, text=True,
+                               env=_say_env(), timeout=_TTS_TIMEOUT_S)
         if proc2.returncode != 0:
             return Response(status_code=http_status.HTTP_204_NO_CONTENT)
         size = out_path.stat().st_size if out_path.exists() else 0
@@ -1226,7 +1288,7 @@ def _voice_segment_sync(
             # and playFull reads 204 as end-of-playlist, so ONE oversized
             # segment silently truncates the whole read-aloud from there on.
             _say_cmd(out_path, segments[body.index][:_TTS_PROVIDER_CHAR_LIMIT], body.lang),
-            capture_output=True, text=True, timeout=_TTS_TIMEOUT_S,
+            capture_output=True, text=True, env=_say_env(), timeout=_TTS_TIMEOUT_S,
         )
         # `not proc.stdout.strip()` is say.py's DOCUMENTED failure signal
         # ("0 + empty stdout -> silently disabled / all providers failed", say.py
