@@ -447,27 +447,33 @@ def get_model_tier_mapping() -> dict[str, dict[str, str]]:
 
 def resolve_model_for_workload(
     engine_id: str,
-    workload_type: "str | object",  # Can be str "chat"/"code"/"uncertain" or WorkloadType enum
-    user_chosen_model: str | None,
+    workload_type: "str | object | None" = None,
+    user_chosen_model: str | None = None,
+    confidence: float | None = None,
+    fast_chat_enabled: bool = False,
 ) -> str | None:
     """Resolve the actual model to use based on engine, workload classification,
     and user's chosen model.
 
-    ADR-0043: Route CHAT workloads to the engine's fast tier, CODE to full tier.
+    ADR-0043 Phase 1: Route CHAT workloads (high confidence) to the engine's fast tier,
+    CODE to full tier, UNCERTAIN to user's choice (safe fallback).
 
     Args:
         engine_id: The engine identifier (e.g., "claude_code", "gemini")
-        workload_type: Classification result (str or WorkloadType enum).
+        workload_type: Classification result (str or WorkloadType enum, or None).
                        If enum, extracted as .value first.
         user_chosen_model: The model the user pinned (if any)
+        confidence: Classification confidence (0.0-1.0). Used to gate CHAT→fast routing.
+        fast_chat_enabled: Whether fast-chat routing is enabled (feature flag).
 
     Returns:
         The resolved model ID string, or None if unable to determine.
 
     Logic:
-        - If workload is "uncertain": always use user_chosen_model (safe fallback)
-        - If workload is "chat": use engine's "fast" tier, fallback to user choice
-        - If workload is "code": use user_chosen_model, fallback to "full" tier
+        - If workload is "chat" AND confidence >= 0.7 AND fast_chat_enabled:
+          use engine's "fast" tier (or user choice if unavailable)
+        - If workload is "code": use user's choice (or fall back to "full" tier)
+        - If workload is "uncertain" or unknown: use user's choice (safe fallback)
     """
     # Normalize workload type: handle both WorkloadType enum and string
     if workload_type is None:
@@ -479,8 +485,8 @@ def resolve_model_for_workload(
         # It's a string or other object; convert to string
         workload = str(workload_type).lower().strip()
 
-    # Safe fallback for unknown workload
-    if workload == "uncertain":
+    # Safe fallback for unknown/uncertain workload
+    if workload != "chat" and workload != "code":
         return user_chosen_model
 
     # Look up the engine's tier mapping
@@ -489,12 +495,18 @@ def resolve_model_for_workload(
         # Unknown engine: use user's choice, no tier-based routing
         return user_chosen_model
 
+    # CHAT routing: use fast tier only if confidence is high and feature is enabled
     if workload == "chat":
-        # CHAT → use fast tier, fallback to user choice
-        return tiers.get("fast") or user_chosen_model
+        if fast_chat_enabled and confidence is not None and confidence >= 0.7:
+            return tiers.get("fast") or user_chosen_model
+        else:
+            # Not confident enough, or feature not enabled: use user choice
+            return user_chosen_model
+
+    # CODE routing: use user's choice, fallback to full tier
     elif workload == "code":
-        # CODE → use user's choice, fallback to full tier
         return user_chosen_model or tiers.get("full")
+
     else:
-        # Unknown workload: fallback to user choice
+        # Shouldn't reach here, but be safe
         return user_chosen_model

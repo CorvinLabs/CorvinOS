@@ -52,8 +52,8 @@ class TestResolveModelForWorkload:
     """Test model resolution based on workload type."""
 
     def test_chat_workload_routes_to_fast(self) -> None:
-        """CHAT workload uses engine's fast tier."""
-        model = resolve_model_for_workload("claude_code", "chat", None)
+        """CHAT workload uses engine's fast tier when confidence is high and enabled."""
+        model = resolve_model_for_workload("claude_code", "chat", None, confidence=0.9, fast_chat_enabled=True)
         assert model == "claude-haiku-4-5-20251001"
 
     def test_code_workload_uses_user_choice(self) -> None:
@@ -93,20 +93,20 @@ class TestResolveModelForWorkload:
 
     def test_workload_type_case_insensitive(self) -> None:
         """Workload type is case-insensitive."""
-        model_lower = resolve_model_for_workload("claude_code", "chat", None)
-        model_upper = resolve_model_for_workload("claude_code", "CHAT", None)
-        model_mixed = resolve_model_for_workload("claude_code", "ChAt", None)
+        model_lower = resolve_model_for_workload("claude_code", "chat", None, confidence=0.8, fast_chat_enabled=True)
+        model_upper = resolve_model_for_workload("claude_code", "CHAT", None, confidence=0.8, fast_chat_enabled=True)
+        model_mixed = resolve_model_for_workload("claude_code", "ChAt", None, confidence=0.8, fast_chat_enabled=True)
         assert model_lower == model_upper == model_mixed
 
     def test_chat_with_user_choice_still_uses_fast(self) -> None:
         """CHAT workload uses fast tier even when user has a choice."""
-        model = resolve_model_for_workload("claude_code", "chat", "claude-opus-4-1")
+        model = resolve_model_for_workload("claude_code", "chat", "claude-opus-4-1", confidence=0.85, fast_chat_enabled=True)
         # CHAT should use fast tier, not user choice
         assert model == "claude-haiku-4-5-20251001"
 
     def test_gemini_chat_routing(self) -> None:
         """Gemini CHAT routes to its fast tier."""
-        model = resolve_model_for_workload("gemini", "chat", None)
+        model = resolve_model_for_workload("gemini", "chat", None, confidence=0.8, fast_chat_enabled=True)
         assert model == "gemini-1.5-flash"
 
     def test_gemini_code_routing(self) -> None:
@@ -116,12 +116,12 @@ class TestResolveModelForWorkload:
 
     def test_codex_chat_routing(self) -> None:
         """Codex CHAT routes to its fast tier."""
-        model = resolve_model_for_workload("codex", "chat", None)
+        model = resolve_model_for_workload("codex", "chat", None, confidence=0.8, fast_chat_enabled=True)
         assert model == "code-davinci-002"
 
     def test_ollama_routing(self) -> None:
         """Ollama local has fast/full tiers."""
-        chat_model = resolve_model_for_workload("ollama_local", "chat", None)
+        chat_model = resolve_model_for_workload("ollama_local", "chat", None, confidence=0.8, fast_chat_enabled=True)
         code_model = resolve_model_for_workload("ollama_local", "code", None)
         assert chat_model == "qwen2:1.5b"
         assert code_model == "qwen2:7b"
