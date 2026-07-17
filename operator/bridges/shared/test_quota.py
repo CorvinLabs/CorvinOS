@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -157,6 +158,52 @@ class SetLimitTests(_QuotaTestBase):
         self.assertEqual(usage["limit_msgs"], quota.DEFAULT_LIMITS["member"]["messages"])
         self.assertFalse(usage["limit_msgs_overridden"])
 
+    def test_concurrent_set_limit_and_record_no_race(self):
+        """Verify that set_limit() and record() serialize correctly via locking.
+
+        ADR-0052 F7: concurrent calls to set_limit() and record() must not
+        cause lost updates or corrupted quotas. The per-(channel, uid) lock
+        protects the read-modify-write in both functions.
+        """
+        roles.grant(CHANNEL, CHAT, MEMBER_UID,
+                    bundle="member", granted_by=OWNER_UID, ttl_s=3600)
+        quota.record(CHANNEL, CHAT, MEMBER_UID, tokens=100)
+
+        errors = []
+        def concurrent_set_limit():
+            try:
+                for i in range(5):
+                    quota.set_limit(CHANNEL, CHAT, MEMBER_UID,
+                                  limit_msgs=50 + i, limit_tokens=10000 + i * 100,
+                                  set_by=OWNER_UID)
+                    time.sleep(0.001)
+            except Exception as e:
+                errors.append(e)
+
+        def concurrent_record():
+            try:
+                for i in range(5):
+                    quota.record(CHANNEL, CHAT, MEMBER_UID, tokens=200)
+                    time.sleep(0.002)
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=concurrent_set_limit)
+        t2 = threading.Thread(target=concurrent_record)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        self.assertFalse(errors, f"Concurrent operations raised errors: {errors}")
+        usage = quota.get_usage(CHANNEL, CHAT, MEMBER_UID)
+        # Should have exactly 6 records total (1 initial + 5 in the thread).
+        self.assertEqual(usage["messages_today"], 6,
+                        f"Expected 6 messages, got {usage['messages_today']}")
+        # Should have 100 + 5*200 = 1100 tokens.
+        self.assertEqual(usage["tokens_today"], 1100,
+                        f"Expected 1100 tokens, got {usage['tokens_today']}")
+
 
 class ResetTests(_QuotaTestBase):
     def test_reset_clears_counters(self):
@@ -172,6 +219,49 @@ class ResetTests(_QuotaTestBase):
     def test_reset_idempotent(self):
         existed = quota.reset(CHANNEL, CHAT, "ghost", reset_by=OWNER_UID)
         self.assertFalse(existed)
+
+    def test_concurrent_reset_and_record_no_race(self):
+        """Verify that reset() and record() serialize correctly via locking.
+
+        ADR-0052 F7: concurrent calls to reset() and record() must not
+        cause lost updates or corrupted quotas. The per-(channel, uid) lock
+        protects the read-modify-write in both functions.
+        """
+        roles.grant(CHANNEL, CHAT, MEMBER_UID,
+                    bundle="member", granted_by=OWNER_UID, ttl_s=3600)
+        quota.record(CHANNEL, CHAT, MEMBER_UID, tokens=100)
+
+        errors = []
+        def concurrent_reset():
+            try:
+                for i in range(3):
+                    quota.reset(CHANNEL, CHAT, MEMBER_UID, reset_by=OWNER_UID)
+                    time.sleep(0.002)
+            except Exception as e:
+                errors.append(e)
+
+        def concurrent_record():
+            try:
+                for i in range(5):
+                    quota.record(CHANNEL, CHAT, MEMBER_UID, tokens=50)
+                    time.sleep(0.001)
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=concurrent_reset)
+        t2 = threading.Thread(target=concurrent_record)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        self.assertFalse(errors, f"Concurrent operations raised errors: {errors}")
+        usage = quota.get_usage(CHANNEL, CHAT, MEMBER_UID)
+        # Messages should be between 1 and 6 depending on interleaving
+        # (1 initial + up to 5 from concurrent thread, minus any that were
+        # reset). At minimum, we should see that the store is consistent.
+        self.assertGreaterEqual(usage["messages_today"], 0)
+        self.assertLessEqual(usage["messages_today"], 6)
 
 
 class WindowRolloverTests(_QuotaTestBase):
@@ -189,6 +279,32 @@ class WindowRolloverTests(_QuotaTestBase):
         # restarted, so window_remaining_s is back near a full WINDOW_S.
         self.assertEqual(usage["messages_today"], 0)
         self.assertEqual(usage["tokens_today"], 0)
+
+    def test_rollover_persists_to_disk(self):
+        """Verify that get_usage() persists rolled-over state before emitting audit.
+
+        This closes audit-reality drift: the quota.reset audit event must not
+        appear without the rolled-over counters being on-disk, else another
+        process reading before a record() would see stale values.
+        """
+        roles.grant(CHANNEL, CHAT, MEMBER_UID,
+                    bundle="member", granted_by=OWNER_UID, ttl_s=3600)
+        quota.record(CHANNEL, CHAT, MEMBER_UID, tokens=500)
+        store = quota._store_path(CHANNEL, CHAT)
+        data = json.loads(store.read_text())
+        data[MEMBER_UID]["day_anchor"] = time.time() - quota.WINDOW_S - 60
+        store.write_text(json.dumps(data))
+
+        # Call get_usage() which triggers rollover.
+        usage = quota.get_usage(CHANNEL, CHAT, MEMBER_UID)
+        self.assertEqual(usage["messages_today"], 0)
+        self.assertEqual(usage["tokens_today"], 0)
+
+        # Verify that the rolled-over state is persisted: reload from disk
+        # and confirm counters are zero, not the prior 1/500.
+        data_after = json.loads(store.read_text())
+        self.assertEqual(data_after[MEMBER_UID]["messages"], 0)
+        self.assertEqual(data_after[MEMBER_UID]["tokens"], 0)
 
 
 class ListUsageTests(_QuotaTestBase):

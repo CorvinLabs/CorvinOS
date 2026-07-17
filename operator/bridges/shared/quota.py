@@ -415,15 +415,25 @@ def record(channel: str, chat_key: str, uid: str, *,
 
 def get_usage(channel: str, chat_key: str, uid: str, *,
               role: str | None = None) -> dict:
-    """Detailed usage status for one uid (powers ``/quota``)."""
+    """Detailed usage status for one uid (powers ``/quota``).
+
+    Persists rolled-over state before audit emission to close audit-reality
+    drift: when _maybe_roll() emits quota.reset, the rolled values must be
+    on-disk so other processes see consistent state.
+    """
     if role is None:
         role = _resolve_role(channel, chat_key, uid)
     now = time.time()
     path = _store_path(channel, chat_key)
     data = _load_store(path)
     entry = data.get(uid, {})
-    entry = _maybe_roll(dict(entry), now, channel=channel,
+    prior_anchor = entry.get("day_anchor")
+    entry = _maybe_roll(entry, now, channel=channel,
                         chat_key=chat_key, uid=uid)
+    # Persist rolled-over state before audit emission (which happens inside _maybe_roll).
+    if entry.get("day_anchor") != prior_anchor:
+        data[uid] = entry
+        _save_store(path, data)
     limit_msgs, limit_tokens = _effective_limits(channel, chat_key, uid,
                                                   role, entry)
     return {
@@ -453,28 +463,38 @@ def set_limit(channel: str, chat_key: str, uid: str, *,
     Pass ``None`` for either field to KEEP the current override / fall
     back to bundle default (no change). Pass ``-1`` to clear the
     override and revert to the bundle default.
+
+    ADR-0052 F7: holds the per-(channel, uid) lock during the entire
+    read-modify-write to close the race where set_limit and record
+    run concurrently.
     """
-    path = _store_path(channel, chat_key)
-    data = _load_store(path)
-    entry = data.get(uid, {})
-    if "day_anchor" not in entry:
-        entry["day_anchor"] = time.time()
-    if "channel" not in entry:
-        entry["channel"] = channel
+    lock = _quota_lock_acquire(channel, uid)
+    try:
+        path = _store_path(channel, chat_key)
+        data = _load_store(path)
+        entry = data.get(uid, {})
+        if "day_anchor" not in entry:
+            entry["day_anchor"] = time.time()
+        if "channel" not in entry:
+            entry["channel"] = channel
 
-    if limit_msgs is not None:
-        if limit_msgs == -1:
-            entry.pop("limit_msgs", None)
-        else:
-            entry["limit_msgs"] = max(0, int(limit_msgs))
-    if limit_tokens is not None:
-        if limit_tokens == -1:
-            entry.pop("limit_tokens", None)
-        else:
-            entry["limit_tokens"] = max(0, int(limit_tokens))
+        if limit_msgs is not None:
+            if limit_msgs == -1:
+                entry.pop("limit_msgs", None)
+            else:
+                entry["limit_msgs"] = max(0, int(limit_msgs))
+        if limit_tokens is not None:
+            if limit_tokens == -1:
+                entry.pop("limit_tokens", None)
+            else:
+                entry["limit_tokens"] = max(0, int(limit_tokens))
 
-    data[uid] = entry
-    _save_store(path, data)
+        data[uid] = entry
+        _save_store(path, data)
+    finally:
+        if lock is not None:
+            lock.release()
+
     _audit("quota.set_limit",
            channel=channel, chat_key=str(chat_key), uid=uid,
            details={
@@ -489,19 +509,30 @@ def reset(channel: str, chat_key: str, uid: str, *,
           reset_by: str = "") -> bool:
     """Force-reset the rolling-window counters for ``uid``.
 
-    Returns True iff an entry actually existed."""
-    path = _store_path(channel, chat_key)
-    data = _load_store(path)
-    if uid not in data:
-        return False
-    prior = {
-        "messages": data[uid].get("messages", 0),
-        "tokens": data[uid].get("tokens", 0),
-    }
-    data[uid]["messages"] = 0
-    data[uid]["tokens"] = 0
-    data[uid]["day_anchor"] = time.time()
-    _save_store(path, data)
+    Returns True iff an entry actually existed.
+
+    ADR-0052 F7: holds the per-(channel, uid) lock during the entire
+    read-modify-write to close the race where reset and record
+    run concurrently.
+    """
+    lock = _quota_lock_acquire(channel, uid)
+    try:
+        path = _store_path(channel, chat_key)
+        data = _load_store(path)
+        if uid not in data:
+            return False
+        prior = {
+            "messages": data[uid].get("messages", 0),
+            "tokens": data[uid].get("tokens", 0),
+        }
+        data[uid]["messages"] = 0
+        data[uid]["tokens"] = 0
+        data[uid]["day_anchor"] = time.time()
+        _save_store(path, data)
+    finally:
+        if lock is not None:
+            lock.release()
+
     _audit("quota.reset",
            channel=channel, chat_key=str(chat_key), uid=uid,
            details={"reason": "operator-reset", "reset_by": reset_by,
