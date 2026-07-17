@@ -505,6 +505,24 @@ READ time in `get_chat_turns` instead — purely additive, idempotent, and a tur
 audio was never generated (voice off, TTS unavailable) simply gets no player.
 Regression guard: `core/console/tests/test_voice_archive.py`.
 
+**Live voice-attach (ADR-0194 live-replay).** Phase 1's rehydrate-on-read means the
+archived player only ever became visible on the *next* page load — the tab that was
+actually open for the turn never saw it appear. `/voice/tts` and `/voice/segment`
+now push a `chat_runtime.publish_voice_event(sid, path, label)` the moment the
+archive write lands, fanning out via a tiny per-sid `asyncio.Queue` registry
+(`subscribe_voice_live` / `_voice_live_subs`) that `routes/chat.py`'s `chat_stream`
+WS forwards to the client as a `"voice"` stream event, alongside (not instead of)
+the existing `"done"` event. Deliberately **not** the tenant-wide `ccc_pubsub.py`
+fanout — this is scoped to the single tab watching this chat, and a stalled/closed
+subscriber (queue `maxsize=16`) must drop the event rather than block the REST
+response that owns it. On the client, `chat-registry.ts` attaches the player to
+`currentAssistantId` if the turn is still streaming, otherwise to `lastAssistantId`
+(the id `"done"` just cleared) — because `/voice/tts` resolves *after* the WS
+already sent `"done"` for the turn, the late arrival is the common case, not the
+exception. Regression guards: `core/console/tests/test_voice_archive.py` (pub/sub +
+`routes/voice.py:_publish_voice_live_event`), `chat-registry.test.ts` (the
+`"voice"` StreamEvent case, both mid-stream and post-done).
+
 **Hermes calls MUST disable qwen3 reasoning (`think: false`).** The default
 zero-config engine is a qwen3 model (`hermes_engine._DEFAULT_MODEL`), which is a
 *thinking* model: left to its own devices it emits a `<think>…</think>` monologue

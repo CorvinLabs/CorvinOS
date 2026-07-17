@@ -268,6 +268,48 @@ describe("applyEvent / StreamEvent processing", () => {
     expect(getSessionState("s1").pendingTitle).toBe("My Chat");
   });
 
+  it("attaches a voice artifact to the still-streaming assistant message", () => {
+    connect("s1");
+    sendMessage("s1", "hello");
+    mockWs.emit({ type: "delta", text: "Hi" });
+    mockWs.emit({
+      type: "voice", name: "a.ogg", path: "voice/a.ogg", mime: "audio/ogg",
+      size: 42, label: "voice",
+    });
+
+    const assistant = getSessionState("s1").messages.find((m) => m.role === "assistant")!;
+    const voicePart = assistant.parts.find((p) => p.kind === "artifact");
+    expect(voicePart).toMatchObject({ name: "a.ogg", path: "voice/a.ogg", mime: "audio/ogg", size: 42 });
+  });
+
+  it("attaches a late voice event (after done) to the just-completed turn via lastAssistantId", () => {
+    connect("s1");
+    sendMessage("s1", "hello");
+    mockWs.emit({ type: "delta", text: "Hi" });
+    mockWs.emit({ type: "done" });
+    expect(getSessionState("s1").messages.find((m) => m.role === "assistant")!.parts
+      .some((p) => p.kind === "artifact")).toBe(false);
+
+    // /voice/tts resolves after "done" already cleared currentAssistantId —
+    // the player must still land on the turn that just finished.
+    mockWs.emit({
+      type: "voice", name: "a.ogg", path: "voice/a.ogg", mime: "audio/ogg",
+      size: 42, label: "voice",
+    });
+
+    const assistant = getSessionState("s1").messages.find((m) => m.role === "assistant")!;
+    expect(assistant.parts.some((p) => p.kind === "artifact")).toBe(true);
+  });
+
+  it("ignores a voice event with no completed or in-flight turn to attach to", () => {
+    connect("s1");
+    mockWs.emit({
+      type: "voice", name: "a.ogg", path: "voice/a.ogg", mime: "audio/ogg",
+      size: 42, label: "voice",
+    });
+    expect(getSessionState("s1").messages).toHaveLength(0);
+  });
+
   it("is a no-op for unknown event types", () => {
     connect("s1");
     const before = getSessionState("s1");

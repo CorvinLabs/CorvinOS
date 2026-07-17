@@ -6,6 +6,32 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.45] — 2026-07-17 — Live voice-attach (ADR-0194) + test-isolation fix
+
+### Added — Voice
+
+- **The archived voice player now attaches to the open chat tab live**, instead
+  of only appearing on the next page reload. `/voice/tts` and `/voice/segment`
+  push a `publish_voice_event(sid, path, label)` the moment the archive write
+  lands; a tiny per-sid `asyncio.Queue` fanout (`subscribe_voice_live`) lets
+  `chat_stream`'s WebSocket forward it to the client as a new `"voice"` stream
+  event. The frontend attaches the player to the still-streaming turn, or —
+  the common case, since `/voice/tts` resolves after `"done"` already fired —
+  to the just-completed one via a new `lastAssistantId` tracker. Scoped to the
+  single open tab (not the tenant-wide pubsub); a stalled/closed subscriber
+  drops the event rather than blocking the archiving REST response.
+
+### Fixed — Tests
+
+- **`test_acs_quota_fallback.py` leaked a fake `acs_runtime` module into
+  `sys.modules`** across the whole test process (never popped in `tearDown`,
+  unlike its sibling `license.*` fake-module injections), which made any test
+  file importing the real `acs_runtime` after it — e.g.
+  `test_acs_local_engine_pin.py` — fail with
+  `AttributeError: module 'acs_runtime' has no attribute '_resolve_worker_engine'`
+  when run in the same process. Order-dependent; invisible running the file in
+  isolation. `tearDown` now pops `acs_runtime` alongside the license modules.
+
 ## [0.10.43] — 2026-07-17 — Voice Mode 2.0 hardening sweep + delegation budget honesty
 
 Three adversarial review/refutation rounds over the last five days of changes
