@@ -109,6 +109,11 @@ dev = [
 compute = [
     "matplotlib >= 3.7",
     "duckdb >= 0.9",
+    # routes/compute.py's artifact-preview uses duckdb's fetchdf(), which
+    # needs pandas at runtime — it was missing here, so the endpoint 500'd
+    # with "'pandas' is required" on every install (found 2026-07-17 via
+    # test_compute_security_e2e).
+    "pandas >= 2.0",
     "psycopg2-binary >= 2.9",
 ]
 # Prometheus metrics export (engine/voice metrics).
@@ -135,6 +140,7 @@ all = [
     "slack-bolt >= 1.18",
     "matplotlib >= 3.7",
     "duckdb >= 0.9",
+    "pandas >= 2.0",
     "psycopg2-binary >= 2.9",
     "prometheus-client >= 0.19",
     "faster-whisper >= 1.0.0",
