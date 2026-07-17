@@ -119,6 +119,7 @@
 
   [data-theme="dark"] audio {
     color-scheme: dark;
+    filter: invert(0.9);
   }
 }
 

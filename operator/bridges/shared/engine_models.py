@@ -516,7 +516,16 @@ def resolve_model_for_workload(
 
     # CHAT routing: use fast tier only if confidence is high and feature is enabled
     if workload == "chat":
-        if fast_chat_enabled and confidence is not None and confidence >= 0.7:
+        # Validate and clamp confidence to [0.0, 1.0]
+        if confidence is None:
+            conf = 0.0
+        else:
+            try:
+                conf = max(0.0, min(1.0, float(confidence)))
+            except (ValueError, TypeError):
+                conf = 0.0
+
+        if fast_chat_enabled and conf >= 0.7:
             fast_model = tiers.get("fast")
             # Validate fast tier model; fallback to user choice if invalid
             if _model_is_valid(fast_model, engine_id):
