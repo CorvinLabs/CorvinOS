@@ -474,6 +474,7 @@ def resolve_model_for_workload(
           use engine's "fast" tier (or user choice if unavailable)
         - If workload is "code": use user's choice (or fall back to "full" tier)
         - If workload is "uncertain" or unknown: use user's choice (safe fallback)
+        - Model IDs are validated; if invalid, fallback to user_choice
     """
     # Normalize workload type: handle both WorkloadType enum and string
     if workload_type is None:
@@ -495,17 +496,47 @@ def resolve_model_for_workload(
         # Unknown engine: use user's choice, no tier-based routing
         return user_chosen_model
 
+    # Helper: validate that a model_id exists in the engine's registry
+    def _model_is_valid(model_id: str | None, engine: str) -> bool:
+        """Check if model_id is in this engine's available models."""
+        if not model_id:
+            return False
+        try:
+            registry = load_registry()
+            engine_spec = registry.get(engine)
+            if not engine_spec:
+                # Engine unknown; we can't validate, so allow it
+                return True
+            # Check both os_models and worker_models
+            all_models = [m.id for m in engine_spec.os_models] + [m.id for m in engine_spec.worker_models]
+            return model_id in all_models
+        except Exception:
+            # Registry load failed; be permissive
+            return True
+
     # CHAT routing: use fast tier only if confidence is high and feature is enabled
     if workload == "chat":
         if fast_chat_enabled and confidence is not None and confidence >= 0.7:
-            return tiers.get("fast") or user_chosen_model
+            fast_model = tiers.get("fast")
+            # Validate fast tier model; fallback to user choice if invalid
+            if _model_is_valid(fast_model, engine_id):
+                return fast_model
+            else:
+                return user_chosen_model
         else:
             # Not confident enough, or feature not enabled: use user choice
             return user_chosen_model
 
     # CODE routing: use user's choice, fallback to full tier
     elif workload == "code":
-        return user_chosen_model or tiers.get("full")
+        if user_chosen_model:
+            return user_chosen_model
+        full_model = tiers.get("full")
+        # Validate full tier model; fallback to user choice if invalid
+        if _model_is_valid(full_model, engine_id):
+            return full_model
+        else:
+            return None
 
     else:
         # Shouldn't reach here, but be safe
