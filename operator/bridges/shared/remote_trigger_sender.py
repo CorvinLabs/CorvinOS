@@ -280,6 +280,25 @@ class SendResult:
     error_detail: str | None = None
 
 
+@dataclass
+class PingResult:
+    """Outcome of a sender.ping() call (ADR-0199 lightweight liveness check).
+
+    Attributes
+    ----------
+    reachable      : bool   — True if peer responded or heartbeat cache fresh
+    source         : str    — "heartbeat_cache" | "network_probe"
+    error_category : str | None — ADR-0197: failure reason if reachable=False
+    error_detail   : str | None — Sanitized error detail (max 256 chars)
+    duration_ms    : int    — Wall time spent (cached: ~0ms, network: 2-10s max)
+    """
+    reachable: bool
+    source: str
+    error_category: str | None = None
+    error_detail: str | None = None
+    duration_ms: int = 0
+
+
 def _sanitize_error(reason: str | None) -> str | None:
     """ADR-0197: Cap error detail to 256 chars, remove PII/leaks."""
     if not reason:
@@ -784,6 +803,141 @@ class RemoteTriggerSender:
              "duration_ms": _ms(start)},
         )
         return ok
+
+    def ping(self, endpoint_id: str, timeout_s: float | None = None) -> PingResult:
+        """ADR-0199: Lightweight peer-liveness check (a2a_ping).
+
+        Fast-path: checks local heartbeat cache (90s TTL); returns instantly if fresh.
+        Fallback: signed network probe with ±30s freshness window (no nonce store).
+        Timeout clamped to [2, 10]s; default 5s.
+
+        Returns PingResult with reachable (bool), source ("heartbeat_cache" | "network_probe"),
+        error_category/error_detail (ADR-0197) if reachable=False.
+        """
+        start = time.time()
+
+        # Clamp timeout_s to [2, 10], default 5
+        if timeout_s is None:
+            timeout_s = 5
+        else:
+            timeout_s = max(2, min(10, timeout_s))
+
+        # 1) Check heartbeat cache first (90s freshness window)
+        try:
+            last_hb = self._get_last_heartbeat_timestamp(endpoint_id)
+            if last_hb is not None:
+                age = time.time() - last_hb
+                if age < 90:  # Fresh
+                    return PingResult(
+                        reachable=True,
+                        source="heartbeat_cache",
+                        duration_ms=_ms(start),
+                    )
+        except Exception:
+            pass  # Fallthrough to network probe
+
+        # 2) Network probe: signed request + response verification
+        try:
+            ok, error_cat, error_det = self._http_ping_probe(
+                endpoint_id, timeout_s=timeout_s
+            )
+            return PingResult(
+                reachable=ok,
+                source="network_probe",
+                error_category=error_cat if not ok else None,
+                error_detail=error_det if not ok else None,
+                duration_ms=_ms(start),
+            )
+        except Exception as exc:
+            # Catch-all: any unexpected error maps to INTERNAL_ERROR
+            return PingResult(
+                reachable=False,
+                source="network_probe",
+                error_category=ErrorCategory.INTERNAL_ERROR,
+                error_detail=self._sanitize_error(str(exc)),
+                duration_ms=_ms(start),
+            )
+
+    def _get_last_heartbeat_timestamp(self, endpoint_id: str) -> float | None:
+        """ADR-0199: Get last-seen heartbeat timestamp from a2a_friendship.py.
+
+        Returns Unix timestamp or None if not found / stale.
+        Lookd up via endpoint_id → origin_id → heartbeat record.
+        """
+        try:
+            cfg = self._registry.load(endpoint_id)
+            origin_id = cfg.get("origin_id_for_send") or cfg.get("our_origin_id") or self._instance_id
+
+            # Import a2a_friendship.py to access endpoint state
+            from a2a_friendship import get_endpoint_last_heartbeat  # type: ignore
+
+            timestamp = get_endpoint_last_heartbeat(origin_id)
+            return timestamp
+        except Exception:
+            return None
+
+    def _http_ping_probe(
+        self, endpoint_id: str, timeout_s: float = 5
+    ) -> tuple[bool, str | None, str | None]:
+        """ADR-0199: Signed ping request-response (network probe).
+
+        Returns: (reachable, error_category, error_detail)
+        - reachable=True: peer responded with valid signature
+        - reachable=False: error_category=UNREACHABLE|TIMEOUT_TRANSPORT|AUTH_FAILED|...
+        """
+        start = time.time()
+
+        try:
+            cfg = self._registry.load(endpoint_id)
+        except EndpointError as exc:
+            error_cat, error_det = self._categorize_transport_error(exc)
+            return False, error_cat, error_det
+
+        # Build ping request: {ping_id, issued_at, origin_id, signature}
+        ping_id = str(uuid.uuid4())
+        issued_at = int(time.time())
+        origin_id = cfg.get("origin_id_for_send") or cfg.get("our_origin_id") or self._instance_id
+
+        ping_request = {
+            "ping_id": ping_id,
+            "issued_at": issued_at,
+            "origin_id": origin_id,
+        }
+
+        # Sign with HMAC key (same as TaskEnvelope)
+        canonical = json.dumps(ping_request, separators=(",", ":"), sort_keys=True)
+        signature = _hmac.new(
+            bytes.fromhex(cfg["hmac_key"]),
+            canonical.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        ping_request["signature"] = signature
+
+        # POST to /v1/a2a/ping
+        ping_url = cfg["url"].rstrip("/") + "/v1/a2a/ping"
+
+        try:
+            raw = self._http_post(ping_url, ping_request, timeout_s)
+        except TransportError as exc:
+            error_cat, error_det = self._categorize_transport_error(exc)
+            return False, error_cat, error_det
+
+        # Verify response signature with recv_key
+        try:
+            response, _ = self._verify_response(
+                raw, cfg["recv_key"], expected_task_id=ping_id
+            )
+        except ResponseVerificationError as exc:
+            error_cat, error_det = self._categorize_verification_error(exc)
+            return False, error_cat, error_det
+
+        # Verify response shape: {ok, instance_id, protocol_version, server_time}
+        if not response.get("ok"):
+            # Peer rejected the ping (shouldn't happen for valid ping)
+            return False, ErrorCategory.REJECTED, "Peer rejected ping"
+
+        # Success
+        return True, None, None
 
     # ── Internals ─────────────────────────────────────────────────────
 
