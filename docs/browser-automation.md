@@ -117,9 +117,19 @@ for the formal decision record.
 
 ## Enable it
 
+**The installer does this for you.** `corvin-install` (which `install.sh` /
+`install.ps1` both invoke) runs a `Browser automation` step that installs
+Playwright and downloads its Chromium binary, so agent browsing works out of the
+box like voice and image generation. The step is **fail-soft** (a failed ~150 MB
+download never aborts the install) and **idempotent** (a re-run skips the
+download when Chromium is already present).
+
+To provision it by hand — e.g. on an environment set up without the wizard, or to
+finish after a failed download:
+
 ```bash
 pip install "corvinos[browser]"   # or: uv pip install "corvinos[browser]"
-playwright install chromium        # one-time browser download
+playwright install chromium        # one-time browser download (~150 MB)
 ```
 
 Playwright is imported lazily, so the console runs fine without it — the feature

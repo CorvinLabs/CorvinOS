@@ -74,6 +74,7 @@ from corvinOS.installer.steps import console as _console
 from corvinOS.installer.steps import bridges as _bridges
 from corvinOS.installer.steps import stt as _stt
 from corvinOS.installer.steps import piper as _piper
+from corvinOS.installer.steps import browser as _browser
 from corvinOS.installer.steps import validate as _validate
 
 
@@ -302,6 +303,19 @@ class CorvinInstaller:
         # explicitly so the fallback order holds even on non-standard interpreters.
         _piper.ensure_edge_tts()
         _piper.ensure_piper(self.voice_config, interactive=self.interactive)
+
+    # ── Step 8b: Browser automation (Playwright + Chromium) ────────────────
+
+    def step_8b_setup_browser(self) -> None:
+        print("\n[Step 8b] Browser automation (Playwright + Chromium)...")
+        # Fail-soft: agent browsing is a bonus, and Chromium is a large network
+        # download — a failure here must never abort the install (ensure_browser
+        # already prints an actionable manual command on any failure).
+        try:
+            _browser.ensure_browser(interactive=self.interactive)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ⚠ browser setup skipped: {exc}")
+            print("  Manual: pip install 'corvinos[browser]' && playwright install chromium")
 
     # ── Step 9: API keys ───────────────────────────────────────────────────
 
@@ -649,6 +663,7 @@ class CorvinInstaller:
             self.step_6_bootstrap_hermes()      # optional — never hard-fails
             self.step_7_setup_stt()
             self.step_8_setup_piper()
+            self.step_8b_setup_browser()        # optional — never hard-fails
             self.step_9_api_keys()
             self.step_10_select_bridges()
             self.step_11_install_bridges()
