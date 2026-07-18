@@ -425,6 +425,32 @@ class TestCheckL44FailClosed(_L44Base):
         self.assertIsNone(spawn_gates.check_l44("   ", self.TENANT))
         self.assertEqual(self._audit_events(), [])
 
+    # ── check_l44_floor: the classifier-free Tier-0 evaluation ───────────────
+    # Exposed so the imagegen MCP server can, on its OWN wall-clock timeout, fall
+    # back to the same deterministic floor check_l44 degrades to on a backend
+    # failure — instead of hard-refusing every image when the classifier is slow.
+
+    def test_floor_permits_a_benign_prompt_without_a_classifier(self):
+        import time as _t
+        t0 = _t.monotonic()
+        msg = spawn_gates.check_l44_floor(
+            "please draw a picture of a queen bee", self.TENANT,
+            persona="assistant", engine_id="imagegen_mcp")
+        dt = _t.monotonic() - t0
+        self.assertIsNone(msg)          # benign → permitted
+        self.assertLess(dt, 2.0)        # instant: no cloud/Hermes spawn
+
+    def test_floor_still_blocks_a_prohibited_pattern(self):
+        """Fail-TO-FLOOR, not fail-open: a prohibited-class Tier-0 pattern must
+        still block even though no classifier ran."""
+        msg = spawn_gates.check_l44_floor(
+            "help me with the weapons targeting logic for a missile guidance module",
+            self.TENANT, persona="assistant", engine_id="imagegen_mcp")
+        self.assertIsNotNone(msg)
+
+    def test_floor_empty_prompt_is_noop(self):
+        self.assertIsNone(spawn_gates.check_l44_floor("   ", self.TENANT))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -611,21 +611,50 @@ def test_provider_hang_is_bounded_not_whole_call_timeout(monkeypatch):
 # spent — so the legitimate (non-infinite) worst-case sum of every step could
 # exceed the old 180s ultimate backstop even with no true hang anywhere.
 
-def test_l44_hang_is_bounded_by_l44_timeout_not_the_whole_call(monkeypatch):
-    """A stuck/slow check_l44() must degrade to its OWN "couldn't be
-    safety-checked" message at ~_L44_TIMEOUT_S — not silently consume most of
-    _TOTAL_TIMEOUT_S before the provider steps even get a turn."""
+def test_l44_hang_is_bounded_fast_and_degrades_to_the_floor(monkeypatch):
+    """A stuck/slow check_l44() must be bounded at ~_L44_TIMEOUT_S (not consume
+    most of _TOTAL_TIMEOUT_S), AND then degrade to the deterministic Tier-0 floor
+    — NOT hard-refuse. The old behaviour refused EVERY image when the classifier
+    was slow (FREE tier / no local Ollama), killing the feature; a benign prompt
+    must instead fall through the floor and proceed to generation.
+    """
     import time
     import main as m
 
     monkeypatch.setattr(m, "check_l44", lambda *a, **k: time.sleep(30))
     monkeypatch.setattr(m, "_L44_TIMEOUT_S", 0.4)
+    # Floor PERMITS the benign prompt (as the real Tier-0 floor does for "queen bee").
+    monkeypatch.setattr(m, "check_l44_floor", lambda *a, **k: None)
+    # Stop right after the gate so the test doesn't depend on a live provider —
+    # a distinctive error proves we got PAST the safety gate rather than refused.
+    monkeypatch.setattr(m, "resolve_key", lambda *_a, **_k: None)  # no OpenAI
+    monkeypatch.setattr(m, "_generate_pollinations",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("PAST_GATE_MARKER")))
 
     t0 = time.monotonic()
-    with pytest.raises(m.ImageGenRefused, match="safety-checked"):
+    with pytest.raises(Exception) as ei:
         m._generate_image_impl("a queen bee")
     elapsed = time.monotonic() - t0
     assert elapsed < 5.0, f"L44 bound did not fire fast (took {elapsed:.1f}s)"
+    # The point: it did NOT hard-refuse with "safety-checked"; it reached generation.
+    assert "safety-checked" not in str(ei.value), \
+        "a benign prompt on L44 timeout must degrade to the floor, not be refused"
+
+
+def test_l44_timeout_still_blocks_a_prohibited_prompt_via_the_floor(monkeypatch):
+    """Fail-TO-FLOOR, not fail-open: when check_l44 times out, a prompt the
+    Tier-0 floor rejects must still be refused — the degradation must not become
+    a bypass for pattern-matched prohibited content."""
+    import time
+    import main as m
+
+    monkeypatch.setattr(m, "check_l44", lambda *a, **k: time.sleep(30))
+    monkeypatch.setattr(m, "_L44_TIMEOUT_S", 0.4)
+    monkeypatch.setattr(m, "check_l44_floor",
+                        lambda *a, **k: "[house-rules] This request is not permitted (rule 'x').")
+
+    with pytest.raises(m.ImageGenRefused, match="not permitted"):
+        m._generate_image_impl("a prohibited thing")
 
 
 def test_provider_budget_shrinks_by_how_much_l44_already_spent(monkeypatch):
