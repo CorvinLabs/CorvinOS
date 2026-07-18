@@ -37,7 +37,7 @@ Audit contract (L16 hash chain, three new event types):
 Audit ``details`` allow-list:
   ``endpoint_id``, ``task_id``, ``instance_id_match``, ``status``,
   ``duration_ms``, ``reason``, ``ttl_s``, ``nonce_prefix``,
-  ``http_status``.
+  ``http_status``, ``error_category``, ``error_detail`` (ADR-0197).
 
 Never in ``details``: ``instruction``, ``result_schema``, response
 ``data``, ``signature``, ``hmac_key``, ``recv_key``, full nonce, URL,
@@ -284,13 +284,29 @@ def _sanitize_error(reason: str | None) -> str | None:
     """ADR-0197: Cap error detail to 256 chars, remove PII/leaks."""
     if not reason:
         return None
-    # Remove common PII patterns
-    sanitized = str(reason)[:256]
-    # Strip paths, URLs, local filenames
-    for phrase in ["localhost", "127.0.0.1", "/home", "/root", "http://", "https://"]:
-        if phrase in sanitized.lower():
-            sanitized = sanitized.replace(phrase, "[REDACTED]")
-    return sanitized.strip() if sanitized.strip() else None
+    import re
+
+    try:
+        sanitized = str(reason)
+        # Remove newlines and excessive whitespace
+        sanitized = " ".join(sanitized.split())
+
+        # Redact common PII patterns (order matters: URLs first, then components)
+        sanitized = re.sub(r'(?:https?://)?[^:@/\s]+:[^@/\s]+@', '[CREDENTIALS]', sanitized)  # URL credentials
+        sanitized = re.sub(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', '[IP]', sanitized)  # IPv4
+        sanitized = re.sub(r'(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}', '[IPv6]', sanitized)  # IPv6
+        sanitized = re.sub(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '[UUID]', sanitized, flags=re.IGNORECASE)  # UUID
+        sanitized = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '[EMAIL]', sanitized)  # E-mail
+        sanitized = re.sub(r'[a-zA-Z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*', '[WINPATH]', sanitized)  # Windows paths
+        sanitized = re.sub(r'/[a-z0-9/_.-]+', '[PATH]', sanitized, flags=re.IGNORECASE)  # Unix paths
+
+        # Truncate to 256 chars
+        if len(sanitized) > 256:
+            sanitized = sanitized[:253] + "..."
+        return sanitized.strip() if sanitized.strip() else None
+    except Exception:
+        # If regex matching fails, return a generic fallback (fail-closed)
+        return "Error detail unavailable"
 
 
 class RemoteTriggerSender:
@@ -324,20 +340,9 @@ class RemoteTriggerSender:
     # ── Public API ────────────────────────────────────────────────────
 
     @staticmethod
-    def _sanitize_error(reason: str) -> str:
-        """ADR-0197: Sanitize error detail to max 256 chars, removing sensitive info.
-
-        Caps the string at 256 characters and strips raw exception messages that
-        might leak implementation details or PII.
-        """
-        if not isinstance(reason, str):
-            reason = str(reason)
-        # Remove newlines and excessive whitespace
-        reason = " ".join(reason.split())
-        # Truncate to 256 chars
-        if len(reason) > 256:
-            reason = reason[:253] + "..."
-        return reason
+    def _sanitize_error(reason: str | None) -> str | None:
+        """ADR-0197: Delegate to module-level _sanitize_error for consistent PII redaction."""
+        return _sanitize_error(reason)
 
     @staticmethod
     def _categorize_transport_error(exc: TransportError) -> tuple[str, str]:
@@ -600,15 +605,17 @@ class RemoteTriggerSender:
         try:
             raw = self._http_post(cfg["url"], envelope, timeout_s)
         except TransportError as exc:
+            # ADR-0197: Map transport error to specific category before auditing
+            error_cat, error_det = self._categorize_transport_error(exc)
             self._audit_best_effort(
                 "A2A.response_rejected", "WARNING",
                 {"endpoint_id": endpoint_id, "task_id": task_id,
                  "reason": exc.reason, "status": "error",
                  "http_status": exc.http_status,
+                 "error_category": error_cat,
+                 "error_detail": error_det,
                  "duration_ms": _ms(start)},
             )
-            # ADR-0197: Map transport error to specific category
-            error_cat, error_det = self._categorize_transport_error(exc)
             return SendResult(
                 ok=False, status="error", task_id=task_id,
                 instance_id="", instance_id_match=False, data={},
@@ -623,14 +630,16 @@ class RemoteTriggerSender:
                 raw, cfg["recv_key"], expected_task_id=task_id,
             )
         except ResponseVerificationError as exc:
+            # ADR-0197: Map response verification error to specific category before auditing
+            error_cat, error_det = self._categorize_verification_error(exc)
             self._audit_best_effort(
                 "A2A.response_rejected", "WARNING",
                 {"endpoint_id": endpoint_id, "task_id": task_id,
                  "reason": exc.reason, "status": "error",
+                 "error_category": error_cat,
+                 "error_detail": error_det,
                  "duration_ms": _ms(start)},
             )
-            # ADR-0197: Map response verification error to specific category
-            error_cat, error_det = self._categorize_verification_error(exc)
             return SendResult(
                 ok=False, status="error", task_id=task_id,
                 instance_id="", instance_id_match=False, data={},
@@ -653,6 +662,8 @@ class RemoteTriggerSender:
                 {"endpoint_id": endpoint_id, "task_id": task_id,
                  "reason": "instance_id_mismatch", "status": "error",
                  "instance_id_match": False,
+                 "error_category": ErrorCategory.AUTH_FAILED,
+                 "error_detail": self._sanitize_error("Instance ID mismatch"),
                  "duration_ms": _ms(start)},
             )
             return SendResult(
