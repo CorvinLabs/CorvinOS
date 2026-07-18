@@ -264,6 +264,45 @@ try:
     @app.get("/local-stats", include_in_schema=False)
     def _local_stats_page() -> _HTMLResponse:
         return _HTMLResponse(content=_ls_html)
+
+    # Public telemetry API — live world map data (no auth required)
+    from corvin_console.aco.telemetry_instances_api import (
+        InstanceStatsAggregator,
+        load_telemetry_instances_from_file,
+    )
+    from pathlib import Path as _TelemetryPath
+    import os as _os_telem
+
+    @app.get("/api/v1/telemetry/instances/live", tags=["telemetry"], include_in_schema=False)
+    async def _get_live_instances() -> dict:
+        """Live instance counts per country/continent for world map dashboard."""
+        try:
+            corvin_home = _TelemetryPath(
+                _os_telem.getenv("CORVIN_HOME", _os_telem.path.expanduser("~/.corvin"))
+            )
+            telemetry_dir = corvin_home / "aco" / "telemetry"
+            pings_file = telemetry_dir / "pings.jsonl"
+
+            if not pings_file.exists():
+                pings_file = corvin_home / "audit.jsonl"
+
+            records = load_telemetry_instances_from_file(pings_file)
+            aggregator = InstanceStatsAggregator()
+            aggregator.load_instances(records)
+            return aggregator.get_cached_stats()
+        except Exception as _telem_exc:
+            _logging.getLogger(__name__).error(
+                "Failed to load telemetry: %r", _telem_exc
+            )
+            return {
+                "total_active": 0,
+                "total_active_now": 0,
+                "total_active_today": 0,
+                "total_active_week": 0,
+                "total_active_month": 0,
+                "continents": {},
+                "countries": {},
+            }
 except ImportError:
     pass
 except Exception as _plugin_exc:
