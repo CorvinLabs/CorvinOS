@@ -93,6 +93,16 @@ def bootstrap_voice_models() -> dict[str, bool]:
     return results
 
 
+def ensure_piper_available() -> bool:
+    """Quick check: are German + English Piper models present?
+
+    Returns True if at least German is available (minimum for zero-config).
+    Called at console startup; non-blocking, best-effort.
+    """
+    piper_de = _PIPER_MODELS_DIR / PIPER_MODELS["de"]["model"]
+    return piper_de.exists()
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     bootstrap_voice_models()
