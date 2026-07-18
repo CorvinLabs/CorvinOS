@@ -2185,3 +2185,85 @@ def test_observe_visits_every_iframe_even_when_none_contribute_marks():
         asyncio.run(run())
     finally:
         httpd.shutdown()
+
+
+# ── missing-browser gives an ACTIONABLE error, not an opaque 500 ─────────────
+# Reported 2026-07-18: a fresh install looped "der Browser-Dienst ist nicht
+# verfügbar" with no hint that `playwright install chromium` was needed. The
+# installer now provisions it, but an older install / failed download still hits
+# start() — which must translate the raw Playwright failure into a message that
+# names the fix, so it flows route(409) → corvin-browser MCP detail → the model.
+
+def test_missing_browser_detector_matches_the_real_playwright_message():
+    from corvin_console.browser.session import _looks_like_missing_browser as f
+    real = ("Executable doesn't exist at "
+            "/home/u/.cache/ms-playwright/chromium-1140/chrome-linux/chrome\n"
+            "Looks like Playwright was just installed or updated.\n"
+            "Please run: playwright install")
+    assert f(Exception(real)) is True
+    assert f(Exception("Navigation timeout of 30000ms exceeded")) is False
+    assert f(Exception("net::ERR_NAME_NOT_RESOLVED")) is False
+
+
+def test_start_translates_a_missing_chromium_into_an_actionable_error(monkeypatch):
+    """Launch failure with the missing-binary signature → BrowserActionError
+    whose message names `playwright install chromium`."""
+    from corvin_console.browser import session as _sess
+    from corvin_console.browser import BrowserActionError
+
+    s = _sess.BrowserSession.__new__(_sess.BrowserSession)  # no real __init__
+    s._closed = False
+    s._home = Path(tempfile.mkdtemp())
+    s.session_id = "s1"
+    s._headless = True
+
+    class _PW:
+        class chromium:
+            @staticmethod
+            async def launch_persistent_context(**_kw):
+                raise RuntimeError(
+                    "Executable doesn't exist at /x/chromium-1140/chrome. "
+                    "Please run: playwright install")
+        async def stop(self):  # noqa: D401
+            return None
+
+    async def _fake_start_pw():
+        return _PW()
+
+    import playwright.async_api as _pa
+    monkeypatch.setattr(_pa, "async_playwright", lambda: type("_A", (), {"start": staticmethod(_fake_start_pw)})())
+
+    with pytest.raises(BrowserActionError) as ei:
+        asyncio.run(s.start())
+    assert "playwright install chromium" in str(ei.value)
+
+
+def test_start_reraises_an_unrelated_launch_error_unchanged(monkeypatch):
+    """A genuine, non-setup launch failure must NOT be mislabelled as 'not set up'."""
+    from corvin_console.browser import session as _sess
+    from corvin_console.browser import BrowserActionError
+
+    s = _sess.BrowserSession.__new__(_sess.BrowserSession)
+    s._closed = False
+    s._home = Path(tempfile.mkdtemp())
+    s.session_id = "s2"
+    s._headless = True
+
+    class _PW:
+        class chromium:
+            @staticmethod
+            async def launch_persistent_context(**_kw):
+                raise RuntimeError("Target page crashed unexpectedly")
+        async def stop(self):
+            return None
+
+    async def _fake_start_pw():
+        return _PW()
+
+    import playwright.async_api as _pa
+    monkeypatch.setattr(_pa, "async_playwright", lambda: type("_A", (), {"start": staticmethod(_fake_start_pw)})())
+
+    with pytest.raises(RuntimeError) as ei:
+        asyncio.run(s.start())
+    assert "Target page crashed" in str(ei.value)
+    assert not isinstance(ei.value, BrowserActionError) or "playwright install" not in str(ei.value)
