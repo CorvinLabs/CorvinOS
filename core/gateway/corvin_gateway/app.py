@@ -265,6 +265,29 @@ try:
     def _local_stats_page() -> _HTMLResponse:
         return _HTMLResponse(content=_ls_html)
 
+    # Operator dashboards — bare /op.html, /analytics.html, /telemetry.html (outside SPA)
+    from pathlib import Path as _DashboardPath
+    _website_root = _Path2(__file__).resolve().parents[4] / "Corvin-Website"
+    if _website_root.exists():
+        _op_html_path = _website_root / "op.html"
+        _analytics_html_path = _website_root / "analytics.html"
+        _telemetry_html_path = _website_root / "telemetry.html"
+
+        if _op_html_path.exists():
+            @app.get("/op.html", include_in_schema=False)
+            def _op_dashboard() -> _HTMLResponse:
+                return _HTMLResponse(content=_op_html_path.read_text())
+
+        if _analytics_html_path.exists():
+            @app.get("/analytics.html", include_in_schema=False)
+            def _analytics_dashboard() -> _HTMLResponse:
+                return _HTMLResponse(content=_analytics_html_path.read_text())
+
+        if _telemetry_html_path.exists():
+            @app.get("/telemetry.html", include_in_schema=False)
+            def _telemetry_dashboard() -> _HTMLResponse:
+                return _HTMLResponse(content=_telemetry_html_path.read_text())
+
     # Public telemetry API — live world map data (no auth required)
     from corvin_console.aco.telemetry_instances_api import (
         InstanceStatsAggregator,
