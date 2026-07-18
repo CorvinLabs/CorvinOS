@@ -1140,6 +1140,11 @@ class OrchestrationServer:
             "data": result.data,
             "duration_ms": result.duration_ms,
         }
+        # ADR-0197: Typed error taxonomy
+        if hasattr(result, "error_category") and result.error_category is not None:
+            envelope["error_category"] = result.error_category
+        if hasattr(result, "error_detail") and result.error_detail is not None:
+            envelope["error_detail"] = result.error_detail
         self._respond(msgid, self._text_result(envelope, is_error=not result.ok))
 
     def _call_a2a_list_endpoints(self, msgid: Any, args: dict) -> None:
