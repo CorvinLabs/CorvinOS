@@ -76,6 +76,28 @@ def send_heartbeat(home: Path) -> bool:
         return False
 
 
+def _check_a2a_reconnect(home: Path) -> None:
+    """ADR-0198: best-effort proactive A2A reconnect broadcast.
+
+    Piggybacks on this thread's existing 5-minute cadence instead of
+    spinning up a dedicated thread — this is an IP-change *poll*, not a
+    telemetry ping, so it deliberately ignores ``ping_enabled`` (opting out
+    of the anonymous instance ping says nothing about wanting stale, dead
+    A2A peer connections). Soft-imports operator/bridges/shared, which is
+    not present in every deployment shape; absence is a silent no-op.
+    """
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _shared = _Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+        if _shared.is_dir() and str(_shared) not in _sys.path:
+            _sys.path.insert(0, str(_shared))
+        from a2a_friendship import check_and_broadcast_reconnect  # type: ignore[import-not-found]
+        check_and_broadcast_reconnect()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _heartbeat_loop(home: Path) -> None:
     """Run forever: wait one interval, then heartbeat every 5 minutes.
 
@@ -93,6 +115,7 @@ def _heartbeat_loop(home: Path) -> None:
                 send_heartbeat(home)
         except Exception:  # noqa: BLE001
             pass
+        _check_a2a_reconnect(home)
         time.sleep(_INTERVAL + random.randint(-_JITTER, _JITTER))
 
 

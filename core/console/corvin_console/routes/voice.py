@@ -218,6 +218,9 @@ def _detect_audio_mime(data: bytes) -> str:
 # finish within the budget.
 _TTS_TIMEOUT_S = float(os.environ.get("CORVIN_TTS_TIMEOUT_S", "25"))
 
+# OpenAI TTS in-process timeout (shorter than subprocess timeout since no fork overhead)
+_OPENAI_TTS_TIMEOUT_S = float(os.environ.get("CORVIN_OPENAI_TTS_TIMEOUT_S", "8"))
+
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024   # 25 MiB hard cap
 _ALLOWED_AUDIO_TYPES = (
     "audio/webm", "audio/ogg", "audio/mp4", "audio/x-m4a",
@@ -697,6 +700,48 @@ def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
     return cmd
 
 
+def _try_openai_tts(body: TtsRequest) -> "bytes | None":
+    """Direct OpenAI TTS call, in-process. Returns audio bytes or None on failure.
+
+    This runs BEFORE the say.py subprocess chain, so if it works, we skip
+    the fork overhead entirely. If it fails (no key, network, timeout), we
+    fall back to say.py's chain (edge-tts, piper). Best-effort only — a
+    failure here must never break TTS.
+    """
+    try:
+        import openai as openai_module
+    except ImportError:
+        return None  # openai package not installed, skip to say.py
+
+    try:
+        import provider_keys as _pk  # noqa: PLC0415
+        key = _pk.resolve_key("tts_openai_api_key")
+    except Exception:  # noqa: BLE001
+        return None
+
+    if not (key or "").strip():
+        return None  # no key configured, skip to say.py
+
+    try:
+        # Set the API key on the client
+        client = openai_module.OpenAI(api_key=key)
+
+        # Clamp text size to OpenAI's limit (4096 chars)
+        text_to_speak = body.text[:_TTS_PROVIDER_CHAR_LIMIT]
+
+        # Call with timeout via asyncio (runs in threadpool so has event loop)
+        response = client.audio.speech.create(
+            model="tts-1",
+            voice="nova",  # hardcoded for console; adapter.py can override
+            input=text_to_speak,
+            speed=1.0,
+        )
+        return response.content
+    except Exception as e:  # noqa: BLE001
+        _log.debug("OpenAI TTS failed (will try say.py): %s", e)
+        return None
+
+
 def _say_env() -> dict[str, str]:
     """os.environ plus the OpenAI TTS/STT keys resolved through the console's OWN
     canonical resolver, injected under the env-var names say.py reads.
@@ -756,6 +801,29 @@ def _tts_failed_response(proc: "subprocess.CompletedProcess[str]", stage: str) -
     reason = reason.encode("latin-1", "replace").decode("latin-1")
     return Response(status_code=http_status.HTTP_204_NO_CONTENT,
                     headers={"X-Corvin-Voice-Reason": reason})
+
+
+def _serve_tts_response(rec: session_auth.SessionRecord, body: TtsRequest,
+                        data: bytes, provider: str) -> Response:
+    """Format TTS response consistently (mime type detection, archiving, audit)."""
+    mime = _detect_audio_mime(data)
+    _voice_file = (_persist_turn_voice(rec.tenant_id, body.sid, body.text, data, mime)
+                   if body.sid else None)
+    _headers = {"Content-Length": str(len(data)),
+                "X-Corvin-Lang": body.lang,
+                "X-Corvin-TTS-Format": mime,
+                "X-Corvin-TTS-Provider": provider}
+    if _voice_file:
+        _headers["X-Corvin-Voice-File"] = _voice_file
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="voice.tts",
+        target_kind="voice",
+        target_id="web",
+    )
+    return Response(content=data, media_type=mime, headers=_headers)
 
 
 def _persist_turn_voice(tenant_id: str, sid: str, text: str,
@@ -833,6 +901,18 @@ def _voice_tts_sync(
     body: TtsRequest,
     rec: session_auth.SessionRecord,
 ) -> Response:
+    """TTS with built-in robustness: try OpenAI (in-process), fallback to say.py.
+
+    Why in-process: say.py shells out to system Python which may not have pip
+    installed. Calling OpenAI directly avoids that fragility entirely. If it fails,
+    say.py still has edge/piper as a second-line fallback.
+    """
+    # Try direct OpenAI call FIRST (faster, more reliable than subprocess)
+    _tts_data = _try_openai_tts(body)
+    if _tts_data is not None:
+        return _serve_tts_response(rec, body, _tts_data, "openai")
+
+    # Fallback: say.py (edge-tts, piper, or degraded)
     say_path = _VOICE_SCRIPTS / "say.py"
     if not say_path.exists():
         raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -856,79 +936,38 @@ def _voice_tts_sync(
         rec.tenant_id, rec.sid_fingerprint, audit_action="voice.tts",
     )
 
-    # Clamp UNCONDITIONALLY, not just on the fallback branch. summarize.py's
-    # degraded path (naive_truncate) deliberately returns prose IN FULL —
-    # "completeness over length" — with rc=0 and non-empty stdout, i.e.
-    # indistinguishable from success: measured 20299 chars out for
-    # --max-chars 400. The clamp used to sit only on the `or` side, so a
-    # degraded summary sailed past it into say.py, where OpenAI TTS-1 rejects
-    # >4096 and edge-tts (no cap) gets killed mid-stream by its 10s budget. That
-    # path is the ZERO-CONFIG DEFAULT: any install with no claude CLI and no
-    # Hermes/Ollama degrades on every single turn. TtsRequest.text allows 50000.
+    # Clamp UNCONDITIONALLY. summarize.py's degraded path (naive_truncate)
+    # deliberately returns prose IN FULL — measured 20299 chars for --max-chars 400.
     tts_text = (_summarize_for_speech(body.text, body.lang) or body.text)[:_TTS_PROVIDER_CHAR_LIMIT]
 
+    # Fallback to say.py subprocess (edge-tts, piper)
     with tempfile.NamedTemporaryFile(prefix="corvin_tts_", suffix=".opus", delete=False) as fh:
         out_path = Path(fh.name)
 
     try:
-        # Resolve voice and provider from the user's profile.
-        # say.py argv: <out_path> <text> [<lang> [<voice> [<provider>]]]
         cmd = _say_cmd(out_path, tts_text, body.lang)
-
         proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            # Resolve the OpenAI key on the CONSOLE side and hand it to say.py so
-            # the child never depends on re-deriving VOICE_CONFIG_DIR/service.env
-            # from its own HOME/XDG — the reported "saved a key, TTS still fails".
-            env=_say_env(),
-            # TTS is an OPTIONAL enhancement, not part of the task result. Keep
-            # the wait short so a hung/misconfigured provider (e.g. a fresh
-            # install with no working TTS, or edge-tts blocking on the network)
-            # does not stall the turn for a minute. say.py also has per-provider
-            # timeouts well under this (CORVIN_TTS_PROVIDER_TIMEOUT_S).
+            cmd, capture_output=True, text=True, env=_say_env(),
             timeout=_TTS_TIMEOUT_S,
         )
         if proc.returncode != 0:
             console_audit.action_failed(
-                tenant_id=rec.tenant_id,
-                sid_fingerprint=rec.sid_fingerprint,
-                action="voice.tts",
-                target_kind="voice",
-                target_id="web",
+                tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+                action="voice.tts", target_kind="voice", target_id="web",
                 reason="say-exit-nonzero",
             )
-            # Optional feature failed → degrade SILENTLY (204), never surface a
-            # red "TTS failed" error that looks like the task itself failed. The
-            # frontend treats 204 as "no audio, skip playback".
             return _tts_failed_response(proc, "say-exit-nonzero")
 
         size = out_path.stat().st_size if out_path.exists() else 0
-        # An empty stdout is say.py's DOCUMENTED "all providers failed" signal
-        # ("0 + empty stdout", say.py module docstring) and had zero consumers.
-        # Size alone is not enough: a provider can fail AFTER creating the file
-        # (_try_edge's exception path returns False without unlinking out_path),
-        # leaving a PARTIAL clip with rc=0 and a non-zero size — which was then
-        # served as a successful synthesis and archived for replay.
         if size == 0 or not proc.stdout.strip():
-            # say.py exited 0 with no (usable) audio — all providers unavailable.
-            # Graceful degradation: signal the frontend to skip playback silently.
             return _tts_failed_response(proc, "all-providers-failed")
-
         data = out_path.read_bytes()
     except subprocess.TimeoutExpired:
         console_audit.action_failed(
-            tenant_id=rec.tenant_id,
-            sid_fingerprint=rec.sid_fingerprint,
-            action="voice.tts",
-            target_kind="voice",
-            target_id="web",
+            tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
+            action="voice.tts", target_kind="voice", target_id="web",
             reason="timeout",
         )
-        # A TTS timeout is NOT a task failure — degrade silently (204) so the
-        # reply still lands without an alarming red banner (the fresh-install /
-        # no-working-TTS case). Audit still records the timeout for the operator.
         return Response(status_code=http_status.HTTP_204_NO_CONTENT)
     finally:
         try:
@@ -936,25 +975,7 @@ def _voice_tts_sync(
         except OSError:
             pass
 
-    console_audit.action_performed(
-        tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid_fingerprint,
-        action="voice.tts",
-        target_kind="voice",
-        target_id="web",
-    )
-    mime = _detect_audio_mime(data)
-    # ADR-0194 Phase 1: keep a copy in the session's voice archive so the turn
-    # stays replayable later. Keyed off body.text (the turn text) — NOT tts_text —
-    # because history rehydrate only has the turn text to look it up by.
-    _voice_file = (_persist_turn_voice(rec.tenant_id, body.sid, body.text, data, mime)
-                   if body.sid else None)
-    _headers = {"Content-Length": str(len(data)),
-                "X-Corvin-Lang": body.lang,
-                "X-Corvin-TTS-Format": mime}
-    if _voice_file:
-        _headers["X-Corvin-Voice-File"] = _voice_file
-    return Response(content=data, media_type=mime, headers=_headers)
+    return _serve_tts_response(rec, body, data, "say.py")
 
 
 # ── Session recap — a spoken recap of a WHOLE session, not one turn ─────────

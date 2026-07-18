@@ -120,6 +120,18 @@ _A2A_NETWORK_PUBKEY_PATH = (
 _REMOTE_ORIGINS_ENV = "REMOTE_ORIGINS_DIR"
 _REMOTE_ORIGINS_DEFAULT = Path(__file__).resolve().parents[2] / "cowork" / "remote_origins"
 
+# ── Endpoint registry resolution (ADR-0198 reconnect token) — mirrors
+# RemoteEndpointRegistry's own default in remote_trigger_sender.py. A signed
+# reconnect envelope updates OUR OUTBOUND endpoint entry for the sender's
+# kid, so the receiver needs to locate the same directory the local sender
+# uses, not just its own inbound origins directory.
+_REMOTE_ENDPOINTS_ENV = "REMOTE_ENDPOINTS_DIR"
+_REMOTE_ENDPOINTS_DEFAULT = Path(__file__).resolve().parents[2] / "cowork" / "remote_endpoints"
+
+# Reconnect new_url: same scheme/length bar as other operator-controlled
+# A2A URLs (see a2a_friendship.set_my_url) — bounded length, http(s) only.
+_MAX_RECONNECT_URL_LEN = 512
+
 # Validation time window: ±300 s
 _TIME_WINDOW_S: float = 300.0
 
@@ -142,7 +154,11 @@ _DEFAULT_RATE_LIMIT_RPM: int = 60
 # ── Protocol version ──────────────────────────────────────────────────────
 # ADR-0153 M5: current protocol version supported by this receiver.
 # Senders/receivers at v7 and earlier continue to work — v8 merely adds the
-# optional corvin_id_jwt field (additive, backward-compatible).
+# optional corvin_id_jwt field (additive, backward-compatible). ADR-0198's
+# reconnect field (below) is likewise additive and does NOT bump this
+# constant — same rationale as instance_attestation/ADR-0145: this constant
+# is reserved for deliberate capability-discovery milestones, not every
+# additive field.
 PROTOCOL_VERSION: int = 8
 
 
@@ -230,6 +246,16 @@ class TaskEnvelope:
     # stripped or swapped in transit. Capped at 8 192 chars. Pre-M5 receivers that
     # do not know this field ignore it (additive, backward-compatible).
     corvin_id_jwt: str | None = None
+    # ADR-0198: optional proactive reconnect notification (additive field,
+    # does not bump PROTOCOL_VERSION — see comment above).
+    # Contains {"new_url": "<peer's new A2A base URL>"}. Included in the HMAC
+    # payload so it cannot be stripped or swapped in transit. When present,
+    # receive() short-circuits BEFORE worker dispatch (see _handle_reconnect):
+    # this is a control-plane message about the sender's own reachability,
+    # not a task. Pre-ADR-0198 receivers ignore the field (additive,
+    # backward-compatible) and fall through to normal instruction handling,
+    # which is safe because reconnect envelopes carry an empty instruction.
+    reconnect: dict | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "TaskEnvelope":
@@ -247,6 +273,7 @@ class TaskEnvelope:
             net_att_raw = d.get("network_attestation")
             inst_att_raw = d.get("instance_attestation")
             corvin_id_jwt_raw = d.get("corvin_id_jwt")
+            reconnect_raw = d.get("reconnect")
             issued_at_val = float(d["issued_at"])
             if not math.isfinite(issued_at_val):
                 raise ValidationError("issued_at_not_finite")
@@ -312,6 +339,7 @@ class TaskEnvelope:
                 sender_genesis_hash=sgh_val,
                 instance_attestation=dict(inst_att_raw) if isinstance(inst_att_raw, dict) else None,
                 corvin_id_jwt=str(corvin_id_jwt_raw)[:8192] if isinstance(corvin_id_jwt_raw, str) else None,
+                reconnect=dict(reconnect_raw) if isinstance(reconnect_raw, dict) else None,
             )
         except (TypeError, ValueError, AttributeError) as exc:
             raise ValidationError(f"type_error:{type(exc).__name__}") from exc
@@ -338,6 +366,9 @@ class TaskEnvelope:
         # ADR-0153 M5: omit corvin_id_jwt when None (backward compat with pre-v8 senders).
         if d.get("corvin_id_jwt") is None:
             d.pop("corvin_id_jwt", None)
+        # ADR-0198: omit reconnect when None (backward compat with pre-v9 senders).
+        if d.get("reconnect") is None:
+            d.pop("reconnect", None)
         return json.dumps(
             d, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode()
@@ -697,6 +728,15 @@ class RemoteTriggerReceiver:
 
         # Rate-limit check is now in _validate() step 5.6 (before nonce consumption).
         recv_key_bytes = bytes.fromhex(origin_config["recv_key"])
+
+        # ADR-0198: reconnect notifications are a control-plane message about
+        # the sender's own reachability, not a task — short-circuit BEFORE
+        # attachment/classification/worker-dispatch machinery. Signature,
+        # origin trust, time-window, and replay protection are already
+        # enforced by the successful _validate() call above (fail-closed);
+        # nothing below re-derives trust.
+        if env.reconnect is not None:
+            return self._handle_reconnect(env, recv_key_bytes, start)
 
         # Step 7: Audit-first (strict — failure blocks the request)
         # Inbound attachment counts go into the audit details (no content).
@@ -1897,6 +1937,77 @@ class RemoteTriggerReceiver:
         sig = _hmac.new(recv_key, resp.canonical_payload(), hashlib.sha256).hexdigest()
         resp.signature = sig
         return resp
+
+    def _handle_reconnect(
+        self, env: TaskEnvelope, recv_key: bytes, start: float,
+    ) -> ResponseEnvelope:
+        """ADR-0198: apply a signed reconnect notification (proactive IP/URL
+        change push). ``env`` already passed HMAC + origin + time-window +
+        replay validation in ``_validate()`` — this method only sanitizes the
+        new_url shape and rewrites the local outbound endpoint entry that
+        shares ``env.origin_id`` as its kid (see a2a_friendship.py: origin
+        and endpoint files are paired 1:1 under the same friendship kid).
+
+        Fail-closed: any rejection here returns status="rejected" and never
+        touches the endpoint file. Audit-first — the endpoint file is only
+        written after the audit record lands (mirrors the envelope_received
+        invariant elsewhere in this class).
+        """
+        reason: str | None = None
+        new_url = str((env.reconnect or {}).get("new_url", "")).strip()
+        if not new_url or len(new_url) > _MAX_RECONNECT_URL_LEN:
+            reason = "reconnect_url_invalid_length"
+        elif not (new_url.startswith("https://") or new_url.startswith("http://")):
+            reason = "reconnect_url_bad_scheme"
+        elif not new_url.isprintable() or any(c.isspace() for c in new_url):
+            reason = "reconnect_url_bad_chars"
+
+        applied = False
+        if reason is None:
+            try:
+                from a2a_friendship import update_endpoint_url  # noqa: PLC0415
+                applied = update_endpoint_url(
+                    env.origin_id, new_url, endpoints_dir=self._endpoints_dir(),
+                )
+                if not applied:
+                    reason = "no_matching_active_endpoint"
+            except Exception as exc:  # noqa: BLE001
+                reason = f"reconnect_apply_error:{type(exc).__name__}"
+
+        try:
+            self._audit_strict(
+                "A2A.reconnect_applied" if applied else "A2A.reconnect_rejected",
+                "INFO" if applied else "WARNING",
+                {"task_id": env.task_id, "origin_id": env.origin_id,
+                 "status": "ok" if applied else "rejected",
+                 "reason": reason or "", "duration_ms": _ms(start)},
+            )
+        except AuditWriteError:
+            # Audit-first: a failed audit write means the change is NOT
+            # durable evidence — roll back the nonce (mirrors the
+            # envelope_received rollback) and reject so the sender retries.
+            self._nonces.remove(env.nonce)
+            return self._rejected_response(env.task_id, env.origin_id, recv_key)
+
+        resp = ResponseEnvelope(
+            task_id=env.task_id,
+            origin_id=env.origin_id,
+            issued_at=time.time(),
+            instance_id=self._instance_id,
+            status="ok" if applied else "rejected",
+            data={"applied": applied},
+            attachments=[],
+            signature="",
+        )
+        resp.signature = _hmac.new(
+            recv_key, resp.canonical_payload(), hashlib.sha256,
+        ).hexdigest()
+        return resp
+
+    @staticmethod
+    def _endpoints_dir() -> Path:
+        env = os.environ.get(_REMOTE_ENDPOINTS_ENV)
+        return Path(env) if env else _REMOTE_ENDPOINTS_DEFAULT
 
     def _rejected_response(
         self, task_id: str, origin_id: str, recv_key: bytes | None = None,

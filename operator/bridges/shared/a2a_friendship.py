@@ -355,3 +355,131 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> None:
     os.replace(tmp, path)
     if path.exists():
         os.chmod(path, 0o600)
+
+
+# ── ADR-0198 — proactive reconnect (dynamic-IP peers) ───────────────────
+#
+# Concept: a peer whose own address changes at runtime (e.g. an LTE router
+# handing out a new public IP) PUSHES a signed reconnect notification to
+# every peer that already holds it as an ACTIVE endpoint, instead of relying
+# on the next outbound call failing with a TransportError and an operator
+# manually re-running ``activate_connection``. The notification travels as
+# a TaskEnvelope carrying ``reconnect={"new_url": ...}`` (see
+# remote_trigger_receiver.TaskEnvelope / RemoteTriggerSender.send_reconnect)
+# so it is authenticated by the SAME HMAC keys already established at
+# pairing time — no new credential, no new trust root.
+
+def update_endpoint_url(kid: str, new_url: str, *, endpoints_dir: Path) -> bool:
+    """Rewrite the ``url`` field of an existing, ACTIVE friendship endpoint.
+
+    Unlike :func:`activate_connection`, this does NOT create or enable a
+    connection — it only updates a peer that is already ACTIVE, so a
+    reconnect notification can never be used to bootstrap trust. Returns
+    False (no-op) for a missing, disabled, PENDING, or non-friendship file.
+    """
+    path = endpoints_dir / f"{kid}.json"
+    if not path.exists():
+        return False
+    try:
+        cfg = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not cfg.get("_friendship") or not cfg.get("enabled") or cfg.get("state") != "ACTIVE":
+        return False
+    new_url = new_url.strip().rstrip("/")
+    if not new_url:
+        return False
+    cfg["url"] = new_url if new_url.endswith("/v1/a2a/receive") else new_url + "/v1/a2a/receive"
+    _atomic_write(path, cfg)
+    return True
+
+
+def detect_local_ip() -> str:
+    """Best-effort local outbound-interface IP, or "" on any failure.
+
+    Pure local socket operation (UDP connect without sending data) — no
+    external egress, so it does not implicate L35 egress-lockdown allowlists.
+    This is a proxy signal for "the network interface changed", not the
+    peer-visible public IP; operators behind NAT/CGNAT still need their
+    ``my_a2a_url`` kept current (e.g. via a DDNS updater) for the URL this
+    module re-announces to actually be reachable.
+    """
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(0.5)
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except OSError:
+        return ""
+
+
+def _last_known_ip_path() -> Path:
+    return _corvin_home() / "global" / "remote_trigger" / "last_known_ip"
+
+
+def check_and_broadcast_reconnect(
+    *, endpoints_dir: Path | None = None,
+) -> int:
+    """If the local interface IP changed since the last check, proactively
+    push a signed reconnect notification (current ``get_my_url()``) to every
+    ACTIVE friendship endpoint. Fail-soft: never raises, returns the number
+    of peers successfully notified (0 on no-op or any failure).
+
+    Intended to be polled from an existing background loop (e.g. the
+    presence heartbeat) rather than run on its own thread.
+    """
+    current_ip = detect_local_ip()
+    if not current_ip:
+        return 0
+
+    ip_path = _last_known_ip_path()
+    try:
+        last_ip = ip_path.read_text("utf-8").strip() if ip_path.exists() else ""
+    except OSError:
+        last_ip = ""
+
+    if current_ip == last_ip:
+        return 0
+
+    try:
+        ip_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ip_path.with_suffix(".tmp")
+        tmp.write_text(current_ip, encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, ip_path)
+    except OSError:
+        pass
+
+    if not last_ip:
+        # First observation this boot — nothing to compare against yet,
+        # avoid announcing on every fresh start.
+        return 0
+
+    my_url = get_my_url()
+    if not my_url:
+        return 0
+
+    try:
+        from remote_trigger_sender import (  # noqa: PLC0415
+            RemoteTriggerSender, RemoteEndpointRegistry,
+        )
+    except Exception:  # noqa: BLE001
+        return 0
+
+    registry = RemoteEndpointRegistry(endpoints_dir)
+    sender = RemoteTriggerSender(endpoints_dir, registry)
+    notified = 0
+    for endpoint_id in registry.list_ids():
+        try:
+            cfg = registry.load(endpoint_id)
+        except Exception:  # noqa: BLE001
+            continue
+        if not cfg.get("_friendship") or cfg.get("state") != "ACTIVE":
+            continue
+        try:
+            if sender.send_reconnect(endpoint_id, my_url):
+                notified += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return notified

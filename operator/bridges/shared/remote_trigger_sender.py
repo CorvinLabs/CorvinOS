@@ -28,6 +28,10 @@ Audit contract (L16 hash chain, three new event types):
   ``A2A.response_received``     INFO     After successful response verification
   ``A2A.response_rejected``     WARNING  Signature mismatch, transport error,
                                           or instance_id pin mismatch
+  ``A2A.reconnect_sent``        INFO     ADR-0198: send_reconnect() got a signed
+                                          "ok" response
+  ``A2A.reconnect_send_failed`` WARNING  ADR-0198: send_reconnect() transport
+                                          error, bad signature, or rejection
   ============================= ======== =========================================
 
 Audit ``details`` allow-list:
@@ -535,6 +539,59 @@ class RemoteTriggerSender:
             duration_ms=_ms(start),
         )
 
+    def send_reconnect(self, endpoint_id: str, new_url: str, *,
+                        timeout_s: int = _DEFAULT_TIMEOUT_S) -> bool:
+        """ADR-0198: proactively push a signed "my URL changed" notification.
+
+        Reuses the endpoint's existing pairing HMAC key — no new credential.
+        Fail-soft: never raises, returns False on any error (the operator's
+        next real ``send()`` still surfaces a hard TransportError if the
+        stale URL truly went dead, so this is additive robustness, not a
+        replacement for normal error handling).
+        """
+        start = time.time()
+        try:
+            cfg = self._registry.load(endpoint_id)
+        except EndpointError as exc:
+            self._audit_best_effort(
+                "A2A.reconnect_send_failed", "WARNING",
+                {"endpoint_id": endpoint_id, "reason": exc.reason,
+                 "duration_ms": _ms(start)},
+            )
+            return False
+
+        envelope = self._build_envelope(
+            task_id=str(uuid.uuid4()),
+            nonce=secrets.token_hex(32),
+            origin_id=cfg.get("origin_id_for_send") or cfg.get("our_origin_id") or self._instance_id,
+            instruction="",
+            result_schema={},
+            ttl_s=int(cfg.get("default_ttl_s", _DEFAULT_TTL_S)),
+            hmac_key_hex=cfg["hmac_key"],
+            sender_instance_id=self._instance_id,
+            reconnect={"new_url": new_url.strip().rstrip("/")[:512]},
+        )
+        try:
+            raw = self._http_post(cfg["url"], envelope, timeout_s)
+            response, _ = self._verify_response(raw, cfg["recv_key"], expected_task_id=envelope["task_id"])
+        except (TransportError, ResponseVerificationError) as exc:
+            self._audit_best_effort(
+                "A2A.reconnect_send_failed", "WARNING",
+                {"endpoint_id": endpoint_id, "reason": exc.reason,
+                 "duration_ms": _ms(start)},
+            )
+            return False
+
+        ok = str(response.get("status", "rejected")) == "ok"
+        self._audit_best_effort(
+            "A2A.reconnect_sent" if ok else "A2A.reconnect_send_failed",
+            "INFO" if ok else "WARNING",
+            {"endpoint_id": endpoint_id,
+             "reason": "" if ok else str(response.get("status", "rejected")),
+             "duration_ms": _ms(start)},
+        )
+        return ok
+
     # ── Internals ─────────────────────────────────────────────────────
 
     @staticmethod
@@ -667,6 +724,7 @@ class RemoteTriggerSender:
         network_attestation: dict | None = None,
         sender_chain_tail: str | None = None,
         sender_genesis_hash: str | None = None,
+        reconnect: dict | None = None,
     ) -> dict:
         env: dict = {
             "task_id": task_id,
@@ -707,6 +765,11 @@ class RemoteTriggerSender:
         # that pre-date ADR-0117 ignore the field.
         if sender_genesis_hash is not None and isinstance(sender_genesis_hash, str):
             env["sender_genesis_hash"] = sender_genesis_hash
+        # ADR-0198: reconnect — proactive "my URL changed" push. Included in
+        # HMAC when present. Pre-ADR-0198 receivers ignore the field and fall
+        # through to normal instruction handling (safe: instruction is "").
+        if reconnect is not None and isinstance(reconnect, dict):
+            env["reconnect"] = reconnect
         # IBC concept (Protocol v7): instance_attestation — binds this envelope to
         # the sender's Instance Binding Certificate (IBC).  Included in HMAC when
         # present so it cannot be stripped or swapped in transit.  Receivers that

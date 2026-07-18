@@ -237,6 +237,75 @@ meets or exceeds the licence limit.
 
 ---
 
+## Proactive Reconnect (ADR-0198, dynamic-IP peers)
+
+**Problem:** an instance behind a dynamic-IP connection (e.g. an LTE router)
+changes its public address at runtime. Every peer that already holds it as an
+ACTIVE friendship endpoint (`operator/cowork/remote_endpoints/<kid>.json`)
+keeps the stale URL until either an operator manually re-runs
+`activate_connection`, or the next real task send fails with a
+`TransportError` — a purely passive, timeout-driven recovery path.
+
+**Mechanism:** the changed instance pushes a signed reconnect notification
+to each known peer instead of waiting to be called. It travels as an
+ordinary `TaskEnvelope` (Protocol v10) carrying a new optional
+`reconnect: {"new_url": "<base url>"}` field, HMAC-covered by the *same*
+per-pairing key already established at pairing time — no new credential, no
+new trust root. `RemoteTriggerReceiver.receive()` short-circuits on this
+field, BEFORE attachment/classification/worker-dispatch machinery, and
+re-validates only the URL shape (`http(s)://`, ≤512 chars, printable,
+no whitespace) before rewriting the peer's own `remote_endpoints/<kid>.json`
+`url` field via `a2a_friendship.update_endpoint_url()`.
+
+**Fail-closed guarantees:**
+
+| Guard | Effect |
+|---|---|
+| Signature/origin/time-window/replay checks run in `_validate()` first | An unauthenticated or replayed reconnect is rejected before it is even parsed as a reconnect |
+| Endpoint must already be `state == "ACTIVE"` and `enabled` | A PENDING (never-yet-connected) or disabled peer cannot be reconnected into existence — reconnect can only *update* trust that already exists |
+| Audit-first (`_audit_strict`) | `A2A.reconnect_applied` / `A2A.reconnect_rejected` is hash-chained before the endpoint file is (or is not) rewritten; a failed audit write rolls back the nonce and rejects |
+| No IP/URL in audit `details` | Mirrors the existing A2A audit allow-list (`endpoint_id`, `task_id`, `reason`, `status`, `duration_ms`) — the new URL itself is never logged |
+
+**Trigger (sender side):** `RemoteTriggerSender.send_reconnect(endpoint_id, new_url)`
+builds and POSTs the signed envelope, fail-soft (never raises). It is polled
+from `a2a_friendship.check_and_broadcast_reconnect()`, which compares the
+local outbound-interface IP (pure local UDP-connect trick, no external
+egress call) against a cached last-known value at
+`<corvin_home>/global/remote_trigger/last_known_ip`; on change, it
+re-announces the operator-configured `get_my_url()` to every ACTIVE
+friendship endpoint. This is polled from the existing 5-minute presence-
+heartbeat thread (`aco/heartbeat.py::_heartbeat_loop`) rather than a new
+dedicated thread — deliberately independent of `ping_enabled` (opting out of
+the anonymous telemetry ping says nothing about wanting dead A2A peer links).
+
+**Scope note:** local-interface-IP-changed is a *proxy* trigger, not true
+public-IP detection (which would require an external STUN/echo call and a
+new L35 egress allowlist entry — out of scope here). Operators behind
+NAT/CGNAT must still keep `my_a2a_url` (`CORVIN_A2A_URL` env var or
+`<corvin_home>/global/remote_trigger/my_a2a_url`) current, e.g. via a DDNS
+updater; this mechanism only makes the *push* proactive once that URL is
+known to have changed, instead of leaving peers to time out.
+
+### Audit events (ADR-0198)
+
+| Event | Severity | When |
+|---|---|---|
+| `A2A.reconnect_sent` | INFO | Sender's `send_reconnect()` receives a signed `"ok"` response |
+| `A2A.reconnect_send_failed` | WARNING | Transport error, bad signature, or receiver rejected the reconnect |
+| `A2A.reconnect_applied` | INFO | Receiver rewrote the peer's endpoint URL |
+| `A2A.reconnect_rejected` | WARNING | Receiver validated the envelope but declined to apply (bad URL shape, no matching ACTIVE endpoint, or audit write failed) |
+
+### Key files (ADR-0198 additions)
+
+| File | Role |
+|---|---|
+| `operator/bridges/shared/remote_trigger_receiver.py` | `TaskEnvelope.reconnect` field, `_handle_reconnect()` |
+| `operator/bridges/shared/remote_trigger_sender.py` | `RemoteTriggerSender.send_reconnect()` |
+| `operator/bridges/shared/a2a_friendship.py` | `update_endpoint_url()`, `detect_local_ip()`, `check_and_broadcast_reconnect()` |
+| `core/console/corvin_console/aco/heartbeat.py` | polls `check_and_broadcast_reconnect()` each 5-min tick |
+
+---
+
 ## Threat model
 
 | Threat | Mitigated by |
@@ -247,6 +316,8 @@ meets or exceeds the licence limit.
 | MitM on manifest fetch | Manifest is cryptographically signed; MitM cannot forge |
 | Stale manifest attack | 7-day TTL; `a2a_manifest_required` for strict mode |
 | Free-tier quota bypass via alternative pairing paths | `_check_a2a_peers_max()` called by all 4 pairing routes |
+| Unauthenticated reconnect hijack (redirect a peer's outbound calls to an attacker URL) | `_validate()`'s HMAC/origin/time-window/replay checks run before `reconnect` is even inspected — no distinct/weaker trust path (ADR-0198) |
+| Reconnect-as-bootstrap (spoof a PENDING/never-connected peer into existence) | `update_endpoint_url()` refuses any file that is not already `state == "ACTIVE"` and `enabled` (ADR-0198) |
 
 **Out of scope:** Operator with valid license who deliberately modifies source.
 The network enforces *valid license*, not *unmodified binary*.
