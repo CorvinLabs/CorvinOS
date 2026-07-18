@@ -74,6 +74,32 @@ class BrowserActionError(RuntimeError):
     """Raised when an action cannot be completed (bad index, blocked, timeout)."""
 
 
+# Actionable message for the one setup gap users actually hit: the browser
+# isn't provisioned. The installer now does this (corvinOS/installer/steps/
+# browser.py), but an install that predates that step, or a failed download,
+# still lands here — so say exactly what to run instead of "not available".
+_BROWSER_NOT_SET_UP = (
+    "Browser automation isn't set up yet — the Chromium engine is missing. "
+    "Run:  playwright install chromium   (or reinstall with "
+    "'pip install corvinos[browser] && playwright install chromium'). "
+    "This is a one-time ~150 MB download."
+)
+
+
+def _looks_like_missing_browser(exc: BaseException) -> bool:
+    """True iff *exc* is Playwright's 'browser binary not installed' failure.
+
+    Playwright raises a generic Error whose message names the missing executable
+    and points at `playwright install` — matched on the stable phrases rather
+    than an exception type, since the driver surfaces it as a plain Error."""
+    msg = str(exc).lower()
+    return (
+        ("executable doesn't exist" in msg or "executabledoesn'texist" in msg
+         or ("browser" in msg and "was not found" in msg))
+        or "playwright install" in msg
+    )
+
+
 class StaleMarkError(BrowserActionError):
     """Raised when the live element at ``[index]`` no longer matches the
     ``Mark`` captured at the last ``observe()`` (ADR-0183 S1 stale-mark
@@ -201,7 +227,15 @@ class BrowserSession:
 
     async def start(self) -> None:
         import os
-        from playwright.async_api import async_playwright
+        try:
+            from playwright.async_api import async_playwright
+        except ModuleNotFoundError as exc:
+            # The `playwright` package itself isn't installed (a base
+            # `pip install corvinos` — playwright is the `[browser]` extra).
+            # Raise the ACTIONABLE message instead of a bare ModuleNotFoundError
+            # that the route turns into an opaque 500 and the model narrates as
+            # "der Browser-Dienst ist nicht verfügbar".
+            raise BrowserActionError(_BROWSER_NOT_SET_UP) from exc
         user_data = self._home / "sessions" / self.session_id
         user_data.mkdir(parents=True, exist_ok=True)
         self._user_data = user_data
@@ -222,13 +256,20 @@ class BrowserSession:
                 args=args,
                 viewport={"width": 1280, "height": 800},
             )
-        except Exception:
+        except Exception as exc:
             # A failed launch must not leak the Playwright driver subprocess nor
             # leave _pw truthy — that would make _ensure_started() think the
             # session is already up on the next call, permanently wedging it.
             with contextlib.suppress(Exception):
                 await self._pw.stop()
             self._pw = None
+            # The dominant real cause is the Chromium BINARY not being downloaded
+            # (playwright installed, `playwright install chromium` never run):
+            # Playwright raises "Executable doesn't exist at …/chromium-XXXX/…".
+            # Translate that into the actionable message so the user learns they
+            # need to fetch the browser, instead of the opaque "not available".
+            if _looks_like_missing_browser(exc):
+                raise BrowserActionError(_BROWSER_NOT_SET_UP) from exc
             raise
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         self._page.set_default_timeout(self._nav_timeout)
