@@ -464,6 +464,89 @@ def check_l44(
     )
 
 
+def check_l44_floor(
+    prompt: "str | None",
+    tenant_id: str,
+    *,
+    persona: str = "assistant",
+    channel: str = "",
+    chat_key: str = "",
+    engine_id: str = "",
+    corvin_home: "Path | None" = None,
+) -> "str | None":
+    """L44 evaluated on the DETERMINISTIC Tier-0 floor ONLY — no classifier spawn.
+
+    Same policy, rules and audit machinery as :func:`check_l44`, but the gate is
+    built with ``classifier=None``, so ``HouseRulesGate.classify`` returns the
+    Tier-0 verdict INSTANTLY (regex over the prohibited-class patterns; military
+    / offensive-cyber / disinformation still MATCH and BLOCK, a task matching no
+    rule reaches the policy default). No cloud spawn, no Hermes, so it can never
+    hang.
+
+    This is the exact degradation ``check_l44`` already documents for a
+    classifier BACKEND failure, exposed as a callable so a caller that puts its
+    OWN wall-clock bound around ``check_l44`` (the imagegen MCP server) can, on
+    timeout, fall back to the floor instead of hard-refusing. Before this, a slow
+    or unreachable cloud classifier made the imagegen's 100s wrapper fire first
+    and refuse EVERY image — even a benign "queen bee" — with "couldn't be
+    safety-checked in time", so image generation was dead on any box without a
+    fast classifier. Fail-TO-FLOOR, never fail-open: a prohibited prompt is still
+    blocked here.
+    """
+    task = prompt or ""
+    if not task.strip():
+        return None
+
+    tenant = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+    try:
+        import house_rules as _hr  # type: ignore
+        from egress_gate import make_forge_audit_writer as _mk_writer  # type: ignore
+    except Exception as _imp_exc:  # noqa: BLE001 — mandatory layer absent → fail closed
+        _log.error("[house-rules] floor: module import failed (%s) — fail-closed deny",
+                   type(_imp_exc).__name__)
+        return ("[house-rules] Acceptable-use gate unavailable — request blocked "
+                "(fail-closed). Contact the operator.")
+
+    try:
+        try:
+            overlay = _load_l44_overlay(tenant, corvin_home)
+        except Exception:  # noqa: BLE001
+            overlay = None
+        try:
+            _audit_write = _mk_writer(_l44_audit_path(tenant, corvin_home))
+        except Exception:  # noqa: BLE001
+            def _audit_write(event_type: str, severity: str, details: dict) -> None:
+                pass
+
+        gate = _hr.HouseRulesGate.from_repo(
+            audit_writer=_audit_write,
+            classifier=None,   # ← the whole point: instant deterministic floor
+            tenant_overlay=overlay,
+        )
+        decision = gate.classify(
+            task, persona=persona or "", channel=channel, chat_key=chat_key,
+            engine_id=engine_id,
+        )
+    except Exception as _exc:  # noqa: BLE001 — even the floor failed to build → fail closed
+        _log.error("[house-rules] floor: gate/classify failed (%s) — fail-closed deny",
+                   type(_exc).__name__)
+        return ("[house-rules] Acceptable-use gate unavailable — request blocked "
+                "(fail-closed). Contact the operator.")
+
+    if decision.action in ("allow", "warn"):
+        return None
+    rid = getattr(decision, "rule_id", "") or ""
+    if decision.action == "escalate":
+        return (
+            f"[house-rules] This request needs operator approval before it can run "
+            f"(rule '{rid}'). It touches a restricted or uncertain area."
+        )
+    return (
+        f"[house-rules] This request is not permitted by the operator's "
+        f"acceptable-use policy (rule '{rid}')."
+    )
+
+
 def _load_l35_gate(tenant_id: str, corvin_home: "Path | None"):
     """Return a mtime-cached EgressGate for *tenant_id*, or None.
 

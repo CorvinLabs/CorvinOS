@@ -115,6 +115,21 @@ This adds the LIP integrity pin on top of the committed-anchor check.
     degrades. Maintainer-approved. Tests: `test_house_rules.py::
     test_classifier_backend_unreachable_degrades_to_tier0_floor` +
     `test_console_spawn_gates.py::test_gate_exception_degrades_to_floor`.
+  - **Caller-timeout → same floor via `check_l44_floor` (2026-07-18):** the
+    backend-unavailable degradation above only fires when the classifier callable
+    itself RAISES. A caller that wraps `check_l44` in its OWN wall-clock bound — the
+    imagegen MCP server bounds it at `_L44_TIMEOUT_S = 100s` — hits its timeout FIRST
+    when the cloud classifier is merely slow (FREE tier / `claude` not logged in /
+    no local Ollama: worst case ~63s cloud + ~30s Hermes), so `classify()` never
+    reaches its own degradation and the caller used to hard-refuse EVERY image, even a
+    benign "queen bee". `spawn_gates.check_l44_floor()` exposes the identical Tier-0
+    floor as a standalone, classifier-free, never-hangs call (`HouseRulesGate` built
+    with `classifier=None`); the imagegen server calls it on timeout and honours its
+    verdict — benign proceeds, a prohibited-pattern prompt is still BLOCKED. Same
+    fail-TO-FLOOR contract, applied at the timeout boundary. Tests:
+    `test_spawn_gates.py::test_floor_*` + `test_imagegen_zero_config.py::
+    test_l44_hang_is_bounded_fast_and_degrades_to_the_floor` /
+    `test_l44_timeout_still_blocks_a_prohibited_prompt_via_the_floor`.
   - **Fresh-install readiness (shrinks the floor window, 2026-07-12):** the
     installer (`install.sh` / `install.ps1`) now **pre-warms** the Hermes classifier
     model (one throwaway `/api/generate` with `keep_alive: 30m`) right after pulling

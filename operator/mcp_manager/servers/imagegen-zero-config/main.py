@@ -36,7 +36,7 @@ _BRIDGES_SHARED = _HERE.parents[2] / "bridges" / "shared"
 if _BRIDGES_SHARED.is_dir() and str(_BRIDGES_SHARED) not in sys.path:
     sys.path.insert(0, str(_BRIDGES_SHARED))
 
-from spawn_gates import check_l44  # type: ignore  # noqa: E402
+from spawn_gates import check_l44, check_l44_floor  # type: ignore  # noqa: E402
 from provider_keys import resolve_key  # type: ignore  # noqa: E402
 from imagegen_disclosure import ensure_disclosed  # type: ignore  # noqa: E402
 
@@ -421,15 +421,32 @@ def _generate_image_impl(prompt: str) -> list:
         lambda: check_l44(prompt, tid, persona="assistant", engine_id="imagegen_mcp"),
         min(_L44_TIMEOUT_S, _remaining(deadline)), "imagegen-l44")
     if _l44_timed:
-        raise ImageGenRefused(
-            "[house-rules] This request couldn't be safety-checked in time — "
-            "try again in a moment."
-        )
-    if "error" in _l44:
-        raise _l44["error"]
-    refusal = _l44["ok"]
-    if refusal:
-        raise ImageGenRefused(refusal)
+        # The full L44 gate (cloud classifier ~63s + Hermes fallback ~30s) ran past
+        # our bound — typically a box with no fast/reachable classifier (FREE tier,
+        # claude not logged in, no local Ollama). It used to hard-refuse here with
+        # "couldn't be safety-checked in time", so EVERY image — even a benign
+        # "queen bee" — was blocked and the model just retried into the same wall.
+        # Fall back to the SAME deterministic Tier-0 floor check_l44 itself uses on
+        # a backend failure: instant, no spawn, prohibited classes still BLOCK,
+        # benign prompts proceed. Fail-TO-FLOOR, never fail-open.
+        _floor, _floor_timed = _run_bounded(
+            lambda: check_l44_floor(prompt, tid, persona="assistant", engine_id="imagegen_mcp"),
+            min(10.0, _remaining(deadline)), "imagegen-l44-floor")
+        if _floor_timed or "error" in _floor:
+            # Even the regex floor didn't return — now genuinely refuse.
+            raise ImageGenRefused(
+                "[house-rules] This request couldn't be safety-checked — "
+                "try again in a moment."
+            )
+        refusal = _floor["ok"]
+        if refusal:
+            raise ImageGenRefused(refusal)
+    else:
+        if "error" in _l44:
+            raise _l44["error"]
+        refusal = _l44["ok"]
+        if refusal:
+            raise ImageGenRefused(refusal)
 
     tier1_note: str | None = None
     openai_key = resolve_key("openai_api_key")
