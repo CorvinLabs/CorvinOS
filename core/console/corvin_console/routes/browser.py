@@ -330,6 +330,39 @@ async def attach_consent_status(
     return _ac.status(rec.tenant_id)
 
 
+class ConfirmModeReq(BaseModel):
+    mode: str                      # "confirm-each" | "watch"
+    ttl_s: int | None = None       # watch-mode TTL, clamped to [60s, 30m]
+    model_config = {"extra": "forbid"}
+
+
+@router.post("/browser/attach/confirm-mode")
+async def set_confirm_mode(
+    body: ConfirmModeReq,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
+) -> dict[str, Any]:
+    """Q3: confirm-each (default) or watch-mode-with-hard-TTL. Watch-mode never
+    disables audit or egress — it only suppresses the interactive prompt, and
+    only on attached (real-login) sessions."""
+    from ..browser import confirm_mode as _cm  # noqa: PLC0415
+    if body.mode == "watch":
+        _cm.set_watch(rec.tenant_id, body.ttl_s, audit_fn=_audit_fn)
+    elif body.mode == "confirm-each":
+        _cm.set_confirm_each(rec.tenant_id, audit_fn=_audit_fn)
+    else:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST,
+                            detail="mode must be 'confirm-each' or 'watch'")
+    return _cm.status(rec.tenant_id)
+
+
+@router.get("/browser/attach/confirm-mode")
+async def get_confirm_mode(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session_or_token)],
+) -> dict[str, Any]:
+    from ..browser import confirm_mode as _cm  # noqa: PLC0415
+    return _cm.status(rec.tenant_id)
+
+
 @router.get("/browser/attach/launch-command")
 async def attach_launch_command(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session_or_token)],
