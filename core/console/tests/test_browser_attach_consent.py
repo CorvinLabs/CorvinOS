@@ -137,6 +137,7 @@ def _mk_manager(tmp_path):
 def test_manager_confirm_auto_approves_attached_watch(tmp_path, monkeypatch):
     import asyncio
     from corvin_console.browser import confirm_mode as cm
+    ac.grant("_default", 3600)   # attach now requires active consent (review fix)
     mgr = _mk_manager(tmp_path)
     sid = asyncio.run(mgr.create("_default", cdp_endpoint="ws://x/y"))
     live = mgr._sessions[f"_default:{sid}"]
@@ -174,3 +175,71 @@ def test_manager_confirm_does_NOT_auto_approve_launched_watch(tmp_path):
             m._CONFIRM_TIMEOUT_S = orig
     assert asyncio.run(_call()) is False         # launched + watch → still asks (declines)
     assert not any(e.get("action") == "confirm_auto_watch" for e in live.actions)
+
+
+# ── adversarial-review hardening fixes ───────────────────────────────────────
+
+def test_confirm_mode_is_owner_scoped(tmp_path, monkeypatch):
+    """Finding 3: user A's watch-mode must NOT auto-approve user B's session."""
+    from corvin_console.browser import confirm_mode as cm
+    cm.set_watch("_default", ttl_s=300, owner="userA")
+    assert cm.should_auto_approve("_default", "userA") is True
+    assert cm.should_auto_approve("_default", "userB") is False   # different owner
+    assert cm.should_auto_approve("_default", "") is False        # tenant-wide legacy
+
+
+def test_confirm_mode_reclamps_a_crafted_far_future_expiry(tmp_path):
+    """Finding 7: a hand-written store must not bypass the 30-min ceiling."""
+    import json
+    from corvin_console.browser import confirm_mode as cm
+    cm._path("_default", "u").write_text(json.dumps({"mode": "watch", "expires_at": 9e12}))
+    st = cm.status("_default", "u")
+    assert st["mode"] == "watch"
+    assert st["remaining_s"] <= cm.WATCH_MAX_TTL_S     # capped on READ, not just write
+
+
+def test_confirm_mode_non_numeric_expiry_is_failclosed(tmp_path):
+    import json
+    from corvin_console.browser import confirm_mode as cm
+    cm._path("_default", "u").write_text(json.dumps({"mode": "watch", "expires_at": "abc"}))
+    assert cm.should_auto_approve("_default", "u") is False   # no longer raises
+
+
+def test_loopback_cdp_validator():
+    from corvin_console.routes.browser import _is_loopback_cdp as f
+    assert f("ws://127.0.0.1:9222/devtools/browser/x") is True
+    assert f("ws://localhost:9222/x") is True
+    assert f("ws://[::1]:9222/x") is True
+    assert f("ws://169.254.169.254:9222/x") is False   # metadata
+    assert f("ws://attacker.com:9222/x") is False       # remote
+    assert f("ws://10.0.0.5:9222/x") is False           # LAN
+    assert f("wss://127.0.0.1:9222/x") is False          # wrong scheme
+    assert f("http://127.0.0.1:9222/x") is False
+
+
+def test_lapsed_consent_refuses_further_actions(tmp_path, monkeypatch):
+    """Findings 1+2: an attached session must STOP acting when consent expires
+    or is revoked — not just refuse NEW sessions."""
+    import asyncio
+    from corvin_console.browser.session import BrowserSession, BrowserActionError
+    live = {"ok": True}
+    s = BrowserSession("s", "_default", home=tmp_path,
+                       cdp_endpoint="ws://127.0.0.1:9222/x",
+                       consent_ok=lambda: live["ok"])
+    s._guard_active("navigate")            # consent live → allowed
+    live["ok"] = False                      # consent revoked/expired mid-session
+    try:
+        s._guard_active("click")
+        raise AssertionError("a lapsed consent must refuse the action")
+    except BrowserActionError as e:
+        assert "consent expired" in str(e)
+
+
+def test_ws_egress_gate_is_registered():
+    """Finding 1: session wires a WebSocket egress route (context.route alone
+    does NOT cover WS handshakes)."""
+    import inspect
+    from corvin_console.browser import session as _s
+    src = inspect.getsource(_s.BrowserSession._finish_start)
+    assert "route_web_socket" in src
+    assert hasattr(_s.BrowserSession, "_route_web_socket")

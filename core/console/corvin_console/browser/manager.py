@@ -31,6 +31,15 @@ logger = logging.getLogger("corvin.browser.manager")
 
 _ACTION_LOG_CAP = 200
 _CONFIRM_TIMEOUT_S = 120.0
+def _attach_consent_active(tenant_id: str) -> bool:
+    """True iff the real-chrome attach consent is still live. Fail-closed."""
+    try:
+        from . import attach_consent as _ac  # noqa: PLC0415
+        return bool(_ac.active(tenant_id))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 _MAX_SESSIONS_PER_TENANT = 8       # bound concurrent browsers → no resource exhaustion
 
 
@@ -94,6 +103,17 @@ class BrowserSessionManager:
                      owner_fingerprint: str = "",
                      task_scoped_hosts: list[str] | None = None,
                      cdp_endpoint: str | None = None) -> str:
+        # Defense-in-depth (review finding): the real-chrome consent gate must
+        # not live ONLY in the REST route — any in-process caller of
+        # create(cdp_endpoint=…) (a future chat/delegation path) would otherwise
+        # attach to the user's real Chrome unchecked. Enforce it here too, where
+        # cdp_endpoint is actually consumed. Fail-closed.
+        if cdp_endpoint:
+            from . import attach_consent as _ac  # noqa: PLC0415
+            if not _ac.active(tenant_id):
+                raise RuntimeError(
+                    "real-chrome attach requires an active consent (none granted)")
+
         # Bound concurrent browsers per tenant → no Chromium/PID exhaustion (DoS).
         live_count = sum(1 for k in self._sessions if k.startswith(f"{tenant_id}:"))
         if live_count >= _MAX_SESSIONS_PER_TENANT:
@@ -133,10 +153,26 @@ class BrowserSessionManager:
             if sess is not None and getattr(sess, "_attached", False):
                 try:
                     from . import confirm_mode as _cm  # noqa: PLC0415
-                    if _cm.should_auto_approve(tenant_id):
+                    # Owner-scoped (review finding): watch-mode is this console
+                    # user's own setting, never a tenant-wide switch that another
+                    # user could flip to auto-approve THIS session.
+                    if _cm.should_auto_approve(tenant_id, owner_fingerprint):
                         live.append({"action": "confirm_auto_watch", "host": host,
                                      "role": role, "name": name, "attach": "real-chrome",
                                      "ts": self._now()})
+                        # Durable, hash-chained record (review finding): a
+                        # watch-mode auto-approval of a real-login action MUST be
+                        # distinguishable from a human confirm in audit.jsonl, not
+                        # only in the volatile in-memory action log.
+                        if self._audit_fn is not None:
+                            try:
+                                self._audit_fn(tenant_id=tenant_id,
+                                               event="browser.confirm.auto_watch",
+                                               details={"host": host, "role": role,
+                                                        "attach": "real-chrome",
+                                                        "owner": owner_fingerprint[:8]})
+                            except Exception:  # noqa: BLE001 — audit best-effort
+                                pass
                         return True
                 except Exception:  # noqa: BLE001 — never fail-open on a broker error
                     pass
@@ -167,6 +203,10 @@ class BrowserSessionManager:
             audit_fn=self._audit_fn, vault_resolve=vault,
             confirm_fn=_confirm, on_action=_on_action, headless=headless,
             cdp_endpoint=cdp_endpoint,
+            # Per-action recheck: an attached session keeps acting only while the
+            # real-chrome consent is still live (expiry/revoke stops it).
+            consent_ok=((lambda: _attach_consent_active(tenant_id))
+                        if cdp_endpoint else None),
         )
         live.session = session
         # Lazy start: register the screencast callback but do NOT launch Chromium yet.
