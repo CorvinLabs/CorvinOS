@@ -234,7 +234,7 @@ class TaskEnvelope:
     # the peer_genesis_hash stored in the origin config (set at pairing time).
     # Pre-M4 senders omit the field; receivers apply grace-period behaviour.
     sender_genesis_hash: str | None = None
-    # ADR-0145 M2 — IBC Protocol v9: optional per-message instance attestation.
+    # ADR-0145 M2 — IBC (Protocol v7, see header): optional per-message instance attestation.
     # Contains {ibc_jti, ed25519_sig, ibc_snapshot}. Included in HMAC payload
     # so it cannot be stripped or swapped in transit. Receivers that pre-date
     # ADR-0145 ignore the field (additive, backward-compatible).
@@ -252,9 +252,13 @@ class TaskEnvelope:
     # payload so it cannot be stripped or swapped in transit. When present,
     # receive() short-circuits BEFORE worker dispatch (see _handle_reconnect):
     # this is a control-plane message about the sender's own reachability,
-    # not a task. Pre-ADR-0198 receivers ignore the field (additive,
-    # backward-compatible) and fall through to normal instruction handling,
-    # which is safe because reconnect envelopes carry an empty instruction.
+    # not a task. Compat (corrected 2026-07-19): pre-ADR-0198 receivers do
+    # NOT silently ignore the field — their canonical payload omits the
+    # unknown `reconnect` key, so the HMAC no longer matches and the
+    # envelope is hard-rejected with bad_signature. That is accepted
+    # fail-closed behaviour: an old peer never half-applies a reconnect,
+    # it visibly rejects it; the sender's fail-soft send_reconnect() logs
+    # A2A.reconnect_send_failed and normal task traffic is unaffected.
     reconnect: dict | None = None
 
     @classmethod
@@ -366,7 +370,10 @@ class TaskEnvelope:
         # ADR-0153 M5: omit corvin_id_jwt when None (backward compat with pre-v8 senders).
         if d.get("corvin_id_jwt") is None:
             d.pop("corvin_id_jwt", None)
-        # ADR-0198: omit reconnect when None (backward compat with pre-v9 senders).
+        # ADR-0198: omit reconnect when None (keeps the canonical payload
+        # byte-identical with pre-ADR-0198 senders/receivers at the current
+        # PROTOCOL_VERSION = 8 — the field is additive and does not bump
+        # the wire version).
         if d.get("reconnect") is None:
             d.pop("reconnect", None)
         return json.dumps(
@@ -1943,18 +1950,40 @@ class RemoteTriggerReceiver:
     ) -> ResponseEnvelope:
         """ADR-0198: apply a signed reconnect notification (proactive IP/URL
         change push). ``env`` already passed HMAC + origin + time-window +
-        replay validation in ``_validate()`` — this method only sanitizes the
-        new_url shape and rewrites the local outbound endpoint entry that
-        shares ``env.origin_id`` as its kid (see a2a_friendship.py: origin
-        and endpoint files are paired 1:1 under the same friendship kid).
+        replay validation in ``_validate()`` — this method validates the
+        new_url (shape AND the danger-category SSRF gate, see
+        ``a2a_friendship._reconnect_url_rejection_reason``: forbidden hosts,
+        global→private redirect, no https→http downgrade, fail-closed DNS)
+        and rewrites the local outbound endpoint entry that shares
+        ``env.origin_id`` as its kid (see a2a_friendship.py: origin and
+        endpoint files are paired 1:1 under the same friendship kid).
 
-        Fail-closed: any rejection here returns status="rejected" and never
-        touches the endpoint file. Audit-first — the endpoint file is only
-        written after the audit record lands (mirrors the envelope_received
-        invariant elsewhere in this class).
+        Write-first, audit-reflects-reality (redesigned 2026-07-19; the first
+        hardening was audit-first, but auditing ``reconnect_applied`` BEFORE
+        the write meant a subsequent write failure left the chain asserting an
+        application that never happened, with a swallowed rollback audit):
+
+        1. validate (read-only preflight, no write)
+        2. if the validation rejected: audit ``A2A.reconnect_rejected`` (no
+           write). On AuditWriteError roll back the nonce and reject.
+        3. if the validation passed: perform the DURABLE endpoint write first
+           (temp+fsync+rename), then audit the *actual* outcome —
+           ``A2A.reconnect_applied`` only when the write truly succeeded, or
+           ``A2A.reconnect_failed`` (status rejected) when it did not.
+
+        Nonce invariant: on every path the nonce is either consumed with a
+        definitive audited outcome, or rolled back — never consumed-with-no-
+        outcome. Residual: if the durable write succeeds but the following
+        ``reconnect_applied`` audit itself raises, the nonce is rolled back and
+        the response is a rejection, leaving a durable-but-unaudited endpoint
+        mutation for that one (disk-full-during-audit) window; a later push
+        re-writes the same URL idempotently and re-audits. This is the
+        accepted trade of the write-first model (audit never lies about an
+        application that did not happen).
         """
         reason: str | None = None
         new_url = str((env.reconnect or {}).get("new_url", "")).strip()
+        # Cheap shape checks first (no imports, no I/O).
         if not new_url or len(new_url) > _MAX_RECONNECT_URL_LEN:
             reason = "reconnect_url_invalid_length"
         elif not (new_url.startswith("https://") or new_url.startswith("http://")):
@@ -1962,32 +1991,72 @@ class RemoteTriggerReceiver:
         elif not new_url.isprintable() or any(c.isspace() for c in new_url):
             reason = "reconnect_url_bad_chars"
 
-        applied = False
+        # Read-only preflight: endpoint existence/state + ADR-0198 SSRF gate
+        # (forbidden hosts, global→private, scheme downgrade, unresolvable).
         if reason is None:
+            try:
+                from a2a_friendship import validate_endpoint_url_change  # noqa: PLC0415
+                reason = validate_endpoint_url_change(
+                    env.origin_id, new_url, endpoints_dir=self._endpoints_dir(),
+                )
+            except Exception as exc:  # noqa: BLE001
+                reason = f"reconnect_apply_error:{type(exc).__name__}"
+
+        applied = False
+        if reason is not None:
+            # Rejected/invalid — audit the rejection; NO write is attempted.
+            try:
+                self._audit_strict(
+                    "A2A.reconnect_rejected", "WARNING",
+                    {"task_id": env.task_id, "origin_id": env.origin_id,
+                     "status": "rejected", "reason": reason,
+                     "duration_ms": _ms(start)},
+                )
+            except AuditWriteError:
+                # No durable evidence → roll back the nonce and reject so the
+                # sender retries. Nothing was mutated.
+                self._nonces.remove(env.nonce)
+                return self._rejected_response(env.task_id, env.origin_id, recv_key)
+        else:
+            # Validated OK — DURABLE write first, then audit the real outcome.
             try:
                 from a2a_friendship import update_endpoint_url  # noqa: PLC0415
                 applied = update_endpoint_url(
                     env.origin_id, new_url, endpoints_dir=self._endpoints_dir(),
                 )
-                if not applied:
-                    reason = "no_matching_active_endpoint"
-            except Exception as exc:  # noqa: BLE001
-                reason = f"reconnect_apply_error:{type(exc).__name__}"
-
-        try:
-            self._audit_strict(
-                "A2A.reconnect_applied" if applied else "A2A.reconnect_rejected",
-                "INFO" if applied else "WARNING",
-                {"task_id": env.task_id, "origin_id": env.origin_id,
-                 "status": "ok" if applied else "rejected",
-                 "reason": reason or "", "duration_ms": _ms(start)},
-            )
-        except AuditWriteError:
-            # Audit-first: a failed audit write means the change is NOT
-            # durable evidence — roll back the nonce (mirrors the
-            # envelope_received rollback) and reject so the sender retries.
-            self._nonces.remove(env.nonce)
-            return self._rejected_response(env.task_id, env.origin_id, recv_key)
+            except Exception:  # noqa: BLE001
+                applied = False
+            if applied:
+                try:
+                    self._audit_strict(
+                        "A2A.reconnect_applied", "INFO",
+                        {"task_id": env.task_id, "origin_id": env.origin_id,
+                         "status": "ok", "reason": "",
+                         "duration_ms": _ms(start)},
+                    )
+                except AuditWriteError:
+                    # Durable write landed but could not be recorded. Roll back
+                    # the nonce (a later push re-writes idempotently + audits)
+                    # and reject. See docstring "Residual".
+                    self._nonces.remove(env.nonce)
+                    return self._rejected_response(
+                        env.task_id, env.origin_id, recv_key,
+                    )
+            else:
+                # Write failed AFTER validation (transient: disk full, race).
+                # Audit FAILED — never "applied" for a write that did not
+                # happen — roll back the nonce so the next push retries.
+                reason = "reconnect_write_failed"
+                try:
+                    self._audit_strict(
+                        "A2A.reconnect_failed", "WARNING",
+                        {"task_id": env.task_id, "origin_id": env.origin_id,
+                         "status": "rejected", "reason": reason,
+                         "duration_ms": _ms(start)},
+                    )
+                except AuditWriteError:
+                    pass
+                self._nonces.remove(env.nonce)
 
         resp = ResponseEnvelope(
             task_id=env.task_id,

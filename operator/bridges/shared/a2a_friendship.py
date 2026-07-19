@@ -350,8 +350,16 @@ def activate_connection(
 def _atomic_write(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-    os.chmod(tmp, 0o600)
+    # Durable temp+fsync+rename (ADR-0198 audit-truthfulness, 2026-07-19): the
+    # receiver audits an endpoint rewrite only AFTER this returns, so the bytes
+    # must be on disk — an un-fsynced rename can lose the write across a crash
+    # while the audit chain asserts it happened.
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, json.dumps(data, indent=2, sort_keys=True).encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
     os.replace(tmp, path)
     if path.exists():
         os.chmod(path, 0o600)
@@ -369,13 +377,278 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> None:
 # so it is authenticated by the SAME HMAC keys already established at
 # pairing time — no new credential, no new trust root.
 
+# Reconnect target URLs are length-capped like every other operator-facing
+# A2A URL surface (mirrors remote_trigger_receiver._MAX_RECONNECT_URL_LEN).
+_MAX_RECONNECT_URL_LEN = 512
+
+
+# ── ADR-0198 reconnect host classification (danger-category model) ──────
+#
+# 2026-07-19 REDESIGN (adversarial refutation round). The first hardening
+# used a blunt "globally routable only" rule (``ipaddress.is_global``). That
+# was wrong in two directions:
+#
+#   * it BANNED every legitimate LAN / hotspot reconnect (172.20.10.x iPhone
+#     tether, 192.168.x home LAN — the exact ADR-0198 use case), causing a
+#     permanent 5-minute re-broadcast storm on those deployments; and
+#   * it still ACCEPTED NAT64 / 6to4 / v4-mapped IPv6 literals whose EMBEDDED
+#     IPv4 is loopback / link-local metadata (Python reports the outer v6 as
+#     ``is_global == True``): e.g. ``[64:ff9b::7f00:1]`` == 127.0.0.1,
+#     ``[64:ff9b::a9fe:a9fe]`` == 169.254.169.254.
+#
+# The replacement is a DANGER-CATEGORY model, not global-vs-private:
+#
+#   forbidden — loopback, link-local (incl. 169.254.169.254 cloud metadata
+#               and fe80::/10), unspecified (0.0.0.0/::), multicast, reserved.
+#               NEVER a peer's legitimate endpoint → rejected unconditionally.
+#   private   — RFC1918 (10/8, 172.16/12, 192.168/16), CGNAT 100.64/10,
+#               IPv6 ULA fc00::/7. Allowed ONLY when the PREVIOUS stored URL
+#               was ALSO private/LAN (established LAN pairing renumbering).
+#               global→private is the SSRF "pull us inward" signature → reject.
+#   global    — everything else. global→global allowed (existing checks).
+#
+# Every resolved address AND every embedded-IPv4 it carries is classified.
+import ipaddress as _ipa
+
+_NAT64_WKP = _ipa.ip_network("64:ff9b::/96")            # RFC 6052 well-known
+_NAT64_LOCAL = _ipa.ip_network("64:ff9b:1::/48")        # RFC 8215 local-use
+_LAN_V4_NETS = (
+    _ipa.ip_network("10.0.0.0/8"),
+    _ipa.ip_network("172.16.0.0/12"),
+    _ipa.ip_network("192.168.0.0/16"),
+    _ipa.ip_network("100.64.0.0/10"),                   # CGNAT (RFC 6598)
+)
+_ULA_V6_NET = _ipa.ip_network("fc00::/7")               # IPv6 unique-local
+
+
+def _embedded_ipv4s(ip6: "_ipa.IPv6Address") -> list["_ipa.IPv4Address"]:
+    """Extract every IPv4 an IPv6 address embeds (v4-mapped, 6to4, NAT64)."""
+    out: list[_ipa.IPv4Address] = []
+    try:
+        if ip6.ipv4_mapped is not None:
+            out.append(ip6.ipv4_mapped)
+    except (AttributeError, ValueError):
+        pass
+    try:
+        if ip6.sixtofour is not None:
+            out.append(ip6.sixtofour)
+    except (AttributeError, ValueError):
+        pass
+    try:
+        if ip6 in _NAT64_WKP or ip6 in _NAT64_LOCAL:
+            # RFC 6052 / 8215: the IPv4 is the low 32 bits of the address.
+            out.append(_ipa.IPv4Address(int(ip6) & 0xFFFFFFFF))
+    except (ValueError, TypeError):
+        pass
+    return out
+
+
+def _addr_is_forbidden(ip: "_ipa.IPv4Address | _ipa.IPv6Address") -> bool:
+    return bool(
+        ip.is_loopback or ip.is_link_local or ip.is_unspecified
+        or ip.is_multicast or ip.is_reserved
+    )
+
+
+def _v4_is_lan(ip: "_ipa.IPv4Address") -> bool:
+    return any(ip in net for net in _LAN_V4_NETS)
+
+
+def _classify_addr(ip: "_ipa.IPv4Address | _ipa.IPv6Address") -> str:
+    """Return ``"forbidden"``, ``"private"``, or ``"global"`` for one address.
+
+    For IPv6, the embedded IPv4 (if any) is classified with the SAME rules and
+    the more-dangerous verdict wins (forbidden > private > global) — this is
+    what closes the NAT64/6to4/v4-mapped loopback+metadata bypass.
+    """
+    embedded: list[_ipa.IPv4Address] = []
+    if isinstance(ip, _ipa.IPv6Address):
+        embedded = _embedded_ipv4s(ip)
+    if _addr_is_forbidden(ip) or any(_addr_is_forbidden(e) for e in embedded):
+        return "forbidden"
+    if isinstance(ip, _ipa.IPv4Address) and _v4_is_lan(ip):
+        return "private"
+    if isinstance(ip, _ipa.IPv6Address) and ip in _ULA_V6_NET:
+        return "private"
+    if any(_v4_is_lan(e) for e in embedded):
+        return "private"
+    if ip.is_global:
+        return "global"
+    # Not forbidden, not LAN, not globally routable (e.g. some documentation
+    # / benchmarking ranges) — treat as forbidden, fail-closed.
+    return "forbidden"
+
+
+def _resolve_host_classes(host: str, scheme: str, port: int | None) -> set[str] | None:
+    """Classify a hostname/IP-literal host into the set of danger categories
+    of ALL its addresses. Returns None on resolution failure (fail-closed)."""
+    import socket
+    host = host.strip("[]").lower()
+    try:
+        ip = _ipa.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None:
+        return {_classify_addr(ip)}
+    try:
+        default_port = 443 if scheme == "https" else 80
+        infos = socket.getaddrinfo(host, port or default_port, proto=socket.IPPROTO_TCP)
+    except (OSError, ValueError):
+        return None
+    if not infos:
+        return None
+    classes: set[str] = set()
+    for info in infos:
+        addr = str(info[4][0]).split("%", 1)[0]
+        try:
+            classes.add(_classify_addr(_ipa.ip_address(addr)))
+        except ValueError:
+            classes.add("forbidden")
+    return classes
+
+
+def _previous_host_is_lan(previous_url: str) -> bool:
+    """True only when the stored/previous endpoint host resolves ENTIRELY to
+    private/LAN addresses (fail-closed: unknown/unresolvable/global → False).
+    Used to authorise a private→private LAN renumbering while blocking the
+    global→private SSRF signature."""
+    from urllib.parse import urlsplit
+    if not previous_url:
+        return False
+    try:
+        parts = urlsplit(previous_url)
+        host = parts.hostname
+        scheme = (parts.scheme or "").lower()
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host.strip("[]").lower() in ("localhost",) or host.endswith(".localhost"):
+        return False
+    classes = _resolve_host_classes(host, scheme, parts.port)
+    return classes == {"private"}
+
+
+def _reconnect_url_rejection_reason(new_url: str, previous_url: str) -> str | None:
+    """ADR-0198 hardening (2026-07-19 redesign): SSRF / redirect-primitive gate.
+
+    A reconnect notification is authenticated (per-pairing HMAC), but a
+    *compromised peer* must not be able to repoint our outbound A2A calls
+    (signed envelopes, IBC JWTs, attachments) at internal infrastructure —
+    while a legitimate LAN / hotspot peer MUST still be able to renumber.
+    Rules, all fail-closed (see the danger-category model above):
+
+    - length ≤ 512, printable, no whitespace, parseable
+    - scheme http(s) only; ``http`` is accepted ONLY when the previously
+      stored URL was already ``http`` — an https→http downgrade is rejected
+    - resolve the host (literal IPs used directly); for EVERY resolved address
+      and every embedded-IPv4 (v4-mapped / 6to4 / NAT64):
+        * forbidden category (loopback, link-local incl. 169.254.169.254,
+          unspecified, multicast, reserved) → reject ``reconnect_url_forbidden_host``
+        * private/LAN category → allowed ONLY if the previous stored host was
+          ALSO private/LAN, else reject ``reconnect_url_global_to_private``
+        * global → allowed
+    - resolution failure rejects (``reconnect_url_unresolvable``)
+
+    Returns an audit-safe rejection reason string, or None when acceptable.
+    """
+    from urllib.parse import urlsplit
+
+    if not new_url or len(new_url) > _MAX_RECONNECT_URL_LEN:
+        return "reconnect_url_invalid_length"
+    if not new_url.isprintable() or any(c.isspace() for c in new_url):
+        return "reconnect_url_bad_chars"
+    try:
+        parts = urlsplit(new_url)
+    except ValueError:
+        return "reconnect_url_unparseable"
+    scheme = (parts.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return "reconnect_url_bad_scheme"
+    if scheme == "http":
+        prev_scheme = ""
+        if previous_url:
+            try:
+                prev_scheme = (urlsplit(previous_url).scheme or "").lower()
+            except ValueError:
+                prev_scheme = ""
+        if prev_scheme != "http":
+            return "reconnect_url_scheme_downgrade"
+    try:
+        host = parts.hostname
+    except ValueError:
+        return "reconnect_url_unparseable"
+    if not host:
+        return "reconnect_url_no_host"
+    host_l = host.strip("[]").lower()
+    if host_l == "localhost" or host_l.endswith(".localhost") or host_l.endswith(".onion"):
+        return "reconnect_url_forbidden_host"
+    classes = _resolve_host_classes(host_l, scheme, parts.port)
+    if classes is None:
+        return "reconnect_url_unresolvable"
+    if "forbidden" in classes:
+        return "reconnect_url_forbidden_host"
+    if "private" in classes:
+        # Private/LAN target: allowed only as a LAN renumbering of an already
+        # private/LAN pairing. global→private is the SSRF "pull us inward"
+        # signature and is rejected.
+        if _previous_host_is_lan(previous_url):
+            return None
+        return "reconnect_url_global_to_private"
+    # All addresses global → allowed.
+    return None
+
+
+def validate_endpoint_url_change(
+    kid: str, new_url: str, *, endpoints_dir: Path,
+) -> str | None:
+    """Read-only preflight for :func:`update_endpoint_url`.
+
+    Returns an audit-safe rejection reason (see
+    :func:`_reconnect_url_rejection_reason`, plus
+    ``"no_matching_active_endpoint"`` for a missing / disabled / PENDING /
+    non-friendship endpoint file), or None when the change would be applied.
+    Performs NO write — the receiver uses this to audit-then-write
+    (audit-first invariant, ADR-0198 hardening 2026-07-19).
+    """
+    path = endpoints_dir / f"{kid}.json"
+    if not path.exists():
+        return "no_matching_active_endpoint"
+    try:
+        cfg = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return "no_matching_active_endpoint"
+    if not cfg.get("_friendship") or not cfg.get("enabled") or cfg.get("state") != "ACTIVE":
+        return "no_matching_active_endpoint"
+    return _reconnect_url_rejection_reason(
+        new_url.strip().rstrip("/"), str(cfg.get("url") or ""),
+    )
+
+
 def update_endpoint_url(kid: str, new_url: str, *, endpoints_dir: Path) -> bool:
     """Rewrite the ``url`` field of an existing, ACTIVE friendship endpoint.
 
     Unlike :func:`activate_connection`, this does NOT create or enable a
     connection — it only updates a peer that is already ACTIVE, so a
     reconnect notification can never be used to bootstrap trust. Returns
-    False (no-op) for a missing, disabled, PENDING, or non-friendship file.
+    False (no-op) for a missing, disabled, PENDING, or non-friendship file,
+    and for any URL that fails the ADR-0198 danger-category SSRF gate
+    (:func:`_reconnect_url_rejection_reason`): non-http(s) scheme,
+    https→http downgrade, a forbidden host (loopback, link-local incl. cloud
+    metadata, unspecified, multicast, reserved — including those embedded in
+    NAT64/6to4/v4-mapped IPv6 literals), a global→private redirect, or an
+    unresolvable name.
+
+    Egress-control honesty (2026-07-19 — corrected false claim): outbound A2A
+    peer POSTs do NOT pass the L35 ``check_engine_egress`` gate — that gate is
+    an engine-spawn control and is never applied to A2A peer URLs. The real
+    controls on a reconnect-updated URL are: (a) redirect-following is disabled
+    in the sender's ``_http_post`` (a 3xx is an error, not a silent internal
+    fetch), and (b) this danger-category host gate. A DNS-rebinding residual
+    remains (a compromised paired peer using short-TTL DNS that resolves global
+    at check-time and private at send-time) and is accepted for this release:
+    the peer must already be a cryptographically-paired ACTIVE friend and
+    redirects are blocked.
     """
     path = endpoints_dir / f"{kid}.json"
     if not path.exists():
@@ -388,6 +661,9 @@ def update_endpoint_url(kid: str, new_url: str, *, endpoints_dir: Path) -> bool:
         return False
     new_url = new_url.strip().rstrip("/")
     if not new_url:
+        return False
+    # ADR-0198 hardening (2026-07-19): fail-closed SSRF gate.
+    if _reconnect_url_rejection_reason(new_url, str(cfg.get("url") or "")) is not None:
         return False
     cfg["url"] = new_url if new_url.endswith("/v1/a2a/receive") else new_url + "/v1/a2a/receive"
     _atomic_write(path, cfg)
@@ -424,7 +700,11 @@ def check_and_broadcast_reconnect(
     """If the local interface IP changed since the last check, proactively
     push a signed reconnect notification (current ``get_my_url()``) to every
     ACTIVE friendship endpoint. Fail-soft: never raises, returns the number
-    of peers successfully notified (0 on no-op or any failure).
+    of peers the notification was DELIVERED to — i.e. that returned a
+    cryptographically signed response, accept OR reject (0 on no-op or when
+    every peer was unreachable). Delivery, not acceptance, drives IP
+    persistence so a signed-rejecting peer cannot trigger an unbounded
+    re-broadcast storm (2026-07-19 retry-storm fix).
 
     Intended to be polled from an existing background loop (e.g. the
     presence heartbeat) rather than run on its own thread.
@@ -442,22 +722,20 @@ def check_and_broadcast_reconnect(
     if current_ip == last_ip:
         return 0
 
-    try:
-        ip_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = ip_path.with_suffix(".tmp")
-        tmp.write_text(current_ip, encoding="utf-8")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, ip_path)
-    except OSError:
-        pass
+    def _persist_ip() -> None:
+        try:
+            ip_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = ip_path.with_suffix(".tmp")
+            tmp.write_text(current_ip, encoding="utf-8")
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, ip_path)
+        except OSError:
+            pass
 
     if not last_ip:
         # First observation this boot — nothing to compare against yet,
         # avoid announcing on every fresh start.
-        return 0
-
-    my_url = get_my_url()
-    if not my_url:
+        _persist_ip()
         return 0
 
     try:
@@ -469,7 +747,7 @@ def check_and_broadcast_reconnect(
 
     registry = RemoteEndpointRegistry(endpoints_dir)
     sender = RemoteTriggerSender(endpoints_dir, registry)
-    notified = 0
+    eligible: list[str] = []
     for endpoint_id in registry.list_ids():
         try:
             cfg = registry.load(endpoint_id)
@@ -477,9 +755,46 @@ def check_and_broadcast_reconnect(
             continue
         if not cfg.get("_friendship") or cfg.get("state") != "ACTIVE":
             continue
+        eligible.append(endpoint_id)
+
+    if not eligible:
+        # No peers to announce to — persist so we don't retry forever.
+        _persist_ip()
+        return 0
+
+    my_url = get_my_url()
+    if not my_url:
+        # Peers exist but our own URL is unknown right now — do NOT persist
+        # the new IP, so the change is retried on the next cycle instead of
+        # being silently swallowed (2026-07-19 fix: previously the IP was
+        # persisted before broadcasting, so an all-peers-unreachable cycle
+        # lost the change forever).
+        return 0
+
+    # Bounded worst case: ≤ 10 s per peer (short reconnect timeout) and the
+    # caller's 5-minute cadence tolerates one slow cycle; a hard 180 s
+    # wall-clock budget stops a pathological many-dead-peers sweep from
+    # starving the heartbeat loop. Peers skipped by the budget are retried
+    # on the next cycle when the broadcast didn't reach anyone (IP not yet
+    # persisted); once ≥1 peer was reached the remainder rely on their own
+    # inbound-failure recovery path.
+    _budget_deadline = time.monotonic() + 180.0
+    delivered = 0
+    for endpoint_id in eligible:
+        if time.monotonic() > _budget_deadline:
+            break
         try:
-            if sender.send_reconnect(endpoint_id, my_url):
-                notified += 1
+            # send_reconnect returns True on DELIVERY (signed response, accept
+            # OR reject) — a signed-rejecting peer counts as delivered so we
+            # stop re-broadcasting to it forever.
+            if sender.send_reconnect(endpoint_id, my_url, timeout_s=10):
+                delivered += 1
         except Exception:  # noqa: BLE001
             pass
-    return notified
+
+    if delivered >= 1:
+        # Persist ONLY after the new URL was delivered to at least one peer —
+        # otherwise keep the stale value so the next cycle re-detects the
+        # change and retries the broadcast (pending re-announce semantics).
+        _persist_ip()
+    return delivered
