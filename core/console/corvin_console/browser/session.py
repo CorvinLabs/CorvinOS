@@ -85,13 +85,33 @@ _BROWSER_NOT_SET_UP = (
     "This is a one-time ~150 MB download."
 )
 
+# Distinct failure on minimal Linux images: Chromium IS downloaded but system
+# libraries are missing. `playwright install chromium` cannot fix this one —
+# only the root-level dependency install can, so it needs its own message.
+_BROWSER_MISSING_SYSTEM_DEPS = (
+    "Chromium is installed but system libraries it needs are missing. "
+    "Run:  sudo playwright install-deps chromium   (one-time, needs root)."
+)
+
+
+def _looks_like_missing_system_deps(exc: BaseException) -> bool:
+    """True iff *exc* is Playwright's 'host is missing dependencies' failure —
+    Chromium downloaded fine but shared libraries are absent (minimal Linux)."""
+    msg = str(exc).lower()
+    return "missing dependencies" in msg or "install-deps" in msg
+
 
 def _looks_like_missing_browser(exc: BaseException) -> bool:
     """True iff *exc* is Playwright's 'browser binary not installed' failure.
 
     Playwright raises a generic Error whose message names the missing executable
     and points at `playwright install` — matched on the stable phrases rather
-    than an exception type, since the driver surfaces it as a plain Error."""
+    than an exception type, since the driver surfaces it as a plain Error.
+    The missing-system-deps failure ALSO mentions `playwright install` (as
+    `install-deps`), so that shape must be excluded here or the user gets told
+    to re-download a browser they already have."""
+    if _looks_like_missing_system_deps(exc):
+        return False
     msg = str(exc).lower()
     return (
         ("executable doesn't exist" in msg or "executabledoesn'texist" in msg
@@ -268,6 +288,8 @@ class BrowserSession:
             # Playwright raises "Executable doesn't exist at …/chromium-XXXX/…".
             # Translate that into the actionable message so the user learns they
             # need to fetch the browser, instead of the opaque "not available".
+            if _looks_like_missing_system_deps(exc):
+                raise BrowserActionError(_BROWSER_MISSING_SYSTEM_DEPS) from exc
             if _looks_like_missing_browser(exc):
                 raise BrowserActionError(_BROWSER_NOT_SET_UP) from exc
             raise

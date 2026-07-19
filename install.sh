@@ -106,7 +106,10 @@ else
     fi
     # --refresh bypasses uv's local index cache so a freshly published release
     # is picked up immediately, without pinning the version into the receipt.
-    uv tool install --force --refresh "$PKG"
+    # [browser] puts playwright into the uv receipt itself: a plain pip-inject
+    # would be wiped by the next `uv tool upgrade` (rebuilds the venv from the
+    # receipt), silently killing agent browsing after the first auto-update.
+    uv tool install --force --refresh "${PKG}[browser]"
 fi
 uv tool update-shell >/dev/null 2>&1 || true   # persist ~/.local/bin on PATH
 

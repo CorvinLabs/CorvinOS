@@ -133,7 +133,10 @@ if ($EditablePath -ne "") {
     }
     # --refresh bypasses uv's local index cache (which can lag a fresh release)
     # WITHOUT pinning the version into the receipt, so upgrades keep working.
-    uv tool install --force --refresh $Package
+    # [browser] puts playwright into the uv receipt itself: a plain pip-inject
+    # would be wiped by the next `uv tool upgrade` (rebuilds the venv from the
+    # receipt), silently killing agent browsing after the first auto-update.
+    uv tool install --force --refresh "$Package[browser]"
 }
 if ($LASTEXITCODE -ne 0) {
     # Re-enable the autostart task we disabled above before bailing out —

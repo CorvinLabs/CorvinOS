@@ -2267,3 +2267,24 @@ def test_start_reraises_an_unrelated_launch_error_unchanged(monkeypatch):
         asyncio.run(s.start())
     assert "Target page crashed" in str(ei.value)
     assert not isinstance(ei.value, BrowserActionError) or "playwright install" not in str(ei.value)
+
+
+def test_missing_system_deps_detector_distinguishes_from_missing_browser():
+    """Playwright's 'Host system is missing dependencies' failure mentions
+    `install-deps`, which the missing-browser detector must NOT claim — the
+    remedies are different (root-level lib install vs. browser download)."""
+    from corvin_console.browser.session import (
+        _looks_like_missing_browser,
+        _looks_like_missing_system_deps,
+    )
+    real = ("Host system is missing dependencies to run browsers.\n"
+            "Please install them with the following command:\n"
+            "    sudo playwright install-deps\n")
+    assert _looks_like_missing_system_deps(Exception(real)) is True
+    assert _looks_like_missing_browser(Exception(real)) is False
+    # The classic missing-binary shape stays with the other detector.
+    binary_missing = ("Executable doesn't exist at /x/chrome\n"
+                      "Please run: playwright install")
+    assert _looks_like_missing_system_deps(Exception(binary_missing)) is False
+    assert _looks_like_missing_browser(Exception(binary_missing)) is True
+    assert _looks_like_missing_system_deps(Exception("net::ERR_FAILED")) is False

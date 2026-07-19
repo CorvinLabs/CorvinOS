@@ -83,6 +83,14 @@ def ensure_browser(interactive: bool = True) -> None:
         return
     if proc.returncode == 0 and _chromium_present():
         print("  ✓ Chromium installed — agent browsing is ready")
+        # The download alone is not sufficient on minimal Linux images: Chromium
+        # needs system libraries (libnss3, libatk, libasound2, ...) that only a
+        # root-level package manager can provide. We cannot (and must not) sudo
+        # from here, so surface the one command that closes the gap if launch
+        # fails later.
+        if sys.platform.startswith("linux"):
+            print("  ℹ if the browser fails to launch with 'missing dependencies',"
+                  " run:  sudo playwright install-deps chromium")
     else:
         print("  ⚠ Chromium download failed (exit "
               f"{proc.returncode}). Finish later with:  playwright install chromium")
