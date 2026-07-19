@@ -293,6 +293,58 @@ async def close_session(
     return {"closed": sid}
 
 
+# ── ADR-0200: real-chrome attach consent + launch helper ─────────────────────
+
+class AttachConsentReq(BaseModel):
+    ttl_s: int | None = None      # clamped to [60s, 12h]; None → 1h default
+    model_config = {"extra": "forbid"}
+
+
+@router.post("/browser/attach/consent")
+async def grant_attach_consent(
+    body: AttachConsentReq | None,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
+) -> dict[str, Any]:
+    """Grant (or refresh) the real-chrome attach consent for this tenant."""
+    from ..browser import attach_consent as _ac  # noqa: PLC0415
+    ttl = body.ttl_s if body else None
+    expires_at = _ac.grant(rec.tenant_id, ttl, audit_fn=_audit_fn)
+    return {"active": True, "expires_at": expires_at,
+            "remaining_s": _ac.status(rec.tenant_id)["remaining_s"]}
+
+
+@router.delete("/browser/attach/consent")
+async def revoke_attach_consent(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
+) -> dict[str, Any]:
+    from ..browser import attach_consent as _ac  # noqa: PLC0415
+    _ac.revoke(rec.tenant_id, audit_fn=_audit_fn)
+    return {"active": False}
+
+
+@router.get("/browser/attach/consent")
+async def attach_consent_status(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session_or_token)],
+) -> dict[str, Any]:
+    from ..browser import attach_consent as _ac  # noqa: PLC0415
+    return _ac.status(rec.tenant_id)
+
+
+@router.get("/browser/attach/launch-command")
+async def attach_launch_command(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session_or_token)],
+    port: int = 9222,
+    profile: str | None = None,
+) -> dict[str, Any]:
+    """The exact per-OS command the USER runs to start a debug Chrome CorvinOS
+    can attach to (Q4: we never launch it for them)."""
+    from ..browser.session import cdp_launch_command  # noqa: PLC0415
+    if port < 1024 or port > 65535:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST,
+                            detail="port must be 1024–65535")
+    return {"command": cdp_launch_command(port, profile), "port": port}
+
+
 # ── actions (tool surface) ────────────────────────────────────────────────────
 def _owned_session(rec: session_auth.SessionRecord, sid: str):
     """Look up a browser session, verifying the caller owns it — prevents one
