@@ -122,6 +122,24 @@ class BrowserSessionManager:
 
         async def _confirm(*, action: str, host: str, role: str, name: str) -> bool:
             nonlocal pid_seq
+            # ADR-0200 watch-mode (Q3): on an ATTACHED (real-login) session, when
+            # the user has explicitly set watch-mode ("I'm watching, act freely")
+            # and its hard TTL has not expired, auto-approve the interactive
+            # confirm — but ONLY for attached sessions, and the action is STILL
+            # audited + egress-gated (watch-mode suppresses only the prompt).
+            # Fail-closed everywhere else: a launched session, an expired/absent
+            # setting, or any error → the normal human confirm below.
+            sess = getattr(live, "session", None)
+            if sess is not None and getattr(sess, "_attached", False):
+                try:
+                    from . import confirm_mode as _cm  # noqa: PLC0415
+                    if _cm.should_auto_approve(tenant_id):
+                        live.append({"action": "confirm_auto_watch", "host": host,
+                                     "role": role, "name": name, "attach": "real-chrome",
+                                     "ts": self._now()})
+                        return True
+                except Exception:  # noqa: BLE001 — never fail-open on a broker error
+                    pass
             pid_seq += 1
             pid = f"c{pid_seq}"      # monotonic per-session → never collides
             # get_running_loop() (review L1): we are inside a coroutine, so the

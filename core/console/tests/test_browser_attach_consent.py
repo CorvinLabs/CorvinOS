@@ -13,6 +13,8 @@ from corvin_console.browser import compliance as cmp
 @pytest.fixture(autouse=True)
 def _isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(ac._forge_paths, "tenant_global_dir", lambda t: tmp_path)
+    from corvin_console.browser import confirm_mode as _cm
+    monkeypatch.setattr(_cm._forge_paths, "tenant_global_dir", lambda t: tmp_path)
 
 
 def test_no_grant_means_inactive():
@@ -85,3 +87,90 @@ def test_grant_then_status_active_then_revoke(monkeypatch, tmp_path):
     assert ac.active("_default") is True
     ac.revoke("_default")
     assert ac.active("_default") is False
+
+
+# ── confirm-mode (Q3): watch-mode auto-approve, TTL-bounded, attach-only ──────
+
+def test_confirm_mode_defaults_to_confirm_each():
+    from corvin_console.browser import confirm_mode as cm
+    assert cm.status("_default")["mode"] == "confirm-each"
+    assert cm.should_auto_approve("_default") is False
+
+
+def test_watch_mode_auto_approves_until_ttl():
+    from corvin_console.browser import confirm_mode as cm
+    cm.set_watch("_default", ttl_s=300)
+    assert cm.should_auto_approve("_default") is True
+    with mock.patch.object(cm, "_now", return_value=time.time() + 10_000):
+        assert cm.should_auto_approve("_default") is False   # hard TTL
+
+
+def test_watch_ttl_is_clamped():
+    from corvin_console.browser import confirm_mode as cm
+    assert cm._clamp(1) == cm.WATCH_MIN_TTL_S
+    assert cm._clamp(10**9) == cm.WATCH_MAX_TTL_S            # 30m ceiling
+    assert cm._clamp(None) == cm.WATCH_DEFAULT_TTL_S
+
+
+def test_confirm_each_reverts_watch():
+    from corvin_console.browser import confirm_mode as cm
+    cm.set_watch("_default", ttl_s=300)
+    assert cm.should_auto_approve("_default") is True
+    cm.set_confirm_each("_default")
+    assert cm.should_auto_approve("_default") is False
+
+
+def test_corrupt_confirm_mode_store_is_failclosed_to_ask():
+    from corvin_console.browser import confirm_mode as cm
+    cm._path("_default").write_text("{bad")
+    assert cm.should_auto_approve("_default") is False
+
+
+# ── manager enforcement: watch-mode auto-approves ONLY attached sessions ─────
+
+def _mk_manager(tmp_path):
+    from corvin_console.browser.manager import BrowserSessionManager
+    return BrowserSessionManager(home_resolver=lambda t: tmp_path,
+                                 allowlist_resolver=lambda t: (None, None))
+
+
+def test_manager_confirm_auto_approves_attached_watch(tmp_path, monkeypatch):
+    import asyncio
+    from corvin_console.browser import confirm_mode as cm
+    mgr = _mk_manager(tmp_path)
+    sid = asyncio.run(mgr.create("_default", cdp_endpoint="ws://x/y"))
+    live = mgr._sessions[f"_default:{sid}"]
+    assert live.session._attached is True
+    cm.set_watch("_default", ttl_s=300)
+    # the confirm broker is the session's confirm_fn (the manager closure)
+    approved = asyncio.run(live.session._confirm(
+        action="click", host="bank.example", role="button", name="Pay"))
+    assert approved is True                      # watch-mode auto-approved
+    # audited as an auto-approve, not a human confirm
+    assert any(e.get("action") == "confirm_auto_watch" for e in live.actions)
+
+
+def test_manager_confirm_does_NOT_auto_approve_launched_watch(tmp_path):
+    import asyncio
+    from corvin_console.browser import confirm_mode as cm
+    mgr = _mk_manager(tmp_path)
+    sid = asyncio.run(mgr.create("_default"))    # launched, NOT attached
+    live = mgr._sessions[f"_default:{sid}"]
+    assert live.session._attached is False
+    cm.set_watch("_default", ttl_s=300)
+    # a launched session must still ASK — the broker creates a pending future and
+    # waits; with no answer it fail-closed declines (times out). Assert it does
+    # NOT short-circuit to True: run with a tiny timeout via the pending path.
+    async def _call():
+        # patch the confirm timeout to near-zero so the "asks then declines" path
+        # returns quickly instead of blocking the test.
+        import corvin_console.browser.manager as m
+        orig = m._CONFIRM_TIMEOUT_S
+        m._CONFIRM_TIMEOUT_S = 0.05
+        try:
+            return await live.session._confirm(
+                action="click", host="bank.example", role="button", name="Pay")
+        finally:
+            m._CONFIRM_TIMEOUT_S = orig
+    assert asyncio.run(_call()) is False         # launched + watch → still asks (declines)
+    assert not any(e.get("action") == "confirm_auto_watch" for e in live.actions)
