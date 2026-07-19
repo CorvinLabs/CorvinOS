@@ -114,6 +114,10 @@ def test_voice_tts_speaks_the_summary_not_the_raw_text(monkeypatch):
     monkeypatch.setattr(V, "_resolve_tts_voice", lambda lang: None)
     monkeypatch.setattr(V, "_resolve_tts_provider", lambda: None)
     monkeypatch.setattr(V.console_audit, "action_performed", lambda **k: None)
+    # This test pins the SAY.PY path. The in-process OpenAI parity branch is
+    # covered by test_voice_tts_openai_parity.py; on a machine with a real
+    # key it would otherwise hit the live API here.
+    monkeypatch.setattr(V, "_try_openai_tts", lambda *a, **k: None)
 
     long_answer = "Dies ist eine sehr lange Antwort. " * 50
     body = V.TtsRequest(text=long_answer, lang="de")
@@ -153,6 +157,10 @@ def test_voice_tts_falls_back_to_raw_truncated_text_when_summarize_fails(monkeyp
     monkeypatch.setattr(V, "_resolve_tts_voice", lambda lang: None)
     monkeypatch.setattr(V, "_resolve_tts_provider", lambda: None)
     monkeypatch.setattr(V.console_audit, "action_performed", lambda **k: None)
+    # This test pins the SAY.PY path. The in-process OpenAI parity branch is
+    # covered by test_voice_tts_openai_parity.py; on a machine with a real
+    # key it would otherwise hit the live API here.
+    monkeypatch.setattr(V, "_try_openai_tts", lambda *a, **k: None)
 
     raw_text = "x" * 5000  # over the 4000-char provider limit
     body = V.TtsRequest(text=raw_text, lang="de")

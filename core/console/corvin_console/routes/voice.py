@@ -6,8 +6,11 @@ Endpoints
   POST /v1/console/voice/tts          {text, lang?} → audio/ogg blob
 
 STT delegates to ``operator/voice/scripts/stt/`` (the same provider
-chain bridges use). TTS shells out to ``operator/voice/scripts/say.py``
-to avoid pulling the OpenAI client into the console process.
+chain bridges use). TTS first summarizes and resolves the user's
+provider/voice pins, then synthesizes via an in-process OpenAI branch
+(only when the resolved provider is OpenAI and CORVIN_TTS_LOCAL_ONLY
+permits cloud egress) with ``operator/voice/scripts/say.py`` as the
+subprocess fallback chain (openai → edge → piper).
 
 Audit policy (load-bearing — CLAUDE.md § Layer 23):
     voice.transcribed audit emits METADATA ONLY, never transcript text.
@@ -502,9 +505,19 @@ def _resolve_tts_provider() -> str | None:
 
     Returns one of: "openai", "edge", "piper", None.
     None means say.py will use its automatic chain (openai → edge → piper).
-    The operator-level env var CORVIN_TTS_PROVIDER takes final precedence;
-    that is handled inside say.py itself so we don't duplicate the logic here.
+
+    The operator-level env var ``CORVIN_TTS_PROVIDER`` takes FINAL precedence
+    (over the profile). say.py honours it too, but the in-process OpenAI branch
+    in ``_voice_tts_sync`` runs BEFORE say.py — so it MUST be resolved here or a
+    ``CORVIN_TTS_PROVIDER=piper`` (or ``edge``) pin would silently ship reply
+    text to OpenAI's cloud despite the operator pinning a local provider. Env
+    wins over profile; ``auto`` means "no pin, use the auto-chain".
     """
+    env_provider = os.environ.get("CORVIN_TTS_PROVIDER", "").strip()
+    if env_provider and env_provider != "auto":
+        return env_provider
+    if env_provider == "auto":
+        return None
     if not _PROFILE_OK or _profile_module is None:
         return None
     try:
@@ -700,14 +713,42 @@ def _say_cmd(out_path: "Path", text: str, lang: str) -> list[str]:
     return cmd
 
 
-def _try_openai_tts(body: TtsRequest) -> "bytes | None":
+# The OpenAI TTS-1 voice names the in-process branch accepts verbatim. A
+# profile ``tts_voice`` that is NOT one of these (e.g. an edge neural voice
+# like "de-DE-KatjaNeural") cannot be honoured by OpenAI — the branch then
+# falls back to "nova" rather than sending a doomed request. say.py's own
+# ``_openai_voice_for`` passes any override verbatim; the closed set here is
+# deliberately stricter because an in-process API error would burn the
+# timeout budget before the say.py chain even starts.
+_OPENAI_TTS_VOICES = frozenset({
+    "alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer",
+})
+
+
+def _try_openai_tts(text: str, lang: str, voice: "str | None") -> "bytes | None":
     """Direct OpenAI TTS call, in-process. Returns audio bytes or None on failure.
 
-    This runs BEFORE the say.py subprocess chain, so if it works, we skip
-    the fork overhead entirely. If it fails (no key, network, timeout), we
-    fall back to say.py's chain (edge-tts, piper). Best-effort only — a
-    failure here must never break TTS.
+    Mirrors ``adapter.py::_try_openai_tts`` (the messenger bridges' twin):
+
+    * **CORVIN_TTS_LOCAL_ONLY=1 disables it entirely** — OpenAI TTS ships the
+      reply text to OpenAI's cloud, which is forbidden under the EU local-only
+      egress guarantee (L35 / EU_PRODUCTION). Returning None falls through to
+      say.py, which enforces the same flag on its openai AND edge tiers.
+    * **timeout + no retries** — without these the SDK defaults to 600 s with
+      retries; a degraded network would park the request threadpool worker in
+      TTS for minutes before say.py's chain is even attempted.
+    * *text* must be the SUMMARIZED speech text and *voice* the profile-resolved
+      voice — the caller (``_voice_tts_sync``) runs ``_summarize_for_speech`` and
+      ``_resolve_tts_voice`` first, so this branch speaks exactly what the
+      say.py chain would speak.
+
+    Best-effort only — any failure returns None and must never break TTS.
     """
+    # EU local-only egress guarantee — checked FIRST, before any key resolution,
+    # exactly like the adapter twin (adapter.py::_try_openai_tts).
+    if os.environ.get("CORVIN_TTS_LOCAL_ONLY") == "1":
+        return None
+
     try:
         import openai as openai_module
     except ImportError:
@@ -722,18 +763,20 @@ def _try_openai_tts(body: TtsRequest) -> "bytes | None":
     if not (key or "").strip():
         return None  # no key configured, skip to say.py
 
+    # Honour the user's profile voice when it names a real OpenAI voice;
+    # anything else (edge/piper voice names, unset) falls back to "nova".
+    openai_voice = (voice or "").strip().lower()
+    if openai_voice not in _OPENAI_TTS_VOICES:
+        openai_voice = "nova"
+
     try:
-        # Set the API key on the client
-        client = openai_module.OpenAI(api_key=key)
-
-        # Clamp text size to OpenAI's limit (4096 chars)
-        text_to_speak = body.text[:_TTS_PROVIDER_CHAR_LIMIT]
-
-        # Call with timeout via asyncio (runs in threadpool so has event loop)
+        client = openai_module.OpenAI(
+            api_key=key, timeout=_OPENAI_TTS_TIMEOUT_S, max_retries=0,
+        )
         response = client.audio.speech.create(
             model="tts-1",
-            voice="nova",  # hardcoded for console; adapter.py can override
-            input=text_to_speak,
+            voice=openai_voice,
+            input=text[:_TTS_PROVIDER_CHAR_LIMIT],  # OpenAI TTS-1 hard cap 4096
             speed=1.0,
         )
         return response.content
@@ -901,23 +944,20 @@ def _voice_tts_sync(
     body: TtsRequest,
     rec: session_auth.SessionRecord,
 ) -> Response:
-    """TTS with built-in robustness: try OpenAI (in-process), fallback to say.py.
+    """TTS pipeline: summarize → resolve provider + voice → OpenAI in-process
+    when the resolved provider is OpenAI (pinned "openai", or no pin — say.py's
+    auto-chain leads with openai anyway) → say.py subprocess fallback.
 
-    Why in-process: say.py shells out to system Python which may not have pip
-    installed. Calling OpenAI directly avoids that fragility entirely. If it fails,
-    say.py still has edge/piper as a second-line fallback.
+    Why the in-process OpenAI branch exists at all: say.py shells out to system
+    Python which may not have pip installed. Calling OpenAI directly avoids that
+    fragility (and the fork overhead). But it is a PARITY branch, not a shortcut:
+    it runs AFTER summarization and provider/voice resolution, so it speaks the
+    same condensed summary with the same resolved voice the say.py chain would —
+    and it is skipped entirely when the user pinned a non-OpenAI provider
+    (e.g. piper) or CORVIN_TTS_LOCAL_ONLY=1 forbids cloud egress (see
+    _try_openai_tts). On any failure the say.py chain (openai → edge → piper,
+    with its own local-only enforcement) runs unchanged.
     """
-    # Try direct OpenAI call FIRST (faster, more reliable than subprocess)
-    _tts_data = _try_openai_tts(body)
-    if _tts_data is not None:
-        return _serve_tts_response(rec, body, _tts_data, "openai")
-
-    # Fallback: say.py (edge-tts, piper, or degraded)
-    say_path = _VOICE_SCRIPTS / "say.py"
-    if not say_path.exists():
-        raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE,
-                            "say.py not found")
-
     # Speak a real, condensed summary (learnings/metaphor annex included, same
     # as every messenger bridge via adapter.py::build_voice_summary) instead of
     # the raw answer text — see _summarize_for_speech's docstring for why this
@@ -939,6 +979,29 @@ def _voice_tts_sync(
     # Clamp UNCONDITIONALLY. summarize.py's degraded path (naive_truncate)
     # deliberately returns prose IN FULL — measured 20299 chars for --max-chars 400.
     tts_text = (_summarize_for_speech(body.text, body.lang) or body.text)[:_TTS_PROVIDER_CHAR_LIMIT]
+
+    # Resolve the user's pins ONCE, before choosing a synthesis path. Before
+    # this restructure the OpenAI branch ran FIRST — on raw un-summarized text,
+    # with a hardcoded "nova" voice, ignoring a pinned tts_provider (a piper pin
+    # still went to OpenAI's cloud) and ignoring CORVIN_TTS_LOCAL_ONLY (an L35
+    # violation under EU local-only deployments).
+    provider = _resolve_tts_provider()
+    voice = _resolve_tts_voice(body.lang)
+
+    # In-process OpenAI only when the resolved provider IS OpenAI: an explicit
+    # "openai" pin, or no pin at all — say.py's auto-chain leads with openai, so
+    # with a key configured this is the same tier without the fork overhead.
+    # Any other pin (piper, edge) must reach say.py untouched.
+    if provider in (None, "openai"):
+        _tts_data = _try_openai_tts(tts_text, body.lang, voice)
+        if _tts_data is not None:
+            return _serve_tts_response(rec, body, _tts_data, "openai")
+
+    # Fallback: say.py (openai, edge-tts, piper, or degraded)
+    say_path = _VOICE_SCRIPTS / "say.py"
+    if not say_path.exists():
+        raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "say.py not found")
 
     # Fallback to say.py subprocess (edge-tts, piper)
     with tempfile.NamedTemporaryFile(prefix="corvin_tts_", suffix=".opus", delete=False) as fh:

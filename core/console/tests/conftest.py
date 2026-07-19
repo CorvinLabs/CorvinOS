@@ -79,13 +79,23 @@ _TRACKED_ENV = (
     "XDG_CONFIG_HOME",
     "CORVIN_USE_ENGINE_LAYER",
     "CORVIN_OS_MODEL_ALLOW_HAIKU",
+    "CORVIN_TTS_LOCAL_ONLY",
 )
 
 
 @pytest.fixture(autouse=True)
 def _isolate_environ():
-    """Snapshot + restore the tracked environment keys around each test."""
+    """Snapshot + restore the tracked environment keys around each test.
+
+    Also defaults CORVIN_TTS_LOCAL_ONLY=1 for every test: a route-level test
+    that doesn't stub key resolution would otherwise make a LIVE billable
+    OpenAI TTS call from pytest whenever a real key is configured on the host
+    (observed 2026-07-19 — the "test mutates live service" class). Tests that
+    genuinely exercise the cloud branch monkeypatch.delenv it explicitly and
+    stub the openai module.
+    """
     saved = {k: os.environ.get(k) for k in _TRACKED_ENV}
+    os.environ["CORVIN_TTS_LOCAL_ONLY"] = "1"
     try:
         yield
     finally:

@@ -646,6 +646,47 @@ correctness bug). A cleaner fix would have the frontend only call
 `playTts()` once, after the annex is known — out of scope for this pass.
 Regression: `core/console/tests/test_voice_tts_summarize.py` (8 cases).
 
+**Console `/voice/tts` final chain — OpenAI in-process parity hardening
+(2026-07-19).** The route had grown a second synthesis entry point: an
+in-process `_try_openai_tts` branch that ran FIRST, before everything the
+paragraph above fixed. Adversarial review verified three defects: it spoke
+up to 4000 chars of raw un-summarized markdown verbatim (bypassing
+`_summarize_for_speech`), it overrode the user's pinned `tts_provider`
+(a piper pin still shipped text to OpenAI's cloud) and hardcoded
+voice="nova", and — the L35 violation — it ignored `CORVIN_TTS_LOCAL_ONLY=1`
+entirely and constructed the SDK client with its defaults (600 s timeout,
+retries), unlike the adapter's twin (`adapter.py::_try_openai_tts`), which
+guards the flag and pins `timeout`/`max_retries=0`. The pipeline in
+`_voice_tts_sync` is now, in order:
+
+1. **license gate** (`enforce_voice_summaries`, fail-closed — now metered on
+   EVERY turn, including OpenAI-served ones; before, an OpenAI success
+   skipped the gate);
+2. **summarize** (`_summarize_for_speech`, raw-truncation fallback), clamped
+   at `_TTS_PROVIDER_CHAR_LIMIT`;
+3. **resolve pins once** — `_resolve_tts_provider()` + `_resolve_tts_voice()`;
+4. **OpenAI in-process** only when the resolved provider IS OpenAI (explicit
+   `"openai"` pin, or no pin — say.py's auto-chain leads with openai anyway):
+   `_try_openai_tts(summary, lang, resolved_voice)` returns None (→ fall
+   through) under `CORVIN_TTS_LOCAL_ONLY=1`, checked BEFORE key resolution
+   like the adapter twin; the client is constructed with
+   `timeout=_OPENAI_TTS_TIMEOUT_S, max_retries=0`; a profile voice that names
+   a real OpenAI voice (`_OPENAI_TTS_VOICES`) is honoured, anything else
+   (edge/piper voice names) falls back to "nova" instead of sending a doomed
+   request;
+5. **say.py subprocess fallback** (openai → edge → piper, with its own
+   local-only enforcement) — unchanged, including the 204 +
+   `X-Corvin-Voice-Reason` degradation contract and audit events.
+
+The redundant `core/console/corvin_console/voice_bootstrap.py` was deleted
+in the same pass: never imported anywhere, its `urlretrieve(..., context=)`
+call raised TypeError on every invocation, its GitHub model URLs 404 — and
+`corvinOS/installer/steps/piper.py` already provisions Piper models
+correctly from HuggingFace. Regression guards:
+`core/console/tests/test_voice_tts_openai_parity.py` (7 cases: local-only
+unit + pipeline, summary+resolved-voice reaches OpenAI, unmapped-voice→nova,
+piper pin never touches OpenAI, ctor timeout/retries, input clamp).
+
 **Annex must never double (`build_voice_summary` dedup).** The bridge backfills
 the LERN-ZUGABE / METAPHER onto the spoken text on every path, each guarded by
 `_has_lern_zugabe_suffix` / `_has_metapher_suffix` so an annex the summarizer (or
