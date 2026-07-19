@@ -10731,6 +10731,22 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
+    # ── TELEMETRY INITIALIZATION ──────────────────────────────────────────────
+    # Start the automatic ping thread and healing-trace uploader. This ensures
+    # that telemetry is collected and sent continuously without manual intervention.
+    # Every instance automatically reports its status, version, and health.
+    try:
+        from corvin_console.aco.htrace_uploader import start_ping_thread as _start_ping
+        from forge.paths import corvin_home as _telemetry_home
+        _telemetry_home_path = _telemetry_home()
+        _ping_thread = _start_ping(_telemetry_home_path)
+        if _ping_thread and _ping_thread.is_alive():
+            log("telemetry: ping thread started (daily heartbeat active)")
+        else:
+            log("telemetry: ping thread start skipped (already running elsewhere or unavailable)")
+    except Exception as _tele_e:  # noqa: BLE001
+        log(f"telemetry: ping thread initialization failed (best-effort): {_tele_e}")
+
     def _drain_and_exit() -> int:
         """Stop accepting work, let in-flight runs finish, then exit.
 
@@ -10838,6 +10854,22 @@ def main() -> int:
                                     f"terminated records older than 1h")
                         except Exception as _e:
                             log(f"process_table cleanup failed: {_e}")
+
+                    # ── Telemetry healing-trace upload ────────────────────────────
+                    # Trigger daily healing-trace bundle upload (if new data exists).
+                    # This runs on the same cleanup interval (~1h), so bundles queue
+                    # for upload multiple times per day if available. Non-blocking.
+                    try:
+                        from corvin_console.aco.htrace_uploader import (  # noqa: PLC0415
+                            run_upload_cycle as _telemetry_upload,
+                        )
+                        from forge.paths import corvin_home as _upload_home  # noqa: PLC0415
+                        _outcome, _count = _telemetry_upload(_upload_home())
+                        if _count > 0:
+                            log(f"telemetry: uploaded {_count} healing-trace bundle(s) ({_outcome})")
+                    except Exception as _ute:  # noqa: BLE001
+                        pass  # Best-effort; never block main cleanup loop
+
                     last_cleanup = time.monotonic()
                 time.sleep(POLL_INTERVAL)
             except KeyboardInterrupt:
