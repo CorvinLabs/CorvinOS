@@ -67,3 +67,21 @@ def test_audit_omits_the_tag_for_launched_mode():
     cmp.audit_action(lambda **kw: captured.update(kw), tenant_id="_default",
                      session_id="s1", action="navigate", host="example.com", attach="")
     assert "attach" not in captured["details"]
+
+
+# ── the REST surface (grant / revoke / status / launch-command) ──────────────
+
+def test_launch_command_endpoint_shape():
+    from corvin_console.browser.session import cdp_launch_command
+    cmd = cdp_launch_command(9222, None)
+    assert "9222" in cmd and "--user-data-dir=" in cmd
+
+
+def test_grant_then_status_active_then_revoke(monkeypatch, tmp_path):
+    # attach_consent already isolated to tmp_path by the autouse fixture.
+    assert ac.active("_default") is False
+    exp = ac.grant("_default", 3600)
+    assert exp > time.time()
+    assert ac.active("_default") is True
+    ac.revoke("_default")
+    assert ac.active("_default") is False
