@@ -241,6 +241,11 @@ class CreateSessionReq(BaseModel):
     # must go through this same REST API as any other caller — so the field
     # is now accepted here too. An empty/omitted list changes nothing.
     task_scoped_hosts: list[str] | None = None
+    # ADR-0200: when set, attach to the user's OWN Chrome at this CDP endpoint
+    # (a ws:// URL from a debug Chrome the USER started) instead of launching an
+    # empty Chromium. Gated on an active `real-chrome` attach consent — refused
+    # otherwise. Omitted/None keeps the default launched-Chromium behaviour.
+    cdp_endpoint: str | None = None
     model_config = {"extra": "forbid"}
 
 
@@ -252,10 +257,25 @@ async def create_session(
 ) -> dict[str, Any]:
     headless = body.headless if (body and body.headless is not None) else _default_headless()
     task_scoped_hosts = (body.task_scoped_hosts or None) if body else None
+    cdp_endpoint = (body.cdp_endpoint or None) if body else None
+    if cdp_endpoint:
+        # ADR-0200: attaching to the user's real logged-in Chrome requires an
+        # active, non-expired `real-chrome` consent — fail-closed otherwise.
+        from ..browser import attach_consent as _ac  # noqa: PLC0415
+        if not _ac.active(rec.tenant_id):
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail=("Attaching to your real Chrome needs an active "
+                        "'real-chrome' consent. Grant it in the console "
+                        "(Browser → Attach to my Chrome), then retry."))
+        # Real-login attach is ALWAYS visible — the user must see it act; a
+        # headless attach would hide actions on their bank/mail sessions.
+        headless = False
     try:
         sid = await _mgr().create(rec.tenant_id, headless=headless,
                                    owner_fingerprint=rec.sid_fingerprint,
-                                   task_scoped_hosts=task_scoped_hosts)
+                                   task_scoped_hosts=task_scoped_hosts,
+                                   cdp_endpoint=cdp_endpoint)
     except RuntimeError as e:   # session cap reached or allowlist config error
         raise HTTPException(status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
                             detail=str(e)) from e
