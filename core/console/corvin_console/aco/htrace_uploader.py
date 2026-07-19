@@ -101,104 +101,30 @@ _CORVINLOGS_REPO = "CorvinLabs/CorvinLogs"
 # telemetry._assert_safe / htrace._assert_safe_htrace: it is fail-closed, so a
 # body that over-ships is DROPPED (ValueError → ping_if_due returns False, no
 # network call) rather than transmitted.
-_PING_BODY_ALLOWED_KEYS = frozenset({
-    # Core (existing)
-    "corvin_version", "platform", "python_minor", "active_engine",
-    # Phase 1 (new, 2026-07-17)
-    "voice_languages_enabled",  # hex bitmask of 20 languages
-    "voice_usage_rate",  # never | occasionally | frequently | always
-    "stt_engine",  # system | openai | byok | unconfigured
-    "install_type",  # fresh_install | upgrade | docker | manual | installer_msi | installer_ps1
-    "auto_update_enabled",  # true | false | null
-    "container_runtime",  # native | docker | vm | wsl | unknown
-    "code_review_used",  # true | false | null
-    "browser_automation_used",  # true | false | null
-    # Phase 2 Geolocation (new, 2026-07-18) — closed enums only, no IPs/coordinates
-    "country_code",  # ISO 3166-1 alpha-2 (e.g., "DE", "US", "XX")
-    "continent",  # Africa | Americas | Asia | Europe | Oceania | Unknown
-    "timezone_offset",  # integer seconds offset from UTC (e.g., 3600 for +01:00)
-})
+_PING_BODY_ALLOWED_KEYS = frozenset(
+    {"corvin_version", "platform", "python_minor", "active_engine"}
+)
 _PING_ALLOWED_PLATFORMS = frozenset({"linux", "win32", "darwin", "other"})
 _RE_PING_VERSION = re.compile(r"^[0-9A-Za-z.\-+]{1,32}\Z")
 _RE_PING_PY_MINOR = re.compile(r"^\d{1,2}\.\d{1,3}\Z")
-_RE_VOICE_LANGS = re.compile(r"^(?:0x)?[0-9a-fA-F]{1,16}\Z")  # hex bitmask with optional 0x prefix
-
-# Phase 1 Enum Validators
-_VOICE_USAGE_RATES = frozenset({"never", "occasionally", "frequently", "always"})
-_STT_ENGINES = frozenset({"system", "openai", "byok", "unconfigured"})
-_INSTALL_TYPES = frozenset({"fresh_install", "upgrade", "docker", "manual", "installer_msi", "installer_ps1"})
-_CONTAINER_RUNTIMES = frozenset({"native", "docker", "vm", "wsl", "unknown"})
-
-# Phase 2 Geolocation (2026-07-18) — closed enums for GDPR safety
-# ISO 3166-1 alpha-2 country codes (allowlist to prevent injection)
-_ALLOWED_COUNTRY_CODES = frozenset({
-    "AD", "AE", "AF", "AG", "AI", "AL", "AM", "AO", "AQ", "AR", "AS", "AT", "AU", "AW", "AX", "AZ",
-    "BA", "BB", "BD", "BE", "BF", "BG", "BH", "BI", "BJ", "BL", "BM", "BN", "BO", "BQ", "BR", "BS", "BT", "BV", "BW", "BY", "BZ",
-    "CA", "CC", "CD", "CF", "CG", "CH", "CI", "CK", "CL", "CM", "CN", "CO", "CR", "CU", "CV", "CW", "CX", "CY", "CZ",
-    "DE", "DJ", "DK", "DM", "DO", "DZ",
-    "EC", "EE", "EG", "EH", "ER", "ES", "ET",
-    "FI", "FJ", "FK", "FM", "FO", "FR",
-    "GA", "GB", "GD", "GE", "GF", "GG", "GH", "GI", "GL", "GM", "GN", "GP", "GQ", "GR", "GS", "GT", "GU", "GW", "GY",
-    "HK", "HM", "HN", "HR", "HT", "HU",
-    "ID", "IE", "IL", "IM", "IN", "IO", "IQ", "IR", "IS", "IT",
-    "JE", "JM", "JO", "JP",
-    "KE", "KG", "KH", "KI", "KM", "KN", "KP", "KR", "KW", "KY", "KZ",
-    "LA", "LB", "LC", "LI", "LK", "LR", "LS", "LT", "LU", "LV", "LY",
-    "MA", "MC", "MD", "ME", "MF", "MG", "MH", "MK", "ML", "MM", "MN", "MO", "MP", "MQ", "MR", "MS", "MT", "MU", "MV", "MW", "MX", "MY", "MZ",
-    "NA", "NC", "NE", "NF", "NG", "NI", "NL", "NO", "NP", "NR", "NU", "NZ",
-    "OM",
-    "PA", "PE", "PF", "PG", "PH", "PK", "PL", "PM", "PN", "PR", "PS", "PT", "PW", "PY",
-    "QA",
-    "RE", "RO", "RS", "RU", "RW",
-    "SA", "SB", "SC", "SD", "SE", "SG", "SH", "SI", "SJ", "SK", "SL", "SM", "SN", "SO", "SR", "SS", "ST", "SV", "SX", "SY", "SZ",
-    "TC", "TD", "TF", "TG", "TH", "TJ", "TK", "TL", "TM", "TN", "TO", "TR", "TT", "TV", "TW", "TZ",
-    "UA", "UG", "UM", "US", "UY", "UZ",
-    "VA", "VC", "VE", "VG", "VI", "VN", "VU",
-    "WF", "WS",
-    "YE", "YT",
-    "ZA", "ZM", "ZW", "XX"  # XX = unknown/VPN/proxy
-})
-
-# Continents: closed set, no free-form strings
-_ALLOWED_CONTINENTS = frozenset({
-    "Africa", "Americas", "Asia", "Europe", "Oceania", "Unknown"
-})
-
-# Timezone offset ranges: validated as integer, ±14 hours = ±50400 seconds
-_TIMEZONE_OFFSET_MIN = -12 * 3600  # -43200
-_TIMEZONE_OFFSET_MAX = 14 * 3600   # 50400
 
 
 def _assert_ping_safe(body: dict) -> None:
     """Raise if the ping body carries any non-allowlisted key or a value
-    outside its closed enum/pattern. Fail-closed. Phase 1 (2026-07-17):
-    extended with 8 new optional fields (voice, install, runtime, features)."""
+    outside its closed enum/pattern. Fail-closed."""
     extra = set(body.keys()) - _PING_BODY_ALLOWED_KEYS
     if extra:
         raise ValueError(
             f"ping body carries non-allowlisted keys {sorted(extra)!r}"
         )
     checks = {
-        "corvin_version": lambda v: isinstance(v, str) and bool(_RE_PING_VERSION.match(v)),
-        "platform": lambda v: isinstance(v, str) and v in _PING_ALLOWED_PLATFORMS,
-        "python_minor": lambda v: isinstance(v, str) and bool(_RE_PING_PY_MINOR.match(v)),
-        "active_engine": lambda v: isinstance(v, str) and (v in _ALLOWED_ENGINES or v == "unknown"),
-        # Phase 1 (new)
-        "voice_languages_enabled": lambda v: isinstance(v, str) and bool(_RE_VOICE_LANGS.match(v)),
-        "voice_usage_rate": lambda v: isinstance(v, str) and v in _VOICE_USAGE_RATES,
-        "stt_engine": lambda v: isinstance(v, str) and v in _STT_ENGINES,
-        "install_type": lambda v: isinstance(v, str) and v in _INSTALL_TYPES,
-        "auto_update_enabled": lambda v: v is None or isinstance(v, bool),
-        "container_runtime": lambda v: isinstance(v, str) and v in _CONTAINER_RUNTIMES,
-        "code_review_used": lambda v: v is None or isinstance(v, bool),
-        "browser_automation_used": lambda v: v is None or isinstance(v, bool),
-        # Phase 2 Geolocation (new, 2026-07-18)
-        "country_code": lambda v: isinstance(v, str) and v in _ALLOWED_COUNTRY_CODES,
-        "continent": lambda v: isinstance(v, str) and v in _ALLOWED_CONTINENTS,
-        "timezone_offset": lambda v: isinstance(v, int) and _TIMEZONE_OFFSET_MIN <= v <= _TIMEZONE_OFFSET_MAX,
+        "corvin_version": lambda v: bool(_RE_PING_VERSION.match(v)),
+        "platform": lambda v: v in _PING_ALLOWED_PLATFORMS,
+        "python_minor": lambda v: bool(_RE_PING_PY_MINOR.match(v)),
+        "active_engine": lambda v: v in _ALLOWED_ENGINES or v == "unknown",
     }
     for key, val in body.items():
-        if key not in checks or not checks[key](val):
+        if not isinstance(val, str) or not checks[key](val):
             raise ValueError(f"ping body key {key!r} carries a non-allowlisted value")
 
 
@@ -296,332 +222,6 @@ def record_active_engine(home: Path, engine: str) -> None:
                 tmp.unlink()
     except Exception:  # noqa: BLE001
         pass
-
-
-def _collect_voice_languages(home: Path) -> str:
-    """Collect enabled voice languages as hex bitmask.
-
-    Maps 20 languages: de, en, es, fr, it, pt, nl, pl, ru, ja, zh, ko, ar, tr, sv, da, no, fi, el, cs.
-    Returns hex string (e.g., "0x0FFFFF80") or "0" if unconfigured.
-    """
-    try:
-        # Languages in order: de(0), en(1), es(2), fr(3), it(4), pt(5), nl(6), pl(7), ru(8), ja(9),
-        #                     zh(10), ko(11), ar(12), tr(13), sv(14), da(15), no(16), fi(17), el(18), cs(19)
-        lang_map = {
-            "de": 0, "en": 1, "es": 2, "fr": 3, "it": 4, "pt": 5, "nl": 6, "pl": 7, "ru": 8, "ja": 9,
-            "zh": 10, "ko": 11, "ar": 12, "tr": 13, "sv": 14, "da": 15, "no": 16, "fi": 17, "el": 18, "cs": 19,
-        }
-        bitmask = 0
-        voice_config = home / ".config" / "corvin-voice" / "profile.json"
-        if voice_config.exists():
-            import json as _j
-            try:
-                data = _j.loads(voice_config.read_text(encoding="utf-8"))
-                display_language = data.get("display_language", "")
-                if display_language in lang_map:
-                    bitmask |= (1 << lang_map[display_language])
-            except Exception:
-                pass
-        return format(bitmask, "x") if bitmask else "0"
-    except Exception:  # noqa: BLE001
-        return "0"
-
-
-def _collect_voice_usage_rate(home: Path) -> str:
-    """Estimate voice usage rate from audit log (heuristic).
-
-    Returns: never | occasionally | frequently | always
-    """
-    try:
-        audit = home / "audit.jsonl"
-        if not audit.exists():
-            return "never"
-        # Heuristic: count voice events in the last 7 days
-        import time as _t
-        lines = audit.read_text(encoding="utf-8", errors="replace").strip().split("\n")
-        voice_events = 0
-        total_events = 0
-        threshold = _t.time() - (7 * 86400)  # 7 days ago
-        for line in lines[-500:]:  # scan last 500 events
-            if not line.strip():
-                continue
-            try:
-                import json as _j
-                rec = _j.loads(line)
-                total_events += 1
-                ts = rec.get("timestamp", 0)
-                if ts > threshold and "voice" in str(rec).lower():
-                    voice_events += 1
-            except Exception:
-                pass
-        if total_events == 0:
-            return "never"
-        rate = voice_events / max(1, total_events)
-        if rate > 0.5:
-            return "frequently"
-        elif rate > 0.2:
-            return "occasionally"
-        return "never"
-    except Exception:  # noqa: BLE001
-        return "never"
-
-
-def _collect_stt_engine(home: Path) -> str:
-    """Detect configured STT engine.
-
-    Returns: system | openai | byok | unconfigured
-    """
-    try:
-        voice_config = home / ".config" / "corvin-voice" / "stt.yaml"
-        if voice_config.exists():
-            text = voice_config.read_text(encoding="utf-8", errors="replace")
-            if "openai" in text.lower():
-                return "openai"
-            if "byok" in text.lower() or "api_key" in text.lower():
-                return "byok"
-            return "system"
-        return "unconfigured"
-    except Exception:  # noqa: BLE001
-        return "unconfigured"
-
-
-def _collect_install_type(home: Path) -> str:
-    """Detect installation type.
-
-    Returns: fresh_install | upgrade | docker | manual | installer_msi | installer_ps1
-    """
-    try:
-        install_marker = home / "aco" / "install.marker"
-        if install_marker.exists():
-            marker = install_marker.read_text(encoding="utf-8", errors="replace").strip()
-            if marker in ("docker", "manual", "installer_msi", "installer_ps1"):
-                return marker
-            if "upgrade" in marker.lower():
-                return "upgrade"
-        return "fresh_install"
-    except Exception:  # noqa: BLE001
-        return "unknown"
-
-
-def _collect_container_runtime() -> str:
-    """Detect if running in container/VM.
-
-    Returns: native | docker | vm | wsl | unknown
-    """
-    try:
-        # Check for /.dockerenv (Docker marker)
-        if Path("/.dockerenv").exists():
-            return "docker"
-        # Check for WSL marker (Windows Subsystem for Linux)
-        if Path("/proc/version").exists():
-            proc_version = Path("/proc/version").read_text(encoding="utf-8", errors="replace").lower()
-            if "microsoft" in proc_version or "wsl" in proc_version:
-                return "wsl"
-        # Check for VM via dmidecode or systemd (best-effort)
-        try:
-            import subprocess as _sp
-            result = _sp.run(["systemd-detect-virt"], capture_output=True, text=True, timeout=2)
-            vm_type = result.stdout.strip().lower()
-            if vm_type and vm_type not in ("none", "unknown"):
-                return "vm"
-        except Exception:
-            pass
-        return "native"
-    except Exception:  # noqa: BLE001
-        return "unknown"
-
-
-def _collect_country_code(home: Path) -> str:
-    """Detect country code from system timezone.
-
-    Uses tzdata to map the local timezone to an ISO 3166-1 alpha-2 country code.
-    Returns 2-character uppercase code or "XX" if unknown/VPN.
-    Fail-soft: never raises.
-    """
-    try:
-        import time as _t
-        # Try to detect timezone from environment or system
-        try:
-            from zoneinfo import ZoneInfo
-        except ImportError:
-            from backports.zoneinfo import ZoneInfo  # type: ignore[import]
-
-        # Get local timezone name
-        tz_name = None
-        try:
-            import os as _os
-            if "TZ" in _os.environ:
-                tz_name = _os.environ["TZ"]
-            else:
-                # Try to read from /etc/timezone (Linux)
-                try:
-                    tz_path = Path("/etc/timezone")
-                    if tz_path.exists():
-                        tz_name = tz_path.read_text(encoding="utf-8").strip()
-                except OSError:
-                    pass
-        except Exception:
-            pass
-
-        # Fallback: try to infer from offset
-        if not tz_name:
-            # Map common timezone offsets to regions (heuristic)
-            # This is a best-effort fallback when timezone name is unavailable
-            offset_map = {
-                -28800: "US",  # PST (-8h)
-                -25200: "US",  # MST (-7h)
-                -21600: "US",  # CST (-6h)
-                -18000: "US",  # EST (-5h)
-                -3600: "GB",   # GMT
-                0: "GB",       # UTC
-                3600: "DE",    # CET (+1h)
-                7200: "EE",    # EET (+2h)
-                19800: "IN",   # IST (+5:30h)
-                28800: "CN",   # CST (+8h)
-                32400: "JP",   # JST (+9h)
-            }
-            offset_sec = int(_t.timezone if _t.daylight == 0 else _t.altzone)
-            # Negative offset means east of UTC
-            if -offset_sec in offset_map:
-                return offset_map[-offset_sec]
-            return "XX"
-
-        # Map common timezone -> country code (simplified; real system would use tzdata)
-        tz_to_country = {
-            "Europe/Berlin": "DE", "Europe/Paris": "FR", "Europe/London": "GB",
-            "Europe/Madrid": "ES", "Europe/Rome": "IT", "Europe/Amsterdam": "NL",
-            "Europe/Brussels": "BE", "Europe/Vienna": "AT", "Europe/Prague": "CZ",
-            "Europe/Warsaw": "PL", "Europe/Moscow": "RU", "Europe/Istanbul": "TR",
-            "America/New_York": "US", "America/Chicago": "US", "America/Denver": "US",
-            "America/Los_Angeles": "US", "America/Toronto": "CA", "America/Mexico_City": "MX",
-            "America/Sao_Paulo": "BR", "America/Buenos_Aires": "AR", "America/Santiago": "CL",
-            "Asia/Tokyo": "JP", "Asia/Shanghai": "CN", "Asia/Hong_Kong": "HK",
-            "Asia/Singapore": "SG", "Asia/Bangkok": "TH", "Asia/Seoul": "KR",
-            "Asia/Mumbai": "IN", "Asia/Kolkata": "IN", "Asia/Dubai": "AE",
-            "Africa/Cairo": "EG", "Africa/Johannesburg": "ZA", "Africa/Lagos": "NG",
-            "Australia/Sydney": "AU", "Australia/Melbourne": "AU",
-            "Pacific/Auckland": "NZ", "UTC": "XX",
-        }
-        if tz_name in tz_to_country:
-            return tz_to_country[tz_name]
-
-        # Extract country code from timezone string (e.g., Europe/Berlin -> DE)
-        if "/" in tz_name:
-            try:
-                region = tz_name.split("/")[1]  # e.g., "Berlin"
-                # Simple heuristic: if it's a city name, try to resolve it
-                # This is best-effort and may return XX (unknown)
-                if len(region) == 2 and region.isupper():
-                    if region in _ALLOWED_COUNTRY_CODES:
-                        return region
-            except (IndexError, ValueError):
-                pass
-
-        return "XX"  # Unknown/VPN
-    except Exception:  # noqa: BLE001
-        return "XX"
-
-
-def _collect_continent(home: Path) -> str:
-    """Map country code to continent.
-
-    Returns: Africa | Americas | Asia | Europe | Oceania | Unknown
-    Uses simple country_code -> continent mapping.
-    Fail-soft: never raises.
-    """
-    try:
-        cc = _collect_country_code(home)
-
-        # Country-to-continent mapping (simplified)
-        continent_map = {
-            # Africa
-            "DZ": "Africa", "AO": "Africa", "BJ": "Africa", "BW": "Africa", "BF": "Africa",
-            "BI": "Africa", "CM": "Africa", "CV": "Africa", "CF": "Africa", "TD": "Africa",
-            "KM": "Africa", "CG": "Africa", "CD": "Africa", "CI": "Africa", "DJ": "Africa",
-            "EG": "Africa", "GQ": "Africa", "ER": "Africa", "ET": "Africa", "GA": "Africa",
-            "GM": "Africa", "GH": "Africa", "GN": "Africa", "GW": "Africa", "KE": "Africa",
-            "LS": "Africa", "LR": "Africa", "LY": "Africa", "MG": "Africa", "MW": "Africa",
-            "ML": "Africa", "MR": "Africa", "MU": "Africa", "MA": "Africa", "MZ": "Africa",
-            "NA": "Africa", "NE": "Africa", "NG": "Africa", "RE": "Africa", "RW": "Africa",
-            "SH": "Africa", "ST": "Africa", "SN": "Africa", "SC": "Africa", "SL": "Africa",
-            "SO": "Africa", "ZA": "Africa", "SS": "Africa", "SD": "Africa", "SZ": "Africa",
-            "TZ": "Africa", "TG": "Africa", "TN": "Africa", "UG": "Africa", "ZM": "Africa",
-            "ZW": "Africa", "EH": "Africa",
-            # Americas
-            "AG": "Americas", "AR": "Americas", "BS": "Americas", "BB": "Americas", "BZ": "Americas",
-            "CA": "Americas", "CR": "Americas", "CU": "Americas", "DM": "Americas", "DO": "Americas",
-            "SV": "Americas", "GD": "Americas", "GT": "Americas", "GY": "Americas", "HT": "Americas",
-            "HN": "Americas", "JM": "Americas", "MX": "Americas", "NI": "Americas", "PA": "Americas",
-            "PY": "Americas", "PE": "Americas", "KN": "Americas", "LC": "Americas", "VC": "Americas",
-            "SR": "Americas", "TT": "Americas", "US": "Americas", "UY": "Americas", "VE": "Americas",
-            "BM": "Americas", "GL": "Americas", "AI": "Americas", "AW": "Americas", "BQ": "Americas",
-            "CW": "Americas", "SX": "Americas", "FK": "Americas", "GF": "Americas", "GP": "Americas",
-            "MQ": "Americas", "PM": "Americas", "PR": "Americas", "VG": "Americas", "VI": "Americas",
-            "BO": "Americas", "BR": "Americas", "CL": "Americas", "CO": "Americas", "EC": "Americas",
-            # Asia
-            "AF": "Asia", "AM": "Asia", "AZ": "Asia", "BH": "Asia", "BD": "Asia", "BT": "Asia",
-            "BN": "Asia", "KH": "Asia", "CN": "Asia", "GE": "Asia", "HK": "Asia", "IN": "Asia",
-            "ID": "Asia", "IR": "Asia", "IQ": "Asia", "IL": "Asia", "JP": "Asia", "JO": "Asia",
-            "KZ": "Asia", "KP": "Asia", "KR": "Asia", "KW": "Asia", "KG": "Asia", "LA": "Asia",
-            "LB": "Asia", "MO": "Asia", "MY": "Asia", "MV": "Asia", "MN": "Asia", "MM": "Asia",
-            "NP": "Asia", "OM": "Asia", "PK": "Asia", "PS": "Asia", "PH": "Asia", "QA": "Asia",
-            "SA": "Asia", "SG": "Asia", "LK": "Asia", "SY": "Asia", "TW": "Asia", "TJ": "Asia",
-            "TH": "Asia", "TL": "Asia", "TR": "Asia", "TM": "Asia", "AE": "Asia", "UZ": "Asia",
-            "VN": "Asia", "YE": "Asia", "IO": "Asia", "CC": "Asia",
-            # Europe
-            "AX": "Europe", "AL": "Europe", "AD": "Europe", "AT": "Europe", "BY": "Europe",
-            "BE": "Europe", "BA": "Europe", "BG": "Europe", "HR": "Europe", "CY": "Europe",
-            "CZ": "Europe", "DK": "Europe", "DE": "Europe", "EE": "Europe", "FO": "Europe",
-            "FI": "Europe", "FR": "Europe", "GB": "Europe", "GR": "Europe", "HU": "Europe",
-            "IS": "Europe", "IE": "Europe", "IT": "Europe", "XK": "Europe", "LV": "Europe",
-            "LI": "Europe", "LT": "Europe", "LU": "Europe", "MT": "Europe", "MD": "Europe",
-            "MC": "Europe", "ME": "Europe", "NL": "Europe", "NO": "Europe", "PL": "Europe",
-            "PT": "Europe", "RO": "Europe", "RU": "Europe", "SM": "Europe", "RS": "Europe",
-            "SK": "Europe", "SI": "Europe", "ES": "Europe", "SE": "Europe", "CH": "Europe",
-            "UA": "Europe", "VA": "Europe", "IM": "Europe", "JE": "Europe", "GG": "Europe",
-            "SJ": "Europe",
-            # Oceania
-            "AU": "Oceania", "FJ": "Oceania", "KI": "Oceania", "MH": "Oceania",
-            "FM": "Oceania", "NR": "Oceania", "NZ": "Oceania", "PW": "Oceania",
-            "PG": "Oceania", "WS": "Oceania", "SB": "Oceania", "TO": "Oceania",
-            "TV": "Oceania", "VU": "Oceania", "NU": "Oceania", "NC": "Oceania",
-            "PF": "Oceania", "WF": "Oceania",
-            # Special/Unknown
-            "XX": "Unknown",
-        }
-        return continent_map.get(cc, "Unknown")
-    except Exception:  # noqa: BLE001
-        return "Unknown"
-
-
-def _collect_timezone_offset(home: Path) -> int:
-    """Collect local UTC offset in seconds.
-
-    Returns: integer seconds offset from UTC (e.g., 3600 for +01:00, -18000 for -05:00)
-    Fail-soft: never raises, defaults to 0 (UTC) on error.
-    """
-    try:
-        import time as _t
-        import calendar as _cal
-
-        # Try to get current UTC offset
-        now = datetime.now()
-
-        # Get the local time's UTC offset
-        # On most systems, -time.timezone or -time.altzone gives the offset
-        if _t.daylight:
-            # DST is in effect or might be
-            offset = -_t.altzone if _t.daylight and _t.daylight != 0 else -_t.timezone
-        else:
-            offset = -_t.timezone
-
-        # Clamp to valid range
-        if not (_TIMEZONE_OFFSET_MIN <= offset <= _TIMEZONE_OFFSET_MAX):
-            return 0  # Fallback to UTC if sanity check fails
-
-        return offset
-    except Exception:  # noqa: BLE001
-        return 0  # UTC fallback
 
 
 def _detect_active_engine(home: Path) -> str:
@@ -761,15 +361,13 @@ def ping_if_due(home: Path) -> bool:
                 except Exception:  # noqa: BLE001
                     corvin_version = "unknown"
 
-            # Body carries the version plus coarse environment enums (platform / python_minor / active_engine)
-            # plus Phase 1 feature flags (voice, install, container, features).
-            # The uuid4 (instance_id) and the HMAC pseudonym (instance_token) go in the headers below.
-            # All values are closed enums (never free-form); _assert_ping_safe is a fail-closed
-            # backstop that validates keys AND values (see its definition).
-            # Phase 1 (2026-07-17): added 8 fields for language distribution, install type, runtime,
-            # feature adoption. All GDPR-safe (closed enums, no PII, no behavioral fingerprinting).
-            # Phase 2 (2026-07-18): added 3 geolocation fields (country_code, continent, timezone_offset)
-            # for live-world-map stats. No IP addresses, no fine-grained coordinates, only closed enums.
+            # Body carries the version plus three coarse environment enums —
+            # the uuid4 (instance_id) and the HMAC pseudonym (instance_token)
+            # go in the headers below. platform / python_minor / active_engine
+            # are closed enums (never free-form), reinstated by maintainer
+            # decision 2026-07-10 so the public stats distributions reflect
+            # real installs. _assert_ping_safe is a fail-closed backstop that
+            # validates keys AND values (see its definition).
             raw_platform = sys.platform
             ping_body = {
                 "corvin_version": corvin_version,
@@ -778,19 +376,6 @@ def ping_if_due(home: Path) -> bool:
                 else "other",
                 "python_minor": f"{sys.version_info[0]}.{sys.version_info[1]}",
                 "active_engine": _detect_active_engine(home),
-                # Phase 1 (new, 2026-07-17)
-                "voice_languages_enabled": _collect_voice_languages(home),
-                "voice_usage_rate": _collect_voice_usage_rate(home),
-                "stt_engine": _collect_stt_engine(home),
-                "install_type": _collect_install_type(home),
-                "auto_update_enabled": None,  # TODO: detect from config
-                "container_runtime": _collect_container_runtime(),
-                "code_review_used": None,  # TODO: detect from audit
-                "browser_automation_used": None,  # TODO: detect from audit
-                # Phase 2 Geolocation (new, 2026-07-18) — closed enums, GDPR-safe
-                "country_code": _collect_country_code(home),
-                "continent": _collect_continent(home),
-                "timezone_offset": _collect_timezone_offset(home),
             }
             _assert_ping_safe(ping_body)
             payload = json.dumps(ping_body).encode("utf-8")
