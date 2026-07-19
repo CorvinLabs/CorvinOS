@@ -32,16 +32,26 @@ Audit contract (L16 hash chain, three new event types):
                                           "ok" response
   ``A2A.reconnect_send_failed`` WARNING  ADR-0198: send_reconnect() transport
                                           error, bad signature, or rejection
+  ``A2A.ping_result``           INFO/WARN ADR-0199: one event per ping() call
+                                          (reachable → INFO, else WARNING)
   ============================= ======== =========================================
 
-Audit ``details`` allow-list:
+Audit ``details`` allow-list (enforced fail-closed by
+``_assert_audit_details_safe`` — the ADR-0197 backstop; free-form values
+are dropped and replaced with ``"redacted"``):
   ``endpoint_id``, ``task_id``, ``instance_id_match``, ``status``,
   ``duration_ms``, ``reason``, ``ttl_s``, ``nonce_prefix``,
-  ``http_status``, ``error_category``, ``error_detail`` (ADR-0197).
+  ``http_status``, ``error_category``, ``error_detail``,
+  ``attachments_count``, ``our_chain_tail``, ``peer_chain_tail``,
+  ``match``, ``reachable``, ``source`` (ADR-0197/0199).
+
+``error_detail`` values come exclusively from the fixed template set
+(``_ERROR_DETAIL_TEMPLATES``) or the closed exception-type-name allowlist
+(``_ALLOWED_EXC_TYPE_NAMES``) — never ``str(exc)`` verbatim (ADR-0197 §2).
 
 Never in ``details``: ``instruction``, ``result_schema``, response
 ``data``, ``signature``, ``hmac_key``, ``recv_key``, full nonce, URL,
-HTTP headers, response body bytes.
+HTTP headers, response body bytes, raw exception text.
 
 CI lint: module MUST NOT ``import anthropic``.
 """
@@ -51,6 +61,7 @@ import hashlib
 import hmac as _hmac
 import json
 import os
+import re as _re
 import secrets
 import stat
 import sys
@@ -118,6 +129,23 @@ _DEFAULT_TTL_S = 60
 # Rogue receivers that stream more raise TransportError("response_too_large")
 # (ADR-0099 iter-5 finding MED-IT5-03).
 _MAX_RESPONSE_BYTES = 6 * 1024 * 1024  # 6 MiB
+
+
+# ── No-redirect opener (SSRF hardening, 2026-07-19) ────────────────────────
+#
+# The default urllib opener silently FOLLOWS 3xx redirects. A paired peer with
+# a valid global stored URL could therefore 302 our signed POST (or ping) to
+# http://127.0.0.1 / 169.254.169.254 — turning an authenticated peer into an
+# SSRF pivot despite the danger-category host gate on the STORED url. We route
+# every outbound A2A POST/ping through an opener whose redirect handler refuses
+# to follow: a 3xx becomes an ``HTTPError`` (categorised as a transport error),
+# never a silent internal fetch.
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        return None  # do not follow — urlopen raises HTTPError for the 3xx
+
+
+_NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────
@@ -286,11 +314,15 @@ class PingResult:
 
     Attributes
     ----------
-    reachable      : bool   — True if peer responded or heartbeat cache fresh
-    source         : str    — "heartbeat_cache" | "network_probe"
+    reachable      : bool   — True iff peer returned a SIGNED, verified response
+    source         : str    — "network_probe" (a "heartbeat_cache" fast path is
+                              a future, receiver-side iteration; the sender-side
+                              stub was removed 2026-07-19 — it referenced a
+                              nonexistent symbol and an in-memory cross-process
+                              cache cannot work)
     error_category : str | None — ADR-0197: failure reason if reachable=False
-    error_detail   : str | None — Sanitized error detail (max 256 chars)
-    duration_ms    : int    — Wall time spent (cached: ~0ms, network: 2-10s max)
+    error_detail   : str | None — Template-based error detail (ADR-0197 §2)
+    duration_ms    : int    — Wall time spent (network: 2-10s max)
     """
     reachable: bool
     source: str
@@ -299,33 +331,157 @@ class PingResult:
     duration_ms: int = 0
 
 
+# ── ADR-0197 §2: FIXED TEMPLATE SET for error_detail ──────────────────────
+# error_detail (SendResult / PingResult / audit) is ALWAYS drawn from this
+# closed set of fixed strings — never str(exc) verbatim, never interpolated
+# peer-controlled text. Denylist-style regex scrubbing was rejected during
+# the 2026-07-19 adversarial review: it leaked API tokens (sk-ant-…),
+# Bearer JWTs, Discord UIDs (17-19 digit numbers), hostnames
+# (host.fritz.box:8443) and 64-char hex keys straight into audit.jsonl.
+# An allowlist of templates cannot leak by construction.
+_ERROR_DETAIL_GENERIC = "error_detail_unavailable"
+_ERROR_DETAIL_TEMPLATES = frozenset({
+    "Response body exceeded maximum size",
+    "HTTP error",
+    "Unable to reach endpoint (DNS/connection refused)",
+    "HTTP request timeout",
+    "Response is not valid JSON",
+    "Response is not a JSON object",
+    "Response signature verification failed",
+    "Response encoding error",
+    "Receiver key configuration error",
+    "Endpoint config unavailable",
+    "Instance ID mismatch",
+    "Invalid attachment",
+    "Invalid response attachment",
+    "unexpected_receiver_status",
+    "Unsigned ping response rejected",
+    "Peer rejected ping",
+    _ERROR_DETAIL_GENERIC,
+})
+
+# ADR-0197 §2: the only non-template content ever emitted as error_detail is
+# an exception *type name*, allowlist-validated against this closed set.
+# Unknown / user-defined exception types collapse to "internal_error".
+_ALLOWED_EXC_TYPE_NAMES = frozenset({
+    # Local SendError family
+    "SendError", "EndpointError", "TransportError", "ResponseVerificationError",
+    # OS / socket layer
+    "OSError", "ConnectionError", "ConnectionResetError",
+    "ConnectionRefusedError", "ConnectionAbortedError", "BrokenPipeError",
+    "TimeoutError", "InterruptedError", "PermissionError",
+    "FileNotFoundError", "gaierror", "herror", "timeout",
+    # TLS
+    "SSLError", "SSLCertVerificationError", "SSLEOFError", "CertificateError",
+    # urllib / http.client
+    "URLError", "HTTPError", "InvalidURL", "RemoteDisconnected",
+    "IncompleteRead", "BadStatusLine", "LineTooLong", "HTTPException",
+    # Parsing / runtime
+    "ValueError", "TypeError", "KeyError", "AttributeError",
+    "JSONDecodeError", "UnicodeDecodeError", "UnicodeError",
+    "MemoryError", "OverflowError", "RecursionError",
+})
+
+
+def _safe_exc_type_name(exc: "BaseException | str") -> str:
+    """Closed-set exception type name, or "internal_error" for unknown types."""
+    name = exc if isinstance(exc, str) else exc.__class__.__name__
+    return name if name in _ALLOWED_EXC_TYPE_NAMES else "internal_error"
+
+
 def _sanitize_error(reason: str | None) -> str | None:
-    """ADR-0197: Cap error detail to 256 chars, remove PII/leaks."""
+    """ADR-0197 §2: template-gate an error detail string.
+
+    Returns the input only when it is a member of the fixed template set or
+    an allowlisted exception type name; everything else — including raw
+    exception text, tokens, hostnames, UIDs — collapses to the generic
+    template. This is allowlist (fail-closed), not denylist scrubbing.
+    """
     if not reason:
         return None
-    import re
+    text = str(reason)
+    if text in _ERROR_DETAIL_TEMPLATES or text in _ALLOWED_EXC_TYPE_NAMES:
+        return text
+    if text == "internal_error":
+        return text
+    return _ERROR_DETAIL_GENERIC
 
+
+# ── ADR-0197 fail-closed audit backstop (analogous to telemetry _assert_safe) ─
+# Every audited details dict passes through _assert_audit_details_safe before
+# it reaches the hash chain. Free-form values are DROPPED (replaced with
+# "redacted"), never raised on — the send path must not fail because of the
+# backstop.
+_AUDIT_ALLOWED_KEYS = frozenset({
+    "endpoint_id", "task_id", "instance_id_match", "status", "duration_ms",
+    "reason", "ttl_s", "nonce_prefix", "http_status", "error_category",
+    "error_detail", "attachments_count", "our_chain_tail", "peer_chain_tail",
+    "match", "reachable", "source",
+})
+_AUDIT_STATUS_VALUES = frozenset({
+    "sent", "ok", "error", "rejected", "filtered", "timeout",
+})
+# reason: enum-ish machine token, must start with a letter (rejects digit-only
+# Discord UIDs and most hex keys), optional ":sub_token,sub_token" suffix
+# (missing_fields:hmac_key,recv_key / transport_error:OSError). Length caps
+# reject 64-char hex keys and JWTs.
+_AUDIT_REASON_RE = _re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,47}(:[A-Za-z0-9_,]{1,48})?$")
+# ids / prefixes / source: uuid-, hex-, or enum-shaped, no dots (rejects
+# hostnames), no spaces, bounded length.
+_AUDIT_ENUMISH_RE = _re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+
+def _is_safe_audit_value(key: str, value: Any) -> bool:
+    if value is None or isinstance(value, bool):
+        return True
+    if isinstance(value, (int, float)):
+        # 2026-07-19 fix: do NOT blanket-trust numerics. A Discord-UID-shaped
+        # int (17-19 digits) previously short-circuited to True BEFORE the
+        # per-key regex, so its string form was redacted but the int form
+        # leaked verbatim. Bound the magnitude: 10^13 is generous for every
+        # legitimate numeric audit field (ttl_s, http_status, duration_ms of a
+        # single op, counters, epoch-ms timestamps ~1.7e12) yet well below
+        # snowflake range (smallest Discord IDs ~4e15). Non-finite floats
+        # (inf/NaN) fail the comparison and are redacted.
+        try:
+            return abs(value) < 10**13
+        except (TypeError, ValueError):
+            return False
+    if not isinstance(value, str):
+        return False
+    if value == "":
+        return True
+    if key == "error_category":
+        return value in ErrorCategory.ALL
+    if key == "error_detail":
+        return (value in _ERROR_DETAIL_TEMPLATES
+                or value in _ALLOWED_EXC_TYPE_NAMES
+                or value == "internal_error")
+    if key == "status":
+        return value in _AUDIT_STATUS_VALUES
+    if key == "reason":
+        return bool(_AUDIT_REASON_RE.match(value))
+    return bool(_AUDIT_ENUMISH_RE.match(value))
+
+
+def _assert_audit_details_safe(details: dict) -> dict:
+    """Fail-closed backstop: allowlisted keys + enum/typename-shaped values only.
+
+    On violation the offending value is replaced with "redacted" — the event
+    still lands in the chain (visibility), the free-form payload does not.
+    Never raises.
+    """
     try:
-        sanitized = str(reason)
-        # Remove newlines and excessive whitespace
-        sanitized = " ".join(sanitized.split())
-
-        # Redact common PII patterns (order matters: URLs first, then components)
-        sanitized = re.sub(r'(?:https?://)?[^:@/\s]+:[^@/\s]+@', '[CREDENTIALS]', sanitized)  # URL credentials
-        sanitized = re.sub(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', '[IP]', sanitized)  # IPv4
-        sanitized = re.sub(r'(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}', '[IPv6]', sanitized)  # IPv6
-        sanitized = re.sub(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '[UUID]', sanitized, flags=re.IGNORECASE)  # UUID
-        sanitized = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '[EMAIL]', sanitized)  # E-mail
-        sanitized = re.sub(r'[a-zA-Z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*', '[WINPATH]', sanitized)  # Windows paths
-        sanitized = re.sub(r'/[a-z0-9/_.-]+', '[PATH]', sanitized, flags=re.IGNORECASE)  # Unix paths
-
-        # Truncate to 256 chars
-        if len(sanitized) > 256:
-            sanitized = sanitized[:253] + "..."
-        return sanitized.strip() if sanitized.strip() else None
+        safe: dict = {}
+        for k, v in dict(details).items():
+            key = k if isinstance(k, str) else "redacted_key"
+            if key not in _AUDIT_ALLOWED_KEYS:
+                safe[key[:64]] = "redacted"
+                continue
+            safe[key] = v if _is_safe_audit_value(key, v) else "redacted"
+        return safe
     except Exception:
-        # If regex matching fails, return a generic fallback (fail-closed)
-        return "Error detail unavailable"
+        return {"reason": "audit_details_redacted"}
 
 
 class RemoteTriggerSender:
@@ -382,14 +538,11 @@ class RemoteTriggerSender:
                 "Response body exceeded maximum size"
             )
         elif reason.startswith("http_"):
-            # http_XXX format where XXX is the status code
-            try:
-                status_code = int(reason.split("_")[1])
-                return ErrorCategory.HTTP_ERROR, RemoteTriggerSender._sanitize_error(
-                    f"HTTP error {status_code}"
-                )
-            except (ValueError, IndexError):
-                return ErrorCategory.HTTP_ERROR, RemoteTriggerSender._sanitize_error(reason)
+            # http_XXX format; the numeric status travels in the separate
+            # http_status audit field — the detail stays a fixed template.
+            return ErrorCategory.HTTP_ERROR, RemoteTriggerSender._sanitize_error(
+                "HTTP error"
+            )
         elif reason == "connection_failed":
             return ErrorCategory.UNREACHABLE, RemoteTriggerSender._sanitize_error(
                 "Unable to reach endpoint (DNS/connection refused)"
@@ -403,8 +556,10 @@ class RemoteTriggerSender:
                 "Response is not valid JSON"
             )
         else:
-            # catch-all for other transport errors
-            return ErrorCategory.INTERNAL_ERROR, RemoteTriggerSender._sanitize_error(reason)
+            # ADR-0197 §2 catch-all: emit ONLY the allowlisted exception type
+            # name — never the free-form reason string (which may embed
+            # str(exc) with tokens/hostnames from lower layers).
+            return ErrorCategory.INTERNAL_ERROR, _safe_exc_type_name(exc)
 
     @staticmethod
     def _categorize_verification_error(exc: ResponseVerificationError) -> tuple[str, str]:
@@ -437,8 +592,8 @@ class RemoteTriggerSender:
                 "Receiver key configuration error"
             )
         else:
-            # catch-all for other verification errors
-            return ErrorCategory.INTERNAL_ERROR, RemoteTriggerSender._sanitize_error(reason)
+            # ADR-0197 §2 catch-all: allowlisted exception type name only.
+            return ErrorCategory.INTERNAL_ERROR, _safe_exc_type_name(exc)
 
     @staticmethod
     def _categorize_response_status(status: str) -> tuple[str | None, str | None, bool]:
@@ -462,9 +617,13 @@ class RemoteTriggerSender:
         elif status == "filtered":
             return ErrorCategory.FILTERED, None, False
         else:
-            # Unknown/unexpected status from receiver
+            # Unknown/unexpected status from receiver. The peer-supplied
+            # status string is NEVER interpolated into error_detail — a
+            # malicious receiver could inject arbitrary text into audit
+            # records otherwise (2026-07-19 adversarial finding). Fixed
+            # template, no interpolation.
             return ErrorCategory.INTERNAL_ERROR, RemoteTriggerSender._sanitize_error(
-                f"Unexpected receiver status: {status}"
+                "unexpected_receiver_status"
             ), False
 
     def send(
@@ -713,7 +872,7 @@ class RemoteTriggerSender:
                 instance_id=received_iid, instance_id_match=False,
                 data={}, attachments=[], duration_ms=_ms(start),
                 error_category=ErrorCategory.PROTOCOL_ERROR,
-                error_detail=self._sanitize_error(f"Invalid response attachment: {exc.reason}"),
+                error_detail=self._sanitize_error("Invalid response attachment"),
             )
 
         self._audit_best_effort(
@@ -756,10 +915,16 @@ class RemoteTriggerSender:
         """ADR-0198: proactively push a signed "my URL changed" notification.
 
         Reuses the endpoint's existing pairing HMAC key — no new credential.
-        Fail-soft: never raises, returns False on any error (the operator's
-        next real ``send()`` still surfaces a hard TransportError if the
-        stale URL truly went dead, so this is additive robustness, not a
-        replacement for normal error handling).
+        Fail-soft: never raises.
+
+        Return value = DELIVERED, not accepted (2026-07-19 retry-storm fix):
+        returns True as soon as the peer returned a cryptographically SIGNED
+        response — meaning it received our new URL — REGARDLESS of whether it
+        accepted (``status == "ok"``) or signed-rejected it. Only a genuinely
+        unreachable peer (transport error, bad/absent signature) returns False.
+        The caller persists the new IP once ANY peer delivered, so a peer that
+        signs-rejects (and will reject again on retry) does not cause an
+        unbounded 5-minute re-broadcast storm growing both audit chains.
         """
         start = time.time()
         try:
@@ -785,7 +950,9 @@ class RemoteTriggerSender:
         )
         try:
             raw = self._http_post(cfg["url"], envelope, timeout_s)
-            response, _ = self._verify_response(raw, cfg["recv_key"], expected_task_id=envelope["task_id"])
+            response, is_signed = self._verify_response(
+                raw, cfg["recv_key"], expected_task_id=envelope["task_id"],
+            )
         except (TransportError, ResponseVerificationError) as exc:
             self._audit_best_effort(
                 "A2A.reconnect_send_failed", "WARNING",
@@ -794,7 +961,21 @@ class RemoteTriggerSender:
             )
             return False
 
+        # An unsigned legacy rejection (ADR-0077 C-5) proves nothing about
+        # whether the *paired* peer heard us — treat it as NOT delivered so the
+        # IP stays pending, exactly like an unreachable peer.
+        if not is_signed:
+            self._audit_best_effort(
+                "A2A.reconnect_send_failed", "WARNING",
+                {"endpoint_id": endpoint_id, "reason": "unsigned_response",
+                 "duration_ms": _ms(start)},
+            )
+            return False
+
         ok = str(response.get("status", "rejected")) == "ok"
+        # Delivered = a signed response arrived (accept OR reject). The audit
+        # event still distinguishes accepted from rejected for visibility, but
+        # persistence is driven by delivery, not acceptance.
         self._audit_best_effort(
             "A2A.reconnect_sent" if ok else "A2A.reconnect_send_failed",
             "INFO" if ok else "WARNING",
@@ -802,17 +983,24 @@ class RemoteTriggerSender:
              "reason": "" if ok else str(response.get("status", "rejected")),
              "duration_ms": _ms(start)},
         )
-        return ok
+        return True
 
     def ping(self, endpoint_id: str, timeout_s: float | None = None) -> PingResult:
         """ADR-0199: Lightweight peer-liveness check (a2a_ping).
 
-        Fast-path: checks local heartbeat cache (90s TTL); returns instantly if fresh.
-        Fallback: signed network probe with ±30s freshness window (no nonce store).
+        Signed network probe with ±30s freshness window (no nonce store).
         Timeout clamped to [2, 10]s; default 5s.
 
-        Returns PingResult with reachable (bool), source ("heartbeat_cache" | "network_probe"),
+        Note (2026-07-19): the ADR-0199 §2 heartbeat-cache fast path is
+        deliberately NOT implemented on the sender side. It requires
+        receiver-side last-seen heartbeat records that do not exist yet;
+        the earlier stub imported a nonexistent symbol and was a silent
+        dead path. Future iteration — see ADR-0199.
+
+        Returns PingResult with reachable (bool), source ("network_probe"),
         error_category/error_detail (ADR-0197) if reachable=False.
+        One ``A2A.ping_result`` audit event is emitted per call (closed
+        enum values only — same safe audit path as send()).
         """
         start = time.time()
 
@@ -822,26 +1010,12 @@ class RemoteTriggerSender:
         else:
             timeout_s = max(2, min(10, timeout_s))
 
-        # 1) Check heartbeat cache first (90s freshness window)
-        try:
-            last_hb = self._get_last_heartbeat_timestamp(endpoint_id)
-            if last_hb is not None:
-                age = time.time() - last_hb
-                if age < 90:  # Fresh
-                    return PingResult(
-                        reachable=True,
-                        source="heartbeat_cache",
-                        duration_ms=_ms(start),
-                    )
-        except Exception:
-            pass  # Fallthrough to network probe
-
-        # 2) Network probe: signed request + response verification
+        # Network probe: signed request + signed-response verification
         try:
             ok, error_cat, error_det = self._http_ping_probe(
                 endpoint_id, timeout_s=timeout_s
             )
-            return PingResult(
+            result = PingResult(
                 reachable=ok,
                 source="network_probe",
                 error_category=error_cat if not ok else None,
@@ -849,32 +1023,29 @@ class RemoteTriggerSender:
                 duration_ms=_ms(start),
             )
         except Exception as exc:
-            # Catch-all: any unexpected error maps to INTERNAL_ERROR
-            return PingResult(
+            # Catch-all: any unexpected error maps to INTERNAL_ERROR with an
+            # allowlisted exception type name (ADR-0197 §2) — never str(exc).
+            result = PingResult(
                 reachable=False,
                 source="network_probe",
                 error_category=ErrorCategory.INTERNAL_ERROR,
-                error_detail=self._sanitize_error(str(exc)),
+                error_detail=_safe_exc_type_name(exc),
                 duration_ms=_ms(start),
             )
 
-    def _get_last_heartbeat_timestamp(self, endpoint_id: str) -> float | None:
-        """ADR-0199: Get last-seen heartbeat timestamp from a2a_friendship.py.
-
-        Returns Unix timestamp or None if not found / stale.
-        Lookd up via endpoint_id → origin_id → heartbeat record.
-        """
-        try:
-            cfg = self._registry.load(endpoint_id)
-            origin_id = cfg.get("origin_id_for_send") or cfg.get("our_origin_id") or self._instance_id
-
-            # Import a2a_friendship.py to access endpoint state
-            from a2a_friendship import get_endpoint_last_heartbeat  # type: ignore
-
-            timestamp = get_endpoint_last_heartbeat(origin_id)
-            return timestamp
-        except Exception:
-            return None
+        # ADR-0199: one audit event per ping outcome. endpoint_id is the
+        # pairing kid (pseudonym), consistent with the other A2A events;
+        # every value is a closed enum / bool / int — backstop-validated.
+        self._audit_best_effort(
+            "A2A.ping_result",
+            "INFO" if result.reachable else "WARNING",
+            {"endpoint_id": endpoint_id,
+             "reachable": result.reachable,
+             "source": result.source,
+             "error_category": result.error_category,
+             "duration_ms": result.duration_ms},
+        )
+        return result
 
     def _http_ping_probe(
         self, endpoint_id: str, timeout_s: float = 5
@@ -913,8 +1084,14 @@ class RemoteTriggerSender:
         ).hexdigest()
         ping_request["signature"] = signature
 
-        # POST to /v1/a2a/ping
-        ping_url = cfg["url"].rstrip("/") + "/v1/a2a/ping"
+        # POST to /v1/a2a/ping. cfg["url"] is the full RECEIVE url
+        # (".../v1/a2a/receive") — strip that suffix to get the base, then
+        # append the ping route. Naive rstrip("/") + "/v1/a2a/ping" produced
+        # ".../v1/a2a/receive/v1/a2a/ping" → permanent 404 (2026-07-19 fix).
+        base = cfg["url"].rstrip("/")
+        if base.endswith("/v1/a2a/receive"):
+            base = base[: -len("/v1/a2a/receive")]
+        ping_url = base.rstrip("/") + "/v1/a2a/ping"
 
         try:
             raw = self._http_post(ping_url, ping_request, timeout_s)
@@ -924,17 +1101,29 @@ class RemoteTriggerSender:
 
         # Verify response signature with recv_key
         try:
-            response, _ = self._verify_response(
+            response, is_signed = self._verify_response(
                 raw, cfg["recv_key"], expected_task_id=ping_id
             )
         except ResponseVerificationError as exc:
             error_cat, error_det = self._categorize_verification_error(exc)
             return False, error_cat, error_det
 
+        # ADR-0199 §4: ping is authenticated — non-negotiable. The legacy
+        # unsigned-rejection tolerance in _verify_response (ADR-0077 C-5)
+        # MUST NOT confer reachable=True: an unsigned response proves only
+        # that *something* answered, not that the paired peer did. Forgeable
+        # liveness was a 2026-07-19 HIGH finding.
+        if not is_signed:
+            return False, ErrorCategory.AUTH_FAILED, self._sanitize_error(
+                "Unsigned ping response rejected"
+            )
+
         # Verify response shape: {ok, instance_id, protocol_version, server_time}
         if not response.get("ok"):
             # Peer rejected the ping (shouldn't happen for valid ping)
-            return False, ErrorCategory.REJECTED, "Peer rejected ping"
+            return False, ErrorCategory.REJECTED, self._sanitize_error(
+                "Peer rejected ping"
+            )
 
         # Success
         return True, None, None
@@ -1113,8 +1302,12 @@ class RemoteTriggerSender:
         if sender_genesis_hash is not None and isinstance(sender_genesis_hash, str):
             env["sender_genesis_hash"] = sender_genesis_hash
         # ADR-0198: reconnect — proactive "my URL changed" push. Included in
-        # HMAC when present. Pre-ADR-0198 receivers ignore the field and fall
-        # through to normal instruction handling (safe: instruction is "").
+        # HMAC when present. Compat (corrected 2026-07-19): pre-ADR-0198
+        # receivers do NOT ignore the field — their canonical payload omits
+        # the unknown key, so the HMAC mismatches and they hard-reject the
+        # envelope with bad_signature. Accepted fail-closed behaviour: no
+        # half-applied reconnects on old peers; send_reconnect() is
+        # fail-soft and simply reports False.
         if reconnect is not None and isinstance(reconnect, dict):
             env["reconnect"] = reconnect
         # IBC concept (Protocol v7): instance_attestation — binds this envelope to
@@ -1210,7 +1403,10 @@ class RemoteTriggerSender:
             # deadline and a body size cap to prevent both attacks
             # (ADR-0099 iter-5 findings HIGH-IT5-02 and MED-IT5-03).
             deadline = time.monotonic() + timeout_s
-            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            # No-redirect opener (2026-07-19): a 3xx from the peer raises
+            # HTTPError below rather than being silently followed to an
+            # internal address.
+            with _NO_REDIRECT_OPENER.open(req, timeout=timeout_s) as resp:
                 chunks: list[bytes] = []
                 total = 0
                 while True:
@@ -1243,12 +1439,19 @@ class RemoteTriggerSender:
         except TimeoutError as exc:
             raise TransportError("timeout") from exc
         except Exception as exc:
-            raise TransportError(f"transport_error:{exc}") from exc
+            # ADR-0197 §2: reason carries ONLY the allowlisted exception type
+            # name. str(exc) can embed the target URL/host and must never
+            # reach SendResult or audit details (2026-07-19 finding).
+            raise TransportError(
+                "transport_error:" + _safe_exc_type_name(exc)
+            ) from exc
 
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise TransportError(f"invalid_response_json:{exc}") from exc
+            # ADR-0197 §2: no str(exc) — the decode error message quotes the
+            # (peer-controlled) response body.
+            raise TransportError("invalid_response_json") from exc
 
     @staticmethod
     def _verify_response(
@@ -1307,13 +1510,13 @@ class RemoteTriggerSender:
                 ensure_ascii=True,
             ).encode()
         except (TypeError, ValueError) as exc:
-            raise ResponseVerificationError(
-                f"canonical_encode_failed:{exc}",
-            ) from exc
+            # ADR-0197 §2: fixed reason, no str(exc) (can quote payload text).
+            raise ResponseVerificationError("canonical_encode_failed") from exc
         try:
             key = bytes.fromhex(recv_key_hex)
         except ValueError as exc:
-            raise ResponseVerificationError(f"bad_recv_key:{exc}") from exc
+            # ADR-0197 §2: fixed reason, no str(exc) (can quote key material).
+            raise ResponseVerificationError("bad_recv_key") from exc
         expected = _hmac.new(key, canonical, hashlib.sha256).hexdigest()
         if not _hmac.compare_digest(expected, sig.lower()):
             raise ResponseVerificationError("bad_signature")
@@ -1335,10 +1538,12 @@ class RemoteTriggerSender:
                 return
             path = audit_path()
             path.parent.mkdir(parents=True, exist_ok=True)
+            # ADR-0197: fail-closed backstop (analogous to telemetry
+            # _assert_safe) — free-form values are dropped, never sent.
             se.write_event(
                 path, event_type,
                 severity=severity, tool="", run_id="",
-                details=details, hash_chain=True,
+                details=_assert_audit_details_safe(details), hash_chain=True,
             )
         except Exception:
             pass

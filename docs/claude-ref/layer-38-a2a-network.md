@@ -248,14 +248,24 @@ keeps the stale URL until either an operator manually re-runs
 
 **Mechanism:** the changed instance pushes a signed reconnect notification
 to each known peer instead of waiting to be called. It travels as an
-ordinary `TaskEnvelope` (Protocol v10) carrying a new optional
-`reconnect: {"new_url": "<base url>"}` field, HMAC-covered by the *same*
-per-pairing key already established at pairing time — no new credential, no
-new trust root. `RemoteTriggerReceiver.receive()` short-circuits on this
-field, BEFORE attachment/classification/worker-dispatch machinery, and
-re-validates only the URL shape (`http(s)://`, ≤512 chars, printable,
-no whitespace) before rewriting the peer's own `remote_endpoints/<kid>.json`
-`url` field via `a2a_friendship.update_endpoint_url()`.
+ordinary `TaskEnvelope` carrying a new optional
+`reconnect: {"new_url": "<base url>"}` field (additive — the wire version
+stays at the actual `PROTOCOL_VERSION = 8`; the constant is reserved for
+capability-discovery milestones, not every additive field), HMAC-covered by
+the *same* per-pairing key already established at pairing time — no new
+credential, no new trust root. `RemoteTriggerReceiver.receive()`
+short-circuits on this field, BEFORE attachment/classification/
+worker-dispatch machinery, validates the URL, then rewrites the peer's own
+`remote_endpoints/<kid>.json` `url` field via
+`a2a_friendship.update_endpoint_url()`.
+
+**Backward compatibility (honest statement, corrected 2026-07-19):**
+pre-ADR-0198 receivers do NOT silently ignore the `reconnect` field — their
+canonical payload omits the unknown key, so the sender's HMAC no longer
+matches and the envelope is hard-rejected with `bad_signature`. That is
+accepted fail-closed behaviour: an old peer never half-applies a reconnect,
+it visibly rejects it; the fail-soft `send_reconnect()` logs
+`A2A.reconnect_send_failed` and normal task traffic is unaffected.
 
 **Fail-closed guarantees:**
 
@@ -263,8 +273,11 @@ no whitespace) before rewriting the peer's own `remote_endpoints/<kid>.json`
 |---|---|
 | Signature/origin/time-window/replay checks run in `_validate()` first | An unauthenticated or replayed reconnect is rejected before it is even parsed as a reconnect |
 | Endpoint must already be `state == "ACTIVE"` and `enabled` | A PENDING (never-yet-connected) or disabled peer cannot be reconnected into existence — reconnect can only *update* trust that already exists |
-| Audit-first (`_audit_strict`) | `A2A.reconnect_applied` / `A2A.reconnect_rejected` is hash-chained before the endpoint file is (or is not) rewritten; a failed audit write rolls back the nonce and rejects |
-| No IP/URL in audit `details` | Mirrors the existing A2A audit allow-list (`endpoint_id`, `task_id`, `reason`, `status`, `duration_ms`) — the new URL itself is never logged |
+| Danger-category SSRF gate (2026-07-19 redesign; `a2a_friendship._reconnect_url_rejection_reason`) | Shape checks (`http(s)://`, ≤512 chars, printable, no whitespace) PLUS no https→http downgrade (`http` only if the previously stored URL was `http`). Then EVERY resolved address **and every embedded-IPv4** it carries (`.ipv4_mapped`, `.sixtofour`, NAT64 `64:ff9b::/96` + `64:ff9b:1::/48`) is classified: **forbidden** (loopback, link-local incl. `169.254.169.254` metadata + `fe80::/10`, unspecified, multicast, reserved) → `reconnect_url_forbidden_host` unconditionally; **private/LAN** (RFC1918, CGNAT `100.64/10`, ULA `fc00::/7`) → allowed ONLY if the previous stored host was ALSO private/LAN (LAN renumbering), else `reconnect_url_global_to_private`; **global** → allowed. Resolution failure rejects; `localhost`/`.onion` reject outright. This closes the NAT64/6to4/v4-mapped bypass (e.g. `[64:ff9b::7f00:1]` = 127.0.0.1) that the earlier `is_global`-only rule missed, while re-permitting the legitimate LAN/hotspot (`172.20.10.x`, `192.168.x`) reconnect it wrongly banned |
+| No redirect-following on outbound POST/ping (2026-07-19; `remote_trigger_sender._NO_REDIRECT_OPENER`) | `_http_post` routes through a `HTTPRedirectHandler` that refuses to follow — a paired peer's `302` to `http://127.0.0.1`/`169.254.169.254` becomes a `http_3xx` `TransportError`, not a silent internal fetch |
+| Write-first, audit-reflects-reality (`_handle_reconnect`, redesigned 2026-07-19 — the earlier build audited `reconnect_applied` BEFORE the write, so a subsequent write failure left the chain asserting an application that never happened) | Order is: read-only validation → on rejection audit `A2A.reconnect_rejected` (no write; audit-failure rolls back the nonce and rejects) → on pass, DURABLE endpoint write (temp+fsync+rename) FIRST, then audit the *real* outcome: `A2A.reconnect_applied` only when the write truly succeeded, else `A2A.reconnect_failed`. Nonce invariant: every path either audits a definitive outcome with the nonce consumed, or rolls the nonce back |
+| Egress-control honesty (2026-07-19 — corrected) | Outbound A2A peer POSTs do **NOT** pass the L35 `check_engine_egress` gate (that gate is an engine-spawn control, never applied to A2A peer URLs — the earlier "still pass the L35 egress gates" claim was false). The real controls are the two rows above: no-redirect + the danger-category host gate. A **DNS-rebinding residual** remains (a compromised paired peer using short-TTL DNS that resolves global at check-time and private at send-time) — accepted for this release: the peer must already be a cryptographically-paired ACTIVE friend and redirects are blocked |
+| No IP/URL in audit `details` | Mirrors the existing A2A audit allow-list (`endpoint_id`, `task_id`, `reason`, `status`, `duration_ms`) — the new URL itself is never logged. Numeric audit values are magnitude-bounded (≤ 10^13) so a Discord-UID-shaped int cannot leak past the backstop the way its string form is redacted (2026-07-19) |
 
 **Trigger (sender side):** `RemoteTriggerSender.send_reconnect(endpoint_id, new_url)`
 builds and POSTs the signed envelope, fail-soft (never raises). It is polled
@@ -277,6 +290,19 @@ friendship endpoint. This is polled from the existing 5-minute presence-
 heartbeat thread (`aco/heartbeat.py::_heartbeat_loop`) rather than a new
 dedicated thread — deliberately independent of `ping_enabled` (opting out of
 the anonymous telemetry ping says nothing about wanting dead A2A peer links).
+Since 2026-07-19 the heartbeat thread ALWAYS starts; `ping_enabled` gates
+only the telemetry `send_heartbeat` inside the loop (re-checked per
+iteration), so boot-time opt-outs still get the A2A reconnect poll.
+Re-announce semantics (2026-07-19 fixes): the new IP is persisted once the
+reconnect was **delivered** to ≥ 1 peer — i.e. that peer returned a
+cryptographically SIGNED response, accept OR reject — or when there is nothing
+to announce. Delivery, not acceptance, drives persistence: a peer that
+signs-rejects will reject again on retry, so re-broadcasting to it every tick
+is pointless and previously grew both audit chains unbounded (`send_reconnect`
+now returns True on any signed response, False only for a genuinely
+unreachable/unsigned peer). An all-peers-unreachable cycle still retries on
+the next tick instead of silently losing the change. Broadcast cost is bounded
+(10 s per peer, 180 s wall-clock budget per cycle).
 
 **Scope note:** local-interface-IP-changed is a *proxy* trigger, not true
 public-IP detection (which would require an external STUN/echo call and a
@@ -290,10 +316,11 @@ known to have changed, instead of leaving peers to time out.
 
 | Event | Severity | When |
 |---|---|---|
-| `A2A.reconnect_sent` | INFO | Sender's `send_reconnect()` receives a signed `"ok"` response |
-| `A2A.reconnect_send_failed` | WARNING | Transport error, bad signature, or receiver rejected the reconnect |
-| `A2A.reconnect_applied` | INFO | Receiver rewrote the peer's endpoint URL |
-| `A2A.reconnect_rejected` | WARNING | Receiver validated the envelope but declined to apply (bad URL shape, no matching ACTIVE endpoint, or audit write failed) |
+| `A2A.reconnect_sent` | INFO | Sender's `send_reconnect()` received a signed `"ok"` response (accepted). Note: a signed `"rejected"` also counts as *delivered* for persistence, but is logged under `reconnect_send_failed` for visibility |
+| `A2A.reconnect_send_failed` | WARNING | Transport error, bad/absent signature, unsigned response, or the peer signed-rejected the reconnect |
+| `A2A.reconnect_applied` | INFO | Receiver validated the reconnect AND the durable endpoint write succeeded; event lands AFTER the write (write-first, audit-reflects-reality) |
+| `A2A.reconnect_rejected` | WARNING | Receiver validated the envelope but declined to apply (bad URL shape, danger-category SSRF gate, no matching ACTIVE endpoint) — no write attempted |
+| `A2A.reconnect_failed` | WARNING | Validation passed but the durable endpoint write failed (transient: disk full / race); the nonce is rolled back so a later push retries (replaces the former `reconnect_rollback`, which the write-first ordering makes unnecessary) |
 
 ### Key files (ADR-0198 additions)
 
@@ -303,6 +330,84 @@ known to have changed, instead of leaving peers to time out.
 | `operator/bridges/shared/remote_trigger_sender.py` | `RemoteTriggerSender.send_reconnect()` |
 | `operator/bridges/shared/a2a_friendship.py` | `update_endpoint_url()`, `detect_local_ip()`, `check_and_broadcast_reconnect()` |
 | `core/console/corvin_console/aco/heartbeat.py` | polls `check_and_broadcast_reconnect()` each 5-min tick |
+
+---
+
+## Typed error taxonomy (ADR-0197, sender-side)
+
+`RemoteTriggerSender.send()` and `ping()` classify every failure into a
+closed `error_category` enum (`remote_trigger_sender.ErrorCategory`),
+surfaced on `SendResult` / `PingResult` alongside the legacy `ok`/`status`
+fields:
+
+| `error_category` | Meaning for the caller |
+|---|---|
+| `unreachable` | Nothing answered — DNS, refused, or TLS failure (`connection_failed`) |
+| `timeout_transport` | Sender-side connect/read/total-transfer deadline |
+| `timeout_remote` | Peer answered; its own worker/engine timed out — **`ok=False`** (fixes the pre-ADR bug where this read as success) |
+| `rejected` | Peer explicitly refused (validation, TTL, revocation, rate limit) |
+| `filtered` | House-rules (L44) blocked the instruction |
+| `auth_failed` | Something answered but did not prove it was the paired peer (`bad_signature` / `missing_signature` / `task_id_mismatch`, unsigned ping response, instance-pin mismatch) |
+| `http_error` | Peer's HTTP layer rejected before A2A logic (`http_status` carried alongside) |
+| `protocol_error` | Unparseable/oversized response, invalid attachments |
+| `internal_error` | Catch-all |
+
+**Corrected `ok` semantics:** `SendResult.ok = (status not in ("rejected", "timeout"))`
+— `ok=True` means the instruction actually ran and returned a receiver-signed result.
+
+**Template-only `error_detail` (ADR-0197 §2, hardened 2026-07-19):**
+`error_detail` is ALWAYS drawn from the fixed template set
+(`_ERROR_DETAIL_TEMPLATES`) or the closed exception-type-name allowlist
+(`_ALLOWED_EXC_TYPE_NAMES`) — never `str(exc)` verbatim, never interpolated
+peer-controlled text (a malicious receiver's `status` string is mapped to
+the fixed `"unexpected_receiver_status"` template). Reason strings are
+closed at the raise sites (`transport_error:<TypeName>`,
+`invalid_response_json`, `canonical_encode_failed`, `bad_recv_key` — no
+embedded exception text).
+
+**Audit fields + fail-closed backstop:** every audited `details` dict passes
+through `_assert_audit_details_safe` (analogous to telemetry's
+`_assert_safe`): only allowlisted keys (`endpoint_id`, `task_id`,
+`instance_id_match`, `status`, `duration_ms`, `reason`, `ttl_s`,
+`nonce_prefix`, `http_status`, `error_category`, `error_detail`,
+`attachments_count`, `our_chain_tail`, `peer_chain_tail`, `match`,
+`reachable`, `source`) with enum/typename-shaped values; free-form values
+are dropped and replaced with `"redacted"` — never raised on, never sent.
+
+---
+
+## Lightweight peer liveness — `a2a_ping` (ADR-0199)
+
+**Status: sender-side implemented (2026-07-19); receiver-side pending** — no
+`/v1/a2a/ping` route exists yet in `a2a_http_server.py` or the gateway, so a
+real probe currently returns `http_error`/`unreachable` until the route
+ships (backend parity is a hard requirement, see ADR-0199).
+
+`RemoteTriggerSender.ping(endpoint_id, timeout_s)` — timeout clamped to
+`[2, 10]` s (default 5), far below `a2a_send`'s `[5, 120]` window.
+
+- **Request:** `{ping_id: uuid4, issued_at, origin_id}` + HMAC-SHA256
+  signature with the pairing's `hmac_key`. POSTed to `<base>/v1/a2a/ping`,
+  where `<base>` is the endpoint URL with its `/v1/a2a/receive` suffix
+  stripped.
+- **Response (contract):** `{ok, instance_id, protocol_version, server_time,
+  task_id}` signed with the pairing's `recv_key`; **`task_id` MUST echo the
+  request's `ping_id`** (anti-replay binding — settled 2026-07-19, see
+  ADR-0199). The sender verifies via
+  `_verify_response(..., expected_task_id=ping_id)`.
+- **Authenticated, non-negotiable:** only a *signed*, verified response
+  yields `reachable=true`. The legacy unsigned-rejection tolerance
+  (ADR-0077 C-5) never confers liveness — an unsigned `ok:true` is
+  `auth_failed` (forgeable-liveness fix, 2026-07-19).
+- **No nonce store** — pings are side-effect-free; ±30 s `issued_at`
+  freshness suffices (receiver-side, when implemented).
+- **Failures reuse the ADR-0197 enum** (one taxonomy, two producers).
+- **Audit:** one `A2A.ping_result` event per call (INFO when reachable,
+  WARNING otherwise) with closed-enum details only (`endpoint_id`,
+  `reachable`, `source`, `error_category`, `duration_ms`).
+- The ADR-0199 §2 heartbeat-cache fast path is deliberately NOT implemented
+  sender-side yet — it needs receiver-side last-seen records that do not
+  exist; `source` is always `"network_probe"` for now.
 
 ---
 
@@ -324,6 +429,19 @@ The network enforces *valid license*, not *unmodified binary*.
 
 ---
 
+| Threat (2026-07-19 additions) | Mitigated by |
+|---|---|
+| Compromised peer repoints our outbound A2A traffic at internal infrastructure via reconnect (SSRF/stored redirect) | Danger-category host gate (forbidden hosts incl. NAT64/6to4/v4-mapped embedded IPv4 + global→private) and no-scheme-downgrade in `update_endpoint_url` / `validate_endpoint_url_change`, PLUS no-redirect-following on the outbound POST (ADR-0198 hardening, 2026-07-19 redesign). Residual: DNS-rebinding by an already-paired peer (accepted this release) |
+| Compromised peer 302-redirects our signed POST to an internal address | `_http_post` uses a no-redirect opener — a 3xx is a `TransportError`, never followed (2026-07-19) |
+| Forged liveness: anyone answering the port returns unsigned `ok:true` to a ping | `reachable=true` requires a recv_key-signed response echoing `task_id=ping_id` (ADR-0199) |
+| Peer-controlled text injected into audit records (status strings, exception reprs) | Template-only `error_detail`, closed reason strings, `_assert_audit_details_safe` backstop (ADR-0197) |
+
+---
+
 ## ADR
 
-Full decision record: `Corvin-ADR: decisions/0103-a2a-network-membership-attestation.md`
+Full decision records:
+- `Corvin-ADR: decisions/0103-a2a-network-membership-attestation.md`
+- `Corvin-ADR: decisions/0197-a2a-send-typed-error-taxonomy.md` (error taxonomy)
+- `Corvin-ADR: decisions/0198-a2a-reconnect-broadcast.md` (proactive reconnect)
+- `Corvin-ADR: decisions/0199-a2a-ping-lightweight-peer-liveness.md` (a2a_ping)

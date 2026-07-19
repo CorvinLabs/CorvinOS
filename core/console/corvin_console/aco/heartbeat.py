@@ -77,21 +77,31 @@ def send_heartbeat(home: Path) -> bool:
 
 
 def _check_a2a_reconnect(home: Path) -> None:
-    """ADR-0198: best-effort proactive A2A reconnect broadcast.
+    """ADR-0198 (Corvin-ADR/decisions/0198-a2a-reconnect-broadcast.md):
+    best-effort proactive A2A reconnect broadcast.
 
     Piggybacks on this thread's existing 5-minute cadence instead of
     spinning up a dedicated thread — this is an IP-change *poll*, not a
     telemetry ping, so it deliberately ignores ``ping_enabled`` (opting out
     of the anonymous instance ping says nothing about wanting stale, dead
-    A2A peer connections). Soft-imports operator/bridges/shared, which is
-    not present in every deployment shape; absence is a silent no-op.
+    A2A peer connections; see ``start_heartbeat_thread``, which starts this
+    loop even for opted-out instances for exactly that reason).
+    Soft-imports operator/bridges/shared, which is not present in every
+    deployment shape; absence is a silent no-op.
+
+    Worst-case duration: ``check_and_broadcast_reconnect`` bounds itself to
+    a 180 s wall-clock budget (10 s reconnect timeout per peer) — one 5-min
+    tick can be delayed by at most that budget, never stalled indefinitely.
     """
     try:
         import sys as _sys
         from pathlib import Path as _Path
         _shared = _Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+        # Append (never insert at 0): prepending would let operator/bridges/
+        # shared modules shadow same-named stdlib/site-packages modules for
+        # the whole process (2026-07-19 hardening).
         if _shared.is_dir() and str(_shared) not in _sys.path:
-            _sys.path.insert(0, str(_shared))
+            _sys.path.append(str(_shared))
         from a2a_friendship import check_and_broadcast_reconnect  # type: ignore[import-not-found]
         check_and_broadcast_reconnect()
     except Exception:  # noqa: BLE001
@@ -123,15 +133,17 @@ def start_heartbeat_thread(home: Path) -> None:
     """Start the 5-minute presence heartbeat daemon thread (idempotent).
 
     Only one thread is ever started per process (module-level ``_started``
-    guard). Respects ``ping_enabled(home)`` — if the user opted out of the
-    anonymous instance ping, the heartbeat is also skipped.
+    guard). The thread is ALWAYS started — ``ping_enabled(home)`` gates only
+    the telemetry ``send_heartbeat`` inside the loop (re-checked on every
+    iteration), while the ADR-0198 A2A reconnect poll runs unconditionally.
+    Fixed 2026-07-19: the previous boot-time early-return meant instances
+    opted out at boot never got the A2A reconnect broadcast either, directly
+    contradicting ``_check_a2a_reconnect``'s "deliberately ignores
+    ping_enabled" contract.
     """
     global _started  # noqa: PLW0603
     with _started_lock:
         if _started:
-            return
-        if not ping_enabled(home):
-            logger.debug("heartbeat: skipped — ping_enabled is false")
             return
         t = threading.Thread(
             target=_heartbeat_loop,

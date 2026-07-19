@@ -385,6 +385,168 @@ class TestVerifyResponse(unittest.TestCase):
             rts.RemoteTriggerSender._verify_response("not a dict", RECV_KEY)  # type: ignore[arg-type]
 
 
+# ── ADR-0198 send_reconnect delivery semantics (2026-07-19 retry-storm fix) ─
+
+class TestSendReconnectDelivery(unittest.TestCase):
+    """Fix #2: persistence is driven by DELIVERY (a signed response arrived —
+    accept OR reject), not acceptance. A signed-rejecting peer must count as
+    delivered so it is not re-broadcast to on every 5-minute heartbeat forever;
+    a peer with no signed response (transport error, unsigned) must NOT."""
+
+    def setUp(self) -> None:
+        self._tmp_endpoints = tempfile.TemporaryDirectory()
+        self._tmp_iid = tempfile.TemporaryDirectory()
+        self.endpoints_dir = Path(self._tmp_endpoints.name)
+        os.environ["CORVIN_INSTANCE_ID_PATH"] = str(
+            Path(self._tmp_iid.name) / "instance_id.json")
+        os.environ["CORVIN_A2A_ATTESTATION_DISABLED"] = "1"
+        _write_endpoint_file(
+            self.endpoints_dir, ENDPOINT_ID,
+            "https://peer.example.com/v1/a2a/receive")
+
+    def tearDown(self) -> None:
+        os.environ.pop("CORVIN_INSTANCE_ID_PATH", None)
+        os.environ.pop("CORVIN_A2A_ATTESTATION_DISABLED", None)
+        self._tmp_endpoints.cleanup()
+        self._tmp_iid.cleanup()
+
+    def _sender(self):
+        return rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir)
+
+    def test_signed_rejected_counts_as_delivered(self):
+        sender = self._sender()
+        with mock.patch.object(rts.RemoteTriggerSender, "_http_post",
+                               return_value={"raw": 1}), \
+             mock.patch.object(rts.RemoteTriggerSender, "_verify_response",
+                               return_value=({"status": "rejected"}, True)):
+            self.assertTrue(
+                sender.send_reconnect(ENDPOINT_ID, "https://new.example.com"))
+
+    def test_signed_ok_delivered(self):
+        sender = self._sender()
+        with mock.patch.object(rts.RemoteTriggerSender, "_http_post",
+                               return_value={"raw": 1}), \
+             mock.patch.object(rts.RemoteTriggerSender, "_verify_response",
+                               return_value=({"status": "ok"}, True)):
+            self.assertTrue(
+                sender.send_reconnect(ENDPOINT_ID, "https://new.example.com"))
+
+    def test_unsigned_response_not_delivered(self):
+        sender = self._sender()
+        with mock.patch.object(rts.RemoteTriggerSender, "_http_post",
+                               return_value={"raw": 1}), \
+             mock.patch.object(rts.RemoteTriggerSender, "_verify_response",
+                               return_value=({"status": "rejected"}, False)):
+            self.assertFalse(
+                sender.send_reconnect(ENDPOINT_ID, "https://new.example.com"))
+
+    def test_transport_error_not_delivered(self):
+        sender = self._sender()
+        with mock.patch.object(rts.RemoteTriggerSender, "_http_post",
+                               side_effect=rts.TransportError("connection_failed")):
+            self.assertFalse(
+                sender.send_reconnect(ENDPOINT_ID, "https://new.example.com"))
+
+
+# ── ADR-0198 no-redirect POST (SSRF hardening, 2026-07-19) ──────────────────
+
+class TestNoRedirectPost(unittest.TestCase):
+    """Fix #3: _http_post must NOT follow 3xx redirects. A paired peer with a
+    valid global URL could otherwise 302 our signed POST to an internal
+    address. A redirect becomes a TransportError; the target is never hit."""
+
+    @staticmethod
+    def _spawn(handler_cls):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler_cls)
+        t = threading.Thread(target=httpd.serve_forever, daemon=True)
+        t.start()
+        return httpd, port
+
+    def test_302_not_followed(self):
+        target_hits: list[str] = []
+
+        class TargetHandler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a, **k):
+                pass
+
+            def _record(self):
+                # urllib converts a followed 302 POST into a GET, so BOTH
+                # methods must be recorded for "never contacted" to be sound.
+                target_hits.append(f"{self.command} {self.path}")
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            do_POST = _record  # noqa: N815
+            do_GET = _record   # noqa: N815
+
+        target_httpd, target_port = self._spawn(TargetHandler)
+        redirect_to = f"http://127.0.0.1:{target_port}/internal"
+
+        class RedirHandler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a, **k):
+                pass
+
+            def do_POST(self):  # noqa: N802
+                self.send_response(302)
+                self.send_header("Location", redirect_to)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+        redir_httpd, redir_port = self._spawn(RedirHandler)
+        try:
+            with self.assertRaises(rts.TransportError) as ctx:
+                rts.RemoteTriggerSender._http_post(
+                    f"http://127.0.0.1:{redir_port}/v1/a2a/receive",
+                    {"task_id": "t"}, 3)
+            self.assertTrue(ctx.exception.reason.startswith("http_3"))
+            self.assertEqual(target_hits, [],
+                             "redirect target must never be contacted")
+        finally:
+            redir_httpd.shutdown(); redir_httpd.server_close()
+            target_httpd.shutdown(); target_httpd.server_close()
+
+
+# ── ADR-0197 audit backstop: numeric values (2026-07-19 bypass fix) ─────────
+
+class TestAuditNumericBackstop(unittest.TestCase):
+    """Fix #5: _is_safe_audit_value no longer blanket-trusts numerics. A
+    Discord-UID-shaped int must be redacted like its string form; small
+    counters / bools / http codes still pass."""
+
+    def test_uid_shaped_int_redacted(self):
+        out = rts._assert_audit_details_safe({"reason": 123456789012345678})
+        self.assertEqual(out["reason"], "redacted")
+
+    def test_uid_shaped_int_under_status_redacted(self):
+        out = rts._assert_audit_details_safe({"status": 123456789012345678})
+        self.assertEqual(out["status"], "redacted")
+
+    def test_small_numbers_and_bools_allowed(self):
+        out = rts._assert_audit_details_safe({
+            "duration_ms": 1523, "http_status": 404,
+            "attachments_count": 3, "reachable": True, "ttl_s": 60,
+        })
+        self.assertEqual(out["duration_ms"], 1523)
+        self.assertEqual(out["http_status"], 404)
+        self.assertEqual(out["attachments_count"], 3)
+        self.assertIs(out["reachable"], True)
+        self.assertEqual(out["ttl_s"], 60)
+
+    def test_epoch_ms_timestamp_allowed(self):
+        # ~1.7e12 (13-digit epoch-ms) is below the 10^13 bound.
+        out = rts._assert_audit_details_safe({"duration_ms": 1_700_000_000_000})
+        self.assertEqual(out["duration_ms"], 1_700_000_000_000)
+
+    def test_non_finite_float_redacted(self):
+        out = rts._assert_audit_details_safe({"duration_ms": float("inf")})
+        self.assertEqual(out["duration_ms"], "redacted")
+
+
 # ── CI lint ──────────────────────────────────────────────────────────────
 
 class TestCILint(unittest.TestCase):
