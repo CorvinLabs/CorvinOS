@@ -216,6 +216,9 @@ class BrowserSession:
         # profile — see close(). None = the original launch-own-Chromium mode.
         self._cdp_endpoint = cdp_endpoint
         self._attached = cdp_endpoint is not None
+        # Audit tag stamped on every action so a reviewer can tell real-login
+        # (attach) actions apart from sandboxed ones (ADR-0200).
+        self._attach_tag = "real-chrome" if self._attached else ""
 
         self._pw = None
         self._browser = None
@@ -439,12 +442,12 @@ class BrowserSession:
             host = decision.host
             if not decision.allowed and url not in ("about:blank", ""):
                 await self._safe_close_tab(new_page)
-                _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                                   action="new_tab", host=host, ok=False,
                                   extra={"reason": decision.reason})
                 self._emit("new_tab", host=host, ok=False, reason=decision.reason)
                 return
-            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                               action="new_tab", host=host, ok=True)
             self._emit("new_tab", host=host, ok=True)
         except Exception:  # noqa: BLE001 — a hook failure must never crash the session;
@@ -553,7 +556,7 @@ class BrowserSession:
                                  form_has_sensitive_field=form_sensitive):
             return
         if self._confirm is None:
-            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                               action=action, host=host, role=role, index=index, ok=False,
                               extra={"reason": "no_confirm_broker"})
             self._emit(action, index=index, role=role, name=name, ok=False,
@@ -562,7 +565,7 @@ class BrowserSession:
                 f"sensitive {action} on '{name}' blocked: no confirmation channel")
         approved = await self._confirm(action=action, host=host, role=role, name=name)
         if not approved:
-            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                               action=action, host=host, role=role, index=index, ok=False,
                               extra={"reason": "user_declined_sensitive"})
             self._emit(action, index=index, role=role, name=name, ok=False,
@@ -584,7 +587,7 @@ class BrowserSession:
                 await page.goto("about:blank")
             except Exception:  # noqa: BLE001
                 pass
-            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                               action=action, host=fdec.host, role=role, index=index, ok=False,
                               extra={"reason": "nav_" + fdec.reason})
             self._emit(action, index=index, role=role, ok=False, reason="navigation blocked")
@@ -628,7 +631,7 @@ class BrowserSession:
         # with no prompt. Only a host the task never named (the real injection
         # surface: the agent hopping somewhere off its own bat) reaches the confirm.
         if self._task_scoped_hosts and _host_task_scoped(landing, self._task_scoped_hosts):
-            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                               action=action, host=landing, role=role, index=index, ok=True,
                               extra={"reason": "task_scoped_auto_approved"})
             return
@@ -639,7 +642,7 @@ class BrowserSession:
             async with self._page_lock:
                 with contextlib.suppress(Exception):
                     await self._require_page().goto("about:blank")
-            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                               action=action, host=landing, role=role, index=index, ok=False,
                               extra={"reason": "user_declined_cross_host"})
             self._emit(action, index=index, role=role, ok=False, reason="cross-host declined")
@@ -686,7 +689,7 @@ class BrowserSession:
         await self._ensure_started()
         decision = _cmp.check_egress(url, allowlist=self._allowlist, forbidden=self._forbidden)
         if not decision.allowed:
-            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                               action="navigate", host=decision.host, ok=False,
                               extra={"reason": decision.reason})
             self._emit("navigate", host=decision.host, ok=False, reason=decision.reason)
@@ -707,7 +710,7 @@ class BrowserSession:
                 # the agent deciding on its own, from page content, to hop
                 # somewhere the user never mentioned) is unchanged below.
                 if self._task_scoped_hosts and _host_task_scoped(decision.host, self._task_scoped_hosts):
-                    _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                    _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                                       action="navigate", host=decision.host, ok=True,
                                       extra={"reason": "task_scoped_auto_approved"})
                     self._emit("navigate", host=decision.host, ok=True, reason="task-scoped, auto-approved")
@@ -720,7 +723,7 @@ class BrowserSession:
                     approved = await self._confirm(action="navigate", host=decision.host,
                                                    role="navigation", name=decision.host)
                     if not approved:
-                        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                                           action="navigate", host=decision.host, ok=False,
                                           extra={"reason": "user_declined_cross_host"})
                         self._emit("navigate", host=decision.host, ok=False, reason="cross-host declined")
@@ -740,7 +743,7 @@ class BrowserSession:
                     await page.goto("about:blank")
                 except Exception:  # noqa: BLE001
                     pass
-                _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+                _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                                   action="navigate", host=fdec.host, ok=False,
                                   extra={"reason": "redirect_" + fdec.reason})
                 self._emit("navigate", host=fdec.host, ok=False, reason="redirect blocked")
@@ -754,7 +757,7 @@ class BrowserSession:
         if confirm_cross_host:
             await self._confirm_cross_host_or_park("navigate", prev_host=decision.host)
         async with self._page_lock:
-            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+            _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                               action="navigate", host=fdec.host, ok=True)
             # L1: action log carries HOST only, never the full URL (which could
             # hold ?token=/reset links). The full url stays local to the browser.
@@ -810,7 +813,7 @@ class BrowserSession:
         self._mark_frame = mark_frame
         obs = Observation(url=url, title=title, marks=marks)
         host = _cmp._host(obs.url)
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="observe", host=host, ok=True, extra={"count": len(marks)})
         self._emit("observe", host=host, count=len(marks))    # host only, not full url
         return obs
@@ -952,7 +955,7 @@ class BrowserSession:
         # indirect-prompt-injection vector navigate()'s confirm was meant to stop —
         # gate it too (outside the lock so the screencast keeps updating).
         await self._confirm_cross_host_or_park("click", prev_host=host, role=role, index=index)
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="click", host=host, role=role, index=index, ok=True)
         self._emit("click", index=index, role=role, name=name, ok=True)
 
@@ -975,7 +978,7 @@ class BrowserSession:
             el = await self._resolve(index)
             await self._refuse_if_live_password(el, index, "fill")
             await el.fill(text)
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="fill", host=host, role=role, index=index, ok=True,
                           extra={"chars": len(text),          # length only, never the value
                                  "form_sensitive_context": form_sensitive})
@@ -1004,7 +1007,7 @@ class BrowserSession:
             await self._refuse_if_live_password(el, index, "fill_secret")
             await el.fill(value)
         del value      # drop the secret from this frame promptly
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="fill_secret", host=host, index=index, ok=True,
                           extra={"vault_key": vault_key})   # key name only, never the value
         self._emit("fill_secret", index=index, ok=True, vault_key=vault_key)
@@ -1022,7 +1025,7 @@ class BrowserSession:
                 txt = await page.evaluate(
                     "() => document.body ? (document.body.innerText || '') : ''")
         n = min(len(txt), max_chars)
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="read", host=host, index=index, ok=True, extra={"chars": n})
         self._emit("read", index=index, chars=n)
         return txt[:max_chars]
@@ -1059,7 +1062,7 @@ class BrowserSession:
             host = _cmp._host(self._require_page().url)
             el = await self._resolve(index)
             await el.hover(timeout=self._nav_timeout)
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="hover", host=host, role=role, index=index, ok=True)
         self._emit("hover", index=index, role=role, ok=True)
 
@@ -1114,7 +1117,7 @@ class BrowserSession:
         # The key NAME itself ("Enter") is not sensitive content — it is
         # metadata about the action, not typed text — so it is safe to audit,
         # unlike a fill() value.
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="key", host=host, ok=True, extra={"key": key})
         self._emit("key", key=key, ok=True)
 
@@ -1147,7 +1150,7 @@ class BrowserSession:
         # BR-F1: a <select onchange=location=…> can hop cross-host — gate a
         # no-allowlist cross-host landing through the same confirm (outside lock).
         await self._confirm_cross_host_or_park("select_option", prev_host=host, role=role, index=index)
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="select_option", host=host, role=role, index=index, ok=True,
                           extra={"chars": len(value)})   # length only, never the value
         self._emit("select_option", index=index, role=role, ok=True)
@@ -1188,7 +1191,7 @@ class BrowserSession:
             host = _cmp._host(self._require_page().url)
             el = await self._resolve(index)
             await el.set_input_files(str(candidate))
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="upload_file", host=host, role=role, index=index, ok=True,
                           extra={"filename": raw})   # filename only — never file content
         self._emit("upload_file", index=index, role=role, ok=True, filename=raw)
@@ -1234,7 +1237,7 @@ class BrowserSession:
         # BR-F1: a drag-to-confirm / slide-to-pay control can navigate cross-host —
         # gate a no-allowlist cross-host landing through the same confirm.
         await self._confirm_cross_host_or_park("drag", prev_host=host)
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="drag", host=host, ok=True,
                           extra={"from_index": from_index, "to_index": to_index})
         self._emit("drag", from_index=from_index, to_index=to_index, ok=True)
@@ -1255,7 +1258,7 @@ class BrowserSession:
                 except Exception:  # noqa: BLE001
                     title = ""
                 out.append({"index": i, "url": pg.url, "title": title})
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="tabs", ok=True, extra={"count": len(out)})
         self._emit("tabs", count=len(out))
         return out
@@ -1281,7 +1284,7 @@ class BrowserSession:
             self._mark_frame = {}
             obs = await self._observe_locked()
         host = _cmp._host(obs.url)
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="switch_tab", host=host, ok=True, extra={"tab_index": index})
         self._emit("switch_tab", tab_index=index, host=host, ok=True)
         return obs
@@ -1301,7 +1304,7 @@ class BrowserSession:
             data = await el.evaluate(_EXTRACT_TABLE_JS, _MAX_EXTRACT_ROWS)
         headers = data.get("headers", []) if isinstance(data, dict) else []
         rows = data.get("rows", []) if isinstance(data, dict) else []
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="extract_table", host=host, index=index, ok=True,
                           extra={"count": len(rows)})
         self._emit("extract_table", index=index, count=len(rows), ok=True)
@@ -1322,7 +1325,7 @@ class BrowserSession:
             host = _cmp._host(page.url)
             forms = await page.evaluate(_EXTRACT_FORMS_JS)
         forms = forms if isinstance(forms, list) else []
-        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id,
+        _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="extract_form_schema", host=host, ok=True,
                           extra={"count": len(forms)})
         self._emit("extract_form_schema", count=len(forms), ok=True)

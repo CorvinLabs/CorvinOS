@@ -353,8 +353,14 @@ def audit_action(
     index: int | None = None,
     ok: bool = True,
     extra: dict | None = None,
+    attach: str = "",
 ) -> None:
     """Emit a METADATA-ONLY audit event. Never receives or logs field values.
+
+    ``attach`` (ADR-0200) tags the browser mode — "real-chrome" for a session
+    attached to the user's own logged-in Chrome, "" for the ephemeral launched
+    Chromium. It lets a reviewer tell real-login actions apart from sandboxed
+    ones in the hash-chained log. Metadata only, like everything else here.
 
     ``audit_fn`` is the injected console audit sink; if None, degrade to a debug
     log line (still metadata-only). A failure here never blocks the action.
@@ -367,6 +373,8 @@ def audit_action(
         "element_index": index,
         "ok": ok,
     }
+    if attach:
+        details["attach"] = attach
     if extra:
         # Defensive scrub (review LOW-2): never let a caller smuggle a field value
         # into the audit trail. Broadened denylist + one level of recursion into
