@@ -128,6 +128,53 @@
   [data-theme="dark"] div:has(> audio) {
     background: hsl(var(--card)) !important;
   }
+
+  /* AudioPlayer range inputs — `appearance: none` (needed for the inline
+     progress-gradient track) strips the native rendering INCLUDING the
+     `accent-color` styling, which left an invisible/UA-default thumb. Thumb
+     and track are therefore drawn explicitly for both engines (webkit + moz).
+     Colors ride the theme tokens, so light and dark are both covered without
+     a separate branch. */
+  .audio-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    /* Filled-track gradient comes from the component's inline style. */
+  }
+
+  .audio-slider::-webkit-slider-runnable-track {
+    height: 0.25rem;
+    border-radius: 999px;
+    background: transparent; /* element background (gradient) is the track */
+  }
+
+  .audio-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 0.75rem;
+    height: 0.75rem;
+    margin-top: -0.25rem; /* center 12px thumb on the 4px track */
+    border: none;
+    border-radius: 999px;
+    background: hsl(var(--accent));
+    box-shadow: 0 0 0 1px hsl(var(--card));
+    cursor: pointer;
+  }
+
+  .audio-slider::-moz-range-track {
+    height: 0.25rem;
+    border-radius: 999px;
+    background: transparent; /* element background (gradient) is the track */
+  }
+
+  .audio-slider::-moz-range-thumb {
+    width: 0.75rem;
+    height: 0.75rem;
+    border: none;
+    border-radius: 999px;
+    background: hsl(var(--accent));
+    box-shadow: 0 0 0 1px hsl(var(--card));
+    cursor: pointer;
+  }
 }
 
 @layer components {

@@ -142,7 +142,10 @@ def test_adapter_code_has_fallback():
         ("_try_piper_tts function exists", "_try_piper_tts(" in adapter_code),
         ("Quota error detection", "insufficient_quota" in adapter_code),
         ("Piper fallback attempted", "_try_piper_tts(text, lang)" in adapter_code),
-        ("Error message cleared on success", 'last_skip_reason"] = None' in adapter_code),
+        # 0.10.34 refactored the raw dict write (`last_skip_reason"] = None`)
+        # into the _set_voice_skip_reason() helper — the guard's intent is
+        # unchanged: success paths must clear the user-facing skip reason.
+        ("Error message cleared on success", "_set_voice_skip_reason(None)" in adapter_code),
         ("Both engines failed check", "now < _voice_engine_state.get(" in adapter_code),
     ]
 
