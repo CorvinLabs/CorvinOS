@@ -197,5 +197,37 @@ Two distinct ways to drive the browser exist side by side, per ADR-0193:
   *non-password* field (e.g. an API-key box) is visible to the operator watching
   it — the live view is owner-only and the value still never reaches the model
   context or any log.
-- The browser-extension mode (drive your *own* logged-in browser, ADR-0182 M5)
-  is not yet built; today CorvinOS drives its own managed browser.
+## Attach to your real Chrome (ADR-0200)
+
+Besides the managed empty Chromium above, CorvinOS can drive **your own,
+logged-in Chrome** — your cookies, sessions, 2FA — so authenticated tasks work
+without a fresh login each time. Console → **Browser → „Mit meinem echten Chrome
+verbinden…"**.
+
+Flow (all in the panel):
+1. **Grant consent.** A dedicated, TTL-capped (default 1h), revocable
+   `real-chrome` consent. Attaching without it is refused (HTTP 403).
+2. **Start Chrome yourself.** Copy the shown per-OS command — it starts Chrome
+   with `--remote-debugging-port` and a **dedicated automation profile**
+   (Chrome 136+ refuses the debug port on the default profile; the separate
+   profile is also the visible trust boundary). CorvinOS never launches it for
+   you. Log into the accounts you want it to use.
+3. **Paste the `ws://…` CDP endpoint** Chrome prints, and attach.
+4. **Confirm-mode** toggle: *confirm-each* (default — every sensitive action
+   asks) or *watch-mode* ("act freely" with a hard, non-extendable TTL, max
+   30 min, then it reverts).
+
+Security (this is the point — your real logins are in reach):
+- **Every gate still runs:** egress allowlist + SSRF/metadata block on every
+  request, L44 house-rules, metadata-only audit, sensitive-action confirm — the
+  attach only changes how the browser context is obtained.
+- **Always visible** — an attached session is forced non-headless; you see it act.
+- **Detach never touches your browser:** closing the session disconnects the CDP
+  link only; it never closes your tabs and never wipes a profile.
+- **Audit-distinguishable:** every attached action is tagged `attach=real-chrome`
+  in the hash-chained log (metadata only, never page text).
+- **Watch-mode suppresses only the prompt** — audit and egress still run, and it
+  only applies to attached sessions (never the empty launched one).
+
+- The browser-extension mode (a CorvinOS-authored extension, deeper than CDP
+  attach) is not built; CDP attach (ADR-0200) is the supported real-browser path.
