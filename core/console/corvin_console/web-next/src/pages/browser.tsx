@@ -6,7 +6,10 @@ import {
   browserClick, browserFill, browserScroll, browserActions, browserConfirm,
   browserPause, browserAgent, browserAgentStop, browserAgentContinue,
   transcribeAudio, ttsBlob,
+  attachConsentStatus, attachConsentGrant, attachConsentRevoke,
+  attachLaunchCommand, confirmModeStatus, confirmModeSet,
   type BrowserObservation, type BrowserAction, type BrowserPending,
+  type AttachConsent, type ConfirmMode,
 } from "@/lib/api";
 
 /**
@@ -395,6 +398,9 @@ export function BrowserPage() {
         </div>
       )}
 
+      {/* ADR-0200: attach to the user's real logged-in Chrome */}
+      {!sid && <AttachPanel csrf={csrf} onAttached={(s) => setSid(s)} />}
+
       {/* Session controls */}
       {!sid ? (
         <button onClick={start} disabled={busy}
@@ -593,6 +599,118 @@ export function BrowserPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * ADR-0200 attach panel — drive the user's REAL, logged-in Chrome.
+ *
+ * Flow the user follows: grant the (TTL-capped, revocable) real-chrome consent →
+ * copy the launch command and start Chrome themselves (we never launch it) →
+ * paste the ws:// CDP endpoint → attach. Confirm-mode (confirm-each / watch)
+ * governs how often sensitive actions ask. Everything here is over the REST
+ * endpoints from P3a/P3b; the real security lives server-side.
+ */
+function AttachPanel({ csrf, onAttached }: { csrf: string; onAttached: (sid: string) => void }) {
+  const [open, setOpen] = React.useState(false);
+  const [consent, setConsent] = React.useState<AttachConsent | null>(null);
+  const [mode, setMode] = React.useState<ConfirmMode | null>(null);
+  const [cmd, setCmd] = React.useState<string>("");
+  const [endpoint, setEndpoint] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState<string | null>(null);
+
+  const refresh = React.useCallback(async () => {
+    try {
+      const [c, m] = await Promise.all([attachConsentStatus(), confirmModeStatus()]);
+      setConsent(c); setMode(m);
+    } catch { /* leave prior state */ }
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+    refresh();
+    const t = window.setInterval(refresh, 5000);   // TTL countdown
+    return () => window.clearInterval(t);
+  }, [open, refresh]);
+
+  const doGrant = async () => { setBusy(true); setErr(null);
+    try { setConsent(await attachConsentGrant(3600, csrf)); if (!cmd) setCmd((await attachLaunchCommand()).command); }
+    catch (e) { setErr(String(e)); } finally { setBusy(false); } };
+  const doRevoke = async () => { setBusy(true);
+    try { setConsent(await attachConsentRevoke(csrf)); } catch (e) { setErr(String(e)); } finally { setBusy(false); } };
+  const doAttach = async () => { setBusy(true); setErr(null);
+    try { const { session } = await browserCreateSession(csrf, endpoint.trim()); onAttached(session); }
+    catch (e) { setErr(String(e)); } finally { setBusy(false); } };
+  const setWatch = async () => { try { setMode(await confirmModeSet("watch", csrf, 300)); } catch (e) { setErr(String(e)); } };
+  const setEach = async () => { try { setMode(await confirmModeSet("confirm-each", csrf)); } catch (e) { setErr(String(e)); } };
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)}
+        className="rounded border border-amber-400/50 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-sm px-3 py-1.5">
+        Mit meinem echten Chrome verbinden…
+      </button>
+    );
+  }
+
+  const active = consent?.active;
+  return (
+    <div className="rounded border border-amber-400/40 bg-amber-500/5 p-3 space-y-3 text-sm">
+      <div className="flex items-center justify-between">
+        <strong className="text-amber-700 dark:text-amber-300">Echtes Chrome verbinden</strong>
+        <button onClick={() => setOpen(false)} className="text-xs text-muted-foreground">schließen</button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        CorvinOS steuert dein eingeloggtes Chrome — deine Cookies und Sessions. Sichtbar,
+        widerrufbar, zeitlich begrenzt. Sensible Aktionen fragen (oder Zuschau-Modus mit Limit).
+      </p>
+
+      {/* 1. Consent */}
+      <div className="flex items-center gap-2">
+        {active
+          ? <><span className="text-emerald-600">● Consent aktiv ({consent?.remaining_s}s)</span>
+              <button onClick={doRevoke} disabled={busy} className="rounded border px-2 py-0.5 text-xs">Widerrufen</button></>
+          : <><span className="text-muted-foreground">○ kein Consent</span>
+              <button onClick={doGrant} disabled={busy} className="rounded bg-amber-600 text-white px-2 py-0.5 text-xs">Consent geben (1h)</button></>}
+      </div>
+
+      {active && (
+        <>
+          {/* 2. Launch command */}
+          {cmd && (
+            <div className="space-y-1">
+              <div className="text-xs text-muted-foreground">Starte Chrome damit (einmal, eigenes Profil):</div>
+              <div className="flex gap-2">
+                <code className="flex-1 rounded bg-muted px-2 py-1 text-xs break-all">{cmd}</code>
+                <button onClick={() => navigator.clipboard?.writeText(cmd)} className="rounded border px-2 py-1 text-xs">Kopieren</button>
+              </div>
+            </div>
+          )}
+          {/* 3. Attach */}
+          <div className="flex gap-2">
+            <input value={endpoint} onChange={(e) => setEndpoint(e.target.value)}
+              placeholder="ws://127.0.0.1:9222/devtools/browser/…"
+              className="flex-1 rounded border bg-background px-2 py-1 text-xs" />
+            <button onClick={doAttach} disabled={busy || !endpoint.trim()}
+              className="rounded bg-primary text-primary-foreground px-3 py-1 text-xs">Verbinden</button>
+          </div>
+          {/* 4. Confirm mode */}
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground">Bestätigung:</span>
+            <button onClick={setEach}
+              className={`rounded px-2 py-0.5 border ${mode?.mode === "confirm-each" ? "bg-primary/15 border-primary/50" : ""}`}>
+              jede Aktion
+            </button>
+            <button onClick={setWatch}
+              className={`rounded px-2 py-0.5 border ${mode?.mode === "watch" ? "bg-primary/15 border-primary/50" : ""}`}>
+              Zuschau-Modus {mode?.mode === "watch" ? `(${mode?.remaining_s}s)` : "(5 min)"}
+            </button>
+          </div>
+        </>
+      )}
+      {err && <div className="text-xs text-red-500 break-all">{err}</div>}
     </div>
   );
 }

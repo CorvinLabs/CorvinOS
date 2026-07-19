@@ -5620,8 +5620,32 @@ export interface BrowserObservation { url: string; title: string; marks: Browser
 export interface BrowserAction { action: string; ts?: number; [k: string]: unknown; }
 export interface BrowserPending { id: string; action: string; host: string; role: string; name: string; }
 
-export function browserCreateSession(csrf: string): Promise<{ session: string }> {
-  return api("/browser/session", { method: "POST", csrf });
+export function browserCreateSession(csrf: string, cdpEndpoint?: string): Promise<{ session: string }> {
+  return api("/browser/session", { method: "POST", csrf,
+    body: cdpEndpoint ? { cdp_endpoint: cdpEndpoint } : undefined });
+}
+
+// ── ADR-0200: real-chrome attach controls ────────────────────────────────────
+export interface AttachConsent { active: boolean; expires_at: number | null; remaining_s: number }
+export function attachConsentStatus(): Promise<AttachConsent> {
+  return api("/browser/attach/consent");
+}
+export function attachConsentGrant(ttlS: number, csrf: string): Promise<AttachConsent> {
+  return api("/browser/attach/consent", { method: "POST", csrf, body: { ttl_s: ttlS } });
+}
+export function attachConsentRevoke(csrf: string): Promise<AttachConsent> {
+  return api("/browser/attach/consent", { method: "DELETE", csrf });
+}
+export function attachLaunchCommand(port = 9222): Promise<{ command: string; port: number }> {
+  return api(`/browser/attach/launch-command?port=${port}`);
+}
+export interface ConfirmMode { mode: "confirm-each" | "watch"; expires_at: number | null; remaining_s: number }
+export function confirmModeStatus(): Promise<ConfirmMode> {
+  return api("/browser/attach/confirm-mode");
+}
+export function confirmModeSet(mode: "confirm-each" | "watch", csrf: string, ttlS?: number): Promise<ConfirmMode> {
+  return api("/browser/attach/confirm-mode", { method: "POST", csrf,
+    body: ttlS != null ? { mode, ttl_s: ttlS } : { mode } });
 }
 export function browserClose(sid: string, csrf: string): Promise<{ closed: string }> {
   return api(`/browser/${sid}/close`, { method: "POST", csrf });
