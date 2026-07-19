@@ -92,7 +92,8 @@ class BrowserSessionManager:
 
     async def create(self, tenant_id: str, *, headless: bool = True,
                      owner_fingerprint: str = "",
-                     task_scoped_hosts: list[str] | None = None) -> str:
+                     task_scoped_hosts: list[str] | None = None,
+                     cdp_endpoint: str | None = None) -> str:
         # Bound concurrent browsers per tenant → no Chromium/PID exhaustion (DoS).
         live_count = sum(1 for k in self._sessions if k.startswith(f"{tenant_id}:"))
         if live_count >= _MAX_SESSIONS_PER_TENANT:
@@ -147,6 +148,7 @@ class BrowserSessionManager:
             task_scoped_hosts=task_scoped_hosts,
             audit_fn=self._audit_fn, vault_resolve=vault,
             confirm_fn=_confirm, on_action=_on_action, headless=headless,
+            cdp_endpoint=cdp_endpoint,
         )
         live.session = session
         # Lazy start: register the screencast callback but do NOT launch Chromium yet.

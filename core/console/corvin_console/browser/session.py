@@ -101,6 +101,26 @@ def _looks_like_missing_system_deps(exc: BaseException) -> bool:
     return "missing dependencies" in msg or "install-deps" in msg
 
 
+def cdp_launch_command(port: int = 9222, profile_dir: str | None = None) -> str:
+    """The exact command the user runs to start a debug Chrome for attach mode
+    (ADR-0200 Q4: CorvinOS never auto-launches it — the user does, explicitly).
+
+    A DEDICATED automation profile (Q1) is mandatory, not cosmetic: Chrome 136+
+    refuses --remote-debugging-port on the default profile, and a separate
+    profile is the user-visible trust boundary the ADR rests on.
+    """
+    import sys as _sys
+    prof = profile_dir or "<automation-profile-dir>"
+    if _sys.platform == "darwin":
+        chrome = '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"'
+    elif _sys.platform.startswith("win"):
+        chrome = '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"'
+    else:
+        chrome = "google-chrome"
+    return (f'{chrome} --remote-debugging-port={port} '
+            f'--user-data-dir="{prof}"')
+
+
 def _looks_like_missing_browser(exc: BaseException) -> bool:
     """True iff *exc* is Playwright's 'browser binary not installed' failure.
 
@@ -172,6 +192,7 @@ class BrowserSession:
         on_action: OnAction | None = None,
         headless: bool = True,
         nav_timeout_ms: int = 30_000,
+        cdp_endpoint: str | None = None,
     ) -> None:
         self.session_id = session_id
         self.tenant_id = tenant_id
@@ -189,6 +210,12 @@ class BrowserSession:
         self._on_action = on_action
         self._headless = headless
         self._nav_timeout = nav_timeout_ms
+        # ADR-0200: when set, this session ATTACHES to the user's real Chrome
+        # (connect_over_cdp) instead of launching its own empty Chromium. Detach
+        # (close) must then never close the user's context/tabs nor wipe a
+        # profile — see close(). None = the original launch-own-Chromium mode.
+        self._cdp_endpoint = cdp_endpoint
+        self._attached = cdp_endpoint is not None
 
         self._pw = None
         self._browser = None
@@ -256,10 +283,45 @@ class BrowserSession:
             # that the route turns into an opaque 500 and the model narrates as
             # "der Browser-Dienst ist nicht verfügbar".
             raise BrowserActionError(_BROWSER_NOT_SET_UP) from exc
+        self._pw = await async_playwright().start()
+
+        # ADR-0200 attach mode: drive the user's REAL, logged-in Chrome via CDP
+        # instead of launching our own empty Chromium. The user starts Chrome
+        # with --remote-debugging-port + a dedicated automation profile (Q1/Q4),
+        # logs in, and we connect_over_cdp to it. Everything downstream of
+        # self._context/_page — navigate, observe, act, egress checks, audit,
+        # confirm — is IDENTICAL to the launched-browser path; only how the
+        # context is obtained differs.
+        if self._attached:
+            try:
+                self._browser = await self._pw.chromium.connect_over_cdp(
+                    self._cdp_endpoint, timeout=self._nav_timeout)
+            except Exception as exc:
+                with contextlib.suppress(Exception):
+                    await self._pw.stop()
+                self._pw = None
+                raise BrowserActionError(
+                    "Could not attach to your Chrome. Start it with the command "
+                    "from the console (chrome --remote-debugging-port=… "
+                    "--user-data-dir=<automation profile>), then retry."
+                ) from exc
+            # Reuse the context/page the user already has open; never open a
+            # blank one behind their back. new_context() would create a fresh,
+            # login-less context — the exact opposite of what attach is for — so
+            # prefer an EXISTING context (their logged-in one).
+            self._context = (self._browser.contexts[0]
+                             if self._browser.contexts
+                             else await self._browser.new_context())
+            self._page = (self._context.pages[0] if self._context.pages
+                          else await self._context.new_page())
+            # SAME page setup + multi-tab guard + per-request egress route as the
+            # launched path — the user's real browser is gated identically.
+            await self._finish_start()
+            return
+
         user_data = self._home / "sessions" / self.session_id
         user_data.mkdir(parents=True, exist_ok=True)
         self._user_data = user_data
-        self._pw = await async_playwright().start()
         # Renderer sandbox stays ON — this browser loads untrusted third-party
         # pages, so a renderer exploit must NOT reach the host. Only disable it
         # when the deploy environment genuinely can't sandbox (e.g. unprivileged
@@ -294,15 +356,22 @@ class BrowserSession:
                 raise BrowserActionError(_BROWSER_NOT_SET_UP) from exc
             raise
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        await self._finish_start()
+
+    async def _finish_start(self) -> None:
+        """Page setup + guards shared by the launched and CDP-attached paths.
+
+        Whichever way self._context/_page were obtained, EVERY tab must get the
+        multi-tab egress guard and the per-request egress route — the user's real
+        browser is not exempt from either.
+        """
         self._page.set_default_timeout(self._nav_timeout)
         # Multi-tab awareness (ADR-0183 S2): a target="_blank" click or a
         # window.open() creates a brand-new Page OUTSIDE the normal
         # navigate()/click() control flow — without this hook it could reach
         # an off-allowlist host without ever going through check_egress().
         # Wired once, at the context level, so it covers every tab for the
-        # life of the session (registered after context.pages[0] already
-        # exists, which is fine: that first tab is only ever driven through
-        # our own navigate(), which already egress-checks explicitly).
+        # life of the session.
         self._context.on("page", self._on_new_page)
         # Network-layer egress enforcement (review HIGH-1). check_egress() gates
         # top-level NAVIGATION, but a loaded page can still fetch()/XHR/beacon/
@@ -426,7 +495,15 @@ class BrowserSession:
                     pass
                 self._screencast_task = None
             try:
-                if self._context:
+                if self._attached:
+                    # ADR-0200 detach: the browser is the USER'S real Chrome.
+                    # NEVER close the context (that would close their tabs) and
+                    # NEVER rmtree (there is no managed profile — it is theirs).
+                    # Just disconnect the CDP link; their Chrome keeps running.
+                    if self._browser is not None:
+                        with contextlib.suppress(Exception):
+                            await self._browser.close()   # disconnect, not kill
+                elif self._context:
                     await self._context.close()
             finally:
                 if self._pw:
@@ -434,6 +511,8 @@ class BrowserSession:
                 self._pw = self._browser = self._context = self._page = None
                 # L3: wipe the persistent profile (cookies/localStorage/auth) — the
                 # ephemeral managed session must not leave credentials on disk.
+                # Attach mode has no managed profile (the guard below is false),
+                # so the user's real profile is never touched.
                 try:
                     import shutil
                     if getattr(self, "_user_data", None) and self._user_data.exists():

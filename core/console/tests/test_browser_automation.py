@@ -2216,6 +2216,7 @@ def test_start_translates_a_missing_chromium_into_an_actionable_error(monkeypatc
     s._home = Path(tempfile.mkdtemp())
     s.session_id = "s1"
     s._headless = True
+    s._attached = False  # launched mode (ADR-0200)
 
     class _PW:
         class chromium:
@@ -2248,6 +2249,7 @@ def test_start_reraises_an_unrelated_launch_error_unchanged(monkeypatch):
     s._home = Path(tempfile.mkdtemp())
     s.session_id = "s2"
     s._headless = True
+    s._attached = False  # launched mode (ADR-0200)
 
     class _PW:
         class chromium:
@@ -2288,3 +2290,69 @@ def test_missing_system_deps_detector_distinguishes_from_missing_browser():
     assert _looks_like_missing_system_deps(Exception(binary_missing)) is False
     assert _looks_like_missing_browser(Exception(binary_missing)) is True
     assert _looks_like_missing_system_deps(Exception("net::ERR_FAILED")) is False
+
+
+# ── ADR-0200 Phase 1: CDP attach to the user's real Chrome ───────────────────
+# The load-bearing safety invariants: attach connects instead of launching, and
+# DETACH must never close the user's tabs nor wipe a profile — it is THEIR Chrome.
+
+def test_cdp_endpoint_sets_attach_mode():
+    from corvin_console.browser.session import BrowserSession
+    s = BrowserSession("s", "_default", home=Path("/tmp"),
+                       cdp_endpoint="ws://127.0.0.1:9222/devtools/browser/x")
+    assert s._attached is True
+    s2 = BrowserSession("s", "_default", home=Path("/tmp"))
+    assert s2._attached is False
+
+
+def test_launch_command_forces_a_dedicated_profile_and_port():
+    from corvin_console.browser.session import cdp_launch_command
+    cmd = cdp_launch_command(9222, "/tmp/auto-prof")
+    assert "--remote-debugging-port=9222" in cmd
+    assert "--user-data-dir=" in cmd and "/tmp/auto-prof" in cmd
+
+
+def test_detach_never_closes_the_users_context_or_wipes_a_profile(tmp_path):
+    """The single most important attach-mode guarantee."""
+    import asyncio as _aio
+    from unittest import mock
+    from corvin_console.browser.session import BrowserSession
+
+    s = BrowserSession("s", "_default", home=tmp_path,
+                       cdp_endpoint="ws://127.0.0.1:9222/devtools/browser/x")
+    ctx = mock.AsyncMock()          # the user's real context — must NOT be closed
+    browser = mock.AsyncMock()      # the CDP-connected browser — disconnect only
+    s._context = ctx
+    s._browser = browser
+    s._pw = mock.AsyncMock()
+    s._start_lock = _aio.Lock()
+    # If attach ever set a managed profile, deleting it would hit the user's disk.
+    assert getattr(s, "_user_data", None) is None
+
+    with mock.patch("shutil.rmtree") as rm:
+        _aio.run(s.close())
+
+    ctx.close.assert_not_called()          # NEVER close the user's tabs
+    browser.close.assert_awaited()         # disconnect the CDP link (does not kill Chrome)
+    rm.assert_not_called()                 # NEVER rmtree — it's the user's profile
+
+
+def test_launched_mode_still_closes_and_wipes(tmp_path):
+    """Regression guard: the non-attach path keeps its ephemeral-profile cleanup."""
+    import asyncio as _aio
+    from unittest import mock
+    from corvin_console.browser.session import BrowserSession
+
+    s = BrowserSession("s", "_default", home=tmp_path)   # launched mode
+    ctx = mock.AsyncMock()
+    s._context = ctx
+    s._pw = mock.AsyncMock()
+    s._start_lock = _aio.Lock()
+    prof = tmp_path / "prof"
+    prof.mkdir()
+    s._user_data = prof
+
+    with mock.patch("shutil.rmtree") as rm:
+        _aio.run(s.close())
+    ctx.close.assert_awaited()             # launched mode DOES close its own context
+    rm.assert_called_once()                # and DOES wipe its ephemeral profile
