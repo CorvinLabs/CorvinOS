@@ -259,6 +259,16 @@ async def create_session(
     task_scoped_hosts = (body.task_scoped_hosts or None) if body else None
     cdp_endpoint = (body.cdp_endpoint or None) if body else None
     if cdp_endpoint:
+        # The debug Chrome is ALWAYS local (ADR-0200: the user starts it on their
+        # own machine). Restrict the CDP target to a loopback ws:// endpoint so a
+        # mistaken/confused value can't make CorvinOS connect out to a remote or
+        # metadata host (defense-in-depth; the model can't reach this field, only
+        # the authenticated console owner can). Review finding.
+        if not _is_loopback_cdp(cdp_endpoint):
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail=("cdp_endpoint must be a loopback ws:// URL "
+                        "(ws://127.0.0.1:<port>/… or ws://localhost:<port>/…)"))
         # ADR-0200: attaching to the user's real logged-in Chrome requires an
         # active, non-expired `real-chrome` consent — fail-closed otherwise.
         from ..browser import attach_consent as _ac  # noqa: PLC0415
@@ -294,6 +304,20 @@ async def close_session(
 
 
 # ── ADR-0200: real-chrome attach consent + launch helper ─────────────────────
+
+def _is_loopback_cdp(endpoint: str) -> bool:
+    """True iff *endpoint* is a ws://loopback CDP URL. Rejects wss/http, remote
+    hosts, and metadata IPs — the debug Chrome is always local."""
+    from urllib.parse import urlsplit  # noqa: PLC0415
+    try:
+        u = urlsplit(endpoint.strip())
+    except Exception:  # noqa: BLE001
+        return False
+    if u.scheme != "ws":
+        return False
+    host = (u.hostname or "").lower()
+    return host in {"127.0.0.1", "localhost", "::1"}
+
 
 class AttachConsentReq(BaseModel):
     ttl_s: int | None = None      # clamped to [60s, 12h]; None → 1h default
@@ -346,13 +370,13 @@ async def set_confirm_mode(
     only on attached (real-login) sessions."""
     from ..browser import confirm_mode as _cm  # noqa: PLC0415
     if body.mode == "watch":
-        _cm.set_watch(rec.tenant_id, body.ttl_s, audit_fn=_audit_fn)
+        _cm.set_watch(rec.tenant_id, body.ttl_s, rec.sid_fingerprint, audit_fn=_audit_fn)
     elif body.mode == "confirm-each":
-        _cm.set_confirm_each(rec.tenant_id, audit_fn=_audit_fn)
+        _cm.set_confirm_each(rec.tenant_id, rec.sid_fingerprint, audit_fn=_audit_fn)
     else:
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST,
                             detail="mode must be 'confirm-each' or 'watch'")
-    return _cm.status(rec.tenant_id)
+    return _cm.status(rec.tenant_id, rec.sid_fingerprint)
 
 
 @router.get("/browser/attach/confirm-mode")
@@ -360,7 +384,7 @@ async def get_confirm_mode(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session_or_token)],
 ) -> dict[str, Any]:
     from ..browser import confirm_mode as _cm  # noqa: PLC0415
-    return _cm.status(rec.tenant_id)
+    return _cm.status(rec.tenant_id, rec.sid_fingerprint)
 
 
 @router.get("/browser/attach/launch-command")

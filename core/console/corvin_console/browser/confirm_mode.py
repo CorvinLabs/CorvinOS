@@ -37,8 +37,14 @@ def _now() -> float:
     return time.time()
 
 
-def _path(tenant_id: str) -> Path:
-    return _forge_paths.tenant_global_dir(tenant_id) / "browser_confirm_mode.json"
+def _path(tenant_id: str, owner: str = "") -> Path:
+    # Owner-scoped (adversarial-review finding): watch-mode is per console USER,
+    # not tenant-wide — otherwise user A's watch-mode would auto-approve user B's
+    # attached (real-login) session in the same tenant. `owner` is the session
+    # owner_fingerprint; "" keeps the legacy tenant-wide file for back-compat.
+    safe = "".join(c for c in owner if c.isalnum())[:16]
+    name = f"browser_confirm_mode_{safe}.json" if safe else "browser_confirm_mode.json"
+    return _forge_paths.tenant_global_dir(tenant_id) / name
 
 
 def _clamp(ttl_s: int | float | None) -> int:
@@ -49,9 +55,9 @@ def _clamp(ttl_s: int | float | None) -> int:
     return max(WATCH_MIN_TTL_S, min(WATCH_MAX_TTL_S, v))
 
 
-def set_confirm_each(tenant_id: str, *, audit_fn: "Callable[..., None] | None" = None) -> None:
+def set_confirm_each(tenant_id: str, owner: str = "", *, audit_fn: "Callable[..., None] | None" = None) -> None:
     """Revert to the default: confirm every sensitive action."""
-    p = _path(tenant_id)
+    p = _path(tenant_id, owner)
     if p.exists():
         try:
             p.unlink()
@@ -60,12 +66,12 @@ def set_confirm_each(tenant_id: str, *, audit_fn: "Callable[..., None] | None" =
     _audit(audit_fn, tenant_id, "browser.attach.confirm_mode_each")
 
 
-def set_watch(tenant_id: str, ttl_s: int | float | None = None,
+def set_watch(tenant_id: str, ttl_s: int | float | None = None, owner: str = "",
               *, audit_fn: "Callable[..., None] | None" = None) -> float:
     """Enter watch-mode for *ttl_s* seconds (clamped). Returns absolute expiry."""
     ttl = _clamp(ttl_s)
     expires_at = _now() + ttl
-    p = _path(tenant_id)
+    p = _path(tenant_id, owner)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_name(f"{p.name}.tmp")
     tmp.write_text(json.dumps({"mode": "watch", "expires_at": expires_at,
@@ -75,26 +81,30 @@ def set_watch(tenant_id: str, ttl_s: int | float | None = None,
     return expires_at
 
 
-def status(tenant_id: str) -> dict[str, Any]:
+def status(tenant_id: str, owner: str = "") -> dict[str, Any]:
     """Current effective mode. A missing/expired/corrupt setting is confirm-each."""
-    p = _path(tenant_id)
+    p = _path(tenant_id, owner)
+    deny = {"mode": "confirm-each", "expires_at": None, "remaining_s": 0}
     if not p.exists():
-        return {"mode": "confirm-each", "expires_at": None, "remaining_s": 0}
+        return deny
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 — corrupt → fail-closed to confirm-each
-        return {"mode": "confirm-each", "expires_at": None, "remaining_s": 0}
-    exp = float(d.get("expires_at") or 0)
-    remaining = exp - _now()
+        exp = float(d.get("expires_at") or 0)          # inside try (finding 7)
+    except Exception:  # noqa: BLE001 — corrupt/non-numeric → fail-closed to ask
+        return deny
+    # Re-clamp on READ, not just on write: a hand-crafted store with a far-future
+    # numeric expiry must NOT bypass the 30-min ceiling (finding 7). Cap remaining
+    # to WATCH_MAX_TTL_S regardless of what the file claims.
+    remaining = min(exp - _now(), float(WATCH_MAX_TTL_S))
     if d.get("mode") == "watch" and remaining > 0:
         return {"mode": "watch", "expires_at": exp, "remaining_s": int(remaining)}
     return {"mode": "confirm-each", "expires_at": exp, "remaining_s": 0}
 
 
-def should_auto_approve(tenant_id: str) -> bool:
+def should_auto_approve(tenant_id: str, owner: str = "") -> bool:
     """True iff watch-mode is active and unexpired. The confirm broker consults
     this ONLY for attached sessions; fail-closed on any error (→ ask)."""
-    return status(tenant_id).get("mode") == "watch"
+    return status(tenant_id, owner).get("mode") == "watch"
 
 
 def _audit(audit_fn, tenant_id: str, event: str, **details: Any) -> None:
