@@ -6,6 +6,112 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.48] — 2026-07-19 — adversarial review sweep: telemetry-compliance, A2A hardening, voice + installer robustness
+
+This is a hardening release. A full iterative adversarial review of the previous
+three days' work (installation, voice, A2A) found — and this release closes —
+one compliance breach that never shipped, one unauthenticated endpoint that did,
+and a cluster of A2A/voice correctness and security defects.
+
+### Security & Compliance
+
+- **Telemetry ping kept CONTENT-FREE.** A work-in-progress change had expanded the
+  anonymous daily instance ping from its 4 documented fields
+  (`corvin_version`, `platform`, `python_minor`, `active_engine`) to 15 — adding
+  geolocation and behavioural fields (`country_code`, `voice_usage_rate` derived
+  from the audit log, `install_type`, `container_runtime`, …) over a red
+  compliance-guard test, with no ADR. It never reached PyPI; the ping is reverted
+  to the documented enum-only baseline and the guard test is green again. The
+  anonymous/CONTENT-FREE invariant (GDPR Art. 6(1)(f)) is intact.
+- **Removed the unauthenticated `/api/v1/telemetry/instances/live` endpoint**
+  (shipped in 0.10.47). It parsed the local `~/.corvin/audit.jsonl` inside an
+  auth-free gateway route. Instance aggregation belongs on the Corvin-Logs server,
+  not on every user install pointed at that user's own audit log. The dead
+  `telemetry_instances_api.py` module and unwired `routes/telemetry.py` are deleted.
+- **A2A error taxonomy no longer leaks secrets into the audit log (ADR-0197).**
+  `error_detail` now comes from a fixed template set + an allowlist of exception
+  type names — never `str(exc)`. Tokens (`sk-ant-…`), Bearer JWTs, Discord UIDs,
+  hostnames and 64-hex keys can no longer reach `audit.jsonl` or `SendResult`. A
+  fail-closed `_assert_audit_details_safe` backstop redacts any non-enum value
+  before it is written.
+- **A2A reconnect hardened against SSRF/redirect (ADR-0198).** A paired peer could
+  repoint our signed task POSTs at an internal address (`127.0.0.1`, cloud
+  metadata `169.254.169.254`, another internal service). Endpoint-URL changes are
+  now gated by *danger category*, not global-vs-private: loopback, link-local /
+  metadata, unspecified, multicast and reserved addresses are always rejected —
+  including when embedded in an IPv6 form (NAT64 `64:ff9b::/96`, IPv4-mapped,
+  6to4) that Python otherwise reports as global — and `https→http` downgrades are
+  rejected. A change to a private/LAN address is allowed only when the previous
+  endpoint was already private (LAN renumbering), so a `global→private` "pull us
+  inward" move is blocked while genuine LAN/hotspot self-healing keeps working.
+  Outbound A2A POSTs (reconnect *and* ping) no longer follow HTTP redirects.
+  Endpoint mutation is durable-write-first, then audited (`reconnect_applied` only
+  after a successful fsync+rename, else `reconnect_failed`). A residual
+  DNS-rebinding window for an already-paired peer is documented and accepted.
+  ADR-0198 written retroactively.
+- **A2A audit backstop closed for numeric values.** `_assert_audit_details_safe`
+  now magnitude-bounds numeric audit values, so a Discord-UID-shaped integer can
+  no longer reach `audit.jsonl` where its string form was already redacted.
+
+### Fixed — A2A (ADR-0199 a2a_ping, sender-side)
+
+- Ping URL was malformed (`…/v1/a2a/receive/v1/a2a/ping` → permanent 404); base is
+  now derived correctly.
+- Liveness was forgeable: an unsigned response with `ok:true` marked a peer
+  reachable. Reachability now requires a cryptographically signed response.
+- Removed a dead in-memory heartbeat-cache fast-path that referenced a
+  non-existent symbol (silently swallowed at HEAD). Each ping now emits one
+  enum-only audit event.
+
+### Fixed — Voice
+
+- **In-process OpenAI TTS honours the pipeline again.** The console's new OpenAI-first
+  TTS branch bypassed summarization, provider/voice resolution and the
+  `CORVIN_TTS_LOCAL_ONLY` egress guard, and had no request timeout (SDK default
+  600 s × 3). It now runs *after* summarize + provider/voice resolution, only when
+  the resolved provider is OpenAI, with `timeout` pinned and `max_retries=0`, and
+  skips entirely under `CORVIN_TTS_LOCAL_ONLY=1`. A pinned `piper`/`edge` provider
+  never constructs the OpenAI client.
+- **Operator TTS pin honoured.** `CORVIN_TTS_PROVIDER=piper` (or `edge`) is now
+  resolved before the in-process OpenAI branch, so an operator pin to a local
+  provider can no longer ship reply text to OpenAI's cloud.
+- **Removed `voice_bootstrap.py`** — dead code (never imported; its
+  `urlretrieve(..., context=)` call raised `TypeError` on every invocation and its
+  model URLs 404'd). Piper models are provisioned by `installer/steps/piper.py`.
+- **Custom audio player** no longer keeps playing after a session switch (unmount
+  now stops + releases the element), shows an "audio unavailable" state on decode
+  errors instead of a dead `0:00/0:00`, guards `duration === Infinity`
+  (webm/opus), and uses the element's `muted` property. A benign `AbortError` /
+  `NotAllowedError` from `play()` no longer flips the player to a permanent error
+  card, and the error state resets when the source changes (chat cards are
+  index-keyed, so the component instance is reused).
+- Test isolation: pytest now defaults `CORVIN_TTS_LOCAL_ONLY=1` so a route-level
+  test can never make a live billable OpenAI call from the host.
+
+### Fixed — Installation
+
+- **Browser automation survives auto-update.** `install.sh`/`install.ps1` now install
+  `corvinos[browser]`, so Playwright is in the uv receipt instead of a pip-inject
+  that the next `uv tool upgrade` wiped (silently killing agent browsing).
+- On minimal Linux, a Chromium that is downloaded but missing system libraries now
+  produces its own actionable message (`sudo playwright install-deps chromium`)
+  instead of being misreported as a missing browser.
+
+### Docs
+
+- `docs/claude-ref/layer-38-a2a-network.md` gained the ADR-0197 error-taxonomy and
+  ADR-0199 ping sections and corrected reconnect protocol/compat claims;
+  `docs/claude-ref/layer-voice-ldd.md` documents the final TTS chain. ADRs 0197,
+  0198, 0199 recorded in Corvin-ADR.
+
+## [0.10.47] — 2026-07-18 — live world map telemetry API (superseded)
+
+### Added
+
+- Live world-map telemetry aggregation endpoint on the gateway. **Superseded by
+  0.10.48**, which removes the endpoint: it was unauthenticated and read the local
+  audit log; aggregation is moving server-side.
+
 ## [0.10.46] — 2026-07-18 — 20-language voice detection + ADR-0043 fast-chat routing hardening
 
 ### Added — Voice
