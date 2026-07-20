@@ -10,8 +10,10 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"))
 
 from corvin_console import chat_runtime as cr  # noqa: E402
+from acs_classify import heuristic_classify as _hc  # noqa: E402
 
 
 # ── triage ────────────────────────────────────────────────────────────
@@ -138,6 +140,77 @@ def test_console_directive_block_empty_for_direct_and_blank() -> None:
     assert cr._acs_directive_block("wie spät ist es?") == ""
     assert cr._acs_directive_block("") == ""
     assert cr._acs_directive_block("   ") == ""
+
+
+def test_console_directive_suppresses_workflow_on_direct_turn() -> None:
+    """Review F9: this block is injected ONLY on the direct (un-metered) turn.
+    A WORKFLOW directive ("Use the Workflow tool ...") would steer that turn
+    back into quota-charging compute — contradictory. It must be suppressed."""
+    wf_prompt = "Mach einen iterativen Code-Review über das ganze Repo und behebe die Fehler"
+    # sanity: the classifier really sees this as WORKFLOW, and the turn is
+    # routed DIRECT (coding tokens repo/code) — the exact F9 contradiction.
+    bp = _hc(wf_prompt)
+    assert bp.primitive == "WORKFLOW", bp.primitive
+    assert cr._should_delegate(wf_prompt) is False
+    assert cr._acs_directive_block(wf_prompt) == ""
+
+
+# ── ADR-0203 review fixes: routing-precision regressions (F1/F2/F4/F5) ───────
+
+
+@pytest.mark.parametrize("prompt", [
+    # F1 — low-weight recurrence words (stündlich 0.65, täglich 0.60) are below
+    # the old 0.70 gate yet must still route direct (scheduler, not ACS).
+    "Recherchiere stündlich die Preise der Wettbewerber und vergleiche mehrere Anbieter",
+    "Vergleiche täglich mehrere Nachrichtenquellen und fasse sie danach zusammen",
+    # F5 — crash/freeze coding vocabulary without a code token.
+    "Behebe den Absturz der App beim Start",
+    "Fix the crash when opening the settings page",
+    "Die Anwendung hängt sich beim Speichern auf, bitte beheben",
+])
+def test_triage_precision_stays_direct(prompt: str) -> None:
+    assert cr._should_delegate(prompt) is False
+
+
+@pytest.mark.parametrize("prompt", [
+    # F2/F3/F4 — explicit parallelism outranks every classifier collision.
+    "Vergleiche parallel mit mehreren Workern die aktuellen Apple Watch Modelle",
+    "Vergleiche parallel mit mehreren Workern die besten 4K Monitor Modelle",
+    "Vergleiche parallel mit mehreren Workern die Versandkosten mit Hermes und DHL",
+    "Delegiere die Recherche an mehrere parallele Worker und sammle die Ergebnisse",
+    "Analysiere die drei CSV-Dateien parallel mit mehreren Workern und erstelle Charts",
+    # F4 — inflected German: "parallele Recherchen" (neither bare form matches).
+    "Führe drei parallele Recherchen zu Strompreisen durch und fasse sie zusammen",
+    # F2 — per-item fan-out the unbounded jede-regex mis-classified as LOOP;
+    # with the span bounded it is no longer LOOP and reaches the fan-out gate.
+    "Recherchiere für jeden der fünf Anbieter die Lieferzeit in Minuten und vergleiche sie danach",
+])
+def test_triage_explicit_parallel_and_fanout_take_acs(prompt: str) -> None:
+    assert cr._should_delegate(prompt) is True
+
+
+def test_triage_bare_delegate_without_engine_is_not_forced_direct() -> None:
+    """F2: a bare "delegiere" with no named engine is ambiguous — it must NOT
+    be routed direct by rule 2 (only a NAMED engine is unambiguous intent)."""
+    # A named engine → direct (rule 2 DELEGATE branch fires).
+    assert cr._should_delegate("Frag Hermes nach einer kurzen Zusammenfassung") is False
+    # Bare "delegiere" + explicit workers → explicit-parallel wins → ACS.
+    assert cr._should_delegate(
+        "Delegiere die Aufgabe an mehrere parallele Worker") is True
+
+
+def test_triage_loosening_gate_low_confidence_does_not_steal_fanout(monkeypatch) -> None:
+    """Review test-F4: a spurious LOW-confidence non-fan-out classification must
+    not hijack a genuinely fan-out-shaped task away from ACS. Below the 0.50
+    render floor, rule 2 must not fire."""
+    from acs_classify import ACSBlueprint  # type: ignore
+    monkeypatch.setattr(
+        cr, "_acs_x_blueprint",
+        lambda p: ACSBlueprint(primitive="COMPUTE", confidence=0.30, path="heuristic"))
+    # A clearly fan-out task must still reach ACS despite the weak COMPUTE guess.
+    assert cr._should_delegate(
+        "Recherchiere aus mehreren Quellen die Marktlage und vergleiche "
+        "danach die drei größten Anbieter") is True
 
 
 # ── tenant flag + budget ──────────────────────────────────────────────

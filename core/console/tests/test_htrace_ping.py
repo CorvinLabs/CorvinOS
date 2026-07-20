@@ -112,6 +112,7 @@ def test_ping_body_carries_only_allowlisted_enum_fields(tmp_path):
     def _capture(req, *a, **k):
         captured["body"] = json.loads(req.data.decode("utf-8"))
         captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        captured["url"] = req.full_url
         return mock_ctx
 
     with (
@@ -128,6 +129,10 @@ def test_ping_body_carries_only_allowlisted_enum_fields(tmp_path):
 
     assert result is True
     mock_urlopen.assert_called_once()
+    # The actual REQUEST targets the Cloudflare-fronted ping URL (test-audit F3:
+    # the sibling test pins the _PING_URL_DEFAULT constant, but nothing asserted
+    # the POST used it — a mutation sending to the Railway origin passed).
+    assert captured["url"] == hu._PING_URL_DEFAULT
     # Body: exactly the four allowlisted keys, values from closed enums.
     assert set(captured["body"].keys()) == {
         "corvin_version", "platform", "python_minor", "active_engine",

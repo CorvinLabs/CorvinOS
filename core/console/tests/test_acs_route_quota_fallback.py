@@ -67,14 +67,18 @@ class ACSRouteQuotaFallbackTest(unittest.TestCase):
                      "quota_fallback": True, "notice": "n"}
         acs_result = {"run_id": "acs-1", "status": "success", "summary": "s",
                       "error": None, "engine": "acs", "duration_s": 0.1}
+        # NO create=True (adversarial test-audit F2): create=True would
+        # manufacture _run_acs_quota_fallback / _run_acs_workflow even if the
+        # production import were deleted, masking a NameError-at-runtime. Patch
+        # only what the module genuinely binds — a missing name now fails here.
         with (
             patch.object(self.compute, "_ACS_ENGINE_OK", True),
             patch("corvin_console.routes._compute_license_gate.enforce_compute_quota",
                   side_effect=enforce_side_effect),
             patch.object(self.compute, "_run_acs_quota_fallback",
-                         return_value=fb_result, create=True) as fb,
+                         return_value=fb_result) as fb,
             patch.object(self.compute, "_run_acs_workflow",
-                         return_value=acs_result, create=True) as acs,
+                         return_value=acs_result) as acs,
         ):
             out = self.compute.submit_acs_workflow_run(self.body, _rec())
         return out, fb, acs

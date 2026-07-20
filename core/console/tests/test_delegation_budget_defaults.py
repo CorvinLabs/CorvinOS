@@ -280,23 +280,35 @@ def test_the_manager_llm_cannot_raise_the_operator_bounds() -> None:
         except ValueError:
             pass
 
-    env = acs._budget_from_spec(
-        cr._build_delegation_spec("a two-step task", _DEFAULTS))
-    # raise attempts are clamped back to the operator's values
+    # Adversarial test-audit F1: the DEFAULTS now sit AT the ceiling (86400 /
+    # 5000), so a raise-attempt of 86400 against an 86400 operator bound is
+    # indistinguishable from a pass-through — min(86400,86400)==86400 whether or
+    # not the clamp exists (this pin's THIRD generation of lying). Build an
+    # envelope with BELOW-ceiling operator bounds so the clamp has something to
+    # bite: a manager raise-attempt must be pulled DOWN to the operator value.
+    env = acs._budget_from_spec({
+        "orchestration": {"delegation_loop": {"budget": {
+            "max_loops": 20, "max_wall_time": 14400, "max_depth": 4,
+            "max_total_workers": 8, "timeout_seconds": 600, "max_worker_turns": 50,
+        }}}
+    })
+    assert env.timeout_seconds == 600 and env.max_worker_turns == 50
+    # raise attempts are clamped back to the operator's (below-ceiling) values
     raised = acs._worker_budget_for_spawn(
         env, {"timeout_seconds": 86400, "max_worker_turns": 99999})
-    assert raised["timeout_seconds"] == _DEFAULTS["timeout_seconds"]
-    assert raised["max_worker_turns"] == _DEFAULTS["max_worker_turns"]
+    assert raised["timeout_seconds"] == 600, (
+        f"manager raised timeout to {raised['timeout_seconds']} — clamp is dead")
+    assert raised["max_worker_turns"] == 50
     # lower attempts are honoured
     lowered = acs._worker_budget_for_spawn(
         env, {"timeout_seconds": 120, "max_worker_turns": 5})
     assert lowered["timeout_seconds"] == 120
     assert lowered["max_worker_turns"] == 5
-    # garbage is ignored, not crashed on
+    # garbage is ignored, not crashed on — falls back to the operator's values
     garbage = acs._worker_budget_for_spawn(
         env, {"timeout_seconds": "yes please", "max_worker_turns": None})
-    assert garbage["timeout_seconds"] == _DEFAULTS["timeout_seconds"]
-    assert garbage["max_worker_turns"] == _DEFAULTS["max_worker_turns"]
+    assert garbage["timeout_seconds"] == 600
+    assert garbage["max_worker_turns"] == 50
     # the spawn is deadlined against REMAINING wall time: a nearly-exhausted
     # envelope caps the timeout at the 60 s floor instead of its full value
     env.start_time -= env.max_wall_time  # pretend the run used its wall time

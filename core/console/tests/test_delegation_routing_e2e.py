@@ -93,6 +93,11 @@ class DelegationRoutingE2ETest(unittest.TestCase):
 
     def _pin_house_rules_allowed(self):
         import house_rules as _hr  # type: ignore
+        # Save + restore (adversarial test-audit F5): house_rules is not in
+        # conftest's tracked-module snapshot, so a bare assignment leaks a
+        # permanently-allow classifier into every later test in the session.
+        _orig = getattr(_hr, "_house_rules_classifier", None)
+        self.addCleanup(setattr, _hr, "_house_rules_classifier", _orig)
         _hr._house_rules_classifier = (  # type: ignore[assignment]
             lambda task, rules, auth, **kw: ("", 0.0, "test clear")
         )
@@ -150,6 +155,11 @@ class DelegationRoutingE2ETest(unittest.TestCase):
             proc.stderr.read = AsyncMock(return_value=b"")
             return proc
 
+        # Save + restore (adversarial test-audit F5): create_subprocess_exec is
+        # an attribute of the stdlib asyncio module object, mutated process-wide;
+        # without cleanup it stays _fake_spawn for every later test in the run.
+        self.addCleanup(setattr, self.cr.asyncio, "create_subprocess_exec",
+                        self.cr.asyncio.create_subprocess_exec)
         self.cr.asyncio.create_subprocess_exec = _fake_spawn  # type: ignore
         return called
 
@@ -204,9 +214,13 @@ class DelegationRoutingE2ETest(unittest.TestCase):
             "LOOP")
 
     def test_rule3_persistent_goal_shape_direct_with_goal_directive(self) -> None:
+        # Fan-out wording ("vergleiche mehrere Ansätze") is deliberately present
+        # (test-audit F6): without it the GOAL prompt matches no fan-out shape,
+        # so "must NOT take ACS" holds trivially even if the ladder were deleted.
+        # With it, rule 2 (GOAL→direct) is what actually keeps this off ACS.
         self._assert_direct_with_directive(
             "Setze als dauerhaftes Ziel: verbessere die Dokumentation des "
-            "Projekts Schritt für Schritt über mehrere Sessions",
+            "Projekts Schritt für Schritt und vergleiche mehrere Ansätze",
             "GOAL")
 
     def test_rule4_compute_shape_direct_with_compute_directive(self) -> None:
