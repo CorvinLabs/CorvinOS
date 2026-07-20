@@ -1903,6 +1903,56 @@ _TRIAGE_MULTI_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── ACS-suitability triage (2026-07-20 rework) ────────────────────────
+# ACS is a manager/worker FAN-OUT: independent subtasks, each worker a fresh
+# `claude -p` with only its subtask + ≤3 KB context state, spawned OUTSIDE the
+# session workspace, results merged by a JSON-schema manager loop. That shape
+# fits decomposable, read-mostly, parallel work — and structurally MISFITS
+# coding: coding is sequential (explore → edit → test → fix), needs the shared
+# session workspace + conversation context, and parallel workers editing the
+# same files conflict. The direct Claude Code OS-turn does all of that natively
+# (session-pinned workdir, its own Task-tool sub-delegation when parallelism
+# helps) AND is un-metered — while every ACS turn burns one
+# compute_units_per_day (free tier: 1/day). Routing a "fix this bug" into the
+# fan-out spends the user's single daily unit on the worse tool.
+#
+# Coding-shaped prompts: a coding verb or code-context token routes the turn
+# to the DIRECT path even when long. Word-boundary anchors as above.
+_TRIAGE_CODING_RE = re.compile(
+    r"\b("
+    r"bug|bugs|fehler|error|exception|traceback|stack\s?trace"
+    r"|debugge|debug|debugging"
+    r"|refaktoriere|refactor|refactoring"
+    r"|kompiliert?|compile[sd]?|build\s+(fails?|error)"
+    r"|unit[\s\-]?tests?|failing\s+tests?|tests?\s+(schlagen|fails?|rot|red|grün|green)"
+    r"|repo|repository|branch|commit|merge|pull[\s\-]?request|diff"
+    r"|funktion|function|methode|method|klasse|class\b|modul|module"
+    r"|endpoint|api|schnittstelle"
+    r"|code|quellcode|source\s?file|skript|script"
+    r"|implementiere|implement|programmiere"
+    r")\b"
+    r"|\.(py|js|ts|tsx|jsx|go|rs|java|c|cpp|h|cs|rb|php|sh|ps1|yaml|yml|json|toml|sql|md)\b"
+    r"|```",
+    re.IGNORECASE,
+)
+# Fan-out-shaped prompts: explicit parallelism, multi-source research,
+# per-item bulk work, multi-perspective review — the shapes where N
+# independent workers genuinely beat one sequential turn.
+_TRIAGE_FANOUT_RE = re.compile(
+    r"\b("
+    r"parallel|gleichzeitig|worker[ns]?|fan[\s\-]?out"
+    r"|unabhängig\s+voneinander|independently"
+    r"|mehrere\s+(quellen|perspektiven|varianten|ansätze|kandidaten)"
+    r"|multiple\s+(sources|perspectives|variants|approaches|candidates)"
+    r"|aus\s+\w+\s+perspektiven|from\s+\w+\s+perspectives"
+    r"|für\s+jede[ns]?\b|for\s+each\b|je\s+eine?n?\b"
+    r"|recherchiere|research"
+    r"|vergleiche|compare"
+    r"|sammle|collect|crawle"
+    r")\b",
+    re.IGNORECASE,
+)
+
 # --- Console chat inline-artifact gate -------------------------------------
 # A file Claude (or a delegated ACS run) writes is surfaced into the chat as an
 # inline artifact iff the console frontend can render it. This MUST stay in sync
@@ -2268,17 +2318,45 @@ def _delegation_budget(tenant_id: str) -> dict:
 
 
 def _should_delegate(prompt: str) -> bool:
-    """Heuristic triage: substantive work → delegate to workers.
+    """Heuristic triage: does THIS task fit the ACS fan-out? (2026-07-20 rework)
 
-    Strong verbs (review, debug, refactor, test, fix, migrate) always
-    delegate regardless of length — even a short command is real work.
-    Weak verbs (analyze, build, write, explain) delegate only when the
-    prompt is long (≥160 chars) or explicitly multi-step.
+    True → ACS manager/worker fan-out. False → the normal direct Claude Code
+    OS-turn, which is NOT "no delegation": Claude Code does its own built-in
+    Task-tool sub-delegation there, in the shared session workspace, un-metered.
+
+    Routing rules, in order (deterministic, 0 ms, no API):
+      1. ``/delegate`` prefix → ACS (explicit user override, unchanged).
+      2. Fan-out-shaped (explicit parallelism, multi-source research,
+         per-item bulk work, multi-perspective) → ACS — the shapes where N
+         independent workers genuinely beat one sequential turn.
+      3. Coding-shaped (bug/fix/refactor/implement/test with code context)
+         → DIRECT, even when long: coding is sequential, needs the shared
+         workspace + conversation context, and each ACS turn burns one
+         compute_units_per_day. Pre-2026-07-20 the strong-verb list sent
+         every coding task into the fan-out — the historical error classes
+         (error_max_turns, worker parse failures, "Delegation
+         fehlgeschlagen: unknown error") almost all came from that mismatch.
+      4. Remaining substantive work (strong verbs, long or multi-step weak
+         verbs, ≥400 chars) → ACS, as before.
     Regex anchors prevent false-positives: "latest" ≁ test, "prefix" ≁ fix.
     """
     p = prompt.strip()
     if p.lower().startswith(_DELEGATE_PREFIX):
         return True
+    if _TRIAGE_FANOUT_RE.search(p):
+        has_verb = bool(_TRIAGE_VERB_RE.search(p) or _TRIAGE_STRONG_RE.search(p))
+        has_multi = bool(_TRIAGE_MULTI_RE.search(p))
+        # Fan-out markers on smalltalk ("wie vergleiche ich?") still need a
+        # substantive shape: a verb plus multi-step/length, same gate as weak
+        # verbs — except explicit parallel/worker/fan-out words, which are
+        # unambiguous on their own.
+        if re.search(r"\b(parallel|gleichzeitig|worker[ns]?|fan[\s\-]?out)\b", p,
+                     re.IGNORECASE):
+            return True
+        if has_verb and (has_multi or len(p) >= 160):
+            return True
+    if _TRIAGE_CODING_RE.search(p):
+        return False
     if len(p) >= 400:
         return True
     if _TRIAGE_STRONG_RE.search(p):
