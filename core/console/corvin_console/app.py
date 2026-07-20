@@ -122,6 +122,8 @@ from .routes import (
     browser as browser_route,
     # Local instance stats (no remote API)
     local_stats as local_stats_route,
+    # ADR-0205 — Geo-Tracking Tier 1-3 Statistics (public dashboard)
+    stats_geo as stats_geo_route,
 )
 
 
@@ -240,6 +242,7 @@ router.include_router(aco_route.router, tags=["console-aco"])
 router.include_router(healing_config_route.router, tags=["console-healing-config"])
 router.include_router(browser_route.router, tags=["console-browser"])
 router.include_router(local_stats_route.router, tags=["console-local-stats"])
+router.include_router(stats_geo_route.router, tags=["console-stats-geo"])
 
 
 @router.get("/version")
