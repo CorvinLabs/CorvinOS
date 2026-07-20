@@ -73,7 +73,17 @@ _TELEMETRY_BASE = os.environ.get(
     "CORVIN_TELEMETRY_BASE_URL", "https://corvin-features-production.up.railway.app"
 ).rstrip("/")
 _UPLOAD_URL_DEFAULT = f"{_TELEMETRY_BASE}/v1/telemetry/healing-traces"
-_PING_URL_DEFAULT = f"{_TELEMETRY_BASE}/v1/telemetry/ping"
+# The instance-count ping is routed through corvin-labs.com (Cloudflare Pages,
+# functions/api/telemetry/ping.js) instead of hitting the Railway origin
+# directly. Railway has no Cloudflare zone in front of it, so a direct ping
+# never carries CF-IPCountry; the Pages Function sits behind Cloudflare's
+# edge, forwards CF-IPCountry to the upstream, and same-origin-proxies the
+# HMAC-authenticated body/headers unmodified. Overridable via
+# CORVIN_TELEMETRY_PING_BASE_URL (e.g. for local dev against Railway directly).
+_PING_BASE = os.environ.get(
+    "CORVIN_TELEMETRY_PING_BASE_URL", "https://corvin-labs.com"
+).rstrip("/")
+_PING_URL_DEFAULT = f"{_PING_BASE}/api/telemetry/ping"
 _UPLOAD_TIMEOUT_S = 30
 _PING_TIMEOUT_S = 8
 _PING_INTERVAL_S = 24 * 3600  # once per 24h

@@ -1552,13 +1552,39 @@ def _memory_index_block() -> str:
         return ""
 
 
-def _turn_system_prompt(sess: WebChatSession) -> str:
+def _acs_directive_block(task_text: str) -> str:
+    """Bridge-parity ACS-X directive for the console OS-turn (ADR-0203).
+
+    The messenger bridges have injected the ``<acs_directive>`` block
+    (ADR-0155) on every turn since ACS-X shipped; the console never did — so
+    a console user asking for a recurring monitor, a persistent goal, or a
+    data-compute job got no primitive guidance at all. Classify with the
+    SHARED heuristic (same table as the bridges; heuristic stage only — the
+    per-turn path must not spawn a Haiku subprocess) and render the same
+    block. Fail-open: any failure returns "" and the turn proceeds without
+    the directive, exactly like the adapter's try/except contract.
+    """
+    if not task_text.strip():
+        return ""
+    try:
+        _shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        if str(_shared) not in sys.path:
+            sys.path.insert(0, str(_shared))
+        from acs_classify import heuristic_classify, render_directive_block  # type: ignore  # noqa: PLC0415
+        block = render_directive_block(heuristic_classify(task_text), persona="assistant")
+        return ("\n\n" + block) if block else ""
+    except Exception:  # noqa: BLE001 — advisory layer, never break the turn
+        return ""
+
+
+def _turn_system_prompt(sess: WebChatSession, task_text: str = "") -> str:
     """Base web-chat system prompt + per-turn uploaded-file manifest, plus the
     bridge-parity context blocks (ADR-0114): the resolved persona role, the
     Layer-12 voice-profile audience shaping, the Tier-1 user profile and the
-    Tier-2 memory index. Each added block is fail-safe (the helper swallows its
-    own errors) so any failure degrades to the v1 minimal prompt rather than
-    breaking the console chat."""
+    Tier-2 memory index — and, when ``task_text`` is given, the per-task
+    ACS-X ``<acs_directive>`` block (ADR-0203 bridge parity). Each added
+    block is fail-safe (the helper swallows its own errors) so any failure
+    degrades to the v1 minimal prompt rather than breaking the console chat."""
     return (
         _WEB_CHAT_SYSTEM_PROMPT
         + _attachment_manifest(sess)
@@ -1566,6 +1592,7 @@ def _turn_system_prompt(sess: WebChatSession) -> str:
         + _user_profile_block()
         + _memory_index_block()
         + _voice_audience_block()
+        + _acs_directive_block(task_text)
     )
 
 
@@ -1613,7 +1640,7 @@ def _web_workspace_roots(tenant_id: str) -> list[str]:
     return out
 
 
-def _write_turn_system_prompt(sess: WebChatSession) -> Path:
+def _write_turn_system_prompt(sess: WebChatSession, task_text: str = "") -> Path:
     """Write this turn's merged system prompt to a file in the session
     workdir and return its path.
 
@@ -1636,12 +1663,12 @@ def _write_turn_system_prompt(sess: WebChatSession) -> Path:
     which already skip ``name.startswith(".")``).
     """
     path = sess.workdir / ".corvin-system-prompt.txt"
-    path.write_text(_turn_system_prompt(sess), encoding="utf-8")
+    path.write_text(_turn_system_prompt(sess, task_text), encoding="utf-8")
     return path
 
 
 def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
-                 browser_token: str | None = None) -> list[str]:
+                 browser_token: str | None = None, task_text: str = "") -> list[str]:
     """Build a ``claude -p`` invocation for this turn.
 
     Resume mode uses ``--continue`` so the per-workdir session state
@@ -1676,7 +1703,7 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
     args += ["-p",
              "--output-format", "stream-json",
              "--verbose",
-             "--append-system-prompt-file", str(_write_turn_system_prompt(sess))]
+             "--append-system-prompt-file", str(_write_turn_system_prompt(sess, task_text))]
 
     # MCP servers — the persona's resolver-injected servers + mcp_manager
     # catalog tools, exactly like the bridge adapter's spawn path. Without
@@ -2317,32 +2344,73 @@ def _delegation_budget(tenant_id: str) -> dict:
     return out
 
 
+def _acs_x_blueprint(prompt: str):
+    """Classify the task with the shared ACS-X heuristic (bridge parity).
+
+    Returns an ``acs_classify.ACSBlueprint`` or ``None`` when the shared
+    module is unavailable (fail-open — the console triage then falls back to
+    its own regex rules alone). Heuristic stage ONLY: the triage path must
+    stay 0 ms / no-subprocess, so the Haiku fallback stage is never invoked
+    here. Import is lazy + path-inserted because chat_runtime lives in
+    core/console while acs_classify lives in operator/bridges/shared.
+    """
+    try:
+        _shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        if str(_shared) not in sys.path:
+            sys.path.insert(0, str(_shared))
+        from acs_classify import heuristic_classify  # type: ignore  # noqa: PLC0415
+        return heuristic_classify(prompt)
+    except Exception:  # noqa: BLE001 — advisory layer, never break the turn
+        return None
+
+
+# ACS-X primitives that must NEVER route into the ACS fan-out: their correct
+# execution mechanism is something else entirely (scheduler//loop iteration,
+# session goal, L25 compute, a single engine delegation) and every ACS turn
+# burns one compute_units_per_day. Part of the ADR-0203 priority ladder.
+_NON_FANOUT_PRIMITIVES = frozenset({"LOOP", "GOAL", "COMPUTE", "DELEGATE"})
+
+
 def _should_delegate(prompt: str) -> bool:
-    """Heuristic triage: does THIS task fit the ACS fan-out? (2026-07-20 rework)
+    """Heuristic triage: does THIS task fit the ACS fan-out? (ADR-0202/0203)
 
     True → ACS manager/worker fan-out. False → the normal direct Claude Code
     OS-turn, which is NOT "no delegation": Claude Code does its own built-in
-    Task-tool sub-delegation there, in the shared session workspace, un-metered.
+    Task-tool sub-delegation there, in the shared session workspace, un-metered
+    — and the OS-turn system prompt carries the ACS-X ``<acs_directive>``
+    (bridge parity, ADR-0203) steering LOOP/GOAL/COMPUTE/DELEGATE-shaped tasks
+    to their correct mechanism.
 
-    Routing rules, in order (deterministic, 0 ms, no API):
+    Priority ladder (deterministic, 0 ms, no API):
       1. ``/delegate`` prefix → ACS (explicit user override, unchanged).
-      2. Fan-out-shaped (explicit parallelism, multi-source research,
+      2. ACS-X shape LOOP/GOAL/COMPUTE/DELEGATE (confidence ≥ 0.70) →
+         DIRECT: a recurring/monitoring task belongs to the scheduler or a
+         /loop iteration, a persistent objective to the goal system, data
+         processing to L25 compute, an explicit engine wish to corvin_delegate
+         — never to a quota-burning one-shot fan-out. Checked BEFORE the
+         fan-out shape so "recherchiere jede Stunde ..." does not mis-route
+         into ACS on its research wording.
+      3. Fan-out-shaped (explicit parallelism, multi-source research,
          per-item bulk work, multi-perspective) → ACS — the shapes where N
          independent workers genuinely beat one sequential turn.
-      3. Coding-shaped (bug/fix/refactor/implement/test with code context)
+      4. Coding-shaped (bug/fix/refactor/implement/test with code context)
          → DIRECT, even when long: coding is sequential, needs the shared
          workspace + conversation context, and each ACS turn burns one
          compute_units_per_day. Pre-2026-07-20 the strong-verb list sent
          every coding task into the fan-out — the historical error classes
          (error_max_turns, worker parse failures, "Delegation
          fehlgeschlagen: unknown error") almost all came from that mismatch.
-      4. Remaining substantive work (strong verbs, long or multi-step weak
+      5. Remaining substantive work (strong verbs, long or multi-step weak
          verbs, ≥400 chars) → ACS, as before.
     Regex anchors prevent false-positives: "latest" ≁ test, "prefix" ≁ fix.
     """
     p = prompt.strip()
     if p.lower().startswith(_DELEGATE_PREFIX):
         return True
+    _bp = _acs_x_blueprint(p)
+    if (_bp is not None and _bp.primitive in _NON_FANOUT_PRIMITIVES
+            and _bp.confidence >= 0.70):
+        return False
     if _TRIAGE_FANOUT_RE.search(p):
         has_verb = bool(_TRIAGE_VERB_RE.search(p) or _TRIAGE_STRONG_RE.search(p))
         has_multi = bool(_TRIAGE_MULTI_RE.search(p))
@@ -2622,7 +2690,7 @@ async def _stream_hermes_turn(
     engine = _HermesEngine(model=model)  # type: ignore[misc]
     ev_q: "_queue.Queue" = _queue.Queue()
 
-    system_prompt = _turn_system_prompt(sess)
+    system_prompt = _turn_system_prompt(sess, prompt)
 
     def _stream_thread() -> None:
         try:
@@ -2895,7 +2963,8 @@ async def stream_turn(
     # tool's first HTTP call.
     from .browser import internal_auth as _browser_internal_auth  # noqa: PLC0415
     _browser_token = _browser_internal_auth.mint(sess.tenant_id, sid_fingerprint)
-    args = _build_args(sess, resume=resume, model=_os_model, browser_token=_browser_token)
+    args = _build_args(sess, resume=resume, model=_os_model,
+                       browser_token=_browser_token, task_text=prompt)
 
     # First-turn auto-title: derive a readable label from the prompt so the
     # sidebar shows "Wie groß ist die Wahrscheinlichkeit, dass …" instead of

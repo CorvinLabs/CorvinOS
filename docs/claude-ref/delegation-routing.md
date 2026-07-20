@@ -1,0 +1,132 @@
+# Delegation Routing — how the OS picks the right execution mechanism (ADR-0203)
+
+This is the **single conceptual reference** for every "which tool runs this
+task?" decision in CorvinOS. It exists because the answer used to live in
+three places with three vocabularies (console triage, bridge ACS-X, ATO
+hints) — and they could disagree.
+
+## 1. The mechanism inventory
+
+| # | Mechanism | Right for | Entry points | Metered? |
+|---|---|---|---|---|
+| 1 | **Direct OS-turn** (Claude Code `-p`, session workspace, built-in Task-tool sub-delegation) | default; ALL coding; anything sequential/context-heavy | every surface | no |
+| 2 | **ACS delegation_loop** (manager/worker fan-out, `acs_runtime.py`) | N *independent* subtasks: multi-source research, comparisons, multi-perspective review, per-item bulk | console triage / `/delegate` / `acs_delegate` MCP / AWP `engine: delegation_loop` | **yes** — 1 compute unit/run |
+| 3 | **AWP DAG workflows** (`corvin_workflows`, deterministic node graph; "dynamic workflows" = generated/exported specs, awpkg) | fixed repeatable pipelines, branching, human-in-the-loop pauses | `workflow_run` MCP / console routes / CLI / scheduler | **yes** — compute units |
+| 4 | **Loop / recurring** (`scheduler.py` cron+reminders; `/loop`-style self-paced iteration inside a turn) | time-based recurrence, monitoring, retry-until-green | scheduler; LOOP directive → model iterates | per-fire = normal turn |
+| 5 | **Goal system** (`goal.py`, `<session_goal>` block, `/goal`) | persistent multi-session objectives | `/goal` (bridges); GOAL directive | no |
+| 6 | **L25 Compute** (deterministic data processing, DSI datasources) | statistics, charts, CSV/dataset transforms, ML | COMPUTE directive → `compute_run`; console compute routes | **yes** — compute units |
+| 7 | **Normal delegation** (`corvin_delegate` MCP: `delegate_claude_code/codex/opencode/hermes/copilot`) | one bounded call to a *named* engine | model-chosen tool; DELEGATE directive | no (deliberate, LIC-DELEGATE-MCP-COMPUTE-01) |
+| 8 | **Background tasks** (`/task`·`/bg` bridges; console TaskManager) | long-running detached jobs with completion notify | explicit user command / CCC `/create task` | task-count quotas |
+
+## 2. Two-tier routing model
+
+The load-bearing structural insight: there are TWO kinds of routing decision,
+and they must not be conflated.
+
+**Tier 1 — authoritative runtime routing.** The runtime *forces* an execution
+path before any model sees the task. Today exactly one Tier-1 decision
+exists: the console web-chat triage (`chat_runtime._should_delegate`) that
+either spawns the ACS fan-out or the direct OS-turn. Explicit user commands
+(`/delegate`, `/task`, `/goal`, schedule requests) are Tier-1 overrides:
+the user has already chosen the mechanism; classifiers never override them.
+
+**Tier 2 — advisory primitive directive.** The runtime *classifies* the task
+(ACS-X, `acs_classify.py`: GOAL · LOOP · WORKFLOW · COMPUTE · DELEGATE ·
+DIRECT) and injects an `<acs_directive>` into the OS-turn system prompt. The
+**model** then picks the concrete tool (Workflow tool, `compute_run`,
+`delegate_*`, `/loop`-style iteration, setting a goal). Tier 2 never spawns
+anything itself — it steers the turn that Tier 1 already chose.
+
+Both tiers run on **both** chat surfaces since ADR-0203: the bridges always
+had Tier 2 (adapter.py `<acs_directive>` injection); the console got it in
+`chat_runtime._acs_directive_block` (same shared classifier, heuristic stage
+only, fail-open). ATO (`ato_classify.py`, ADR-0165) stays a third, purely
+observational layer: audit hints, no routing.
+
+## 3. The priority ladder (the actual decision order)
+
+Applied at Tier 1 (console triage) and encoded in Tier 2's primitive set.
+First match wins:
+
+```
+1. EXPLICIT USER COMMAND         → that mechanism, always
+   /delegate → ACS · /task → background · /goal → goal · "schedule …" → scheduler
+2. RECURRING  (LOOP shape)       → scheduler / in-turn iteration — NEVER ACS
+   ("jede Stunde", "every N min", monitoring, watch)      [quota: 1 unit/fire would be absurd]
+3. PERSISTENT (GOAL shape)       → goal system — NEVER ACS
+4. DATA/DETERMINISTIC (COMPUTE)  → L25 compute — NEVER ACS (LLM workers ≠ data pipeline)
+5. NAMED ENGINE (DELEGATE shape) → corvin_delegate single call — NEVER ACS
+6. FAN-OUT shape                 → ACS delegation_loop (console) / Workflow tool (in-turn)
+   (explicit parallelism; multi-source/multi-perspective/per-item with substantive shape)
+7. CODING shape                  → direct OS-turn + built-in Task tool — NEVER ACS
+   (sequential, context-heavy, workspace-bound; ADR-0202)
+8. REMAINING SUBSTANTIVE         → ACS (console legacy: strong verbs, long/multi-step)
+9. EVERYTHING ELSE               → direct OS-turn
+```
+
+Rules 2–5 sit ABOVE fan-out deliberately: each of those shapes has a
+*cheaper, structurally correct* mechanism, and mis-routing them into ACS
+burns the daily compute unit on the wrong tool. Rule 7 sits BELOW fan-out so
+an explicitly parallel coding request ("review from 3 perspectives in
+parallel") still fans out.
+
+Implementation: rules 2–5 reuse the **shared ACS-X heuristic** from the
+console triage (`_acs_x_blueprint`, confidence ≥ 0.70, fail-open); rules
+6–8 are the console regex tables (`_TRIAGE_FANOUT_RE`, `_TRIAGE_CODING_RE`,
+strong/weak verbs). One classifier vocabulary, two consumers.
+
+## 4. Surface-capability matrix
+
+Not every mechanism exists on every surface — a directive must never assume
+a capability the surface lacks.
+
+| Mechanism | Console web-chat | Messenger bridges | Voice | MCP (model-chosen) |
+|---|---|---|---|---|
+| Direct OS-turn | ✓ | ✓ | ✓ (via bridge) | — |
+| ACS fan-out | ✓ (triage/`/delegate`) | ✗ (no fan-out path) | ✗ | ✓ `acs_delegate` |
+| DAG workflows | ✓ (routes) | via MCP tools in-turn | via MCP | ✓ `workflow_run` |
+| Scheduler | via MCP/in-turn | ✓ (native, 30 s tick) | ✓ | — |
+| Goal | in-turn advisory | ✓ `/goal` | ✓ | — |
+| L25 Compute | ✓ (routes + MCP) | via MCP | via MCP | ✓ |
+| `delegate_*` | ✓ (MCP merged into turn) | ✓ | ✓ | ✓ |
+| Background `/task` | CCC `/create task` | ✓ `/task`·`/bg` | ✓ | — |
+| Worker personas (hermes-/copilot-worker) | n/a | WORKFLOW+DELEGATE directives suppressed (ADR-0160 M4a) | n/a | n/a |
+
+## 5. Metering map (why the ladder ordering is also a cost policy)
+
+| Path | Charges `compute_units_per_day`? |
+|---|---|
+| Direct OS-turn (incl. its Task-tool subagents) | **no** |
+| `delegate_*` single calls | **no** (maintainer decision) |
+| ACS fan-out (any entry) | **yes** — web-chat charges at `chat_runtime` (direct-`ACSRuntime` path), everything else at the `run_acs_workflow` chokepoint; quota exhausted → single-turn fallback (ADR-0201) |
+| `workflow_run` / compute routes | **yes** |
+| Scheduler fires / background tasks | normal-turn cost / task-count quotas |
+
+## 6. Invariants (must NOT be weakened)
+
+- Explicit user commands beat every classifier (Tier-1 override).
+- LOOP/GOAL/COMPUTE/DELEGATE shapes never route into the ACS fan-out.
+- Coding never routes into the ACS fan-out (ADR-0202) — `/delegate` remains
+  the escape hatch.
+- Tier 2 stays **fail-open and advisory**: classifier failure → no
+  directive → the turn still runs. Tier 1 failure modes stay fail-safe
+  toward the DIRECT path (a mis-routed direct turn is recoverable; a
+  mis-routed fan-out burns quota).
+- The triage path never spawns a subprocess (heuristic stage only — the
+  Haiku fallback is reserved for the bridge adapter's Tier-2 injection).
+- Quota exhaustion degrades (ADR-0201), never hard-fails.
+
+## 7. Known gaps (documented, not hidden)
+
+- The bridge adapter's Tier-2 uses the two-stage classifier (with Haiku
+  fallback); the console uses heuristic-only. Ambiguous console tasks may
+  get no directive where a bridge turn would.
+- `_TRIAGE_FANOUT_RE`/`_TRIAGE_CODING_RE` (rules 6–7) live in
+  `chat_runtime.py`, not yet in `acs_classify.py` — the WORKFLOW primitive's
+  signal table and the console fan-out table are similar but not identical.
+  Target state: fold both into one shared table.
+- `delegation_loop` exists in three forms (standalone `ACSRuntime`, AWP
+  engine, DAG node in `routes/workflows.py`) — the DAG node reimplements
+  the manager semantics instead of reusing `acs_runtime._manager_loop`.
+- ATO (`ato_classify.py`) overlaps ACS-X vocabulary but stays advisory-only;
+  candidates for merging into the shared table.
