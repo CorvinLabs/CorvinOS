@@ -49,31 +49,39 @@ Applied at Tier 1 (console triage) and encoded in Tier 2's primitive set.
 First match wins:
 
 ```
-1. EXPLICIT USER COMMAND         → that mechanism, always
-   /delegate → ACS · /task → background · /goal → goal · "schedule …" → scheduler
-2. RECURRING  (LOOP shape)       → scheduler / in-turn iteration — NEVER ACS
-   ("jede Stunde", "every N min", monitoring, watch)      [quota: 1 unit/fire would be absurd]
-3. PERSISTENT (GOAL shape)       → goal system — NEVER ACS
-4. DATA/DETERMINISTIC (COMPUTE)  → L25 compute — NEVER ACS (LLM workers ≠ data pipeline)
-5. NAMED ENGINE (DELEGATE shape) → corvin_delegate single call — NEVER ACS
-6. FAN-OUT shape                 → ACS delegation_loop (console) / Workflow tool (in-turn)
-   (explicit parallelism; multi-source/multi-perspective/per-item with substantive shape)
-7. CODING shape                  → direct OS-turn + built-in Task tool — NEVER ACS
-   (sequential, context-heavy, workspace-bound; ADR-0202)
-8. REMAINING SUBSTANTIVE         → ACS (console legacy: strong verbs, long/multi-step)
-9. EVERYTHING ELSE               → direct OS-turn
+1.  EXPLICIT USER COMMAND        → that mechanism, always
+    /delegate → ACS · /task → background · /goal → goal · "schedule …" → scheduler
+1b. EXPLICIT PARALLELISM         → ACS, before the classifier gate
+    ("parallel", "mehreren Workern", "fan-out") — the user named workers; a
+    product-noun collision must not hijack it (review F2/F3/F4)
+2.  RECURRING/PERSISTENT/DATA     → scheduler / goal / L25 compute — NEVER ACS
+    LOOP·GOAL·COMPUTE at ANY real signal (≥0.50 render floor, review F1:
+    "stündlich"/"täglich" weigh 0.60-0.65 and must still not burn quota)
+    DELEGATE only when a real ENGINE is NAMED (review F2: bare "delegiere" /
+    "mit Hermes" the parcel carrier must not steer off the fan-out)
+3.  FAN-OUT shape                → ACS delegation_loop (console) / Workflow tool
+    (multi-source/multi-perspective/per-item with substantive shape)
+4.  CODING shape                 → direct OS-turn + built-in Task tool — NEVER ACS
+    (sequential, context-heavy, workspace-bound; incl. crash/freeze; ADR-0202)
+5.  REMAINING SUBSTANTIVE         → ACS (console legacy: strong verbs, long/multi-step)
+6.  EVERYTHING ELSE               → direct OS-turn
 ```
 
-Rules 2–5 sit ABOVE fan-out deliberately: each of those shapes has a
-*cheaper, structurally correct* mechanism, and mis-routing them into ACS
-burns the daily compute unit on the wrong tool. Rule 7 sits BELOW fan-out so
-an explicitly parallel coding request ("review from 3 perspectives in
-parallel") still fans out.
+Rule 1b sits ABOVE the classifier gate (review F2/F3/F4): explicit worker
+requests are unambiguous and must win over a noun collision. Rule 2 sits
+ABOVE fan-out because each of those shapes has a *cheaper, structurally
+correct* mechanism, and mis-routing them into ACS burns the daily compute
+unit on the wrong tool. Rule 4 (coding) sits BELOW fan-out so an explicitly
+parallel coding request still fans out via rule 1b.
 
-Implementation: rules 2–5 reuse the **shared ACS-X heuristic** from the
-console triage (`_acs_x_blueprint`, confidence ≥ 0.70, fail-open); rules
-6–8 are the console regex tables (`_TRIAGE_FANOUT_RE`, `_TRIAGE_CODING_RE`,
-strong/weak verbs). One classifier vocabulary, two consumers.
+Implementation: rule 1b is `_EXPLICIT_PARALLEL_RE`; rule 2 reuses the
+**shared ACS-X heuristic** from the console triage (`_acs_x_blueprint`,
+LOOP/GOAL/COMPUTE at ≥0.50, DELEGATE needs `_NAMED_ENGINE_RE`, fail-open with
+a one-time import-failure warning); rules 3–5 are the console regex tables
+(`_TRIAGE_FANOUT_RE`, `_TRIAGE_CODING_RE`, strong/weak verbs). One classifier
+vocabulary, two consumers. The `acs_classify` `jede…`-recurrence signal spans
+a bounded window (`[^.!?]{0,30}`) so a per-item fan-out
+("für jeden … in Minuten") is not mis-read as LOOP.
 
 ## 4. Surface-capability matrix
 
@@ -99,8 +107,14 @@ a capability the surface lacks.
 | Direct OS-turn (incl. its Task-tool subagents) | **no** |
 | `delegate_*` single calls | **no** (maintainer decision) |
 | ACS fan-out (any entry) | **yes** — web-chat charges at `chat_runtime` (direct-`ACSRuntime` path), everything else at the `run_acs_workflow` chokepoint; quota exhausted → single-turn fallback (ADR-0201) |
+| ACS quota fallback (single direct turn) | **no** (un-metered `run_delegate`) — but bounded by `_FALLBACK_MAX_PER_DAY`=50/tenant/day and an elevated-but-fixed `BUDGET_FALLBACK_MAX_S` wall-clock ceiling (review F6/F7) |
 | `workflow_run` / compute routes | **yes** |
 | Scheduler fires / background tasks | normal-turn cost / task-count quotas |
+
+Note: `delegate_*` single calls are capped at the 600 s interactive
+`BUDGET_MAX_S` — only the quota fallback may request the higher ceiling, and
+only via `run_delegate(budget_ceiling_s=…)`, never from the MCP tool surface
+(review F7).
 
 ## 6. Invariants (must NOT be weakened)
 
@@ -114,7 +128,13 @@ a capability the surface lacks.
   mis-routed fan-out burns quota).
 - The triage path never spawns a subprocess (heuristic stage only — the
   Haiku fallback is reserved for the bridge adapter's Tier-2 injection).
-- Quota exhaustion degrades (ADR-0201), never hard-fails.
+- Quota exhaustion degrades (ADR-0201), never hard-fails — but the degraded
+  path is itself bounded (`_FALLBACK_MAX_PER_DAY`, `budget_ceiling_s`) so it
+  cannot become an unbounded un-metered surface (review F6/F7).
+- The WORKFLOW directive is suppressed on the console direct turn (review
+  F9): that turn is un-metered, and "use the Workflow tool" would route it
+  back into quota-charging compute — a contradiction. Bridges (no fan-out
+  path of their own) keep the WORKFLOW directive.
 
 ## 7. Known gaps (documented, not hidden)
 
