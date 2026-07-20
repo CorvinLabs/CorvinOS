@@ -531,6 +531,22 @@ Origin files must include `"enabled": true`; the default is `false` (fail-closed
 `corvin-a2a pair` generates this field automatically — it only needs to be added
 manually when origin files are created by hand.
 
+Every per-connection right is owned by the **receiving** side and can be changed
+retroactively in the console (Agent Hub → Peers → Edit connection): connection
+name (`label`), Observer/Executor mode (`spawn_worker`), persona allow-list,
+TTL cap, and the deny-by-default M2 tool opt-ins (`allow_bash`,
+`allow_network`, `allow_read_files`, `allow_write_files`, `allow_subagents`).
+See `docs/claude-ref/layer-38-a2a-network.md` § *Per-connection rights*.
+
+Two honest caveats about these opt-ins (2026-07-20):
+
+- `allow_subagents=true` unblocks the Task tool, and the engine does **not**
+  guarantee that the other per-connection denies bind inside subagent
+  workers — treat it as potentially granting subagents default (full) tool
+  access; the remaining checkboxes may not apply there.
+- `allow_bash=true` factually includes network egress (`curl`/`wget` run in
+  the shell); the Network opt-in only gates the built-in web tools.
+
 ---
 
 ```bash
@@ -540,8 +556,13 @@ corvin-instance-id show
 # Generate a key pair for two instances and write registry files
 corvin-a2a pair <peer-label> <peer-url>
 
-# Send a task to a remote endpoint (Protocol v4)
-corvin-a2a send <endpoint-id> "Compute the monthly summary for region=EU" \
+# Send a task to a remote endpoint (Protocol v4).
+# The target may be the endpoint id, its connection name (label,
+# case-insensitive), or a unique id-prefix. An exact endpoint id always
+# wins deterministically (a peer's label can never shadow a foreign id);
+# an ambiguous label errors out instead of guessing. The same resolution
+# applies to the a2a_send MCP tool.
+corvin-a2a send <endpoint-id-or-name> "Compute the monthly summary for region=EU" \
   --ttl 300 \
   --purpose analytics \
   --schema ./schemas/monthly-summary.json \

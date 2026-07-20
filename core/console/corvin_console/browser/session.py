@@ -20,6 +20,7 @@ import asyncio
 import base64
 import contextlib
 import logging
+import sys as _sys  # only for the remedy message below (venv interpreter path)
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlparse
@@ -78,19 +79,24 @@ class BrowserActionError(RuntimeError):
 # isn't provisioned. The installer now does this (corvinOS/installer/steps/
 # browser.py), but an install that predates that step, or a failed download,
 # still lands here — so say exactly what to run instead of "not available".
+# I1 (2026-07-20): the remedy must be a command that EXISTS on the canonical
+# `uv tool install 'corvinos[browser]'` PATH — bare `playwright` / `pip` are
+# "command not found" there; `corvin-install --browser` re-runs the
+# provisioning step with the right interpreter on every install flavour.
 _BROWSER_NOT_SET_UP = (
     "Browser automation isn't set up yet — the Chromium engine is missing. "
-    "Run:  playwright install chromium   (or reinstall with "
-    "'pip install corvinos[browser] && playwright install chromium'). "
-    "This is a one-time ~150 MB download."
+    "Run:  corvin-install --browser   "
+    "(re-runs the browser provisioning step; a one-time ~150 MB download)."
 )
 
 # Distinct failure on minimal Linux images: Chromium IS downloaded but system
-# libraries are missing. `playwright install chromium` cannot fix this one —
-# only the root-level dependency install can, so it needs its own message.
+# libraries are missing. The Chromium download cannot fix this one — only the
+# root-level dependency install can, so it needs its own message. Root's PATH
+# has neither `playwright` nor this venv, so name the interpreter explicitly.
 _BROWSER_MISSING_SYSTEM_DEPS = (
     "Chromium is installed but system libraries it needs are missing. "
-    "Run:  sudo playwright install-deps chromium   (one-time, needs root)."
+    f'Run:  sudo "{_sys.executable}" -m playwright install-deps chromium   '
+    "(one-time, needs root)."
 )
 
 
@@ -625,7 +631,18 @@ class BrowserSession:
         disallowed (off-allowlist, private/metadata, forbidden) → close. Same
         policy as _route_egress. Fail-closed: any error closes the socket."""
         try:
-            if _cmp.check_egress(ws.url, allowlist=self._allowlist,
+            # B2 (adversarial review 2026-07-20): check_egress hard-rejects the
+            # ws/wss scheme, so the gate closed EVERY WebSocket — including
+            # allowlisted hosts — and the 'Allowed → proxy' path above was
+            # unreachable. Map ws→http / wss→https for the CHECK only: all
+            # host/IP/private/forbidden logic runs identically; any other
+            # scheme still fails the check_egress scheme gate (fail-closed).
+            check_url = ws.url
+            if check_url.startswith("wss://"):
+                check_url = "https://" + check_url[len("wss://"):]
+            elif check_url.startswith("ws://"):
+                check_url = "http://" + check_url[len("ws://"):]
+            if _cmp.check_egress(check_url, allowlist=self._allowlist,
                                  forbidden=self._forbidden).allowed:
                 ws.connect_to_server()
             else:
@@ -826,24 +843,6 @@ class BrowserSession:
                 "the browser was closed" + (" (your Chrome quit)" if self._attached
                 else " (it crashed or exited)") + " — this session is over; "
                 "start a new one")
-        # Per-action consent recheck for attached sessions (review finding): the
-        # real-chrome consent was checked at session CREATE only, so an expired
-        # TTL or an explicit Revoke did NOT stop an already-running session from
-        # driving the user's real Chrome. Now every action re-checks; a lapsed
-        # consent refuses further actions (the session must be re-consented or
-        # closed). Fail-closed: a missing/erroring check refuses.
-        if self._attached and self._consent_ok is not None:
-            try:
-                ok = self._consent_ok()
-            except Exception:  # noqa: BLE001
-                ok = False
-            if not ok:
-                raise BrowserActionError(
-                    "real-chrome consent expired or was revoked — re-grant it in "
-                    "the console (Browser → Attach) or close this session")
-        if self.paused:
-            raise BrowserActionError(
-                f"blocked: session is paused / under user take-over ({action})")
         # Per-action consent recheck for attached sessions (review finding): the
         # real-chrome consent was checked at session CREATE only, so an expired
         # TTL or an explicit Revoke did NOT stop an already-running session from
@@ -1661,6 +1660,32 @@ class BrowserSession:
         return forms
 
     async def screenshot(self, *, marks: bool = True) -> bytes:
+        # B1 (adversarial review 2026-07-20): screenshot was the ONLY action
+        # skipping the guard — a revoked/expired attach consent (or an attach
+        # take-over pause) kept serving live JPEGs of the user's real Chrome
+        # via the REST/MCP pull path, the same leak class the F7 screencast
+        # hardening closed on the push path. Deliberately narrower than
+        # _guard_active: a paused MANAGED session must keep serving frames
+        # (the take-over live view depends on this pull), so `paused` only
+        # refuses in attach mode — exact screencast-loop parity.
+        if self._disconnected:
+            raise BrowserActionError(
+                "the browser was closed" + (" (your Chrome quit)" if self._attached
+                else " (it crashed or exited)") + " — this session is over; "
+                "start a new one")
+        if self._attached:
+            if self.paused:
+                raise BrowserActionError(
+                    "blocked: session is paused / under user take-over (screenshot)")
+            if self._consent_ok is not None:
+                try:
+                    ok = self._consent_ok()
+                except Exception:  # noqa: BLE001
+                    ok = False
+                if not ok:
+                    raise BrowserActionError(
+                        "real-chrome consent expired or was revoked — re-grant it in "
+                        "the console (Browser → Attach) or close this session")
         await self._ensure_started()
         async with self._page_lock:
             return await self._screenshot_locked(marks=marks)

@@ -13,6 +13,11 @@ Provider chain (first available wins, unless pinned):
 Pin a provider via CORVIN_TTS_PROVIDER=openai|edge|piper (operator env)
 or via the tts_provider field in the user profile (console settings).
 
+The whole chain runs under a wall-clock deadline (default 22s, override via
+CORVIN_TTS_TOTAL_BUDGET_S) kept strictly below the console's outer 25s
+subprocess budget: each provider attempt is clamped to the remaining budget,
+and a provider with too little budget left is skipped with a stderr note.
+
 Set CORVIN_SAY_NO_FALLBACK=1 to make a PINNED provider hard-fail (no
 auto-chain fallback) when it can't produce audio — a strict/isolation mode
 used by tests to prove a specific tier actually works instead of being masked
@@ -36,7 +41,19 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
+
+# V2-RESIDUAL (2026-07-20): anchor the total-deadline clock at MODULE IMPORT,
+# not in main(). On a slow (e.g. cold Windows) interpreter start, the seconds
+# spent booting + importing say.py's own deps count against the console's outer
+# 25s subprocess budget but NOT against a deadline captured later in main() — so
+# the internal 22s deadline could expire only AFTER the console's SIGKILL,
+# orphaning the Piper grandchild. Capturing here (as early as this module runs)
+# folds say.py's import cost into the budget, guaranteeing self-termination
+# before the outer kill. Only the fixed interpreter-boot slice stays uncounted.
+_PROCESS_START_MONOTONIC = time.monotonic()
+
 
 def _resolve_voice_config_dir() -> Path:
     """SSOT for the corvin-voice config dir — byte-identical to
@@ -59,6 +76,41 @@ VOICE_CONFIG_DIR = _resolve_voice_config_dir()
 # caller's outer timeout fired. Keeping each provider short lets the auto-chain
 # fail fast to the next provider (or to silent text-only) within budget.
 _PROVIDER_TIMEOUT_S = float(os.environ.get("CORVIN_TTS_PROVIDER_TIMEOUT_S", "10"))
+
+# Piper binary gets a longer per-attempt cap than the network providers — a
+# local first-run synth loads the model from disk (VOICE-10 chose 20s).
+_PIPER_TIMEOUT_S = 20.0
+
+# Total wall-clock budget for the WHOLE provider chain. Per-provider caps
+# alone don't protect the caller: they SUM to up to 40s (openai 10 + edge 10
+# + piper 20) while the console's outer subprocess budget is 25s
+# (routes/voice.py::_TTS_TIMEOUT_S). When the sum overran, the console
+# SIGKILLed say.py mid-Piper — orphaning the Piper grandchild and leaving the
+# sibling corvin_tts_*.wav behind. say.py now enforces its OWN deadline,
+# strictly below the console's, so it always finishes (or degrades to the
+# documented silent skip) before the caller kills it.
+_TOTAL_BUDGET_S = float(os.environ.get("CORVIN_TTS_TOTAL_BUDGET_S", "22"))
+_DEADLINE_MARGIN_S = 1.0  # reserved for our own teardown before the deadline
+_MIN_ATTEMPT_S = 1.0      # don't even start a provider with less than this
+
+
+def _clamped_timeout(provider_timeout_s: float,
+                     remaining_s: "float | None") -> "float | None":
+    """Effective timeout for the next provider attempt under the total budget.
+
+    ``remaining_s=None`` means "no deadline" — the provider timeout passes
+    through unchanged. Returns ``None`` when the remaining budget (minus the
+    safety margin) is too small to plausibly complete an attempt: the caller
+    must SKIP the provider (with a stderr note for the failure-reason
+    surface) instead of starting work the console's outer timeout would
+    SIGKILL mid-flight.
+    """
+    if remaining_s is None:
+        return provider_timeout_s
+    usable = remaining_s - _DEADLINE_MARGIN_S
+    if usable < _MIN_ATTEMPT_S:
+        return None
+    return min(provider_timeout_s, usable)
 
 
 # ── OpenAI helpers ────────────────────────────────────────────────────
@@ -153,8 +205,11 @@ def _openai_voice_for(lang: str, voice: str | None = None) -> str:
     return "shimmer"
 
 
-def _try_openai(out_path: Path, text: str, lang: str, voice: str | None) -> bool:
+def _try_openai(out_path: Path, text: str, lang: str, voice: str | None,
+                timeout_s: "float | None" = None) -> bool:
     """Attempt OpenAI TTS. Returns True on success, False on any failure."""
+    if timeout_s is None:
+        timeout_s = _PROVIDER_TIMEOUT_S
     key = _resolve_key()
     if not key:
         sys.stderr.write("say.py: no OPENAI_API_KEY — skipping OpenAI TTS\n")
@@ -168,7 +223,7 @@ def _try_openai(out_path: Path, text: str, lang: str, voice: str | None) -> bool
         # max_retries=0: the SDK default of 2 retries pushes the worst case
         # past the outer 25s route budget (VOICE-10), orphaning a Piper
         # subprocess when the outer timeout fires first.
-        client = OpenAI(api_key=key, timeout=_PROVIDER_TIMEOUT_S, max_retries=0)
+        client = OpenAI(api_key=key, timeout=timeout_s, max_retries=0)
         resp = client.audio.speech.create(
             model="tts-1",
             voice=_openai_voice_for(lang, voice),
@@ -247,8 +302,11 @@ def _edge_voice_for(lang: str) -> str:
     )
 
 
-def _try_edge(out_path: Path, text: str, lang: str) -> bool:
+def _try_edge(out_path: Path, text: str, lang: str,
+              timeout_s: "float | None" = None) -> bool:
     """Attempt edge-tts (HTTPS, no API key). Returns True on success."""
+    if timeout_s is None:
+        timeout_s = _PROVIDER_TIMEOUT_S
     try:
         import edge_tts  # type: ignore[import-not-found]  # noqa: F401
     except ImportError:
@@ -262,7 +320,7 @@ def _try_edge(out_path: Path, text: str, lang: str) -> bool:
         # edge-tts writes MP3; the caller detects format via magic bytes.
         # Bounded so a hung Microsoft websocket can't block the whole TTS call.
         await asyncio.wait_for(
-            communicate.save(str(out_path)), timeout=_PROVIDER_TIMEOUT_S,
+            communicate.save(str(out_path)), timeout=timeout_s,
         )
 
     try:
@@ -418,13 +476,19 @@ def _resolve_piper_binary() -> str | None:
     return piper_bin
 
 
-def _try_piper(out_path: Path, text: str, lang: str) -> bool:
+def _try_piper(out_path: Path, text: str, lang: str,
+               timeout_s: "float | None" = None) -> bool:
     """Attempt Piper TTS (fully local). Returns True on success.
 
     Tries the Python piper-tts package first, then the piper binary.
     Model files must be present in PIPER_MODEL_DIR (default:
-    ~/.config/corvin-voice/piper-models/).
+    ~/.config/corvin-voice/piper-models/). ``timeout_s`` bounds the piper
+    BINARY tier; the in-process piper-tts package tier has no timeout hook
+    (bounded instead by the caller skipping Piper entirely when the total
+    budget is low — see _clamped_timeout).
     """
+    if timeout_s is None:
+        timeout_s = _PIPER_TIMEOUT_S
     model_path = _piper_model_for(lang)
     if model_path is None:
         sys.stderr.write(
@@ -479,9 +543,10 @@ def _try_piper(out_path: Path, text: str, lang: str) -> bool:
         # VOICE-10: keep this UNDER the caller's outer TTS budget
         # (routes/voice.py::_TTS_TIMEOUT_S == 25s). A 120s inner cap meant the
         # outer timeout fired first and killed a slow first Piper run
-        # inconsistently (orphaned subprocess, no clean fallback). 20s is
-        # comfortably below 25s yet ample for a local Piper synth once the
-        # model is loaded.
+        # inconsistently (orphaned subprocess, no clean fallback). The default
+        # (_PIPER_TIMEOUT_S == 20s) is comfortably below 25s yet ample for a
+        # local Piper synth once the model is loaded; main()'s total-deadline
+        # clamp shrinks it further when earlier providers ate into the budget.
         # input as UTF-8 BYTES (not text=True): text mode encodes stdin with
         # the locale codec — cp1252 on Windows — which mojibakes umlauts and
         # raises UnicodeEncodeError for ru/uk/zh/tr, exactly the languages in
@@ -493,7 +558,7 @@ def _try_piper(out_path: Path, text: str, lang: str) -> bool:
             [piper_bin, "--model", str(model_path), "--output_file", str(wav_path)],
             input=text.encode("utf-8"),
             capture_output=True,
-            timeout=20,
+            timeout=timeout_s,
             creationflags=_no_window,
         )
         if result.returncode != 0:
@@ -704,18 +769,34 @@ def main() -> int:
     # path and the auto-chain — previously only voice_lib.sh honored the flag.
     local_only = os.environ.get("CORVIN_TTS_LOCAL_ONLY", "0") == "1"
 
+    # Total-deadline budget (V2): whatever the chain does, it must finish
+    # before the console's outer subprocess timeout SIGKILLs us — see the
+    # _TOTAL_BUDGET_S comment above. Anchored at module import
+    # (_PROCESS_START_MONOTONIC), not "now", so a slow interpreter start eats
+    # into the budget instead of pushing the deadline past the outer SIGKILL
+    # (V2-RESIDUAL 2026-07-20).
+    deadline = _PROCESS_START_MONOTONIC + _TOTAL_BUDGET_S
+
     def _run(name: str) -> bool:
         if local_only and name in ("openai", "edge"):
             sys.stderr.write(
                 f"say.py: provider '{name}' disabled by CORVIN_TTS_LOCAL_ONLY\n"
             )
             return False
+        base_timeout = _PIPER_TIMEOUT_S if name == "piper" else _PROVIDER_TIMEOUT_S
+        timeout_s = _clamped_timeout(base_timeout, deadline - time.monotonic())
+        if timeout_s is None:
+            sys.stderr.write(
+                f"say.py: skipping provider '{name}' — total TTS budget "
+                f"({_TOTAL_BUDGET_S:g}s) exhausted\n"
+            )
+            return False
         if name == "openai":
-            return _try_openai(out_path, text, lang, voice_override)
+            return _try_openai(out_path, text, lang, voice_override, timeout_s)
         if name == "edge":
-            return _try_edge(out_path, text, lang)
+            return _try_edge(out_path, text, lang, timeout_s)
         if name == "piper":
-            return _try_piper(out_path, text, lang)
+            return _try_piper(out_path, text, lang, timeout_s)
         return False
 
     strict = os.environ.get("CORVIN_SAY_NO_FALLBACK", "").strip().lower() in (

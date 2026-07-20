@@ -713,7 +713,10 @@ engine. Tool names map to engine_ids:
 | `mcp__corvin_delegate__delegate_copilot` | CopilotCliEngine (`copilot -p`) | GitHub Copilot CLI — zero incremental cost for Copilot Business/Enterprise; `model` field sets task type: `shell`, `git`, `gh` (prompt-prefix steering), or omit for general chat; requires `copilot` binary + subscription; ADR-0071 |
 
 Each tool takes `prompt` (required), and optional `model`, `budget_s`
-(clamped 10..86400 since ADR-0201, default 60), `working_dir` (absolute path; sets
+(clamped 10..600 — `BUDGET_MIN_S..BUDGET_MAX_S`, default 60; the 86400 s
+`BUDGET_FALLBACK_MAX_S` ceiling is reachable ONLY via
+`run_delegate(budget_ceiling_s=…)` from the ACS quota fallback, never from
+the MCP tool surface — review F7), `working_dir` (absolute path; sets
 the worker subprocess' cwd). Returns a structured envelope:
 `{ok, engine, final_text, duration_ms, usage, model, error}`.
 
@@ -804,15 +807,19 @@ test entries, all green standalone).
   `DelegateResult.error` with `ok=False` (caller may want to render
   the worker's failure gracefully through the bridge). Conflating
   the two gives every transient network issue a stack-trace surface.
-- **Don't lower the `BUDGET_MAX_S` cap below what the ACS quota
-  fallback needs.** Since 2026-07-20 (ADR-0201) the cap is 86400 s:
-  `run_acs_quota_fallback` runs a whole workflow goal as ONE
-  delegate turn, and the earlier 600 s cap aborted exactly the long
-  tasks the fallback exists to save. The *default* stays 60 s — an
-  interactive `delegate_*` call still feels synchronous unless the
-  caller explicitly asks for more. For hours-scale work with an
-  out-of-band status surface, Layer 25 (compute worker) remains the
-  better fit.
+- **Don't collapse the two budget ceilings into one.** Since the F7
+  review fix (2026-07-20, commit 1f5ecd4) there are TWO caps:
+  `BUDGET_MAX_S = 600` bounds every ordinary `run_delegate` caller
+  (including all `delegate_*` MCP tools), and
+  `BUDGET_FALLBACK_MAX_S = 86400` is reachable ONLY by passing
+  `run_delegate(budget_ceiling_s=…)` explicitly — which only
+  `run_acs_quota_fallback` does, because a whole-workflow fallback
+  goal legitimately needs longer than an interactive call. Do not
+  raise `BUDGET_MAX_S` back to 86400 (that re-opens the F7 hole: any
+  MCP caller could book a 24 h un-metered turn), and do not expose
+  `budget_ceiling_s` on the MCP tool surface. The *default* stays
+  60 s. For hours-scale work with an out-of-band status surface,
+  Layer 25 (compute worker) remains the better fit.
 - **Don't store the worker's `final_text` in any state-store on
   disk** (consent, roles, quota, recall, user-model, audit, …).
   Worker results are ephemeral context for the next OS-turn reply,
@@ -1842,9 +1849,15 @@ where the gate normally lives — L34/tenant-policy/`engines_allowed` are
 enforced inside `run_delegate`; (3) `run_delegate` is deliberately
 un-metered (LIC-DELEGATE-MCP-COMPUTE-01), so the fallback does not re-open
 the quota — the fan-out stays blocked, only a single turn runs. To let that
-single turn actually finish long tasks, `corvin_delegate.BUDGET_MAX_S` was
-raised 600 → 86400 (the caller-requestable maximum; `BUDGET_DEFAULT_S`
-stays 60 s).
+single turn actually finish long tasks, the fallback passes
+`run_delegate(budget_ceiling_s=BUDGET_FALLBACK_MAX_S)` (86400 s) — the
+elevated ceiling exists ONLY on this internal path (review F7); every other
+caller, including the `delegate_*` MCP tools, stays clamped to
+`BUDGET_MAX_S = 600` (`BUDGET_DEFAULT_S` stays 60 s). The fallback also
+threads the caller's own `budget_override.max_wall_time` through both the
+console route and the `run_acs_workflow` chokepoint (reviews F8/D1 — the
+narrower bound always wins) and is race-safe capped at
+`_FALLBACK_MAX_PER_DAY` per tenant (LIC-1 lock pattern, review D3).
 
 ### References
 

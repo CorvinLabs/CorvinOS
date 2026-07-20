@@ -21,6 +21,7 @@ Load-bearing invariants verified here:
 """
 from __future__ import annotations
 
+import os
 import sys
 import types
 from pathlib import Path
@@ -281,6 +282,25 @@ def test_fallback_honours_narrower_budget_override(
     assert fake_delegate[0]["budget_s"] == 300
 
 
+def test_chokepoint_threads_budget_override_into_fallback(
+        tmp_path, fake_delegate, fake_l44_allow):
+    """D1: the run_acs_workflow chokepoint (workflow CLI, scheduler,
+    orchestration MCP) must not DROP budget_override when it degrades to the
+    quota fallback — F8 fixed only the console route's direct call. A caller
+    who bounded the run to 300 s must not get a BUDGET_FALLBACK-length turn."""
+    with (
+        patch.object(_adapter, "_enforce_acs_compute_quota",
+                     return_value=_quota_block()),
+        patch.object(_adapter, "_acs_runs_dir", return_value=tmp_path),
+    ):
+        out = _adapter.run_acs_workflow(
+            _spec(), tenant_id="_default",
+            budget_override={"max_wall_time": 300})
+
+    assert out["quota_fallback"] is True
+    assert fake_delegate[0]["budget_s"] == 300
+
+
 def test_fallback_is_bounded_per_day(tmp_path, fake_delegate, fake_l44_allow):
     """F6/Sec-F1: after _FALLBACK_MAX_PER_DAY runs the fallback stops degrading
     (bounds the scriptable un-metered surface) rather than looping unbounded."""
@@ -301,6 +321,84 @@ def test_fallback_is_bounded_per_day(tmp_path, fake_delegate, fake_l44_allow):
         assert out["status"] == "failed"
         assert "fallback limit reached" in out["error"]
         assert len(fake_delegate) == n_before, "no spawn past the daily cap"
+
+
+def test_fallback_daily_counter_is_race_safe(tmp_path):
+    """D3: _fallback_quota_ok was an unlocked read-modify-write — N parallel
+    submissions could each read the same count and overshoot the daily cap
+    arbitrarily. The counter must serialize (LIC-1 flock pattern from
+    operator/license/compute_quota.py) so concurrent callers never exceed
+    _FALLBACK_MAX_PER_DAY. The patched slow write widens the read→write
+    window; with a correct lock the write happens INSIDE the critical
+    section, so the cap still holds."""
+    import threading
+    import time as _time
+
+    if os.name != "nt":
+        pytest.importorskip("fcntl")
+
+    cap = _adapter._FALLBACK_MAX_PER_DAY
+    real_write = _adapter._write_json_atomic
+
+    def _slow_write(path, obj):
+        _time.sleep(0.002)
+        return real_write(path, obj)
+
+    n_threads = cap + 30
+    allowed: list[int] = []
+    guard = threading.Lock()
+    barrier = threading.Barrier(n_threads)
+
+    def _worker():
+        barrier.wait()
+        ok, _count = _adapter._fallback_quota_ok("_default")
+        if ok:
+            with guard:
+                allowed.append(1)
+
+    with (
+        # runs dir one level DOWN so the day counter (written to
+        # runs_dir.parent) lands inside this test's own tmp_path — the bare
+        # tmp_path would place it in the pytest basetemp shared by every test
+        # of the run (cross-test pollution).
+        patch.object(_adapter, "_acs_runs_dir",
+                     return_value=tmp_path / "runs"),
+        patch.object(_adapter, "_write_json_atomic", side_effect=_slow_write),
+    ):
+        threads = [threading.Thread(target=_worker) for _ in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert len(allowed) <= cap, (
+        f"{len(allowed)} concurrent fallbacks allowed — daily cap is {cap}; "
+        "the counter's read-modify-write is not atomic")
+
+
+def test_fallback_run_ids_do_not_collide_within_one_second(
+        tmp_path, fake_delegate, fake_l44_allow):
+    """D8: the generated fallback run_id had second resolution
+    (`acs-fb-<int(t0)>`) — two fallbacks starting in the same second shared
+    one run_dir and silently overwrote each other's manifest/result. The id
+    must be unique even at identical timestamps."""
+    with (
+        patch.object(_adapter, "_enforce_acs_compute_quota",
+                     return_value=_quota_block()),
+        # runs dir one level DOWN: keeps the day counter (runs_dir.parent)
+        # inside this test's tmp_path instead of the shared pytest basetemp.
+        patch.object(_adapter, "_acs_runs_dir",
+                     return_value=tmp_path / "runs"),
+        patch.object(_adapter.time, "time", return_value=1234567890.5),
+    ):
+        out1 = _adapter.run_acs_quota_fallback(_spec(), tenant_id="_default")
+        out2 = _adapter.run_acs_quota_fallback(_spec(), tenant_id="_default")
+
+    assert out1["status"] == "success" and out2["status"] == "success"
+    assert out1["run_id"] != out2["run_id"], (
+        "two same-second fallbacks must not share a run_id/run_dir")
+    assert (tmp_path / "runs" / out1["run_id"] / "manifest.json").exists()
+    assert (tmp_path / "runs" / out2["run_id"] / "manifest.json").exists()
 
 
 def test_dry_run_never_charges_or_falls_back(tmp_path, fake_delegate):

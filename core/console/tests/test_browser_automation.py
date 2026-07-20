@@ -2207,7 +2207,9 @@ def test_missing_browser_detector_matches_the_real_playwright_message():
 
 def test_start_translates_a_missing_chromium_into_an_actionable_error(monkeypatch):
     """Launch failure with the missing-binary signature → BrowserActionError
-    whose message names `playwright install chromium`."""
+    whose message names a remedy that EXISTS on the canonical uv-tool install
+    path (`corvin-install --browser`) — bare `playwright …` / `pip …` are
+    'command not found' there (I1, 2026-07-20)."""
     from corvin_console.browser import session as _sess
     from corvin_console.browser import BrowserActionError
 
@@ -2236,7 +2238,13 @@ def test_start_translates_a_missing_chromium_into_an_actionable_error(monkeypatc
 
     with pytest.raises(BrowserActionError) as ei:
         asyncio.run(s.start())
-    assert "playwright install chromium" in str(ei.value)
+    msg = str(ei.value)
+    assert "corvin-install --browser" in msg
+    # No bare `playwright …` / `pip …` command — they do not exist on the
+    # user PATH of a `uv tool install` (the canonical curl|sh path).
+    import re as _re
+    assert _re.search(r"(?<!-m )\bplaywright install", msg) is None, msg
+    assert _re.search(r"(?<!-m )\bpip install", msg) is None, msg
 
 
 def test_start_reraises_an_unrelated_launch_error_unchanged(monkeypatch):
@@ -2290,6 +2298,18 @@ def test_missing_system_deps_detector_distinguishes_from_missing_browser():
     assert _looks_like_missing_system_deps(Exception(binary_missing)) is False
     assert _looks_like_missing_browser(Exception(binary_missing)) is True
     assert _looks_like_missing_system_deps(Exception("net::ERR_FAILED")) is False
+
+
+def test_missing_system_deps_remedy_uses_the_venv_interpreter():
+    """`sudo playwright install-deps chromium` is not runnable on the canonical
+    uv-tool install (no `playwright` on the user PATH, let alone root's) — the
+    remedy must name the tool venv's own interpreter in `-m` form (I1)."""
+    import re as _re
+    import sys as _sys
+    from corvin_console.browser.session import _BROWSER_MISSING_SYSTEM_DEPS as msg
+    assert _sys.executable in msg
+    assert "-m playwright install-deps chromium" in msg
+    assert _re.search(r"(?<!-m )\bplaywright install", msg) is None, msg
 
 
 # ── ADR-0200 Phase 1: CDP attach to the user's real Chrome ───────────────────

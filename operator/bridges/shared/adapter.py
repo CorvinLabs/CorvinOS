@@ -7881,9 +7881,11 @@ def _try_openai_tts(
             api_key.encode("ascii")
         except (UnicodeEncodeError, UnicodeDecodeError):
             api_key = None
-        else:
-            if not api_key.startswith("sk-"):
-                api_key = None
+        # No 'sk-' prefix requirement: proxy / org-scoped keys carry other
+        # prefixes and are accepted by say.py and the console — the bridge
+        # must not silently discard them (review parity finding V5). Only
+        # non-empty + ASCII-clean is required here; the API itself is the
+        # authority on key validity.
     if not api_key:
         return None
 
@@ -7937,15 +7939,123 @@ def _try_openai_tts(
         return None
 
 
+# BCP-47 prefix → Piper model stem. Byte-identical twin of
+# say.py::_PIPER_MODELS (SSOT invariant VOICE-6: the stems must equal the
+# names installer/steps/piper.py::_MODELS actually downloads). Duplicated here
+# because the bridge adapter cannot import operator/voice/scripts/say.py
+# (separate entry-point tree, no shared package); parity guarded by
+# test_adapter_piper_parity.py::test_stem_table_matches_say_py_ssot.
+_PIPER_MODELS: dict[str, str] = {
+    "de":  "de_DE-kerstin-low",
+    "en":  "en_US-lessac-medium",
+    "es":  "es_ES-sharvard-medium",
+    "fr":  "fr_FR-siwis-medium",
+    "it":  "it_IT-paola-medium",
+    "nl":  "nl_NL-mls-medium",
+    "pl":  "pl_PL-gosia-medium",
+    "pt":  "pt_BR-faber-medium",
+    "ru":  "ru_RU-irina-medium",
+    "tr":  "tr_TR-dfki-medium",
+    "uk":  "uk_UA-lada-x_low",
+    "zh":  "zh_CN-huayan-x_low",
+}
+
+
+def _piper_model_dir() -> Path:
+    """Where corvin-install places Piper models (env-overridable). Resolved at
+    call time so a service.env change takes effect without re-import."""
+    return Path(
+        os.environ.get("CORVIN_PIPER_MODEL_DIR")
+        or (_VOICE_CONFIG_DIR / "piper-models")
+    )
+
+
+def _resolve_piper_binary() -> str | None:
+    """Locate the piper binary — ported twin of say.py::_resolve_piper_binary
+    (review parity finding V4b): PIPER_BIN (only if it exists) → PATH "piper"
+    → PATH "piper-tts" (uv/pipx install name) → next to the interpreter
+    (PATH-stripped service environments)."""
+    import shutil as _shutil  # noqa: PLC0415
+    env_bin = os.environ.get("PIPER_BIN")
+    piper_bin = (
+        (env_bin if (env_bin and Path(env_bin).exists()) else None)
+        or _shutil.which("piper")
+        or _shutil.which("piper-tts")
+    )
+    if not piper_bin:
+        exe_dir = Path(sys.executable).parent
+        for cand in ("piper", "piper.exe"):
+            if (exe_dir / cand).exists():
+                return str(exe_dir / cand)
+    return piper_bin
+
+
+def _piper_model_for(lang: str) -> str | None:
+    """Resolve the Piper model for a BCP-47 code — ported twin of
+    say.py::_piper_model_for (review parity finding V4a).
+
+    Resolution order: exact-language env override (NO cross-language
+    CORVIN_PIPER_MODEL_DE fallback — that spoke German for every language),
+    then config.json exact lang / primary tag (no lang_default/any fallback
+    at this tier), then the installer stem table, then — last resort, logged,
+    never silent — any configured model (wrong-language speech beats total
+    silence only offline).
+    """
+    lc = (lang or "de").lower()
+    env_key = f"CORVIN_PIPER_MODEL_{lc.upper().replace('-', '_')}"
+    env_path = os.environ.get(env_key)
+    if env_path:
+        return env_path if Path(env_path).exists() else None
+
+    try:
+        import json as _json  # noqa: PLC0415
+        cfg = _json.loads(
+            (_VOICE_CONFIG_DIR / "config.json").read_text(encoding="utf-8")
+        )
+        if not isinstance(cfg, dict):
+            cfg = {}
+    except Exception:  # noqa: BLE001
+        cfg = {}
+
+    # Language-exact config lookups only ("en-us" also tries its "en" primary
+    # tag — the installer writes primary-tag keys). Cross-language fallback is
+    # a deliberate last resort BELOW the stem table (see say.py history: an
+    # any-model tier above the stem table shadowed a correct same-language
+    # model on disk).
+    path_str = (
+        cfg.get(f"piper_model_{lc}")
+        or cfg.get(f"piper_model_{lc.split('-')[0]}")
+    )
+    if path_str and Path(path_str).exists():
+        return str(path_str)
+
+    stem = _PIPER_MODELS.get(lc) or _PIPER_MODELS.get(lc.split("-")[0])
+    if stem:
+        model = _piper_model_dir() / f"{stem}.onnx"
+        if model.exists():
+            return str(model)
+
+    # Last resort — ANY configured model; logged so the degradation is visible.
+    any_model = (
+        cfg.get(f"piper_model_{cfg.get('lang_default', 'de')}")
+        or next((v for k, v in cfg.items()
+                 if k.startswith("piper_model_") and v), None)
+    )
+    if any_model and Path(any_model).exists():
+        log(f"piper TTS: no Piper model for '{lang}' — falling back to "
+            f"{Path(any_model).name} (wrong-language speech)")
+        return str(any_model)
+    return None
+
+
 def _try_piper_tts(text: str, lang: str = "de") -> Path | None:
     """Attempt Piper local TTS → WAV → OGG-Opus via ffmpeg.
 
-    Model resolution: CORVIN_PIPER_MODEL_<LANG> env var, then
-    piper_model_<lang> key in ~/.config/corvin-voice/config.json.
-    Returns OGG path on success, None if piper/ffmpeg/model unavailable.
+    Binary + model resolution mirror say.py (_resolve_piper_binary /
+    _piper_model_for). Returns OGG path on success, None if
+    piper/ffmpeg/model unavailable.
     """
-    import shutil as _shutil
-    piper_bin = os.environ.get("PIPER_BIN") or _shutil.which("piper")
+    piper_bin = _resolve_piper_binary()
     if not piper_bin or not os.path.isfile(piper_bin):
         log("piper TTS: binary not found — install piper-tts or set PIPER_BIN in service.env")
         return None
@@ -7954,24 +8064,7 @@ def _try_piper_tts(text: str, lang: str = "de") -> Path | None:
         log("piper TTS: ffmpeg not found (system PATH or imageio-ffmpeg) — cannot convert WAV to OGG")
         return None
 
-    model = (
-        os.environ.get(f"CORVIN_PIPER_MODEL_{lang.upper()}")
-        or os.environ.get("CORVIN_PIPER_MODEL_DE")
-    )
-    if not model:
-        try:
-            import json as _json
-            cfg = _json.loads(
-                (_VOICE_CONFIG_DIR / "config.json").read_text(encoding="utf-8")
-            )
-            # Try exact lang, then lang_default, then any configured model
-            model = (
-                cfg.get(f"piper_model_{lang}")
-                or cfg.get(f"piper_model_{cfg.get('lang_default', 'de')}")
-                or next((v for k, v in cfg.items() if k.startswith("piper_model_") and v), "")
-            )
-        except Exception:
-            pass
+    model = _piper_model_for(lang)
     if not model:
         log("piper TTS: no model configured — run corvin-install or set "
             "piper_model_<lang> in ~/.config/corvin-voice/config.json")
@@ -10301,6 +10394,54 @@ def submit_inbox_item(inbox_file: Path, settings: dict) -> None:
             _in_flight[msg_id] = (entry[0], fut)
 
 
+def _start_telemetry_threads() -> None:
+    """Start the bridge-side telemetry background threads (fail-soft).
+
+    Everything network-bound runs in daemon threads owned by the console
+    telemetry modules — the bridge main loop (inbox polling + SIGTERM drain)
+    must never wait on telemetry I/O:
+
+    - Recurring instance-count ping (hourly check, daily self-throttle).
+    - Healing-trace upload cycle (hourly check; the uploader's flock +
+      daily stamp prevent double uploads). Previously invoked SYNCHRONOUSLY
+      from the main inbox loop's ~1h cleanup tick — on a dead uplink that
+      stalled message handling and the SIGTERM drain for up to ~60s of
+      network timeouts while the comment claimed "Non-blocking" (review
+      finding T2).
+    - Presence heartbeat (~5 min): bridge-only deployments never boot the
+      console, so without this they were systematically missing from
+      online_now / online-geo (review finding T5). heartbeat.py's module
+      guard prevents an in-process double start; the server-side rate
+      limiter absorbs a console+bridge pair sharing one CORVIN_HOME.
+    """
+    try:
+        from corvin_console.aco.htrace_uploader import (  # noqa: PLC0415
+            start_ping_thread as _start_ping,
+            start_upload_thread as _start_upload,
+        )
+        from forge.paths import corvin_home as _telemetry_home  # noqa: PLC0415
+        _home = _telemetry_home()
+        _start_ping(_home)
+        _start_upload(_home)
+        # start_ping_thread / start_upload_thread return None by design
+        # (idempotent, module-guarded starters) — reaching this line without
+        # an exception IS the success signal. The previous is_alive() check on
+        # that None return logged every successful start as "skipped" (review
+        # finding T3).
+        log("telemetry: ping + healing-trace upload threads started (daemon)")
+    except Exception as _tele_e:  # noqa: BLE001
+        log(f"telemetry: ping/upload thread initialization failed (best-effort): {_tele_e}")
+    try:
+        from corvin_console.aco.heartbeat import (  # noqa: PLC0415
+            start_heartbeat_thread as _start_heartbeat,
+        )
+        from forge.paths import corvin_home as _hb_home  # noqa: PLC0415
+        _start_heartbeat(_hb_home())
+        log("telemetry: presence heartbeat thread started (daemon)")
+    except Exception as _hb_e:  # noqa: BLE001
+        log(f"telemetry: heartbeat thread initialization failed (best-effort): {_hb_e}")
+
+
 def main() -> int:
     global _executor, _sidechannel_executor
     INBOX.mkdir(exist_ok=True)
@@ -10732,20 +10873,10 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
     # ── TELEMETRY INITIALIZATION ──────────────────────────────────────────────
-    # Start the automatic ping thread and healing-trace uploader. This ensures
-    # that telemetry is collected and sent continuously without manual intervention.
-    # Every instance automatically reports its status, version, and health.
-    try:
-        from corvin_console.aco.htrace_uploader import start_ping_thread as _start_ping
-        from forge.paths import corvin_home as _telemetry_home
-        _telemetry_home_path = _telemetry_home()
-        _ping_thread = _start_ping(_telemetry_home_path)
-        if _ping_thread and _ping_thread.is_alive():
-            log("telemetry: ping thread started (daily heartbeat active)")
-        else:
-            log("telemetry: ping thread start skipped (already running elsewhere or unavailable)")
-    except Exception as _tele_e:  # noqa: BLE001
-        log(f"telemetry: ping thread initialization failed (best-effort): {_tele_e}")
+    # Start the ping / healing-trace-upload / heartbeat daemon threads. All
+    # telemetry network I/O lives in those threads — never in this main loop
+    # (see _start_telemetry_threads for the review-finding history T2/T3/T5).
+    _start_telemetry_threads()
 
     def _drain_and_exit() -> int:
         """Stop accepting work, let in-flight runs finish, then exit.
@@ -10855,20 +10986,13 @@ def main() -> int:
                         except Exception as _e:
                             log(f"process_table cleanup failed: {_e}")
 
-                    # ── Telemetry healing-trace upload ────────────────────────────
-                    # Trigger daily healing-trace bundle upload (if new data exists).
-                    # This runs on the same cleanup interval (~1h), so bundles queue
-                    # for upload multiple times per day if available. Non-blocking.
-                    try:
-                        from corvin_console.aco.htrace_uploader import (  # noqa: PLC0415
-                            run_upload_cycle as _telemetry_upload,
-                        )
-                        from forge.paths import corvin_home as _upload_home  # noqa: PLC0415
-                        _outcome, _count = _telemetry_upload(_upload_home())
-                        if _count > 0:
-                            log(f"telemetry: uploaded {_count} healing-trace bundle(s) ({_outcome})")
-                    except Exception as _ute:  # noqa: BLE001
-                        pass  # Best-effort; never block main cleanup loop
+                    # Healing-trace upload: deliberately NOT triggered here.
+                    # The synchronous upload call that used to live in this
+                    # cleanup tick blocked THIS loop — the same loop that polls
+                    # the inbox and checks _shutdown_event — for up to ~60s of
+                    # network timeouts on a dead uplink (review finding T2).
+                    # It now runs hourly in the daemon thread started by
+                    # _start_telemetry_threads (start_upload_thread).
 
                     last_cleanup = time.monotonic()
                 time.sleep(POLL_INTERVAL)

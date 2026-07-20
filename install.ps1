@@ -110,7 +110,12 @@ try {
 
 if ($EditablePath -ne "") {
     Write-Step "Installing CorvinOS (editable) from $EditablePath ..."
-    uv tool install --force --editable $EditablePath
+    # [browser] in the editable receipt too (I5): without it a dev install
+    # loses pip-injected playwright on the next `uv tool upgrade` (the venv
+    # is rebuilt from the receipt) -- same upgrade-wipe the PyPI branch
+    # below already guards against. $(...) delimits the variable name so
+    # PowerShell does not parse `[browser]` as an index expression.
+    uv tool install --force --editable "$($EditablePath)[browser]"
 } else {
     # INST-1: install UNPINNED. `uv tool install corvinos==<ver>` writes that
     # exact pin into the uv receipt, after which `uv tool upgrade corvinos`

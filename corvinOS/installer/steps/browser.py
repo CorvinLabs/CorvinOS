@@ -25,6 +25,38 @@ import sys
 
 from .dependencies import pip_install as _pip_install
 
+# ── Remedy commands (I1, 2026-07-20) ──────────────────────────────────────────
+# The canonical install path is `curl | sh` → `uv tool install 'corvinos[browser]'`,
+# which exposes ONLY corvinos' own entry points in ~/.local/bin. Bare
+# `playwright …` and `pip …` are "command not found" on that PATH, so every
+# printed remedy must be either a corvinos entry point, a `uv tool …` command,
+# or an explicit `<venv-python> -m …` interpreter form.
+
+# One-line re-run of exactly this provisioning step (added alongside this fix).
+_REMEDY_PROVISION = "corvin-install --browser"
+
+
+def _is_uv_tool_install() -> bool:
+    """True when running from a ``uv tool install`` managed venv (which has no
+    pip and exposes no `playwright` shim on the user PATH)."""
+    probe = str(sys.prefix).replace("\\", "/").lower()
+    return "/uv/tools/" in probe or probe.rstrip("/").endswith("/tools/corvinos")
+
+
+def _remedy_reinstall_extra() -> str:
+    """The durable way to (re)install the `[browser]` extra for this flavour:
+    into the uv receipt for uv-tool installs (survives `uv tool upgrade`),
+    via the interpreter's own pip module otherwise."""
+    if _is_uv_tool_install():
+        return "uv tool install --force 'corvinos[browser]'"
+    return f'"{sys.executable}" -m pip install "corvinos[browser]"'
+
+
+def _remedy_system_deps() -> str:
+    """Chromium's system libraries need root — name the venv interpreter
+    explicitly, since root's PATH has neither `playwright` nor this venv."""
+    return f'sudo "{sys.executable}" -m playwright install-deps chromium'
+
 
 def _chromium_present() -> bool:
     """True iff Playwright can already resolve a Chromium executable — so a
@@ -58,7 +90,8 @@ def ensure_browser(interactive: bool = True) -> None:
         if not _pip_install("playwright>=1.40"):
             print("  ⚠ could not install the 'playwright' package — browser "
                   "automation stays off. Finish later with:")
-            print("      pip install 'corvinos[browser]' && playwright install chromium")
+            print(f"      {_remedy_reinstall_extra()}")
+            print(f"      {_REMEDY_PROVISION}")
             return
 
     # 2. The Chromium BINARY — the part a bare pip install never fetches. Skip if
@@ -79,7 +112,7 @@ def ensure_browser(interactive: bool = True) -> None:
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         print(f"  ⚠ Chromium download did not finish ({type(exc).__name__}). "
-              "Finish later with:  playwright install chromium")
+              f"Finish later with:  {_REMEDY_PROVISION}")
         return
     if proc.returncode == 0 and _chromium_present():
         print("  ✓ Chromium installed — agent browsing is ready")
@@ -90,7 +123,7 @@ def ensure_browser(interactive: bool = True) -> None:
         # fails later.
         if sys.platform.startswith("linux"):
             print("  ℹ if the browser fails to launch with 'missing dependencies',"
-                  " run:  sudo playwright install-deps chromium")
+                  f" run:  {_remedy_system_deps()}")
     else:
         print("  ⚠ Chromium download failed (exit "
-              f"{proc.returncode}). Finish later with:  playwright install chromium")
+              f"{proc.returncode}). Finish later with:  {_REMEDY_PROVISION}")

@@ -506,5 +506,158 @@ class VersionComparisonTests(unittest.TestCase):
         self.assertFalse(sb._pypi_version_is_newer("garbage", "0.10.28"))
 
 
+class PostUpgradeBrowserProvisionTests(unittest.TestCase):
+    """I2 (2026-07-20): a bare ``uv tool upgrade corvinos`` rebuilds the tool
+    venv strictly from the uv receipt — (a) pip-injected playwright from early
+    installs is wiped, and (b) 0.10.45–0.10.47 receipts without [browser]
+    never get Chromium at all. After a successful upgrade the backend must
+    best-effort re-ensure browser provisioning (fail-soft, never blocking
+    server start)."""
+
+    def setUp(self) -> None:
+        self._orig_platform = sb.sys.platform
+        self._orig_run = sb.subprocess.run
+        self._orig_pick = sb._pick_upgrade_command
+        self._orig_prov = sb._provision_browser_after_upgrade
+        sb._clear_update_convergence_marker()
+
+    def tearDown(self) -> None:
+        sb.sys.platform = self._orig_platform
+        sb.subprocess.run = self._orig_run
+        sb._pick_upgrade_command = self._orig_pick
+        sb._provision_browser_after_upgrade = self._orig_prov
+        sb._clear_update_convergence_marker()
+
+    def _fake_pypi(self, current: str, latest: str):
+        import importlib.metadata as _meta
+        import json as _json
+        import urllib.request as _ur
+
+        class _FakeResp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return _json.dumps({"info": {"version": latest}}).encode()
+
+        orig_version = _meta.version
+        orig_urlopen = _ur.urlopen
+        _meta.version = lambda _pkg: current
+        _ur.urlopen = lambda *a, **k: _FakeResp()
+        return orig_version, orig_urlopen, _meta, _ur
+
+    def test_posix_upgrade_success_triggers_provisioning(self) -> None:
+        import subprocess as _sp
+        sb.sys.platform = "linux"
+        sb._pick_upgrade_command = lambda latest: (
+            ["uv", "tool", "upgrade", "corvinos"], "uv tool upgrade corvinos",
+        )
+        sb.subprocess.run = lambda *a, **k: _sp.CompletedProcess(a, 0, stdout="", stderr="")
+        prov: list[int] = []
+        sb._provision_browser_after_upgrade = lambda: prov.append(1)
+
+        orig_version, orig_urlopen, _meta, _ur = self._fake_pypi("0.10.6", "9.9.9")
+        try:
+            sb.maybe_pypi_autoupdate()
+        finally:
+            _meta.version = orig_version
+            _ur.urlopen = orig_urlopen
+        self.assertEqual(prov, [1])
+
+    def test_failed_upgrade_does_not_trigger_provisioning(self) -> None:
+        import subprocess as _sp
+        sb.sys.platform = "linux"
+        sb._pick_upgrade_command = lambda latest: (
+            ["uv", "tool", "upgrade", "corvinos"], "uv tool upgrade corvinos",
+        )
+        sb.subprocess.run = lambda *a, **k: _sp.CompletedProcess(a, 1, stdout="", stderr="boom")
+        prov: list[int] = []
+        sb._provision_browser_after_upgrade = lambda: prov.append(1)
+
+        orig_version, orig_urlopen, _meta, _ur = self._fake_pypi("0.10.6", "9.9.9")
+        try:
+            sb.maybe_pypi_autoupdate()
+        finally:
+            _meta.version = orig_version
+            _ur.urlopen = orig_urlopen
+        self.assertEqual(prov, [])
+
+    def test_windows_handoff_convergence_triggers_provisioning_on_next_start(self) -> None:
+        """The Windows upgrade happens in a detached script AFTER this process
+        exits — the provisioning check must therefore run on the NEXT start,
+        when the convergence marker shows the handed-off target was reached."""
+        prov: list[int] = []
+        sb._provision_browser_after_upgrade = lambda: prov.append(1)
+        sb._record_update_attempt("0.10.6")  # marker == the now-current version
+
+        orig_version, orig_urlopen, _meta, _ur = self._fake_pypi("0.10.6", "0.10.6")
+        try:
+            sb.maybe_pypi_autoupdate()
+        finally:
+            _meta.version = orig_version
+            _ur.urlopen = orig_urlopen
+        self.assertEqual(prov, [1])
+        # The marker must still be cleared afterwards (existing behaviour).
+        self.assertTrue(sb._update_convergence_ok("0.10.6"))
+
+    def test_up_to_date_without_marker_does_not_provision(self) -> None:
+        prov: list[int] = []
+        sb._provision_browser_after_upgrade = lambda: prov.append(1)
+
+        orig_version, orig_urlopen, _meta, _ur = self._fake_pypi("0.10.6", "0.10.6")
+        try:
+            sb.maybe_pypi_autoupdate()
+        finally:
+            _meta.version = orig_version
+            _ur.urlopen = orig_urlopen
+        self.assertEqual(prov, [])
+
+
+class EnsureBrowserProvisionedTests(unittest.TestCase):
+    """Unit behaviour of the provisioning routine itself (all subprocess
+    boundaries mocked)."""
+
+    def setUp(self) -> None:
+        self._orig_run = sb.subprocess.run
+        self._orig_extra = sb._browser_extra_present
+        self._orig_chromium = sb._playwright_chromium_present
+        self._orig_uvflavour = sb._is_uv_tool_install
+        self._orig_find_uv = sb._find_uv
+
+    def tearDown(self) -> None:
+        sb.subprocess.run = self._orig_run
+        sb._browser_extra_present = self._orig_extra
+        sb._playwright_chromium_present = self._orig_chromium
+        sb._is_uv_tool_install = self._orig_uvflavour
+        sb._find_uv = self._orig_find_uv
+
+    def test_restores_extra_via_uv_receipt_then_installs_chromium(self) -> None:
+        import subprocess as _sp
+        calls: list[list[str]] = []
+        sb.subprocess.run = lambda cmd, **k: calls.append(list(cmd)) or _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+        extra = iter([False, True])          # missing → restored
+        sb._browser_extra_present = lambda: next(extra)
+        chromium = iter([False, True])       # missing → downloaded
+        sb._playwright_chromium_present = lambda: next(chromium)
+        sb._is_uv_tool_install = lambda: True
+        sb._find_uv = lambda: "/x/uv"
+
+        sb._ensure_browser_provisioned()
+
+        self.assertEqual(calls[0], ["/x/uv", "tool", "install", "--force", "corvinos[browser]"])
+        self.assertEqual(calls[1], [sb.sys.executable, "-m", "playwright", "install", "chromium"])
+
+    def test_noop_when_everything_is_present(self) -> None:
+        sb.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("nothing to do — no subprocess may run"))
+        sb._browser_extra_present = lambda: True
+        sb._playwright_chromium_present = lambda: True
+        sb._ensure_browser_provisioned()  # must not raise
+
+    def test_never_raises_even_when_probes_explode(self) -> None:
+        def _boom() -> bool:
+            raise RuntimeError("probe exploded")
+        sb._browser_extra_present = _boom
+        sb._ensure_browser_provisioned()  # fail-soft: must not raise
+
+
 if __name__ == "__main__":
     unittest.main()

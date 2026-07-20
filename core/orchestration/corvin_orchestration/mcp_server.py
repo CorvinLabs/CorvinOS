@@ -645,7 +645,10 @@ _A2A_SEND_SCHEMA: dict = {
     "properties": {
         "endpoint_id": {
             "type": "string",
-            "description": "Target endpoint id — see a2a_list_endpoints for the configured set.",
+            "description": (
+                "Target endpoint id OR its configured connection name (label), "
+                "e.g. 'Papa Laptop' — see a2a_list_endpoints for the configured set."
+            ),
         },
         "instruction": {
             "type": "string",
@@ -754,6 +757,8 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 "description": (
                     "Send a signed task instruction to a paired CorvinOS "
                     "instance (ADR-0103/ADR-0116/ADR-0038 A2A protocol). "
+                    "The target can be addressed by endpoint id or by its "
+                    "connection name (label) as shown in a2a_list_endpoints. "
                     "Pairing must already be configured (console-managed); "
                     "this only sends. Never raises on remote/transport "
                     "failure — check the response's ok/status fields."
@@ -1107,10 +1112,16 @@ class OrchestrationServer:
         if not _A2A_AVAILABLE:
             self._error(msgid, METHOD_NOT_FOUND, "A2A sender not installed (operator/bridges/shared/)")
             return
-        endpoint_id = str(args.get("endpoint_id") or "")
+        endpoint_ref = str(args.get("endpoint_id") or "")
         instruction = str(args.get("instruction") or "")
-        if not endpoint_id or not instruction:
+        if not endpoint_ref or not instruction:
             self._error(msgid, INVALID_PARAMS, "endpoint_id and instruction are required")
+            return
+        # Accept the connection name (label) as well as the raw endpoint id.
+        try:
+            endpoint_id = _RemoteEndpointRegistry().resolve(endpoint_ref)
+        except Exception as exc:  # ambiguous label → refuse, never guess a peer
+            self._error(msgid, INVALID_PARAMS, f"a2a_send target not unique: {exc}")
             return
         timeout_s = _clamp(args.get("timeout_s"), lo=5, hi=120, default=30)
         ttl_s = args.get("ttl_s")
@@ -1154,11 +1165,24 @@ class OrchestrationServer:
         registry = _RemoteEndpointRegistry()
         out: list[dict] = []
         for eid in registry.list_ids():
+            # A4 (2026-07-20, defense-in-depth): labels go to the agent via
+            # peek_label() on BOTH branches — it re-sanitizes stored values,
+            # so pre-ingestion-sanitizer records (raw peer-token labels with
+            # ANSI/bidi content) cannot reach the agent context.
             try:
-                cfg = registry.load(eid)
-                out.append({"endpoint_id": eid, "label": cfg.get("label", ""), "enabled": True})
+                registry.load(eid)  # gates: perms, enabled, required fields
+                out.append({
+                    "endpoint_id": eid,
+                    "label": registry.peek_label(eid),
+                    "enabled": True,
+                })
             except _EndpointError as exc:
-                out.append({"endpoint_id": eid, "enabled": False, "error": str(exc)})
+                out.append({
+                    "endpoint_id": eid,
+                    "label": registry.peek_label(eid),
+                    "enabled": False,
+                    "error": str(exc),
+                })
         self._respond(msgid, self._text_result({"endpoints": out}))
 
     # -- Group 3: ACS --------------------------------------------------

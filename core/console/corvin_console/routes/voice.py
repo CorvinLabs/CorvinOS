@@ -724,6 +724,12 @@ _OPENAI_TTS_VOICES = frozenset({
     "alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer",
 })
 
+# V6: once-per-process dedup for the in-process OpenAI TTS failure WARNING —
+# a permanently dead PAID tier was invisible at DEBUG, but warning on every
+# turn would spam the log. Benign data race under the threadpool: worst case
+# is one extra WARNING.
+_openai_tts_warned_once = False
+
 
 def _try_openai_tts(text: str, lang: str, voice: "str | None") -> "bytes | None":
     """Direct OpenAI TTS call, in-process. Returns audio bytes or None on failure.
@@ -781,7 +787,14 @@ def _try_openai_tts(text: str, lang: str, voice: "str | None") -> "bytes | None"
         )
         return response.content
     except Exception as e:  # noqa: BLE001
-        _log.debug("OpenAI TTS failed (will try say.py): %s", e)
+        # WARNING once per process, DEBUG afterwards (V6). CONTENT-FREE:
+        # type + HTTP status only — str(e) can embed the request payload,
+        # i.e. the text being spoken (compliance: no PII/prompt in logs).
+        global _openai_tts_warned_once
+        level = logging.DEBUG if _openai_tts_warned_once else logging.WARNING
+        _openai_tts_warned_once = True
+        _log.log(level, "in-process OpenAI TTS failed (will try say.py): %s status=%s",
+                 type(e).__name__, getattr(e, "status_code", ""))
         return None
 
 
@@ -844,6 +857,22 @@ def _tts_failed_response(proc: "subprocess.CompletedProcess[str]", stage: str) -
     reason = reason.encode("latin-1", "replace").decode("latin-1")
     return Response(status_code=http_status.HTTP_204_NO_CONTENT,
                     headers={"X-Corvin-Voice-Reason": reason})
+
+
+def _cleanup_tts_tmp(out_path: "Path") -> None:
+    """Unlink a say.py temp target AND its ``.wav`` sibling. Best-effort.
+
+    say.py's Piper tier synthesizes into ``out_path.with_suffix(".wav")``
+    before replacing it onto ``out_path``; when the outer subprocess timeout
+    SIGKILLs say.py mid-synthesis that sibling survives. The old ``finally``
+    blocks unlinked only the ``.opus`` target, so ``corvin_tts_*.wav`` files
+    accumulated in the tempdir (V2b, review 2026-07-20).
+    """
+    for p in (out_path, out_path.with_suffix(".wav")):
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 
 def _serve_tts_response(rec: session_auth.SessionRecord, body: TtsRequest,
@@ -1025,18 +1054,27 @@ def _voice_tts_sync(
         if size == 0 or not proc.stdout.strip():
             return _tts_failed_response(proc, "all-providers-failed")
         data = out_path.read_bytes()
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         console_audit.action_failed(
             tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
             action="voice.tts", target_kind="voice", target_id="web",
             reason="timeout",
         )
-        return Response(status_code=http_status.HTTP_204_NO_CONTENT)
+        # V1: this was the ONE degrade path returning a bare 204 without the
+        # X-Corvin-Voice-Reason diagnostic surface. Route it through
+        # _tts_failed_response with a synthetic "timeout" line appended to
+        # whatever say.py managed to write to stderr before the kill.
+        stderr_txt = exc.stderr or ""
+        if isinstance(stderr_txt, (bytes, bytearray)):
+            stderr_txt = stderr_txt.decode("utf-8", "replace")
+        stderr_txt = ((stderr_txt.rstrip() + "\n") if stderr_txt.strip() else "") \
+            + f"timeout: say.py exceeded {_TTS_TIMEOUT_S:g}s"
+        return _tts_failed_response(
+            subprocess.CompletedProcess(cmd, -1, stdout="", stderr=stderr_txt),
+            "say-timeout",
+        )
     finally:
-        try:
-            out_path.unlink()
-        except OSError:
-            pass
+        _cleanup_tts_tmp(out_path)
 
     return _serve_tts_response(rec, body, data, "say.py")
 
@@ -1270,10 +1308,7 @@ def _voice_session_summary_tts(
         )
         return Response(status_code=http_status.HTTP_204_NO_CONTENT)
     finally:
-        try:
-            out_path.unlink()
-        except OSError:
-            pass
+        _cleanup_tts_tmp(out_path)
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,
@@ -1397,10 +1432,7 @@ def _voice_segment_sync(
         )
         return Response(status_code=http_status.HTTP_204_NO_CONTENT)
     finally:
-        try:
-            out_path.unlink()
-        except OSError:
-            pass
+        _cleanup_tts_tmp(out_path)
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id, sid_fingerprint=rec.sid_fingerprint,

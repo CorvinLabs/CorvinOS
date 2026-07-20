@@ -213,6 +213,94 @@ def test_triage_loosening_gate_low_confidence_does_not_steal_fanout(monkeypatch)
         "danach die drei größten Anbieter") is True
 
 
+# ── D6 (adversarial review 2026-07-20): rule 1b must not hijack coding/LOOP ──
+
+
+@pytest.mark.parametrize("prompt", [
+    # Incidental "worker"/"gleichzeitig" vocabulary inside a coding prompt
+    # used to fire rule 1b (_EXPLICIT_PARALLEL_RE) ABOVE the coding triage and
+    # burn the daily compute unit on the ACS fan-out (finding D6).
+    "Debug why the celery worker crashes during startup",
+    "Fix den Bug: der Background-Worker hängt sich beim Start auf",
+    "Das Programm stürzt ab, wenn zwei Nutzer gleichzeitig speichern — fix das",
+])
+def test_triage_parallel_words_never_hijack_coding(prompt: str) -> None:
+    """§6 invariant: coding never routes into the ACS fan-out (ADR-0202) —
+    not even when the prompt happens to contain parallel vocabulary."""
+    assert cr._should_delegate(prompt) is False
+
+
+def test_triage_parallel_words_never_hijack_loop_recurrence() -> None:
+    """§6 invariant: LOOP shapes never route into the ACS fan-out. The German
+    recurrence form "alle 10 Minuten" must beat the "parallel" wording (D6);
+    the task belongs to the scheduler, not a quota-burning one-shot fan-out."""
+    assert cr._should_delegate(
+        "Prüfe alle 10 Minuten parallel die drei Server auf Erreichbarkeit "
+        "und melde Ausfälle") is False
+
+
+def test_console_directive_block_for_alle_n_minuten_recurrence() -> None:
+    """The console-side recurrence supplement must reach Tier 2 as well: the
+    direct turn for an "alle N Minuten" task carries the LOOP directive."""
+    block = cr._acs_directive_block(
+        "Prüfe alle 10 Minuten parallel die drei Server auf Erreichbarkeit")
+    assert "<acs_directive" in block
+    assert 'primitive="LOOP"' in block
+
+
+@pytest.mark.parametrize("prompt", [
+    # Genuine parallel fan-out wishes must KEEP hitting ACS after the D6
+    # reorder — rule 1b still wins where no coding/LOOP shape is present.
+    "recherchiere mit 3 workern parallel zu E-Bikes, Lastenrädern und Pedelecs",
+    "Vergleiche parallel mit mehreren Workern die Angebote von drei Cloud-Anbietern",
+])
+def test_triage_genuine_parallel_fanout_still_takes_acs(prompt: str) -> None:
+    assert cr._should_delegate(prompt) is True
+
+
+@pytest.mark.parametrize("prompt", [
+    # D6 refutation (2026-07-20): the 0.90 suppression threshold let the whole
+    # 0.60–0.85 LOOP band through — an ordinary monitoring verb (überwache /
+    # beobachte / watch / monitor = 0.85) plus a bare parallel ADVERB fired
+    # rule 1b and burned a compute unit in the fan-out. A bare adverb is far
+    # too weak to force ACS; only an EXPLICIT worker/fan-out phrase may.
+    "beobachte die Preise mehrerer Anbieter gleichzeitig",
+    "überwache die Dashboards parallel",
+    "watch multiple dashboards in parallel",
+    "monitor the prices in parallel",
+    # Recurrence forms the digit-only supplement missed — all must stay DIRECT
+    # once a bare adverb no longer forces the fan-out.
+    "prüfe stündlich parallel die Verfügbarkeit",
+    "mach das zweimal täglich parallel",
+    "check every few minutes in parallel",
+    "prüfe alle sechs Stunden parallel",
+    "mach das jeden Morgen parallel",
+])
+def test_triage_bare_parallel_adverb_never_forces_fanout(prompt: str) -> None:
+    """A bare 'parallel'/'gleichzeitig' adverb must defer to the LOOP/GOAL/
+    COMPUTE blueprint (rule 2) and the fan-out-shape gate (rule 3) — it is not,
+    on its own, an explicit worker demand and must never burn a quota unit."""
+    assert cr._should_delegate(prompt) is False
+
+
+def test_triage_explicit_worker_overrides_incidental_coding_token() -> None:
+    """D6(a) refutation: the reorder wrongly let an incidental coding token
+    ('API') suppress an EXPLICIT worker request. A named worker/fan-out demand
+    outranks a coding-noun collision (F2/F3/F4 explicit-worker guarantee)."""
+    assert cr._should_delegate(
+        "sammle unabhängig voneinander aus mehreren Quellen die API-Preise "
+        "mit mehreren Workern") is True
+
+
+def test_triage_german_dative_mehreren_quellen_takes_acs() -> None:
+    """D7: the inflected dative "aus mehreren Quellen" matched neither
+    `mehrere\\s+quellen` nor `\\bmehrere\\b` — the regexes must cover the
+    German flexion forms (mehrere[nrm]?)."""
+    assert cr._should_delegate(
+        "Recherchiere aus mehreren Quellen die besten E-Bikes und "
+        "vergleiche sie") is True
+
+
 # ── tenant flag + budget ──────────────────────────────────────────────
 
 

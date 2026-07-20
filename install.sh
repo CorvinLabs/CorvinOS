@@ -86,7 +86,11 @@ echo "  uv $(uv --version 2>/dev/null | awk '{print $2}') — $(_green OK)"
 # ── 2. install CorvinOS as an isolated tool (uv fetches Python if needed) ─────
 if [ -n "$EDITABLE" ]; then
     echo "  Installing CorvinOS (editable) from $EDITABLE ..."
-    uv tool install --force --editable "$EDITABLE"
+    # [browser] in the editable receipt too (I5): without it a dev install
+    # loses pip-injected playwright on the next `uv tool upgrade` (the venv is
+    # rebuilt from the receipt) — same upgrade-wipe the PyPI branch below
+    # already guards against.
+    uv tool install --force --editable "${EDITABLE}[browser]"
 else
     # INST-1: install UNPINNED. A `uv tool install corvinos==<ver>` writes that
     # exact pin into the uv receipt, after which `uv tool upgrade corvinos`

@@ -12,6 +12,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import secrets
@@ -71,44 +72,16 @@ def _read_endpoint_cfg(path: Path) -> dict:
 def _resolve_endpoint_id(name: str, endpoints_dir: Path) -> str:
     """Resolve a user-supplied name (endpoint_id OR label) to an actual endpoint_id.
 
-    Resolution order:
-    1. Exact endpoint_id match (filename stem).
-    2. Case-insensitive label match.
-    3. Case-insensitive endpoint_id prefix match (unique prefix only).
-
-    Falls back to the original name so the registry reports 'not found' with
-    full context rather than a cryptic alias-lookup error.
+    Delegates to ``RemoteEndpointRegistry.resolve`` (single source of truth,
+    shared with the MCP ``a2a_send`` tool): exact id → unique case-insensitive
+    label → unique id-prefix. An ambiguous label exits with an error instead
+    of silently picking one peer.
     """
-    if not endpoints_dir.exists():
-        return name
-
-    # Exact match
-    if (endpoints_dir / f"{name}.json").exists():
-        return name
-
-    name_lower = name.lower()
-
-    # Label match (sorted for determinism on ties)
-    for entry in sorted(endpoints_dir.iterdir()):
-        if not entry.is_file() or entry.suffix != ".json":
-            continue
-        cfg = _read_endpoint_cfg(entry)
-        label = cfg.get("label", "")
-        if label and label.lower() == name_lower:
-            return entry.stem
-
-    # Prefix match on endpoint_id (unique only)
-    matches = [
-        entry.stem
-        for entry in sorted(endpoints_dir.iterdir())
-        if entry.is_file()
-        and entry.suffix == ".json"
-        and entry.stem.lower().startswith(name_lower)
-    ]
-    if len(matches) == 1:
-        return matches[0]
-
-    return name  # fall through — let registry report the error
+    try:
+        return rts.RemoteEndpointRegistry(endpoints_dir=endpoints_dir).resolve(name)
+    except rts.EndpointError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        raise SystemExit(2)
 
 
 def _atomic_write(path: Path, payload: dict) -> None:
@@ -722,23 +695,33 @@ def _cmd_migrate_attestation(args: argparse.Namespace) -> int:
     dry_run = getattr(args, "dry_run", False)
     updated, skipped, already_set = [], [], []
 
-    for path in sorted(origins_dir.glob("*.json")):
-        try:
-            cfg = json.loads(path.read_text("utf-8"))
-        except Exception as exc:  # noqa: BLE001
-            print(f"  skip {path.stem}: unreadable ({exc})", file=sys.stderr)
-            skipped.append(path.stem)
-            continue
+    # A2-RESIDUAL (2026-07-20): this read-modify-write runs across processes
+    # (Console PATCH, bridge receiver) — take the shared cross-process config
+    # lock so a concurrent writer holding it cannot be silently clobbered
+    # (advisory flock only serialises between lock-takers). Skipped on dry-run
+    # since nothing is written then.
+    _lock_ctx = (
+        _friendship.config_file_lock(origins_dir)
+        if not dry_run else contextlib.nullcontext()
+    )
+    with _lock_ctx:
+        for path in sorted(origins_dir.glob("*.json")):
+            try:
+                cfg = json.loads(path.read_text("utf-8"))
+            except Exception as exc:  # noqa: BLE001
+                print(f"  skip {path.stem}: unreadable ({exc})", file=sys.stderr)
+                skipped.append(path.stem)
+                continue
 
-        if "require_network_attestation" in cfg:
-            already_set.append((path.stem, cfg["require_network_attestation"]))
-            continue
+            if "require_network_attestation" in cfg:
+                already_set.append((path.stem, cfg["require_network_attestation"]))
+                continue
 
-        # Field absent → this is a pre-M4 origin; add enforcement.
-        cfg["require_network_attestation"] = True
-        if not dry_run:
-            _atomic_write(path, cfg)
-        updated.append(path.stem)
+            # Field absent → this is a pre-M4 origin; add enforcement.
+            cfg["require_network_attestation"] = True
+            if not dry_run:
+                _atomic_write(path, cfg)
+            updated.append(path.stem)
 
     print(f"migration report (dry_run={dry_run}):")
     for oid in updated:
@@ -774,9 +757,14 @@ def _cmd_label_endpoint(args: argparse.Namespace) -> int:
     if any(ord(c) < 0x20 or ord(c) == 0x7F for c in label):
         print("error: label contains control characters", file=sys.stderr)
         return 2
-    cfg = json.loads(path.read_text("utf-8"))
-    cfg["label"] = label
-    _atomic_write(path, cfg)
+    # A2-RESIDUAL (2026-07-20): the read-modify-write below runs across
+    # processes (a concurrent Console PATCH holds config_file_lock while
+    # rewriting the same endpoint file) — take the shared cross-process lock so
+    # this CLI edit cannot silently overwrite a lock-holding writer's change.
+    with _friendship.config_file_lock(_endpoints_dir()):
+        cfg = json.loads(path.read_text("utf-8"))
+        cfg["label"] = label
+        _atomic_write(path, cfg)
     print(json.dumps(_redact(cfg), sort_keys=True, indent=2))
     return 0
 

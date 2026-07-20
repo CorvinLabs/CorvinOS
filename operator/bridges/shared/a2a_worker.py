@@ -25,11 +25,13 @@ trusted. Six concrete injection vectors are mitigated here:
      instruction containing the closing tag (case-insensitive,
      whitespace-tolerant).
 
-  3. **Tool-scope widening** — an instruction asking to use tools beyond
-     ``allowed_personas[0]``'s configured allowed_tools is structurally
-     blocked at the engine level (persona's allowed_tools list enforced
-     by ClaudeCodeEngine's ``--allowed-tools`` flag). A2A does not widen
-     persona reach.
+  3. **Tool-scope widening** — the load-bearing tool gate is the per-origin
+     ``allow_*`` policy, which the receiver compiles into a ``--disallowedTools``
+     denylist AND (see spawn) ``--strict-mcp-config`` so no built-in or MCP
+     tool outside the grant is reachable. The persona's own allowed_tools
+     list is NOT separately loaded here — persona-scope narrowing beyond the
+     denylist is advisory (system-prompt text), so do not rely on it as a
+     security boundary; the ``allow_*`` denylist is the enforced one.
 
   4. **DoS via giant instruction** — capped at 16 KB.
 
@@ -747,6 +749,17 @@ def spawn_a2a_worker(
         working_dir=workspace,
         env=_ENV_CLEAR,
     )
+    # ADR-0144 F-C4-03: isolate MCP for the A2A worker. Without this the
+    # ClaudeCodeEngine subprocess inherits the operator's user-scoped MCP
+    # servers (~/.claude.json — Gmail/Drive/custom tools) since HOME is not
+    # cleared, and those mcp__* tools are NOT covered by the allow_* denylist
+    # (which lists only built-in tool names) — so allow_network=false /
+    # allow_read_files=false would be silently bypassable via MCP. Passing
+    # --strict-mcp-config with no --mcp-config loads ZERO MCP servers, matching
+    # the existing FORGE_ROOT="" intent. Claude-engine-only (the flag is
+    # claude-CLI-specific); other engines keep their own MCP posture.
+    if engine_name == "claude_code":
+        _spawn_kwargs["extra_args"] = ["--strict-mcp-config"]
     if can_pin and resume_sid:
         _spawn_kwargs["resume_session_id"] = resume_sid
 

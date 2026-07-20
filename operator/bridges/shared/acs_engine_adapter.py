@@ -20,7 +20,9 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -144,25 +146,69 @@ def _enforce_acs_compute_quota(tenant_id: str, run_id: "str | None") -> "dict[st
 _FALLBACK_MAX_PER_DAY = 50
 
 
+# D3 (adversarial review): the counter below is a read-modify-write; unlocked,
+# N parallel submissions each read the same count and overshoot the daily cap
+# arbitrarily. Serialize with the LIC-1 pattern from
+# operator/license/compute_quota.py: an in-process threading.Lock around the
+# ENTIRE read-modify-write plus an advisory file lock (POSIX fcntl.flock;
+# msvcrt.locking range lock on Windows) for cross-process safety.
+_FALLBACK_COUNT_LOCK = threading.Lock()
+
+
 def _fallback_quota_ok(tenant_id: str) -> "tuple[bool, int]":
     """Increment + check the per-UTC-day fallback counter. Returns
-    (allowed, count_after). Fail-open: any error returns (True, -1)."""
+    (allowed, count_after). Fail-open on operational errors (any error returns
+    (True, -1) — the cap is a backstop, not a security boundary), but the
+    read-modify-write itself is atomic (LIC-1 lock pattern, review D3)."""
     try:
         import datetime as _dt  # noqa: PLC0415
         day = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
         path = _acs_runs_dir(tenant_id).parent / "fallback_count.json"
         path.parent.mkdir(parents=True, exist_ok=True)
-        cur = {}
-        if path.exists():
+        with _FALLBACK_COUNT_LOCK:
+            _lf = None
+            _locked = False
             try:
-                cur = json.loads(path.read_text(encoding="utf-8")) or {}
-            except Exception:  # noqa: BLE001 — corrupt counter → start fresh
+                _lf = open(path.with_suffix(".lock"), "a+b")  # noqa: SIM115
+                if os.name == "nt":
+                    try:
+                        import msvcrt  # type: ignore  # noqa: PLC0415
+                        msvcrt.locking(_lf.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+                        _locked = True
+                    except OSError:
+                        # Range lock unavailable — the in-process lock above
+                        # still serializes this process (same as LIC-1).
+                        log.warning("acs quota fallback: msvcrt lock unavailable "
+                                    "— relying on in-process lock only")
+                else:
+                    import fcntl  # noqa: PLC0415
+                    fcntl.flock(_lf, fcntl.LOCK_EX)
+                    _locked = True
                 cur = {}
-        count = int(cur.get("count", 0)) if cur.get("utc_day") == day else 0
-        if count >= _FALLBACK_MAX_PER_DAY:
-            return False, count
-        _write_json_atomic(path, {"utc_day": day, "count": count + 1})
-        return True, count + 1
+                if path.exists():
+                    try:
+                        cur = json.loads(path.read_text(encoding="utf-8")) or {}
+                    except Exception:  # noqa: BLE001 — corrupt counter → start fresh
+                        cur = {}
+                count = int(cur.get("count", 0)) if cur.get("utc_day") == day else 0
+                if count >= _FALLBACK_MAX_PER_DAY:
+                    return False, count
+                _write_json_atomic(path, {"utc_day": day, "count": count + 1})
+                return True, count + 1
+            finally:
+                if _lf is not None:
+                    try:
+                        if _locked:
+                            if os.name == "nt":
+                                import msvcrt  # type: ignore  # noqa: PLC0415
+                                _lf.seek(0)
+                                msvcrt.locking(_lf.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+                            else:
+                                import fcntl  # noqa: PLC0415
+                                fcntl.flock(_lf, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+                    _lf.close()
     except Exception:  # noqa: BLE001 — never let the counter break degradation
         return True, -1
 
@@ -200,14 +246,18 @@ def run_acs_quota_fallback(
     # otherwise get an arbitrary-write escape from the tenant runs dir. Mirror
     # the sibling read routes' traversal guard via the canonical component
     # sanitizer (also fixes Windows-illegal chars). Adversarial review F3.
-    rid = run_id or f"acs-fb-{int(t0)}"
+    # uuid4 suffix (review D8): a bare `acs-fb-<int(t0)>` has SECOND
+    # resolution — two fallbacks starting in the same second shared one
+    # run_dir and silently overwrote each other's manifest/result.json.
+    _default_rid = f"acs-fb-{int(t0)}-{uuid.uuid4().hex[:8]}"
+    rid = run_id or _default_rid
     try:
         from forge.paths import fs_safe_component as _fs_safe  # type: ignore
-        rid = _fs_safe(rid) or f"acs-fb-{int(t0)}"
+        rid = _fs_safe(rid) or _default_rid
     except Exception:  # noqa: BLE001 — never let sanitizer import break the fallback
         # Last-resort inline guard: reject traversal/separators outright.
         if (not rid) or ("/" in rid) or ("\\" in rid) or rid.startswith(".") or (".." in rid):
-            rid = f"acs-fb-{int(t0)}"
+            rid = _default_rid
 
     def _failed(err: str) -> dict[str, Any]:
         return {
@@ -426,6 +476,11 @@ def run_acs_workflow(
                 return run_acs_quota_fallback(
                     spec, inputs, tenant_id=tenant_id, run_id=run_id,
                     quota_error=str(_cq_block.get("error") or ""),
+                    # Review D1 (companion of F8): thread the caller's budget
+                    # bound through the chokepoint too — an MCP/scheduler run
+                    # bounded to e.g. max_wall_time=300 must not degrade into
+                    # a BUDGET_FALLBACK-length turn.
+                    budget_override=budget_override,
                 )
             return _cq_block
 

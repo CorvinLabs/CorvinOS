@@ -155,6 +155,7 @@ def _stubbed_env(tmp_path: Path):
     _write_stub(
         fakebin / "uv",
         """
+echo "$@" >> "$HOME/uv-args.log"
 case "$1" in
   --version) echo "uv 9.9.9 (stub)"; exit 0 ;;
   tool) exit 0 ;;
@@ -199,6 +200,22 @@ def test_happy_path_reaches_ready_banner_with_no_hermes(_stubbed_env) -> None:
     assert "CorvinOS is ready!" in result.stdout
     assert "Server is ready!" in result.stdout
     assert f"Installing CorvinOS (editable) from {editable_dir}" in result.stdout
+
+
+def test_editable_install_carries_the_browser_extra(_stubbed_env) -> None:
+    """I5 (2026-07-20): the dev/editable branch must write [browser] into the
+    uv receipt too — without it, the next `uv tool upgrade` rebuilds the venv
+    from an extra-less receipt and silently wipes playwright (the same
+    upgrade-wipe the non-editable branch already guards against)."""
+    fakebin, editable_dir, env = _stubbed_env
+    _write_stub(fakebin / "corvinos-serve", "exit 0")
+
+    result = _run(["--editable", str(editable_dir), "--no-hermes"], env=env)
+
+    assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    uv_log = Path(env["HOME"]) / "uv-args.log"
+    logged = uv_log.read_text() if uv_log.exists() else ""
+    assert f"{editable_dir}[browser]" in logged, logged
 
 
 def test_missing_corvinos_serve_on_path_dies_with_clear_message(_stubbed_env) -> None:

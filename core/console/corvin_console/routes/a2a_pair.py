@@ -974,12 +974,19 @@ def friendship_set_url(
 ) -> dict[str, Any]:
     """Upgrade a PENDING friendship connection to ACTIVE by providing the peer URL."""
     try:
-        _ft.activate_connection(
-            body.kid,
-            body.peer_url.strip().rstrip("/"),
-            origins_dir=_origins_dir(),
-            endpoints_dir=_endpoints_dir(),
-        )
+        # A1 (2026-07-20): activate_connection is a read-modify-write on the
+        # origin+endpoint files (sets state=ACTIVE / enabled=true) — hold
+        # _pair_lock like every other RMW in this module so a concurrent
+        # PATCH (e.g. enabled=false) is not silently overwritten. Cross-
+        # process serialisation comes from config_file_lock inside
+        # activate_connection itself.
+        with _pair_lock:
+            _ft.activate_connection(
+                body.kid,
+                body.peer_url.strip().rstrip("/"),
+                origins_dir=_origins_dir(),
+                endpoints_dir=_endpoints_dir(),
+            )
     except _ft.FriendshipError as exc:
         raise HTTPException(status_code=404, detail="not found") from exc
     console_audit.action_performed(
@@ -1000,7 +1007,7 @@ def friendship_revoke(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Delete a friendship connection (both origin and endpoint files)."""
-    if not kid or "/" in kid or "\\" in kid or kid.startswith("."):
+    if not kid or "/" in kid or "\\" in kid or ":" in kid or kid.startswith("."):
         raise HTTPException(status_code=400, detail="invalid kid")
     origin_path = _origins_dir() / f"{kid}.json"
     endpoint_path = _endpoints_dir() / f"{kid}.json"
@@ -1055,7 +1062,11 @@ def friendship_connections(
         seen[kid] = {
             "kid": kid,
             "state": cfg.get("state", "ACTIVE"),
-            "label": cfg.get("label") or None,
+            # A4-RESIDUAL: sanitize the on-disk label on the way OUT too — a
+            # pre-existing record (or one written before the sanitizer existed)
+            # could carry a bidi override (U+202E) / ANSI escape that would
+            # spoof the friendship name in the React UI.
+            "label": _clean_label(cfg.get("label") or "") or None,
             "personas": cfg.get("allowed_personas", []),
             "url": None,
             "expires": cfg.get("_ft_expires"),
@@ -1076,7 +1087,8 @@ def friendship_connections(
             seen[kid] = {
                 "kid": kid,
                 "state": cfg.get("state", "ACTIVE"),
-                "label": cfg.get("label") or None,
+                # A4-RESIDUAL: sanitize on the way out (see above).
+                "label": _clean_label(cfg.get("label") or "") or None,
                 "personas": [],
                 "url": url,
                 "expires": cfg.get("_ft_expires"),
@@ -1094,6 +1106,64 @@ class OriginPatchRequest(BaseModel):
     enabled: bool | None = Field(default=None)
     allowed_personas: list[str] | None = Field(default=None)
     max_ttl_s: int | None = Field(default=None, ge=10, le=86400)
+    label: str | None = Field(default=None, max_length=80)
+    # M2 tool policy (ADR-0144): deny-by-default in the receiver; these are
+    # explicit per-connection opt-ins mirroring remote_trigger_receiver.
+    allow_bash: bool | None = Field(default=None)
+    allow_network: bool | None = Field(default=None)
+    allow_read_files: bool | None = Field(default=None)
+    allow_write_files: bool | None = Field(default=None)
+    allow_subagents: bool | None = Field(default=None)
+
+
+_ORIGIN_TOOL_FLAGS = (
+    "allow_bash",
+    "allow_network",
+    "allow_read_files",
+    "allow_write_files",
+    "allow_subagents",
+)
+
+
+def _clean_label(raw: str) -> str:
+    """Canonicalize a connection label. Delegates to the shared sanitizer
+    (NFC-normalize, drop non-printable, trim, cap) so operator-set and
+    peer-authored labels are canonicalized identically — see
+    ``a2a_friendship.sanitize_label``."""
+    return _ft.sanitize_label(raw, max_len=80)
+
+
+def _validate_endpoint_url(raw: str) -> str:
+    """A6 (2026-07-20): schema-check an operator-supplied endpoint URL —
+    http/https only, non-empty host, no embedded credentials (userinfo).
+
+    Deliberately NO L35 / danger-category egress gate here: outbound A2A
+    peer POSTs never pass the L35 engine-egress gate (documented egress
+    honesty — see ``a2a_friendship.update_endpoint_url``), and this URL is
+    operator-set via an authenticated CSRF-protected console session, not
+    peer-controlled. Raises HTTPException(400) on violation.
+    """
+    from urllib.parse import urlsplit
+    url = raw.strip()
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        has_credentials = parts.username is not None or parts.password is not None
+    except ValueError:
+        parts = None
+        host = None
+        has_credentials = False
+    if (
+        parts is None
+        or parts.scheme not in ("http", "https")
+        or not host
+        or has_credentials
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="invalid url: must be http(s) with a host and no embedded credentials",
+        )
+    return url
 
 
 @router.patch("/remote-trigger/origins/{origin_id}")
@@ -1103,30 +1173,64 @@ def patch_origin(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Update permission settings for an inbound origin."""
-    if not origin_id or "/" in origin_id or "\\" in origin_id or origin_id.startswith("."):
+    # A8 (2026-07-20): ':' blocked too — 'C:foo' is drive-relative on Windows
+    # and would escape the origins dir (peek_label applies the same rule).
+    if (not origin_id or "/" in origin_id or "\\" in origin_id
+            or ":" in origin_id or origin_id.startswith(".")):
         raise HTTPException(status_code=400, detail="invalid origin_id")
-    origin_path = _origins_dir() / f"{origin_id}.json"
-    if not origin_path.exists():
-        raise HTTPException(status_code=404, detail=f"Origin {origin_id!r} not found")
-    try:
-        cfg = json.loads(origin_path.read_text("utf-8"))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail="Failed to read origin file") from exc
-    if body.spawn_worker is not None:
-        cfg["spawn_worker"] = body.spawn_worker
-    if body.enabled is not None:
-        cfg["enabled"] = body.enabled
     if body.allowed_personas is not None:
-        cfg["allowed_personas"] = body.allowed_personas
-    if body.max_ttl_s is not None:
-        cfg["max_ttl_s"] = body.max_ttl_s
-    _write_secure(origin_path, cfg)
+        if len(body.allowed_personas) > 32 or any(
+            not p or len(p) > 64 or not p.isprintable() for p in body.allowed_personas
+        ):
+            raise HTTPException(status_code=400, detail="invalid allowed_personas")
+    origin_path = _origins_dir() / f"{origin_id}.json"
+    # Hold _pair_lock across the read-modify-write so a concurrent PATCH or
+    # pairing write can't cause a lost update (e.g. silently un-disabling an
+    # origin, or resurrecting stale keys over a fresh re-pair). The file lock
+    # (A2, 2026-07-20) extends the same guarantee across PROCESSES — the
+    # bridge receiver and voice CLI rewrite these files too.
+    changed: list[str] = []
+    with _pair_lock, _ft.config_file_lock(_origins_dir()):
+        if not origin_path.exists():
+            raise HTTPException(status_code=404, detail=f"Origin {origin_id!r} not found")
+        try:
+            cfg = json.loads(origin_path.read_text("utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="Failed to read origin file") from exc
+        if body.spawn_worker is not None:
+            cfg["spawn_worker"] = body.spawn_worker
+            changed.append(f"spawn_worker={body.spawn_worker}")
+        if body.enabled is not None:
+            cfg["enabled"] = body.enabled
+            changed.append(f"enabled={body.enabled}")
+        if body.allowed_personas is not None:
+            cfg["allowed_personas"] = body.allowed_personas
+            changed.append("allowed_personas")
+        if body.max_ttl_s is not None:
+            cfg["max_ttl_s"] = body.max_ttl_s
+            changed.append(f"max_ttl_s={body.max_ttl_s}")
+        if body.label is not None:
+            cleaned = _clean_label(body.label)
+            if cleaned:
+                cfg["label"] = cleaned
+            else:
+                cfg.pop("label", None)
+            changed.append("label")
+        for flag in _ORIGIN_TOOL_FLAGS:
+            val = getattr(body, flag)
+            if val is not None:
+                cfg[flag] = val
+                changed.append(f"{flag}={val}")
+        _write_secure(origin_path, cfg)
+    # Record WHICH rights changed — granting a peer allow_bash must not look
+    # like a label rename in the audit chain (values are non-PII booleans).
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
         action="a2a.origin.updated",
         target_kind="a2a_origin",
         target_id=origin_id,
+        trigger=",".join(changed) if changed else None,
     )
     return {
         "ok": True,
@@ -1135,6 +1239,11 @@ def patch_origin(
         "enabled": cfg.get("enabled", True),
         "allowed_personas": cfg.get("allowed_personas", []),
         "max_ttl_s": cfg.get("max_ttl_s"),
+        # A4-RESIDUAL: when label is not in the patch body, this echoes the raw
+        # on-disk value — sanitize it so a pre-existing bidi/ANSI label can't
+        # spoof the UI in the PATCH response either.
+        "label": _clean_label(cfg.get("label") or "") or None,
+        **{flag: bool(cfg.get(flag, False)) for flag in _ORIGIN_TOOL_FLAGS},
     }
 
 
@@ -1151,7 +1260,8 @@ def delete_origin(
     Friendship origins (``_friendship: true``) must be removed via
     ``DELETE /remote-trigger/pair/friendship/{kid}`` instead.
     """
-    if not origin_id or "/" in origin_id or "\\" in origin_id or origin_id.startswith("."):
+    if (not origin_id or "/" in origin_id or "\\" in origin_id
+            or ":" in origin_id or origin_id.startswith(".")):
         raise HTTPException(status_code=400, detail="invalid origin_id")
     origin_path = _origins_dir() / f"{origin_id}.json"
     if not origin_path.exists():
@@ -1192,7 +1302,8 @@ def delete_endpoint(
     Friendship endpoints must be removed via
     ``DELETE /remote-trigger/pair/friendship/{kid}`` instead.
     """
-    if not endpoint_id or "/" in endpoint_id or "\\" in endpoint_id or endpoint_id.startswith("."):
+    if (not endpoint_id or "/" in endpoint_id or "\\" in endpoint_id
+            or ":" in endpoint_id or endpoint_id.startswith(".")):
         raise HTTPException(status_code=400, detail="invalid endpoint_id")
     endpoint_path = _endpoints_dir() / f"{endpoint_id}.json"
     if not endpoint_path.exists():
@@ -1237,24 +1348,37 @@ def patch_endpoint(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> dict[str, Any]:
     """Update metadata for an outbound endpoint (label, URL, enabled, TTL)."""
-    if not endpoint_id or "/" in endpoint_id or "\\" in endpoint_id or endpoint_id.startswith("."):
+    # A8 (2026-07-20): ':' blocked too — 'C:foo' is drive-relative on Windows
+    # and would escape the endpoints dir (peek_label applies the same rule).
+    if (not endpoint_id or "/" in endpoint_id or "\\" in endpoint_id
+            or ":" in endpoint_id or endpoint_id.startswith(".")):
         raise HTTPException(status_code=400, detail="invalid endpoint_id")
+    validated_url = _validate_endpoint_url(body.url) if body.url is not None else None
     endpoint_path = _endpoints_dir() / f"{endpoint_id}.json"
-    if not endpoint_path.exists():
-        raise HTTPException(status_code=404, detail=f"Endpoint {endpoint_id!r} not found")
-    try:
-        cfg = json.loads(endpoint_path.read_text("utf-8"))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail="Failed to read endpoint file") from exc
-    if body.label is not None:
-        cfg["label"] = body.label
-    if body.url is not None:
-        cfg["url"] = body.url
-    if body.enabled is not None:
-        cfg["enabled"] = body.enabled
-    if body.default_ttl_s is not None:
-        cfg["default_ttl_s"] = body.default_ttl_s
-    _write_secure(endpoint_path, cfg)
+    # Same lost-update guard as patch_origin — a concurrent re-pair writing
+    # this endpoint's keys must not be clobbered by a stale read-back. The
+    # file lock (A2, 2026-07-20) extends the guarantee across PROCESSES
+    # (bridge receiver reconnect updates, voice CLI set-url).
+    with _pair_lock, _ft.config_file_lock(_endpoints_dir()):
+        if not endpoint_path.exists():
+            raise HTTPException(status_code=404, detail=f"Endpoint {endpoint_id!r} not found")
+        try:
+            cfg = json.loads(endpoint_path.read_text("utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="Failed to read endpoint file") from exc
+        if body.label is not None:
+            cleaned = _clean_label(body.label)
+            if cleaned:
+                cfg["label"] = cleaned
+            else:
+                cfg.pop("label", None)
+        if validated_url is not None:
+            cfg["url"] = validated_url
+        if body.enabled is not None:
+            cfg["enabled"] = body.enabled
+        if body.default_ttl_s is not None:
+            cfg["default_ttl_s"] = body.default_ttl_s
+        _write_secure(endpoint_path, cfg)
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
@@ -1265,7 +1389,8 @@ def patch_endpoint(
     return {
         "ok": True,
         "endpoint_id": endpoint_id,
-        "label": cfg.get("label"),
+        # A4-RESIDUAL: sanitize the echoed on-disk label (see patch_origin).
+        "label": _clean_label(cfg.get("label") or "") or None,
         "url": cfg.get("url"),
         "enabled": cfg.get("enabled", True),
         "default_ttl_s": cfg.get("default_ttl_s"),

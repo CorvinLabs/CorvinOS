@@ -370,5 +370,328 @@ def test_start_ping_thread_is_idempotent():
     assert len(started_threads) == 1
 
 
+class TestTelemetryUserAgent:
+    """Cloudflare's bot protection blocks generic Python UAs (Python-urllib/3.x
+    → 403 at the edge, before the Pages Function runs). Every telemetry request
+    that routes through corvin-labs.com MUST therefore carry the explicit
+    CorvinOS-* User-Agent — a missing UA is a silently-dead channel, not a
+    cosmetic issue (adversarial review 2026-07-20: the heartbeat shipped
+    without one and 100% of presence beats died with 403)."""
+
+    @staticmethod
+    def _capture_request(captured):
+        mock_resp = type("R", (), {"getcode": lambda self: 200})()
+
+        def _open(req, timeout):
+            captured.append(req)
+            return type("Ctx", (), {
+                "__enter__": lambda self: mock_resp,
+                "__exit__": lambda self, *a: False,
+            })()
+
+        return _open
+
+    def test_heartbeat_request_carries_corvinos_user_agent(self, tmp_path):
+        from corvin_console.aco import heartbeat as hb
+
+        captured: list = []
+        with (
+            patch.object(hb, "_load_telemetry_token", return_value="tok"),
+            patch.object(hb, "_load_instance_token", return_value="itok"),
+            patch.object(hb, "load_or_create_instance_id", return_value="iid"),
+            patch.object(hb, "_open_no_redirect", side_effect=self._capture_request(captured)),
+        ):
+            assert hb.send_heartbeat(_make_home(tmp_path)) is True
+
+        assert len(captured) == 1
+        ua = captured[0].get_header("User-agent")
+        assert ua is not None and ua.startswith("CorvinOS-"), (
+            f"heartbeat User-Agent is {ua!r} — a generic/absent UA gets 403'd "
+            "by Cloudflare bot protection and kills the presence channel"
+        )
+
+    def test_ping_request_carries_corvinos_user_agent(self, tmp_path):
+        home = _make_home(tmp_path)
+        captured: list = []
+        with (
+            patch.object(hu, "ping_enabled", return_value=True),
+            patch.object(hu, "ensure_ping_tokens", return_value=True),
+            patch.object(hu, "_last_ping_path", return_value=tmp_path / "last_ping"),
+            patch.object(hu, "_load_telemetry_token", return_value="tok"),
+            patch.object(hu, "_load_instance_token", return_value="itok"),
+            patch.object(hu, "load_or_create_instance_id", return_value="iid"),
+            patch.object(hu, "_detect_active_engine", return_value="claude_code"),
+            patch.object(hu, "_open_no_redirect", side_effect=self._capture_request(captured)),
+        ):
+            assert hu.ping_if_due(home) is True
+
+        assert len(captured) == 1
+        ua = captured[0].get_header("User-agent")
+        assert ua is not None and ua.startswith("CorvinOS-")
+
+    def test_heartbeat_url_is_cloudflare_fronted(self):
+        """ADR-0204: like the ping, the heartbeat must route through the
+        corvin-labs.com Pages Function (CF-IPCountry for online geo), and it
+        must follow _PING_BASE so the env override redirects both channels."""
+        from corvin_console.aco import heartbeat as hb
+
+        assert hb._HEARTBEAT_URL == "https://corvin-labs.com/api/telemetry/heartbeat"
+        assert hb._HEARTBEAT_URL.startswith(hu._PING_BASE)
+
+
+class TestPing401Reprovision:
+    """T6 (review finding, pre-existing) + T6-RESIDUAL (2026-07-20 refutation):
+    locally persisted tokens can become permanently invalid when the server
+    rotates/deletes them — ensure_ping_tokens only provisions when the FILES are
+    missing, so ping + heartbeat returned 401 forever. Recovery drops the token
+    pair, re-provisions, and retries EXACTLY once.
+
+    The RESIDUAL hardens the *trigger*: the destructive delete must NOT fire on a
+    single transient 401 (WAF blip, auth-backend hiccup, a rate-limiter answering
+    401 instead of 429) — a fleet-wide simultaneous wipe would drive a
+    self-reinforcing hourly reprovision storm. Only TWO consecutive 401s (the
+    ``.consec_401`` counter) count as persistent token invalidation, and the
+    delete is ADDITIONALLY capped to once per day (``.reprovision_401``). A
+    successful (or otherwise non-401) ping resets the streak counter."""
+
+    @staticmethod
+    def _raise_401(req, timeout):
+        import urllib.error
+        raise urllib.error.HTTPError(
+            str(req.full_url), 401, "Unauthorized", None, None
+        )
+
+    @staticmethod
+    def _ok_ctx():
+        mock_resp = type("R", (), {"getcode": lambda self: 200})()
+        return type("Ctx", (), {
+            "__enter__": lambda self: mock_resp,
+            "__exit__": lambda self, *a: False,
+        })()
+
+    @staticmethod
+    def _write_token_pair(home: Path) -> Path:
+        d = home / "aco" / "telemetry"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "htrace-token.txt").write_text("stale-instance-token", encoding="utf-8")
+        (d / ".telemetry_token").write_text("stale-telemetry-token", encoding="utf-8")
+        return d
+
+    def test_single_transient_401_does_not_delete_tokens(self, tmp_path):
+        """RESIDUAL core: ONE 401 must never destroy the token pair — no
+        re-provision, no retry, tokens stay on disk. The consecutive-401 counter
+        is bumped to 1 and awaits a second confirmation."""
+        home = _make_home(tmp_path)
+        tel_dir = self._write_token_pair(home)
+
+        with (
+            patch.object(hu, "ping_enabled", return_value=True),
+            patch.object(hu, "ensure_ping_tokens", return_value=True) as mock_ensure,
+            patch.object(hu, "load_or_create_instance_id", return_value="iid"),
+            patch.object(hu, "_detect_active_engine", return_value="claude_code"),
+            patch.object(hu, "_open_no_redirect", side_effect=self._raise_401) as mock_open,
+        ):
+            result = hu.ping_if_due(home)
+
+        assert result is False
+        assert mock_open.call_count == 1, "a single 401 must NOT be retried"
+        assert mock_ensure.call_count == 1, (
+            "only the normal entry check may run — a single 401 must NOT "
+            "re-provision"
+        )
+        assert (tel_dir / "htrace-token.txt").exists(), (
+            "a single transient 401 must not delete the instance token"
+        )
+        assert (tel_dir / ".telemetry_token").exists(), (
+            "a single transient 401 must not delete the telemetry token"
+        )
+        assert not (tel_dir / ".reprovision_401").exists(), (
+            "no destructive re-provision may have been attempted"
+        )
+        assert (tel_dir / ".consec_401").read_text().strip() == "1", (
+            "the consecutive-401 counter must be at 1 after one 401"
+        )
+
+    def test_second_consecutive_401_deletes_reprovisions_and_retries_once(self, tmp_path):
+        home = _make_home(tmp_path)
+        tel_dir = self._write_token_pair(home)
+
+        with (
+            patch.object(hu, "ping_enabled", return_value=True),
+            patch.object(hu, "ensure_ping_tokens", return_value=True) as mock_ensure,
+            patch.object(hu, "load_or_create_instance_id", return_value="iid"),
+            patch.object(hu, "_detect_active_engine", return_value="claude_code"),
+            patch.object(hu, "_open_no_redirect", side_effect=self._raise_401) as mock_open,
+        ):
+            hu.ping_if_due(home)  # first 401 — counter → 1, no delete
+            self._write_token_pair(home)  # tokens still present
+            mock_open.reset_mock()
+            mock_ensure.reset_mock()
+            result = hu.ping_if_due(home)  # second consecutive 401 → recovery
+
+        assert result is False, "a still-failing ping must stay a failure (fail-soft)"
+        assert mock_open.call_count == 2, (
+            "the second consecutive 401 triggers EXACTLY one retry "
+            "(send + one retry, no retry loop)"
+        )
+        assert mock_ensure.call_count == 2, (
+            "recovery must re-run ensure_ping_tokens after dropping the pair"
+        )
+        assert not (tel_dir / "htrace-token.txt").exists(), (
+            "the persistent-401 recovery must delete the stale instance token"
+        )
+        assert not (tel_dir / ".telemetry_token").exists(), (
+            "the persistent-401 recovery must delete the stale telemetry token"
+        )
+        assert (tel_dir / ".reprovision_401").exists(), (
+            "the recovery must persist a daily backoff stamp"
+        )
+
+    def test_successful_ping_resets_the_consecutive_401_counter(self, tmp_path):
+        """A non-401 result breaks the streak: after a 401 (counter → 1) a
+        successful ping must clear ``.consec_401``, so a LATER isolated 401
+        again needs a fresh second confirmation before any delete."""
+        home = _make_home(tmp_path)
+        tel_dir = self._write_token_pair(home)
+        stamp = tmp_path / "last_ping"
+
+        with (
+            patch.object(hu, "ping_enabled", return_value=True),
+            patch.object(hu, "ensure_ping_tokens", return_value=True),
+            patch.object(hu, "_last_ping_path", return_value=stamp),
+            patch.object(hu, "_load_telemetry_token", return_value="tok"),
+            patch.object(hu, "_load_instance_token", return_value="itok"),
+            patch.object(hu, "load_or_create_instance_id", return_value="iid"),
+            patch.object(hu, "_detect_active_engine", return_value="claude_code"),
+        ):
+            with patch.object(hu, "_open_no_redirect", side_effect=self._raise_401):
+                hu.ping_if_due(home)  # 401 → counter = 1
+            assert (tel_dir / ".consec_401").read_text().strip() == "1"
+            # A success in between (delete the rate-limit stamp so it sends).
+            stamp.unlink(missing_ok=True)
+            with patch.object(hu, "_open_no_redirect", return_value=self._ok_ctx()):
+                assert hu.ping_if_due(home) is True
+
+        assert not (tel_dir / ".consec_401").exists(), (
+            "a successful ping must reset the consecutive-401 streak counter"
+        )
+
+    def test_second_reprovision_same_day_is_blocked(self, tmp_path):
+        """After the persistent-401 recovery fires once, further 401s the same
+        day must NOT delete the (re-provisioned) tokens again — the daily
+        ``.reprovision_401`` cap gates a second destructive attempt even though
+        the consecutive counter keeps climbing."""
+        home = _make_home(tmp_path)
+        self._write_token_pair(home)
+
+        with (
+            patch.object(hu, "ping_enabled", return_value=True),
+            patch.object(hu, "ensure_ping_tokens", return_value=True),
+            patch.object(hu, "load_or_create_instance_id", return_value="iid"),
+            patch.object(hu, "_detect_active_engine", return_value="claude_code"),
+            patch.object(hu, "_open_no_redirect", side_effect=self._raise_401) as mock_open,
+        ):
+            hu.ping_if_due(home)              # 401 → counter = 1
+            hu.ping_if_due(home)              # 2nd 401 → recovery deletes + stamps
+            tel_dir = self._write_token_pair(home)  # tokens re-appear on disk
+            mock_open.reset_mock()
+            result = hu.ping_if_due(home)     # 3rd 401 same day
+
+        assert result is False
+        assert mock_open.call_count == 1, (
+            "a further 401 on the same day must NOT retry — the daily "
+            ".reprovision_401 stamp gates the destructive recovery"
+        )
+        assert (tel_dir / "htrace-token.txt").exists(), (
+            "the daily cap must keep the re-provisioned token pair untouched"
+        )
+
+
+class TestUploadBackgroundThread:
+    """T2 (bridge review): run_upload_cycle() used to be invoked synchronously
+    from the bridge's main inbox loop — up to ~60s of network timeouts stalled
+    message handling and the SIGTERM drain. The uploader now offers a daemon
+    background thread mirroring start_ping_thread(); run_upload_cycle's own
+    flock + daily stamp keep the hourly cadence double-upload-free."""
+
+    def _reset_guard(self):
+        orig = hu._upload_thread_started
+        hu._upload_thread_started = False
+        return orig
+
+    def test_start_upload_thread_does_not_block_caller_on_a_slow_upload(self, tmp_path):
+        import time as _time
+
+        release = threading.Event()
+        called = threading.Event()
+
+        def _blocking_cycle(_home):
+            called.set()
+            release.wait(timeout=10)
+            # Plain return: after the patch is restored the daemon loop calls
+            # the real run_upload_cycle on tmp_path once (local no_bundle
+            # no-op) and parks in its hourly sleep until process exit.
+
+        orig = self._reset_guard()
+        try:
+            with patch.object(hu, "run_upload_cycle", side_effect=_blocking_cycle):
+                t0 = _time.monotonic()
+                hu.start_upload_thread(tmp_path)
+                elapsed = _time.monotonic() - t0
+                assert elapsed < 1.0, (
+                    f"start_upload_thread blocked the caller for {elapsed:.1f}s — "
+                    "the upload cycle must run in a background daemon thread"
+                )
+                assert called.wait(timeout=5), (
+                    "the background thread must actually run the upload cycle"
+                )
+        finally:
+            release.set()
+            hu._upload_thread_started = orig
+
+    def test_start_upload_thread_is_idempotent_and_daemon(self):
+        started_threads = []
+        orig_thread = threading.Thread
+
+        def _tracking_thread(*a, **k):
+            t = orig_thread(*a, **k)
+            started_threads.append(t)
+            return t
+
+        orig = self._reset_guard()
+        try:
+            with (
+                patch.object(hu, "upload_loop", lambda home: None),
+                patch("threading.Thread", side_effect=_tracking_thread),
+            ):
+                hu.start_upload_thread(Path("/fake/home"))
+                hu.start_upload_thread(Path("/fake/home"))
+        finally:
+            hu._upload_thread_started = orig
+
+        assert len(started_threads) == 1
+        assert started_threads[0].daemon is True, (
+            "the upload thread must be a daemon so it never blocks shutdown"
+        )
+
+    def test_upload_loop_reinvokes_run_upload_cycle_repeatedly(self):
+        calls = []
+
+        def _fake_cycle(home):
+            calls.append(home)
+            if len(calls) >= 3:
+                raise SystemExit  # break out of the infinite loop for the test
+            return ("no_bundle", 0)
+
+        with (
+            patch.object(hu, "run_upload_cycle", _fake_cycle),
+            patch.object(hu.time, "sleep", lambda _s: None),  # no real waiting
+        ):
+            with pytest.raises(SystemExit):
+                hu.upload_loop(Path("/fake/home"))
+
+        assert len(calls) == 3
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

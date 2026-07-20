@@ -1385,6 +1385,77 @@ class TestCILint(unittest.TestCase):
                 )
 
 
+class TestA2ASubagentGating(unittest.TestCase):
+    """A5-HARDENING (2026-07-20 refutation): granting allow_subagents while a
+    dangerous capability (bash / network / write) is DENIED must NOT leave Task/
+    Todo* reachable. Deny-list propagation into Task subagents is not
+    contractually guaranteed, so the receiver force-restricts — keeps Task/Todo*
+    blocked and audits the downgrade — instead of trusting the subagent to
+    inherit the denies."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="corvin-a5-")
+        self.dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _capture_disallowed(self, origin_config: dict) -> list[str]:
+        import a2a_worker
+
+        captured: dict = {}
+
+        class _WR:
+            engine_name = "claude_code"
+            duration_ms = 1
+            status = "error"  # non-ok → short-circuits the result-filter path
+
+        def _fake_spawn(**kwargs):
+            captured["disallowed_tools"] = kwargs.get("disallowed_tools")
+            return _WR()
+
+        recv = rtr.RemoteTriggerReceiver(
+            origins_dir=self.dir, engine_factory=lambda: mock.MagicMock()
+        )
+        env = rtr.TaskEnvelope.from_dict(_build_envelope(instruction="hi"))
+        with mock.patch.object(a2a_worker, "spawn_a2a_worker", _fake_spawn):
+            recv._spawn_and_filter(
+                env=env, origin_config=origin_config, start=time.time(),
+                inbound_attachments=[],
+            )
+        return list(captured.get("disallowed_tools") or [])
+
+    def test_subagents_granted_but_bash_denied_forces_task_block(self):
+        cfg = {"allowed_personas": ["assistant"], "allow_subagents": True,
+               "allow_bash": False, "allow_network": True,
+               "allow_write_files": True, "allow_read_files": True}
+        disallowed = self._capture_disallowed(cfg)
+        self.assertIn("Task", disallowed,
+                      "allow_subagents must be force-ignored while bash is denied")
+        self.assertIn("TodoWrite", disallowed)
+
+    def test_subagents_granted_but_network_denied_forces_task_block(self):
+        cfg = {"allowed_personas": ["assistant"], "allow_subagents": True,
+               "allow_bash": True, "allow_network": False,
+               "allow_write_files": True, "allow_read_files": True}
+        self.assertIn("Task", self._capture_disallowed(cfg))
+
+    def test_subagents_granted_but_write_denied_forces_task_block(self):
+        cfg = {"allowed_personas": ["assistant"], "allow_subagents": True,
+               "allow_bash": True, "allow_network": True,
+               "allow_write_files": False, "allow_read_files": True}
+        self.assertIn("Task", self._capture_disallowed(cfg))
+
+    def test_subagents_granted_all_dangerous_allowed_keeps_task(self):
+        cfg = {"allowed_personas": ["assistant"], "allow_subagents": True,
+               "allow_bash": True, "allow_network": True,
+               "allow_write_files": True, "allow_read_files": True}
+        disallowed = self._capture_disallowed(cfg)
+        self.assertNotIn("Task", disallowed,
+                         "with every dangerous capability granted, "
+                         "allow_subagents may enable Task")
+
+
 if __name__ == "__main__":
     # Stop the module-level forge patch before unittest's own setup (we
     # manage it per-test in setUp/tearDown above), but keep it running

@@ -1571,7 +1571,7 @@ def _acs_directive_block(task_text: str) -> str:
         if str(_shared) not in sys.path:
             sys.path.insert(0, str(_shared))
         from acs_classify import heuristic_classify, render_directive_block  # type: ignore  # noqa: PLC0415
-        _bp = heuristic_classify(task_text)
+        _bp = _recurrence_supplement(heuristic_classify(task_text), task_text)
         # Review F9: this block is injected ONLY on the DIRECT OS-turn (the ACS
         # fan-out path builds its own manager prompt). The WORKFLOW directive
         # says "Use the Workflow tool for parallel multi-agent execution" —
@@ -1932,7 +1932,7 @@ _TRIAGE_VERB_RE = re.compile(
 )
 _TRIAGE_MULTI_RE = re.compile(
     r"\b("
-    r"und dann|anschließend|danach|mehrere|parallel"
+    r"und dann|anschließend|danach|mehrere[nrm]?|parallel"
     r"|schritte|steps|multiple"
     r"| dann(?=\s|$)"
     r"|then\b"
@@ -1988,6 +1988,29 @@ _EXPLICIT_PARALLEL_RE = re.compile(
     r"\b(parallel\w*|gleichzeitig|worker[ns]?|fan[\s\-]?out)\b",
     re.IGNORECASE,
 )
+# An EXPLICIT worker / fan-out demand — the ONLY parallelism signal strong
+# enough to override the LOOP/GOAL/COMPUTE blueprint or an incidental coding
+# token at rule 1b (D6 refutation 2026-07-20). Deliberately narrower than
+# _EXPLICIT_PARALLEL_RE: a bare adverb ("parallel"/"gleichzeitig") is excluded
+# — "überwache die Dashboards parallel" is genuine monitoring (LOOP → DIRECT),
+# not a fan-out request — and so is a bare "worker(s)" noun, which collides
+# with "celery worker crashes" (a coding task). A count/quantifier or the
+# "parallele Worker" / "fan-out" phrasing is required, matching every pinned
+# F2/F3/F4 fan-out prompt ("mit mehreren Workern", "3 workern", "mehrere
+# parallele Worker").
+_EXPLICIT_WORKER_RE = re.compile(
+    r"\b("
+    r"fan[\s\-]?out"
+    r"|parallele[nrms]?\s+worker[ns]?"
+    r"|(\d+|mehrere[nrm]?|zwei|drei|vier|fünf|sechs|several|multiple)"
+    r"\s+(parallele[nrms]?\s+)?worker[ns]?"
+    # "parallele <plural work-noun>" — the inflected adjective + a plural
+    # fan-out noun ("drei parallele Recherchen") is an explicit fan-out; the
+    # bare adverb "parallel" ("… Dashboards parallel") is NOT and is excluded.
+    r"|parallele[nrms]?\s+(recherchen|analysen|durchläufe|läufe|abfragen|suchen)"
+    r")\b",
+    re.IGNORECASE,
+)
 # A real worker-engine name, required before a DELEGATE-shaped prompt routes to
 # the direct path (review F2): bare "delegiere" (no engine) and "mit Hermes"
 # the parcel carrier must not silently steer a task off the fan-out.
@@ -2003,7 +2026,10 @@ _TRIAGE_FANOUT_RE = re.compile(
     r"\b("
     r"parallel\w*|gleichzeitig|worker[ns]?|fan[\s\-]?out"
     r"|unabhängig\s+voneinander|independently"
-    r"|mehrere\s+(quellen|perspektiven|varianten|ansätze|kandidaten|recherchen)"
+    # `mehrere[nrm]?` covers the German flexion forms — the dative "aus
+    # mehreren Quellen" matched neither bare `mehrere` nor `mehrere\s+quellen`
+    # (adversarial review D7).
+    r"|mehrere[nrm]?\s+(quellen|perspektiven|varianten|ansätze|kandidaten|recherchen)"
     r"|multiple\s+(sources|perspectives|variants|approaches|candidates)"
     r"|aus\s+\w+\s+perspektiven|from\s+\w+\s+perspectives"
     r"|für\s+jede[ns]?\b|for\s+each\b|je\s+eine?n?\b"
@@ -2013,6 +2039,38 @@ _TRIAGE_FANOUT_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+
+# German recurrence "alle N Minuten/Stunden/Tage" (adversarial review D6): the
+# shared acs_classify heuristic only knows "jede[rn] …" and English
+# "every N …", so this equally common form classified as DIRECT — and its
+# frequent companion word "parallel" ("prüfe alle 10 Minuten parallel …") then
+# hijacked the scheduler task into the quota-burning ACS fan-out via rule 1b.
+# Console-side supplement (acs_classify is a shared bridge module; the fix
+# lives in the routing layer that needs it — known-gap §7 of
+# delegation-routing.md tracks folding the tables together).
+_RECURRENCE_DE_RE = re.compile(
+    r"\balle\s+(\d+|zwei|drei|vier|fünf|zehn|paar)\s*"
+    r"(minuten?|stunden?|sekunden?|tage[n]?)\b",
+    re.IGNORECASE,
+)
+
+
+def _recurrence_supplement(bp, task_text: str):
+    """Upgrade a weak/DIRECT blueprint to LOOP on a German 'alle N <unit>'
+    recurrence. Mirrors the 0.90 weight of the shared `jede[rn]…` signal.
+    Never downgrades a strong (>=0.90) non-DIRECT classification; fail-open."""
+    try:
+        if (bp is not None
+                and bp.primitive != "LOOP"
+                and (bp.primitive == "DIRECT" or bp.confidence < 0.90)
+                and _RECURRENCE_DE_RE.search(task_text)):
+            from acs_classify import ACSBlueprint  # type: ignore  # noqa: PLC0415
+            return ACSBlueprint(
+                primitive="LOOP", confidence=0.90, path="heuristic",
+                reason="console supplement: German recurrence 'alle N <unit>'")
+    except Exception:  # noqa: BLE001 — advisory layer, never break the turn
+        pass
+    return bp
 
 # --- Console chat inline-artifact gate -------------------------------------
 # A file Claude (or a delegated ACS run) writes is surfaced into the chat as an
@@ -2393,7 +2451,7 @@ def _acs_x_blueprint(prompt: str):
         if str(_shared) not in sys.path:
             sys.path.insert(0, str(_shared))
         from acs_classify import heuristic_classify  # type: ignore  # noqa: PLC0415
-        return heuristic_classify(prompt)
+        return _recurrence_supplement(heuristic_classify(prompt), prompt)
     except Exception as _exc:  # noqa: BLE001 — advisory layer, never break the turn
         # Log ONCE per process (review observation): if acs_classify ever fails
         # to import in a deployment, rule 2 silently vanishes and every
@@ -2430,10 +2488,17 @@ def _should_delegate(prompt: str) -> bool:
 
     Priority ladder (deterministic, 0 ms, no API):
       1. ``/delegate`` prefix → ACS (explicit user override, unchanged).
-      1b. EXPLICIT parallelism ("parallel", "mehreren Workern", "fan-out")
-         → ACS, checked BEFORE the blueprint gate: the user named workers,
-         and a product-noun collision (Apple *Watch*, 4K *Monitor*, *mit
-         Hermes* the parcel carrier) must not hijack that to DIRECT (F2/F3/F4).
+      1b. An EXPLICIT worker/fan-out demand ("mehreren Workern", "3 workers",
+         "fan-out", "parallele Recherchen") → ACS, checked BEFORE the blueprint
+         and coding gates: the user literally named workers, and a product-noun
+         collision (Apple *Watch*, 4K *Monitor*, *mit Hermes*) or an incidental
+         coding token ("API") must not hijack that to DIRECT (F2/F3/F4 + D6(a)).
+         A BARE parallel adverb ("parallel"/"gleichzeitig") is deliberately NOT
+         enough here (D6 refutation): it is too weak to force the quota-burning
+         fan-out — "überwache die Dashboards parallel" is monitoring (LOOP),
+         "prüfe alle 10 Minuten parallel" is a scheduler task — so a bare adverb
+         falls through to rule 2 (blueprint → DIRECT) and rule 3 (fan-out shape),
+         which already require a substantive multi-source shape.
       2. ACS-X shape LOOP/GOAL/COMPUTE at ANY confidence → DIRECT: a
          recurring/monitoring task belongs to the scheduler or a /loop
          iteration, a persistent objective to the goal system, data
@@ -2460,11 +2525,32 @@ def _should_delegate(prompt: str) -> bool:
     p = prompt.strip()
     if p.lower().startswith(_DELEGATE_PREFIX):
         return True
-    # Rule 1b — explicit parallelism wins over every classifier (see F2/F3/F4).
-    if _EXPLICIT_PARALLEL_RE.search(p):
+    # D6 (adversarial review 2026-07-20): the coding triage and the
+    # LOOP/GOAL/COMPUTE blueprint are evaluated BEFORE rule 1b fires. Rule 1b
+    # used to sit unconditionally above both, so incidental parallel
+    # vocabulary ("celery worker crashes", "zwei Nutzer gleichzeitig",
+    # "alle 10 Minuten parallel") hijacked coding and scheduler tasks into
+    # the quota-burning fan-out — violating the §6 invariants of
+    # delegation-routing.md ("Coding never routes into the ACS fan-out",
+    # "LOOP … never route into the ACS fan-out"). DELEGATE deliberately stays
+    # BELOW rule 1b: "mit Hermes" the parcel carrier + explicit workers must
+    # keep fanning out (F2/F3/F4).
+    _coding = bool(_TRIAGE_CODING_RE.search(p))
+    _bp = _acs_x_blueprint(p)
+    # Rule 1b — an EXPLICIT worker/fan-out demand wins over the classifier's
+    # product-noun collisions (Apple *Watch* → LOOP 0.85, 4K *Monitor*, *mit
+    # Hermes*) AND over an incidental coding token: the user literally named
+    # workers, so honour it (F2/F3/F4, + D6(a) refutation — an "API" token must
+    # not cancel "mit mehreren Workern"). The earlier fix suppressed this on a
+    # 0.90 confidence threshold, which let the whole 0.60–0.85 LOOP band
+    # ("überwache … parallel") slip through on a bare adverb. The real
+    # discriminator is signal STRENGTH, not confidence: only an explicit
+    # worker/fan-out phrase reaches here. A bare "parallel"/"gleichzeitig"
+    # adverb falls through to rule 2 (the LOOP/GOAL/COMPUTE blueprint routes it
+    # DIRECT) and rule 3 (which demands a substantive multi-source shape).
+    if _EXPLICIT_WORKER_RE.search(p):
         return True
     # Rule 2 — non-fan-out ACS-X primitives route to their correct mechanism.
-    _bp = _acs_x_blueprint(p)
     if _bp is not None and _bp.primitive in _NON_FANOUT_PRIMITIVES:
         if _bp.primitive == "DELEGATE":
             # Only a NAMED engine is an unambiguous delegate intent.
@@ -2480,7 +2566,7 @@ def _should_delegate(prompt: str) -> bool:
         # parallel/worker words already returned True at rule 1b.)
         if has_verb and (has_multi or len(p) >= 160):
             return True
-    if _TRIAGE_CODING_RE.search(p):
+    if _coding:
         return False
     if len(p) >= 400:
         return True
@@ -3368,16 +3454,28 @@ async def stream_turn(
                 yield {"type": "notice", "subtype": "acs_fallback",
                        "message": "ACS-Run nicht möglich — der Task läuft direkt über "
                                   "Claude Code.\n\n"}
+        _fb_quota_exceeded = False
         try:
             if not _quota_fallback:
                 _cq_inc(_cq_home, channel="web-chat-acs", chat_key=f"web:{sess.tenant_id}:{sess.sid}")
         except _CQErr:  # type: ignore[misc]
             _quota_fallback = True
-            # L34/L35 fix: re-gate with the ACTUAL fallback engine.  The initial
-            # gate (above) was called with engine_id="acs"; after quota fallback the
-            # real engine is _os_engine (claude_code / hermes / …).  Without this
-            # second check, CONFIDENTIAL data could bypass residency policy because
-            # the gate never evaluated the engine that will actually spawn.
+            _fb_quota_exceeded = True
+        except Exception:  # noqa: BLE001 — operational error swallowed by increment_and_check
+            pass
+
+        if _quota_fallback:
+            # L34/L35 fix: re-gate with the ACTUAL fallback engine on EVERY
+            # fallback branch (adversarial review D2 — previously only the
+            # quota-exhausted branch re-gated; the "ACS runtime unavailable",
+            # "empty task" and "acs dir uncreatable" branches flipped to the
+            # direct engine ungated). The initial gate (above) was called with
+            # engine_id="acs"; after ANY fallback the real engine is _os_engine
+            # (claude_code / hermes / …). Without this second check,
+            # CONFIDENTIAL data could bypass residency policy because the gate
+            # never evaluated the engine that will actually spawn. Fail-closed:
+            # a refusal ends the turn. The gate runs BEFORE the quota notice so
+            # a blocked turn never announces a fallback it will not perform.
             _fb_gate = _spawn_gates.check_console_spawn_or_refusal(
                 _task_text, tenant_id=sess.tenant_id, persona="assistant",
                 channel=CHANNEL, chat_key=sess.chat_key,
@@ -3387,7 +3485,7 @@ async def stream_turn(
                 _os_audit("os_turn.started", {"model": _os_model_used})
                 tm.record_event(task_id, {
                     "event": "task.failed", "exit_code": 1,
-                    "error": "quota-fallback engine blocked by pre-spawn gate",
+                    "error": "fallback engine blocked by pre-spawn gate",
                 })
                 _audit_emit(sess, "web.turn.completed", rc=1,
                             result_chars=len(_fb_gate), usage=None,
@@ -3399,17 +3497,16 @@ async def stream_turn(
                 _append_turn(sess, "assistant", [{"kind": "text", "text": _fb_gate}])
                 yield {"type": "done"}
                 return
-            _quota_notice = (
-                "Dein tägliches ACS-Kontingent ist ausgeschöpft "
-                "(1 Delegation-Run/Tag im Free-Tier). "
-                "Der Task wird über Claude Code ausgeführt — ohne parallele Worker.\n"
-                "Für unbegrenzte ACS-Runs: [Member-Upgrade](https://corvin-labs.com/pricing)\n\n"
-            )
-            yield {"type": "notice", "subtype": "quota_fallback",
-                   "message": _quota_notice}
-            yield {"type": "delta", "text": _quota_notice}
-        except Exception:  # noqa: BLE001 — operational error swallowed by increment_and_check
-            pass
+            if _fb_quota_exceeded:
+                _quota_notice = (
+                    "Dein tägliches ACS-Kontingent ist ausgeschöpft "
+                    "(1 Delegation-Run/Tag im Free-Tier). "
+                    "Der Task wird über Claude Code ausgeführt — ohne parallele Worker.\n"
+                    "Für unbegrenzte ACS-Runs: [Member-Upgrade](https://corvin-labs.com/pricing)\n\n"
+                )
+                yield {"type": "notice", "subtype": "quota_fallback",
+                       "message": _quota_notice}
+                yield {"type": "delta", "text": _quota_notice}
 
         if not _quota_fallback:
             run_id = f"acs-web-{int(time.time())}-{secrets.token_hex(3)}"

@@ -21,6 +21,7 @@ import json
 import os
 import socket
 import sys
+import threading
 import time
 from html import escape as _html_escape
 from pathlib import Path
@@ -2832,6 +2833,18 @@ class ACSRunRequest(BaseModel):
         description="Override delegation_loop.budget fields (e.g. max_loops, max_depth)",
     )
 
+# D4 (adversarial review 2026-07-20): submit_acs_workflow_run is a SYNCHRONOUS
+# handler — after quota exhaustion every request degrades to a long-running
+# quota-fallback turn on an anyio worker thread, so ~40 parallel requests from
+# one free-tier tenant could occupy the whole threadpool with un-metered work.
+# Minimal mitigation (no async redesign): cap the CONCURRENT quota-fallback
+# executions per tenant; excess requests fail fast with a typed 429 instead of
+# blocking a thread. The metered ACS path and dry_run are unaffected.
+_ACS_FB_MAX_CONCURRENT = 2
+_acs_fb_active: dict[str, int] = {}
+_acs_fb_active_lock = threading.Lock()
+
+
 @router.post("/compute/acs/runs")
 def submit_acs_workflow_run(
     body: ACSRunRequest,
@@ -2887,15 +2900,51 @@ def submit_acs_workflow_run(
             else:
                 raise
 
-    console_audit.action_performed(
-        tenant_id=rec.tenant_id,
-        sid_fingerprint=rec.sid_fingerprint,
-        action="acs.run_submit",
-        target_kind="acs_workflow",
-        target_id=_wf_audit_id,
-    )
+    # D4: acquire a per-tenant fallback slot BEFORE dispatching — over-limit
+    # requests get the typed 429 immediately instead of blocking a worker
+    # thread behind long-running degraded turns.
+    _fb_slot = False
+    if _quota_fb:
+        with _acs_fb_active_lock:
+            _n_active = _acs_fb_active.get(rec.tenant_id, 0)
+            if _n_active >= _ACS_FB_MAX_CONCURRENT:
+                console_audit.action_failed(
+                    tenant_id=rec.tenant_id,
+                    sid_fingerprint=rec.sid_fingerprint,
+                    action="acs.run_submit",
+                    target_kind="acs_workflow",
+                    target_id=_wf_audit_id,
+                    reason="fallback_concurrency_limit",
+                )
+                raise HTTPException(
+                    http_status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail={
+                        "error": "license_limit",
+                        "feature": "acs_quota_fallback",
+                        "reason": "fallback_concurrency_limit",
+                        "msg": (
+                            f"{_n_active} degraded (quota-fallback) ACS runs "
+                            "already in flight for this tenant — retry later "
+                            "or upgrade for metered ACS runs"),
+                        "upgrade_url": "https://corvin-labs.com/pricing",
+                    })
+            _acs_fb_active[rec.tenant_id] = _n_active + 1
+            _fb_slot = True
 
     try:
+        # D4-RESIDUAL (2026-07-20): this audit write lived BETWEEN the slot
+        # acquire and the try block. An I/O error on the hash-chain here leaked
+        # the _acs_fb_active slot permanently (finally never ran) — two such
+        # leaks pinned the tenant at 429 forever. Inside the try, the finally
+        # below releases the slot on this path too. The slot acquire itself
+        # stays outside so its typed 429 HTTPException is not remapped to 500.
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="acs.run_submit",
+            target_kind="acs_workflow",
+            target_id=_wf_audit_id,
+        )
         if _quota_fb:
             # L44 house-rules gate runs INSIDE run_acs_quota_fallback
             # (fail-closed) — same guarantee as the ACSRuntime.run chokepoint.
@@ -2928,6 +2977,16 @@ def submit_acs_workflow_run(
         )
         raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR,
                             f"ACS run failed: {type(e).__name__}") from e
+    finally:
+        # D4: release the fallback slot on every exit path (success, refusal
+        # mapping below, and the 500 above).
+        if _fb_slot:
+            with _acs_fb_active_lock:
+                _left = _acs_fb_active.get(rec.tenant_id, 1) - 1
+                if _left <= 0:
+                    _acs_fb_active.pop(rec.tenant_id, None)
+                else:
+                    _acs_fb_active[rec.tenant_id] = _left
 
     # L44 acceptable-use refusal (ADR-0143): the run was blocked by the
     # house-rules gate at the ACSRuntime.run chokepoint (run_acs_workflow →

@@ -100,6 +100,17 @@ except ImportError:
         sys.path.insert(0, str(_shared))
     from instance_identity import get_instance_id  # type: ignore[import-not-found]
 
+# Shared label sanitizer (A4 defense-in-depth, 2026-07-20): labels stored
+# BEFORE the ingestion sanitizer existed may still carry ANSI escapes / bidi
+# overrides — sanitize again at every read-side delivery point.
+try:
+    from a2a_friendship import sanitize_label as _sanitize_label  # type: ignore[import-not-found]
+except ImportError:
+    _shared = Path(__file__).resolve().parent
+    if str(_shared) not in sys.path:
+        sys.path.insert(0, str(_shared))
+    from a2a_friendship import sanitize_label as _sanitize_label  # type: ignore[import-not-found]
+
 # ── IBC attestation (ADR-0103 Protocol v7 / IBC concept) ─────────────────
 try:
     from instance_identity import (  # type: ignore[import-not-found]
@@ -248,6 +259,94 @@ class RemoteEndpointRegistry:
             if entry.is_file() and entry.suffix == ".json":
                 out.append(entry.stem)
         return out
+
+    def peek_label(self, endpoint_id: str) -> str:
+        """Best-effort label read WITHOUT the load() gates (works for
+        disabled endpoints too). Returns \"\" when unreadable/absent.
+
+        The stored value is re-sanitized on read (A4, 2026-07-20): records
+        written before the ingestion sanitizer existed may carry raw
+        peer-token labels, and this is a delivery point (MCP
+        ``a2a_list_endpoints``, ``resolve()``, CLI listings)."""
+        if (
+            not endpoint_id
+            or "/" in endpoint_id
+            or "\\" in endpoint_id
+            or endpoint_id.startswith(".")
+            or ":" in endpoint_id
+        ):
+            return ""
+        path = self._dir / f"{endpoint_id}.json"
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                return _sanitize_label(json.load(fh).get("label") or "")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _norm(s: str) -> str:
+        """Canonical comparison form: NFC + casefold + strip. Two labels that
+        render identically MUST compare equal here, otherwise a homoglyph/NFD
+        twin (peer-authored labels are only length-capped upstream) would
+        evade the ambiguity guard and misroute a signed task."""
+        import unicodedata as _ud
+        return _ud.normalize("NFC", s).casefold().strip()
+
+    def resolve(self, name: str) -> str:
+        """Resolve a user/agent-supplied reference (endpoint_id OR connection
+        name/label) to an endpoint_id.
+
+        Resolution order: exact id → unique label → unique id-prefix. An
+        exact endpoint_id match wins deterministically (ids are
+        operator-assigned and unique; a peer-controlled label must not be
+        able to shadow a foreign id — A3, 2026-07-20). Below that, any
+        collision that points at *different* endpoints raises
+        ``EndpointError("ambiguous_endpoint_ref")`` rather than silently
+        picking one — a signed task must never go to a guessed peer. Falls
+        through to the original name (so ``load()`` reports 'unknown_endpoint'
+        with full context) only when nothing matches.
+        """
+        if not name or not self._dir.exists():
+            return name
+
+        ids = self.list_ids()
+        q = self._norm(name)
+
+        exact_id = name if (self._dir / f"{name}.json").exists() else None
+
+        label_matches = {
+            eid for eid in ids
+            if (lbl := self.peek_label(eid)) and self._norm(lbl) == q
+        }
+        prefix_matches = {eid for eid in ids if self._norm(eid).startswith(q)}
+
+        # Collect every distinct endpoint the reference could designate,
+        # honoring precedence but treating any conflict across match types
+        # as ambiguous (F1/F2 misrouting: label shadowing a prefix, etc.).
+        if exact_id is not None:
+            # A3 (2026-07-20): the exact endpoint_id match wins DETERMINISTICALLY.
+            # endpoint_ids are operator-assigned and unique; labels are
+            # peer-controlled (sanitized but content-free). If a colliding
+            # label could make the exact-id reference ambiguous, a peer that
+            # sets its label equal to ANOTHER peer's id would render that
+            # victim unaddressable via CLI and MCP — a peer-triggerable
+            # availability DoS. Labels are therefore consulted only when no
+            # exact id match exists; label↔label collisions below stay
+            # fail-closed ambiguous.
+            return exact_id
+
+        if len(label_matches) > 1:
+            raise EndpointError(f"ambiguous_endpoint_ref:{name}")
+        if len(label_matches) == 1:
+            (only_label,) = tuple(label_matches)
+            if prefix_matches - {only_label}:
+                raise EndpointError(f"ambiguous_endpoint_ref:{name}")
+            return only_label
+
+        if len(prefix_matches) == 1:
+            return next(iter(prefix_matches))
+
+        return name
 
 
 # ── Error Taxonomy (ADR-0197) ─────────────────────────────────────────────

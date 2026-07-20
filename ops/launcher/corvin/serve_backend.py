@@ -91,6 +91,20 @@ def _pip_available() -> bool:
     return importlib.util.find_spec("pip") is not None
 
 
+def _find_uv() -> str | None:
+    """Locate the uv binary, probing the usual install dirs when it is not on
+    PATH — Windows %USERPROFILE%\\.local\\bin is often not on the
+    Task-Scheduler PATH."""
+    uv = shutil.which("uv")
+    if not uv:
+        for cand in (Path.home() / ".local" / "bin" / ("uv.exe" if os.name == "nt" else "uv"),
+                     Path.home() / ".cargo" / "bin" / ("uv.exe" if os.name == "nt" else "uv")):
+            if cand.is_file():
+                uv = str(cand)
+                break
+    return uv
+
+
 def _pick_upgrade_command(latest: str) -> tuple[list[str] | None, str]:
     """Choose the right upgrade command for this install flavour.
 
@@ -98,14 +112,7 @@ def _pick_upgrade_command(latest: str) -> tuple[list[str] | None, str]:
     but cannot find the tool to run it (so the caller prints the manual hint
     instead of running a broken command).
     """
-    uv = shutil.which("uv")
-    # Windows %USERPROFILE%\.local\bin is often not on the Task-Scheduler PATH.
-    if not uv:
-        for cand in (Path.home() / ".local" / "bin" / ("uv.exe" if os.name == "nt" else "uv"),
-                     Path.home() / ".cargo" / "bin" / ("uv.exe" if os.name == "nt" else "uv")):
-            if cand.is_file():
-                uv = str(cand)
-                break
+    uv = _find_uv()
 
     if _is_uv_tool_install() or (uv and not _pip_available()):
         if uv:
@@ -118,6 +125,111 @@ def _pick_upgrade_command(latest: str) -> tuple[list[str] | None, str]:
         [sys.executable, "-m", "pip", "install", f"corvinos=={latest}", "--quiet"],
         f"pip install corvinos=={latest}",
     )
+
+
+# ── Post-upgrade browser provisioning (I2, 2026-07-20) ────────────────────────
+# A bare `uv tool upgrade corvinos` rebuilds the tool venv strictly from the uv
+# receipt: (a) playwright pip-injected by early installers is wiped, and
+# (b) 0.10.45–0.10.47-era installs (whose installer never fetched Chromium)
+# would NEVER get the browser. After a successful upgrade we therefore
+# best-effort re-ensure the [browser] extra + the Chromium binary. Everything
+# here is fail-soft and runs in a daemon thread — a failure or slow download
+# must never block or delay server startup.
+
+_BROWSER_PROVISION_TIMEOUT = 900  # seconds — bounded, the download is ~150 MB
+
+# Probe run in the (possibly freshly rebuilt) tool venv — mirrors the
+# installer's _chromium_present() without importing playwright in-process
+# (this process may predate the rebuild).
+_CHROMIUM_PROBE_SRC = (
+    "import os, sys\n"
+    "from playwright.sync_api import sync_playwright\n"
+    "with sync_playwright() as pw:\n"
+    "    p = pw.chromium.executable_path\n"
+    "sys.exit(0 if p and os.path.exists(p) else 1)\n"
+)
+
+
+def _browser_extra_present() -> bool:
+    """True when the venv behind sys.executable can import playwright."""
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-c", "import playwright"],
+            capture_output=True, timeout=60,
+        )
+        return probe.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _playwright_chromium_present() -> bool:
+    """True when Playwright (in the venv behind sys.executable) can resolve an
+    existing Chromium executable."""
+    try:
+        probe = subprocess.run(
+            [sys.executable, "-c", _CHROMIUM_PROBE_SRC],
+            capture_output=True, timeout=120,
+        )
+        return probe.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _ensure_browser_provisioned() -> None:
+    """Best-effort browser re-provisioning after an auto-update. Fail-soft:
+    logs and swallows every failure — the server keeps running regardless."""
+    try:
+        if not _browser_extra_present():
+            if not _is_uv_tool_install():
+                # pip flavour: don't second-guess the environment — point at
+                # the entry point that provisions with the right interpreter.
+                print("  ℹ browser automation is missing — finish with: corvin-install --browser")
+                return
+            uv = _find_uv()
+            if uv is None:
+                print("  ℹ browser extra missing and uv not found — run: "
+                      "uv tool install --force 'corvinos[browser]'")
+                return
+            # Restore the extra INTO THE RECEIPT (not pip-inject) so the next
+            # `uv tool upgrade` keeps it. POSIX-safe while running: the venv
+            # files are replaced by inode, our open handles stay valid.
+            print("  restoring the corvinos[browser] extra (lost in upgrade) …")
+            r = subprocess.run(
+                [uv, "tool", "install", "--force", "corvinos[browser]"],
+                capture_output=True, text=True, timeout=_BROWSER_PROVISION_TIMEOUT,
+            )
+            if r.returncode != 0 or not _browser_extra_present():
+                print("  ⚠ could not restore the [browser] extra — run: "
+                      "uv tool install --force 'corvinos[browser]'")
+                return
+        if _playwright_chromium_present():
+            return
+        print("  downloading Playwright Chromium (~150 MB, one-time) …")
+        r = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            capture_output=True, timeout=_BROWSER_PROVISION_TIMEOUT,
+        )
+        if r.returncode == 0 and _playwright_chromium_present():
+            print("  ✓ browser automation provisioned")
+        else:
+            print("  ⚠ Chromium download failed — finish with: corvin-install --browser")
+    except Exception as exc:  # noqa: BLE001 — never propagate into startup
+        try:
+            print(f"(browser provisioning skipped: {exc})")
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _provision_browser_after_upgrade() -> None:
+    """Run the provisioning check in a daemon thread — never blocks startup."""
+    try:
+        threading.Thread(
+            target=_ensure_browser_provisioned,
+            name="corvin-browser-provision",
+            daemon=True,
+        ).start()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _update_marker_path() -> Path:
@@ -393,6 +505,17 @@ def maybe_pypi_autoupdate(relaunch_argv: list[str] | None = None) -> bool:
         # un-doing the release it had just installed. Version-tuple compare, so
         # equal AND older both mean "do nothing".
         if not _pypi_version_is_newer(latest, current):
+            # I2: when the convergence marker names the NOW-CURRENT version, a
+            # Windows self-update handoff just completed (the upgrade ran in a
+            # detached script after the previous process exited — this is the
+            # first start of the upgraded install). The rebuilt venv may have
+            # lost pip-injected playwright, and pre-0.10.48 receipts never got
+            # Chromium — re-ensure browser provisioning, non-blocking.
+            try:
+                if _update_marker_path().read_text(encoding="utf-8").strip() == current:
+                    _provision_browser_after_upgrade()
+            except Exception:  # noqa: BLE001 — no marker / unreadable → nothing to do
+                pass
             _clear_update_convergence_marker()
             print(f"up to date ({current})")
             return False
@@ -458,6 +581,9 @@ def maybe_pypi_autoupdate(relaunch_argv: list[str] | None = None) -> bool:
         )
         if result.returncode == 0:
             print("done — restart corvin-serve to apply")
+            # I2: the upgrade rebuilt the tool venv from the receipt — make
+            # sure the browser stack survived it (background, fail-soft).
+            _provision_browser_after_upgrade()
         else:
             # upgrade failed (UAC, network, read-only env, …) — show the actual
             # error so failures are diagnosable instead of a bare "failed", and

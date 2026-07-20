@@ -60,8 +60,9 @@ class _FakeACSResult:
     run_dir = None
 
 
-class DelegationRoutingE2ETest(unittest.TestCase):
-    """One fictional task per ladder route, through the real stream_turn."""
+class _StreamTurnE2EBase(unittest.TestCase):
+    """Shared stream_turn harness: fake claude subprocess, fake acs_runtime,
+    pinned house-rules classifier, fake license quota."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -196,6 +197,9 @@ class DelegationRoutingE2ETest(unittest.TestCase):
         self.assertIn(f'primitive="{primitive}"', sys_text)
         self.assertEqual(events[-1].get("type"), "done")
 
+class DelegationRoutingE2ETest(_StreamTurnE2EBase):
+    """One fictional task per ladder route, through the real stream_turn."""
+
     # ── Rule 1: explicit /delegate override → ACS, even for coding text ──────
 
     def test_rule1_explicit_delegate_override_takes_acs(self) -> None:
@@ -274,6 +278,82 @@ class DelegationRoutingE2ETest(unittest.TestCase):
         self.assertTrue(spawn["hit"])
         self.assertNotIn("<acs_directive", sys_text,
                          "smalltalk must not carry any primitive directive")
+        self.assertEqual(events[-1].get("type"), "done")
+
+
+class FallbackReGateE2ETest(_StreamTurnE2EBase):
+    """D2 (adversarial review 2026-07-20) — EVERY "ACS → direct turn" fallback
+    branch must re-run the L34/L35 pre-spawn gate against the engine that will
+    ACTUALLY spawn (_os_engine), fail-closed. Previously only the
+    quota-exhausted branch re-gated; the "ACS runtime unavailable" and
+    "acs dir uncreatable" branches flipped to the direct engine ungated, so
+    CONFIDENTIAL data could bypass the residency policy."""
+
+    REFUSAL = "[L34] engine claude_code is not permitted for this data class"
+    FANOUT_PROMPT = ("Recherchiere aus mehreren Quellen die Marktlage für "
+                     "E-Bikes und vergleiche danach die drei größten Anbieter")
+
+    def _gate_allow_acs_only(self) -> None:
+        """Fake gate: PERMIT the ACS fan-out engine, REFUSE everything else —
+        the exact shape of a residency policy that allows the delegation
+        fan-out but forbids the direct claude_code engine."""
+        sg = self.cr._spawn_gates
+        deleg_id = sg.DELEGATION_ENGINE_ID
+        orig = sg.check_console_spawn_or_refusal
+
+        def _fake(prompt, *, engine_id="claude_code", **kw):
+            return None if engine_id == deleg_id else self.REFUSAL
+
+        self.addCleanup(setattr, sg, "check_console_spawn_or_refusal", orig)
+        sg.check_console_spawn_or_refusal = _fake  # type: ignore[assignment]
+
+    def _run_fallback_turn(self, *, break_acs: bool = False,
+                           acs_dir_as_file: bool = False):
+        self._pin_house_rules_allowed()
+        self._inject_license_ok()
+        if break_acs:
+            # sys.modules[...] = None makes `import acs_runtime` raise
+            # ImportError → the "ACS runtime unavailable" fallback branch.
+            sys.modules["acs_runtime"] = None  # type: ignore[assignment]
+            self.addCleanup(sys.modules.pop, "acs_runtime", None)
+        else:
+            self._inject_fake_acs()
+        if acs_dir_as_file:
+            # A FILE at workdir/acs makes mkdir(workdir/acs/runs) raise
+            # OSError → the "acs dir uncreatable" fallback branch.
+            (self.sess.workdir / "acs").write_text("not a dir", encoding="utf-8")
+        spawn_called = self._no_spawn_guard()
+        with patch.object(self.cr, "_delegation_enabled", return_value=True):
+            events = _drain(self.cr.stream_turn(self.sess, self.FANOUT_PROMPT))
+        return events, spawn_called
+
+    def _assert_regated_refusal(self, events, spawn) -> None:
+        self.assertFalse(
+            spawn["hit"],
+            "gate-blocked fallback engine must NOT spawn (L34/L35 bypass)")
+        self.assertTrue(
+            any(self.REFUSAL in (e.get("text") or "")
+                for e in events if e.get("type") in ("delta", "result")),
+            f"refusal must be surfaced to the user; events: "
+            f"{[e.get('type') for e in events]}")
+        self.assertEqual(events[-1].get("type"), "done")
+
+    def test_acs_runtime_unavailable_fallback_is_regated(self) -> None:
+        self._gate_allow_acs_only()
+        events, spawn = self._run_fallback_turn(break_acs=True)
+        self._assert_regated_refusal(events, spawn)
+
+    def test_acs_dir_uncreatable_fallback_is_regated(self) -> None:
+        self._gate_allow_acs_only()
+        events, spawn = self._run_fallback_turn(acs_dir_as_file=True)
+        self._assert_regated_refusal(events, spawn)
+
+    def test_fallback_proceeds_when_gate_permits_direct_engine(self) -> None:
+        # Control case: with the real (permitting) gate the fallback still
+        # degrades to the direct turn — the re-gate is fail-closed on refusal,
+        # not a new hard failure mode.
+        events, spawn = self._run_fallback_turn(break_acs=True)
+        self.assertTrue(spawn["hit"], "permitted fallback must run the direct turn")
         self.assertEqual(events[-1].get("type"), "done")
 
 

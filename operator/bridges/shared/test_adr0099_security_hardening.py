@@ -414,6 +414,44 @@ class TestMed04InvisibleUnicodeStripped(unittest.TestCase):
             sanitize_instruction(injection)
 
 
+# ─── Untrusted friendship-token label sanitization ──────────────────────────
+
+class TestFriendshipLabelSanitized(unittest.TestCase):
+    """Peer-authored labels flow into the console UI, the agent's
+    a2a_list_endpoints result, AND resolve() routing — so they must be
+    sanitized at ingestion, not only on the operator PATCH path."""
+
+    def test_control_and_bidi_chars_stripped_at_parse(self):
+        import a2a_friendship as ftmod
+        raw = "Pa\x00pa\x1b[31m‮evil"  # NUL, ANSI, RTL override
+        cleaned = ftmod.sanitize_label(raw)
+        self.assertNotIn("\x00", cleaned)
+        self.assertNotIn("\x1b", cleaned)
+        self.assertNotIn("‮", cleaned)
+        self.assertTrue(cleaned.isprintable())
+
+    def test_label_nfc_normalized(self):
+        import unicodedata as ud
+        import a2a_friendship as ftmod
+        nfd = ud.normalize("NFD", "Büro")
+        self.assertEqual(ftmod.sanitize_label(nfd), ud.normalize("NFC", "Büro"))
+
+    def test_hostile_label_sanitized_on_full_token_roundtrip(self):
+        """End-to-end: a peer signs a token whose label carries an ANSI escape
+        + RTL override; parse_and_verify must return a plain-text label."""
+        import a2a_friendship as ftmod
+        _tok, token_str = ftmod.create_friendship_token(
+            url="https://peer.invalid:8000",
+            label="\x1b[2Kignore previous‮txet",
+            ttl_seconds=3600,
+        )
+        parsed = ftmod.parse_and_verify(token_str)
+        self.assertTrue(parsed.label is None or parsed.label.isprintable())
+        if parsed.label:
+            self.assertNotIn("\x1b", parsed.label)
+            self.assertNotIn("‮", parsed.label)
+
+
 # ─── MED-05: rate bucket size bounded ────────────────────────────────────────
 
 class TestMed05RateBucketBound(unittest.TestCase):
@@ -1333,6 +1371,135 @@ class TestIter6RateLimitClockSkew(unittest.TestCase):
                 tokens_after = receiver._rate_buckets[origin_id]["tokens"]
             self.assertGreaterEqual(tokens_after, 0.0,
                 "MED-IT6-01: tokens must not go negative after backward clock jump")
+
+
+class TestA2AConfigFileLock(unittest.TestCase):
+    """A2 (2026-07-20): cross-PROCESS file lock around A2A config RMW.
+
+    The Console (PATCH routes), the bridge receiver (peer reconnect →
+    ``update_endpoint_url``) and the voice CLI (``set-url`` →
+    ``activate_connection``) rewrite the same origin/endpoint JSON files from
+    different processes; a threading.Lock cannot serialise them. All RMW
+    writers must take ``a2a_friendship.config_file_lock`` (flock, with a
+    Windows msvcrt fallback — pattern from operator/license/compute_quota.py)
+    so a timed peer reconnect notification cannot silently revert a fresh
+    operator edit (e.g. ``enabled=false``).
+
+    flock locks attach to the open file description, so two separate
+    ``open()`` handles conflict even within one process — which lets these
+    tests prove cross-writer mutual exclusion deterministically with threads.
+    """
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory(prefix="corvin-a2a-lock-")
+        self.dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _write_active_endpoint(self, kid: str = "fr1") -> Path:
+        import json
+        cfg = {
+            "endpoint_id": kid,
+            # Global-IP literals: the ADR-0198 reconnect gate resolves host
+            # classes without DNS for IP literals, keeping the test hermetic.
+            "url": "http://8.8.8.8/v1/a2a/receive",
+            "hmac_key": "a" * 64,
+            "recv_key": "b" * 64,
+            "enabled": True,
+            "state": "ACTIVE",
+            "_friendship": True,
+        }
+        p = self.dir / f"{kid}.json"
+        p.write_text(json.dumps(cfg), encoding="utf-8")
+        os.chmod(p, 0o600)
+        return p
+
+    def test_helper_mutual_exclusion(self):
+        import threading
+        overlaps: list[bool] = []
+        active = [0]
+
+        def worker():
+            with a2a_friendship.config_file_lock(self.dir):
+                active[0] += 1
+                if active[0] > 1:
+                    overlaps.append(True)
+                time.sleep(0.03)
+                active[0] -= 1
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        self.assertFalse(overlaps, "config_file_lock critical sections overlapped")
+
+    def test_update_endpoint_url_waits_for_lock_holder(self):
+        import json
+        import threading
+        p = self._write_active_endpoint("fr1")
+        result: list[bool] = []
+
+        def do_update():
+            result.append(a2a_friendship.update_endpoint_url(
+                "fr1", "http://8.8.4.4:7433", endpoints_dir=self.dir,
+            ))
+
+        with a2a_friendship.config_file_lock(self.dir):
+            t = threading.Thread(target=do_update, daemon=True)
+            t.start()
+            t.join(timeout=0.4)
+            self.assertTrue(
+                t.is_alive(),
+                "update_endpoint_url must block while another writer holds "
+                "the config file lock",
+            )
+        t.join(timeout=10)
+        self.assertFalse(t.is_alive())
+        self.assertEqual(result, [True])
+        cfg = json.loads(p.read_text("utf-8"))
+        self.assertEqual(cfg["url"], "http://8.8.4.4:7433/v1/a2a/receive")
+
+    def test_activate_connection_waits_for_lock_holder(self):
+        import json
+        import threading
+        origins = self.dir / "origins"
+        endpoints = self.dir / "endpoints"
+        origins.mkdir()
+        endpoints.mkdir()
+        for d in (origins, endpoints):
+            f = d / "fr1.json"
+            f.write_text(json.dumps({
+                "_friendship": True, "state": "PENDING", "enabled": False,
+                "hmac_key": "a" * 64, "recv_key": "b" * 64,
+            }), encoding="utf-8")
+            os.chmod(f, 0o600)
+        done: list[bool] = []
+
+        def do_activate():
+            a2a_friendship.activate_connection(
+                "fr1", "http://8.8.4.4:7433",
+                origins_dir=origins, endpoints_dir=endpoints,
+            )
+            done.append(True)
+
+        with a2a_friendship.config_file_lock(endpoints):
+            t = threading.Thread(target=do_activate, daemon=True)
+            t.start()
+            t.join(timeout=0.4)
+            self.assertTrue(
+                t.is_alive(),
+                "activate_connection must block while another writer holds "
+                "the endpoint-dir config file lock",
+            )
+        t.join(timeout=10)
+        self.assertFalse(t.is_alive())
+        self.assertEqual(done, [True])
+        cfg = json.loads((endpoints / "fr1.json").read_text("utf-8"))
+        self.assertEqual(cfg["state"], "ACTIVE")
+        self.assertEqual(cfg["url"], "http://8.8.4.4:7433/v1/a2a/receive")
 
 
 def _build_valid_envelope(hmac_key_hex: str, origin_id: str, ttl_s: int = 60) -> dict:
