@@ -713,7 +713,7 @@ engine. Tool names map to engine_ids:
 | `mcp__corvin_delegate__delegate_copilot` | CopilotCliEngine (`copilot -p`) | GitHub Copilot CLI — zero incremental cost for Copilot Business/Enterprise; `model` field sets task type: `shell`, `git`, `gh` (prompt-prefix steering), or omit for general chat; requires `copilot` binary + subscription; ADR-0071 |
 
 Each tool takes `prompt` (required), and optional `model`, `budget_s`
-(clamped 10..600, default 60), `working_dir` (absolute path; sets
+(clamped 10..86400 since ADR-0201, default 60), `working_dir` (absolute path; sets
 the worker subprocess' cwd). Returns a structured envelope:
 `{ok, engine, final_text, duration_ms, usage, model, error}`.
 
@@ -804,13 +804,15 @@ test entries, all green standalone).
   `DelegateResult.error` with `ok=False` (caller may want to render
   the worker's failure gracefully through the bridge). Conflating
   the two gives every transient network issue a stack-trace surface.
-- **Don't lower the `BUDGET_MAX_S` cap from 600 s.** A worker can
-  legitimately need minutes on a complex code-gen run; but more
-  than 10 minutes means the user is waiting too long for an
-  asynchronous-feeling interaction. If a truly long-running task
-  is needed, route through Layer 25 (compute worker) instead — it
-  is designed for hours-scale work with an explicit out-of-band
-  status surface.
+- **Don't lower the `BUDGET_MAX_S` cap below what the ACS quota
+  fallback needs.** Since 2026-07-20 (ADR-0201) the cap is 86400 s:
+  `run_acs_quota_fallback` runs a whole workflow goal as ONE
+  delegate turn, and the earlier 600 s cap aborted exactly the long
+  tasks the fallback exists to save. The *default* stays 60 s — an
+  interactive `delegate_*` call still feels synchronous unless the
+  caller explicitly asks for more. For hours-scale work with an
+  out-of-band status surface, Layer 25 (compute worker) remains the
+  better fit.
 - **Don't store the worker's `final_text` in any state-store on
   disk** (consent, roles, quota, recall, user-model, audit, …).
   Worker results are ephemeral context for the next OS-turn reply,
@@ -1710,21 +1712,26 @@ Worker model: inherits the tenant's user model (ADR-0112); when the OS
 engine is Hermes/Ollama, `chat_runtime` pins `worker_model` to the same
 local model so workers stay fully local and no Anthropic API key is needed.
 
-**Budget defaults (raised 2026-07-16, maintainer decision).** A fresh install
-kept meeting a budget on ordinary work, and meeting one read as a *failure* to
-anyone who had never seen these numbers. The knobs that actually stop work early
-were raised — `max_loops` 5 → 20, `max_worker_turns` 100 → 300, `max_wall_time`
-and `timeout_seconds` 1 h → 4 h — while the fan-out knobs were deliberately left
-alone: `max_total_workers` stays 8 and `max_depth` stays 4.
+**Budget defaults sit AT the ceilings (2026-07-20, maintainer decision —
+supersedes the 2026-07-16 "generous-but-below-ceiling" raise).** A task must
+never stop on an *unconfigured* budget — mid-task budget stops kept aborting
+real work on fresh installs and read as failures. Every linear knob now
+defaults to its validation ceiling: `max_loops` 100, `max_wall_time` and
+`timeout_seconds` 24 h, `max_worker_turns` 5000, `max_total_workers` 64.
+`max_depth` alone stays at 4 (ceiling 10): depth is the fan-out **exponent**,
+and an exhausted depth never aborts a task — the worker completes the subtask
+itself instead of sub-delegating, so it gains nothing from a UX raise.
 
-The distinction is the whole point. The 2026 quota-defeat (a 100× inflation to
-400 workers / 100 h) is measured in **worker-hours per metered compute unit** —
-`max_total_workers × max_wall_time`. `max_total_workers` is that figure's
-numerator and `max_depth` its exponent, so neither may ride along with a
-UX-motivated raise. For scale: old default 8 worker-hours, new default 32, UI
-ceiling 1536, the defeat 40000. Defaulting to the ceilings (which is what "no
-limits at all" would mean) would hand every free-tier user 64 workers for 24 h
-out of their single daily compute unit — the same hole, through the front door.
+What still holds: the **ceilings themselves are unchanged** and remain the
+guard line — `acs_validator` R32/R35/R36 fail loudly on anything above them
+(the a47c6d3 100×-inflation class), and the manager-LLM still cannot raise any
+per-call bound. What the decision deliberately gives up is the 2026-07-16
+"one metered compute unit must not authorize the maximum fan-out" guard: a
+free-tier install may now spend its single daily ACS run at full width and
+length (64 workers / 24 h worst case). The companion mitigations are that a
+reached budget reports as a bounded stop naming the limit, and that an
+exhausted daily quota degrades to the un-metered single-turn fallback (below)
+instead of failing.
 
 Defaults live in **two** places that must agree: `settings.py::_BUDGET_KEYS`
 (what a fresh install serves and the Settings UI shows) and
@@ -1763,6 +1770,45 @@ end-to-end: `web.turn.completed` records `rc=0`, the task manager records
 `task.completed`, and the post-run artifact scan runs (the partial results the
 message promises are actually delivered), instead of the chat saying "not an
 error" while every activity view recorded a crash.
+
+**Exhausted daily ACS quota degrades to normal Claude Code delegation —
+EVERYWHERE (2026-07-20, maintainer decision).** "No ACS turn available because
+the day limit is spent" must never fail a task; it degrades to ONE direct
+`claude_code` engine turn, which does its own built-in Task-tool delegation.
+Two implementations, same contract:
+
+- **Web-chat/voice** (`chat_runtime.stream_turn`, ADR-0150): on
+  `LicenseLimitError` from the compute charge, the turn emits a
+  `notice/quota_fallback` event and routes to the normal OS turn. The
+  fallback engine is re-gated (`check_console_spawn_or_refusal` with the
+  ACTUAL engine id) so L34/L35 cannot be bypassed on the degraded path.
+  Pinned by `core/console/tests/test_acs_quota_fallback.py`.
+- **Every other caller** — workflow CLI, scheduler, orchestration MCP, and
+  the console ACS route — funnels through
+  `acs_engine_adapter.run_acs_workflow`, whose quota chokepoint now calls
+  `run_acs_quota_fallback()` instead of returning a hard failure: the
+  workflow *goal text* (`_workflow_goal_text`) runs as a single
+  `corvin_delegate.run_delegate(engine="claude_code", allow_write=True)`
+  turn, bounded by the spec's own `max_wall_time` (default 24 h), with the
+  result persisted in the normal ACS runs index and marked
+  `quota_fallback: true`. The console route
+  (`routes/compute.py::submit_acs_workflow_run`) catches the 402 whose
+  `detail.reason == "quota_exceeded"` and takes the same path.
+  Pinned by `operator/bridges/shared/test_acs_quota_fallback_adapter.py`.
+
+Load-bearing invariants of the fallback: (1) it fires ONLY on genuine
+`quota_exhausted` — a removed/shadowed license module
+(`reason: enforcement_unavailable`) stays a hard fail-closed deny, or
+deleting the license package would buy unmetered fallback compute; (2) the
+fallback path enforces **L44 itself, fail-closed** (`spawn_gates.check_l44`
+on the goal text before any spawn), because it bypasses `ACSRuntime.run`
+where the gate normally lives — L34/tenant-policy/`engines_allowed` are
+enforced inside `run_delegate`; (3) `run_delegate` is deliberately
+un-metered (LIC-DELEGATE-MCP-COMPUTE-01), so the fallback does not re-open
+the quota — the fan-out stays blocked, only a single turn runs. To let that
+single turn actually finish long tasks, `corvin_delegate.BUDGET_MAX_S` was
+raised 600 → 86400 (the caller-requestable maximum; `BUDGET_DEFAULT_S`
+stays 60 s).
 
 ### References
 
@@ -2130,7 +2176,9 @@ was applied via a bare `int(...)` with no `_clamp_positive_cap()` call — a
 workflow YAML or the caller-controllable `budget_override` (it's in
 `_BUDGET_OVERRIDE_ALLOWED_FIELDS`) could set an arbitrarily large value,
 giving a run more wall-clock time to compound Findings 1+2. Now clamped to
-`[3600s default, 86400s ceiling]` — legitimately long-running workflows
+the 86400 s ceiling (the unconfigured default was 3600 s until 2026-07-20,
+when defaults moved to the ceilings — the CEILING is the load-bearing part
+of this finding and is unchanged) — legitimately long-running workflows
 still complete, just bounded rather than unlimited.
 
 ### What you, as Claude Code, must NOT do (ADR-0104 ACS memory hardening)

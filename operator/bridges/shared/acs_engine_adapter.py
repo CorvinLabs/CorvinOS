@@ -107,6 +107,10 @@ def _enforce_acs_compute_quota(tenant_id: str, run_id: "str | None") -> "dict[st
             "error": "compute quota enforcement unavailable (fail-closed)",
             "engine": "acs",
             "duration_s": 0.0,
+            # NOT quota_exhausted: a removed/shadowed license module must stay a
+            # hard fail-closed deny — the quota fallback below must NOT fire, or
+            # deleting the license package would buy unmetered fallback compute.
+            "reason": "enforcement_unavailable",
         }
     # _corvin_home() now uses forge.paths.corvin_home() (module-level _FORGE_P set at
     # import time), so repo-root .corvin detection is consistent with run manifest storage.
@@ -117,6 +121,7 @@ def _enforce_acs_compute_quota(tenant_id: str, run_id: "str | None") -> "dict[st
         return {
             "run_id": run_id or "unknown",
             "status": "failed",
+            "reason": "quota_exhausted",
             "error": f"compute_units_per_day exceeded: {exc}",
             "engine": "acs",
             "duration_s": 0.0,
@@ -124,6 +129,162 @@ def _enforce_acs_compute_quota(tenant_id: str, run_id: "str | None") -> "dict[st
     except Exception:  # noqa: BLE001 — operational error already swallowed (fail-open)
         pass
     return None
+
+
+def run_acs_quota_fallback(
+    spec: "dict | str | Path",
+    inputs: "dict | None" = None,
+    *,
+    tenant_id: str = "_default",
+    run_id: "str | None" = None,
+    quota_error: str = "",
+) -> dict[str, Any]:
+    """Daily ACS quota exhausted → run the workflow GOAL as ONE direct Claude
+    Code engine run instead of failing (maintainer decision 2026-07-20).
+
+    Extends the ADR-0150 web-chat graceful degradation to every
+    run_acs_workflow caller (workflow CLI, scheduler, orchestration MCP,
+    console ACS route): "no ACS turn available" must degrade to the normal
+    Claude Code delegation — Claude Code does its own built-in Task-tool
+    delegation inside the single turn — never to a hard failure.
+
+    Gate parity (load-bearing): the ACS path enforces L44 fail-closed inside
+    ACSRuntime.run, which this fallback bypasses entirely — so the SAME
+    check_l44 gate runs here, fail-closed, BEFORE any spawn. L34/tenant-policy/
+    engines_allowed are enforced inside run_delegate itself. run_delegate is
+    deliberately un-metered (LIC-DELEGATE-MCP-COMPUTE-01), so this does not
+    re-open the quota: the fan-out stays blocked, only a single turn runs.
+    """
+    t0 = time.time()
+    rid = run_id or f"acs-fb-{int(t0)}"
+
+    def _failed(err: str) -> dict[str, Any]:
+        return {
+            "run_id": rid, "status": "failed", "error": err,
+            "engine": "acs", "duration_s": round(time.time() - t0, 3),
+            "quota_fallback": True,
+        }
+
+    # Resolve the spec dict (path callers: CLI/route pass a .awp.yaml path).
+    if isinstance(spec, (str, Path)):
+        try:
+            import yaml  # noqa: PLC0415
+            spec_dict: dict = yaml.safe_load(Path(spec).read_text("utf-8")) or {}
+        except Exception as e:  # noqa: BLE001
+            return _failed(f"{quota_error}; quota fallback unavailable "
+                           f"(spec unreadable: {type(e).__name__})")
+    else:
+        spec_dict = spec or {}
+
+    try:
+        from acs_runtime import _workflow_goal_text  # type: ignore
+        goal = _workflow_goal_text(spec_dict, inputs)
+    except Exception as e:  # noqa: BLE001
+        return _failed(f"{quota_error}; quota fallback unavailable "
+                       f"(goal extraction failed: {type(e).__name__})")
+    if not goal.strip():
+        # No free-text instruction to hand to a single engine turn — nothing
+        # a fallback run could act on. Surface the original quota stop.
+        return _failed(f"{quota_error}; quota fallback skipped (workflow "
+                       "carries no goal/description text)")
+
+    # L44 acceptable-use — MANDATORY, fail-CLOSED (same contract as the
+    # ACSRuntime.run chokepoint this path bypasses).
+    try:
+        from spawn_gates import check_l44 as _sg_l44  # type: ignore
+    except Exception as _l44_exc:  # noqa: BLE001 — mandatory layer absent → DENY
+        log.error("acs quota fallback: L44 spawn_gates import failed (%s) — "
+                  "fail-closed deny", type(_l44_exc).__name__)
+        return _failed("[house-rules] Acceptable-use gate unavailable — "
+                       "fallback blocked (fail-closed). Contact the operator.")
+    _l44_refusal = _sg_l44(
+        goal, tenant_id, persona="orchestrator",
+        channel="acs-quota-fallback", chat_key=rid, engine_id="claude_code",
+    )
+    if _l44_refusal is not None:
+        # check_l44 already emitted the house_rules.* L16 event (audit-first).
+        return _failed(_l44_refusal)
+
+    # Single-turn wall-clock budget: honour the spec's own wall-time if set.
+    _dl = (spec_dict.get("orchestration", {}) or {}).get("delegation_loop", {}) \
+        if isinstance(spec_dict.get("orchestration"), dict) else {}
+    _b = _dl.get("budget", {}) if isinstance(_dl, dict) else {}
+    try:
+        budget_s = int(_b.get("max_wall_time") or 86400)
+    except (TypeError, ValueError):
+        budget_s = 86400
+
+    # run_delegate: installed package first, repo-relative second.
+    try:
+        from corvin_delegate.delegation import run_delegate  # type: ignore
+    except ImportError:
+        _dele = Path(__file__).resolve().parents[3] / "core" / "delegate"
+        if str(_dele) not in sys.path:
+            sys.path.insert(0, str(_dele))
+        try:
+            from corvin_delegate.delegation import run_delegate  # type: ignore
+        except ImportError as e:
+            return _failed(f"{quota_error}; quota fallback unavailable "
+                           f"(corvin_delegate not importable: {e})")
+
+    # Persist artifacts under the normal ACS runs index so the console
+    # list/get endpoints see the fallback run like any other.
+    runs_dir = _acs_runs_dir(tenant_id)
+    run_dir = runs_dir / rid
+    out_dir = run_dir / "output"
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return _failed(f"{quota_error}; quota fallback unavailable "
+                       f"(run dir not creatable: {type(e).__name__})")
+
+    notice = (
+        "Daily ACS quota exhausted — task ran as a single direct Claude Code "
+        "turn (its built-in delegation) instead of the ACS worker fan-out."
+    )
+    prompt = (
+        "The ACS multi-worker delegation is unavailable right now, so you are "
+        "handling this workflow goal as a single agent turn. Use your own "
+        "built-in subagent delegation where it helps.\n\nGoal:\n" + goal
+    )
+    log.info("acs quota fallback: running goal as direct claude_code turn "
+             "(run_id=%s, budget_s=%d)", rid, budget_s)
+    try:
+        res = run_delegate(
+            engine="claude_code",
+            prompt=prompt,
+            budget_s=budget_s,
+            working_dir=out_dir,
+            allow_write=True,
+            persona="acs-quota-fallback",
+        )
+    except Exception as e:  # noqa: BLE001 — caller-side validation errors
+        return _failed(f"quota fallback failed: {type(e).__name__}: {e}")
+
+    duration_s = round(time.time() - t0, 3)
+    status = "success" if res.ok else "failed"
+    workflow_id = str((spec_dict.get("workflow", {}) or {}).get("name") or "unknown")
+    manifest = {
+        "run_id": rid, "workflow_id": workflow_id, "status": status,
+        "engine": "claude_code", "quota_fallback": True,
+        "started_at": t0, "completed_at": t0 + duration_s,
+        "duration_s": duration_s, "iterations": 1, "workers_spawned": 0,
+        "budget_breach": "", "run_dir": str(run_dir),
+    }
+    _write_json_atomic(run_dir / "manifest.json", manifest)
+    _write_json_atomic(run_dir / "result.json", {
+        "run_id": rid, "workflow_id": workflow_id, "status": status,
+        "summary": notice, "final_output": res.final_text,
+        "error": res.error, "iterations": 1, "workers_spawned": 0,
+        "budget_breach": "", "elapsed_s": duration_s,
+    })
+    return {
+        "run_id": rid, "status": status, "summary": notice,
+        "final_output": res.final_text, "error": res.error,
+        "engine": "claude_code", "duration_s": duration_s,
+        "workflow_id": workflow_id, "iterations": 1, "workers_spawned": 0,
+        "budget_breach": "", "quota_fallback": True, "notice": notice,
+    }
 
 
 def run_acs_workflow(
@@ -182,6 +343,15 @@ def run_acs_workflow(
     if charge_quota and not dry_run:
         _cq_block = _enforce_acs_compute_quota(tenant_id, run_id)
         if _cq_block is not None:
+            # Day limit reached → degrade to a single direct Claude Code turn
+            # (maintainer decision 2026-07-20; mirrors the ADR-0150 web-chat
+            # fallback). Only for genuine quota exhaustion — a missing license
+            # module stays a hard fail-closed deny (reason=enforcement_unavailable).
+            if _cq_block.get("reason") == "quota_exhausted":
+                return run_acs_quota_fallback(
+                    spec, inputs, tenant_id=tenant_id, run_id=run_id,
+                    quota_error=str(_cq_block.get("error") or ""),
+                )
             return _cq_block
 
     rt = ACSRuntime(tenant_id=tenant_id)

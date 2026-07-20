@@ -70,7 +70,12 @@ _WORKER_OUTPUT_CAP = 131072   # 128 KB max worker response
 
 # ACS timeouts (in seconds) — generous to allow complex workflows
 _MANAGER_TIMEOUT = 1800   # 30 min for manager decisions
-_DEFAULT_BUDGET_TIMEOUT = 600  # 10 min default (can be overridden per budget)
+# Maintainer decision 2026-07-20: unconfigured budgets default to the ceilings
+# (see chat_runtime._DELEGATION_BUDGET_DEFAULTS) so a task never stops on a
+# default nobody chose. A worker with no configured timeout is still deadlined
+# against the envelope's REMAINING wall time in _worker_budget_for_spawn.
+_DEFAULT_BUDGET_TIMEOUT = 86400  # 24 h when not configured (was 600)
+_DEFAULT_WORKER_TURNS = 5000     # per-worker turn cap when not configured (was 20)
 # Hard cap on a CONFIGURED per-worker timeout_seconds — matches the Settings
 # validation max (routes/settings.py::_BUDGET_KEYS). Until 2026-07-17 workers
 # were hard-clamped to 1800 (claude) / 3600 (hermes) regardless of the budget,
@@ -139,7 +144,7 @@ def _worker_budget_for_spawn(envelope: "BudgetEnvelope", alloc: dict,
         timeout = min(timeout, max(60, min(remainings)))
     out["timeout_seconds"] = max(30, timeout)
 
-    spec_turns = envelope.max_worker_turns or 20
+    spec_turns = envelope.max_worker_turns or _DEFAULT_WORKER_TURNS
     alloc_turns = _pos_int(alloc.get("max_worker_turns"))
     out["max_worker_turns"] = (min(spec_turns, alloc_turns)
                                if alloc_turns else spec_turns)
@@ -239,12 +244,16 @@ _BUDGET_OVERRIDE_ALLOWED_FIELDS = frozenset({
 
 @dataclass
 class BudgetEnvelope:
+    # Defaults sit at the settings/validator ceilings (maintainer decision
+    # 2026-07-20, aligned with chat_runtime._DELEGATION_BUDGET_DEFAULTS): an
+    # ACS run whose spec carries no budget must not stop on a limit nobody
+    # chose. acs_validator R32/R35/R36 still reject anything ABOVE these.
     max_loops: int = 100
     max_total_tokens: int = 0        # 0 = unbounded
-    max_wall_time: int = 3600        # seconds
-    max_total_workers: int = 8       # aligned with the delegation-budget default
+    max_wall_time: int = 86400       # seconds (= R36 ceiling; was 3600)
+    max_total_workers: int = 64      # = R35 ceiling; was 8
     max_tool_calls: int = 0          # 0 = unbounded
-    max_depth: int = 4
+    max_depth: int = 4               # fan-out exponent — deliberately NOT at the R32 ceiling
     max_workers_per_iteration: int = 6
     max_rejected_completions: int = 2
     # Per-worker-call bounds (NOT aggregates — check() never looks at them).
@@ -640,8 +649,10 @@ def _budget_from_spec(spec: dict) -> BudgetEnvelope:
         # crash on a large ACS workflow, 2026-07-14). 86400s (24h) is
         # generous — legitimately long-running workflows still complete,
         # just bounded rather than unlimited.
-        max_wall_time=_clamp_positive_cap(int(b.get("max_wall_time") or 3600), 3600, 86400),
-        max_total_workers=_clamp_positive_cap(int(b.get("max_total_workers") or 8), 8, 64),
+        # Unconfigured = ceiling (maintainer decision 2026-07-20): a spec that
+        # carries no budget must not stop mid-run on a limit nobody chose.
+        max_wall_time=_clamp_positive_cap(int(b.get("max_wall_time") or 86400), 86400, 86400),
+        max_total_workers=_clamp_positive_cap(int(b.get("max_total_workers") or 64), 64, 64),
         max_tool_calls=int(b.get("max_tool_calls") or 0),
         max_depth=int(b.get("max_depth") or 4),
         # Unlike max_loops/max_total_workers above, this had NO clamp and NO
@@ -1663,12 +1674,12 @@ def _call_worker_sync(
     _strip_worker_secrets(env)
     _apply_provider_redirect(env, tenant_id)  # ADR-0181 M3 #6 — consistent egress
     timeout = _effective_worker_timeout(budget)
-    # max-turns: 20 gives workers enough headroom for multi-file explore/implement
-    # tasks. 5 was too tight — workers hit the limit mid-tool-use and returned
+    # max-turns fallback: _DEFAULT_WORKER_TURNS (unconfigured = ceiling, 2026-07-20).
+    # History: 5 was too tight — workers hit the limit mid-tool-use and returned
     # error_max_turns, which _parse_worker_output silently treated as
     # status="partial", confidence=0.0, causing every delegated web-console
     # turn to fail with "Delegation fehlgeschlagen: unknown error".
-    worker_max_turns = str(budget.get("max_worker_turns", 20))
+    worker_max_turns = str(budget.get("max_worker_turns", _DEFAULT_WORKER_TURNS))
     # Windows fresh-install fix (adversarial-review finding — this was the
     # actually-flagged MEDIUM risk, unlike the manager spawn's small fixed
     # constant): `system` includes an UNBOUNDED dynamic-tools list

@@ -8,7 +8,7 @@ Covers:
   - Audit-event allow-list + forbidden-field set
   - DelegateError on unknown engine
   - Persona tag flows into audit metadata
-  - Budget clamp [10..600]
+  - Budget clamp [BUDGET_MIN_S..BUDGET_MAX_S] (10..86400 since 2026-07-20)
 
 Real disk for audit-chain writes; fake engines that yield real
 StreamEvent instances (so the agents.collect() helper runs end-to-end).
@@ -215,7 +215,7 @@ class ValidationTests(unittest.TestCase):
 
     def test_budget_clamp_high(self):
         fake = _FakeEngine()
-        run_delegate(engine="codex_cli", prompt="hi", budget_s=9999,
+        run_delegate(engine="codex_cli", prompt="hi", budget_s=BUDGET_MAX_S + 1,
                      engine_factory=_make_factory(fake), audit=False)
         self.assertEqual(fake.spawn_kwargs["timeout"], float(BUDGET_MAX_S))
 
