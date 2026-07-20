@@ -1703,7 +1703,36 @@ model split per turn.
 template; deny-by-default in code so existing installs without the key keep
 the direct path until they add it) the web OS turn triages each task
 (deterministic heuristic; `/delegate <task>` forces) and dispatches
-substantive work to `ACSRuntime(bridge="web", chat=<sid>)`.
+fan-out-shaped work to `ACSRuntime(bridge="web", chat=<sid>)`.
+
+**ACS-suitability triage (reworked 2026-07-20, ADR-0202).** The question the
+triage answers is no longer "is this substantive?" but "does this task fit
+the ACS *fan-out shape*?" — independent subtasks, each worker a fresh
+`claude -p` with only its subtask + ≤3 KB context state, results merged by a
+JSON manager loop. Routing (`_should_delegate`, deterministic, 0 ms):
+
+1. `/delegate` prefix → ACS (explicit user override).
+2. Fan-out-shaped → ACS: explicit parallelism (`parallel`, `worker`,
+   `gleichzeitig`, `unabhängig voneinander`), multi-source research,
+   per-item bulk work (`für jede`/`for each`), multi-perspective review.
+   The explicit-parallel words are unambiguous on their own; the rest need
+   a substantive shape (verb + multi-step/length) on top.
+3. Coding-shaped → **direct OS-turn**, even when long: bug/fix/refactor/
+   implement/test wording plus code-context tokens (file extensions, code
+   fences, repo/branch/commit, traceback, function/class/module). Coding is
+   sequential (explore → edit → test → fix), needs the shared session
+   workspace and conversation context — ACS workers have neither — and
+   every ACS turn burns one `compute_units_per_day` (free tier: 1/day).
+   The direct turn is un-metered and does its own Task-tool sub-delegation
+   when parallelism genuinely helps. Pre-rework, the strong-verb list sent
+   every coding task into the fan-out; the historical error classes
+   (`error_max_turns`, worker JSON-parse failures, "Delegation
+   fehlgeschlagen: unknown error") almost all came from that mismatch.
+4. Remaining substantive work (strong verbs like migrate/deploy, long or
+   multi-step weak-verb prompts, ≥400 chars) → ACS, as before.
+
+Pinned by `test_web_delegation.py::test_triage_routes_coding_to_direct_claude_code`
+/ `::test_triage_routes_fanout_to_acs`.
 The run lands in the session workdir, passes the existing ACS gate chain
 and budget envelope (`spec.web_chat.budget` may override `max_loops`,
 `max_depth`, `max_total_workers`, `max_wall_time`), and worker progress is

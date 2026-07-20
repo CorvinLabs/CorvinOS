@@ -40,6 +40,51 @@ def test_triage_keeps_trivial_direct(prompt: str) -> None:
     assert cr._should_delegate(prompt) is False
 
 
+# ── ACS-suitability rework (2026-07-20): coding → direct, fan-out → ACS ──────
+
+
+@pytest.mark.parametrize("prompt", [
+    # Strong verbs that used to force the ACS fan-out now stay direct when the
+    # task is coding-shaped: coding is sequential, needs the shared session
+    # workspace, and each ACS turn burns one compute_units_per_day.
+    "Behebe den Bug in der Login-Funktion",
+    "Fix the failing test in test_auth.py",
+    "Debugge den Traceback aus dem letzten Lauf",
+    "Refactor the authentication module and add unit tests",
+    "Implementiere die neue Export-Funktion in server.py und schreibe Tests dafür",
+    "Review den Code in chat_runtime.py und behebe die Fehler",
+    # Long coding prompts stay direct too — length alone must not override
+    # the coding shape (pre-rework, ≥400 chars force-delegated everything).
+    "Fix the bug in the parser module: " + "der Fehler tritt im Code auf " * 20,
+])
+def test_triage_routes_coding_to_direct_claude_code(prompt: str) -> None:
+    """Coding-shaped work takes the direct OS-turn (Claude Code's own
+    Task-tool sub-delegation), NOT the ACS manager/worker fan-out."""
+    assert cr._should_delegate(prompt) is False
+
+
+@pytest.mark.parametrize("prompt", [
+    # Explicitly parallel / fan-out-shaped work is what ACS is FOR — even when
+    # code is involved (the fan-out marker wins over the coding shape).
+    "Review den Code aus Security-, Performance- und Style-Perspektive parallel",
+    "Analysiere die Module unabhängig voneinander mit mehreren Workern",
+    "Recherchiere aus mehreren Quellen die Marktlage und vergleiche danach die Anbieter",
+    "Compare the three frameworks independently and then collect the results",
+    # Explicit user override beats every shape — /delegate always fans out.
+    "/delegate fix the bug in server.py",
+])
+def test_triage_routes_fanout_to_acs(prompt: str) -> None:
+    assert cr._should_delegate(prompt) is True
+
+
+@pytest.mark.parametrize("prompt", [
+    "Wie vergleiche ich zwei Dateien?",     # fan-out word, but smalltalk shape
+    "Vergleiche kurz A und B",              # short compare without multi-step
+])
+def test_triage_fanout_words_alone_do_not_delegate(prompt: str) -> None:
+    assert cr._should_delegate(prompt) is False
+
+
 # ── tenant flag + budget ──────────────────────────────────────────────
 
 
