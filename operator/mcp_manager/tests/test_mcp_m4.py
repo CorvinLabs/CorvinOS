@@ -337,7 +337,11 @@ class TestBrowserTokenInjection:
         # Pre-existing plaintext env entries must survive the injection.
         assert env["CORVIN_TENANT_ID"] == TID
 
-    def test_no_browser_token_leaves_env_unset(self, tmp_corvin):
+    def test_no_browser_token_drops_the_browser_tool(self, tmp_corvin):
+        # Adversarial-review C1: a spawn with NO per-turn token (e.g. a bridge
+        # daemon, a separate process that cannot mint one) must NOT advertise the
+        # browser_* tools — otherwise the model calls one, gets "no token", and
+        # loops forever. The tool is dropped entirely from a token-less spawn.
         catalog.add_tool(TID, {
             "id": "corvin-browser",
             "source": "builtin:/fake/main.py",
@@ -348,7 +352,10 @@ class TestBrowserTokenInjection:
         })
         activate.activate(TID, "corvin-browser", "tenant")
         servers = activate.get_active_mcp_servers(TID)
-        assert "CORVIN_BROWSER_TOKEN" not in servers["corvin-browser"].get("env", {})
+        assert "corvin-browser" not in servers
+        # …but WITH a token it is present and wired.
+        servers2 = activate.get_active_mcp_servers(TID, browser_token="tok-xyz")
+        assert servers2["corvin-browser"]["env"]["CORVIN_BROWSER_TOKEN"] == "tok-xyz"
 
     def test_other_tools_unaffected_by_browser_token(self, tmp_corvin):
         _add_local_tool(TID, "tool-a")

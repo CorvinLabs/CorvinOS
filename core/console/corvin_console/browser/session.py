@@ -101,23 +101,84 @@ def _looks_like_missing_system_deps(exc: BaseException) -> bool:
     return "missing dependencies" in msg or "install-deps" in msg
 
 
+def _find_chrome_binary() -> tuple[str, bool]:
+    """Locate a real Google Chrome (or Chromium) executable for the attach launch
+    command. Returns (path_or_name, found). Probes the actual per-OS install
+    locations — incl. per-user Windows installs and the several Linux binary
+    names — instead of hardcoding one guess that dead-ends the attach flow when
+    Chrome lives elsewhere (review F6/M5)."""
+    import os as _os
+    import shutil as _shutil
+    import sys as _sys
+    if _sys.platform == "darwin":
+        cands = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            _os.path.expanduser("~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+    elif _sys.platform.startswith("win"):
+        pf = _os.environ.get("ProgramFiles", r"C:\Program Files")
+        pf86 = _os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        local = _os.environ.get("LOCALAPPDATA", "")
+        cands = [
+            rf"{pf}\Google\Chrome\Application\chrome.exe",
+            rf"{pf86}\Google\Chrome\Application\chrome.exe",
+            (rf"{local}\Google\Chrome\Application\chrome.exe" if local else ""),
+        ]
+    else:
+        # Prefer an on-PATH binary; fall back to common absolute locations.
+        for name in ("google-chrome", "google-chrome-stable", "chromium",
+                     "chromium-browser"):
+            hit = _shutil.which(name)
+            if hit:
+                return hit, True
+        cands = ["/opt/google/chrome/chrome", "/usr/bin/chromium",
+                 "/usr/bin/chromium-browser", "/snap/bin/chromium"]
+    for c in cands:
+        if c and _os.path.exists(c):
+            return c, True
+    # Nothing found: return a sensible per-OS default name so the command is
+    # still copy-pasteable (Chrome may be on PATH under a name we didn't probe).
+    if _sys.platform == "darwin":
+        return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", False
+    if _sys.platform.startswith("win"):
+        return r"C:\Program Files\Google\Chrome\Application\chrome.exe", False
+    return "google-chrome", False
+
+
+def _default_automation_profile() -> str:
+    """A stable, per-user automation-profile dir for attach mode — never the
+    user's real Chrome profile. Filled into the launch command so the user does
+    not have to invent a path (review M5: the old command emitted a literal
+    <automation-profile-dir> placeholder that copy-paste turned into a directory
+    of that literal name)."""
+    import os as _os
+    import sys as _sys
+    if _sys.platform.startswith("win"):
+        base = _os.environ.get("LOCALAPPDATA") or _os.path.expanduser("~")
+        return _os.path.join(base, "CorvinOS", "chrome-automation-profile")
+    return _os.path.expanduser("~/.corvin/chrome-automation-profile")
+
+
 def cdp_launch_command(port: int = 9222, profile_dir: str | None = None) -> str:
     """The exact command the user runs to start a debug Chrome for attach mode
     (ADR-0200 Q4: CorvinOS never auto-launches it — the user does, explicitly).
 
     A DEDICATED automation profile (Q1) is mandatory, not cosmetic: Chrome 136+
     refuses --remote-debugging-port on the default profile, and a separate
-    profile is the user-visible trust boundary the ADR rests on.
+    profile is the user-visible trust boundary the ADR rests on. The command is
+    emitted in a shell-correct form per OS — on Windows PowerShell (the default
+    shell) a bare quoted path is only ECHOED, so it needs the `& ` call operator.
     """
     import sys as _sys
-    prof = profile_dir or "<automation-profile-dir>"
-    if _sys.platform == "darwin":
-        chrome = '"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"'
-    elif _sys.platform.startswith("win"):
-        chrome = '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"'
-    else:
-        chrome = "google-chrome"
-    return (f'{chrome} --remote-debugging-port={port} '
+    chrome, _found = _find_chrome_binary()
+    prof = profile_dir or _default_automation_profile()
+    if _sys.platform.startswith("win"):
+        # PowerShell: `& "C:\...\chrome.exe" --flags` actually executes.
+        return (f'& "{chrome}" --remote-debugging-port={port} '
+                f'--user-data-dir="{prof}"')
+    # POSIX shells: quote the path (it may contain spaces on macOS).
+    return (f'"{chrome}" --remote-debugging-port={port} '
             f'--user-data-dir="{prof}"')
 
 
@@ -140,6 +201,57 @@ def _looks_like_missing_browser(exc: BaseException) -> bool:
     )
 
 
+# ── Chrome-primary / Chromium-fallback launch engine selection (ADR-0182) ─────
+# The launched (non-attach) session prefers the user's real Google Chrome
+# (Playwright `channel="chrome"`) for the best real-site compatibility and the
+# "real browser" feel, and falls back to Playwright's bundled Chromium — the
+# version guaranteed to be present after `playwright install chromium` — when
+# Chrome isn't installed or won't start. Override with CORVIN_BROWSER_CHANNEL:
+#   auto      (default) → try Chrome, fall back to bundled Chromium
+#   chrome / chrome-beta / chrome-dev / msedge / msedge-beta / msedge-dev
+#             → that branded channel ONLY, no silent fallback
+#   chromium / bundled  → the bundled Chromium ONLY
+_EXPLICIT_CHANNELS = frozenset({
+    "chrome", "chrome-beta", "chrome-dev", "chrome-canary",
+    "msedge", "msedge-beta", "msedge-dev",
+})
+
+# Sentinel + process-wide cache: once auto mode has learned which engine actually
+# launches on THIS host, every later session skips the (stable, non-transient)
+# failed-Chrome attempt — so a headless server with no Google Chrome does not pay
+# a failed-launch round-trip on every single session. None ⇒ bundled Chromium.
+_UNSET: Any = object()
+_auto_channel_cache: Any = _UNSET
+
+
+def _channel_pref() -> str:
+    import os
+    return (os.environ.get("CORVIN_BROWSER_CHANNEL") or "auto").strip().lower()
+
+
+def _channel_candidates() -> list[str | None]:
+    """Ordered launch engines to try. In auto mode: real Chrome first, bundled
+    Chromium as the fallback (or the cached winner once learned)."""
+    pref = _channel_pref()
+    if pref in _EXPLICIT_CHANNELS:
+        return [pref]
+    if pref in ("chromium", "bundled"):
+        return [None]
+    if _auto_channel_cache is not _UNSET:
+        return [_auto_channel_cache]
+    return ["chrome", None]
+
+
+def _remember_channel(channel: str | None) -> None:
+    """Cache the engine that actually launched, so auto mode is sticky for the
+    life of the process. Only auto mode caches — an explicit override is never
+    second-guessed."""
+    global _auto_channel_cache
+    pref = _channel_pref()
+    if pref not in _EXPLICIT_CHANNELS and pref not in ("chromium", "bundled"):
+        _auto_channel_cache = channel
+
+
 class StaleMarkError(BrowserActionError):
     """Raised when the live element at ``[index]`` no longer matches the
     ``Mark`` captured at the last ``observe()`` (ADR-0183 S1 stale-mark
@@ -148,6 +260,24 @@ class StaleMarkError(BrowserActionError):
     "mark not found" case (element removed entirely) so a caller (e.g. the
     agent loop) can specifically prompt a re-observe instead of retrying
     blindly or surfacing a generic error."""
+
+
+def _safe_tab_url(url: str) -> str:
+    """scheme://host/path with the query string + fragment stripped — a URL fit
+    to hand back to the model / live-view without leaking a ?token=/reset secret
+    carried in the query. Falls back to the bare host on any parse trouble."""
+    try:
+        u = urlparse(url or "")
+        if not u.scheme or not u.hostname:
+            return (u.hostname or "").lower()
+        # Build netloc from host(+port) ONLY — never u.netloc, which would carry
+        # any user:password@ userinfo through verbatim.
+        netloc = u.hostname.lower()
+        if u.port:
+            netloc = f"{netloc}:{u.port}"
+        return f"{u.scheme}://{netloc}{u.path}"
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _host_task_scoped(host: str, task_hosts: list[str]) -> bool:
@@ -254,6 +384,13 @@ class BrowserSession:
         # (close() nulls _pw/_context, which _ensure_started would otherwise read
         # as "never started" and relaunch → a leaked, unreachable zombie browser).
         self._closed = False
+        # Set by a browser/context disconnect event (review F3): the launched
+        # Chromium crashed (OOM), or in attach mode the user quit their real
+        # Chrome / closed the debug port. Once set, every action fails fast with
+        # an ACTIONABLE message ("the browser was closed — start a new session")
+        # instead of a raw Playwright 'Target closed' that the route turns into an
+        # opaque 500 and the live view freezes on the last frame forever.
+        self._disconnected = False
         # Fire-and-forget new-tab egress guards (review H3): the event loop keeps
         # only a WEAK ref to a bare ensure_future task, so it can be GC'd mid-wait
         # and silently skip the egress check (fail-closed → fail-open). Keep a hard
@@ -279,6 +416,28 @@ class BrowserSession:
                     await self.start_screencast(self._pending_on_frame)
                     self._pending_on_frame = None
 
+    async def _abort_start(self) -> None:
+        """Fully unwind a partial start (review: partial-start fail-open / driver
+        leak). ANY failure after ``_pw`` is set — including a failure INSIDE
+        ``_finish_start`` (e.g. context.route() on a browser that died mid-start)
+        — must leave NO refs set and NO driver subprocess leaked; otherwise the
+        next ``_ensure_started`` either treats a half-built session as usable
+        (running WITHOUT the per-request egress route / WS gate / new-tab guard —
+        fail-OPEN on a security control) or re-enters start() and overwrites
+        ``_pw`` without stopping the old driver (leaked Chromium holding the
+        profile lock → every relaunch wedges on 'profile in use'). Never closes
+        the USER's real Chrome in attach mode — only disconnects the CDP link."""
+        with contextlib.suppress(Exception):
+            if self._attached:
+                if self._browser is not None:
+                    await self._browser.close()   # disconnect CDP, don't kill their Chrome
+            elif self._context is not None:
+                await self._context.close()
+        with contextlib.suppress(Exception):
+            if self._pw is not None:
+                await self._pw.stop()
+        self._pw = self._browser = self._context = self._page = None
+
     async def start(self) -> None:
         import os
         try:
@@ -290,6 +449,14 @@ class BrowserSession:
             # that the route turns into an opaque 500 and the model narrates as
             # "der Browser-Dienst ist nicht verfügbar".
             raise BrowserActionError(_BROWSER_NOT_SET_UP) from exc
+        # Defensive against a re-entrant start() after a partial failure that left
+        # a driver behind: never overwrite a live _pw without stopping it first.
+        # getattr, not attribute access — start() may run on a partially built
+        # object (some tests construct via __new__).
+        _existing_pw = getattr(self, "_pw", None)
+        if _existing_pw is not None:
+            with contextlib.suppress(Exception):
+                await _existing_pw.stop()
         self._pw = await async_playwright().start()
 
         # ADR-0200 attach mode: drive the user's REAL, logged-in Chrome via CDP
@@ -304,26 +471,32 @@ class BrowserSession:
                 self._browser = await self._pw.chromium.connect_over_cdp(
                     self._cdp_endpoint, timeout=self._nav_timeout)
             except Exception as exc:
-                with contextlib.suppress(Exception):
-                    await self._pw.stop()
-                self._pw = None
+                await self._abort_start()
                 raise BrowserActionError(
                     "Could not attach to your Chrome. Start it with the command "
                     "from the console (chrome --remote-debugging-port=… "
                     "--user-data-dir=<automation profile>), then retry."
                 ) from exc
-            # Reuse the context/page the user already has open; never open a
-            # blank one behind their back. new_context() would create a fresh,
-            # login-less context — the exact opposite of what attach is for — so
-            # prefer an EXISTING context (their logged-in one).
-            self._context = (self._browser.contexts[0]
-                             if self._browser.contexts
-                             else await self._browser.new_context())
-            self._page = (self._context.pages[0] if self._context.pages
-                          else await self._context.new_page())
-            # SAME page setup + multi-tab guard + per-request egress route as the
-            # launched path — the user's real browser is gated identically.
-            await self._finish_start()
+            try:
+                # Reuse the context/page the user already has open; never open a
+                # blank one behind their back. new_context() would create a fresh,
+                # login-less context — the exact opposite of what attach is for —
+                # so prefer an EXISTING context (their logged-in one).
+                self._context = (self._browser.contexts[0]
+                                 if self._browser.contexts
+                                 else await self._browser.new_context())
+                self._page = (self._context.pages[0] if self._context.pages
+                              else await self._context.new_page())
+                # SAME page setup + multi-tab guard + per-request egress route as
+                # the launched path — the user's real browser is gated identically.
+                await self._finish_start()
+            except Exception as exc:
+                # A failure wiring the egress guards must NOT leave a half-built,
+                # gate-less attached session usable. Disconnect + null everything.
+                await self._abort_start()
+                raise BrowserActionError(
+                    "Attached to your Chrome but could not finish securing the "
+                    "session — it may have closed mid-attach. Retry.") from exc
             return
 
         user_data = self._home / "sessions" / self.session_id
@@ -337,33 +510,74 @@ class BrowserSession:
         if os.environ.get("CORVIN_BROWSER_NO_SANDBOX") == "1":
             args.append("--no-sandbox")
             logger.warning("browser: renderer sandbox DISABLED (CORVIN_BROWSER_NO_SANDBOX=1)")
+
+        # Chrome-primary, Chromium-fallback: try the user's real Google Chrome
+        # first (best real-site compatibility + real-browser feel), then fall
+        # back to the bundled Chromium that `playwright install chromium`
+        # guarantees. In auto mode ANY Chrome-launch failure (not installed,
+        # version mismatch, won't start) transparently falls through to the
+        # fallback — only the LAST candidate's failure surfaces to the user, so a
+        # host without Chrome still "just works" on Chromium.
+        candidates = _channel_candidates()
+        self._context = None
+        for i, channel in enumerate(candidates):
+            is_last = i == len(candidates) - 1
+            try:
+                self._context = await self._pw.chromium.launch_persistent_context(
+                    user_data_dir=str(user_data),
+                    channel=channel,            # None → bundled Chromium; "chrome" → system Google Chrome
+                    headless=self._headless,
+                    accept_downloads=False,     # downloads gated separately (L10) — off by default
+                    args=args,
+                    viewport={"width": 1280, "height": 800},
+                )
+            except Exception as exc:
+                if not is_last:
+                    # A preferred branded channel failed — fall back to the next
+                    # candidate (bundled Chromium). Not user-facing: the fallback
+                    # is the whole point.
+                    logger.info(
+                        "browser: launch via channel=%r failed (%s); trying fallback",
+                        channel or "chromium", type(exc).__name__)
+                    continue
+                # The last candidate failed — this IS terminal. A failed launch
+                # must not leak the Playwright driver subprocess nor leave _pw
+                # truthy — that would make _ensure_started() think the session is
+                # already up on the next call, permanently wedging it.
+                with contextlib.suppress(Exception):
+                    await self._pw.stop()
+                self._pw = None
+                # The dominant real cause is the Chromium BINARY not being
+                # downloaded (playwright installed, `playwright install chromium`
+                # never run): Playwright raises "Executable doesn't exist at
+                # …/chromium-XXXX/…". Translate that into the actionable message
+                # so the user learns they need to fetch the browser, instead of
+                # the opaque "not available".
+                if _looks_like_missing_system_deps(exc):
+                    raise BrowserActionError(_BROWSER_MISSING_SYSTEM_DEPS) from exc
+                if _looks_like_missing_browser(exc):
+                    raise BrowserActionError(_BROWSER_NOT_SET_UP) from exc
+                raise
+            else:
+                # Remember what actually launched so later sessions in auto mode
+                # skip the (stable) failed-Chrome attempt.
+                _remember_channel(channel)
+                if channel:
+                    logger.info("browser: launched via '%s'", channel)
+                break
         try:
-            self._context = await self._pw.chromium.launch_persistent_context(
-                user_data_dir=str(user_data),
-                headless=self._headless,
-                accept_downloads=False,     # downloads gated separately (L10) — off by default
-                args=args,
-                viewport={"width": 1280, "height": 800},
-            )
+            self._page = (self._context.pages[0] if self._context.pages
+                          else await self._context.new_page())
+            await self._finish_start()
         except Exception as exc:
-            # A failed launch must not leak the Playwright driver subprocess nor
-            # leave _pw truthy — that would make _ensure_started() think the
-            # session is already up on the next call, permanently wedging it.
-            with contextlib.suppress(Exception):
-                await self._pw.stop()
-            self._pw = None
-            # The dominant real cause is the Chromium BINARY not being downloaded
-            # (playwright installed, `playwright install chromium` never run):
-            # Playwright raises "Executable doesn't exist at …/chromium-XXXX/…".
-            # Translate that into the actionable message so the user learns they
-            # need to fetch the browser, instead of the opaque "not available".
-            if _looks_like_missing_system_deps(exc):
-                raise BrowserActionError(_BROWSER_MISSING_SYSTEM_DEPS) from exc
-            if _looks_like_missing_browser(exc):
-                raise BrowserActionError(_BROWSER_NOT_SET_UP) from exc
-            raise
-        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
-        await self._finish_start()
+            # Same partial-start hardening as the attach path: a failure wiring
+            # the egress guards must tear the half-built session down completely
+            # (stop the driver, null refs) rather than leave it fail-open or leak
+            # a Chromium holding the profile lock.
+            await self._abort_start()
+            raise BrowserActionError(
+                "Browser launched but could not finish securing the session — "
+                "retry.") from exc
 
     async def _finish_start(self) -> None:
         """Page setup + guards shared by the launched and CDP-attached paths.
@@ -373,6 +587,14 @@ class BrowserSession:
         browser is not exempt from either.
         """
         self._page.set_default_timeout(self._nav_timeout)
+        # Disconnect detection (review F3): mark the session dead the moment the
+        # browser process goes away — a launched Chromium crash, or in attach mode
+        # the user quitting their real Chrome — so the next action fails fast with
+        # an actionable message and the screencast loop stops, instead of the live
+        # view freezing and every action raising a raw 'Target closed' → 500.
+        self._context.on("close", lambda *_: self._mark_disconnected())
+        if self._browser is not None:
+            self._browser.on("disconnected", lambda *_: self._mark_disconnected())
         # Multi-tab awareness (ADR-0183 S2): a target="_blank" click or a
         # window.open() creates a brand-new Page OUTSIDE the normal
         # navigate()/click() control flow — without this hook it could reach
@@ -457,9 +679,17 @@ class BrowserSession:
         try:
             # Tab-flood cap (review H3): a page that window.open()s in a loop must
             # not spawn unbounded tabs+guards. Over the cap, close the newcomer.
+            # ATTACH-MODE CARVE-OUT (review CRITICAL): in attach mode the pages
+            # list is the user's OWN Chrome — tabs THEY opened count toward
+            # len(pages), and closing "the newcomer" would slam shut a tab the
+            # user just opened themselves. ADR-0200's invariant is absolute: never
+            # close their tabs. So on an attached session, only audit/emit the
+            # over-cap condition; never close.
             if self._context is not None and len(self._context.pages) > _MAX_TABS:
-                await self._safe_close_tab(new_page)
-                self._emit("new_tab", host="", ok=False, reason="tab_limit")
+                if not self._attached:
+                    await self._safe_close_tab(new_page)
+                self._emit("new_tab", host="", ok=False,
+                           reason="tab_limit" if not self._attached else "tab_limit_attach_noclose")
                 return
             with contextlib.suppress(Exception):
                 await new_page.wait_for_load_state("load", timeout=self._nav_timeout)
@@ -487,9 +717,14 @@ class BrowserSession:
             self._emit("new_tab", host=host, ok=True)
         except Exception:  # noqa: BLE001 — a hook failure must never crash the session;
             # fail-closed: an unexpected error means we could NOT confirm the new
-            # tab is safe, so close it rather than leave it open unchecked.
-            await self._safe_close_tab(new_page)
-            logger.debug("new-tab egress guard failed for %s", host, exc_info=True)
+            # tab is safe, so close it rather than leave it open unchecked —
+            # EXCEPT in attach mode, where the tab may be the user's own and the
+            # ADR-0200 invariant forbids closing their tabs even on our error.
+            # The per-request egress route + WS gate still block its actual
+            # network egress; here we only decline to auto-close.
+            if not self._attached:
+                await self._safe_close_tab(new_page)
+            logger.debug("new-tab egress guard failed for %s (attached=%s)", host, self._attached, exc_info=True)
 
     async def _safe_close_tab(self, page) -> None:
         """Close a popup/secondary tab under the page lock (review M2: the guard
@@ -571,7 +806,44 @@ class BrowserSession:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _mark_disconnected(self) -> None:
+        """Browser/context went away (crash, or the user quit their real Chrome).
+        Sync event callback — just flip the flag and drop one action-log line so
+        the live view shows WHY it stopped, rather than freezing silently."""
+        if self._disconnected:
+            return
+        self._disconnected = True
+        with contextlib.suppress(Exception):
+            self._emit("browser_disconnected", ok=False,
+                       reason=("your Chrome was closed" if self._attached
+                               else "the browser process exited"))
+
     def _guard_active(self, action: str) -> None:
+        # Browser gone (review F3): fail fast + actionable instead of a raw
+        # 'Target closed' → HTTP 500 and a frozen live view.
+        if self._disconnected:
+            raise BrowserActionError(
+                "the browser was closed" + (" (your Chrome quit)" if self._attached
+                else " (it crashed or exited)") + " — this session is over; "
+                "start a new one")
+        # Per-action consent recheck for attached sessions (review finding): the
+        # real-chrome consent was checked at session CREATE only, so an expired
+        # TTL or an explicit Revoke did NOT stop an already-running session from
+        # driving the user's real Chrome. Now every action re-checks; a lapsed
+        # consent refuses further actions (the session must be re-consented or
+        # closed). Fail-closed: a missing/erroring check refuses.
+        if self._attached and self._consent_ok is not None:
+            try:
+                ok = self._consent_ok()
+            except Exception:  # noqa: BLE001
+                ok = False
+            if not ok:
+                raise BrowserActionError(
+                    "real-chrome consent expired or was revoked — re-grant it in "
+                    "the console (Browser → Attach) or close this session")
+        if self.paused:
+            raise BrowserActionError(
+                f"blocked: session is paused / under user take-over ({action})")
         # Per-action consent recheck for attached sessions (review finding): the
         # real-chrome consent was checked at session CREATE only, so an expired
         # TTL or an explicit Revoke did NOT stop an already-running session from
@@ -1307,7 +1579,14 @@ class BrowserSession:
                     title = await pg.title()
                 except Exception:  # noqa: BLE001
                     title = ""
-                out.append({"index": i, "url": pg.url, "title": title})
+                # SECURITY (review): return scheme+host+path but NEVER the query
+                # string / fragment. Everywhere else in this surface is host-only
+                # precisely because a URL can carry ?token=/reset secrets; tabs()
+                # is the one place that leaked the full URL of every open tab into
+                # the model context + emit — worst in attach mode, where the tabs
+                # are the user's own logged-in ones. host+path keeps it useful for
+                # the agent to tell tabs apart without exposing the token.
+                out.append({"index": i, "url": _safe_tab_url(pg.url), "title": title})
         _cmp.audit_action(self._audit, tenant_id=self.tenant_id, session_id=self.session_id, attach=self._attach_tag,
                           action="tabs", ok=True, extra={"count": len(out)})
         self._emit("tabs", count=len(out))
@@ -1412,6 +1691,26 @@ class BrowserSession:
 
         async def _loop() -> None:
             while True:
+                # Stop streaming a session that is gone or off-limits (review
+                # F3/F7): once the browser disconnected, or is closed, or (attach)
+                # the real-chrome consent lapsed / a take-over pause is on, the
+                # continuous screencast must NOT keep capturing the user's real
+                # Chrome — it is the highest-bandwidth leak of a revoked-consent
+                # session. Exit the loop (frozen last frame + the disconnect
+                # action-log line tell the user why).
+                if self._closed or self._disconnected:
+                    return
+                if self._attached:
+                    if self.paused:
+                        await asyncio.sleep(interval)
+                        continue
+                    if self._consent_ok is not None:
+                        try:
+                            ok = self._consent_ok()
+                        except Exception:  # noqa: BLE001
+                            ok = False
+                        if not ok:
+                            return
                 try:
                     png = await self.screenshot(marks=True)
                     on_frame(png)
@@ -1423,4 +1722,6 @@ class BrowserSession:
 
         if self._screencast_task:
             self._screencast_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._screencast_task   # review F10: await the old loop before replacing
         self._screencast_task = asyncio.ensure_future(_loop())

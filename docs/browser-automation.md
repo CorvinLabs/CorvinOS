@@ -17,8 +17,15 @@ Browser-page UI, which apply regardless of which caller drives them.
   interactive elements on the page (`[0] textbox: Email`, `[1] button: Sign in`,
   …). The agent acts by index (`click(1)`), not by pixel — robust to layout
   changes and usable by any engine (Claude or the local Hermes).
-- **Action.** A Playwright-managed Chromium runs per session (isolated profile,
-  sandboxed). The full tool surface is
+- **Action.** A Playwright-managed browser runs per session (isolated profile,
+  sandboxed). **Engine selection is Chrome-primary, Chromium-fallback:** a
+  launched session tries your real **Google Chrome** first (best real-site
+  compatibility and the real-browser feel), and transparently falls back to the
+  bundled **Chromium** — the build `playwright install chromium` guarantees —
+  when Chrome isn't installed or won't start. The working engine is cached for
+  the process, so a host without Chrome doesn't retry it every session. Override
+  with `CORVIN_BROWSER_CHANNEL` (`auto` default · `chrome` · `chromium`). The
+  full tool surface is
   `browser.navigate/observe/click/fill/fill_secret/key/select_option/hover/drag/
   upload_file/read/scroll/back/tabs/switch_tab/extract_table/extract_form_schema/
   screenshot`. The autonomous agent, the REST endpoints, and the `browser.*` tool
@@ -122,7 +129,9 @@ for the formal decision record.
 Playwright and downloads its Chromium binary, so agent browsing works out of the
 box like voice and image generation. The step is **fail-soft** (a failed ~150 MB
 download never aborts the install) and **idempotent** (a re-run skips the
-download when Chromium is already present).
+download when Chromium is already present). Chromium is the **guaranteed
+fallback**; if you already have **Google Chrome** installed, launched sessions
+use it automatically (see engine selection above) — no extra install needed.
 
 To provision it by hand — e.g. on an environment set up without the wizard, or to
 finish after a failed download:
@@ -157,6 +166,8 @@ wins.
 | `spec.browser.allowed_hosts` | Egress allowlist (deny-by-default when set) |
 | `spec.browser.forbidden_hosts` | Always-blocked hosts |
 | `spec.browser.notify_channel` / `spec.browser.notify_chat_id` | ADR-0189: opt-in routing (e.g. `discord` + a chat ID) for proactive voice notifications when the agent pauses. No console UI/API yet — manual YAML edit only, same pattern as the allowlist above. Absent → no proactive notification (in-chat text + live view still apply). |
+| env `CORVIN_BROWSER_CHANNEL` | Launch engine: `auto` (default — Google Chrome, else bundled Chromium) · `chrome` (Chrome only, no fallback) · `chromium` (bundled only). Also accepts `chrome-beta`/`chrome-dev`/`msedge`. |
+| env `CORVIN_BROWSER_HEADLESS` | Force `1`=headless / `0`=visible. Default: visible when a desktop display exists (incl. Windows/macOS), headless on a display-less server — the live view shows every action either way. |
 | env `CORVIN_BROWSER_NO_SANDBOX=1` | Disable the renderer sandbox (constrained hosts only) |
 
 ## Native chat tool vs. the Browser page's own agent loop
@@ -174,6 +185,15 @@ Two distinct ways to drive the browser exist side by side, per ADR-0193:
   runs a whole natural-language task to completion in the background, with
   its own Weiter button / voice vocabulary for `needs_login`/`needs_approval`
   pauses — unrelated to and unaffected by the chat-tool path above.
+
+**Where it works — console only, for now.** The native browser tools are wired
+only on the **console chat** turn, which mints the per-turn bearer token they
+authenticate with. A **bridge** (Discord / WhatsApp / Teams) is a separate
+process that cannot mint that token, so the browser tools are **not offered** on
+bridge turns (previously they were offered but every call dead-ended in a
+"no token — retry" loop). Ask from the console to drive a browser. Giving bridges
+a governed browser path is a tracked follow-up (a real cross-process token
+endpoint), not a silent capability.
 
 ## Known limitations
 
@@ -197,6 +217,25 @@ Two distinct ways to drive the browser exist side by side, per ADR-0193:
   *non-password* field (e.g. an API-key box) is visible to the operator watching
   it — the live view is owner-only and the value still never reaches the model
   context or any log.
+
+## Stability + lifecycle
+
+- **The browser going away is handled cleanly.** If the launched Chromium
+  crashes, or (attach mode) you quit your real Chrome, the session is marked
+  disconnected: the next action returns an actionable "the browser was closed —
+  start a new one" instead of an opaque 500, the live view stops instead of
+  freezing on the last frame, and — in attach mode — the screencast stops
+  capturing your real Chrome the moment consent lapses or the session is paused.
+- **A slow page never wedges a whole task.** A single click/navigate timeout or
+  a stale element is reported and the agent re-observes and continues, rather
+  than aborting the run; the REST/tool surface translates raw browser timeouts
+  and target-closed errors into actionable 409s.
+- **No session-cap wedge.** Up to 8 concurrent sessions per tenant; genuinely
+  idle sessions (no running agent, no pending confirm, idle > 30 min) are
+  reaped when a new one is created, so forgotten sessions never permanently
+  block new ones. `GET /browser/sessions` lists your live sessions (metadata
+  only) so you can see and close them.
+
 ## Attach to your real Chrome (ADR-0200)
 
 Besides the managed empty Chromium above, CorvinOS can drive **your own,
@@ -210,8 +249,12 @@ Flow (all in the panel):
 2. **Start Chrome yourself.** Copy the shown per-OS command — it starts Chrome
    with `--remote-debugging-port` and a **dedicated automation profile**
    (Chrome 136+ refuses the debug port on the default profile; the separate
-   profile is also the visible trust boundary). CorvinOS never launches it for
-   you. Log into the accounts you want it to use.
+   profile is also the visible trust boundary). The command is ready to run:
+   it points at your **actual** Chrome/Chromium install (probed per-OS,
+   including per-user Windows installs), fills in a real default profile path
+   (`~/.corvin/chrome-automation-profile`, no placeholder to edit), and on
+   Windows is emitted in PowerShell-correct form (`& "…\chrome.exe" …`).
+   CorvinOS never launches it for you. Log into the accounts you want it to use.
 3. **Paste the `ws://…` CDP endpoint** Chrome prints, and attach.
 4. **Confirm-mode** toggle: *confirm-each* (default — every sensitive action
    asks) or *watch-mode* ("act freely" with a hard, non-extendable TTL, max

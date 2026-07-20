@@ -82,8 +82,19 @@ def status(tenant_id: str) -> dict[str, Any]:
     if d.get("revoked"):
         return {"active": False, "expires_at": d.get("expires_at"), "remaining_s": 0}
     exp = float(d.get("expires_at") or 0)
-    remaining = exp - _now()
-    return {"active": remaining > 0, "expires_at": exp,
+    # Read-time re-clamp against the WRITE time (review F3): a hand-crafted /
+    # tampered store with a far-future expires_at must NOT become a permanent
+    # real-login consent — the 12h ceiling is enforced on read too, not only on
+    # write. Bound the effective expiry at granted_at + MAX_TTL_S; a store with
+    # no valid granted_at is treated as expired (fail-closed), since we can't
+    # prove it is within the ceiling.
+    try:
+        granted_at = float(d.get("granted_at"))
+    except (TypeError, ValueError):
+        return {"active": False, "expires_at": exp, "remaining_s": 0}
+    effective_exp = min(exp, granted_at + MAX_TTL_S)
+    remaining = effective_exp - _now()
+    return {"active": remaining > 0, "expires_at": effective_exp,
             "remaining_s": max(0, int(remaining))}
 
 

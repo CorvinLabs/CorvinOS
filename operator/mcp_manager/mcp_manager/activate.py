@@ -377,11 +377,22 @@ def get_active_mcp_servers(
     # the vault holds) — threaded through exactly like image_outdir above,
     # since an MCP subprocess doesn't reliably inherit env from the spawning
     # claude process either.
-    if browser_token and "corvin-browser" in servers:
-        _b_env = servers["corvin-browser"].setdefault("env", {})
-        _b_env["CORVIN_BROWSER_TOKEN"] = browser_token
-        if browser_base_url:
-            _b_env["CORVIN_BROWSER_BASE_URL"] = browser_base_url
+    if "corvin-browser" in servers:
+        if browser_token:
+            _b_env = servers["corvin-browser"].setdefault("env", {})
+            _b_env["CORVIN_BROWSER_TOKEN"] = browser_token
+            if browser_base_url:
+                _b_env["CORVIN_BROWSER_BASE_URL"] = browser_base_url
+        else:
+            # No per-turn token → this spawn CANNOT drive the browser (the token
+            # is minted only by the console chat path, and lives in the console
+            # process memory; a bridge daemon is a separate process). Shipping the
+            # 19 browser_* tools anyway made the model call one, hit "no token —
+            # please retry", and loop forever on a retry that can never succeed
+            # (adversarial-review C1). Drop the tool from this spawn instead of
+            # advertising a capability that structurally cannot work here.
+            servers.pop("corvin-browser", None)
+            tool_entries.pop("corvin-browser", None)
 
     # M2 — spawn-time compliance filter (SHA256, secrets, L34, L35)
     return _compliance.filter_compliant_servers(servers, tool_entries, tid)
