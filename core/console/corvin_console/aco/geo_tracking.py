@@ -208,13 +208,14 @@ class GeoConsentManager:
 
 
 class GeoTracker:
-    """High-level geo-tracking orchestrator."""
+    """High-level geo-tracking orchestrator with DB persistence (Phase 3.1)."""
 
     def __init__(
         self,
         geoip_db_path: Path | str,
         config_path: Path | str,
         instance_id: str,
+        db_dsn: Optional[str] = None,
     ):
         """Initialize tracker.
 
@@ -222,13 +223,17 @@ class GeoTracker:
             geoip_db_path: Path to GeoLite2 database.
             config_path: Path to instance config (spec.yaml).
             instance_id: Unique instance identifier (will be hashed in logs).
+            db_dsn: PostgreSQL connection string (optional; enables DB persistence).
         """
         self.reader = GeoIPReader(geoip_db_path)
         self.consent = GeoConsentManager(config_path)
         self.instance_id_hash = hashlib.sha256(instance_id.encode()).hexdigest()[:16]
+        self.db_dsn = db_dsn  # PostgreSQL DSN for persistence
 
     def track(self, ip_address: str) -> Optional[GeoResult]:
         """Perform geo-tracking lookup respecting consent & tier.
+
+        If db_dsn is configured, persists result to PostgreSQL.
 
         Returns:
             GeoResult with granularity matching configured tier, or None if blocked.
@@ -266,6 +271,10 @@ class GeoTracker:
         # Audit log
         self._audit_lookup(result, tier)
 
+        # Persist to database if DSN is configured
+        if self.db_dsn:
+            self._write_to_db(result, tier)
+
         return result
 
     def _audit_lookup(self, result: GeoResult, tier: int):
@@ -284,6 +293,34 @@ class GeoTracker:
             logger.info(f"geo_lookup: {json.dumps(audit_entry)}")
         except Exception as e:
             logger.error(f"Failed to audit geo-lookup: {e}")
+
+    def _write_to_db(self, result: GeoResult, tier: int):
+        """Persist geo result to PostgreSQL (Phase 3.1).
+
+        Safe to call if db_dsn is None (will skip silently).
+        """
+        if not self.db_dsn:
+            return
+
+        try:
+            # Lazy-import to avoid hard dependency
+            from . import geo_schema
+
+            # Extract grid coordinates for Tier 3
+            grid_lat, grid_lng = result.grid_coordinates()
+
+            geo_schema.insert_geo_ping(
+                dsn=self.db_dsn,
+                instance_id_hash=self.instance_id_hash,
+                country=result.country,
+                tier=tier,
+                region=result.region,
+                city=result.city,
+                grid_lat=grid_lat,
+                grid_lng=grid_lng,
+            )
+        except Exception as e:
+            logger.error(f"Failed to persist geo-tracking to DB: {e}")
 
     def close(self):
         """Clean up resources."""
