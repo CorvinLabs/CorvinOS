@@ -2860,9 +2860,12 @@ def submit_acs_workflow_run(
     # (claude -p managers + Haiku workers) and were a SECOND, ungated compute
     # execution path that bypassed the compute_units_per_day cap enforced on
     # POST /compute/runs. Enforce the shared fail-closed quota gate here too, so
-    # a free-tier user cannot loop this route for unbounded paid compute. The
-    # FREE_TIER cap (1/day) also bounds concurrent ACS runs. dry_run spawns no
-    # workers, so it is exempt.
+    # a free-tier user cannot loop this route for unbounded paid compute.
+    # dry_run spawns no workers, so it is exempt. NOTE (review F6): the daily
+    # cap bounds METERED ACS fan-out runs; once exhausted the route degrades to
+    # the un-metered quota fallback, which has its OWN separate bound
+    # (_FALLBACK_MAX_PER_DAY in acs_engine_adapter) — the two are not the same
+    # counter, and this route no longer claims the 1/day cap bounds everything.
     _quota_fb = False
     if not body.dry_run:
         from ._compute_license_gate import enforce_compute_quota  # noqa: PLC0415
@@ -2901,6 +2904,7 @@ def submit_acs_workflow_run(
                 inputs=body.inputs or None,
                 tenant_id=rec.tenant_id,
                 quota_error="compute_units_per_day exceeded",
+                budget_override=body.budget_override,  # review F8: don't drop it
             )
         else:
             result = _run_acs_workflow(

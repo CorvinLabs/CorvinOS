@@ -8,7 +8,8 @@ Covers:
   - Audit-event allow-list + forbidden-field set
   - DelegateError on unknown engine
   - Persona tag flows into audit metadata
-  - Budget clamp [BUDGET_MIN_S..BUDGET_MAX_S] (10..86400 since 2026-07-20)
+  - Budget clamp [BUDGET_MIN_S..BUDGET_MAX_S] (10..600); elevated ceiling
+    (BUDGET_FALLBACK_MAX_S=86400) reachable ONLY via budget_ceiling_s (F7)
 
 Real disk for audit-chain writes; fake engines that yield real
 StreamEvent instances (so the agents.collect() helper runs end-to-end).
@@ -224,6 +225,32 @@ class ValidationTests(unittest.TestCase):
         run_delegate(engine="codex_cli", prompt="hi",
                      engine_factory=_make_factory(fake), audit=False)
         self.assertEqual(fake.spawn_kwargs["timeout"], float(BUDGET_DEFAULT_S))
+
+    def test_budget_ceiling_default_caps_at_600(self):
+        """Review F7: the interactive ceiling (what every MCP delegate_* caller
+        gets) is 600 s — a 24 h request from a prompt-injected model is clamped."""
+        from corvin_delegate.delegation import BUDGET_FALLBACK_MAX_S
+        self.assertEqual(BUDGET_MAX_S, 600)
+        fake = _FakeEngine()
+        run_delegate(engine="codex_cli", prompt="hi", budget_s=BUDGET_FALLBACK_MAX_S,
+                     engine_factory=_make_factory(fake), audit=False)
+        self.assertEqual(fake.spawn_kwargs["timeout"], 600.0)
+
+    def test_budget_ceiling_elevated_only_via_explicit_param(self):
+        """The fallback path may exceed 600 s ONLY by passing budget_ceiling_s;
+        a caller cannot widen its own ceiling beyond BUDGET_FALLBACK_MAX_S."""
+        from corvin_delegate.delegation import BUDGET_FALLBACK_MAX_S
+        fake = _FakeEngine()
+        run_delegate(engine="codex_cli", prompt="hi", budget_s=7200,
+                     budget_ceiling_s=BUDGET_FALLBACK_MAX_S,
+                     engine_factory=_make_factory(fake), audit=False)
+        self.assertEqual(fake.spawn_kwargs["timeout"], 7200.0)
+        # even with the elevated ceiling, an over-large request clamps at the max
+        fake2 = _FakeEngine()
+        run_delegate(engine="codex_cli", prompt="hi", budget_s=999999,
+                     budget_ceiling_s=BUDGET_FALLBACK_MAX_S,
+                     engine_factory=_make_factory(fake2), audit=False)
+        self.assertEqual(fake2.spawn_kwargs["timeout"], float(BUDGET_FALLBACK_MAX_S))
 
 
 class HappyPathTests(unittest.TestCase):
