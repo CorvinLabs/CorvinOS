@@ -312,3 +312,106 @@ WHERE (geo_consent_tier = 2 AND created_at < CURRENT_DATE - INTERVAL '30 days')
 -- Run daily via cron:
 -- SELECT cron.schedule('delete_old_geo_data', '0 2 * * *', 'DELETE FROM instance_geo_pings WHERE ...');
 """
+
+
+@router.get("/instances/country/{country_code}")
+async def get_geo_country_regions(
+    country_code: str,
+    tier: int = Query(2, ge=2, le=3),
+):
+    """Get regional breakdown (Tier 2+)."""
+    country_code = country_code.upper()
+    logger.info(f"geo_stats: Regions {country_code} Tier {tier}")
+    
+    if DATABASE_URL and tier >= 2:
+        try:
+            from ..aco.geo_schema import get_db_connection
+            import psycopg2.extras
+            
+            conn = get_db_connection(DATABASE_URL)
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute("""
+                SELECT region, COUNT(*) as instances,
+                  COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '1 day' THEN 1 END) as active_24h
+                FROM instance_geo_pings
+                WHERE country = %s AND geo_consent_tier >= 2 AND created_at >= CURRENT_DATE - INTERVAL '30 days'
+                GROUP BY region ORDER BY instances DESC
+            """, (country_code,))
+            
+            regions = [dict(row) for row in cur.fetchall()]
+            cur.close()
+            conn.close()
+            
+            if regions:
+                return {"country": country_code, "tier": 2, "regions": regions}
+        except Exception as e:
+            logger.warning(f"Tier 2 query failed: {e}")
+    
+    mock = next((c for c in MOCK_GEO_TIER2['countries'] if c['code'] == country_code), None)
+    return mock or {"error": "No data"}
+
+
+@router.get("/heatmap")
+async def get_geo_heatmap(country: str = Query("DE"), limit: int = Query(100, ge=10, le=1000)):
+    """Get heatmap data (Tier 3): 10km grid clustering."""
+    country = country.upper()
+    logger.info(f"geo_stats: Heatmap {country}")
+    
+    if DATABASE_URL:
+        try:
+            from ..aco.geo_schema import get_db_connection
+            import psycopg2.extras
+            
+            conn = get_db_connection(DATABASE_URL)
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute("""
+                SELECT COALESCE(geo_grid_lat, 0) as lat, COALESCE(geo_grid_lng, 0) as lng,
+                  COALESCE(city, 'Unknown') as city, COUNT(*) as instances
+                FROM instance_geo_pings
+                WHERE country = %s AND geo_consent_tier >= 3 AND created_at >= CURRENT_DATE - INTERVAL '14 days'
+                GROUP BY geo_grid_lat, geo_grid_lng, city HAVING COUNT(*) > 0
+                ORDER BY instances DESC LIMIT %s
+            """, (country, limit))
+            
+            heatmap = [dict(row) for row in cur.fetchall()]
+            cur.close()
+            conn.close()
+            
+            if heatmap:
+                return {"country": country, "tier": 3, "heatmap": heatmap, "grid_km": 10}
+        except Exception as e:
+            logger.warning(f"Heatmap query failed: {e}")
+    
+    return {"country": country, "tier": 3, "heatmap": []}
+
+
+@router.get("/trends")
+async def get_geo_trends(country: str = Query("DE"), days: int = Query(7, ge=1, le=30)):
+    """Get 7-day trend data."""
+    country = country.upper()
+    logger.info(f"geo_stats: Trends {country}/{days}d")
+    
+    if DATABASE_URL:
+        try:
+            from ..aco.geo_schema import get_db_connection
+            import psycopg2.extras
+            
+            conn = get_db_connection(DATABASE_URL)
+            cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            cur.execute(f"""
+                SELECT created_at as date, COUNT(*) as instances
+                FROM instance_geo_pings
+                WHERE country = %s AND created_at >= CURRENT_DATE - INTERVAL '{days} days'
+                GROUP BY created_at ORDER BY created_at
+            """, (country,))
+            
+            trend = [dict(row) for row in cur.fetchall()]
+            cur.close()
+            conn.close()
+            
+            if trend:
+                return {"country": country, "days": days, "trend": trend}
+        except Exception as e:
+            logger.warning(f"Trends query failed: {e}")
+    
+    return {"country": country, "days": days, "trend": []}
