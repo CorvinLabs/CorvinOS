@@ -1,6 +1,8 @@
 """Lightweight presence heartbeat — fires every 5 minutes while CorvinOS runs.
 
-Sends an authenticated POST /v1/telemetry/heartbeat to api.corvin-labs.com.
+Sends an authenticated POST to corvin-labs.com/api/telemetry/heartbeat (a
+Cloudflare Pages Function that proxies to Railway, same routing as the daily
+ping — see _HEARTBEAT_URL below for why).
 Uses the same HMAC token triple as the daily ping (no new credentials needed).
 Fail-soft: never raises, never blocks the server.
 
@@ -19,7 +21,7 @@ import urllib.request
 from pathlib import Path
 
 from .htrace_uploader import (
-    _TELEMETRY_BASE,
+    _PING_BASE,
     _load_telemetry_token,
     _load_instance_token,
 )
@@ -31,7 +33,12 @@ from .htrace_consent import (
 
 logger = logging.getLogger(__name__)
 
-_HEARTBEAT_URL = f"{_TELEMETRY_BASE}/v1/telemetry/heartbeat"
+# Routed through corvin-labs.com (Cloudflare Pages, functions/api/telemetry/
+# heartbeat.js) rather than hitting the Railway origin directly — same reason
+# as the daily ping (see _PING_BASE in htrace_uploader.py): Railway has no
+# Cloudflare zone in front of it, so a direct heartbeat never carries
+# CF-IPCountry, and online_country_distribution would stay stuck on "XX".
+_HEARTBEAT_URL = f"{_PING_BASE}/api/telemetry/heartbeat"
 _HEARTBEAT_TIMEOUT_S = 5
 _INTERVAL = 5 * 60   # 5 minutes
 _JITTER = 30         # ±30s random jitter to avoid thundering herd

@@ -318,7 +318,7 @@ def test_ping_if_due_provisions_tokens_inside_the_lock_not_before(tmp_path):
 
 
 class TestPingTargetsCloudflareProxy:
-    """ADR-0203: the ping POST must route through the Cloudflare-fronted
+    """ADR-0204: the ping POST must route through the Cloudflare-fronted
     corvin-labs.com Pages Function, not hit the Railway origin directly —
     Railway has no Cloudflare zone in front of it, so a direct hit never
     carries CF-IPCountry and the backend's country capture never fires."""
