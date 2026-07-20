@@ -1571,7 +1571,17 @@ def _acs_directive_block(task_text: str) -> str:
         if str(_shared) not in sys.path:
             sys.path.insert(0, str(_shared))
         from acs_classify import heuristic_classify, render_directive_block  # type: ignore  # noqa: PLC0415
-        block = render_directive_block(heuristic_classify(task_text), persona="assistant")
+        _bp = heuristic_classify(task_text)
+        # Review F9: this block is injected ONLY on the DIRECT OS-turn (the ACS
+        # fan-out path builds its own manager prompt). The WORKFLOW directive
+        # says "Use the Workflow tool for parallel multi-agent execution" —
+        # which routes through run_acs_workflow and CHARGES compute_units. On a
+        # turn the triage already decided to keep direct + un-metered, that is a
+        # contradictory instruction. Suppress it: the direct turn uses Claude
+        # Code's own built-in Task tool for any sub-delegation it needs.
+        if _bp.primitive == "WORKFLOW":
+            return ""
+        block = render_directive_block(_bp, persona="assistant")
         return ("\n\n" + block) if block else ""
     except Exception:  # noqa: BLE001 — advisory layer, never break the turn
         return ""
@@ -1957,23 +1967,47 @@ _TRIAGE_CODING_RE = re.compile(
     r"|endpoint|api|schnittstelle"
     r"|code|quellcode|source\s?file|skript|script"
     r"|implementiere|implement|programmiere"
+    # Crash/freeze vocabulary (review F5): a bug report rarely names a code
+    # token — "die App stürzt ab", "fix the crash", "hängt sich auf" — yet is
+    # squarely coding work that must stay on the sequential direct turn.
+    r"|crash|absturz|abstürzt|stürzt\s+ab|abgestürzt"
+    r"|hängt(\s+sich)?(\s+auf)?|hangs?|freeze[sd]?|einfriert|eingefroren"
+    r"|app|anwendung|programm|deployment|deploy"
     r")\b"
     r"|\.(py|js|ts|tsx|jsx|go|rs|java|c|cpp|h|cs|rb|php|sh|ps1|yaml|yml|json|toml|sql|md)\b"
     r"|```",
     re.IGNORECASE,
 )
+# EXPLICIT parallelism — the user named workers / parallelism / fan-out. This
+# is unambiguous intent and outranks the ACS-X blueprint gate (review F2/F3/F4):
+# a product-noun collision (Apple *Watch*, 4K *Monitor*, *mit Hermes* the parcel
+# carrier) must never hijack an explicit worker request to the direct path.
+# Morphology: `parallel\w*` catches "parallele/parallelen"; `worker[ns]?`
+# catches "Workern" (review F4).
+_EXPLICIT_PARALLEL_RE = re.compile(
+    r"\b(parallel\w*|gleichzeitig|worker[ns]?|fan[\s\-]?out)\b",
+    re.IGNORECASE,
+)
+# A real worker-engine name, required before a DELEGATE-shaped prompt routes to
+# the direct path (review F2): bare "delegiere" (no engine) and "mit Hermes"
+# the parcel carrier must not silently steer a task off the fan-out.
+_NAMED_ENGINE_RE = re.compile(
+    r"\b(hermes|copilot|codex|opencode|claude[\s\-]?code)\b",
+    re.IGNORECASE,
+)
 # Fan-out-shaped prompts: explicit parallelism, multi-source research,
 # per-item bulk work, multi-perspective review — the shapes where N
-# independent workers genuinely beat one sequential turn.
+# independent workers genuinely beat one sequential turn. `parallel\w*` and
+# `recherche[n]?` cover the inflected/noun German forms (review F4).
 _TRIAGE_FANOUT_RE = re.compile(
     r"\b("
-    r"parallel|gleichzeitig|worker[ns]?|fan[\s\-]?out"
+    r"parallel\w*|gleichzeitig|worker[ns]?|fan[\s\-]?out"
     r"|unabhängig\s+voneinander|independently"
-    r"|mehrere\s+(quellen|perspektiven|varianten|ansätze|kandidaten)"
+    r"|mehrere\s+(quellen|perspektiven|varianten|ansätze|kandidaten|recherchen)"
     r"|multiple\s+(sources|perspectives|variants|approaches|candidates)"
     r"|aus\s+\w+\s+perspektiven|from\s+\w+\s+perspectives"
     r"|für\s+jede[ns]?\b|for\s+each\b|je\s+eine?n?\b"
-    r"|recherchiere|research"
+    r"|recherchiere|recherchen|research"
     r"|vergleiche|compare"
     r"|sammle|collect|crawle"
     r")\b",
@@ -2360,8 +2394,21 @@ def _acs_x_blueprint(prompt: str):
             sys.path.insert(0, str(_shared))
         from acs_classify import heuristic_classify  # type: ignore  # noqa: PLC0415
         return heuristic_classify(prompt)
-    except Exception:  # noqa: BLE001 — advisory layer, never break the turn
+    except Exception as _exc:  # noqa: BLE001 — advisory layer, never break the turn
+        # Log ONCE per process (review observation): if acs_classify ever fails
+        # to import in a deployment, rule 2 silently vanishes and every
+        # LOOP/GOAL/COMPUTE/DELEGATE task reverts to quota-burning ACS with zero
+        # signal. A single warning turns that from invisible into diagnosable.
+        global _ACS_X_IMPORT_WARNED
+        if not _ACS_X_IMPORT_WARNED:
+            _ACS_X_IMPORT_WARNED = True
+            _log.warning("[delegation] acs_classify unavailable (%s) — routing "
+                         "rule 2 (LOOP/GOAL/COMPUTE/DELEGATE→direct) disabled; "
+                         "tasks may over-route to the ACS fan-out", _exc)
         return None
+
+
+_ACS_X_IMPORT_WARNED = False
 
 
 # ACS-X primitives that must NEVER route into the ACS fan-out: their correct
@@ -2383,19 +2430,25 @@ def _should_delegate(prompt: str) -> bool:
 
     Priority ladder (deterministic, 0 ms, no API):
       1. ``/delegate`` prefix → ACS (explicit user override, unchanged).
-      2. ACS-X shape LOOP/GOAL/COMPUTE/DELEGATE (confidence ≥ 0.70) →
-         DIRECT: a recurring/monitoring task belongs to the scheduler or a
-         /loop iteration, a persistent objective to the goal system, data
-         processing to L25 compute, an explicit engine wish to corvin_delegate
-         — never to a quota-burning one-shot fan-out. Checked BEFORE the
-         fan-out shape so "recherchiere jede Stunde ..." does not mis-route
-         into ACS on its research wording.
-      3. Fan-out-shaped (explicit parallelism, multi-source research,
-         per-item bulk work, multi-perspective) → ACS — the shapes where N
-         independent workers genuinely beat one sequential turn.
-      4. Coding-shaped (bug/fix/refactor/implement/test with code context)
-         → DIRECT, even when long: coding is sequential, needs the shared
-         workspace + conversation context, and each ACS turn burns one
+      1b. EXPLICIT parallelism ("parallel", "mehreren Workern", "fan-out")
+         → ACS, checked BEFORE the blueprint gate: the user named workers,
+         and a product-noun collision (Apple *Watch*, 4K *Monitor*, *mit
+         Hermes* the parcel carrier) must not hijack that to DIRECT (F2/F3/F4).
+      2. ACS-X shape LOOP/GOAL/COMPUTE at ANY confidence → DIRECT: a
+         recurring/monitoring task belongs to the scheduler or a /loop
+         iteration, a persistent objective to the goal system, data
+         processing to L25 compute — never a quota-burning one-shot fan-out.
+         "Any confidence" is the F1 fix: "stündlich"/"täglich" weigh 0.60-
+         0.65, below the old 0.70 gate, yet must still not burn quota. The
+         DELEGATE primitive routes DIRECT only when a real engine is NAMED
+         (F2: bare "delegiere"/"mit Hermes" must not steer off the fan-out).
+         Checked BEFORE the fan-out shape so "recherchiere jede Stunde ..."
+         does not mis-route into ACS on its research wording.
+      3. Fan-out-shaped (multi-source research, per-item bulk work,
+         multi-perspective) → ACS — N independent workers beat one turn.
+      4. Coding-shaped (bug/fix/refactor/implement/test/crash with code
+         context) → DIRECT, even when long: coding is sequential, needs the
+         shared workspace + conversation context, and each ACS turn burns one
          compute_units_per_day. Pre-2026-07-20 the strong-verb list sent
          every coding task into the fan-out — the historical error classes
          (error_max_turns, worker parse failures, "Delegation
@@ -2407,20 +2460,24 @@ def _should_delegate(prompt: str) -> bool:
     p = prompt.strip()
     if p.lower().startswith(_DELEGATE_PREFIX):
         return True
+    # Rule 1b — explicit parallelism wins over every classifier (see F2/F3/F4).
+    if _EXPLICIT_PARALLEL_RE.search(p):
+        return True
+    # Rule 2 — non-fan-out ACS-X primitives route to their correct mechanism.
     _bp = _acs_x_blueprint(p)
-    if (_bp is not None and _bp.primitive in _NON_FANOUT_PRIMITIVES
-            and _bp.confidence >= 0.70):
-        return False
+    if _bp is not None and _bp.primitive in _NON_FANOUT_PRIMITIVES:
+        if _bp.primitive == "DELEGATE":
+            # Only a NAMED engine is an unambiguous delegate intent.
+            if _NAMED_ENGINE_RE.search(p):
+                return False
+        elif _bp.confidence >= 0.50:  # LOOP/GOAL/COMPUTE at any real signal
+            return False
     if _TRIAGE_FANOUT_RE.search(p):
         has_verb = bool(_TRIAGE_VERB_RE.search(p) or _TRIAGE_STRONG_RE.search(p))
         has_multi = bool(_TRIAGE_MULTI_RE.search(p))
         # Fan-out markers on smalltalk ("wie vergleiche ich?") still need a
-        # substantive shape: a verb plus multi-step/length, same gate as weak
-        # verbs — except explicit parallel/worker/fan-out words, which are
-        # unambiguous on their own.
-        if re.search(r"\b(parallel|gleichzeitig|worker[ns]?|fan[\s\-]?out)\b", p,
-                     re.IGNORECASE):
-            return True
+        # substantive shape: a verb plus multi-step/length. (Explicit
+        # parallel/worker words already returned True at rule 1b.)
         if has_verb and (has_multi or len(p) >= 160):
             return True
     if _TRIAGE_CODING_RE.search(p):

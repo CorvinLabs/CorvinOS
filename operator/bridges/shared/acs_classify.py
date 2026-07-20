@@ -49,8 +49,14 @@ ALL_PRIMITIVES: Final[tuple[str, ...]] = (
 _RAW_SIGNALS: Final[list[tuple[str, str, float]]] = [
     # ── LOOP ────────────────────────────────────────────────────────────────
     # Temporal recurrence patterns
-    # "every N min/hour/day" and German "jede X" are strong LOOP signals (0.90)
-    (r"\bjede[rn]?\b.*\b(minute[n]?|stunde[n]?|sekunde[n]?|tag[e]?)\b",  PRIMITIVE_LOOP, 0.90),
+    # "every N min/hour/day" and German "jede X" are strong LOOP signals (0.90).
+    # Span bounded to 30 non-sentence chars (was unbounded `.*`): "jede 5
+    # Minuten" still matches, but "für JEDEN der fünf Anbieter die Lieferzeit
+    # in MINUTEN" (a per-item fan-out, ~35 chars apart, crossing the whole
+    # clause) no longer false-fires LOOP (review F2 — the unbounded span
+    # spanned an entire sentence).
+    (r"\bjede[rn]?\b[^.!?]{0,30}\b(minute[n]?|stunde[n]?|sekunde[n]?|tag[e]?)\b",
+                                                                          PRIMITIVE_LOOP, 0.90),
     (r"\bevery\s+\d+\s*(minute|hour|second|day)s?\b",                     PRIMITIVE_LOOP, 0.90),
     # Explicit scheduling intent (0.80): "on a schedule", "periodically"
     (r"\b(periodisch|regelmäßig|periodically|on a schedule)\b",           PRIMITIVE_LOOP, 0.80),
