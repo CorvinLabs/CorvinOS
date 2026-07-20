@@ -17,6 +17,21 @@ logger = logging.getLogger(__name__)
 # Database configuration (uses DATABASE_URL env var or falls back to mock)
 DATABASE_URL = os.environ.get('DATABASE_URL')
 
+# ISO 3166-1 Country Code → Name Mapping
+COUNTRY_NAMES = {
+    'DE': 'Germany', 'US': 'United States', 'GB': 'United Kingdom', 'FR': 'France',
+    'CA': 'Canada', 'NL': 'Netherlands', 'SE': 'Sweden', 'AU': 'Australia',
+    'JP': 'Japan', 'CH': 'Switzerland', 'IT': 'Italy', 'ES': 'Spain',
+    'BR': 'Brazil', 'IN': 'India', 'CN': 'China', 'RU': 'Russia',
+    'MX': 'Mexico', 'ZA': 'South Africa', 'SG': 'Singapore', 'KR': 'South Korea',
+    'NZ': 'New Zealand', 'BE': 'Belgium', 'AT': 'Austria', 'DK': 'Denmark',
+    'FI': 'Finland', 'NO': 'Norway', 'PL': 'Poland', 'CZ': 'Czech Republic',
+    'GR': 'Greece', 'PT': 'Portugal', 'HK': 'Hong Kong', 'TW': 'Taiwan',
+    'TH': 'Thailand', 'MY': 'Malaysia', 'PH': 'Philippines', 'VN': 'Vietnam',
+    'ID': 'Indonesia', 'UA': 'Ukraine', 'TR': 'Turkey', 'SA': 'Saudi Arabia',
+    'AE': 'UAE', 'XX': 'Unknown',
+}
+
 router = APIRouter(prefix="/v1/stats", tags=["telemetry"])
 
 
@@ -156,7 +171,7 @@ async def get_geo_instances(
                 countries = [
                     {
                         "code": code,
-                        "name": code,  # TODO: Map code to name via country_names
+                        "name": COUNTRY_NAMES.get(code, code),  # ✅ Map code to name
                         "instances": data.get('instances', 0),
                         "active_24h": data.get('active_24h', 0),
                         "retention": data.get('retention', 0.92),
