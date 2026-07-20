@@ -156,7 +156,21 @@ def run_acs_quota_fallback(
     re-open the quota: the fan-out stays blocked, only a single turn runs.
     """
     t0 = time.time()
+    # Sanitize run_id BEFORE any path join: rid flows into runs_dir / rid and
+    # then run_delegate(working_dir=..., allow_write=True). Every current caller
+    # passes run_id=None or an internally-generated id, so this is defense-in-
+    # depth — but a future caller threading a user-controlled run_id would
+    # otherwise get an arbitrary-write escape from the tenant runs dir. Mirror
+    # the sibling read routes' traversal guard via the canonical component
+    # sanitizer (also fixes Windows-illegal chars). Adversarial review F3.
     rid = run_id or f"acs-fb-{int(t0)}"
+    try:
+        from forge.paths import fs_safe_component as _fs_safe  # type: ignore
+        rid = _fs_safe(rid) or f"acs-fb-{int(t0)}"
+    except Exception:  # noqa: BLE001 — never let sanitizer import break the fallback
+        # Last-resort inline guard: reject traversal/separators outright.
+        if (not rid) or ("/" in rid) or ("\\" in rid) or rid.startswith(".") or (".." in rid):
+            rid = f"acs-fb-{int(t0)}"
 
     def _failed(err: str) -> dict[str, Any]:
         return {

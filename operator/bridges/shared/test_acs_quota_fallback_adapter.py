@@ -147,6 +147,28 @@ def test_quota_exhausted_falls_back_to_single_claude_code_turn(
     assert (manifest_dir / "result.json").exists()
 
 
+def test_run_id_is_sanitized_before_path_join(
+        tmp_path, fake_delegate, fake_l44_allow):
+    """Adversarial review F3: a traversal-shaped run_id must not escape the
+    tenant runs dir. The sanitized id addresses a child of tmp_path, and the
+    directory run_delegate writes into stays under it."""
+    with (
+        patch.object(_adapter, "_enforce_acs_compute_quota",
+                     return_value=_quota_block()),
+        patch.object(_adapter, "_acs_runs_dir", return_value=tmp_path),
+    ):
+        out = _adapter.run_acs_workflow(
+            _spec(), tenant_id="_default", run_id="../../etc/evil")
+
+    assert out["quota_fallback"] is True
+    # run_delegate's working_dir must resolve UNDER the runs dir, never outside.
+    wd = Path(fake_delegate[0]["working_dir"]).resolve()
+    assert str(wd).startswith(str(tmp_path.resolve())), (
+        f"working_dir {wd} escaped the runs dir {tmp_path}")
+    # No sibling of tmp_path named after the traversal was created.
+    assert not (tmp_path.parent / "etc").exists()
+
+
 def test_enforcement_unavailable_stays_hard_fail_closed(
         tmp_path, fake_delegate, fake_l44_allow):
     with (
