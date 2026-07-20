@@ -58,13 +58,20 @@ _AGENTS_DIR = _REPO_ROOT / "operator" / "bridges" / "shared"
 
 BUDGET_DEFAULT_S = 60
 BUDGET_MIN_S = 10
-# Raised 600 → 86400 (maintainer decision 2026-07-20): the ACS daily-quota
-# fallback runs a whole workflow goal as ONE delegate turn, and a 10-min cap
-# aborted exactly the long tasks the fallback exists to save. Matches the ACS
-# per-worker ceiling (_WORKER_TIMEOUT_CEILING) and the delegation-budget
-# ceiling in routes/settings.py::_BUDGET_KEYS. The default stays 60 s — only
-# the CALLER-requestable maximum moved.
-BUDGET_MAX_S = 86400
+# The normal caller-requestable maximum stays 600 s (10 min). Adversarial
+# review F7: raising this global to 86400 (as ADR-0201 first did) let EVERY
+# run_delegate caller — including the corvin_delegate MCP `delegate_*` tools,
+# whose budget_s comes straight from (possibly prompt-injected) LLM tool args —
+# hold an un-metered engine subprocess for 24 h. A 10-min interactive cap is
+# right for those; only the ACS quota-fallback legitimately needs longer, and
+# it now passes an explicit higher `budget_ceiling_s` (see BUDGET_FALLBACK_MAX_S).
+BUDGET_MAX_S = 600
+# The elevated ceiling the ACS daily-quota fallback may request: it runs a whole
+# workflow goal as ONE delegate turn, so a 10-min cap aborts exactly the long
+# tasks the fallback exists to save. Matches the ACS per-worker ceiling
+# (_WORKER_TIMEOUT_CEILING) and routes/settings.py::_BUDGET_KEYS. Reachable ONLY
+# via run_delegate(budget_ceiling_s=...), never from the MCP tool surface.
+BUDGET_FALLBACK_MAX_S = 86400
 
 PROMPT_MAX_CHARS = 64_000  # rejected hard above; protects engines from runaway input
 MODEL_MAX_CHARS = 256
@@ -539,15 +546,20 @@ def _validate_model(model: Any) -> str | None:
     return model
 
 
-def _clamp_budget(budget_s: Any) -> int:
+def _clamp_budget(budget_s: Any, ceiling_s: int = BUDGET_MAX_S) -> int:
     try:
         b = int(budget_s)
     except (TypeError, ValueError):
         b = BUDGET_DEFAULT_S
     if b < BUDGET_MIN_S:
         return BUDGET_MIN_S
-    if b > BUDGET_MAX_S:
-        return BUDGET_MAX_S
+    # ceiling_s defaults to the interactive cap (600 s); only the ACS quota
+    # fallback passes the elevated BUDGET_FALLBACK_MAX_S (review F7). A caller
+    # can never widen its OWN ceiling — the elevated value is a fixed constant,
+    # not caller input.
+    ceiling_s = max(BUDGET_MIN_S, min(int(ceiling_s), BUDGET_FALLBACK_MAX_S))
+    if b > ceiling_s:
+        return ceiling_s
     return b
 
 
@@ -586,6 +598,7 @@ def run_delegate(
     prompt: str,
     model: str | None = None,
     budget_s: int = BUDGET_DEFAULT_S,
+    budget_ceiling_s: int = BUDGET_MAX_S,
     working_dir: str | Path | None = None,
     env_extra: dict[str, str] | None = None,
     engine_factory: Callable[[str], Any] | None = None,
@@ -647,7 +660,7 @@ def run_delegate(
         )
     prompt = _validate_prompt(prompt)
     model = _validate_model(model)
-    budget = _clamp_budget(budget_s)
+    budget = _clamp_budget(budget_s, ceiling_s=budget_ceiling_s)
     cwd = _validate_working_dir(working_dir)
     env_overlay = _validate_env_extra(env_extra)
     cap_chars = _clamp_output_cap(output_cap_chars)

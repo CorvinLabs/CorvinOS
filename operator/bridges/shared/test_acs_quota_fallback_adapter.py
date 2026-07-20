@@ -78,6 +78,8 @@ def fake_delegate():
     pkg = types.ModuleType("corvin_delegate")
     mod = types.ModuleType("corvin_delegate.delegation")
     mod.run_delegate = _run_delegate  # type: ignore[attr-defined]
+    # The fallback imports BUDGET_FALLBACK_MAX_S from this module (review F7).
+    mod.BUDGET_FALLBACK_MAX_S = 86400  # type: ignore[attr-defined]
     pkg.delegation = mod  # type: ignore[attr-defined]
     saved = {k: sys.modules.get(k) for k in ("corvin_delegate",
                                              "corvin_delegate.delegation")}
@@ -257,6 +259,48 @@ def test_fallback_honours_spec_wall_time_budget(
                                   tenant_id="_default")
 
     assert fake_delegate[0]["budget_s"] == 7200
+    # F7: the fallback passes the elevated ceiling so a legitimate long goal
+    # is not clamped to the 600 s interactive cap.
+    from corvin_delegate.delegation import BUDGET_FALLBACK_MAX_S
+    assert fake_delegate[0]["budget_ceiling_s"] == BUDGET_FALLBACK_MAX_S
+
+
+def test_fallback_honours_narrower_budget_override(
+        tmp_path, fake_delegate, fake_l44_allow):
+    """F8: an explicit budget_override.max_wall_time must not be dropped — the
+    narrower of spec and override wins."""
+    with (
+        patch.object(_adapter, "_enforce_acs_compute_quota",
+                     return_value=_quota_block()),
+        patch.object(_adapter, "_acs_runs_dir", return_value=tmp_path),
+    ):
+        _adapter.run_acs_quota_fallback(
+            _spec(budget={"max_wall_time": 7200}), tenant_id="_default",
+            budget_override={"max_wall_time": 300})
+
+    assert fake_delegate[0]["budget_s"] == 300
+
+
+def test_fallback_is_bounded_per_day(tmp_path, fake_delegate, fake_l44_allow):
+    """F6/Sec-F1: after _FALLBACK_MAX_PER_DAY runs the fallback stops degrading
+    (bounds the scriptable un-metered surface) rather than looping unbounded."""
+    cap = _adapter._FALLBACK_MAX_PER_DAY
+    with (
+        patch.object(_adapter, "_enforce_acs_compute_quota",
+                     return_value=_quota_block()),
+        patch.object(_adapter, "_acs_runs_dir", return_value=tmp_path),
+    ):
+        for i in range(cap):
+            out = _adapter.run_acs_quota_fallback(_spec(), tenant_id="_default",
+                                                  run_id=f"r{i}")
+            assert out["quota_fallback"] is True, f"run {i} should still degrade"
+        # the (cap+1)-th is refused, no further delegate spawn
+        n_before = len(fake_delegate)
+        out = _adapter.run_acs_quota_fallback(_spec(), tenant_id="_default",
+                                              run_id="over")
+        assert out["status"] == "failed"
+        assert "fallback limit reached" in out["error"]
+        assert len(fake_delegate) == n_before, "no spawn past the daily cap"
 
 
 def test_dry_run_never_charges_or_falls_back(tmp_path, fake_delegate):

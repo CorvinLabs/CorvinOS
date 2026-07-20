@@ -131,6 +131,42 @@ def _enforce_acs_compute_quota(tenant_id: str, run_id: "str | None") -> "dict[st
     return None
 
 
+# Generous-but-finite daily cap on quota-fallback runs per tenant. The fallback
+# runs on the user's OWN engine credentials (un-metered by design,
+# LIC-DELEGATE-MCP-COMPUTE-01), so this is not a paid-compute gate — it bounds
+# the SCRIPTABLE surface adversarial review F6/Sec-F1 flagged: without it, after
+# the single daily ACS unit is spent, every subsequent POST /compute/acs/runs
+# (or scheduler tick) degrades to an un-metered 24 h-budgeted turn with no limit
+# on repetition or concurrency. 50/day is far above any legitimate degraded-mode
+# usage and still turns "unlimited" into "bounded". Fail-OPEN: a broken counter
+# lets the fallback proceed (degradation must not become a hard failure on an
+# I/O hiccup) — the cap is a backstop, not a security boundary.
+_FALLBACK_MAX_PER_DAY = 50
+
+
+def _fallback_quota_ok(tenant_id: str) -> "tuple[bool, int]":
+    """Increment + check the per-UTC-day fallback counter. Returns
+    (allowed, count_after). Fail-open: any error returns (True, -1)."""
+    try:
+        import datetime as _dt  # noqa: PLC0415
+        day = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+        path = _acs_runs_dir(tenant_id).parent / "fallback_count.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cur = {}
+        if path.exists():
+            try:
+                cur = json.loads(path.read_text(encoding="utf-8")) or {}
+            except Exception:  # noqa: BLE001 — corrupt counter → start fresh
+                cur = {}
+        count = int(cur.get("count", 0)) if cur.get("utc_day") == day else 0
+        if count >= _FALLBACK_MAX_PER_DAY:
+            return False, count
+        _write_json_atomic(path, {"utc_day": day, "count": count + 1})
+        return True, count + 1
+    except Exception:  # noqa: BLE001 — never let the counter break degradation
+        return True, -1
+
+
 def run_acs_quota_fallback(
     spec: "dict | str | Path",
     inputs: "dict | None" = None,
@@ -138,6 +174,7 @@ def run_acs_quota_fallback(
     tenant_id: str = "_default",
     run_id: "str | None" = None,
     quota_error: str = "",
+    budget_override: "dict | None" = None,
 ) -> dict[str, Any]:
     """Daily ACS quota exhausted → run the workflow GOAL as ONE direct Claude
     Code engine run instead of failing (maintainer decision 2026-07-20).
@@ -219,14 +256,32 @@ def run_acs_quota_fallback(
         # check_l44 already emitted the house_rules.* L16 event (audit-first).
         return _failed(_l44_refusal)
 
-    # Single-turn wall-clock budget: honour the spec's own wall-time if set.
+    # Bounded scriptable surface (review F6/Sec-F1) — checked AFTER L44 so a
+    # gate-blocked task does not consume the daily fallback budget.
+    _fb_ok, _fb_count = _fallback_quota_ok(tenant_id)
+    if not _fb_ok:
+        return _failed(
+            f"{quota_error}; quota fallback limit reached "
+            f"({_FALLBACK_MAX_PER_DAY}/day) — try again tomorrow or upgrade for "
+            "unmetered ACS runs")
+
+    # Single-turn wall-clock budget: honour the spec's own wall-time if set,
+    # and an explicit caller budget_override (review F8: the console route drops
+    # body.budget_override otherwise, so a caller who bounded the run to e.g.
+    # 300 s got a turn allowed to run 24 h). Take the MIN of whatever bounds
+    # were requested — a narrower request always wins.
     _dl = (spec_dict.get("orchestration", {}) or {}).get("delegation_loop", {}) \
         if isinstance(spec_dict.get("orchestration"), dict) else {}
     _b = _dl.get("budget", {}) if isinstance(_dl, dict) else {}
-    try:
-        budget_s = int(_b.get("max_wall_time") or 86400)
-    except (TypeError, ValueError):
-        budget_s = 86400
+    _wall_bounds = [86400]
+    for _src in (_b, budget_override or {}):
+        try:
+            _w = int((_src or {}).get("max_wall_time") or 0)
+            if _w > 0:
+                _wall_bounds.append(_w)
+        except (TypeError, ValueError):
+            pass
+    budget_s = min(_wall_bounds)
 
     # run_delegate: installed package first, repo-relative second.
     try:
@@ -264,10 +319,16 @@ def run_acs_quota_fallback(
     log.info("acs quota fallback: running goal as direct claude_code turn "
              "(run_id=%s, budget_s=%d)", rid, budget_s)
     try:
+        # budget_ceiling_s lets THIS path exceed the 600 s interactive cap that
+        # bounds every other run_delegate caller (review F7): a whole-workflow
+        # fallback goal legitimately needs longer, the MCP delegate_* tools do
+        # not. run_delegate clamps budget_s to [BUDGET_MIN_S, budget_ceiling_s].
+        from corvin_delegate.delegation import BUDGET_FALLBACK_MAX_S  # type: ignore
         res = run_delegate(
             engine="claude_code",
             prompt=prompt,
             budget_s=budget_s,
+            budget_ceiling_s=BUDGET_FALLBACK_MAX_S,
             working_dir=out_dir,
             allow_write=True,
             persona="acs-quota-fallback",
