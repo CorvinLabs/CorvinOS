@@ -41,6 +41,7 @@ def _attach_consent_active(tenant_id: str) -> bool:
 
 
 _MAX_SESSIONS_PER_TENANT = 8       # bound concurrent browsers → no resource exhaustion
+_IDLE_TTL_S = 30 * 60              # reap a session idle this long (no agent, no pending)
 
 
 @dataclass
@@ -62,6 +63,7 @@ class _Live:
     frame: bytes | None = None
     pending: dict[str, _Pending] = field(default_factory=dict)
     created: float = field(default_factory=lambda: 0.0)
+    last_activity: float = 0.0    # ts of the most recent action — idle-reaper input
     emitted: int = 0          # monotonic total events ever appended (survives deque rollover)
     agent_task: "asyncio.Task | None" = None
     # ADR-0189: needed so a paused (needs_login) agent can be resumed by
@@ -74,6 +76,9 @@ class _Live:
 
     def append(self, rec: dict) -> None:
         self.emitted += 1
+        ts = rec.get("ts")
+        if isinstance(ts, (int, float)):
+            self.last_activity = ts
         self.actions.append(rec)
 
 
@@ -114,6 +119,15 @@ class BrowserSessionManager:
                 raise RuntimeError(
                     "real-chrome attach requires an active consent (none granted)")
 
+        # Reclaim genuinely-idle sessions first (review H2): without this, 8
+        # forgotten sessions (a Browser-page tab left open, an MCP session whose
+        # turn ended without close) permanently wedge the tenant at the cap —
+        # every later create() 429s and neither the user nor the model knows any
+        # sid to close. Reap only sessions idle past the TTL with NO running agent
+        # and NO parked confirm, so an active or awaiting-approval session is
+        # never torn out from under its owner.
+        await self._reap_idle(tenant_id)
+
         # Bound concurrent browsers per tenant → no Chromium/PID exhaustion (DoS).
         live_count = sum(1 for k in self._sessions if k.startswith(f"{tenant_id}:"))
         if live_count >= _MAX_SESSIONS_PER_TENANT:
@@ -133,8 +147,9 @@ class BrowserSessionManager:
                 # would mean unrestricted egress).
                 raise RuntimeError(f"browser egress policy unavailable: {e}") from e
 
+        _t0 = self._now()
         live: _Live = _Live(session=None, owner_fingerprint=owner_fingerprint,  # type: ignore[arg-type]
-                            created=self._now())
+                            created=_t0, last_activity=_t0)
         pid_seq = 0
 
         def _on_action(rec: dict) -> None:
@@ -221,6 +236,50 @@ class BrowserSessionManager:
         self._sessions[self._key(tenant_id, sid)] = live
         return sid
 
+    async def _reap_idle(self, tenant_id: str) -> None:
+        """Close the tenant's sessions idle beyond _IDLE_TTL_S — but only ones
+        with no running agent and no parked confirm, so an active or
+        awaiting-human session is never reaped. Best-effort; a close error on one
+        session never blocks reaping the rest or the create() that triggered it."""
+        now = self._now()
+        for key, live in list(self._sessions.items()):
+            if not key.startswith(f"{tenant_id}:"):
+                continue
+            running = live.agent_task is not None and not live.agent_task.done()
+            if running or live.pending:
+                continue
+            last = live.last_activity or live.created
+            if last and (now - last) < _IDLE_TTL_S:
+                continue
+            self._sessions.pop(key, None)
+            self._drain_pending(live)
+            if live.session:
+                with contextlib.suppress(Exception):
+                    await live.session.close()
+
+    def sessions_info(self, tenant_id: str, *, owner_fingerprint: str = "") -> list[dict[str, Any]]:
+        """List this owner's live sessions (review H2: the missing discoverability
+        surface). Owner-scoped so one console user never sees another's sessions;
+        metadata only — never a URL or page content."""
+        out: list[dict[str, Any]] = []
+        prefix = f"{tenant_id}:"
+        for key, live in self._sessions.items():
+            if not key.startswith(prefix):
+                continue
+            if owner_fingerprint and live.owner_fingerprint and live.owner_fingerprint != owner_fingerprint:
+                continue
+            sid = key[len(prefix):]
+            running = live.agent_task is not None and not live.agent_task.done()
+            out.append({
+                "session": sid,
+                "attached": bool(getattr(live.session, "_attached", False)),
+                "agent_running": running,
+                "pending_confirms": len(live.pending),
+                "created": live.created,
+                "last_activity": live.last_activity,
+            })
+        return out
+
     def get(self, tenant_id: str, sid: str, *, owner_fingerprint: str = "") -> _Live:
         live = self._sessions.get(self._key(tenant_id, sid))
         if live is None:
@@ -247,7 +306,8 @@ class BrowserSessionManager:
                      "approved": approved, "ts": self._now()})
         return True
 
-    def resolve_oldest_pending(self, tenant_id: str, sid: str, approved: bool) -> bool:
+    def resolve_oldest_pending(self, tenant_id: str, sid: str, approved: bool, *,
+                               owner_fingerprint: str = "") -> bool:
         """Resolve the OLDEST pending human-in-the-loop confirm for (tenant_id,
         sid) — the manager-level entry point for the decoupled confirm channel
         (ADR-0183 S1). The live-view browser tab resolves a specific pending id
@@ -266,12 +326,17 @@ class BrowserSessionManager:
         (not an error) when the session is known but has no pending confirm —
         callers should surface both cases as a clear, distinct error rather
         than silently approving/declining nothing.
+        When ``owner_fingerprint`` is supplied it is enforced (review F11): a
+        same-tenant caller must not approve another user's parked confirm — the
+        same owner-scoping every other entry point already applies. "" preserves
+        the legacy tenant-wide behaviour for any caller that has no fingerprint.
         """
-        live = self.get(tenant_id, sid)
+        live = self.get(tenant_id, sid, owner_fingerprint=owner_fingerprint)
         if not live.pending:
             return False
         oldest_pid = next(iter(live.pending))   # dict preserves insertion order
-        return self.resolve_confirm(tenant_id, sid, oldest_pid, approved)
+        return self.resolve_confirm(tenant_id, sid, oldest_pid, approved,
+                                    owner_fingerprint=owner_fingerprint)
 
     def set_paused(self, tenant_id: str, sid: str, paused: bool, *,
                    owner_fingerprint: str = "") -> None:
@@ -337,6 +402,10 @@ class BrowserSessionManager:
                     # THIS still-finishing agent task. Just drop the session + shut
                     # the browser down.
                     self._sessions.pop(self._key(tenant_id, sid), None)
+                    # Fail-closed-resolve any confirm a concurrent REST click
+                    # parked (review F9) — otherwise that caller hangs the full
+                    # 120s timeout on a session that is already gone.
+                    self._drain_pending(live)
                     with contextlib.suppress(Exception):
                         await live.session.close()
 

@@ -89,6 +89,25 @@ def test_grant_then_status_active_then_revoke(monkeypatch, tmp_path):
     assert ac.active("_default") is False
 
 
+def test_attach_consent_reclamps_crafted_far_future_expiry(tmp_path):
+    """Review F3: a tampered store with a far-future expires_at must not become a
+    permanent real-login consent — the 12h ceiling is enforced on READ against
+    granted_at, and a store with no valid granted_at is fail-closed."""
+    import json, time as _t
+    # far-future expiry but granted_at well past the 12h ceiling → dead.
+    ac._path("_default").write_text(json.dumps(
+        {"expires_at": 9e12, "granted_at": _t.time() - (13 * 3600), "revoked": False}))
+    assert ac.active("_default") is False
+    # no granted_at at all → cannot prove it is within the ceiling → fail-closed.
+    ac._path("_default").write_text(json.dumps({"expires_at": 9e12, "revoked": False}))
+    assert ac.active("_default") is False
+    # a fresh grant with far-future expiry is capped but still active.
+    ac._path("_default").write_text(json.dumps(
+        {"expires_at": 9e12, "granted_at": _t.time(), "revoked": False}))
+    st = ac.status("_default")
+    assert st["active"] is True and 0 < st["remaining_s"] <= ac.MAX_TTL_S
+
+
 # ── confirm-mode (Q3): watch-mode auto-approve, TTL-bounded, attach-only ──────
 
 def test_confirm_mode_defaults_to_confirm_each():
@@ -188,14 +207,37 @@ def test_confirm_mode_is_owner_scoped(tmp_path, monkeypatch):
     assert cm.should_auto_approve("_default", "") is False        # tenant-wide legacy
 
 
-def test_confirm_mode_reclamps_a_crafted_far_future_expiry(tmp_path):
-    """Finding 7: a hand-written store must not bypass the 30-min ceiling."""
+def test_confirm_mode_crafted_far_future_without_set_at_is_failclosed(tmp_path):
+    """Review F2: the previous reclamp capped only the REPORTED remaining — a
+    crafted far-future expires_at then read as active-watch FOREVER. Now a store
+    with no valid set_at (i.e. hand-crafted, never written by set_watch) is
+    fail-closed to confirm-each: it cannot prove it is within the 30-min ceiling."""
     import json
     from corvin_console.browser import confirm_mode as cm
     cm._path("_default", "u").write_text(json.dumps({"mode": "watch", "expires_at": 9e12}))
     st = cm.status("_default", "u")
-    assert st["mode"] == "watch"
-    assert st["remaining_s"] <= cm.WATCH_MAX_TTL_S     # capped on READ, not just write
+    assert st["mode"] == "confirm-each"
+    assert st["remaining_s"] == 0
+    assert cm.should_auto_approve("_default", "u") is False
+
+
+def test_confirm_mode_reclamps_far_future_expiry_against_set_at(tmp_path):
+    """Review F2: even WITH a set_at, a crafted far-future expires_at is bounded
+    at set_at + WATCH_MAX_TTL_S — a stale watch (set long ago) is expired, not
+    perpetually active."""
+    import json, time as _t
+    from corvin_console.browser import confirm_mode as cm
+    # set_at an hour ago (> 30-min ceiling) + a far-future expiry → must be dead.
+    cm._path("_default", "u").write_text(json.dumps(
+        {"mode": "watch", "expires_at": 9e12, "set_at": _t.time() - 3600}))
+    st = cm.status("_default", "u")
+    assert st["mode"] == "confirm-each" and st["remaining_s"] == 0
+    # A fresh set_at with far-future expiry is capped to the ceiling, still active.
+    cm._path("_default", "u").write_text(json.dumps(
+        {"mode": "watch", "expires_at": 9e12, "set_at": _t.time()}))
+    st2 = cm.status("_default", "u")
+    assert st2["mode"] == "watch"
+    assert 0 < st2["remaining_s"] <= cm.WATCH_MAX_TTL_S
 
 
 def test_confirm_mode_non_numeric_expiry_is_failclosed(tmp_path):

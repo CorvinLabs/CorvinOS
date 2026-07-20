@@ -225,7 +225,13 @@ class EgressDecision:
 
 def _host(url: str) -> str:
     try:
-        return (urlparse(url).hostname or "").lower()
+        # Strip a trailing dot: `blocked.example.com.` is the SAME host as
+        # `blocked.example.com` to the resolver, but a raw hostname keeps the dot
+        # and would then match neither `host == p` nor `host.endswith("."+p)` in
+        # _match() — sailing past the forbidden list and the _METADATA_HOSTS
+        # literal set (the DNS-name egress bypass found in adversarial review).
+        # The IP path already strips it in _parse_host_ip; do it here for names.
+        return (urlparse(url).hostname or "").strip().rstrip(".").lower()
     except Exception:  # noqa: BLE001
         return ""
 

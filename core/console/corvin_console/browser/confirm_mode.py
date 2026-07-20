@@ -90,15 +90,20 @@ def status(tenant_id: str, owner: str = "") -> dict[str, Any]:
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
         exp = float(d.get("expires_at") or 0)          # inside try (finding 7)
-    except Exception:  # noqa: BLE001 — corrupt/non-numeric → fail-closed to ask
+        set_at = float(d.get("set_at"))                # required — no default
+    except Exception:  # noqa: BLE001 — corrupt/non-numeric/missing set_at → ask
         return deny
-    # Re-clamp on READ, not just on write: a hand-crafted store with a far-future
-    # numeric expiry must NOT bypass the 30-min ceiling (finding 7). Cap remaining
-    # to WATCH_MAX_TTL_S regardless of what the file claims.
-    remaining = min(exp - _now(), float(WATCH_MAX_TTL_S))
+    # Re-clamp on READ against the WRITE time, not against now (review finding):
+    # the previous `min(exp - now, WATCH_MAX_TTL_S)` capped only the *reported*
+    # remaining — a hand-crafted far-future expires_at then pinned remaining to
+    # WATCH_MAX_TTL_S on EVERY read, so watch-mode never actually expired. Bound
+    # the effective expiry at set_at + WATCH_MAX_TTL_S so the 30-min ceiling is a
+    # real lifetime cap, and honour a genuine shorter expires_at too.
+    effective_exp = min(exp, set_at + WATCH_MAX_TTL_S)
+    remaining = effective_exp - _now()
     if d.get("mode") == "watch" and remaining > 0:
-        return {"mode": "watch", "expires_at": exp, "remaining_s": int(remaining)}
-    return {"mode": "confirm-each", "expires_at": exp, "remaining_s": 0}
+        return {"mode": "watch", "expires_at": effective_exp, "remaining_s": int(remaining)}
+    return {"mode": "confirm-each", "expires_at": effective_exp, "remaining_s": 0}
 
 
 def should_auto_approve(tenant_id: str, owner: str = "") -> bool:

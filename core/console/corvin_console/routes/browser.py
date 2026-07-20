@@ -213,6 +213,29 @@ async def _act(coro):
         raise HTTPException(status_code=http_status.HTTP_409_CONFLICT, detail=str(e)) from e
     except KeyError as e:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        # A raw Playwright error (a click/goto timeout, or 'Target/context/browser
+        # has been closed' from a renderer crash / the user quitting attached
+        # Chrome) must NOT surface as an opaque HTTP 500 with driver internals —
+        # the model narrates that as "the browser service is unavailable" and the
+        # user is stuck. Translate the two common shapes into an actionable 409;
+        # re-raise anything genuinely unexpected so real bugs still show as 500.
+        mod = type(e).__module__ or ""
+        msg = str(e)
+        if mod.startswith("playwright"):
+            low = msg.lower()
+            if "closed" in low or "crashed" in low or "disconnected" in low:
+                raise HTTPException(
+                    status_code=http_status.HTTP_409_CONFLICT,
+                    detail="the browser was closed — this session is over, start a new one") from e
+            if "timeout" in low or "exceeded" in low:
+                raise HTTPException(
+                    status_code=http_status.HTTP_409_CONFLICT,
+                    detail="the page did not respond in time — observe() the page and retry") from e
+            raise HTTPException(
+                status_code=http_status.HTTP_409_CONFLICT,
+                detail="browser action failed — observe() the page and retry") from e
+        raise
 
 
 def _default_headless() -> bool:
@@ -221,10 +244,16 @@ def _default_headless() -> bool:
     (the console live-view screencast still shows every action either way).
     Override with CORVIN_BROWSER_HEADLESS=1 (force headless) / =0 (force visible)."""
     import os
+    import sys
     forced = os.environ.get("CORVIN_BROWSER_HEADLESS")
     if forced in ("1", "true", "yes"):
         return True
     if forced in ("0", "false", "no"):
+        return False
+    # Windows/macOS desktops have no DISPLAY/WAYLAND_DISPLAY env var but DO have a
+    # screen (review F5 / ADR-0159): treat them as display-present so the operator
+    # sees a real window there too, instead of always-headless on 2 of 3 OSes.
+    if sys.platform in ("win32", "darwin"):
         return False
     has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     return not has_display
@@ -295,6 +324,17 @@ async def create_session(
     return {"session": sid}
 
 
+@router.get("/browser/sessions")
+async def list_sessions(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session_or_token)],
+) -> dict[str, Any]:
+    """List this owner's live browser sessions (review H2). Gives the SPA, the
+    model, and the user a way to SEE and close forgotten sessions instead of
+    hitting an opaque 'session limit reached' with no sid to close. Metadata
+    only — never a URL or page content."""
+    return {"sessions": _mgr().sessions_info(rec.tenant_id, owner_fingerprint=rec.sid_fingerprint)}
+
+
 @router.post("/browser/{sid}/close")
 async def close_session(
     sid: str, rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
@@ -330,6 +370,16 @@ async def grant_attach_consent(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
 ) -> dict[str, Any]:
     """Grant (or refresh) the real-chrome attach consent for this tenant."""
+    # ADR-0200 rests on real-Chrome attach requiring an EXPLICIT HUMAN action
+    # ("grant it in the console"). require_csrf_or_token also accepts the internal
+    # per-turn MCP bearer token — so without this guard, the very tool the model
+    # drives could grant itself consent to the user's logged-in Chrome. Grant is
+    # human-cookie-only; the internal-tool path is refused (review F1).
+    if getattr(rec, "is_internal_tool", False):
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail=("real-chrome attach consent must be granted by the human in "
+                    "the console (Browser → Attach), not by an automated tool"))
     from ..browser import attach_consent as _ac  # noqa: PLC0415
     ttl = body.ttl_s if body else None
     expires_at = _ac.grant(rec.tenant_id, ttl, audit_fn=_audit_fn)
@@ -369,6 +419,15 @@ async def set_confirm_mode(
     disables audit or egress — it only suppresses the interactive prompt, and
     only on attached (real-login) sessions."""
     from ..browser import confirm_mode as _cm  # noqa: PLC0415
+    # Entering WATCH mode suppresses the human confirm on real-login actions — a
+    # trust escalation ADR-0200 reserves for the human. Refuse it from the
+    # internal MCP-tool path (review F1); confirm-each (the safe direction) may
+    # still be set by either caller.
+    if body.mode == "watch" and getattr(rec, "is_internal_tool", False):
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail=("watch-mode must be enabled by the human in the console, "
+                    "not by an automated tool"))
     if body.mode == "watch":
         _cm.set_watch(rec.tenant_id, body.ttl_s, rec.sid_fingerprint, audit_fn=_audit_fn)
     elif body.mode == "confirm-each":

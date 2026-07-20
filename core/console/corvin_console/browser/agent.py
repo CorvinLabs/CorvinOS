@@ -321,6 +321,23 @@ class BrowserAgent:
             except (KeyError, ValueError, TypeError) as e:
                 action["error"] = f"bad action args: {e}"
                 self._emit({"action": "agent_error", "step": step, "error": str(e)})
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                # A raw Playwright error (a click/goto timeout, an element that
+                # went stale, a transient renderer hiccup) on ONE action must not
+                # abort the whole run — record it, re-observe, and let the planner
+                # recover on the next turn, exactly like a bad index does. Only a
+                # broker-declined action (BrowserActionError above) or a genuinely
+                # dead browser (observe below also raises) ends the run.
+                action["error"] = str(e)
+                self._emit({"action": "agent_error", "step": step, "error": str(e)})
+                try:
+                    obs = await self._s.observe()
+                except BrowserActionError as oe:
+                    return {"status": "error", "reason": str(oe), "steps": step}
+                except Exception as oe:  # noqa: BLE001 — browser truly gone
+                    return {"status": "error", "reason": str(oe), "steps": step}
 
         self._emit({"action": "agent_done", "reason": "max steps reached"})
         return {"status": "max_steps", "steps": self._max}

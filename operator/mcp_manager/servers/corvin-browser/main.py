@@ -98,10 +98,16 @@ def _request(method: str, path: str, *, json_body: dict | None = None,
              params: dict | None = None) -> Any:
     token = _token()
     if not token:
-        # Should not happen on a real spawn (chat_runtime mints one per turn)
-        # — fail closed with a clear message rather than an opaque 401.
+        # No per-turn token. get_active_mcp_servers now drops this tool from
+        # token-less spawns, so the model should never even see it here — but if
+        # it does (a stale spawn), the message must be HONEST and terminal, not
+        # "please retry" (which caused an infinite loop on bridges — retry can
+        # never mint a token in a separate process). Do NOT tell the model to
+        # retry; tell it the truth so it stops trying.
         raise BrowserToolError(
-            "Browser tool has no session token for this turn — please retry your request.")
+            "Browser control is only available from the CorvinOS console chat, "
+            "not from this channel. Do not retry — tell the user to open the "
+            "console (Browser page) to drive a browser.")
     url = f"{_base_url()}{path}"
     headers = {"X-Corvin-Browser-Token": token}
     try:
