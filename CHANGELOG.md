@@ -6,6 +6,87 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.51] — 2026-07-20 — adversarial review sweep #2: telemetry-geo, browser-attach, delegation-routing, A2A locking
+
+A full iterative adversarial review (six review axes, a fix round, and a
+refutation round that broke and re-fixed one of its own fixes) over the last
+three days' work. This build is a strict superset of 0.10.50 (the multi-tier
+DSGVO geo-tracking feature, ADR-0205, shipped in git as v0.10.50 but never
+published to PyPI — its code ships here).
+
+### Fixed — Telemetry (the presence/geo channel)
+
+- **The presence heartbeat was 100% dead.** It routed through the Cloudflare
+  proxy (ADR-0204) but sent no `User-Agent`, so Cloudflare bot-protection
+  answered 403 at the edge before the Pages Function ran — `online_now` and the
+  online geo distribution never received a single beat. Now sends the explicit
+  `CorvinOS-Heartbeat/<version>` UA (verified live: 403 → 401-through). This is
+  load-bearing for 0.10.50's online-geo aggregation to receive any data.
+- **A transient 401 no longer self-destructs valid tokens fleet-wide.** The
+  401-recovery path deleted and re-provisioned tokens on any single 401 — a WAF
+  blip or a rate-limiter answering 401 would trigger a synchronized fleet-wide
+  token wipe + unthrottled hourly re-provision storm. The destructive delete is
+  now gated on two consecutive 401s; a success resets the counter; the 1×/day
+  cap remains.
+- **Healing-trace upload moved off the message hot-path.** It ran synchronously
+  in the bridge inbox/SIGTERM loop (up to ~60 s stalls on a network outage); it
+  now runs in a daemon thread. Bridge-only deployments now also start the
+  presence heartbeat (were undercounted in online geo).
+
+### Fixed — Browser automation (real-Chrome attach)
+
+- **`screenshot()` bypassed the attach consent recheck.** It was the only action
+  without the guard, so a revoked/expired real-Chrome consent (or an attach
+  take-over pause) still served live JPEGs of the user's real tabs via the
+  REST/MCP pull path — the exact leak the screencast hardening closed on the
+  push path. Now guarded, with screencast parity (a paused *managed* session
+  keeps streaming; only attach mode refuses).
+- **The WebSocket egress gate closed every WebSocket, including allowed ones**
+  (`check_egress` hard-rejects the `ws`/`wss` scheme), silently breaking every
+  WS-using page. The gate now maps `ws→http`/`wss→https` for the host check so
+  allowlisted hosts connect and private/metadata/off-allowlist hosts still fail
+  closed.
+
+### Fixed — Delegation routing (ADR-0202/0203)
+
+- **Bug-report vocabulary no longer burns the daily compute unit.** An ordinary
+  monitoring verb ("überwache"/"watch"/"monitor") or an incidental "worker"
+  token plus a bare "parallel"/"gleichzeitig" adverb used to hijack coding and
+  scheduler tasks into the quota-metered ACS fan-out. Rule 1b now fires only on
+  an *explicit* worker/fan-out demand (a count + "worker(s)", "fan-out",
+  "parallele <work-noun>`"); a bare adverb defers to the LOOP/GOAL/COMPUTE
+  blueprint (→ direct) and the fan-out-shape gate.
+- Budget ceilings threaded through the MCP/scheduler chokepoint fallback; the
+  L34/L35 residency re-gate now covers all quota-fallback branches; the daily
+  fallback counter is file-locked; fallback run-ids are collision-free; the
+  fallback-concurrency limiter no longer leaks a slot on an audit-write error.
+
+### Fixed — A2A (Layer 38)
+
+- Cross-process config writes (console PATCH, bridge reconnect, and the
+  `corvin-a2a` CLI `label`/`migrate-attestation` writers) now share a
+  file-lock, closing a lost-update race on the per-connection rights/name files.
+- `resolve()` — an exact endpoint-id always wins over a colliding peer-supplied
+  label, closing a peer-triggerable addressing DoS. Peer labels are sanitized on
+  every delivery point (listing, MCP, PATCH echo) against bidi/ANSI spoofing.
+- `--strict-mcp-config` on the claude_code worker spawn closes the MCP-tool
+  inheritance bypass of the per-connection denylist; granting `allow_subagents`
+  while bash/write/network are denied is now force-restricted (was a silent
+  escalation).
+
+### Fixed — Voice + Installer
+
+- TTS provider chain gained a total wall-clock deadline (default 22 s, below the
+  25 s console cap) so a slow provider is skipped, not SIGKILLed mid-run
+  (orphan process + leftover temp file); the console now cleans up the `.wav`
+  sibling. Timeout path surfaces `X-Corvin-Voice-Reason`; a dead OpenAI tier
+  logs once at WARNING; unterminated code fences are stripped before TTS.
+- Browser-provisioning recovery commands now point at real, PATH-valid commands
+  (`corvin-install --browser`) instead of a bare `playwright`/`pip` that a
+  `uv tool` install never exposes; the auto-update path re-provisions Playwright
+  + Chromium so existing installs are not left without a browser.
+
+
 ## [0.10.48] — 2026-07-19 — adversarial review sweep: telemetry-compliance, A2A hardening, voice + installer robustness
 
 This is a hardening release. A full iterative adversarial review of the previous
