@@ -92,15 +92,20 @@ class AttachmentManifestTests(unittest.TestCase):
         ad.mkdir()
         (ad / "report.pdf").write_bytes(b"%PDF-1.4")
         sp = self.cr._turn_system_prompt(self.sess)
-        self.assertIn(self.cr._WEB_CHAT_SYSTEM_PROMPT, sp)
+        # The LANGUAGE paragraph is DYNAMIC (auto-detect vs the operator's pinned
+        # Display Language), so assert the stable base instead of the whole
+        # constant — this test is about the attachment manifest, not language.
+        self.assertIn("always write them to the CURRENT WORKING DIRECTORY", sp)
         self.assertIn("report.pdf", sp)
 
     def test_turn_system_prompt_plain_when_no_uploads(self) -> None:
         # _turn_system_prompt always includes _WEB_CHAT_SYSTEM_PROMPT as its base.
         # It may also append user-profile / memory-index blocks (added in a later
         # feature), so we check containment rather than strict equality.
+        # See the note above: the LANGUAGE paragraph is dynamic by design.
         self.assertIn(
-            self.cr._WEB_CHAT_SYSTEM_PROMPT, self.cr._turn_system_prompt(self.sess),
+            "always write them to the CURRENT WORKING DIRECTORY",
+            self.cr._turn_system_prompt(self.sess),
         )
 
     def test_build_args_carries_attachment_path(self) -> None:

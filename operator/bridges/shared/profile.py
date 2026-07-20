@@ -323,9 +323,18 @@ def for_system_prompt() -> str:
     if d.get("name"):
         lines.append(f"- Name: {d['name']}")
     if d.get("display_language"):
+        # AUTHORITATIVE (maintainer decision 2026-07-20). This used to read
+        # "(default; still match the user's actual writing language)", which
+        # explicitly told the model to OVERRIDE the setting — so an operator with
+        # Display Language = Deutsch kept getting English (or, via a stray
+        # CJK character in the reply, Chinese) answers. If the operator picked a
+        # language in Settings → Profile, that IS the output language, for the
+        # chat text and the spoken summary alike.
         lines.append(
-            f"- Language: {d['display_language']} "
-            f"(default; still match the user's actual writing language)"
+            f"- Language: ALWAYS answer in {d['display_language']}. This is the "
+            f"operator's explicit setting and overrides the language of the "
+            f"incoming message — do not switch languages because a message, a "
+            f"quoted snippet or a code sample is in another language."
         )
     if d.get("tone"):
         lines.append(f"- Tone: {d['tone']}")

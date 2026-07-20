@@ -844,8 +844,17 @@ function ChatPane({
   // chat-settings REST API (that API covers bridge channels only, not
   // web sessions). Show the operator-configured global default instead.
   const activePersona = profileQ.data?.profile?.identity?.default_persona;
-  // Profile display_language as fallback for detectTtsLang when the
-  // signal is ambiguous (e.g. very short or language-neutral text).
+  // TRUE when the operator explicitly picked a language in Settings → Profile.
+  // Then it WINS over per-reply text detection (maintainer decision 2026-07-20):
+  // detection used to override it, so a Deutsch profile still got English voice
+  // — and a single CJK character anywhere in the reply (a quoted string, a code
+  // sample) flipped detectTtsLang to "zh" and spoke the whole answer in Chinese.
+  const ttsLangPinned: boolean = React.useMemo(
+    () => Boolean((profileQ.data?.profile?.identity?.display_language ?? "").trim()),
+    [profileQ.data],
+  );
+  // Profile display_language as the spoken language when pinned; otherwise the
+  // fallback detectTtsLang uses when its own signal is ambiguous.
   const ttsLang: string = React.useMemo(() => {
     const raw = profileQ.data?.profile?.identity?.display_language ?? "";
     if (raw.trim()) return raw.trim();
@@ -866,12 +875,20 @@ function ChatPane({
   // handler always sees the current value.
   const voiceOutRef = React.useRef(voiceOut);
   const ttsLangRef = React.useRef(ttsLang);
+  const ttsLangPinnedRef = React.useRef(ttsLangPinned);
   React.useEffect(() => {
     voiceOutRef.current = voiceOut;
   }, [voiceOut]);
   React.useEffect(() => {
     ttsLangRef.current = ttsLang;
   }, [ttsLang]);
+  // Own effect with its OWN dep: the profile query resolves AFTER mount, so
+  // piggy-backing this on [voiceOut] would leave the ref stale (pinned=false)
+  // until the user happened to toggle voice — the exact stale-closure trap the
+  // comment above describes.
+  React.useEffect(() => {
+    ttsLangPinnedRef.current = ttsLangPinned;
+  }, [ttsLangPinned]);
 
   // ADR-0194 annotation fallback: a result event flagged annotation_pending
   // holds TTS back for the final (annotated) result the server guarantees will
@@ -1024,7 +1041,10 @@ function ChatPane({
       if (evt.type === "result" && evt.text) {
         // Auto-detect language from the response text so TTS speaks the
         // language Claude actually answered in (not a static profile setting).
-        const lang = detectTtsLang(evt.text, ttsLangRef.current);
+        // Pinned profile language wins; detection only for an unseeded profile.
+        const lang = ttsLangPinnedRef.current
+          ? ttsLangRef.current
+          : detectTtsLang(evt.text, ttsLangRef.current);
         setLastTts({ text: evt.text, lang });
         // An annotated turn emits TWO result events (the plain reply, then the
         // one carrying the LERN-ZUGABE/metaphor annex). Speaking both cost two

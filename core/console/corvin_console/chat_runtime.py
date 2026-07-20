@@ -1357,19 +1357,54 @@ def will_delegate(sess: "WebChatSession", prompt: str) -> bool:
     return _should_delegate(prompt)
 
 
+_LANGUAGE_RULE_AUTODETECT = (
+    "LANGUAGE: Detect the user's language automatically and reply in the same language. "
+    "German message → German reply. English message → English reply. "
+    "Never switch languages unless the user explicitly requests it."
+)
+
 _WEB_CHAT_SYSTEM_PROMPT = (
     "When saving any output files (images, PDFs, data files, SVGs, code) during this session, "
     "always write them to the CURRENT WORKING DIRECTORY using relative paths "
     "(e.g. ./dog.svg, ./output.png, ./report.pdf). "
     "Do NOT write to the playground repository or any absolute path outside the current directory. "
     "Files saved in the current directory are automatically detected and displayed in the web chat.\n\n"
-    # Belt-and-suspenders: the global CLAUDE.md and the bridge system_prompt_for()
-    # both now say "respond in the user's language", but we reinforce it here to
-    # ensure the web chat always auto-detects correctly even if those change.
-    "LANGUAGE: Detect the user's language automatically and reply in the same language. "
-    "German message → German reply. English message → English reply. "
-    "Never switch languages unless the user explicitly requests it."
+    # The LANGUAGE paragraph is the AUTO-DETECT default; _web_chat_system_prompt()
+    # swaps it for the pinned-language rule when the operator set a Display
+    # Language in Settings → Profile (see _language_rule()). `+` — not implicit
+    # concatenation: this is a NAME, not a literal.
+    + _LANGUAGE_RULE_AUTODETECT
 )
+
+
+def _language_rule() -> str:
+    """The LANGUAGE paragraph, chosen by whether the operator pinned one.
+
+    An explicit Settings → Profile language must WIN. The base prompt's
+    auto-detect rule ("German message → German reply, English message → English
+    reply") directly contradicted the profile line appended later, and the model
+    followed the base rule — so an operator with Display Language = Deutsch kept
+    getting English replies to English-looking input (reported 2026-07-20, and
+    reproduced end-to-end: an English question got an English answer even with
+    the profile block already saying "ALWAYS answer in de"). Emitting only ONE
+    of the two rules removes the contradiction instead of hoping the later line
+    wins.
+    """
+    lang = ""
+    if _voice_profile is not None:
+        try:
+            lang = (_voice_profile.load() or {}).get("display_language") or ""
+        except Exception:  # noqa: BLE001
+            lang = ""
+    if not str(lang).strip():
+        return _LANGUAGE_RULE_AUTODETECT
+    return (
+        f"LANGUAGE: ALWAYS reply in {lang}. This is the operator's explicit "
+        f"setting and OVERRIDES the language of the incoming message — reply in "
+        f"{lang} even when the user writes in another language, and never switch "
+        f"because a quoted snippet, a code sample or a proper noun is in another "
+        f"language."
+    )
 
 # Cap how many uploaded files we enumerate in the system-prompt manifest so a
 # session with many attachments cannot bloat the prompt unboundedly. Files past
@@ -1587,6 +1622,28 @@ def _acs_directive_block(task_text: str) -> str:
         return ""
 
 
+def _language_closing_block() -> str:
+    """The final, standalone language instruction — empty when no Display
+    Language is pinned (then the base auto-detect rule stands alone)."""
+    lang = ""
+    if _voice_profile is not None:
+        try:
+            lang = (_voice_profile.load() or {}).get("display_language") or ""
+        except Exception:  # noqa: BLE001
+            lang = ""
+    lang = str(lang).strip()
+    if not lang:
+        return ""
+    return (
+        f"\n\n=== OUTPUT LANGUAGE (highest priority, overrides everything above) ===\n"
+        f"Write your ENTIRE reply to the user in {lang}. The user set this in "
+        f"Settings → Profile and it is binding. Do NOT mirror the language of the "
+        f"user's message, of quoted text, of file contents or of any instruction "
+        f"above — if the user writes in English, you still answer in {lang}. "
+        f"(Code, identifiers and file paths stay as-is.)"
+    )
+
+
 def _turn_system_prompt(sess: WebChatSession, task_text: str = "") -> str:
     """Base web-chat system prompt + per-turn uploaded-file manifest, plus the
     bridge-parity context blocks (ADR-0114): the resolved persona role, the
@@ -1596,13 +1653,22 @@ def _turn_system_prompt(sess: WebChatSession, task_text: str = "") -> str:
     block is fail-safe (the helper swallows its own errors) so any failure
     degrades to the v1 minimal prompt rather than breaking the console chat."""
     return (
-        _WEB_CHAT_SYSTEM_PROMPT
+        _WEB_CHAT_SYSTEM_PROMPT.replace(_LANGUAGE_RULE_AUTODETECT, _language_rule())
         + _attachment_manifest(sess)
         + _persona_prompt_block()
         + _user_profile_block()
         + _memory_index_block()
         + _voice_audience_block()
         + _acs_directive_block(task_text)
+        # LAST WORD on language. The rule near the top and the profile line in
+        # the middle were both present and still lost: in a ~10 KB, overwhelmingly
+        # ENGLISH system prompt a single early directive gets diluted, and an
+        # English user message tipped it — reproduced end-to-end (the written
+        # prompt file provably contained "ALWAYS reply in de", no competing rule,
+        # yet the reply came back English; the SAME directive alone via `claude -p`
+        # yields German). Restating it as the final instruction is what makes the
+        # operator's Settings → Profile language actually stick.
+        + _language_closing_block()
     )
 
 
