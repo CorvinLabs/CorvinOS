@@ -312,6 +312,38 @@ def test_ping_if_due_provisions_tokens_inside_the_lock_not_before(tmp_path):
     )
 
 
+class TestPingTargetsCloudflareProxy:
+    """ADR-0203: the ping POST must route through the Cloudflare-fronted
+    corvin-labs.com Pages Function, not hit the Railway origin directly —
+    Railway has no Cloudflare zone in front of it, so a direct hit never
+    carries CF-IPCountry and the backend's country capture never fires."""
+
+    def test_ping_default_url_is_cloudflare_fronted(self):
+        assert hu._PING_URL_DEFAULT == "https://corvin-labs.com/api/telemetry/ping"
+
+    def test_healing_trace_upload_url_is_unaffected(self):
+        """Only the ping moved behind Cloudflare — the healing-trace bundle
+        upload still targets the Railway origin directly (unchanged)."""
+        assert hu._UPLOAD_URL_DEFAULT == (
+            "https://corvin-features-production.up.railway.app/v1/telemetry/healing-traces"
+        )
+
+    def test_ping_base_url_overridable_via_env(self, monkeypatch):
+        """CORVIN_TELEMETRY_PING_BASE_URL lets local dev/CI point the ping
+        straight at Railway (or any other host) without touching the code."""
+        import importlib
+
+        monkeypatch.setenv(
+            "CORVIN_TELEMETRY_PING_BASE_URL", "https://example-dev.test/"
+        )
+        try:
+            reloaded = importlib.reload(hu)
+            assert reloaded._PING_URL_DEFAULT == "https://example-dev.test/api/telemetry/ping"
+        finally:
+            monkeypatch.delenv("CORVIN_TELEMETRY_PING_BASE_URL", raising=False)
+            importlib.reload(hu)
+
+
 def test_start_ping_thread_is_idempotent():
     """Calling start_ping_thread() twice must only ever start ONE thread —
     matches the pattern already used by start_heartbeat_thread()."""

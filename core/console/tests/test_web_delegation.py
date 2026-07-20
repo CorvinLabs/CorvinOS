@@ -20,8 +20,11 @@ from corvin_console import chat_runtime as cr  # noqa: E402
 @pytest.mark.parametrize("prompt", [
     "/delegate male ein bild von einem hund",
     "/DELEGATE auch case-insensitiv",
-    "Analysiere alle Spieltage der Bundesliga und erstelle danach eine Tabelle "
-    "mit den wichtigsten Statistiken pro Verein.",
+    # NB: the old "Bundesliga-Tabelle mit Statistiken" case moved to the
+    # ADR-0203 ladder tests below — data aggregation is a COMPUTE shape
+    # (L25 deterministic compute), not an LLM worker fan-out.
+    "Analysiere alle Spieltage der Bundesliga und erstelle danach eine "
+    "Übersicht der spannendsten Spiele pro Verein.",
     "Create a report comparing three frameworks and then summarize the steps.",
     "x" * 400,  # long prompts are substantive by definition
 ])
@@ -83,6 +86,58 @@ def test_triage_routes_fanout_to_acs(prompt: str) -> None:
 ])
 def test_triage_fanout_words_alone_do_not_delegate(prompt: str) -> None:
     assert cr._should_delegate(prompt) is False
+
+
+# ── ADR-0203 priority ladder: LOOP/GOAL/COMPUTE/DELEGATE shapes never fan out ─
+
+
+@pytest.mark.parametrize("prompt", [
+    # LOOP shape — a recurring task belongs to the scheduler / loop iteration;
+    # burning one compute unit per fire in the ACS fan-out would be the worst
+    # possible routing. The research wording must NOT win over the recurrence.
+    "Recherchiere jede Stunde die neuesten Nachrichten aus mehreren Quellen "
+    "und vergleiche danach die Schlagzeilen",
+    "Überwache den Server regelmäßig und erstelle danach einen Bericht über "
+    "die Ausfälle mit mehreren Perspektiven",
+    # GOAL shape — persistent objective, not a one-shot fan-out.
+    "Setze als dauerhaftes Ziel: verbessere die Testabdeckung des Projekts "
+    "Schritt für Schritt und vergleiche mehrere Ansätze",
+    # COMPUTE shape — deterministic data processing (L25), not LLM workers.
+    "Analysiere die CSV mit den Verkaufszahlen und erstelle mehrere Charts "
+    "und dann eine Zusammenfassung der Statistik",
+    # DELEGATE shape — explicit engine wish routes to corvin_delegate.
+    "Frag Hermes nach einer Zusammenfassung der Logs und erstelle danach "
+    "einen Bericht über mehrere Kandidaten",
+])
+def test_triage_ladder_non_fanout_primitives_stay_direct(prompt: str) -> None:
+    """ACS-X shapes LOOP/GOAL/COMPUTE/DELEGATE are checked BEFORE the fan-out
+    shape — their correct mechanism is never the quota-burning ACS fan-out."""
+    assert cr._should_delegate(prompt) is False
+
+
+def test_triage_ladder_fails_open_without_acs_classify(monkeypatch) -> None:
+    """When the shared classifier is unavailable, the triage must fall back to
+    its own regex rules — never crash, never change the fan-out contract."""
+    monkeypatch.setattr(cr, "_acs_x_blueprint", lambda p: None)
+    assert cr._should_delegate(
+        "Recherchiere aus mehreren Quellen die Marktlage und vergleiche "
+        "danach die Anbieter") is True
+    assert cr._should_delegate("hallo") is False
+
+
+# ── ADR-0203 bridge parity: console OS-turn carries the <acs_directive> ──────
+
+
+def test_console_directive_block_for_loop_task() -> None:
+    block = cr._acs_directive_block("Überwache den Ordner jede Stunde auf neue Dateien")
+    assert "<acs_directive" in block
+    assert 'primitive="LOOP"' in block
+
+
+def test_console_directive_block_empty_for_direct_and_blank() -> None:
+    assert cr._acs_directive_block("wie spät ist es?") == ""
+    assert cr._acs_directive_block("") == ""
+    assert cr._acs_directive_block("   ") == ""
 
 
 # ── tenant flag + budget ──────────────────────────────────────────────

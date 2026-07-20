@@ -1705,11 +1705,18 @@ the direct path until they add it) the web OS turn triages each task
 (deterministic heuristic; `/delegate <task>` forces) and dispatches
 fan-out-shaped work to `ACSRuntime(bridge="web", chat=<sid>)`.
 
-**ACS-suitability triage (reworked 2026-07-20, ADR-0202).** The question the
+**ACS-suitability triage (reworked 2026-07-20, ADR-0202/0203).** The full
+routing concept — every mechanism, the two-tier model, the priority ladder,
+surface capabilities and the metering map — lives in
+[delegation-routing.md](delegation-routing.md); this section covers the
+console triage specifics. The question the
 triage answers is no longer "is this substantive?" but "does this task fit
 the ACS *fan-out shape*?" — independent subtasks, each worker a fresh
 `claude -p` with only its subtask + ≤3 KB context state, results merged by a
-JSON manager loop. Routing (`_should_delegate`, deterministic, 0 ms):
+JSON manager loop. Routing (`_should_delegate`, deterministic, 0 ms; since
+ADR-0203 rules LOOP/GOAL/COMPUTE/DELEGATE are checked FIRST via the shared
+ACS-X heuristic — those shapes never fan out — and the console OS-turn now
+carries the same `<acs_directive>` block the bridges inject):
 
 1. `/delegate` prefix → ACS (explicit user override).
 2. Fan-out-shaped → ACS: explicit parallelism (`parallel`, `worker`,
