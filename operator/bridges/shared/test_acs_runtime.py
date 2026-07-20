@@ -630,9 +630,10 @@ def test_budget_from_spec_clamps_zero_max_loops_and_workers():
     }
     budget = _rt._budget_from_spec(spec)
     assert budget.max_loops == 100      # fell back to default, not 0
-    # Falls back to the SSOT delegation default (8), NOT the old inflated 500 —
-    # aligned with chat_runtime / settings.py / validator R35 (ceiling 64).
-    assert budget.max_total_workers == 8  # fell back to default, not -5
+    # Falls back to the SSOT delegation default — since 2026-07-20 that is the
+    # R35 ceiling (64), aligned with chat_runtime / settings.py (unconfigured
+    # must not stop a task; the CEILING itself is unchanged).
+    assert budget.max_total_workers == 64  # fell back to default, not -5
 
 
 def test_budget_from_spec_clamps_max_workers_per_iteration_ceiling():
@@ -675,7 +676,8 @@ def test_budget_from_spec_max_wall_time_zero_or_negative_falls_back_to_default()
         "max_wall_time": -1,
     }}}}
     budget = _rt._budget_from_spec(spec)
-    assert budget.max_wall_time == 3600
+    # Default == R36 ceiling since 2026-07-20 (unconfigured must not stop a task).
+    assert budget.max_wall_time == 86400
 
 
 def test_budget_from_spec_max_wall_time_within_ceiling_passes_through():

@@ -510,7 +510,7 @@ def _run_workflow_acs(
 
     icon = "✅" if out.get("status") == "success" else "❌"
     lines: list[str] = [
-        f"{icon} **{doc.name}** → `{out.get('status')}`  (engine=acs)",
+        f"{icon} **{doc.name}** → `{out.get('status')}`  (engine={out.get('engine', 'acs')})",
         f"Run-ID: `{out.get('run_id')}`  ·  {out.get('duration_s', 0):.1f}s",
     ]
     if out.get("summary"):

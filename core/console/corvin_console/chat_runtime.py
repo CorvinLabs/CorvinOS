@@ -1725,37 +1725,29 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
 _DELEGATE_PREFIX = "/delegate"
 
 _DELEGATION_BUDGET_DEFAULTS = {
-    # ACS-1: the a47c6d3 "blanket 100x scale-up" was only PARTIALLY reverted
-    # (3e1e44b fixed max_depth 200→4 because R32 caught it, but left the other
-    # siblings inflated). Every metered compute unit thus authorized up to 400
-    # worker subprocesses for 100 h — a quota-defeat. The siblings are restored
-    # here to the pre-inflation sane bounds; acs_validator R35/R36 now guards
-    # max_total_workers + max_wall_time the way R32 guards max_depth, so any
-    # future silent re-inflation fails LOUDLY at workflow validation.
-    # Raised 2026-07-16 (maintainer decision) so a fresh install does not meet a
-    # budget on ordinary work — meeting one reads as a failure to someone who has
-    # never seen these numbers. Generous but deliberately BELOW the ceilings in
-    # settings.py::_BUDGET_KEYS; defaulting to the ceilings would let one metered
-    # compute unit authorize 64 workers for 24 h, which is the quota-defeat the
-    # comment above describes and that R32/R35/R36 exist to prevent. MUST stay
-    # aligned with _BUDGET_KEYS (a test pins this).
-    "max_loops": 20,          # 3 was too tight: 1 worker-timeout burn + 2 parse-error burns = budget gone
-    "max_depth": 4,           # recursive worker-delegation depth (M4) — NOT a loop counter like the
-                              # other fields; 200 was an accidental blanket-scale-up in a47c6d3 that
-                              # broke every delegation (acs_validator R32 caps this at 10). 4 matches
-                              # the ACS runtime's own built-in default for recursive delegation depth.
-                              # Deliberately NOT raised with the rest: depth is the fan-out EXPONENT,
-                              # so it multiplies the worker ceiling instead of adding to it.
-    "max_total_workers": 8,   # concurrent worker subprocesses per delegated turn (pre-inflation was 4)
-                              # NOT raised: parallel workers are rarely why a task stops early (loops
-                              # and wall-time are), but this knob multiplies the fan-out directly —
-                              # it is the numerator of the worker-hours-per-metered-unit figure the
-                              # quota-defeat was measured in.
-    "max_wall_time": 14400,   # 4 h wall-clock ceiling for the whole delegation loop
-    "timeout_seconds": 14400, # 4 h — allows complex multi-file tasks to complete
-    "max_worker_turns": 300,  # acs_runtime default was 5 → workers hit max_turns mid-tool-use
-                              # on explore/implement tasks → error_max_turns → confidence=0.0
-                              # → "Delegation fehlgeschlagen: unknown error" in web console.
+    # Maintainer decision 2026-07-20 (supersedes 2026-07-16): defaults sit AT the
+    # settings.py::_BUDGET_KEYS ceilings so a task never stops on an unconfigured
+    # budget — a mid-task budget stop reads as a failure and kept aborting real
+    # work. The ceilings themselves stay put and stay guarded: acs_validator
+    # R32/R35/R36 still fail LOUDLY on anything above them (the a47c6d3 100x
+    # inflation class), and the manager-LLM still cannot RAISE any per-call
+    # bound (_worker_budget_for_spawn clamps). What this deliberately gives up
+    # is the "one metered compute unit must not authorize the maximum fan-out"
+    # guard the 2026-07-16 decision kept: a fresh free-tier install may now
+    # spend its daily ACS run at full width/length. MUST stay aligned with
+    # _BUDGET_KEYS (a test pins this).
+    "max_loops": 100,          # planning rounds for the whole delegation loop
+    "max_depth": 4,            # recursive worker-delegation depth (M4) — NOT a loop counter and NOT
+                               # raised with the rest: depth is the fan-out EXPONENT (it multiplies
+                               # the worker ceiling), and an exhausted depth never aborts a task —
+                               # the worker just does the subtask itself instead of sub-delegating.
+                               # acs_validator R32 caps this at 10; 4 matches the ACS runtime default.
+    "max_total_workers": 64,   # worker subprocesses per delegated turn (= R35 ceiling)
+    "max_wall_time": 86400,    # 24 h wall-clock ceiling for the whole delegation loop (= R36 ceiling)
+    "timeout_seconds": 86400,  # 24 h per worker subprocess (= _WORKER_TIMEOUT_CEILING); the spawn is
+                               # additionally deadlined against REMAINING wall time
+    "max_worker_turns": 5000,  # per-worker turn cap (= settings ceiling); the old runtime default of 5
+                               # killed workers mid-tool-use → error_max_turns → "unknown error"
 }
 
 # Plain-language names for the knobs a delegation can stop on. Keys match the

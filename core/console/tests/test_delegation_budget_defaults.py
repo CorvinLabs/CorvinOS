@@ -1,19 +1,24 @@
-"""Delegation-budget defaults + the bounded-stop message (2026-07-16).
+"""Delegation-budget defaults + the bounded-stop message.
 
-Maintainer decision: a fresh install must not meet a delegation budget on
-ordinary work, because meeting one READS as a failure to someone who has never
-seen these numbers. Two halves:
+Maintainer decision 2026-07-20 (supersedes 2026-07-16): the defaults sit AT
+the validation ceilings for every linear knob, so a task never stops on an
+unconfigured budget — mid-task budget stops kept aborting real work on fresh
+installs. Two halves:
 
-  * defaults raised to generous-but-bounded — deliberately NOT to the ceilings;
-  * reaching a budget now reports itself as a bounded stop naming the limit,
-    instead of "Delegation fehlgeschlagen: ... status 'budget_exhausted'".
+  * defaults == ceilings for the linear knobs (loops, wall time, worker
+    timeout, worker turns, total workers); max_depth alone stays below its
+    ceiling — depth is the fan-out EXPONENT and an exhausted depth never
+    aborts a task (the worker does the subtask itself instead of
+    sub-delegating);
+  * reaching a budget still reports itself as a bounded stop naming the
+    limit, instead of "Delegation fehlgeschlagen: ... 'budget_exhausted'".
 
-The ceilings themselves are load-bearing and stay put: they exist because one
-metered compute unit must not authorize a runaway fan-out. A 100x inflation
-(400 workers / 100h) was shipped once and reverted as a quota-defeat, and
-acs_validator R32/R35/R36 were added so a silent re-inflation fails loudly.
-Defaulting TO the ceilings would hand every free-tier user 64 workers for 24h
-out of their single daily compute unit — the same hole, through the front door.
+The ceilings themselves are unchanged and stay guarded: acs_validator
+R32/R35/R36 fail loudly on anything ABOVE them (the a47c6d3 100x-inflation
+class), and the manager-LLM still cannot RAISE any per-call bound. What the
+2026-07-20 decision deliberately gives up is the "one metered compute unit
+must not authorize the maximum fan-out" guard of 2026-07-16: a free-tier
+install may now spend its daily ACS run at full width/length.
 """
 from __future__ import annotations
 
@@ -44,19 +49,20 @@ def test_the_two_default_tables_agree() -> None:
         )
 
 
-# ── generous, but never AT the ceiling ───────────────────────────────────────
+# ── defaults sit AT the ceilings (2026-07-20), except max_depth ──────────────
 
-def test_no_default_sits_at_its_ceiling() -> None:
-    """The whole point of the decision: raise the floor, keep the roof.
-
-    A default equal to max means the first install is already at the ceiling the
-    quota-defeat guard exists to enforce, and there is no headroom left for a
-    user who genuinely needs more.
+def test_linear_knobs_default_to_their_ceilings() -> None:
+    """The 2026-07-20 decision: an unconfigured budget must never stop a task
+    mid-run, so every linear knob starts at the maximum a save could reach
+    anyway. Guards against a silent revert to below-ceiling defaults.
     """
-    at_ceiling = [k for k, s in _SPEC.items() if s["default"] >= s["max"]]
-    assert not at_ceiling, (
-        f"{at_ceiling} default to their ceiling — one metered compute unit would "
-        "authorize the maximum fan-out on a fresh install"
+    below_ceiling = [
+        k for k, s in _SPEC.items()
+        if k != "max_depth" and s["default"] != s["max"]
+    ]
+    assert not below_ceiling, (
+        f"{below_ceiling} default below their ceiling — a fresh install would "
+        "stop tasks on a budget nobody chose (maintainer decision 2026-07-20)"
     )
 
 
@@ -68,52 +74,40 @@ def test_every_default_is_inside_its_own_validation_range() -> None:
         )
 
 
-def test_the_time_and_iteration_knobs_were_raised() -> None:
-    """Guards against a silent revert of the maintainer decision.
+def test_the_task_stopping_knobs_sit_at_their_maxima() -> None:
+    """Guards against a silent revert of the 2026-07-20 maintainer decision.
 
-    Only the knobs that actually stop ordinary work early: a task that needs
-    more planning rounds, more worker turns, or more wall-clock is the common
-    case. Parallelism is not (see the next test).
+    These are the knobs that stopped ordinary work early — they now start at
+    the maximum a Settings save could reach anyway.
     """
-    assert _DEFAULTS["max_loops"] >= 20
-    assert _DEFAULTS["max_wall_time"] >= 4 * 3600
-    assert _DEFAULTS["timeout_seconds"] >= 4 * 3600
-    assert _DEFAULTS["max_worker_turns"] >= 300
+    assert _DEFAULTS["max_loops"] == 100
+    assert _DEFAULTS["max_wall_time"] == 86400
+    assert _DEFAULTS["timeout_seconds"] == 86400
+    assert _DEFAULTS["max_worker_turns"] == 5000
+    assert _DEFAULTS["max_total_workers"] == 64
 
 
-def test_the_fanout_knobs_were_deliberately_left_alone() -> None:
-    """The quota-defeat is measured in worker-hours per metered compute unit.
-
-    max_total_workers is that figure's numerator and max_depth its exponent, so
-    neither rides along with a UX-motivated raise: the decision buys longer and
-    deeper single-track runs, not a wider fan-out.
-    """
-    assert _DEFAULTS["max_total_workers"] == 8      # pre-inflation value, unchanged
-    assert _DEFAULTS["max_depth"] == 4
-    worker_hours = _DEFAULTS["max_total_workers"] * (_DEFAULTS["max_wall_time"] / 3600)
-    assert worker_hours <= 32, (
-        f"{worker_hours} worker-hours per metered unit (old default 8, UI ceiling "
-        "1536, the 2026 defeat 40000) — this is the axis that must not drift"
-    )
+def test_the_ceilings_themselves_did_not_move() -> None:
+    """Defaults moved TO the ceilings; the ceilings stay put. They are the
+    R32/R35/R36 quota-defeat guard line (64 workers / 24 h / depth 10) — a
+    raise here is the a47c6d3 inflation class and must be a loud, reviewed
+    change, never a drive-by."""
+    assert _SPEC["max_total_workers"]["max"] == 64
+    assert _SPEC["max_wall_time"]["max"] == 86400
+    assert _SPEC["timeout_seconds"]["max"] == 86400
+    assert _SPEC["max_loops"]["max"] == 100
+    assert _SPEC["max_worker_turns"]["max"] == 5000
+    assert _SPEC["max_depth"]["max"] == 10
 
 
 def test_max_depth_was_deliberately_not_raised() -> None:
     """Depth is the fan-out EXPONENT, not a linear knob: raising it multiplies
-    the worker ceiling rather than adding to it. acs_validator R32 caps it at 10.
+    the worker ceiling rather than adding to it — and an exhausted depth never
+    aborts a task (the worker completes the subtask itself instead of
+    sub-delegating), so it rides along with no UX raise. R32 caps it at 10.
     """
     assert _DEFAULTS["max_depth"] == 4
-
-
-def test_headroom_is_left_for_users_who_genuinely_need_more() -> None:
-    """"Generous by default" must not mean "nothing left to give".
-
-    Someone with a real long-running task should still be able to raise the knob
-    in Settings — which is exactly what the new bounded-stop message tells them
-    to do, so it has to be true.
-    """
-    assert _DEFAULTS["max_wall_time"] * 2 <= _SPEC["max_wall_time"]["max"]
-    assert _DEFAULTS["max_loops"] * 2 <= _SPEC["max_loops"]["max"]
-    assert _DEFAULTS["max_total_workers"] * 2 <= _SPEC["max_total_workers"]["max"]
+    assert _DEFAULTS["max_depth"] < _SPEC["max_depth"]["max"]
 
 
 # ── a reached budget is a bounded stop, not a crash ──────────────────────────

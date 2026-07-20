@@ -58,7 +58,13 @@ _AGENTS_DIR = _REPO_ROOT / "operator" / "bridges" / "shared"
 
 BUDGET_DEFAULT_S = 60
 BUDGET_MIN_S = 10
-BUDGET_MAX_S = 600
+# Raised 600 → 86400 (maintainer decision 2026-07-20): the ACS daily-quota
+# fallback runs a whole workflow goal as ONE delegate turn, and a 10-min cap
+# aborted exactly the long tasks the fallback exists to save. Matches the ACS
+# per-worker ceiling (_WORKER_TIMEOUT_CEILING) and the delegation-budget
+# ceiling in routes/settings.py::_BUDGET_KEYS. The default stays 60 s — only
+# the CALLER-requestable maximum moved.
+BUDGET_MAX_S = 86400
 
 PROMPT_MAX_CHARS = 64_000  # rejected hard above; protects engines from runaway input
 MODEL_MAX_CHARS = 256

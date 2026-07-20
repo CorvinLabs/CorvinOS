@@ -2777,6 +2777,7 @@ if str(_ACS_SHARED) not in sys.path:
 try:
     from acs_engine_adapter import (  # type: ignore
         run_acs_workflow as _run_acs_workflow,
+        run_acs_quota_fallback as _run_acs_quota_fallback,
         list_acs_runs as _list_acs_runs,
         get_acs_run as _get_acs_run,
         export_acs_run_as_awpkg as _export_acs_run_as_awpkg,
@@ -2862,12 +2863,26 @@ def submit_acs_workflow_run(
     # a free-tier user cannot loop this route for unbounded paid compute. The
     # FREE_TIER cap (1/day) also bounds concurrent ACS runs. dry_run spawns no
     # workers, so it is exempt.
+    _quota_fb = False
     if not body.dry_run:
         from ._compute_license_gate import enforce_compute_quota  # noqa: PLC0415
 
-        enforce_compute_quota(
-            rec.tenant_id, rec.sid_fingerprint, audit_action="acs.run_submit",
-        )
+        try:
+            enforce_compute_quota(
+                rec.tenant_id, rec.sid_fingerprint, audit_action="acs.run_submit",
+            )
+        except HTTPException as _q_exc:
+            # Day limit reached → degrade to a single direct Claude Code turn
+            # (maintainer decision 2026-07-20; mirrors the ADR-0150 web-chat and
+            # run_acs_workflow chokepoint fallbacks). ONLY for a genuine
+            # quota_exceeded — the fail-closed enforcement_unavailable 402 (and
+            # anything else) stays a hard error.
+            _q_detail = _q_exc.detail if isinstance(_q_exc.detail, dict) else {}
+            if (_q_exc.status_code == http_status.HTTP_402_PAYMENT_REQUIRED
+                    and _q_detail.get("reason") == "quota_exceeded"):
+                _quota_fb = True
+            else:
+                raise
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
@@ -2878,16 +2893,26 @@ def submit_acs_workflow_run(
     )
 
     try:
-        result = _run_acs_workflow(
-            wf_path,
-            inputs=body.inputs or None,
-            tenant_id=rec.tenant_id,
-            dry_run=body.dry_run,
-            budget_override=body.budget_override,
-            # This route already charged the daily quota via enforce_compute_quota
-            # above (and returns a 402); the chokepoint must NOT double-count.
-            charge_quota=False,
-        )
+        if _quota_fb:
+            # L44 house-rules gate runs INSIDE run_acs_quota_fallback
+            # (fail-closed) — same guarantee as the ACSRuntime.run chokepoint.
+            result = _run_acs_quota_fallback(
+                wf_path,
+                inputs=body.inputs or None,
+                tenant_id=rec.tenant_id,
+                quota_error="compute_units_per_day exceeded",
+            )
+        else:
+            result = _run_acs_workflow(
+                wf_path,
+                inputs=body.inputs or None,
+                tenant_id=rec.tenant_id,
+                dry_run=body.dry_run,
+                budget_override=body.budget_override,
+                # This route already charged the daily quota via enforce_compute_quota
+                # above (and returns a 402); the chokepoint must NOT double-count.
+                charge_quota=False,
+            )
     except Exception as e:  # noqa: BLE001
         console_audit.action_failed(
             tenant_id=rec.tenant_id,

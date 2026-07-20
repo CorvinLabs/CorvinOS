@@ -115,28 +115,25 @@ def test_acs1_budget_defaults_are_sane() -> None:
     max_wall_time=360000, max_loops=500, max_worker_turns=10000) was a
     quota-defeat: one metered compute unit authorized 400 workers for 100 h.
 
-    Bounds relaxed 2026-07-16 (maintainer decision) — the time/iteration knobs
-    only. A fresh install kept meeting a budget on ordinary work, which reads as
-    a failure to someone who has never seen these numbers.
-
-    What did NOT change is the thing this test is actually for. The defeat is
-    measured in WORKER-HOURS per metered unit (workers x wall-time), so that
-    product is now asserted directly instead of being implied by two separate
-    ceilings: max_total_workers stays at its pre-inflation value, and the raise
-    buys longer/deeper single-track runs, not a wider fan-out. For scale:
-    old default 8, new default 32, UI ceiling 1536, the defeat 40000.
+    Maintainer decision 2026-07-20 (supersedes the 2026-07-16 relaxation):
+    defaults sit AT the validation ceilings so an unconfigured budget never
+    stops a task mid-run. "Sane" therefore now means: never ABOVE the
+    R32/R35/R36 guard line — the ceilings themselves (64 workers / 24 h /
+    depth ≤ 10) are the invariant, and anything past them is the inflation
+    class this test was written against. The exhaustive default==ceiling pins
+    live in test_delegation_budget_defaults.py.
     """
     d = cr._DELEGATION_BUDGET_DEFAULTS
     worker_hours = d["max_total_workers"] * (d["max_wall_time"] / 3600)
-    assert worker_hours <= 32, (
-        f"{worker_hours} worker-hours per metered compute unit — the fan-out "
-        "budget grew; that is the quota-defeat axis, raise it only deliberately"
+    assert worker_hours <= 64 * 24, (
+        f"{worker_hours} worker-hours per metered compute unit exceeds the "
+        "R35/R36 guard line (64 workers x 24 h) — a47c6d3 inflation class"
     )
-    assert 1 <= d["max_total_workers"] <= 8, d["max_total_workers"]
-    assert d["max_wall_time"] <= 4 * 3600, d["max_wall_time"]
-    assert d["timeout_seconds"] <= 4 * 3600, d["timeout_seconds"]
-    assert 1 <= d["max_loops"] <= 50, d["max_loops"]
-    assert 1 <= d["max_worker_turns"] <= 500, d["max_worker_turns"]
+    assert 1 <= d["max_total_workers"] <= 64, d["max_total_workers"]
+    assert d["max_wall_time"] <= 86400, d["max_wall_time"]
+    assert d["timeout_seconds"] <= 86400, d["timeout_seconds"]
+    assert 1 <= d["max_loops"] <= 100, d["max_loops"]
+    assert 1 <= d["max_worker_turns"] <= 5000, d["max_worker_turns"]
     assert 1 <= d["max_depth"] <= 10, d["max_depth"]
 
 

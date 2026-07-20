@@ -68,6 +68,10 @@ def enforce_compute_quota(
             detail={
                 "error": "license_limit",
                 "feature": "compute_units_per_day",
+                # reason lets callers tell fail-closed apart from a genuine
+                # day-limit stop (only the latter may degrade to the ACS
+                # quota fallback — see submit_acs_workflow_run).
+                "reason": "enforcement_unavailable",
                 "msg": "Compute quota enforcement unavailable — refusing compute (fail-closed).",
                 "upgrade_url": "https://corvin-labs.com/pricing",
             },
@@ -85,6 +89,7 @@ def enforce_compute_quota(
             detail={
                 "error": "license_limit",
                 "feature": "compute_units_per_day",
+                "reason": "quota_exceeded",
                 "limit": _lic_get_limit("compute_units_per_day"),
                 "msg": str(exc),
                 "upgrade_url": "https://corvin-labs.com/pricing",

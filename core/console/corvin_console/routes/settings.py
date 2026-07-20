@@ -441,21 +441,22 @@ _BUDGET_KEYS = {
     # inflation (default 400 workers / 100h) that let one metered compute unit
     # authorize a runaway fan-out; a save above these now fails validation loudly.
     #
-    # Defaults raised 2026-07-16 (maintainer decision): a fresh install should not
-    # hit a delegation budget on ordinary work, because hitting one READS as a
-    # failure to someone who has never seen these numbers. Deliberately raised to
-    # generous-but-bounded, NOT to the ceilings: the ceilings exist because one
-    # metered compute unit must not authorize a runaway fan-out (see above), and
-    # defaulting to them would hand every free-tier user 64 workers for 24h out of
-    # their single daily unit — re-opening the exact hole that was closed. The
-    # companion half of this change is that reaching a budget now reports itself
-    # as a bounded stop with the limit named, not as "Delegation fehlgeschlagen".
-    # max_depth stays at 4: it is the fan-out EXPONENT, not a linear knob.
-    "timeout_seconds":  {"type": int, "min": 30,    "max": 86400,   "default": 14400},
-    "max_worker_turns": {"type": int, "min": 1,     "max": 5000,    "default": 300},
-    "max_loops":        {"type": int, "min": 1,     "max": 100,     "default": 20},
-    "max_wall_time":    {"type": int, "min": 60,    "max": 86400,   "default": 14400},
-    "max_total_workers":{"type": int, "min": 1,     "max": 64,      "default": 8},
+    # Defaults raised to the ceilings 2026-07-20 (maintainer decision, supersedes
+    # the 2026-07-16 "generous-but-below-ceiling" stance): an unconfigured budget
+    # must never stop a task mid-run — budget stops kept aborting real work on
+    # fresh installs. The ceilings themselves are unchanged and stay guarded
+    # (acs_validator R32/R35/R36 fail loudly above them); what changed is only
+    # that a fresh install now starts AT them instead of below them. Trade-off
+    # accepted: one free-tier metered compute unit may authorize the maximum
+    # fan-out (64 workers / 24 h). The bounded-stop message (a reached budget
+    # names the limit instead of reading as a failure) stays as the backstop.
+    # max_depth stays at 4: it is the fan-out EXPONENT, not a linear knob, and
+    # an exhausted depth never aborts a task.
+    "timeout_seconds":  {"type": int, "min": 30,    "max": 86400,   "default": 86400},
+    "max_worker_turns": {"type": int, "min": 1,     "max": 5000,    "default": 5000},
+    "max_loops":        {"type": int, "min": 1,     "max": 100,     "default": 100},
+    "max_wall_time":    {"type": int, "min": 60,    "max": 86400,   "default": 86400},
+    "max_total_workers":{"type": int, "min": 1,     "max": 64,      "default": 64},
     # Recursive delegation depth (M4), not a loop counter — acs_validator R32
     # hard-caps this at 10, so max must match or every save >10 fails validation.
     "max_depth":        {"type": int, "min": 1,     "max": 10,      "default": 4},
