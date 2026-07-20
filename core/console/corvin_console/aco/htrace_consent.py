@@ -294,7 +294,16 @@ def provision_telemetry_tokens(
         _TOKEN_ENDPOINT,
         data=payload,
         method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            # Explicit, non-generic UA (mirrors htrace_uploader._telemetry_user_agent):
+            # Cloudflare's bot-protection blocks urllib's default UA with a 403
+            # before the request reaches any Cloudflare-fronted endpoint. This
+            # endpoint currently hits Railway directly, but shares the pattern
+            # for when it moves behind a Cloudflare zone.
+            "User-Agent": "CorvinOS-TokenProvision/1",
+            "Accept": "application/json",
+        },
     )
 
     lf = None

@@ -138,6 +138,30 @@ def _assert_ping_safe(body: dict) -> None:
             raise ValueError(f"ping body key {key!r} carries a non-allowlisted value")
 
 
+def _corvin_version() -> str:
+    """Return the installed corvinos package version, or 'unknown' in dev-mode."""
+    try:
+        from importlib.metadata import version as _pkg_version
+        return _pkg_version("corvinos")
+    except Exception:  # noqa: BLE001
+        try:
+            # Dev-mode fallback: read __version__ from the installed console package.
+            from corvin_console import __version__ as _cv  # type: ignore[attr-defined]
+            return _cv
+        except Exception:  # noqa: BLE001
+            return "unknown"
+
+
+# Explicit, non-generic User-Agent for all telemetry HTTP requests. Cloudflare's
+# bot-protection (error 1010, "automated fetching banned") blocks the default
+# urllib UA ("Python-urllib/3.x") on corvin-labs.com BEFORE the request reaches
+# functions/api/telemetry/ping.js — confirmed via a real ping attempt returning
+# HTTP 403 with a generic UA vs. HTTP 401 (a normal auth response) once a
+# distinct UA is set. Every request built in this module must carry one.
+def _telemetry_user_agent(component: str) -> str:
+    return f"CorvinOS-{component}/{_corvin_version()}"
+
+
 def _home() -> Optional[Path]:
     try:
         from forge import paths as _p  # type: ignore[import]
@@ -360,16 +384,7 @@ def ping_if_due(home: Path) -> bool:
             instance_token = _load_instance_token(home)
             instance_id = load_or_create_instance_id(home)
 
-            try:
-                from importlib.metadata import version as _pkg_version
-                corvin_version = _pkg_version("corvinos")
-            except Exception:  # noqa: BLE001
-                try:
-                    # Dev-mode fallback: read __version__ from the installed console package.
-                    from corvin_console import __version__ as _cv  # type: ignore[attr-defined]
-                    corvin_version = _cv
-                except Exception:  # noqa: BLE001
-                    corvin_version = "unknown"
+            corvin_version = _corvin_version()
 
             # Body carries the version plus three coarse environment enums —
             # the uuid4 (instance_id) and the HMAC pseudonym (instance_token)
@@ -398,6 +413,8 @@ def ping_if_due(home: Path) -> bool:
                     "Authorization": f"Bearer {telemetry_token}",
                     "X-HTTrace-Instance-Token": instance_token,
                     "X-HTrace-Instance-Id": instance_id,
+                    "User-Agent": _telemetry_user_agent("Ping"),
+                    "Accept": "application/json",
                 },
             )
             # No-redirect + https-only opener (F8): the ping carries the Bearer
@@ -613,6 +630,7 @@ def _post_bundle(
                 "X-HTTrace-Instance-Token": instance_token,
                 "X-HTrace-Instance-Id": instance_id,
                 "X-HTTrace-Consent-Act-Id": consent_act_id,
+                "User-Agent": _telemetry_user_agent("HealingTraceUpload"),
             },
         )
         # No-redirect + https-only (F8): the bundle POST carries a Bearer token +
