@@ -2691,6 +2691,12 @@ export interface A2AOrigin {
   state?: "PENDING" | "ACTIVE";
   label?: string | null;
   _friendship?: boolean;
+  // M2 tool policy — deny-by-default opt-ins (ADR-0144)
+  allow_bash?: boolean;
+  allow_network?: boolean;
+  allow_read_files?: boolean;
+  allow_write_files?: boolean;
+  allow_subagents?: boolean;
 }
 
 export interface A2AOriginsResponse {
@@ -3039,13 +3045,32 @@ export interface OriginPatchRequest {
   enabled?: boolean;
   allowed_personas?: string[];
   max_ttl_s?: number | null;
+  label?: string;
+  allow_bash?: boolean;
+  allow_network?: boolean;
+  allow_read_files?: boolean;
+  allow_write_files?: boolean;
+  allow_subagents?: boolean;
 }
 
 export async function patchA2AOrigin(
   originId: string,
   body: OriginPatchRequest,
   csrf: string,
-): Promise<{ ok: boolean; origin_id: string; spawn_worker: boolean; enabled: boolean; allowed_personas: string[]; max_ttl_s: number | null }> {
+): Promise<{
+  ok: boolean;
+  origin_id: string;
+  spawn_worker: boolean;
+  enabled: boolean;
+  allowed_personas: string[];
+  max_ttl_s: number | null;
+  label: string | null;
+  allow_bash: boolean;
+  allow_network: boolean;
+  allow_read_files: boolean;
+  allow_write_files: boolean;
+  allow_subagents: boolean;
+}> {
   return api(`/remote-trigger/origins/${encodeURIComponent(originId)}`, {
     method: "PATCH",
     body,

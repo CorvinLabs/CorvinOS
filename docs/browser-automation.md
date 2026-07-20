@@ -133,13 +133,42 @@ download when Chromium is already present). Chromium is the **guaranteed
 fallback**; if you already have **Google Chrome** installed, launched sessions
 use it automatically (see engine selection above) — no extra install needed.
 
-To provision it by hand — e.g. on an environment set up without the wizard, or to
-finish after a failed download:
+**Auto-update self-heals it.** After a successful `uv tool upgrade` (the
+auto-update path in `corvin-serve`), the backend re-checks the browser stack in
+the background: a `[browser]` extra lost in the venv rebuild is restored into
+the uv receipt, and a missing Chromium binary is downloaded — fail-soft, never
+blocking server start. This closes the gap for early installs whose playwright
+was pip-injected (wiped by upgrades) and for 0.10.45–0.10.47 installs that
+never got Chromium.
+
+To provision it by hand — e.g. on an environment set up without the wizard, or
+to finish after a failed download:
 
 ```bash
-pip install "corvinos[browser]"   # or: uv pip install "corvinos[browser]"
-playwright install chromium        # one-time browser download (~150 MB)
+corvin-install --browser           # installs Playwright + the Chromium binary
 ```
+
+Note that on the canonical install (`curl | sh` → `uv tool install
+'corvinos[browser]'`) only corvinos' own commands land on your PATH — bare
+`playwright` and `pip` do **not** exist there. If the playwright *package*
+itself is missing (the `[browser]` extra was never installed or got wiped),
+restore it into the uv receipt first so upgrades keep it:
+
+```bash
+uv tool install --force 'corvinos[browser]'   # then: corvin-install --browser
+```
+
+On minimal Linux images Chromium additionally needs system libraries that only
+root can install — this is the one step that must target the tool venv's own
+interpreter explicitly:
+
+```bash
+sudo "$(uv tool dir)/corvinos/bin/python" -m playwright install-deps chromium
+```
+
+(Windows equivalent of the venv interpreter, should you ever need `-m
+playwright` by hand: `& "$(uv tool dir)\corvinos\Scripts\python.exe" -m
+playwright install chromium`.)
 
 Playwright is imported lazily, so the console runs fine without it — the feature
 simply activates once the package + browser are present. Open the console →

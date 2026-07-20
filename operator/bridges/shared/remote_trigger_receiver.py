@@ -1115,16 +1115,45 @@ class RemoteTriggerReceiver:
                 if _nt not in _base_disallowed:
                     _base_disallowed.append(_nt)
         if not origin_config.get("allow_read_files"):
-            for _rt in ("Read", "Grep", "Glob", "LS"):  # Grep/Glob/LS are Read-bypass
+            # Grep/Glob/LS are Read-bypass; NotebookRead reads .ipynb content.
+            for _rt in ("Read", "Grep", "Glob", "LS", "NotebookRead"):
                 if _rt not in _base_disallowed:
                     _base_disallowed.append(_rt)
         if not origin_config.get("allow_write_files"):
             for _wt in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
                 if _wt not in _base_disallowed:
                     _base_disallowed.append(_wt)
-        if not origin_config.get("allow_subagents"):
-            # Task spawns subagents that inherit DEFAULT permissions, not caller's
-            # disallowed_tools list — blocks privilege escalation via subagent proxy.
+        # Corrected claim (A5, verified against code.claude.com docs
+        # 2026-07-20): claude-CLI subagents DO inherit the parent
+        # session's permission context ("the same block and allow rules
+        # as the parent session"), but the bare-name --disallowedTools
+        # form used here is documented as a *context-removal* mechanism,
+        # and its propagation into Task subagents is only inferred from
+        # the session-level scope — not contractually guaranteed. Non-
+        # claude engines guarantee nothing at all. Blocking Task/Todo*
+        # by default therefore stays the fail-closed posture against
+        # privilege escalation via subagent proxy (see layer-38 docs).
+        _allow_subagents = bool(origin_config.get("allow_subagents"))
+        # A5-HARDENING (2026-07-20 refutation): because that deny propagation
+        # into Task subagents is NOT guaranteed, granting allow_subagents while
+        # STILL denying a dangerous capability (bash / network / write) would
+        # let a Task subagent inherit default rights and bypass exactly those
+        # denies. Enforcement gap → force-restrict: whenever any of bash /
+        # network / write is denied, ignore the subagent grant so Task/Todo*
+        # stay blocked and the fail-closed denies keep binding. Deny-by-default
+        # is preserved; the downgrade is audited.
+        if _allow_subagents and (
+            not origin_config.get("allow_bash")
+            or not origin_config.get("allow_network")
+            or not origin_config.get("allow_write_files")
+        ):
+            self._audit_best_effort(
+                "A2A.subagents_force_restricted", "WARN",
+                {"task_id": env.task_id, "origin_id": env.origin_id,
+                 "reason": "dangerous_capability_denied"},
+            )
+            _allow_subagents = False
+        if not _allow_subagents:
             for _st in ("Task", "TodoWrite", "TodoRead"):
                 if _st not in _base_disallowed:
                     _base_disallowed.append(_st)

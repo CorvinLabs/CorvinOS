@@ -277,6 +277,47 @@ def test_lapsed_consent_refuses_further_actions(tmp_path, monkeypatch):
         assert "consent expired" in str(e)
 
 
+def test_screenshot_refuses_lapsed_consent_and_attach_pause(tmp_path):
+    """B1 (adversarial review 2026-07-20): screenshot() was the ONLY action
+    without a guard — a revoked/expired attach consent or an attach take-over
+    pause kept serving live JPEGs of the user's real Chrome via the REST/MCP
+    pull path, the exact leak class the F7 screencast hardening closed."""
+    import asyncio
+    from corvin_console.browser.session import BrowserSession, BrowserActionError
+    live = {"ok": True}
+    s = BrowserSession("s", "_default", home=tmp_path,
+                       cdp_endpoint="ws://127.0.0.1:9222/x",
+                       consent_ok=lambda: live["ok"])
+    live["ok"] = False
+    with pytest.raises(BrowserActionError, match="consent expired"):
+        asyncio.run(s.screenshot())
+    live["ok"] = True
+    s.paused = True
+    with pytest.raises(BrowserActionError, match="paused"):
+        asyncio.run(s.screenshot())
+
+
+def test_screenshot_still_serves_paused_managed_session(tmp_path):
+    """Counterpart to B1: a paused MANAGED (launched) session must keep
+    serving frames — the take-over live view depends on the screenshot pull.
+    Only the attach mode refuses while paused (screencast-loop parity)."""
+    import asyncio
+    from corvin_console.browser.session import BrowserSession
+    s = BrowserSession("s", "_default", home=tmp_path)
+    assert s._attached is False
+    s.paused = True
+
+    async def _no_start():
+        return None
+
+    async def _fake_shot(*, marks=True):
+        return b"jpeg"
+
+    s._ensure_started = _no_start  # type: ignore[method-assign]
+    s._screenshot_locked = _fake_shot  # type: ignore[method-assign]
+    assert asyncio.run(s.screenshot()) == b"jpeg"
+
+
 def test_ws_egress_gate_is_registered():
     """Finding 1: session wires a WebSocket egress route (context.route alone
     does NOT cover WS handshakes)."""
@@ -285,3 +326,41 @@ def test_ws_egress_gate_is_registered():
     src = inspect.getsource(_s.BrowserSession._finish_start)
     assert "route_web_socket" in src
     assert hasattr(_s.BrowserSession, "_route_web_socket")
+
+
+class _FakeWs:
+    def __init__(self, url):
+        self.url = url
+        self.connected = False
+        self.closed = False
+
+    def connect_to_server(self):
+        self.connected = True
+
+    def close(self):
+        self.closed = True
+
+
+def test_ws_egress_gate_behavior(tmp_path):
+    """B2 (adversarial review 2026-07-20): the WS gate previously closed EVERY
+    WebSocket — check_egress hard-rejects the ws/wss scheme — so the documented
+    'Allowed → proxy to the real server' path was unreachable and any WS-using
+    page (live chat, streaming) silently broke. The gate must apply the SAME
+    host policy as HTTP: allowlisted host connects, everything else closes."""
+    from corvin_console.browser.session import BrowserSession
+
+    s = BrowserSession("s", "_default", home=tmp_path,
+                       allowlist=["example.com"])
+    ok = _FakeWs("wss://example.com/chat")
+    s._route_web_socket(ok)
+    assert ok.connected and not ok.closed
+
+    for bad_url in (
+        "wss://attacker.com/exfil",          # off-allowlist
+        "ws://169.254.169.254/latest",        # metadata IP
+        "ws://10.0.0.5:9222/x",               # private LAN
+        "ftp://example.com/x",                # non-WS scheme stays rejected
+    ):
+        bad = _FakeWs(bad_url)
+        s._route_web_socket(bad)
+        assert bad.closed and not bad.connected, bad_url

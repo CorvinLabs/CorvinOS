@@ -29,6 +29,7 @@ import re
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -58,6 +59,8 @@ from .htrace_consent import (
     load_or_create_instance_id,
     ping_enabled,
     ensure_ping_tokens,
+    _instance_token_path,
+    _telemetry_token_path,
     _tenant_cfg_path,
     _open_no_redirect,
 )
@@ -309,6 +312,103 @@ def _detect_active_engine(home: Path) -> str:
     return "unknown"
 
 
+# ── 401 token-recovery (T6, pre-existing review finding) ─────────────────────
+# ensure_ping_tokens() re-provisions ONLY when the token FILES are missing —
+# tokens rotated or deleted server-side therefore made ping AND heartbeat
+# return HTTP 401 forever, with no local recovery path.
+_REPROVISION_401_FILENAME = ".reprovision_401"
+_REPROVISION_401_INTERVAL_S = 24 * 3600  # at most one recovery attempt per day
+# T6-RESIDUAL (2026-07-20): the DESTRUCTIVE token delete is gated on a
+# PERSISTENT 401, not a single one. A lone 401 (WAF blip, auth-backend hiccup,
+# a rate-limiter that answers 401 instead of 429) must not wipe the token pair —
+# fleet-wide simultaneous deletes would drive a self-reinforcing hourly
+# reprovision storm against an already-wobbling endpoint. The consecutive-401
+# counter persists across ping cycles; a non-401 result (success OR a different
+# error) resets it. Only ``>= _CONSEC_401_THRESHOLD`` consecutive 401s trigger
+# the delete/re-provision (which is ADDITIONALLY capped to once per day).
+_CONSEC_401_FILENAME = ".consec_401"
+_CONSEC_401_THRESHOLD = 2
+
+
+def _consec_401_path(home: Path) -> Path:
+    return home / "aco" / "telemetry" / _CONSEC_401_FILENAME
+
+
+def _bump_consec_401(home: Path) -> int:
+    """Increment and persist the consecutive-401 counter; return the new value.
+    Fail-soft: on any I/O error, report 1 (a single 401) so a broken counter
+    file can never escalate straight to a destructive delete."""
+    p = _consec_401_path(home)
+    try:
+        current = 0
+        if p.exists():
+            try:
+                current = int(p.read_text(encoding="utf-8").strip() or "0")
+            except (OSError, ValueError):
+                current = 0
+        new = current + 1 if current >= 0 else 1
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(new), encoding="utf-8")
+        return new
+    except OSError:
+        return 1
+
+
+def _reset_consec_401(home: Path) -> None:
+    """Clear the consecutive-401 counter (a non-401 result breaks the streak)."""
+    with _contextlib.suppress(OSError):
+        _consec_401_path(home).unlink(missing_ok=True)
+
+
+def _reprovision_after_401(home: Path) -> bool:
+    """One-shot 401 recovery: drop the local token pair and re-provision.
+
+    Returns True only when the pair was actually re-provisioned (the caller
+    then retries the ping EXACTLY once). Throttled to at most once per 24h via
+    the persisted ``.reprovision_401`` stamp — the stamp is written BEFORE the
+    delete/refetch so a still-failing provision cannot re-trigger on every
+    hourly ping check. No retry loop; everything stays fail-soft.
+
+    Must only be called while ping_if_due() holds the shared ``.ping.lock``:
+    ensure_ping_tokens() → provision_telemetry_tokens(_outer_locked=True)
+    relies on that lock already being held (F6).
+
+    The presence heartbeat (aco/heartbeat.py) deliberately has NO 401
+    recovery of its own: it authenticates with the SAME token pair, so this
+    ping-side re-provision heals the heartbeat on its next ~5-minute cycle,
+    and a second concurrent writer of the pair would only reintroduce the
+    mismatched-token-pair race the .ping.lock exists to prevent.
+    """
+    try:
+        stamp = home / "aco" / "telemetry" / _REPROVISION_401_FILENAME
+        try:
+            if stamp.exists():
+                age = time.time() - stamp.stat().st_mtime
+                # Same backward-clock-jump guard as the ping stamp: only an
+                # actually-elapsed, non-negative age suppresses the recovery.
+                if 0 <= age < _REPROVISION_401_INTERVAL_S:
+                    logger.debug(
+                        "htrace: 401 recovery already attempted today — skipping"
+                    )
+                    return False
+        except OSError:
+            pass
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(str(int(time.time())), encoding="utf-8")
+        for token_path in (_instance_token_path(home), _telemetry_token_path(home)):
+            with _contextlib.suppress(OSError):
+                token_path.unlink(missing_ok=True)
+        ok = bool(ensure_ping_tokens(home))
+        logger.info(
+            "htrace: ping got 401 — dropped local token pair and re-provisioned "
+            "(%s)", "ok" if ok else "failed"
+        )
+        return ok
+    except Exception as e:  # noqa: BLE001
+        logger.debug("htrace: 401 re-provision failed (non-fatal): %s", e)
+        return False
+
+
 def ping_if_due(home: Path) -> bool:
     """Send a daily activity ping to api.corvin-labs.com/v1/telemetry/ping.
 
@@ -380,53 +480,84 @@ def ping_if_due(home: Path) -> bool:
             except OSError:
                 pass  # unreadable stamp — proceed to ping
 
-            telemetry_token = _load_telemetry_token(home)
-            instance_token = _load_instance_token(home)
-            instance_id = load_or_create_instance_id(home)
+            def _send_ping_once() -> int:
+                """Build + POST the ping with the CURRENT on-disk tokens and
+                return the HTTP status. Tokens are (re-)loaded here so the
+                single 401-recovery retry below picks up the freshly
+                provisioned pair. A 4xx/5xx raised as HTTPError by the
+                hardened opener is converted to its status code; transport
+                errors keep propagating to the outer fail-soft handler."""
+                telemetry_token = _load_telemetry_token(home)
+                instance_token = _load_instance_token(home)
+                instance_id = load_or_create_instance_id(home)
 
-            corvin_version = _corvin_version()
+                corvin_version = _corvin_version()
 
-            # Body carries the version plus three coarse environment enums —
-            # the uuid4 (instance_id) and the HMAC pseudonym (instance_token)
-            # go in the headers below. platform / python_minor / active_engine
-            # are closed enums (never free-form), reinstated by maintainer
-            # decision 2026-07-10 so the public stats distributions reflect
-            # real installs. _assert_ping_safe is a fail-closed backstop that
-            # validates keys AND values (see its definition).
-            raw_platform = sys.platform
-            ping_body = {
-                "corvin_version": corvin_version,
-                "platform": raw_platform
-                if raw_platform in _PING_ALLOWED_PLATFORMS
-                else "other",
-                "python_minor": f"{sys.version_info[0]}.{sys.version_info[1]}",
-                "active_engine": _detect_active_engine(home),
-            }
-            _assert_ping_safe(ping_body)
-            payload = json.dumps(ping_body).encode("utf-8")
-            req = urllib.request.Request(
-                _PING_URL_DEFAULT,
-                data=payload,
-                method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {telemetry_token}",
-                    "X-HTTrace-Instance-Token": instance_token,
-                    "X-HTrace-Instance-Id": instance_id,
-                    "User-Agent": _telemetry_user_agent("Ping"),
-                    "Accept": "application/json",
-                },
-            )
-            # No-redirect + https-only opener (F8): the ping carries the Bearer
-            # telemetry token + instance token/id in headers. A plain urlopen
-            # would follow a 302 to an attacker host WITH those credentials
-            # intact, and would POST them in plaintext over an http:// base URL.
-            # Route through the same hardened opener the token endpoint uses.
-            with _open_no_redirect(req, _PING_TIMEOUT_S) as resp:
-                status = resp.getcode()
-                if not (200 <= status < 300):
-                    logger.debug("htrace: ping returned %d", status)
-                    return False
+                # Body carries the version plus three coarse environment enums —
+                # the uuid4 (instance_id) and the HMAC pseudonym (instance_token)
+                # go in the headers below. platform / python_minor / active_engine
+                # are closed enums (never free-form), reinstated by maintainer
+                # decision 2026-07-10 so the public stats distributions reflect
+                # real installs. _assert_ping_safe is a fail-closed backstop that
+                # validates keys AND values (see its definition).
+                raw_platform = sys.platform
+                ping_body = {
+                    "corvin_version": corvin_version,
+                    "platform": raw_platform
+                    if raw_platform in _PING_ALLOWED_PLATFORMS
+                    else "other",
+                    "python_minor": f"{sys.version_info[0]}.{sys.version_info[1]}",
+                    "active_engine": _detect_active_engine(home),
+                }
+                _assert_ping_safe(ping_body)
+                payload = json.dumps(ping_body).encode("utf-8")
+                req = urllib.request.Request(
+                    _PING_URL_DEFAULT,
+                    data=payload,
+                    method="POST",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {telemetry_token}",
+                        "X-HTTrace-Instance-Token": instance_token,
+                        "X-HTrace-Instance-Id": instance_id,
+                        "User-Agent": _telemetry_user_agent("Ping"),
+                        "Accept": "application/json",
+                    },
+                )
+                # No-redirect + https-only opener (F8): the ping carries the Bearer
+                # telemetry token + instance token/id in headers. A plain urlopen
+                # would follow a 302 to an attacker host WITH those credentials
+                # intact, and would POST them in plaintext over an http:// base URL.
+                # Route through the same hardened opener the token endpoint uses.
+                try:
+                    with _open_no_redirect(req, _PING_TIMEOUT_S) as resp:
+                        return resp.getcode()
+                except urllib.error.HTTPError as he:
+                    # 4xx/5xx → status code for the caller; close the attached
+                    # response fp so the socket doesn't linger.
+                    with _contextlib.suppress(Exception):
+                        he.close()
+                    return he.code
+
+            status = _send_ping_once()
+            if status == 401:
+                # T6-RESIDUAL: only a PERSISTENT 401 destroys the token pair.
+                # Bump the cross-cycle consecutive-401 counter; a single
+                # transient 401 stops here (no delete, no retry). Reaching the
+                # threshold means real server-side token rotation/deletion —
+                # re-provision (daily-capped) under this same lock and retry
+                # EXACTLY once.
+                consec = _bump_consec_401(home)
+                if consec >= _CONSEC_401_THRESHOLD and _reprovision_after_401(home):
+                    status = _send_ping_once()
+            if status != 401:
+                # Any non-401 result (success OR a different error) breaks the
+                # 401 streak — reset the counter so a later isolated 401 starts
+                # fresh rather than inheriting a stale count.
+                _reset_consec_401(home)
+            if not (200 <= status < 300):
+                logger.debug("htrace: ping returned %d", status)
+                return False
 
             # Record successful ping (touch the stamp with the current timestamp).
             try:
@@ -496,6 +627,52 @@ def start_ping_thread(home: Path) -> None:
         t.start()
         _ping_thread_started = True
         logger.debug("htrace: recurring ping thread started")
+
+
+# Recheck interval for the recurring upload loop (start_upload_thread).
+# run_upload_cycle() self-guards via its .upload.lock flock and the
+# .last_upload daily stamp, so an hourly check is cheap and matches the ~1h
+# cleanup-interval cadence the bridge main loop used before the upload was
+# moved off that loop (review finding T2: the synchronous call stalled inbox
+# polling and the SIGTERM drain for up to ~60s of network timeouts).
+_UPLOAD_LOOP_INTERVAL_S = 3600
+
+
+def upload_loop(home: Path) -> None:
+    """Run forever: call run_upload_cycle() every hour.
+
+    The cycle's own flock + daily stamp prevent double uploads, so this loop
+    only provides cadence — any network stall blocks solely this daemon
+    thread, never a caller's main loop.
+    """
+    while True:
+        try:
+            run_upload_cycle(home)
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(_UPLOAD_LOOP_INTERVAL_S)
+
+
+_upload_thread_started = False
+_upload_thread_lock = threading.Lock()
+
+
+def start_upload_thread(home: Path) -> None:
+    """Start the recurring healing-trace upload daemon thread (idempotent per
+    process). Mirrors start_ping_thread(); run_upload_cycle() re-checks
+    healing_traces_enabled() on every cycle, so an opt-out set mid-process-
+    lifetime takes effect on the next hourly check without a restart."""
+    global _upload_thread_started
+    with _upload_thread_lock:
+        if _upload_thread_started:
+            return
+        t = threading.Thread(
+            target=upload_loop, args=(home,), daemon=True,
+            name="corvin-htrace-upload",
+        )
+        t.start()
+        _upload_thread_started = True
+        logger.debug("htrace: recurring upload thread started")
 
 
 def _upload_url(home: Path) -> str:

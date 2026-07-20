@@ -287,12 +287,15 @@ class TestExitCodes(unittest.TestCase):
                 raise RuntimeError("simulated total failure")
 
         with _Sandbox() as sb:
-            # Register failing handlers for all built-in stub layers
-            # (including L38-a2a which was added to builtin_stub_chain() post-test)
-            for lid in ("L7-skill-forge", "L24-data-snapshot",
-                        "L28-recall", "L33-artifacts", "L16-identity-mapping",
-                        "L38-a2a"):
-                corvin_erasure.register_handler(_FailAll(lid))
+            # Register failing handlers for ALL built-in stub layers, derived
+            # from builtin_stub_chain() itself — a hardcoded id list here has
+            # drifted twice already (L38-a2a, then L153-corvinid/L163-ulo):
+            # any layer the chain gains that is not forced to fail turns the
+            # expected FAILED (3) into PARTIAL (2).
+            from erasure_orchestrator import builtin_stub_chain
+
+            for handler in builtin_stub_chain():
+                corvin_erasure.register_handler(_FailAll(handler.layer_id))
             with redirect_stdout(io.StringIO()), \
                  redirect_stderr(io.StringIO()) as err:
                 rc = corvin_erasure.main([

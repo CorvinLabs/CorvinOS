@@ -40,6 +40,28 @@ _forge_paths = _bootstrap.forge_paths
 _REPO = _bootstrap._REPO
 
 import os as _os
+import sys as _sys
+
+# Shared label sanitizer (A4 defense-in-depth, 2026-07-20): labels stored
+# BEFORE the ingestion sanitizer existed (raw peer-token labels) must not
+# reach the UI with ANSI escapes / bidi overrides — sanitize read-side too.
+_BRIDGES_SHARED = _REPO / "operator" / "bridges" / "shared"
+if str(_BRIDGES_SHARED) not in _sys.path:
+    _sys.path.insert(0, str(_BRIDGES_SHARED))
+try:
+    from a2a_friendship import sanitize_label as _sanitize_label  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover — minimal fallback, never fail-open
+    def _sanitize_label(raw: object, max_len: int = 64) -> str:
+        s = str(raw)
+        return "".join(ch for ch in s if ch.isprintable()).strip()[:max_len]
+
+
+def _label_out(cfg: dict) -> str | None:
+    """Read-side sanitized label for API/UI delivery (None stays None)."""
+    raw = cfg.get("label")
+    if raw is None:
+        return None
+    return _sanitize_label(raw, max_len=80) or None
 
 _COWORK_ORIGINS_DEFAULT = _REPO / "operator" / "cowork" / "remote_origins"
 _COWORK_ENDPOINTS_DEFAULT = _REPO / "operator" / "cowork" / "remote_endpoints"
@@ -253,8 +275,14 @@ def remote_trigger_origins(
                 "max_ttl_s":  cfg.get("max_ttl_s"),
                 "allowed_personas": cfg.get("allowed_personas", []),
                 "state":      cfg.get("state") or ("ACTIVE" if cfg.get("enabled", False) else None),
-                "label":      cfg.get("label"),
+                "label":      _label_out(cfg),
                 "_friendship": bool(cfg.get("_friendship", False)),
+                # M2 tool policy — deny-by-default opt-ins (ADR-0144)
+                "allow_bash":        bool(cfg.get("allow_bash", False)),
+                "allow_network":     bool(cfg.get("allow_network", False)),
+                "allow_read_files":  bool(cfg.get("allow_read_files", False)),
+                "allow_write_files": bool(cfg.get("allow_write_files", False)),
+                "allow_subagents":   bool(cfg.get("allow_subagents", False)),
             })
     return {"ts": time.time(), "count": len(out), "origins": out}
 
@@ -286,7 +314,7 @@ def remote_trigger_endpoints(
                 "enabled":         bool(cfg.get("enabled", False)),
                 "default_ttl_s":   cfg.get("default_ttl_s"),
                 "state":           cfg.get("state") or ("ACTIVE" if cfg.get("enabled", False) else None),
-                "label":           cfg.get("label"),
+                "label":           _label_out(cfg),
                 "_friendship":     bool(cfg.get("_friendship", False)),
             })
     return {"ts": time.time(), "count": len(out), "endpoints": out}

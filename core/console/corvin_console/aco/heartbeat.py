@@ -24,6 +24,7 @@ from .htrace_uploader import (
     _PING_BASE,
     _load_telemetry_token,
     _load_instance_token,
+    _telemetry_user_agent,
 )
 from .htrace_consent import (
     load_or_create_instance_id,
@@ -68,6 +69,10 @@ def send_heartbeat(home: Path) -> bool:
                 "Authorization": f"Bearer {telemetry_token}",
                 "X-HTTrace-Instance-Token": instance_token,
                 "X-HTrace-Instance-Id": instance_id,
+                # Cloudflare bot protection 403s generic Python UAs at the edge,
+                # before the Pages Function runs — without this header every
+                # heartbeat dies silently and online geo stays empty.
+                "User-Agent": _telemetry_user_agent("Heartbeat"),
             },
         )
         # https-only + no-redirect opener (F8): never forward the Authorization /

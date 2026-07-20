@@ -25,7 +25,9 @@ import sys
 def strip_code_only(text: str) -> str:
     # Fenced code blocks: drop entirely. Their contents are noise for the
     # summarizer and the prose around them is what we want to read aloud.
-    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    # The \Z arm also drops an UNTERMINATED trailing fence (streaming
+    # cut-off / missing closing ```) — mirrors detect_lang._CODE_FENCE_RE.
+    text = re.sub(r"```[\s\S]*?(?:```|\Z)", "", text)
     # Inline code → unwrap, the words inside are usually identifiers worth speaking.
     text = re.sub(r"`([^`]+)`", r"\1", text)
     # Table separator rows (---|---|---) — the pipes confuse models, the row is content-free.

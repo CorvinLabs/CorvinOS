@@ -315,7 +315,9 @@ class CorvinInstaller:
             _browser.ensure_browser(interactive=self.interactive)
         except Exception as exc:  # noqa: BLE001
             print(f"  ⚠ browser setup skipped: {exc}")
-            print("  Manual: pip install 'corvinos[browser]' && playwright install chromium")
+            # I1: `pip` / `playwright` are NOT on the user PATH of the
+            # canonical uv-tool install — point at the entry point that is.
+            print("  Manual: corvin-install --browser")
 
     # ── Step 9: API keys ───────────────────────────────────────────────────
 

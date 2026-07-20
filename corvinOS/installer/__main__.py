@@ -27,6 +27,13 @@ def main():
         action="store_true",
         help="Non-interactive mode (use defaults)",
     )
+    install_parser.add_argument(
+        "--browser",
+        action="store_true",
+        help="Provision browser automation only (Playwright package + "
+             "Chromium download) — the one-line remedy printed when the "
+             "browser step failed or was never run",
+    )
 
     # Uninstall command
     uninstall_parser = subparsers.add_parser("uninstall", help="Uninstall CorvinOS")
@@ -62,6 +69,18 @@ def main():
     # Piped stdin (e.g. curl | bash) would make input() return "" which the
     # `or "y"` default turns into auto-yes — treat that as non-interactive.
     interactive = sys.stdin.isatty() and not getattr(args, "yes", False)
+
+    # `corvin-install --browser`: re-run ONLY the browser provisioning step
+    # (I1, 2026-07-20). This is the remedy every browser-setup failure message
+    # prints — it must not drag the user through the full wizard, and it runs
+    # with the right interpreter (sys.executable = this venv's python), which
+    # a bare `playwright install chromium` on the canonical uv-tool install
+    # cannot (playwright is not on the user PATH there).
+    if args.command == "install" and getattr(args, "browser", False):
+        from corvinOS.installer.steps import browser as _browser_step
+        _browser_step.ensure_browser(interactive=interactive)
+        return
+
     installer = CorvinInstaller(interactive=interactive)
 
     if args.command == "install":

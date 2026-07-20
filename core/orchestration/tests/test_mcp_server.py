@@ -390,6 +390,75 @@ class TestA2ATools(TestOrchestrationServerBase):
         resp = _drive(server, [_call("a2a_send", {"endpoint_id": "x"})])
         self.assertIn("required", resp[0]["error"]["message"])
 
+    def test_a2a_send_resolves_connection_name(self):
+        """a2a_send accepts the configured label; the failure (unreachable
+        URL) must be a transport error, NOT unknown_endpoint."""
+        cfg = {
+            "endpoint_id": "test-peer",
+            "url": "https://example.invalid/a2a",
+            "hmac_key": "ab" * 32,
+            "recv_key": "cd" * 32,
+            "enabled": True,
+            "default_ttl_s": 60,
+            "label": "Papa Laptop",
+        }
+        path = Path(self.endpoints_tmp.name) / "test-peer.json"
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        path.chmod(0o600)
+        server = self._server()
+        resp = _drive(server, [_call("a2a_send", {
+            "endpoint_id": "papa laptop", "instruction": "ping", "timeout_s": 5,
+        })])
+        blob = json.dumps(resp[0])
+        self.assertNotIn("unknown_endpoint", blob)
+        payload = json.loads(resp[0]["result"]["content"][0]["text"])
+        self.assertFalse(payload["ok"])
+
+    def test_a2a_send_ambiguous_label_is_invalid_params(self):
+        self._write_endpoint("peer-a", label="Papa")
+        self._write_endpoint("peer-b", label="papa")
+        server = self._server()
+        resp = _drive(server, [_call("a2a_send", {
+            "endpoint_id": "PAPA", "instruction": "ping",
+        })])
+        self.assertIn("not unique", resp[0]["error"]["message"])
+
+    def test_a2a_list_endpoints_shows_label_for_disabled_peer(self):
+        self._write_endpoint("test-peer", label="Papa Laptop")
+        path = Path(self.endpoints_tmp.name) / "test-peer.json"
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg["enabled"] = False
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        path.chmod(0o600)
+        server = self._server()
+        resp = _drive(server, [_call("a2a_list_endpoints", {})])
+        payload = json.loads(resp[0]["result"]["content"][0]["text"])
+        self.assertEqual(payload["endpoints"][0]["label"], "Papa Laptop")
+        self.assertFalse(payload["endpoints"][0]["enabled"])
+
+    def test_a2a_list_endpoints_sanitizes_legacy_stored_labels(self):
+        # A4 (2026-07-20, defense-in-depth): labels stored BEFORE the
+        # ingestion sanitizer existed (raw peer-token labels) must not reach
+        # the agent with ANSI escapes / bidi overrides — sanitize read-side
+        # on BOTH delivery branches (enabled via load(), disabled via
+        # peek_label()).
+        rlo = chr(0x202E)  # RIGHT-TO-LEFT OVERRIDE
+        self._write_endpoint("peer-a", label="Ok\x1b[31mRed" + rlo + "x")
+        self._write_endpoint("peer-b", label="B\x1b]0;evil\x07oo")
+        path = Path(self.endpoints_tmp.name) / "peer-b.json"
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        cfg["enabled"] = False
+        path.write_text(json.dumps(cfg), encoding="utf-8")
+        path.chmod(0o600)
+        server = self._server()
+        resp = _drive(server, [_call("a2a_list_endpoints", {})])
+        payload = json.loads(resp[0]["result"]["content"][0]["text"])
+        labels = {e["endpoint_id"]: e["label"] for e in payload["endpoints"]}
+        for eid in ("peer-a", "peer-b"):
+            self.assertNotIn("\x1b", labels[eid], eid)
+            self.assertNotIn(rlo, labels[eid], eid)
+            self.assertNotIn("\x07", labels[eid], eid)
+
 
 class TestACSTool(TestOrchestrationServerBase):
     def test_acs_delegate_dry_run_validates_without_spending_quota(self):

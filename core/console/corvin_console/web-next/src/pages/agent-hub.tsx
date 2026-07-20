@@ -205,6 +205,14 @@ function OriginPermEditor({
   const [personas, setPersonas] = React.useState(origin.allowed_personas.join(", "));
   const [maxTtl, setMaxTtl] = React.useState(origin.max_ttl_s ? String(origin.max_ttl_s) : "");
   const [enabled, setEnabled] = React.useState(origin.enabled);
+  const [label, setLabel] = React.useState(origin.label ?? "");
+  const [toolFlags, setToolFlags] = React.useState({
+    allow_bash: Boolean(origin.allow_bash),
+    allow_network: Boolean(origin.allow_network),
+    allow_read_files: Boolean(origin.allow_read_files),
+    allow_write_files: Boolean(origin.allow_write_files),
+    allow_subagents: Boolean(origin.allow_subagents),
+  });
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState("");
 
@@ -237,6 +245,8 @@ function OriginPermEditor({
           enabled,
           allowed_personas: allowedPersonas,
           max_ttl_s: ttl,
+          label: label.trim(),
+          ...toolFlags,
         },
         csrf,
       );
@@ -245,6 +255,12 @@ function OriginPermEditor({
         enabled: res.enabled,
         allowed_personas: res.allowed_personas,
         max_ttl_s: res.max_ttl_s,
+        label: res.label,
+        allow_bash: res.allow_bash,
+        allow_network: res.allow_network,
+        allow_read_files: res.allow_read_files,
+        allow_write_files: res.allow_write_files,
+        allow_subagents: res.allow_subagents,
       });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
@@ -279,7 +295,22 @@ function OriginPermEditor({
 
   return (
     <div className="mt-2 rounded-md border border-border bg-muted/30 p-3 space-y-3">
-      <p className="text-xs font-semibold text-foreground">Edit permissions</p>
+      <p className="text-xs font-semibold text-foreground">Edit connection</p>
+
+      {/* Connection name */}
+      <div className="space-y-1">
+        <label className="text-xs font-medium text-foreground">
+          Connection name{" "}
+          <span className="text-muted-foreground">— shown in the console and to the agent</span>
+        </label>
+        <Input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="e.g. Papa Laptop"
+          maxLength={80}
+          className="h-8 text-xs"
+        />
+      </div>
 
       {/* Preset cards */}
       <div className="grid grid-cols-3 gap-2">
@@ -325,6 +356,45 @@ function OriginPermEditor({
               {parsedPersonas.join(" · ")}
             </p>
           )}
+        </div>
+      )}
+
+      {/* Tool permissions (M2 worker policy, deny-by-default) */}
+      {preset !== "observer" && (
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-foreground">
+            Tool permissions{" "}
+            <span className="text-muted-foreground">— everything is blocked unless granted</span>
+          </label>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-3">
+            {([
+              ["allow_bash", "Shell (Bash)"],
+              ["allow_network", "Network access"],
+              ["allow_read_files", "Read files"],
+              ["allow_write_files", "Write files"],
+              ["allow_subagents", "Subagents"],
+            ] as const).map(([key, title]) => (
+              <label key={key} className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={toolFlags[key]}
+                  onChange={(e) =>
+                    setToolFlags((prev) => ({ ...prev, [key]: e.target.checked }))
+                  }
+                  className="rounded"
+                />
+                <span className="text-xs">{title}</span>
+              </label>
+            ))}
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            Honest limits: Shell (Bash) effectively includes network access
+            (curl/wget run in the shell) — the Network checkbox only gates the
+            built-in web tools. Subagents may run with default tool access:
+            the engine does not guarantee that the other denies above bind
+            inside subagent workers, so enabling Subagents can effectively
+            grant them all.
+          </p>
         </div>
       )}
 
@@ -433,6 +503,20 @@ function OriginRow({
             />
             {origin.max_ttl_s !== null && (
               <span className="text-[10px] text-muted-foreground">max {origin.max_ttl_s}s TTL</span>
+            )}
+            {origin.enabled && origin.spawn_worker && (
+              <span className="text-[10px] text-muted-foreground">
+                tools:{" "}
+                {[
+                  origin.allow_bash && "bash",
+                  origin.allow_network && "network",
+                  origin.allow_read_files && "read",
+                  origin.allow_write_files && "write",
+                  origin.allow_subagents && "subagents",
+                ]
+                  .filter(Boolean)
+                  .join(", ") || "none"}
+              </span>
             )}
           </div>
         </div>

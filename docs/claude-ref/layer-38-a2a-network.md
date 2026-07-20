@@ -237,6 +237,94 @@ meets or exceeds the licence limit.
 
 ---
 
+## Per-connection rights + connection names (2026-07-20)
+
+Pairing is bidirectional (each side stores an inbound *origin* and an outbound
+*endpoint*), and **each side owns its own inbound policy**: what a peer may do
+here is decided exclusively by the local origin file — the peer has no say in
+it, and every field can be changed retroactively from the console (Agent Hub →
+Peers → Edit connection) via `PATCH /v1/console/remote-trigger/origins/{id}`.
+
+Editable per-connection fields (`OriginPatchRequest`, `a2a_pair.py`):
+
+| Field | Meaning |
+|---|---|
+| `enabled` | connection on/off |
+| `spawn_worker` | Observer (validate-only) vs Executor (M2 worker runs the instruction) |
+| `allowed_personas` | persona allow-list; `[0]` is the active persona |
+| `max_ttl_s` | cap on envelope TTL (10–86400 s) |
+| `label` | human-readable connection name (≤80 chars, control chars stripped) |
+| `allow_bash` / `allow_network` / `allow_read_files` / `allow_write_files` / `allow_subagents` | M2 tool policy opt-ins — **deny-by-default** (ADR-0144); enforced in `remote_trigger_receiver._spawn_and_filter()` |
+
+The tool policy is compiled into a `--disallowedTools` denylist (built-ins:
+Bash · WebFetch/WebSearch · Read/Grep/Glob/LS/NotebookRead · Write/Edit/… ·
+Task/Todo*). The A2A worker also spawns with `--strict-mcp-config` (no
+`--mcp-config`), so it loads **zero** MCP servers — the operator's user-scoped
+MCP tools (`~/.claude.json`) can't be used to sidestep `allow_network=false` /
+`allow_read_files=false`. Persona-scope narrowing beyond the denylist is
+advisory (prompt text), not a security boundary.
+
+**Honest limits of the checkbox model (2026-07-20):**
+
+- `allow_subagents=true` unblocks the Task tool, and the engine does **not**
+  contractually guarantee that the other per-connection denies bind inside
+  subagent workers: claude-CLI subagents inherit the parent session's
+  permission context, but the bare-name `--disallowedTools` form used here is
+  a context-removal mechanism whose propagation into Task subagents is only
+  inferred from documentation, and non-claude engines guarantee nothing.
+  Because of that gap, `_spawn_and_filter()` **force-restricts** (A5, 2026-07-20):
+  if `allow_subagents=true` is combined with **any** of `allow_bash` /
+  `allow_network` / `allow_write_files` **denied**, the subagent grant is
+  ignored — Task/Todo* stay on the denylist and the downgrade is audited as
+  `A2A.subagents_force_restricted` (WARN). So a dangerous capability that is
+  switched off can no longer be re-reached through a Task subagent. Only when
+  every dangerous capability is granted does `allow_subagents=true` actually
+  enable Task — where, by definition, there is no stricter deny left to leak.
+- `allow_bash=true` factually includes network egress (`curl`/`wget` run in
+  the shell). The Network checkbox only gates the built-in WebFetch/WebSearch
+  tools — checkbox independence between Shell and Network is a fiction.
+
+`GET /remote-trigger/origins` returns the same fields (never keys); stored
+labels are re-sanitized read-side on **every** delivery surface (console
+origin/endpoint listings, `GET /pair/friendship/connections`, the `PATCH`
+origin/endpoint responses when the body omits `label`, MCP
+`a2a_list_endpoints`, `peek_label()`) so pre-sanitizer records cannot carry
+ANSI/bidi content (e.g. a U+202E override) to the UI or agent (A4
+defense-in-depth). The
+outbound side edits `label` / `url` / `enabled` / `default_ttl_s` via
+`PATCH /remote-trigger/endpoints/{id}`; a patched `url` is schema-checked
+(http/https only, non-empty host, no embedded credentials) but deliberately
+NOT passed through an L35/danger-category egress gate — outbound A2A POSTs
+never traverse L35 (documented egress honesty, see
+`a2a_friendship.update_endpoint_url`). PATCH-route ids additionally reject
+`:` (Windows drive-relative path escape).
+
+**Concurrency (2026-07-20):** every read-modify-write on origin/endpoint
+files — console PATCH routes, `friendship_set_url`/`activate_connection`,
+the reconnect-driven `update_endpoint_url` in the bridge receiver, and the
+`corvin-a2a` CLI writers `label-endpoint` and `migrate-attestation` (A2
+residual) — runs under `a2a_friendship.config_file_lock` (per-directory
+`.a2a_config.lock`, `fcntl.flock` on POSIX / `msvcrt.locking` on Windows) in
+addition to the console's in-process `_pair_lock`. This closes the
+cross-process lost-update window where a peer could time reconnect
+notifications — or a concurrent CLI edit could overwrite a lock-holding
+console PATCH — to silently revert a fresh operator edit such as
+`enabled: false`.
+
+**Connection names for delegation:** `RemoteEndpointRegistry.resolve(name)`
+(`remote_trigger_sender.py`) maps a reference to an endpoint_id — exact id →
+unique case-insensitive label → unique id-prefix. An **exact endpoint_id
+match wins deterministically** (ids are operator-assigned and unique; a
+peer-controlled label equal to another peer's id must not make the victim
+unaddressable — peer-triggerable DoS otherwise). Below that, an ambiguous
+label raises `EndpointError("ambiguous_endpoint_ref")` instead of silently
+picking a peer. Both the CLI (`corvin-a2a send <name>`) and the MCP tool
+`a2a_send` (`corvin_orchestration.mcp_server`) accept a connection name; the
+agent discovers names via `a2a_list_endpoints` (labels are returned for
+disabled peers too, via `peek_label()`, sanitized read-side).
+
+---
+
 ## Proactive Reconnect (ADR-0198, dynamic-IP peers)
 
 **Problem:** an instance behind a dynamic-IP connection (e.g. an LTE router)

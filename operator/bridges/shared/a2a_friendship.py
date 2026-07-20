@@ -21,21 +21,56 @@ CI lint: module MUST NOT ``import anthropic``.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hmac as _hmac
 import json
 import os
 import secrets
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# Cross-process file locking (A2 lost-update fix, 2026-07-20) — same
+# platform-independence pattern as operator/license/compute_quota.py:
+# fcntl.flock on POSIX, msvcrt.locking on Windows, advisory fail-soft.
+_IS_WINDOWS = sys.platform.startswith("win")
+
+try:
+    import msvcrt  # type: ignore
+except ImportError:  # non-Windows — no msvcrt module.
+    msvcrt = None  # type: ignore[assignment]
+
+try:
+    import fcntl  # type: ignore
+except ImportError:  # Windows — no fcntl module.
+    fcntl = None  # type: ignore[assignment]
+
 # ── constants ──────────────────────────────────────────────────────────
 
 TOKEN_PREFIX = "corvin-a2a:ft1:"
 _MAX_LABEL_LEN = 64
 _EXPIRY_TOLERANCE_S = 30.0
+
+
+def sanitize_label(raw: object, max_len: int = _MAX_LABEL_LEN) -> str:
+    """Canonicalize a connection label from ANY source (operator input OR a
+    peer-authored friendship token).
+
+    Labels are rendered in the console, surfaced to the local agent via
+    ``a2a_list_endpoints``, AND used as a routing key (``resolve()``), so an
+    untrusted label must not carry control chars / bidi overrides (terminal
+    or prompt spoofing) and must have a single canonical byte form (else two
+    visually-identical labels evade the ambiguity guard and misroute a signed
+    task). Normalize to NFC, drop non-printable code points, collapse
+    surrounding whitespace, cap length. Returns "" for empty/garbage input.
+    """
+    import unicodedata as _ud
+    s = _ud.normalize("NFC", str(raw))
+    s = "".join(ch for ch in s if ch.isprintable())
+    return s.strip()[:max_len]
 
 
 class FriendshipError(Exception):
@@ -226,7 +261,7 @@ def parse_and_verify(token_str: str) -> FriendshipToken:
         kid=str(d["kid"]),
         key=key,
         url=str(url_raw).strip().rstrip("/") if url_raw else None,
-        label=str(label_raw)[:_MAX_LABEL_LEN] if label_raw else None,
+        label=(sanitize_label(label_raw) or None) if label_raw else None,
         expires=expires,
         constraints=constraints,
     )
@@ -313,6 +348,76 @@ def to_endpoint_dict(token: FriendshipToken) -> dict[str, Any]:
     return d
 
 
+# ── cross-process config lock (A2, 2026-07-20) ─────────────────────────
+
+CONFIG_LOCK_NAME = ".a2a_config.lock"
+
+
+@contextlib.contextmanager
+def config_file_lock(*dirs: Path):
+    """Cross-PROCESS advisory lock serialising read-modify-write cycles on
+    the A2A origin/endpoint config files inside ``dirs``.
+
+    Why: the Console PATCH routes (``a2a_pair.py``), the bridge receiver
+    (peer reconnect notifications → :func:`update_endpoint_url`) and the
+    voice CLI (``corvin-a2a set-url`` → :func:`activate_connection`) rewrite
+    the same JSON files from DIFFERENT processes — an in-process
+    ``threading.Lock`` cannot serialise them, so a peer could time reconnect
+    notifications to silently revert a fresh operator edit (e.g.
+    ``enabled: false``). Every RMW writer takes this lock (in addition to
+    any thread lock) so the read→modify→write cycle is atomic across
+    processes.
+
+    Mechanics (pattern from ``operator/license/compute_quota.py`` — the
+    repo's platform-independence constraint is hard): one ``.a2a_config.lock``
+    file per directory, locked via ``fcntl.flock`` on POSIX and
+    ``msvcrt.locking`` on Windows. Multiple dirs are locked in sorted path
+    order (deterministic → deadlock-free for writers like
+    :func:`activate_connection` that touch both dirs). Advisory fail-soft:
+    if a lock file cannot be created/locked (exotic FS, containers), proceed
+    unlocked rather than break the operation — matching compute_quota's
+    documented degradation.
+    """
+    handles: list[tuple[Any, bool]] = []
+    try:
+        for d in sorted({Path(d).resolve() for d in dirs}, key=str):
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                lock_path = d / CONFIG_LOCK_NAME
+                lf = open(lock_path, "a+")
+                try:
+                    os.chmod(lock_path, 0o600)
+                except OSError:
+                    pass
+            except OSError:
+                continue  # fail-soft: no lock file → advisory no-op for this dir
+            locked = False
+            try:
+                if _IS_WINDOWS and msvcrt is not None:
+                    lf.seek(0)
+                    msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+                    locked = True
+                elif fcntl is not None:
+                    fcntl.flock(lf, fcntl.LOCK_EX)
+                    locked = True
+            except OSError:
+                pass  # advisory fail-soft (mirrors compute_quota)
+            handles.append((lf, locked))
+        yield
+    finally:
+        for lf, locked in reversed(handles):
+            if locked:
+                try:
+                    if _IS_WINDOWS and msvcrt is not None:
+                        lf.seek(0)
+                        msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+                    elif fcntl is not None:
+                        fcntl.flock(lf, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            lf.close()
+
+
 # ── set-url helper ──────────────────────────────────────────────────────
 
 def activate_connection(
@@ -326,25 +431,31 @@ def activate_connection(
 
     Modifies both the origin and endpoint config files atomically.
     Raises ``FriendshipError`` if the connection is not found.
+
+    The whole read-modify-write runs under :func:`config_file_lock` (A2,
+    2026-07-20) so a concurrent writer in another process (Console PATCH,
+    reconnect-driven :func:`update_endpoint_url`) cannot be lost.
     """
     origin_path = origins_dir / f"{kid}.json"
     endpoint_path = endpoints_dir / f"{kid}.json"
-    if not origin_path.exists() and not endpoint_path.exists():
-        raise FriendshipError(f"connection {kid!r} not found")
 
     peer_url = peer_url.strip().rstrip("/")
 
-    for path in (origin_path, endpoint_path):
-        if not path.exists():
-            continue
-        cfg = json.loads(path.read_text("utf-8"))
-        if not cfg.get("_friendship"):
-            raise FriendshipError(f"{path.name} is not a friendship connection")
-        cfg["state"] = "ACTIVE"
-        cfg["enabled"] = True
-        if path == endpoint_path:
-            cfg["url"] = peer_url + "/v1/a2a/receive"
-        _atomic_write(path, cfg)
+    with config_file_lock(origins_dir, endpoints_dir):
+        if not origin_path.exists() and not endpoint_path.exists():
+            raise FriendshipError(f"connection {kid!r} not found")
+
+        for path in (origin_path, endpoint_path):
+            if not path.exists():
+                continue
+            cfg = json.loads(path.read_text("utf-8"))
+            if not cfg.get("_friendship"):
+                raise FriendshipError(f"{path.name} is not a friendship connection")
+            cfg["state"] = "ACTIVE"
+            cfg["enabled"] = True
+            if path == endpoint_path:
+                cfg["url"] = peer_url + "/v1/a2a/receive"
+            _atomic_write(path, cfg)
 
 
 def _atomic_write(path: Path, data: dict[str, Any]) -> None:
@@ -651,22 +762,26 @@ def update_endpoint_url(kid: str, new_url: str, *, endpoints_dir: Path) -> bool:
     redirects are blocked.
     """
     path = endpoints_dir / f"{kid}.json"
-    if not path.exists():
-        return False
-    try:
-        cfg = json.loads(path.read_text("utf-8"))
-    except (OSError, ValueError):
-        return False
-    if not cfg.get("_friendship") or not cfg.get("enabled") or cfg.get("state") != "ACTIVE":
-        return False
     new_url = new_url.strip().rstrip("/")
     if not new_url:
         return False
-    # ADR-0198 hardening (2026-07-19): fail-closed SSRF gate.
-    if _reconnect_url_rejection_reason(new_url, str(cfg.get("url") or "")) is not None:
-        return False
-    cfg["url"] = new_url if new_url.endswith("/v1/a2a/receive") else new_url + "/v1/a2a/receive"
-    _atomic_write(path, cfg)
+    # A2 (2026-07-20): the read→gate→write below is a cross-process RMW —
+    # without the file lock a peer could time reconnect notifications to
+    # revert a concurrent operator edit (e.g. enabled=false) via lost update.
+    with config_file_lock(endpoints_dir):
+        if not path.exists():
+            return False
+        try:
+            cfg = json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError):
+            return False
+        if not cfg.get("_friendship") or not cfg.get("enabled") or cfg.get("state") != "ACTIVE":
+            return False
+        # ADR-0198 hardening (2026-07-19): fail-closed SSRF gate.
+        if _reconnect_url_rejection_reason(new_url, str(cfg.get("url") or "")) is not None:
+            return False
+        cfg["url"] = new_url if new_url.endswith("/v1/a2a/receive") else new_url + "/v1/a2a/receive"
+        _atomic_write(path, cfg)
     return True
 
 

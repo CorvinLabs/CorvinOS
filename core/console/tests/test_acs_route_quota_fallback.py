@@ -102,6 +102,128 @@ class ACSRouteQuotaFallbackTest(unittest.TestCase):
         # the route already charged; the chokepoint must not double-count
         self.assertFalse(acs.call_args.kwargs.get("charge_quota", True))
 
+    # ── D4 (adversarial review): per-tenant fallback concurrency cap ─────────
+    # submit_acs_workflow_run is synchronous; after quota exhaustion every
+    # request degrades to a long-running fallback turn on an anyio worker
+    # thread — without a cap, ~40 parallel requests from one free-tier tenant
+    # occupy the whole threadpool. Excess requests must get the typed 429
+    # immediately instead of blocking.
+
+    def test_fallback_concurrency_limit_returns_typed_429(self) -> None:
+        limit = self.compute._ACS_FB_MAX_CONCURRENT
+        with self.compute._acs_fb_active_lock:
+            self.compute._acs_fb_active["_default"] = limit
+        self.addCleanup(self.compute._acs_fb_active.pop, "_default", None)
+
+        with self.assertRaises(HTTPException) as ctx:
+            self._call(_quota_402("quota_exceeded"))
+        self.assertEqual(ctx.exception.status_code, 429)
+        detail = ctx.exception.detail
+        self.assertIsInstance(detail, dict)
+        self.assertEqual(detail.get("reason"), "fallback_concurrency_limit")
+
+    def test_fallback_slot_released_after_run(self) -> None:
+        self._call(_quota_402("quota_exceeded"))
+        self.assertEqual(self.compute._acs_fb_active.get("_default", 0), 0,
+                         "fallback slot must be released after the run")
+
+    def test_fallback_slot_released_on_failure(self) -> None:
+        with (
+            patch.object(self.compute, "_ACS_ENGINE_OK", True),
+            patch("corvin_console.routes._compute_license_gate.enforce_compute_quota",
+                  side_effect=_quota_402("quota_exceeded")),
+            patch.object(self.compute, "_run_acs_quota_fallback",
+                         side_effect=RuntimeError("boom")),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                self.compute.submit_acs_workflow_run(self.body, _rec())
+        self.assertEqual(ctx.exception.status_code, 500)
+        self.assertEqual(self.compute._acs_fb_active.get("_default", 0), 0,
+                         "slot must be released even when the fallback raises")
+
+    def test_fallback_slot_released_when_submit_audit_write_raises(self) -> None:
+        # D4-RESIDUAL (2026-07-20): the acs.run_submit audit write used to sit
+        # BETWEEN the slot acquire and the try/finally. A hash-chain I/O error
+        # there leaked the slot permanently (two leaks pinned the tenant at
+        # 429). The write now lives inside the try, so the finally releases the
+        # slot on this path too.
+        self.assertEqual(self.compute._acs_fb_active.get("_default", 0), 0)
+        with (
+            patch.object(self.compute, "_ACS_ENGINE_OK", True),
+            patch("corvin_console.routes._compute_license_gate.enforce_compute_quota",
+                  side_effect=_quota_402("quota_exceeded")),
+            patch.object(self.compute, "_run_acs_quota_fallback",
+                         return_value={"run_id": "x", "status": "success"}),
+            patch.object(self.compute.console_audit, "action_performed",
+                         side_effect=RuntimeError("audit chain I/O error")),
+            patch.object(self.compute.console_audit, "action_failed"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                self.compute.submit_acs_workflow_run(self.body, _rec())
+        self.assertEqual(ctx.exception.status_code, 500)
+        self.assertEqual(self.compute._acs_fb_active.get("_default", 0), 0,
+                         "slot must be released even when the submit audit write raises")
+
+    def test_concurrent_fallbacks_beyond_limit_get_429_immediately(self) -> None:
+        import threading
+
+        limit = self.compute._ACS_FB_MAX_CONCURRENT
+        release = threading.Event()
+        inside = threading.Semaphore(0)
+
+        def _blocking_fb(*a, **kw):
+            inside.release()
+            release.wait(timeout=10)
+            return {"run_id": "fb", "status": "success", "quota_fallback": True}
+
+        results: list[object] = []
+
+        def _submit():
+            try:
+                with (
+                    patch.object(self.compute, "_ACS_ENGINE_OK", True),
+                    patch("corvin_console.routes._compute_license_gate."
+                          "enforce_compute_quota",
+                          side_effect=_quota_402("quota_exceeded")),
+                    patch.object(self.compute, "_run_acs_quota_fallback",
+                                 side_effect=_blocking_fb),
+                ):
+                    results.append(
+                        self.compute.submit_acs_workflow_run(self.body, _rec()))
+            except HTTPException as exc:
+                results.append(exc)
+
+        threads = [threading.Thread(target=_submit) for _ in range(limit)]
+        for t in threads:
+            t.start()
+        try:
+            for _ in range(limit):
+                self.assertTrue(inside.acquire(timeout=10),
+                                "in-flight fallbacks did not start")
+            # limit runs are in flight and BLOCKED — the next request must not
+            # queue behind them but fail fast with the typed 429.
+            with self.assertRaises(HTTPException) as ctx:
+                self._submit_expect_raise()
+            self.assertEqual(ctx.exception.status_code, 429)
+        finally:
+            release.set()
+            for t in threads:
+                t.join(timeout=10)
+        ok = [r for r in results if isinstance(r, dict)]
+        self.assertEqual(len(ok), limit,
+                         "the in-flight fallbacks must complete normally")
+        self.assertEqual(self.compute._acs_fb_active.get("_default", 0), 0)
+
+    def _submit_expect_raise(self):
+        with (
+            patch.object(self.compute, "_ACS_ENGINE_OK", True),
+            patch("corvin_console.routes._compute_license_gate.enforce_compute_quota",
+                  side_effect=_quota_402("quota_exceeded")),
+            patch.object(self.compute, "_run_acs_quota_fallback",
+                         return_value={"run_id": "x", "status": "success"}),
+        ):
+            return self.compute.submit_acs_workflow_run(self.body, _rec())
+
 
 if __name__ == "__main__":
     unittest.main()
