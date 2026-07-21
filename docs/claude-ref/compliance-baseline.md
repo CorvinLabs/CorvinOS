@@ -16,6 +16,7 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
 | Path-gate hook (fail-closed on forge/skill-forge/audit/policy writes) | L10 | GDPR Art. 32 | ✅ Locked |
 | Voice-transcribe audit emits METADATA ONLY, never transcript text | L23 | GDPR Art. 5 | ✅ Locked |
 | Acceptable-use / house-rules gate (no military / offensive-cyber / disinformation) | L44 | EU AI Act Art. 5 + 50 | ✅ Locked |
+| Tier 2/3 geo-tracking consent gate — region/city require BOTH `geo_tracking_tier` config AND explicit `geo_tracking_consent_given: true`; Tier 1 (country) stays default-ON/opt-out | ADR-0205/0206 | GDPR Art. 6(1)(a) | ✅ Locked |
 
 ## Absolute Constraints (Must NOT do)
 
@@ -80,3 +81,4 @@ Three-layer defence (L34 + L35 complementary to ADR-0007):
 - [Layer 19](layer-19-disclosure.md) — Bot-disclosure card
 - [Layer 44](layer-44-house-rules.md) — Acceptable-use gate
 - [ADR-0007](https://github.com/anthropics/corvin-adr/blob/main/decisions/0007-multi-tenant-axis.md) — Multi-tenant axis
+- ADR-0205/0206 — Multi-tier geo-tracking (Tier 1 country default-ON, Tier 2/3 region/city opt-in); Tier 2/3 uses Cloudflare-edge-resolved geo (never a raw IP) and file-based TTL storage, not the original Postgres design

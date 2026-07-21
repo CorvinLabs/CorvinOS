@@ -497,6 +497,90 @@ def _tenant_ping_flag(home: Path, tid: str | None) -> bool:
     return True if flag is None else flag
 
 
+# ── Geo-tracking Tier 2/3 consent gate (ADR-0205/0206, opt-IN, deny-by-default) ─
+#
+# Unlike ping_enabled()/healing_traces (default-ON, opt-out, Art. 6(1)(f)
+# legitimate interest), Tier 2/3 geo-tracking is Art. 6(1)(a) EXPLICIT
+# CONSENT: both flags below default to the privacy-preserving state (tier 1,
+# no consent) on any absent/unreadable/broken config — never fail-open.
+
+
+def geo_tracking_tier(home: Path) -> int:
+    """Return the configured geo-tracking tier: 1 (country), 2 (region), or 3
+    (city + 10km grid). Default and fail-closed value: 1.
+
+    Reads ``spec.telemetry.geo_tracking_tier`` from tenant.corvin.yaml. Any
+    read/parse error, a missing key, or an out-of-range value (must be
+    exactly 1, 2, or 3) returns 1 — the tier that was already the default
+    before this feature existed, never a silent escalation.
+    """
+    cfg_path = _tenant_cfg_path(home)
+    if not cfg_path.exists():
+        return 1
+    try:
+        text = cfg_path.read_text(encoding="utf-8")
+        import yaml  # noqa: PLC0415
+        data = yaml.safe_load(text)
+    except Exception:  # noqa: BLE001
+        return 1
+    if not isinstance(data, dict):
+        return 1
+    spec = data.get("spec", data)
+    if not isinstance(spec, dict):
+        return 1
+    tele = spec.get("telemetry", {})
+    if not isinstance(tele, dict):
+        return 1
+    tier = tele.get("geo_tracking_tier", 1)
+    try:
+        tier = int(tier)
+    except (TypeError, ValueError):
+        return 1
+    return tier if tier in (1, 2, 3) else 1
+
+
+def geo_tracking_consent_given(home: Path) -> bool:
+    """Explicit Tier 2/3 consent flag. Default and fail-closed value: False.
+
+    Reads ``spec.telemetry.geo_tracking_consent_given``. Must be the exact
+    boolean ``True`` — absent, unreadable, broken YAML, or any false-like
+    value all mean "no consent" (F4: a config we cannot trust must never
+    fall through to consent-given).
+    """
+    cfg_path = _tenant_cfg_path(home)
+    if not cfg_path.exists():
+        return False
+    try:
+        text = cfg_path.read_text(encoding="utf-8")
+        import yaml  # noqa: PLC0415
+        data = yaml.safe_load(text)
+    except Exception:  # noqa: BLE001
+        return False
+    if not isinstance(data, dict):
+        return False
+    spec = data.get("spec", data)
+    if not isinstance(spec, dict):
+        return False
+    tele = spec.get("telemetry", {})
+    if not isinstance(tele, dict):
+        return False
+    return tele.get("geo_tracking_consent_given", False) is True
+
+
+def effective_geo_tier(home: Path) -> int:
+    """Return the tier to actually request on outgoing telemetry.
+
+    Requires BOTH ``geo_tracking_tier >= 2`` AND explicit
+    ``geo_tracking_consent_given`` — configuring the tier alone (e.g. by
+    copy-pasting an example config) must never be enough to start sending a
+    deeper geo-tier request; the consent flag is a second, independent gate.
+    """
+    tier = geo_tracking_tier(home)
+    if tier >= 2 and not geo_tracking_consent_given(home):
+        return 1
+    return tier
+
+
 def ensure_ping_tokens(home: Path) -> bool:
     """Provision HMAC tokens if not yet present; fail-soft.
 
