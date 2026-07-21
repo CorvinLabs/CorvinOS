@@ -29,6 +29,7 @@ from .htrace_uploader import (
 from .htrace_consent import (
     load_or_create_instance_id,
     ping_enabled,
+    effective_geo_tier,
     _open_no_redirect,
 )
 
@@ -59,21 +60,31 @@ def send_heartbeat(home: Path) -> bool:
         instance_token = _load_instance_token(home)
         instance_id = load_or_create_instance_id(home)
 
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {telemetry_token}",
+            "X-HTTrace-Instance-Token": instance_token,
+            "X-HTrace-Instance-Id": instance_id,
+            # Cloudflare bot protection 403s generic Python UAs at the edge,
+            # before the Pages Function runs — without this header every
+            # heartbeat dies silently and online geo stays empty.
+            "User-Agent": _telemetry_user_agent("Heartbeat"),
+        }
+        # ADR-0205/0206: Tier 2/3 geo-tracking is opt-IN (explicit consent) —
+        # effective_geo_tier() returns 1 (omit the header entirely) unless the
+        # operator has BOTH configured a higher tier AND given consent. The
+        # Cloudflare Pages Function only attaches CF-Region/CF-City/CF-Lat/
+        # CF-Lng when this header requests tier >= 2 (see heartbeat.js).
+        tier = effective_geo_tier(home)
+        if tier >= 2:
+            headers["X-HTrace-Geo-Tier"] = str(tier)
+
         payload = json.dumps({}).encode("utf-8")
         req = urllib.request.Request(
             _HEARTBEAT_URL,
             data=payload,
             method="POST",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {telemetry_token}",
-                "X-HTTrace-Instance-Token": instance_token,
-                "X-HTrace-Instance-Id": instance_id,
-                # Cloudflare bot protection 403s generic Python UAs at the edge,
-                # before the Pages Function runs — without this header every
-                # heartbeat dies silently and online geo stays empty.
-                "User-Agent": _telemetry_user_agent("Heartbeat"),
-            },
+            headers=headers,
         )
         # https-only + no-redirect opener (F8): never forward the Authorization /
         # instance-token headers over plaintext or across a cross-host 3xx.
