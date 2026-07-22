@@ -111,10 +111,10 @@ _BRIDGE_GUIDES: dict[str, dict[str, Any]] = {
         "steps": [
             "Go to discord.com/developers/applications and click **New Application**.",
             "Under **Bot**, click **Add Bot** → **Reset Token** → copy the token.",
-            "Enable **Message Content Intent** under Privileged Gateway Intents.",
             "Under **OAuth2 → URL Generator**, select **bot** scope + **Send Messages**, **Read Message History** permissions.",
             "Open the generated URL to invite the bot to your server.",
-            "Paste the bot token into the field below and save.",
+            "Paste the bot token into the field below and save — that's all that's required.",
+            "Optional: enable **Message Content Intent** (Privileged Gateway Intents) so the bot reads *all* guild-channel text; without it, DMs and @mentions work out of the box.",
         ],
         "field_label": "Bot Token",
         "field_placeholder": "Paste your Discord bot token…",

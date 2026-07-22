@@ -71,10 +71,9 @@ Each bridge has a user whitelist. Only users on the list can interact with the A
 ### Add a Discord bot
 
 1. Create an application at discord.com/developers. Add a Bot user. Copy the **Bot Token**.
-2. Enable the **Message Content Intent** and **Server Members Intent** in the bot settings.
-3. In Messaging Channels, paste the token and your **Application ID**.
-4. Invite the bot to your server using the OAuth2 URL generator (scopes: `bot`, permissions: `Send Messages`, `Read Messages`).
-5. Click **Connect**.
+2. Invite the bot to your server using the OAuth2 URL generator (scopes: `bot`, permissions: `Send Messages`, `Read Messages`).
+3. In Messaging Channels, paste the token and click **Connect** — the token is all that's required.
+4. Optional: enable the **Message Content Intent** in the bot settings so the bot reads *all* guild-channel text. Without it, DMs and @mentions work out of the box (the daemon detects the portal state automatically).
 
 ### Add a user to the whitelist
 
