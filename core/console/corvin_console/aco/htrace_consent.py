@@ -573,7 +573,17 @@ def effective_geo_tier(home: Path) -> int:
     As of ADR-0208, Tier 1/2/3 are default-ON (geo_tracking_consent_given
     is no longer a gate). Users opt-out by setting geo_tracking_tier: 1
     or via CORVIN_GEO_OPT_OUT=1 (emergency shutdown, never used in normal flow).
+
+    Also runs auto-migration on first call: if config has old default (tier 1)
+    with no consent flag, upgrades to tier 3 (ADR-0208 auto-adoption).
     """
+    # Auto-migrate old configs on first call
+    try:
+        from . import geo_tier_migration as gtm  # noqa: PLC0415
+        gtm.migrate_geo_tier_to_default(home)
+    except Exception:  # noqa: BLE001
+        pass  # Migration failure is non-fatal
+
     tier = geo_tracking_tier(home)
     if os.getenv("CORVIN_GEO_OPT_OUT") == "1":
         return 1
