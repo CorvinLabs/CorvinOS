@@ -41,18 +41,17 @@ class FeatureHeatmapResponse(BaseModel):
 
 
 @router.get("/stats/features", tags=["console-stats"])
-def get_feature_stats(home: Path | None = None) -> FeatureHeatmapResponse:
+def get_feature_stats() -> FeatureHeatmapResponse:
     """Get ecosystem-level feature adoption heatmap.
 
     Scans ~/.corvin/telemetry/feature_snapshot.json (local instance data).
     Returns adoption percentages for core features: Bridges, LDD, A2A, Workflows,
     Browser, Compute. Used by dashboard FeatureHeatmapCard component.
     """
-    # Resolve home path (normally from context; fallback for testing).
-    if not home:
-        home = Path.home() / ".corvin"
-    else:
-        home = Path(home)
+    # Resolve home path from environment or default.
+    import os
+    home_str = os.environ.get("CORVIN_HOME")
+    home = Path(home_str) if home_str else Path.home() / ".corvin"
 
     snapshot_file = home / "telemetry" / "feature_snapshot.json"
     snapshot_data = {}
