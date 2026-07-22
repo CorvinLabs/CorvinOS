@@ -50,6 +50,12 @@ export function DiscordSetupDialog() {
         body: JSON.stringify({ token: token.trim() }),
       })
 
+      if (!response.ok) {
+        setError(`HTTP ${response.status}: ${response.statusText}`)
+        setStep('error')
+        return
+      }
+
       const data: ValidateTokenResponse = await response.json()
 
       if (!data.valid) {
@@ -76,6 +82,12 @@ export function DiscordSetupDialog() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: token.trim() }),
       })
+
+      if (!response.ok) {
+        setError(`HTTP ${response.status}: ${response.statusText}`)
+        setStep('error')
+        return
+      }
 
       const data: SaveTokenResponse = await response.json()
 
