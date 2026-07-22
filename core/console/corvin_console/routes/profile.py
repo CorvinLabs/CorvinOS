@@ -69,7 +69,7 @@ class IdentityFields(BaseModel):
     timezone:                 str | None = Field(None, max_length=60)
     default_persona:          str | None = Field(None, max_length=60)
     voice_note_max_sentences: conint(ge=1, le=10) | None = None
-    custom_instructions:      str | None = Field(None, max_length=500)
+    custom_instructions:      str | None = Field(None, max_length=2000)
 
     model_config = {"extra": "forbid"}
 
