@@ -1104,3 +1104,285 @@ async def save_telegram_token(
             success=False,
             error=f"Failed to save token: {str(e)[:100]}",
         )
+
+
+# ── Slack Zero-Config Setup (Category B: OAuth) ─────────────────────────────
+#
+# Pattern: OAuth authorization → token exchange → scope validation
+
+class GenerateSlackOAuthURLRequest(BaseModel):
+    client_id: str = Field(..., min_length=5)
+
+
+class GenerateSlackOAuthURLResponse(BaseModel):
+    url: str
+    required_scopes: list[str]
+    error: str | None = None
+
+
+class ExchangeSlackCodeRequest(BaseModel):
+    code: str = Field(..., min_length=5)
+
+
+class ExchangeSlackCodeResponse(BaseModel):
+    valid: bool
+    access_token: str | None = None
+    team_name: str | None = None
+    error: str | None = None
+
+
+@router.post("/slack/oauth/generate-url", response_model=GenerateSlackOAuthURLResponse)
+async def generate_slack_oauth_url(
+    body: GenerateSlackOAuthURLRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> GenerateSlackOAuthURLResponse:
+    """Generate Slack OAuth authorization URL."""
+    _log.info(f"Generating Slack OAuth URL (user: {rec.user_id})")
+
+    bridges_dir = _resolve_bridges_dir()
+    oauth_flow_path = bridges_dir / "slack" / "auto_slack_oauth_flow.js"
+
+    if not oauth_flow_path.exists():
+        return GenerateSlackOAuthURLResponse(
+            url="",
+            required_scopes=[],
+            error="OAuth flow module not found",
+        )
+
+    script = f"""
+const {{ AutoSlackOAuthFlow }} = require(process.env.OAUTH_FLOW_PATH);
+const flow = new AutoSlackOAuthFlow({{log: () => {{}}}}, process.env.CLIENT_ID, '');
+const result = flow.generateAuthorizationUrl();
+console.log(JSON.stringify(result));
+"""
+
+    try:
+        result = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={
+                **os.environ,
+                "OAUTH_FLOW_PATH": str(oauth_flow_path),
+                "CLIENT_ID": body.client_id,
+            },
+        )
+
+        if result.returncode != 0:
+            return GenerateSlackOAuthURLResponse(
+                url="",
+                required_scopes=[],
+                error="OAuth URL generation failed",
+            )
+
+        data = json.loads(result.stdout)
+        return GenerateSlackOAuthURLResponse(
+            url=data.get("url", ""),
+            required_scopes=data.get("requiredScopes", []),
+        )
+
+    except Exception as e:
+        _log.error(f"OAuth URL generation error: {e}")
+        return GenerateSlackOAuthURLResponse(
+            url="",
+            required_scopes=[],
+            error=str(e)[:100],
+        )
+
+
+@router.post("/slack/oauth/exchange-code", response_model=ExchangeSlackCodeResponse)
+async def exchange_slack_code(
+    body: ExchangeSlackCodeRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> ExchangeSlackCodeResponse:
+    """Exchange OAuth code for access token."""
+    _log.info(f"Exchanging Slack OAuth code (user: {rec.user_id})")
+
+    bridges_dir = _resolve_bridges_dir()
+    oauth_flow_path = bridges_dir / "slack" / "auto_slack_oauth_flow.js"
+    slack_settings = bridges_dir / "slack" / "settings.json"
+
+    # Load client_id from settings
+    if not slack_settings.exists():
+        return ExchangeSlackCodeResponse(
+            valid=False,
+            error="Slack settings not found",
+        )
+
+    try:
+        # Pre-validate settings.json
+        try:
+            with open(slack_settings, "r") as f:
+                settings = json.load(f)
+        except json.JSONDecodeError as e:
+            _log.error(f"Slack settings.json corrupted: {e}")
+            return ExchangeSlackCodeResponse(
+                valid=False,
+                error="Settings file corrupted",
+            )
+
+        client_id = settings.get("client_id", "")
+        client_secret = settings.get("client_secret", "")
+
+        if not client_id:
+            return ExchangeSlackCodeResponse(
+                valid=False,
+                error="client_id not configured",
+            )
+
+        # Step 1: Exchange code for token
+        script_exchange = """
+const { AutoSlackOAuthFlow, REQUIRED_SCOPES } = require(process.env.OAUTH_FLOW_PATH);
+const flow = new AutoSlackOAuthFlow(
+  (msg) => console.error(msg),
+  process.env.CLIENT_ID,
+  process.env.CLIENT_SECRET
+);
+(async () => {
+  const result = await flow.exchangeCodeForToken(process.env.CODE);
+  console.log(JSON.stringify(result));
+})().catch(err => {
+  console.log(JSON.stringify({valid: false, error: err.message}));
+});
+"""
+
+        try:
+            result = subprocess.run(
+                ["node", "-e", script_exchange],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env={
+                    **os.environ,
+                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
+                    "CLIENT_ID": client_id,
+                    "CLIENT_SECRET": client_secret,
+                    "CODE": body.code,
+                },
+            )
+        except subprocess.TimeoutExpired:
+            _log.error("Slack OAuth exchange timeout (>10s)")
+            return ExchangeSlackCodeResponse(
+                valid=False,
+                error="OAuth exchange timeout",
+            )
+        except FileNotFoundError:
+            _log.error("Node.js not found or oauth_flow.js missing")
+            return ExchangeSlackCodeResponse(
+                valid=False,
+                error="Setup error: OAuth module not found",
+            )
+
+        if result.returncode != 0:
+            _log.error(f"Node.js exit {result.returncode}: {result.stderr[:200]}")
+            return ExchangeSlackCodeResponse(
+                valid=False,
+                error="OAuth exchange failed",
+            )
+
+        # Parse token exchange result
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            _log.error(f"Failed to parse OAuth exchange response: {e}")
+            return ExchangeSlackCodeResponse(
+                valid=False,
+                error="OAuth exchange response invalid",
+            )
+
+        if not data.get("valid"):
+            return ExchangeSlackCodeResponse(
+                valid=False,
+                error=data.get("error", "Exchange failed"),
+            )
+
+        access_token = data.get("access_token")
+        team_id = data.get("team_id")
+        team_name = data.get("team_name")
+
+        # Step 2: Validate scopes (CRITICAL)
+        script_validate = """
+const { AutoSlackOAuthFlow, REQUIRED_SCOPES } = require(process.env.OAUTH_FLOW_PATH);
+const flow = new AutoSlackOAuthFlow((msg) => {}, "", "");
+(async () => {
+  const result = await flow.validateScopes(process.env.ACCESS_TOKEN);
+  console.log(JSON.stringify(result));
+})().catch(err => {
+  console.log(JSON.stringify({valid: false, error: err.message}));
+});
+"""
+
+        try:
+            scope_result = subprocess.run(
+                ["node", "-e", script_validate],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env={
+                    **os.environ,
+                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
+                    "ACCESS_TOKEN": access_token,
+                },
+            )
+        except subprocess.TimeoutExpired:
+            _log.warning("Scope validation timeout, continuing with caution")
+            scope_result = None
+        except Exception as e:
+            _log.warning(f"Scope validation error, continuing: {e}")
+            scope_result = None
+
+        if scope_result and scope_result.returncode == 0:
+            try:
+                scope_data = json.loads(scope_result.stdout)
+                if not scope_data.get("valid"):
+                    _log.warning(f"Missing scopes: {scope_data.get('error')}")
+                    return ExchangeSlackCodeResponse(
+                        valid=False,
+                        error=f"Permission error: {scope_data.get('error')}",
+                    )
+            except json.JSONDecodeError:
+                _log.warning("Could not parse scope validation response")
+
+        # Save token (atomic write)
+        fd, tmp_path = tempfile.mkstemp(prefix=slack_settings.name + ".", dir=str(slack_settings.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                settings["slack_token"] = access_token
+                settings["team_id"] = team_id
+                settings["_token_validated_at"] = "via-console-oauth"
+                json.dump(settings, tmp, indent=2)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+
+            # Atomic replace
+            tmp_path_obj = Path(tmp_path)
+            tmp_path_obj.replace(slack_settings)
+            slack_settings.chmod(0o600)
+
+            _log.info(f"Slack token saved (team: {team_name}, id: {team_id})")
+            return ExchangeSlackCodeResponse(
+                valid=True,
+                access_token=access_token[:20] + "...",
+                team_name=team_name,
+            )
+        except Exception as e:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            _log.error(f"Failed to save Slack token: {e}")
+            raise
+
+    except FileNotFoundError:
+        _log.error(f"Slack settings not found: {slack_settings}")
+        return ExchangeSlackCodeResponse(
+            valid=False,
+            error="Settings path error",
+        )
+    except Exception as e:
+        _log.error(f"OAuth exchange error: {e}", exc_info=True)
+        return ExchangeSlackCodeResponse(
+            valid=False,
+            error="Internal error",
+        )
