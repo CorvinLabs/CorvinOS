@@ -430,6 +430,33 @@ async def a2a_receive(request: Request) -> JSONResponse:
     return JSONResponse(content=response.to_dict())
 
 
+@app.post("/v1/a2a/ping")
+async def a2a_ping(request: Request) -> JSONResponse:
+    """ADR-0199 — lightweight peer-liveness check (receiver side).
+
+    HMAC-authenticated signed probe; responds with a recv_key-signed body
+    echoing task_id=ping_id. Delegates to the SAME shared core as the
+    stdlib server (a2a_http_server.process_ping_request) so the two
+    backends cannot drift — ADR-0199: "Both backends ship together or the
+    feature doesn't ship."
+    """
+    if not _A2A_AVAILABLE or _a2a_receiver is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "a2a_not_configured"},
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "invalid_json"},
+        )
+    from a2a_http_server import process_ping_request  # type: ignore[import-not-found]
+    status_code, payload = process_ping_request(body, _a2a_receiver)
+    return JSONResponse(content=payload, status_code=status_code)
+
+
 # ── Auth note ────────────────────────────────────────────────────────
 #
 # Static atlr_* token auth has been removed. For local deployments the

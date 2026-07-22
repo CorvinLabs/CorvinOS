@@ -64,7 +64,11 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import instance_identity  # type: ignore[import-not-found]
-from remote_trigger_receiver import RemoteTriggerReceiver, OriginRegistry  # type: ignore[import-not-found]
+from remote_trigger_receiver import (  # type: ignore[import-not-found]
+    PROTOCOL_VERSION,
+    OriginRegistry,
+    RemoteTriggerReceiver,
+)
 
 # GoogleA2AAdapter is optional — imported lazily so the server stays
 # functional even if a2a_google_adapter.py is not yet installed.
@@ -72,6 +76,177 @@ try:
     from a2a_google_adapter import GoogleA2AAdapter  # type: ignore[import-not-found]
 except ImportError:
     GoogleA2AAdapter = None  # type: ignore[assignment,misc]
+
+
+# ADR-0199 Decision 7 — ping rate limiting. Deliberately a SEPARATE bounded
+# bucket map, NOT the receiver's self._rate_buckets: that map's invariant is
+# "populated post-HMAC only, so authenticated origins only" — the ping check
+# runs PRE-auth (its whole point is to shield OriginRegistry.load from
+# unauthenticated floods), and sharing the map would let an attacker with
+# unique fake origin_ids evict real /receive buckets (refutation finding,
+# 2026-07-22). Worst case here: fake ids evict other PING buckets only.
+_PING_RATE_BUCKETS: dict[str, dict[str, float]] = {}
+_PING_RATE_BUCKETS_MAX = 1000
+_PING_RATE_LOCK = threading.Lock()
+_PING_RATE_RPM = 60.0
+
+
+def _ping_rate_ok(origin_id: str) -> bool:
+    """Token bucket per (requested) origin_id, 60 rpm, bounded map."""
+    import time as _time_module
+
+    now = _time_module.monotonic()
+    with _PING_RATE_LOCK:
+        bucket = _PING_RATE_BUCKETS.get(origin_id)
+        if bucket is None:
+            if len(_PING_RATE_BUCKETS) >= _PING_RATE_BUCKETS_MAX:
+                oldest = min(
+                    _PING_RATE_BUCKETS,
+                    key=lambda k: _PING_RATE_BUCKETS[k]["last_refill"],
+                )
+                del _PING_RATE_BUCKETS[oldest]
+            bucket = {"tokens": _PING_RATE_RPM, "last_refill": now}
+            _PING_RATE_BUCKETS[origin_id] = bucket
+        elapsed = now - bucket["last_refill"]
+        bucket["last_refill"] = now
+        bucket["tokens"] = min(
+            _PING_RATE_RPM, bucket["tokens"] + elapsed * (_PING_RATE_RPM / 60.0)
+        )
+        if bucket["tokens"] >= 1.0:
+            bucket["tokens"] -= 1.0
+            return True
+        return False
+
+
+def process_ping_request(req: Any, receiver: Any) -> tuple[int, dict[str, Any]]:
+    """ADR-0199: shared core of the receiver-side ping (both backends).
+
+    Takes the parsed JSON body and the RemoteTriggerReceiver instance;
+    returns ``(http_status, response_payload)``. Used by the stdlib server's
+    ``_handle_ping`` AND the gateway's ``/v1/a2a/ping`` route so the two
+    backends cannot drift (ADR-0199: "Both backends ship together").
+
+    Anti-oracle ordering: signature is verified BEFORE freshness, and
+    unknown-origin / bad-signature share one opaque 403 — an unauthenticated
+    caller cannot distinguish "origin_id unknown" from "signature wrong", so
+    pairing ids cannot be enumerated. No nonce store — replay within the
+    ±30s freshness window is accepted by design (a replayed ping only
+    reconfirms liveness).
+    """
+    import hashlib
+    import hmac as _hmac
+    import time as _time_module
+
+    if not isinstance(req, dict):
+        return 400, {"reason": "envelope_not_object"}
+
+    ping_id = req.get("ping_id")
+    issued_at = req.get("issued_at")
+    origin_id = req.get("origin_id")
+    signature = req.get("signature")
+
+    if not all((ping_id, issued_at, origin_id, signature)):
+        return 400, {"reason": "missing_fields"}
+
+    # Strict field types — a JSON number/array as signature would raise
+    # inside hmac.compare_digest and kill the handler thread.
+    if not isinstance(ping_id, str) or not isinstance(origin_id, str) \
+            or not isinstance(signature, str):
+        return 400, {"reason": "missing_fields"}
+
+    # Validate issued_at is an integer timestamp. Reject floats outright:
+    # the sender canonicalizes issued_at as int, so coercing a float here
+    # would only ever produce an invalid_signature — fail clearly instead.
+    if isinstance(issued_at, bool) or not isinstance(issued_at, int):
+        return 400, {"reason": "invalid_issued_at"}
+
+    # Rate-limit BEFORE any disk work (ADR-0199 Decision 7): a flood of pings
+    # (valid or not) must not burn CPU/disk via OriginRegistry.load. Uses the
+    # ping-only bounded bucket map — see _PING_RATE_BUCKETS above for why the
+    # receiver's post-HMAC /receive buckets must NOT be reused here.
+    try:
+        if not _ping_rate_ok(origin_id[:128]):
+            return 429, {"reason": "rate_limited"}
+    except Exception:
+        pass  # rate limiting is a shield, never a crash source
+
+    # Load origin config from the SAME registry the receiver was built with
+    # (build_server wires origins_dir into the receiver; a separate
+    # OriginRegistry(None) here consulted a different store).
+    try:
+        registry = getattr(receiver, "_registry", None) or OriginRegistry(
+            origins_dir=None
+        )
+        origin_cfg = registry.load(origin_id)
+    except Exception:
+        # Opaque: indistinguishable from a bad signature (anti-enumeration).
+        return 403, {"reason": "ping_rejected"}
+
+    # Verify HMAC signature FIRST — only holders of the pairing hmac_key may
+    # learn anything beyond an opaque 403 (freshness included).
+    ping_request_canonical = json.dumps(
+        {"ping_id": ping_id, "issued_at": issued_at, "origin_id": origin_id},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    try:
+        expected_sig = _hmac.new(
+            bytes.fromhex(origin_cfg["hmac_key"]),
+            ping_request_canonical.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+    except (KeyError, TypeError, ValueError):
+        # Malformed origin config (non-hex/missing hmac_key) — same opaque
+        # rejection, never an unhandled exception in the handler thread.
+        return 403, {"reason": "ping_rejected"}
+    if not _hmac.compare_digest(signature, expected_sig):
+        return 403, {"reason": "ping_rejected"}
+
+    # Verify freshness (±30s window) — authenticated callers only, so the
+    # distinct reason is safe and aids clock-skew diagnostics.
+    now = int(_time_module.time())
+    if abs(now - issued_at) > 30:
+        return 400, {"reason": "stale_ping"}
+
+    # Record heartbeat (if supported)
+    try:
+        from a2a_friendship import record_endpoint_heartbeat  # type: ignore[import-not-found]
+        record_endpoint_heartbeat(origin_id)
+    except Exception:
+        pass  # Heartbeat is optional; proceed even if recording fails
+
+    # Build signed response
+    iid = getattr(receiver, "_instance_id", "") or ""
+    if not iid:
+        try:
+            iid = instance_identity.get_instance_id()
+        except Exception:
+            iid = ""
+
+    response = {
+        "ok": True,
+        # ADR-0199 Decision 3: the signed response MUST echo task_id set to
+        # the request's ping_id — the sender's _verify_response raises
+        # task_id_mismatch otherwise, and the echo binds this response to
+        # this probe (anti-replay for responses).
+        "task_id": ping_id,
+        "instance_id": iid,
+        "protocol_version": str(PROTOCOL_VERSION),
+        "server_time": now,
+    }
+
+    # Sign response with recv_key
+    response_canonical = json.dumps(response, separators=(",", ":"), sort_keys=True)
+    try:
+        response_sig = _hmac.new(
+            bytes.fromhex(origin_cfg["recv_key"]),
+            response_canonical.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+    except (KeyError, TypeError, ValueError):
+        return 403, {"reason": "ping_rejected"}
+    response["signature"] = response_sig
+    return 200, response
 
 
 class _A2AHandler(http.server.BaseHTTPRequestHandler):
@@ -116,13 +291,6 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
                     iid = ""
             body = json.dumps({"ok": True, "instance_id": iid}).encode()
             self._respond(200, body)
-            return
-
-        # ADR-0199: Lightweight peer-liveness check. Receiver-side ping endpoint.
-        # Sender POSTs a signed ping request; receiver verifies and responds with
-        # signature. No nonce store — ±30s freshness window suffices.
-        if self.path == "/v1/a2a/ping":
-            self._handle_ping()
             return
 
         # ADR-0141 Tier 4 — Audit Chain Transparency. A peer requests the local
@@ -171,6 +339,14 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
         # Google A2A: JSON-RPC dispatch
         if self.path == "/a2a" and self.google_adapter is not None:
             self._handle_google_a2a()
+            return
+
+        # ADR-0199: Lightweight peer-liveness check. Receiver-side ping
+        # endpoint. The sender POSTs a signed ping request; the receiver
+        # verifies and responds with a recv_key-signed, task_id-echoing body.
+        # No nonce store — ±30s freshness window suffices.
+        if self.path == "/v1/a2a/ping":
+            self._handle_ping()
             return
 
         # Native L38
@@ -278,16 +454,20 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
     # ── Route implementations ─────────────────────────────────────────
 
     def _handle_ping(self) -> None:
-        """ADR-0199: Handle GET /v1/a2a/ping (receiver-side liveness check).
+        """ADR-0199: Handle POST /v1/a2a/ping (receiver-side liveness check).
 
-        Expects JSON body: {ping_id, issued_at, origin_id, signature}
-        Verifies signature with origin's hmac_key; responds with signed
-        {ok, instance_id, protocol_version, server_time, signature}.
+        Expects JSON body: {ping_id, issued_at, origin_id, signature}.
+        Verifies signature with the origin's hmac_key; responds with the
+        recv_key-signed {ok, task_id, instance_id, protocol_version,
+        server_time, signature} — task_id echoes ping_id, which the sender's
+        _verify_response requires (ADR-0199 Decision 3).
 
-        Finding #11 Note: ping_id is used for request deduplication but only
-        within the ±30s freshness window. Attackers can still replay within
-        that window. Full replay protection requires per-origin sequence
-        tracking (deferred to next phase).
+        Anti-oracle ordering: signature is verified BEFORE freshness, and
+        unknown-origin / bad-signature share one opaque 403 — an
+        unauthenticated caller cannot distinguish "origin_id unknown" from
+        "signature wrong", so pairing ids cannot be enumerated. No nonce
+        store — replay within the ±30s freshness window is accepted by
+        design (a replayed ping only reconfirms liveness).
         """
         import hashlib
         import hmac as _hmac
@@ -314,86 +494,8 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
             self._respond(400, b'{"reason":"envelope_not_object"}\n')
             return
 
-        # Extract fields
-        ping_id = req.get("ping_id")
-        issued_at = req.get("issued_at")
-        origin_id = req.get("origin_id")
-        signature = req.get("signature")
-
-        if not all((ping_id, issued_at, origin_id, signature)):
-            self._respond(400, b'{"reason":"missing_fields"}\n')
-            return
-
-        # Validate issued_at is numeric (prevent type errors in freshness check)
-        try:
-            issued_at = int(issued_at) if isinstance(issued_at, (int, float)) else int(issued_at)
-        except (TypeError, ValueError):
-            self._respond(400, b'{"reason":"invalid_issued_at"}\n')
-            return
-
-        # Load origin config (same as RemoteTriggerReceiver does)
-        try:
-            registry = OriginRegistry(origins_dir=None)  # Uses default
-            origin_cfg = registry.load(origin_id)
-        except Exception:
-            # OriginError: invalid_origin_id, unknown_origin, file permissions, etc
-            self._respond(403, b'{"reason":"unknown_origin"}\n')
-            return
-
-        # Verify freshness (±30s window)
-        now = int(_time_module.time())
-        if abs(now - issued_at) > 30:
-            self._respond(400, b'{"reason":"stale_ping"}\n')
-            return
-
-        # Verify HMAC signature
-        ping_request_canonical = json.dumps(
-            {"ping_id": ping_id, "issued_at": issued_at, "origin_id": origin_id},
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        expected_sig = _hmac.new(
-            bytes.fromhex(origin_cfg["hmac_key"]),
-            ping_request_canonical.encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
-        if not _hmac.compare_digest(signature, expected_sig):
-            self._respond(403, b'{"reason":"invalid_signature"}\n')
-            return
-
-        # Record heartbeat (if supported)
-        try:
-            from a2a_friendship import record_endpoint_heartbeat  # type: ignore[import-not-found]
-            record_endpoint_heartbeat(origin_id)
-        except Exception:
-            pass  # Heartbeat is optional; proceed even if recording fails
-
-        # Build signed response
-        iid = getattr(self.receiver, "_instance_id", "") or ""
-        if not iid:
-            try:
-                iid = instance_identity.get_instance_id()
-            except Exception:
-                iid = ""
-
-        response = {
-            "ok": True,
-            "instance_id": iid,
-            "protocol_version": "1.0",
-            "server_time": now,
-        }
-
-        # Sign response with recv_key
-        response_canonical = json.dumps(response, separators=(",", ":"), sort_keys=True)
-        response_sig = _hmac.new(
-            bytes.fromhex(origin_cfg["recv_key"]),
-            response_canonical.encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()
-        response["signature"] = response_sig
-
-        body = json.dumps(response).encode()
-        self._respond(200, body)
+        status, payload = process_ping_request(req, self.receiver)
+        self._respond(status, (json.dumps(payload) + "\n").encode())
 
     # ── Helpers ───────────────────────────────────────────────────────
 

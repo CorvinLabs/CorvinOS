@@ -466,10 +466,27 @@ are dropped and replaced with `"redacted"` — never raised on, never sent.
 
 ## Lightweight peer liveness — `a2a_ping` (ADR-0199)
 
-**Status: sender-side implemented (2026-07-19); receiver-side pending** — no
-`/v1/a2a/ping` route exists yet in `a2a_http_server.py` or the gateway, so a
-real probe currently returns `http_error`/`unreachable` until the route
-ships (backend parity is a hard requirement, see ADR-0199).
+**Status: sender + receiver implemented in BOTH backends (2026-07-22)** —
+`POST /v1/a2a/ping` is served by `a2a_http_server.py` and the gateway
+(`corvin_gateway/app.py`); both delegate to the shared core
+`a2a_http_server.process_ping_request()` so the backends cannot drift
+(ADR-0199's parity requirement holds by construction).
+
+Receiver-side behavior (2026-07-22 adversarial-review hardening):
+- **Anti-oracle ordering:** the HMAC signature is verified BEFORE the
+  freshness check, and unknown-origin / bad-signature both return one opaque
+  `403 ping_rejected` — an unauthenticated caller cannot enumerate paired
+  origin_ids. `400 stale_ping` is only reachable with a valid signature.
+- **Rate limit:** a ping-only, separately-bounded per-origin token-bucket map
+  (60 rpm, `_PING_RATE_BUCKETS`) is checked BEFORE any disk work, so ping
+  floods cannot burn CPU/disk via `OriginRegistry.load`. It is deliberately
+  NOT the receiver's `/receive` bucket map: that map's invariant is
+  "populated post-HMAC only", and sharing it would let unauthenticated fake
+  origin_ids evict real `/receive` buckets — ping floods can at worst evict
+  other ping buckets.
+- **task_id echo:** the signed response carries `task_id = ping_id`
+  (Decision 3); a valid ping also records a receiver-side endpoint heartbeat
+  (`a2a_friendship.record_endpoint_heartbeat`).
 
 `RemoteTriggerSender.ping(endpoint_id, timeout_s)` — timeout clamped to
 `[2, 10]` s (default 5), far below `a2a_send`'s `[5, 120]` window.
@@ -488,7 +505,7 @@ ships (backend parity is a hard requirement, see ADR-0199).
   (ADR-0077 C-5) never confers liveness — an unsigned `ok:true` is
   `auth_failed` (forgeable-liveness fix, 2026-07-19).
 - **No nonce store** — pings are side-effect-free; ±30 s `issued_at`
-  freshness suffices (receiver-side, when implemented).
+  freshness suffices (enforced receiver-side).
 - **Failures reuse the ADR-0197 enum** (one taxonomy, two producers).
 - **Audit:** one `A2A.ping_result` event per call (INFO when reachable,
   WARNING otherwise) with closed-enum details only (`endpoint_id`,
