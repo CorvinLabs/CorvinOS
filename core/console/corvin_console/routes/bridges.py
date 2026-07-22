@@ -924,3 +924,183 @@ async def save_discord_token(
             success=False,
             error=f"Failed to save token: {str(e)[:100]}",
         )
+
+
+# ── Telegram Zero-Config Setup ────────────────────────────────────────
+#
+# Same pattern as Discord (Category A template):
+# Validate token via Telegram API → Save to settings.json
+
+class ValidateTelegramTokenRequest(BaseModel):
+    token: str = Field(..., min_length=10, max_length=200, description="Telegram bot token")
+
+
+class ValidateTelegramTokenResponse(BaseModel):
+    valid: bool
+    botId: str | None = None
+    botUsername: str | None = None
+    botName: str | None = None
+    error: str | None = None
+
+
+class SaveTelegramTokenRequest(BaseModel):
+    token: str = Field(..., min_length=10, max_length=200, description="Telegram bot token")
+
+
+class SaveTelegramTokenResponse(BaseModel):
+    success: bool
+    error: str | None = None
+
+
+def _validate_telegram_token_via_node(token: str, bridges_dir: Path) -> dict[str, Any]:
+    """Internal helper: validate Telegram token via Node.js subprocess.
+
+    Returns: {
+      valid: bool, botId?: str, botUsername?: str, botName?: str, error?: str
+    }
+
+    Security: Token passed via environment variable (not script interpolation).
+    """
+    provisioner_path = bridges_dir / "telegram" / "auto_telegram_provisioner.js"
+
+    if not provisioner_path.exists():
+        return {"valid": False, "error": f"auto_telegram_provisioner.js not found"}
+
+    script = """
+const { AutoTelegramTokenProvisioner } = require(process.env.PROVISIONER_PATH);
+const prov = new AutoTelegramTokenProvisioner({log: () => {}});
+prov.validateAndProvision(process.env.TELEGRAM_TOKEN).then(result => {
+  console.log(JSON.stringify(result));
+}).catch(err => {
+  console.log(JSON.stringify({valid: false, error: err.message}));
+});
+"""
+
+    try:
+        result = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(bridges_dir / "telegram"),
+            env={
+                **os.environ,
+                "PROVISIONER_PATH": str(provisioner_path),
+                "TELEGRAM_TOKEN": token,
+            },
+        )
+
+        if result.returncode != 0:
+            _log.warning(f"Node.js validation failed: {result.stderr}")
+            return {"valid": False, "error": "Token validation service error"}
+
+        try:
+            response_data = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            _log.error(f"Invalid JSON from provisioner: {result.stdout}")
+            return {"valid": False, "error": "Validation response error"}
+
+        return response_data
+
+    except subprocess.TimeoutExpired:
+        return {"valid": False, "error": "Validation timeout (>10s)"}
+    except Exception as e:
+        _log.error(f"Token validation error: {e}")
+        return {"valid": False, "error": str(e)[:100]}
+
+
+@router.post("/telegram/validate-token", response_model=ValidateTelegramTokenResponse)
+async def validate_telegram_token(
+    body: ValidateTelegramTokenRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> ValidateTelegramTokenResponse:
+    """Validate a Telegram bot token and extract bot info."""
+    _log.info(f"Validating Telegram token (user: {rec.user_id})")
+
+    bridges_dir = _resolve_bridges_dir()
+    response_data = _validate_telegram_token_via_node(body.token, bridges_dir)
+
+    if not response_data.get("valid"):
+        return ValidateTelegramTokenResponse(
+            valid=False,
+            error=response_data.get("error", "Token validation failed"),
+        )
+
+    return ValidateTelegramTokenResponse(
+        valid=True,
+        botId=response_data.get("botId"),
+        botUsername=response_data.get("botUsername"),
+        botName=response_data.get("botName"),
+    )
+
+
+@router.post("/telegram/save-token", response_model=SaveTelegramTokenResponse)
+async def save_telegram_token(
+    body: SaveTelegramTokenRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> SaveTelegramTokenResponse:
+    """Save Telegram bot token to settings.json (atomic write + validation)."""
+    _log.info(f"Saving Telegram token (user: {rec.user_id})")
+
+    try:
+        bridges_dir = _resolve_bridges_dir()
+        telegram_settings_file = bridges_dir / "telegram" / "settings.json"
+
+        # Validate first
+        validation = _validate_telegram_token_via_node(body.token, bridges_dir)
+        if not validation.get("valid"):
+            return SaveTelegramTokenResponse(
+                success=False,
+                error=validation.get("error", "Token validation failed"),
+            )
+
+        # Load current settings
+        if telegram_settings_file.exists():
+            with open(telegram_settings_file, "r") as f:
+                settings = json.load(f)
+        else:
+            settings = {}
+
+        # Update token
+        settings["telegram_token"] = body.token
+        settings["_token_validated_at"] = "via-console"
+
+        # Atomic write: temp file → rename
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=telegram_settings_file.parent,
+            delete=False,
+            suffix=".tmp",
+        ) as tmp:
+            json.dump(settings, tmp, indent=2)
+            tmp_path = tmp.name
+
+        try:
+            tmp_path_obj = Path(tmp_path)
+            tmp_path_obj.replace(telegram_settings_file)
+            telegram_settings_file.chmod(0o600)
+
+            _log.info(f"Telegram token saved (bot: @{validation.get('botUsername')})")
+            console_audit.action_performed(
+                tenant_id=rec.tenant_id,
+                sid_fingerprint=rec.sid_fingerprint,
+                action="telegram.token.write",
+                target_kind="bridge",
+                target_id="telegram",
+            )
+
+            return SaveTelegramTokenResponse(success=True)
+        except Exception as e:
+            try:
+                Path(tmp_path).unlink()
+            except Exception:
+                pass
+            raise e
+
+    except Exception as e:
+        _log.error(f"Token save error: {e}")
+        return SaveTelegramTokenResponse(
+            success=False,
+            error=f"Failed to save token: {str(e)[:100]}",
+        )
