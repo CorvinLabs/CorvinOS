@@ -283,6 +283,11 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
         Expects JSON body: {ping_id, issued_at, origin_id, signature}
         Verifies signature with origin's hmac_key; responds with signed
         {ok, instance_id, protocol_version, server_time, signature}.
+
+        Finding #11 Note: ping_id is used for request deduplication but only
+        within the ±30s freshness window. Attackers can still replay within
+        that window. Full replay protection requires per-origin sequence
+        tracking (deferred to next phase).
         """
         import hashlib
         import hmac as _hmac
