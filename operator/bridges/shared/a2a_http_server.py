@@ -64,7 +64,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import instance_identity  # type: ignore[import-not-found]
-from remote_trigger_receiver import RemoteTriggerReceiver  # type: ignore[import-not-found]
+from remote_trigger_receiver import RemoteTriggerReceiver, OriginRegistry  # type: ignore[import-not-found]
 
 # GoogleA2AAdapter is optional — imported lazily so the server stays
 # functional even if a2a_google_adapter.py is not yet installed.
@@ -116,6 +116,13 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
                     iid = ""
             body = json.dumps({"ok": True, "instance_id": iid}).encode()
             self._respond(200, body)
+            return
+
+        # ADR-0199: Lightweight peer-liveness check. Receiver-side ping endpoint.
+        # Sender POSTs a signed ping request; receiver verifies and responds with
+        # signature. No nonce store — ±30s freshness window suffices.
+        if self.path == "/v1/a2a/ping":
+            self._handle_ping()
             return
 
         # ADR-0141 Tier 4 — Audit Chain Transparency. A peer requests the local
@@ -267,6 +274,114 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
 
         payload = json.dumps(result).encode()
         self._respond(200, payload)
+
+    # ── Route implementations ─────────────────────────────────────────
+
+    def _handle_ping(self) -> None:
+        """ADR-0199: Handle GET /v1/a2a/ping (receiver-side liveness check).
+
+        Expects JSON body: {ping_id, issued_at, origin_id, signature}
+        Verifies signature with origin's hmac_key; responds with signed
+        {ok, instance_id, protocol_version, server_time, signature}.
+        """
+        import hashlib
+        import hmac as _hmac
+        import time as _time_module
+
+        # Read request body
+        length_hdr = self.headers.get("Content-Length", "0")
+        try:
+            length = int(length_hdr)
+        except ValueError:
+            self._respond(400, b'{"reason":"invalid_content_length"}\n')
+            return
+        if length <= 0 or length > self.max_body_bytes:
+            self._respond(413, b'{"reason":"body_too_large_or_empty"}\n')
+            return
+
+        raw = self.rfile.read(length)
+        try:
+            req = json.loads(raw)
+        except Exception:
+            self._respond(400, b'{"reason":"invalid_json"}\n')
+            return
+        if not isinstance(req, dict):
+            self._respond(400, b'{"reason":"envelope_not_object"}\n')
+            return
+
+        # Extract fields
+        ping_id = req.get("ping_id")
+        issued_at = req.get("issued_at")
+        origin_id = req.get("origin_id")
+        signature = req.get("signature")
+
+        if not all((ping_id, issued_at, origin_id, signature)):
+            self._respond(400, b'{"reason":"missing_fields"}\n')
+            return
+
+        # Load origin config (same as RemoteTriggerReceiver does)
+        try:
+            registry = OriginRegistry(origins_dir=None)  # Uses default
+            origin_cfg = registry.load(origin_id)
+        except Exception:
+            # OriginError: invalid_origin_id, unknown_origin, file permissions, etc
+            self._respond(403, b'{"reason":"unknown_origin"}\n')
+            return
+
+        # Verify freshness (±30s window)
+        now = int(_time_module.time())
+        if abs(now - issued_at) > 30:
+            self._respond(400, b'{"reason":"stale_ping"}\n')
+            return
+
+        # Verify HMAC signature
+        ping_request_canonical = json.dumps(
+            {"ping_id": ping_id, "issued_at": issued_at, "origin_id": origin_id},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        expected_sig = _hmac.new(
+            bytes.fromhex(origin_cfg["hmac_key"]),
+            ping_request_canonical.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        if not _hmac.compare_digest(signature, expected_sig):
+            self._respond(403, b'{"reason":"invalid_signature"}\n')
+            return
+
+        # Record heartbeat (if supported)
+        try:
+            from a2a_friendship import record_endpoint_heartbeat  # type: ignore[import-not-found]
+            record_endpoint_heartbeat(origin_id)
+        except Exception:
+            pass  # Heartbeat is optional; proceed even if recording fails
+
+        # Build signed response
+        iid = getattr(self.receiver, "_instance_id", "") or ""
+        if not iid:
+            try:
+                iid = instance_identity.get_instance_id()
+            except Exception:
+                iid = ""
+
+        response = {
+            "ok": True,
+            "instance_id": iid,
+            "protocol_version": "1.0",
+            "server_time": now,
+        }
+
+        # Sign response with recv_key
+        response_canonical = json.dumps(response, separators=(",", ":"), sort_keys=True)
+        response_sig = _hmac.new(
+            bytes.fromhex(origin_cfg["recv_key"]),
+            response_canonical.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        response["signature"] = response_sig
+
+        body = json.dumps(response).encode()
+        self._respond(200, body)
 
     # ── Helpers ───────────────────────────────────────────────────────
 

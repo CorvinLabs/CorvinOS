@@ -913,3 +913,34 @@ def check_and_broadcast_reconnect(
         # change and retries the broadcast (pending re-announce semantics).
         _persist_ip()
     return delivered
+
+
+# ── ADR-0199: Lightweight Peer-Liveness Check (receiver-side heartbeat cache) ─
+
+_endpoint_heartbeat_cache: dict[str, float] = {}
+
+
+def record_endpoint_heartbeat(origin_id: str) -> None:
+    """ADR-0199: Record a heartbeat timestamp for an origin.
+
+    Stores (or updates) the most recent successful ping response timestamp
+    in the in-memory heartbeat cache. Called by the ping handler after a
+    valid signed response is received. Callers should not parse or validate
+    origin_id further — cache is a best-effort map.
+    """
+    if origin_id and isinstance(origin_id, str):
+        _endpoint_heartbeat_cache[origin_id] = time.time()
+
+
+def get_endpoint_last_heartbeat(origin_id: str) -> float | None:
+    """ADR-0199: Retrieve the cached last-heartbeat timestamp for an origin.
+
+    Returns the unix timestamp of the most recent successful ping response,
+    or None if no heartbeat is cached for this origin_id. The timestamp is
+    not validated or aged; callers should check freshness (e.g. 90s TTL).
+
+    Note: Receiver-side heartbeat cache is in-memory and per-process.
+    A future iteration (ADR-0199 Phase 2) may add persistent SQLite storage
+    for cross-process / cross-restart visibility.
+    """
+    return _endpoint_heartbeat_cache.get(origin_id)

@@ -285,6 +285,271 @@ class TestADR0199Ping:
         assert "nonce_store" not in source.lower(), "Ping should not access nonce store"
 
 
+class TestADR0199ReceiverPingHandler:
+    """ADR-0199 receiver-side: GET /v1/a2a/ping handler and heartbeat recording."""
+
+    def test_http_server_has_ping_handler(self):
+        """Receiver HTTP server has _handle_ping method."""
+        from a2a_http_server import _A2AHandler
+        assert hasattr(_A2AHandler, "_handle_ping")
+
+    def test_ping_handler_rejects_missing_fields(self, tmp_path):
+        """Missing ping_id, issued_at, origin_id, or signature → 400."""
+        import json
+        import urllib.request
+        import threading
+
+        sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+        from a2a_http_server import build_server, serve_in_thread
+
+        origins = tmp_path / "origins"
+        origins.mkdir()
+        (origins / "test-origin.json").write_text(json.dumps({
+            "origin_id": "test-origin",
+            "hmac_key": _HMAC_KEY,
+            "recv_key": _RECV_KEY,
+            "enabled": True,
+        }), encoding="utf-8")
+
+        server = build_server(host="127.0.0.1", port=0, origins_dir=origins)
+        thread = serve_in_thread(server)
+        try:
+            host, port = server.server_address[:2]
+            url = f"http://{host}:{port}/v1/a2a/ping"
+
+            # Missing issued_at
+            payload = json.dumps({
+                "ping_id": "test-ping",
+                "origin_id": "test-origin",
+                "signature": "x",
+            }).encode()
+            req = urllib.request.Request(url, data=payload)
+            try:
+                urllib.request.urlopen(req)
+            except urllib.error.HTTPError as e:
+                assert e.code == 400
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+    def test_ping_handler_stale_request_rejected(self, tmp_path):
+        """Request with issued_at > 30s ago → 400 stale_ping."""
+        import json
+        import urllib.request
+        import hashlib
+
+        sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+        from a2a_http_server import build_server, serve_in_thread
+
+        origins = tmp_path / "origins"
+        origins.mkdir()
+        (origins / "test-origin.json").write_text(json.dumps({
+            "origin_id": "test-origin",
+            "hmac_key": _HMAC_KEY,
+            "recv_key": _RECV_KEY,
+            "enabled": True,
+        }), encoding="utf-8")
+
+        server = build_server(host="127.0.0.1", port=0, origins_dir=origins)
+        thread = serve_in_thread(server)
+        try:
+            host, port = server.server_address[:2]
+            url = f"http://{host}:{port}/v1/a2a/ping"
+
+            # issued_at 60 seconds ago
+            ping_id = "stale-ping"
+            issued_at = int(time.time()) - 60
+            origin_id = "test-origin"
+
+            payload_dict = {
+                "ping_id": ping_id,
+                "issued_at": issued_at,
+                "origin_id": origin_id,
+            }
+            canonical = json.dumps(payload_dict, separators=(",", ":"), sort_keys=True)
+            signature = _hmac.new(
+                bytes.fromhex(_HMAC_KEY), canonical.encode("utf-8"), hashlib.sha256,
+            ).hexdigest()
+
+            payload_dict["signature"] = signature
+            payload = json.dumps(payload_dict).encode()
+            req = urllib.request.Request(url, data=payload)
+            try:
+                urllib.request.urlopen(req)
+            except urllib.error.HTTPError as e:
+                assert e.code == 400  # stale_ping
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+    def test_ping_handler_invalid_signature_rejected(self, tmp_path):
+        """Bad signature → 403 invalid_signature."""
+        import json
+        import urllib.request
+
+        sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+        from a2a_http_server import build_server, serve_in_thread
+
+        origins = tmp_path / "origins"
+        origins.mkdir()
+        (origins / "test-origin.json").write_text(json.dumps({
+            "origin_id": "test-origin",
+            "hmac_key": _HMAC_KEY,
+            "recv_key": _RECV_KEY,
+            "enabled": True,
+        }), encoding="utf-8")
+
+        server = build_server(host="127.0.0.1", port=0, origins_dir=origins)
+        thread = serve_in_thread(server)
+        try:
+            host, port = server.server_address[:2]
+            url = f"http://{host}:{port}/v1/a2a/ping"
+
+            payload = json.dumps({
+                "ping_id": "test-ping",
+                "issued_at": int(time.time()),
+                "origin_id": "test-origin",
+                "signature": "wrong-signature-hex-64-chars-xxxxxxxxxxxxxxxxxxxxxxxx",
+            }).encode()
+            req = urllib.request.Request(url, data=payload)
+            try:
+                urllib.request.urlopen(req)
+            except urllib.error.HTTPError as e:
+                assert e.code == 403
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+    def test_ping_handler_valid_signed_response(self, tmp_path):
+        """Valid signature → 200 with signed response."""
+        import json
+        import urllib.request
+        import hashlib
+
+        sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+        from a2a_http_server import build_server, serve_in_thread
+
+        origins = tmp_path / "origins"
+        origins.mkdir()
+        (origins / "test-origin.json").write_text(json.dumps({
+            "origin_id": "test-origin",
+            "hmac_key": _HMAC_KEY,
+            "recv_key": _RECV_KEY,
+            "enabled": True,
+        }), encoding="utf-8")
+
+        server = build_server(host="127.0.0.1", port=0, origins_dir=origins)
+        thread = serve_in_thread(server)
+        try:
+            host, port = server.server_address[:2]
+            url = f"http://{host}:{port}/v1/a2a/ping"
+
+            # Build valid request
+            ping_id = "valid-ping"
+            issued_at = int(time.time())
+            origin_id = "test-origin"
+
+            payload_dict = {
+                "ping_id": ping_id,
+                "issued_at": issued_at,
+                "origin_id": origin_id,
+            }
+            canonical = json.dumps(payload_dict, separators=(",", ":"), sort_keys=True)
+            signature = _hmac.new(
+                bytes.fromhex(_HMAC_KEY), canonical.encode("utf-8"), hashlib.sha256,
+            ).hexdigest()
+
+            payload_dict["signature"] = signature
+            payload = json.dumps(payload_dict).encode()
+            req = urllib.request.Request(url, data=payload)
+
+            try:
+                response = urllib.request.urlopen(req)
+                body = response.read().decode()
+                resp = json.loads(body)
+
+                # Check response shape
+                assert resp["ok"] is True
+                assert "instance_id" in resp
+                assert "protocol_version" in resp
+                assert "server_time" in resp
+                assert "signature" in resp
+
+                # Verify response signature with recv_key
+                resp_copy = {k: v for k, v in resp.items() if k != "signature"}
+                resp_canonical = json.dumps(resp_copy, separators=(",", ":"), sort_keys=True)
+                expected_sig = _hmac.new(
+                    bytes.fromhex(_RECV_KEY), resp_canonical.encode("utf-8"), hashlib.sha256,
+                ).hexdigest()
+                assert resp["signature"] == expected_sig
+            except urllib.error.HTTPError:
+                pytest.fail("Expected 200 response")
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+    def test_heartbeat_recorded_on_valid_ping(self, tmp_path):
+        """Valid ping response records heartbeat in cache."""
+        import json
+        import urllib.request
+        import hashlib
+
+        sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "bridges" / "shared"))
+        from a2a_http_server import build_server, serve_in_thread
+        from a2a_friendship import get_endpoint_last_heartbeat, _endpoint_heartbeat_cache
+
+        origins = tmp_path / "origins"
+        origins.mkdir()
+        (origins / "test-origin.json").write_text(json.dumps({
+            "origin_id": "test-origin",
+            "hmac_key": _HMAC_KEY,
+            "recv_key": _RECV_KEY,
+            "enabled": True,
+        }), encoding="utf-8")
+
+        # Clear cache
+        _endpoint_heartbeat_cache.clear()
+
+        server = build_server(host="127.0.0.1", port=0, origins_dir=origins)
+        thread = serve_in_thread(server)
+        try:
+            host, port = server.server_address[:2]
+            url = f"http://{host}:{port}/v1/a2a/ping"
+
+            # Build valid request
+            ping_id = "heartbeat-ping"
+            issued_at = int(time.time())
+            origin_id = "test-origin"
+
+            payload_dict = {
+                "ping_id": ping_id,
+                "issued_at": issued_at,
+                "origin_id": origin_id,
+            }
+            canonical = json.dumps(payload_dict, separators=(",", ":"), sort_keys=True)
+            signature = _hmac.new(
+                bytes.fromhex(_HMAC_KEY), canonical.encode("utf-8"), hashlib.sha256,
+            ).hexdigest()
+
+            payload_dict["signature"] = signature
+            payload = json.dumps(payload_dict).encode()
+            req = urllib.request.Request(url, data=payload)
+
+            try:
+                urllib.request.urlopen(req)
+            except urllib.error.HTTPError:
+                pytest.fail("Expected 200 response")
+
+            # Check heartbeat recorded
+            hb = get_endpoint_last_heartbeat("test-origin")
+            assert hb is not None
+            assert isinstance(hb, float)
+            assert hb > (time.time() - 2)  # Within last 2 seconds
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+
 class TestADR0199ReceiverBackendParity:
     """Verify ping route exists in both receiver backends with same behavior."""
 
