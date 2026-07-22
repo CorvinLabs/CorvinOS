@@ -80,7 +80,7 @@ class FriendshipError(Exception):
 # ── path helpers ────────────────────────────────────────────────────────
 
 def _corvin_home() -> Path:
-    env = os.environ.get("CORVIN_HOME") or os.environ.get("CORVIN_HOME")
+    env = os.environ.get("CORVIN_HOME")
     return Path(env) if env else Path.home() / ".corvin"
 
 
@@ -918,6 +918,29 @@ def check_and_broadcast_reconnect(
 # ── ADR-0199: Lightweight Peer-Liveness Check (receiver-side heartbeat cache) ─
 
 _endpoint_heartbeat_cache: dict[str, float] = {}
+_HEARTBEAT_CACHE_MAX_ENTRIES = 10000  # Prevent unbounded growth
+_HEARTBEAT_CACHE_MAX_AGE_S = 86400    # Evict entries older than 1 day
+
+
+def _prune_stale_heartbeats() -> None:
+    """Remove heartbeat entries older than MAX_AGE or if cache exceeds max size.
+
+    Called automatically on each record_endpoint_heartbeat() when cache is full
+    or entries are stale. Best-effort cleanup (no locking for Phase 2).
+    """
+    now = time.time()
+    # Remove entries older than 1 day
+    stale = [k for k, ts in _endpoint_heartbeat_cache.items()
+             if (now - ts) > _HEARTBEAT_CACHE_MAX_AGE_S]
+    for k in stale:
+        del _endpoint_heartbeat_cache[k]
+
+    # If still over limit, evict oldest 10%
+    if len(_endpoint_heartbeat_cache) > _HEARTBEAT_CACHE_MAX_ENTRIES:
+        oldest_keys = sorted(_endpoint_heartbeat_cache.items(), key=lambda x: x[1])
+        evict_count = len(_endpoint_heartbeat_cache) // 10
+        for k, _ in oldest_keys[:evict_count]:
+            del _endpoint_heartbeat_cache[k]
 
 
 def record_endpoint_heartbeat(origin_id: str) -> None:
@@ -925,10 +948,13 @@ def record_endpoint_heartbeat(origin_id: str) -> None:
 
     Stores (or updates) the most recent successful ping response timestamp
     in the in-memory heartbeat cache. Called by the ping handler after a
-    valid signed response is received. Callers should not parse or validate
-    origin_id further — cache is a best-effort map.
+    valid signed response is received.
+
+    Prunes stale/old entries when cache reaches max size to prevent
+    unbounded growth (max 10k origins, entries auto-evict after 1 day).
     """
     if origin_id and isinstance(origin_id, str):
+        _prune_stale_heartbeats()
         _endpoint_heartbeat_cache[origin_id] = time.time()
 
 

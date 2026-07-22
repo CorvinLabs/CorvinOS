@@ -227,11 +227,15 @@ def parse_task_analysis_response(lm_response: str) -> InitialAnalysisRequest:
     try:
         data = json.loads(lm_response)
     except json.JSONDecodeError:
-        # Try to find JSON block inside markdown code fence
+        # Try to find JSON block inside markdown code fence.
+        # Use greedy {.*} to capture complete JSON, not partial structures.
         import re
-        match = re.search(r"```(?:json)?\s*({.*?})\s*```", lm_response, re.DOTALL)
+        match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", lm_response, re.DOTALL)
         if match:
-            data = json.loads(match.group(1))
+            try:
+                data = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                raise ValueError(f"Markdown JSON block is not valid: {match.group(1)[:200]}")
         else:
             raise ValueError(f"Response is not valid JSON: {lm_response[:200]}")
 

@@ -319,6 +319,13 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
             self._respond(400, b'{"reason":"missing_fields"}\n')
             return
 
+        # Validate issued_at is numeric (prevent type errors in freshness check)
+        try:
+            issued_at = int(issued_at) if isinstance(issued_at, (int, float)) else int(issued_at)
+        except (TypeError, ValueError):
+            self._respond(400, b'{"reason":"invalid_issued_at"}\n')
+            return
+
         # Load origin config (same as RemoteTriggerReceiver does)
         try:
             registry = OriginRegistry(origins_dir=None)  # Uses default
