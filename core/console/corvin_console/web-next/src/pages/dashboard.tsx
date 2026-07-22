@@ -35,6 +35,7 @@ import {
   listDataSources,
   getInstanceIdentity,
 } from "@/lib/api";
+import { Gauge } from "lucide-react";
 import { formatBytes, formatDate } from "@/lib/utils";
 import type { DSIConnection, OsEngineSetting, OsEngineHealth, InstanceIdentityStatus } from "@/lib/api";
 
@@ -571,6 +572,11 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       </section>
+
+      {/* ── Feature Telemetry Heatmap (ADR-0212) ── */}
+      <section>
+        <FeatureHeatmapCard />
+      </section>
     </div>
   );
 }
@@ -845,5 +851,106 @@ function ComplianceRow({ label }: { label: string }) {
       <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
       <span>{label}</span>
     </div>
+  );
+}
+
+// ── Feature Telemetry Heatmap ─────────────────────────────────────────────────
+
+interface FeatureAdoption {
+  adoption_pct: Record<string, number>;
+  total_instances: number;
+}
+
+function FeatureHeatmapCard() {
+  const [data, setData] = React.useState<FeatureAdoption | null>(null);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    const fetchFeatures = async () => {
+      try {
+        const response = await fetch("/v1/console/stats/features", {
+          headers: { "Accept": "application/json" },
+        });
+        if (response.ok) {
+          const json = await response.json();
+          setData(json);
+        }
+      } catch (e) {
+        console.error("Failed to fetch feature telemetry:", e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchFeatures();
+    const interval = setInterval(fetchFeatures, 60_000); // Refresh every 60s
+    return () => clearInterval(interval);
+  }, []);
+
+  const features = [
+    { name: "Bridges", key: "bridges" },
+    { name: "LDD", key: "ldd" },
+    { name: "A2A", key: "a2a" },
+    { name: "Workflows", key: "workflows" },
+    { name: "Browser", key: "browser" },
+    { name: "Compute", key: "compute" },
+  ];
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Gauge className="h-4 w-4 text-accent" />
+          <div>
+            <CardTitle className="text-base">Ecosystem Feature Telemetry</CardTitle>
+            <CardDescription className="text-xs">
+              {loading ? "Loading..." : `${data?.total_instances || 0} instance${data?.total_instances !== 1 ? "s" : ""}`}
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="space-y-2">
+            {features.map((f) => (
+              <Skeleton key={f.key} className="h-6 w-full" />
+            ))}
+          </div>
+        ) : data ? (
+          <div className="space-y-3">
+            {features.map((f) => {
+              const pct = data.adoption_pct[f.key] ?? 0;
+              const bgColor =
+                pct > 50 ? "bg-emerald-500/20" :
+                pct > 20 ? "bg-yellow-500/20" :
+                "bg-gray-500/20";
+              const textColor =
+                pct > 50 ? "text-emerald-600" :
+                pct > 20 ? "text-yellow-600" :
+                "text-gray-600";
+
+              return (
+                <div key={f.key} className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="font-medium">{f.name}</span>
+                    <span className={textColor}>{pct.toFixed(0)}%</span>
+                  </div>
+                  <div className="h-1.5 bg-border/40 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full ${bgColor} transition-all`}
+                      style={{ width: `${Math.min(pct, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground text-center py-6">
+            No feature data available
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
