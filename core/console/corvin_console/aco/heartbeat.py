@@ -32,6 +32,11 @@ from .htrace_consent import (
     effective_geo_tier,
     _open_no_redirect,
 )
+from .feature_snapshot import (
+    collect_feature_snapshot,
+    _assert_safe_features,
+    save_feature_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +57,7 @@ _started_lock = threading.Lock()
 def send_heartbeat(home: Path) -> bool:
     """Send a single POST /v1/telemetry/heartbeat.
 
+    Collects feature_snapshot (ADR-0212) and appends to payload if valid.
     Returns True on 2xx, False on any error.
     Fail-soft: catches all exceptions.
     """
@@ -79,7 +85,19 @@ def send_heartbeat(home: Path) -> bool:
         if tier >= 2:
             headers["X-HTrace-Geo-Tier"] = str(tier)
 
-        payload = json.dumps({}).encode("utf-8")
+        # ADR-0212: collect feature snapshot and include in payload.
+        payload_dict = {}
+        try:
+            snapshot = collect_feature_snapshot(home)
+            if snapshot:
+                snapshot_safe = _assert_safe_features(snapshot)
+                if snapshot_safe:
+                    payload_dict["features"] = snapshot_safe
+                    save_feature_snapshot(home, snapshot)
+        except Exception:  # noqa: BLE001
+            pass  # fail-soft: missing feature data doesn't block the heartbeat
+
+        payload = json.dumps(payload_dict).encode("utf-8")
         req = urllib.request.Request(
             _HEARTBEAT_URL,
             data=payload,
