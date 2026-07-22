@@ -43,6 +43,7 @@ class DecisionCache:
         storage_dir: Path | str | None = None,
         enable_sqlite: bool = False,
         max_memory_entries: int = 1000,
+        context_hash_cache_size: int = 100,
     ) -> None:
         """Initialize decision cache.
 
@@ -52,6 +53,7 @@ class DecisionCache:
             enable_sqlite: Enable persistent SQLite backend (Phase 3+).
                            For Phase 2, leave as False (memory-only).
             max_memory_entries: Maximum in-memory cache entries (LRU eviction).
+            context_hash_cache_size: LRU cache for context hash computations (Finding #8).
         """
         self._memory: dict[str, tuple[InitialAnalysisRequest, float]] = {}
         self._memory_access_order: list[str] = []  # For LRU tracking
@@ -61,6 +63,9 @@ class DecisionCache:
         self._enable_sqlite = enable_sqlite and storage_dir is not None
         self._db_path: Path | None = None
         self._db_conn: sqlite3.Connection | None = None
+        # Cache context hashes to avoid repeated serialization (Finding #8)
+        self._context_hash_cache: dict[str, str] = {}
+        self._context_hash_cache_size = max_memory_entries
 
         if self._enable_sqlite:
             self._db_path = Path(storage_dir) / "decision_cache.db"
@@ -98,8 +103,8 @@ class DecisionCache:
         """Generate a cache key from task text + context (SHA256 hash).
 
         Includes context in key to avoid stale cache hits when files/environment
-        change. If context changes (file modified, env var updated), cache
-        key differs → new analysis runs.
+        change. Caches context JSON serialization to avoid repeated hashing
+        for large contexts (Finding #8).
 
         Args:
             task: Plain English task description.
@@ -109,9 +114,19 @@ class DecisionCache:
         Returns:
             Hex-encoded SHA256 hash (deterministic).
         """
-        # Canonical JSON of context (sorted keys for determinism)
-        context_str = json.dumps(context or {}, sort_keys=True, default=str)
-        combined = f"{task}:::{context_str}"
+        # Cache context serialization to avoid repeated JSON encoding (Finding #8)
+        context_key = json.dumps(context or {}, sort_keys=True, default=str)
+        if context_key not in self._context_hash_cache:
+            # If cache is full, clear oldest entry (simple LRU)
+            if len(self._context_hash_cache) >= self._context_hash_cache_size:
+                first_key = next(iter(self._context_hash_cache))
+                del self._context_hash_cache[first_key]
+            # Hash context only once, reuse across calls
+            self._context_hash_cache[context_key] = hashlib.sha256(
+                context_key.encode("utf-8")
+            ).hexdigest()
+
+        combined = f"{task}:::{self._context_hash_cache[context_key]}"
         return hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
     def _evict_lru(self) -> None:

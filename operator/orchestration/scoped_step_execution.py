@@ -46,6 +46,8 @@ class ScopedStepExecutor:
         "evaluate",
     }
 
+    ALL_VALID_ACTIONS = DETERMINISTIC_ACTIONS | REASONING_ACTIONS
+
     def __init__(
         self,
         global_decision: InitialAnalysisRequest,
@@ -56,8 +58,25 @@ class ScopedStepExecutor:
             global_decision: InitialAnalysisRequest from initial analysis.
                             Contains classification, entities, global_plan.
                             All steps reuse this to avoid re-planning.
+
+        Raises:
+            ValueError: If any step in global_decision has invalid action.
         """
         self.global_decision = global_decision
+        self._validate_plan_actions()  # Finding #9: early validation
+
+    def _validate_plan_actions(self) -> None:
+        """Validate all steps have known actions (Finding #9: early validation).
+
+        Raises:
+            ValueError: If any step action is invalid.
+        """
+        for step in self.global_decision.global_plan.steps:
+            if step.action not in self.ALL_VALID_ACTIONS:
+                raise ValueError(
+                    f"Step {step.step} has invalid action '{step.action}'. "
+                    f"Valid: {sorted(self.ALL_VALID_ACTIONS)}"
+                )
 
     async def execute_step(
         self,
@@ -119,6 +138,13 @@ class ScopedStepExecutor:
 
         Does NOT re-classify, re-route, or re-plan — those happened once
         in initial_analysis. This call is scoped to ONE step.
+
+        NOTE (Finding #6): The LM is instructed not to re-plan, but there is
+        no downstream validation that it obeyed this constraint. If the LM
+        violates this and re-plans, the token-savings estimate (2K per step)
+        becomes inaccurate. Future versions should add semantic validation
+        (e.g., parse output, detect plan changes) or use structured output
+        to enforce this constraint architecturally.
         """
         if upstream_results is None:
             upstream_results = {}
