@@ -270,7 +270,18 @@ def test_installer_output_resolves_via_say_py_for_every_language(
     voice_config_dir = tmp_path / "voice_config"
     voice_config_dir.mkdir()
 
-    with mock.patch.object(piper_mod, "_fetch", side_effect=_fake_fetch_writes_placeholder):
+    # CRITICAL sandbox guard (adversarial review 2026-07-22): _setup_model /
+    # _download_model run the REAL _save_model_config →
+    # _seed_profile_display_language → profile.set_value() pipeline. Without
+    # redirecting PROFILE_FILE this test overwrote the operator's live
+    # ~/.config/corvin-voice/profile.json display_language on every full
+    # pytest run (same failure class as the ADAPTER_INBOX sandbox trap).
+    profile_mod = _shared_profile_module()
+
+    with mock.patch.object(piper_mod, "_fetch", side_effect=_fake_fetch_writes_placeholder), \
+         mock.patch.object(profile_mod, "PROFILE_FILE", tmp_path / "profile_config" / "profile.json"), \
+         mock.patch.object(profile_mod, "_cache", None, create=True), \
+         mock.patch.object(profile_mod, "_cache_mtime", 0.0, create=True):
         piper_mod._setup_model(voice_config_dir, interactive=False)
         # _setup_model's non-interactive branch downloads the DETECTED
         # system language, not necessarily the parametrized one — call
