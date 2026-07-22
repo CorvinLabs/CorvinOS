@@ -364,12 +364,33 @@ def _ensure_npm_modules(channel: str) -> None:
 
 
 def _settings_path(channel: str) -> Path:
+    """Canonical settings location (ADR-0008 §8.3): <corvin_home>/bridges/
+    <channel>/settings.json — the SAME file every daemon resolves via
+    bridgeSettingsPath(). This route historically wrote the source/vendored
+    channel dir instead; on a wheel install the daemons run from the runtime
+    dir and materialisation deliberately skips settings.json, so a token
+    saved in the UI never reached the daemon ("DISCORD_TOKEN not set" on a
+    fresh install). Writer and reader now agree on the runtime path."""
     if channel not in CHANNELS:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
             detail=f"unknown channel: {channel!r}",
         )
+    return _corvin_home() / "bridges" / channel / "settings.json"
+
+
+def _legacy_settings_path(channel: str) -> Path:
+    """Pre-fix location (source tree / _vendor). Read-fallback only, so
+    values written by older console versions stay visible and migrate to
+    the runtime path on the next PUT."""
     return _BRIDGES_DIR / channel / "settings.json"
+
+
+def _read_settings(channel: str) -> dict[str, Any]:
+    path = _settings_path(channel)
+    if path.exists():
+        return _read_json(path)
+    return _read_json(_legacy_settings_path(channel))
 
 
 def _is_secret_key(key: str) -> bool:
@@ -537,11 +558,11 @@ def get_bridge_settings(
 ) -> dict[str, Any]:
     """Return masked settings.json for ``channel``."""
     path = _settings_path(channel)
-    payload = _read_json(path)
+    payload = _read_settings(channel)
     return {
         "channel":  channel,
         "path":     str(path),
-        "exists":   path.exists(),
+        "exists":   path.exists() or _legacy_settings_path(channel).exists(),
         "settings": _mask_payload(payload),
     }
 
@@ -588,8 +609,11 @@ def put_bridge_settings(
             detail="re-auth failed",
         )
 
-    existing = _read_json(path)
+    # Merge base includes the legacy source-tree file so secrets stored there
+    # by older console versions survive the move to the runtime path.
+    existing = _read_settings(channel)
     merged = _merge_preserving_secrets(body.settings, existing)
+    path.parent.mkdir(parents=True, exist_ok=True)
     _write_atomic(path, merged)
 
     runtime = _apply_runtime_change(channel, enabled=None)

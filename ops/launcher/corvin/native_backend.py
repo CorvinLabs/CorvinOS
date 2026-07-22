@@ -62,7 +62,10 @@ def is_available() -> bool:
     if os.name == "nt":
         # On Windows we use bridge_manager.py (no bash needed)
         return _find_bridge_manager() is not None
-    return _find_bridge_sh() is not None
+    # POSIX: bridge.sh (source tree) preferred; on a wheel install only the
+    # vendored bridge_manager.py exists — without this fallback a Linux/macOS
+    # pip install had NO way to start the bridges at all.
+    return _find_bridge_sh() is not None or _find_bridge_manager() is not None
 
 
 def start(foreground: bool = True) -> int:
@@ -84,11 +87,16 @@ def start(foreground: bool = True) -> int:
         result = subprocess.run([sys.executable, str(mgr), "fg"], env=env)
         return result.returncode
 
-    # Linux / macOS: use bridge.sh fg
+    # Linux / macOS: bridge.sh fg (source tree), else the vendored
+    # cross-platform bridge_manager.py (wheel install).
     bridge_sh = _find_bridge_sh()
-    if not bridge_sh:
-        raise RuntimeError("native backend: bridge.sh not found")
-    result = subprocess.run(["bash", str(bridge_sh), "fg"], env=env)
+    if bridge_sh:
+        result = subprocess.run(["bash", str(bridge_sh), "fg"], env=env)
+        return result.returncode
+    mgr = _find_bridge_manager()
+    if not mgr:
+        raise RuntimeError("native backend: neither bridge.sh nor bridge_manager.py found")
+    result = subprocess.run([sys.executable, str(mgr), "fg"], env=env)
     return result.returncode
 
 

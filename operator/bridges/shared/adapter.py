@@ -10444,9 +10444,11 @@ def _start_telemetry_threads() -> None:
 
 def main() -> int:
     global _executor, _sidechannel_executor
-    INBOX.mkdir(exist_ok=True)
-    OUTBOX.mkdir(exist_ok=True)
-    PROCESSED.mkdir(exist_ok=True)
+    # parents=True: with ADAPTER_INBOX/OUTBOX/PROCESSED pinned to a fresh
+    # runtime dir (<corvin_home>/bridges/shared/*) the parent may not exist yet.
+    INBOX.mkdir(parents=True, exist_ok=True)
+    OUTBOX.mkdir(parents=True, exist_ok=True)
+    PROCESSED.mkdir(parents=True, exist_ok=True)
     _executor = ThreadPoolExecutor(
         max_workers=MAX_PARALLEL, thread_name_prefix="claude-worker"
     )

@@ -373,6 +373,8 @@ run "Node: net probe (outage detection)" node shared/js/test_net_probe.js >/dev/
 run "Node: outbox poller (preCheck+dedup)" node shared/js/test_outbox_poller.js >/dev/null || fails=$((fails+1))
 run "Node: in-chat commands"     node shared/js/test_in_chat_commands.js >/dev/null   || fails=$((fails+1))
 run "Node: discord slash-cmds"   node discord/test_slash_commands.js >/dev/null       || fails=$((fails+1))
+run "Node: discord intent-preflight" node discord/test_intent_preflight.js >/dev/null || fails=$((fails+1))
+run "Python: fresh-install paths (adapter env + detached)" python3 tests/test_fresh_install_paths.py >/dev/null 2>&1 || fails=$((fails+1))
 run "Node: teams cards (unit)"   node teams/test_cards.js >/dev/null                   || fails=$((fails+1))
 run "Node: teams handler (E2E)"  node teams/test_teams_e2e.js >/dev/null               || fails=$((fails+1))
 run "Node: signal handler (E2E)" node signal/test_signal_daemon.js >/dev/null          || fails=$((fails+1))
