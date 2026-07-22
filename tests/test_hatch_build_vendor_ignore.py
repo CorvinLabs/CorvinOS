@@ -33,6 +33,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+# hatch_build.py imports hatchling (the build backend) at module import time.
+# hatchling is a build-time dependency, not a runtime/dev dependency, so it is
+# absent in plain dev venvs — without this guard the import error aborts the
+# ENTIRE tests/ collection (pytest "Interrupted: 1 error during collection"),
+# masking every other test. Skip cleanly instead; CI release builds (where
+# hatchling is present) still run these tests.
+pytest.importorskip("hatchling")
+
 _REPO = Path(__file__).resolve().parents[1]
 
 
