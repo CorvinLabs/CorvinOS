@@ -180,6 +180,30 @@ def _budget_account_turn(chat_key: str, msg_id: str,
         log(f"budget account_turn failed: {exc}")
 
 ROOT = Path(__file__).resolve().parent
+def _adapter_is_test_sandbox() -> bool:
+    """True when this adapter runs as an isolated TEST sandbox — the signal
+    that redirects the audit chain, CORVIN_HOME, budgets and process table
+    into a throwaway dir and skips the production-only migrations.
+
+    Historically this was INFERRED from ADAPTER_INBOX being set, because only
+    tests ever set it. That inference broke the moment a real deployment
+    legitimately pinned ADAPTER_INBOX to align its queues with the daemons'
+    runtime dir (2026-07-22): production then forked its GDPR hash-chained
+    audit.jsonl to <corvin_home>/bridges/shared/audit.jsonl and re-rooted
+    CORVIN_HOME, silently splitting consent/opt-out state. The signal is now
+    EXPLICIT: CORVIN_ADAPTER_SANDBOX=1 forces sandbox, =0 forces production.
+    The ADAPTER_INBOX fallback is kept ONLY for backward-compat with the 24
+    existing test files that set ADAPTER_INBOX but not the flag; any code path
+    that pins ADAPTER_INBOX in production MUST also set
+    CORVIN_ADAPTER_SANDBOX=0 (bridge_manager does)."""
+    flag = os.environ.get("CORVIN_ADAPTER_SANDBOX")
+    if flag is not None:
+        return flag == "1"
+    return bool(os.environ.get("ADAPTER_INBOX"))
+
+
+_IS_TEST_SANDBOX = _adapter_is_test_sandbox()
+
 # INBOX / OUTBOX / PROCESSED can be overridden via env so a sandboxed test
 # adapter can run alongside the live one without touching real channels.
 INBOX     = Path(os.environ.get("ADAPTER_INBOX")     or (ROOT / "inbox"))
@@ -198,10 +222,10 @@ SETTINGS_FILE = Path(os.environ.get("ADAPTER_SETTINGS") or (ROOT / "settings.jso
 # same sandbox so test events do not pollute the real
 # ~/.config/corvin-voice/forge/audit.jsonl or production budgets/process_table.
 # Production never sets ADAPTER_INBOX → production paths are unaffected.
-if os.environ.get("ADAPTER_INBOX") and not os.environ.get("VOICE_AUDIT_PATH"):
+if _IS_TEST_SANDBOX and not os.environ.get("VOICE_AUDIT_PATH"):
     os.environ["VOICE_AUDIT_PATH"] = str(INBOX.parent / "audit.jsonl")
 if (
-    os.environ.get("ADAPTER_INBOX")
+    _IS_TEST_SANDBOX
     and not os.environ.get("CORVIN_HOME")
 ):
     # context_budget, process_table, pipe_registry, context_cold_storage
@@ -220,7 +244,7 @@ if (
 # Operator opt-out: CORVIN_MIGRATE=0 disables the call. Failures here
 # are non-fatal — the adapter continues to boot even if the migration
 # couldn't run.
-if not os.environ.get("ADAPTER_INBOX"):
+if not _IS_TEST_SANDBOX:
     try:
         from corvin_migrate import migrate_home_if_needed  # type: ignore
         _migrate_result = migrate_home_if_needed(
@@ -239,7 +263,7 @@ if not os.environ.get("ADAPTER_INBOX"):
 # as the rebrand helper above — production-only (ADAPTER_INBOX absent),
 # best-effort, idempotent, gated by CORVIN_TENANT_MIGRATE=0 opt-out.
 # Resolves the live corvin_home via forge.paths.corvin_home().
-if not os.environ.get("ADAPTER_INBOX"):
+if not _IS_TEST_SANDBOX:
     try:
         _forge_root = ROOT.parent.parent / "forge"
         if str(_forge_root) not in sys.path:
@@ -4020,21 +4044,51 @@ _CHANNEL_LABEL = {
 }
 
 
+def _pinned_display_language() -> str:
+    """The operator's explicitly pinned reply language (normalised, e.g.
+    'de'/'en'), or '' when unset. Same source of truth the VOICE path uses
+    (_resolve_voice_output_language) so text and voice can't disagree."""
+    if _voice_profile is None or _i18n is None:
+        return ""
+    try:
+        raw = _voice_profile.load().get("display_language") or ""
+        return _i18n.normalise(raw) if raw else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def system_prompt_for(channel: str) -> str:
     """Channel-specific system prompt. The earlier hardcoded version always
     said 'WhatsApp' regardless of channel — Claude would then say things
     like 'as we discussed on WhatsApp' inside a Discord conversation. The
     voice-note hint applies in every channel because every daemon renders
     `voice_path`.
+
+    Language rule mirrors the console fix (74575ea): a pinned display_language
+    is AUTHORITATIVE (reply in it regardless of the incoming message's
+    language); only an UNPINNED profile falls back to per-message auto-detect.
+    Without this the bridge text path kept auto-detecting and a user who
+    pinned German but wrote one English line got an English reply — the exact
+    'the pin still loses on bridges' regression.
     """
     label, _ = _CHANNEL_LABEL.get(channel, (channel.capitalize() or "messenger",) * 2)
+    _pin = _pinned_display_language()
+    if _pin:
+        _lang_name = {"de": "German", "en": "English"}.get(_pin, _pin)
+        _rule1 = (f"1. ALWAYS reply in {_lang_name} — the user has pinned this as "
+                  f"their display language. Reply in {_lang_name} even when the "
+                  f"incoming message is in another language. This pin is "
+                  f"authoritative; do not auto-detect or switch.")
+    else:
+        _rule1 = ("1. Reply in the user's language. If they wrote in German, reply "
+                  "in German; if in English, reply in English. Match their "
+                  "language consistently.")
     return f"""You are being addressed through a {label} bridge.
 The human is verified (whitelist) and has explicitly granted you full
 access — you may use any tools.
 
 Reply formatting rules:
-1. Reply in the user's language. If they wrote in German, reply in German;
-   if in English, reply in English. Match their language consistently.
+{_rule1}
 2. Keep replies readable on a phone screen — use headings and bullet points
    for structure. Write a full, detailed answer; a spoken voice note is
    automatically synthesised from your reply (the voice system summarises

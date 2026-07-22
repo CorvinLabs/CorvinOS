@@ -160,6 +160,14 @@ def _adapter_queue_env(env: dict) -> None:
         p = shared / sub
         p.mkdir(parents=True, exist_ok=True)
         env.setdefault(key, str(p))
+    # adapter.py historically treated a set ADAPTER_INBOX as "I am a test
+    # sandbox" and forked the audit chain + re-rooted CORVIN_HOME. We pin the
+    # queues in PRODUCTION, so declare it explicitly — without this the
+    # adapter would split its GDPR audit.jsonl and consent state into a
+    # throwaway dir. Also pin CORVIN_HOME so every component (console, adapter,
+    # daemons) resolves the SAME home.
+    env["CORVIN_ADAPTER_SANDBOX"] = "0"
+    env.setdefault("CORVIN_HOME", str(_corvin_home()))
 
 
 # ── Node.js discovery ──────────────────────────────────────────────────────────
@@ -710,8 +718,83 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+def _pid_cmdline(pid: int) -> str:
+    """Best-effort process command line for cmdline-verified liveness.
+    Empty string when unknown (treated as 'cannot confirm' by callers)."""
+    if pid <= 0:
+        return ""
+    if os.name == "nt":
+        try:
+            out = subprocess.run(
+                ["wmic", "process", "where", f"ProcessId={pid}", "get",
+                 "CommandLine", "/FORMAT:LIST"],
+                capture_output=True, text=True, check=False, timeout=10,
+            ).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        return out
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            return fh.read().replace(b"\x00", b" ").decode("utf-8", "replace")
+    except OSError:
+        # macOS / no procfs — fall back to ps.
+        try:
+            return subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                capture_output=True, text=True, check=False, timeout=10,
+            ).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+
+
+def _adapter_running_pid(adapter_py: Path) -> int:
+    """Return the PID of an adapter already polling OUR shared inbox, or 0.
+
+    Cross-launcher aware: a bridge.sh- or systemd-started adapter never wrote
+    our pidfile, so trusting the pidfile alone would spawn a SECOND adapter
+    double-processing the same inbox. Two-stage check:
+      1. Our pidfile PID, but only if its cmdline still names this adapter.py
+         (defeats PID reuse — a recycled PID belonging to an unrelated process
+         must not read as 'adapter alive').
+      2. A system-wide scan for any live process whose cmdline runs this exact
+         adapter.py path (catches adapters started by another launcher)."""
+    marker = str(adapter_py)
+
+    pidfile = _adapter_pidfile()
+    try:
+        pid = int(pidfile.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        pid = 0
+    if pid and _pid_alive(pid) and "adapter.py" in _pid_cmdline(pid):
+        return pid
+
+    # System-wide scan (POSIX: /proc; else pgrep -f).
+    proc_dir = Path("/proc")
+    if proc_dir.is_dir():
+        for entry in proc_dir.iterdir():
+            if not entry.name.isdigit():
+                continue
+            other = int(entry.name)
+            if other == os.getpid():
+                continue
+            if marker in _pid_cmdline(other):
+                return other
+    else:
+        try:
+            out = subprocess.run(
+                ["pgrep", "-f", marker], capture_output=True, text=True,
+                check=False, timeout=10,
+            ).stdout
+            for line in out.split():
+                if line.strip().isdigit() and int(line) != os.getpid():
+                    return int(line)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return 0
+
+
 def ensure_adapter_detached() -> dict:
-    """Start adapter.py detached iff it is not already running (pidfile).
+    """Start adapter.py detached iff it is not already running.
 
     start_channel_detached() — the engine behind the web console's bridge
     Start button — used to launch ONLY the Node daemon. On installs without
@@ -719,19 +802,21 @@ def ensure_adapter_detached() -> dict:
     fine, inbound envelopes piled up, and the bot never answered. The adapter
     is the other half of every bridge; starting one without the other is a
     broken state, so the button path now ensures both.
+
+    Idempotency is cmdline-verified and cross-launcher aware (see
+    _adapter_running_pid) so a second console click, or a click after
+    bridge.sh/systemd already started an adapter, never spawns a duplicate
+    that double-processes the inbox.
     """
     adapter_py = _BRIDGE_DIR / "shared" / "adapter.py"
     if not adapter_py.exists():
         return {"ok": False, "error": f"adapter.py not found at {adapter_py}"}
 
-    pidfile = _adapter_pidfile()
-    try:
-        pid = int(pidfile.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
-        pid = 0
-    if pid and _pid_alive(pid):
-        return {"ok": True, "already_running": True, "pid": pid}
+    running = _adapter_running_pid(adapter_py)
+    if running:
+        return {"ok": True, "already_running": True, "pid": running}
 
+    pidfile = _adapter_pidfile()
     env = os.environ.copy()
     _load_service_env(env)
     _adapter_queue_env(env)
