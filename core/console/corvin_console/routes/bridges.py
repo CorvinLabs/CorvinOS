@@ -1386,3 +1386,298 @@ const flow = new AutoSlackOAuthFlow((msg) => {}, "", "");
             valid=False,
             error="Internal error",
         )
+
+
+# ── Teams OAuth (Azure AD) ──────────────────────────────────────────────
+# Category B (OAuth) pattern: Azure AD variant (tenant ID configurable)
+
+
+class GenerateTeamsOAuthURLRequest(BaseModel):
+    client_id: str = Field(..., description="Azure AD client ID")
+    tenant_id: str = Field(default="common", description="Azure AD tenant ID (common for multi-tenant)")
+
+
+class GenerateTeamsOAuthURLResponse(BaseModel):
+    url: str = Field(default="", description="OAuth authorization URL")
+    required_scopes: list[str] = Field(default_factory=list, description="Required scopes")
+    error: str = Field(default="", description="Error message if any")
+
+
+class ExchangeTeamsCodeRequest(BaseModel):
+    code: str = Field(..., description="OAuth authorization code")
+
+
+class ExchangeTeamsCodeResponse(BaseModel):
+    valid: bool
+    access_token: str = Field(default="", description="Masked access token")
+    user_email: str = Field(default="", description="User email (principal name)")
+    error: str = Field(default="", description="Error message if any")
+
+
+@router.post("/teams/oauth/generate-url", response_model=GenerateTeamsOAuthURLResponse)
+async def generate_teams_oauth_url(
+    body: GenerateTeamsOAuthURLRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> GenerateTeamsOAuthURLResponse:
+    """Generate Teams OAuth authorization URL."""
+    _log.info(f"Generating Teams OAuth URL (user: {rec.user_id})")
+
+    bridges_dir = _resolve_bridges_dir()
+    oauth_flow_path = bridges_dir / "teams" / "auto_teams_oauth_flow.js"
+
+    if not oauth_flow_path.exists():
+        return GenerateTeamsOAuthURLResponse(
+            url="",
+            required_scopes=[],
+            error="Teams OAuth module not found",
+        )
+
+    script = f"""
+const {{ AutoTeamsOAuthFlow }} = require(process.env.OAUTH_FLOW_PATH);
+const flow = new AutoTeamsOAuthFlow({{log: () => {{}}}}, process.env.CLIENT_ID, '', process.env.TENANT_ID);
+const result = flow.generateAuthorizationUrl();
+console.log(JSON.stringify(result));
+"""
+
+    try:
+        result = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={
+                **os.environ,
+                "OAUTH_FLOW_PATH": str(oauth_flow_path),
+                "CLIENT_ID": body.client_id,
+                "TENANT_ID": body.tenant_id,
+            },
+        )
+
+        if result.returncode != 0:
+            return GenerateTeamsOAuthURLResponse(
+                url="",
+                required_scopes=[],
+                error="OAuth URL generation failed",
+            )
+
+        data = json.loads(result.stdout)
+        return GenerateTeamsOAuthURLResponse(
+            url=data.get("url", ""),
+            required_scopes=data.get("requiredScopes", []),
+        )
+
+    except subprocess.TimeoutExpired:
+        return GenerateTeamsOAuthURLResponse(
+            url="",
+            required_scopes=[],
+            error="Generation timeout",
+        )
+    except json.JSONDecodeError as e:
+        _log.error(f"Teams OAuth URL generation response parse error: {e}")
+        return GenerateTeamsOAuthURLResponse(
+            url="",
+            required_scopes=[],
+            error="Response parse error",
+        )
+    except Exception as e:
+        _log.error(f"Teams OAuth URL generation error: {e}")
+        return GenerateTeamsOAuthURLResponse(
+            url="",
+            required_scopes=[],
+            error="Internal error",
+        )
+
+
+@router.post("/teams/oauth/exchange-code", response_model=ExchangeTeamsCodeResponse)
+async def exchange_teams_code(
+    body: ExchangeTeamsCodeRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> ExchangeTeamsCodeResponse:
+    """Exchange Teams OAuth code for access token."""
+    _log.info(f"Exchanging Teams OAuth code (user: {rec.user_id})")
+
+    bridges_dir = _resolve_bridges_dir()
+    oauth_flow_path = bridges_dir / "teams" / "auto_teams_oauth_flow.js"
+    teams_settings = bridges_dir / "teams" / "settings.json"
+
+    # Load client_id, client_secret from settings
+    if not teams_settings.exists():
+        return ExchangeTeamsCodeResponse(
+            valid=False,
+            error="Teams settings not found",
+        )
+
+    try:
+        # Pre-validate settings.json
+        try:
+            with open(teams_settings, "r") as f:
+                settings = json.load(f)
+        except json.JSONDecodeError as e:
+            _log.error(f"Teams settings.json corrupted: {e}")
+            return ExchangeTeamsCodeResponse(
+                valid=False,
+                error="Settings file corrupted",
+            )
+
+        client_id = settings.get("client_id", "")
+        client_secret = settings.get("client_secret", "")
+        tenant_id = settings.get("tenant_id", "common")
+
+        if not client_id:
+            return ExchangeTeamsCodeResponse(
+                valid=False,
+                error="client_id not configured",
+            )
+
+        # Exchange code for token
+        script_exchange = """
+const { AutoTeamsOAuthFlow } = require(process.env.OAUTH_FLOW_PATH);
+const flow = new AutoTeamsOAuthFlow(
+  (msg) => console.error(msg),
+  process.env.CLIENT_ID,
+  process.env.CLIENT_SECRET,
+  process.env.TENANT_ID
+);
+(async () => {
+  const result = await flow.exchangeCodeForToken(process.env.CODE);
+  console.log(JSON.stringify(result));
+})().catch(err => {
+  console.log(JSON.stringify({valid: false, error: err.message}));
+});
+"""
+
+        try:
+            result = subprocess.run(
+                ["node", "-e", script_exchange],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env={
+                    **os.environ,
+                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
+                    "CLIENT_ID": client_id,
+                    "CLIENT_SECRET": client_secret,
+                    "TENANT_ID": tenant_id,
+                    "CODE": body.code,
+                },
+            )
+        except subprocess.TimeoutExpired:
+            _log.error("Teams OAuth exchange timeout (>10s)")
+            return ExchangeTeamsCodeResponse(
+                valid=False,
+                error="OAuth exchange timeout",
+            )
+        except FileNotFoundError:
+            _log.error("Node.js not found or oauth_flow.js missing")
+            return ExchangeTeamsCodeResponse(
+                valid=False,
+                error="Setup error: OAuth module not found",
+            )
+
+        if result.returncode != 0:
+            _log.error(f"Node.js exit {result.returncode}: {result.stderr[:200]}")
+            return ExchangeTeamsCodeResponse(
+                valid=False,
+                error="OAuth exchange failed",
+            )
+
+        # Parse token exchange result
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            _log.error(f"Failed to parse Teams OAuth exchange response: {e}")
+            return ExchangeTeamsCodeResponse(
+                valid=False,
+                error="OAuth exchange response invalid",
+            )
+
+        if not data.get("valid"):
+            return ExchangeTeamsCodeResponse(
+                valid=False,
+                error=data.get("error", "Exchange failed"),
+            )
+
+        access_token = data.get("access_token")
+        user_email = data.get("user_email", "")
+
+        # Validate token via Microsoft Graph
+        script_validate = """
+const { AutoTeamsOAuthFlow } = require(process.env.OAUTH_FLOW_PATH);
+const flow = new AutoTeamsOAuthFlow((msg) => {}, "", "", "");
+(async () => {
+  const result = await flow.validateToken(process.env.ACCESS_TOKEN);
+  console.log(JSON.stringify(result));
+})().catch(err => {
+  console.log(JSON.stringify({valid: false, error: err.message}));
+});
+"""
+
+        try:
+            validate_result = subprocess.run(
+                ["node", "-e", script_validate],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env={
+                    **os.environ,
+                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
+                    "ACCESS_TOKEN": access_token,
+                },
+            )
+        except subprocess.TimeoutExpired:
+            _log.warning("Token validation timeout, continuing with caution")
+            validate_result = None
+        except Exception as e:
+            _log.warning(f"Token validation error, continuing: {e}")
+            validate_result = None
+
+        if validate_result and validate_result.returncode == 0:
+            try:
+                validate_data = json.loads(validate_result.stdout)
+                if validate_data.get("valid"):
+                    user_email = validate_data.get("user_email", user_email)
+            except json.JSONDecodeError:
+                _log.warning("Could not parse token validation response")
+
+        # Save token (atomic write)
+        fd, tmp_path = tempfile.mkstemp(prefix=teams_settings.name + ".", dir=str(teams_settings.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                settings["teams_token"] = access_token
+                settings["user_email"] = user_email
+                settings["_token_validated_at"] = "via-console-oauth"
+                json.dump(settings, tmp, indent=2)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+
+            # Atomic replace
+            tmp_path_obj = Path(tmp_path)
+            tmp_path_obj.replace(teams_settings)
+            teams_settings.chmod(0o600)
+
+            _log.info(f"Teams token saved (user: {user_email})")
+            return ExchangeTeamsCodeResponse(
+                valid=True,
+                access_token=access_token[:20] + "...",
+                user_email=user_email,
+            )
+        except Exception as e:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            _log.error(f"Failed to save Teams token: {e}")
+            raise
+
+    except FileNotFoundError:
+        _log.error(f"Teams settings not found: {teams_settings}")
+        return ExchangeTeamsCodeResponse(
+            valid=False,
+            error="Settings path error",
+        )
+    except Exception as e:
+        _log.error(f"Teams OAuth exchange error: {e}", exc_info=True)
+        return ExchangeTeamsCodeResponse(
+            valid=False,
+            error="Internal error",
+        )
