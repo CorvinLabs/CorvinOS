@@ -729,3 +729,189 @@ def put_bridge_enabled(
         "restart_needed": not runtime.get("applied", False),
         "ok":             True,
     }
+
+
+# ── Discord Zero-Config Setup ─────────────────────────────────────────
+#
+# Endpoints for token validation and OAuth2 URL generation.
+# Phase 2 of Discord Zero-Config: Console UI integration.
+
+class ValidateTokenRequest(BaseModel):
+    token: str = Field(..., min_length=20, max_length=200, description="Discord bot token")
+
+
+class ValidateTokenResponse(BaseModel):
+    valid: bool
+    appId: str | None = None
+    appName: str | None = None
+    url: str | None = None
+    error: str | None = None
+    permissionsHuman: list[str] | None = None
+
+
+class SaveTokenRequest(BaseModel):
+    token: str = Field(..., min_length=20, max_length=200, description="Discord bot token")
+
+
+class SaveTokenResponse(BaseModel):
+    success: bool
+    error: str | None = None
+
+
+@router.post("/discord/validate-token", response_model=ValidateTokenResponse)
+async def validate_discord_token(
+    body: ValidateTokenRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> ValidateTokenResponse:
+    """Validate a Discord bot token and generate OAuth2 URL.
+
+    Calls AutoOAuth2Generator (Node.js) to verify token is valid via Discord API
+    and generate the OAuth2 authorization URL for the user.
+    """
+    _log.info(f"Validating Discord token (user: {rec.user_id})")
+
+    try:
+        # Validate token via Node.js subprocess
+        bridges_dir = _resolve_bridges_dir()
+        auto_oauth2_path = bridges_dir / "discord" / "auto_oauth2.js"
+
+        # Create small Node.js script to run AutoOAuth2Generator
+        script = f"""
+const {{ AutoOAuth2Generator }} = require('{auto_oauth2_path}');
+
+const gen = new AutoOAuth2Generator({{log: () => {{}}}});
+gen.generateAuthorizationUrl('{body.token}').then(result => {{
+  console.log(JSON.stringify(result));
+}}).catch(err => {{
+  console.log(JSON.stringify({{valid: false, error: err.message}}));
+}});
+"""
+
+        result = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(bridges_dir / "discord"),
+        )
+
+        if result.returncode != 0:
+            _log.warning(f"Node.js validation failed: {result.stderr}")
+            return ValidateTokenResponse(
+                valid=False,
+                error="Token validation service error",
+            )
+
+        response_data = json.loads(result.stdout)
+
+        if not response_data.get("valid"):
+            return ValidateTokenResponse(
+                valid=False,
+                error=response_data.get("error", "Token validation failed"),
+            )
+
+        return ValidateTokenResponse(
+            valid=True,
+            appId=response_data.get("appId"),
+            appName=response_data.get("appName"),
+            url=response_data.get("url"),
+            permissionsHuman=response_data.get("permissionsHuman"),
+        )
+
+    except subprocess.TimeoutExpired:
+        return ValidateTokenResponse(
+            valid=False,
+            error="Validation timeout (>10s)",
+        )
+    except Exception as e:
+        _log.error(f"Token validation error: {e}")
+        return ValidateTokenResponse(
+            valid=False,
+            error=f"Validation error: {str(e)[:100]}",
+        )
+
+
+@router.post("/discord/save-token", response_model=SaveTokenResponse)
+async def save_discord_token(
+    body: SaveTokenRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> SaveTokenResponse:
+    """Save Discord bot token to settings.json.
+
+    Validates token first, then persists it to the Discord bridge settings.
+    """
+    _log.info(f"Saving Discord token (user: {rec.user_id})")
+
+    try:
+        bridges_dir = _resolve_bridges_dir()
+        discord_settings_file = bridges_dir / "discord" / "settings.json"
+        auto_oauth2_path = bridges_dir / "discord" / "auto_oauth2.js"
+
+        # Validate token first
+        script = f"""
+const {{ AutoOAuth2Generator }} = require('{auto_oauth2_path}');
+
+const gen = new AutoOAuth2Generator({{log: () => {{}}}});
+gen.generateAuthorizationUrl('{body.token}').then(result => {{
+  console.log(JSON.stringify(result));
+}}).catch(err => {{
+  console.log(JSON.stringify({{valid: false, error: err.message}}));
+}});
+"""
+
+        result = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(bridges_dir / "discord"),
+        )
+
+        if result.returncode != 0:
+            return SaveTokenResponse(
+                success=False,
+                error="Token validation failed",
+            )
+
+        validation = json.loads(result.stdout)
+        if not validation.get("valid"):
+            return SaveTokenResponse(
+                success=False,
+                error=validation.get("error", "Token validation failed"),
+            )
+
+        # Load current settings
+        if discord_settings_file.exists():
+            with open(discord_settings_file, "r") as f:
+                settings = json.load(f)
+        else:
+            settings = {}
+
+        # Update token
+        settings["discord_token"] = body.token
+        settings["_token_validated_at"] = "via-console"
+
+        # Save settings (with restricted permissions)
+        with open(discord_settings_file, "w") as f:
+            json.dump(settings, f, indent=2)
+
+        # Restrict permissions to owner only (0600)
+        discord_settings_file.chmod(0o600)
+
+        _log.info(f"Discord token saved successfully (app: {validation.get('appName')})")
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="discord.token.write",
+            target_kind="bridge",
+            target_id="discord",
+        )
+
+        return SaveTokenResponse(success=True)
+
+    except Exception as e:
+        _log.error(f"Token save error: {e}")
+        return SaveTokenResponse(
+            success=False,
+            error=f"Failed to save token: {str(e)[:100]}",
+        )
