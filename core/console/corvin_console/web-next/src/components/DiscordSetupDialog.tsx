@@ -27,7 +27,13 @@ interface SaveTokenResponse {
 
 type DialogStep = 'input' | 'validating' | 'confirm' | 'saving' | 'success' | 'error'
 
-export function DiscordSetupDialog() {
+interface DiscordSetupDialogProps {
+  /** CSRF token of the active console session (session.csrf_token) —
+   * the validate/save endpoints are mutations and require x-csrf-token. */
+  csrf: string
+}
+
+export function DiscordSetupDialog({ csrf }: DiscordSetupDialogProps) {
   const [step, setStep] = useState<DialogStep>('input')
   const [token, setToken] = useState('')
   const [validationResult, setValidationResult] = useState<ValidateTokenResponse | null>(null)
@@ -46,7 +52,7 @@ export function DiscordSetupDialog() {
     try {
       const response = await fetch('/v1/console/discord/validate-token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrf },
         body: JSON.stringify({ token: token.trim() }),
       })
 
@@ -79,7 +85,7 @@ export function DiscordSetupDialog() {
     try {
       const response = await fetch('/v1/console/discord/save-token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrf },
         body: JSON.stringify({ token: token.trim() }),
       })
 

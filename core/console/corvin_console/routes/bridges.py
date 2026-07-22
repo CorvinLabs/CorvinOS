@@ -30,19 +30,18 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status as http_status
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi import status as http_status
 from pydantic import BaseModel, Field
 
-from .. import auth as session_auth
 from .. import audit as console_audit
+from .. import auth as session_auth
 from ..deps import require_csrf, require_session, verify_reauth
-
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO = _THIS_DIR.parents[3]
@@ -972,6 +971,17 @@ def post_bridge_disconnect(
         for key in drop:
             current.pop(key, None)
         _write_atomic(path, current)
+        # _write_atomic rotated the PRE-strip file (token included) to .bak —
+        # and earlier settings PUTs may have left older .baks with the same
+        # secret. "Disconnect" exists to revoke a credential from the console,
+        # so no cleartext copy may survive on disk.
+        bak = path.with_suffix(path.suffix + ".bak")
+        try:
+            bak.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            _log.warning("could not remove %s", bak)
         cleared.extend(k for k in drop if k not in cleared)
 
     # 4. Pairing state outside settings.json (WhatsApp linked device).
@@ -1040,7 +1050,7 @@ gen.generateAuthorizationUrl(process.env.DISCORD_TOKEN).then(result => {
 
         try:
             response_data = json.loads(result.stdout)
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError:
             _log.error(f"Invalid JSON from auto_oauth2: {result.stdout}")
             return {"valid": False, "error": "Validation response error"}
 
@@ -1056,7 +1066,7 @@ gen.generateAuthorizationUrl(process.env.DISCORD_TOKEN).then(result => {
 @router.post("/discord/validate-token", response_model=ValidateTokenResponse)
 async def validate_discord_token(
     body: ValidateTokenRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> ValidateTokenResponse:
     """Validate a Discord bot token and generate OAuth2 URL.
 
@@ -1086,76 +1096,47 @@ async def validate_discord_token(
 @router.post("/discord/save-token", response_model=SaveTokenResponse)
 async def save_discord_token(
     body: SaveTokenRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> SaveTokenResponse:
     """Save Discord bot token to settings.json (atomic write + validation).
 
     1. Validate token via Discord API (secure: env var, not interpolation)
-    2. Load current settings
-    3. Write to temp file (prevent partial corruption)
-    4. Atomic rename (POSIX move)
-    5. Set 0600 permissions
+    2. Merge into the CANONICAL runtime settings file (_settings_path — the
+       file the daemon actually reads; the legacy/source tree is only migrated
+       once at first boot, so writing there loses every later rotation)
+    3. Atomic write (tmp → fsync → rename) + 0600 via _write_atomic
     """
     _log.info(f"Saving Discord token (user: {rec.user_id})")
 
     try:
-        bridges_dir = _resolve_bridges_dir()
-        discord_settings_file = bridges_dir / "discord" / "settings.json"
-
-        # Validate token first (reuse secure helper)
-        validation = _validate_discord_token_via_node(body.token, bridges_dir)
+        # Validate token first (reuse secure helper; bridges_dir only locates
+        # the vendored JS validator — it is NOT the write target)
+        validation = _validate_discord_token_via_node(body.token, _resolve_bridges_dir())
         if not validation.get("valid"):
             return SaveTokenResponse(
                 success=False,
                 error=validation.get("error", "Token validation failed"),
             )
 
-        # Load current settings
-        if discord_settings_file.exists():
-            with open(discord_settings_file, "r") as f:
-                settings = json.load(f)
-        else:
-            settings = {}
-
-        # Update token
+        # Merge into current settings (runtime path, legacy read-fallback)
+        settings = _read_settings("discord")
         settings["discord_token"] = body.token
         settings["_token_validated_at"] = "via-console"
 
-        # Atomic write: tmp file → rename (prevents partial corruption on crash)
-        import tempfile
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            dir=discord_settings_file.parent,
-            delete=False,
-            suffix=".tmp",
-        ) as tmp:
-            json.dump(settings, tmp, indent=2)
-            tmp_path = tmp.name
+        target = _settings_path("discord")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _write_atomic(target, settings)
 
-        try:
-            # Atomic rename on POSIX
-            tmp_path_obj = Path(tmp_path)
-            tmp_path_obj.replace(discord_settings_file)
+        _log.info(f"Discord token saved successfully (app: {validation.get('appName')})")
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="discord.token.write",
+            target_kind="bridge",
+            target_id="discord",
+        )
 
-            # Set secure permissions
-            discord_settings_file.chmod(0o600)
-
-            _log.info(f"Discord token saved successfully (app: {validation.get('appName')})")
-            console_audit.action_performed(
-                tenant_id=rec.tenant_id,
-                sid_fingerprint=rec.sid_fingerprint,
-                action="discord.token.write",
-                target_kind="bridge",
-                target_id="discord",
-            )
-
-            return SaveTokenResponse(success=True)
-        except Exception as e:
-            try:
-                Path(tmp_path).unlink()
-            except Exception:
-                pass
-            raise e
+        return SaveTokenResponse(success=True)
 
     except Exception as e:
         _log.error(f"Token save error: {e}")
@@ -1203,7 +1184,7 @@ def _validate_telegram_token_via_node(token: str, bridges_dir: Path) -> dict[str
     provisioner_path = bridges_dir / "telegram" / "auto_telegram_provisioner.js"
 
     if not provisioner_path.exists():
-        return {"valid": False, "error": f"auto_telegram_provisioner.js not found"}
+        return {"valid": False, "error": "auto_telegram_provisioner.js not found"}
 
     script = """
 const { AutoTelegramTokenProvisioner } = require(process.env.PROVISIONER_PATH);
@@ -1235,7 +1216,7 @@ prov.validateAndProvision(process.env.TELEGRAM_TOKEN).then(result => {
 
         try:
             response_data = json.loads(result.stdout)
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError:
             _log.error(f"Invalid JSON from provisioner: {result.stdout}")
             return {"valid": False, "error": "Validation response error"}
 
@@ -1251,7 +1232,7 @@ prov.validateAndProvision(process.env.TELEGRAM_TOKEN).then(result => {
 @router.post("/telegram/validate-token", response_model=ValidateTelegramTokenResponse)
 async def validate_telegram_token(
     body: ValidateTelegramTokenRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> ValidateTelegramTokenResponse:
     """Validate a Telegram bot token and extract bot info."""
     _log.info(f"Validating Telegram token (user: {rec.user_id})")
@@ -1276,66 +1257,40 @@ async def validate_telegram_token(
 @router.post("/telegram/save-token", response_model=SaveTelegramTokenResponse)
 async def save_telegram_token(
     body: SaveTelegramTokenRequest,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> SaveTelegramTokenResponse:
-    """Save Telegram bot token to settings.json (atomic write + validation)."""
+    """Save Telegram bot token to the CANONICAL runtime settings.json
+    (atomic write + validation) — same writer≠reader rationale as
+    save_discord_token."""
     _log.info(f"Saving Telegram token (user: {rec.user_id})")
 
     try:
-        bridges_dir = _resolve_bridges_dir()
-        telegram_settings_file = bridges_dir / "telegram" / "settings.json"
-
-        # Validate first
-        validation = _validate_telegram_token_via_node(body.token, bridges_dir)
+        # Validate first (bridges_dir only locates the vendored JS validator)
+        validation = _validate_telegram_token_via_node(body.token, _resolve_bridges_dir())
         if not validation.get("valid"):
             return SaveTelegramTokenResponse(
                 success=False,
                 error=validation.get("error", "Token validation failed"),
             )
 
-        # Load current settings
-        if telegram_settings_file.exists():
-            with open(telegram_settings_file, "r") as f:
-                settings = json.load(f)
-        else:
-            settings = {}
-
-        # Update token
+        settings = _read_settings("telegram")
         settings["telegram_token"] = body.token
         settings["_token_validated_at"] = "via-console"
 
-        # Atomic write: temp file → rename
-        import tempfile
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            dir=telegram_settings_file.parent,
-            delete=False,
-            suffix=".tmp",
-        ) as tmp:
-            json.dump(settings, tmp, indent=2)
-            tmp_path = tmp.name
+        target = _settings_path("telegram")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _write_atomic(target, settings)
 
-        try:
-            tmp_path_obj = Path(tmp_path)
-            tmp_path_obj.replace(telegram_settings_file)
-            telegram_settings_file.chmod(0o600)
+        _log.info(f"Telegram token saved (bot: @{validation.get('botUsername')})")
+        console_audit.action_performed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action="telegram.token.write",
+            target_kind="bridge",
+            target_id="telegram",
+        )
 
-            _log.info(f"Telegram token saved (bot: @{validation.get('botUsername')})")
-            console_audit.action_performed(
-                tenant_id=rec.tenant_id,
-                sid_fingerprint=rec.sid_fingerprint,
-                action="telegram.token.write",
-                target_kind="bridge",
-                target_id="telegram",
-            )
-
-            return SaveTelegramTokenResponse(success=True)
-        except Exception as e:
-            try:
-                Path(tmp_path).unlink()
-            except Exception:
-                pass
-            raise e
+        return SaveTelegramTokenResponse(success=True)
 
     except Exception as e:
         _log.error(f"Token save error: {e}")
@@ -1375,59 +1330,19 @@ async def generate_slack_oauth_url(
     body: GenerateSlackOAuthURLRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> GenerateSlackOAuthURLResponse:
-    """Generate Slack OAuth authorization URL."""
-    _log.info(f"Generating Slack OAuth URL (user: {rec.user_id})")
+    """NOT IMPLEMENTED — returns 501.
 
-    bridges_dir = _resolve_bridges_dir()
-    oauth_flow_path = bridges_dir / "slack" / "auto_slack_oauth_flow.js"
-
-    if not oauth_flow_path.exists():
-        return GenerateSlackOAuthURLResponse(
-            url="",
-            required_scopes=[],
-            error="OAuth flow module not found",
-        )
-
-    script = f"""
-const {{ AutoSlackOAuthFlow }} = require(process.env.OAUTH_FLOW_PATH);
-const flow = new AutoSlackOAuthFlow({{log: () => {{}}}}, process.env.CLIENT_ID, '');
-const result = flow.generateAuthorizationUrl();
-console.log(JSON.stringify(result));
-"""
-
-    try:
-        result = subprocess.run(
-            ["node", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env={
-                **os.environ,
-                "OAUTH_FLOW_PATH": str(oauth_flow_path),
-                "CLIENT_ID": body.client_id,
-            },
-        )
-
-        if result.returncode != 0:
-            return GenerateSlackOAuthURLResponse(
-                url="",
-                required_scopes=[],
-                error="OAuth URL generation failed",
-            )
-
-        data = json.loads(result.stdout)
-        return GenerateSlackOAuthURLResponse(
-            url=data.get("url", ""),
-            required_scopes=data.get("requiredScopes", []),
-        )
-
-    except Exception as e:
-        _log.error(f"OAuth URL generation error: {e}")
-        return GenerateSlackOAuthURLResponse(
-            url="",
-            required_scopes=[],
-            error=str(e)[:100],
-        )
+    Adversarial review 2026-07-22 (ADR-0211): the flow calls non-existent Slack API paths, sends JSON where Slack requires form-encoding, and cannot yield the xapp- app-level token the Socket-Mode daemon needs.
+    The shipped Slack zero-config OAuth endpoint therefore only ever produced a dead-end
+    or fake state. Until a working implementation exists, this endpoint
+    fails honestly; configure the channel via Bridge Settings (PUT
+    /bridges/{channel}/settings) instead. The auto_* JS modules remain on
+    disk as scaffolding for a future real implementation.
+    """
+    raise HTTPException(
+        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Slack zero-config OAuth setup is not implemented; use manual bridge settings",
+    )
 
 
 @router.post("/slack/oauth/exchange-code", response_model=ExchangeSlackCodeResponse)
@@ -1435,196 +1350,19 @@ async def exchange_slack_code(
     body: ExchangeSlackCodeRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> ExchangeSlackCodeResponse:
-    """Exchange OAuth code for access token."""
-    _log.info(f"Exchanging Slack OAuth code (user: {rec.user_id})")
+    """NOT IMPLEMENTED — returns 501.
 
-    bridges_dir = _resolve_bridges_dir()
-    oauth_flow_path = bridges_dir / "slack" / "auto_slack_oauth_flow.js"
-    slack_settings = bridges_dir / "slack" / "settings.json"
-
-    # Load client_id from settings
-    if not slack_settings.exists():
-        return ExchangeSlackCodeResponse(
-            valid=False,
-            error="Slack settings not found",
-        )
-
-    try:
-        # Pre-validate settings.json
-        try:
-            with open(slack_settings, "r") as f:
-                settings = json.load(f)
-        except json.JSONDecodeError as e:
-            _log.error(f"Slack settings.json corrupted: {e}")
-            return ExchangeSlackCodeResponse(
-                valid=False,
-                error="Settings file corrupted",
-            )
-
-        client_id = settings.get("client_id", "")
-        client_secret = settings.get("client_secret", "")
-
-        if not client_id:
-            return ExchangeSlackCodeResponse(
-                valid=False,
-                error="client_id not configured",
-            )
-
-        # Step 1: Exchange code for token
-        script_exchange = """
-const { AutoSlackOAuthFlow, REQUIRED_SCOPES } = require(process.env.OAUTH_FLOW_PATH);
-const flow = new AutoSlackOAuthFlow(
-  (msg) => console.error(msg),
-  process.env.CLIENT_ID,
-  process.env.CLIENT_SECRET
-);
-(async () => {
-  const result = await flow.exchangeCodeForToken(process.env.CODE);
-  console.log(JSON.stringify(result));
-})().catch(err => {
-  console.log(JSON.stringify({valid: false, error: err.message}));
-});
-"""
-
-        try:
-            result = subprocess.run(
-                ["node", "-e", script_exchange],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                env={
-                    **os.environ,
-                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
-                    "CLIENT_ID": client_id,
-                    "CLIENT_SECRET": client_secret,
-                    "CODE": body.code,
-                },
-            )
-        except subprocess.TimeoutExpired:
-            _log.error("Slack OAuth exchange timeout (>10s)")
-            return ExchangeSlackCodeResponse(
-                valid=False,
-                error="OAuth exchange timeout",
-            )
-        except FileNotFoundError:
-            _log.error("Node.js not found or oauth_flow.js missing")
-            return ExchangeSlackCodeResponse(
-                valid=False,
-                error="Setup error: OAuth module not found",
-            )
-
-        if result.returncode != 0:
-            _log.error(f"Node.js exit {result.returncode}: {result.stderr[:200]}")
-            return ExchangeSlackCodeResponse(
-                valid=False,
-                error="OAuth exchange failed",
-            )
-
-        # Parse token exchange result
-        try:
-            data = json.loads(result.stdout)
-        except json.JSONDecodeError as e:
-            _log.error(f"Failed to parse OAuth exchange response: {e}")
-            return ExchangeSlackCodeResponse(
-                valid=False,
-                error="OAuth exchange response invalid",
-            )
-
-        if not data.get("valid"):
-            return ExchangeSlackCodeResponse(
-                valid=False,
-                error=data.get("error", "Exchange failed"),
-            )
-
-        access_token = data.get("access_token")
-        team_id = data.get("team_id")
-        team_name = data.get("team_name")
-
-        # Step 2: Validate scopes (CRITICAL)
-        script_validate = """
-const { AutoSlackOAuthFlow, REQUIRED_SCOPES } = require(process.env.OAUTH_FLOW_PATH);
-const flow = new AutoSlackOAuthFlow((msg) => {}, "", "");
-(async () => {
-  const result = await flow.validateScopes(process.env.ACCESS_TOKEN);
-  console.log(JSON.stringify(result));
-})().catch(err => {
-  console.log(JSON.stringify({valid: false, error: err.message}));
-});
-"""
-
-        try:
-            scope_result = subprocess.run(
-                ["node", "-e", script_validate],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                env={
-                    **os.environ,
-                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
-                    "ACCESS_TOKEN": access_token,
-                },
-            )
-        except subprocess.TimeoutExpired:
-            _log.warning("Scope validation timeout, continuing with caution")
-            scope_result = None
-        except Exception as e:
-            _log.warning(f"Scope validation error, continuing: {e}")
-            scope_result = None
-
-        if scope_result and scope_result.returncode == 0:
-            try:
-                scope_data = json.loads(scope_result.stdout)
-                if not scope_data.get("valid"):
-                    _log.warning(f"Missing scopes: {scope_data.get('error')}")
-                    return ExchangeSlackCodeResponse(
-                        valid=False,
-                        error=f"Permission error: {scope_data.get('error')}",
-                    )
-            except json.JSONDecodeError:
-                _log.warning("Could not parse scope validation response")
-
-        # Save token (atomic write)
-        fd, tmp_path = tempfile.mkstemp(prefix=slack_settings.name + ".", dir=str(slack_settings.parent))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
-                settings["slack_token"] = access_token
-                settings["team_id"] = team_id
-                settings["_token_validated_at"] = "via-console-oauth"
-                json.dump(settings, tmp, indent=2)
-                tmp.flush()
-                os.fsync(tmp.fileno())
-
-            # Atomic replace
-            tmp_path_obj = Path(tmp_path)
-            tmp_path_obj.replace(slack_settings)
-            slack_settings.chmod(0o600)
-
-            _log.info(f"Slack token saved (team: {team_name}, id: {team_id})")
-            return ExchangeSlackCodeResponse(
-                valid=True,
-                access_token=access_token[:20] + "...",
-                team_name=team_name,
-            )
-        except Exception as e:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            _log.error(f"Failed to save Slack token: {e}")
-            raise
-
-    except FileNotFoundError:
-        _log.error(f"Slack settings not found: {slack_settings}")
-        return ExchangeSlackCodeResponse(
-            valid=False,
-            error="Settings path error",
-        )
-    except Exception as e:
-        _log.error(f"OAuth exchange error: {e}", exc_info=True)
-        return ExchangeSlackCodeResponse(
-            valid=False,
-            error="Internal error",
-        )
+    Adversarial review 2026-07-22 (ADR-0211): the flow calls non-existent Slack API paths, sends JSON where Slack requires form-encoding, and cannot yield the xapp- app-level token the Socket-Mode daemon needs.
+    The shipped Slack zero-config OAuth endpoint therefore only ever produced a dead-end
+    or fake state. Until a working implementation exists, this endpoint
+    fails honestly; configure the channel via Bridge Settings (PUT
+    /bridges/{channel}/settings) instead. The auto_* JS modules remain on
+    disk as scaffolding for a future real implementation.
+    """
+    raise HTTPException(
+        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Slack zero-config OAuth setup is not implemented; use manual bridge settings",
+    )
 
 
 # ── Teams OAuth (Azure AD) ──────────────────────────────────────────────
@@ -1658,73 +1396,19 @@ async def generate_teams_oauth_url(
     body: GenerateTeamsOAuthURLRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> GenerateTeamsOAuthURLResponse:
-    """Generate Teams OAuth authorization URL."""
-    _log.info(f"Generating Teams OAuth URL (user: {rec.user_id})")
+    """NOT IMPLEMENTED — returns 501.
 
-    bridges_dir = _resolve_bridges_dir()
-    oauth_flow_path = bridges_dir / "teams" / "auto_teams_oauth_flow.js"
-
-    if not oauth_flow_path.exists():
-        return GenerateTeamsOAuthURLResponse(
-            url="",
-            required_scopes=[],
-            error="Teams OAuth module not found",
-        )
-
-    script = f"""
-const {{ AutoTeamsOAuthFlow }} = require(process.env.OAUTH_FLOW_PATH);
-const flow = new AutoTeamsOAuthFlow({{log: () => {{}}}}, process.env.CLIENT_ID, '', process.env.TENANT_ID);
-const result = flow.generateAuthorizationUrl();
-console.log(JSON.stringify(result));
-"""
-
-    try:
-        result = subprocess.run(
-            ["node", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env={
-                **os.environ,
-                "OAUTH_FLOW_PATH": str(oauth_flow_path),
-                "CLIENT_ID": body.client_id,
-                "TENANT_ID": body.tenant_id,
-            },
-        )
-
-        if result.returncode != 0:
-            return GenerateTeamsOAuthURLResponse(
-                url="",
-                required_scopes=[],
-                error="OAuth URL generation failed",
-            )
-
-        data = json.loads(result.stdout)
-        return GenerateTeamsOAuthURLResponse(
-            url=data.get("url", ""),
-            required_scopes=data.get("requiredScopes", []),
-        )
-
-    except subprocess.TimeoutExpired:
-        return GenerateTeamsOAuthURLResponse(
-            url="",
-            required_scopes=[],
-            error="Generation timeout",
-        )
-    except json.JSONDecodeError as e:
-        _log.error(f"Teams OAuth URL generation response parse error: {e}")
-        return GenerateTeamsOAuthURLResponse(
-            url="",
-            required_scopes=[],
-            error="Response parse error",
-        )
-    except Exception as e:
-        _log.error(f"Teams OAuth URL generation error: {e}")
-        return GenerateTeamsOAuthURLResponse(
-            url="",
-            required_scopes=[],
-            error="Internal error",
-        )
+    Adversarial review 2026-07-22 (ADR-0211): the flow obtains a delegated user Graph token, but the Teams daemon authenticates with Bot Framework app credentials (microsoft_app_id/password) — the stored token can never start the bridge.
+    The shipped Teams zero-config OAuth endpoint therefore only ever produced a dead-end
+    or fake state. Until a working implementation exists, this endpoint
+    fails honestly; configure the channel via Bridge Settings (PUT
+    /bridges/{channel}/settings) instead. The auto_* JS modules remain on
+    disk as scaffolding for a future real implementation.
+    """
+    raise HTTPException(
+        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Teams zero-config OAuth setup is not implemented; use manual bridge settings",
+    )
 
 
 @router.post("/teams/oauth/exchange-code", response_model=ExchangeTeamsCodeResponse)
@@ -1732,194 +1416,19 @@ async def exchange_teams_code(
     body: ExchangeTeamsCodeRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> ExchangeTeamsCodeResponse:
-    """Exchange Teams OAuth code for access token."""
-    _log.info(f"Exchanging Teams OAuth code (user: {rec.user_id})")
+    """NOT IMPLEMENTED — returns 501.
 
-    bridges_dir = _resolve_bridges_dir()
-    oauth_flow_path = bridges_dir / "teams" / "auto_teams_oauth_flow.js"
-    teams_settings = bridges_dir / "teams" / "settings.json"
-
-    # Load client_id, client_secret from settings
-    if not teams_settings.exists():
-        return ExchangeTeamsCodeResponse(
-            valid=False,
-            error="Teams settings not found",
-        )
-
-    try:
-        # Pre-validate settings.json
-        try:
-            with open(teams_settings, "r") as f:
-                settings = json.load(f)
-        except json.JSONDecodeError as e:
-            _log.error(f"Teams settings.json corrupted: {e}")
-            return ExchangeTeamsCodeResponse(
-                valid=False,
-                error="Settings file corrupted",
-            )
-
-        client_id = settings.get("client_id", "")
-        client_secret = settings.get("client_secret", "")
-        tenant_id = settings.get("tenant_id", "common")
-
-        if not client_id:
-            return ExchangeTeamsCodeResponse(
-                valid=False,
-                error="client_id not configured",
-            )
-
-        # Exchange code for token
-        script_exchange = """
-const { AutoTeamsOAuthFlow } = require(process.env.OAUTH_FLOW_PATH);
-const flow = new AutoTeamsOAuthFlow(
-  (msg) => console.error(msg),
-  process.env.CLIENT_ID,
-  process.env.CLIENT_SECRET,
-  process.env.TENANT_ID
-);
-(async () => {
-  const result = await flow.exchangeCodeForToken(process.env.CODE);
-  console.log(JSON.stringify(result));
-})().catch(err => {
-  console.log(JSON.stringify({valid: false, error: err.message}));
-});
-"""
-
-        try:
-            result = subprocess.run(
-                ["node", "-e", script_exchange],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                env={
-                    **os.environ,
-                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
-                    "CLIENT_ID": client_id,
-                    "CLIENT_SECRET": client_secret,
-                    "TENANT_ID": tenant_id,
-                    "CODE": body.code,
-                },
-            )
-        except subprocess.TimeoutExpired:
-            _log.error("Teams OAuth exchange timeout (>10s)")
-            return ExchangeTeamsCodeResponse(
-                valid=False,
-                error="OAuth exchange timeout",
-            )
-        except FileNotFoundError:
-            _log.error("Node.js not found or oauth_flow.js missing")
-            return ExchangeTeamsCodeResponse(
-                valid=False,
-                error="Setup error: OAuth module not found",
-            )
-
-        if result.returncode != 0:
-            _log.error(f"Node.js exit {result.returncode}: {result.stderr[:200]}")
-            return ExchangeTeamsCodeResponse(
-                valid=False,
-                error="OAuth exchange failed",
-            )
-
-        # Parse token exchange result
-        try:
-            data = json.loads(result.stdout)
-        except json.JSONDecodeError as e:
-            _log.error(f"Failed to parse Teams OAuth exchange response: {e}")
-            return ExchangeTeamsCodeResponse(
-                valid=False,
-                error="OAuth exchange response invalid",
-            )
-
-        if not data.get("valid"):
-            return ExchangeTeamsCodeResponse(
-                valid=False,
-                error=data.get("error", "Exchange failed"),
-            )
-
-        access_token = data.get("access_token")
-        user_email = data.get("user_email", "")
-
-        # Validate token via Microsoft Graph
-        script_validate = """
-const { AutoTeamsOAuthFlow } = require(process.env.OAUTH_FLOW_PATH);
-const flow = new AutoTeamsOAuthFlow((msg) => {}, "", "", "");
-(async () => {
-  const result = await flow.validateToken(process.env.ACCESS_TOKEN);
-  console.log(JSON.stringify(result));
-})().catch(err => {
-  console.log(JSON.stringify({valid: false, error: err.message}));
-});
-"""
-
-        try:
-            validate_result = subprocess.run(
-                ["node", "-e", script_validate],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                env={
-                    **os.environ,
-                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
-                    "ACCESS_TOKEN": access_token,
-                },
-            )
-        except subprocess.TimeoutExpired:
-            _log.warning("Token validation timeout, continuing with caution")
-            validate_result = None
-        except Exception as e:
-            _log.warning(f"Token validation error, continuing: {e}")
-            validate_result = None
-
-        if validate_result and validate_result.returncode == 0:
-            try:
-                validate_data = json.loads(validate_result.stdout)
-                if validate_data.get("valid"):
-                    user_email = validate_data.get("user_email", user_email)
-            except json.JSONDecodeError:
-                _log.warning("Could not parse token validation response")
-
-        # Save token (atomic write)
-        fd, tmp_path = tempfile.mkstemp(prefix=teams_settings.name + ".", dir=str(teams_settings.parent))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
-                settings["teams_token"] = access_token
-                settings["user_email"] = user_email
-                settings["_token_validated_at"] = "via-console-oauth"
-                json.dump(settings, tmp, indent=2)
-                tmp.flush()
-                os.fsync(tmp.fileno())
-
-            # Atomic replace
-            tmp_path_obj = Path(tmp_path)
-            tmp_path_obj.replace(teams_settings)
-            teams_settings.chmod(0o600)
-
-            _log.info(f"Teams token saved (user: {user_email})")
-            return ExchangeTeamsCodeResponse(
-                valid=True,
-                access_token=access_token[:20] + "...",
-                user_email=user_email,
-            )
-        except Exception as e:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            _log.error(f"Failed to save Teams token: {e}")
-            raise
-
-    except FileNotFoundError:
-        _log.error(f"Teams settings not found: {teams_settings}")
-        return ExchangeTeamsCodeResponse(
-            valid=False,
-            error="Settings path error",
-        )
-    except Exception as e:
-        _log.error(f"Teams OAuth exchange error: {e}", exc_info=True)
-        return ExchangeTeamsCodeResponse(
-            valid=False,
-            error="Internal error",
-        )
+    Adversarial review 2026-07-22 (ADR-0211): the flow obtains a delegated user Graph token, but the Teams daemon authenticates with Bot Framework app credentials (microsoft_app_id/password) — the stored token can never start the bridge.
+    The shipped Teams zero-config OAuth endpoint therefore only ever produced a dead-end
+    or fake state. Until a working implementation exists, this endpoint
+    fails honestly; configure the channel via Bridge Settings (PUT
+    /bridges/{channel}/settings) instead. The auto_* JS modules remain on
+    disk as scaffolding for a future real implementation.
+    """
+    raise HTTPException(
+        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Teams zero-config OAuth setup is not implemented; use manual bridge settings",
+    )
 
 
 # ── Email OAuth (Microsoft Graph + Gmail) ──────────────────────────────────
@@ -1955,49 +1464,19 @@ async def generate_email_oauth_url(
     body: EmailOAuthRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> EmailOAuthResponse:
-    """Generate Email OAuth URL (Microsoft Graph or Gmail)."""
-    bridges_dir = _resolve_bridges_dir()
-    oauth_flow_path = bridges_dir / "email" / "auto_email_oauth_flow.js"
+    """NOT IMPLEMENTED — returns 501.
 
-    if not oauth_flow_path.exists():
-        return EmailOAuthResponse(error="Email OAuth module not found")
-
-    # Generate CSRF state token
-    state = os.urandom(16).hex()
-
-    script = f"""
-const {{ AutoEmailOAuthFlow }} = require(process.env.OAUTH_FLOW_PATH);
-const flow = new AutoEmailOAuthFlow(() => {{}}, process.env.CLIENT_ID, '', process.env.PROVIDER);
-const result = flow.generateAuthorizationUrl(process.env.REDIRECT_URI);
-result.state = process.env.STATE;
-console.log(JSON.stringify(result));
-"""
-
-    try:
-        result = subprocess.run(
-            ["node", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env={
-                **os.environ,
-                "OAUTH_FLOW_PATH": str(oauth_flow_path),
-                "CLIENT_ID": body.client_id,
-                "PROVIDER": body.provider,
-                "REDIRECT_URI": body.redirect_uri,
-                "STATE": state,
-            },
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            return EmailOAuthResponse(
-                url=data.get("url", ""),
-                provider=body.provider,
-                state=state,
-            )
-    except Exception as e:
-        _log.error(f"Email OAuth error: {e}")
-    return EmailOAuthResponse(error="Generation failed")
+    Adversarial review 2026-07-22 (ADR-0211): the token exchange sends JSON where RFC 6749 requires form-encoding, and the email daemon authenticates via IMAP/SMTP credentials only — no runtime component consumes the OAuth token.
+    The shipped Email zero-config OAuth endpoint therefore only ever produced a dead-end
+    or fake state. Until a working implementation exists, this endpoint
+    fails honestly; configure the channel via Bridge Settings (PUT
+    /bridges/{channel}/settings) instead. The auto_* JS modules remain on
+    disk as scaffolding for a future real implementation.
+    """
+    raise HTTPException(
+        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Email zero-config OAuth setup is not implemented; use manual bridge settings",
+    )
 
 
 @router.post("/email/oauth/exchange-code", response_model=EmailCodeExchangeResponse)
@@ -2005,148 +1484,19 @@ async def exchange_email_code(
     body: EmailCodeExchangeRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> EmailCodeExchangeResponse:
-    """Exchange Email OAuth code for access token."""
-    bridges_dir = _resolve_bridges_dir()
-    oauth_flow_path = bridges_dir / "email" / "auto_email_oauth_flow.js"
-    email_settings = bridges_dir / "email" / "settings.json"
+    """NOT IMPLEMENTED — returns 501.
 
-    if not email_settings.exists():
-        return EmailCodeExchangeResponse(valid=False, error="Email settings not found")
-
-    try:
-        try:
-            with open(email_settings, "r") as f:
-                settings = json.load(f)
-        except json.JSONDecodeError as e:
-            _log.error(f"Email settings.json corrupted: {e}")
-            return EmailCodeExchangeResponse(valid=False, error="Settings file corrupted")
-
-        client_id = settings.get("client_id", "")
-        client_secret = settings.get("client_secret", "")
-        provider = settings.get("provider", "microsoft")
-        redirect_uri = settings.get("redirect_uri", "http://localhost:8765/bridge-setup/callback")
-
-        if not client_id or not client_secret:
-            return EmailCodeExchangeResponse(valid=False, error="OAuth credentials not configured")
-
-        script_exchange = """
-const { AutoEmailOAuthFlow } = require(process.env.OAUTH_FLOW_PATH);
-const flow = new AutoEmailOAuthFlow(
-  (msg) => console.error(msg),
-  process.env.CLIENT_ID,
-  process.env.CLIENT_SECRET,
-  process.env.PROVIDER
-);
-(async () => {
-  const result = await flow.exchangeCodeForToken(process.env.CODE);
-  console.log(JSON.stringify(result));
-})().catch(err => {
-  console.log(JSON.stringify({valid: false, error: err.message}));
-});
-"""
-
-        try:
-            result = subprocess.run(
-                ["node", "-e", script_exchange],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                env={
-                    **os.environ,
-                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
-                    "CLIENT_ID": client_id,
-                    "CLIENT_SECRET": client_secret,
-                    "PROVIDER": provider,
-                    "CODE": body.code,
-                },
-            )
-        except subprocess.TimeoutExpired:
-            _log.error("Email OAuth exchange timeout (>10s)")
-            return EmailCodeExchangeResponse(valid=False, error="OAuth exchange timeout")
-        except FileNotFoundError:
-            return EmailCodeExchangeResponse(valid=False, error="Setup error: OAuth module not found")
-
-        if result.returncode != 0:
-            _log.error(f"Node.js exit {result.returncode}: {result.stderr[:200]}")
-            return EmailCodeExchangeResponse(valid=False, error="OAuth exchange failed")
-
-        try:
-            data = json.loads(result.stdout)
-        except json.JSONDecodeError as e:
-            _log.error(f"Failed to parse Email OAuth exchange response: {e}")
-            return EmailCodeExchangeResponse(valid=False, error="OAuth exchange response invalid")
-
-        if not data.get("valid"):
-            return EmailCodeExchangeResponse(valid=False, error=data.get("error", "Exchange failed"))
-
-        access_token = data.get("access_token")
-
-        # Validate token
-        script_validate = """
-const { AutoEmailOAuthFlow } = require(process.env.OAUTH_FLOW_PATH);
-const flow = new AutoEmailOAuthFlow((msg) => {}, "", "", process.env.PROVIDER);
-(async () => {
-  const result = await flow.validateToken(process.env.ACCESS_TOKEN);
-  console.log(JSON.stringify(result));
-})().catch(err => {
-  console.log(JSON.stringify({valid: false, error: err.message}));
-});
-"""
-
-        try:
-            validate_result = subprocess.run(
-                ["node", "-e", script_validate],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                env={
-                    **os.environ,
-                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
-                    "PROVIDER": provider,
-                    "ACCESS_TOKEN": access_token,
-                },
-            )
-            if validate_result.returncode == 0:
-                validate_data = json.loads(validate_result.stdout)
-                if not validate_data.get("valid"):
-                    return EmailCodeExchangeResponse(valid=False, error=f"Token validation failed: {validate_data.get('error')}")
-        except Exception as e:
-            _log.warning(f"Email token validation error, continuing: {e}")
-
-        # Save token (atomic write)
-        fd, tmp_path = tempfile.mkstemp(prefix=email_settings.name + ".", dir=str(email_settings.parent))
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
-                settings["email_token"] = access_token
-                settings["_token_validated_at"] = "via-console-oauth"
-                json.dump(settings, tmp, indent=2)
-                tmp.flush()
-                os.fsync(tmp.fileno())
-
-            tmp_path_obj = Path(tmp_path)
-            tmp_path_obj.replace(email_settings)
-            email_settings.chmod(0o600)
-
-            _log.info(f"Email token saved (provider: {provider})")
-            return EmailCodeExchangeResponse(
-                valid=True,
-                access_token=access_token[:20] + "...",
-                email="configured",
-            )
-        except Exception as e:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            _log.error(f"Failed to save Email token: {e}")
-            raise
-
-    except FileNotFoundError:
-        _log.error(f"Email settings not found: {email_settings}")
-        return EmailCodeExchangeResponse(valid=False, error="Settings path error")
-    except Exception as e:
-        _log.error(f"Email OAuth exchange error: {e}", exc_info=True)
-        return EmailCodeExchangeResponse(valid=False, error="Internal error")
+    Adversarial review 2026-07-22 (ADR-0211): the token exchange sends JSON where RFC 6749 requires form-encoding, and the email daemon authenticates via IMAP/SMTP credentials only — no runtime component consumes the OAuth token.
+    The shipped Email zero-config OAuth endpoint therefore only ever produced a dead-end
+    or fake state. Until a working implementation exists, this endpoint
+    fails honestly; configure the channel via Bridge Settings (PUT
+    /bridges/{channel}/settings) instead. The auto_* JS modules remain on
+    disk as scaffolding for a future real implementation.
+    """
+    raise HTTPException(
+        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Email zero-config OAuth setup is not implemented; use manual bridge settings",
+    )
 
 
 # ── Signal QR Linking ──────────────────────────────────────────────────────
@@ -2162,52 +1512,19 @@ class SignalQRResponse(BaseModel):
 async def generate_signal_qr(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> SignalQRResponse:
-    """Generate Signal device linking QR code (user scans to link)."""
-    bridges_dir = _resolve_bridges_dir()
-    provisioner_path = bridges_dir / "signal" / "auto_signal_provisioner.js"
-    signal_settings = bridges_dir / "signal" / "settings.json"
+    """NOT IMPLEMENTED — returns 501.
 
-    if not provisioner_path.exists():
-        return SignalQRResponse(error="Signal provisioner not found")
-
-    script = f"""
-const {{ AutoSignalProvisioner }} = require(process.env.PROV_PATH);
-const prov = new AutoSignalProvisioner(() => {{}});
-(async () => {{ const qr = await prov.generateDeviceLinkQR(); console.log(JSON.stringify(qr)); }})();
-"""
-
-    try:
-        result = subprocess.run(
-            ["node", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env={**os.environ, "PROV_PATH": str(provisioner_path)},
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            device_id = data.get("device_id", "")
-
-            # Save device_id to settings for polling
-            signal_settings.parent.mkdir(parents=True, exist_ok=True)
-            settings = {}
-            if signal_settings.exists():
-                try:
-                    settings = json.loads(signal_settings.read_text())
-                except json.JSONDecodeError:
-                    pass
-
-            settings["_pending_device_id"] = device_id
-            settings["_device_link_generated_at"] = str(int(time.time()))
-            signal_settings.write_text(json.dumps(settings, indent=2))
-
-            return SignalQRResponse(
-                qr_data=data.get("qr_data", ""),
-                session_id=device_id,
-            )
-    except Exception as e:
-        _log.error(f"Signal QR error: {e}")
-    return SignalQRResponse(error="QR generation failed")
+    Adversarial review 2026-07-22 (ADR-0211): the provisioner fabricates a mock QR (not a real Signal linking URI) and never talks to signal-cli — a scan can never succeed.
+    The shipped Signal zero-config linking endpoint therefore only ever produced a dead-end
+    or fake state. Until a working implementation exists, this endpoint
+    fails honestly; configure the channel via Bridge Settings (PUT
+    /bridges/{channel}/settings) instead. The auto_* JS modules remain on
+    disk as scaffolding for a future real implementation.
+    """
+    raise HTTPException(
+        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Signal zero-config linking setup is not implemented; use manual bridge settings",
+    )
 
 
 class SignalPollResponse(BaseModel):
@@ -2220,52 +1537,19 @@ async def poll_signal_link(
     body: BaseModel,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> SignalPollResponse:
-    """Poll for Signal device linking completion (call repeatedly after generating QR)."""
-    bridges_dir = _resolve_bridges_dir()
-    provisioner_path = bridges_dir / "signal" / "auto_signal_provisioner.js"
-    signal_settings = bridges_dir / "signal" / "settings.json"
+    """NOT IMPLEMENTED — returns 501.
 
-    if not signal_settings.exists():
-        return SignalPollResponse(error="No pending link found")
-
-    try:
-        settings = json.loads(signal_settings.read_text())
-        device_id = settings.get("_pending_device_id")
-        generated_at = int(settings.get("_device_link_generated_at", 0))
-        elapsed = int(time.time()) - generated_at
-
-        if elapsed > 300:  # 5 minute timeout
-            del settings["_pending_device_id"]
-            signal_settings.write_text(json.dumps(settings, indent=2))
-            return SignalPollResponse(error="QR code expired (>5min)")
-
-        # Validate device link
-        script = f"""
-const {{ AutoSignalProvisioner }} = require(process.env.PROV_PATH);
-const prov = new AutoSignalProvisioner(() => {{}});
-(async () => {{ const result = await prov.validateDeviceLink(process.env.DEVICE_ID); console.log(JSON.stringify(result)); }})();
-"""
-
-        result = subprocess.run(
-            ["node", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env={**os.environ, "PROV_PATH": str(provisioner_path), "DEVICE_ID": device_id or ""},
-        )
-
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            if data.get("valid"):
-                del settings["_pending_device_id"]
-                settings["signal_linked"] = True
-                signal_settings.write_text(json.dumps(settings, indent=2))
-                return SignalPollResponse(linked=True)
-
-        return SignalPollResponse(linked=False)
-    except Exception as e:
-        _log.error(f"Signal link polling error: {e}")
-        return SignalPollResponse(error="Polling failed")
+    Adversarial review 2026-07-22 (ADR-0211): the provisioner unconditionally reports linked=true without doing anything, writing a fake connection flag the daemon never reads.
+    The shipped Signal zero-config linking endpoint therefore only ever produced a dead-end
+    or fake state. Until a working implementation exists, this endpoint
+    fails honestly; configure the channel via Bridge Settings (PUT
+    /bridges/{channel}/settings) instead. The auto_* JS modules remain on
+    disk as scaffolding for a future real implementation.
+    """
+    raise HTTPException(
+        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Signal zero-config linking setup is not implemented; use manual bridge settings",
+    )
 
 
 # ── WhatsApp QR Linking ────────────────────────────────────────────────────
@@ -2281,52 +1565,19 @@ class WhatsAppQRResponse(BaseModel):
 async def generate_whatsapp_qr(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> WhatsAppQRResponse:
-    """Generate WhatsApp Web QR code (user scans to link)."""
-    bridges_dir = _resolve_bridges_dir()
-    provisioner_path = bridges_dir / "whatsapp" / "auto_whatsapp_provisioner.js"
-    whatsapp_settings = bridges_dir / "whatsapp" / "settings.json"
+    """NOT IMPLEMENTED — returns 501.
 
-    if not provisioner_path.exists():
-        return WhatsAppQRResponse(error="WhatsApp provisioner not found")
-
-    script = f"""
-const {{ AutoWhatsAppProvisioner }} = require(process.env.PROV_PATH);
-const prov = new AutoWhatsAppProvisioner(() => {{}});
-(async () => {{ const qr = await prov.generateQRCode(); console.log(JSON.stringify(qr)); }})();
-"""
-
-    try:
-        result = subprocess.run(
-            ["node", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env={**os.environ, "PROV_PATH": str(provisioner_path)},
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            session_id = data.get("session_id", "")
-
-            # Save session_id to settings for polling
-            whatsapp_settings.parent.mkdir(parents=True, exist_ok=True)
-            settings = {}
-            if whatsapp_settings.exists():
-                try:
-                    settings = json.loads(whatsapp_settings.read_text())
-                except json.JSONDecodeError:
-                    pass
-
-            settings["_pending_session_id"] = session_id
-            settings["_qr_generated_at"] = str(int(time.time()))
-            whatsapp_settings.write_text(json.dumps(settings, indent=2))
-
-            return WhatsAppQRResponse(
-                qr_data=data.get("qr_data", ""),
-                session_id=session_id,
-            )
-    except Exception as e:
-        _log.error(f"WhatsApp QR error: {e}")
-    return WhatsAppQRResponse(error="QR generation failed")
+    Adversarial review 2026-07-22 (ADR-0211): the provisioner fabricates a mock QR that is not a Baileys pairing code — scanning it in WhatsApp does nothing.
+    The shipped WhatsApp zero-config linking endpoint therefore only ever produced a dead-end
+    or fake state. Until a working implementation exists, this endpoint
+    fails honestly; configure the channel via Bridge Settings (PUT
+    /bridges/{channel}/settings) instead. The auto_* JS modules remain on
+    disk as scaffolding for a future real implementation.
+    """
+    raise HTTPException(
+        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+        detail="WhatsApp zero-config linking setup is not implemented; use manual bridge settings",
+    )
 
 
 class WhatsAppPollResponse(BaseModel):
@@ -2339,49 +1590,17 @@ async def poll_whatsapp_scan(
     body: BaseModel,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
 ) -> WhatsAppPollResponse:
-    """Poll for WhatsApp QR scan completion (call repeatedly after generating QR)."""
-    bridges_dir = _resolve_bridges_dir()
-    provisioner_path = bridges_dir / "whatsapp" / "auto_whatsapp_provisioner.js"
-    whatsapp_settings = bridges_dir / "whatsapp" / "settings.json"
+    """NOT IMPLEMENTED — returns 501.
 
-    if not whatsapp_settings.exists():
-        return WhatsAppPollResponse(error="No pending link found")
+    Adversarial review 2026-07-22 (ADR-0211): the mock's success branch is mathematically unreachable and the real pairing state lives in the daemon's Baileys auth/ directory.
+    The shipped WhatsApp zero-config linking endpoint therefore only ever produced a dead-end
+    or fake state. Until a working implementation exists, this endpoint
+    fails honestly; configure the channel via Bridge Settings (PUT
+    /bridges/{channel}/settings) instead. The auto_* JS modules remain on
+    disk as scaffolding for a future real implementation.
+    """
+    raise HTTPException(
+        status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+        detail="WhatsApp zero-config linking setup is not implemented; use manual bridge settings",
+    )
 
-    try:
-        settings = json.loads(whatsapp_settings.read_text())
-        session_id = settings.get("_pending_session_id")
-        generated_at = int(settings.get("_qr_generated_at", 0))
-        elapsed = int(time.time()) - generated_at
-
-        if elapsed > 120:  # 2 minute timeout
-            del settings["_pending_session_id"]
-            whatsapp_settings.write_text(json.dumps(settings, indent=2))
-            return WhatsAppPollResponse(error="QR code expired (>2min)")
-
-        # Poll for scan completion
-        script = f"""
-const {{ AutoWhatsAppProvisioner }} = require(process.env.PROV_PATH);
-const prov = new AutoWhatsAppProvisioner(() => {{}});
-(async () => {{ const result = await prov.pollQRScanStatus(process.env.SESSION_ID, 2); console.log(JSON.stringify(result)); }})();
-"""
-
-        result = subprocess.run(
-            ["node", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env={**os.environ, "PROV_PATH": str(provisioner_path), "SESSION_ID": session_id or ""},
-        )
-
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            if data.get("scanned"):
-                del settings["_pending_session_id"]
-                settings["whatsapp_linked"] = True
-                whatsapp_settings.write_text(json.dumps(settings, indent=2))
-                return WhatsAppPollResponse(linked=True)
-
-        return WhatsAppPollResponse(linked=False)
-    except Exception as e:
-        _log.error(f"WhatsApp scan polling error: {e}")
-        return WhatsAppPollResponse(error="Polling failed")

@@ -1415,13 +1415,26 @@ function BridgeManageDialog({
     mutationFn: async (mode: "disconnect" | "delete") =>
       disconnectBridge(channel, mode, session!.csrf_token, session!.fingerprint),
     onSuccess: async (data) => {
-      setToast({
-        kind: "ok",
-        msg:
-          data.mode === "delete"
-            ? `${meta.label} deleted. Connect again to set it up from scratch.`
-            : `${meta.label} disconnected — your settings were kept. Connect again with new credentials.`,
-      });
+      // restart_needed=true means the runtime could not stop the daemon
+      // (no supervisor/systemd on this host) — credentials are wiped on disk,
+      // but the process may still hold them in memory until restarted.
+      setToast(
+        data.restart_needed
+          ? {
+              kind: "err",
+              msg:
+                `${meta.label}: credentials removed, but the daemon could not be ` +
+                `stopped automatically — restart the bridge process (bridge.sh) ` +
+                `to complete the ${data.mode === "delete" ? "deletion" : "disconnect"}.`,
+            }
+          : {
+              kind: "ok",
+              msg:
+                data.mode === "delete"
+                  ? `${meta.label} deleted. Connect again to set it up from scratch.`
+                  : `${meta.label} disconnected — your settings were kept. Connect again with new credentials.`,
+            },
+      );
       await qc.invalidateQueries({ queryKey: ["bridges"] });
       // The dialog's own detail query is now stale (credentials are gone).
       await qc.invalidateQueries({ queryKey: ["bridges", channel] });

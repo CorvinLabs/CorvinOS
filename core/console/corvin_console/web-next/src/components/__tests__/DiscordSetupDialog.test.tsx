@@ -31,7 +31,7 @@ describe('DiscordSetupDialog', () => {
   })
 
   test('1: Shows initial input state with token textarea', () => {
-    render(<DiscordSetupDialog />)
+    render(<DiscordSetupDialog csrf="test-csrf" />)
 
     expect(screen.getByText(/Discord Bot Aktivierung/i)).toBeInTheDocument()
     expect(screen.getByPlaceholderText(/Paste your bot token/i)).toBeInTheDocument()
@@ -40,7 +40,7 @@ describe('DiscordSetupDialog', () => {
 
   test('2: Prevents empty token submission', async () => {
     const user = userEvent.setup()
-    render(<DiscordSetupDialog />)
+    render(<DiscordSetupDialog csrf="test-csrf" />)
 
     const button = screen.getByText(/Validieren & Weiter/i)
     await user.click(button)
@@ -68,7 +68,7 @@ describe('DiscordSetupDialog', () => {
       json: async () => mockResponse,
     })
 
-    render(<DiscordSetupDialog />)
+    render(<DiscordSetupDialog csrf="test-csrf" />)
 
     const textarea = screen.getByPlaceholderText(/Paste your bot token/i)
     await user.type(textarea, 'test_token_123')
@@ -101,7 +101,7 @@ describe('DiscordSetupDialog', () => {
       json: async () => mockResponse,
     })
 
-    render(<DiscordSetupDialog />)
+    render(<DiscordSetupDialog csrf="test-csrf" />)
 
     const textarea = screen.getByPlaceholderText(/Paste your bot token/i)
     await user.type(textarea, 'test_token_123')
@@ -130,7 +130,7 @@ describe('DiscordSetupDialog', () => {
       json: async () => mockResponse,
     })
 
-    render(<DiscordSetupDialog />)
+    render(<DiscordSetupDialog csrf="test-csrf" />)
 
     const textarea = screen.getByPlaceholderText(/Paste your bot token/i)
     await user.type(textarea, 'test_token_123')
@@ -171,7 +171,7 @@ describe('DiscordSetupDialog', () => {
         json: async () => mockSave,
       })
 
-    render(<DiscordSetupDialog />)
+    render(<DiscordSetupDialog csrf="test-csrf" />)
 
     const textarea = screen.getByPlaceholderText(/Paste your bot token/i)
     await user.type(textarea, 'test_token_123')
@@ -202,7 +202,7 @@ describe('DiscordSetupDialog', () => {
       json: async () => mockError,
     })
 
-    render(<DiscordSetupDialog />)
+    render(<DiscordSetupDialog csrf="test-csrf" />)
 
     const textarea = screen.getByPlaceholderText(/Paste your bot token/i)
     await user.type(textarea, 'invalid_token')
@@ -238,7 +238,7 @@ describe('DiscordSetupDialog', () => {
         json: async () => mockSaveError,
       })
 
-    render(<DiscordSetupDialog />)
+    render(<DiscordSetupDialog csrf="test-csrf" />)
 
     const textarea = screen.getByPlaceholderText(/Paste your bot token/i)
     await user.type(textarea, 'test_token_123')
@@ -269,7 +269,7 @@ describe('DiscordSetupDialog', () => {
       json: async () => mockError,
     })
 
-    render(<DiscordSetupDialog />)
+    render(<DiscordSetupDialog csrf="test-csrf" />)
 
     const textarea = screen.getByPlaceholderText(/Paste your bot token/i)
     await user.type(textarea, 'invalid_token')
