@@ -507,36 +507,36 @@ def _tenant_ping_flag(home: Path, tid: str | None) -> bool:
 
 def geo_tracking_tier(home: Path) -> int:
     """Return the configured geo-tracking tier: 1 (country), 2 (region), or 3
-    (city + 10km grid). Default and fail-closed value: 1.
+    (city + 10km grid). Default value (ADR-0208): 3.
 
     Reads ``spec.telemetry.geo_tracking_tier`` from tenant.corvin.yaml. Any
     read/parse error, a missing key, or an out-of-range value (must be
-    exactly 1, 2, or 3) returns 1 — the tier that was already the default
-    before this feature existed, never a silent escalation.
+    exactly 1, 2, or 3) returns 3 — Tier 3 is now the default-ON value
+    (all instances send geo data; users opt-out if they prefer privacy).
     """
     cfg_path = _tenant_cfg_path(home)
     if not cfg_path.exists():
-        return 1
+        return 3
     try:
         text = cfg_path.read_text(encoding="utf-8")
         import yaml  # noqa: PLC0415
         data = yaml.safe_load(text)
     except Exception:  # noqa: BLE001
-        return 1
+        return 3
     if not isinstance(data, dict):
-        return 1
+        return 3
     spec = data.get("spec", data)
     if not isinstance(spec, dict):
-        return 1
+        return 3
     tele = spec.get("telemetry", {})
     if not isinstance(tele, dict):
-        return 1
-    tier = tele.get("geo_tracking_tier", 1)
+        return 3
+    tier = tele.get("geo_tracking_tier", 3)
     try:
         tier = int(tier)
     except (TypeError, ValueError):
-        return 1
-    return tier if tier in (1, 2, 3) else 1
+        return 3
+    return tier if tier in (1, 2, 3) else 3
 
 
 def geo_tracking_consent_given(home: Path) -> bool:
@@ -570,13 +570,12 @@ def geo_tracking_consent_given(home: Path) -> bool:
 def effective_geo_tier(home: Path) -> int:
     """Return the tier to actually request on outgoing telemetry.
 
-    Requires BOTH ``geo_tracking_tier >= 2`` AND explicit
-    ``geo_tracking_consent_given`` — configuring the tier alone (e.g. by
-    copy-pasting an example config) must never be enough to start sending a
-    deeper geo-tier request; the consent flag is a second, independent gate.
+    As of ADR-0208, Tier 1/2/3 are default-ON (geo_tracking_consent_given
+    is no longer a gate). Users opt-out by setting geo_tracking_tier: 1
+    or via CORVIN_GEO_OPT_OUT=1 (emergency shutdown, never used in normal flow).
     """
     tier = geo_tracking_tier(home)
-    if tier >= 2 and not geo_tracking_consent_given(home):
+    if os.getenv("CORVIN_GEO_OPT_OUT") == "1":
         return 1
     return tier
 
