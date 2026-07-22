@@ -1221,11 +1221,33 @@ class OrchestrationServer:
             "state": {"initial": {"task": task}},
         }
 
+        # F7 (re-audit 2026-07-22): budget_s bounds only THIS watchdog call —
+        # on timeout _run_with_budget detaches and returns, but the delegation
+        # loop's engine turn keeps running under its OWN budget. With no
+        # explicit budget_override the loop applies its default (up to the
+        # 86400 s quota-fallback ceiling), so a chat-triggered acs_delegate
+        # held an un-metered engine subprocess long after the caller's
+        # budget_s expired — the exact F7 hole delegation.py already closed
+        # for run_delegate. Cap the inner turn's max_wall_time at budget_s;
+        # MIN wins so an explicit smaller override is honoured, and an explicit
+        # larger one is clamped down to the caller's stated bound.
+        eff_override = dict(budget_override) if isinstance(budget_override, dict) else {}
+        _existing_wall = eff_override.get("max_wall_time")
+        eff_override["max_wall_time"] = (
+            min(int(_existing_wall), budget_s) if isinstance(_existing_wall, (int, float))
+            else budget_s
+        )
+        # R31: a delegation_loop budget, once present, MUST carry max_depth.
+        # Setting max_wall_time makes the budget non-empty, so supply the
+        # established recursion default (chat_runtime.py) unless the caller
+        # pinned one — otherwise validation rejects the run.
+        eff_override.setdefault("max_depth", 4)
+
         try:
             result = _run_with_budget(
                 lambda: _run_acs_workflow(
                     spec, tenant_id=tenant_id, dry_run=dry_run,
-                    budget_override=budget_override,
+                    budget_override=eff_override,
                 ),
                 budget_s=budget_s,
             )

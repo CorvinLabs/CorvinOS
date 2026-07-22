@@ -474,6 +474,36 @@ class TestACSTool(TestOrchestrationServerBase):
         resp = _drive(server, [_call("acs_delegate", {})])
         self.assertIn("required", resp[0]["error"]["message"])
 
+    def test_acs_delegate_caps_inner_turn_wall_at_budget_s(self):
+        """F7 re-audit (2026-07-22): the caller's budget_s must bound the
+        detached engine turn, not just this watchdog call. Capture the
+        budget_override actually handed to run_acs_workflow."""
+        import corvin_orchestration.mcp_server as m
+        server = self._server()
+        seen = {}
+
+        def _fake(spec, *, tenant_id, dry_run, budget_override):
+            seen["override"] = budget_override
+            return {"run_id": "r", "status": "completed", "summary": "ok",
+                    "final_output": {}, "engine": "acs", "duration_s": 0.0}
+
+        with mock.patch.object(m, "_run_acs_workflow", _fake):
+            # No explicit override → wall must equal budget_s; and R31 max_depth present.
+            _drive(server, [_call("acs_delegate", {"task": "x", "budget_s": 90})])
+            self.assertEqual(seen["override"]["max_wall_time"], 90)
+            self.assertIn("max_depth", seen["override"])
+            # Explicit larger override → clamped DOWN to budget_s (MIN wins).
+            _drive(server, [_call("acs_delegate",
+                   {"task": "x", "budget_s": 120,
+                    "budget_override": {"max_wall_time": 86400, "max_depth": 2}})])
+            self.assertEqual(seen["override"]["max_wall_time"], 120)
+            self.assertEqual(seen["override"]["max_depth"], 2)  # caller's pin preserved
+            # Explicit smaller override → preserved (MIN wins the other way).
+            _drive(server, [_call("acs_delegate",
+                   {"task": "x", "budget_s": 300,
+                    "budget_override": {"max_wall_time": 45}})])
+            self.assertEqual(seen["override"]["max_wall_time"], 45)
+
 
 class TestBackgroundCompletionNotify(TestOrchestrationServerBase):
     """A run that outlives its wall-clock budget must not become an
