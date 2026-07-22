@@ -60,6 +60,8 @@ UNIT_TG="corvin-voice-bridge-telegram.service"
 UNIT_DC="corvin-voice-bridge-discord.service"
 UNIT_SK="corvin-voice-bridge-slack.service"
 UNIT_EM="corvin-voice-bridge-email.service"
+UNIT_SG="signal-daemon.service"
+UNIT_TM="teams-daemon.service"
 # Phase 7 — corvin-* units removed; corvin-* units are the only variants.
 UNIT_CORVIN_TIMEOUT_SVC="corvin-session-timeout.service"
 UNIT_CORVIN_TIMEOUT_TIMER="corvin-session-timeout.timer"
@@ -217,6 +219,11 @@ channel_configured() {
       [[ -n "$(jq -r '.slack_bot_token // empty' "$s" 2>/dev/null)" ]] \
         && [[ -n "$(jq -r '.slack_app_token // empty' "$s" 2>/dev/null)" ]] \
         && ! grep -q "DEIN_SLACK" "$s" 2>/dev/null ;;
+    signal)  [[ -n "$(jq -r '.signal_number // empty' "$BRIDGES_DIR/signal/settings.json" 2>/dev/null)" ]] ;;
+    teams)
+      local t="$BRIDGES_DIR/teams/settings.json"
+      [[ -n "$(jq -r '.microsoft_app_id // empty' "$t" 2>/dev/null)" ]] \
+        && [[ -n "$(jq -r '.microsoft_app_password // empty' "$t" 2>/dev/null)" ]] ;;
     email)
       local s="$BRIDGES_DIR/email/settings.json"
       [[ -n "$(jq -r '.imap_user // empty' "$s" 2>/dev/null)" ]] \
@@ -248,6 +255,8 @@ install_units() {
               "$BRIDGES_DIR/discord/systemd/$UNIT_DC" \
               "$BRIDGES_DIR/slack/systemd/$UNIT_SK" \
               "$BRIDGES_DIR/email/systemd/$UNIT_EM" \
+              "$BRIDGES_DIR/signal/systemd/$UNIT_SG" \
+              "$BRIDGES_DIR/teams/systemd/$UNIT_TM" \
               "$BRIDGES_DIR/systemd/$UNIT_CORVIN_HERMES_HEALTH_SVC" \
               "$BRIDGES_DIR/systemd/$UNIT_CORVIN_HERMES_HEALTH_TIMER" \
               "$PLUGIN_ROOT/scripts/systemd/$UNIT_CORVIN_TIMEOUT_SVC" \
@@ -280,7 +289,7 @@ cmd_up() {
   check_prereqs || { fail "prerequisites missing — `bridge.sh doctor` zeigt's nochmal."; exit 1; }
 
   step "2/5  node modules per channel"
-  for ch in telegram discord whatsapp slack email; do
+  for ch in telegram discord whatsapp slack email signal teams; do
     channel_configured "$ch" 2>/dev/null && ensure_npm_modules "$ch" || warn "$ch: not configured (skipped)"
   done
 
@@ -373,7 +382,7 @@ cmd_up() {
   else
     warn "corvin WebUI could not be enabled — check: journalctl --user -u $UNIT_CORVIN_WEBUI"
   fi
-  for ch_unit_pair in "whatsapp:$UNIT_WA" "telegram:$UNIT_TG" "discord:$UNIT_DC" "slack:$UNIT_SK" "email:$UNIT_EM"; do
+  for ch_unit_pair in "whatsapp:$UNIT_WA" "telegram:$UNIT_TG" "discord:$UNIT_DC" "slack:$UNIT_SK" "email:$UNIT_EM" "signal:$UNIT_SG" "teams:$UNIT_TM"; do
     ch="${ch_unit_pair%%:*}"; unit="${ch_unit_pair##*:}"
     if channel_configured "$ch" 2>/dev/null; then
       systemctl --user enable --now "$unit"
@@ -423,7 +432,7 @@ cmd_status() {
   done
   echo
   echo "HTTP-Health-Endpoints:"
-  for ch_port in "whatsapp:7891" "telegram:7892" "discord:7893" "slack:7894" "email:7895"; do
+  for ch_port in "whatsapp:7891" "telegram:7892" "discord:7893" "slack:7894" "email:7895" "signal:7896" "teams:7897"; do
     ch="${ch_port%%:*}"; port="${ch_port##*:}"
     out="$(curl -s --max-time 1 "http://127.0.0.1:$port/status" 2>/dev/null)"
     if [[ -n "$out" ]]; then
@@ -496,7 +505,7 @@ cmd_doctor() {
   # a fixed port and a hung daemon returns nothing within 1 s.
   echo "HTTP-Health-Endpoints (works on every host, no systemd needed):"
   local any_offline=0
-  for ch_port in "whatsapp:7891" "telegram:7892" "discord:7893" "slack:7894" "email:7895"; do
+  for ch_port in "whatsapp:7891" "telegram:7892" "discord:7893" "slack:7894" "email:7895" "signal:7896" "teams:7897"; do
     local ch="${ch_port%%:*}" port="${ch_port##*:}"
     local out
     out="$(curl -s --max-time 1 "http://127.0.0.1:$port/status" 2>/dev/null)"
@@ -550,7 +559,7 @@ cmd_fg() {
   check_prereqs || { fail "prerequisites missing — bridge.sh doctor zeigt's nochmal."; exit 1; }
 
   step "node modules per channel"
-  for ch in telegram discord whatsapp slack email; do
+  for ch in telegram discord whatsapp slack email signal teams; do
     channel_configured "$ch" 2>/dev/null && ensure_npm_modules "$ch" \
       || warn "$ch: not configured (skipped)"
   done
@@ -615,7 +624,9 @@ cmd_fg() {
                  "telegram:$BRIDGES_DIR/telegram" \
                  "discord:$BRIDGES_DIR/discord" \
                  "slack:$BRIDGES_DIR/slack" \
-                 "email:$BRIDGES_DIR/email"; do
+                 "email:$BRIDGES_DIR/email" \
+                 "signal:$BRIDGES_DIR/signal" \
+                 "teams:$BRIDGES_DIR/teams"; do
     ch="${ch_pair%%:*}"; dir="${ch_pair##*:}"
     if channel_configured "$ch" 2>/dev/null; then
       step "Starte $ch (foreground)"

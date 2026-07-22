@@ -24,6 +24,8 @@ const fs   = require('fs');
 const path = require('path');
 
 // ── Shared bridge runtime ─────────────────────────────────────────────────────
+require('../shared/js/bridge_state').exitIfDisabled('signal');
+const { bridgeSettingsPath } = require('../shared/js/bridge_paths');
 const { makeLogger }           = require('../shared/js/logger');
 const { makeSettingsAccessor } = require('../shared/js/settings');
 const { makeAuth }             = require('../shared/js/auth');
@@ -39,7 +41,16 @@ const PLUGIN_ROOT   = path.resolve(ROOT, '..', '..');
 const SHARED        = path.resolve(ROOT, '..', 'shared');
 const INBOX         = path.join(SHARED, 'inbox');
 const OUTBOX        = path.join(SHARED, 'outbox');
-const SETTINGS_FILE = path.join(ROOT, 'settings.json');
+// ADR-0008 §8.3: settings live in <corvin_home>/bridges/signal/.
+// Auto-migrate from legacy in-repo location on first boot.
+const SETTINGS_FILE = (c => {
+  const can = bridgeSettingsPath(c);
+  const leg = path.join(ROOT, 'settings.json');
+  if (!fs.existsSync(can) && fs.existsSync(leg)) {
+    try { fs.mkdirSync(path.dirname(can), { recursive: true }); fs.copyFileSync(leg, can); } catch {}
+  }
+  return fs.existsSync(can) ? can : leg;
+})('signal');
 const CHANNEL       = 'signal';
 const HEALTH_PORT   = parseInt(process.env.SIGNAL_HEALTH_PORT || '7896', 10);
 const POLL_MS       = parseInt(process.env.SIGNAL_POLL_MS     || '500',  10);

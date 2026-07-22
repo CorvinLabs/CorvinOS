@@ -35,6 +35,8 @@ const {
 const express = require('express');
 
 // ── Shared bridge runtime ─────────────────────────────────────────────────────
+require('../shared/js/bridge_state').exitIfDisabled('teams');
+const { bridgeSettingsPath } = require('../shared/js/bridge_paths');
 const { makeLogger }           = require('../shared/js/logger');
 const { makeSettingsAccessor } = require('../shared/js/settings');
 const { makeAuth }             = require('../shared/js/auth');
@@ -51,10 +53,21 @@ const PLUGIN_ROOT = path.resolve(ROOT, '..', '..');
 const SHARED      = path.resolve(ROOT, '..', 'shared');
 const INBOX       = path.join(SHARED, 'inbox');
 const OUTBOX      = path.join(SHARED, 'outbox');
-const SETTINGS_FILE = path.join(ROOT, 'settings.json');
+// ADR-0008 §8.3: settings live in <corvin_home>/bridges/teams/.
+// Auto-migrate from legacy in-repo location on first boot.
+const SETTINGS_FILE = (c => {
+  const can = bridgeSettingsPath(c);
+  const leg = path.join(ROOT, 'settings.json');
+  if (!fs.existsSync(can) && fs.existsSync(leg)) {
+    try { fs.mkdirSync(path.dirname(can), { recursive: true }); fs.copyFileSync(leg, can); } catch {}
+  }
+  return fs.existsSync(can) ? can : leg;
+})('teams');
 const CHANNEL     = 'teams';
 const HTTP_PORT   = parseInt(process.env.TEAMS_HTTP_PORT || '3978', 10);
-const HEALTH_PORT = parseInt(process.env.TEAMS_HEALTH_PORT || '7895', 10);
+// 7897: 7895 collided with the email daemon's health port — both silently
+// fought over the bind when teams + email ran on the same host.
+const HEALTH_PORT = parseInt(process.env.TEAMS_HEALTH_PORT || '7897', 10);
 
 for (const d of [INBOX, OUTBOX]) fs.mkdirSync(d, { recursive: true });
 
