@@ -927,20 +927,25 @@ def _prune_stale_heartbeats() -> None:
 
     Called automatically on each record_endpoint_heartbeat() when cache is full
     or entries are stale. Best-effort cleanup (no locking for Phase 2).
+    Finding #10: Early return if under limit and no stale entries.
     """
     now = time.time()
-    # Remove entries older than 1 day
-    stale = [k for k, ts in _endpoint_heartbeat_cache.items()
-             if (now - ts) > _HEARTBEAT_CACHE_MAX_AGE_S]
-    for k in stale:
-        del _endpoint_heartbeat_cache[k]
-
-    # If still over limit, evict oldest 10%
-    if len(_endpoint_heartbeat_cache) > _HEARTBEAT_CACHE_MAX_ENTRIES:
-        oldest_keys = sorted(_endpoint_heartbeat_cache.items(), key=lambda x: x[1])
-        evict_count = len(_endpoint_heartbeat_cache) // 10
-        for k, _ in oldest_keys[:evict_count]:
+    # Early return: if cache small enough, skip pruning entirely
+    if len(_endpoint_heartbeat_cache) < _HEARTBEAT_CACHE_MAX_ENTRIES:
+        # Check if any stale entries; skip sort if none
+        stale = [k for k, ts in _endpoint_heartbeat_cache.items()
+                 if (now - ts) > _HEARTBEAT_CACHE_MAX_AGE_S]
+        if not stale:
+            return  # No pruning needed (Finding #10: early exit)
+        for k in stale:
             del _endpoint_heartbeat_cache[k]
+        return
+
+    # Over limit: evict oldest 10% (O(N log N) only when needed)
+    oldest_keys = sorted(_endpoint_heartbeat_cache.items(), key=lambda x: x[1])
+    evict_count = len(_endpoint_heartbeat_cache) // 10
+    for k, _ in oldest_keys[:evict_count]:
+        del _endpoint_heartbeat_cache[k]
 
 
 def record_endpoint_heartbeat(origin_id: str) -> None:
