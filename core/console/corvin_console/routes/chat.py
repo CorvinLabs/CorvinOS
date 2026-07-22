@@ -1486,6 +1486,8 @@ def list_session_os_turns(
 _EXEC_LOG_EVENTS = {
     # OS-turn lifecycle
     "os_turn.started", "os_turn.tool_called", "os_turn.completed",
+    # ADR-0213 — ACS delegation result -> CLI transcript sync
+    "os_turn.context_sync",
     # ACS run + manager lifecycle
     "acs.run_start", "acs.run_error",
     "acs.manager_call", "acs.manager_decided", "acs.manager_error",
