@@ -368,5 +368,50 @@ ok('maybeRegisterAliases: enables disableChats to remove sibling form retroactiv
   assert.ok(denied.has('233118@lid'));
 });
 
+// ── Re-pair outbound regression (2026-07-22) ────────────────────────────────
+// After a re-pair WhatsApp issues a NEW @lid for the same chat. /on arrived
+// under the phone form only (enabled_chats=[phone]), the content message then
+// carried remoteJid=<new-lid> + remoteJidAlt=<phone>, so the inbound check
+// passed via the phone alt and maybeRegisterAliases linked the two forms.
+// The reply envelope's `to` is the raw remoteJid (<new-lid>) — the outbound
+// gate calls isAnyChatEnabled([<new-lid>]) with a single form. Before the fix
+// the enabled-side lookup did NOT expand aliases (only the deny side did), so
+// every reply was dropped as "disabled chat" while inbound kept working.
+
+ok('re-pair: reply to @lid form passes when phone form is enabled + aliased', () => {
+  const settings = { enabled_chats: ['491729@s.whatsapp.net'] };
+  // Content message carries both forms → daemon registers the alias.
+  cs.maybeRegisterAliases(['77771111@lid', '491729@s.whatsapp.net'], settings);
+  // Outbound gate sees only the raw reply JID (the new @lid form).
+  assert.strictEqual(
+    cs.isAnyChatEnabled(['77771111@lid'], settings), true,
+    'reply to aliased @lid form must be treated as enabled');
+});
+
+ok('re-pair: reply to phone form passes when only @lid form is enabled + aliased', () => {
+  const settings = { enabled_chats: ['77771111@lid'] };
+  cs.maybeRegisterAliases(['491729@s.whatsapp.net', '77771111@lid'], settings);
+  assert.strictEqual(
+    cs.isAnyChatEnabled(['491729@s.whatsapp.net'], settings), true,
+    'reverse direction must be symmetric');
+});
+
+ok('re-pair: alias expansion must NOT bypass the hard deny-list', () => {
+  const settings = {
+    enabled_chats: ['491729@s.whatsapp.net'],
+    disabled_chats: ['77771111@lid'],
+  };
+  cs.maybeRegisterAliases(['77771111@lid', '491729@s.whatsapp.net'], settings);
+  assert.strictEqual(
+    cs.isAnyChatEnabled(['77771111@lid'], settings), false,
+    'deny-list still wins over alias-expanded enabled match');
+});
+
+ok('unaliased unknown JID stays disabled (no false-open)', () => {
+  const settings = { enabled_chats: ['491729@s.whatsapp.net'] };
+  assert.strictEqual(cs.isAnyChatEnabled(['999@lid'], settings), false,
+    'a JID with no alias link must not become enabled');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
