@@ -338,6 +338,43 @@ def test_system_prompt_per_channel() -> None:
     print("PASS: clarification + irreversible-guard clauses present in every channel")
 
 
+def test_system_prompt_language_pin() -> None:
+    _section("system-prompt-language-pin")
+    import adapter  # type: ignore
+    # A pinned display_language must make rule 1 authoritative (mirrors the
+    # console fix 74575ea) — no lingering auto-detect rule to contradict it.
+    orig = adapter._voice_profile
+    try:
+        class _Prof:
+            @staticmethod
+            def load(*a, **k):
+                return {"display_language": "de"}
+            def __getattr__(self, name):  # delegate anything else to the real module
+                return getattr(orig, name)
+        adapter._voice_profile = _Prof()
+        prompt = adapter.system_prompt_for("discord")
+        assert "ALWAYS reply in German" in prompt, prompt[:400]
+        assert "authoritative" in prompt
+        assert "If they wrote in German, reply\nin German" not in prompt, \
+            "the auto-detect rule must NOT coexist with the pin"
+        print("PASS: pinned language → authoritative rule 1, no auto-detect contradiction")
+
+        # No pin → auto-detect rule stays.
+        class _ProfEmpty:
+            @staticmethod
+            def load(*a, **k):
+                return {}
+            def __getattr__(self, name):
+                return getattr(orig, name)
+        adapter._voice_profile = _ProfEmpty()
+        prompt2 = adapter.system_prompt_for("discord")
+        assert "Reply in the user's language" in prompt2
+        assert "ALWAYS reply in" not in prompt2
+        print("PASS: no pin → auto-detect rule 1 retained")
+    finally:
+        adapter._voice_profile = orig
+
+
 def test_streaming_recursion_counter() -> None:
     _section("streaming-recursion-counter")
     for mod in list(sys.modules):
@@ -446,6 +483,7 @@ def main() -> int:
     test_submit_inbox_item_non_dict_json_is_not_quarantined()
     test_env_parser()
     test_system_prompt_per_channel()
+    test_system_prompt_language_pin()
     test_streaming_recursion_counter()
     print("\nALL CHECKS PASSED.")
     return 0
