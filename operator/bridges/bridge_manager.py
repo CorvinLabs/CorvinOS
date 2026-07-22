@@ -47,7 +47,10 @@ from typing import Optional
 # This is READ-ONLY from bridge_manager's perspective.
 _BRIDGE_DIR = Path(__file__).parent
 
-_CHANNELS = ["discord", "telegram", "whatsapp", "slack", "email"]
+# signal + teams were long console-configurable but absent here — the console
+# saved their settings and then NOTHING could ever start the daemons (silent
+# half-wiring, fresh-install audit 2026-07-22). Both have complete daemons.
+_CHANNELS = ["discord", "telegram", "whatsapp", "slack", "email", "signal", "teams"]
 
 
 def _corvin_home() -> Path:
@@ -130,6 +133,33 @@ def _source_channel_dir(channel: str) -> Path:
 def _runtime_channel_dir(channel: str) -> Path:
     """User-writable runtime dir: ~/.corvin/bridges/<channel>/"""
     return _runtime_bridges_dir() / channel
+
+
+def _runtime_shared_dir() -> Path:
+    """<corvin_home>/bridges/shared — the queue root (inbox/outbox) a daemon
+    resolves when it runs from its runtime dir (SHARED = __dirname/../shared)."""
+    return _runtime_bridges_dir() / "shared"
+
+
+def _adapter_queue_env(env: dict) -> None:
+    """Pin the adapter's queue dirs to the RUNTIME shared dir.
+
+    adapter.py defaults its queues to its own source/vendored shared/ dir,
+    while daemons spawned from runtime dirs poll <corvin_home>/bridges/shared
+    — two different directories on every wheel install. Result: inbound
+    envelopes were never picked up and replies never reached a daemon (the
+    fresh-install "bot never answers" class). Explicit env aligns the adapter
+    with the daemons; bridge.sh source-tree mode (both sides source shared/)
+    is untouched because it never calls this. setdefault → an operator
+    override in service.env still wins.
+    """
+    shared = _runtime_shared_dir()
+    for key, sub in (("ADAPTER_INBOX", "inbox"),
+                     ("ADAPTER_OUTBOX", "outbox"),
+                     ("ADAPTER_PROCESSED", "processed")):
+        p = shared / sub
+        p.mkdir(parents=True, exist_ok=True)
+        env.setdefault(key, str(p))
 
 
 # ── Node.js discovery ──────────────────────────────────────────────────────────
@@ -481,6 +511,10 @@ def channel_configured(channel: str) -> bool:
             return bool(cfg.get("slack_bot_token") and cfg.get("slack_app_token"))
         if channel == "email":
             return bool(cfg.get("imap_user") and cfg.get("imap_password"))
+        if channel == "signal":
+            return bool(cfg.get("signal_number"))
+        if channel == "teams":
+            return bool(cfg.get("microsoft_app_id") and cfg.get("microsoft_app_password"))
 
     return False
 
@@ -550,9 +584,12 @@ def start_fg(channels: Optional[list[str]] = None) -> int:
 
     processes: list[subprocess.Popen] = []
 
-    def _spawn(label: str, cmd: list[str], cwd: Path) -> None:
+    def _spawn(label: str, cmd: list[str], cwd: Path,
+               mutate_env: Optional["callable"] = None) -> None:  # type: ignore[name-defined]
         env = os.environ.copy()
         _load_service_env(env)
+        if mutate_env is not None:
+            mutate_env(env)
         proc = subprocess.Popen(cmd, cwd=cwd, env=env)
         processes.append(proc)
         _info(f"  started {label} (pid={proc.pid})")
@@ -578,10 +615,12 @@ def start_fg(channels: Optional[list[str]] = None) -> int:
                 pass
         _info("  All processes stopped.")
 
-    # Adapter (Python) — runs from shared/ source dir (pure Python, no npm)
+    # Adapter (Python) — runs from shared/ source dir (pure Python, no npm),
+    # but its QUEUES are pinned to the runtime shared dir the daemons poll.
     adapter_py = _BRIDGE_DIR / "shared" / "adapter.py"
     if adapter_py.exists():
-        _spawn("adapter", [sys.executable, str(adapter_py)], _BRIDGE_DIR / "shared")
+        _spawn("adapter", [sys.executable, str(adapter_py)], _BRIDGE_DIR / "shared",
+               mutate_env=_adapter_queue_env)
     else:
         _info(f"  ⚠ adapter.py not found at {adapter_py}")
 
@@ -640,6 +679,96 @@ def _port_open(port: int, host: str = "127.0.0.1") -> bool:
             return True
     except OSError:
         return False
+
+
+def _adapter_pidfile() -> Path:
+    return _corvin_home() / "run" / "adapter.pid"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Cross-platform liveness probe. NEVER use os.kill(pid, 0) on Windows —
+    any non-CTRL signal value there unconditionally TerminateProcess()es."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, check=False, timeout=10,
+            ).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return f'"{pid}"' in out
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def ensure_adapter_detached() -> dict:
+    """Start adapter.py detached iff it is not already running (pidfile).
+
+    start_channel_detached() — the engine behind the web console's bridge
+    Start button — used to launch ONLY the Node daemon. On installs without
+    bridge.sh/systemd nothing ever polled the shared inbox: the bridge paired
+    fine, inbound envelopes piled up, and the bot never answered. The adapter
+    is the other half of every bridge; starting one without the other is a
+    broken state, so the button path now ensures both.
+    """
+    adapter_py = _BRIDGE_DIR / "shared" / "adapter.py"
+    if not adapter_py.exists():
+        return {"ok": False, "error": f"adapter.py not found at {adapter_py}"}
+
+    pidfile = _adapter_pidfile()
+    try:
+        pid = int(pidfile.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        pid = 0
+    if pid and _pid_alive(pid):
+        return {"ok": True, "already_running": True, "pid": pid}
+
+    env = os.environ.copy()
+    _load_service_env(env)
+    _adapter_queue_env(env)
+
+    log_dir = _corvin_home() / "run" / "log"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_fh = open(log_dir / "adapter-start.log", "ab")
+    except OSError:
+        log_fh = subprocess.DEVNULL  # type: ignore[assignment]
+    kwargs: dict = {"stdout": log_fh, "stderr": subprocess.STDOUT}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, str(adapter_py)],
+            cwd=str(adapter_py.parent), env=env, **kwargs,
+        )
+    except OSError as exc:
+        return {"ok": False, "error": f"adapter spawn failed: {exc}"}
+    try:
+        pidfile.parent.mkdir(parents=True, exist_ok=True)
+        pidfile.write_text(str(proc.pid), encoding="utf-8")
+    except OSError:
+        pass  # liveness falls back to "spawn again next click, pid probe fails"
+
+    # Brief liveness probe — an import error dies within a second.
+    time.sleep(1.0)
+    if proc.poll() is not None:
+        return {
+            "ok": False,
+            "error": (f"adapter exited on boot (code {proc.returncode}); "
+                      f"see {log_dir / 'adapter-start.log'}"),
+        }
+    return {"ok": True, "pid": proc.pid}
 
 
 def start_channel_detached(
@@ -758,8 +887,16 @@ def start_channel_detached(
                     "error": (f"The WhatsApp bridge exited right after starting (exit code "
                               f"{proc.returncode}). See the bridge log on the server for details, then retry."),
                 }
+        # The daemon alone is half a bridge — without the adapter nothing
+        # polls the inbox and the bot never answers. Non-fatal on failure
+        # (the QR flow must still come up), but surfaced to the caller.
+        _p("Starting the message adapter…")
+        adapter_status = ensure_adapter_detached()
+        if not adapter_status.get("ok"):
+            _info(f"  ⚠ adapter start failed: {adapter_status.get('error')}")
+
         _p("Bridge started — waiting for WhatsApp to generate the QR…")
-        return {"ok": True, "pid": proc.pid}
+        return {"ok": True, "pid": proc.pid, "adapter": adapter_status}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"Unexpected error starting {channel}: {exc}"}
 
