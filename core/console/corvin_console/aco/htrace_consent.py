@@ -646,8 +646,54 @@ def run_consent_flow(home: Path, *, method: str = "cli") -> Optional[ConsentAct]
     return act
 
 
+def _set_healing_traces_flag(home: Path, enabled: bool) -> bool:
+    """Write ``spec.telemetry.healing_traces`` into tenant.corvin.yaml,
+    preserving every other key. This is the ONLY thing the runtime gate
+    (healing_traces_enabled) actually reads — the ConsentAct file is an audit
+    artefact, not a gate. Mirrors routes/healing_config.py::_write_flags for
+    the CLI path. Returns True on success. Atomic (tmp + replace)."""
+    try:
+        import yaml  # type: ignore[import]
+    except Exception:  # noqa: BLE001
+        return False
+    path = _tenant_cfg_path(home)
+    cfg: dict = {}
+    if path.exists():
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                cfg = loaded
+        except Exception:  # noqa: BLE001
+            cfg = {}
+    target = cfg["spec"] if isinstance(cfg.get("spec"), dict) else cfg
+    if not isinstance(target.get("telemetry"), dict):
+        target["telemetry"] = {}
+    target["telemetry"]["healing_traces"] = enabled
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        body = yaml.dump(cfg, default_flow_style=False, sort_keys=False)
+        tmp = path.with_suffix(".yaml.tmp")
+        tmp.write_text(body, encoding="utf-8")
+        try:
+            tmp.chmod(0o600)
+        except OSError:
+            pass
+        tmp.replace(path)
+        return True
+    except OSError:
+        return False
+
+
 def run_revoke_flow(home: Path) -> None:
     """Revoke consent. Immediate effect — no further uploads."""
+    # LOAD-BEARING (GDPR Art. 7(3)/Art. 21): the runtime gate
+    # healing_traces_enabled() reads ONLY spec.telemetry.healing_traces from
+    # tenant.corvin.yaml — since the ADR-0180 default-ON redesign it NEVER
+    # consults the ConsentAct file. Writing only the {revoked:true} stub (as
+    # this flow used to) left collection + uploads running while telling the
+    # user "No further data will be sent." The YAML opt-out is what actually
+    # stops it; the stub below stays for the audit trail.
+    flag_written = _set_healing_traces_flag(home, False)
     p = _consent_act_path(home)
     if p.exists():
         # Capture the existing act BEFORE overwriting — the file content is
@@ -660,7 +706,12 @@ def run_revoke_flow(home: Path) -> None:
             encoding="utf-8",
         )
         _write_revoke_audit_event(home, existing_act)
-    print("Healing trace telemetry disabled. No further data will be sent.")
+    if flag_written:
+        print("Healing trace telemetry disabled. No further data will be sent.")
+    else:
+        print("Healing trace telemetry: could not write the opt-out flag to "
+              "tenant.corvin.yaml (pyyaml missing or path unwritable). Set "
+              "spec.telemetry.healing_traces: false there manually to opt out.")
     # Run cap enforcement once now: after revocation, healing_traces_enabled()
     # returns False so neither write_trace nor run_upload_cycle will call
     # _enforce_caps again, causing JSONL files to persist past the 14-day

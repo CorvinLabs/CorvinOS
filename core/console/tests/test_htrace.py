@@ -587,3 +587,47 @@ class TestPingDefaultOnOptOut:
         for v in ("yes", "true", 1, "maybe"):
             self._write_cfg(tmpdir, v)
             assert ping_enabled(tmpdir) is True, v
+
+
+class TestRevokeFlowStopsCollection:
+    """GDPR Art. 7(3)/Art. 21: the CLI opt-out/erase must ACTUALLY disable the
+    runtime gate, not just write an unread {revoked:true} stub. Regression for
+    the 2026-07-22 finding where run_revoke_flow left healing_traces_enabled()
+    True (default-ON) because it never wrote the YAML opt-out flag."""
+
+    def test_revoke_flow_disables_the_runtime_gate(self):
+        from corvin_console.aco.htrace_consent import run_revoke_flow
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            assert healing_traces_enabled(home) is True  # default-ON
+            run_revoke_flow(home)
+            assert healing_traces_enabled(home) is False, (
+                "opt-out must flip the gate the uploader/collector reads")
+
+    def test_revoke_flow_writes_yaml_optout(self):
+        from corvin_console.aco.htrace_consent import run_revoke_flow, _tenant_cfg_path
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            run_revoke_flow(home)
+            cfg = _tenant_cfg_path(home)
+            assert cfg.exists()
+            import yaml
+            data = yaml.safe_load(cfg.read_text())
+            spec = data.get("spec", data)
+            assert spec["telemetry"]["healing_traces"] is False
+
+    def test_revoke_preserves_other_yaml_keys(self):
+        from corvin_console.aco.htrace_consent import run_revoke_flow, _tenant_cfg_path
+        import yaml
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            cfg = _tenant_cfg_path(home)
+            cfg.parent.mkdir(parents=True, exist_ok=True)
+            cfg.write_text(yaml.dump({
+                "spec": {"telemetry": {"ping_enabled": True}, "aco": {"l5_enabled": True}}
+            }))
+            run_revoke_flow(home)
+            data = yaml.safe_load(cfg.read_text())
+            assert data["spec"]["telemetry"]["healing_traces"] is False
+            assert data["spec"]["telemetry"]["ping_enabled"] is True  # untouched
+            assert data["spec"]["aco"]["l5_enabled"] is True          # untouched
