@@ -228,9 +228,9 @@ def parse_task_analysis_response(lm_response: str) -> InitialAnalysisRequest:
         data = json.loads(lm_response)
     except json.JSONDecodeError:
         # Try to find JSON block inside markdown code fence.
-        # Use greedy {.*} to capture complete JSON, not partial structures.
+        # Use non-greedy {.*?} to capture first JSON block (prevent multi-JSON confusion).
         import re
-        match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", lm_response, re.DOTALL)
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", lm_response, re.DOTALL)
         if match:
             try:
                 data = json.loads(match.group(1))

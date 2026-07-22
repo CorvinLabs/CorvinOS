@@ -166,8 +166,9 @@ class DecisionCache:
         # Check SQLite (if enabled)
         decision = self._load_from_sqlite(cache_key, now)
         if decision is not None:
-            # Re-populate memory cache for future hits
+            # Re-populate memory cache + access order for future hits
             self._memory[cache_key] = (decision, now)
+            self._mark_access(cache_key)  # Update LRU tracking
             _logger.info(f"cache_hit (sqlite): {cache_key}, reusing decision")
             return decision, True
 
