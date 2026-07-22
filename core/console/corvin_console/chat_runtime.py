@@ -1622,6 +1622,170 @@ def _acs_directive_block(task_text: str) -> str:
         return ""
 
 
+# ── ADR-0213 — ACS delegation result → OS engine transcript sync ────────
+# See ADR-0114's follow-up (ADR-0213) for the root cause: the delegation
+# branch below never invokes `claude -p` for the OS role, so the CLI's own
+# on-disk transcript never advances even though `touch(increment_turn=True)`
+# tells the NEXT turn's `resume = turn_count > 0` check that it did.
+
+_CONTEXT_SYNC_SYSTEM = (
+    "You are receiving a background note about a task you already delegated "
+    "to ACS workers earlier in this same conversation. The delegation and "
+    "its result already happened outside this turn — you are not being "
+    "asked to do anything now, and no tools are available in this turn. "
+    "Read the note, then reply with a short (one sentence) acknowledgement "
+    "in the note's language. Do not start new work, do not ask follow-up "
+    "questions, and do not repeat the note verbatim."
+)
+
+# Hard character caps on both the echoed task and the result text (ADR-0213
+# open question #1): an uncompressed worker result echoed into a `claude -p`
+# prompt is an unbounded prompt-injection surface with model authority — a
+# manipulated sub-task's output would otherwise ride straight back into the
+# OS engine's own transcript. Mirrors the `final[:250]` pattern already used
+# for user-facing error messages above, just with more headroom since this
+# note is never shown to the user.
+_CONTEXT_SYNC_TASK_CAP = 200
+_CONTEXT_SYNC_RESULT_CAP = 1200
+_CONTEXT_SYNC_TIMEOUT = 90.0  # seconds — tool-less, --max-turns 1, should be fast
+_CONTEXT_SYNC_OUTPUT_CAP = 20_000  # chars retained from the ack subprocess's own stdout/stderr
+
+
+def _compress_acs_result_for_context(res: Any, task_text: str, run_id: str) -> str:
+    """Build the compressed, tool-less acknowledgement note for the
+    context-sync call (ADR-0213). Truncates both the echoed task and the
+    ACS result to hard character caps — see the caps' docstring above for
+    why this must never pass the raw ``result.json`` through.
+
+    ``ACSResult.final_output`` is a ``dict`` (structured output), not a
+    string like ``summary``/``error`` — a plain ``or`` chain across all
+    three picks whichever is truthy first and would hand a dict straight
+    to ``.strip()`` the moment ``summary`` is empty on an otherwise
+    successful, structured-output-only run (adversarial review finding).
+    """
+    task = task_text.strip()
+    task_preview = task[:_CONTEXT_SYNC_TASK_CAP]
+    if len(task) > _CONTEXT_SYNC_TASK_CAP:
+        task_preview += "…"
+    body = (getattr(res, "summary", "") or "").strip()
+    if not body:
+        final_output = getattr(res, "final_output", None)
+        if final_output:
+            try:
+                body = json.dumps(final_output, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):
+                body = str(final_output)
+    if not body:
+        body = (getattr(res, "error", "") or "").strip()
+    body_preview = body[:_CONTEXT_SYNC_RESULT_CAP]
+    if len(body) > _CONTEXT_SYNC_RESULT_CAP:
+        body_preview += "…"
+    return (
+        "[Background note — a task you delegated to ACS workers has "
+        "finished. This note is informational only; no action is "
+        "requested.]\n\n"
+        f"Delegated task: {task_preview}\n"
+        f"Run ID: {run_id}\n"
+        f"Status: {getattr(res, 'status', 'unknown')}\n"
+        f"Result:\n{body_preview or '(no result text)'}\n"
+    )
+
+
+class _ContextSyncProcHolder:
+    """Mutable holder so an awaiting caller can kill the sync subprocess
+    spawned inside ``_sync_acs_result_to_transcript``'s ``to_thread`` call
+    if the enclosing turn is cancelled (client disconnect, server
+    shutdown). Mirrors ``acs_runtime._WorkerProcessHolder``, which exists
+    for the identical reason: ``asyncio.to_thread()`` does not itself
+    interrupt a blocking ``subprocess.Popen``/``communicate()`` call
+    already running in the executor thread — without this, a cancelled
+    turn leaves the tool-less sync `claude -p` process running for up to
+    ``_CONTEXT_SYNC_TIMEOUT`` seconds after the turn already ended."""
+
+    def __init__(self) -> None:
+        self.popen: "subprocess.Popen | None" = None
+        self.lock = threading.Lock()
+
+    def kill(self) -> None:
+        with self.lock:
+            proc = self.popen
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001 — best-effort, never raise from cleanup
+                pass
+
+
+def _sync_acs_result_to_transcript(sess: WebChatSession, res: Any, run_id: str,
+                                    task_text: str, *, model: str | None,
+                                    resume: bool,
+                                    proc_holder: "_ContextSyncProcHolder | None" = None,
+                                    ) -> bool:
+    """ADR-0213 — write a compressed acknowledgement of an ACS delegation
+    result into the REAL claude CLI transcript via a tool-less
+    ``claude -p [--continue] --max-turns 1 --disallowedTools "*"`` call, so
+    the next ``--continue`` turn (the normal spawn path a few hundred lines
+    below) actually knows the delegation happened.
+
+    Synchronous and blocking by design — callers MUST run this via
+    ``asyncio.to_thread`` (mirrors ``_render_acs_graph``'s use of the same
+    pattern for the same reason: do not block the event loop). Pass a
+    ``proc_holder`` so a cancelled caller can kill the subprocess (see
+    ``_ContextSyncProcHolder``).
+
+    The acknowledgement note is compressed BEFORE the subprocess spawns —
+    a failure in ``_compress_acs_result_for_context`` must never leave an
+    already-spawned, never-communicated `claude -p` process orphaned with
+    an open stdin pipe (adversarial review finding: the previous ordering
+    computed the note only after `Popen`, so a compression bug crashed
+    into the catch-all below without ever calling ``communicate``/kill).
+
+    Returns True only when the subprocess exits 0 — i.e. the transcript
+    provably advanced. Callers must treat False as "no transcript write
+    happened" and apply the C1 fallback (``touch(increment_turn=False)``),
+    exactly like a first-turn-ever spawn failure. Never raises."""
+    try:
+        note = _compress_acs_result_for_context(res, task_text, run_id)
+        import acs_runtime as _acs  # type: ignore  # noqa: PLC0415 — path already on sys.path by the caller
+        args = _build_args(sess, resume=resume, model=model,
+                            task_text=task_text, purpose="context_sync")
+        is_win_shim = (sys.platform == "win32" and args
+                       and str(args[0]).lower().endswith((".cmd", ".bat")))
+        if is_win_shim:
+            from agents._win_shim import windows_shim_command  # noqa: PLC0415
+            argv = windows_shim_command(args)
+        else:
+            argv = args
+        proc = subprocess.Popen(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, cwd=str(sess.workdir),
+            text=True, encoding="utf-8", errors="replace",
+        )
+        if proc_holder is not None:
+            with proc_holder.lock:
+                proc_holder.popen = proc
+        try:
+            _acs._communicate_capped(  # noqa: SLF001 — shared, already-hardened helper
+                proc, input_text=note, timeout=_CONTEXT_SYNC_TIMEOUT,
+                cap_chars=_CONTEXT_SYNC_OUTPUT_CAP,
+            )
+        except subprocess.TimeoutExpired:
+            _log.warning("[ADR-0213] context-sync subprocess timed out after %ss "
+                         "(run_id=%s) — applying C1 fallback (turn_count not advanced)",
+                         _CONTEXT_SYNC_TIMEOUT, run_id)
+            return False
+        if proc.returncode != 0:
+            _log.warning("[ADR-0213] context-sync subprocess exited %s (run_id=%s) — "
+                         "applying C1 fallback (turn_count not advanced)",
+                         proc.returncode, run_id)
+        return proc.returncode == 0
+    except Exception as exc:  # noqa: BLE001 — best-effort; caller applies C1 fallback on False
+        _log.warning("[ADR-0213] context-sync failed (%s: %s, run_id=%s) — "
+                     "applying C1 fallback (turn_count not advanced)",
+                     type(exc).__name__, exc, run_id)
+        return False
+
+
 def _language_closing_block() -> str:
     """The final, standalone language instruction — empty when no Display
     Language is pinned (then the base auto-detect rule stands alone)."""
@@ -1744,7 +1908,8 @@ def _write_turn_system_prompt(sess: WebChatSession, task_text: str = "") -> Path
 
 
 def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
-                 browser_token: str | None = None, task_text: str = "") -> list[str]:
+                 browser_token: str | None = None, task_text: str = "",
+                 purpose: str = "turn") -> list[str]:
     """Build a ``claude -p`` invocation for this turn.
 
     Resume mode uses ``--continue`` so the per-workdir session state
@@ -1759,6 +1924,14 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
     always register the session workdir (plus any configured workspace roots) as
     allowed ``--add-dir`` directories so the Bash/PowerShell working-directory
     sandbox agrees with the file-tool layer.
+
+    ``purpose="context_sync"`` (ADR-0213) builds a minimal, TOOL-LESS
+    ``claude -p [--continue] --max-turns 1 --disallowedTools "*"``
+    invocation used only to hand an ACS delegation summary back into the OS
+    engine's own CLI transcript. No MCP config, no persona/system-prompt
+    blocks, no ``--add-dir``, no tenant allowed-tools merge — the sync call
+    must never be able to execute a tool, independent of any tenant
+    permission-mode configuration.
     """
     binary = _claude_binary()
     # On Windows, shutil.which() may resolve the npm-installed claude to a
@@ -1776,6 +1949,21 @@ def _build_args(sess: WebChatSession, *, resume: bool, model: str | None = None,
         args: list[str] = [resolved or binary]
     else:
         args = [binary]
+
+    if purpose == "context_sync":
+        sync_prompt_path = sess.workdir / ".corvin-context-sync-system-prompt.txt"
+        sync_prompt_path.write_text(_CONTEXT_SYNC_SYSTEM, encoding="utf-8")
+        args += ["-p",
+                 "--output-format", "json",
+                 "--append-system-prompt-file", str(sync_prompt_path),
+                 "--disallowedTools", "*",
+                 "--max-turns", "1"]
+        if model:
+            args += ["--model", model]
+        if resume:
+            args.append("--continue")
+        return args
+
     args += ["-p",
              "--output-format", "stream-json",
              "--verbose",
@@ -4007,8 +4195,40 @@ async def stream_turn(
                 })
             else:
                 tm.record_event(task_id, {"event": "task.failed", "exit_code": 1})
+
+            # ADR-0213 — write the ACS result into the REAL claude CLI
+            # transcript before advancing turn_count. This branch never
+            # calls `claude -p` for the OS role (only ACSRuntime's own
+            # manager/worker subprocesses), so without this the next
+            # `--continue` turn would resume a transcript that never saw
+            # this delegation — see ADR-0213 for the full root cause.
+            _sync_holder = _ContextSyncProcHolder()
+            try:
+                _sync_ok = await asyncio.to_thread(
+                    _sync_acs_result_to_transcript, sess, res, run_id,
+                    task_text, model=_os_model, resume=resume,
+                    proc_holder=_sync_holder,
+                )
+            except (asyncio.CancelledError, GeneratorExit):
+                # Client gone mid-sync — kill the subprocess synchronously
+                # (asyncio.to_thread cannot interrupt the blocking thread
+                # itself) before propagating, same bug class the ACS
+                # worker/manager calls already fixed via _WorkerProcessHolder.
+                _sync_holder.kill()
+                raise
+            except Exception:  # noqa: BLE001 — best-effort; C1 fallback below covers it
+                _sync_ok = False
+            _os_audit("os_turn.context_sync", {
+                "delegated_run_id": run_id, "synced": _sync_ok,
+            })
             _os_emit_completed(0 if (ok or bounded_stop) else 1)
-            touch(sess, increment_turn=True)
+            # C1 fallback (ADR-0213): only advance turn_count when the
+            # transcript actually advanced — otherwise the next turn's
+            # `resume = turn_count > 0` would append --continue onto a
+            # transcript that never recorded this turn, reproducing the
+            # original bug (turn-count increment with no transcript write)
+            # in the failure path.
+            touch(sess, increment_turn=_sync_ok)
             _append_turn(sess, "assistant", _turn_parts)
             yield {"type": "done"}
             return
