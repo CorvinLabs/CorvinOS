@@ -42,6 +42,7 @@ class ScopedStepExecutor:
         "reason_about",
         "generate_code",
         "generate_text",
+        "generate_report",
         "synthesize",
         "evaluate",
     }
@@ -181,7 +182,7 @@ class ScopedStepExecutor:
             "",
             "## Your Task",
             f"Execute step {step.step} ({step.action}) using ONLY the context above.",
-            "Do NOT reclassify, reroute, or replan — those decisions were made in initial analysis.",
+            "do NOT reclassify, do NOT reroute, do NOT re-plan — those decisions were made in initial analysis.",
             "Focus solely on this step's action.",
             "",
         ])

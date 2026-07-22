@@ -65,7 +65,7 @@ class DecisionCache:
         self._db_conn: sqlite3.Connection | None = None
         # Cache context hashes to avoid repeated serialization (Finding #8)
         self._context_hash_cache: dict[str, str] = {}
-        self._context_hash_cache_size = max_memory_entries
+        self._context_hash_cache_size = max(1, context_hash_cache_size)
 
         if self._enable_sqlite:
             self._db_path = Path(storage_dir) / "decision_cache.db"
@@ -179,10 +179,14 @@ class DecisionCache:
                     self._memory_access_order.remove(cache_key)
 
         # Check SQLite (if enabled)
-        decision = self._load_from_sqlite(cache_key, now)
-        if decision is not None:
-            # Re-populate memory cache + access order for future hits
-            self._memory[cache_key] = (decision, now)
+        loaded = self._load_from_sqlite(cache_key, now)
+        if loaded is not None:
+            decision, original_cached_at = loaded
+            # Re-populate memory cache + access order for future hits.
+            # Keep the ORIGINAL cached_at: stamping `now` here would reset the
+            # TTL clock on every reload and serve stale decisions for up to
+            # ~2x TTL via the memory fast path.
+            self._memory[cache_key] = (decision, original_cached_at)
             self._mark_access(cache_key)  # Update LRU tracking
             _logger.info(f"cache_hit (sqlite): {cache_key}, reusing decision")
             return decision, True
@@ -207,10 +211,13 @@ class DecisionCache:
 
         return decision, False
 
-    def _load_from_sqlite(self, cache_key: str, now: float) -> InitialAnalysisRequest | None:
+    def _load_from_sqlite(
+        self, cache_key: str, now: float
+    ) -> tuple[InitialAnalysisRequest, float] | None:
         """Load a cached decision from SQLite (Phase 3+).
 
-        Returns None if not found, expired, or DB unavailable.
+        Returns (decision, original_cached_at) so callers can preserve the
+        original TTL clock, or None if not found, expired, or DB unavailable.
         """
         if not self._db_conn or not self._enable_sqlite:
             return None
@@ -228,7 +235,7 @@ class DecisionCache:
             if (now - cached_at) < ttl_s:
                 # Still valid
                 decision = InitialAnalysisRequest.from_dict(json.loads(decision_json))
-                return decision
+                return decision, cached_at
             else:
                 # Expired
                 self._db_conn.execute(
@@ -269,6 +276,11 @@ class DecisionCache:
         """
         if cache_key in self._memory:
             del self._memory[cache_key]
+        # Keep the LRU book-keeping in sync: a stale key left in the access
+        # order makes a later _evict_lru() pop it as a no-op and lets _memory
+        # exceed max_memory_entries.
+        if cache_key in self._memory_access_order:
+            self._memory_access_order.remove(cache_key)
 
         if self._enable_sqlite and self._db_conn:
             try:
@@ -285,6 +297,7 @@ class DecisionCache:
     def clear(self) -> None:
         """Clear all cached decisions (both memory and SQLite)."""
         self._memory.clear()
+        self._memory_access_order.clear()
 
         if self._enable_sqlite and self._db_conn:
             try:

@@ -128,13 +128,23 @@ class ParallelExecutor:
                     raise ExecutionError(f"Cycle detected in dependency graph")
 
     def should_parallelize(self) -> bool:
-        """Check if plan allows parallelization based on fallback_strategy.
+        """Check if plan allows parallelization.
+
+        Per ADR-0210, ``fallback_strategy`` describes what to do when parallel
+        execution fails — it is NOT the mode selector. Parallel batching is
+        driven by the plan itself: any step carrying ``can_parallelize`` hints
+        opts the plan into batched execution (``_group_parallel_steps`` only
+        ever co-batches steps whose hints are symmetric, so plans without
+        hints degrade to sequential singleton batches anyway). An explicit
+        non-"sequential" strategy also enables batching.
 
         Returns:
-            True if fallback_strategy is "parallel" (or other non-sequential).
-            False if strategy is "sequential" (run steps one-by-one).
+            True if any step has can_parallelize hints or fallback_strategy
+            is non-"sequential"; False otherwise.
         """
-        return self.plan.fallback_strategy != "sequential"
+        if self.plan.fallback_strategy != "sequential":
+            return True
+        return any(s.can_parallelize for s in self.plan.steps)
 
     def _group_parallel_steps(self) -> list[list[int]]:
         """Group steps into batches for parallel execution.
@@ -199,7 +209,8 @@ class ParallelExecutor:
             List of StepResult objects (one per step).
         """
         self._detect_cycles()
-        # Check plan's fallback strategy: if "sequential", don't parallelize
+        # Batch when the plan opts in (can_parallelize hints or an explicit
+        # non-"sequential" strategy) — see should_parallelize()
         if self.should_parallelize():
             batches = self._group_parallel_steps()
         else:

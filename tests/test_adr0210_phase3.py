@@ -197,10 +197,15 @@ class TestADR0210Phase3ParallelExecutor:
             ParallelExecutor(plan)
 
     def test_dependency_graph_built(self):
-        """Dependency graph correctly represents depends_on."""
+        """Dependency graph correctly represents depends_on.
+
+        Note: depends_on and can_parallelize are mutually exclusive per step
+        pair (_validate_plan, adversarial finding #5) — step 2 may therefore
+        not list step 1 in can_parallelize while depending on it.
+        """
         steps = [
-            Step(step=1, action="a", depends_on=[], can_parallelize=[2]),
-            Step(step=2, action="b", depends_on=[1], can_parallelize=[1]),
+            Step(step=1, action="a", depends_on=[], can_parallelize=[]),
+            Step(step=2, action="b", depends_on=[1], can_parallelize=[]),
         ]
         plan = self._make_plan(steps)
         executor = ParallelExecutor(plan)
