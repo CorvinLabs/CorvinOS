@@ -35,7 +35,7 @@ class GlobalPlan:
     steps: list[Step]                  # Ordered list of execution steps
     estimated_duration_s: int          # Total estimated wall time
     estimated_tokens: int              # Total estimated token consumption
-    fallback_strategy: str = "sequential"  # Fallback if parallel fails
+    fallback_strategy: str = "sequential"  # Fallback if parallel fails — NOT the mode selector (can_parallelize hints opt steps into batching)
 
 
 @dataclass
@@ -129,7 +129,7 @@ Analyze the task type, complexity, and routing:
 ## 2. Entity Extraction
 
 Identify all external dependencies:
-- **files**: [{path: str, purpose: "input" | "output" | "reference"}]
+- **files**: [{{path: str, purpose: "input" | "output" | "reference"}}]
 - **tools**: ["tool1", "tool2"] — tools the task will call
 - **external_apis**: ["api1"] — external services (HTTP, database, etc.)
 - **environment_vars**: ["VAR1", "VAR2"] — env vars this task depends on
@@ -140,7 +140,7 @@ Design the full step sequence with parallelization hints:
 - **steps**: [
     {{
       "step": 1,
-      "action": "read_file" | "call_tool" | "analyze_data" | "generate_code" | "api_fetch",
+      "action": one of "read_file" | "write_file" | "call_tool" | "api_fetch" | "database_query" | "list_files" | "check_existence" | "analyze_data" | "reason_about" | "generate_code" | "generate_text" | "generate_report" | "synthesize" | "evaluate",
       "depends_on": [list of step numbers],
       "can_parallelize": [list of step numbers that can run in parallel with this one],
       "estimated_tokens": integer (rough estimate)
@@ -149,7 +149,7 @@ Design the full step sequence with parallelization hints:
   ]
 - **estimated_duration_s**: total wall time (sum of longest chains, considering parallelism)
 - **estimated_tokens**: total LM tokens for this task
-- **fallback_strategy**: "sequential" (default; run steps one-by-one) or "parallel" (try groups in parallel)
+- **fallback_strategy**: what to do when parallel execution FAILS: "sequential" (default) re-runs one-by-one. This is NOT the mode selector — parallel batching is opted into per step via `can_parallelize` hints (symmetric: both steps must list each other).
 
 ## JSON Output Format
 
