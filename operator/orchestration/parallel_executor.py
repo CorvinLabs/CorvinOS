@@ -61,6 +61,7 @@ class ParallelExecutor:
         - Step numbers are sequential (1, 2, 3, ...)
         - can_parallelize and depends_on reference valid step numbers
         - No impossible dependencies (depends_on higher step numbers)
+        - depends_on and can_parallelize are mutually exclusive
         """
         if not self.plan.steps:
             raise ExecutionError("Plan has no steps")
@@ -77,6 +78,11 @@ class ParallelExecutor:
                 if dep >= s.step:
                     raise ExecutionError(
                         f"Step {s.step} depends on later step {dep} (cycles)"
+                    )
+                # Validate mutual exclusivity: can't depend AND parallelize same step
+                if dep in s.can_parallelize:
+                    raise ExecutionError(
+                        f"Step {s.step} both depends on {dep} and parallelize it (conflict)"
                     )
             # Check can_parallelize references valid steps
             for par in s.can_parallelize:
@@ -120,6 +126,15 @@ class ParallelExecutor:
             if step_num not in visited:
                 if has_cycle_dfs(step_num):
                     raise ExecutionError(f"Cycle detected in dependency graph")
+
+    def should_parallelize(self) -> bool:
+        """Check if plan allows parallelization based on fallback_strategy.
+
+        Returns:
+            True if fallback_strategy is "parallel" (or other non-sequential).
+            False if strategy is "sequential" (run steps one-by-one).
+        """
+        return self.plan.fallback_strategy != "sequential"
 
     def _group_parallel_steps(self) -> list[list[int]]:
         """Group steps into batches for parallel execution.
@@ -184,7 +199,12 @@ class ParallelExecutor:
             List of StepResult objects (one per step).
         """
         self._detect_cycles()
-        batches = self._group_parallel_steps()
+        # Check plan's fallback strategy: if "sequential", don't parallelize
+        if self.should_parallelize():
+            batches = self._group_parallel_steps()
+        else:
+            # Sequential mode: each step in its own batch
+            batches = [[s.step] for s in self.plan.steps]
 
         results_by_step: dict[int, StepResult] = {}
         all_results: list[StepResult] = []
