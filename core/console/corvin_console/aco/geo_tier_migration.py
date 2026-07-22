@@ -53,11 +53,21 @@ def should_migrate_geo_tier(home: Path) -> bool:
     if not isinstance(tele, dict):
         return False
 
-    tier = tele.get("geo_tracking_tier")
-    has_consent_flag = "geo_tracking_consent_given" in tele
-
-    # Migrate if: tier is 1, but consent flag absent (auto-generated, not user-set)
-    return tier == 1 and not has_consent_flag
+    # RETIRED (adversarial review 2026-07-22, v0.10.59): this heuristic —
+    # "tier is 1 and consent flag absent ⇒ auto-generated old default" —
+    # cannot distinguish a legacy default from an EXPLICIT user opt-out,
+    # because the documented ADR-0208 opt-out mechanism is precisely writing
+    # ``geo_tracking_tier: 1`` by hand (no consent flag involved). Running the
+    # migration therefore silently overrode a user's opt-out on the next
+    # heartbeat — a violation of the load-bearing opt-out invariant
+    # (GDPR Art. 21; CLAUDE.md: "don't remove an opt-out").
+    #
+    # The migration is safe to retire: v0.10.58's heartbeat loop already ran
+    # it fleet-wide at 5-minute cadence for every upgrading install, and a
+    # config WITHOUT the key defaults to tier 3 anyway (htrace_consent.
+    # geo_tracking_tier), so only explicit tier-1 values remain — which must
+    # be respected. Function kept so callers stay wire-compatible.
+    return False
 
 
 def migrate_geo_tier_to_default(home: Path) -> bool:

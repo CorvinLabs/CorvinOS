@@ -574,8 +574,10 @@ def effective_geo_tier(home: Path) -> int:
     is no longer a gate). Users opt-out by setting geo_tracking_tier: 1
     or via CORVIN_GEO_OPT_OUT=1 (emergency shutdown, never used in normal flow).
 
-    Also runs auto-migration on first call: if config has old default (tier 1)
-    with no consent flag, upgrades to tier 3 (ADR-0208 auto-adoption).
+    The v0.10.58 tier-1→3 auto-migration is RETIRED (v0.10.59): it could not
+    distinguish an explicit tier-1 opt-out from the legacy default and
+    therefore overrode user opt-outs (GDPR Art. 21). The call below is now a
+    guaranteed no-op kept for wire-compat; explicit tier values always stick.
     """
     # Auto-migrate old configs on first call
     try:
