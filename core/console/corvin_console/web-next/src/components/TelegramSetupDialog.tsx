@@ -2,22 +2,24 @@
  * Telegram Zero-Config Setup Dialog
  *
  * Component flow:
- * 1. Input: User pastes bot token
+ * 1. Input: User pastes bot token (from @BotFather)
  * 2. Validate: Call /v1/console/telegram/validate-token
- * 3. Show OAuth2 URL + Open link
+ * 3. Confirm: Show the validated bot identity
  * 4. Save: Call /v1/console/telegram/save-token (when confirmed)
+ *
+ * Note: unlike Discord there is NO authorization URL step — a Telegram bot
+ * token from @BotFather is immediately usable once saved.
  */
 
 import { useState } from 'react'
-import { CheckCircle, AlertCircle, Copy, ExternalLink, Loader } from 'lucide-react'
+import { CheckCircle, AlertCircle, ExternalLink, Loader } from 'lucide-react'
 
-interface ValidateTokenResponse {
+interface ValidateTelegramTokenResponse {
   valid: boolean
-  appId?: string
-  appName?: string
-  url?: string
+  botId?: string
+  botUsername?: string
+  botName?: string
   error?: string
-  permissionsHuman?: string[]
 }
 
 interface SaveTokenResponse {
@@ -27,12 +29,17 @@ interface SaveTokenResponse {
 
 type DialogStep = 'input' | 'validating' | 'confirm' | 'saving' | 'success' | 'error'
 
-export function TelegramSetupDialog() {
+interface TelegramSetupDialogProps {
+  /** CSRF token of the active console session (session.csrf_token) —
+   * the validate/save endpoints are mutations and require x-csrf-token. */
+  csrf: string
+}
+
+export function TelegramSetupDialog({ csrf }: TelegramSetupDialogProps) {
   const [step, setStep] = useState<DialogStep>('input')
   const [token, setToken] = useState('')
-  const [validationResult, setValidationResult] = useState<ValidateTokenResponse | null>(null)
+  const [validationResult, setValidationResult] = useState<ValidateTelegramTokenResponse | null>(null)
   const [error, setError] = useState('')
-  const [copied, setCopied] = useState(false)
 
   const handleValidate = async () => {
     if (!token.trim()) {
@@ -46,7 +53,7 @@ export function TelegramSetupDialog() {
     try {
       const response = await fetch('/v1/console/telegram/validate-token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrf },
         body: JSON.stringify({ token: token.trim() }),
       })
 
@@ -56,7 +63,7 @@ export function TelegramSetupDialog() {
         return
       }
 
-      const data: ValidateTokenResponse = await response.json()
+      const data: ValidateTelegramTokenResponse = await response.json()
 
       if (!data.valid) {
         setError(data.error || 'Token ungültig')
@@ -79,7 +86,7 @@ export function TelegramSetupDialog() {
     try {
       const response = await fetch('/v1/console/telegram/save-token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrf },
         body: JSON.stringify({ token: token.trim() }),
       })
 
@@ -104,19 +111,13 @@ export function TelegramSetupDialog() {
     }
   }
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="sticky top-0 bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-4">
+        <div className="sticky top-0 bg-gradient-to-r from-sky-600 to-blue-600 text-white px-6 py-4">
           <h2 className="text-xl font-bold">🤖 Telegram Bot Aktivierung</h2>
-          <p className="text-sm text-indigo-100 mt-1">Nur 2 Schritte bis der Bot einsatzbereit ist</p>
+          <p className="text-sm text-sky-100 mt-1">Nur 2 Schritte bis der Bot einsatzbereit ist</p>
         </div>
 
         {/* Content */}
@@ -126,23 +127,24 @@ export function TelegramSetupDialog() {
             <>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Bot Token von Telegram Developer Portal
+                  Bot Token von @BotFather
                 </label>
                 <textarea
                   value={token}
                   onChange={(e) => setToken(e.target.value)}
-                  placeholder="Paste your bot token here..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="123456789:AA..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm font-mono focus:outline-none focus:ring-2 focus:ring-sky-500"
                   rows={3}
                 />
                 <p className="text-xs text-gray-500 mt-2">
-                  Token findest du hier: Telegram Developer Portal → Applications → Deine App → Bot → Copy Token
+                  Token bekommst du so: In Telegram @BotFather öffnen → /newbot senden
+                  (oder /token für einen bestehenden Bot) → Token kopieren
                 </p>
               </div>
 
               <button
                 onClick={handleValidate}
-                className="w-full bg-indigo-600 text-white py-2 rounded-md font-medium hover:bg-indigo-700 transition"
+                className="w-full bg-sky-600 text-white py-2 rounded-md font-medium hover:bg-sky-700 transition"
               >
                 Validieren &amp; Weiter
               </button>
@@ -152,12 +154,12 @@ export function TelegramSetupDialog() {
           {/* Step 2: Validating */}
           {step === 'validating' && (
             <div className="flex items-center justify-center py-8">
-              <Loader className="w-8 h-8 animate-spin text-indigo-600 mr-3" />
+              <Loader className="w-8 h-8 animate-spin text-sky-600 mr-3" />
               <span>Validiere Token...</span>
             </div>
           )}
 
-          {/* Step 3: Confirm & OAuth2 URL */}
+          {/* Step 3: Confirm */}
           {step === 'confirm' && validationResult && (
             <>
               <div className="bg-green-50 border border-green-200 rounded-md p-4">
@@ -166,60 +168,21 @@ export function TelegramSetupDialog() {
                   <span className="text-sm font-medium text-green-800">Token validiert ✓</span>
                 </div>
                 <p className="text-sm text-green-700 mt-2">
-                  App: <strong>{validationResult.appName}</strong> ({validationResult.appId})
+                  Bot: <strong>{validationResult.botName}</strong>{' '}
+                  (@{validationResult.botUsername}, ID {validationResult.botId})
                 </p>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-gray-900 mb-2">Berechtigungen</h3>
-                <ul className="text-sm text-gray-700 space-y-1 list-disc list-inside">
-                  {validationResult.permissionsHuman?.map((perm, i) => (
-                    <li key={i}>{perm}</li>
-                  ))}
-                </ul>
-              </div>
-
-              <div>
-                <h3 className="font-semibold text-gray-900 mb-2">Telegram Autorisierung</h3>
-                <p className="text-sm text-gray-600 mb-3">
-                  Klicke den Button um den Bot zu Telegram hinzuzufügen:
-                </p>
-                <a
-                  href={validationResult.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition font-medium"
-                >
-                  Öffne Telegram Autorisierung
-                  <ExternalLink className="w-4 h-4 ml-2" />
-                </a>
               </div>
 
               <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
                 <p className="text-xs text-blue-800">
-                  💡 Alternativ kannst du diese URL kopieren und selbst öffnen:
+                  💡 Telegram-Bots brauchen keine zusätzliche Autorisierung: nach dem
+                  Speichern kannst du dem Bot direkt schreiben (@{validationResult.botUsername}).
                 </p>
-                <div className="mt-2 flex items-center justify-between bg-white border border-blue-100 rounded p-2">
-                  <code className="text-xs font-mono text-gray-700 overflow-hidden text-ellipsis">
-                    {validationResult.url?.substring(0, 50)}...
-                  </code>
-                  <button
-                    onClick={() => validationResult.url && copyToClipboard(validationResult.url)}
-                    className="ml-2 p-1 hover:bg-gray-100 rounded transition"
-                    title="Copy URL"
-                  >
-                    {copied ? (
-                      <CheckCircle className="w-4 h-4 text-emerald-600" />
-                    ) : (
-                      <Copy className="w-4 h-4 text-gray-500" />
-                    )}
-                  </button>
-                </div>
               </div>
 
               <div className="border-t pt-4">
                 <p className="text-sm text-gray-600 mb-3">
-                  Nach der Autorisierung speichern wir den Token lokal:
+                  Der Token wird lokal gespeichert (chmod 600, nie im Klartext angezeigt):
                 </p>
                 <button
                   onClick={handleSaveToken}
@@ -254,7 +217,7 @@ export function TelegramSetupDialog() {
               </p>
               <button
                 onClick={() => window.location.reload()}
-                className="px-6 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition font-medium"
+                className="px-6 py-2 bg-sky-600 text-white rounded-md hover:bg-sky-700 transition font-medium"
               >
                 Schließen &amp; Neu laden
               </button>
@@ -294,15 +257,16 @@ export function TelegramSetupDialog() {
           <p>
             Anleitung:{' '}
             <a
-              href="https://discord.com/developers/applications"
+              href="https://core.telegram.org/bots#how-do-i-create-a-bot"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-indigo-600 hover:underline"
+              className="text-sky-600 hover:underline inline-flex items-center"
             >
-              Telegram Developer Portal öffnen
+              Telegram-Bot-Doku öffnen
+              <ExternalLink className="w-3 h-3 ml-1" />
             </a>
-            {' → '}
-            Applications {' → '} New Application {' → '} Bot {' → '} Copy Token
+            {' — '}
+            @BotFather {' → '} /newbot {' → '} Token kopieren
           </p>
         </div>
       </div>

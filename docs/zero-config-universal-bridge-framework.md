@@ -4,6 +4,28 @@
 
 ---
 
+## Implementation Status (adversarial review 2026-07-22)
+
+| Channel | Zero-config endpoints | State |
+|---|---|---|
+| Discord | `POST /discord/validate-token`, `/discord/save-token` | **Working.** Hardened: writes the canonical runtime settings path (`_settings_path`), CSRF-gated, audited. |
+| Telegram | `POST /telegram/validate-token`, `/telegram/save-token` | **Working.** Same hardening as Discord. |
+| Slack | `/slack/oauth/*` | **501 Not Implemented.** The shipped flow called non-existent Slack API paths, sent JSON where Slack requires form-encoding, and structurally cannot yield the `xapp-` Socket-Mode token the daemon needs. |
+| Teams | `/teams/oauth/*` | **501 Not Implemented.** The flow obtained a delegated user Graph token; the daemon authenticates with Bot Framework app credentials — the token can never start the bridge. |
+| Email | `/email/oauth/*` | **501 Not Implemented.** RFC 6749 form-encoding violation + no runtime component consumes the OAuth token (daemon uses IMAP/SMTP credentials). |
+| Signal | `/signal/generate-qr`, `/signal/poll-link` | **501 Not Implemented.** Provisioner was a mock (fake QR, unconditional `linked=true`). |
+| WhatsApp | `/whatsapp/generate-qr`, `/whatsapp/poll-scan` | **501 Not Implemented.** Mock QR was not a Baileys pairing code; real pairing state lives in the daemon's `auth/` dir. |
+
+All non-working channels are configured via the manual flow (`PUT
+/bridges/{channel}/settings` in the Console), which is hardened and audited.
+The `auto_*` JS modules for the 501 channels remain on disk as scaffolding
+only — nothing calls them at runtime. The SetupDialog components
+(`DiscordSetupDialog.tsx`, `TelegramSetupDialog.tsx`) are implemented but not
+yet mounted in the SPA; mounting them requires passing the session's
+`csrf_token` as the `csrf` prop.
+
+---
+
 ## Current State Analysis
 
 | Bridge | Current Setup | Complexity | Auth Method |
