@@ -8,7 +8,7 @@
  * 4. Save: Call /v1/console/discord/save-token (when confirmed)
  */
 
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { CheckCircle, AlertCircle, Copy, ExternalLink, Loader } from 'lucide-react'
 
 interface ValidateTokenResponse {
@@ -208,7 +208,11 @@ export function DiscordSetupDialog() {
                     className="ml-2 p-1 hover:bg-gray-100 rounded transition"
                     title="Copy URL"
                   >
-                    <Copy className="w-4 h-4 text-gray-500" />
+                    {copied ? (
+                      <CheckCircle className="w-4 h-4 text-emerald-600" />
+                    ) : (
+                      <Copy className="w-4 h-4 text-gray-500" />
+                    )}
                   </button>
                 </div>
               </div>
