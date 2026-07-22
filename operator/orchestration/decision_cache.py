@@ -33,6 +33,7 @@ class DecisionCache:
     Cache hit on identical task returns cached decision (zero LM cost).
     Cache miss runs full initial_analysis, caches result for future hits.
     TTL default 300s (5 min); configurable per instance.
+    Memory cache bounded to max_memory_entries; LRU eviction when full.
     """
 
     def __init__(
@@ -41,6 +42,7 @@ class DecisionCache:
         ttl_seconds: int = 300,
         storage_dir: Path | str | None = None,
         enable_sqlite: bool = False,
+        max_memory_entries: int = 1000,
     ) -> None:
         """Initialize decision cache.
 
@@ -49,9 +51,12 @@ class DecisionCache:
             storage_dir: Path to store SQLite db (if enable_sqlite=True).
             enable_sqlite: Enable persistent SQLite backend (Phase 3+).
                            For Phase 2, leave as False (memory-only).
+            max_memory_entries: Maximum in-memory cache entries (LRU eviction).
         """
         self._memory: dict[str, tuple[InitialAnalysisRequest, float]] = {}
+        self._memory_access_order: list[str] = []  # For LRU tracking
         self._ttl_s = max(1, ttl_seconds)
+        self._max_memory_entries = max(1, max_memory_entries)
         self._storage_dir = Path(storage_dir) if storage_dir else None
         self._enable_sqlite = enable_sqlite and storage_dir is not None
         self._db_path: Path | None = None
@@ -89,16 +94,40 @@ class DecisionCache:
             self._db_conn = None
             self._enable_sqlite = False
 
-    def _cache_key_for_task(self, task: str) -> str:
-        """Generate a cache key from task text (SHA256 hash).
+    def _cache_key_for_task(self, task: str, context: dict[str, Any] | None = None) -> str:
+        """Generate a cache key from task text + context (SHA256 hash).
+
+        Includes context in key to avoid stale cache hits when files/environment
+        change. If context changes (file modified, env var updated), cache
+        key differs → new analysis runs.
 
         Args:
-            task: Plain English task description or serialized task dict.
+            task: Plain English task description.
+            context: Optional task context (files, state, config). If provided,
+                    is included in key to prevent stale hits when context changes.
 
         Returns:
             Hex-encoded SHA256 hash (deterministic).
         """
-        return hashlib.sha256(task.encode("utf-8")).hexdigest()
+        # Canonical JSON of context (sorted keys for determinism)
+        context_str = json.dumps(context or {}, sort_keys=True, default=str)
+        combined = f"{task}:::{context_str}"
+        return hashlib.sha256(combined.encode("utf-8")).hexdigest()
+
+    def _evict_lru(self) -> None:
+        """Evict least-recently-used entry if cache is full."""
+        if len(self._memory) >= self._max_memory_entries:
+            if self._memory_access_order:
+                lru_key = self._memory_access_order.pop(0)
+                if lru_key in self._memory:
+                    del self._memory[lru_key]
+                    _logger.debug(f"evicted LRU entry: {lru_key}")
+
+    def _mark_access(self, cache_key: str) -> None:
+        """Mark a cache key as recently accessed (for LRU tracking)."""
+        if cache_key in self._memory_access_order:
+            self._memory_access_order.remove(cache_key)
+        self._memory_access_order.append(cache_key)
 
     async def get_or_analyze(
         self,
@@ -118,18 +147,21 @@ class DecisionCache:
         Returns:
             (decision, is_cache_hit) tuple. is_cache_hit=True when from cache.
         """
-        cache_key = self._cache_key_for_task(task)
+        cache_key = self._cache_key_for_task(task, context)
         now = time.time()
 
         # Check memory cache first (zero-latency fast path)
         if cache_key in self._memory:
             cached_decision, cached_at = self._memory[cache_key]
             if (now - cached_at) < self._ttl_s:
+                self._mark_access(cache_key)  # Update LRU order
                 _logger.info(f"cache_hit: {cache_key}, reusing decision")
                 return cached_decision, True
             else:
                 # Expired in memory — remove
                 del self._memory[cache_key]
+                if cache_key in self._memory_access_order:
+                    self._memory_access_order.remove(cache_key)
 
         # Check SQLite (if enabled)
         decision = self._load_from_sqlite(cache_key, now)
@@ -146,8 +178,12 @@ class DecisionCache:
         decision.ttl_seconds = self._ttl_s
         decision.created_at = now
 
+        # Evict LRU if memory cache is full
+        self._evict_lru()
+
         # Store in memory
         self._memory[cache_key] = (decision, now)
+        self._mark_access(cache_key)
 
         # Store in SQLite (if enabled)
         if self._enable_sqlite:
@@ -172,17 +208,18 @@ class DecisionCache:
                 return None
 
             decision_json, cached_at, ttl_s = row
-            if (now - cached_at) > ttl_s:
+            # Use < (not <=) to match memory cache behavior: expired when age >= ttl
+            if (now - cached_at) < ttl_s:
+                # Still valid
+                decision = InitialAnalysisRequest.from_dict(json.loads(decision_json))
+                return decision
+            else:
                 # Expired
                 self._db_conn.execute(
                     "DELETE FROM decisions WHERE cache_key = ?", (cache_key,)
                 )
                 self._db_conn.commit()
                 return None
-
-            # Deserialize
-            decision = InitialAnalysisRequest.from_dict(json.loads(decision_json))
-            return decision
         except Exception as e:
             _logger.debug(f"SQLite load failed: {e}")
             return None
