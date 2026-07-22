@@ -31,6 +31,14 @@ CREDENTIAL_SOURCES = ("subscription", "env_var", "config_file", "vault", "none",
 _PROBE_TIMEOUT = 5.0
 _OLLAMA_TIMEOUT = 2.0
 
+# Claude credential search paths (same as installer/core.py — MUST stay in sync)
+_CLAUDE_CREDENTIAL_PATHS = [
+    Path.home() / ".claude" / ".credentials.json",
+    Path.home() / ".claude" / "credentials.json",
+    Path.home() / ".config" / "claude" / ".credentials.json",
+    Path.home() / ".config" / "claude" / "credentials.json",
+]
+
 # Auto-discovery candidates — any binary found in PATH gets surfaced as "discovered".
 # (binary_name, display_label) pairs; order = display order after registered engines.
 # NOTE: "claude-code" is NOT a candidate — it is tried as a fallback in probe_claude_code()
@@ -97,6 +105,28 @@ def _run(cmd: list[str], timeout: float = _PROBE_TIMEOUT) -> tuple[int, str, str
         return -1, "", ""
 
 
+def _find_claude_credentials() -> Path | None:
+    """Find Claude credentials across all standard paths (v0.10.60 unification).
+
+    Search order matches installer/core.py to ensure engine_detection and
+    the installer probe the SAME files. Stops at first valid, readable file.
+
+    Fail-closed: returns None if no credentials found, not if a file is corrupted.
+    """
+    for path in _CLAUDE_CREDENTIAL_PATHS:
+        if path.exists() and path.is_file():
+            try:
+                creds = json.loads(path.read_text(encoding="utf-8"))
+                # Valid JSON with at least one auth field
+                if creds.get("claudeAiOauth") or creds.get("accessToken"):
+                    return path
+            except (json.JSONDecodeError, PermissionError, UnicodeDecodeError) as e:
+                _log.warning(f"Credentials file {path} is corrupted or unreadable: {e}")
+                # Continue to next path instead of failing
+                continue
+    return None
+
+
 def probe_claude_code() -> EngineProbeResult:
     engine_id = "claude_code"
 
@@ -125,20 +155,14 @@ def probe_claude_code() -> EngineProbeResult:
             detail="claude binary not found (tried: claude, claude-code)",
         )
 
-    # Subscription-First: check OAuth session before API key.
-    creds_path = Path.home() / ".claude" / ".credentials.json"
-    if creds_path.exists():
-        try:
-            creds = json.loads(creds_path.read_text())
-            # Claude Code OAuth stores session under claudeAiOauth or accessToken.
-            if creds.get("claudeAiOauth") or creds.get("accessToken"):
-                return EngineProbeResult(
-                    engine_id=engine_id, installed=True, authenticated=True,
-                    credential_source="subscription", version=version,
-                    detail="Authenticated via Claude subscription (OAuth)",
-                )
-        except Exception:  # noqa: BLE001
-            pass
+    # Subscription-First: check OAuth session before API key (v0.10.60: unified search).
+    creds_path = _find_claude_credentials()
+    if creds_path:
+        return EngineProbeResult(
+            engine_id=engine_id, installed=True, authenticated=True,
+            credential_source="subscription", version=version,
+            detail=f"Authenticated via Claude subscription (OAuth) — {creds_path}",
+        )
 
     if os.environ.get("ANTHROPIC_API_KEY"):
         return EngineProbeResult(

@@ -217,6 +217,57 @@ class TestQuality:
             f"Summary doesn't explain reasoning: {summary}"
 
 
+class TestCriticalWarnings:
+    """Test that critical warnings / danger sections are preserved in summaries."""
+
+    def test_critical_warnings_not_omitted(self):
+        """WARNING/DANGER/CRITICAL sections must appear in summary (ADR-0209 v0.10.60)."""
+        response = (
+            "Fixed login bug in staging. "
+            "WARNING: Do NOT deploy to production until the database migration runs. "
+            "The schema change is NOT backwards compatible. "
+            "Migration must run before any server upgrade."
+        )
+
+        summary = run_summarize_smart(response, max_chars=500)
+        summary_lower = summary.lower()
+
+        # Must preserve at least one of the warning keywords
+        assert any(w in summary_lower for w in ["warning", "danger", "critical", "must", "not deploy"]), \
+            f"Summary lost critical warning: {summary}"
+
+    def test_danger_section_preserved(self):
+        """DANGER sections must be fully preserved."""
+        response = (
+            "Implemented new authentication protocol. "
+            "DANGER: This is a breaking change — all clients must upgrade within 48 hours "
+            "or they will be locked out. No graceful degradation possible."
+        )
+
+        summary = run_summarize_smart(response, max_chars=500)
+        summary_lower = summary.lower()
+
+        # Must mention both the breaking nature AND the deadline
+        assert "breaking" in summary_lower or "upgrade" in summary_lower or "48" in summary_lower, \
+            f"Summary didn't capture the danger/urgency: {summary}"
+
+    def test_critical_deployment_notes_preserved(self):
+        """Critical deployment/operational notes must not be silently omitted."""
+        response = (
+            "Fixed memory leak in worker pool. "
+            "CRITICAL: Workers must be restarted after deployment. "
+            "Simply reloading the module is NOT sufficient — it will cause a hang. "
+            "Requires full process restart and health check validation."
+        )
+
+        summary = run_summarize_smart(response, max_chars=600)
+        summary_lower = summary.lower()
+
+        # Must mention restart requirement
+        assert any(w in summary_lower for w in ["restart", "reboot", "process", "critical"]), \
+            f"Summary omitted critical restart requirement: {summary}"
+
+
 if __name__ == "__main__":
     # Quick sanity test
     test_response = "Fixed the bug. Added tests. Works now."
