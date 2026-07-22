@@ -32,11 +32,6 @@ from .htrace_consent import (
     effective_geo_tier,
     _open_no_redirect,
 )
-from .telemetry.feature_snapshot import (
-    collect_feature_snapshot,
-    _assert_safe_features,
-    save_feature_snapshot,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -84,13 +79,7 @@ def send_heartbeat(home: Path) -> bool:
         if tier >= 2:
             headers["X-HTrace-Geo-Tier"] = str(tier)
 
-        # Collect feature snapshot (ADR-0212)
-        snapshot = collect_feature_snapshot(home)
-        snapshot = _assert_safe_features(snapshot)
-        save_feature_snapshot(home, snapshot)
-
-        payload_dict = {"features": snapshot}
-        payload = json.dumps(payload_dict).encode("utf-8")
+        payload = json.dumps({}).encode("utf-8")
         req = urllib.request.Request(
             _HEARTBEAT_URL,
             data=payload,
