@@ -122,6 +122,8 @@ from .routes import (
     browser as browser_route,
     # Local instance stats (no remote API)
     local_stats as local_stats_route,
+    # ADR-0212 — Feature Telemetry (Ecosystem Heatmap)
+    stats_features as stats_features_route,
 )
 
 
@@ -197,6 +199,8 @@ router.include_router(space_route.router, prefix="/space", tags=["console-space"
 router.include_router(grants_route.router, prefix="/grants", tags=["console-grants"])
 # Layer 42 — CorvinOrg organisation actors.
 router.include_router(orgs_route.router, prefix="/orgs", tags=["console-orgs"])
+# ADR-0212 — Feature Telemetry Heatmap (instances × features).
+router.include_router(stats_features_route.router, tags=["console-stats"])
 # Token management router kept as empty stub (tokens removed — see routes/tokens.py).
 # ADR-0062 — Console floating assistant (stateless claude -p wrapper).
 router.include_router(assistant_route.router, tags=["console-assistant"])
