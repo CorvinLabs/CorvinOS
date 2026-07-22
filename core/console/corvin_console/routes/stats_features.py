@@ -2,6 +2,13 @@
 
 GET /v1/console/stats/features returns instance-level feature adoption percentages.
 Aggregates locally stored feature_snapshot.json records; no backend call needed.
+
+Response shape mirrors the ecosystem-wide GET /v1/stats/features on the
+Railway backend (corvin_features.telemetry.feature_stats) — same
+adoption_pct/adoption_counts/total_instances keys, same feature-key names —
+so the dashboard card and the public stats page can share one mental model
+even though one aggregates 1 local instance and the other aggregates the
+whole fleet.
 """
 from __future__ import annotations
 
@@ -14,39 +21,37 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-
-class FeatureSnapshot(BaseModel):
-    instance_id: str
-    bridges_connected: int = 0
-    ldd_enabled: bool = False
-    a2a_delegations_count: int = 0
-    workflows_run_count: int = 0
-    browser_automation_used: bool = False
-    compute_jobs_count: int = 0
-    forge_tools_created: int = 0
-    skills_created: int = 0
-    voice_sessions: int = 0
-    artifacts_created: int = 0
+# Keep in sync with aco/feature_snapshot.py::_KNOWN_FEATURES and
+# corvin_features.telemetry.feature_counter._KNOWN_FEATURES.
+_KNOWN_FEATURES = (
+    "bridges_connected",
+    "ldd_enabled",
+    "a2a_delegations_count",
+    "workflows_run_count",
+    "browser_automation_used",
+    "compute_jobs_count",
+    "forge_tools_created",
+    "skills_created",
+    "voice_sessions",
+    "artifacts_created",
+    "mcp_servers_connected",
+)
 
 
 class FeatureHeatmapResponse(BaseModel):
-    """Adoption percentages for core features."""
-    bridges_adoption: float
-    ldd_adoption: float
-    a2a_adoption: float
-    workflows_adoption: float
-    browser_adoption: float
-    compute_adoption: float
-    instance_count: int
+    """Adoption percentages for this instance's known features."""
+    adoption_pct: dict[str, float]
+    adoption_counts: dict[str, int]
+    total_instances: int
 
 
 @router.get("/stats/features", tags=["console-stats"])
 def get_feature_stats() -> FeatureHeatmapResponse:
-    """Get ecosystem-level feature adoption heatmap.
+    """Get this instance's feature adoption snapshot.
 
-    Scans ~/.corvin/telemetry/feature_snapshot.json (local instance data).
-    Returns adoption percentages for core features: Bridges, LDD, A2A, Workflows,
-    Browser, Compute. Used by dashboard FeatureHeatmapCard component.
+    Scans ~/.corvin/telemetry/feature_snapshot.json (local instance data
+    only — the ecosystem-wide aggregate lives on the Railway backend, see
+    GET /v1/stats/features). Used by dashboard FeatureHeatmapCard component.
     """
     # Resolve home path from environment or default.
     import os
@@ -54,7 +59,7 @@ def get_feature_stats() -> FeatureHeatmapResponse:
     home = Path(home_str) if home_str else Path.home() / ".corvin"
 
     snapshot_file = home / "telemetry" / "feature_snapshot.json"
-    snapshot_data = {}
+    snapshot_data: dict[str, Any] = {}
 
     if snapshot_file.exists():
         try:
@@ -62,21 +67,17 @@ def get_feature_stats() -> FeatureHeatmapResponse:
         except (OSError, json.JSONDecodeError):
             pass
 
-    # Calculate adoption rates (instance-level booleans map to 0/1).
-    instance_count = 1  # Always at least the local instance.
-    bridges_adoption = float(snapshot_data.get("bridges_connected", 0) > 0) * 100
-    ldd_adoption = float(snapshot_data.get("ldd_enabled", False)) * 100
-    a2a_adoption = float(snapshot_data.get("a2a_delegations_count", 0) > 0) * 100
-    workflows_adoption = float(snapshot_data.get("workflows_run_count", 0) > 0) * 100
-    browser_adoption = float(snapshot_data.get("browser_automation_used", False)) * 100
-    compute_adoption = float(snapshot_data.get("compute_jobs_count", 0) > 0) * 100
+    has_snapshot = bool(snapshot_data)
+    adoption_counts: dict[str, int] = {}
+    adoption_pct: dict[str, float] = {}
+    for key in _KNOWN_FEATURES:
+        value = snapshot_data.get(key)
+        adopted = bool(value) if isinstance(value, bool) else bool(value and value > 0)
+        adoption_counts[key] = int(adopted)
+        adoption_pct[key] = 100.0 if adopted else 0.0
 
     return FeatureHeatmapResponse(
-        bridges_adoption=bridges_adoption,
-        ldd_adoption=ldd_adoption,
-        a2a_adoption=a2a_adoption,
-        workflows_adoption=workflows_adoption,
-        browser_adoption=browser_adoption,
-        compute_adoption=compute_adoption,
-        instance_count=instance_count,
+        adoption_pct=adoption_pct,
+        adoption_counts=adoption_counts,
+        total_instances=1 if has_snapshot else 0,
     )

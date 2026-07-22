@@ -888,12 +888,17 @@ function FeatureHeatmapCard() {
   }, []);
 
   const features = [
-    { name: "Bridges", key: "bridges" },
-    { name: "LDD", key: "ldd" },
-    { name: "A2A", key: "a2a" },
-    { name: "Workflows", key: "workflows" },
-    { name: "Browser", key: "browser" },
-    { name: "Compute", key: "compute" },
+    { name: "Bridges", key: "bridges_connected" },
+    { name: "LDD", key: "ldd_enabled" },
+    { name: "A2A", key: "a2a_delegations_count" },
+    { name: "Workflows", key: "workflows_run_count" },
+    { name: "Browser", key: "browser_automation_used" },
+    { name: "Compute", key: "compute_jobs_count" },
+    { name: "Forge Tools", key: "forge_tools_created" },
+    { name: "Skills", key: "skills_created" },
+    { name: "Voice", key: "voice_sessions" },
+    { name: "Artifacts", key: "artifacts_created" },
+    { name: "MCP Servers", key: "mcp_servers_connected" },
   ];
 
   return (
