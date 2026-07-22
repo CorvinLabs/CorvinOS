@@ -4,18 +4,23 @@
 // All inbound messages are tagged channel:"discord". Adapter routes the
 // reply back via the chat_id (= Discord channel ID).
 //
-// Setup:
+// Setup — a bot token is ALL that is required:
 //   1. https://discord.com/developers/applications → New Application →
 //      Bot tab → Reset Token → copy.
-//   2. Enable "MESSAGE CONTENT INTENT" under Privileged Gateway Intents.
-//   3. OAuth2 → URL Generator → scopes: bot. Permissions: Read Messages,
+//   2. OAuth2 → URL Generator → scopes: bot. Permissions: Read Messages,
 //      Send Messages, Attach Files, Read Message History. Copy URL, open
 //      it in browser, invite bot to your server (or to a personal server).
-//   4. Put token in settings.json -> discord_token.
-//   5. Add your Discord user ID to whitelist (right-click your name in
-//      Discord → "User-ID copy"; needs Developer Mode enabled in
-//      Settings → Advanced).
-//   6. Run via systemd or `node daemon.js`.
+//   3. Put token in settings.json -> discord_token.
+//   4. Run via systemd or `node daemon.js`.
+//
+// Optional:
+//   - "MESSAGE CONTENT INTENT" (Privileged Gateway Intents in the portal):
+//     WITHOUT it the bot still reads DMs and @mentions in full — enable it
+//     only if the bot should read ALL guild-channel text. The daemon
+//     preflights the portal state via REST and requests the privileged
+//     intent only when it is actually granted (intent_preflight.js), so a
+//     fresh app with the toggle off boots cleanly in token-only mode.
+//   - whitelist: empty = first sender becomes owner (DEV mode).
 
 const fs = require('fs');
 const path = require('path');
@@ -25,7 +30,7 @@ const { spawn } = require('child_process');
 // has been turned off via the Bridges console (state.json).
 require('../shared/js/bridge_state').exitIfDisabled('discord');
 
-const { Client, GatewayIntentBits, Partials, AttachmentBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, IntentsBitField, Partials, AttachmentBuilder } = require('discord.js');
 
 // ── Shared bridge runtime (Phase 2 refactor) ────────────────────────────────
 const { makeLogger }            = require('../shared/js/logger');
@@ -41,6 +46,7 @@ const inChatCmds                = require('../shared/js/in_chat_commands');
 const chatToggle                = require('../shared/js/chat_toggle');
 const slashCommands             = require('./slash_commands');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
+const { messageContentAvailable } = require('./intent_preflight');
 
 const ROOT = __dirname;
 const PLUGIN_ROOT = path.resolve(ROOT, '..', '..');
@@ -212,6 +218,31 @@ const client = new Client({
   ],
   partials: [Partials.Channel, Partials.Message],
 });
+
+// Token-only mode: MessageContent is a PRIVILEGED intent — a fresh app has
+// the portal toggle off and the gateway kills the IDENTIFY (4014 "used
+// disallowed intents") if we request it anyway. loginWithBackoff() preflights
+// the portal state and calls enterTokenOnlyMode() when the intent would be
+// rejected; DMs and @mentions carry full content without it. The marker file
+// survives restarts so a login that DID die on disallowed intents (preflight
+// unreachable) comes back up in token-only mode on the supervisor restart.
+let messageContentActive = true;
+const MC_MARKER = path.join(path.dirname(SETTINGS_FILE), '.message_content_disallowed');
+
+function enterTokenOnlyMode(reason) {
+  if (!messageContentActive) return;
+  messageContentActive = false;
+  // Safe pre-login: WebSocketManager reads client.options.intents.bitfield at
+  // connect() time, not at Client construction (discord.js v14).
+  client.options.intents = new IntentsBitField([
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.DirectMessages,
+  ]).freeze();
+  log(`message-content intent OFF (${reason}) — token-only mode: DMs and @mentions ` +
+      `work out of the box; enable "MESSAGE CONTENT INTENT" in the Developer Portal ` +
+      `to read all guild-channel text`);
+}
 
 client.once('ready', async () => {
   log(`logged in as ${client.user.tag} (id=${client.user.id})`);
@@ -482,7 +513,14 @@ client.on('messageCreate', async (msg) => {
   try {
     if (msg.author.bot) return;
     const userId = msg.author.id;
-    const text = msg.content || '';
+    // Strip a leading @mention of the bot: in token-only mode (no privileged
+    // MessageContent intent) guild text only arrives when the bot is
+    // mentioned, and "<@botid> hello" should reach the adapter as "hello".
+    // Harmless when the intent is active — a leading mention is address form,
+    // not content.
+    let text = msg.content || '';
+    const meId = client.user?.id;
+    if (meId) text = text.replace(new RegExp(`^\\s*<@!?${meId}>\\s*`), '');
     const id = newMsgId();
 
     {
@@ -751,6 +789,13 @@ client.on('messageCreate', async (msg) => {
 
     if (text) {
       writeInbox({ ...base, text });
+    } else if (!messageContentActive) {
+      // Expected in token-only mode: guild messages that neither mention the
+      // bot nor are DMs arrive with stripped content. Log at trace level of
+      // detail but with the actionable hint.
+      log(`messageCreate dropped (token-only mode): guild message without @mention — ` +
+          `mention the bot or DM it, or enable MESSAGE CONTENT INTENT in the Developer ` +
+          `Portal (msg=${msg.id} author=${userId} channel=${msg.channel.id})`);
     } else {
       // Empty text + no attachments. The most likely cause is the
       // "MESSAGE CONTENT INTENT" being disabled in the Developer Portal —
@@ -991,6 +1036,20 @@ async function loginWithBackoff() {
   //    15 s and retry immediately once the uplink is back, instead of
   //    sitting out a 900 s ladder step 12 minutes past network recovery
   //    (incident 2026-07-10). Network failures don't advance the ladder.
+  // Preflight the privileged-intent portal state BEFORE the first IDENTIFY —
+  // requesting MessageContent against a fresh app (toggle off) makes the
+  // gateway reject the login outright. true → request it; false → token-only
+  // mode; null (REST unreachable) → fall back to the marker a previous
+  // disallowed-intents failure left behind.
+  const mcAvailable = await messageContentAvailable(TOKEN);
+  if (mcAvailable === false) {
+    enterTokenOnlyMode('portal toggle is off');
+  } else if (mcAvailable === true) {
+    try { fs.unlinkSync(MC_MARKER); } catch {}
+  } else if (fs.existsSync(MC_MARKER)) {
+    enterTokenOnlyMode('preflight unreachable + previous disallowed-intents failure');
+  }
+
   let apiAttempt = 0;
   for (;;) {
     try {
@@ -999,6 +1058,22 @@ async function loginWithBackoff() {
       return;
     } catch (e) {
       const msg = e?.message || String(e);
+      if (/disallowed intents/i.test(msg) && messageContentActive) {
+        // NOT a token problem: the portal toggle is off and the preflight
+        // could not tell us (REST unreachable / new failure mode). Leave a
+        // marker so the supervisor restart boots straight into token-only
+        // mode instead of looping on the same rejected IDENTIFY.
+        try {
+          fs.mkdirSync(path.dirname(MC_MARKER), { recursive: true });
+          fs.writeFileSync(MC_MARKER,
+            `${new Date().toISOString()} gateway rejected privileged intents\n`);
+        } catch (we) { log(`marker write failed: ${we.message}`); }
+        log('login failed: gateway rejected the privileged MESSAGE CONTENT intent ' +
+            '(portal toggle is off — this is NOT a token problem). Exiting for a ' +
+            'supervisor restart into token-only mode (DMs + @mentions work without ' +
+            'any portal change).');
+        process.exit(1);
+      }
       if (e?.code === 'TokenInvalid' || TERMINAL_LOGIN_PATTERNS.test(msg)) {
         log(`login failed (terminal — token rotation needed): ${msg}`);
         process.exit(1);

@@ -219,9 +219,10 @@ either fails (ADR-0185 M5).
    and click **New Application**. Give it a name.
 2. In the left sidebar, click **Bot**.
 3. Click **Reset Token** (confirm the warning), then copy the token.
-4. On the same page, scroll down to **Privileged Gateway Intents** and enable
-   **MESSAGE CONTENT INTENT**. Save changes. (Without this, the bot cannot read
-   message text.)
+4. Optional: scroll down to **Privileged Gateway Intents** and enable
+   **MESSAGE CONTENT INTENT** if the bot should read *all* guild-channel text.
+   Without it, DMs and @mentions work out of the box — the daemon preflights
+   the portal state and starts in token-only mode automatically.
 5. In the left sidebar, click **OAuth2 → URL Generator**.
 6. Under **Scopes**, check `bot`.
 7. Under **Bot Permissions**, check: `Send Messages`, `Read Message History`,

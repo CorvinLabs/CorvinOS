@@ -47,10 +47,13 @@ corvin-install --bridge discord   # guided token setup for Discord only
 3. Left sidebar: **Bot** → **Add Bot** → confirm
 4. Under **Token**: click **Reset Token** → copy the token
 
-### 2. Enable Privileged Intents
-On the same **Bot** page, scroll to **Privileged Gateway Intents** and enable:
-- **Message Content Intent** ✓
-- **Server Members Intent** ✓ (optional, for user management)
+### 2. Privileged Intents (optional)
+The bot token alone is enough: without any privileged intent, DMs and
+@mentions work out of the box (the daemon detects the portal state and starts
+in token-only mode). Enable on the **Bot** page under **Privileged Gateway
+Intents** only if you want more:
+- **Message Content Intent** — read *all* guild-channel text (not just @mentions)
+- **Server Members Intent** — optional, for user management
 
 ### 3. Invite the bot to your server
 1. Left sidebar: **OAuth2 → URL Generator**
@@ -224,7 +227,7 @@ The bridge package (npm / pip) is NOT uninstalled — run `corvin-uninstall` for
 ### "Bridge did not start" / no response in the chat app
 1. Check logs: `bridge.sh logs discord`  (or the bridge name)
 2. Verify the token is correct and has the right permissions
-3. On Discord: make sure **Message Content Intent** is enabled
+3. On Discord: without **Message Content Intent** the bot only sees DMs and @mentions — mention the bot, or enable the intent for full channel reading
 4. Restart the bridge: `bridge.sh restart discord`
 
 ### Voice notes not being sent

@@ -141,8 +141,9 @@ def _configure_discord(bridges_dir: Path, interactive: bool) -> BridgeSetup:
     print()
     print("  Discord bot token — get one at https://discord.com/developers/applications")
     print("    1. New Application → Bot → Reset Token → copy")
-    print("    2. Enable 'MESSAGE CONTENT INTENT' under Privileged Gateway Intents")
-    print("    3. OAuth2 → URL Generator → bot + Read/Send/History perms → invite")
+    print("    2. OAuth2 → URL Generator → bot + Read/Send/History perms → invite")
+    print("    (Optional: enable 'MESSAGE CONTENT INTENT' to read ALL guild text;")
+    print("     without it, DMs and @mentions work out of the box.)")
     token = input("  Paste token: ").strip()
 
     print()

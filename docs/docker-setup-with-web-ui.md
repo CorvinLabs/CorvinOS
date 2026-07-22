@@ -102,9 +102,9 @@ The UI provides **step-by-step setup guides** for each bridge:
 2. Create a new application
 3. Add a bot user
 4. Copy the bot token
-5. Enable Message Content Intent
-6. Paste token in the UI
-7. Bridge auto-connects
+5. Paste token in the UI — that's all that's required
+6. Bridge auto-connects (DMs + @mentions work immediately; optionally enable
+   Message Content Intent for full guild-channel reading)
 
 **Telegram**
 1. Chat with @BotFather on Telegram
