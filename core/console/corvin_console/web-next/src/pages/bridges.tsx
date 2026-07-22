@@ -2,6 +2,7 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
 import {
+  AlertTriangle,
   BookOpen,
   Check,
   CheckCircle2,
@@ -26,6 +27,8 @@ import {
   Send,
   Settings2,
   Sliders,
+  Trash2,
+  Unplug,
   X,
   XCircle,
   Zap,
@@ -55,6 +58,7 @@ import {
   listWebhookChannels,
   putBridgeSettings,
   setBridgeEnabled,
+  disconnectBridge,
   type BridgeListItem,
 } from "@/lib/api";
 import {
@@ -667,6 +671,11 @@ function BridgeTile({
     timeMinutes: 5,
   };
   const Icon = meta.icon;
+  // Disconnected, but a configuration is still on disk (whitelist, PIN, ...).
+  // That is a different state from "never set up" and gets its own affordances:
+  // reconnecting keeps the settings, and Manage stays reachable so the leftover
+  // configuration can still be deleted.
+  const leftovers = !bridge.configured && !!bridge.has_settings;
 
   return (
     <div
@@ -709,15 +718,18 @@ function BridgeTile({
         </div>
         <div className="text-xs text-muted-foreground">
           {!bridge.configured
-            ? "Not connected"
+            ? leftovers
+              ? "Disconnected · settings kept"
+              : "Not connected"
             : bridge.enabled
               ? "Active"
               : "Configured · inactive"}
         </div>
       </div>
 
-      {/* Requirements preview (only on unconfigured tiles) */}
-      {!bridge.configured && meta.requirements.length > 0 && (
+      {/* Requirements preview (only for channels never set up — pointless once
+          the user already has a configuration waiting to be reconnected). */}
+      {!bridge.configured && !leftovers && meta.requirements.length > 0 && (
         <div className="rounded-lg bg-muted/40 px-3 py-2.5 space-y-1.5">
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
             What you need
@@ -738,23 +750,37 @@ function BridgeTile({
       )}
 
       {/* Action */}
-      <Button
-        size="sm"
-        variant={bridge.configured ? "outline" : "accent"}
-        className="mt-auto w-full gap-1.5"
-        onClick={bridge.configured ? onManage : onConnect}
-      >
-        {bridge.configured ? (
-          <>
-            <Settings2 className="h-3.5 w-3.5" /> Manage
-          </>
-        ) : (
-          <>
-            Connect
-            <ChevronRight className="h-3.5 w-3.5" />
-          </>
+      <div className="mt-auto space-y-1.5">
+        <Button
+          size="sm"
+          variant={bridge.configured ? "outline" : "accent"}
+          className="w-full gap-1.5"
+          onClick={bridge.configured ? onManage : onConnect}
+        >
+          {bridge.configured ? (
+            <>
+              <Settings2 className="h-3.5 w-3.5" /> Manage
+            </>
+          ) : (
+            <>
+              {leftovers ? "Reconnect" : "Connect"}
+              <ChevronRight className="h-3.5 w-3.5" />
+            </>
+          )}
+        </Button>
+        {/* Without this, a disconnected channel's leftover configuration would
+            be unreachable — the primary button goes to the setup wizard. */}
+        {leftovers && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="w-full gap-1.5 text-xs text-muted-foreground"
+            onClick={onManage}
+          >
+            <Settings2 className="h-3.5 w-3.5" /> Settings
+          </Button>
         )}
-      </Button>
+      </div>
     </div>
   );
 }
@@ -1295,6 +1321,10 @@ function BridgeManageDialog({
   const [pendingEnabled, setPendingEnabled] = React.useState<boolean | null>(
     null,
   );
+  // Which destructive action the user is confirming, if any.
+  const [confirmMode, setConfirmMode] = React.useState<
+    "disconnect" | "delete" | null
+  >(null);
   const [toast, setToast] = React.useState<{
     kind: "ok" | "err";
     msg: string;
@@ -1381,6 +1411,30 @@ function BridgeManageDialog({
     onError: (e: Error) => setToast({ kind: "err", msg: e.message }),
   });
 
+  const disconnectMutation = useMutation({
+    mutationFn: async (mode: "disconnect" | "delete") =>
+      disconnectBridge(channel, mode, session!.csrf_token, session!.fingerprint),
+    onSuccess: async (data) => {
+      setToast({
+        kind: "ok",
+        msg:
+          data.mode === "delete"
+            ? `${meta.label} deleted. Connect again to set it up from scratch.`
+            : `${meta.label} disconnected — your settings were kept. Connect again with new credentials.`,
+      });
+      await qc.invalidateQueries({ queryKey: ["bridges"] });
+      // The dialog's own detail query is now stale (credentials are gone).
+      await qc.invalidateQueries({ queryKey: ["bridges", channel] });
+      setConfirmMode(null);
+      // A deleted channel has nothing left to manage — drop back to the grid.
+      if (data.mode === "delete") onClose();
+    },
+    onError: (e: Error) => {
+      setToast({ kind: "err", msg: e.message });
+      setConfirmMode(null);
+    },
+  });
+
   return (
     <DialogContent className="max-w-2xl">
       <DialogHeader>
@@ -1464,6 +1518,12 @@ function BridgeManageDialog({
               <TabsTrigger value="advanced" className="gap-1.5">
                 <Settings2 className="h-3.5 w-3.5" /> Advanced
               </TabsTrigger>
+              <TabsTrigger
+                value="connection"
+                className="gap-1.5 data-[state=active]:text-destructive"
+              >
+                <Unplug className="h-3.5 w-3.5" /> Connection
+              </TabsTrigger>
             </TabsList>
 
             {/* Settings tab */}
@@ -1523,6 +1583,117 @@ function BridgeManageDialog({
                   <p className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                     {advancedError}
                   </p>
+                )}
+              </div>
+            </TabsContent>
+
+            {/* Connection tab — disconnect / delete so the channel can be set
+                up again with different credentials. */}
+            <TabsContent value="connection">
+              <div className="space-y-4">
+                <p className="text-xs text-muted-foreground">
+                  Use this to hand {meta.label} to a different bot or account,
+                  or to revoke a credential you no longer trust. Both actions
+                  stop the bridge and switch the channel off; a backup of the
+                  previous configuration is kept on the server.
+                </p>
+
+                {/* Level 1 — disconnect, keep preferences */}
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-1">
+                      <p className="flex items-center gap-1.5 text-sm font-medium">
+                        <Unplug className="h-3.5 w-3.5 text-amber-500" />
+                        Disconnect
+                      </p>
+                      <p className="text-[11px] leading-relaxed text-muted-foreground">
+                        Removes the credential and any device pairing. Your
+                        whitelist, PIN, rate limit and per-chat profiles stay.
+                        Connect again to plug in new credentials.
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 border-amber-500/40 text-amber-600 hover:bg-amber-500/10 dark:text-amber-400"
+                      disabled={disconnectMutation.isPending}
+                      onClick={() => setConfirmMode("disconnect")}
+                    >
+                      Disconnect
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Level 2 — full delete */}
+                <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="space-y-1">
+                      <p className="flex items-center gap-1.5 text-sm font-medium text-destructive">
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete configuration
+                      </p>
+                      <p className="text-[11px] leading-relaxed text-muted-foreground">
+                        Removes the whole configuration file, including your
+                        whitelist and preferences. The channel goes back to
+                        never-configured.
+                      </p>
+                    </div>
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="shrink-0"
+                      disabled={disconnectMutation.isPending}
+                      onClick={() => setConfirmMode("delete")}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Inline confirmation — deliberately not a native confirm(),
+                    and it names the exact consequence of the chosen level. */}
+                {confirmMode && (
+                  <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 space-y-3">
+                    <p className="flex items-start gap-2 text-xs text-destructive">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      {confirmMode === "delete" ? (
+                        <span>
+                          Delete the entire {meta.label} configuration? Your
+                          whitelist and preferences go too. This stops the
+                          bridge immediately.
+                        </span>
+                      ) : (
+                        <span>
+                          Disconnect {meta.label}? The credential is removed and
+                          the bridge stops. Your settings are kept.
+                        </span>
+                      )}
+                    </p>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={disconnectMutation.isPending}
+                        onClick={() => setConfirmMode(null)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        disabled={disconnectMutation.isPending}
+                        onClick={() => disconnectMutation.mutate(confirmMode)}
+                      >
+                        {disconnectMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : confirmMode === "delete" ? (
+                          "Yes, delete"
+                        ) : (
+                          "Yes, disconnect"
+                        )}
+                      </Button>
+                    </div>
+                  </div>
                 )}
               </div>
             </TabsContent>

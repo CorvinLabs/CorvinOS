@@ -370,7 +370,12 @@ export async function setPersonaDisabled(
 
 export interface BridgeListItem {
   channel: string;
+  /** True only when a usable credential is on disk — NOT merely "a settings
+   *  file exists". A file holding just preferences is not a connection. */
   configured: boolean;
+  /** A settings file exists (possibly preferences-only). Used to tell
+   *  "never set up" apart from "disconnected, preferences kept". */
+  has_settings?: boolean;
   enabled: boolean;
   path: string;
   size_bytes: number;
@@ -435,6 +440,39 @@ export async function setBridgeEnabled(
       method: "PUT",
       csrf,
       body: { enabled, re_auth_token: reAuthToken || null },
+    },
+  );
+}
+
+/** Drop a channel's connection so it can be set up again.
+ *
+ *  "disconnect" strips credentials and pairing state but keeps preferences
+ *  (whitelist, PIN, rate limits, chat_profiles) — the "reconnect with a
+ *  different bot" path. "delete" removes settings.json entirely; a .bak is
+ *  kept server-side either way. Both stop the daemon and disable the channel. */
+export interface BridgeDisconnectResponse {
+  channel: string;
+  mode: "disconnect" | "delete";
+  /** Key NAMES that were removed — never their values. */
+  cleared_keys: string[];
+  removed_files: string[];
+  archived_state: string[];
+  restart_needed: boolean;
+  ok: boolean;
+}
+
+export async function disconnectBridge(
+  channel: string,
+  mode: "disconnect" | "delete",
+  csrf: string,
+  reAuthToken?: string,
+): Promise<BridgeDisconnectResponse> {
+  return api<BridgeDisconnectResponse>(
+    `/bridges/${encodeURIComponent(channel)}/disconnect`,
+    {
+      method: "POST",
+      csrf,
+      body: { mode, re_auth_token: reAuthToken || null },
     },
   );
 }

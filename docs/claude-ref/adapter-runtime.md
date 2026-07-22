@@ -28,6 +28,48 @@ structural daemon code changes. After structural changes, note:
 
 ---
 
+## Disconnecting / deleting a channel connection
+
+`POST /bridges/{channel}/disconnect` drops a connection so the channel can be
+set up again — previously a credential could only be created, never removed, so
+moving a bridge to a different bot or revoking a leaked token was impossible
+from the console.
+
+| `mode` | Removes | Keeps |
+|---|---|---|
+| `disconnect` (default) | credentials + pairing state | whitelist, `pin`, rate limit, `chat_profiles`, `lang`, routing |
+| `delete` | the whole `settings.json` | nothing (a `.bak` is written first) |
+
+Both stop the daemon and set `enabled: false`. Gated like every mutation
+(cookie + CSRF + re-auth) and audited as `bridge.connection.{disconnect,delete}`.
+
+**Load-bearing details — each one is a way for "delete" to silently not delete:**
+
+- **Stop the daemon first.** Daemons hot-reload `settings.json` and some
+  re-persist credentials (WhatsApp's `saveCreds`), so cleaning the file under a
+  live daemon can be undone a second later. The route stops before it writes.
+- **Clean BOTH locations.** The zero-config setup endpoints write via
+  `_resolve_bridges_dir()` (source/`_vendor`) while `_settings_path()` is the
+  runtime path, and `_read_settings()` falls back runtime → legacy. Clearing one
+  leaves a working credential behind.
+- **`pin` is a preference, not a credential.** It matches `_SECRET_KEY_HINTS`
+  (so it is masked on GET, correctly) but it is the operator's access PIN — it
+  must survive a disconnect and must never count as proof of a connection. See
+  `_PREFERENCE_SECRET_KEYS`.
+- **Pairing state lives outside `settings.json`.** WhatsApp keeps linked-device
+  credentials in `<channel>/auth/` (Baileys `useMultiFileAuthState`); the route
+  archives that directory to `auth.bak.<stamp>` rather than leaving it, or the
+  daemon re-attaches to the old account.
+
+**`configured` means "has a usable credential", not "a settings file exists".**
+`GET /bridges` derives it from `_channel_connected()`. The old file-existence
+test reported a preferences-only file as configured — on a real install
+`telegram` was exactly that — and after a disconnect every channel would still
+have claimed to be set up. `has_settings` is reported separately so the UI can
+distinguish "never configured" from "disconnected, preferences kept".
+
+---
+
 ## Inbox dispatch model — turn pool vs. side-channel pool (load-bearing)
 
 Inbound items are read by the poll loop (`INBOX.glob("*.json")`, name-sorted) and

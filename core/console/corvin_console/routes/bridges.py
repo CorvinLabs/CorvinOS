@@ -576,10 +576,16 @@ def list_bridges(
     state = _read_state()
     items = []
     for channel in CHANNELS:
-        path = _BRIDGES_DIR / channel / "settings.json"
+        # Report the RUNTIME path — that is where writes land and where every
+        # daemon reads. The legacy path stays a read-fallback only.
+        path = _settings_path(channel)
+        legacy = _legacy_settings_path(channel)
+        present = path.exists() or legacy.exists()
         items.append({
             "channel":    channel,
-            "configured": path.exists(),
+            # Credential-based, not file-based: see _channel_connected.
+            "configured": _channel_connected(channel),
+            "has_settings": present,
             "enabled":    _channel_enabled(channel, state),
             "path":       str(path),
             "size_bytes": path.stat().st_size if path.exists() else 0,
@@ -757,6 +763,238 @@ class SaveTokenRequest(BaseModel):
 class SaveTokenResponse(BaseModel):
     success: bool
     error: str | None = None
+
+
+# ── Disconnect / delete a channel connection ──────────────────────────
+#
+# Until now a channel could be created (save-token / OAuth exchange / QR
+# pairing) and toggled off, but never *un*-connected: the credential stayed on
+# disk forever and re-running the setup wizard was the only way to replace it.
+# There was no way to hand a bridge to a different bot/account, or to revoke a
+# leaked token from the UI.
+#
+# Two levels, because they answer different questions:
+#
+#   disconnect  -- "give me a fresh connection, keep my configuration"
+#                  Strips credentials and link state; keeps whitelist, pin,
+#                  rate limits, chat_profiles, language, routing.
+#   delete      -- "remove this channel entirely"
+#                  Removes settings.json outright (a .bak is kept).
+#
+# Both stop the daemon FIRST. Ordering is load-bearing: a running daemon
+# hot-reloads settings.json and several of them re-persist credentials (e.g.
+# WhatsApp's saveCreds), so cleaning the file under a live daemon can be undone
+# a second later.
+#
+# Both also clean BOTH storage locations. The zero-config endpoints above write
+# via _resolve_bridges_dir() (source/_vendor tree) while _settings_path() is the
+# runtime path, and _read_settings() falls back from runtime to legacy — so
+# clearing only one of them leaves a working credential behind and the channel
+# silently stays connected.
+
+# Non-secret keys that still identify a *connection* and must go when the user
+# asks for a fresh one. Secret-shaped keys (token/password/api_key/...) are
+# swept generically via _SECRET_KEY_HINTS, so this list only needs the ones a
+# name-based match would miss.
+_CONNECTION_KEYS: dict[str, tuple[str, ...]] = {
+    "discord":  (),
+    "telegram": (),
+    "slack":    ("team_id",),
+    "teams":    ("user_email",),
+    "email":    ("imap_user", "smtp_user", "from_address"),
+    "signal":   ("signal_linked", "_pending_device_id", "_device_link_generated_at"),
+    "whatsapp": ("whatsapp_linked", "_pending_session_id", "_qr_generated_at"),
+}
+
+# Written by every setup path; never a user preference.
+_CONNECTION_KEYS_COMMON = ("_token_validated_at",)
+
+# Secret-SHAPED keys that are nonetheless user preferences, not credentials for
+# the upstream service. ``pin`` is the bridge access PIN the operator chooses;
+# it matches _SECRET_KEY_HINTS (masking it on GET is right) but it must survive
+# a disconnect and must never count as proof that a channel is connected.
+_PREFERENCE_SECRET_KEYS = frozenset({"pin"})
+
+
+def _is_credential_key(key: str) -> bool:
+    """True for keys that carry (or directly identify) a credential.
+
+    Name-based on purpose: it stays correct when a channel gains a new secret
+    field, which an explicit allowlist would not.
+    """
+    low = key.lower()
+    if low in _PREFERENCE_SECRET_KEYS:
+        return False
+    return any(hint in low for hint in _SECRET_KEY_HINTS)
+
+
+# Per-channel flags that prove a pairing exists without any secret in the file.
+_LINK_FLAGS = {"signal": "signal_linked", "whatsapp": "whatsapp_linked"}
+
+
+def _channel_connected(channel: str) -> bool:
+    """True iff the channel actually holds a usable connection.
+
+    Deliberately NOT ``settings.json exists``: a channel can have a settings
+    file holding nothing but preferences (whitelist, PIN, rate limit) and still
+    have no credential at all — on this very install ``telegram`` is exactly
+    that, and the tile claimed "configured" for a bridge that cannot start.
+    After a disconnect the same would be true for every channel, so the tile
+    has to key off the credential, not the file.
+    """
+    settings = _read_settings(channel)
+    flag = _LINK_FLAGS.get(channel)
+    if flag and settings.get(flag):
+        return True
+    for key, value in settings.items():
+        if not _is_credential_key(key):
+            continue
+        if isinstance(value, str):
+            # Whitespace-only is not a credential. Must return here rather than
+            # fall through: the generic emptiness check below would treat "   "
+            # as truthy and report a blank token as a live connection.
+            if value.strip():
+                return True
+            continue
+        if value not in (None, False, [], {}):
+            return True
+    return False
+
+
+def _credential_keys_for(channel: str, settings: dict[str, Any]) -> list[str]:
+    """Keys to strip from ``settings`` for a disconnect of ``channel``."""
+    explicit = set(_CONNECTION_KEYS.get(channel, ())) | set(_CONNECTION_KEYS_COMMON)
+    return sorted(k for k in settings if k in explicit or _is_credential_key(k))
+
+
+def _link_state_dirs(channel: str) -> list[Path]:
+    """On-disk pairing state that lives outside settings.json.
+
+    WhatsApp (Baileys ``useMultiFileAuthState``) keeps its linked-device
+    credentials in ``<channel>/auth/``. Leaving that behind means the daemon
+    silently re-attaches to the old account after a "disconnect", so it has to
+    go with the credential.
+    """
+    dirs: list[Path] = []
+    if channel == "whatsapp":
+        for base in (_BRIDGES_DIR, _corvin_home() / "bridges"):
+            d = base / "whatsapp" / "auth"
+            if d.is_dir():
+                dirs.append(d)
+    return dirs
+
+
+def _archive_dir(path: Path) -> str | None:
+    """Move ``path`` aside with a timestamp instead of deleting outright.
+
+    Mirrors the existing ``auth.bak.<stamp>`` convention in the whatsapp dir, so
+    a mis-click stays recoverable. Returns the new name, or None on failure.
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = path.with_name(f"{path.name}.bak.{stamp}")
+    try:
+        path.rename(dest)
+        return str(dest)
+    except OSError:
+        _log.warning("could not archive %s", path)
+        return None
+
+
+class BridgeDisconnectRequest(BaseModel):
+    mode:          str = Field("disconnect", pattern="^(disconnect|delete)$")
+    re_auth_token: str | None = None
+    model_config = {"extra": "forbid"}
+
+
+@router.post("/bridges/{channel}/disconnect")
+def post_bridge_disconnect(
+    channel: str,
+    body: BridgeDisconnectRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Drop a channel's connection so it can be set up again.
+
+    ``mode="disconnect"`` keeps preferences and removes only credentials and
+    pairing state. ``mode="delete"`` removes settings.json entirely. Both stop
+    the daemon and mark the channel disabled.
+    """
+    if not _CHANNEL_RE.match(channel) or channel not in CHANNELS:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="invalid channel slug",
+        )
+    action = f"bridge.connection.{body.mode}"
+    if not verify_reauth(rec, body.re_auth_token):
+        console_audit.action_failed(
+            tenant_id=rec.tenant_id,
+            sid_fingerprint=rec.sid_fingerprint,
+            action=action,
+            target_kind="bridge",
+            target_id=channel,
+            reason="reauth-failed",
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_401_UNAUTHORIZED,
+            detail="re-auth failed",
+        )
+
+    # 1. Stop the daemon BEFORE touching disk — a live daemon re-persists
+    #    credentials and would undo the cleanup moments later.
+    runtime = _apply_runtime_change(channel, enabled=False)
+
+    # 2. Mark disabled so a restart cannot bring the channel back up against a
+    #    half-removed connection.
+    state = _read_state()
+    state.setdefault("channels", {}).setdefault(channel, {})["enabled"] = False
+    _write_state(state)
+
+    # 3. Clean BOTH storage locations.
+    cleared: list[str] = []
+    removed_files: list[str] = []
+    for path in (_settings_path(channel), _legacy_settings_path(channel)):
+        if not path.exists():
+            continue
+        if body.mode == "delete":
+            try:
+                shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
+            except OSError:
+                pass
+            try:
+                path.unlink()
+                removed_files.append(str(path))
+            except OSError:
+                _log.warning("could not remove %s", path)
+            continue
+        current = _read_json(path)
+        drop = _credential_keys_for(channel, current)
+        if not drop:
+            continue
+        for key in drop:
+            current.pop(key, None)
+        _write_atomic(path, current)
+        cleared.extend(k for k in drop if k not in cleared)
+
+    # 4. Pairing state outside settings.json (WhatsApp linked device).
+    archived = [a for d in _link_state_dirs(channel) if (a := _archive_dir(d))]
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action=action,
+        target_kind="bridge",
+        target_id=channel,
+    )
+    return {
+        "channel":        channel,
+        "mode":           body.mode,
+        # Key NAMES only — never their values.
+        "cleared_keys":   cleared,
+        "removed_files":  removed_files,
+        "archived_state": archived,
+        "runtime":        runtime,
+        "restart_needed": not runtime.get("applied", False),
+        "ok":             True,
+    }
 
 
 def _validate_discord_token_via_node(token: str, bridges_dir: Path) -> dict[str, Any]:
