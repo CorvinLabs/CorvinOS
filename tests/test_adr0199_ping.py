@@ -286,7 +286,7 @@ class TestADR0199Ping:
 
 
 class TestADR0199ReceiverPingHandler:
-    """ADR-0199 receiver-side: GET /v1/a2a/ping handler and heartbeat recording."""
+    """ADR-0199 receiver-side: POST /v1/a2a/ping handler and heartbeat recording."""
 
     def test_http_server_has_ping_handler(self):
         """Receiver HTTP server has _handle_ping method."""
@@ -310,6 +310,8 @@ class TestADR0199ReceiverPingHandler:
             "recv_key": _RECV_KEY,
             "enabled": True,
         }), encoding="utf-8")
+        # OriginRegistry.load enforces 0600 (origin_file_world_readable)
+        (origins / "test-origin.json").chmod(0o600)
 
         server = build_server(host="127.0.0.1", port=0, origins_dir=origins)
         thread = serve_in_thread(server)
@@ -349,6 +351,8 @@ class TestADR0199ReceiverPingHandler:
             "recv_key": _RECV_KEY,
             "enabled": True,
         }), encoding="utf-8")
+        # OriginRegistry.load enforces 0600 (origin_file_world_readable)
+        (origins / "test-origin.json").chmod(0o600)
 
         server = build_server(host="127.0.0.1", port=0, origins_dir=origins)
         thread = serve_in_thread(server)
@@ -398,6 +402,8 @@ class TestADR0199ReceiverPingHandler:
             "recv_key": _RECV_KEY,
             "enabled": True,
         }), encoding="utf-8")
+        # OriginRegistry.load enforces 0600 (origin_file_world_readable)
+        (origins / "test-origin.json").chmod(0o600)
 
         server = build_server(host="127.0.0.1", port=0, origins_dir=origins)
         thread = serve_in_thread(server)
@@ -437,6 +443,8 @@ class TestADR0199ReceiverPingHandler:
             "recv_key": _RECV_KEY,
             "enabled": True,
         }), encoding="utf-8")
+        # OriginRegistry.load enforces 0600 (origin_file_world_readable)
+        (origins / "test-origin.json").chmod(0o600)
 
         server = build_server(host="127.0.0.1", port=0, origins_dir=origins)
         thread = serve_in_thread(server)
@@ -506,6 +514,8 @@ class TestADR0199ReceiverPingHandler:
             "recv_key": _RECV_KEY,
             "enabled": True,
         }), encoding="utf-8")
+        # OriginRegistry.load enforces 0600 (origin_file_world_readable)
+        (origins / "test-origin.json").chmod(0o600)
 
         # Clear cache
         _endpoint_heartbeat_cache.clear()
@@ -553,7 +563,6 @@ class TestADR0199ReceiverPingHandler:
 class TestADR0199ReceiverBackendParity:
     """Verify ping route exists in both receiver backends with same behavior."""
 
-    @pytest.mark.skip(reason="Receiver-side implementation planned next iteration")
     def test_stdlib_receiver_has_ping_route(self):
         server_file = Path(__file__).parent.parent / "operator" / "bridges" / "shared" / "a2a_http_server.py"
         assert server_file.exists(), "a2a_http_server.py must exist"
@@ -561,7 +570,6 @@ class TestADR0199ReceiverBackendParity:
         assert "/v1/a2a/ping" in content, \
             "a2a_http_server.py must have POST /v1/a2a/ping route"
 
-    @pytest.mark.skip(reason="Receiver-side implementation planned next iteration")
     def test_gateway_receiver_has_ping_route(self):
         gateway_file = Path(__file__).parent.parent / "core" / "gateway" / "corvin_gateway" / "app.py"
         assert gateway_file.exists(), "gateway app.py must exist"
