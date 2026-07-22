@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -123,6 +125,48 @@ class EnsureAdapterDetachedTests(unittest.TestCase):
                 res = bm.ensure_adapter_detached()
                 self.assertFalse(res["ok"])
                 self.assertIn("exited on boot", res["error"])
+
+    def test_pid_reuse_does_not_read_as_running(self):
+        """A pidfile PID recycled onto an unrelated process (our own test PID,
+        whose cmdline is NOT adapter.py) must not count as a live adapter."""
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            home = tdp / "home"
+            sleeper = self._fake_bridge_dir(tdp, "import time\ntime.sleep(30)")
+            with patch.dict(os.environ, {"CORVIN_HOME": str(home)}), \
+                 patch.object(bm, "_BRIDGE_DIR", sleeper):
+                pidfile = bm._adapter_pidfile()
+                pidfile.parent.mkdir(parents=True, exist_ok=True)
+                # This test process is alive but is not an adapter.
+                pidfile.write_text(str(os.getpid()), encoding="utf-8")
+                self.assertEqual(
+                    bm._adapter_running_pid(sleeper / "shared" / "adapter.py"), 0,
+                    "PID reuse must be rejected via cmdline verification")
+
+    def test_cross_launcher_adapter_detected(self):
+        """An adapter started by another launcher (no pidfile) is still found
+        by the system-wide cmdline scan, so we don't spawn a duplicate."""
+        with tempfile.TemporaryDirectory() as td:
+            tdp = Path(td)
+            home = tdp / "home"
+            sleeper = self._fake_bridge_dir(tdp, "import time\ntime.sleep(30)")
+            adapter_py = sleeper / "shared" / "adapter.py"
+            # Launch it directly, as bridge.sh/systemd would — no pidfile.
+            proc = subprocess.Popen([sys.executable, str(adapter_py)])
+            try:
+                # give it a moment to appear in the process table
+                import time as _t
+                _t.sleep(0.5)
+                with patch.dict(os.environ, {"CORVIN_HOME": str(home)}), \
+                     patch.object(bm, "_BRIDGE_DIR", sleeper):
+                    found = bm._adapter_running_pid(adapter_py)
+                    self.assertEqual(found, proc.pid,
+                                     "system-wide scan must find a foreign-launched adapter")
+                    status = bm.ensure_adapter_detached()
+                    self.assertTrue(status.get("already_running"))
+                    self.assertEqual(status["pid"], proc.pid)
+            finally:
+                proc.kill()
 
     def test_missing_adapter_is_error(self):
         with tempfile.TemporaryDirectory() as td:
