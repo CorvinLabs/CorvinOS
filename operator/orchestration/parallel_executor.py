@@ -138,25 +138,26 @@ class ParallelExecutor:
         while ready:
             # In this batch, find steps that are parallel-safe
             batch: list[int] = []
-            to_remove: set[int] = set()
 
             for s in sorted(ready):
                 step_obj = next(st for st in self.plan.steps if st.step == s)
                 # Check if s can parallelize with other ready steps in batch
+                # Validate symmetric parallelization: both must list each other
                 can_add = True
                 for other_step in batch:
-                    if (other_step not in step_obj.can_parallelize and
-                        s not in step_obj.can_parallelize):
+                    other_step_obj = next(st for st in self.plan.steps if st.step == other_step)
+                    # Both directions must agree: s in other's can_parallelize AND vice versa
+                    if not (s in other_step_obj.can_parallelize and other_step in step_obj.can_parallelize):
                         can_add = False
                         break
                 if can_add:
                     batch.append(s)
-                    to_remove.add(s)
 
             if batch:
                 batches.append(batch)
                 completed.update(batch)
-                ready.remove(batch[0])
+                # Remove all batch steps from ready (not just batch[0])
+                ready -= set(batch)
 
                 # Find new ready steps (all dependencies now complete)
                 for step in self.plan.steps:
