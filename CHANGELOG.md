@@ -6,6 +6,88 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.59] — 2026-07-22 — iterative adversarial review of the last 3 days (6 axes + refutation round)
+
+Six-axis adversarial review over everything shipped since v0.10.58 (ADR-0199 /
+0210 / 0211 / 0212, Discord zero-config, console UX), followed by a dedicated
+refutation round attacking the fixes themselves. Every default test gate is
+green again (`tests/`: 549 passed; bridge suite; web-next tsc + build).
+
+### Fixed — Compliance (GDPR, load-bearing)
+
+- **Geo-tier auto-migration retired (GDPR Art. 21).** The v0.10.58 tier-1→3
+  migration could not distinguish the legacy default from an EXPLICIT
+  `geo_tracking_tier: 1` opt-out — the exact mechanism ADR-0208 documents —
+  and silently re-upgraded user opt-outs on the next heartbeat. Retired
+  loss-free (v0.10.58 heartbeats already migrated upgrading installs; absent
+  keys still default to tier 3). Explicit tier values now always stick.
+- **Reverted ADR-0212 "Ecosystem Feature Telemetry"** (committed today by a
+  parallel session): the new `aco/telemetry/` package shadowed the existing
+  `aco/telemetry.py` module, which silently killed the ADR-0186 presence
+  heartbeat AND the ADR-0198 reconnect broadcast at import time; the payload
+  carried free-form filesystem-derived strings (PII-capable, violates the
+  CONTENT-FREE invariant); the stats endpoint 500'd on a nonexistent
+  `SessionRecord` field; and the change to the heartbeat's "empty body"
+  contract was never ratified (draft ADR in the wrong repo, no maintainer
+  decision). A compliant re-implementation needs a real ADR-0212 first.
+- **`tests/test_installer_piper.py` no longer overwrites the operator's live
+  `~/.config/corvin-voice/profile.json`** on full pytest runs (sandbox-trap
+  class; `display_language` was being flipped by the E2E language matrix).
+
+### Fixed — A2A ping receiver (ADR-0199)
+
+- Route moved to POST (sender and the ADR always specified POST; the GET
+  route made every real ping fail), signed response now echoes
+  `task_id = ping_id` (Decision 3 — pings failed AUTH even after the method
+  fix), and the gateway serves `/v1/a2a/ping` too — both backends delegate to
+  one shared `process_ping_request()` core, so ADR-0199's parity requirement
+  holds by construction.
+- Anti-enumeration: unknown-origin and bad-signature collapse into one opaque
+  `403 ping_rejected`; freshness (`stale_ping`) is only diagnosable with a
+  valid signature. Ping-only bounded rate-limit buckets (60 rpm) run BEFORE
+  any disk work — deliberately separate from the post-HMAC `/receive`
+  buckets so fake origin floods cannot evict real buckets (refutation-round
+  finding against the first version of this very fix).
+
+### Fixed — Console / bridges
+
+- **Discord/Telegram save-token endpoints write the canonical runtime
+  settings path** (`<corvin_home>/bridges/<ch>/settings.json`) instead of the
+  source/vendor tree — token rotation via Console never reached the daemon
+  after first boot (writer≠reader split, same class as the fresh-install bug
+  fixed in 0.10.56). Both validate/save endpoints now require CSRF; the
+  setup dialogs send `x-csrf-token` (new `csrf` prop).
+- **Ten structurally non-functional zero-config endpoints now return an
+  honest HTTP 501** instead of dead-ends or fake state: Slack OAuth (wrong
+  API paths, wrong content-type, cannot yield the `xapp-` Socket-Mode
+  token), Teams OAuth (delegated Graph token vs Bot-Framework daemon
+  credentials), Email OAuth (form-encoding violation; token consumed by
+  nothing), Signal QR/poll (mock; unconditional fake `linked=true`),
+  WhatsApp QR/poll (mock QR; success branch mathematically unreachable).
+  Manual bridge settings remain the supported setup path (ADR-0211 amended).
+- Bridge disconnect: the SPA now surfaces `restart_needed` (daemon could not
+  be stopped on non-systemd hosts) instead of a false-green toast, and
+  disconnect removes `settings.json.bak` so no cleartext token survives a
+  revocation. Telegram setup dialog rebuilt against the real API response
+  shape (was a broken Discord copy-paste with a fictional OAuth step).
+
+### Fixed — ADR-0210 scaffolding + test infrastructure
+
+- `make_task_analysis_prompt()` crashed with `KeyError: 'path'` on every call
+  since Phase 1 (unescaped template brace); decision cache no longer resets
+  the TTL clock on SQLite reload (stale decisions up to ~2× TTL), keeps LRU
+  book-keeping in sync on `invalidate()`/`clear()`, and wires the previously
+  dead `context_hash_cache_size` parameter; `fallback_strategy` is a failure
+  policy again, not a mode selector (Phase-3 parallelism was off by default);
+  the 46-test ADR-0210 suite is green again (10 tests were red on main —
+  two fix commits had broken their own earlier phases without re-running the
+  suite). ADR-0210 status amended: scaffold-only, NOT integrated — the
+  headline 56%/50% savings remain unrealized.
+- `tests/` default collection no longer aborts: the new profile-identity
+  tests import the shared profile module the documented way (stdlib
+  `operator` collision) and actually test the 2000-char cap; the
+  hatchling-dependent build test skips cleanly outside CI.
+
 ## [0.10.56] — 2026-07-22 — fresh-install bridge repair (WhatsApp/Discord/all channels) + adversarial review sweep
 
 The bridges were silently dead on a fresh install. This release fixes every
