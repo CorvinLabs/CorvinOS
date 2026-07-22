@@ -6,6 +6,103 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.56] — 2026-07-22 — fresh-install bridge repair (WhatsApp/Discord/all channels) + adversarial review sweep
+
+The bridges were silently dead on a fresh install. This release fixes every
+channel end-to-end, then runs a six-axis iterative adversarial review over the
+last three days of work (20 findings confirmed after a three-lens refutation
+pass, all fixed). It is a strict superset of the git-only builds 0.10.52/0.53
+(geo-tracking scaffolding) and the published 0.10.54/0.10.55 (ecosystem
+dashboard) — see the version-hygiene note at the end.
+
+### Fixed — Bridges (fresh install)
+
+- **WhatsApp: replies vanished after a re-pair.** A re-pair issues a new `@lid`
+  identity; the inbound gate and `/on` handle both JID forms, but the outbound
+  gate checked the single raw reply JID without alias expansion, so every reply
+  was dropped as "disabled chat" while inbound kept working. `isAnyChatEnabled`
+  now alias-expands the query symmetrically (the deny-list still wins, so `/off`
+  is never bypassed). On `loggedOut` the daemon now moves `auth/` aside
+  automatically so the next start shows a fresh QR instead of wedging on stale
+  `registered=true` creds.
+- **Discord was completely dead with a valid token.** The daemon hardcoded the
+  privileged `MessageContent` intent; a fresh app has that portal toggle OFF, so
+  the gateway rejected the login (4014 "used disallowed intents") and the daemon
+  exited with a misleading "token rotation needed". A REST preflight now checks
+  the portal state before the IDENTIFY and boots in **token-only mode** when the
+  intent isn't granted — DMs and @mentions work with just a bot token, no portal
+  changes. Leading @mentions are stripped from inbound text. Onboarding across
+  the console, installer and docs now states the token is all that's required.
+- **The adapter never started on the console Start-button path**, so nothing
+  polled the shared inbox and the bot never answered. The button now also
+  ensures the adapter (cmdline-verified, cross-launcher-aware idempotency — it
+  won't spawn a duplicate that double-processes the inbox).
+- **Adapter queues split from the daemons on a wheel install.** The adapter
+  defaulted its queues to its vendored `shared/` dir while daemons polled
+  `<corvin_home>/bridges/shared`; they now agree. A related trap — the adapter
+  treated a pinned `ADAPTER_INBOX` as "test sandbox" and forked its GDPR audit
+  chain + re-rooted `CORVIN_HOME` — is closed by an explicit
+  `CORVIN_ADAPTER_SANDBOX` signal instead of the overloaded inference.
+- **Console-saved bridge tokens never reached the daemon.** `PUT /bridges/{ch}/
+  settings` wrote the vendored source dir while daemons read the runtime path;
+  writer and reader now agree (with legacy read-fallback + migration), and both
+  the console and `bridge.sh channel_configured` honour the `service.env`
+  `CORVIN_HOME` pin.
+- **Signal & Teams could not be started by anything** despite the console
+  offering them — now wired into `bridge_manager` and `bridge.sh`, with canonical
+  settings paths, the disable gate, real templated systemd units, and a fixed
+  health-port collision (Teams 7895 → 7897).
+- **Email** now names the `auth_results_authserv_id` fix in its drop log when the
+  IMAP provider isn't in the built-in receiver list.
+- POSIX wheel installs can now start bridges at all (native_backend falls back to
+  the vendored `bridge_manager.py` when `bridge.sh` is absent).
+
+### Fixed — Telemetry / stats (adversarial review)
+
+- **Country was `XX` for nearly every instance.** `CF-IPCountry` is a
+  Cloudflare-managed header the Workers runtime strips on subrequests to the
+  Railway origin. The Pages proxy now also sends `X-Edge-Country`, which the
+  origin prefers (ADR-0207).
+- **Public stats were geo-spoofable.** Railway is directly reachable, so a direct
+  POST could forge country/region/city onto the public dashboard. A shared
+  `GEO_PROXY_SECRET` (`X-Proxy-Auth`) now lets the origin trust geo headers only
+  from the edge proxy; staged rollout — trust-all until the secret is set on both
+  sides (ADR-0208).
+- **The healing-traces CLI opt-out/erase was a no-op** (GDPR Art. 7(3)/21): it
+  wrote an unread `{revoked:true}` stub while the runtime gate reads only the YAML
+  flag, so collection and uploads continued after "No further data will be sent."
+  The CLI now writes `spec.telemetry.healing_traces: false`.
+
+### Fixed — Orchestration
+
+- **`acs_delegate` re-opened the F7 hole**: the caller's `budget_s` bounded only
+  the watchdog, so a chat-triggered delegation could hold an un-metered engine
+  turn up to the 24 h quota-fallback ceiling. The inner turn's `max_wall_time` is
+  now capped at `budget_s` (MIN wins).
+- **The Settings → Profile language pin still lost on bridges.** The 74575ea fix
+  updated the console but `adapter.py`'s system prompt kept an auto-detect rule
+  that contradicted the appended authoritative pin; rule 1 is now pin-aware, so a
+  pinned language wins for text as it already does for voice.
+
+### Version hygiene
+
+CHANGELOG.md is the single source of truth. Note on the immediately preceding
+tags: **0.10.50 / 0.10.52 / 0.10.53 were git tags only and never published to
+PyPI** (their per-file `CHANGELOG-0.10.5x.md` install instructions do not apply);
+**0.10.54 and 0.10.55** shipped the production ecosystem dashboard to PyPI. This
+0.10.56 supersedes all of them.
+
+## [0.10.55] — 2026-07-20 — production ecosystem dashboard (PyPI)
+
+Full 8-tab stats dashboard (Stats + Tier 1–3 geo + Config + Bridges + Features +
+Health), real telemetry API wired to the Railway backend, deployed to
+corvin-labs.com/stats. Published to PyPI.
+
+## [0.10.54] — 2026-07-20 — first PyPI upload since 0.10.51
+
+Republish to close the PyPI gap: 0.10.52 and 0.10.53 existed only as git commits.
+Published to PyPI.
+
 ## [0.10.51] — 2026-07-20 — adversarial review sweep #2: telemetry-geo, browser-attach, delegation-routing, A2A locking
 
 A full iterative adversarial review (six review axes, a fix round, and a

@@ -1,3 +1,5 @@
+> **Historical per-release note.** This file predates and diverges from the published PyPI 0.10.51; CHANGELOG.md is the single source of truth for what each version actually contains.
+
 # CorvinOS 0.10.51 — Phase 3.1 PostgreSQL Geo-Tracking Live Integration
 
 **Release Date:** 2026-07-20  

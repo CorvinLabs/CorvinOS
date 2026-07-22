@@ -1,3 +1,5 @@
+> **git tag only — never published to PyPI.** The pip-install instructions below do not apply. See CHANGELOG.md (single source of truth); this build's code shipped in 0.10.54+.
+
 # CorvinOS 0.10.50 — Multi-Tier DSGVO-Compliant Geo-Tracking
 
 **Release Date:** 2026-07-20  
