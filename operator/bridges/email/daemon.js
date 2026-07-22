@@ -277,7 +277,9 @@ async function handleParsed(parsed, uid) {
   // principal (owner / whitelist / PIN claim). Fail-closed: drop spoofable mail.
   const inboundAuth = inboundAuthPasses(parsed, fromAddr);
   if (!inboundAuth.ok) {
-    log(`auth: inbound authentication failed for ${fromAddr} (${inboundAuth.reason}); dropping unverified From (possible spoof)`);
+    log(`auth: inbound authentication failed for ${fromAddr} (${inboundAuth.reason}); dropping unverified From (possible spoof)` +
+        (inboundAuth.reason && String(inboundAuth.reason).includes('authserv') ?
+         ` — your IMAP provider is not in the built-in receiver list; set "auth_results_authserv_id" in settings.json to your provider's Authentication-Results authserv-id to accept its DMARC/DKIM stamps` : ''));
     await imap.messageFlagsAdd(uid, ['\\Seen'], { uid: true });
     return;
   }
