@@ -45,6 +45,33 @@ class FeatureHeatmapResponse(BaseModel):
     total_instances: int
 
 
+def _validate_feature_snapshot(data: dict[str, Any]) -> dict[str, Any]:
+    """Validate and sanitize feature snapshot data (v0.10.60: input validation gate).
+
+    Fail-closed: only known feature keys are returned; unknown keys are dropped.
+    Type checking: bool/int values only. Strings/lists/dicts are coerced to bool.
+    This prevents corrupted or tampered snapshot files from breaking the dashboard.
+    """
+    validated = {}
+    for key in _KNOWN_FEATURES:
+        if key not in data:
+            continue
+        value = data[key]
+        # Allow bool or numeric types
+        if isinstance(value, bool):
+            validated[key] = value
+        elif isinstance(value, (int, float)):
+            validated[key] = value > 0
+        elif isinstance(value, str):
+            # Coerce non-empty strings to True
+            validated[key] = len(value) > 0
+        elif isinstance(value, (list, dict)):
+            # Coerce collections by length
+            validated[key] = len(value) > 0  # type: ignore[arg-type]
+        # else: skip unknown types entirely (fail-closed)
+    return validated
+
+
 @router.get("/stats/features", tags=["console-stats"])
 def get_feature_stats() -> FeatureHeatmapResponse:
     """Get this instance's feature adoption snapshot.
@@ -52,6 +79,8 @@ def get_feature_stats() -> FeatureHeatmapResponse:
     Scans ~/.corvin/telemetry/feature_snapshot.json (local instance data
     only — the ecosystem-wide aggregate lives on the Railway backend, see
     GET /v1/stats/features). Used by dashboard FeatureHeatmapCard component.
+
+    v0.10.60: Validates snapshot data before using (fails gracefully if corrupted).
     """
     # Resolve home path from environment or default.
     import os
@@ -63,7 +92,8 @@ def get_feature_stats() -> FeatureHeatmapResponse:
 
     if snapshot_file.exists():
         try:
-            snapshot_data = json.loads(snapshot_file.read_text(encoding="utf-8"))
+            raw_data = json.loads(snapshot_file.read_text(encoding="utf-8"))
+            snapshot_data = _validate_feature_snapshot(raw_data)
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -71,8 +101,8 @@ def get_feature_stats() -> FeatureHeatmapResponse:
     adoption_counts: dict[str, int] = {}
     adoption_pct: dict[str, float] = {}
     for key in _KNOWN_FEATURES:
-        value = snapshot_data.get(key)
-        adopted = bool(value) if isinstance(value, bool) else bool(value and value > 0)
+        value = snapshot_data.get(key, False)
+        adopted = bool(value)
         adoption_counts[key] = int(adopted)
         adoption_pct[key] = 100.0 if adopted else 0.0
 

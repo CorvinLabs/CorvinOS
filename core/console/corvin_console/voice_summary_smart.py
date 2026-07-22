@@ -32,13 +32,39 @@ class ResponseAnalysis:
     user_benefit: str  # Why should the user care?
 
 
+def _strip_secrets_from_text(text: str) -> str:
+    """Remove AWS/OpenAI/GCP API keys and credentials before analysis.
+
+    Fail-closed: if a secret pattern is detected, replace with [REDACTED].
+    This runs BEFORE semantic analysis so secrets never enter the LLM context.
+    """
+    # Common secret patterns (non-exhaustive, but covers high-risk cases)
+    patterns = {
+        r'(?i)aws_[a-z_]*key["\']?\s*[:=]\s*["\']?[A-Z0-9]{20,}["\']?': '[REDACTED-AWS]',
+        r'(?i)openai_?api_?key["\']?\s*[:=]\s*["\']?sk-[A-Za-z0-9]{20,}["\']?': '[REDACTED-OPENAI]',
+        r'(?i)gcp_?key["\']?\s*[:=]\s*["\']?[a-z0-9]{32,}["\']?': '[REDACTED-GCP]',
+        r'(?i)password["\']?\s*[:=]\s*["\']?[^\s"\']{8,}["\']?': '[REDACTED-PASSWORD]',
+        r'(?i)auth[_-]?token["\']?\s*[:=]\s*["\']?[A-Za-z0-9\-_.]{20,}["\']?': '[REDACTED-TOKEN]',
+    }
+
+    cleaned = text
+    for pattern, replacement in patterns.items():
+        cleaned = re.sub(pattern, replacement, cleaned)
+
+    return cleaned
+
+
 def analyze_response(text: str, user_context: str = "") -> ResponseAnalysis:
     """Heuristic analysis of the response.
 
     In production, this would use an LLM to truly understand semantics.
     For MVP, we use regex patterns and keyword matching.
+
+    **SECURITY: Secrets are stripped before analysis (ADR-0209 v0.10.60 fix).**
     """
-    text_lower = text.lower()
+    # Strip secrets BEFORE any analysis (fail-closed against info leakage)
+    text_cleaned = _strip_secrets_from_text(text)
+    text_lower = text_cleaned.lower()
 
     # Classify work type
     if any(w in text_lower for w in ["fix", "fixed", "bug", "crash", "error", "handle"]):
@@ -70,12 +96,12 @@ def analyze_response(text: str, user_context: str = "") -> ResponseAnalysis:
         risk_level = "high"
 
     # Extract file names (crude regex)
-    files = re.findall(r'\b[\w\-\.]+\.(?:py|ts|tsx|js|go|rs)\b', text)
+    files = re.findall(r'\b[\w\-\.]+\.(?:py|ts|tsx|js|go|rs)\b', text_cleaned)
     key_files = list(set(files))[:3]  # Top 3 unique files
 
     # Extract key insight (first sentence or summary)
-    sentences = re.split(r'[.!?]+', text)
-    key_insight = sentences[0].strip() if sentences else text[:100]
+    sentences = re.split(r'[.!?]+', text_cleaned)
+    key_insight = sentences[0].strip() if sentences else text_cleaned[:100]
 
     # Detect blockers being resolved
     blockers = []

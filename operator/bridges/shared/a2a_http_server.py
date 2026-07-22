@@ -154,6 +154,11 @@ def process_ping_request(req: Any, receiver: Any) -> tuple[int, dict[str, Any]]:
             or not isinstance(signature, str):
         return 400, {"reason": "missing_fields"}
 
+    # Truncate ping_id to prevent memory bloat (v0.10.60: DoS resilience).
+    # ping_id is echoed in the response; a 4MB payload attack could cause
+    # memory bloat. Legitimate ping_ids are typically 16-64 chars; cap at 512.
+    ping_id = ping_id[:512]
+
     # Validate issued_at is an integer timestamp. Reject floats outright:
     # the sender canonicalizes issued_at as int, so coercing a float here
     # would only ever produce an invalid_signature — fail clearly instead.
