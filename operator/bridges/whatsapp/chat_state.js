@@ -71,23 +71,30 @@ function _expandAliases(jids, settings) {
 // True when any of `jids` is in `enabled_chats`, UNLESS any of `jids` (or
 // their aliases) is in `disabled_chats` — the hard deny-list always wins.
 // Both sides go through normalizeJid so device-suffix variants don't break.
+//
+// The query JIDs are alias-expanded for BOTH checks. The enabled side needs
+// this because the outbound gate only has the single raw reply JID: after a
+// re-pair WhatsApp issues a new @lid, /on may have registered only the phone
+// form, and replies addressed to the @lid form were dropped as "disabled
+// chat" while inbound (which sees both forms) kept passing. Expanding the
+// query restores the symmetry. The deny side expands the same way, so the
+// widened enabled match can never step around a /off.
 function isAnyChatEnabled(jids, settings) {
   const list = jids || [];
   if (list.length === 0) return false;
+  const query = _expandAliases(list, settings);
 
-  // Hard deny: disabled_chats beats enabled_chats. Expand aliases so a
-  // /off under form A also blocks subsequent messages arriving under form B
-  // (once the alias is registered by maybeRegisterAliases).
+  // Hard deny: disabled_chats beats enabled_chats.
   if (Array.isArray(settings.disabled_chats) && settings.disabled_chats.length > 0) {
     const denied = _expandAliases(settings.disabled_chats, settings);
-    for (const j of list) {
-      if (denied.has(normalizeJid(j))) return false;
+    for (const j of query) {
+      if (denied.has(j)) return false;
     }
   }
 
   const enabled = (settings.enabled_chats || []).map(normalizeJid);
-  for (const j of list) {
-    if (enabled.includes(normalizeJid(j))) return true;
+  for (const j of query) {
+    if (enabled.includes(j)) return true;
   }
   return false;
 }

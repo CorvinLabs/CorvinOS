@@ -517,7 +517,9 @@ async function processOutbox() {
     // intentionally chat-agnostic and we don't want to teach it
     // about per-bridge enabled_chats state.
     if (payload.to && !isChatEnabled(payload.to)) {
-      log(`outbox: dropping reply to disabled chat ${payload.to} (file=${f})`);
+      log(`outbox: dropping reply to disabled chat ${payload.to} (file=${f}) — ` +
+          `if this chat should be live, send /on in it (registers the current JID forms; ` +
+          `a re-pair issues a new @lid identity)`);
       try { fs.unlinkSync(fpath); } catch (e) {
         log(`outbox: unlink after disabled-chat drop failed: ${e.message}`);
       }
@@ -956,7 +958,19 @@ if (MOCK) {
         log(`Connection closed (reason=${reason}/${reasonName}).`);
         waSocket = null;
         if (reason === DisconnectReason?.loggedOut) {
-          log('Logged out — auth invalidated. Delete auth/ and pair again.');
+          // The server invalidated this session — the stored creds are dead
+          // weight and, worse, `state.creds.registered` stays truthy, which
+          // suppresses QR/pair-code emission on the next boot and wedges every
+          // re-pair attempt. Move auth/ aside automatically (backup, never
+          // delete) so the next start drops straight into pairing mode.
+          const ts = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+          const bak = `${AUTH}.bak.${ts}`;
+          try {
+            fs.renameSync(AUTH, bak);
+            log(`Logged out — auth invalidated. Moved auth/ to ${path.basename(bak)}; restart shows a fresh QR.`);
+          } catch (e) {
+            log(`Logged out — auth invalidated, but moving auth/ aside failed (${e.message}). Delete auth/ manually and pair again.`);
+          }
           process.exit(0);
         }
         // 515 = restartRequired is the EXPECTED close right after a QR scan.
