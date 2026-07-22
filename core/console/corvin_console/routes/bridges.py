@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -1681,3 +1682,468 @@ const flow = new AutoTeamsOAuthFlow((msg) => {}, "", "", "");
             valid=False,
             error="Internal error",
         )
+
+
+# ── Email OAuth (Microsoft Graph + Gmail) ──────────────────────────────────
+
+
+class EmailOAuthRequest(BaseModel):
+    provider: str = Field(default="microsoft", description="microsoft or google")
+    client_id: str
+    redirect_uri: str = Field(default="http://localhost:8765/bridge-setup/callback")
+
+
+class EmailOAuthResponse(BaseModel):
+    url: str = Field(default="")
+    provider: str = ""
+    state: str = Field(default="")
+    error: str = Field(default="")
+
+
+class EmailCodeExchangeRequest(BaseModel):
+    code: str
+    state: str
+
+
+class EmailCodeExchangeResponse(BaseModel):
+    valid: bool
+    access_token: str = Field(default="")
+    email: str = Field(default="")
+    error: str = Field(default="")
+
+
+@router.post("/email/oauth/generate-url", response_model=EmailOAuthResponse)
+async def generate_email_oauth_url(
+    body: EmailOAuthRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> EmailOAuthResponse:
+    """Generate Email OAuth URL (Microsoft Graph or Gmail)."""
+    bridges_dir = _resolve_bridges_dir()
+    oauth_flow_path = bridges_dir / "email" / "auto_email_oauth_flow.js"
+
+    if not oauth_flow_path.exists():
+        return EmailOAuthResponse(error="Email OAuth module not found")
+
+    # Generate CSRF state token
+    state = os.urandom(16).hex()
+
+    script = f"""
+const {{ AutoEmailOAuthFlow }} = require(process.env.OAUTH_FLOW_PATH);
+const flow = new AutoEmailOAuthFlow(() => {{}}, process.env.CLIENT_ID, '', process.env.PROVIDER);
+const result = flow.generateAuthorizationUrl(process.env.REDIRECT_URI);
+result.state = process.env.STATE;
+console.log(JSON.stringify(result));
+"""
+
+    try:
+        result = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={
+                **os.environ,
+                "OAUTH_FLOW_PATH": str(oauth_flow_path),
+                "CLIENT_ID": body.client_id,
+                "PROVIDER": body.provider,
+                "REDIRECT_URI": body.redirect_uri,
+                "STATE": state,
+            },
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            return EmailOAuthResponse(
+                url=data.get("url", ""),
+                provider=body.provider,
+                state=state,
+            )
+    except Exception as e:
+        _log.error(f"Email OAuth error: {e}")
+    return EmailOAuthResponse(error="Generation failed")
+
+
+@router.post("/email/oauth/exchange-code", response_model=EmailCodeExchangeResponse)
+async def exchange_email_code(
+    body: EmailCodeExchangeRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> EmailCodeExchangeResponse:
+    """Exchange Email OAuth code for access token."""
+    bridges_dir = _resolve_bridges_dir()
+    oauth_flow_path = bridges_dir / "email" / "auto_email_oauth_flow.js"
+    email_settings = bridges_dir / "email" / "settings.json"
+
+    if not email_settings.exists():
+        return EmailCodeExchangeResponse(valid=False, error="Email settings not found")
+
+    try:
+        try:
+            with open(email_settings, "r") as f:
+                settings = json.load(f)
+        except json.JSONDecodeError as e:
+            _log.error(f"Email settings.json corrupted: {e}")
+            return EmailCodeExchangeResponse(valid=False, error="Settings file corrupted")
+
+        client_id = settings.get("client_id", "")
+        client_secret = settings.get("client_secret", "")
+        provider = settings.get("provider", "microsoft")
+        redirect_uri = settings.get("redirect_uri", "http://localhost:8765/bridge-setup/callback")
+
+        if not client_id or not client_secret:
+            return EmailCodeExchangeResponse(valid=False, error="OAuth credentials not configured")
+
+        script_exchange = """
+const { AutoEmailOAuthFlow } = require(process.env.OAUTH_FLOW_PATH);
+const flow = new AutoEmailOAuthFlow(
+  (msg) => console.error(msg),
+  process.env.CLIENT_ID,
+  process.env.CLIENT_SECRET,
+  process.env.PROVIDER
+);
+(async () => {
+  const result = await flow.exchangeCodeForToken(process.env.CODE);
+  console.log(JSON.stringify(result));
+})().catch(err => {
+  console.log(JSON.stringify({valid: false, error: err.message}));
+});
+"""
+
+        try:
+            result = subprocess.run(
+                ["node", "-e", script_exchange],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env={
+                    **os.environ,
+                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
+                    "CLIENT_ID": client_id,
+                    "CLIENT_SECRET": client_secret,
+                    "PROVIDER": provider,
+                    "CODE": body.code,
+                },
+            )
+        except subprocess.TimeoutExpired:
+            _log.error("Email OAuth exchange timeout (>10s)")
+            return EmailCodeExchangeResponse(valid=False, error="OAuth exchange timeout")
+        except FileNotFoundError:
+            return EmailCodeExchangeResponse(valid=False, error="Setup error: OAuth module not found")
+
+        if result.returncode != 0:
+            _log.error(f"Node.js exit {result.returncode}: {result.stderr[:200]}")
+            return EmailCodeExchangeResponse(valid=False, error="OAuth exchange failed")
+
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            _log.error(f"Failed to parse Email OAuth exchange response: {e}")
+            return EmailCodeExchangeResponse(valid=False, error="OAuth exchange response invalid")
+
+        if not data.get("valid"):
+            return EmailCodeExchangeResponse(valid=False, error=data.get("error", "Exchange failed"))
+
+        access_token = data.get("access_token")
+
+        # Validate token
+        script_validate = """
+const { AutoEmailOAuthFlow } = require(process.env.OAUTH_FLOW_PATH);
+const flow = new AutoEmailOAuthFlow((msg) => {}, "", "", process.env.PROVIDER);
+(async () => {
+  const result = await flow.validateToken(process.env.ACCESS_TOKEN);
+  console.log(JSON.stringify(result));
+})().catch(err => {
+  console.log(JSON.stringify({valid: false, error: err.message}));
+});
+"""
+
+        try:
+            validate_result = subprocess.run(
+                ["node", "-e", script_validate],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env={
+                    **os.environ,
+                    "OAUTH_FLOW_PATH": str(oauth_flow_path),
+                    "PROVIDER": provider,
+                    "ACCESS_TOKEN": access_token,
+                },
+            )
+            if validate_result.returncode == 0:
+                validate_data = json.loads(validate_result.stdout)
+                if not validate_data.get("valid"):
+                    return EmailCodeExchangeResponse(valid=False, error=f"Token validation failed: {validate_data.get('error')}")
+        except Exception as e:
+            _log.warning(f"Email token validation error, continuing: {e}")
+
+        # Save token (atomic write)
+        fd, tmp_path = tempfile.mkstemp(prefix=email_settings.name + ".", dir=str(email_settings.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                settings["email_token"] = access_token
+                settings["_token_validated_at"] = "via-console-oauth"
+                json.dump(settings, tmp, indent=2)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+
+            tmp_path_obj = Path(tmp_path)
+            tmp_path_obj.replace(email_settings)
+            email_settings.chmod(0o600)
+
+            _log.info(f"Email token saved (provider: {provider})")
+            return EmailCodeExchangeResponse(
+                valid=True,
+                access_token=access_token[:20] + "...",
+                email="configured",
+            )
+        except Exception as e:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            _log.error(f"Failed to save Email token: {e}")
+            raise
+
+    except FileNotFoundError:
+        _log.error(f"Email settings not found: {email_settings}")
+        return EmailCodeExchangeResponse(valid=False, error="Settings path error")
+    except Exception as e:
+        _log.error(f"Email OAuth exchange error: {e}", exc_info=True)
+        return EmailCodeExchangeResponse(valid=False, error="Internal error")
+
+
+# ── Signal QR Linking ──────────────────────────────────────────────────────
+
+
+class SignalQRResponse(BaseModel):
+    qr_data: str = Field(default="")
+    session_id: str = Field(default="")
+    error: str = Field(default="")
+
+
+@router.get("/signal/generate-qr", response_model=SignalQRResponse)
+async def generate_signal_qr(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> SignalQRResponse:
+    """Generate Signal device linking QR code (user scans to link)."""
+    bridges_dir = _resolve_bridges_dir()
+    provisioner_path = bridges_dir / "signal" / "auto_signal_provisioner.js"
+    signal_settings = bridges_dir / "signal" / "settings.json"
+
+    if not provisioner_path.exists():
+        return SignalQRResponse(error="Signal provisioner not found")
+
+    script = f"""
+const {{ AutoSignalProvisioner }} = require(process.env.PROV_PATH);
+const prov = new AutoSignalProvisioner(() => {{}});
+(async () => {{ const qr = await prov.generateDeviceLinkQR(); console.log(JSON.stringify(qr)); }})();
+"""
+
+    try:
+        result = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={**os.environ, "PROV_PATH": str(provisioner_path)},
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            device_id = data.get("device_id", "")
+
+            # Save device_id to settings for polling
+            signal_settings.parent.mkdir(parents=True, exist_ok=True)
+            settings = {}
+            if signal_settings.exists():
+                try:
+                    settings = json.loads(signal_settings.read_text())
+                except json.JSONDecodeError:
+                    pass
+
+            settings["_pending_device_id"] = device_id
+            settings["_device_link_generated_at"] = str(int(time.time()))
+            signal_settings.write_text(json.dumps(settings, indent=2))
+
+            return SignalQRResponse(
+                qr_data=data.get("qr_data", ""),
+                session_id=device_id,
+            )
+    except Exception as e:
+        _log.error(f"Signal QR error: {e}")
+    return SignalQRResponse(error="QR generation failed")
+
+
+class SignalPollResponse(BaseModel):
+    linked: bool = False
+    error: str = Field(default="")
+
+
+@router.post("/signal/poll-link", response_model=SignalPollResponse)
+async def poll_signal_link(
+    body: BaseModel,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> SignalPollResponse:
+    """Poll for Signal device linking completion (call repeatedly after generating QR)."""
+    bridges_dir = _resolve_bridges_dir()
+    provisioner_path = bridges_dir / "signal" / "auto_signal_provisioner.js"
+    signal_settings = bridges_dir / "signal" / "settings.json"
+
+    if not signal_settings.exists():
+        return SignalPollResponse(error="No pending link found")
+
+    try:
+        settings = json.loads(signal_settings.read_text())
+        device_id = settings.get("_pending_device_id")
+        generated_at = int(settings.get("_device_link_generated_at", 0))
+        elapsed = int(time.time()) - generated_at
+
+        if elapsed > 300:  # 5 minute timeout
+            del settings["_pending_device_id"]
+            signal_settings.write_text(json.dumps(settings, indent=2))
+            return SignalPollResponse(error="QR code expired (>5min)")
+
+        # Validate device link
+        script = f"""
+const {{ AutoSignalProvisioner }} = require(process.env.PROV_PATH);
+const prov = new AutoSignalProvisioner(() => {{}});
+(async () => {{ const result = await prov.validateDeviceLink(process.env.DEVICE_ID); console.log(JSON.stringify(result)); }})();
+"""
+
+        result = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={**os.environ, "PROV_PATH": str(provisioner_path), "DEVICE_ID": device_id or ""},
+        )
+
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            if data.get("valid"):
+                del settings["_pending_device_id"]
+                settings["signal_linked"] = True
+                signal_settings.write_text(json.dumps(settings, indent=2))
+                return SignalPollResponse(linked=True)
+
+        return SignalPollResponse(linked=False)
+    except Exception as e:
+        _log.error(f"Signal link polling error: {e}")
+        return SignalPollResponse(error="Polling failed")
+
+
+# ── WhatsApp QR Linking ────────────────────────────────────────────────────
+
+
+class WhatsAppQRResponse(BaseModel):
+    qr_data: str = Field(default="")
+    session_id: str = Field(default="")
+    error: str = Field(default="")
+
+
+@router.get("/whatsapp/generate-qr", response_model=WhatsAppQRResponse)
+async def generate_whatsapp_qr(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> WhatsAppQRResponse:
+    """Generate WhatsApp Web QR code (user scans to link)."""
+    bridges_dir = _resolve_bridges_dir()
+    provisioner_path = bridges_dir / "whatsapp" / "auto_whatsapp_provisioner.js"
+    whatsapp_settings = bridges_dir / "whatsapp" / "settings.json"
+
+    if not provisioner_path.exists():
+        return WhatsAppQRResponse(error="WhatsApp provisioner not found")
+
+    script = f"""
+const {{ AutoWhatsAppProvisioner }} = require(process.env.PROV_PATH);
+const prov = new AutoWhatsAppProvisioner(() => {{}});
+(async () => {{ const qr = await prov.generateQRCode(); console.log(JSON.stringify(qr)); }})();
+"""
+
+    try:
+        result = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={**os.environ, "PROV_PATH": str(provisioner_path)},
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            session_id = data.get("session_id", "")
+
+            # Save session_id to settings for polling
+            whatsapp_settings.parent.mkdir(parents=True, exist_ok=True)
+            settings = {}
+            if whatsapp_settings.exists():
+                try:
+                    settings = json.loads(whatsapp_settings.read_text())
+                except json.JSONDecodeError:
+                    pass
+
+            settings["_pending_session_id"] = session_id
+            settings["_qr_generated_at"] = str(int(time.time()))
+            whatsapp_settings.write_text(json.dumps(settings, indent=2))
+
+            return WhatsAppQRResponse(
+                qr_data=data.get("qr_data", ""),
+                session_id=session_id,
+            )
+    except Exception as e:
+        _log.error(f"WhatsApp QR error: {e}")
+    return WhatsAppQRResponse(error="QR generation failed")
+
+
+class WhatsAppPollResponse(BaseModel):
+    linked: bool = False
+    error: str = Field(default="")
+
+
+@router.post("/whatsapp/poll-scan", response_model=WhatsAppPollResponse)
+async def poll_whatsapp_scan(
+    body: BaseModel,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> WhatsAppPollResponse:
+    """Poll for WhatsApp QR scan completion (call repeatedly after generating QR)."""
+    bridges_dir = _resolve_bridges_dir()
+    provisioner_path = bridges_dir / "whatsapp" / "auto_whatsapp_provisioner.js"
+    whatsapp_settings = bridges_dir / "whatsapp" / "settings.json"
+
+    if not whatsapp_settings.exists():
+        return WhatsAppPollResponse(error="No pending link found")
+
+    try:
+        settings = json.loads(whatsapp_settings.read_text())
+        session_id = settings.get("_pending_session_id")
+        generated_at = int(settings.get("_qr_generated_at", 0))
+        elapsed = int(time.time()) - generated_at
+
+        if elapsed > 120:  # 2 minute timeout
+            del settings["_pending_session_id"]
+            whatsapp_settings.write_text(json.dumps(settings, indent=2))
+            return WhatsAppPollResponse(error="QR code expired (>2min)")
+
+        # Poll for scan completion
+        script = f"""
+const {{ AutoWhatsAppProvisioner }} = require(process.env.PROV_PATH);
+const prov = new AutoWhatsAppProvisioner(() => {{}});
+(async () => {{ const result = await prov.pollQRScanStatus(process.env.SESSION_ID, 2); console.log(JSON.stringify(result)); }})();
+"""
+
+        result = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={**os.environ, "PROV_PATH": str(provisioner_path), "SESSION_ID": session_id or ""},
+        )
+
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            if data.get("scanned"):
+                del settings["_pending_session_id"]
+                settings["whatsapp_linked"] = True
+                whatsapp_settings.write_text(json.dumps(settings, indent=2))
+                return WhatsAppPollResponse(linked=True)
+
+        return WhatsAppPollResponse(linked=False)
+    except Exception as e:
+        _log.error(f"WhatsApp scan polling error: {e}")
+        return WhatsAppPollResponse(error="Polling failed")
