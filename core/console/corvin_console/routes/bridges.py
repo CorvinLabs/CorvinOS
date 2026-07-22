@@ -105,13 +105,48 @@ router = APIRouter()
 # socket), the API returns ``restart_needed: true``.
 
 
+def _service_env_corvin_home() -> str | None:
+    """Read a CORVIN_HOME pin from ~/.config/corvin-voice/service.env.
+
+    bridge_manager and every daemon honour this pin (bridge.sh writes it), so
+    the console — the WRITER of settings.json/state.json — must resolve the
+    same home or it writes a file the daemons never read (writer≠reader split
+    under a documented pin). Best-effort; malformed lines are ignored."""
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    base = Path(os.path.expanduser(xdg)) if xdg else (Path.home() / ".config")
+    env_file = base / "corvin-voice" / "service.env"
+    try:
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip()
+            if k.startswith("export "):
+                k = k[len("export "):].strip()
+            if k != "CORVIN_HOME":
+                continue
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                v = v[1:-1]
+            if v.strip():
+                return v
+    except OSError:
+        pass
+    return None
+
+
 def _corvin_home() -> Path:
-    """Resolve the writable corvin home. Mirrors paths.corvin_home()
-    without importing the shared module (avoid a console→bridges-shared
-    coupling)."""
+    """Resolve the writable corvin home the SAME way bridge_manager and the
+    daemons do: env CORVIN_HOME → service.env pin → <repo>/.corvin → ~/.corvin.
+    Mirrors paths.corvin_home() without importing the shared module (avoid a
+    console→bridges-shared coupling)."""
     val = os.environ.get("CORVIN_HOME")
-    if val:
+    if val and val.strip():
         return Path(val)
+    pinned = _service_env_corvin_home()
+    if pinned:
+        return Path(pinned)
     repo_local = _REPO / ".corvin"
     if repo_local.exists() or (_REPO / ".corvin_repo").exists():
         return repo_local

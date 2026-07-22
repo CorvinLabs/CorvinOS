@@ -60,8 +60,8 @@ UNIT_TG="corvin-voice-bridge-telegram.service"
 UNIT_DC="corvin-voice-bridge-discord.service"
 UNIT_SK="corvin-voice-bridge-slack.service"
 UNIT_EM="corvin-voice-bridge-email.service"
-UNIT_SG="signal-daemon.service"
-UNIT_TM="teams-daemon.service"
+UNIT_SG="corvin-voice-bridge-signal.service"
+UNIT_TM="corvin-voice-bridge-teams.service"
 # Phase 7 — corvin-* units removed; corvin-* units are the only variants.
 UNIT_CORVIN_TIMEOUT_SVC="corvin-session-timeout.service"
 UNIT_CORVIN_TIMEOUT_TIMER="corvin-session-timeout.timer"
@@ -98,7 +98,7 @@ UNIT_CORVIN_HERMES_HEALTH_SVC="corvin-hermes-health.service"
 UNIT_CORVIN_HERMES_HEALTH_TIMER="corvin-hermes-health.timer"
 UNIT_CORVIN_BG_MONITOR_SVC="corvin-bg-monitor.service"
 UNIT_CORVIN_BG_MONITOR_TIMER="corvin-bg-monitor.timer"
-ALL_UNITS=("$UNIT_ADAPTER" "$UNIT_WA" "$UNIT_TG" "$UNIT_DC" "$UNIT_SK" "$UNIT_EM" \
+ALL_UNITS=("$UNIT_ADAPTER" "$UNIT_WA" "$UNIT_TG" "$UNIT_DC" "$UNIT_SK" "$UNIT_EM" "$UNIT_SG" "$UNIT_TM" \
            "$UNIT_WATCHDOG_TIMER" "$UNIT_WATCHDOG_SVC" \
            "$UNIT_CORVIN_TIMEOUT_TIMER" "$UNIT_CORVIN_TIMEOUT_SVC" \
            "$UNIT_CORVIN_AUDIT_VERIFY_TIMER" "$UNIT_CORVIN_AUDIT_VERIFY_SVC" \
@@ -207,25 +207,60 @@ ensure_npm_modules() {
   fi
 }
 
+# Resolve the runtime <corvin_home>/bridges dir the SAME way the daemons and
+# bridge_manager do: CORVIN_HOME (incl. the service.env pin) → <repo>/.corvin
+# → ~/.corvin. Loaded lazily on first channel_configured call.
+_RUNTIME_BRIDGES_DIR=""
+_resolve_runtime_bridges_dir() {
+  [[ -n "$_RUNTIME_BRIDGES_DIR" ]] && return 0
+  local home=""
+  local env_file="$HOME/.config/corvin-voice/service.env"
+  if [[ -n "${CORVIN_HOME:-}" ]]; then
+    home="$CORVIN_HOME"
+  elif [[ -f "$env_file" ]] && grep -q '^CORVIN_HOME=' "$env_file" 2>/dev/null; then
+    home="$(grep '^CORVIN_HOME=' "$env_file" | tail -1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//')"
+  elif [[ -d "$BRIDGES_DIR/../../.corvin" ]]; then
+    home="$(cd "$BRIDGES_DIR/../.." && pwd)/.corvin"
+  else
+    home="$HOME/.corvin"
+  fi
+  _RUNTIME_BRIDGES_DIR="$home/bridges"
+}
+
+# Settings path for a channel: canonical runtime path first (where the console
+# writes and the daemon reads, ADR-0008 §8.3), source tree as fallback for
+# source-only installs. Without this, a channel configured through the web
+# console (canonical path since 90c3e35) was silently skipped by bridge.sh.
+_settings_file() {
+  local ch="$1"
+  _resolve_runtime_bridges_dir
+  local rt="$_RUNTIME_BRIDGES_DIR/$ch/settings.json"
+  if [[ -f "$rt" ]]; then printf '%s' "$rt"; else printf '%s' "$BRIDGES_DIR/$ch/settings.json"; fi
+}
+
 # Channel only enabled if it has a usable credential.
 channel_configured() {
   local ch="$1"
+  local s
   case "$ch" in
-    telegram) [[ -n "$(jq -r '.telegram_token // empty' "$BRIDGES_DIR/telegram/settings.json" 2>/dev/null)" ]] ;;
-    discord)  [[ -n "$(jq -r '.discord_token // empty'  "$BRIDGES_DIR/discord/settings.json" 2>/dev/null)" ]] ;;
-    whatsapp) [[ -f "$BRIDGES_DIR/whatsapp/auth/creds.json" ]] ;;
+    telegram) s="$(_settings_file telegram)"; [[ -n "$(jq -r '.telegram_token // empty' "$s" 2>/dev/null)" ]] ;;
+    discord)  s="$(_settings_file discord)";  [[ -n "$(jq -r '.discord_token // empty'  "$s" 2>/dev/null)" ]] ;;
+    whatsapp)
+      _resolve_runtime_bridges_dir
+      [[ -f "$_RUNTIME_BRIDGES_DIR/whatsapp/auth/creds.json" ]] \
+        || [[ -f "$BRIDGES_DIR/whatsapp/auth/creds.json" ]] ;;
     slack)
-      local s="$BRIDGES_DIR/slack/settings.json"
+      s="$(_settings_file slack)"
       [[ -n "$(jq -r '.slack_bot_token // empty' "$s" 2>/dev/null)" ]] \
         && [[ -n "$(jq -r '.slack_app_token // empty' "$s" 2>/dev/null)" ]] \
         && ! grep -q "DEIN_SLACK" "$s" 2>/dev/null ;;
-    signal)  [[ -n "$(jq -r '.signal_number // empty' "$BRIDGES_DIR/signal/settings.json" 2>/dev/null)" ]] ;;
+    signal)  s="$(_settings_file signal)"; [[ -n "$(jq -r '.signal_number // empty' "$s" 2>/dev/null)" ]] ;;
     teams)
-      local t="$BRIDGES_DIR/teams/settings.json"
-      [[ -n "$(jq -r '.microsoft_app_id // empty' "$t" 2>/dev/null)" ]] \
-        && [[ -n "$(jq -r '.microsoft_app_password // empty' "$t" 2>/dev/null)" ]] ;;
+      s="$(_settings_file teams)"
+      [[ -n "$(jq -r '.microsoft_app_id // empty' "$s" 2>/dev/null)" ]] \
+        && [[ -n "$(jq -r '.microsoft_app_password // empty' "$s" 2>/dev/null)" ]] ;;
     email)
-      local s="$BRIDGES_DIR/email/settings.json"
+      s="$(_settings_file email)"
       [[ -n "$(jq -r '.imap_user // empty' "$s" 2>/dev/null)" ]] \
         && [[ -n "$(jq -r '.imap_password // empty' "$s" 2>/dev/null)" ]] \
         && ! grep -q "YOUR_IMAP_APP_PASSWORD\|YOUR_SMTP_APP_PASSWORD" "$s" 2>/dev/null ;;
