@@ -107,7 +107,7 @@ const LANG_OPTIONS = [
   { value: "el", label: "Ελληνικά (Greek)" },
 ] as const;
 
-const DEBOUNCE_MS = 800;
+const DEBOUNCE_MS = 1500; // Increased from 800ms for longer text input (custom instructions up to 2000 chars)
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 type ErrorKind = "save" | "reset";
@@ -446,10 +446,10 @@ export function VoicePage() {
             }
           >
             <Textarea
-              rows={3}
-              maxLength={500}
+              rows={6}
+              maxLength={2000}
               value={identity.custom_instructions ?? ""}
-              placeholder='e.g. "Always structure replies with a summary first." or "Use metric units."'
+              placeholder='e.g. "Always structure replies with a summary first." or "Use metric units and German for technical terms. Format lists with bullet points."'
               onChange={(e) =>
                 updateIdentity("custom_instructions", e.target.value || null)
               }
