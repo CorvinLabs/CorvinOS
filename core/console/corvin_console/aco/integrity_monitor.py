@@ -135,7 +135,13 @@ def check_audit_chain_integrity(tenant_id: str) -> list[IntegrityFinding]:
         from operator.bridges.shared.audit import verify_audit, audit_path
     except ImportError:
         try:
-            bridge_shared = Path(__file__).resolve().parents[5] / "operator" / "bridges" / "shared"
+            # parents[4] is the repo root (core/console/corvin_console/aco/
+            # integrity_monitor.py -> aco -> corvin_console -> console -> core
+            # -> repo root); parents[5] pointed one level ABOVE the repo and
+            # never existed, so this fallback silently never ran (masked
+            # because *some* other module usually already put the real
+            # bridges/shared dir on sys.path first — order-dependent bug).
+            bridge_shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
             import sys
             sys.path.insert(0, str(bridge_shared))
             from audit import verify_audit, audit_path  # type: ignore
@@ -312,7 +318,18 @@ def check_global_acs_anomaly(tenant_id: str) -> list[IntegrityFinding]:
     """
     findings: list[IntegrityFinding] = []
     try:
-        from operator.bridges.shared.audit import audit_path
+        try:
+            from operator.bridges.shared.audit import audit_path
+        except ImportError:
+            # Same operator/-shadows-stdlib issue as check_audit_chain_integrity()
+            # above — "operator.bridges.shared.X" can never resolve; this path
+            # had NO fallback at all, so the anomaly check always silently
+            # no-op'd (caught by the broad except below).
+            bridge_shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+            import sys
+            if str(bridge_shared) not in sys.path:
+                sys.path.insert(0, str(bridge_shared))
+            from audit import audit_path  # type: ignore
         audit_file = audit_path()
         if not audit_file.exists():
             return findings

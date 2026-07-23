@@ -108,7 +108,7 @@ class AdaptiveDelegationExecutor:
         budget: Optional[BudgetEnvelope] = None,
         complexity: str = "moderate",
         max_classification: str = "INTERNAL",
-        use_semantic_judge: bool = True,
+        use_semantic_judge: bool = False,
     ):
         """Initialize executor.
 
@@ -123,8 +123,16 @@ class AdaptiveDelegationExecutor:
         self.budget = budget
         self.complexity = complexity
         self.max_classification = max_classification
-        # False → skip the LLM judge in _measure_loss (unit tests, offline);
-        # falls back to the discounted lexical metric.
+        # Defaults to False: a raw AdaptiveDelegationExecutor is constructed
+        # directly by every unit test (MockWorkerIPC, no real LLM calls per
+        # those files' own docstrings) — defaulting this True silently spawned
+        # a REAL `claude` CLI subprocess (~10s each) from the exploration path
+        # in several "offline" tests (round-4 finding: only ONE of ~7 affected
+        # tests had been given the use_semantic_judge=False guard by a prior
+        # round; the constructor default is the actual root cause).
+        # TieredDelegationEngine (the real production caller) always passes
+        # this explicitly (tde_engine.py), tied to real_ipc — unaffected by
+        # this default.
         self.use_semantic_judge = use_semantic_judge
         # Validates the plan (raises ExecutionError) and provides the
         # symmetric-hint parallel grouping from ADR-0210 Phase 3.
@@ -432,18 +440,36 @@ class AdaptiveDelegationExecutor:
             if self.budget is not None:
                 self.budget.charge(step.estimated_tokens)
             local_result = await self._execute_local(step, statement, step_executor_fn)
-            loss_pct = await self._measure_loss(step, local_result.output, step_result.output)
-            self.loss_tracker.record_delegation_result(
-                task_type=step.action,
-                engine="tiered_delegation",
-                loss_pct=loss_pct,
-                complexity=self.complexity,
-                measured=True,
-            )
-            tde_audit.emit(
-                "loss_recorded", task_type=step.action, engine="tiered_delegation",
-                loss_pct=loss_pct, measured=True,
-            )
+            if local_result.success:
+                loss_pct = await self._measure_loss(step, local_result.output, step_result.output)
+                self.loss_tracker.record_delegation_result(
+                    task_type=step.action,
+                    engine="tiered_delegation",
+                    loss_pct=loss_pct,
+                    complexity=self.complexity,
+                    measured=True,
+                )
+                tde_audit.emit(
+                    "loss_recorded", task_type=step.action, engine="tiered_delegation",
+                    loss_pct=loss_pct, measured=True,
+                )
+            else:
+                # The LOCAL comparison run itself failed (e.g. a transient
+                # worker timeout) — that says nothing about the DELEGATED
+                # output's quality. Feeding local_result.output (None/partial)
+                # into _measure_loss would score a false high loss against the
+                # delegated step and poison the tracker with a full-weight
+                # (measured=True) garbage sample — a flaky local re-run could
+                # then block future delegation for this action even though
+                # the delegated output was fine (round-4 finding). Record via
+                # proxy instead: no comparison happened, so no loss claim.
+                self.loss_tracker.record_via_proxy(
+                    task_type=step.action,
+                    engine="tiered_delegation",
+                    schema_valid=step_result.success,
+                    downstream_ok=step_result.success,
+                    complexity=self.complexity,
+                )
         else:
             self.loss_tracker.record_via_proxy(
                 task_type=step.action,

@@ -3372,6 +3372,7 @@ async def _stream_tde_turn(
             from tde.analysis_runner import run_initial_analysis_sync  # noqa: PLC0415
             from tde.engine_registry import EngineRegistry  # noqa: PLC0415
             from tde.send_integration import SendIntegration  # noqa: PLC0415
+            from tde.worker_ipc import ProcHolder  # noqa: PLC0415
         except ImportError as _imp_err:
             final = (f"TDE ist auf dieser Installation nicht verfügbar "
                      f"(Modul fehlt: {_imp_err}).")
@@ -3385,13 +3386,20 @@ async def _stream_tde_turn(
             yield {"type": "done"}
             return
 
+        # Round-4 finding: unlike the ADR-0213 context-sync call below
+        # (_ContextSyncProcHolder), this subprocess had no cancellation
+        # holder — a client disconnect mid-analysis left the `claude -p`
+        # one-shot running for up to _ANALYSIS_TIMEOUT_S (180s) after the
+        # turn already ended. Killed from the outer except below.
+        _analysis_holder = ProcHolder()
         try:
             context: dict[str, Any] = {
                 "statement": {"task": task_text},
                 "task_text": task_text,
             }
             analysis = await asyncio.to_thread(
-                run_initial_analysis_sync, task_text, context
+                run_initial_analysis_sync, task_text, context,
+                proc_holder=_analysis_holder,
             )
             plan = analysis.global_plan
             yield {"type": "delta", "text": (
@@ -3407,6 +3415,21 @@ async def _stream_tde_turn(
 
             summary = result.get("summary") or {}
             selection = result.get("engine_selection") or {}
+            if engine_name != "tiered_delegation":
+                # Round-4 finding: the FIRST "engine" stream event above is
+                # emitted before anything ran and is hardcoded to
+                # "tiered_delegation" (this whole function only runs for the
+                # explicit opt-in). When L34's prescan forces claude_code
+                # (selection["l34_forced"]), the turn actually executed
+                # entirely locally — a consumer that keys off the structured
+                # `engine` event (the documented purpose of this event, per
+                # the per-turn engine badge) rather than the German badge
+                # text kept showing "tiered_delegation" for a turn that never
+                # delegated anything. Emit a corrective event with the engine
+                # that actually ran.
+                yield {"type": "engine", "engine": engine_name,
+                       "label": f"{engine_name} (L34-Pre-Gate erzwungen)"
+                                if selection.get("l34_forced") else engine_name}
             parts: list[str] = []
             for r in result.get("results", []) or []:
                 out = getattr(r, "output", None)
@@ -3439,8 +3462,18 @@ async def _stream_tde_turn(
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnect / server shutdown mid-TDE: close the audit pair
         # before propagating (os_turn.started must not stay unmatched —
-        # mirrors the Hermes/ACS paths). The in-flight helper one-shots are
-        # bounded by their own timeouts + process-group kill (run_one_shot).
+        # mirrors the Hermes/ACS paths). The InitialAnalysis one-shot is
+        # killed explicitly (round-4 finding, see _analysis_holder above);
+        # the per-step delegated/local worker one-shots inside
+        # select_engine_and_execute() are still only bounded by their own
+        # timeouts + process-group kill (run_one_shot) — killing those on
+        # mid-batch cancellation is a larger, tracked follow-up (would need
+        # holder plumbing through AdaptiveDelegationExecutor's parallel
+        # batches, not a single subprocess).
+        try:
+            _analysis_holder.kill()  # no-op if never started / already done
+        except NameError:
+            pass
         if not books_closed:
             audit_emit(sess, "web.turn.cancelled", tde_run_id=run_id)
             tm.record_event(task_id, {"event": "task.failed", "exit_code": -1,
