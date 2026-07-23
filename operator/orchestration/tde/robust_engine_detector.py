@@ -218,12 +218,18 @@ class RobustEngineDetector:
 
         # === NEW Signal 6: Iteration Loops (ADR-0214 refined) ===
         # Count how many steps re-read prior outputs (indicates iterative refinement).
-        # Heuristic: if plan is long + sequential (low parallelization), assume iterative.
+        # Heuristic: only penalize if parallelization is VERY low (<20%) AND complexity high
+        # (to avoid false-positive on sequential pipelines that are just ordered execution).
         iteration_loops = 1  # Conservative default: assume one-pass
-        if parallelization_ratio < 0.3 and total_steps > 3:
-            iteration_loops = min(total_steps, 3)  # Heuristic: sequential = 2-3 iterations
+        if (
+            parallelization_ratio < 0.2  # Very low parallelization (not just sequential pipelining)
+            and total_steps > 2
+            and complexity in ["moderate", "complex"]  # Only for complex tasks
+        ):
+            # High-confidence iterative pattern: sequential + complex + multiple steps
+            iteration_loops = min(total_steps // 2, 4)  # Damped: don't over-penalize
         signal_iteration = (
-            0.2 if iteration_loops <= 2 else 0.8  # ACS hates iteration; TDE loves it
+            0.1 if iteration_loops <= 1 else (0.5 if iteration_loops <= 2 else 0.8)
         )
 
         # === NEW Signal 7: User Interaction ===
@@ -284,18 +290,20 @@ class RobustEngineDetector:
 
         # === ACS Logit: Parallelizable, stateless, batch ===
         acs_logit = (
-            # Parallelization: ACS LOVES high parallelization
+            # Parallelization: ACS LOVES high parallelization (only path to ACS victory)
             signals.signal_parallelization * self.WEIGHTS["signal_parallelization"]
             # Iteration: ACS HATES iteration (penalty)
             - signals.signal_iteration * self.WEIGHTS["signal_iteration"]
-            # Task type: ACS for reasoning / decomposition (if task_type < 0)
-            + (0.6 if signals.signal_task_type < 0 else -0.2) * self.WEIGHTS["signal_task_type"]
+            # Task type: ACS for reasoning / decomposition ONLY if parallelizable
+            # (refutation: 0% parallel reasoning should never route to ACS, even if task_type="reasoning")
+            + (0.3 if signals.signal_task_type < 0 and signals.parallelization_ratio > 0.2 else -0.3)
+                * self.WEIGHTS["signal_task_type"]
             # Data: large data helps ACS only if parallelizable
             + (0.3 if signals.data_mb > 500 and signals.parallelization_ratio > 0.5 else -0.1)
                 * self.WEIGHTS["signal_data_complexity"]
             # Interaction: ACS hates interactive (batch-oriented)
             - signals.signal_interaction * self.WEIGHTS["signal_interaction"]
-            + 0.2  # ACS baseline
+            + 0.1  # ACS baseline (reduced from 0.2)
         )
 
         # === Claude-Code Logit: Safe default, sequential, interactive ===
