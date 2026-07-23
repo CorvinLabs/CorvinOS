@@ -595,19 +595,39 @@ def _summarize_for_speech(text: str, lang: str) -> str | None:
     any failure (missing script, timeout, empty output) so the caller can
     fall back to the raw text — this must never break TTS, only improve it.
 
-    Before this helper existed, ``POST /voice/tts`` spoke the raw, full
-    answer text (truncated blindly at ``_TTS_PROVIDER_CHAR_LIMIT``) —
-    ``/voice/summarize`` was a fully-working, tested endpoint that the
-    frontend never called (confirmed via grep: zero references to
-    "voice/summarize" anywhere under web-next/src). Every messenger bridge
-    (Discord, WhatsApp, ...) speaks a real condensed summary; the console
-    read the raw text word-for-word — this is the console-specific gap
-    behind that discrepancy (found 2026-07-14, reported as "voice summary
-    works in Discord but not in the console chat").
+    PRE-STRIPS code blocks via strip_for_tts.py (--mode code-only) BEFORE
+    passing to summarize.py — mirrors the exact preprocessing that
+    adapter.py::build_voice_summary() does. Failure to strip falls back to
+    raw text (fail-soft). This ensures the LLM-summarizer sees clean prose
+    without code-blocks / table-noise that would distract it.
     """
     summarize_path = _VOICE_SCRIPTS / "summarize.py"
+    stripper_path = _VOICE_SCRIPTS / "strip_for_tts.py"
     if not summarize_path.exists():
         return None
+
+    # Pre-strip code blocks so summarize.py sees clean prose (adapter.py parity).
+    cleaned_text = text
+    if stripper_path.exists():
+        try:
+            clean_env = {k: v for k, v in os.environ.items()
+                         if k not in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_API_BASE')}
+            pre = subprocess.run(
+                [sys.executable, str(stripper_path), "--mode", "code-only"],
+                input=text, capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=10, check=True, env=clean_env,
+            ).stdout.strip()
+            # Explicit check: if stripper consumed all content, fall back to raw text.
+            if pre:
+                cleaned_text = pre
+            else:
+                _log.debug("voice_tts: strip_for_tts returned empty — using raw text")
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError) as e:
+            _log.debug("voice_tts: strip_for_tts failed (%s) — using raw text", type(e).__name__)
+            # Fall through to raw text
+            pass
+
     cmd = [sys.executable, str(summarize_path),
            "--lang", lang if lang in ("de", "en") else "de",
            "--max-chars", str(_TTS_SUMMARIZE_MAX_CHARS)]
@@ -626,7 +646,7 @@ def _summarize_for_speech(text: str, lang: str) -> str | None:
     try:
         proc = subprocess.run(
             cmd,
-            input=text, capture_output=True, text=True,
+            input=cleaned_text, capture_output=True, text=True,
             timeout=_TTS_SUMMARIZE_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired:
