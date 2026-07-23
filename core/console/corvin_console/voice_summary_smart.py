@@ -148,55 +148,168 @@ def analyze_response(text: str, user_context: str = "") -> ResponseAnalysis:
     )
 
 
-def generate_voice_summary(analysis: ResponseAnalysis, max_words: int = 200) -> str:
+def generate_voice_summary(
+    analysis: ResponseAnalysis,
+    max_words: int = 200,
+    tone: str = "warm",
+    user_name: str = "",
+) -> str:
     """Convert analysis into a natural spoken narrative.
 
-    Structure:
-    1. Opening hook (why it matters)
-    2. What was done (the change)
-    3. Why this approach (reasoning, trade-offs)
-    4. Closing (impact or next step)
+    Respects voice profile tone (warm/formal/casual) and generates varied,
+    conversational language instead of rigid templates.
+
+    Args:
+        analysis: Response classification and insights
+        max_words: Max words for the summary
+        tone: Voice tone from profile (warm/formal/casual)
+        user_name: User's name for personalization (optional)
     """
+    import random
+
     parts = []
 
-    # Opening: Why it matters
+    # Openings: Varied based on tone, not rigid template
+    openings_warm = [
+        (lambda b: f"Great news! We've unblocked {b[0]} for you." if b else None),
+        (lambda b: f"Good call—we just fixed something that was holding us back." if b else None),
+        (lambda b: f"Alright, {b[0]} is no longer in our way." if b else None),
+    ]
+
+    openings_formal = [
+        (lambda b: f"Blocker resolved: {b[0]}." if b else None),
+        (lambda b: f"{b[0].capitalize()} has been unblocked." if b else None),
+    ]
+
+    openings_neutral = openings_formal  # Formal fallback
+
+    openings_fallback_warm = [
+        f"I just wrapped up a {analysis.work_type}.",
+        f"Completed a {analysis.work_type} that I think you'll appreciate.",
+        f"Finished a meaningful {analysis.work_type}.",
+    ]
+
+    openings_fallback_neutral = [
+        f"A {analysis.work_type} has been completed.",
+        f"Completed: {analysis.work_type}.",
+    ]
+
+    # Pick opening based on blockers and tone
+    opening = None
     if analysis.blockers_resolved:
-        opening = f"Good news: we just unblocked {analysis.blockers_resolved[0]}."
-    elif analysis.risk_level == "high":
-        opening = f"Heads up: we made a significant {analysis.work_type} to the {analysis.scope} scope."
-    else:
-        opening = f"We just completed a {analysis.work_type} to {', '.join(analysis.key_files) if analysis.key_files else 'the codebase'}."
+        if tone == "warm":
+            candidates = openings_warm
+        elif tone == "formal":
+            candidates = openings_formal
+        else:
+            candidates = openings_neutral
+        opening = random.choice(candidates)(analysis.blockers_resolved)
+
+    if not opening:
+        fallback = openings_fallback_warm if tone == "warm" else openings_fallback_neutral
+        opening = random.choice(fallback)
 
     parts.append(opening)
 
-    # Body: What was done + reasoning
-    if analysis.work_type == "fix":
-        body = f"The issue was causing problems—we fixed it with a targeted change. {analysis.key_insight}"
-    elif analysis.work_type == "feature":
-        body = f"We added new functionality. {analysis.key_insight}"
-    elif analysis.work_type == "refactor":
-        body = f"We improved the code structure for maintainability. {analysis.key_insight}"
-    else:
-        body = analysis.key_insight
+    # Body: Contextual narrative (not "The issue was causing problems—we fixed it")
+    body_templates_warm = {
+        "fix": [
+            f"There was a bug that needed tackling. {analysis.key_insight}",
+            f"Spotted an issue and patched it. {analysis.key_insight}",
+            f"Fixed something that was broken. {analysis.key_insight}",
+        ],
+        "feature": [
+            f"Added something new that should be useful. {analysis.key_insight}",
+            f"Built out a new feature. {analysis.key_insight}",
+            f"Implemented new functionality. {analysis.key_insight}",
+        ],
+        "refactor": [
+            f"Tidied up the code to make it cleaner going forward. {analysis.key_insight}",
+            f"Refactored some internals for better maintainability. {analysis.key_insight}",
+            f"Improved the structure so it's easier to work with. {analysis.key_insight}",
+        ],
+    }
 
+    body_templates_formal = {
+        "fix": [f"Issue identified and resolved. {analysis.key_insight}"],
+        "feature": [f"Feature implemented. {analysis.key_insight}"],
+        "refactor": [f"Code architecture improved. {analysis.key_insight}"],
+    }
+
+    body_templates_neutral = body_templates_formal
+
+    if tone == "warm":
+        body_source = body_templates_warm
+    elif tone == "formal":
+        body_source = body_templates_formal
+    else:
+        body_source = body_templates_neutral
+
+    body = random.choice(body_source.get(analysis.work_type, [analysis.key_insight]))
     parts.append(body)
 
-    # Trade-offs and reasoning
-    if analysis.trade_offs:
-        tradeoff_text = analysis.trade_offs[0]
-        parts.append(f"We considered other approaches, but this one makes the most sense: {tradeoff_text}")
+    # Reasoning & trade-offs (show thinking, not just "considered other approaches")
+    if analysis.trade_offs and tone == "warm":
+        tradeoff_openers = [
+            "The approach made sense because:",
+            "I went with this because:",
+            "Why this way?",
+        ]
+        parts.append(f"{random.choice(tradeoff_openers)} {analysis.trade_offs[0]}")
 
-    # Testing claim
+    # Testing: Conversational, not "We verified it with tests, so it's solid"
     if analysis.testing_mentioned:
-        parts.append("We verified it with tests, so it's solid.")
+        test_claims_warm = [
+            "Tests are passing, so we're good.",
+            "Verified the changes, it's working as expected.",
+            "Tests confirm it's solid.",
+        ]
+        test_claims_neutral = [
+            "Tests verified.",
+            "Verified with tests.",
+        ]
+        test_source = test_claims_warm if tone == "warm" else test_claims_neutral
+        parts.append(random.choice(test_source))
 
-    # Closing: Impact
-    if analysis.risk_level == "high":
-        parts.append(f"Worth keeping an eye on, but it's well thought through.")
-    elif analysis.blockers_resolved:
-        parts.append(f"You should be able to move forward now.")
+    # Closing: Impact on user (personalized if possible)
+    closing_templates_warm = {
+        "high_risk": [
+            "This is significant work, but it's well thought through.",
+            "Worth paying attention to—solid engineering though.",
+        ],
+        "unblocked": [
+            f"You should be able to move forward now.",
+            f"This unblocks the next steps.",
+        ],
+        "default": [
+            f"This makes things better: {analysis.user_benefit.lower()}.",
+            f"{analysis.user_benefit}—that's what matters here.",
+        ],
+    }
+
+    closing_templates_formal = {
+        "high_risk": ["Significant architectural change, well documented."],
+        "unblocked": ["Blocker resolution complete."],
+        "default": [analysis.user_benefit],
+    }
+
+    closing_templates_neutral = closing_templates_formal
+
+    if tone == "warm":
+        closing_source = closing_templates_warm
+    elif tone == "formal":
+        closing_source = closing_templates_formal
     else:
-        parts.append(f"This improves {analysis.user_benefit.lower()}.")
+        closing_source = closing_templates_neutral
+
+    if analysis.risk_level == "high":
+        closing = random.choice(closing_source["high_risk"])
+    elif analysis.blockers_resolved:
+        closing = random.choice(closing_source["unblocked"])
+    else:
+        closing = random.choice(closing_source["default"])
+
+    parts.append(closing)
 
     # Join and truncate if needed
     full_text = " ".join(parts)
@@ -248,10 +361,10 @@ if __name__ == "__main__":
     of code in src/renderer/image.ts. Verified with existing unit tests."""
 
     analysis1 = analyze_response(response1)
-    summary1 = generate_voice_summary(analysis1)
+    summary1 = generate_voice_summary(analysis1, tone="warm")
     final1 = polish_for_audio(summary1)
 
-    print("=== BUG FIX EXAMPLE ===")
+    print("=== BUG FIX EXAMPLE (WARM TONE) ===")
     print(f"Original: {response1[:100]}...")
     print(f"\nVoice Summary:\n{final1}\n")
 
@@ -262,12 +375,15 @@ if __name__ == "__main__":
     easier to add new migrations in the future."""
 
     analysis2 = analyze_response(response2)
-    summary2 = generate_voice_summary(analysis2)
-    final2 = polish_for_audio(summary2)
+    summary2_warm = generate_voice_summary(analysis2, tone="warm")
+    summary2_formal = generate_voice_summary(analysis2, tone="formal")
+    final2_warm = polish_for_audio(summary2_warm)
+    final2_formal = polish_for_audio(summary2_formal)
 
-    print("=== REFACTOR EXAMPLE ===")
+    print("=== REFACTOR EXAMPLE (WARM vs FORMAL) ===")
     print(f"Original: {response2[:100]}...")
-    print(f"\nVoice Summary:\n{final2}\n")
+    print(f"\nWarm Tone:\n{final2_warm}\n")
+    print(f"Formal Tone:\n{final2_formal}\n")
 
     # Test 3: Feature
     response3 = """Implemented geo-tracking Tier 3 with 10km grid rasterization. This enables
@@ -275,9 +391,15 @@ if __name__ == "__main__":
     Added comprehensive tests. Unblocks the analytics dashboard feature."""
 
     analysis3 = analyze_response(response3)
-    summary3 = generate_voice_summary(analysis3)
+    summary3 = generate_voice_summary(analysis3, tone="warm")
     final3 = polish_for_audio(summary3)
 
-    print("=== FEATURE EXAMPLE ===")
+    print("=== FEATURE EXAMPLE (WARM TONE) ===")
     print(f"Original: {response3[:100]}...")
     print(f"\nVoice Summary:\n{final3}\n")
+
+    # Test 4: Show variability
+    print("=== VARIABILITY TEST (same input, multiple outputs) ===")
+    for i in range(3):
+        varied = generate_voice_summary(analysis1, tone="warm")
+        print(f"Attempt {i+1}: {varied}\n")

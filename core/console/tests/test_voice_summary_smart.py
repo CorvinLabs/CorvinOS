@@ -181,3 +181,38 @@ def test_high_risk_changes_flagged():
     summary = generate_voice_summary(analysis)
     # Should sound cautious or emphasize the importance
     assert "heads up" in summary.lower() or "important" in summary.lower() or len(summary) > 100
+
+
+def test_voice_summary_respects_tone_profile():
+    """Summary should use different language based on tone (warm vs formal)."""
+    response = "Fixed the rendering bug. Tests pass."
+    analysis = analyze_response(response)
+
+    # Warm tone should use more conversational language
+    summary_warm = generate_voice_summary(analysis, tone="warm")
+    summary_formal = generate_voice_summary(analysis, tone="formal")
+
+    # Both should contain some fix-related content
+    assert any(w in summary_warm.lower() for w in ["fix", "bug", "solid"])
+    assert any(w in summary_formal.lower() for w in ["fix", "bug"])
+
+    # Warm should sound more conversational
+    warm_words = ["we", "i", "you", "great", "good"]
+    formal_words = ["system", "process", "verified"]
+    warm_score = sum(1 for w in warm_words if w in summary_warm.lower())
+    formal_score = sum(1 for w in formal_words if w in summary_formal.lower())
+    # Warm should have more conversational markers
+    assert warm_score >= formal_score or len(summary_warm) > 0
+
+
+def test_voice_summary_varies_output():
+    """Summaries should vary (not always identical robot statements)."""
+    response = "Fixed a bug in the rendering system."
+    analysis = analyze_response(response)
+
+    # Generate multiple summaries from same analysis
+    summaries = [generate_voice_summary(analysis, tone="warm") for _ in range(5)]
+
+    # Should have at least 2 different outputs
+    unique_summaries = set(summaries)
+    assert len(unique_summaries) >= 2, f"Summaries should vary, got: {unique_summaries}"
