@@ -31,6 +31,7 @@ import {
 import { Markdown } from "@/components/markdown";
 import { WdatAuditPanel } from "@/components/WdatAuditPanel";
 import { DualTrackAuditPanel } from "@/components/DualTrackAuditPanel";
+import { TdeAuditGraphPanel } from "@/components/TdeAuditGraphPanel";
 import { AudioPlayer } from "@/components/AudioPlayer";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -801,7 +802,7 @@ function ChatPane({
   // Reset CCC action cards when the session changes.
   React.useEffect(() => { setCccActions([]); }, [sid]);
   const [auditOpen, setAuditOpen] = React.useState(false);
-  const [auditTab, setAuditTab] = React.useState<"single" | "dual-track">("single");
+  const [auditTab, setAuditTab] = React.useState<"single" | "dual-track" | "tde-graph">("single");
   const [workdirInfo, setWorkdirInfo] = React.useState<{ path: string; opened: boolean; error?: string } | null>(null);
   // Voice-out is on by default — the operator can flip it off via the
   // toggle in the chat header, the choice is then session-local.
@@ -1774,13 +1775,25 @@ function ChatPane({
             >
               Dual-Track
             </button>
+            <button
+              onClick={() => setAuditTab("tde-graph")}
+              className={`px-3 py-1.5 text-[10px] font-semibold border-b-2 transition-colors ${
+                auditTab === "tde-graph"
+                  ? "border-sky-500 text-sky-400 bg-sky-950/20"
+                  : "border-transparent text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              TDE Graph
+            </button>
           </div>
           {/* panel body */}
           <div className="flex-1 min-h-0">
             {auditTab === "single" ? (
               <WdatAuditPanel sid={sid} />
-            ) : (
+            ) : auditTab === "dual-track" ? (
               <DualTrackAuditPanel sid={sid} />
+            ) : (
+              <TdeAuditGraphPanel sid={sid} />
             )}
           </div>
         </div>

@@ -33,8 +33,10 @@ import { Loader2, AlertCircle } from "lucide-react";
 import {
   getComputeRunGraph,
   getACSRunGraph,
+  getTdeRunGraph,
   type L25GraphPayload,
   type ACSGraphPayload,
+  type TDEGraphPayload,
 } from "@/lib/api";
 
 // ── Semantic color constants (CSS-variable-backed where possible) ─────────
@@ -65,6 +67,7 @@ const NODE_W: Record<string, number> = {
   sub_manager: 130,
   sub_worker:  110,
   completion:  130,
+  l34_block:   110,
 };
 const NODE_H: Record<string, number> = {
   task:        90,
@@ -74,6 +77,7 @@ const NODE_H: Record<string, number> = {
   sub_manager: 64,
   sub_worker:  50,
   completion:  52,
+  l34_block:   50,
 };
 
 // Invisible handle style — edges connect but dots aren't visible
@@ -104,18 +108,47 @@ function TaskRootNode({ data }: NodeProps) {
 
 function ManagerNode({ data }: NodeProps) {
   const [l1 = "Manager", l2 = ""] = String(data.label ?? "Manager").split("\n");
+  // TDE's manager node (engine selection) carries a confidence-derived color
+  // per-node (see _acs_confidence_color in compute.py); ACS always sends the
+  // same fixed purple, so defaulting to COLORS.manager keeps that unchanged.
+  const color: string = (data.color as string) ?? COLORS.manager;
   return (
     <div style={{
       width: NODE_W.manager, height: NODE_H.manager,
-      background: `${COLORS.manager}1f`,
-      border: `2px solid ${COLORS.manager}`, borderRadius: 10,
+      background: `${color}1f`,
+      border: `2px solid ${color}`, borderRadius: 10,
       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
       fontFamily: "monospace", gap: 2,
-      boxShadow: `0 0 14px ${COLORS.manager}38`,
+      boxShadow: `0 0 14px ${color}38`,
     }}>
       <Handle type="target" position={Position.Top} style={H_STYLE} />
-      <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.manager }}>★ {l1}</div>
+      <div style={{ fontSize: 12, fontWeight: 700, color }}>★ {l1}</div>
       {l2 && <div style={{ fontSize: 9, color: COLORS.muted }}>{l2}</div>}
+      <Handle type="source" position={Position.Bottom} style={H_STYLE} />
+    </div>
+  );
+}
+
+// TDE-only: L34 pre-scan/step block node — a red warning triangle inserted
+// into the chain wherever the L34 data-classification gate refused delegation
+// outright (compute.py's "l34_block" group; ACS never emits this group).
+function L34BlockNode({ data }: NodeProps) {
+  const [l1 = "L34 Blocked", l2 = ""] = String(data.label ?? "L34 Blocked").split("\n");
+  return (
+    <div style={{ width: NODE_W.l34_block, height: NODE_H.l34_block, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <Handle type="target" position={Position.Top} style={H_STYLE} />
+      <div style={{
+        width: 46, height: 40,
+        background: `${COLORS.failed}20`,
+        border: `2px solid ${COLORS.failed}`,
+        clipPath: "polygon(50% 0%, 0% 100%, 100% 100%)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <div style={{ textAlign: "center", marginTop: 8 }}>
+          <div style={{ fontSize: 7, fontFamily: "monospace", fontWeight: 700, color: COLORS.failed }}>{l1}</div>
+        </div>
+      </div>
+      {l2 && <div style={{ fontSize: 8, fontFamily: "monospace", color: COLORS.failed, marginTop: 2 }}>{l2}</div>}
       <Handle type="source" position={Position.Bottom} style={H_STYLE} />
     </div>
   );
@@ -152,19 +185,22 @@ function IterationNode({ data }: NodeProps) {
   const [l1 = "Iter", l2 = "", l3 = ""] = String(data.label ?? "Iter").split("\n");
   // l25 runs flag their single best iteration (matches the green "best iter"
   // marker already used in LossCurvePanel) — everything else stays the
-  // regular gold iteration styling.
+  // regular gold iteration styling. TDE's decision nodes instead carry a
+  // per-node color (red=blocked, green=delegate, gray=local) — respected
+  // here when present and the node isn't flagged "best".
   const isBest = Boolean(data.isBest);
+  const color: string = isBest ? COLORS.success : ((data.color as string) ?? COLORS.iteration);
   return (
     <div style={{
       width: NODE_W.decision, height: NODE_H.decision,
-      background: `${COLORS.iteration}1f`,
-      border: `${isBest ? 3 : 2}px solid ${isBest ? COLORS.success : COLORS.iteration}`,
+      background: `${color}1f`,
+      border: `${isBest ? 3 : 2}px solid ${color}`,
       borderRadius: 8,
       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
       fontFamily: "monospace", gap: 1,
     }}>
       <Handle type="target" position={Position.Top} style={H_STYLE} />
-      <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.iteration }}>{l1}</div>
+      <div style={{ fontSize: 11, fontWeight: 700, color }}>{l1}</div>
       {l2 && <div style={{ fontSize: 9, color: COLORS.textPrimary }}>{l2}</div>}
       {l3 && <div style={{ fontSize: 9, color: COLORS.muted }}>{l3}</div>}
       {/* Named handles so edges target the correct side */}
@@ -287,6 +323,7 @@ const NODE_TYPES = {
   sub_manager: SubManagerNode,
   sub_worker:  SubWorkerNode,
   completion:  CompletionNode,
+  l34_block:   L34BlockNode,
 };
 
 // ── AWP-style custom layout ───────────────────────────────────────────────
@@ -335,6 +372,31 @@ interface RawNode {
   // Manager fields
   engine?: string;
   max_loops?: number;
+  // TDE-only fields (ADR-0214 audit-graph endpoint — see compute.py
+  // _build_tde_audit_graph). step_num/step_action/delegate/l34_blocked/
+  // reason_code live on "decision" nodes; success/duration_ms/loss_pct/
+  // measured on "worker" nodes; scope/reason_code on "l34_block"; task_type/
+  // complexity/override/trivial on "manager"; n_events/wall_time_s on
+  // "task"; step_count/delegated_count/local_count on "completion".
+  step_num?: number | null;
+  step_action?: string;
+  delegate?: boolean;
+  l34_blocked?: boolean;
+  reason_code?: string;
+  scope?: string;
+  task_type?: string;
+  complexity?: string;
+  override?: boolean;
+  trivial?: boolean;
+  success?: boolean;
+  duration_ms?: number;
+  loss_pct?: number | null;
+  measured?: boolean;
+  n_events?: number;
+  wall_time_s?: number | null;
+  step_count?: number;
+  delegated_count?: number;
+  local_count?: number;
   [key: string]: unknown;
 }
 
@@ -539,6 +601,113 @@ function buildReactFlowGraph(
   return [nodes, edges, completionY + Y_ROW] as const;
 }
 
+// ── TDE-specific layout (ADR-0214 audit-graph endpoint) ────────────────────
+//
+// The TDE turn is reconstructed from a hash-chained *event* trail, not from
+// per-run artifact files, so its topology is a single linear chain (unlike
+// ACS's fan of workers per iteration): task_root → [l34_prescan_block] →
+// mgr_1 (engine_selected) → decision_1 → [worker_1] → decision_2 → …
+// → completion. Each decision has AT MOST one worker (delegated OR local),
+// which — per _build_tde_audit_graph — always branches off its own decision
+// node (decision→decision edges chain independently of any worker), so a
+// simple "one row per decision, worker offset to the right" layout mirrors
+// the ACS column pattern without needing its id-prefix chain-walking.
+function buildTdeReactFlowGraph(
+  rawNodes: RawNode[],
+  rawEdges: RawEdge[],
+): [Node[], Edge[], number] {
+  const groupById: Record<string, string> = {};
+  rawNodes.forEach((n) => { groupById[n.id] = n.group; });
+
+  // decision id -> its worker id (edges from a decision node to a worker node)
+  const workerOfDecision: Record<string, string> = {};
+  rawEdges.forEach((e) => {
+    const src = e.from ?? e.source ?? "";
+    const tgt = e.to ?? e.target ?? "";
+    if (groupById[src] === "decision" && groupById[tgt] === "worker") {
+      workerOfDecision[src] = tgt;
+    }
+  });
+
+  const decisions = rawNodes
+    .filter((n) => n.group === "decision")
+    .sort((a, b) => {
+      const sa = typeof a.step_num === "number" ? a.step_num : Number.MAX_SAFE_INTEGER;
+      const sb = typeof b.step_num === "number" ? b.step_num : Number.MAX_SAFE_INTEGER;
+      return sa - sb;
+    });
+
+  const pos: Record<string, { x: number; y: number }> = {};
+  let row = 0;
+
+  const taskRoot = rawNodes.find((n) => n.group === "task");
+  if (taskRoot) pos[taskRoot.id] = { x: ITER_X, y: (row++) * Y_ROW };
+
+  const l34Prescan = rawNodes.find((n) => n.group === "l34_block");
+  if (l34Prescan) pos[l34Prescan.id] = { x: ITER_X, y: (row++) * Y_ROW };
+
+  const manager = rawNodes.find((n) => n.group === "manager");
+  if (manager) pos[manager.id] = { x: ITER_X, y: (row++) * Y_ROW };
+
+  decisions.forEach((d) => {
+    const y = row * Y_ROW;
+    pos[d.id] = { x: ITER_X, y };
+    const wId = workerOfDecision[d.id];
+    if (wId) pos[wId] = { x: ITER_X + W_START, y };
+    row++;
+  });
+
+  const completion = rawNodes.find((n) => n.group === "completion");
+  if (completion) pos[completion.id] = { x: ITER_X, y: row * Y_ROW };
+  const totalHeight = (row + 1) * Y_ROW;
+
+  const nodes: Node[] = rawNodes.map((n) => {
+    const p = pos[n.id] ?? { x: 0, y: 0 };
+    const w = NODE_W[n.group] ?? 120;
+    const h = NODE_H[n.group] ?? 60;
+    return {
+      id: n.id,
+      type: n.group,
+      position: { x: p.x - w / 2, y: p.y - h / 2 },
+      data: n,
+    };
+  });
+
+  const edges: Edge[] = rawEdges.map((e, i) => {
+    const src = e.from ?? e.source ?? "";
+    const tgt = e.to ?? e.target ?? "";
+    const fromGroup = groupById[src];
+    const toGroup = groupById[tgt];
+    // decision → worker: horizontal branch (right → left).
+    // decision → * (next decision, or completion when the last step had no
+    // worker): vertical, via the decision's named "bottom" handle.
+    // worker → * (completion, when the last step DID have a worker):
+    // horizontal source via the worker's named "right" handle.
+    // Everything else (task/l34_block/manager chain) uses the nodes'
+    // unnamed default handles, same as the ACS builder above.
+    const handles =
+      toGroup === "worker" ? { sourceHandle: "right", targetHandle: "left" } :
+      fromGroup === "decision" ? { sourceHandle: "bottom" } :
+      fromGroup === "worker" ? { sourceHandle: "right" } :
+      {};
+    return {
+      id: `e${i}__${src}__${tgt}`,
+      source: src,
+      target: tgt,
+      ...handles,
+      type: "smoothstep",
+      style: { stroke: e.color ?? COLORS.muted, strokeWidth: e.width ?? 1.5, opacity: 0.85 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: e.color ?? COLORS.muted, width: 15, height: 15 },
+      label: e.label,
+      labelStyle: { fill: COLORS.muted, fontSize: 9, fontFamily: "monospace" },
+      labelBgStyle: { fill: "transparent" },
+      labelBgBorderRadius: 2,
+    };
+  });
+
+  return [nodes, edges, totalHeight] as const;
+}
+
 // ── Hover Tooltip ─────────────────────────────────────────────────────────
 
 function TooltipRow({ label, value, color }: { label: string; value: React.ReactNode; color?: string }) {
@@ -550,7 +719,7 @@ function TooltipRow({ label, value, color }: { label: string; value: React.React
   );
 }
 
-function NodeTooltipPanel({ data }: { data: RawNode }) {
+function NodeTooltipPanel({ data, mode }: { data: RawNode; mode: "l25" | "acs" | "tde" }) {
   const g = data.group as string;
   const pct = (v: number | null | undefined) =>
     v != null ? `${(v * 100).toFixed(0)}%` : "—";
@@ -561,15 +730,25 @@ function NodeTooltipPanel({ data }: { data: RawNode }) {
     : s === "failed" || s === "error" ? COLORS.failed
     : COLORS.muted;
 
-  const title: Record<string, string> = {
-    task:        "ACS Workflow Task",
-    manager:     "Manager Agent",
-    decision:    `Iteration ${data.iter_num ?? ""}`,
-    worker:      data.worker_name ?? data.id,
-    sub_manager: `Sub-Manager: ${data.worker_name ?? data.id}`,
-    sub_worker:  `Sub-Worker: ${data.worker_name ?? data.id}`,
-    completion:  "Run Result",
-  };
+  const title: Record<string, string> =
+    mode === "tde"
+      ? {
+          task:      "TDE Turn",
+          l34_block: "L34 Gate — Blocked",
+          manager:   "Engine Selection",
+          decision:  `Step ${data.step_num ?? "?"}`,
+          worker:    data.delegate ? "Delegated Worker" : "Local Worker",
+          completion: "TDE Turn Result",
+        }
+      : {
+          task:        "ACS Workflow Task",
+          manager:     "Manager Agent",
+          decision:    `Iteration ${data.iter_num ?? ""}`,
+          worker:      data.worker_name ?? data.id,
+          sub_manager: `Sub-Manager: ${data.worker_name ?? data.id}`,
+          sub_worker:  `Sub-Worker: ${data.worker_name ?? data.id}`,
+          completion:  "Run Result",
+        };
 
   return (
     <div style={{
@@ -588,7 +767,7 @@ function NodeTooltipPanel({ data }: { data: RawNode }) {
         {title[g] ?? g}
       </div>
 
-      {g === "task" && (<>
+      {mode !== "tde" && g === "task" && (<>
         <TooltipRow label="Run ID"      value={data.run_id ?? "—"} />
         <TooltipRow label="Workflow"    value={data.workflow_id ?? "—"} />
         <TooltipRow label="Status"      value={data.run_status ?? "—"} color={statusColor(data.run_status)} />
@@ -597,12 +776,12 @@ function NodeTooltipPanel({ data }: { data: RawNode }) {
         <TooltipRow label="Duration"    value={dur(data.duration_s)} />
       </>)}
 
-      {g === "manager" && (<>
+      {mode !== "tde" && g === "manager" && (<>
         <TooltipRow label="Engine"     value={data.engine ?? "—"} />
         <TooltipRow label="Max loops"  value={data.max_loops ?? "—"} />
       </>)}
 
-      {g === "decision" && (<>
+      {mode !== "tde" && g === "decision" && (<>
         <TooltipRow label="Decision"    value={data.decision ?? "—"} />
         <TooltipRow label="Confidence"  value={pct(data.confidence)} color={_confColor(data.confidence as number | undefined)} />
         {data.loss != null && (
@@ -612,7 +791,7 @@ function NodeTooltipPanel({ data }: { data: RawNode }) {
         <TooltipRow label="Workers"     value={data.workers_count ?? "—"} />
       </>)}
 
-      {(g === "worker" || g === "sub_worker") && (<>
+      {mode !== "tde" && (g === "worker" || g === "sub_worker") && (<>
         <TooltipRow label="Worker"      value={data.worker_name ?? data.id} />
         <TooltipRow label="Iteration"   value={data.iteration ?? "—"} />
         {data.parent_worker_id && <TooltipRow label="Sub-Mgr" value={data.parent_worker_id} />}
@@ -624,7 +803,7 @@ function NodeTooltipPanel({ data }: { data: RawNode }) {
         <TooltipRow label="Depth"       value={data.depth ?? "—"} />
       </>)}
 
-      {g === "sub_manager" && (<>
+      {mode !== "tde" && g === "sub_manager" && (<>
         <TooltipRow label="Worker"       value={data.worker_name ?? data.id} />
         <TooltipRow label="Iteration"    value={data.iteration ?? "—"} />
         <TooltipRow label="Status"       value={data.status ?? "—"} color={statusColor(data.status)} />
@@ -636,7 +815,7 @@ function NodeTooltipPanel({ data }: { data: RawNode }) {
         <TooltipRow label="Depth"        value={data.depth ?? "—"} />
       </>)}
 
-      {g === "completion" && (<>
+      {mode !== "tde" && g === "completion" && (<>
         <TooltipRow label="Status"      value={data.run_status ?? "—"} color={statusColor(data.run_status)} />
         <TooltipRow label="Iterations"  value={data.total_iters ?? "—"} />
         <TooltipRow label="Workers"     value={data.workers_spawned ?? "—"} />
@@ -644,6 +823,51 @@ function NodeTooltipPanel({ data }: { data: RawNode }) {
           data.quality_score != null && data.quality_score >= 0.8 ? COLORS.success : undefined
         } />
         <TooltipRow label="Wall time"   value={dur(data.duration_s)} />
+      </>)}
+
+      {/* ── TDE-mode rows (ADR-0214) ───────────────────────────────────── */}
+
+      {mode === "tde" && g === "task" && (<>
+        <TooltipRow label="Run ID"    value={data.run_id ?? "—"} />
+        <TooltipRow label="Events"    value={data.n_events ?? "—"} />
+        <TooltipRow label="Wall time" value={dur(data.wall_time_s as number | undefined)} />
+      </>)}
+
+      {mode === "tde" && g === "l34_block" && (<>
+        <TooltipRow label="Scope"       value={data.scope ?? "—"} />
+        <TooltipRow label="Reason code" value={data.reason_code ?? "—"} color={COLORS.failed} />
+      </>)}
+
+      {mode === "tde" && g === "manager" && (<>
+        <TooltipRow label="Engine"     value={data.engine ?? "—"} />
+        <TooltipRow label="Confidence" value={pct(data.confidence)} color={_confColor(data.confidence as number | undefined)} />
+        <TooltipRow label="Task type"  value={data.task_type ?? "—"} />
+        <TooltipRow label="Complexity" value={data.complexity ?? "—"} />
+        {data.override != null && <TooltipRow label="Override" value={String(data.override)} />}
+        {data.trivial != null && <TooltipRow label="Trivial" value={String(data.trivial)} />}
+      </>)}
+
+      {mode === "tde" && g === "decision" && (<>
+        <TooltipRow label="Step action" value={data.step_action ?? "—"} />
+        <TooltipRow label="Delegate"    value={data.delegate ? "yes" : "no"} color={data.delegate ? COLORS.success : COLORS.muted} />
+        <TooltipRow label="L34 blocked" value={data.l34_blocked ? "yes" : "no"} color={data.l34_blocked ? COLORS.failed : COLORS.muted} />
+        {data.reason_code != null && <TooltipRow label="Reason code" value={data.reason_code} />}
+      </>)}
+
+      {mode === "tde" && g === "worker" && (<>
+        <TooltipRow label="Engine"     value={data.engine ?? "—"} />
+        <TooltipRow label="Success"    value={data.success ? "yes" : "no"} color={data.success ? COLORS.success : COLORS.failed} />
+        <TooltipRow label="Duration"   value={data.duration_ms != null ? `${data.duration_ms}ms` : "—"} />
+        {data.loss_pct != null && (
+          <TooltipRow label="Loss" value={(data.loss_pct as number).toFixed(4)} color={_lossColor(data.loss_pct as number)} />
+        )}
+        {data.measured != null && <TooltipRow label="Measured" value={String(data.measured)} />}
+      </>)}
+
+      {mode === "tde" && g === "completion" && (<>
+        <TooltipRow label="Steps"     value={data.step_count ?? "—"} />
+        <TooltipRow label="Delegated" value={data.delegated_count ?? "—"} />
+        <TooltipRow label="Local"     value={data.local_count ?? "—"} />
       </>)}
     </div>
   );
@@ -733,17 +957,27 @@ function LossCurvePanel({ lossCurve }: { lossCurve: LossPt[] }) {
 
 // ── Legend ────────────────────────────────────────────────────────────────
 
-function GraphLegend({ mode }: { mode: "l25" | "acs" }) {
+function GraphLegend({ mode }: { mode: "l25" | "acs" | "tde" }) {
+  const items =
+    mode === "tde"
+      ? [
+          { color: COLORS.task, label: "Turn Root" },
+          { color: COLORS.manager, label: "Engine Selection" },
+          { color: "#00E676", label: "Delegated Step" },
+          { color: "#8b949e", label: "Local Step" },
+          { color: COLORS.failed, label: "L34 Blocked" },
+        ]
+      : [
+          { color: COLORS.task, label: mode === "l25" ? "Run Root" : "Task Root" },
+          { color: COLORS.manager, label: mode === "l25" ? "Strategy" : "Manager" },
+          { color: COLORS.iteration, label: "Iteration" },
+          { color: COLORS.success, label: "Worker (conf ≥0.8)" },
+          { color: COLORS.muted, label: "Worker (partial)" },
+          { color: COLORS.failed, label: "Failed" },
+        ];
   return (
     <div className="flex flex-wrap items-center gap-3 text-[10px] text-muted-foreground font-mono pt-1">
-      {[
-        { color: COLORS.task, label: mode === "l25" ? "Run Root" : "Task Root" },
-        { color: COLORS.manager, label: mode === "l25" ? "Strategy" : "Manager" },
-        { color: COLORS.iteration, label: "Iteration" },
-        { color: COLORS.success, label: "Worker (conf ≥0.8)" },
-        { color: COLORS.muted, label: "Worker (partial)" },
-        { color: COLORS.failed, label: "Failed" },
-      ].map(({ color, label }) => (
+      {items.map(({ color, label }) => (
         <span key={label} className="flex items-center gap-1">
           <span className="inline-block w-3 h-3 rounded-sm" style={{ background: color }} />
           {label}
@@ -753,21 +987,42 @@ function GraphLegend({ mode }: { mode: "l25" | "acs" }) {
   );
 }
 
+// Hash-chain integrity banner — surfaces meta.chain_verified/chain_problems
+// from the TDE audit-graph endpoint (ADR-0214). ACS/L25 graphs are built
+// from on-disk artifact files, not the audit chain, so they carry no
+// equivalent field and never render this.
+function ChainIntegrityBanner({ verified, problems }: { verified: boolean; problems: Record<string, unknown>[] }) {
+  return (
+    <div
+      className="flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-mono"
+      style={{
+        borderColor: verified ? COLORS.success : COLORS.failed,
+        background: `${verified ? COLORS.success : COLORS.failed}14`,
+        color: verified ? COLORS.success : COLORS.failed,
+      }}
+    >
+      {verified ? "✓ Audit hash-chain verified for this turn" : `✗ Audit hash-chain broken (${problems.length} problem${problems.length === 1 ? "" : "s"})`}
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────
 
 interface Props {
-  mode: "l25" | "acs";
+  mode: "l25" | "acs" | "tde";
   runId: string;
   pollMs?: number;
 }
 
 export function ComputeGraphView({ mode, runId, pollMs = 0 }: Props) {
-  const graphQ = useQuery<L25GraphPayload | ACSGraphPayload, Error>({
+  const graphQ = useQuery<L25GraphPayload | ACSGraphPayload | TDEGraphPayload, Error>({
     queryKey: ["compute-graph", mode, runId],
     queryFn: ({ signal }) =>
       mode === "l25"
         ? getComputeRunGraph(runId, { signal })
-        : getACSRunGraph(runId, { signal }),
+        : mode === "acs"
+        ? getACSRunGraph(runId, { signal })
+        : getTdeRunGraph(runId, { signal }),
     staleTime: pollMs > 0 ? pollMs / 2 : Infinity,
     refetchInterval: pollMs > 0 ? pollMs : false,
     retry: false,
@@ -782,12 +1037,14 @@ export function ComputeGraphView({ mode, runId, pollMs = 0 }: Props) {
 
   React.useEffect(() => {
     if (!graphQ.data) return;
-    const [nodes, edges, totalHeight] = buildReactFlowGraph(graphQ.data.nodes as unknown as RawNode[], graphQ.data.edges as unknown as RawEdge[]);
+    const [nodes, edges, totalHeight] = mode === "tde"
+      ? buildTdeReactFlowGraph(graphQ.data.nodes as unknown as RawNode[], graphQ.data.edges as unknown as RawEdge[])
+      : buildReactFlowGraph(graphQ.data.nodes as unknown as RawNode[], graphQ.data.edges as unknown as RawEdge[]);
     setRfNodes(nodes);
     setRfEdges(edges);
     setGraphTotalHeight(totalHeight);
     setTimeout(() => rfRef.current?.fitView({ padding: 0.15, duration: 400 }), 150);
-  }, [graphQ.data, setRfNodes, setRfEdges]);
+  }, [graphQ.data, mode, setRfNodes, setRfEdges]);
 
   const handleNodeEnter = React.useCallback((evt: React.MouseEvent, node: Node) => {
     setTooltip({ data: (node.data as RawNode), cx: evt.clientX, cy: evt.clientY });
@@ -807,7 +1064,31 @@ export function ComputeGraphView({ mode, runId, pollMs = 0 }: Props) {
   return (
     <div className="flex flex-col gap-2">
       {/* Stats bar */}
-      {meta && (
+      {meta && mode === "tde" && (
+        <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground font-mono">
+          <span>Steps: <span className="text-foreground font-semibold">{(meta as Record<string, unknown>).n_steps as number}</span></span>
+          <span>Delegated: <span className="text-foreground font-semibold">{(meta as Record<string, unknown>).n_delegated as number}</span></span>
+          <span>Local: <span className="text-foreground font-semibold">{(meta as Record<string, unknown>).n_local as number}</span></span>
+          {(meta as Record<string, unknown>).engine != null && (
+            <span>Engine: <span className="text-foreground font-semibold">{(meta as Record<string, unknown>).engine as string}</span></span>
+          )}
+          {(meta as Record<string, unknown>).loss_min != null && (meta as Record<string, unknown>).loss_max != null && (
+            <span>Loss range: <span className="text-foreground font-semibold">
+              {((meta as Record<string, unknown>).loss_min as number).toFixed(4)} – {((meta as Record<string, unknown>).loss_max as number).toFixed(4)}
+            </span></span>
+          )}
+          {(meta as Record<string, unknown>).wall_time_s != null && (
+            <span>Wall time: <span className="text-foreground font-semibold">{((meta as Record<string, unknown>).wall_time_s as number).toFixed(1)}s</span></span>
+          )}
+        </div>
+      )}
+      {meta && mode === "tde" && (
+        <ChainIntegrityBanner
+          verified={Boolean((meta as Record<string, unknown>).chain_verified)}
+          problems={((meta as Record<string, unknown>).chain_problems as Record<string, unknown>[]) ?? []}
+        />
+      )}
+      {meta && mode !== "tde" && (
         <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground font-mono">
           {"n_iters" in meta && (
             <span>Iterations: <span className="text-foreground font-semibold">{meta.n_iters}</span></span>
@@ -900,7 +1181,7 @@ export function ComputeGraphView({ mode, runId, pollMs = 0 }: Props) {
           zIndex: 9999,
           pointerEvents: "none",
         }}>
-          <NodeTooltipPanel data={tooltip.data} />
+          <NodeTooltipPanel data={tooltip.data} mode={mode} />
         </div>,
         document.body,
       )}

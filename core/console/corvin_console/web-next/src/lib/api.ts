@@ -1900,6 +1900,42 @@ export async function getACSRunGraph(
   );
 }
 
+// ADR-0214: TDE delegation audit graph — reconstructed from the hash-chained
+// tde.* audit trail for one turn (see routes/compute.py::_build_tde_audit_graph).
+// Unlike L25/ACS (built from manifest.json + artifact files on disk), this
+// payload also carries chain-integrity verification for the turn's event span.
+export interface TDEGraphPayload {
+  mode: "tde";
+  run_id: string;
+  nodes: VisNode[];
+  edges: VisEdge[];
+  meta: {
+    run_id: string;
+    n_events: number;
+    n_steps: number;
+    n_delegated: number;
+    n_local: number;
+    wall_time_s: number | null;
+    engine: string | null;
+    confidence: number | null;
+    loss_min: number | null;
+    loss_max: number | null;
+    loss_curve: { step: number | null; loss: number }[];
+    chain_verified: boolean;
+    chain_problems: Record<string, unknown>[];
+  };
+}
+
+export async function getTdeRunGraph(
+  run_id: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<TDEGraphPayload> {
+  return api<TDEGraphPayload>(
+    `/compute/tde/${encodeURIComponent(run_id)}/graph`,
+    { signal: opts.signal },
+  );
+}
+
 // ── Compute license / quota ─────────────────────────────────────────
 
 export interface ComputeQuotaBucket {

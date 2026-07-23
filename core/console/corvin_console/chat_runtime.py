@@ -3353,8 +3353,14 @@ async def _stream_tde_turn(
 
     books_closed = False
     try:
+        # tde_run_id (ADR-0214 audit-graph endpoint): the frontend has no other
+        # way to learn this turn's correlation id — it never appears as a
+        # structured field elsewhere, only buried in the free-text summary of
+        # the closing task.completed event. Stamping it on the "engine" event
+        # lets chat-registry.ts's existing engine-stamping case attach it to
+        # the ChatMessage so the Audit panel's TDE Graph tab can find it.
         yield {"type": "engine", "engine": "tiered_delegation",
-               "label": "TDE (Tiered Delegation Engine)"}
+               "label": "TDE (Tiered Delegation Engine)", "tde_run_id": run_id}
         yield {"type": "delta",
                "text": "⚙ TDE (Tiered Delegation Engine, ADR-0214) gestartet — "
                        "Initial-Analyse läuft…\n"}
@@ -3430,7 +3436,8 @@ async def _stream_tde_turn(
                 # that actually ran.
                 yield {"type": "engine", "engine": engine_name,
                        "label": f"{engine_name} (L34-Pre-Gate erzwungen)"
-                                if selection.get("l34_forced") else engine_name}
+                                if selection.get("l34_forced") else engine_name,
+                       "tde_run_id": run_id}
             parts: list[str] = []
             for r in result.get("results", []) or []:
                 out = getattr(r, "output", None)

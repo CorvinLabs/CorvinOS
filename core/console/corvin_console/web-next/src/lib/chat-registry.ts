@@ -33,6 +33,12 @@ export interface ChatMessage {
   engine?: string;
   /** Human-readable engine label for the badge. */
   engineLabel?: string;
+  /** ADR-0214: TDE turn correlation id ("tde-<epoch>-<hex>"), stamped from
+   *  the `engine` stream event when this turn ran through the Tiered
+   *  Delegation Engine. Lets the Audit panel's TDE Graph tab find the
+   *  matching GET /compute/tde/{run_id}/graph payload. Live-only, same as
+   *  engine/engineLabel above. */
+  tdeRunId?: string;
 }
 
 export interface StreamEvent {
@@ -57,6 +63,9 @@ export interface StreamEvent {
   // ADR-0214: engine event — which agentic-compute engine runs this turn.
   // Last event of a turn wins (fallback paths re-stamp the actual engine).
   engine?: string;
+  // ADR-0214: TDE turn correlation id, present only on "engine" events
+  // emitted by the TDE turn path (chat_runtime.py::_stream_tde_turn).
+  tde_run_id?: string;
   // ccc_action fields (ADR-0168 M3)
   action_id?: string;
   entity_type?: string;
@@ -291,7 +300,14 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
       if (aid && evt.engine) {
         entry.messages = entry.messages.map((m) =>
           m.id === aid
-            ? { ...m, engine: evt.engine, engineLabel: evt.label ?? evt.engine }
+            ? {
+                ...m,
+                engine: evt.engine,
+                engineLabel: evt.label ?? evt.engine,
+                // Keep a prior tdeRunId if this particular engine event
+                // didn't carry one (e.g. a non-TDE fallback re-stamp).
+                ...(evt.tde_run_id ? { tdeRunId: evt.tde_run_id } : {}),
+              }
             : m
         );
       }
