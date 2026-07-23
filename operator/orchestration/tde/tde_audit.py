@@ -13,11 +13,22 @@ Compliance contract (CLAUDE.md baseline):
   blocked by audit availability (audit_event upstream is best-effort too).
 
 Event namespace: ``tde.*``
-- tde.engine_selected     {engine, confidence, override, trivial, task_type, complexity}
-- tde.l34_blocked         {scope, reason_code, variable_class}
-- tde.delegation_decision {step_action, delegate, reason_code}
-- tde.step_delegated      {step_action, success, duration_ms, ipc}
-- tde.loss_recorded       {task_type, engine, loss_pct, measured}
+- tde.engine_selected      {engine, confidence, override, trivial, task_type, complexity, tde_run_id}
+- tde.l34_blocked          {scope, reason_code, variable_class, tde_run_id, step_num?}
+- tde.delegation_decision  {step_action, delegate, reason_code, tde_run_id, step_num}
+- tde.step_delegated       {step_action, success, duration_ms, ipc, tde_run_id, step_num}
+- tde.step_executed_local  {step_action, success, duration_ms, tde_run_id, step_num}
+- tde.loss_recorded        {task_type, engine, loss_pct, measured, tde_run_id, step_num}
+- tde.plan_executed        {step_count, batch_count, delegated_count, local_count, tde_run_id}
+
+``tde_run_id`` (ADR-0214 audit-graph endpoint) is the per-turn correlation ID
+chat_runtime._stream_tde_turn generates (``tde-<epoch>-<hex>``) and threads
+down through SendIntegration -> TieredDelegationEngine -> AdaptiveDelegation-
+Executor; ``step_num`` is the plan's 1-based step number. Together they let
+core/console/corvin_console/routes/compute.py::_build_tde_audit_graph
+reconstruct one turn's real delegation tree from the hash-chained events.
+Both are optional (default "") for callers that predate this correlation —
+an event missing them just can't be placed on a per-turn graph.
 """
 from __future__ import annotations
 
@@ -34,6 +45,11 @@ _ALLOWED_KEYS = {
     "scope", "reason_code", "variable_class", "step_action", "delegate",
     "success", "duration_ms", "ipc", "loss_pct", "measured", "step_count",
     "batch_count", "delegated_count", "local_count",
+    # ADR-0214 audit-graph endpoint (turn/step correlation — see compute.py
+    # _build_tde_audit_graph): tde_run_id is the same identifier chat_runtime
+    # already tags its own web.turn.* events with; step_num lets the graph
+    # builder distinguish two steps sharing the same step_action.
+    "tde_run_id", "step_num",
     # NOTE: no free-text-capable keys. "signals_digest" was removed (round-3):
     # it was the only unguarded string slot and is not emitted anywhere.
 }
@@ -45,7 +61,8 @@ _MAX_STR = 120
 # refutation finding). Enforce a closed identifier shape; anything else is
 # replaced by a neutral token.
 _IDENTIFIER_KEYS = {"step_action", "task_type", "engine", "complexity",
-                    "reason_code", "scope", "variable_class", "ipc"}
+                    "reason_code", "scope", "variable_class", "ipc",
+                    "tde_run_id"}
 _IDENTIFIER_RE = __import__("re").compile(r"^[A-Za-z0-9_.:-]{1,40}$")
 
 _audit_fn: Optional[Callable[..., None]] = None

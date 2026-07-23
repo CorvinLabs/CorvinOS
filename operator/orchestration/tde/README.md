@@ -114,13 +114,22 @@ package (repo-relative `sys.path` insert + bare import of the leaf module).
   gating), loss-profile persistence across sessions. Streaming (round 4) is
   now chunked and unit-tested, but still local-only — no streaming-capable
   WorkerIPC exists yet.
-- Known follow-up (round 4, not yet fixed): a client disconnect while
-  per-step delegated/local worker subprocesses are in flight inside
-  `AdaptiveDelegationExecutor.execute()`'s parallel batches does not kill
-  those subprocesses (bounded only by their own timeout). The equivalent gap
-  for the single InitialAnalysis one-shot IS fixed (`worker_ipc.ProcHolder`,
-  used by `chat_runtime._stream_tde_turn`); extending this to the batched
-  executor needs holder-tracking across `asyncio.gather()`, deferred as a
-  larger, separately-reviewable change rather than rushed in under this pass.
+- Round-4 follow-up (RESOLVED): a client disconnect while per-step
+  delegated/local worker subprocesses are in flight inside
+  `AdaptiveDelegationExecutor.execute()`'s parallel batches now kills every
+  subprocess that batch started, not just whichever task happened to raise.
+  `execute()` allocates one `worker_ipc.ProcHolder` per concurrently-scheduled
+  task in a batch (delegated: threaded through `WorkerIPCInterface.send_delegation`'s
+  new `proc_holder` kwarg; local: threaded through the injected
+  `step_executor_fn` when it declares a `proc_holder` parameter, detected via
+  signature inspection so arbitrary embedder-supplied executors — e.g.
+  Hermes's genuinely-local one — aren't required to accept it). A
+  `CancelledError` raised out of `asyncio.gather()` (the whole `execute()`
+  coroutine being cancelled) kills every holder in that batch before
+  re-raising. Same pattern as the InitialAnalysis one-shot fix
+  (`chat_runtime._stream_tde_turn`'s `_analysis_holder`). Covered by
+  `tests/test_tde_proc_holder.py::TestParallelBatchProcHolderTracking`
+  (normal batch completion + real mid-batch cancellation killing both
+  sibling subprocesses).
 
 See ADR-0214 for the full design rationale.

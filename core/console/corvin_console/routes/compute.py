@@ -91,6 +91,7 @@ if str(_FORGE_PATH) not in sys.path:
     sys.path.insert(0, str(_FORGE_PATH))
 
 from forge import paths as _forge_paths  # noqa: E402
+from forge import security_events as _forge_security_events  # noqa: E402
 
 _OPERATOR = _REPO / "operator"
 if str(_OPERATOR) not in sys.path:
@@ -3712,6 +3713,393 @@ def compute_acs_run_graph(
         sid_fingerprint=rec.sid_fingerprint,
         action="compute.acs_graph_viewed",
         target_kind="acs_run",
+        target_id=run_id,
+    )
+    return payload
+
+# ══════════════════════════════════════════════════════════════════════════
+# ── TDE Audit Graph (ADR-0214) ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Unlike the L25/ACS graphs above (built from manifest.json + iteration/worker
+# files on disk), the TDE delegation tree is NOT written to per-run artifact
+# files — it only exists as tde.* events on the hash-chained audit log
+# (tde_audit.py, GDPR Art. 30/32). This builder reconstructs the tree
+# entirely from that chain, correlated by ``tde_run_id`` (the
+# ``tde-<epoch>-<hex>`` id chat_runtime._stream_tde_turn generates per turn
+# and threads through SendIntegration -> TieredDelegationEngine ->
+# AdaptiveDelegationExecutor), and additionally surfaces whether the chain
+# segment covering this turn's events verifies intact.
+#
+# NOTE (tenant scoping): tde_audit.py emits through
+# operator/bridges/shared/audit.py, whose ``audit_path()`` is the
+# scope-independent workspace root (corvin_home()/global/forge/audit.jsonl —
+# see that module's docstring), NOT ``_forge_paths.tenant_home(rec.tenant_id)``
+# like the rest of this file. This endpoint reads from the exact same
+# ``audit_path()`` for read/write consistency rather than re-deriving a
+# tenant-scoped path that TDE never actually wrote to; it does not itself
+# add or fix tenant isolation for the TDE audit chain (a pre-existing,
+# separately-tracked gap, not introduced here).
+
+_TDE_AUDIT_SHARED = _REPO / "operator" / "bridges" / "shared"
+if str(_TDE_AUDIT_SHARED) not in sys.path:
+    sys.path.insert(0, str(_TDE_AUDIT_SHARED))
+try:
+    from audit import audit_path as _tde_audit_path  # type: ignore
+    _TDE_AUDIT_OK = True
+except ImportError:
+    _tde_audit_path = None  # type: ignore[assignment]
+    _TDE_AUDIT_OK = False
+
+
+def _read_audit_records(path: Path) -> list[tuple[int, dict[str, Any]]]:
+    """Read every syntactically-valid JSON-object line from an audit chain.
+
+    Returns ``(line_no, record)`` pairs with 1-based line numbers that match
+    ``forge.security_events.verify_chain``'s own numbering exactly (every
+    physical line increments the counter, blank lines included) so
+    ``chain_problems`` entries (keyed by ``line``) can be matched back to
+    the records they concern. Malformed lines are skipped here — verify_chain
+    reports those itself as ``invalid_json`` problems.
+    """
+    out: list[tuple[int, dict[str, Any]]] = []
+    if not path.exists():
+        return out
+    line_no = 0
+    with path.open("r") as fh:
+        for line in fh:
+            line_no += 1
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                rec = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict):
+                out.append((line_no, rec))
+    return out
+
+
+def _build_tde_audit_graph(
+    run_id: str,
+    events: list[dict[str, Any]],
+    *,
+    chain_verified: bool,
+    chain_problems: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build vis.js-compatible graph payload for one TDE turn's real
+    tde.* audit trail (ADR-0214 audit-graph endpoint).
+
+    ``events`` must already be filtered to this ``run_id`` (via the
+    ``tde_run_id`` detail every tde.* event carries) and may be in any order —
+    this function sorts by ``ts``. Mirrors the ACS graph's node/edge/meta
+    shape (``_build_acs_graph`` above): task root -> manager decision
+    (engine_selected) -> per-step decision nodes (delegation_decision,
+    chained sequentially like ACS iterations) -> per-step worker nodes
+    (step_delegated / step_executed_local, loss_recorded merged in when
+    present) -> completion (plan_executed).
+    """
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    _font = {"color": "#c9d1d9", "size": 11, "face": "monospace"}
+
+    events = sorted(events, key=lambda e: float(e.get("ts") or 0.0))
+
+    def _details(e: dict[str, Any]) -> dict[str, Any]:
+        d = e.get("details")
+        return d if isinstance(d, dict) else {}
+
+    def _by_type(et: str) -> list[dict[str, Any]]:
+        return [e for e in events if e.get("event_type") == et]
+
+    ts_values = [float(e.get("ts") or 0.0) for e in events]
+    first_ts = min(ts_values) if ts_values else 0.0
+    last_ts = max(ts_values) if ts_values else 0.0
+
+    engine_selected_events = _by_type("tde.engine_selected")
+    l34_events = _by_type("tde.l34_blocked")
+    prescan_blocks = [e for e in l34_events if _details(e).get("scope") == "prescan"]
+    step_blocks = {
+        _details(e).get("step_num"): e for e in l34_events
+        if _details(e).get("scope") == "step" and _details(e).get("step_num") is not None
+    }
+    decision_events = sorted(
+        _by_type("tde.delegation_decision"),
+        key=lambda e: (_details(e).get("step_num") is None, _details(e).get("step_num") or 0),
+    )
+    delegated_events = {
+        _details(e).get("step_num"): e for e in _by_type("tde.step_delegated")
+        if _details(e).get("step_num") is not None
+    }
+    local_events = {
+        _details(e).get("step_num"): e for e in _by_type("tde.step_executed_local")
+        if _details(e).get("step_num") is not None
+    }
+    loss_events = {
+        _details(e).get("step_num"): e for e in _by_type("tde.loss_recorded")
+        if _details(e).get("step_num") is not None
+    }
+    plan_events = _by_type("tde.plan_executed")
+
+    # Level 0 — TDE Turn Root
+    nodes.append({
+        "id": "task_root",
+        "label": f"TDE Turn\n{run_id[:24]}",
+        "shape": "diamond",
+        "color": "#40C4FF",
+        "size": 45,
+        "level": 0,
+        "group": "task",
+        "font": _font,
+        "run_id": run_id,
+        "n_events": len(events),
+        "wall_time_s": round(last_ts - first_ts, 3) if events else None,
+    })
+    chain_src = "task_root"
+
+    if prescan_blocks:
+        pb = _details(prescan_blocks[0])
+        nodes.append({
+            "id": "l34_prescan_block",
+            "label": "L34 Blocked\n(prescan)",
+            "shape": "triangle",
+            "color": "#FF1744",
+            "size": 26,
+            "level": 1,
+            "group": "l34_block",
+            "font": _font,
+            "scope": "prescan",
+            "reason_code": pb.get("reason_code"),
+        })
+        edges.append({"from": "task_root", "to": "l34_prescan_block",
+                      "color": "#FF1744", "width": 2})
+        chain_src = "l34_prescan_block"
+
+    # Level 1 — Manager decision (engine selection)
+    if engine_selected_events:
+        d = _details(engine_selected_events[-1])
+        engine = str(d.get("engine") or "?")
+        confidence = d.get("confidence")
+        mgr_label = f"Engine\n{engine}"
+        if confidence is not None:
+            mgr_label += f"\nconf:{float(confidence):.2f}"
+        nodes.append({
+            "id": "mgr_1",
+            "label": mgr_label,
+            "shape": "star",
+            "color": _acs_confidence_color(float(confidence)) if confidence is not None else "#E040FB",
+            "size": 35,
+            "level": 1,
+            "group": "manager",
+            "font": _font,
+            "engine": engine,
+            "confidence": round(float(confidence), 4) if confidence is not None else None,
+            "override": d.get("override"),
+            "trivial": d.get("trivial"),
+            "task_type": d.get("task_type"),
+            "complexity": d.get("complexity"),
+        })
+        edges.append({"from": chain_src, "to": "mgr_1", "color": "#E040FB", "width": 2})
+        chain_src = "mgr_1"
+
+    delegated_count = 0
+    local_count = 0
+    any_failed = False
+    last_id: str | None = None
+    _worker_losses: list[float] = []
+    _loss_curve_unsorted: list[dict[str, Any]] = []
+
+    for dec in decision_events:
+        dd = _details(dec)
+        step_num = dd.get("step_num")
+        step_label = step_num if step_num is not None else "?"
+        decision_id = f"step_{step_label}_{len(nodes)}"
+        delegate = bool(dd.get("delegate"))
+        blocked = step_blocks.get(step_num)
+
+        if delegate:
+            delegated_count += 1
+        else:
+            local_count += 1
+
+        color = "#FF1744" if blocked else ("#00E676" if delegate else "#8b949e")
+        nodes.append({
+            "id": decision_id,
+            "label": (f"Step {step_label}\n{dd.get('step_action', '?')}\n"
+                      + ("BLOCKED" if blocked else ("delegate" if delegate else "local"))),
+            "shape": "box",
+            "color": color,
+            "size": 22,
+            "level": 2,
+            "group": "decision",
+            "font": _font,
+            "step_num": step_num,
+            "step_action": dd.get("step_action"),
+            "delegate": delegate,
+            "l34_blocked": bool(blocked),
+            "reason_code": (_details(blocked).get("reason_code") if blocked
+                           else dd.get("reason_code")),
+        })
+        edges.append({"from": chain_src, "to": decision_id, "color": "#555555", "width": 1.5})
+        chain_src = decision_id
+        last_id = decision_id
+
+        worker_event = delegated_events.get(step_num) if delegate else local_events.get(step_num)
+        loss_event = loss_events.get(step_num)
+        if worker_event is not None or loss_event is not None:
+            wd = _details(worker_event) if worker_event else {}
+            ld = _details(loss_event) if loss_event else {}
+            success = bool(wd.get("success", True))
+            loss_pct = ld.get("loss_pct")
+            worker_id = f"w_{step_label}_{len(nodes)}"
+            if loss_pct is not None:
+                conf = max(0.0, min(1.0, 1.0 - float(loss_pct)))
+                w_color = _acs_confidence_color(conf)
+                _worker_losses.append(round(float(loss_pct), 4))
+                _loss_curve_unsorted.append({"step": step_num, "loss": round(float(loss_pct), 4)})
+                worker_label = f"{'Worker' if delegate else 'Local'}\nloss:{float(loss_pct):.3f}"
+            else:
+                w_color = "#00E676" if success else "#FF1744"
+                worker_label = f"{'Worker' if delegate else 'Local'}\n{'ok' if success else 'FAIL'}"
+            nodes.append({
+                "id": worker_id,
+                "label": worker_label,
+                "shape": "dot",
+                "color": w_color,
+                "size": 20,
+                "level": 3,
+                "group": "worker",
+                "font": _font,
+                "step_num": step_num,
+                "engine": "tiered_delegation" if delegate else "local",
+                "success": success,
+                "duration_ms": wd.get("duration_ms"),
+                "loss_pct": round(float(loss_pct), 4) if loss_pct is not None else None,
+                "measured": ld.get("measured"),
+            })
+            edges.append({"from": decision_id, "to": worker_id,
+                          "color": "#00E676" if success else "#FF1744", "width": 1.5})
+            last_id = worker_id
+            if not success:
+                any_failed = True
+
+    # Level 4 — Completion (tde.plan_executed)
+    if plan_events:
+        pd = _details(plan_events[-1])
+        step_count = pd.get("step_count", len(decision_events))
+        d_count = pd.get("delegated_count", delegated_count)
+        l_count = pd.get("local_count", local_count)
+    else:
+        step_count, d_count, l_count = len(decision_events), delegated_count, local_count
+
+    is_success = bool(plan_events) and not any_failed
+    comp_color = "#00E676" if is_success else "#FF1744"
+    nodes.append({
+        "id": "completion",
+        "label": f"Result\n{'ok' if is_success else 'incomplete'}\nsteps:{step_count}",
+        "shape": "box",
+        "color": comp_color,
+        "size": 28,
+        "level": 4,
+        "group": "completion",
+        "font": _font,
+        "step_count": step_count,
+        "delegated_count": d_count,
+        "local_count": l_count,
+    })
+    edges.append({
+        "from": last_id or chain_src, "to": "completion",
+        "color": comp_color, "width": 2, "dashes": not is_success,
+    })
+
+    _loss_curve = sorted(_loss_curve_unsorted, key=lambda x: (x["step"] is None, x["step"]))
+    engine_details = _details(engine_selected_events[-1]) if engine_selected_events else {}
+
+    return {
+        "mode": "tde",
+        "run_id": run_id,
+        "nodes": nodes,
+        "edges": edges,
+        "meta": {
+            "run_id": run_id,
+            "n_events": len(events),
+            "n_steps": step_count,
+            "n_delegated": d_count,
+            "n_local": l_count,
+            "wall_time_s": round(last_ts - first_ts, 3) if events else None,
+            "engine": engine_details.get("engine"),
+            "confidence": (round(float(engine_details["confidence"]), 4)
+                          if engine_details.get("confidence") is not None else None),
+            "loss_min": round(min(_worker_losses), 4) if _worker_losses else None,
+            "loss_max": round(max(_worker_losses), 4) if _worker_losses else None,
+            "loss_curve": _loss_curve,
+            "chain_verified": chain_verified,
+            "chain_problems": chain_problems[:20],
+        },
+    }
+
+
+@router.get("/compute/tde/{run_id}/graph")
+def compute_tde_audit_graph(
+    run_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Return vis.js-compatible graph data for one TDE-delegated turn's real
+    tde.* hash-chained audit trail, with chain integrity surfaced in
+    ``meta.chain_verified`` (ADR-0214 audit-graph endpoint).
+
+    ``run_id`` is the ``tde-<epoch>-<hex>`` id chat_runtime yields as the
+    turn's ``engine``/task-completion events reference (``tde_run_id`` in
+    every tde.* audit record for that turn).
+    """
+    if not run_id or "/" in run_id or run_id.startswith("..") or run_id == ".":
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid run_id")
+    if not _TDE_AUDIT_OK or _tde_audit_path is None:
+        raise HTTPException(http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "TDE audit backend unavailable")
+
+    path = _tde_audit_path()
+    records = _read_audit_records(path)
+    matched = [
+        (ln, r) for ln, r in records
+        if str(r.get("event_type", "")).startswith("tde.")
+        and isinstance(r.get("details"), dict)
+        and r["details"].get("tde_run_id") == run_id
+    ]
+    if not matched:
+        raise HTTPException(http_status.HTTP_404_NOT_FOUND,
+                            f"no tde.* audit trail found for run {run_id!r}")
+
+    events = [r for _ln, r in matched]
+    line_nos = [ln for ln, _r in matched]
+    lo, hi = min(line_nos), max(line_nos)
+
+    try:
+        _chain_ok_whole, problems = _forge_security_events.verify_chain(path)
+    except Exception as exc:
+        raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            f"chain verify failed: {exc}")
+    # Scope to the line range this run's own events span (ADR-0214 task
+    # spec: "verify the local chain segment") rather than failing every run
+    # whenever ANY other segment of a long-lived shared chain is broken.
+    problems_in_range = [p for p in problems if lo <= p.get("line", -1) <= hi]
+
+    try:
+        payload = _build_tde_audit_graph(
+            run_id, events,
+            chain_verified=len(problems_in_range) == 0,
+            chain_problems=problems_in_range,
+        )
+    except Exception as exc:
+        raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            f"TDE audit graph build failed: {exc}")
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="tde.audit_graph_viewed",
+        target_kind="tde_run",
         target_id=run_id,
     )
     return payload

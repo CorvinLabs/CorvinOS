@@ -37,12 +37,17 @@ class WorkerIPCInterface(Protocol):
     async def send_delegation(
         self,
         envelope: DelegationEnvelope,
+        *,
+        proc_holder: "Optional[ProcHolder]" = None,
     ) -> dict[str, Any]:
         """
         Send step to remote worker.
 
         Args:
             envelope: DelegationEnvelope with step, plan, snapshot, budget
+            proc_holder: when given, populated with the live subprocess
+                (if any) so a cancelling caller can kill it — see
+                ``ProcHolder``.
 
         Returns:
             Result dict: {"success": bool, "output": Any, "error": str|None}
@@ -56,8 +61,14 @@ class MockWorkerIPC:
     def __init__(self):
         self.sent_envelopes: list[DelegationEnvelope] = []
 
-    async def send_delegation(self, envelope: DelegationEnvelope) -> dict[str, Any]:
-        """Mock: record envelope, return placeholder result."""
+    async def send_delegation(
+        self,
+        envelope: DelegationEnvelope,
+        *,
+        proc_holder: "Optional[ProcHolder]" = None,
+    ) -> dict[str, Any]:
+        """Mock: record envelope, return placeholder result (no subprocess,
+        proc_holder accepted for interface parity but never populated)."""
         self.sent_envelopes.append(envelope)
         _logger.debug("Mock delegation: step %s", envelope.step.step)
         return {
@@ -214,15 +225,22 @@ class SubprocessWorkerIPC:
             '{"output": <your result — string or object>}\n'
         )
 
-    async def send_delegation(self, envelope: DelegationEnvelope) -> dict[str, Any]:
+    async def send_delegation(
+        self,
+        envelope: DelegationEnvelope,
+        *,
+        proc_holder: "Optional[ProcHolder]" = None,
+    ) -> dict[str, Any]:
         """Run the step as a one-shot claude CLI call (off the event loop)."""
         prompt = self._build_prompt(envelope)
         try:
-            return await asyncio.to_thread(self._run_worker, prompt)
+            return await asyncio.to_thread(self._run_worker, prompt, proc_holder)
         except Exception as e:
             return {"success": False, "output": None, "error": str(e)}
 
-    def _run_worker(self, prompt: str) -> dict[str, Any]:
+    def _run_worker(
+        self, prompt: str, proc_holder: "Optional[ProcHolder]" = None,
+    ) -> dict[str, Any]:
         bin_path = self._hm.resolve_claude_bin()
         model_args = self._hm.claude_args(self._hm.SITE_TDE_WORKER)
         cmd = [
@@ -234,8 +252,9 @@ class SubprocessWorkerIPC:
         ]
         try:
             # Neutral cwd (never pick up the orchestrating repo's CLAUDE.md)
-            # + process-group kill on timeout.
-            rc, stdout, stderr = run_one_shot(cmd, self.timeout_s)
+            # + process-group kill on timeout; proc_holder lets a cancelling
+            # caller (parallel-batch disconnect) kill this one specifically.
+            rc, stdout, stderr = run_one_shot(cmd, self.timeout_s, proc_holder=proc_holder)
         except FileNotFoundError:
             return {"success": False, "output": None, "error": "claude CLI not found"}
         except subprocess.TimeoutExpired:
@@ -263,7 +282,12 @@ class A2AWorkerIPC:
         self.a2a_client = a2a_client
         _logger.info("A2AWorkerIPC initialized (Phase 3 stub)")
 
-    async def send_delegation(self, envelope: DelegationEnvelope) -> dict[str, Any]:
+    async def send_delegation(
+        self,
+        envelope: DelegationEnvelope,
+        *,
+        proc_holder: "Optional[ProcHolder]" = None,
+    ) -> dict[str, Any]:
         """Send via A2A protocol (not yet implemented)."""
         raise NotImplementedError("A2A delegation coming in Phase 3")
 

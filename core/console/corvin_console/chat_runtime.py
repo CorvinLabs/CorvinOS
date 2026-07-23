@@ -3411,6 +3411,7 @@ async def _stream_tde_turn(
             integration = SendIntegration(registry=EngineRegistry(real_ipc=True))
             engine_name, result = await integration.select_engine_and_execute(
                 "/use-engine tiered_delegation\n" + task_text, context, analysis,
+                run_id=run_id,
             )
 
             summary = result.get("summary") or {}
