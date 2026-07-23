@@ -1045,7 +1045,6 @@ function ChatPane({
         const lang = ttsLangPinnedRef.current
           ? ttsLangRef.current
           : detectTtsLang(evt.text, ttsLangRef.current);
-        setLastTts({ text: evt.text, lang });
         // An annotated turn emits TWO result events (the plain reply, then the
         // one carrying the LERN-ZUGABE/metaphor annex). Speaking both cost two
         // FULL server-side syntheses per turn: superseding the playback does
@@ -1054,6 +1053,8 @@ function ChatPane({
         // The server flags the non-final event and guarantees a final one
         // follows — but only for as long as the socket lives, so instead of
         // waiting unconditionally we ARM the client-side fallback above.
+        // ONLY update lastTts when we have the FINAL result event (annotation_pending === false),
+        // to ensure the Voice TTS speaks from the complete, final output—not an intermediate version.
         if (evt.annotation_pending) {
           if (pendingSpeakRef.current) clearTimeout(pendingSpeakRef.current.timer);
           fallbackSpokenRef.current = false;
@@ -1074,6 +1075,9 @@ function ChatPane({
           }
           const alreadySpoken = fallbackSpokenRef.current;
           fallbackSpokenRef.current = false;
+          // Update lastTts ONLY for the final result event (annotation_pending === false)
+          // so the replay button and voice synthesis always use the complete, annotated output.
+          setLastTts({ text: evt.text, lang });
           if (voiceOutRef.current && !alreadySpoken) {
             playTts(evt.text, lang, sid).catch(() => { /* surface in playTts */ });
           }
