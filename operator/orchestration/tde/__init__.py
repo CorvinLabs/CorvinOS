@@ -1,12 +1,12 @@
 """ADR-0214: Tiered Delegation Engine (TDE) Components.
 
-Phase 1 Core:
+Phase 1 Core (Production-Ready):
 - RobustEngineDetector: Multi-signal ensemble for engine selection
 - L34DelegationGate: Data-safe, fail-closed delegation check
 - LossProfileTracker: In-session learning from outcomes
 - SlashCommandParser: /use-engine command parsing
 
-Phase 2 Integration:
+Phase 2 Integration (Production-Ready):
 - EngineRegistry: Central registry of all agentic engines
 - AdaptiveDelegationExecutor: Parallel execution with sampling-loss-measurement
 - SendIntegration: L22 send() hookpoint (select + execute)
