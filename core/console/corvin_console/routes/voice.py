@@ -95,6 +95,24 @@ except Exception:  # pragma: no cover
     _profile_module = None  # type: ignore[assignment]
     _PROFILE_OK = False
 
+try:
+    # Language detection for Smart Hybrid voice-language resolution (BUG-1.2)
+    sys.path.insert(0, str(_VOICE_SCRIPTS))
+    from detect_lang import detect_confident as _detect_confident_de_en  # noqa: E402
+    _DETECT_LANG_OK = True
+except Exception:  # pragma: no cover
+    _detect_confident_de_en = None  # type: ignore[assignment]
+    _DETECT_LANG_OK = False
+
+try:
+    # i18n for BCP-47 normalization
+    sys.path.insert(0, str(_VOICE_SHARED))
+    import i18n as _i18n  # noqa: E402 — bridges/shared/i18n.py
+    _I18N_OK = True
+except Exception:  # pragma: no cover
+    _i18n = None  # type: ignore[assignment]
+    _I18N_OK = False
+
 
 router = APIRouter()
 
@@ -570,6 +588,39 @@ _TTS_SUMMARIZE_MAX_CHARS = 400   # same default build_voice_summary() uses for b
 _TTS_SUMMARIZE_TIMEOUT_S = float(os.environ.get("CORVIN_TTS_SUMMARIZE_TIMEOUT_S", "120"))
 
 
+def _resolve_voice_output_language(candidate_text: str) -> str:
+    """Resolve the language voice summaries should be generated in.
+
+    Smart Hybrid approach (BUG-1.2 fix — Language-Routing):
+    1. If user has explicitly set `display_language` → use that (User FIRST)
+    2. If not set → auto-detect from text (Text-First for new users)
+    3. If detection fails → fallback to "de" (default)
+
+    Mirrors adapter.py::_resolve_voice_output_language exactly for console parity.
+    """
+    # ── (1) User preference IF explicitly set ────────────────────────────────
+    output_language = ""
+    if _PROFILE_OK and _profile_module is not None:
+        try:
+            raw = _profile_module.load().get("display_language") or ""
+            if raw:  # Only if explicitly set by user
+                if _I18N_OK and _i18n is not None:
+                    output_language = _i18n.normalise(raw)
+                    if output_language:
+                        return output_language  # User preference is authoritative
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ── (2) Auto-detect from text (for unseeded profiles) ────────────────────
+    if _DETECT_LANG_OK and _detect_confident_de_en is not None:
+        detected = _detect_confident_de_en(candidate_text)
+        if detected:
+            return detected
+
+    # ── (3) Fallback: German default ─────────────────────────────────────────
+    return "de"
+
+
 def _tts_audience_block(lang: str) -> str:
     """The layer-12 listener-profile block for ``summarize.py --audience``,
     resolved exactly like ``adapter.py::build_voice_summary()`` does.
@@ -600,6 +651,9 @@ def _summarize_for_speech(text: str, lang: str) -> str | None:
     adapter.py::build_voice_summary() does. Failure to strip falls back to
     raw text (fail-soft). This ensures the LLM-summarizer sees clean prose
     without code-blocks / table-noise that would distract it.
+
+    LANGUAGE ROUTING (BUG-1.2 fix): Uses smart-hybrid language resolution:
+    user display_language → auto-detect from text → fallback to de.
     """
     summarize_path = _VOICE_SCRIPTS / "summarize.py"
     stripper_path = _VOICE_SCRIPTS / "strip_for_tts.py"
@@ -628,8 +682,11 @@ def _summarize_for_speech(text: str, lang: str) -> str | None:
             # Fall through to raw text
             pass
 
+    # BUG-1.2 FIX: Smart-hybrid language resolution (User pref → Auto-detect → de fallback)
+    resolved_lang = _resolve_voice_output_language(cleaned_text)
+
     cmd = [sys.executable, str(summarize_path),
-           "--lang", lang if lang in ("de", "en") else "de",
+           "--lang", resolved_lang if resolved_lang in ("de", "en") else "de",
            "--max-chars", str(_TTS_SUMMARIZE_MAX_CHARS)]
     # The docstring above promised the annex "per the user's audience settings"
     # since this helper was written, but --audience was never actually passed:
