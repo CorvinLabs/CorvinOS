@@ -1,8 +1,9 @@
 # Voice Summary System — Adversarial Review Findings
 
 **Date:** 2026-07-23  
-**Status:** FIXING IN PROGRESS (Iteration 1 of 5)  
-**Bugs Found:** 13 (3 CRITICAL, 5 HIGH, 5 MEDIUM)
+**Status:** FIXING IN PROGRESS (Iteration 2 of 5)  
+**Bugs Found:** 13 + 1 NEW (3 CRITICAL, 5 HIGH, 5 MEDIUM + 1 TIMING)
+**Fixed in Iteration 1:** BUG-1.2, BUG-2.3 (NEW)
 
 ## Critical Bugs (Being Fixed in Iteration 1)
 
@@ -17,6 +18,13 @@
 - **Root:** _first_clause() truncates each item to 350 chars
 - **Fix:** Verify COMPLETENESS rule: EVERY list item must be full length
 - **Files:** operator/voice/scripts/summarize.py
+
+### BUG-2.3: CRITICAL — Voice Result Event Timing (FIXED Iteration 1)
+- **Impact:** Voice summary spoken from intermediate result, not final output
+- **Root:** setLastTts() called on EVERY result event, even intermediate ones
+- **Fix:** Only update setLastTts() on final result (annotation_pending === false)
+- **Files:** core/console/corvin_console/web-next/src/pages/chat.tsx
+- **Status:** ✅ FIXED (commit 9bc46f0)
 
 ### BUG-4.1: HIGH — voice_audience_learning Silent Drop
 - **Impact:** User-setting display_language ignored, no error
