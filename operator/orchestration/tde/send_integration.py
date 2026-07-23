@@ -60,6 +60,8 @@ class SendIntegration:
         task: str,
         context: dict[str, Any],
         initial_analysis: InitialAnalysisRequest,
+        *,
+        run_id: str = "",
     ) -> tuple[str, dict[str, Any]]:
         """
         Core send() logic: select engine and execute.
@@ -68,6 +70,11 @@ class SendIntegration:
             task: Raw task (may contain /use-engine command)
             context: Task context
             initial_analysis: Classification from Phase 1
+            run_id: ADR-0214 audit-graph correlation ID (chat_runtime's
+                per-turn ``tde-<epoch>-<hex>``). Threaded into every tde.*
+                audit event as ``tde_run_id`` and forwarded to the engine so
+                per-step events can be tied back to this turn. Optional —
+                "" for callers that don't need graph correlation (tests).
 
         Returns:
             (engine_name, result). ``result`` always carries an
@@ -107,7 +114,8 @@ class SendIntegration:
                     engine_override, prescan.reason,
                 )
             engine_override = "claude_code"
-            tde_audit.emit("l34_blocked", scope="prescan", reason_code="prescan_block")
+            tde_audit.emit("l34_blocked", scope="prescan", reason_code="prescan_block",
+                           tde_run_id=run_id)
             _logger.warning(f"L34 prescan blocked delegation: {prescan.reason}")
 
         # Step 3: Selection. Precedence: L34/override > trivial > detector.
@@ -140,12 +148,13 @@ class SendIntegration:
             trivial=trivial,
             task_type=initial_analysis.classification.task_type,
             complexity=initial_analysis.classification.complexity,
+            tde_run_id=run_id,
         )
 
         # Step 4: Execute
         _logger.info(f"Executing with {engine_name}")
         result = await self.registry.execute(
-            engine_name, initial_analysis, context, task_text=task_text
+            engine_name, initial_analysis, context, task_text=task_text, run_id=run_id,
         )
         if not isinstance(result, dict):
             result = {"engine": engine_name, "success": bool(result), "output": result}

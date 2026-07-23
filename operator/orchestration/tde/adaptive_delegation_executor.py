@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import random
@@ -57,6 +58,21 @@ SHADOW_SAMPLE_RATE = 0.05
 # Cap for step outputs fed forward into the working statement for dependent
 # steps (bounded so a huge step output doesn't blow up later prompts).
 _STEP_OUTPUT_FEED_CAP = 8000
+
+
+def _accepts_proc_holder(fn: Callable) -> bool:
+    """Whether ``fn`` (an injected step executor) declares a ``proc_holder``
+    kwarg or a catch-all ``**kwargs`` — used to decide whether it's safe to
+    pass one without breaking arbitrary embedder-supplied executors (test
+    fixtures, Hermes's genuinely-local executor) that only accept
+    ``(step, statement)``."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return "proc_holder" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
 
 
 @dataclass
@@ -109,8 +125,18 @@ class AdaptiveDelegationExecutor:
         complexity: str = "moderate",
         max_classification: str = "INTERNAL",
         use_semantic_judge: bool = False,
+        run_id: str = "",
     ):
         """Initialize executor.
+
+        Args:
+            run_id: ADR-0214 audit-graph correlation ID (chat_runtime's
+                per-turn ``tde-<epoch>-<hex>``, threaded down via
+                tde_engine.TieredDelegationEngine). Stamped onto every
+                tde.* audit event this executor emits as ``tde_run_id`` so
+                compute.py's audit-graph endpoint can reconstruct one turn's
+                delegation tree. "" (default) for callers that don't need
+                graph correlation (every existing unit test).
 
         Raises:
             ExecutionError: if the plan is malformed (invalid deps, cycles,
@@ -123,6 +149,7 @@ class AdaptiveDelegationExecutor:
         self.budget = budget
         self.complexity = complexity
         self.max_classification = max_classification
+        self.run_id = run_id
         # Defaults to False: a raw AdaptiveDelegationExecutor is constructed
         # directly by every unit test (MockWorkerIPC, no real LLM calls per
         # those files' own docstrings) — defaulting this True silently spawned
@@ -159,6 +186,10 @@ class AdaptiveDelegationExecutor:
         Returns:
             List of StepResult
         """
+        # Lazy: worker_ipc imports DelegationEnvelope from this module at
+        # module level, so a top-level import here would cycle.
+        from .worker_ipc import ProcHolder  # noqa: PLC0415
+
         if task_analysis is not None:
             self.complexity = task_analysis.classification.complexity
 
@@ -177,6 +208,14 @@ class AdaptiveDelegationExecutor:
             tasks = []
             scheduled: list[int] = []
             decisions: dict[int, tuple[bool, str, bool]] = {}
+            # One ProcHolder per concurrently-scheduled task in THIS batch —
+            # a client disconnect cancels the whole execute() coroutine, but
+            # asyncio.gather() cancelling its child Tasks does not stop an
+            # asyncio.to_thread-wrapped blocking subprocess call (the worker
+            # thread keeps running until its own timeout). Tracking every
+            # sibling holder lets the except-block below kill ALL of them,
+            # not just whichever task happened to raise (round-4 follow-up).
+            batch_holders: list[ProcHolder] = []
 
             for step_num in batch:
                 step = self._steps_by_num[step_num]
@@ -201,6 +240,7 @@ class AdaptiveDelegationExecutor:
                 tde_audit.emit(
                     "delegation_decision",
                     step_action=step.action, delegate=delegate, reason_code=reason,
+                    tde_run_id=self.run_id, step_num=step_num,
                 )
 
                 # Reserve budget AT DECISION TIME — charging after the batch
@@ -212,13 +252,26 @@ class AdaptiveDelegationExecutor:
                         charged += DELEGATION_OVERHEAD_TOKENS
                     self.budget.charge(charged)
 
+                holder = ProcHolder()
+                batch_holders.append(holder)
                 if delegate:
                     envelope = self._build_envelope(step, working_statement)
-                    tasks.append(self._execute_delegated(step, envelope))
+                    tasks.append(self._execute_delegated(step, envelope, proc_holder=holder))
                 else:
-                    tasks.append(self._execute_local(step, working_statement, step_executor_fn))
+                    tasks.append(self._execute_local(
+                        step, working_statement, step_executor_fn, proc_holder=holder,
+                    ))
 
-            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+            except asyncio.CancelledError:
+                # execute() itself was cancelled (client disconnect / server
+                # shutdown) while this batch was in flight — kill every
+                # subprocess this batch started, delegated AND local, then
+                # propagate so the caller's own bookkeeping runs.
+                for h in batch_holders:
+                    h.kill()
+                raise
 
             # Snapshot of the statement AS THE BATCH SAW IT: shadow runs must
             # compare against the same inputs the delegated run received —
@@ -249,6 +302,19 @@ class AdaptiveDelegationExecutor:
                         step, batch_input, step_result, step_executor_fn,
                         force_measure=force_measure,
                     )
+                else:
+                    # Symmetric counterpart to _execute_delegated's
+                    # step_delegated event — without this, a genuinely LOCAL
+                    # step (as opposed to a shadow-run comparison, which never
+                    # reaches this branch) left no per-step audit trail beyond
+                    # the aggregate plan_executed local_count, making it
+                    # invisible on the ADR-0214 audit-graph endpoint.
+                    tde_audit.emit(
+                        "step_executed_local",
+                        step_action=step.action, success=step_result.success,
+                        duration_ms=step_result.duration_ms,
+                        tde_run_id=self.run_id, step_num=step_num,
+                    )
                 if step_result.success:
                     # Feed the output forward (bounded) for dependent steps.
                     working_statement[f"step_{step_num}_output"] = str(
@@ -264,6 +330,7 @@ class AdaptiveDelegationExecutor:
             batch_count=len(batches),
             delegated_count=delegated_count,
             local_count=len(all_results) - delegated_count,
+            tde_run_id=self.run_id,
         )
         return all_results
 
@@ -286,7 +353,8 @@ class AdaptiveDelegationExecutor:
             step, statement, max_classification=self.max_classification
         )
         if not gate_result.can_delegate:
-            tde_audit.emit("l34_blocked", scope="step", reason_code="classification_exceeded")
+            tde_audit.emit("l34_blocked", scope="step", reason_code="classification_exceeded",
+                           tde_run_id=self.run_id, step_num=step.step)
             return False, "l34_blocked", False
 
         # Gate 2: budget (hard constraint).
@@ -356,11 +424,17 @@ class AdaptiveDelegationExecutor:
         self,
         step: Step,
         envelope: DelegationEnvelope,
+        *,
+        proc_holder: Optional[Any] = None,
     ) -> StepResult:
-        """Execute step via WorkerIPC delegation."""
+        """Execute step via WorkerIPC delegation.
+
+        ``proc_holder``, when given, is forwarded to the IPC backend so a
+        parallel-batch cancellation can kill this step's subprocess.
+        """
         start = time.time()
         try:
-            ipc_result = await self.worker_ipc.send_delegation(envelope)
+            ipc_result = await self.worker_ipc.send_delegation(envelope, proc_holder=proc_holder)
             duration = int((time.time() - start) * 1000)
             success = bool(ipc_result.get("success"))
             result = StepResult(
@@ -386,6 +460,7 @@ class AdaptiveDelegationExecutor:
             step_action=step.action, success=result.success,
             duration_ms=result.duration_ms,
             ipc=type(self.worker_ipc).__name__,
+            tde_run_id=self.run_id, step_num=step.step,
         )
         return result
 
@@ -394,11 +469,23 @@ class AdaptiveDelegationExecutor:
         step: Step,
         statement: dict[str, Any],
         executor_fn: Callable[[Step, dict[str, Any]], Any],
+        *,
+        proc_holder: Optional[Any] = None,
     ) -> StepResult:
-        """Execute step locally."""
+        """Execute step locally.
+
+        ``proc_holder``, when given AND the injected ``executor_fn`` accepts
+        one (checked via signature — arbitrary embedder-supplied executors,
+        e.g. Hermes's genuinely-local one, are not required to), is
+        forwarded so a parallel-batch cancellation can kill this step's
+        subprocess (see ``tde_engine.default_local_step_executor``).
+        """
         start = time.time()
         try:
-            result = await executor_fn(step, statement)
+            if proc_holder is not None and _accepts_proc_holder(executor_fn):
+                result = await executor_fn(step, statement, proc_holder=proc_holder)
+            else:
+                result = await executor_fn(step, statement)
             return StepResult(
                 step_num=step.step,
                 action=step.action,
@@ -452,6 +539,7 @@ class AdaptiveDelegationExecutor:
                 tde_audit.emit(
                     "loss_recorded", task_type=step.action, engine="tiered_delegation",
                     loss_pct=loss_pct, measured=True,
+                    tde_run_id=self.run_id, step_num=step.step,
                 )
             else:
                 # The LOCAL comparison run itself failed (e.g. a transient

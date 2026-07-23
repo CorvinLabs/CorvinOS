@@ -54,7 +54,9 @@ def _ensure_bridges_on_path() -> None:
         sys.path.insert(0, str(shared))
 
 
-async def default_local_step_executor(step: Step, statement: dict[str, Any]) -> Any:
+async def default_local_step_executor(
+    step: Step, statement: dict[str, Any], *, proc_holder: Optional[Any] = None,
+) -> Any:
     """Default LOCAL step execution: tool-less one-shot LLM with FULL context.
 
     HONEST BOUNDARY NOTE (round-2 review): in the default configuration this
@@ -64,6 +66,12 @@ async def default_local_step_executor(step: Step, statement: dict[str, Any]) -> 
     network boundary. It becomes a true network boundary once delegation
     targets remote A2A instances (Phase 3). Embedders that need a hard
     boundary inject a genuinely local ``local_step_executor`` (e.g. Hermes).
+
+    ``proc_holder`` (a ``tde.worker_ipc.ProcHolder``), when given, is
+    populated with the live subprocess so a cancelling caller — a parallel
+    batch in ``AdaptiveDelegationExecutor.execute()`` unwinding on client
+    disconnect — can kill it instead of leaving it running to its own
+    timeout (round-4 follow-up).
     """
     _ensure_bridges_on_path()
     import helper_model  # noqa: PLC0415
@@ -91,7 +99,7 @@ async def default_local_step_executor(step: Step, statement: dict[str, Any]) -> 
             "--disallowedTools", "*",
             *helper_model.claude_args(helper_model.SITE_TDE_WORKER),
         ]
-        rc, stdout, stderr = run_one_shot(cmd, _LOCAL_STEP_TIMEOUT_S)
+        rc, stdout, stderr = run_one_shot(cmd, _LOCAL_STEP_TIMEOUT_S, proc_holder=proc_holder)
         if rc != 0:
             raise RuntimeError(f"local step exit {rc}: {stderr.strip()[:300]}")
         return parse_worker_output(stdout)
@@ -173,6 +181,7 @@ class TieredDelegationEngine:
                 complexity=(analysis.classification.complexity if analysis else "moderate"),
                 max_classification=self.max_classification,
                 use_semantic_judge=kwargs.get("use_semantic_judge", self.real_ipc),
+                run_id=str(kwargs.get("run_id") or ""),
             )
         except ExecutionError as exc:
             # LM-emitted plans are routinely slightly malformed (0-based step
