@@ -8,10 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Protocol, Optional
 
-try:
-    from operator.orchestration.tde.adaptive_delegation_executor import DelegationEnvelope
-except ImportError:
-    from adaptive_delegation_executor import DelegationEnvelope  # type: ignore
+from .adaptive_delegation_executor import DelegationEnvelope
 
 _logger = logging.getLogger(__name__)
 
