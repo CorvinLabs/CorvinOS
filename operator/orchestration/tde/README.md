@@ -37,7 +37,7 @@ send(task)
 | `worker_ipc.py` | `MockWorkerIPC` (tests) / `SubprocessWorkerIPC` (REAL delegation: one tool-less LLM one-shot per step, neutral cwd, fenced-JSON parsing) / `A2AWorkerIPC` (Phase 3, raises) |
 | `tde_engine.py` | Real engines for the registry (TDE / claude_code-local / ACS bridge — no fake-success placeholders) |
 | `send_integration.py` | L22 hookpoint: parse → prescan → precedence → detect → execute → record REAL outcome |
-| `tde_audit.py` | Hash-chained `tde.*` events via bridges audit; allowlisted scalar details only (content-free) |
+| `tde_audit.py` | Hash-chained `tde.*` events via bridges audit; allowlisted scalar details only (content-free); every event carries `tde_run_id`/`step_num` correlation |
 | `slash_command_parser.py` | `/use-engine <name>` (same-line or newline task), `/engine-auto`, `/debug-engine` |
 | `streaming_executor.py` | Phase 3 partial: L34-filtered streaming into a LOCAL executor (remote streaming IPC not built yet). Round 4: values are chunked below the L34 content-scan ceiling so streaming actually succeeds for its designed use case (>1GB data) instead of always failing closed; unsafe chunks are skipped (not a full-stream abort); emits `tde.streaming_step_executed` |
 
@@ -67,11 +67,75 @@ send(task)
 ## Audit events (hash-chained, content-free)
 
 `tde.engine_selected`, `tde.l34_blocked`, `tde.delegation_decision`,
-`tde.step_delegated`, `tde.loss_recorded`, `tde.plan_executed`,
-`tde.streaming_step_executed` (round 4).
+`tde.step_delegated`, `tde.step_executed_local` (audit-graph endpoint —
+symmetric counterpart to `step_delegated` for genuinely-local steps),
+`tde.loss_recorded`, `tde.plan_executed`, `tde.streaming_step_executed`
+(round 4).
 Details are allowlisted scalars (engine, confidence, reason codes, counts,
 durations). Task text, statement values and snapshots never enter the chain.
 Sandbox for tests: `FORGE_ROOT`.
+
+Every event above also carries `tde_run_id` (the `tde-<epoch>-<hex>` id
+`chat_runtime._stream_tde_turn` generates per turn, threaded down through
+`SendIntegration` → `TieredDelegationEngine` → `AdaptiveDelegationExecutor`)
+and, for per-step events, `step_num` (the plan's 1-based step number). This
+is the correlation key the audit-graph endpoint below uses to reconstruct
+one turn's delegation tree from the shared chain.
+
+## Audit-graph endpoint (ADR-0214, `_build_tde_audit_graph`)
+
+`GET /compute/tde/{run_id}/graph` (`core/console/corvin_console/routes/compute.py`)
+reconstructs one TDE turn's real delegation tree from the hash-chained
+`tde.*` events carrying that `run_id` in `tde_run_id` — modeled directly on
+the existing L25/ACS graph endpoints (`_build_l25_graph` / `_build_acs_graph`
+in the same file), but built entirely from the audit chain instead of
+per-run artifact files (TDE writes no manifest/iteration files of its own).
+
+Payload shape (`{nodes, edges, meta}`, vis.js-compatible):
+
+- **`task_root`** (level 0) — the turn itself: `run_id`, `n_events`, `wall_time_s`.
+- **`l34_prescan_block`** (level 1, only if `tde.l34_blocked{scope=prescan}`
+  fired) — red, `reason_code`.
+- **`mgr_1`** (level 1, from `tde.engine_selected`) — engine choice: `engine`,
+  `confidence` (AWP-style green/yellow/orange/red), `override`, `trivial`,
+  `task_type`, `complexity`.
+- **`step_*`** decision nodes (level 2, one per `tde.delegation_decision`,
+  chained sequentially like the ACS iteration chain) — `step_num`,
+  `step_action`, `delegate`, `l34_blocked` (true + red when a matching
+  `tde.l34_blocked{scope=step}` exists for that `step_num`), `reason_code`.
+- **`w_*`** worker nodes (level 3, one per matched `tde.step_delegated` /
+  `tde.step_executed_local`, merged with `tde.loss_recorded` by `step_num`
+  when present) — `engine` (`tiered_delegation` or `local`), `success`,
+  `duration_ms`, `loss_pct`, `measured`. Color follows the AWP confidence
+  heatmap when a loss is known, else plain success/fail.
+- **`completion`** (level 4, from `tde.plan_executed`) — `step_count`,
+  `delegated_count`, `local_count`.
+- **`meta`** — `run_id`, `n_events`, `n_steps`, `n_delegated`, `n_local`,
+  `wall_time_s`, `engine`, `confidence`, `loss_min`/`loss_max`/`loss_curve`
+  (same shape as the ACS graph), and the GDPR Art. 30/32 integrity fields:
+  **`chain_verified`** (bool) and **`chain_problems`** (list, truncated to 20).
+
+Chain verification reuses `forge.security_events.verify_chain` over the
+whole audit file, then scopes the result to the **line range this run's own
+events span** (`chain_problems` filtered to `lo <= line <= hi`) rather than
+failing every run whenever any other segment of a long-lived shared chain is
+broken — a tamper anywhere inside that range (including a downstream
+`broken_chain` pointer mismatch caused by tampering the record just before
+it) flips `chain_verified` to `false` for this run only.
+
+A view of the graph emits `tde.audit_graph_viewed` (via
+`console_audit.action_performed`, mirroring `compute.acs_graph_viewed`).
+
+Tenant-scoping caveat: TDE audit events land wherever
+`operator/bridges/shared/audit.py::audit_path()` resolves (the
+scope-independent `corvin_home()/global/forge/audit.jsonl` workspace root —
+see `tde_audit.py`'s module docstring), not the tenant-scoped path the rest
+of `compute.py` uses. The endpoint reads from that same location for
+read/write consistency; it does not itself add tenant isolation for the TDE
+chain (a pre-existing, separately-tracked gap).
+
+No frontend yet — this is the backend contract; the graph viewer UI is a
+separate follow-up once this payload shape is settled.
 
 ## Testing
 
@@ -85,6 +149,12 @@ Sandbox for tests: `FORGE_ROOT`.
   explicitly and is unaffected).
 - Live E2E (REAL LM calls, opt-in): `CLAUDE_LIVE_E2E=1 pytest tests/test_tde_e2e_live.py -q`
   — real classification, real per-step delegation, audit-chain verification.
+- Audit-graph endpoint: `core/console/tests/test_tde_audit_graph.py` — builder
+  shape (normal turn, loss-curve, L34-block coloring) + full route
+  round-trips against a real hash-chained `audit.jsonl` fixture, including
+  the broken-chain case (tampered record inside the run's line range flips
+  `chain_verified` to `false`) and a same-file cross-run isolation check
+  (tampering run B must not flip run A's `chain_verified`).
 
 ## Nervous System integration (ADR-0177)
 
