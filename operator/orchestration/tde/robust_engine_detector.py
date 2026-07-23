@@ -42,17 +42,30 @@ class DetectionSignals:
     has_full_context: bool
     signal_context: float
 
+    # ADR-0214 refined: ACS vs. TDE routing based on iteration + context, not volume
+    iteration_loops: int  # Count of steps that re-read prior outputs (default: 1)
+    signal_iteration: float  # 0-1: penalty for ACS (hates iteration); reward for TDE
+
+    user_interactive: bool  # Is user present for real-time steering? (default: False)
+    signal_interaction: float  # 0-1: TDE for interactive, ACS for batch
+
+    sensitivity_level: str  # PUBLIC | INTERNAL | CONFIDENTIAL | RESTRICTED (default: PUBLIC)
+    # Note: RESTRICTED blocks ACS entirely (L34 hard-gate), not here
+
 
 class RobustEngineDetector:
     """Multi-signal ensemble for engine selection."""
 
     # Weights (sum to 1.0 by design)
+    # ADR-0214 refined: increased parallelization weight, added iteration penalty
     WEIGHTS = {
-        "signal_parallelization": 0.30,
-        "signal_data_complexity": 0.20,
-        "signal_task_type": 0.20,
-        "signal_historical": 0.25,
-        "signal_context": 0.05,
+        "signal_parallelization": 0.35,  # Increased: most important for ACS/TDE split
+        "signal_iteration": 0.20,  # NEW: ACS hates iteration; TDE loves it
+        "signal_task_type": 0.15,  # Reduced (was 0.20)
+        "signal_historical": 0.20,  # Reduced (was 0.25)
+        "signal_context": 0.05,  # Unchanged
+        "signal_data_complexity": 0.03,  # Reduced to minimal (was 0.20; volume alone insufficient)
+        "signal_interaction": 0.02,  # Minimal: tiebreaker only
     }
 
     # Logit scaling factor (to prevent Softmax saturation at ~33%)
@@ -203,6 +216,26 @@ class RobustEngineDetector:
         has_full_context = "statement" in context and context.get("statement") is not None
         signal_context = 0.8 if has_full_context else 0.1
 
+        # === NEW Signal 6: Iteration Loops (ADR-0214 refined) ===
+        # Count how many steps re-read prior outputs (indicates iterative refinement).
+        # Heuristic: if plan is long + sequential (low parallelization), assume iterative.
+        iteration_loops = 1  # Conservative default: assume one-pass
+        if parallelization_ratio < 0.3 and total_steps > 3:
+            iteration_loops = min(total_steps, 3)  # Heuristic: sequential = 2-3 iterations
+        signal_iteration = (
+            0.2 if iteration_loops <= 2 else 0.8  # ACS hates iteration; TDE loves it
+        )
+
+        # === NEW Signal 7: User Interaction ===
+        # Is user present for real-time steering? Heuristic: interactive task types.
+        user_interactive = task_type in ("reasoning", "debugging", "code_analysis")
+        signal_interaction = 0.8 if user_interactive else 0.2  # TDE for interactive
+
+        # === NEW Signal 8: Data Sensitivity ===
+        # Extract sensitivity from context if available (set by L34PreGate).
+        # Default: PUBLIC (safe assumption; L34 gate will override for sensitive data).
+        sensitivity_level = context.get("sensitivity_level", "PUBLIC")
+
         return DetectionSignals(
             parallelization_ratio=parallelization_ratio,
             signal_parallelization=signal_parallelization,
@@ -216,32 +249,66 @@ class RobustEngineDetector:
             signal_historical=signal_historical,
             has_full_context=has_full_context,
             signal_context=signal_context,
+            iteration_loops=iteration_loops,
+            signal_iteration=signal_iteration,
+            user_interactive=user_interactive,
+            signal_interaction=signal_interaction,
+            sensitivity_level=sensitivity_level,
         )
 
     def _ensemble_scores(self, signals: DetectionSignals) -> dict[str, float]:
-        """Combine signals into engine scores via softmax."""
+        """Combine signals into engine scores via softmax.
 
-        # Compute per-engine logits
+        ADR-0214 refined routing:
+        - ACS: high parallelization + low iteration + stateless (PUBLIC data)
+        - TDE: iterative refinement + context-carrying + user interaction
+        """
+
+        # === TDE Logit: Context-carrying, iterative, interactive ===
         tde_logit = (
-            signals.signal_parallelization * self.WEIGHTS["signal_parallelization"]
-            + signals.signal_data_complexity * self.WEIGHTS["signal_data_complexity"]
+            # Parallelization: TDE OK with <40% parallel (vs ACS needs >60%)
+            (1.0 - signals.signal_parallelization) * self.WEIGHTS["signal_parallelization"]
+            # Iteration: TDE LOVES iteration (ACS hates it)
+            + signals.signal_iteration * self.WEIGHTS["signal_iteration"]
+            # Task type: TDE for coding, user interaction
             + signals.signal_task_type * self.WEIGHTS["signal_task_type"]
+            # Historical loss: use empirical data
             + signals.signal_historical * self.WEIGHTS["signal_historical"]
+            # Context: TDE needs full context
             + signals.signal_context * self.WEIGHTS["signal_context"]
+            # Interaction: TDE for real-time steering
+            + signals.signal_interaction * self.WEIGHTS["signal_interaction"]
+            # Data complexity: TDE OK with complex (iterative refinement)
+            + (0.5 if signals.complexity in ["moderate", "complex"] else 0.0) * 0.01
         )
 
+        # === ACS Logit: Parallelizable, stateless, batch ===
         acs_logit = (
-            -signals.signal_data_complexity * 0.5  # ACS for large data
-            + (0.75 if signals.signal_task_type < 0 else 0.0)  # ACS for reasoning
-            + 0.3  # ACS baseline
+            # Parallelization: ACS LOVES high parallelization
+            signals.signal_parallelization * self.WEIGHTS["signal_parallelization"]
+            # Iteration: ACS HATES iteration (penalty)
+            - signals.signal_iteration * self.WEIGHTS["signal_iteration"]
+            # Task type: ACS for reasoning / decomposition (if task_type < 0)
+            + (0.6 if signals.signal_task_type < 0 else -0.2) * self.WEIGHTS["signal_task_type"]
+            # Data: large data helps ACS only if parallelizable
+            + (0.3 if signals.data_mb > 500 and signals.parallelization_ratio > 0.5 else -0.1)
+                * self.WEIGHTS["signal_data_complexity"]
+            # Interaction: ACS hates interactive (batch-oriented)
+            - signals.signal_interaction * self.WEIGHTS["signal_interaction"]
+            + 0.2  # ACS baseline
         )
 
-        claude_code_logit = 0.2  # Claude-Code baseline
+        # === Claude-Code Logit: Safe default, sequential, interactive ===
+        claude_code_logit = (
+            # Is this truly simple? (low parallelization + low data)
+            (0.3 if signals.parallelization_ratio < 0.2 and signals.data_mb < 50 else 0.0)
+            # Context availability helps CC (direct access to files/state)
+            + signals.signal_context * self.WEIGHTS["signal_context"] * 0.5
+            + 0.15  # CC baseline (safe default for uncertainty)
+        )
 
         # Softmax with logit-scaling (fix saturation). NO clamping: softmax
-        # handles negative logits natively, and max(0, …) collapsed every
-        # strongly-anti-TDE case onto the same distribution as a marginal one
-        # (round-2 refutation finding).
+        # handles negative logits natively.
         logits = {
             "tiered_delegation": tde_logit * self.LOGIT_SCALE,
             "acs": acs_logit * self.LOGIT_SCALE,
