@@ -174,6 +174,11 @@ _VENDOR_MAP: tuple[tuple[str, str], ...] = (
     # the file directly via the repo-relative path.
     ("operator/voice/i18n", "corvin_console/_vendor/operator/voice/i18n"),
     ("operator/mcp_manager", "corvin_console/_vendor/operator/mcp_manager"),
+    # ADR-0210/0214: orchestration layer (InitialAnalysis, ParallelExecutor,
+    # TDE package). Without this, `from tde import ...` and the ADR-0214
+    # engine registry are absent from every wheel install (found in the
+    # 2026-07-23 ADR-0214 adversarial review).
+    ("operator/orchestration", "corvin_console/_vendor/operator/orchestration"),
     ("operator/skill-forge", "corvin_console/_vendor/operator/skill-forge"),
     ("operator/cowork", "corvin_console/_vendor/operator/cowork"),
     # ADR-0141: the RS256-signed layer-integrity manifest. Without this the

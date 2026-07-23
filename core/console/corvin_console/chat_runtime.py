@@ -3289,6 +3289,192 @@ async def _stream_hermes_turn(
 # path in ``stream_turn``.
 
 
+async def _stream_tde_turn(
+    sess: "WebChatSession",
+    task_text: str,
+    tm: Any,
+    task_id: str,
+    *,
+    os_audit: Any,
+    audit_emit: Any,
+    emit_completed: Any,
+    os_model: str,
+    resume: bool,
+) -> AsyncIterator[dict[str, Any]]:
+    """ADR-0214 — explicit TDE opt-in turn (`/use-engine tiered_delegation`).
+
+    Runs the Tiered Delegation Engine: one REAL InitialAnalysis LM call,
+    then parallel step execution with three-gate delegation (L34 → budget →
+    loss) via SubprocessWorkerIPC. Yields the same event shapes as the other
+    turn paths, plus the `engine` event that feeds the per-turn badge.
+
+    This path never replaces auto-routing — it exists only behind the
+    explicit slash command (ADR-0214: Implemented→Live requires canary).
+
+    Attribution note: the ADR-0171 engine span emitted via os_audit
+    ("os_turn.started") is attributed to the configured OS engine — which is
+    accurate for the ADR-0213 context-sync `claude -p` call this turn makes;
+    the TDE execution itself is attributed via the task event
+    (engine="tiered_delegation") and the tde.* audit chain.
+    """
+    import types as _types
+
+    tm.record_event(task_id, {
+        "event": "task.started", "engine": "tiered_delegation",
+        "turn": sess.turn_count,
+    })
+    os_audit("os_turn.started", {"model": "tde/helper"})
+
+    rc = 1
+    final = ""
+    # Unique run id — second-granularity time.time() collides across
+    # concurrent sessions (round-2 finding).
+    run_id = f"tde-{int(time.time())}-{secrets.token_hex(4)}"
+
+    def _close_books(rc_val: int, *, reason: "str | None" = None,
+                     error: "str | None" = None) -> None:
+        """Pair os_turn.started/task.started exactly once (round-3: every
+        yield is a cancellation window — books must close BEFORE yields)."""
+        kw: dict[str, Any] = {"tde_run_id": run_id}
+        if reason:
+            kw["reason"] = reason
+        audit_emit(sess, "web.turn.completed", rc=rc_val,
+                   result_chars=len(final), usage=None, **kw)
+        ev: dict[str, Any] = {
+            "event": "task.completed" if rc_val == 0 else "task.failed",
+            "exit_code": rc_val,
+        }
+        if error:
+            ev["error"] = error
+        else:
+            ev["summary"] = f"TDE run {run_id}: {len(final)} chars output"
+        tm.record_event(task_id, ev)
+        emit_completed(rc_val)
+
+    books_closed = False
+    try:
+        yield {"type": "engine", "engine": "tiered_delegation",
+               "label": "TDE (Tiered Delegation Engine)"}
+        yield {"type": "delta",
+               "text": "⚙ TDE (Tiered Delegation Engine, ADR-0214) gestartet — "
+                       "Initial-Analyse läuft…\n"}
+
+        # orchestration dir → sys.path (repo-relative pattern, bridges/shared)
+        _orch = Path(__file__).resolve().parents[3] / "operator" / "orchestration"
+        if _orch.is_dir() and str(_orch) not in sys.path:
+            sys.path.insert(0, str(_orch))
+
+        # Import pre-check BEFORE spending anything: on a wheel install
+        # without the orchestration tree, fail the turn cleanly and skip the
+        # context-sync subprocess (syncing a known-dead error would cost a
+        # real `claude -p`).
+        try:
+            from tde.analysis_runner import run_initial_analysis_sync  # noqa: PLC0415
+            from tde.engine_registry import EngineRegistry  # noqa: PLC0415
+            from tde.send_integration import SendIntegration  # noqa: PLC0415
+        except ImportError as _imp_err:
+            final = (f"TDE ist auf dieser Installation nicht verfügbar "
+                     f"(Modul fehlt: {_imp_err}).")
+            _close_books(1, reason="tde_unavailable",
+                         error="tde modules unavailable")
+            books_closed = True
+            yield {"type": "delta", "text": final}
+            yield {"type": "result", "text": final, "usage": None}
+            touch(sess, increment_turn=False)
+            _append_turn(sess, "assistant", [{"kind": "text", "text": final}])
+            yield {"type": "done"}
+            return
+
+        try:
+            context: dict[str, Any] = {
+                "statement": {"task": task_text},
+                "task_text": task_text,
+            }
+            analysis = await asyncio.to_thread(
+                run_initial_analysis_sync, task_text, context
+            )
+            plan = analysis.global_plan
+            yield {"type": "delta", "text": (
+                f"⚙ Analyse: {analysis.classification.task_type} / "
+                f"{analysis.classification.complexity} — {len(plan.steps)} Steps, "
+                f"parallele Ausführung startet…\n"
+            )}
+
+            integration = SendIntegration(registry=EngineRegistry(real_ipc=True))
+            engine_name, result = await integration.select_engine_and_execute(
+                "/use-engine tiered_delegation\n" + task_text, context, analysis,
+            )
+
+            summary = result.get("summary") or {}
+            selection = result.get("engine_selection") or {}
+            parts: list[str] = []
+            for r in result.get("results", []) or []:
+                out = getattr(r, "output", None)
+                if getattr(r, "success", False) and out:
+                    parts.append(str(out))
+            final = ("\n\n".join(parts)).strip() or str(result.get("error") or "")
+            ok = bool(result.get("success"))
+            rc = 0 if ok else 1
+
+            badge = (
+                f"\n\n—\n⚙ Engine: {engine_name} · Steps: "
+                f"{summary.get('succeeded', 0)}/{summary.get('step_count', 0)} ok · "
+                f"delegiert: {summary.get('delegated', 0)} · lokal: "
+                f"{summary.get('local', 0)}"
+            )
+            if selection.get("l34_forced"):
+                badge += " · L34-Pre-Gate: Delegation blockiert (claude_code erzwungen)"
+            final = (final + badge).strip()
+        except Exception as e:  # noqa: BLE001 — surface, never crash the socket
+            final = f"TDE-Turn fehlgeschlagen: {e}"
+            rc = 1
+
+        # Bookkeeping BEFORE the result yields: a disconnect on any yield
+        # below must not leave the task RUNNING / audit unpaired.
+        _close_books(rc)
+        books_closed = True
+
+        yield {"type": "delta", "text": "\n" + final + "\n"}
+        yield {"type": "result", "text": final, "usage": None}
+    except (asyncio.CancelledError, GeneratorExit):
+        # Client disconnect / server shutdown mid-TDE: close the audit pair
+        # before propagating (os_turn.started must not stay unmatched —
+        # mirrors the Hermes/ACS paths). The in-flight helper one-shots are
+        # bounded by their own timeouts + process-group kill (run_one_shot).
+        if not books_closed:
+            audit_emit(sess, "web.turn.cancelled", tde_run_id=run_id)
+            tm.record_event(task_id, {"event": "task.failed", "exit_code": -1,
+                                      "error": "cancelled mid-TDE"})
+            emit_completed(-1)
+        raise
+
+    # ADR-0213 (same root cause as the ACS branch): this turn never advanced
+    # the claude CLI transcript, so sync the result back before incrementing
+    # the turn counter — otherwise the next `--continue` resumes a transcript
+    # that never saw this TDE turn.
+    _shim = _types.SimpleNamespace(
+        summary=final[:_CONTEXT_SYNC_RESULT_CAP],
+        final_output=None, error=None,
+        status="completed" if rc == 0 else "failed",
+    )
+    _sync_holder = _ContextSyncProcHolder()
+    try:
+        _sync_ok = await asyncio.to_thread(
+            _sync_acs_result_to_transcript, sess, _shim, run_id,
+            task_text, model=os_model, resume=resume,
+            proc_holder=_sync_holder,
+        )
+    except (asyncio.CancelledError, GeneratorExit):
+        _sync_holder.kill()
+        raise
+    except Exception:  # noqa: BLE001 — best-effort, C1 fallback below
+        _sync_ok = False
+    os_audit("os_turn.context_sync", {"delegated_run_id": run_id, "synced": _sync_ok})
+    touch(sess, increment_turn=_sync_ok)
+    _append_turn(sess, "assistant", [{"kind": "text", "text": final}])
+    yield {"type": "done"}
+
+
 async def stream_turn(
     sess: WebChatSession,
     prompt: str,
@@ -3373,6 +3559,37 @@ async def stream_turn(
     _force_delegate = prompt.strip().lower().startswith(_DELEGATE_PREFIX)
     _task_text = (prompt.strip()[len(_DELEGATE_PREFIX):].strip()
                   if _force_delegate else prompt)
+    # ADR-0214 — explicit engine override (`/use-engine <engine> <task>`).
+    # A routing directive like /delegate (the slash dispatcher passes
+    # /use-engine through). tiered_delegation → TDE turn path below
+    # (pre-spawn gates classify it as delegation); acs → ADR-0114 delegation
+    # branch; claude_code → normal turn with the directive stripped.
+    _tde_force = False
+    _ue_unknown: "str | None" = None
+    _use_engine_m = re.match(
+        r"^/use-engine\s+(\w+)(?:\s+|\s*\n|$)(.*)",
+        prompt.strip(), re.IGNORECASE | re.DOTALL,
+    )
+    if _use_engine_m:
+        _ue_engine = _use_engine_m.group(1).lower()
+        _ue_task = _use_engine_m.group(2).strip()
+        if _ue_engine == "tiered_delegation":
+            _tde_force = True
+            _task_text = _ue_task
+        elif _ue_engine == "acs":
+            _force_delegate = True
+            _task_text = _ue_task
+            # Strip the directive from the OS prompt too — the delegation
+            # branch can fall back to the normal turn (quota/import), which
+            # must not hand the raw command text to the LLM (round-3 finding).
+            prompt = _ue_task or prompt
+        elif _ue_engine == "claude_code":
+            prompt = _ue_task or prompt
+        else:
+            # Unknown engine: explicit feedback (mirrors SlashCommandParser's
+            # ValueError semantics) instead of silently prompting the LLM
+            # with the command text (round-3 finding).
+            _ue_unknown = _ue_engine
 
     # Resolve engine early so turn.start debug event can record it.
     # The full pre-spawn gate check (line ~1958) also uses this value.
@@ -3538,7 +3755,8 @@ async def stream_turn(
     _gate_refusal = _spawn_gates.check_console_spawn_or_refusal(
         _task_text, tenant_id=sess.tenant_id, persona="assistant",
         channel=CHANNEL, chat_key=sess.chat_key,
-        engine_id=(_spawn_gates.DELEGATION_ENGINE_ID if _will_delegate else _os_engine),
+        engine_id=(_spawn_gates.DELEGATION_ENGINE_ID
+                   if (_will_delegate or _tde_force) else _os_engine),
     )
     if _gate_refusal is not None:
         _os_audit("os_turn.started", {"model": _os_model_used})
@@ -3621,6 +3839,60 @@ async def stream_turn(
             pass  # entity_extract not installed — skip CCC (degraded mode)
         except Exception as _ccc_err:  # noqa: BLE001
             _log.debug("CCC hook error (non-fatal): %s", _ccc_err)
+
+    # ── ADR-0214 — /use-engine with unknown engine name ──────────────────
+    if _ue_unknown is not None:
+        _ue_msg = (f"Unbekannte Engine `{_ue_unknown}`. Verfügbar: "
+                   "tiered_delegation, acs, claude_code.")
+        _os_audit("os_turn.started", {"model": _os_model_used})
+        tm.record_event(task_id, {
+            "event": "task.failed", "exit_code": 1,
+            "error": "unknown engine in /use-engine",
+        })
+        _audit_emit(sess, "web.turn.completed", rc=1,
+                    result_chars=len(_ue_msg), usage=None,
+                    reason="use_engine_unknown")
+        _os_emit_completed(1)
+        yield {"type": "delta", "text": _ue_msg}
+        yield {"type": "result", "text": _ue_msg, "usage": None}
+        touch(sess, increment_turn=False)
+        _append_turn(sess, "assistant", [{"kind": "text", "text": _ue_msg}])
+        yield {"type": "done"}
+        return
+
+    # ── ADR-0214 — TDE explicit opt-in path ──────────────────────────────
+    # Fires ONLY on the slash command; auto-routing stays ADR-0114 (below).
+    if _tde_force:
+        if not _task_text:
+            _tde_hint = "Bitte Task angeben: /use-engine tiered_delegation <task>"
+            # Full bookkeeping (mirrors the gate-refusal branch): without the
+            # task.failed event the pre-created task stays PENDING forever and
+            # counts against the per-chat quota (round-2 finding). started
+            # MUST precede completed — an unpaired os_turn.completed is the
+            # same audit defect in the other direction (round-3 finding).
+            _os_audit("os_turn.started", {"model": _os_model_used})
+            tm.record_event(task_id, {
+                "event": "task.failed", "exit_code": 1,
+                "error": "tde command without task text",
+            })
+            _audit_emit(sess, "web.turn.completed", rc=1,
+                        result_chars=len(_tde_hint), usage=None,
+                        reason="tde_empty_task")
+            _os_emit_completed(1)
+            yield {"type": "delta", "text": _tde_hint}
+            yield {"type": "result", "text": _tde_hint, "usage": None}
+            touch(sess, increment_turn=False)
+            _append_turn(sess, "assistant", [{"kind": "text", "text": _tde_hint}])
+            yield {"type": "done"}
+            return
+        async for _ev in _stream_tde_turn(
+            sess, _task_text, tm, task_id,
+            os_audit=_os_audit, audit_emit=_audit_emit,
+            emit_completed=_os_emit_completed,
+            os_model=_os_model, resume=resume,
+        ):
+            yield _ev
+        return
 
     # ── ADR-0114 M1/M2 — delegation path ─────────────────────────────────
     # Tenant opt-in + triage: substantive tasks run on ACS workers (which
@@ -3799,6 +4071,10 @@ async def stream_turn(
                 "turn": sess.turn_count,
             })
             _os_audit("os_turn.started", {"model": _os_model_used})
+            # Per-turn agentic-compute badge (frontend takes the LAST engine
+            # event of a turn — fallback paths later re-stamp claude/hermes).
+            yield {"type": "engine", "engine": "acs",
+                   "label": "ACS (Agentic Compute Fan-out)"}
             yield {"type": "delta",
                    "text": f"⚙ Delegation an ACS-Worker gestartet (run {run_id})…\n"}
 
@@ -4267,6 +4543,7 @@ async def stream_turn(
     # routing it here is what makes the recommended Hermes onboarding actually
     # answer in the web chat (round-6 blocker).
     if _os_engine == "hermes":
+        yield {"type": "engine", "engine": "hermes", "label": "Hermes (lokal)"}
         async for _ev in _stream_hermes_turn(
             sess, prompt, tm, task_id,
             os_audit=_os_audit, audit_emit=_audit_emit,
@@ -4340,6 +4617,8 @@ async def stream_turn(
         "turn": sess.turn_count, "pid": proc.pid,
     })
     _os_audit("os_turn.started", {"model": _os_model_used})
+    yield {"type": "engine", "engine": _os_engine or "claude_code",
+           "label": "Claude Code (OS-Engine)"}
 
     # Feed the prompt + close stdin so claude knows we're done.
     assert proc.stdin is not None

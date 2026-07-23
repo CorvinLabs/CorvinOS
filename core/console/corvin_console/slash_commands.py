@@ -31,7 +31,10 @@ _CCC_CMDS = frozenset({"/create", "/erase", "/audit"})
 # ``_force_delegate`` branch — it must pass THROUGH this dispatcher, not be
 # rejected as "Unknown command". Without this entry the console command-center's
 # flagship delegation verb is dead (the slash handler runs before stream_turn).
-_PASSTHROUGH_CMDS = frozenset({"/delegate"})
+# /use-engine (ADR-0214) is the same trap class: stream_turn's `_tde_force` /
+# engine-override branch handles it — found dead-on-arrival in the 2026-07-23
+# round-2 refutation because this entry was missing.
+_PASSTHROUGH_CMDS = frozenset({"/delegate", "/use-engine"})
 
 # Performed by the frontend (abort the live stream / navigate sessions). If they
 # reach the server, give a pointer instead of an LLM turn.

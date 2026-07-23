@@ -17,6 +17,7 @@ hints) — and they could disagree.
 | 6 | **L25 Compute** (deterministic data processing, DSI datasources) | statistics, charts, CSV/dataset transforms, ML | COMPUTE directive → `compute_run`; console compute routes | **yes** — compute units |
 | 7 | **Normal delegation** (`corvin_delegate` MCP: `delegate_claude_code/codex/opencode/hermes/copilot`) | one bounded call to a *named* engine | model-chosen tool; DELEGATE directive | no (deliberate, LIC-DELEGATE-MCP-COMPUTE-01) |
 | 8 | **Background tasks** (`/task`·`/bg` bridges; console TaskManager) | long-running detached jobs with completion notify | explicit user command / CCC `/create task` | task-count quotas |
+| 9 | **TDE — Tiered Delegation Engine** (ADR-0214, `operator/orchestration/tde/`): one InitialAnalysis LM call → parallel step batches → per-step three-gate delegation (L34 fail-closed → budget → learned loss) to subprocess one-shot workers | parallelizable coding/analysis plans where full-context steps can fan out safely | EXPLICIT opt-in only: console `/use-engine tiered_delegation <task>`; `SendIntegration` for embedders; live E2E suite | no (helper-model one-shots) |
 
 **Remote instances (A2A, L38)** are not a ladder mechanism: like mechanism 7
 they are a model-chosen tool (`a2a_send` MCP, persona flag
@@ -37,7 +38,14 @@ and they must not be conflated.
 **Tier 1 — authoritative runtime routing.** The runtime *forces* an execution
 path before any model sees the task. Today exactly one Tier-1 decision
 exists: the console web-chat triage (`chat_runtime._should_delegate`) that
-either spawns the ACS fan-out or the direct OS-turn. Explicit user commands
+either spawns the ACS fan-out or the direct OS-turn. (ADR-0214's
+RobustEngineDetector — TDE vs ACS vs claude_code — is implemented and
+E2E-proven in `SendIntegration`, but does NOT drive console Tier-1 routing
+yet: per ADR-0214 that requires a canary; the console runs TDE only on the
+explicit `/use-engine tiered_delegation` command, gated as delegation by the
+pre-spawn gates. Which mechanism actually ran a turn is now visible in the
+chat UI via the per-turn `engine` badge, and on bridges via the
+`[⚙ ACS: <primitive>]` context-bar segment.) Explicit user commands
 (`/delegate`, `/task`, `/goal`, schedule requests) are Tier-1 overrides:
 the user has already chosen the mechanism; classifiers never override them.
 
