@@ -480,6 +480,15 @@ const ENGINE_META: Record<string, { label: string; icon: React.ComponentType<{cl
   copilot:      { label: "Copilot",     icon: Cloud, local: false },
 };
 
+// ADR-0214 — display labels for the per-turn agentic-compute badge
+// (stamped by the `engine` stream event; see chat-registry.ts).
+const AGENTIC_ENGINE_LABELS: Record<string, string> = {
+  claude_code:       "Claude Code (OS-Engine)",
+  hermes:            "Hermes (lokal)",
+  acs:               "ACS (Agentic Compute Fan-out)",
+  tiered_delegation: "TDE (Tiered Delegation Engine)",
+};
+
 const HERMES_MODEL_OPTIONS = [
   { value: "",                label: "Hermes — default model" },
   { value: "hermes-fast",     label: "hermes-fast (7B)" },
@@ -496,6 +505,10 @@ const SLASH_COMMANDS = [
   { cmd: "/new",              args: "",                desc: "Start a new session" },
   { cmd: "/clear",            args: "",                desc: "Clear conversation history" },
   { cmd: "/reset",            args: "",                desc: "Reset session and history" },
+  // ── Agentic compute (ADR-0214) ──
+  { cmd: "/use-engine tiered_delegation", args: "<task>", desc: "TDE: parallel three-gate delegation (ADR-0214)" },
+  { cmd: "/use-engine acs",   args: "<task>",          desc: "Force ACS manager/worker fan-out" },
+  { cmd: "/use-engine claude_code", args: "<task>",    desc: "Force the sequential OS engine" },
   // ── CCC — entity creation (ADR-0168 M6) ──
   { cmd: "/create workflow",  args: '[name="…"] [schedule="*/5 * * * *"]', desc: "CCC: create a workflow" },
   { cmd: "/create task",      args: '[name="…"]',      desc: "CCC: create an ATS task" },
@@ -2202,6 +2215,15 @@ const MessageBubble = React.memo(function MessageBubble({ m }: { m: ChatMessage 
         {m.error && (
           <p className="mt-2 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1 text-xs text-destructive">
             {m.error}
+          </p>
+        )}
+        {!isUser && m.engine && (
+          /* ADR-0214: agentic-compute badge — which engine produced this turn */
+          <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Cpu className="h-3 w-3" aria-hidden />
+            <span>
+              Engine: {AGENTIC_ENGINE_LABELS[m.engine] ?? m.engineLabel ?? m.engine}
+            </span>
           </p>
         )}
       </div>

@@ -8,7 +8,6 @@ Uses softmax ensemble with logit-scaling for real probability outputs.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import math
@@ -16,9 +15,9 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 try:
-    from operator.orchestration.initial_analysis import InitialAnalysisRequest
-except ImportError:
-    from initial_analysis import InitialAnalysisRequest  # type: ignore
+    from initial_analysis import InitialAnalysisRequest
+except ImportError:  # pragma: no cover - orchestration dir not on sys.path
+    from ..initial_analysis import InitialAnalysisRequest  # type: ignore
 
 _logger = logging.getLogger(__name__)
 
@@ -62,6 +61,13 @@ class RobustEngineDetector:
     # Quality threshold for loss-gate (independent of tokens)
     QUALITY_THRESHOLD = 0.05  # 5% max acceptable loss
 
+    # Below this softmax confidence the detector refuses to pick a specialist
+    # engine and falls back to claude_code (ADR-0214: safe default).
+    # MUST be > 1/3: a 3-way softmax maximum is always >= 1/3, so a 0.3
+    # threshold could never fire (round-2 refutation: dead code).
+    CONFIDENCE_THRESHOLD = 0.45
+    FALLBACK_ENGINE = "claude_code"
+
     def __init__(self, loss_tracker: Optional[Any] = None):
         """Initialize detector with optional loss-tracker for historical signals."""
         self.loss_tracker = loss_tracker
@@ -96,6 +102,16 @@ class RobustEngineDetector:
         # Select best engine
         best_engine = max(scores, key=scores.get)
         confidence = scores[best_engine]
+
+        # Uncertainty fallback: when no engine clearly wins, use the safe
+        # sequential default instead of gambling on a specialist engine.
+        if confidence < self.CONFIDENCE_THRESHOLD and best_engine != self.FALLBACK_ENGINE:
+            _logger.info(
+                "Engine detection uncertain (%.1f%% < %.0f%%) — falling back to %s",
+                confidence * 100, self.CONFIDENCE_THRESHOLD * 100, self.FALLBACK_ENGINE,
+            )
+            best_engine = self.FALLBACK_ENGINE
+            confidence = scores.get(self.FALLBACK_ENGINE, confidence)
 
         _logger.info(
             f"Engine detection: {best_engine} ({confidence:.1%} confidence) | "
@@ -137,16 +153,39 @@ class RobustEngineDetector:
         task_type = analysis.classification.task_type
         llm_confidence = analysis.classification.confidence
 
-        if task_type in ["code_generation", "code_analysis", "refactoring", "debugging"]:
+        # Vocabulary MUST match the ADR-0210 analysis prompt (initial_analysis.py):
+        # code_generation | data_analysis | tool_call | reasoning | transformation
+        # | retrieval | delegation. "transformation" is what the classifier
+        # emits for refactorings (verified against the live prompt 2026-07-23).
+        # Legacy aliases kept as harmless supersets.
+        if task_type in ("code_generation", "transformation",
+                         "code_analysis", "refactoring", "debugging"):
             signal_task_type = 0.75 * llm_confidence  # Coding = TDE, weighted by confidence
-        elif task_type in ["reasoning", "decomposition", "hierarchical_planning"]:
-            signal_task_type = -0.6  # Reasoning = ACS
+        elif task_type in ("reasoning", "delegation",
+                           "decomposition", "hierarchical_planning"):
+            signal_task_type = -0.6  # Deep reasoning / recursive decomposition = ACS
         else:
-            signal_task_type = 0.0  # Neutral
+            signal_task_type = 0.0  # Neutral (data_analysis, tool_call, retrieval, …)
 
         # === Signal 4: Historical Loss Profile ===
-        if self.loss_tracker and hasattr(self.loss_tracker, 'history') and self.loss_tracker.history:
-            avg_loss = self.loss_tracker.estimate_loss_for_task_type(task_type, complexity)
+        # Only a LEARNED loss moves this signal off neutral. Without enough
+        # evidence the tracker returns its conservative default (10%), which
+        # must NOT be misread as "TDE is losing 10%" — that would penalize
+        # TDE before a single delegation ever ran.
+        has_evidence = False
+        if self.loss_tracker is not None:
+            try:
+                min_samples = getattr(self.loss_tracker, "MIN_SAMPLES", 5)
+                has_evidence = self.loss_tracker.evidence_for(
+                    task_type, complexity, engine="tiered_delegation"
+                ) >= min_samples
+            except AttributeError:
+                has_evidence = bool(getattr(self.loss_tracker, "history", None))
+
+        if has_evidence:
+            avg_loss = self.loss_tracker.estimate_loss_for_task_type(
+                task_type, complexity, engine="tiered_delegation"
+            )
             historical_loss_pct = avg_loss * 100
 
             if avg_loss < 0.03:  # <3% loss
@@ -199,11 +238,14 @@ class RobustEngineDetector:
 
         claude_code_logit = 0.2  # Claude-Code baseline
 
-        # Softmax with logit-scaling (fix saturation)
+        # Softmax with logit-scaling (fix saturation). NO clamping: softmax
+        # handles negative logits natively, and max(0, …) collapsed every
+        # strongly-anti-TDE case onto the same distribution as a marginal one
+        # (round-2 refutation finding).
         logits = {
-            "tiered_delegation": max(0, tde_logit) * self.LOGIT_SCALE,
-            "acs": max(0, acs_logit) * self.LOGIT_SCALE,
-            "claude_code": max(0, claude_code_logit) * self.LOGIT_SCALE,
+            "tiered_delegation": tde_logit * self.LOGIT_SCALE,
+            "acs": acs_logit * self.LOGIT_SCALE,
+            "claude_code": claude_code_logit * self.LOGIT_SCALE,
         }
 
         return self._softmax(logits)

@@ -27,11 +27,17 @@ export interface ChatMessage {
   ts: number;
   streaming?: boolean;
   error?: string;
+  /** ADR-0214: agentic-compute engine that produced this turn
+   *  ("claude_code" | "hermes" | "acs" | "tiered_delegation"). Live-only
+   *  (stamped from the `engine` stream event; not persisted in turns.jsonl). */
+  engine?: string;
+  /** Human-readable engine label for the badge. */
+  engineLabel?: string;
 }
 
 export interface StreamEvent {
   type: "ready" | "delta" | "tool_use" | "result" | "error" | "done" | "info" |
-        "pong" | "session_title" | "artifact" | "ccc_action" | "voice";
+        "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine";
   text?: string;
   name?: string;
   input?: Record<string, unknown>;
@@ -48,6 +54,9 @@ export interface StreamEvent {
   // (notably TTS, which costs a real synthesis per call) must wait for the
   // final event; consumers that only render text can use either.
   annotation_pending?: boolean;
+  // ADR-0214: engine event — which agentic-compute engine runs this turn.
+  // Last event of a turn wins (fallback paths re-stamp the actual engine).
+  engine?: string;
   // ccc_action fields (ADR-0168 M3)
   action_id?: string;
   entity_type?: string;
@@ -271,6 +280,21 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
 
     case "result": {
       if (evt.text) entry.latestResultText = evt.text;
+      return;
+    }
+
+    case "engine": {
+      // ADR-0214: stamp the agentic-compute engine on the current turn.
+      // Multiple engine events per turn are possible (e.g. ACS chosen, then
+      // quota-fallback to claude_code) — the last one reflects reality.
+      const aid = entry.currentAssistantId;
+      if (aid && evt.engine) {
+        entry.messages = entry.messages.map((m) =>
+          m.id === aid
+            ? { ...m, engine: evt.engine, engineLabel: evt.label ?? evt.engine }
+            : m
+        );
+      }
       return;
     }
 

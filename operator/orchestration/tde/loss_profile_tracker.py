@@ -6,8 +6,9 @@ Post-hoc measurement: After execution, compare local vs delegated output.
 Features:
 - In-session only (reset on new session)
 - Model-ID keying (detect when model changes)
-- Exponential decay (forget old entries)
-- ε-greedy exploration (learn from non-chosen engines)
+- Exponential decay weighting (half-life 7 days) + pruning of dead entries
+- Separates measured loss from proxy-derived loss (proxy entries carry
+  lower evidence weight so fabricated defaults can't dominate learning)
 """
 from __future__ import annotations
 
@@ -27,7 +28,9 @@ class LossEntry:
     model_id: str
     loss_pct: float  # 0-100
     engine: str  # Which engine was chosen
-    alternative_scores: dict[str, float]  # Scores of other engines
+    complexity: str = "moderate"
+    measured: bool = True  # True = real local-vs-remote comparison, False = proxy
+    alternative_scores: dict[str, float] = field(default_factory=dict)
 
 
 class LossProfileTracker:
@@ -36,23 +39,32 @@ class LossProfileTracker:
     # Configuration
     MAX_ENTRIES = 1000
     DECAY_HALF_LIFE_DAYS = 7
-    DEFAULT_LOSS_PCT = 5.0  # Conservative: 5% default loss until we have data
+    # Prune entries older than this many half-lives (weight < ~6%).
+    PRUNE_AFTER_HALF_LIVES = 4
+    # Conservative: 10% default loss until we have data (matches ADR-0214 and
+    # RobustEngineDetector's no-history default).
+    DEFAULT_LOSS_PCT = 10.0
+    # Minimum evidence mass before estimates leave the conservative default.
+    MIN_SAMPLES = 5
+    # Proxy entries count less than measured ones.
+    PROXY_WEIGHT = 0.25
 
     def __init__(self, model_id: str = "default"):
         """Initialize tracker.
 
         Args:
-            model_id: Current model (e.g., "Claude-3.5-Sonnet"). Used to detect model changes.
+            model_id: Current model (e.g., "claude-sonnet-5"). Used to detect model changes.
         """
         self.history: list[LossEntry] = []
         self.current_model_id = model_id
-        self._access_count = 0  # For stats
 
     def record_delegation_result(
         self,
         task_type: str,
         engine: str,
         loss_pct: float,
+        complexity: str = "moderate",
+        measured: bool = True,
         alternative_scores: Optional[dict[str, float]] = None,
     ):
         """Record a delegation outcome.
@@ -61,6 +73,8 @@ class LossProfileTracker:
             task_type: Task classification (code_generation, etc)
             engine: Which engine was chosen
             loss_pct: Measured quality loss (0-100)
+            complexity: Task complexity bucket (simple/moderate/complex)
+            measured: True for real local-vs-remote comparison, False for proxy
             alternative_scores: Softmax scores of other engines (for off-policy learning)
         """
 
@@ -68,37 +82,51 @@ class LossProfileTracker:
             timestamp=time.time(),
             task_type=task_type,
             model_id=self.current_model_id,
-            loss_pct=loss_pct,
+            loss_pct=max(0.0, min(100.0, float(loss_pct))),
             engine=engine,
+            complexity=complexity,
+            measured=measured,
             alternative_scores=alternative_scores or {},
         )
 
         self.history.append(entry)
 
-        # FIFO eviction if over limit
+        # Eviction if over limit: drop the OLDEST PROXY entry first — the
+        # rare measured (shadow-run) entries are the valuable signal and must
+        # not be flushed out by a flood of proxy records (round-2 finding).
         if len(self.history) > self.MAX_ENTRIES:
-            self.history.pop(0)
+            for i, e in enumerate(self.history):
+                if not e.measured:
+                    self.history.pop(i)
+                    break
+            else:
+                self.history.pop(0)
 
         _logger.debug(
-            f"Recorded loss: {task_type} / {engine} / {loss_pct:.1f}% / model={self.current_model_id}"
+            "Recorded loss: %s / %s / %.1f%% / measured=%s / model=%s",
+            task_type, engine, entry.loss_pct, measured, self.current_model_id,
         )
 
     def record_via_proxy(
         self,
         task_type: str,
         engine: str,
-        schema_valid: bool = True,
-        downstream_ok: bool = True,
+        schema_valid: bool,
+        downstream_ok: bool,
+        complexity: str = "moderate",
     ):
         """Record outcome via proxy metrics (not actual loss measurement).
 
-        Used for 95% of delegations to avoid 100% measurement overhead.
+        Used for the ~95% of delegations without a shadow-run, to avoid 100%
+        measurement overhead. Proxy entries are down-weighted in estimates
+        (PROXY_WEIGHT) so they can't drown out real measurements.
 
         Args:
             task_type: Task classification
             engine: Engine chosen
             schema_valid: Did output pass schema validation?
             downstream_ok: Did downstream steps succeed?
+            complexity: Task complexity bucket
         """
 
         # Proxy loss: assume 1% if schema OK and downstream OK, else 10%
@@ -108,50 +136,91 @@ class LossProfileTracker:
             task_type=task_type,
             engine=engine,
             loss_pct=loss_pct,
-            alternative_scores={},
+            complexity=complexity,
+            measured=False,
         )
 
-    def estimate_loss_for_task_type(self, task_type: str, complexity: str) -> float:
+    def estimate_loss_for_task_type(
+        self, task_type: str, complexity: str = "moderate", engine: Optional[str] = None
+    ) -> float:
         """
-        Estimate loss for a task type (used in detection).
+        Estimate loss for a task type (used in detection and delegation gates).
 
-        Returns average loss for matching entries, or DEFAULT if no history.
+        Exponentially-decayed weighted average over entries matching
+        (task_type, model_id[, engine]); complexity narrows the match when
+        enough same-complexity samples exist. Proxy entries carry PROXY_WEIGHT.
 
         Args:
-            task_type: Task classification
-            complexity: Task complexity (simple, moderate, complex)
+            engine: When given, only entries for that engine count — a
+                learned claude_code outcome must not masquerade as evidence
+                about TDE delegation quality.
 
         Returns:
-            Estimated loss as fraction (0.0-1.0)
+            Estimated loss as fraction (0.0-1.0). DEFAULT until enough evidence.
         """
 
-        # Clean stale entries (exponential decay)
-        self._decay_history()
+        self._prune_history()
 
-        # Find matching entries for current model
         relevant = [
             e for e in self.history
             if e.task_type == task_type and e.model_id == self.current_model_id
+            and (engine is None or e.engine == engine)
         ]
 
-        # Conservative: need at least N samples
-        if len(relevant) < 5:
+        # Prefer complexity-matched subset when it has enough evidence on its own.
+        same_complexity = [e for e in relevant if e.complexity == complexity]
+        if self._evidence_mass(same_complexity) >= self.MIN_SAMPLES:
+            relevant = same_complexity
+
+        if self._evidence_mass(relevant) < self.MIN_SAMPLES:
             return self.DEFAULT_LOSS_PCT / 100.0
 
-        # Average loss
-        avg_loss_pct = sum(e.loss_pct for e in relevant) / len(relevant)
-        return avg_loss_pct / 100.0
-
-    def _decay_history(self):
-        """Remove stale entries (older than half-life)."""
         now = time.time()
-        half_life_sec = self.DECAY_HALF_LIFE_DAYS * 86400
+        half_life_sec = self.DECAY_HALF_LIFE_DAYS * 86400.0
+        num = 0.0
+        den = 0.0
+        for e in relevant:
+            age_weight = 0.5 ** ((now - e.timestamp) / half_life_sec)
+            w = age_weight * (1.0 if e.measured else self.PROXY_WEIGHT)
+            num += w * e.loss_pct
+            den += w
 
-        # Keep entries that are recent enough
-        self.history = [
+        if den <= 0.0:
+            return self.DEFAULT_LOSS_PCT / 100.0
+        return (num / den) / 100.0
+
+    def _evidence_mass(self, entries: list[LossEntry]) -> float:
+        """Effective sample count: measured=1, proxy=PROXY_WEIGHT."""
+        return sum(1.0 if e.measured else self.PROXY_WEIGHT for e in entries)
+
+    def evidence_for(
+        self, task_type: str, complexity: str = "moderate", engine: Optional[str] = None
+    ) -> float:
+        """Evidence mass backing estimate_loss_for_task_type().
+
+        Lets callers (RobustEngineDetector, delegation gate) distinguish a
+        LEARNED 10% loss from the conservative no-evidence DEFAULT of 10%.
+        Mirrors estimate_loss_for_task_type()'s selection exactly: prefers the
+        complexity-matched subset when that subset alone carries enough
+        evidence (round-2 finding: ignoring complexity here let simple-task
+        samples unlock delegation for complex steps).
+        """
+        self._prune_history()
+        relevant = [
             e for e in self.history
-            if (now - e.timestamp) < half_life_sec
+            if e.task_type == task_type and e.model_id == self.current_model_id
+            and (engine is None or e.engine == engine)
         ]
+        same_complexity = [e for e in relevant if e.complexity == complexity]
+        if self._evidence_mass(same_complexity) >= self.MIN_SAMPLES:
+            return self._evidence_mass(same_complexity)
+        return self._evidence_mass(relevant)
+
+    def _prune_history(self):
+        """Drop entries so old their decay weight is negligible."""
+        now = time.time()
+        max_age = self.DECAY_HALF_LIFE_DAYS * 86400.0 * self.PRUNE_AFTER_HALF_LIVES
+        self.history = [e for e in self.history if (now - e.timestamp) < max_age]
 
     def set_model(self, model_id: str):
         """Update model (e.g., after an upgrade from Sonnet to Fable)."""
@@ -160,17 +229,16 @@ class LossProfileTracker:
 
     def stats(self) -> dict[str, Any]:
         """Return stats about learning."""
-        self._decay_history()
+        self._prune_history()
 
-        by_task_type = {}
+        by_task_type: dict[str, list[float]] = {}
         for entry in self.history:
-            key = entry.task_type
-            if key not in by_task_type:
-                by_task_type[key] = []
-            by_task_type[key].append(entry.loss_pct)
+            by_task_type.setdefault(entry.task_type, []).append(entry.loss_pct)
 
         return {
             "total_measurements": len(self.history),
+            "measured_count": sum(1 for e in self.history if e.measured),
+            "proxy_count": sum(1 for e in self.history if not e.measured),
             "avg_loss_by_task_type": {
                 k: sum(v) / len(v) for k, v in by_task_type.items()
             },
@@ -184,3 +252,16 @@ class LossProfileTracker:
         """Clear all history."""
         self.history = []
         _logger.info("Loss profile cleared")
+
+
+# Module-level singleton: in-session learning must survive per-request
+# construction of SendIntegration / engines (F26).
+_session_tracker: Optional[LossProfileTracker] = None
+
+
+def get_session_tracker(model_id: str = "default") -> LossProfileTracker:
+    """Get or create the session-wide loss tracker."""
+    global _session_tracker
+    if _session_tracker is None:
+        _session_tracker = LossProfileTracker(model_id=model_id)
+    return _session_tracker

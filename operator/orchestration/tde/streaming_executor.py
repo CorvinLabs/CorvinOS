@@ -9,9 +9,9 @@ import logging
 from typing import Any, AsyncIterator, Optional
 
 try:
-    from operator.orchestration.initial_analysis import Step
-except ImportError:
-    from initial_analysis import Step  # type: ignore
+    from initial_analysis import Step
+except ImportError:  # pragma: no cover - orchestration dir not on sys.path
+    from ..initial_analysis import Step  # type: ignore
 
 from .adaptive_delegation_executor import StepResult
 from .l34_delegation_gate import L34DelegationGate
@@ -60,8 +60,7 @@ class StreamingExecutor:
             var_value = statement[var_name]
 
             # Pre-scan: is this variable safe?
-            gate_result = self.l34_gate.can_delegate_step(
-                None,  # No specific step
+            gate_result = self.l34_gate.prescan(
                 {var_name: var_value},
                 max_classification=max_classification,
             )
@@ -80,14 +79,21 @@ class StreamingExecutor:
         step: Step,
         statement: dict[str, Any],
         executor_fn,  # Async function to process streamed data
+        required_vars: Optional[set] = None,
+        max_classification: str = "INTERNAL",
     ) -> StepResult:
         """
         Execute step with streaming data.
+
+        Phase-3 status: the stream is L34-filtered and consumed by a LOCAL
+        executor_fn (was_delegated=False is accurate). Remote streaming
+        delegation needs a streaming-capable WorkerIPC (not yet built).
 
         Args:
             step: Step to execute
             statement: Large data (~GB)
             executor_fn: Async function that processes stream
+            required_vars: Variables this step needs (default: all keys)
 
         Returns:
             StepResult
@@ -96,8 +102,14 @@ class StreamingExecutor:
         try:
             _logger.info(f"Streaming execution for step {step.step}")
 
-            # Create streaming generator
-            stream = self.stream_filtered_data(statement, set(statement.keys()))
+            # Create streaming generator (only the variables this step needs;
+            # the caller's classification ceiling is passed through — it was
+            # previously silently reset to the INTERNAL default).
+            stream = self.stream_filtered_data(
+                statement,
+                required_vars if required_vars is not None else set(statement.keys()),
+                max_classification=max_classification,
+            )
 
             # Pass stream to executor
             result = await executor_fn(step, stream)

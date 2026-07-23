@@ -46,12 +46,12 @@ class SlashCommandParser:
             ValueError: If engine is invalid
         """
 
-        # Pattern 1: /use-engine <name>
-        match = re.match(r"^/use-engine\s+(\w+)\s*\n?(.*)", message, re.DOTALL)
+        # Pattern 1: /use-engine <name> — task may follow on the same line
+        # ("/use-engine acs Fix the bug") or on the next line(s).
+        match = re.match(r"^/use-engine\s+(\w+)[ \t]*\n?(.*)", message, re.DOTALL)
         if match:
             engine = match.group(1)
-            task_start = message.find("\n")
-            task_text = message[task_start + 1:].strip() if task_start >= 0 else ""
+            task_text = match.group(2).strip()
 
             if engine not in self.VALID_ENGINES:
                 raise ValueError(
@@ -66,8 +66,8 @@ class SlashCommandParser:
                 original_message=message,
             )
 
-        # Pattern 2: /engine-auto
-        match = re.match(r"^/engine-auto\s*\n?(.*)", message, re.DOTALL)
+        # Pattern 2: /engine-auto (word boundary: "/engine-autopilot" must NOT match)
+        match = re.match(r"^/engine-auto(?:\s+|\s*\n|$)(.*)", message, re.DOTALL)
         if match:
             task_text = match.group(1).strip()
             _logger.info("Parsed /engine-auto (will auto-detect)")
@@ -78,8 +78,8 @@ class SlashCommandParser:
                 original_message=message,
             )
 
-        # Pattern 3: /debug-engine
-        match = re.match(r"^/debug-engine\s*\n?(.*)", message, re.DOTALL)
+        # Pattern 3: /debug-engine (word boundary enforced)
+        match = re.match(r"^/debug-engine(?:\s+|\s*\n|$)(.*)", message, re.DOTALL)
         if match:
             task_text = match.group(1).strip()
             _logger.info("Parsed /debug-engine (will show signals)")

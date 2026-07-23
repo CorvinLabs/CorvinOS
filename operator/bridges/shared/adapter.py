@@ -2702,6 +2702,17 @@ def _resolve_spawn_inputs(
     """
     profile = profile or {}
 
+    # ADR-0214 review — prime the agentic-compute display slot for THIS turn.
+    # Without priming, a turn that skips/fails classification (empty prompt,
+    # acs_classify ImportError, error-page replies) showed the PREVIOUS
+    # turn's primitive in the context bar (stale display, round-2 finding).
+    _ACS_X_LAST[(str(channel or ""), str(chat_key or ""))] = ("DIRECT", 0.0)
+    if len(_ACS_X_LAST) > 512:  # bounded per-process store (read-and-clear
+        try:                    # keeps it small; this is a safety net)
+            _ACS_X_LAST.pop(next(iter(_ACS_X_LAST)))
+        except (StopIteration, KeyError, RuntimeError):
+            pass
+
     # System-Prompt: base + Tier 1 (user profile) + Tier 2 (memory index)
     # + optional chat-level append_system. The user-profile and memory
     # blocks land BEFORE the chat-level append so chat-specific overrides
@@ -2911,6 +2922,14 @@ def _resolve_spawn_inputs(
             )
             if _acs_block:
                 sys_prompt = sys_prompt + "\n\n" + _acs_block
+            # ADR-0214 review — per-chat agentic-compute display: remember the
+            # primitive that is ACTIVE for this turn so the context bar can
+            # show "⚙ ACS: WORKFLOW" on the reply. A suppressed/DIRECT turn
+            # stores DIRECT (bar shows nothing). Metadata only — no prompt text.
+            _ACS_X_LAST[(str(channel or ""), str(chat_key or ""))] = (
+                _acs_bp.primitive if _acs_block else "DIRECT",
+                float(_acs_bp.confidence or 0.0),
+            )
             # Emit audit events — use direct write_event (no _forge_se in scope).
             try:
                 try:
@@ -3964,8 +3983,21 @@ def _reset_session_state(workdir: Path) -> list[str]:
 
 def _build_context_bar(channel: str, chat_key: str, profile: dict | None) -> str:
     """Return a compact one-line session status like '[🎯 Ship billing…] [👾 coder] [📅 2 tasks]'.
-    Returns '' when nothing non-default is active so no empty line is prepended."""
+    Returns '' when nothing non-default is active so no empty line is prepended.
+
+    Includes the agentic-compute segment (⚙ ACS: <primitive>) when the
+    current turn ran with a non-DIRECT ACS-X directive — so bridge users can
+    see what the agentic-compute layer did (ADR-0214 review requirement)."""
     parts: list[str] = []
+
+    # Agentic compute (ACS-X primitive active for this turn).
+    # READ-AND-CLEAR: engine paths that skip _resolve_spawn_inputs (Hermes,
+    # OpenCode, error-page replies) reach this bar too — popping guarantees a
+    # classification is displayed at most once, for the turn that set it
+    # (round-3 refutation: priming alone left those paths stale).
+    _acs_last = _ACS_X_LAST.pop((str(channel or ""), str(chat_key or "")), None)
+    if _acs_last and _acs_last[0] not in ("DIRECT", ""):
+        parts.append(f"⚙ ACS: {_acs_last[0]}")
 
     # Active goal
     if _goal is not None:
@@ -4035,6 +4067,12 @@ def _heartbeat_writer(sender: str, msg_id: str, channel: str, chat_id,
     except OSError:
         pass
 
+
+# ADR-0214 review — per-chat record of the ACS-X primitive active in the
+# CURRENT turn, keyed by (channel, chat_key). Written in _resolve_spawn_inputs
+# (classification time), read by _build_context_bar (reply-assembly time,
+# same turn). Metadata only: primitive name + confidence, never prompt text.
+_ACS_X_LAST: dict[tuple[str, str], tuple[str, float]] = {}
 
 _CHANNEL_LABEL = {
     "whatsapp": ("WhatsApp", "WhatsApp"),

@@ -1,7 +1,11 @@
 """ADR-0214: Engine Registry (Phase 2).
 
 Central registry of all Agentic Compute Engines (TDE, ACS, Claude-Code).
-Supports pluggable detectors (with CLS tier-gating).
+Registers REAL engines (tde_engine.py) — no fake-success placeholders.
+
+Naming note: operator/bridges/shared/engine_registry.py is a DIFFERENT,
+lower-level registry (concrete WorkerEngine builders: claude_code/codex_cli/
+opencode binaries). This one maps agentic-compute strategies onto plans.
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ class EngineInterface(Protocol):
 
     async def execute(
         self,
-        plan: Any,  # GlobalPlan from ADR-0210
+        plan: Any,  # InitialAnalysisRequest or GlobalPlan (ADR-0210)
         context: dict[str, Any],
         **kwargs,
     ) -> dict[str, Any]:
@@ -29,19 +33,27 @@ class EngineInterface(Protocol):
 class EngineRegistry:
     """Registry of Agentic Compute Engines."""
 
-    def __init__(self):
-        """Initialize with built-in engines (placeholders for now)."""
+    def __init__(self, *, real_ipc: bool = False):
+        """Initialize with built-in engines.
+
+        Args:
+            real_ipc: forwarded to TieredDelegationEngine — True enables real
+                subprocess LLM delegation for TDE steps.
+        """
         self.engines: Dict[str, EngineInterface] = {}
-        self._register_builtin_engines()
+        self._register_builtin_engines(real_ipc=real_ipc)
 
-    def _register_builtin_engines(self):
+    def _register_builtin_engines(self, *, real_ipc: bool = False):
         """Register built-in engines (TDE, ACS, Claude-Code)."""
-        # Placeholder: these will be real engines in Phase 2
-        # For now, just register names so registry knows they exist
+        from .tde_engine import (
+            AcsEngineBridge,
+            ClaudeCodeLocalEngine,
+            TieredDelegationEngine,
+        )
 
-        self.engines["tiered_delegation"] = self._TDEPlaceholder()
-        self.engines["acs"] = self._ACSPlaceholder()
-        self.engines["claude_code"] = self._ClaudeCodePlaceholder()
+        self.engines["tiered_delegation"] = TieredDelegationEngine(real_ipc=real_ipc)
+        self.engines["acs"] = AcsEngineBridge()
+        self.engines["claude_code"] = ClaudeCodeLocalEngine()
 
         _logger.info("Registered 3 built-in engines: TDE, ACS, Claude-Code")
 
@@ -72,26 +84,6 @@ class EngineRegistry:
         """Get engine by name."""
         return self.engines.get(name)
 
-    # Placeholders (replace with real implementations in Phase 2)
-
-    class _TDEPlaceholder:
-        name = "tiered_delegation"
-
-        async def execute(self, plan, context, **kwargs):
-            return {"status": "TDE not yet implemented"}
-
-    class _ACSPlaceholder:
-        name = "acs"
-
-        async def execute(self, plan, context, **kwargs):
-            return {"status": "ACS placeholder"}
-
-    class _ClaudeCodePlaceholder:
-        name = "claude_code"
-
-        async def execute(self, plan, context, **kwargs):
-            return {"status": "Claude-Code placeholder"}
-
 
 # Global registry singleton
 _registry: Optional[EngineRegistry] = None
@@ -103,3 +95,9 @@ def get_registry() -> EngineRegistry:
     if _registry is None:
         _registry = EngineRegistry()
     return _registry
+
+
+def reset_registry() -> None:
+    """Reset the singleton (test hook)."""
+    global _registry
+    _registry = None

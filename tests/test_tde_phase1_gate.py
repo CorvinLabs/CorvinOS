@@ -25,8 +25,10 @@ class TestL34DelegationGate:
 
     def test_gate_initialization(self, gate):
         """Gate initializes correctly."""
-        assert gate.QUALITY_THRESHOLD == 0.05
-        assert "PUBLIC" in gate.CLASSIFICATIONS
+        # QUALITY_THRESHOLD is a decision-layer constant (detector/executor),
+        # not a data-gate concern — the gate only knows classifications.
+        assert gate.CLASSIFICATIONS == ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"]
+        assert gate.CLASSIFICATION_RANK["RESTRICTED"] > gate.CLASSIFICATION_RANK["PUBLIC"]
 
     def test_can_delegate_public_data(self, gate, basic_step):
         """PUBLIC data → can delegate."""
@@ -109,8 +111,11 @@ class TestL34DelegationGate:
         step1_action = filtered.steps[0].action
         step2_action = filtered.steps[1].action
 
-        assert "john@example.com" not in step1_action or "[EMAIL_REDACTED]" in step1_action
-        assert "sk_live_xyz" not in step2_action or "[PHONE_REDACTED]" in step2_action
+        assert "john@example.com" not in step1_action
+        assert "[EMAIL_REDACTED]" in step1_action
+        # Secrets are ALWAYS redacted from plan text, regardless of ceiling.
+        assert "sk_live_xyz" not in step2_action
+        assert "[SECRET_REDACTED]" in step2_action
 
     def test_classification_heuristic_email(self, gate):
         """Email heuristic classifies as CONFIDENTIAL."""

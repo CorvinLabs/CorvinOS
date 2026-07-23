@@ -47,10 +47,19 @@ class TestEngineRegistry:
 
     @pytest.mark.asyncio
     async def test_execute_engine(self):
-        """Can execute via registry."""
+        """Registry executes real engines; invalid plan yields explicit error."""
         registry = EngineRegistry()
         result = await registry.execute("claude_code", {}, {})
-        assert "status" in result
+        # Real engine: a bare dict is not a plan → explicit failure, no fake success
+        assert result["success"] is False
+        assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_execute_unknown_engine_raises(self):
+        """Unknown engine name raises."""
+        registry = EngineRegistry()
+        with pytest.raises(ValueError, match="Unknown engine"):
+            await registry.execute("nope", {}, {})
 
 
 class TestAdaptiveDelegationExecutor:
@@ -142,13 +151,34 @@ class TestAdaptiveDelegationExecutor:
         assert all(r.success for r in results)
 
 
+class _RecordingEngine:
+    """Mock engine that records calls (test seam for SendIntegration)."""
+
+    def __init__(self, name):
+        self.name = name
+        self.calls = []
+
+    async def execute(self, plan, context, **kwargs):
+        self.calls.append({"plan": plan, "context": context, "kwargs": kwargs})
+        return {"engine": self.name, "success": True, "results": []}
+
+
+def _mock_registry():
+    registry = EngineRegistry.__new__(EngineRegistry)
+    registry.engines = {
+        name: _RecordingEngine(name)
+        for name in ("tiered_delegation", "acs", "claude_code")
+    }
+    return registry
+
+
 class TestSendIntegration:
     """Test SendIntegration."""
 
     @pytest.fixture
     def integration(self):
-        """Setup integration."""
-        return SendIntegration()
+        """Setup integration with a mock registry (no real engine spawns)."""
+        return SendIntegration(registry=_mock_registry())
 
     def test_integration_initialization(self, integration):
         """Integration initializes with all components."""

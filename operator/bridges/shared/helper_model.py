@@ -124,6 +124,15 @@ SITE_ACS_CLASSIFY: Final[str] = "acs_classify"
 # (cheap, per-objective single call, no tools).
 SITE_ULO_COMPLIANCE: Final[str] = "ulo_compliance"
 
+# ADR-0210 Phase 1 / ADR-0214 — unified InitialAnalysis (classify + extract +
+# plan in ONE call). Haiku by default (structured JSON, no tools).
+SITE_INITIAL_ANALYSIS: Final[str] = "initial_analysis"
+
+# ADR-0214 — TDE delegated-step worker (SubprocessWorkerIPC). Executes one
+# L34-sanitized plan step as a tool-less one-shot. Haiku by default; pin a
+# stronger model via CORVIN_HELPER_MODEL_TDE_WORKER when steps need it.
+SITE_TDE_WORKER: Final[str] = "tde_worker"
+
 ALL_SITES: Final[tuple[str, ...]] = (
     SITE_VOICE_SUMMARY,
     SITE_DIALECTIC_CLI,
@@ -136,6 +145,8 @@ ALL_SITES: Final[tuple[str, ...]] = (
     SITE_HOUSE_RULES,
     SITE_ACS_CLASSIFY,
     SITE_ULO_COMPLIANCE,
+    SITE_INITIAL_ANALYSIS,
+    SITE_TDE_WORKER,
 )
 
 _OPT_OUT_VALUES: Final[frozenset[str]] = frozenset({"", "none", "default", "off"})

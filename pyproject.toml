@@ -349,3 +349,6 @@ disallow_untyped_defs = false
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "--verbose"
+markers = [
+    "live: real-LLM end-to-end tests (opt-in via CLAUDE_LIVE_E2E=1)",
+]

@@ -12,11 +12,10 @@ CI lint: module MUST NOT import anthropic.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import time
-from dataclasses import dataclass, field, asdict
-from typing import Any, Optional
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -27,6 +26,10 @@ class Step:
     depends_on: list[int] = field(default_factory=list)  # Step numbers this depends on
     can_parallelize: list[int] = field(default_factory=list)  # Step numbers safe to run in parallel
     estimated_tokens: int = 5000   # Rough estimate for billing/planning
+    # WHAT to actually do (target file, content spec, tool + args). Without
+    # this an executor only sees the bare action enum and cannot perform the
+    # step — found via live E2E 2026-07-23 (ADR-0214 review).
+    description: str = ""
 
 
 @dataclass
@@ -92,12 +95,26 @@ class InitialAnalysisRequest:
 
     @staticmethod
     def from_dict(d: dict[str, Any]) -> InitialAnalysisRequest:
-        """Deserialize from dict."""
+        """Deserialize from dict.
+
+        Tolerant against EXTRA keys (LMs routinely add e.g. a step
+        "description" despite the schema) — unknown keys are dropped.
+        Missing REQUIRED fields still raise (strict where it matters).
+        """
+        import dataclasses
+
+        def _known(cls: Any, data: dict[str, Any]) -> dict[str, Any]:
+            # Drop unknown keys AND explicit nulls: an LM-emitted
+            # `"description": null` must fall back to the field default
+            # instead of poisoning downstream str-operations with None.
+            names = {f.name for f in dataclasses.fields(cls)}
+            return {k: v for k, v in data.items() if k in names and v is not None}
+
         return InitialAnalysisRequest(
-            classification=Classification(**d["classification"]),
-            entities=Entities(**d["entities"]),
+            classification=Classification(**_known(Classification, d["classification"])),
+            entities=Entities(**_known(Entities, d["entities"])),
             global_plan=GlobalPlan(
-                steps=[Step(**s) for s in d["global_plan"]["steps"]],
+                steps=[Step(**_known(Step, s)) for s in d["global_plan"]["steps"]],
                 estimated_duration_s=d["global_plan"]["estimated_duration_s"],
                 estimated_tokens=d["global_plan"]["estimated_tokens"],
                 fallback_strategy=d["global_plan"].get("fallback_strategy", "sequential"),
@@ -141,6 +158,7 @@ Design the full step sequence with parallelization hints:
     {{
       "step": 1,
       "action": one of "read_file" | "write_file" | "call_tool" | "api_fetch" | "database_query" | "list_files" | "check_existence" | "analyze_data" | "reason_about" | "generate_code" | "generate_text" | "generate_report" | "synthesize" | "evaluate",
+      "description": "concrete instruction: WHAT to do, which file/target, expected output — an executor must be able to perform the step from this text alone",
       "depends_on": [list of step numbers],
       "can_parallelize": [list of step numbers that can run in parallel with this one],
       "estimated_tokens": integer (rough estimate)
