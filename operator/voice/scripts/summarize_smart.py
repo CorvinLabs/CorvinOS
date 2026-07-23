@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Smart Voice Summary — Enhanced summarization with context & reasoning.
 
-Wraps the existing summarize.py pipeline with semantic analysis:
+Direct usage of smart analysis + voice generation (not LLM-based):
 1. Analyze the response for meaning (type, impact, trade-offs)
-2. Pass analysis as context to the LLM summarizer
-3. LLM uses analysis to create better narrative (not just text paraphrase)
+2. Generate natural narrative directly using `generate_voice_summary()` with tone
+3. Polish for audio (remove code, expand acronyms)
+
+This bypasses the LLM entirely for faster, consistent, human-sounding summaries
+that respect the voice profile tone (warm/formal).
 
 Usage:
-    summarize_smart.py --lang de|en [--max-chars 400] [--model claude-haiku-4-5]
+    summarize_smart.py --lang de|en [--max-chars 400] [--tone warm|formal]
     Reads input text from stdin, writes smart summary to stdout.
-
-Replaces: summarize.py (backward compatible — calls summarize.py as fallback)
 """
 
 from __future__ import annotations
@@ -18,133 +19,97 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
-# Import the smart analysis engine
+# Import the smart analysis & generation engine
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "console"))
 try:
     from corvin_console.voice_summary_smart import (
         analyze_response,
+        generate_voice_summary,
+        polish_for_audio,
         ResponseAnalysis,
     )
 except Exception as e:
-    print(f"Warning: Could not import smart analysis engine: {e}", file=sys.stderr)
-    analyze_response = None
+    print(f"Error: Could not import smart analysis engine: {e}", file=sys.stderr)
+    sys.exit(1)
 
 
-def build_analysis_prompt(analysis: ResponseAnalysis) -> str:
-    """Build a prompt fragment that passes the semantic analysis to the LLM."""
-    if not analysis:
+def summarize_with_smart_engine(
+    text: str,
+    lang: str,
+    max_chars: int,
+    tone: str = "warm",
+    user_name: str = "",
+) -> str:
+    """Analyze response and generate summary using voice_summary_smart engine.
+
+    This bypasses LLM entirely and uses direct semantic analysis + natural
+    generation. Much faster and more consistent than LLM-based approach,
+    and respects voice profile tone (warm/formal/casual).
+
+    Args:
+        text: Response text to summarize
+        lang: Language (de/en)
+        max_chars: Target character limit
+        tone: Voice tone from profile (warm/formal/casual)
+        user_name: User's name for personalization
+    """
+    if not text or not text.strip():
         return ""
 
-    parts = [
-        "## SEMANTIC ANALYSIS (for context only — use this to understand the response better):",
-        f"- Work Type: {analysis.work_type}",
-        f"- Scope: {analysis.scope}",
-        f"- Risk Level: {analysis.risk_level}",
-    ]
-
-    if analysis.key_files:
-        parts.append(f"- Key Files: {', '.join(analysis.key_files)}")
-
-    if analysis.blockers_resolved:
-        parts.append(
-            f"- Blockers Resolved: {', '.join(analysis.blockers_resolved)}"
-        )
-
-    if analysis.testing_mentioned:
-        parts.append("- Testing: Mentioned (verification included)")
-
-    if analysis.trade_offs:
-        parts.append(
-            f"- Trade-offs Considered: The response mentions considerations "
-            f"about different approaches — make sure these deliberative aspects "
-            f"come through in the narration."
-        )
-
-    parts.append(
-        f"- User Benefit: {analysis.user_benefit}\n"
-        f"Use this analysis to emphasize why the listener should care, "
-        f"what problem is being solved, and what reasoning went into the decision. "
-        f"Don't just paraphrase — narrate with purpose."
-    )
-
-    return "\n".join(parts)
-
-
-def summarize_with_analysis(text: str, lang: str, max_chars: int, model: str) -> str:
-    """Analyze the response, then pass analysis to summarize.py."""
-
-    # Step 1: Analyze for semantic meaning
-    analysis = None
-    analysis_prompt = ""
-    if analyze_response:
-        try:
-            analysis = analyze_response(text)
-            analysis_prompt = build_analysis_prompt(analysis)
-        except Exception as e:
-            print(f"Warning: Analysis failed, falling back to regular summary: {e}", file=sys.stderr)
-
-    # Step 2: Prepare input for summarize.py
-    # Inject the analysis at the TOP so the LLM sees it before the content
-    if analysis_prompt:
-        full_input = f"{analysis_prompt}\n\n## RESPONSE TO SUMMARIZE:\n{text}"
-    else:
-        full_input = text
-
-    # Step 3: Call the existing summarize.py with the enhanced input
     try:
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(Path(__file__).resolve().parent / "summarize.py"),
-                "--lang", lang,
-                "--max-chars", str(max_chars),
-                "--model", model,
-            ],
-            input=full_input,
-            capture_output=True,
-            text=True,
-            timeout=150,  # Leave room for analysis + summarize
+        # Step 1: Analyze the response for meaning
+        analysis = analyze_response(text)
+
+        # Step 2: Generate summary using smart engine (respects tone)
+        summary = generate_voice_summary(
+            analysis,
+            max_words=int(max_chars / 4),  # ~4 chars per word in German/English
+            tone=tone,
+            user_name=user_name,
         )
 
-        if result.returncode != 0:
-            print(f"Error from summarize.py: {result.stderr}", file=sys.stderr)
-            # Fallback to basic truncation
-            return text[:max_chars]
+        # Step 3: Polish for audio (expand acronyms, remove code, etc)
+        # Map lang codes to language names for polish_for_audio
+        lang_code = "de" if lang.lower().startswith("de") else "en"
+        polished = polish_for_audio(summary, max_length=max_chars, lang=lang_code)
 
-        return result.stdout.strip()
+        return polished
 
-    except subprocess.TimeoutExpired:
-        print("Timeout in smart summarization, falling back to truncation", file=sys.stderr)
-        return text[:max_chars]
     except Exception as e:
-        print(f"Error calling summarize.py: {e}", file=sys.stderr)
-        return text[:max_chars]
+        print(f"Warning: Smart summary generation failed: {e}", file=sys.stderr)
+        # Fallback: just return first N characters
+        return text[:max_chars].strip()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Smart voice summary with semantic analysis"
+        description="Smart voice summary with semantic analysis + tone respect"
     )
     parser.add_argument(
         "--lang",
         choices=["de", "en"],
-        default="en",
+        default="de",
         help="Output language",
     )
     parser.add_argument(
         "--max-chars",
         type=int,
         default=400,
-        help="Target summary length",
+        help="Target summary length (characters)",
     )
     parser.add_argument(
-        "--model",
-        default="claude-haiku-4-5",
-        help="Claude model to use",
+        "--tone",
+        choices=["warm", "formal", "casual"],
+        default="warm",
+        help="Voice tone from profile (affects phrasing)",
+    )
+    parser.add_argument(
+        "--user-name",
+        default="",
+        help="User's name for personalization (optional)",
     )
 
     args = parser.parse_args()
@@ -154,12 +119,13 @@ def main() -> None:
     if not text:
         sys.exit(0)
 
-    # Generate smart summary
-    summary = summarize_with_analysis(
+    # Generate smart summary with tone respect
+    summary = summarize_with_smart_engine(
         text=text,
         lang=args.lang,
         max_chars=args.max_chars,
-        model=args.model,
+        tone=args.tone,
+        user_name=args.user_name,
     )
 
     print(summary)

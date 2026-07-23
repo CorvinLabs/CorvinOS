@@ -320,28 +320,41 @@ def generate_voice_summary(
     return full_text
 
 
-def polish_for_audio(text: str, max_length: int = 300) -> str:
+def polish_for_audio(text: str, max_length: int = 300, lang: str = "de") -> str:
     """Optimize for text-to-speech playback.
 
     - Remove markdown/code
-    - Expand acronyms
+    - Expand acronyms (respecting language)
     - Ensure readability
     """
     # Remove code blocks
     text = re.sub(r'```[\s\S]*?```', '[code]', text)
     text = re.sub(r'`([^`]+)`', r'\1', text)
 
-    # Expand common acronyms (can be enhanced per user profile)
-    acronyms = {
-        "API": "application programming interface",
-        "REST": "representational state transfer",
-        "JSON": "jay-san",
-        "HTTP": "hypertext transfer protocol",
-        "CLI": "command line interface",
-        "UI": "user interface",
-        "UX": "user experience",
-        "CI/CD": "continuous integration continuous deployment",
-    }
+    # Expand common acronyms (language-aware)
+    if lang == "de":
+        acronyms = {
+            "API": "Programmierschnittstelle",
+            "REST": "REST",  # Keep technical term
+            "JSON": "Jason",
+            "HTTP": "HTTP",  # Keep technical
+            "CLI": "Kommandozeile",
+            "UI": "Benutzeroberfläche",
+            "UX": "Nutzererlebnis",
+            "CI/CD": "kontinuierliche Integration Continuous Deployment",
+        }
+    else:  # en
+        acronyms = {
+            "API": "application programming interface",
+            "REST": "representational state transfer",
+            "JSON": "jay-san",
+            "HTTP": "hypertext transfer protocol",
+            "CLI": "command line interface",
+            "UI": "user interface",
+            "UX": "user experience",
+            "CI/CD": "continuous integration continuous deployment",
+        }
+
     for acronym, expanded in acronyms.items():
         text = re.sub(rf"\b{acronym}\b", expanded, text, flags=re.IGNORECASE)
 
