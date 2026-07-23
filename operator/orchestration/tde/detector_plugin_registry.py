@@ -9,9 +9,12 @@ Extensible detector loading with:
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import logging
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Protocol
 
 _logger = logging.getLogger(__name__)
@@ -207,6 +210,95 @@ class DetectorPluginRegistry:
     def list_plugins(self) -> list[str]:
         """List all registered plugin names."""
         return list(self.plugins.keys())
+
+    def load_from_plugin_directory(self, plugin_dir: str) -> tuple[int, int]:
+        """
+        Auto-discover and load plugins from a directory.
+
+        Each plugin is expected to be in its own subdirectory with:
+        - metadata.json: Plugin metadata (name, version, author, cls_tier)
+        - detector.py: Module with a 'Detector' class implementing detect_engine()
+
+        Args:
+            plugin_dir: Path to directory containing plugin subdirectories
+
+        Returns:
+            (loaded_count, failed_count) tuple for reporting
+        """
+        plugin_path = Path(plugin_dir)
+        if not plugin_path.exists() or not plugin_path.is_dir():
+            _logger.warning(f"Plugin directory not found: {plugin_dir}")
+            return (0, 0)
+
+        loaded = 0
+        failed = 0
+
+        for plugin_subdir in sorted(plugin_path.iterdir()):
+            if not plugin_subdir.is_dir():
+                continue
+
+            plugin_name = plugin_subdir.name
+            metadata_file = plugin_subdir / "metadata.json"
+            detector_file = plugin_subdir / "detector.py"
+
+            # Check required files
+            if not metadata_file.exists():
+                _logger.warning(f"Plugin {plugin_name}: metadata.json not found")
+                failed += 1
+                continue
+
+            if not detector_file.exists():
+                _logger.warning(f"Plugin {plugin_name}: detector.py not found")
+                failed += 1
+                continue
+
+            # Load metadata
+            try:
+                with open(metadata_file, "r") as f:
+                    metadata = json.load(f)
+            except Exception as e:
+                _logger.error(f"Plugin {plugin_name}: failed to load metadata.json: {e}")
+                failed += 1
+                continue
+
+            # Load detector module
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    f"tde_plugin_{plugin_name}", detector_file
+                )
+                if spec is None or spec.loader is None:
+                    _logger.error(f"Plugin {plugin_name}: failed to load detector.py")
+                    failed += 1
+                    continue
+
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[spec.name] = module
+                spec.loader.exec_module(module)
+
+                # Get Detector class
+                if not hasattr(module, "Detector"):
+                    _logger.error(f"Plugin {plugin_name}: Detector class not found in detector.py")
+                    failed += 1
+                    continue
+
+                detector_class = module.Detector
+
+            except Exception as e:
+                _logger.error(f"Plugin {plugin_name}: failed to load detector.py: {e}")
+                failed += 1
+                continue
+
+            # Register plugin (without signature validation for local plugins)
+            if self.register_plugin(metadata, detector_class):
+                loaded += 1
+                _logger.info(f"Plugin {plugin_name} loaded from directory")
+            else:
+                failed += 1
+
+        _logger.info(
+            f"Plugin discovery complete: {loaded} loaded, {failed} failed"
+        )
+        return (loaded, failed)
 
     async def execute_plugin(
         self,
