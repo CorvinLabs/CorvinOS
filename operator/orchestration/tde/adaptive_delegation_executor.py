@@ -19,12 +19,11 @@ from typing import Any, Callable, Optional
 
 try:
     from operator.orchestration.initial_analysis import GlobalPlan, Step, InitialAnalysisRequest
-    from operator.orchestration.tde.l34_delegation_gate import L34DelegationGate
-    from operator.orchestration.tde.loss_profile_tracker import LossProfileTracker
 except ImportError:
     from initial_analysis import GlobalPlan, Step, InitialAnalysisRequest  # type: ignore
-    from l34_delegation_gate import L34DelegationGate  # type: ignore
-    from loss_profile_tracker import LossProfileTracker  # type: ignore
+
+from .l34_delegation_gate import L34DelegationGate
+from .loss_profile_tracker import LossProfileTracker
 
 _logger = logging.getLogger(__name__)
 
