@@ -18,19 +18,14 @@ from typing import Any, Optional
 
 try:
     from operator.orchestration.initial_analysis import InitialAnalysisRequest
-    from operator.orchestration.tde.engine_registry import get_registry
-    from operator.orchestration.tde.l34_delegation_gate import L34DelegationGate
-    from operator.orchestration.tde.loss_profile_tracker import LossProfileTracker
-    from operator.orchestration.tde.robust_engine_detector import RobustEngineDetector
-    from operator.orchestration.tde.slash_command_parser import SlashCommandParser
 except ImportError:
-    # Fallback for testing
     from initial_analysis import InitialAnalysisRequest  # type: ignore
-    from engine_registry import get_registry  # type: ignore
-    from l34_delegation_gate import L34DelegationGate  # type: ignore
-    from loss_profile_tracker import LossProfileTracker  # type: ignore
-    from robust_engine_detector import RobustEngineDetector  # type: ignore
-    from slash_command_parser import SlashCommandParser  # type: ignore
+
+from .engine_registry import get_registry
+from .l34_delegation_gate import L34DelegationGate
+from .loss_profile_tracker import LossProfileTracker
+from .robust_engine_detector import RobustEngineDetector
+from .slash_command_parser import SlashCommandParser
 
 _logger = logging.getLogger(__name__)
 

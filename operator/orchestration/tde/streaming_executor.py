@@ -9,13 +9,12 @@ import logging
 from typing import Any, AsyncIterator, Optional
 
 try:
-    from operator.orchestration.tde.adaptive_delegation_executor import StepResult
-    from operator.orchestration.tde.l34_delegation_gate import L34DelegationGate
-    from initial_analysis import Step
+    from operator.orchestration.initial_analysis import Step
 except ImportError:
-    from adaptive_delegation_executor import StepResult  # type: ignore
-    from l34_delegation_gate import L34DelegationGate  # type: ignore
     from initial_analysis import Step  # type: ignore
+
+from .adaptive_delegation_executor import StepResult
+from .l34_delegation_gate import L34DelegationGate
 
 _logger = logging.getLogger(__name__)
 
