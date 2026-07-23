@@ -36,6 +36,14 @@ from .loss_profile_tracker import LossEntry, LossProfileTracker, get_session_tra
 from .robust_engine_detector import DetectionSignals, RobustEngineDetector
 from .send_integration import SendIntegration
 from .slash_command_parser import ParseResult, SlashCommandParser
+from .detector_plugin_registry import (
+    DetectorPlugin,
+    DetectorPluginInterface,
+    DetectorPluginRegistry,
+    Ed25519SignatureValidator,
+    get_plugin_registry,
+    reset_plugin_registry,
+)
 from .streaming_executor import StreamingExecutor
 from .tde_engine import (
     AcsEngineBridge,
@@ -88,4 +96,11 @@ __all__ = [
     "A2AWorkerIPC",
     "get_worker_ipc",
     "set_worker_ipc",
+    # Phase 3 Plugins
+    "DetectorPlugin",
+    "DetectorPluginInterface",
+    "DetectorPluginRegistry",
+    "Ed25519SignatureValidator",
+    "get_plugin_registry",
+    "reset_plugin_registry",
 ]
