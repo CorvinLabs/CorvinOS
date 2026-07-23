@@ -50,7 +50,7 @@ def _bridges_shared_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "bridges" / "shared"
 
 
-def _run_lm_call(prompt: str, timeout_s: int) -> str:
+def _run_lm_call(prompt: str, timeout_s: int, proc_holder: Optional[Any] = None) -> str:
     shared = _bridges_shared_dir()
     if shared.is_dir() and str(shared) not in sys.path:
         sys.path.insert(0, str(shared))
@@ -72,7 +72,7 @@ def _run_lm_call(prompt: str, timeout_s: int) -> str:
         # orchestrator's cwd and loaded repo CLAUDE.md context).
         from .worker_ipc import run_one_shot  # noqa: PLC0415 — avoid import cycle
 
-        rc, stdout, stderr = run_one_shot(cmd, timeout_s)
+        rc, stdout, stderr = run_one_shot(cmd, timeout_s, proc_holder=proc_holder)
     except FileNotFoundError as exc:
         raise AnalysisUnavailable("claude CLI not found") from exc
     except subprocess.TimeoutExpired as exc:
@@ -90,15 +90,21 @@ def run_initial_analysis_sync(
     context: Optional[dict[str, Any]] = None,
     *,
     timeout_s: int = _ANALYSIS_TIMEOUT_S,
+    proc_holder: Optional[Any] = None,
 ) -> InitialAnalysisRequest:
     """One REAL LM call: classify + extract entities + plan (ADR-0210 Phase 1).
+
+    ``proc_holder`` (a ``tde.worker_ipc.ProcHolder``), when given, lets an
+    ``asyncio.to_thread`` caller kill the underlying subprocess if the turn
+    is cancelled mid-analysis (round-4 finding: this call previously had no
+    such holder, unlike the console's ADR-0213 context-sync call).
 
     Raises:
         AnalysisUnavailable: CLI missing/failed/timeout.
         ValueError: LM response was not a valid analysis JSON.
     """
     prompt = make_task_analysis_prompt(task, context or {})
-    raw = _run_lm_call(prompt, timeout_s)
+    raw = _run_lm_call(prompt, timeout_s, proc_holder=proc_holder)
     analysis = parse_task_analysis_response(raw)
     analysis.cache_key = hashlib.sha256(task.encode()).hexdigest()[:16]
     _logger.info(
@@ -116,8 +122,10 @@ async def run_initial_analysis(
     context: Optional[dict[str, Any]] = None,
     *,
     timeout_s: int = _ANALYSIS_TIMEOUT_S,
+    proc_holder: Optional[Any] = None,
 ) -> InitialAnalysisRequest:
     """Async wrapper for run_initial_analysis_sync (subprocess off-loop)."""
     return await asyncio.to_thread(
-        run_initial_analysis_sync, task, context, timeout_s=timeout_s
+        run_initial_analysis_sync, task, context,
+        timeout_s=timeout_s, proc_holder=proc_holder,
     )

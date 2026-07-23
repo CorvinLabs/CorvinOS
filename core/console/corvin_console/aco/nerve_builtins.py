@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -26,6 +27,27 @@ def _home() -> Path | None:
         return _p.corvin_home()
     except Exception:  # noqa: BLE001
         return None
+
+
+def _bridges_shared_dir() -> Path:
+    """Repo-relative ``operator/bridges/shared`` (source-tree mode).
+
+    ``operator/`` has no ``__init__.py`` and shadows the stdlib ``operator``
+    module, so ``from operator.bridges.shared.x import y`` can NEVER resolve
+    (regular stdlib modules always win over namespace-package candidates,
+    regardless of sys.path order) — confirmed structurally broken, not just
+    theoretically: every prior fiber that tried the dotted form silently
+    degraded to "module unavailable" on every single scan. The fix used
+    throughout operator/orchestration/tde/ (e.g. tde_audit.py) is to put the
+    leaf directory on sys.path and import the bare module name instead.
+    """
+    return Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+
+
+def _ensure_bridges_on_path() -> None:
+    shared = _bridges_shared_dir()
+    if shared.is_dir() and str(shared) not in sys.path:
+        sys.path.insert(0, str(shared))
 
 
 # ── Fiber: Session-Gesundheit (L1-L5 ACO) ────────────────────────────────────
@@ -259,7 +281,8 @@ class AuditChainFiber(NerveFiber):
     def scan(self) -> list[NerveSignal]:
         signals: list[NerveSignal] = []
         try:
-            from operator.bridges.shared.audit import verify_audit, audit_path
+            _ensure_bridges_on_path()
+            from audit import verify_audit, audit_path  # type: ignore[import-not-found]
             audit_file = audit_path()
             if not audit_file.exists():
                 return signals  # frische Installation
@@ -306,12 +329,22 @@ class ComplianceFiber(NerveFiber):
         signals: list[NerveSignal] = []
         try:
             import importlib.util
+            _ensure_bridges_on_path()
+            # Bare names, NOT "operator.bridges.shared.X" — see
+            # _bridges_shared_dir() docstring: the dotted form can never
+            # resolve because stdlib `operator` shadows the repo's operator/
+            # directory. find_spec() on a dotted name whose parent isn't a
+            # real package RAISES (not returns None) — every module_name
+            # after the first would never even be checked.
             for module_name, label in [
-                ("operator.bridges.shared.house_rules", "house_rules"),
-                ("operator.bridges.shared.consent",     "consent_gate"),
-                ("operator.bridges.shared.disclosure",  "disclosure_gate"),
+                ("house_rules", "house_rules"),
+                ("consent",     "consent_gate"),
+                ("disclosure",  "disclosure_gate"),
             ]:
-                spec = importlib.util.find_spec(module_name)
+                try:
+                    spec = importlib.util.find_spec(module_name)
+                except (ImportError, ValueError):
+                    spec = None
                 if spec is None:
                     signals.append(NerveSignal(
                         fiber_id=self.fiber_id,
@@ -484,6 +517,157 @@ class RemoteLogFiber(NerveFiber):
         return out
 
 
+# ── Fiber: TDE Delegation Runner (ADR-0214) ──────────────────────────────────
+
+class TdeDelegationFiber(NerveFiber):
+    """Beobachtet den Tiered-Delegation-Engine-Runner über die tde.* Audit-Chain.
+
+    Liest AUSSCHLIESSLICH bereits content-freie ``tde.*`` Events (siehe
+    ``operator/orchestration/tde/tde_audit.py`` — allowlisted Scalars, niemals
+    Statement-/Snapshot-Inhalte). Diese Fiber fügt der Chain keine neuen Events
+    hinzu, sie liest nur; Fehlklassifikationen bleiben also nicht unbemerkt,
+    weil TDE selbst schon vor dem Schreiben scrubbt.
+
+    Exzessive Beobachtung (bewusst, auf Nutzerwunsch): jeder Scan meldet ein
+    OK-Signal mit vollen Zählern (audit=False — kein Audit-Spam), zusätzlich
+    HIGH/MEDIUM bei Auffälligkeiten. Das Signal ist damit über
+    NerveRegistry.scan_all()/summarize_signals() jederzeit sichtbar, auch wenn
+    nichts kaputt ist.
+    """
+    fiber_id = "tde.delegation_runner"
+    fiber_version = "1.0.0"
+    fiber_description = (
+        "ADR-0214 TDE Delegation Runner: L34-Blocks, Delegations-Erfolgsrate, "
+        "gelernter Quality-Loss — gelesen aus der tde.* Audit-Chain"
+    )
+    _TAIL_LINES = 2000
+    # Ab dieser Zahl gemessener Delegationen wird die Fehlerrate/der Loss
+    # überhaupt bewertet — sonst wären 1/1 Fehlschläge sofort ein HIGH-Signal.
+    _MIN_SAMPLES = 5
+    _FAILURE_RATE_HIGH = 0.30
+    _LOSS_PCT_MEDIUM = 5.0  # muss QUALITY_THRESHOLD (adaptive_delegation_executor.py) spiegeln
+    _LOSS_PCT_HIGH = 15.0
+
+    def scan(self) -> list[NerveSignal]:
+        import json as _json
+
+        try:
+            _ensure_bridges_on_path()
+            from audit import audit_path  # type: ignore[import-not-found]
+        except Exception as exc:
+            logger.debug("[TdeDelegationFiber] audit-Modul nicht importierbar: %s", exc)
+            return []
+
+        try:
+            path = audit_path()
+            if not path.exists():
+                return []
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                tail = fh.readlines()[-self._TAIL_LINES:]
+        except OSError as exc:
+            logger.debug("[TdeDelegationFiber] Audit-Datei nicht lesbar: %s", exc)
+            return []
+
+        delegated_total = 0
+        delegated_failed = 0
+        l34_blocked = 0
+        measured_losses: list[float] = []
+        engines_selected: dict[str, int] = {}
+
+        for line in tail:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            event_type = event.get("event_type", "")
+            if not event_type.startswith("tde."):
+                continue
+            details = event.get("details") or {}
+
+            if event_type == "tde.step_delegated":
+                delegated_total += 1
+                if not details.get("success"):
+                    delegated_failed += 1
+            elif event_type == "tde.l34_blocked":
+                l34_blocked += 1
+            elif event_type == "tde.loss_recorded" and details.get("measured"):
+                loss_pct = details.get("loss_pct")
+                if isinstance(loss_pct, (int, float)):
+                    measured_losses.append(float(loss_pct))
+            elif event_type == "tde.engine_selected":
+                engine = details.get("engine", "unknown")
+                engines_selected[engine] = engines_selected.get(engine, 0) + 1
+
+        signals: list[NerveSignal] = []
+        failure_rate = (delegated_failed / delegated_total) if delegated_total else 0.0
+        avg_measured_loss = (
+            sum(measured_losses) / len(measured_losses) if measured_losses else None
+        )
+
+        # Immer sichtbar, auch wenn alles gesund ist (exzessive Beobachtung).
+        signals.append(NerveSignal(
+            fiber_id=self.fiber_id,
+            signal_type="tde.runner_stats",
+            severity=SEVERITY_OK,
+            message=(
+                f"TDE-Runner: {delegated_total} Delegationen "
+                f"({delegated_failed} fehlgeschlagen), {l34_blocked} L34-Blocks, "
+                f"avg_measured_loss="
+                f"{f'{avg_measured_loss:.1f}%' if avg_measured_loss is not None else 'n/a'}"
+            ),
+            data={
+                "delegated_total": delegated_total,
+                "delegated_failed": delegated_failed,
+                "l34_blocked": l34_blocked,
+                "measured_loss_samples": len(measured_losses),
+                "avg_measured_loss_pct": avg_measured_loss,
+                "engines_selected": engines_selected,
+            },
+            audit=False,
+        ))
+
+        if delegated_total >= self._MIN_SAMPLES and failure_rate > self._FAILURE_RATE_HIGH:
+            signals.append(NerveSignal(
+                fiber_id=self.fiber_id,
+                signal_type="tde.delegation_failure_spike",
+                severity=SEVERITY_HIGH,
+                message=(
+                    f"TDE-Delegations-Fehlerrate erhöht: {delegated_failed}/"
+                    f"{delegated_total} ({failure_rate:.0%}) — Worker-IPC prüfen"
+                ),
+                data={"delegated_total": delegated_total, "delegated_failed": delegated_failed,
+                      "failure_rate": round(failure_rate, 3)},
+                repair_hint="claude-Binary/Netzwerk der Worker-Subprozesse prüfen "
+                            "(operator/orchestration/tde/worker_ipc.py)",
+            ))
+
+        if avg_measured_loss is not None and len(measured_losses) >= self._MIN_SAMPLES:
+            if avg_measured_loss >= self._LOSS_PCT_HIGH:
+                signals.append(NerveSignal(
+                    fiber_id=self.fiber_id,
+                    signal_type="tde.quality_loss_elevated",
+                    severity=SEVERITY_HIGH,
+                    message=f"TDE gemessener Quality-Loss stark erhöht: {avg_measured_loss:.1f}%",
+                    data={"avg_measured_loss_pct": avg_measured_loss, "samples": len(measured_losses)},
+                    repair_hint="loss_judge.py / SITE_DELEGATE_OUTPUT_JUDGE prüfen — "
+                                "Delegation ggf. per /use-engine claude_code umgehen",
+                ))
+            elif avg_measured_loss >= self._LOSS_PCT_MEDIUM:
+                signals.append(NerveSignal(
+                    fiber_id=self.fiber_id,
+                    signal_type="tde.quality_loss_elevated",
+                    severity=SEVERITY_MEDIUM,
+                    message=f"TDE gemessener Quality-Loss über dem Gate-Schwellwert: "
+                            f"{avg_measured_loss:.1f}%",
+                    data={"avg_measured_loss_pct": avg_measured_loss, "samples": len(measured_losses)},
+                ))
+
+        return signals
+
+
 # ── Registry der Built-in Fibers (wird von nerve.py importiert) ───────────────
 
 def _make_htrace_fiber():
@@ -506,5 +690,6 @@ _BUILTIN_FIBERS: list[NerveFiber] = [
     LogHealthFiber(),     # Log-Fehlerrate
     ConfigDriftFiber(),   # Beschädigte Configs
     RemoteLogFiber(),     # Remote-Instanz-Logs, z.B. Hetzner
+    TdeDelegationFiber(), # ADR-0214 TDE Delegation Runner
     *([f] if (f := _make_htrace_fiber()) else []),  # ADR-0180 HealingTrace-Uploader
 ]

@@ -13,6 +13,7 @@ try:
 except ImportError:  # pragma: no cover - orchestration dir not on sys.path
     from ..initial_analysis import Step  # type: ignore
 
+from . import tde_audit
 from .adaptive_delegation_executor import StepResult
 from .l34_delegation_gate import L34DelegationGate
 
@@ -24,6 +25,17 @@ class StreamingExecutor:
 
     BIG_DATA_THRESHOLD = 1024 * 1024 * 1024  # 1GB
 
+    # Size of a single scan/stream chunk — kept comfortably under
+    # L34DelegationGate._CONTENT_SCAN_MAX_BYTES (5MB). Without chunking, ANY
+    # value whose string form exceeds that scan ceiling is rejected outright
+    # as RESTRICTED ("unscanned tail cannot be proven safe" — correct for a
+    # single unbounded scan) — which made this module's entire reason to
+    # exist (values >1GB, i.e. always >> the scan ceiling) permanently
+    # unreachable: should_use_streaming() would fire, then the very first
+    # prescan() inside the old single-shot implementation always failed.
+    # Chunking below the scan ceiling lets each piece actually be scanned.
+    _STREAM_CHUNK_BYTES = 1 * 1024 * 1024  # 1MB
+
     def __init__(self, l34_gate: L34DelegationGate):
         """Initialize."""
         self.l34_gate = l34_gate
@@ -31,6 +43,14 @@ class StreamingExecutor:
     def should_use_streaming(self, data_volume_bytes: int) -> bool:
         """Check if data is large enough for streaming."""
         return data_volume_bytes > self.BIG_DATA_THRESHOLD
+
+    def _chunk_value(self, value: Any) -> list[Any]:
+        """Split str/bytes into scan-sized pieces; other types pass through whole."""
+        if isinstance(value, (str, bytes)):
+            size = self._STREAM_CHUNK_BYTES
+            chunks = [value[i:i + size] for i in range(0, len(value), size)]
+            return chunks or [value]
+        return [value]
 
     async def stream_filtered_data(
         self,
@@ -43,6 +63,13 @@ class StreamingExecutor:
 
         Yields chunks of data that pass L34 checks.
         Skips/redacts unsafe data.
+
+        Large values are split into bounded chunks (see _STREAM_CHUNK_BYTES)
+        and each chunk is scanned independently: an unsafe CHUNK is skipped
+        (never yielded) and reported via a content-free tde.* audit event,
+        but does NOT abort the remaining chunks or other variables — true to
+        the "skip/redact" contract above, rather than a full-stream abort on
+        the first unsafe (or merely oversized-for-one-scan) chunk.
 
         Args:
             statement: Full statement (potentially GB-sized)
@@ -58,21 +85,26 @@ class StreamingExecutor:
                 continue
 
             var_value = statement[var_name]
+            chunks = self._chunk_value(var_value)
 
-            # Pre-scan: is this variable safe?
-            gate_result = self.l34_gate.prescan(
-                {var_name: var_value},
-                max_classification=max_classification,
-            )
+            for idx, chunk in enumerate(chunks):
+                gate_result = self.l34_gate.prescan(
+                    {var_name: chunk},
+                    max_classification=max_classification,
+                )
 
-            if not gate_result.can_delegate:
-                # Unsafe: fail-closed
-                _logger.warning(f"Streaming: {var_name} unsafe, aborting stream")
-                raise PermissionError(f"Cannot stream {var_name}: {gate_result.reason}")
+                if not gate_result.can_delegate:
+                    _logger.warning(
+                        "Streaming: %s chunk %d/%d unsafe (%s) — skipped",
+                        var_name, idx + 1, len(chunks), gate_result.reason,
+                    )
+                    tde_audit.emit(
+                        "l34_blocked", scope="stream_chunk",
+                        reason_code="classification_exceeded",
+                    )
+                    continue
 
-            # Safe: yield in chunks
-            # (In real implementation: chunk large values by size)
-            yield {var_name: var_value}
+                yield {var_name: chunk}
 
     async def execute_streaming(
         self,
@@ -99,6 +131,9 @@ class StreamingExecutor:
             StepResult
         """
 
+        import time as _time
+
+        start = _time.time()
         try:
             _logger.info(f"Streaming execution for step {step.step}")
 
@@ -114,6 +149,10 @@ class StreamingExecutor:
             # Pass stream to executor
             result = await executor_fn(step, stream)
 
+            tde_audit.emit(
+                "streaming_step_executed", step_action=step.action, success=True,
+                duration_ms=int((_time.time() - start) * 1000),
+            )
             return StepResult(
                 step_num=step.step,
                 action=step.action,
@@ -123,7 +162,13 @@ class StreamingExecutor:
             )
 
         except PermissionError as e:
-            # L34 gate rejected: fail-closed
+            # Defense-in-depth: stream_filtered_data() itself now skips unsafe
+            # chunks rather than raising, but a directly-injected executor_fn
+            # or a future gate change could still raise — fail-closed either way.
+            tde_audit.emit(
+                "streaming_step_executed", step_action=step.action, success=False,
+                duration_ms=int((_time.time() - start) * 1000),
+            )
             return StepResult(
                 step_num=step.step,
                 action=step.action,
@@ -133,6 +178,10 @@ class StreamingExecutor:
             )
 
         except Exception as e:
+            tde_audit.emit(
+                "streaming_step_executed", step_action=step.action, success=False,
+                duration_ms=int((_time.time() - start) * 1000),
+            )
             return StepResult(
                 step_num=step.step,
                 action=step.action,

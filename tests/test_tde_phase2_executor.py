@@ -205,6 +205,46 @@ class TestExecutionPaths:
         assert budget.spent_tokens >= 1000
 
 
+class TestShadowRunLocalFailure:
+    """Round-4 finding: a failing LOCAL shadow-comparison run must not be
+    scored as a high-loss MEASURED sample against the delegated output —
+    the two runs were never actually compared, so no loss claim should be
+    recorded (fall back to proxy instead)."""
+
+    @pytest.mark.asyncio
+    async def test_failed_local_shadow_falls_back_to_proxy(self):
+        tracker = LossProfileTracker()
+        ipc = MockWorkerIPC()  # delegated call always succeeds
+        # analyze_data is side-effect-free + no evidence yet -> exploration
+        # path -> force_measure=True -> shadow run is attempted.
+        plan = _plan([Step(step=1, action="analyze_data")])
+        ex = AdaptiveDelegationExecutor(
+            plan, L34DelegationGate(), tracker, worker_ipc=ipc,
+        )
+
+        async def _always_failing_local(step, statement):
+            raise RuntimeError("transient local worker failure")
+
+        results = await ex.execute({}, None, _always_failing_local)
+
+        assert results[0].was_delegated is True
+        assert results[0].success is True  # the DELEGATED call succeeded
+
+        # Exactly one loss-tracker entry, and it must be a proxy record
+        # (measured=False) — never a measured=True entry derived from
+        # comparing against a failed local run.
+        assert len(tracker.history) == 1
+        entry = tracker.history[0]
+        assert entry.measured is False, (
+            "a failed local shadow-comparison run must record via proxy, "
+            "not as a measured (full-weight) loss sample"
+        )
+        # Proxy loss for a successful delegated step must be the low
+        # "schema_valid" default (1.0%), not the corrupted lexical-distance
+        # score a None-vs-output comparison would have produced pre-fix.
+        assert entry.loss_pct == 1.0
+
+
 class TestWorkerOutputParsing:
     def test_plain_json(self):
         assert parse_worker_output('{"output": "hi"}') == "hi"

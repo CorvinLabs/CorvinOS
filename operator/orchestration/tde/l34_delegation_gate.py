@@ -95,7 +95,7 @@ class L34DelegationGate:
         # every step of the plan, synchronously on the event loop (round-3
         # refutation finding). str.__hash__ is cached per object, so keys
         # are cheap for repeated lookups of the same value object.
-        self._content_cache: dict[tuple[int, int], str] = {}
+        self._content_cache: dict[str, str] = {}
 
     def can_delegate_step(
         self,
@@ -295,8 +295,18 @@ class L34DelegationGate:
         if len(text) > _CONTENT_SCAN_MAX_BYTES:
             return "RESTRICTED"
 
-        cache_key = (len(text), hash(text))
-        cached = self._content_cache.get(cache_key)
+        # Keyed by the text itself, NOT (len(text), hash(text)): a hash
+        # collision between two DIFFERENT same-length strings would have
+        # returned the wrong cached classification — for a data-safety
+        # classifier that can mean a secret misclassified as PUBLIC via a
+        # stale collision. Python's hash() has no collision-resistance
+        # guarantee (round-4 finding; confirmed via a real delegated TDE
+        # review of this exact function during the round-4 dogfood run).
+        # str.__hash__ is cached per object, so repeated lookups of the SAME
+        # object are still cheap; using the string as the key costs nothing
+        # extra dict-wise (Python hashes it either way) and removes the
+        # false-equality risk entirely.
+        cached = self._content_cache.get(text)
         if cached is not None:
             return cached
 
@@ -310,7 +320,7 @@ class L34DelegationGate:
 
         if len(self._content_cache) > 512:
             self._content_cache.clear()
-        self._content_cache[cache_key] = result
+        self._content_cache[text] = result
         return result
 
     def _exceeds_max(self, data_class: str, max_classification: str) -> bool:

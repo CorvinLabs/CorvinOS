@@ -89,6 +89,27 @@ class TestGateContentScanning:
         result = gate.prescan({42: "plain value", "name": "ok"})
         assert result.can_delegate is True
 
+    def test_content_cache_survives_hash_collision(self, gate, monkeypatch):
+        """Round-4 finding (surfaced via a real delegated TDE review of this
+        exact function): the cache used to key on (len(text), hash(text)).
+        Two DIFFERENT same-length strings whose hash() happens to collide
+        would then share a cache slot — a secret classified after a benign
+        same-length string could incorrectly inherit the benign PUBLIC
+        verdict. Force a collision (patch hash() to a constant) and prove
+        the fix (keyed on the text itself) is immune."""
+        monkeypatch.setattr("builtins.hash", lambda _x: 42)
+
+        benign = "x" * 40  # same length as the secret below
+        # Spaces around the AWS-key pattern preserve its \b word boundaries
+        # (a bare "AKIA...EXAMPLE" + more word chars would NOT match).
+        secret = "z" * 9 + " AKIAIOSFODNN7EXAMPLE " + "z" * 9  # len=40
+        assert len(benign) == len(secret) == 40
+
+        assert gate._classify_content(benign) == "PUBLIC"
+        # Under the old (len, hash)-keyed cache this would incorrectly
+        # return the cached "PUBLIC" from `benign` instead of scanning.
+        assert gate._classify_content(secret) == "RESTRICTED"
+
 
 class TestBudgetReservation:
     """R2-HIGH: budget must be reserved at decision time (batch TOCTOU)."""

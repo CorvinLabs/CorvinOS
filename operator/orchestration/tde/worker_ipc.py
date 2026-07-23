@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
@@ -73,13 +74,51 @@ def _bridges_shared_dir() -> Path:
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
 
-def run_one_shot(cmd: list, timeout_s: int, cwd: Optional[str] = None):
+class ProcHolder:
+    """Mutable holder so a cancelled ``asyncio.to_thread(run_one_shot, ...)``
+    caller can kill the subprocess it started.
+
+    ``asyncio.to_thread`` does not interrupt an already-running blocking
+    ``subprocess.Popen.communicate()`` call when the awaiting coroutine is
+    cancelled (client disconnect, server shutdown) — the worker thread keeps
+    running until its own timeout. Mirrors
+    ``corvin_console.chat_runtime._ContextSyncProcHolder`` (same bug class,
+    already fixed for the ADR-0213 context-sync call; round-4 finding: the
+    TDE InitialAnalysis one-shot had no equivalent holder).
+    """
+
+    def __init__(self) -> None:
+        self.popen: "subprocess.Popen | None" = None
+        self._lock = threading.Lock()
+
+    def _set(self, proc: "subprocess.Popen") -> None:
+        with self._lock:
+            self.popen = proc
+
+    def kill(self) -> None:
+        with self._lock:
+            proc = self.popen
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001 — best-effort, never raise from cleanup
+                pass
+
+
+def run_one_shot(
+    cmd: list, timeout_s: int, cwd: Optional[str] = None,
+    proc_holder: Optional[ProcHolder] = None,
+):
     """Run a helper one-shot with PROCESS-GROUP kill on timeout.
 
     subprocess.run's timeout only kills the direct child; the claude CLI is a
     Node process that spawns children, which survived as orphans (round-2
     refutation finding). POSIX: new session + killpg. Windows: best-effort
     proc.kill() (no process groups via os.killpg).
+
+    ``proc_holder``, when given, is populated with the live Popen BEFORE the
+    blocking ``communicate()`` call so an external (cancelling) caller can
+    kill it — see ``ProcHolder``.
 
     Returns (returncode, stdout, stderr). Raises subprocess.TimeoutExpired
     after killing the group, and FileNotFoundError when the binary is absent.
@@ -93,6 +132,8 @@ def run_one_shot(cmd: list, timeout_s: int, cwd: Optional[str] = None):
         cwd=cwd or tempfile.gettempdir(),
         start_new_session=posix,
     )
+    if proc_holder is not None:
+        proc_holder._set(proc)
     try:
         stdout, stderr = proc.communicate(timeout=timeout_s)
         return proc.returncode, stdout, stderr
