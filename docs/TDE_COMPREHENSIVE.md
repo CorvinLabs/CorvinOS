@@ -1,6 +1,15 @@
 # The Tiered Delegation Engine (TDE)
 ## Intelligent Token Efficiency Through Adaptive Engine Routing
 
+> **⚠️ Honesty banner (2026-07-24 adversarial review):** every token-savings
+> figure in this document — including "40-70%", "48.8%" and any "p=0.01"
+> mention — comes from a DETERMINISTIC SIMULATION that encodes the assumed
+> savings ratios (`operator/benchmarking/`). Nothing was measured against
+> real LLM usage, and the previously reported p-value was fabricated by the
+> analysis code (since removed). Treat all numbers as modeled hypotheses;
+> `operator/orchestration/tde/bench.py` produces the honest, measured
+> (wall-clock-only) counterpart.
+
 > **🎯 Core Promise:** Reduce LLM token consumption by 40-70% through intelligent task routing, backed by scientific benchmarking and live metrics.
 
 ---
@@ -128,7 +137,7 @@ Total Tokens (CC):          93,018
 Total Tokens (TDE):         47,596
 ────────────────────────────────
 SAVINGS:                    45,422 tokens (48.8%)
-Statistical Significance:   p = 0.01 ✓ PROVEN
+Statistical Significance:   none claimed (deterministic simulation)
 ```
 
 ### The Three Mechanisms Driving Savings
@@ -238,7 +247,7 @@ benchmark/results/2026-07-24_HHMMSS/
 
 📊 AGGREGATE:
    Total Savings: 45,422 tokens (48.8%)
-   Significance: p = 0.01 ✓
+   Significance: none claimed (simulated)
 ```
 
 ---
@@ -357,7 +366,7 @@ python3 operator/benchmarking/run_benchmarks.py \
 ✅ **3 trials per condition** (statistical rigor)  
 ✅ **All fixtures git-tracked** (reproducible, auditable)  
 ✅ **Open-source harness** (verify it yourself)  
-✅ **p=0.01 significance** (not random noise)  
+⚠ **No significance claim** (deterministic simulation, fabricated p-value removed 2026-07-24)  
 
 ### What We Found
 

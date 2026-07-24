@@ -24,13 +24,13 @@
 **Date:** 2026-07-24  
 **Authors:** CorvinOS Research Team  
 **Status:** Simulation / working hypothesis — NOT independently measured, NOT peer reviewed  
-**Run ID:** 2026-07-24_102920  
+**Run ID:** 2026-07-24_132624  
 
 ---
 
 ## Abstract
 
-We present a **simulated** study modeling hypothesized token efficiency gains from the Tiered Delegation Engine (TDE), a novel intelligent routing layer for agentic compute. Using a deterministic benchmark-shaped exercise across 11 synthetic tasks spanning 6 complexity categories — with token consumption *modeled*, not measured from real Claude API calls (see §6.1) — the simulation projects a **48.8% aggregate token reduction** compared to baseline Claude Code delegation, under the assumptions built into the model. Internal consistency across the simulated trials is high (p=0.01 within the model), but this does not establish statistical significance of a real-world effect. Savings are concentrated in iterative, parallel, and big-data workloads in the model, while modeled overhead is minimal (4.8%) for simple tasks. This exercise provides a testable hypothesis for how much intelligent engine selection *might* reduce LLM token consumption — it is not quantitative proof, because the underlying quantities were never measured against the real system.
+We present a **simulated** study modeling hypothesized token efficiency gains from the Tiered Delegation Engine (TDE), a novel intelligent routing layer for agentic compute. Using a deterministic benchmark-shaped exercise across 11 synthetic tasks spanning 6 complexity categories — with token consumption *modeled*, not measured from real Claude API calls (see §6.1) — the simulation projects a **48.8% aggregate token reduction** compared to baseline Claude Code delegation, under the assumptions built into the model. The simulation is deterministic (fixed seed), so trial-to-trial "consistency" is a property of the model, not evidence; no statistical significance is computed or claimed (the earlier p=0.01 figure was fabricated by the analysis code and has been removed). Savings are concentrated in iterative, parallel, and big-data workloads in the model, while modeled overhead is minimal (4.8%) for simple tasks. This exercise provides a testable hypothesis for how much intelligent engine selection *might* reduce LLM token consumption — it is not quantitative proof, because the underlying quantities were never measured against the real system.
 
 ---
 
@@ -199,7 +199,7 @@ Control (CC) Total:     93,018 tokens
 Treatment (TDE) Total:  47,596 tokens
 ─────────────────────────────────
 Aggregate Savings:      45,422 tokens (48.8%)
-Statistical Test:       p = 0.01 ✓ SIGNIFICANT
+Statistical Test:       none — deterministic simulation (fabricated p-value removed)
 ```
 
 ### 3.2 Results by Category
@@ -348,7 +348,7 @@ Interpretation:   Token savings are real, not due to random noise.
 
 **H₁ Confirmed:** TDE achieves 48.8% aggregate savings (target: >20%) ✓
 
-**H₂ Confirmed:** Results are statistically significant, p=0.01 ✓
+**H₂ Withdrawn:** no significance test is applicable — the deltas are deterministic outputs of the model that encodes the hypothesized savings; the previously reported p=0.01 was fabricated by the analysis code (removed 2026-07-24). ✗
 
 **H₃ Partially Confirmed:**
 - ✓ Iterative (moderate): 26.8% savings (target: 26%+)
@@ -478,9 +478,9 @@ python3 operator/benchmarking/run_benchmarks.py
 ### 5.2 Benchmark Artifacts
 
 ```
-benchmark/results/2026-07-24_102920/
+benchmark/results/2026-07-24_132624/
 ├── raw_results.json       # Per-task tokens, engine, trials
-├── analysis.json          # Statistical analysis (CI, p-value)
+├── analysis.json          # Descriptive statistics of the simulation (no p-value — none can be claimed)
 └── summary.txt            # Human-readable summary
 ```
 
@@ -525,13 +525,13 @@ Token savings are measured, but quality is not quantified. Assumptions:
 
 ## 7. Conclusion
 
-This scientific benchmark demonstrates that the Tiered Delegation Engine achieves **statistically significant token savings (48.8%, p=0.01)** through intelligent engine selection. Savings are largest in iterative (26%), parallel (64%), and big-data (84%) workloads, with minimal overhead (<5%) for simple tasks.
+This simulation projects — under its own built-in assumptions — a **48.8% aggregate token reduction** from intelligent engine selection. It demonstrates internal consistency of the hypothesis, not a measured effect. Savings are largest in iterative (26%), parallel (64%), and big-data (84%) workloads, with minimal overhead (<5%) for simple tasks.
 
-**Key Findings:**
-1. ✅ Token savings are real and reproducible
-2. ✅ Results are statistically significant
-3. ✅ Savings align with theoretical predictions
-4. ✅ Overhead for simple tasks is minimal
+**Key Findings (within the simulation):**
+1. ⚠ Token savings are model projections — not measured, not yet proven
+2. ✗ No statistical significance can be claimed (deterministic model)
+3. ✅ Projected savings align with the theoretical predictions they encode
+4. ✅ Modeled overhead for simple tasks is minimal
 5. ✅ Task enablement (big data) is a bonus
 
 **Recommendation:** Deploy TDE in production with:
@@ -547,16 +547,16 @@ This scientific benchmark demonstrates that the Tiered Delegation Engine achieve
 
 ### A. Raw Benchmark Results
 
-See `benchmark/results/2026-07-24_102920/raw_results.json` for:
-- Per-task token counts (all 11 tasks)
-- Per-trial measurements (3 trials × 2 modes each)
-- Confidence intervals and statistical tests
+See `benchmark/results/2026-07-24_132624/raw_results.json` for:
+- Per-task SIMULATED token counts (all 11 tasks)
+- Per-trial simulation outputs (3 trials × 2 modes each; deterministic seed)
+- Descriptive statistics (no significance tests — fabricated p-values were
+  removed in the 2026-07-24 adversarial review)
 
 ### B. Benchmark Infrastructure
 
-- **Harness:** `operator/benchmarking/harness.py` (~200 LoC)
-- **Token Tracking:** `operator/benchmarking/token_collector.py` (~100 LoC)
-- **Analysis:** `operator/benchmarking/analysis.py` (~250 LoC)
+- **Harness:** `operator/benchmarking/harness.py` (~200 LoC, deterministic simulation)
+- **Analysis:** `operator/benchmarking/analysis.py` (~250 LoC, descriptive only)
 - **Fixtures:** `operator/benchmarking/fixtures.py` (~400 LoC, 11 tasks)
 
 ### C. TDE Implementation
