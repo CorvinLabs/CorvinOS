@@ -29,6 +29,14 @@ export function TdeAuditGraphPanel({ sid }: Props) {
     return null;
   }, [messages]);
 
+  const latestTdeProgress = React.useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const progress = messages[i].tdeProgress;
+      if (progress) return progress;
+    }
+    return null;
+  }, [messages]);
+
   const [manualRunId, setManualRunId] = React.useState("");
   const activeRunId = manualRunId.trim() || latestTdeRunId;
 
@@ -44,6 +52,30 @@ export function TdeAuditGraphPanel({ sid }: Props) {
           <span>No TDE turn detected yet in this chat (run <code className="font-mono">/use-engine tiered_delegation &lt;task&gt;</code> to start one).</span>
         )}
       </div>
+
+      {latestTdeProgress && (
+        <div className="grid grid-cols-2 gap-2 text-xs bg-slate-900 rounded p-2 border border-slate-800">
+          <div className="col-span-2 font-semibold text-slate-300 mb-1">TDE Delegation Metrics</div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">Steps:</span>
+            <span className="text-slate-200 font-mono">{latestTdeProgress.completed_steps}/{latestTdeProgress.total_steps}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">Delegated:</span>
+            <span className="text-slate-200 font-mono">{latestTdeProgress.delegated_count}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">Local:</span>
+            <span className="text-slate-200 font-mono">{latestTdeProgress.local_count}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">L34 Gate:</span>
+            <span className={`font-mono ${latestTdeProgress.l34_forced ? "text-red-400" : "text-green-400"}`}>
+              {latestTdeProgress.l34_forced ? "Blocked" : "Allowed"}
+            </span>
+          </div>
+        </div>
+      )}
 
       <label className="flex items-center gap-2 text-xs text-slate-400">
         <span className="shrink-0">TDE run id override:</span>
