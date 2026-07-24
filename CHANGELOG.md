@@ -6,6 +6,119 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.61] — 2026-07-24 — TDE production-readiness review + shared agentic-compute pool (ADR-0216)
+
+Four-axis adversarial review of the last 3 days (TDE core, audit chain, TDE
+audit graph/visualization, ADR-0215 infrastructure) with every confirmed
+finding fixed, plus the new daily agentic-compute limit. Default gates green:
+repo-root pytest 721 passed, console suite green, web-next tsc + build +
+844 vitest tests, license suite 240+ passed.
+
+### Added — Licensing (ADR-0216)
+
+- **Shared agentic-compute pool, free tier 10 turns/day.** TDE now charges
+  the SAME daily pool (`compute_units_per_day`, one counter file) as ACS,
+  compute/grid-search runs, forge `compute_run` and A2A compute — the limit
+  is the sum across all engines. Free-tier default raised 1 → 10; member
+  stays unlimited. TDE was previously the only unmetered engine. Fail-closed
+  chokepoint in `TieredDelegationEngine.execute` (missing license module →
+  deny; invalid plans refund their unit; stub/mock test configs unmetered).
+
+### Fixed — Audit chain (GDPR Art. 30/32, load-bearing)
+
+- **`tde.l34_prescan` now hash-chains.** The L34 gate decision event was
+  written to the unchained per-tenant web log; it now goes through
+  `tde_audit.emit` onto the canonical chain (with an allowlist entry —
+  the naive port would have scrubbed the payload empty).
+- **TDE audit-graph endpoint is tenant-scoped (fail-closed).** Every
+  console-originated tde.* record now carries the authenticated
+  `tenant_id` (reserved audit_event arg, not details-injectable); the
+  endpoint 404s cross-tenant and unstamped-legacy runs identically.
+- **Whole-chain verdict surfaced.** `meta.chain_verified_global` +
+  `chain_problems_total` ride alongside the segment-scoped
+  `chain_verified` (prev-hash linkage is transitive; a break before the
+  segment un-anchors it).
+- tde_audit hardening: backend-unavailable now logs WARNING (was silent
+  DEBUG drop of all tde.* events), `delegate`/`step_num` type-pinned.
+- Tests no longer append to the live audit chain (repo-root conftest
+  redirects `VOICE_AUDIT_PATH` to tmp; verified zero growth over the full
+  suite — previously every pytest run left permanent `tde.*` noise in the
+  GDPR Art. 30 record).
+
+### Fixed — TDE visualization (ADR-0214 k=8, end-to-end)
+
+- **`tdeProgress` chain was dead end-to-end:** the backend persisted it, but
+  no frontend code ever assigned it — the metrics card never rendered, live
+  or after reload. Now: `engine_progress` reducer in chat-registry stamps
+  the live message; history hydration maps the persisted `tde_progress`
+  (and re-derives `tdeRunId`, so the TDE Graph tab survives reload).
+- **`tde_progress_dict` UnboundLocalError** killed every degraded TDE turn
+  (analysis timeout/CLI missing) after the k=8 commit; init moved before
+  the try.
+- web-next `tsc` build was broken (unused imports) — repaired + SPA rebuilt.
+- TDE Graph panel: run id + metrics resolved from the same message; manual
+  run-id override validated against the `tde-<epoch>-<hex>` shape (no more
+  one 404 per keystroke); polling while the turn streams (no more sticky
+  404 latched at turn start); fabricated "30-70% estimated savings"
+  placeholder replaced by the genuinely measured latency delta and an
+  honest "not measured" for token savings.
+
+### Fixed — TDE core
+
+- Streaming executor: 10MB chunks exceeded the L34 5MB scan ceiling —
+  every ≥500MB value silently yielded an EMPTY stream while reporting
+  success; chunk tiers now capped under the ceiling (bytes account for
+  str()-repr inflation), and chunk seams are re-scanned with a one-chunk
+  lookahead so a secret straddling a boundary can no longer reassemble.
+- Delegation prompts >128KB hit Linux MAX_ARG_STRLEN (`E2BIG`) — snapshot
+  capped at 100KB with visible truncation; analysis runner maps `OSError`
+  to the degraded path instead of crashing the turn.
+- `/debug-engine` now kills its analysis subprocess on client disconnect
+  (ProcHolder try/finally — was a leaked real LM call per abandoned use).
+- Shadow-run loss measurements get their own ProcHolder (same disconnect
+  leak); executor-level `ExecutionError` returns an error result instead
+  of crashing the turn; wiring gate reports malformed manifest entries as
+  FAIL findings instead of crashing on KeyError.
+- Compliance auditor (`eu_ai_act_audit.py`) existence checks anchored to
+  the repo root — previously reported spurious L10/L16/L23/L35/L37/L38
+  failures whenever cwd ≠ repo root.
+
+### Fixed — Benchmark honesty (operator/benchmarking)
+
+- **Removed the fabricated p-value** (bucketed pseudo-p forced to 0.01 for
+  any mean delta > 500) and all "statistically significant / real and
+  reproducible" claims from code, committed result artifacts, docs,
+  diagrams and README. The package is now labeled throughout as what it
+  is: a deterministic SIMULATION of assumed savings ratios. "95% CI" from
+  n<10 samples replaced by an honest observed range; dead
+  `token_collector.py` deleted; fabricated result dirs replaced by a
+  regenerated, honestly-labeled run. `tde.bench`'s unwired
+  `benchmark_target: true` manifest claim removed; its target registry is
+  now actually consulted (deduped) by `run_default_suite`.
+
+### Fixed — Tests
+
+- `test_adr_0214_engine_visibility` / `phase3_streaming` /
+  `phase4_discovery` async tests ran never (missing pytest-asyncio
+  markers under strict mode) — marked and, where they would have spawned
+  a real `claude` CLI, given offline stub executors.
+- Two aspirational routing examples xfail'd with the real reason
+  (conservative canary fallback) instead of failing the suite.
+
+### Known / documented (not fixed here)
+
+- Pre-existing cross-file test-isolation flake:
+  `test_license_hardening.py` (module-identity churn via
+  `_fresh_validator`) can poison
+  `test_compute_license_gate.py::test_enforce_chat_turns_leaks_across_tenants_cross_tenant_dos`
+  in specific multi-file batches; all files green standalone.
+- Live chain segment 21643–31689 (2026-07-11→13) has 380 pre-existing
+  `mac_tampered` verify problems (MAC-anchor-key mismatch, prev-hash
+  intact) — predates this window, now visible via
+  `chain_verified_global=false`.
+- `MockWorkerIPC` fabricated successes are self-describing in the chain
+  (`ipc: "MockWorkerIPC"`); production console wiring uses real IPC.
+
 ## [0.10.59] — 2026-07-22 — iterative adversarial review of the last 3 days (6 axes + refutation round)
 
 Six-axis adversarial review over everything shipped since v0.10.58 (ADR-0199 /
