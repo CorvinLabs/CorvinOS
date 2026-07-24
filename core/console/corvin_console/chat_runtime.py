@@ -3429,6 +3429,26 @@ async def _stream_tde_turn(
 
             summary = result.get("summary") or {}
             selection = result.get("engine_selection") or {}
+
+            # TDE-Progress: Emit structured progress summary (mirrors ACS's worker-completion tracking).
+            # Frontend uses this for decision-tree visualization in audit panel + inline badge.
+            succeeded = summary.get('succeeded', 0)
+            step_count = summary.get('step_count', 0)
+            delegated = summary.get('delegated', 0)
+            local_count = summary.get('local', 0)
+            token_savings = summary.get('token_savings_pct', 0)
+
+            if step_count > 0:
+                yield {"type": "engine_progress",
+                       "engine": "tiered_delegation",
+                       "run_id": run_id,
+                       "total_steps": step_count,
+                       "completed_steps": succeeded,
+                       "delegated_count": delegated,
+                       "local_count": local_count,
+                       "token_savings_pct": token_savings,
+                       "l34_forced": selection.get("l34_forced", False)}
+
             if engine_name != "tiered_delegation":
                 # Round-4 finding: the FIRST "engine" stream event above is
                 # emitted before anything ran and is hardcoded to
