@@ -202,6 +202,13 @@ class SubprocessWorkerIPC:
         import helper_model  # noqa: PLC0415 — lazy: bridges/shared path just ensured
         self._hm = helper_model
 
+    # Linux MAX_ARG_STRLEN caps a SINGLE argv element at ~128KB; the prompt is
+    # passed as one `-p` argument, so an un-truncated snapshot over ~128KB made
+    # EVERY delegated step fail with E2BIG (adversarial review 2026-07-24 —
+    # the L34 gate admits values up to 5MB, so mid-size contexts hit this
+    # constantly). 100KB leaves headroom for the prompt frame + other args.
+    _SNAPSHOT_MAX_CHARS = 100_000
+
     def _build_prompt(self, envelope: DelegationEnvelope) -> str:
         step = envelope.step
         plan_lines = [
@@ -209,6 +216,13 @@ class SubprocessWorkerIPC:
             for s in envelope.decision_context.steps
         ]
         snapshot_json = json.dumps(envelope.statement_snapshot, default=str, indent=2)
+        if len(snapshot_json) > self._SNAPSHOT_MAX_CHARS:
+            # Truncation is explicit and visible to the worker — same contract
+            # as default_local_step_executor's own 20,000-char context cap.
+            snapshot_json = (
+                snapshot_json[: self._SNAPSHOT_MAX_CHARS]
+                + "\n… [snapshot truncated at 100000 chars — argv size limit]"
+            )
         step_desc = f" — {step.description}" if step.description else ""
         return (
             "You are a delegated worker executing ONE step of a larger plan.\n"

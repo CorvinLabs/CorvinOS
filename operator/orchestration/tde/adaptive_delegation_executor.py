@@ -126,6 +126,7 @@ class AdaptiveDelegationExecutor:
         max_classification: str = "INTERNAL",
         use_semantic_judge: bool = False,
         run_id: str = "",
+        tenant_id: str = "",
     ):
         """Initialize executor.
 
@@ -137,6 +138,11 @@ class AdaptiveDelegationExecutor:
                 compute.py's audit-graph endpoint can reconstruct one turn's
                 delegation tree. "" (default) for callers that don't need
                 graph correlation (every existing unit test).
+            tenant_id: ADR-0007 tenant of the run's owner. Stamped on every
+                tde.* audit event via audit_event's RESERVED tenant arg so
+                the audit-graph endpoint can scope runs per tenant. ""
+                (default) → the run is unscoped and never served
+                cross-tenant.
 
         Raises:
             ExecutionError: if the plan is malformed (invalid deps, cycles,
@@ -150,6 +156,7 @@ class AdaptiveDelegationExecutor:
         self.complexity = complexity
         self.max_classification = max_classification
         self.run_id = run_id
+        self.tenant_id = str(tenant_id or "")
         # Defaults to False: a raw AdaptiveDelegationExecutor is constructed
         # directly by every unit test (MockWorkerIPC, no real LLM calls per
         # those files' own docstrings) — defaulting this True silently spawned
@@ -240,7 +247,7 @@ class AdaptiveDelegationExecutor:
                 tde_audit.emit(
                     "delegation_decision",
                     step_action=step.action, delegate=delegate, reason_code=reason,
-                    tde_run_id=self.run_id, step_num=step_num,
+                    tde_run_id=self.run_id, tenant_id=self.tenant_id, step_num=step_num,
                 )
 
                 # Reserve budget AT DECISION TIME — charging after the batch
@@ -313,7 +320,7 @@ class AdaptiveDelegationExecutor:
                         "step_executed_local",
                         step_action=step.action, success=step_result.success,
                         duration_ms=step_result.duration_ms,
-                        tde_run_id=self.run_id, step_num=step_num,
+                        tde_run_id=self.run_id, tenant_id=self.tenant_id, step_num=step_num,
                     )
                 if step_result.success:
                     # Feed the output forward (bounded) for dependent steps.
@@ -330,7 +337,7 @@ class AdaptiveDelegationExecutor:
             batch_count=len(batches),
             delegated_count=delegated_count,
             local_count=len(all_results) - delegated_count,
-            tde_run_id=self.run_id,
+            tde_run_id=self.run_id, tenant_id=self.tenant_id,
         )
         return all_results
 
@@ -354,7 +361,7 @@ class AdaptiveDelegationExecutor:
         )
         if not gate_result.can_delegate:
             tde_audit.emit("l34_blocked", scope="step", reason_code="classification_exceeded",
-                           tde_run_id=self.run_id, step_num=step.step)
+                           tde_run_id=self.run_id, tenant_id=self.tenant_id, step_num=step.step)
             return False, "l34_blocked", False
 
         # Gate 2: budget (hard constraint).
@@ -460,7 +467,7 @@ class AdaptiveDelegationExecutor:
             step_action=step.action, success=result.success,
             duration_ms=result.duration_ms,
             ipc=type(self.worker_ipc).__name__,
-            tde_run_id=self.run_id, step_num=step.step,
+            tde_run_id=self.run_id, tenant_id=self.tenant_id, step_num=step.step,
         )
         return result
 
@@ -526,7 +533,19 @@ class AdaptiveDelegationExecutor:
             # (previously unbooked, round-2 finding).
             if self.budget is not None:
                 self.budget.charge(step.estimated_tokens)
-            local_result = await self._execute_local(step, statement, step_executor_fn)
+            # Shadow runs execute AFTER the batch's holder unwind — without
+            # their own ProcHolder a client disconnect mid-shadow left the
+            # comparison `claude` subprocess running to its own 120s timeout,
+            # the exact gap ProcHolder closes for the main paths (adversarial
+            # review 2026-07-24). kill() is a no-op on normal completion.
+            from .worker_ipc import ProcHolder  # noqa: PLC0415
+            _shadow_holder = ProcHolder()
+            try:
+                local_result = await self._execute_local(
+                    step, statement, step_executor_fn, proc_holder=_shadow_holder,
+                )
+            finally:
+                _shadow_holder.kill()
             if local_result.success:
                 loss_pct = await self._measure_loss(step, local_result.output, step_result.output)
                 self.loss_tracker.record_delegation_result(
@@ -539,7 +558,7 @@ class AdaptiveDelegationExecutor:
                 tde_audit.emit(
                     "loss_recorded", task_type=step.action, engine="tiered_delegation",
                     loss_pct=loss_pct, measured=True,
-                    tde_run_id=self.run_id, step_num=step.step,
+                    tde_run_id=self.run_id, tenant_id=self.tenant_id, step_num=step.step,
                 )
             else:
                 # The LOCAL comparison run itself failed (e.g. a transient

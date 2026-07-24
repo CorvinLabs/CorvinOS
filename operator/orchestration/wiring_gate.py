@@ -121,7 +121,19 @@ def load_manifest(manifest_path: Path) -> list[dict]:
 def check_manifest_completeness(result: GateResult) -> None:
     for src_dir, manifest_path, _ in _MANIFESTS:
         entries = load_manifest(manifest_path)
-        declared = {e["name"] for e in entries}
+        # A malformed entry without `name` must surface as a FAIL finding,
+        # not crash the whole gate with a KeyError (review 2026-07-24).
+        for e in entries:
+            if not isinstance(e, dict) or "name" not in e:
+                result.findings.append(Finding(
+                    severity="FAIL",
+                    check="manifest_completeness",
+                    message=(
+                        f"{manifest_path.name}: malformed entry without a "
+                        f"`name` key: {e!r}"
+                    ),
+                ))
+        declared = {e["name"] for e in entries if isinstance(e, dict) and "name" in e}
         actual = _discover_py_modules(src_dir)
         undeclared = actual - declared
         for name in sorted(undeclared):

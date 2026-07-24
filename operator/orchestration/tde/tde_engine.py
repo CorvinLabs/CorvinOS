@@ -290,6 +290,7 @@ class TieredDelegationEngine:
                 max_classification=self.max_classification,
                 use_semantic_judge=kwargs.get("use_semantic_judge", self.real_ipc),
                 run_id=str(kwargs.get("run_id") or ""),
+                tenant_id=str(kwargs.get("tenant_id") or ""),
             )
         except ExecutionError as exc:
             # LM-emitted plans are routinely slightly malformed (0-based step
@@ -302,7 +303,18 @@ class TieredDelegationEngine:
                     "error": f"invalid plan: {exc}"}
 
         start = time.time()
-        results = await executor.execute(statement, analysis, self.local_step_executor)
+        try:
+            results = await executor.execute(statement, analysis, self.local_step_executor)
+        except ExecutionError as exc:
+            # _group_parallel_batches' defense-in-depth "unschedulable steps"
+            # raise fires during grouping, before any step ran — previously
+            # only the constructor's ExecutionError was caught, so this path
+            # crashed the turn instead of returning an error result
+            # (review 2026-07-24).
+            if metered:
+                _refund_tde_compute_unit()
+            return {"engine": self.name, "success": False,
+                    "error": f"unschedulable plan: {exc}"}
         summary = _summarize(results)
         summary["wall_time_ms"] = int((time.time() - start) * 1000)
 

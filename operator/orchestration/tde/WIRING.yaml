@@ -94,7 +94,6 @@ components:
     module: tde.bench
     status: live
     entry_point: "tde.bench:run_default_suite"
-    benchmark_target: true
     reason: "ADR-0215 Phase 3 — extensible token/latency benchmark harness, run via CLI/cron, not per-turn"
 
   - name: streaming_executor

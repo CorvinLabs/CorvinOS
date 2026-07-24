@@ -26,13 +26,25 @@ class StreamingExecutor:
     BIG_DATA_THRESHOLD = 1024 * 1024 * 1024  # 1GB
 
     # Adaptive chunk sizing (Phase 4 optimization)
-    # Kept comfortably under L34DelegationGate._CONTENT_SCAN_MAX_BYTES (5MB).
-    # Smaller values → 1MB chunks (fine-grained scanning)
-    # Larger values → 10MB chunks (better throughput, still scanned)
-    # Boundary tuning: <100MB → 1MB, <500MB → 5MB, >=500MB → 10MB
-    _CHUNK_SIZE_SMALL = 1 * 1024 * 1024  # 1MB (for <100MB values)
-    _CHUNK_SIZE_MEDIUM = 5 * 1024 * 1024  # 5MB (for 100-500MB values)
-    _CHUNK_SIZE_LARGE = 10 * 1024 * 1024  # 10MB (for >500MB values)
+    # HARD CONSTRAINT: every chunk must stay strictly under
+    # L34DelegationGate._CONTENT_SCAN_MAX_BYTES (5MB) or the gate classifies
+    # it RESTRICTED outright and the "stream" silently yields nothing while
+    # reporting success (adversarial review 2026-07-24 — the previous 10MB
+    # LARGE tier did exactly that for every value >=500MB). For bytes the
+    # gate scans str(value), and repr-escaping (b'\xNN' → 4 chars/byte)
+    # inflates size up to ~4x, hence the separate bytes divisor below.
+    # Boundary tuning: <100MB → 1MB, <500MB → 2MB, >=500MB → 4MB
+    _CHUNK_SIZE_SMALL = 1 * 1024 * 1024   # 1MB (for <100MB values)
+    _CHUNK_SIZE_MEDIUM = 2 * 1024 * 1024  # 2MB (for 100-500MB values)
+    _CHUNK_SIZE_LARGE = 4 * 1024 * 1024   # 4MB (for >=500MB values)
+    # Worst-case str(bytes) repr inflation (each byte → "\xNN").
+    _BYTES_REPR_INFLATION = 4
+    # Seam scan window: a secret split across two adjacent chunks matches no
+    # pattern in either chunk alone (adversarial review 2026-07-24 — verified
+    # fail-open). Each chunk boundary is therefore re-scanned as
+    # tail(prev, OVERLAP) + head(next, OVERLAP); must exceed the longest
+    # credential/secret pattern the gate knows.
+    _SEAM_OVERLAP_BYTES = 4096
 
     def __init__(self, l34_gate: L34DelegationGate):
         """Initialize."""
@@ -67,10 +79,14 @@ class StreamingExecutor:
         Split str/bytes into adaptively-sized pieces; other types pass through whole.
 
         Uses adaptive chunk sizing based on value size for optimal throughput.
+        bytes chunks are shrunk by _BYTES_REPR_INFLATION so their str() repr —
+        which is what the L34 gate actually scans — stays under the gate's
+        scan ceiling.
         """
         if isinstance(value, (str, bytes)):
-            value_size = len(value)
-            chunk_size = self._adaptive_chunk_size(value_size)
+            chunk_size = self._adaptive_chunk_size(len(value))
+            if isinstance(value, bytes):
+                chunk_size = max(1, chunk_size // self._BYTES_REPR_INFLATION)
             chunks = [value[i:i + chunk_size] for i in range(0, len(value), chunk_size)]
             return chunks or [value]
         return [value]
@@ -110,24 +126,62 @@ class StreamingExecutor:
             var_value = statement[var_name]
             chunks = self._chunk_value(var_value)
 
-            for idx, chunk in enumerate(chunks):
-                gate_result = self.l34_gate.prescan(
-                    {var_name: chunk},
-                    max_classification=max_classification,
+            def _blocked(idx: int, reason: str) -> None:
+                _logger.warning(
+                    "Streaming: %s chunk %d/%d unsafe (%s) — skipped",
+                    var_name, idx + 1, len(chunks), reason,
+                )
+                tde_audit.emit(
+                    "l34_blocked", scope="stream_chunk",
+                    reason_code="classification_exceeded",
                 )
 
-                if not gate_result.can_delegate:
-                    _logger.warning(
-                        "Streaming: %s chunk %d/%d unsafe (%s) — skipped",
-                        var_name, idx + 1, len(chunks), gate_result.reason,
-                    )
-                    tde_audit.emit(
-                        "l34_blocked", scope="stream_chunk",
-                        reason_code="classification_exceeded",
-                    )
+            # One-chunk lookahead buffer: a chunk that passed its OWN scan is
+            # yielded only after the seam it shares with the NEXT chunk also
+            # passes. Fixed-offset slicing alone let a secret straddling a
+            # chunk boundary through unmatched on both sides (adversarial
+            # review 2026-07-24, verified fail-open); scanning
+            # tail(prev) + head(next) closes the seam, and buffering means a
+            # seam hit withholds BOTH halves of the secret.
+            ov = self._SEAM_OVERLAP_BYTES
+            pending: Any = None  # previous chunk awaiting seam clearance
+            pending_idx = -1
+            for idx, chunk in enumerate(chunks):
+                own_ok = self.l34_gate.prescan(
+                    {var_name: chunk},
+                    max_classification=max_classification,
+                ).can_delegate
+
+                seam_ok = True
+                if pending is not None and isinstance(chunk, (str, bytes)) \
+                        and isinstance(pending, (str, bytes)):
+                    seam = pending[-ov:] + chunk[:ov]
+                    seam_ok = self.l34_gate.prescan(
+                        {var_name: seam},
+                        max_classification=max_classification,
+                    ).can_delegate
+
+                if pending is not None:
+                    if seam_ok:
+                        yield {var_name: pending}
+                    else:
+                        _blocked(pending_idx, "seam scan hit")
+                    pending = None
+
+                if not own_ok:
+                    _blocked(idx, "chunk scan hit")
+                    continue
+                if not seam_ok:
+                    # The secret's tail may sit in this chunk's head — drop it
+                    # alongside the withheld predecessor.
+                    _blocked(idx, "seam scan hit")
                     continue
 
-                yield {var_name: chunk}
+                pending = chunk
+                pending_idx = idx
+
+            if pending is not None:
+                yield {var_name: pending}
 
     async def execute_streaming(
         self,

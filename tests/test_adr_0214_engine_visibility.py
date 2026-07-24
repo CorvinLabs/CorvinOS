@@ -7,15 +7,40 @@ import asyncio
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "operator" / "orchestration"))
 
 from tde.send_integration import SendIntegration
+from tde.engine_registry import EngineRegistry
+from tde.tde_engine import ClaudeCodeLocalEngine, TieredDelegationEngine
 from initial_analysis import InitialAnalysisRequest, Classification, Entities, GlobalPlan, Step
 
 
+async def _stub_step_executor(step, statement, **kw):
+    return f"stub-{step.step}"
+
+
+def _offline_integration() -> SendIntegration:
+    """SendIntegration with NO real-LLM reachability.
+
+    Review 2026-07-24: these tests were written as async defs WITHOUT the
+    pytest-asyncio marker, so strict mode failed them at collection — and
+    had they ever run, SendIntegration()'s default registry wires
+    ClaudeCodeLocalEngine with default_local_step_executor, i.e. a REAL
+    `claude -p` spawn per step (the faaab4a bug class). Inject stub
+    executors so the tests actually run, offline.
+    """
+    registry = EngineRegistry(real_ipc=False)
+    registry.register("claude_code", ClaudeCodeLocalEngine(local_step_executor=_stub_step_executor))
+    registry.register("tiered_delegation", TieredDelegationEngine(local_step_executor=_stub_step_executor))
+    return SendIntegration(registry=registry)
+
+
+@pytest.mark.asyncio
 async def test_engine_selection_info_format():
     """Test that engine_selection dict has all required fields for UI display."""
-    integration = SendIntegration()
+    integration = _offline_integration()
 
     # Create a simple task
     analysis = InitialAnalysisRequest(
@@ -68,9 +93,10 @@ async def test_engine_selection_info_format():
     print("  - Override: If override != None, show 'User override: [engine]'")
 
 
+@pytest.mark.asyncio
 async def test_engine_visibility_with_debug():
     """Test that debug mode includes signals for detailed visibility."""
-    integration = SendIntegration()
+    integration = _offline_integration()
 
     analysis = InitialAnalysisRequest(
         classification=Classification(

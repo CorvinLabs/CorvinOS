@@ -47,6 +47,11 @@ _ALLOWED_KEYS = {
     "scope", "reason_code", "variable_class", "step_action", "delegate",
     "success", "duration_ms", "ipc", "loss_pct", "measured", "step_count",
     "batch_count", "delegated_count", "local_count",
+    # tde.l34_prescan (chat_runtime): the per-turn L34 gate decision. Added
+    # when the event moved from the unchained per-tenant web log onto the
+    # hash chain (adversarial review 2026-07-24) — without this entry the
+    # flag would be silently scrubbed to an empty details dict.
+    "l34_forced",
     # ADR-0214 audit-graph endpoint (turn/step correlation — see compute.py
     # _build_tde_audit_graph): tde_run_id is the same identifier chat_runtime
     # already tags its own web.turn.* events with; step_num lets the graph
@@ -94,7 +99,14 @@ def _resolve_audit_fn() -> Optional[Callable[..., None]]:
         if hasattr(_audit_mod, "audit_event"):
             _audit_fn = _audit_mod.audit_event
     except Exception as exc:  # pragma: no cover - environment-dependent
-        _logger.debug("TDE audit backend unavailable: %s", exc)
+        # WARNING, not debug: from here on EVERY tde.* compliance event —
+        # including tde.l34_blocked security decisions — is dropped for the
+        # process lifetime (resolution is cached). That must be visible in
+        # default logs (adversarial review 2026-07-24).
+        _logger.warning(
+            "TDE audit backend unavailable — all tde.* audit events will be "
+            "dropped for this process: %s", exc,
+        )
         _audit_fn = None
     return _audit_fn
 
@@ -104,6 +116,13 @@ def _scrub(details: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in details.items():
         if key not in _ALLOWED_KEYS:
+            continue
+        # Type-pinned keys (hardening, round-5): these are allowlisted but a
+        # string under them would carry up to _MAX_STR chars of free text into
+        # the unerasable chain. All callers pass bool/int — enforce it.
+        if key == "delegate" and not isinstance(value, bool):
+            continue
+        if key == "step_num" and (isinstance(value, bool) or not isinstance(value, int)):
             continue
         if isinstance(value, bool) or value is None:
             out[key] = value
@@ -119,15 +138,23 @@ def _scrub(details: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def emit(event_type: str, **details: Any) -> None:
-    """Emit one hash-chained tde.* audit event (best-effort, content-free)."""
+def emit(event_type: str, tenant_id: str = "", **details: Any) -> None:
+    """Emit one hash-chained tde.* audit event (best-effort, content-free).
+
+    ``tenant_id`` (ADR-0007) rides on audit_event's RESERVED positional arg —
+    never through the details allowlist — so callers cannot spoof it via
+    details injection. When provided, the audit-graph endpoint
+    (routes/compute.py) uses it to scope a run's records to the requesting
+    tenant; events without it (pre-2026-07-24 runs, standalone bench) are
+    treated as unscoped and are NOT served cross-tenant.
+    """
     if not event_type.startswith("tde."):
         event_type = f"tde.{event_type}"
     fn = _resolve_audit_fn()
     if fn is None:
         return
     try:
-        fn(event_type, details=_scrub(details))
+        fn(event_type, details=_scrub(details), tenant_id=str(tenant_id or ""))
     except Exception as exc:  # pragma: no cover - backend hiccups must not break TDE
         _logger.debug("TDE audit emit failed (%s): %s", event_type, exc)
 

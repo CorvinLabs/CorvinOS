@@ -3737,9 +3737,13 @@ def compute_acs_run_graph(
 # see that module's docstring), NOT ``_forge_paths.tenant_home(rec.tenant_id)``
 # like the rest of this file. This endpoint reads from the exact same
 # ``audit_path()`` for read/write consistency rather than re-deriving a
-# tenant-scoped path that TDE never actually wrote to; it does not itself
-# add or fix tenant isolation for the TDE audit chain (a pre-existing,
-# separately-tracked gap, not introduced here).
+# tenant-scoped path that TDE never actually wrote to. Since 2026-07-24 every
+# console-originated tde.* record carries the authenticated ``tenant_id``
+# (chat_runtime → SendIntegration → AdaptiveDelegationExecutor →
+# tde_audit.emit via audit_event's RESERVED arg), and the endpoint below
+# enforces ``details.tenant_id == rec.tenant_id`` fail-closed: records
+# WITHOUT a tenant stamp (pre-fix runs, standalone bench runs) are never
+# served to any tenant.
 
 _TDE_AUDIT_SHARED = _REPO / "operator" / "bridges" / "shared"
 if str(_TDE_AUDIT_SHARED) not in sys.path:
@@ -4067,6 +4071,15 @@ def compute_tde_audit_graph(
         and isinstance(r.get("details"), dict)
         and r["details"].get("tde_run_id") == run_id
     ]
+    # ADR-0007 tenant isolation (fail-closed, adversarial review 2026-07-24):
+    # serve a run ONLY when its records are stamped with the requesting
+    # session's tenant. Unstamped records (pre-fix runs, standalone bench)
+    # match no tenant and 404 like a nonexistent run — indistinguishable from
+    # absence, so the endpoint leaks no cross-tenant existence signal.
+    matched = [
+        (ln, r) for ln, r in matched
+        if r["details"].get("tenant_id") == rec.tenant_id
+    ]
     if not matched:
         raise HTTPException(http_status.HTTP_404_NOT_FOUND,
                             f"no tde.* audit trail found for run {run_id!r}")
@@ -4083,6 +4096,10 @@ def compute_tde_audit_graph(
     # Scope to the line range this run's own events span (ADR-0214 task
     # spec: "verify the local chain segment") rather than failing every run
     # whenever ANY other segment of a long-lived shared chain is broken.
+    # BUT: prev-hash linkage is transitive — a break BEFORE this segment
+    # un-anchors everything after it. Segment-scoped "verified" alone would
+    # therefore overstate integrity (adversarial review 2026-07-24), so the
+    # whole-chain verdict is surfaced alongside it instead of discarded.
     problems_in_range = [p for p in problems if lo <= p.get("line", -1) <= hi]
 
     try:
@@ -4094,6 +4111,10 @@ def compute_tde_audit_graph(
     except Exception as exc:
         raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR,
                             f"TDE audit graph build failed: {exc}")
+    meta = payload.get("meta")
+    if isinstance(meta, dict):
+        meta["chain_verified_global"] = bool(_chain_ok_whole)
+        meta["chain_problems_total"] = len(problems)
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,

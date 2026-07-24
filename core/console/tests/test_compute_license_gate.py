@@ -55,7 +55,7 @@ def test_cross_tenant_compute_quota_is_not_isolated_bug(monkeypatch, tmp_path):
     ONE file shared by every tenant.
 
     This test pins `_forge_paths.corvin_home` to a tmp dir, exhausts the
-    free-tier 1/day cap for tenant 'acme', and shows a completely unrelated
+    free-tier daily cap for tenant 'acme', and shows a completely unrelated
     tenant 'beta' is ALSO rejected — a cross-tenant quota exhaustion / DoS.
     If this is ever intentionally fixed to be per-tenant, this test's second
     assertion must flip to "beta is NOT blocked" and the docstring above
@@ -63,13 +63,16 @@ def test_cross_tenant_compute_quota_is_not_isolated_bug(monkeypatch, tmp_path):
     """
     import license.validator as _v
 
-    _v._set_active_license(None)  # free tier: compute_units_per_day == 1
+    _v._set_active_license(None)  # free tier: compute_units_per_day == 10 (ADR-0216)
 
     home = tmp_path / "corvin_home"
     monkeypatch.setattr(G._forge_paths, "corvin_home", lambda: home)
 
-    # tenant 'acme' consumes the ONLY unit of the shared daily cap.
-    G.enforce_compute_quota("acme", "fpAAAAAA", audit_action="acs.run_submit")
+    # tenant 'acme' consumes EVERY unit of the shared daily cap (limit read
+    # dynamically so a future tier change doesn't silently rot this test).
+    _limit = int(_v.get_limit("compute_units_per_day"))
+    for _ in range(_limit):
+        G.enforce_compute_quota("acme", "fpAAAAAA", audit_action="acs.run_submit")
 
     # tenant 'beta' is a totally different tenant_id -> must be independent,
     # but currently is NOT: it hits the same global counter file and is
@@ -314,7 +317,7 @@ def test_enforce_compute_quota_leaks_across_tenants_cross_tenant_dos(monkeypatch
     audit chat_key, but the actual counter storage path passed to
     _cq_increment is the GLOBAL install root (_forge_paths.corvin_home()),
     never a tenant-scoped path. This test proves the counter is presently
-    SHARED across tenants: exhausting tenant 'acme's free-tier 1/day cap also
+    SHARED across tenants: exhausting tenant 'acme's free-tier daily cap also
     blocks a totally unrelated tenant 'beta' — a cross-tenant quota-exhaustion
     DoS. This is a KNOWN BUG (spec/implementation drift vs. ADR-0094); the
     assertions below pin the CURRENT (buggy) behaviour so a future fix that
@@ -326,13 +329,16 @@ def test_enforce_compute_quota_leaks_across_tenants_cross_tenant_dos(monkeypatch
     import license.validator as _v
 
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
-    _v._set_active_license(None)  # free tier: compute_units_per_day == 1
+    _v._set_active_license(None)  # free tier: compute_units_per_day == 10 (ADR-0216)
     monkeypatch.setattr(G, "_COMPUTE_QUOTA_OK", True)
 
-    # tenant 'acme': first call is under quota (1/day) → must not raise.
-    G.enforce_compute_quota("acme", "fpacme000", audit_action="test.compute")
+    # tenant 'acme': burn the whole shared daily cap (read dynamically so a
+    # future tier change doesn't silently rot this test) → all under quota.
+    _limit = int(_v.get_limit("compute_units_per_day"))
+    for _ in range(_limit):
+        G.enforce_compute_quota("acme", "fpacme000", audit_action="test.compute")
 
-    # tenant 'acme': second call exceeds its own 1/day cap → 402.
+    # tenant 'acme': next call exceeds its own daily cap → 402.
     with pytest.raises(HTTPException) as ei_acme:
         G.enforce_compute_quota("acme", "fpacme000", audit_action="test.compute")
     assert ei_acme.value.status_code == 402
