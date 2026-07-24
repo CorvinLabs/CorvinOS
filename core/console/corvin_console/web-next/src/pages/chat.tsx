@@ -146,6 +146,56 @@ function detectTtsLang(text: string, fallback: string): string {
 type MessagePart = import("@/lib/chat-registry").MessagePart;
 type ChatMessage = import("@/lib/chat-registry").ChatMessage;
 
+// Map one persisted server-side turn to a rendered ChatMessage on reload.
+// Exported so the reload/hydration path is unit-testable (round-4 review: the
+// inline version was untestable because the getChatTurns → loadHistory → store
+// path is bypassed by the test's useChatSession mock).
+//
+// ADR-0214 k=8: the backend persists tde_progress (snake_case) per TDE turn but
+// NOT the live `engine` stream event. The badge render gate keys off
+// `m.engine`, so hydration must DERIVE the engine from the persisted turn.
+//
+// Round-5 refutation: a turn whose L34 prescan FORCED claude_code still
+// persists tde_progress (with l34_forced=true, delegated_count=0) — it did NOT
+// delegate. Deriving "tiered_delegation" unconditionally would show the rich
+// TDE badge on reload while the LIVE path (corrective engine event) shows
+// "Engine: claude_code (L34 erzwungen)". So we mirror the live attribution:
+// l34_forced → claude_code, else tiered_delegation. (`total_steps` still gates
+// the rich badge, so a zero-step quota-denied turn shows nothing either way.)
+export function hydrateChatTurn(t: ChatTurn, i: number, sid: string): ChatMessage {
+  const tde = t.tde_progress as Record<string, unknown> | undefined;
+  const hasTde = !!tde && typeof tde === "object";
+  const runId = hasTde ? tde!.run_id : undefined;
+  const derivedEngine = hasTde
+    ? (tde!.l34_forced === true ? "claude_code" : "tiered_delegation")
+    : undefined;
+  return {
+    id: `h-${t.ts}-${i}`,
+    role: t.role === "system" ? "system" : t.role,
+    ts: t.ts,
+    ...(hasTde
+      ? {
+          engine: derivedEngine,
+          tdeProgress: t.tde_progress as unknown as TdeProgress,
+          ...(typeof runId === "string" ? { tdeRunId: runId } : {}),
+        }
+      : {}),
+    parts: (t.parts ?? []).map((p): MessagePart => {
+      if (p.kind === "text") return { kind: "text", text: String(p.text ?? "") };
+      if (p.kind === "artifact") return {
+        kind: "artifact",
+        name: String(p.name ?? ""),
+        path: String(p.path ?? ""),
+        mime: String(p.mime ?? "application/octet-stream"),
+        size: Number(p.size ?? 0),
+        sid,
+        ...(p.label ? { label: String(p.label) } : {}),
+      };
+      return { kind: "tool", name: String(p.name ?? ""), input: (p.input ?? {}) as Record<string, unknown> };
+    }),
+  };
+}
+
 export function ChatPage() {
   const qc = useQueryClient();
   const { session } = useAuth();
@@ -1011,37 +1061,9 @@ function ChatPane({
     getChatTurns(sid)
       .then((res) => {
         if (cancelled) return;
-        const hydrated: ChatMessage[] = res.turns.map((t: ChatTurn, i: number) => ({
-          id: `h-${t.ts}-${i}`,
-          role: t.role === "system" ? "system" : t.role,
-          ts: t.ts,
-          // ADR-0214 k=8 (adversarial review 2026-07-24): the backend
-          // persists tde_progress (snake_case wrapper) per TDE turn; without
-          // this mapping the metrics card and the TDE Graph tab were empty
-          // after every reload. tdeRunId is re-derived from the same dict —
-          // the `engine` stream event that stamps it live is not persisted.
-          ...(t.tde_progress && typeof t.tde_progress === "object"
-            ? {
-                tdeProgress: t.tde_progress as unknown as TdeProgress,
-                ...(typeof (t.tde_progress as Record<string, unknown>).run_id === "string"
-                  ? { tdeRunId: (t.tde_progress as Record<string, unknown>).run_id as string }
-                  : {}),
-              }
-            : {}),
-          parts: (t.parts ?? []).map((p): MessagePart => {
-            if (p.kind === "text") return { kind: "text", text: String(p.text ?? "") };
-            if (p.kind === "artifact") return {
-              kind: "artifact",
-              name: String(p.name ?? ""),
-              path: String(p.path ?? ""),
-              mime: String(p.mime ?? "application/octet-stream"),
-              size: Number(p.size ?? 0),
-              sid,
-              ...(p.label ? { label: String(p.label) } : {}),
-            };
-            return { kind: "tool", name: String(p.name ?? ""), input: (p.input ?? {}) as Record<string, unknown> };
-          }),
-        }));
+        const hydrated: ChatMessage[] = res.turns.map(
+          (t: ChatTurn, i: number) => hydrateChatTurn(t, i, sid),
+        );
         loadHistory(sid, hydrated);
       })
       .catch(() => { /* empty chat on first visit — expected */ });

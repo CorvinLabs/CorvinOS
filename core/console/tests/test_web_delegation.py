@@ -515,3 +515,200 @@ def test_delegation_spec_e2e_worker_receives_real_task_not_placeholder(
         "worker received the historical ADR-0114 placeholder instead of "
         "the real task text"
     )
+
+
+# ── ADR-0217 — TDE-first delegation: engine choice within the delegated branch ─
+
+@pytest.mark.parametrize("prompt", [
+    "Analysiere 500 GB Serverlogs auf Anomalien und fasse die Muster zusammen",
+    "Wir haben 2,5 TB Rohdaten aus dem Data Lake — vergleiche die Quartale",
+    "Vergleiche 3 Millionen Zeilen Verkaufsdaten aus mehreren Quellen",
+    "Process 40 million records from the database dump and compare regions",
+    "Big-Data-Auswertung der Clickstreams aus drei Quellen erstellen",
+    "Durchsuche riesige Datenmengen aus dem Data Warehouse nach Duplikaten",
+    "Aggregate a massive dataset of user events across all shards",
+    "Werte 2500000 Einträge aus dem Export aus und vergleiche sie",
+])
+def test_big_data_prompts_detected(prompt: str) -> None:
+    assert cr._is_big_data_task(prompt) is True
+
+
+@pytest.mark.parametrize("prompt", [
+    "Recherchiere die Marktlage aus drei unabhängigen Quellen und vergleiche sie",
+    "Vergleiche die drei Cloud-Anbieter aus mehreren Perspektiven",
+    "Fasse die Datenbank-Migration zusammen und liste die Risiken auf",  # DB word, no volume
+    "Analysiere die Verkaufszahlen aus drei Quellen und vergleiche sie",
+    "Erstelle einen großen Bericht über die Lage",  # "großen" without a data noun
+])
+def test_non_big_data_delegation_prompts_stay_tde(prompt: str) -> None:
+    assert cr._is_big_data_task(prompt) is False
+
+
+def test_engine_target_matrix() -> None:
+    f = cr._delegation_engine_target
+    # default: TDE
+    assert f("Recherchiere aus drei Quellen und vergleiche",
+             force_delegate=False, tde_available=True, quota_ok=True) == "tde"
+    # explicit /delegate → ACS always
+    assert f("Recherchiere aus drei Quellen",
+             force_delegate=True, tde_available=True, quota_ok=True) == "acs"
+    # big data → ACS
+    assert f("Analysiere 500 GB Logs aus drei Quellen",
+             force_delegate=False, tde_available=True, quota_ok=True) == "acs"
+    # TDE unavailable → ACS (its branch owns the degrade ladder)
+    assert f("Recherchiere aus drei Quellen",
+             force_delegate=False, tde_available=False, quota_ok=True) == "acs"
+    # pool exhausted (peek) → ACS → ADR-0201 fallback ladder
+    assert f("Recherchiere aus drei Quellen",
+             force_delegate=False, tde_available=True, quota_ok=False) == "acs"
+
+
+def test_engine_target_is_pure_no_spawn(monkeypatch) -> None:
+    """§6 invariant: the triage/choice path must never spawn a subprocess."""
+    import subprocess as _sp
+
+    def _boom(*a, **k):  # pragma: no cover
+        raise AssertionError("delegation engine choice spawned a subprocess")
+
+    monkeypatch.setattr(_sp, "Popen", _boom)
+    monkeypatch.setattr(_sp, "run", _boom)
+    assert cr._delegation_engine_target(
+        "Vergleiche 3 Millionen Zeilen aus mehreren Quellen",
+        force_delegate=False, tde_available=True, quota_ok=True,
+    ) == "acs"
+
+
+def test_tde_quota_peek_fail_closed(monkeypatch) -> None:
+    """A broken license import must peek False (→ ACS branch re-checks
+    authoritatively), never True."""
+    import builtins
+    real_import = builtins.__import__
+
+    def _no_license(name, *a, **k):
+        if name.startswith("license"):
+            raise ImportError("license module unavailable (test)")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_license)
+    monkeypatch.delitem(sys.modules, "license.compute_quota", raising=False)
+    monkeypatch.delitem(sys.modules, "license.validator", raising=False)
+    assert cr._tde_quota_peek_ok() is False
+
+
+# ── ADR-0217 rule 1c — big data is delegation-affirmative ─────────────────────
+
+@pytest.mark.parametrize("prompt", [
+    # COMPUTE-shaped big data used to fall DIRECT at rule 2 (E2E finding)
+    "Analysiere 500 GB Serverlogs aus dem Data Lake auf Anomalie-Muster und vergleiche die Regionen",
+    "Process 40 million records from the database dump and compare error rates",
+])
+def test_big_data_delegates_even_when_compute_shaped(prompt: str) -> None:
+    assert cr._should_delegate(prompt) is True
+    assert cr._delegation_engine_target(
+        prompt, force_delegate=False, tde_available=True, quota_ok=True,
+    ) == "acs"
+
+
+def test_big_data_recurring_stays_scheduler() -> None:
+    # Recurrence carve-out: a daily big-data scan is a scheduler task, not ACS.
+    assert cr._should_delegate(
+        "Überwache täglich die 500 GB Serverlogs auf neue Anomalien"
+    ) is False
+
+
+def test_big_data_named_engine_stays_direct() -> None:
+    # Named-engine carve-out: the user chose the direct delegate_* path.
+    assert cr._should_delegate(
+        "Delegiere an Codex: analysiere die 500 GB Logs aus dem Data Lake"
+    ) is False
+
+
+# ── ADR-0217 round-2: _BIG_DATA_RE precision (review finding 5) ───────────────
+
+@pytest.mark.parametrize("prompt", [
+    "Analysiere 1.000.000 Zeilen aus dem Log und vergleiche die Tage",  # grouped de
+    "Process 1,000,000 rows from the export and compare",               # grouped en
+    "Analysiere 500k rows aus dem Serverlog",                           # k-suffix
+    "Serverlogs von 500 GB analysieren",                               # noun-before-volume
+    "Werte 2500000 Einträge aus dem Export aus",                       # bare big int
+])
+def test_big_data_grouped_and_suffix_counts(prompt: str) -> None:
+    assert cr._is_big_data_task(prompt) is True
+
+
+@pytest.mark.parametrize("prompt", [
+    "Mein Laptop hat 3 gb RAM, warum ist Chrome so langsam?",   # hardware, not data
+    "Mein Server hat 128 GB Arbeitsspeicher, reicht das?",       # high RAM, not data
+    "Die GPU hat 24 GB VRAM",
+    "Wie installiere ich eine 2 TB SSD?",                        # storage hardware
+])
+def test_big_data_hardware_volumes_are_not_big_data(prompt: str) -> None:
+    # A volume tied to hardware (RAM/VRAM/SSD) must NOT route to the ACS
+    # fan-out and burn a compute unit on a smalltalk question.
+    assert cr._is_big_data_task(prompt) is False
+
+
+def test_big_data_regex_no_redos() -> None:
+    import time
+    t = time.time()
+    cr._is_big_data_task("x" * 100_000 + " 500 GB " * 200)
+    assert time.time() - t < 1.0
+
+
+# ── ADR-0217 round-2 refutation: _BIG_DATA_RE rebuilt (ReDoS + precision) ─────
+
+def test_big_data_no_redos_on_digit_blobs() -> None:
+    """The refutation found catastrophic O(n²) backtracking (48s freeze) on a
+    pasted digit blob. Rebuilt detector must stay linear."""
+    import time
+    for blob in ("9" * 20000 + " zzz", ",999" * 1200, "1234567 Zeilen " * 2000):
+        t = time.time()
+        cr._is_big_data_task(blob)
+        assert time.time() - t < 0.5, f"slow on {blob[:20]!r}"
+
+
+@pytest.mark.parametrize("prompt", [
+    "Analysiere die 500 GB aus unserem S3-Bucket",   # bucket noun
+    "3 Millionen Kundentransaktionen auswerten",       # German compound
+    "5 Mio. Messwerte vergleichen",                    # abbrev period + compound
+    "12 Terabyte an alten Backups durchsuchen",        # TB + backups
+])
+def test_big_data_refutation_false_negatives_now_caught(prompt: str) -> None:
+    assert cr._is_big_data_task(prompt) is True
+
+
+@pytest.mark.parametrize("prompt", [
+    "Ich habe 3 GB RAM, welche Dateien brauche ich?",   # comma splits clause
+    "Fahre 10 km und zähl die Dateien im Ordner",       # "km" unit, not count
+    "Ich bin in 3m fertig, schau dir die Dateien an",   # "3m" + comma split
+    "Mein Gehalt ist 100000 Euro, erstelle eine Tabelle",  # 6-digit + comma
+])
+def test_big_data_refutation_false_positives_now_rejected(prompt: str) -> None:
+    assert cr._is_big_data_task(prompt) is False
+
+
+def test_delegate_word_boundary_lockstep() -> None:
+    # "/delegatex …" must NOT delegate (parser lockstep with stream_turn).
+    assert cr._should_delegate("/delegatex mach was") is False
+    assert cr._should_delegate("/delegate mach was") is True
+    assert cr._should_delegate("/delegate") is True
+
+
+# ── ADR-0217 round-3 refutation: O(n²) bound + daten false-friends ────────────
+
+def test_big_data_bounded_on_numeric_blob() -> None:
+    """The whole routine (not just each regex) must stay bounded on a
+    delimiter-free numeric blob — the round-3 O(n²) finding."""
+    import time
+    t = time.time()
+    cr._is_big_data_task("1234567 " * 20000)  # 160 KB, one clause
+    assert time.time() - t < 0.2
+
+
+@pytest.mark.parametrize("prompt,expected", [
+    ("Screene 5 Millionen Kandidaten fuer die Stelle", False),  # -daten false friend
+    ("Verarbeite 5 Millionen Verkaufsdaten", True),             # real data compound
+    ("3 Millionen Soldaten in der Statistik", False),
+])
+def test_big_data_daten_false_friends(prompt: str, expected: bool) -> None:
+    assert cr._is_big_data_task(prompt) is expected

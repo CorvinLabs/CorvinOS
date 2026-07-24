@@ -56,6 +56,14 @@ from pathlib import Path
 #   "skill-forge"         -> promote route (skill promotion)
 #   "license"             -> legacy ADR-0017 license path (operator/license)
 #   "cowork"              -> remote-trigger origin/endpoint readers
+#   "orchestration"       -> ``import tde.*``, ``import initial_analysis`` —
+#                            the ADR-0214/0217 Tiered Delegation Engine. Without
+#                            this entry `import tde.*` fails on every WHEEL
+#                            install, so `_tde_available()` returns False and
+#                            the ADR-0217 default (TDE for all non-big-data
+#                            delegation) silently degrades to ACS on PyPI —
+#                            i.e. the shipped default would not exist on the
+#                            primary distribution channel (2026-07-24 review).
 #
 # Order matters only for human readability; Python searches every entry, and
 # a directory that does not contain the target package is simply skipped.
@@ -69,6 +77,7 @@ _OPERATOR_SUBTREES: tuple[str, ...] = (
     "skill-forge",
     "license",
     "cowork",
+    "orchestration",
 )
 
 # Vendored core subtrees (force-included alongside operator).  ``core`` itself

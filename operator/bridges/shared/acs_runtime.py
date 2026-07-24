@@ -2548,11 +2548,45 @@ async def _manager_loop(
         # --- COMPLETE ---
         elif decision_type == "COMPLETE":
             artifacts = decision.get("complete_artifacts") or {}
-            final_text = artifacts.get("summary", json.dumps(artifacts, default=str))
+            # Guard against a malformed manager COMPLETE (2026-07-24 review):
+            # the LM routinely emits a string / list / null for
+            # `complete_artifacts` or a non-numeric `quality_score`. Without
+            # this, `artifacts.get(...)` / `float(...)` raised and the WHOLE
+            # run died in run()'s top-level except — AFTER paying for every
+            # worker call this iteration. Symmetric to the _is_valid_subtask_list
+            # guard on the DELEGATE branch: coerce to a safe shape and continue.
+            if not isinstance(artifacts, dict):
+                artifacts = {"summary": str(artifacts)}
+            # `output_paths` is read with len() below (artifact_count) and in
+            # ACSResult — an LM emitting a bare count (int) or a string instead
+            # of a list would crash `len()` (2026-07-24 round-3 refutation,
+            # same crash-after-payment class as the summary/quality_score
+            # coercion). Normalise to a list.
+            _op = artifacts.get("output_paths")
+            if not isinstance(_op, list):
+                artifacts = {**artifacts, "output_paths": [] if _op is None else [_op]}
+            _qs = artifacts.get("quality_score", 0.8)
+            try:
+                _confidence = float(_qs)
+            except (TypeError, ValueError):
+                _confidence = 0.8
+            # `summary` may be present-but-null (→ .get returns None, NOT the
+            # default) or a non-string (list/number). final_text feeds
+            # gate-chain simhash / prev-hash (str.split) and ACSResult.summary,
+            # which require a str — coerce (2026-07-24 refutation: the earlier
+            # guard only handled a non-dict `artifacts`, so a dict with a
+            # non-str summary still crashed the run one layer down).
+            _summary = artifacts.get("summary")
+            if isinstance(_summary, str):
+                final_text = _summary
+            elif _summary is None:
+                final_text = json.dumps(artifacts, default=str)
+            else:
+                final_text = json.dumps(_summary, default=str)
             final_result = {
                 "status": "success",
                 "result": artifacts,
-                "confidence": float(artifacts.get("quality_score", 0.8)),
+                "confidence": _confidence,
             }
 
             # M5: run gate chain

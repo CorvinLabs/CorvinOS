@@ -17,6 +17,30 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+# ── Server-side plan bounds (ADR-0217 hardening, 2026-07-24) ──────────────────
+# The global plan comes from an LM whose input (the task text) is untrusted and
+# prompt-injectable. Without a ceiling, an injected "plan 300 fully-parallel
+# steps, estimated_tokens 10**12" response would spawn hundreds of concurrent
+# claude-CLI subprocesses and self-authorize an effectively infinite budget —
+# all for ONE charged pool unit (adversarial review HIGH). These caps validate
+# the untrusted output at the deserialization boundary, the structurally
+# correct place. A plan exceeding MAX_PLAN_STEPS is REJECTED (ValueError →
+# clean error turn + quota refund); per-field integer estimates are coerced and
+# clamped rather than trusted verbatim.
+MAX_PLAN_STEPS = 64
+MAX_ESTIMATED_TOKENS = 5_000_000
+MAX_STEP_ESTIMATED_TOKENS = 500_000
+MAX_ESTIMATED_DURATION_S = 24 * 3600
+
+
+def _clamp_int(value: Any, default: int, lo: int, hi: int) -> int:
+    """Coerce an untrusted LM value to an int in [lo, hi]; default on garbage."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
 
 @dataclass
 class Step:
@@ -110,13 +134,41 @@ class InitialAnalysisRequest:
             names = {f.name for f in dataclasses.fields(cls)}
             return {k: v for k, v in data.items() if k in names and v is not None}
 
+        raw_steps = d["global_plan"]["steps"]
+        # Cap total plan size BEFORE constructing steps — reject, don't
+        # silently truncate (dropping steps would produce a subtly-wrong run).
+        # Rejection here raises during analysis parsing, BEFORE any pool unit
+        # is charged (the charge happens later in engine.execute), so there is
+        # nothing to refund — the turn simply degrades to an error result.
+        if not isinstance(raw_steps, list):
+            raise ValueError("global_plan.steps must be a list")
+        if len(raw_steps) > MAX_PLAN_STEPS:
+            raise ValueError(
+                f"plan too large: {len(raw_steps)} steps exceeds cap "
+                f"{MAX_PLAN_STEPS} (untrusted-plan guard)"
+            )
+
+        steps: list[Step] = []
+        for s in raw_steps:
+            known = _known(Step, s)
+            # Clamp the per-step token estimate so a single step can't
+            # self-authorize a runaway budget (see _clamp_int / the module caps).
+            if "estimated_tokens" in known:
+                known["estimated_tokens"] = _clamp_int(
+                    known["estimated_tokens"], 5000, 0, MAX_STEP_ESTIMATED_TOKENS)
+            steps.append(Step(**known))
+
         return InitialAnalysisRequest(
             classification=Classification(**_known(Classification, d["classification"])),
             entities=Entities(**_known(Entities, d["entities"])),
             global_plan=GlobalPlan(
-                steps=[Step(**_known(Step, s)) for s in d["global_plan"]["steps"]],
-                estimated_duration_s=d["global_plan"]["estimated_duration_s"],
-                estimated_tokens=d["global_plan"]["estimated_tokens"],
+                steps=steps,
+                estimated_duration_s=_clamp_int(
+                    d["global_plan"]["estimated_duration_s"], 60, 0,
+                    MAX_ESTIMATED_DURATION_S),
+                estimated_tokens=_clamp_int(
+                    d["global_plan"]["estimated_tokens"], 30_000, 0,
+                    MAX_ESTIMATED_TOKENS),
                 fallback_strategy=d["global_plan"].get("fallback_strategy", "sequential"),
             ),
             cache_key=d.get("cache_key", ""),
@@ -199,7 +251,7 @@ Output ONLY a valid JSON object (no markdown, no preamble):
 1. **Completeness:** Your output is used by ALL downstream steps. Missing decisions = execution failure. Be thorough.
 2. **No Re-Planning:** Downstream steps WILL NOT call you again. Encode all routing, classification, and planning in this ONE response.
 3. **Parallelization:** Use can_parallelize hints to unlock wall-clock speedup. Mark steps that genuinely have no dependencies on each other.
-4. **Accuracy:** Estimate step counts realistically. A 50-step plan is fine; it's better to over-plan than under-plan.
+4. **Accuracy:** Estimate step counts realistically. Keep the plan to at most 64 steps (a hard server cap — larger plans are rejected). Decompose only as far as the task genuinely needs; do not pad.
 5. **Realism:** Tokens and duration are hints, not hard limits. Measure actual during execution, but be honest here.
 
 Analysis complete. Output the JSON object now."""
