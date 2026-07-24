@@ -702,12 +702,20 @@ def _summarize_for_speech(text: str, lang: str) -> str | None:
     audience = _tts_audience_block(resolved_lang)
     if audience:
         cmd += ["--audience", audience]
-    # Always pin the resolved output language — de/en included. summarize.py now
-    # emits an explicit OUTPUT-LANGUAGE directive for every locale, so this is
-    # what guarantees "always the profile language" even when the answer text is
-    # in a different language. Previously omitted for de/en, which let an English
+    # Always pin the output language — de/en included. summarize.py now emits an
+    # explicit OUTPUT-LANGUAGE directive for every locale, so this is what
+    # guarantees "always the profile language" even when the answer text is in a
+    # different language. Previously omitted for de/en, which let an English
     # answer be summarised — and spoken — in English for a German-pinned user.
-    cmd += ["--output-language", resolved_lang or "de"]
+    #
+    # Precedence: the profile-resolved language wins (resolved_lang prefers an
+    # explicit profile pin). If that only yielded a de/en base (no pin / weak
+    # detect) but the frontend passed an explicit non-de/en locale, honour that
+    # so multi-language users don't regress to the pivot.
+    out_lang = resolved_lang or "de"
+    if out_lang in ("de", "en") and lang and lang.split("-")[0] not in ("de", "en"):
+        out_lang = lang
+    cmd += ["--output-language", out_lang]
     try:
         proc = subprocess.run(
             cmd,
@@ -1090,9 +1098,22 @@ def _voice_tts_sync(
         rec.tenant_id, rec.sid_fingerprint, audit_action="voice.tts",
     )
 
-    # Clamp UNCONDITIONALLY. summarize.py's degraded path (naive_truncate)
-    # deliberately returns prose IN FULL — measured 20299 chars for --max-chars 400.
-    tts_text = (_summarize_for_speech(body.text, body.lang) or body.text)[:_TTS_PROVIDER_CHAR_LIMIT]
+    # summarize.py now BOUNDS even its degraded (no-LLM) fallback to the spoken
+    # budget (2026-07-24) — it can no longer return the whole answer, so the
+    # common path is always a short summary. The `or body.text` branch is the
+    # last-ditch case where summarize.py could not run at all (spawn failure);
+    # even then we must not read the whole answer word-for-word, so it is bounded
+    # to a spoken size here rather than clamped only at the 4096 provider limit.
+    _summary = _summarize_for_speech(body.text, body.lang)
+    if _summary:
+        tts_text = _summary[:_TTS_PROVIDER_CHAR_LIMIT]
+    else:
+        # No summary at all — bound the raw answer to roughly the spoken budget
+        # at a sentence boundary instead of speaking up to 4096 raw chars.
+        _raw = " ".join((body.text or "").split())
+        _cut = _raw[: _TTS_SUMMARIZE_MAX_CHARS * 2]
+        _dot = max(_cut.rfind(". "), _cut.rfind("! "), _cut.rfind("? "))
+        tts_text = (_cut[: _dot + 1] if _dot > 80 else _cut).strip()
 
     # Resolve the user's pins ONCE, before choosing a synthesis path. Before
     # this restructure the OpenAI branch ran FIRST — on raw un-summarized text,

@@ -95,6 +95,10 @@ def test_voice_tts_speaks_the_summary_not_the_raw_text(monkeypatch):
     captured_say_text = {}
 
     def _fake_run(cmd, **kwargs):
+        if Path(cmd[1]).name == "strip_for_tts.py":
+            # Code pre-strip (added 2026: _summarize_for_speech runs it before
+            # summarize.py). Pass the text through unchanged.
+            return _completed(0, stdout=kwargs.get("input", "") or "")
         if Path(cmd[1]).name == "summarize.py":
             summarize_calls.append(cmd)
             return _completed(0, stdout="Kurze gesprochene Zusammenfassung.")
@@ -140,6 +144,10 @@ def test_voice_tts_falls_back_to_raw_truncated_text_when_summarize_fails(monkeyp
     captured_say_text = {}
 
     def _fake_run(cmd, **kwargs):
+        if Path(cmd[1]).name == "strip_for_tts.py":
+            # Code pre-strip (added 2026: _summarize_for_speech runs it before
+            # summarize.py). Pass the text through unchanged.
+            return _completed(0, stdout=kwargs.get("input", "") or "")
         if Path(cmd[1]).name == "summarize.py":
             return _completed(1, stderr="boom")  # summarizer fails
         if Path(cmd[1]).name == "say.py":
@@ -170,7 +178,14 @@ def test_voice_tts_falls_back_to_raw_truncated_text_when_summarize_fails(monkeyp
     resp = V._voice_tts_sync(body, rec=_FakeRec())
 
     assert resp.status_code == 200
-    assert captured_say_text["text"] == raw_text[:V._TTS_PROVIDER_CHAR_LIMIT]
+    # 2026-07-24: when summarize.py cannot run at all, the last-ditch raw
+    # readout is now BOUNDED to a spoken size (~2× the summary budget) instead
+    # of clamped only at the 4000-char provider limit — "never read the whole
+    # thing verbatim" holds even in total-summarizer-failure.
+    spoken = captured_say_text["text"]
+    assert 0 < len(spoken) <= V._TTS_SUMMARIZE_MAX_CHARS * 2
+    assert len(spoken) < len(raw_text), "must not speak the full raw answer"
+    assert raw_text.startswith(spoken[: len(spoken)]), "bounded prefix of the answer"
 
 
 if __name__ == "__main__":

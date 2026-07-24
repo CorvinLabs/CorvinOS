@@ -397,13 +397,26 @@ def _capture_argv(monkeypatch, out: list) -> None:
     monkeypatch.setattr(Path, "exists", lambda self: True)
 
 
+def _summarize_argv(captured: list) -> list:
+    """Return the summarize.py invocation from the captured subprocess calls.
+
+    _summarize_for_speech spawns strip_for_tts.py FIRST (code pre-strip) and
+    summarize.py second, so the old `argv[0]` assumption picked the stripper.
+    Find the summarize call by name instead of by position."""
+    for cmd in captured:
+        if any("summarize.py" in str(part) for part in cmd):
+            return cmd
+    raise AssertionError(f"no summarize.py call captured; got {captured!r}")
+
+
 def test_audience_block_is_passed_to_the_summarizer(monkeypatch) -> None:
     argv: list = []
     _capture_argv(monkeypatch, argv)
     monkeypatch.setattr(voice_routes, "_tts_audience_block", lambda lang: "LERN-ZUGABE: ja")
     voice_routes._summarize_for_speech("some long answer", "de")
-    assert "--audience" in argv[0]
-    assert argv[0][argv[0].index("--audience") + 1] == "LERN-ZUGABE: ja"
+    cmd = _summarize_argv(argv)
+    assert "--audience" in cmd
+    assert cmd[cmd.index("--audience") + 1] == "LERN-ZUGABE: ja"
 
 
 def test_no_audience_configured_omits_the_flag(monkeypatch) -> None:
@@ -411,7 +424,7 @@ def test_no_audience_configured_omits_the_flag(monkeypatch) -> None:
     _capture_argv(monkeypatch, argv)
     monkeypatch.setattr(voice_routes, "_tts_audience_block", lambda lang: "")
     voice_routes._summarize_for_speech("some long answer", "de")
-    assert "--audience" not in argv[0]
+    assert "--audience" not in _summarize_argv(argv)
 
 
 def test_third_language_gets_an_explicit_output_language(monkeypatch) -> None:
@@ -420,16 +433,22 @@ def test_third_language_gets_an_explicit_output_language(monkeypatch) -> None:
     monkeypatch.setattr(voice_routes, "_tts_audience_block", lambda lang: "")
     voice_routes._summarize_for_speech("some long answer", "zh-Hans")
     # The pivot stays de|en, so without this the summary comes back German.
-    assert argv[0][argv[0].index("--output-language") + 1] == "zh-Hans"
+    cmd = _summarize_argv(argv)
+    assert cmd[cmd.index("--output-language") + 1] == "zh-Hans"
 
 
-def test_pivot_languages_need_no_output_language_override(monkeypatch) -> None:
+def test_pivot_languages_are_now_explicitly_pinned(monkeypatch) -> None:
+    # 2026-07-24: de/en are ALSO explicitly pinned now (previously omitted).
+    # summarize.py emits an OUTPUT-LANGUAGE directive for every locale, so the
+    # profile language can never drift to the source text's language.
     argv: list = []
     _capture_argv(monkeypatch, argv)
     monkeypatch.setattr(voice_routes, "_tts_audience_block", lambda lang: "")
     voice_routes._summarize_for_speech("some long answer", "en")
-    assert "--output-language" not in argv[0]
-    assert argv[0][argv[0].index("--lang") + 1] == "en"
+    cmd = _summarize_argv(argv)
+    assert "--output-language" in cmd
+    assert cmd[cmd.index("--output-language") + 1] in ("en", "de")
+    assert cmd[cmd.index("--lang") + 1] in ("en", "de")
 
 
 def test_a_broken_profile_never_breaks_tts(monkeypatch) -> None:

@@ -1177,8 +1177,51 @@ def test_marker_wording_drift_in_summarize_breaks_adapter_dedup_silently() -> No
 # ---------------------------------------------------------------------------
 
 
+# ── 2026-07-24: always-a-summary-in-the-profile-language guarantees ──────────
+
+def test_language_directive_now_pinned_for_de() -> None:
+    """The OUTPUT-LANGUAGE directive is emitted for de too (was omitted).
+
+    This is what stops a German-pinned voice note drifting to English when the
+    answer text is English: the pin is now an explicit prompt instruction, not
+    just the base prompt's native prose."""
+    sysp = summarize._system_for("de", 400, has_task=False)
+    assert "OUTPUT LANGUAGE" in sysp, "de must carry an explicit output-language pin"
+
+
+def test_language_directive_now_pinned_for_en() -> None:
+    sysp = summarize._system_for("en", 400, has_task=False)
+    assert "OUTPUT LANGUAGE" in sysp, "en must carry an explicit output-language pin"
+
+
+def test_cap_to_budget_bounds_long_prose() -> None:
+    """The degraded (no-LLM) fallback must never return the whole answer."""
+    para = ("The pipeline builds the wheel, runs the suite, and uploads. "
+            "It verifies the hash, tags the commit, and publishes notes. ") * 12
+    out = summarize._cap_to_budget(para, 400)
+    assert len(out) <= 400, f"cap must hold the budget, got {len(out)}"
+    assert len(out) < len(para), "must drop content, not return the whole thing"
+
+
+def test_cap_to_budget_keeps_in_budget_text() -> None:
+    short = "Alles erledigt, der Release ist live."
+    assert summarize._cap_to_budget(short, 400) == short
+
+
+def test_cap_to_budget_returns_at_least_one_unit_when_first_sentence_overruns() -> None:
+    one_long = "word " * 200  # a single 1000-char "sentence", no terminator
+    out = summarize._cap_to_budget(one_long, 120)
+    assert 0 < len(out) <= 121, f"must hard-cut a single overrunning unit, got {len(out)}"
+    assert out.endswith("…")
+
+
 def main() -> int:
     tests = [
+        test_language_directive_now_pinned_for_de,
+        test_language_directive_now_pinned_for_en,
+        test_cap_to_budget_bounds_long_prose,
+        test_cap_to_budget_keeps_in_budget_text,
+        test_cap_to_budget_returns_at_least_one_unit_when_first_sentence_overruns,
         test_system_prompt_resolves_with_placeholder,
         test_faithfulness_rule_present_in_every_prompt_variant,
         test_old_invention_inducing_phrases_are_gone,
