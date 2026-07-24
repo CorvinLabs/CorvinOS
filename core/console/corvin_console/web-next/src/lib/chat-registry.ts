@@ -43,7 +43,7 @@ export interface ChatMessage {
 
 export interface StreamEvent {
   type: "ready" | "delta" | "tool_use" | "result" | "error" | "done" | "info" |
-        "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine";
+        "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine" | "engine_progress";
   text?: string;
   name?: string;
   input?: Record<string, unknown>;
@@ -66,6 +66,16 @@ export interface StreamEvent {
   // ADR-0214: TDE turn correlation id, present only on "engine" events
   // emitted by the TDE turn path (chat_runtime.py::_stream_tde_turn).
   tde_run_id?: string;
+  // ADR-0214 TDE Phase 1: engine_progress event emitted on TDE turn completion.
+  // Fields: total_steps, completed_steps, delegated_count, local_count,
+  // token_savings_pct. Used by chat badge + audit graph for visualization.
+  run_id?: string;
+  total_steps?: number;
+  completed_steps?: number;
+  delegated_count?: number;
+  local_count?: number;
+  token_savings_pct?: number;
+  l34_forced?: boolean;
   // ccc_action fields (ADR-0168 M3)
   action_id?: string;
   entity_type?: string;
