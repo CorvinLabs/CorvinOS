@@ -1127,35 +1127,10 @@ function ChatPane({
       }
       if (evt.type === "engine_progress" && evt.engine === "tiered_delegation") {
         // ADR-0214 Phase 4b: Attach TDE progress to the latest assistant message.
-        // This persists the delegation metrics to turns.jsonl so the audit graph
-        // can reconstruct the decision tree on reload/reconnect (not ephemeral).
-        const tdeProgress: TdeProgress = {
-          run_id: evt.run_id || "",
-          total_steps: evt.total_steps ?? 0,
-          completed_steps: evt.completed_steps ?? 0,
-          delegated_count: evt.delegated_count ?? 0,
-          local_count: evt.local_count ?? 0,
-          l34_forced: evt.l34_forced ?? false,
-          // ADR-0215: token_savings_pct stays null (not measured — see
-          // TdeProgress docstring); latency_delta_pct is real and safe.
-          token_savings_pct: evt.token_savings_pct ?? null,
-          token_usage_instrumented: evt.token_usage_instrumented ?? false,
-          latency_delta_pct: evt.latency_delta_pct ?? null,
-        };
-        // Find the latest assistant message and attach tdeProgress.
-        // The message subscription feeds React Query, which auto-persists to turns.jsonl.
-        const cached = qc.getQueryData<SessionState>(["chat", "messages", sid]);
-        if (cached?.messages) {
-          qc.setQueryData<SessionState>(["chat", "messages", sid], (old: SessionState | undefined) => {
-            if (!old) return old;
-            const updated = [...old.messages];
-            const last = updated[updated.length - 1];
-            if (last && last.role === "assistant") {
-              last.tdeProgress = tdeProgress;
-            }
-            return { ...old, messages: updated };
-          });
-        }
+        // k=8: tdeProgress is now persisted by the backend (chat_runtime.py::_append_turn),
+        // so frontend does not need to compute or cache it. The ChatMessage from
+        // turns.jsonl will already have the tdeProgress field populated. TdeAuditGraphPanel
+        // reads directly from useChatSession() which hydrates from the persisted messages.
       }
     });
 

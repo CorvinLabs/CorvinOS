@@ -2861,13 +2861,17 @@ def _turns_path(tenant_id: str, sid: str) -> Path:
 
 
 def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
-                 voice_key_hint: str | None = None) -> None:
+                 voice_key_hint: str | None = None, tde_progress: dict[str, Any] | None = None) -> None:
     """Append one turn (user or assistant) to the session's turns log.
 
     ``voice_key_hint`` (ADR-0194 Phase 1) pins the voice_key of the text this
     turn will actually be SPOKEN as, which is not always derivable from the
     persisted parts — see the comment at the call site. Omitted for user turns
     and for legacy records, where the reader falls back to hashing the turn text.
+
+    ``tde_progress`` (ADR-0214 k=8): TDE delegation metrics (steps, counts, L34 status).
+    Attached by _stream_tde_turn() before persisting, so audit graph survives reload.
+    Omitted for non-TDE turns (backward-compatible; optional field in turns.jsonl).
 
     Best-effort: a failed write does not break the stream — the user
     message is still in the WebSocket history client-side, and the
@@ -2876,6 +2880,8 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
     payload = {"role": role, "ts": time.time(), "parts": parts}
     if voice_key_hint:
         payload["voice_key"] = voice_key_hint
+    if tde_progress:
+        payload["tde_progress"] = tde_progress
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
@@ -3414,6 +3420,9 @@ async def _stream_tde_turn(
                 f"parallele Ausführung startet…\n"
             )}
 
+            # k=8: Initialize tdeProgress dict outside try so it's available in all branches
+            tde_progress_dict: dict[str, Any] | None = None
+
             integration = SendIntegration(
                 registry=EngineRegistry(real_ipc=True),
                 # ADR-0215 F4: scope this turn's loss-tracker evidence to
@@ -3437,6 +3446,20 @@ async def _stream_tde_turn(
             delegated = summary.get('delegated', 0)
             local_count = summary.get('local', 0)
             l34_forced = selection.get("l34_forced", False)
+
+            # k=8: Construct TdeProgress for backend persistence (ADR-0214).
+            # Will be attached to ChatMessage via _append_turn so audit graph survives reload.
+            tde_progress_dict = {
+                "run_id": run_id,
+                "total_steps": step_count,
+                "completed_steps": succeeded,
+                "delegated_count": delegated,
+                "local_count": local_count,
+                "l34_forced": l34_forced,
+                "latency_delta_pct": summary.get("latency_delta_pct"),
+                "token_savings_pct": summary.get("token_savings_pct"),
+                "token_usage_instrumented": summary.get("token_usage_instrumented", False),
+            }
 
             # GDPR Art. 30 Audit: Log L34 gate decision (compliance-load-bearing per CLAUDE.md).
             # Required whether delegation happened or not — the gate decision is itself auditable.
@@ -3507,6 +3530,7 @@ async def _stream_tde_turn(
         except Exception as e:  # noqa: BLE001 — surface, never crash the socket
             final = f"TDE-Turn fehlgeschlagen: {e}"
             rc = 1
+            # tde_progress_dict stays None (initialized above) on exception
 
         # Bookkeeping BEFORE the result yields: a disconnect on any yield
         # below must not leave the task RUNNING / audit unpaired.
@@ -3560,7 +3584,8 @@ async def _stream_tde_turn(
         _sync_ok = False
     os_audit("os_turn.context_sync", {"delegated_run_id": run_id, "synced": _sync_ok})
     touch(sess, increment_turn=_sync_ok)
-    _append_turn(sess, "assistant", [{"kind": "text", "text": final}])
+    # k=8: Attach tdeProgress for backend persistence so audit graph survives reload
+    _append_turn(sess, "assistant", [{"kind": "text", "text": final}], tde_progress=tde_progress_dict)
     yield {"type": "done"}
 
 
