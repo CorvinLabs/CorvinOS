@@ -144,5 +144,5 @@
   <!-- Result Box -->
   <rect x="250" y="1010" width="500" height="60" fill="#e8f5e9" stroke="#4caf50" stroke-width="2" rx="6"/>
   <text x="500" y="1030" class="label" text-anchor="middle" font-weight="bold" fill="#2e7d32">Result: 40-70% token savings</text>
-  <text x="500" y="1050" class="metric" text-anchor="middle" fill="#2e7d32">48.8% aggregate (p=0.01)</text>
+  <text x="500" y="1050" class="metric" text-anchor="middle" fill="#2e7d32">48.8% aggregate (simulated)</text>
 </svg>

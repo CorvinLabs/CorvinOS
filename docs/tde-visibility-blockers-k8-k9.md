@@ -1,8 +1,16 @@
 # TDE-Visibility: Blocking Bugs & Architectural Fixes (k=8 + k=9)
 
-**Status:** BLOCKER FINDINGS from Adversarial Review (0b89c60..5956239)  
+**Status:** RESOLVED 2026-07-24 (second adversarial review round) — kept as
+historical record. The k=8 chain is now complete end-to-end: backend persists
+`tde_progress` per TDE turn (`chat_runtime.py::_append_turn`), the
+`engine_progress` reducer in `chat-registry.ts` stamps the live message, and
+history hydration in `chat.tsx` maps the persisted dict (incl. re-deriving
+`tdeRunId`) so the metrics card and TDE Graph tab survive reload. The first
+k=8 attempt (a6293f0) had persisted backend-side but left the frontend
+write path empty — that gap plus the `tde_progress_dict` UnboundLocalError
+on the analysis-failure path were closed in this round.  
 **Date:** 2026-07-24  
-**Severity:** 3 CRITICAL, 3 HIGH
+**Severity (historical):** 3 CRITICAL, 3 HIGH
 
 ---
 

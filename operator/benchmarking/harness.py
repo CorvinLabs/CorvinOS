@@ -1,4 +1,10 @@
-"""TDE Benchmark Harness — End-to-end benchmark execution."""
+"""TDE Benchmark Harness — deterministic SIMULATION of token usage.
+
+HONESTY NOTE (adversarial review 2026-07-24): _simulate_tokens() hardcodes
+the per-category savings ratios this suite then "finds" — nothing here
+imports or executes TDE. Useful as a reproducible model of the hypothesis,
+NOT as evidence. For measured numbers use operator/orchestration/tde/bench.py.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -10,7 +16,6 @@ from typing import Optional
 
 from .analysis import BenchmarkAnalysis
 from .fixtures import get_fixtures_by_category, load_fixtures
-from .token_collector import BenchmarkTokenCollector
 
 
 class BenchmarkHarness:
@@ -21,7 +26,9 @@ class BenchmarkHarness:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.seed = seed
-        random.seed(seed)
+        # Instance RNG — seeding the process-global `random` module leaked a
+        # deterministic state into the host process (review 2026-07-24).
+        self._rng = random.Random(seed)
 
     async def run_benchmark(
         self,
@@ -127,43 +134,43 @@ class BenchmarkHarness:
             # CC baseline
             if fixture.category == "trivial":
                 # Trivial tasks: minimal overhead
-                return int(base_tokens * random.uniform(0.95, 1.05))
+                return int(base_tokens * self._rng.uniform(0.95, 1.05))
             elif fixture.category == "simple":
                 # Simple tasks: CC is efficient
-                return int(base_tokens * random.uniform(0.98, 1.08))
+                return int(base_tokens * self._rng.uniform(0.98, 1.08))
             elif fixture.category in ["moderate", "complex"]:
                 # Moderate/complex: CC loses context on iterations, re-analyzes each time
                 # Add iteration overhead (context re-read)
                 iteration_overhead = fixture.context_depth == "high" or fixture.context_depth == "very_high"
                 multiplier = 1.15 if iteration_overhead else 1.0
-                return int(base_tokens * multiplier * random.uniform(0.95, 1.05))
+                return int(base_tokens * multiplier * self._rng.uniform(0.95, 1.05))
             elif fixture.category == "parallel":
                 # Sequential processing, no parallelization
-                return int(base_tokens * 1.5 * random.uniform(0.98, 1.05))
+                return int(base_tokens * 1.5 * self._rng.uniform(0.98, 1.05))
             else:  # big_data
                 # CC can't handle big data effectively (would need sampling)
-                return int(base_tokens * 2.0 * random.uniform(0.95, 1.05))
+                return int(base_tokens * 2.0 * self._rng.uniform(0.95, 1.05))
 
         else:  # mode == "tde"
             # TDE: adaptive routing + context preservation
             if fixture.category == "trivial":
                 # Trivial: cheap pre-gate, routes to CC anyway
                 # Adds ~50-100 tokens for detection, minimal savings
-                return int(base_tokens * 1.05 * random.uniform(0.95, 1.05))
+                return int(base_tokens * 1.05 * self._rng.uniform(0.95, 1.05))
             elif fixture.category == "simple":
                 # Simple: TDE detects and routes to CC, adds overhead
-                return int(base_tokens * 1.08 * random.uniform(0.98, 1.05))
+                return int(base_tokens * 1.08 * self._rng.uniform(0.98, 1.05))
             elif fixture.category in ["moderate", "complex"]:
                 # Moderate/complex: TDE wins! Context carryover saves 15-30%
                 # No re-reading prior output on each iteration
                 savings_pct = 0.75 if fixture.context_depth == "very_high" else 0.85
-                return int(base_tokens * savings_pct * random.uniform(0.95, 1.05))
+                return int(base_tokens * savings_pct * self._rng.uniform(0.95, 1.05))
             elif fixture.category == "parallel":
                 # Parallel: ACS parallelization saves ~40-50%
-                return int(base_tokens * 0.55 * random.uniform(0.95, 1.05))
+                return int(base_tokens * 0.55 * self._rng.uniform(0.95, 1.05))
             else:  # big_data
                 # Big data: ACS is only viable option, ~70% reduction
-                return int(base_tokens * 0.30 * random.uniform(0.95, 1.05))
+                return int(base_tokens * 0.30 * self._rng.uniform(0.95, 1.05))
 
     def _select_engine(self, fixture, mode: str) -> str:
         """Determine which engine TDE would select."""

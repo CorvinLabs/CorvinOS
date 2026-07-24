@@ -83,5 +83,5 @@
   <!-- Result Summary -->
   <rect x="100" y="540" width="800" height="50" fill="#f5f5f5" stroke="#999" stroke-width="1" rx="4"/>
   <text x="500" y="560" class="subtitle" text-anchor="middle" font-weight="bold">Result: Optimal engine selected per-task → 48.8% aggregate token savings</text>
-  <text x="500" y="580" class="subtitle" text-anchor="middle">p=0.01 statistically significant across 11 diverse benchmarks</text>
+  <text x="500" y="580" class="subtitle" text-anchor="middle">simulated across 11 modeled benchmark tasks — no measured usage</text>
 </svg>

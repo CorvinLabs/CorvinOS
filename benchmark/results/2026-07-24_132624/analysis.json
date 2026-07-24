@@ -1,7 +1,9 @@
 {
   "metadata": {
-    "analysis_timestamp": "2026-07-24T10:29:20.015052",
-    "version": "1.0"
+    "analysis_timestamp": "2026-07-24T13:26:24.631303",
+    "version": "1.1",
+    "mode": "simulation",
+    "honesty_note": "All token numbers are outputs of a deterministic simulation (harness._simulate_tokens) encoding assumed savings ratios \u2014 not measured LLM usage."
   },
   "aggregate": {
     "total_tokens_cc": 93018,
@@ -104,84 +106,96 @@
       "n_samples": 1,
       "mean_delta_tokens": 13198,
       "stdev_tokens": 0,
-      "ci_lower_tokens": 13198.0,
-      "ci_upper_tokens": 13198.0,
+      "range_tokens": [
+        13198,
+        13198
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
       "mean_delta_pct": 84.39,
-      "ci_lower_pct": 84.39,
-      "ci_upper_pct": 84.39,
-      "significant_at_95": true,
-      "interpretation": "TDE saves 84.4% (95% CI: 84.4%-84.4%)"
+      "significant_at_95": false,
+      "interpretation": "simulated mean delta 84.4% over n=1 samples \u2014 too few for a confidence interval; observed range reported instead"
     },
     "complex": {
       "n_samples": 1,
       "mean_delta_tokens": 7418,
       "stdev_tokens": 0,
-      "ci_lower_tokens": 7418.0,
-      "ci_upper_tokens": 7418.0,
+      "range_tokens": [
+        7418,
+        7418
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
       "mean_delta_pct": 36.12,
-      "ci_lower_pct": 36.12,
-      "ci_upper_pct": 36.12,
-      "significant_at_95": true,
-      "interpretation": "TDE saves 36.1% (95% CI: 36.1%-36.1%)"
+      "significant_at_95": false,
+      "interpretation": "simulated mean delta 36.1% over n=1 samples \u2014 too few for a confidence interval; observed range reported instead"
     },
     "moderate": {
       "n_samples": 2,
       "mean_delta_tokens": 2855,
       "stdev_tokens": 893.8,
-      "ci_lower_tokens": 2223.0,
-      "ci_upper_tokens": 3487.0,
+      "range_tokens": [
+        2223,
+        3487
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
       "mean_delta_pct": 26.77,
-      "ci_lower_pct": 20.84,
-      "ci_upper_pct": 32.69,
-      "significant_at_95": true,
-      "interpretation": "TDE saves 26.8% (95% CI: 20.8%-32.7%)"
+      "significant_at_95": false,
+      "interpretation": "simulated mean delta 26.8% over n=2 samples \u2014 too few for a confidence interval; observed range reported instead"
     },
     "parallel": {
       "n_samples": 2,
       "mean_delta_tokens": 9673,
       "stdev_tokens": 2436.7,
-      "ci_lower_tokens": 7950.0,
-      "ci_upper_tokens": 11396.0,
+      "range_tokens": [
+        7950,
+        11396
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
       "mean_delta_pct": 63.56,
-      "ci_lower_pct": 52.24,
-      "ci_upper_pct": 74.89,
-      "significant_at_95": true,
-      "interpretation": "TDE saves 63.6% (95% CI: 52.2%-74.9%)"
+      "significant_at_95": false,
+      "interpretation": "simulated mean delta 63.6% over n=2 samples \u2014 too few for a confidence interval; observed range reported instead"
     },
     "simple": {
       "n_samples": 2,
       "mean_delta_tokens": -89.5,
       "stdev_tokens": 27.6,
-      "ci_lower_tokens": -109.0,
-      "ci_upper_tokens": -70.0,
+      "range_tokens": [
+        -109,
+        -70
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
       "mean_delta_pct": -5.24,
-      "ci_lower_pct": -6.38,
-      "ci_upper_pct": -4.1,
       "significant_at_95": false,
-      "interpretation": "TDE costs 5.2% more (likely due to added verbosity)"
+      "interpretation": "simulated mean delta -5.2% over n=2 samples \u2014 too few for a confidence interval; observed range reported instead"
     },
     "trivial": {
       "n_samples": 3,
       "mean_delta_tokens": -23.7,
       "stdev_tokens": 10.8,
-      "ci_lower_tokens": -36.0,
-      "ci_upper_tokens": -16.0,
+      "range_tokens": [
+        -36,
+        -16
+      ],
+      "ci_lower_tokens": null,
+      "ci_upper_tokens": null,
       "mean_delta_pct": -4.29,
-      "ci_lower_pct": -6.52,
-      "ci_upper_pct": -2.9,
       "significant_at_95": false,
-      "interpretation": "TDE costs 4.3% more (likely due to added verbosity)"
+      "interpretation": "simulated mean delta -4.3% over n=3 samples \u2014 too few for a confidence interval; observed range reported instead"
     }
   },
   "statistical_tests": {
-    "test": "paired_t_test",
+    "test": "descriptive_only",
     "n_samples": 11,
     "mean_delta_tokens": 4129.3,
     "stdev_delta": 5018.4,
-    "t_statistic": 2.729,
-    "p_value": 0.01,
-    "significant_at_05": true,
-    "interpretation": "Results are STATISTICALLY SIGNIFICANT (p=0.0100). TDE savings are real and reproducible."
+    "t_statistic_descriptive": 2.729,
+    "p_value": null,
+    "significant_at_05": false,
+    "interpretation": "SIMULATION \u2014 deltas follow directly from the model's assumed per-category savings ratios; no statistical significance can be or is claimed. Use tde.bench for measured numbers."
   },
   "per_task_results": [
     {

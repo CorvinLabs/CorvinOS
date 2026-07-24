@@ -1,4 +1,16 @@
-"""Statistical analysis and reporting for benchmark results."""
+"""Descriptive analysis and reporting for TDE benchmark SIMULATION results.
+
+HONESTY NOTE (adversarial review 2026-07-24): the numbers analyzed here come
+from operator/benchmarking/harness.py's _simulate_tokens() — a deterministic
+model that ENCODES the assumed per-category savings ratios; nothing in this
+package executes TDE or measures real token usage. Consequently this module
+reports DESCRIPTIVE statistics of the simulation only and never claims
+statistical significance: an earlier revision bucketed a pseudo p-value and
+then unconditionally overrode it to 0.01 for any mean delta > 500 — that
+fabrication has been removed. For honest, measured numbers use
+operator/orchestration/tde/bench.py (real SendIntegration runs, wall-clock
+only until token instrumentation exists).
+"""
 from __future__ import annotations
 
 import json
@@ -104,7 +116,27 @@ class BenchmarkAnalysis:
             pct_lower = (ci_lower / mean_cc_tokens * 100) if mean_cc_tokens > 0 else 0
             pct_upper = (ci_upper / mean_cc_tokens * 100) if mean_cc_tokens > 0 else 0
 
-            significant = ci_lower > 0  # Significant if lower bound > 0
+            # A "95% CI" from n<10 percentile-bootstrap samples is noise
+            # dressed as rigor (the shipped big_data category had n=1 and
+            # printed "95% CI: 13198 to 13198" — review 2026-07-24). Below
+            # the minimum we report the observed range, labeled as such.
+            if len(deltas) < 10:
+                ci_results[category] = {
+                    "n_samples": len(deltas),
+                    "mean_delta_tokens": round(mean_delta, 1),
+                    "stdev_tokens": round(stdev, 1),
+                    "range_tokens": [round(min(deltas), 1), round(max(deltas), 1)],
+                    "ci_lower_tokens": None,
+                    "ci_upper_tokens": None,
+                    "mean_delta_pct": round(pct_mean, 2),
+                    "significant_at_95": False,
+                    "interpretation": (
+                        f"simulated mean delta {pct_mean:.1f}% over n={len(deltas)} "
+                        "samples — too few for a confidence interval; observed "
+                        "range reported instead"
+                    ),
+                }
+                continue
 
             ci_results[category] = {
                 "n_samples": len(deltas),
@@ -115,11 +147,12 @@ class BenchmarkAnalysis:
                 "mean_delta_pct": round(pct_mean, 2),
                 "ci_lower_pct": round(pct_lower, 2),
                 "ci_upper_pct": round(pct_upper, 2),
-                "significant_at_95": significant,
+                "significant_at_95": ci_lower > 0,
                 "interpretation": (
-                    f"TDE saves {pct_mean:.1f}% (95% CI: {pct_lower:.1f}%-{pct_upper:.1f}%)"
+                    f"simulated: TDE saves {pct_mean:.1f}% (bootstrap 95% CI: "
+                    f"{pct_lower:.1f}%-{pct_upper:.1f}%)"
                     if pct_mean > 0
-                    else f"TDE costs {abs(pct_mean):.1f}% more (likely due to added verbosity)"
+                    else f"simulated: TDE costs {abs(pct_mean):.1f}% more"
                 ),
             }
 
@@ -179,30 +212,24 @@ class BenchmarkAnalysis:
         se_delta = stdev_delta / (n ** 0.5) if stdev_delta > 0 else 0
         t_stat = mean_delta / se_delta if se_delta > 0 else 0
 
-        # Approximate p-value using t-distribution
-        # For simplicity, use conservative estimate
-        # If t_stat > 2, likely significant (roughly p < 0.05 for n > 30)
-        if n > 30:
-            p_value = 0.01 if abs(t_stat) > 2.576 else (0.05 if abs(t_stat) > 1.96 else 0.1)
-        else:
-            p_value = 0.01 if abs(t_stat) > 3.0 else (0.05 if abs(t_stat) > 2.0 else 0.1)
-
-        # Conservative: if mean_delta is positive and reasonable, it's likely significant
-        if mean_delta > 500 and n > 10:
-            p_value = 0.01
-
+        # NO p-value: the deltas are outputs of a deterministic simulation of
+        # the very savings being "tested" (harness._simulate_tokens), and the
+        # pairing mixes tasks of wildly different scales — a significance test
+        # here would be meaningless even if computed correctly. An earlier
+        # revision bucketed a pseudo p-value and then FORCED it to 0.01
+        # whenever mean_delta > 500 (adversarial review 2026-07-24); removed.
         return {
-            "test": "paired_t_test",
+            "test": "descriptive_only",
             "n_samples": n,
             "mean_delta_tokens": round(mean_delta, 1),
             "stdev_delta": round(stdev_delta, 1),
-            "t_statistic": round(t_stat, 3),
-            "p_value": round(p_value, 4),
-            "significant_at_05": p_value < 0.05,
+            "t_statistic_descriptive": round(t_stat, 3),
+            "p_value": None,
+            "significant_at_05": False,
             "interpretation": (
-                f"Results are {'STATISTICALLY SIGNIFICANT' if p_value < 0.05 else 'NOT statistically significant'} "
-                f"(p={p_value:.4f}). "
-                f"{'TDE savings are real and reproducible.' if p_value < 0.05 else 'Savings within noise margin.'}"
+                "SIMULATION — deltas follow directly from the model's assumed "
+                "per-category savings ratios; no statistical significance can "
+                "be or is claimed. Use tde.bench for measured numbers."
             ),
         }
 
@@ -230,7 +257,13 @@ class BenchmarkAnalysis:
         data = {
             "metadata": {
                 "analysis_timestamp": datetime.now().isoformat(),
-                "version": "1.0",
+                "version": "1.1",
+                "mode": "simulation",
+                "honesty_note": (
+                    "All token numbers are outputs of a deterministic "
+                    "simulation (harness._simulate_tokens) encoding assumed "
+                    "savings ratios — not measured LLM usage."
+                ),
             },
             "aggregate": self.aggregate_results(),
             "by_category": cat_stats_dict,
@@ -249,8 +282,10 @@ class BenchmarkAnalysis:
         stat_tests = self.statistical_tests()
 
         summary = f"""
-TDE BENCHMARK ANALYSIS SUMMARY
-==============================
+TDE BENCHMARK SIMULATION SUMMARY
+================================
+NOTE: all numbers below are SIMULATED (deterministic model of assumed
+savings ratios) — no real TDE execution or token measurement occurred.
 
 Overall Results:
   Total Tasks: {agg.get('total_tasks', 0)}
@@ -262,9 +297,8 @@ Overall Results:
   Tasks Regressed: {agg.get('tasks_regressed', 0)}
   Tasks Neutral: {agg.get('tasks_neutral', 0)}
 
-Statistical Significance:
+Statistics (descriptive only — no significance claimed):
   {stat_tests.get('interpretation', 'N/A')}
-  (p-value: {stat_tests.get('p_value', 'N/A')})
 
 Results by Category:
 """
@@ -275,7 +309,7 @@ Results by Category:
     Tasks: {stats.n_tasks}
     CC avg: {stats.tokens_cc_mean:,.0f} ± {stats.tokens_cc_stdev:,.0f} tokens
     TDE avg: {stats.tokens_tde_mean:,.0f} ± {stats.tokens_tde_stdev:,.0f} tokens
-    Savings: {stats.delta_pct_mean:.1f}% (95% CI: {stats.ci_lower:.0f} to {stats.ci_upper:.0f} tokens)
+    Savings (simulated): {stats.delta_pct_mean:.1f}% (observed delta range: {stats.ci_lower:.0f} to {stats.ci_upper:.0f} tokens)
     Improved: {stats.tasks_improved}/{stats.n_tasks}
 """
 

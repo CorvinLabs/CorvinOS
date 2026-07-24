@@ -18,7 +18,7 @@ Shows the current one-engine-fits-all architecture problem:
 Demonstrates TDE's adaptive engine selection:
 - Task → TDE Detector (5-signal ensemble) → Optimal engine
 - Shows three-engine routing with cost breakdown
-- Result: **48.8% aggregate token savings**
+- Result: **48.8% projected aggregate savings (simulation)**
 
 ### 03. Five-Signal Detector
 **File:** `03-five-signal-detector.svg`
@@ -32,10 +32,11 @@ Details the 5-signal ensemble that powers TDE selection:
 
 Includes worked example: complex refactor with 72% TDE confidence.
 
-### 04. Token Savings Proof
+### 04. Token Savings Model (simulation)
 **File:** `04-token-savings-proof.svg`
 
-Real numbers showing token savings in three scenarios:
+PROJECTED numbers (worked model examples, not measured usage — see the
+honesty banner in tde-layer-comprehensive-guide.md) for three scenarios:
 - **Trivial task:** 62% savings (cheap pre-gate)
 - **Moderate task:** 47% savings (context carryover)
 - **Parallel task:** 72% savings (ACS parallelization)
@@ -50,12 +51,12 @@ Bar chart showing token savings across six task categories:
 - **Complex (1 task):** +36.1% ✅ (state retention)
 - **Parallel (2 tasks):** +63.6% ✅ (parallelization)
 - **Big Data (1 task):** +84.4% ✅ (task enablement)
-- **Aggregate (11 tasks):** **48.8%** ✅ (p=0.01 statistical significance)
+- **Aggregate (11 modeled tasks):** **48.8%** (simulated — no measured usage, no significance claim)
 
 ### 06. Three Savings Mechanisms
 **File:** `06-three-mechanisms.svg`
 
-Visual proof of the three core mechanisms:
+Illustration of the three hypothesized mechanisms (modeled figures):
 - **Mechanism 1: Context Carryover** — 52% reduction (iteration context stays warm)
 - **Mechanism 2: Parallelization Efficiency** — 83% reduction (8 workers vs. sequential)
 - **Mechanism 3: Task Enablement** — 84%+ savings (enables impossible-for-CC workloads)
@@ -90,7 +91,7 @@ All diagrams are SVG files optimized for clarity and can be:
 
 ![5-Signal Detector](docs/diagrams/03-five-signal-detector.svg)
 
-![Token Savings Proof](docs/diagrams/04-token-savings-proof.svg)
+![Token Savings Model](docs/diagrams/04-token-savings-proof.svg)
 
 ![Benchmark Results](docs/diagrams/05-benchmark-results-bars.svg)
 

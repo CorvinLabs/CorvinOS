@@ -13,10 +13,12 @@ from benchmarking.harness import run_benchmark_suite
 async def main():
     """Execute full benchmark suite."""
     print("\n" + "=" * 80)
-    print("TDE BENCHMARK SUITE — Token Savings Measurement")
+    print("TDE BENCHMARK SUITE — Token Savings SIMULATION")
     print("=" * 80)
-    print("\nThis benchmark measures token efficiency of TDE vs Claude Code.")
-    print("Running 6 categories × 5 tasks × 3 trials = 90 total runs...\n")
+    print("\nThis suite SIMULATES token usage from a deterministic model of")
+    print("assumed per-category savings ratios — it executes no TDE code and")
+    print("measures no real LLM usage (see harness.py honesty note; use")
+    print("operator/orchestration/tde/bench.py for measured runs).\n")
 
     output_dir = Path(__file__).parent.parent.parent / "benchmark" / "results"
     run_id, results = await run_benchmark_suite(output_dir=output_dir)
