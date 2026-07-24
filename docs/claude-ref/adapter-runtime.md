@@ -21,6 +21,44 @@ daemons re-read on mtime change.
 structural daemon code changes. After structural changes, note:
 "Needs `bridge.sh restart`."
 
+---
+
+## Voice summary — always a human summary, always the profile language (2026-07-24)
+
+The spoken voice note is now **always** an LLM summary rendered in the profile
+language. Two long-standing behaviours that broke this were removed:
+
+- **No verbatim short-circuit.** Both `adapter.py::build_voice_summary` (the
+  `len(text) <= max_chars` branch) and `summarize.py` (the in-budget fast-path)
+  used to speak a reply as-is, markdown-stripped, whenever it fit the ~400-char
+  budget — in its source language, never humanised. That was the confirmed
+  "reads the whole thing out loud, in English" symptom (short replies are the
+  common case). Both are gone; all non-`<voice>` text flows through the
+  summarizer, which keeps short input short ("never pad"). The only fast path
+  left is the assistant's own `<voice>…</voice>` block (already a hand-written
+  spoken summary).
+- **Language is hard-pinned for every locale, de/en included.** `summarize.py`
+  now emits an explicit `OUTPUT LANGUAGE` directive (`i18n.language_directive`)
+  for **every** code, not just non-de/en; callers (`adapter.py`, `routes/voice.py`)
+  always pass `--output-language` with the profile-resolved language. Previously
+  de/en relied only on the base prompt's native prose, so an English answer for a
+  German-pinned user drifted to English. `_resolve_voice_output_language` keeps
+  the explicit profile `display_language` authoritative; text auto-detect is only
+  the fallback for a profile with no pin.
+
+**Degraded fallback is bounded, never full text.** When *no* LLM backend is
+reachable (no Claude auth AND Hermes down/cold), `summarize.py` cannot summarise.
+It used to return `naive_truncate` = the whole answer whitespace-collapsed —
+which is exactly a verbatim readout. It now hard-caps that to `max_chars` via
+`_cap_to_budget` (whole sentences up to the budget, at least one, hard-cut only a
+single overrunning sentence). This is still a degraded result — it cannot
+translate — but it is short and bounded. Keeping a backend reliably warm (so this
+path rarely fires) is the remaining reliability follow-up.
+
+The console `/voice/segment` "Read the full answer aloud" button is a deliberate
+exception — it reads the raw answer verbatim by design and is a separate,
+explicit user action, not the automatic voice note.
+
 **Must NOT do:**
 - READ paths (whitelist check, rate limit, profile lookup) MUST use
   `currentSettings()` (JS) or `_load_channel_settings()` (Python) —
