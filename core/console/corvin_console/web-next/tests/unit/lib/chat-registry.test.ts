@@ -301,6 +301,70 @@ describe("applyEvent / StreamEvent processing", () => {
     expect(assistant.parts.some((p) => p.kind === "artifact")).toBe(true);
   });
 
+  it("attaches tdeProgress on engine_progress, including ADR-0216 quota + classification fields", () => {
+    connect("s1");
+    sendMessage("s1", "do a tiered task");
+    mockWs.emit({ type: "delta", text: "working…" });
+    mockWs.emit({
+      type: "engine_progress",
+      engine: "tiered_delegation",
+      run_id: "tde-123-abc",
+      total_steps: 3,
+      completed_steps: 2,
+      delegated_count: 1,
+      local_count: 1,
+      l34_forced: false,
+      latency_delta_pct: 12.5,
+      token_savings_pct: null,
+      token_usage_instrumented: false,
+      quota_used_today: 4,
+      quota_limit: 10,
+      task_type: "code_generation",
+      complexity: "complex",
+    });
+
+    const assistant = getSessionState("s1").messages.find((m) => m.role === "assistant")!;
+    expect(assistant.tdeProgress).toMatchObject({
+      run_id: "tde-123-abc",
+      total_steps: 3,
+      completed_steps: 2,
+      delegated_count: 1,
+      local_count: 1,
+      l34_forced: false,
+      latency_delta_pct: 12.5,
+      token_savings_pct: null,
+      quota_used_today: 4,
+      quota_limit: 10,
+      task_type: "code_generation",
+      complexity: "complex",
+    });
+    expect(assistant.tdeRunId).toBe("tde-123-abc");
+  });
+
+  it("maps engine_progress quota_limit to null for the unlimited-tier case (never fabricates a cap)", () => {
+    connect("s1");
+    sendMessage("s1", "do a tiered task");
+    mockWs.emit({ type: "delta", text: "working…" });
+    mockWs.emit({
+      type: "engine_progress",
+      engine: "tiered_delegation",
+      run_id: "tde-456-def",
+      total_steps: 1,
+      completed_steps: 1,
+      delegated_count: 0,
+      local_count: 1,
+      l34_forced: false,
+      quota_used_today: 7,
+      quota_limit: null,
+      task_type: "analysis",
+      complexity: "simple",
+    });
+
+    const assistant = getSessionState("s1").messages.find((m) => m.role === "assistant")!;
+    expect(assistant.tdeProgress?.quota_used_today).toBe(7);
+    expect(assistant.tdeProgress?.quota_limit).toBeNull();
+  });
+
   it("ignores a voice event with no completed or in-flight turn to attach to", () => {
     connect("s1");
     mockWs.emit({

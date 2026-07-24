@@ -124,7 +124,9 @@ def _license_corvin_home() -> Path:
         return Path(env) if env else Path.home() / ".corvin"
 
 
-def _enforce_tde_compute_quota(run_id: str) -> Optional[dict[str, Any]]:
+def _enforce_tde_compute_quota(
+    run_id: str,
+) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
     """Charge one unit of the shared daily agentic-compute pool for this run.
 
     TDE shares ONE pool (``compute_units_per_day``, counter file
@@ -134,31 +136,44 @@ def _enforce_tde_compute_quota(run_id: str) -> Optional[dict[str, Any]]:
     contract mirrors acs_engine_adapter._enforce_acs_compute_quota:
     missing/shadowed license module → deny (fail-closed, a removed module
     must not buy unmetered compute); over-quota → deny; transient I/O is
-    handled inside increment_and_check per LIC-2. Returns an error-result
-    dict to surface, or None to proceed.
+    handled inside increment_and_check per LIC-2.
+
+    Returns a ``(denied, quota_info)`` pair: ``denied`` is an error-result
+    dict to surface (``quota_info`` is None alongside it), or None to
+    proceed. On success ``quota_info`` is ``{"quota_used_today": int,
+    "quota_limit": int | None}`` — read via the SAME compute_quota /
+    license.validator chokepoint that just charged the unit, no new call
+    path — for the badge to render "N/10 heute" (limit None = unlimited,
+    omitted in the UI rather than shown as a fabricated number).
     """
     _op_root = str(Path(__file__).resolve().parents[2])
     try:
         if _op_root not in sys.path:
             sys.path.insert(0, _op_root)
+        from license.compute_quota import get_today_count as _cq_count  # type: ignore  # noqa: PLC0415
         from license.compute_quota import increment_and_check as _cq_inc  # type: ignore  # noqa: PLC0415
         from license.limits import LicenseLimitError as _CQErr  # type: ignore  # noqa: PLC0415
+        from license.validator import get_limit as _cq_limit  # type: ignore  # noqa: PLC0415
         from license.validator import load_license_from_env as _load_lic  # type: ignore  # noqa: PLC0415
         # Load the license so limits reflect the real tier, not FREE_TIER
         # defaults (idempotent via _LICENSE_INITIALIZED, same as ACS).
         _load_lic()
     except ImportError:
-        return {"engine": "tiered_delegation", "success": False,
+        return ({"engine": "tiered_delegation", "success": False,
                 "reason": "enforcement_unavailable",
-                "error": "compute quota enforcement unavailable (fail-closed)"}
+                "error": "compute quota enforcement unavailable (fail-closed)"}, None)
     try:
         _cq_inc(_license_corvin_home(), channel="tde",
                 chat_key=f"tde:{run_id or 'run'}")
     except _CQErr as exc:
-        return {"engine": "tiered_delegation", "success": False,
+        return ({"engine": "tiered_delegation", "success": False,
                 "reason": "quota_exhausted",
-                "error": f"compute_units_per_day exceeded: {exc}"}
-    return None
+                "error": f"compute_units_per_day exceeded: {exc}"}, None)
+    quota_info = {
+        "quota_used_today": _cq_count(_license_corvin_home()),
+        "quota_limit": _cq_limit("compute_units_per_day"),
+    }
+    return None, quota_info
 
 
 def _refund_tde_compute_unit() -> None:
@@ -252,8 +267,9 @@ class TieredDelegationEngine:
         # CLI even with real_ipc=False). Unit-test configs (injected stub
         # executor + mock IPC) consume no real compute and stay unmetered.
         metered = self.real_ipc or self.local_step_executor is default_local_step_executor
+        quota_info: Optional[dict[str, Any]] = None
         if metered:
-            denied = _enforce_tde_compute_quota(str(kwargs.get("run_id") or ""))
+            denied, quota_info = _enforce_tde_compute_quota(str(kwargs.get("run_id") or ""))
             if denied is not None:
                 return denied
 
@@ -317,6 +333,15 @@ class TieredDelegationEngine:
                     "error": f"unschedulable plan: {exc}"}
         summary = _summarize(results)
         summary["wall_time_ms"] = int((time.time() - start) * 1000)
+        # Badge concept fields (docs/claude-ref/tde-graph-concept.md): sourced
+        # from the analysis this run already classified with, and from the
+        # SAME quota chokepoint _enforce_tde_compute_quota just charged —
+        # never a fresh/broader call path. quota_* stay None when this run
+        # was unmetered (no unit charged, nothing to report).
+        summary["task_type"] = analysis.classification.task_type if analysis else None
+        summary["complexity"] = analysis.classification.complexity if analysis else "moderate"
+        summary["quota_used_today"] = quota_info["quota_used_today"] if quota_info else None
+        summary["quota_limit"] = quota_info["quota_limit"] if quota_info else None
 
         return {
             "engine": self.name,

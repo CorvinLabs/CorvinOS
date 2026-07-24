@@ -8,6 +8,7 @@ import {
   Download,
   FileText,
   FolderOpen,
+  GitGraph,
   Hammer,
   ListChecks,
   Loader2,
@@ -1870,7 +1871,14 @@ function ChatPane({
           )}
           {messages.length === 0 && <EmptyChat onTry={(t) => setInput(t)} />}
           {messages.map((m) => (
-            <MessageBubble key={m.id} m={m} />
+            <MessageBubble
+              key={m.id}
+              m={m}
+              onViewTdeGraph={() => {
+                setAuditTab("tde-graph");
+                setAuditOpen(true);
+              }}
+            />
           ))}
           {/* CCC M5 — entity action cards inline below messages */}
           {cccActions.length > 0 && (
@@ -2202,7 +2210,13 @@ function SpeakingPulse() {
   );
 }
 
-const MessageBubble = React.memo(function MessageBubble({ m }: { m: ChatMessage }) {
+const MessageBubble = React.memo(function MessageBubble({
+  m,
+  onViewTdeGraph,
+}: {
+  m: ChatMessage;
+  onViewTdeGraph: () => void;
+}) {
   const isUser = m.role === "user";
   return (
     <div className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
@@ -2249,13 +2263,19 @@ const MessageBubble = React.memo(function MessageBubble({ m }: { m: ChatMessage 
           </p>
         )}
         {!isUser && m.engine && (
-          /* ADR-0214: agentic-compute badge — which engine produced this turn */
-          <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
-            <Cpu className="h-3 w-3" aria-hidden />
-            <span>
-              Engine: {AGENTIC_ENGINE_LABELS[m.engine] ?? m.engineLabel ?? m.engine}
-            </span>
-          </p>
+          m.engine === "tiered_delegation" && m.tdeProgress && m.tdeProgress.total_steps > 0 ? (
+            <TdeInlineBadge progress={m.tdeProgress} onViewGraph={onViewTdeGraph} />
+          ) : (
+            /* ADR-0214: agentic-compute badge — which engine produced this turn.
+             * Also the fallback for TDE turns without step data yet (engine_progress
+             * never fires when the run has zero steps). */
+            <p className="mt-2 flex items-center gap-1 text-[11px] text-muted-foreground">
+              <Cpu className="h-3 w-3" aria-hidden />
+              <span>
+                Engine: {AGENTIC_ENGINE_LABELS[m.engine] ?? m.engineLabel ?? m.engine}
+              </span>
+            </p>
+          )
         )}
       </div>
       {isUser && (
@@ -2266,6 +2286,85 @@ const MessageBubble = React.memo(function MessageBubble({ m }: { m: ChatMessage 
     </div>
   );
 });
+
+/**
+ * TdeInlineBadge — ADR-0214/0216 rich per-turn badge for turns that ran
+ * through the Tiered Delegation Engine. Replaces the generic "Engine: X"
+ * line with step/delegation/gate/latency detail and a link into the
+ * Audit panel's "TDE Graph" tab for the per-step routing rationale.
+ *
+ * Honesty contract (ADR-0215): token_savings_pct is structurally always
+ * null (no real token-usage instrumentation exists yet) — this must never
+ * render as "0%" or any number, only as an explicit "not instrumented"
+ * label, so the badge cannot be misread as a measured saving.
+ */
+function TdeInlineBadge({
+  progress,
+  onViewGraph,
+}: {
+  progress: TdeProgress;
+  onViewGraph: () => void;
+}) {
+  const hasLatency =
+    progress.latency_delta_pct !== null && progress.latency_delta_pct !== undefined;
+  const latencyLabel = hasLatency
+    ? `${progress.latency_delta_pct! > 0 ? "+" : ""}${progress.latency_delta_pct!.toFixed(0)}%`
+    : null;
+  const tokenSavingsInstrumented =
+    Boolean(progress.token_usage_instrumented) &&
+    progress.token_savings_pct !== null &&
+    progress.token_savings_pct !== undefined;
+  const hasQuota =
+    progress.quota_limit !== null &&
+    progress.quota_limit !== undefined &&
+    progress.quota_used_today !== undefined;
+  const hasClassification = Boolean(progress.task_type || progress.complexity);
+
+  return (
+    <div className="mt-2 flex flex-col gap-1 rounded-lg border border-sky-900/40 bg-sky-950/10 px-2 py-1.5 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-1 font-medium text-sky-400">
+        <GitGraph className="h-3 w-3" aria-hidden />
+        <span>TDE (Tiered Delegation Engine)</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span>
+          Steps: {progress.completed_steps}/{progress.total_steps}
+        </span>
+        <span>
+          Delegated: {progress.delegated_count} · Local: {progress.local_count}
+        </span>
+        <span className={progress.l34_forced ? "text-amber-400" : undefined}>
+          L34 gate: {progress.l34_forced ? "forced" : "clear"}
+        </span>
+        {hasLatency && <span>Latency Δ: {latencyLabel} (measured)</span>}
+        <span className="italic text-muted-foreground/70">
+          Token savings:{" "}
+          {tokenSavingsInstrumented
+            ? `${progress.token_savings_pct!.toFixed(0)}%`
+            : "not instrumented"}
+        </span>
+        {hasClassification && (
+          <span>
+            {progress.task_type ?? "task"}
+            {progress.complexity ? ` · ${progress.complexity}` : ""}
+          </span>
+        )}
+        {hasQuota && (
+          <span>
+            Quota: {progress.quota_used_today}/{progress.quota_limit} today
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onViewGraph}
+        className="self-start text-sky-400 transition-colors hover:text-sky-300 hover:underline"
+      >
+        View graph →
+      </button>
+    </div>
+  );
+}
 
 function ArtifactCard({ artifact }: { artifact: Extract<MessagePart, { kind: "artifact" }> }) {
   const filePath = artifact.path || artifact.name;

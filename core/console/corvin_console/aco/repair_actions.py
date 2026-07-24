@@ -479,10 +479,43 @@ class StaleLockSweep(RepairAction):
                 pid = self._owner_pid(lk)
                 if pid and _pid_alive(pid):
                     continue
+                # flock guard: a currently-held advisory lock (no pid in the
+                # file, mtime possibly days old) must never be listed as a
+                # fault — see _try_flock_nb.
+                fd = self._try_flock_nb(lk)
+                if fd == -1:
+                    continue
+                if fd >= 0:
+                    os.close(fd)
                 faults.append(lk)
             except OSError:
                 continue
         return faults
+
+    @staticmethod
+    def _try_flock_nb(lk: Path) -> int:
+        """Try to take a non-blocking exclusive flock on *lk*. Returns an open
+        fd (caller must close, which releases the lock) or -1 when the lock is
+        CURRENTLY HELD by a live process — flock does not update mtime, so age
+        alone cannot distinguish "residue" from "held for >TTL". Deleting a held
+        flock file would silently break mutual exclusion for its users (e.g. the
+        quota counter): the next acquirer creates a fresh inode and both
+        proceed. On platforms without fcntl (Windows) returns -2 (no check
+        possible — preserve pre-existing behavior)."""
+        try:
+            import fcntl  # noqa: PLC0415 — POSIX only
+        except ImportError:
+            return -2
+        try:
+            fd = os.open(str(lk), os.O_RDWR)
+        except OSError:
+            return -1  # vanished / unreadable → treat as not sweepable now
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            os.close(fd)
+            return -1
 
     @staticmethod
     def _owner_pid(lk: Path) -> int:
@@ -503,16 +536,26 @@ class StaleLockSweep(RepairAction):
                 t = _assert_within_home(ctx.corvin_home, lk)  # per-file: skip, don't abort
             except RepairScopeError:
                 continue
-            try:
-                data = t.read_bytes()
-            except OSError:
-                data = b""
-            try:
-                t.unlink()
-            except OSError:
+            # Re-take the flock at apply time (TOCTOU: a process may have
+            # acquired the lock between precondition and here). Hold it across
+            # read+unlink so no acquirer can slip in mid-sweep.
+            fd = self._try_flock_nb(t)
+            if fd == -1:
                 continue
-            self._removed.append((t, data))
-            n += 1
+            try:
+                try:
+                    data = t.read_bytes()
+                except OSError:
+                    data = b""
+                try:
+                    t.unlink()
+                except OSError:
+                    continue
+                self._removed.append((t, data))
+                n += 1
+            finally:
+                if fd >= 0:
+                    os.close(fd)
         return n
 
     def undo(self, ctx: RepairContext) -> None:

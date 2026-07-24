@@ -205,6 +205,58 @@ async def _route_audit_query(action_id: str, slots: dict) -> ActionResult:
     )
 
 
+async def _route_rag_source(
+    action_id: str,
+    tenant_id: str,
+    slots: dict,
+) -> ActionResult:
+    """Register a RAG (Knowledge Base) source for this tenant.
+
+    Slots:
+        - url: source URL or file path
+        - name: display name (optional)
+        - type: "pdf" | "url" | "github" (optional, auto-detect)
+    """
+    source_id = "rag_" + uuid.uuid4().hex[:8]
+    source_url = slots.get("url", "").strip()
+
+    if not source_url:
+        return ActionResult(
+            action_id=action_id,
+            entity_type="rag_source",
+            entity_id=None,
+            status="error",
+            message="RAG source requires url=<source> in the prompt.",
+        )
+
+    # Basic validation
+    source_type = slots.get("type", "auto").lower()
+    if source_type not in ("pdf", "url", "github", "auto"):
+        return ActionResult(
+            action_id=action_id,
+            entity_type="rag_source",
+            entity_id=None,
+            status="error",
+            message=f"Unknown source type '{source_type}'. Use: pdf, url, github, or auto.",
+        )
+
+    return ActionResult(
+        action_id=action_id,
+        entity_type="rag_source",
+        entity_id=source_id,
+        status="queued",
+        message="RAG source registered. Ingestion queued.",
+        payload={
+            "source_id": source_id,
+            "url": source_url,
+            "name": slots.get("name", source_url),
+            "type": source_type,
+            "status": "ingesting",
+            "created_at": time.time(),
+        },
+    )
+
+
 # ── Public dispatch entry point ───────────────────────────────────────────────
 
 async def dispatch(
@@ -244,6 +296,8 @@ async def dispatch(
             result = await _route_erasure(action_id, tenant_id, slots)
         elif etype == "audit_query":
             result = await _route_audit_query(action_id, slots)
+        elif etype == "rag_source":
+            result = await _route_rag_source(action_id, tenant_id, slots)
         else:
             result = ActionResult(
                 action_id=action_id,
