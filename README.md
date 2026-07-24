@@ -15,8 +15,8 @@
 
 <p align="center">
   <a href="docs/overview.md">Overview</a> ·
-  <a href="docs/tde-layer-comprehensive-guide.md"><strong>TDE Layer</strong> (48.8% proven)</a> ·
-  <a href="docs/tde-benchmark-scientific-paper.md">Benchmark Study</a> ·
+  <a href="docs/tde-layer-comprehensive-guide.md"><strong>TDE Layer</strong> (48.8% simulated hypothesis, not measured)</a> ·
+  <a href="docs/tde-benchmark-scientific-paper.md">Benchmark Study (simulation)</a> ·
   <a href="docs/architecture.md">Architecture</a> ·
   <a href="docs/audit-and-compliance.md">Audit &amp; Compliance</a> ·
   <a href="docs/agent-communication.md">A2A Network</a> ·
@@ -128,7 +128,7 @@ The agent generates sandboxed, bwrap-isolated tools on demand and calls them imm
 New workflows and domain knowledge distilled into reusable skills at runtime. Skills are graded, promoted, and auto-injected into future sessions — the assistant learns your patterns without any manual configuration.
 
 ### [Tiered Delegation Engine (TDE)](docs/tde-layer-comprehensive-guide.md)
-Intelligent engine selection saves 48.8% of tokens (proven by [scientific benchmark](docs/tde-benchmark-scientific-paper.md)) by routing tasks optimally across three engines: Claude Code (simple, interactive tasks), TDE (iterative coding, context-rich refinement), and ACS (parallel, big-data workloads). Built on 5-signal ensemble detection with L34 data-safety gating. See the [comprehensive guide with SVG diagrams](docs/tde-layer-comprehensive-guide.md) and [peer-review-ready benchmark study](docs/tde-benchmark-scientific-paper.md) with reproducible results (seed=42).
+Intelligent engine selection routes tasks across three engines: Claude Code (simple, interactive tasks), TDE (iterative coding, context-rich refinement), and ACS (parallel, big-data workloads), built on 5-signal ensemble detection with L34 data-safety gating. A hand-modeled simulation projects a 48.8% token reduction under stated assumptions — **not a real measurement**: the underlying pipeline has no per-call token-usage instrumentation yet, and the [benchmark study](docs/tde-benchmark-scientific-paper.md) simulates rather than calls the real API (see that document's own correction notice). What IS real: `/debug-engine` shows the live routing signals, and `tde_engine.py`'s per-turn summary reports genuinely measured wall-clock latency (delegated vs. local). See the [comprehensive guide](docs/tde-layer-comprehensive-guide.md) for the full, corrected picture.
 
 ### [Agentic Compute + Data](docs/data-and-compute.md)
 Large datasets (CSV, databases, external APIs) are handled by a sandboxed compute worker so raw data never enters the LLM context. The agent submits one job and retrieves one result; iteration, sampling, and aggregation run in the worker at zero token cost. Supports PostgreSQL, MySQL, SQLite, DuckDB, and CSV out of the box.

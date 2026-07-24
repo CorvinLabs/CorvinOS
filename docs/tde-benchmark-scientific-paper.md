@@ -1,16 +1,36 @@
 # The Tiered Delegation Engine (TDE): Quantitative Token Savings Measurement
 ## A Scientific Benchmark Study
 
+> **⚠️ ADR-0215 correction (2026-07-24, added during an independent adversarial
+> review):** Despite the "Scientific Benchmark Study" / "Peer Review" / "no
+> hand-wavy estimates" framing below, **this is a simulation, not a
+> measurement of the real system.** Section 6.1 discloses (near the end of
+> the document) that no real Claude API calls were made — the "48.8%
+> aggregate token reduction" and "p=0.01 statistically significant" figures
+> come from a hand-modeled arithmetic simulation of expected savings per
+> task category, not from instrumenting `operator/orchestration/tde/`'s
+> actual execution. Independently verified: the real TDE pipeline has NO
+> per-call token-usage instrumentation anywhere (`worker_ipc.run_one_shot`
+> invokes the worker CLI with `--output-format text`, not `json`, so no
+> structured token count is ever captured — see
+> `nerve_builtins.py::TokenSavingsFiber`'s docstring and
+> `tde_engine.py::_summarize()`'s `token_usage_instrumented: False` field).
+> The "statistical significance" claim describes internal consistency of
+> the simulation model, not a real-world effect. Treat every number below
+> as a **stated hypothesis under stated assumptions**, not proof. This
+> notice is intentionally left at the top rather than relying on readers
+> to reach §6.1.
+
 **Date:** 2026-07-24  
 **Authors:** CorvinOS Research Team  
-**Status:** Peer Review  
+**Status:** Simulation / working hypothesis — NOT independently measured, NOT peer reviewed  
 **Run ID:** 2026-07-24_102920  
 
 ---
 
 ## Abstract
 
-We present a comprehensive empirical study measuring token efficiency gains from the Tiered Delegation Engine (TDE), a novel intelligent routing layer for agentic compute. Using a deterministic, reproducible benchmark suite across 11 tasks spanning 6 complexity categories, we demonstrate that TDE achieves a **48.8% aggregate token reduction** compared to baseline Claude Code delegation. The results are **statistically significant (p=0.01)**, with savings concentrated in iterative, parallel, and big-data workloads, while overhead is minimal (4.8%) for simple tasks. This study provides quantitative proof that intelligent engine selection can substantially reduce LLM token consumption while maintaining or improving output quality.
+We present a **simulated** study modeling hypothesized token efficiency gains from the Tiered Delegation Engine (TDE), a novel intelligent routing layer for agentic compute. Using a deterministic benchmark-shaped exercise across 11 synthetic tasks spanning 6 complexity categories — with token consumption *modeled*, not measured from real Claude API calls (see §6.1) — the simulation projects a **48.8% aggregate token reduction** compared to baseline Claude Code delegation, under the assumptions built into the model. Internal consistency across the simulated trials is high (p=0.01 within the model), but this does not establish statistical significance of a real-world effect. Savings are concentrated in iterative, parallel, and big-data workloads in the model, while modeled overhead is minimal (4.8%) for simple tasks. This exercise provides a testable hypothesis for how much intelligent engine selection *might* reduce LLM token consumption — it is not quantitative proof, because the underlying quantities were never measured against the real system.
 
 ---
 
@@ -464,7 +484,11 @@ benchmark/results/2026-07-24_102920/
 └── summary.txt            # Human-readable summary
 ```
 
-**Audit Trail:** Every token count is recorded; no hand-wavy estimates.
+**Audit Trail:** Every SIMULATED token count is recorded and reproducible
+(deterministic model, seed=42) — but per §6.1, these are modeled estimates,
+not measurements of real API usage. The original wording here ("no
+hand-wavy estimates") contradicted §6.1's own disclosure and has been
+corrected (ADR-0215, 2026-07-24).
 
 ---
 

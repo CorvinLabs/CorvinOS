@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -51,6 +52,21 @@ class _EnvGuard:
         # Phase-2 vars kept for backward compat (not tested here)
         "CORVIN_HELPER_MODEL_OS_TURN",
         "CORVIN_HELPER_MODEL",
+        # ADR-0215 fix (2026-07-24): CORVIN_HOME must ALSO be isolated. These
+        # tests assert Tier-4 fallthrough (adapter._resolve_os_model(...) ==
+        # None), which requires Tier 2.5 (engine_models.get_tenant_engine_
+        # model) to find NOTHING — but on any machine whose real, ambient
+        # ~/.corvin (or repo-local .corvin/) tenant config happens to pin
+        # spec.engine_models.claude_code.os_model (exactly this dev/CI
+        # environment's own configured state), Tier 2.5 legitimately finds a
+        # real value and wins before Tier 3/4 are ever reached — 7 of these
+        # tests failed on this basis, independent of test order (confirmed:
+        # they fail in total isolation, `pytest test_adapter_os_model.py`
+        # alone — this was misdiagnosed as a test-order flake before being
+        # traced to its actual root cause). Redirect CORVIN_HOME to an empty
+        # temp dir so _load_tenant_spec() deterministically finds no tenant
+        # config, matching what every test in this file already assumes.
+        "CORVIN_HOME",
     )
 
     def setUp(self) -> None:
@@ -59,6 +75,8 @@ class _EnvGuard:
         # assertions in this file (see _ADR24_VARS note). Individual tests that
         # need the Sonnet default pop it explicitly.
         os.environ["CORVIN_OS_MODEL_ALLOW_HAIKU"] = "1"
+        self._tmp_home = tempfile.mkdtemp(prefix="adapter-os-model-home-")
+        os.environ["CORVIN_HOME"] = self._tmp_home
 
     def tearDown(self) -> None:
         for k, v in self._saved.items():
@@ -66,6 +84,8 @@ class _EnvGuard:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        import shutil as _shutil_teardown
+        _shutil_teardown.rmtree(self._tmp_home, ignore_errors=True)
 
 
 class ResolveOsModelPhase3Tests(_EnvGuard, unittest.TestCase):

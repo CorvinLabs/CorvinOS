@@ -1,9 +1,22 @@
 # The Tiered Delegation Engine (TDE) Layer
-## Why It Saves Tokens — A Complete Technical Guide
+## Why It Might Save Tokens — A Technical Guide (Hypothesis, Not Measured)
+
+> **⚠️ ADR-0215 correction (2026-07-24):** the token-savings percentages in
+> this guide (and the "Token Savings Proof" section below) are a
+> hand-modeled hypothesis, not a real measurement — the TDE pipeline has no
+> per-call token-usage instrumentation anywhere yet (independently
+> verified: `worker_ipc.run_one_shot` calls the worker CLI with
+> `--output-format text`, not `json`; see
+> `nerve_builtins.py::TokenSavingsFiber`'s docstring). The companion
+> "scientific benchmark" (`tde-benchmark-scientific-paper.md`) that these
+> numbers trace back to is a simulation, not real API measurements — see
+> that document's own top-of-file correction notice. What IS real and
+> measured: per-step wall-clock latency (delegated vs. local), exposed via
+> `tde_engine.py::_summarize()`'s `latency_delta_pct` field.
 
 **Last Updated:** 2026-07-24  
-**Status:** Production-Ready (Phase 1-4 complete)  
-**Token Savings:** 40-70% reduction for complex tasks
+**Status:** Phase 1-4 code implemented and tested; token-savings figures below are an UNVERIFIED hypothesis, not measured  
+**Token Savings:** 40-70% reduction for complex tasks — projected under stated assumptions, not measured (see correction above)
 
 ---
 
@@ -177,7 +190,12 @@ The TDE Layer is a **third agentic compute engine** that sits alongside ACS (Aut
 
 ---
 
-## Token Savings Proof: Real Numbers
+## Token Savings Hypothesis: Worked (Simulated) Examples
+
+**Not real measurements** — see the correction notice at the top of this
+document. The numbers below are hand-constructed worked examples
+illustrating the routing logic's intended effect, not output from running
+the real system.
 
 ### Scenario 1: Simple Bug Fix (Typo in README)
 
@@ -400,6 +418,6 @@ Savings: 2k tokens (29%)**
 
 ---
 
-**Document Version:** 1.0  
+**Document Version:** 1.1 (ADR-0215 honesty correction, 2026-07-24)  
 **Last Updated:** 2026-07-24  
-**Status:** Production-Ready
+**Status:** Code (Phase 1-4) implemented and tested; token-savings claims are an unverified hypothesis, not measured
