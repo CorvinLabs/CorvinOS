@@ -63,6 +63,8 @@ QUALITY_THRESHOLD = 0.05
 
 # Post-exploration shadow-run sampling rate.
 SHADOW_SAMPLE_RATE = 0.05
+# ADR-0219 R5a: boosted rate while an action's measured evidence is still thin.
+_ADAPTIVE_THIN_RATE = 0.25
 
 # Cap for step outputs fed forward into the working statement for dependent
 # steps (bounded so a huge step output doesn't blow up later prompts).
@@ -572,8 +574,18 @@ class AdaptiveDelegationExecutor:
     ) -> None:
         """Record delegation outcome: shadow measurement or proxy."""
         can_shadow = step.action in SIDE_EFFECT_FREE_ACTIONS
+        # ADR-0219 R5a: adaptive shadow rate. Past the forced-exploration phase
+        # the base rate is a flat 5%; boost it while this action's MEASURED
+        # evidence is still thin (< 2×MIN_SAMPLES) so under-sampled action types
+        # accrue real evidence faster instead of sitting on the conservative
+        # default forever, then relax to the base rate once well-sampled.
+        effective_rate = SHADOW_SAMPLE_RATE
+        if can_shadow:
+            measured = self.loss_tracker.measured_count_for(step.action)
+            if measured < 2 * self.loss_tracker.MIN_SAMPLES:
+                effective_rate = max(SHADOW_SAMPLE_RATE, _ADAPTIVE_THIN_RATE)
         do_shadow = can_shadow and (
-            force_measure or random.random() < SHADOW_SAMPLE_RATE
+            force_measure or random.random() < effective_rate
         )
 
         if do_shadow and step_result.success:
@@ -625,13 +637,33 @@ class AdaptiveDelegationExecutor:
                     downstream_ok=step_result.success,
                     complexity=self.complexity,
                 )
-        else:
+        elif can_shadow:
+            # Side-effect-free but not shadowed THIS turn (sampled out): the weak
+            # success proxy is honest here — it COULD be shadow-compared, we just
+            # didn't this time.
             self.loss_tracker.record_via_proxy(
                 task_type=step.action,
                 engine="tiered_delegation",
                 schema_valid=step_result.success,
                 downstream_ok=step_result.success,
                 complexity=self.complexity,
+            )
+        else:
+            # ADR-0219 R5b: a SIDE-EFFECTING action can never be shadow-compared
+            # (you can't safely run a mutation twice). Do NOT feed the success
+            # proxy — "it didn't crash" is not "the output was correct", and a
+            # 1%-loss 'assumed good' would let an unverifiable step delegate on a
+            # false signal. Record it as explicitly UNMEASURED (conservative
+            # default) and surface it in the audit so the gap is visible.
+            self.loss_tracker.record_unmeasured(
+                task_type=step.action,
+                engine="tiered_delegation",
+                complexity=self.complexity,
+            )
+            tde_audit.emit(
+                "loss_unmeasured", task_type=step.action, engine="tiered_delegation",
+                reason="side_effecting_action", tde_run_id=self.run_id,
+                tenant_id=self.tenant_id, step_num=step.step,
             )
 
     # ── helpers ───────────────────────────────────────────────────────────

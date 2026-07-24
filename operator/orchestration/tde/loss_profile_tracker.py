@@ -283,6 +283,34 @@ class LossProfileTracker:
             ),
         }
 
+    def record_unmeasured(
+        self, task_type: str, engine: str, complexity: str = "moderate",
+    ) -> None:
+        """Record a delegation whose quality could NOT be measured (ADR-0219 R5).
+
+        Used for side-effecting actions, which can never be shadow-compared (you
+        cannot safely run a mutation twice). The old path recorded these via the
+        success proxy at 1% loss — i.e. 'assumed good' from a signal that only
+        knows the step did not crash, not that its output was correct. Instead we
+        record the CONSERVATIVE default loss, flagged unmeasured: no quality
+        CLAIM is made, so the estimate does not drift optimistic and the Gate-3
+        quality gate keeps an unverifiable side-effecting step conservative
+        rather than delegating it on a false 'good'."""
+        self.record_delegation_result(
+            task_type=task_type,
+            engine=engine,
+            loss_pct=self.DEFAULT_LOSS_PCT,   # neutral: neither good nor bad
+            complexity=complexity,
+            measured=False,
+        )
+
+    def measured_count_for(self, task_type: str) -> int:
+        """How many MEASURED entries exist for this task_type at the current
+        model — the evidence mass the adaptive shadow rate keys on (R5)."""
+        return sum(1 for e in self.history
+                   if e.measured and e.task_type == task_type
+                   and e.model_id == self.current_model_id)
+
     # ── ADR-0219 R4: cross-session persistence ────────────────────────────────
 
     def _prune_cutoff_ts(self) -> float:
