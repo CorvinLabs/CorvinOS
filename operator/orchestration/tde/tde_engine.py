@@ -87,8 +87,17 @@ async def default_local_step_executor(
         'Execute the step and return ONLY a JSON object on one line: {"output": <result>}\n'
     )
 
+    model_args = helper_model.claude_args(helper_model.SITE_TDE_WORKER)
+    model_tag = ""
+    for i, a in enumerate(model_args):
+        if a == "--model" and i + 1 < len(model_args):
+            model_tag = model_args[i + 1]
+            break
+
     def _run() -> Any:
         from .worker_ipc import (  # noqa: PLC0415 — avoid import cycle
+            LocalResult,
+            parse_cli_envelope,
             parse_worker_output,
             run_one_shot,
         )
@@ -96,14 +105,24 @@ async def default_local_step_executor(
         cmd = [
             helper_model.resolve_claude_bin(), "-p", prompt,
             "--max-turns", "1",
-            "--output-format", "text",
+            # ADR-0219 R1: json (was text) so the LOCAL/non-delegated baseline
+            # also captures real token usage — without it the delegated-vs-local
+            # break-even the whole ADR-0218 vision needs is half-blind. Same
+            # parse_cli_envelope + is_error handling as the delegated worker.
+            "--output-format", "json",
             "--disallowedTools", "*",
-            *helper_model.claude_args(helper_model.SITE_TDE_WORKER),
+            *model_args,
         ]
         rc, stdout, stderr = run_one_shot(cmd, _LOCAL_STEP_TIMEOUT_S, proc_holder=proc_holder)
         if rc != 0:
             raise RuntimeError(f"local step exit {rc}: {stderr.strip()[:300]}")
-        return parse_worker_output(stdout)
+        result_text, usage, env_error = parse_cli_envelope(stdout, model=model_tag)
+        if env_error:
+            # A soft failure (is_error / non-success subtype at rc=0) — same
+            # honesty contract as the delegated path: never treat the error
+            # text as a successful result.
+            raise RuntimeError(f"local step error: {env_error}")
+        return LocalResult(parse_worker_output(result_text), usage)
 
     return await asyncio.to_thread(_run)
 
@@ -216,9 +235,22 @@ def _summarize(results: list[StepResult]) -> dict[str, Any]:
     # fabricated as zero. `token_usage_instrumented` flips True the moment ANY
     # real usage was captured, so the frontend can tell a measured run from a
     # not-yet-instrumented one instead of reading a silent default.
-    usages = [r.token_usage for r in results
-              if getattr(r, "token_usage", None) and isinstance(r.token_usage, dict)]
-    tokens_total = sum(int(u.get("total_tokens", 0) or 0) for u in usages)
+    def _usage_of(r: "StepResult") -> "Optional[dict]":
+        u = getattr(r, "token_usage", None)
+        return u if isinstance(u, dict) and u else None
+
+    usages = [u for r in results if (u := _usage_of(r)) is not None]
+    # ADR-0219 R1: split the token totals by delegated vs local. A single blended
+    # total_tokens would corrupt the very break-even the ADR-0218 vision needs —
+    # the whole question is "does delegating a step cost fewer tokens than doing
+    # it locally?", which is unanswerable if both are summed into one number.
+    # Now that the local executor is also instrumented (--output-format json),
+    # both sides are real and comparable.
+    tokens_delegated = sum(int((_usage_of(r) or {}).get("total_tokens", 0) or 0)
+                           for r in results if r.was_delegated and _usage_of(r))
+    tokens_local = sum(int((_usage_of(r) or {}).get("total_tokens", 0) or 0)
+                       for r in results if not r.was_delegated and _usage_of(r))
+    tokens_total = tokens_delegated + tokens_local
     tokens_by_model: dict[str, int] = {}
     # Keep the price tiers SEPARATE, not just the blended total_tokens scalar
     # (adversarial-review finding 3): cache-read bills ~0.1x, cache-creation
@@ -254,6 +286,9 @@ def _summarize(results: list[StepResult]) -> dict[str, Any]:
         "token_usage_instrumented": bool(usages),
         "instrumented_step_count": len(usages),
         "total_tokens": tokens_total if usages else None,
+        # R1 delegated-vs-local split — the break-even signal.
+        "tokens_delegated": tokens_delegated if usages else None,
+        "tokens_local": tokens_local if usages else None,
         "tokens_by_model": tokens_by_model if usages else None,
         "tokens_by_kind": tokens_by_kind if usages else None,
         "cost_usd": round(cost_total, 6) if have_cost else None,
@@ -455,10 +490,13 @@ class ClaudeCodeLocalEngine:
         for step in sorted(global_plan.steps, key=lambda s: s.step):
             t0 = time.time()
             try:
-                output = await self.local_step_executor(step, statement)
+                from .worker_ipc import unwrap_local_result  # noqa: PLC0415
+                output, usage = unwrap_local_result(
+                    await self.local_step_executor(step, statement))
                 results.append(StepResult(
                     step_num=step.step, action=step.action, success=True,
                     output=output, duration_ms=int((time.time() - t0) * 1000),
+                    token_usage=usage,
                 ))
             except Exception as e:
                 results.append(StepResult(

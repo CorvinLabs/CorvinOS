@@ -164,6 +164,25 @@ def test_cli_envelope_non_success_subtype_is_an_error_even_without_is_error():
     assert error == "error_max_turns"
 
 
+def test_summarize_splits_delegated_and_local_tokens():
+    # ADR-0219 R1: the break-even signal — delegated vs local token totals must
+    # be separate, not blended into one number.
+    from tde.worker_ipc import LocalResult, unwrap_local_result
+    d = StepResult(step_num=1, action="a", success=True, duration_ms=10,
+                   was_delegated=True, token_usage={"total_tokens": 1000, "model": "haiku"})
+    loc = StepResult(step_num=2, action="b", success=True, duration_ms=10,
+                     was_delegated=False, token_usage={"total_tokens": 4000, "model": "haiku"})
+    s = _summarize([d, loc])
+    assert s["tokens_delegated"] == 1000
+    assert s["tokens_local"] == 4000
+    assert s["total_tokens"] == 5000  # sum, but the split is what matters
+
+    # unwrap_local_result: LocalResult → (output, usage); plain value → (value, None)
+    assert unwrap_local_result(LocalResult("hi", {"total_tokens": 5})) == ("hi", {"total_tokens": 5})
+    assert unwrap_local_result("plain") == ("plain", None)
+    assert unwrap_local_result({"echo": 1}) == ({"echo": 1}, None)  # custom-executor dict output
+
+
 def test_summarize_reports_tokens_by_kind():
     # Finding 3: price tiers kept separate, not only the blended total.
     sr = StepResult(step_num=1, action="x", success=True, duration_ms=10,
