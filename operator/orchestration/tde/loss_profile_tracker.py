@@ -24,10 +24,14 @@ byte-for-byte, it just stops silently mixing keyed and unkeyed callers.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
+import tempfile
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 _logger = logging.getLogger(__name__)
@@ -62,14 +66,25 @@ class LossProfileTracker:
     # Proxy entries count less than measured ones.
     PROXY_WEIGHT = 0.25
 
-    def __init__(self, model_id: str = "default"):
+    def __init__(self, model_id: str = "default", persist_path: "Optional[Path]" = None):
         """Initialize tracker.
 
         Args:
             model_id: Current model (e.g., "claude-sonnet-5"). Used to detect model changes.
+            persist_path: ADR-0219 R4 — a TENANT-scoped file the MEASURED
+                (shadow-run) entries are appended to and reloaded from, so a
+                tenant's hard-won loss evidence survives across its own sessions
+                instead of resetting every session (the amplifier could never
+                learn otherwise). None = in-session only (tests / CLI / the
+                "default" session_key), preserving prior behaviour byte-for-byte.
+                Tenant-scoped path keeps ADR-0215 F4 isolation intact — one
+                tenant's file never influences another's.
         """
         self.history: list[LossEntry] = []
         self.current_model_id = model_id
+        self._persist_path = persist_path
+        if persist_path is not None:
+            self._load_from_disk()
 
     def record_delegation_result(
         self,
@@ -114,6 +129,13 @@ class LossProfileTracker:
                     break
             else:
                 self.history.pop(0)
+
+        # ADR-0219 R4: persist only MEASURED entries. Proxy entries are frequent
+        # (every delegation) and cheap to regenerate in-session; the shadow-run
+        # measurements are the rare, expensive, cross-session-valuable signal.
+        # Persisting only them bounds I/O without losing what matters.
+        if measured and self._persist_path is not None:
+            self._append_entry_to_disk(entry)
 
         _logger.debug(
             "Recorded loss: %s / %s / %.1f%% / measured=%s / model=%s",
@@ -261,6 +283,91 @@ class LossProfileTracker:
             ),
         }
 
+    # ── ADR-0219 R4: cross-session persistence ────────────────────────────────
+
+    def _prune_cutoff_ts(self) -> float:
+        """Entries older than PRUNE_AFTER_HALF_LIVES half-lives are dead weight."""
+        return time.time() - (self.DECAY_HALF_LIFE_DAYS * 86400 * self.PRUNE_AFTER_HALF_LIVES)
+
+    def _append_entry_to_disk(self, entry: LossEntry) -> None:
+        """Append one measured entry as a JSONL line. Best-effort, fail-soft —
+        a persistence failure must never break a delegation turn."""
+        try:
+            self._persist_path.parent.mkdir(parents=True, exist_ok=True)
+            line = json.dumps(asdict(entry), separators=(",", ":")) + "\n"
+            # Append is atomic for a single short line on POSIX (< PIPE_BUF), so
+            # concurrent same-tenant sessions can both append without a lock.
+            with open(self._persist_path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+        except OSError as e:
+            _logger.warning("loss-profile persist append failed (%s): %s",
+                            type(e).__name__, e)
+
+    def _load_from_disk(self) -> None:
+        """Load persisted measured entries, drop decayed ones, cap to
+        MAX_ENTRIES, and compact the file if it has grown past the cap. Loaded
+        entries seed self.history so a new session starts already-learned."""
+        p = self._persist_path
+        try:
+            if not p.exists():
+                return
+            cutoff = self._prune_cutoff_ts()
+            loaded: list[LossEntry] = []
+            with open(p, "r", encoding="utf-8") as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        d = json.loads(raw)
+                    except (json.JSONDecodeError, ValueError):
+                        continue  # skip a torn/partial line, keep the rest
+                    ts = float(d.get("timestamp", 0) or 0)
+                    if ts < cutoff:
+                        continue  # decayed to near-zero weight — drop
+                    try:
+                        loaded.append(LossEntry(
+                            timestamp=ts,
+                            task_type=str(d.get("task_type", "")),
+                            model_id=str(d.get("model_id", "")),
+                            loss_pct=max(0.0, min(100.0, float(d.get("loss_pct", 0)))),
+                            engine=str(d.get("engine", "")),
+                            complexity=str(d.get("complexity", "moderate")),
+                            measured=bool(d.get("measured", True)),
+                            alternative_scores=dict(d.get("alternative_scores", {}) or {}),
+                        ))
+                    except (TypeError, ValueError):
+                        continue
+            # Keep the most recent MAX_ENTRIES (they carry the most weight).
+            loaded.sort(key=lambda e: e.timestamp)
+            if len(loaded) > self.MAX_ENTRIES:
+                loaded = loaded[-self.MAX_ENTRIES:]
+            self.history = loaded
+            # Compaction: if the file held more (decayed/over-cap) than we kept,
+            # rewrite it atomically to the pruned set so it can't grow unbounded.
+            self._compact_if_needed(len(loaded))
+        except OSError as e:
+            _logger.warning("loss-profile load failed (%s): %s", type(e).__name__, e)
+            self.history = []
+
+    def _compact_if_needed(self, kept: int) -> None:
+        try:
+            # Cheap heuristic: rewrite only when the file has clearly more lines
+            # than we kept (decayed/over-cap accumulation).
+            with open(self._persist_path, "r", encoding="utf-8") as fh:
+                on_disk = sum(1 for ln in fh if ln.strip())
+            if on_disk <= kept + 50:
+                return
+            fd, tmp = tempfile.mkstemp(dir=str(self._persist_path.parent),
+                                       prefix=self._persist_path.name + ".", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                for e in self.history:
+                    fh.write(json.dumps(asdict(e), separators=(",", ":")) + "\n")
+            os.replace(tmp, self._persist_path)
+            _logger.info("loss-profile compacted %d→%d entries", on_disk, kept)
+        except OSError as e:
+            _logger.warning("loss-profile compaction skipped (%s): %s", type(e).__name__, e)
+
     def clear(self):
         """Clear all history."""
         self.history = []
@@ -272,6 +379,31 @@ class LossProfileTracker:
 # tenants (ADR-0215 F4). Bounded LRU — see module docstring.
 _MAX_SESSION_TRACKERS = 500
 _session_trackers: "OrderedDict[str, LossProfileTracker]" = OrderedDict()
+
+
+def _persist_path_for(session_key: str) -> "Optional[Path]":
+    """TENANT-scoped persistence file for a session_key of the form
+    ``"{tenant_id}:{sid}"`` (ADR-0219 R4). Cross-session learning is per TENANT,
+    so the path drops the sid — every session of one tenant shares one file,
+    and different tenants never share (ADR-0215 F4 isolation).
+
+    Returns None for the legacy ``"default"`` key or when tenant resolution is
+    unavailable — those callers stay in-session-only exactly as before.
+    Opt out entirely with CORVIN_TDE_LOSS_PERSIST=0.
+    """
+    if os.environ.get("CORVIN_TDE_LOSS_PERSIST", "1").strip().lower() in ("0", "false", "no"):
+        return None
+    tenant = session_key.split(":", 1)[0].strip()
+    if not tenant or tenant == "default":
+        return None
+    try:
+        from forge import paths as _forge_paths  # type: ignore  # noqa: PLC0415
+        # tenant_global_dir validates the tenant id (validate_tenant_id) and is
+        # the same tenant-scoped root every other per-tenant artifact uses.
+        return _forge_paths.tenant_global_dir(tenant) / "tde" / "loss_profile.jsonl"
+    except Exception as e:  # noqa: BLE001 — no forge / bad tenant → in-session only
+        _logger.debug("loss-profile persistence unavailable for %r: %s", session_key, e)
+        return None
 
 
 def get_session_tracker(
@@ -290,7 +422,8 @@ def get_session_tracker(
         _session_trackers.move_to_end(session_key)  # LRU touch
         return _session_trackers[session_key]
 
-    tracker = LossProfileTracker(model_id=model_id)
+    tracker = LossProfileTracker(model_id=model_id,
+                                 persist_path=_persist_path_for(session_key))
     _session_trackers[session_key] = tracker
     if len(_session_trackers) > _MAX_SESSION_TRACKERS:
         evicted_key, _ = _session_trackers.popitem(last=False)
