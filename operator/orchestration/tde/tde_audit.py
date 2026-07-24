@@ -20,6 +20,8 @@ Event namespace: ``tde.*``
 - tde.step_executed_local  {step_action, success, duration_ms, tde_run_id, step_num}
 - tde.loss_recorded        {task_type, engine, loss_pct, measured, tde_run_id, step_num}
 - tde.plan_executed        {step_count, batch_count, delegated_count, local_count, tde_run_id}
+- tde.bench_snapshot       {step_count (=tasks_run), batch_count (=calls_spent)} — ADR-0215
+  Phase 3 (tde_bench). Emitted once per benchmark suite run, not per turn.
 
 ``tde_run_id`` (ADR-0214 audit-graph endpoint) is the per-turn correlation ID
 chat_runtime._stream_tde_turn generates (``tde-<epoch>-<hex>``) and threads
