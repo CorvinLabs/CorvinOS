@@ -1215,8 +1215,38 @@ def test_cap_to_budget_returns_at_least_one_unit_when_first_sentence_overruns() 
     assert out.endswith("…")
 
 
+def test_prewarm_is_fail_soft_when_no_backend() -> None:
+    """Prewarm must never raise — a Claude-CLI-only / cloud install has no
+    Ollama, and the bridge fires this at boot in a daemon thread."""
+    import os as _os
+    saved = _os.environ.get("OLLAMA_HOST")
+    _os.environ["OLLAMA_HOST"] = "http://127.0.0.1:1"  # nothing listens here
+    try:
+        assert summarize.prewarm_summary_model(timeout_s=2.0) is False
+    finally:
+        if saved is None:
+            _os.environ.pop("OLLAMA_HOST", None)
+        else:
+            _os.environ["OLLAMA_HOST"] = saved
+
+
+def test_hermes_base_url_adds_scheme_for_bare_hostport() -> None:
+    import os as _os
+    saved = _os.environ.get("OLLAMA_HOST")
+    _os.environ["OLLAMA_HOST"] = "127.0.0.1:11434"
+    try:
+        assert summarize._hermes_base_url() == "http://127.0.0.1:11434"
+    finally:
+        if saved is None:
+            _os.environ.pop("OLLAMA_HOST", None)
+        else:
+            _os.environ["OLLAMA_HOST"] = saved
+
+
 def main() -> int:
     tests = [
+        test_prewarm_is_fail_soft_when_no_backend,
+        test_hermes_base_url_adds_scheme_for_bare_hostport,
         test_language_directive_now_pinned_for_de,
         test_language_directive_now_pinned_for_en,
         test_cap_to_budget_bounds_long_prose,
