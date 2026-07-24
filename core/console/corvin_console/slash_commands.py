@@ -34,7 +34,12 @@ _CCC_CMDS = frozenset({"/create", "/erase", "/audit"})
 # /use-engine (ADR-0214) is the same trap class: stream_turn's `_tde_force` /
 # engine-override branch handles it — found dead-on-arrival in the 2026-07-23
 # round-2 refutation because this entry was missing.
-_PASSTHROUGH_CMDS = frozenset({"/delegate", "/use-engine"})
+# /engine-auto and /debug-engine (ADR-0214's SlashCommandParser also
+# recognizes these) had the SAME trap: they were never added here, so both
+# advertised commands (see slash_command_parser.format_help()) fell into the
+# generic "Unknown command" branch below before stream_turn ever saw them —
+# found by the ADR-0215 adversarial review, 2026-07-23.
+_PASSTHROUGH_CMDS = frozenset({"/delegate", "/use-engine", "/engine-auto", "/debug-engine"})
 
 # Performed by the frontend (abort the live stream / navigate sessions). If they
 # reach the server, give a pointer instead of an LLM turn.

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -241,8 +242,16 @@ async def _heal_cycle() -> None:
         logger.debug("[ACO] Chat subsystem liveness check failed", exc_info=True)
 
     # Verify voice STT resolver is importable (beyond just binary checks).
+    # ADR-0215 F5: the previous dotted `from operator.voice.scripts.stt import
+    # resolver` could NEVER resolve (stdlib `operator` always wins over the
+    # repo's `operator/` directory) — this check silently no-opped on every
+    # single scan since inception. Fixed via the repo's working pattern:
+    # repo-relative sys.path insert + bare import of the leaf package.
     try:
-        from operator.voice.scripts.stt import resolver as _stt_res  # noqa: PLC0415
+        _voice_scripts = Path(__file__).resolve().parents[4] / "operator" / "voice" / "scripts"
+        if _voice_scripts.is_dir() and str(_voice_scripts) not in sys.path:
+            sys.path.insert(0, str(_voice_scripts))
+        from stt import resolver as _stt_res  # noqa: PLC0415
         _ = _stt_res.DEFAULT_CHAIN  # read attribute — confirms module is functional
     except ImportError:
         pass  # stt resolver not installed — engine_healer already reported this

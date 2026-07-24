@@ -11,6 +11,7 @@ Members.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -263,18 +264,31 @@ def healthz() -> dict[str, Any]:
     For a minimal liveness check (is the router mounted?), caller can treat
     `response.status_code == 200` as sufficient; the degraded `ok: false` case
     still returns 200 (not 503) because the router itself is working.
-    """
-    from operator.bridges.shared.engine_detection import _find_claude_credentials
 
-    checks = {
+    ADR-0215 F1: the import below used to be the bare dotted form
+    ``from operator.bridges.shared.engine_detection import ...``, which can
+    NEVER resolve — ``operator/`` has no ``__init__.py`` and always loses to
+    the stdlib ``operator`` module regardless of sys.path order — so this
+    unauthenticated liveness probe raised ``ModuleNotFoundError`` on every
+    single call. Fixed by using the repo's established working pattern
+    (repo-relative sys.path insert + bare leaf-module import, same as
+    ``nerve_builtins._ensure_bridges_on_path``) with the import itself
+    guarded, not just the call.
+    """
+    checks: dict[str, Any] = {
         "console_alive": True,  # We got here, so yes
     }
 
     # Check 1: Claude credentials
     try:
+        _shared_dir = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+        if _shared_dir.is_dir() and str(_shared_dir) not in sys.path:
+            sys.path.insert(0, str(_shared_dir))
+        from engine_detection import _find_claude_credentials  # type: ignore[import]
+
         creds_path = _find_claude_credentials()
         checks["claude_authenticated"] = creds_path is not None
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — liveness probe must never 500
         checks["claude_authenticated"] = False
 
     # Check 2: License activation (features.json)

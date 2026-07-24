@@ -160,7 +160,11 @@ class TieredDelegationEngine:
         budget_tokens = kwargs.get("budget_tokens") or max(
             global_plan.estimated_tokens * 3, 30_000
         )
-        tracker = get_session_tracker()
+        # ADR-0215 F4: propagate the caller's session_key so this tracker is
+        # the SAME instance SendIntegration's RobustEngineDetector already
+        # uses for this session, not a different (or the old global-default)
+        # one — see loss_profile_tracker.py module docstring.
+        tracker = get_session_tracker(session_key=str(kwargs.get("session_key") or "default"))
         if tracker.current_model_id == "default":
             try:
                 _ensure_bridges_on_path()

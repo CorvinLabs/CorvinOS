@@ -41,6 +41,19 @@ def test_delegate_passes_through_to_stream_turn():
     assert _h("/delegate") is None
 
 
+def test_use_engine_family_passes_through_to_stream_turn():
+    # ADR-0214/ADR-0215 F3: /use-engine, /engine-auto and /debug-engine are
+    # all parsed downstream in chat_runtime.py's stream_turn (via
+    # tde.slash_command_parser.SlashCommandParser). Before the ADR-0215 fix,
+    # /engine-auto and /debug-engine were missing from _PASSTHROUGH_CMDS and
+    # fell into "Unknown command" here, so stream_turn never even saw them —
+    # both advertised commands (SlashCommandParser.format_help()) were dead
+    # in the console.
+    assert _h("/use-engine tiered_delegation write a function") is None
+    assert _h("/engine-auto write a function") is None
+    assert _h("/debug-engine write a function") is None
+
+
 # ── functional commands (real data) ──────────────────────────────────
 def test_help_lists_commands():
     out = _h("/help")

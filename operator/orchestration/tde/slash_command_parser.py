@@ -48,9 +48,16 @@ class SlashCommandParser:
 
         # Pattern 1: /use-engine <name> — task may follow on the same line
         # ("/use-engine acs Fix the bug") or on the next line(s).
-        match = re.match(r"^/use-engine\s+(\w+)[ \t]*\n?(.*)", message, re.DOTALL)
+        # ADR-0215 F3: case-insensitive on both the command AND the engine
+        # name — chat_runtime.py's console entry point previously had its
+        # own regex with `re.IGNORECASE` + `.lower()` for this exact reason
+        # (users type `/Use-Engine ACS` as often as the lowercase form); this
+        # parser is now the single implementation both call sites share, so
+        # it must not regress that behavior.
+        match = re.match(r"^/use-engine\s+(\w+)[ \t]*\n?(.*)", message,
+                          re.DOTALL | re.IGNORECASE)
         if match:
-            engine = match.group(1)
+            engine = match.group(1).lower()
             task_text = match.group(2).strip()
 
             if engine not in self.VALID_ENGINES:
@@ -67,7 +74,8 @@ class SlashCommandParser:
             )
 
         # Pattern 2: /engine-auto (word boundary: "/engine-autopilot" must NOT match)
-        match = re.match(r"^/engine-auto(?:\s+|\s*\n|$)(.*)", message, re.DOTALL)
+        match = re.match(r"^/engine-auto(?:\s+|\s*\n|$)(.*)", message,
+                          re.DOTALL | re.IGNORECASE)
         if match:
             task_text = match.group(1).strip()
             _logger.info("Parsed /engine-auto (will auto-detect)")
@@ -79,7 +87,8 @@ class SlashCommandParser:
             )
 
         # Pattern 3: /debug-engine (word boundary enforced)
-        match = re.match(r"^/debug-engine(?:\s+|\s*\n|$)(.*)", message, re.DOTALL)
+        match = re.match(r"^/debug-engine(?:\s+|\s*\n|$)(.*)", message,
+                          re.DOTALL | re.IGNORECASE)
         if match:
             task_text = match.group(1).strip()
             _logger.info("Parsed /debug-engine (will show signals)")
