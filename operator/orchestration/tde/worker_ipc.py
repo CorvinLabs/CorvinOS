@@ -186,6 +186,52 @@ def parse_worker_output(raw: str) -> Any:
     return raw
 
 
+def parse_cli_envelope(stdout: str, *, model: str = "") -> "tuple[str, Optional[dict[str, Any]]]":
+    """Split a ``claude -p --output-format json`` reply into (result_text, usage).
+
+    ADR-0218 Phase 0 — the whole point of switching workers to the json output
+    format is to capture real token usage, which ``--output-format text`` never
+    exposed (token_savings_pct was structurally None, tde_engine._summarize).
+
+    The json envelope wraps the model's own text in ``result`` and carries a
+    ``usage`` block (input/output/cache tokens) plus ``total_cost_usd``. We
+    return the inner ``result`` text (so the existing parse_worker_output
+    unwraps the {"output": …} shape unchanged) and a normalised usage dict.
+
+    Fail-soft: if stdout is not the expected envelope (older CLI, an error line,
+    a plain-text reply), return (stdout, None) — the caller then behaves exactly
+    as it did on the text format, and instrumentation is simply absent for that
+    call rather than crashing the step.
+    """
+    s = (stdout or "").strip()
+    try:
+        env = json.loads(s)
+    except (json.JSONDecodeError, ValueError):
+        return stdout, None
+    if not isinstance(env, dict) or "result" not in env:
+        return stdout, None
+    result_text = env.get("result")
+    if not isinstance(result_text, str):
+        result_text = json.dumps(result_text)
+    raw_usage = env.get("usage") if isinstance(env.get("usage"), dict) else {}
+    inp = int(raw_usage.get("input_tokens", 0) or 0)
+    out = int(raw_usage.get("output_tokens", 0) or 0)
+    cache_read = int(raw_usage.get("cache_read_input_tokens", 0) or 0)
+    cache_create = int(raw_usage.get("cache_creation_input_tokens", 0) or 0)
+    usage = {
+        "input_tokens": inp,
+        "output_tokens": out,
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_create,
+        # billed volume = all input variants + output; a single scalar the
+        # Phase-1 measurement and the break-even guard can sum over.
+        "total_tokens": inp + out + cache_read + cache_create,
+        "cost_usd": env.get("total_cost_usd"),
+        "model": env.get("model") or model or "",
+    }
+    return result_text, usage
+
+
 class SubprocessWorkerIPC:
     """Real delegation: one tool-less LLM one-shot per step via claude CLI.
 
@@ -216,6 +262,14 @@ class SubprocessWorkerIPC:
             for s in envelope.decision_context.steps
         ]
         snapshot_json = json.dumps(envelope.statement_snapshot, default=str, indent=2)
+        # Defang the frame marker so untrusted snapshot content (or a prior
+        # step's output fed forward) cannot emit a literal "</DATA>" to escape
+        # the UNTRUSTED-INPUT frame and inject a directive (2026-07-24 review,
+        # sibling of the judge marker-escape). Targeted replacement (not a
+        # blanket angle-bracket strip) preserves data fidelity — the worker
+        # must still process real "<"/">" in code/markup it's given.
+        snapshot_json = re.sub(r"</?\s*DATA\s*>", "[DATA]", snapshot_json,
+                               flags=re.IGNORECASE)
         if len(snapshot_json) > self._SNAPSHOT_MAX_CHARS:
             # Truncation is explicit and visible to the worker — same contract
             # as default_local_step_executor's own 20,000-char context cap.
@@ -257,10 +311,21 @@ class SubprocessWorkerIPC:
     ) -> dict[str, Any]:
         bin_path = self._hm.resolve_claude_bin()
         model_args = self._hm.claude_args(self._hm.SITE_TDE_WORKER)
+        # Best-effort model tag for the usage record (ADR-0218 Phase 0): read the
+        # --model value the site resolved to, so per-step tokens can be broken
+        # down by model in the Phase-1 measurement even if the CLI envelope omits it.
+        model_tag = ""
+        for i, a in enumerate(model_args):
+            if a == "--model" and i + 1 < len(model_args):
+                model_tag = model_args[i + 1]
+                break
         cmd = [
             bin_path, "-p", prompt,
             "--max-turns", "1",
-            "--output-format", "text",
+            # ADR-0218 Phase 0: json (was text) so the reply carries a usage
+            # block. parse_cli_envelope unwraps result + usage, fail-soft to the
+            # old text behaviour if the envelope shape is absent.
+            "--output-format", "json",
             "--disallowedTools", "*",
             *model_args,
         ]
@@ -280,7 +345,13 @@ class SubprocessWorkerIPC:
                 "error": f"worker exit {rc}: {stderr.strip()[:300]}",
             }
 
-        return {"success": True, "output": parse_worker_output(stdout), "error": None}
+        result_text, usage = parse_cli_envelope(stdout, model=model_tag)
+        return {
+            "success": True,
+            "output": parse_worker_output(result_text),
+            "error": None,
+            "usage": usage,
+        }
 
 
 class A2AWorkerIPC:

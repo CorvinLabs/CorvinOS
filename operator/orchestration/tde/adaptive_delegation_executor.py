@@ -49,6 +49,15 @@ SIDE_EFFECT_FREE_ACTIONS = {
 # envelope, worker system prompt).
 DELEGATION_OVERHEAD_TOKENS = 8000
 
+# Max subprocess-backed steps run concurrently within one batch (ADR-0217
+# hardening, 2026-07-24). Even with the MAX_PLAN_STEPS cap at the plan
+# boundary, a single all-parallel batch would otherwise spawn up to that many
+# claude-CLI (Node) processes at once — starving the shared to_thread pool and
+# every other session in the same console process. This bounds the real
+# process fan-out per turn; excess steps in the batch queue and run as slots
+# free up (correctness unchanged, only concurrency capped).
+MAX_BATCH_CONCURRENCY = 8
+
 # Soft loss gate: block delegation when learned loss exceeds this fraction.
 QUALITY_THRESHOLD = 0.05
 
@@ -109,6 +118,10 @@ class StepResult:
     duration_ms: int = 0
     was_delegated: bool = False
     decision_reason: str = ""
+    # ADR-0218 Phase 0: real per-step token usage from the worker's json
+    # envelope ({input/output/cache tokens, total_tokens, cost_usd, model}),
+    # or None for local/mock/text-format steps where no usage was captured.
+    token_usage: Optional[dict] = None
 
 
 class AdaptiveDelegationExecutor:
@@ -268,6 +281,34 @@ class AdaptiveDelegationExecutor:
                     tasks.append(self._execute_local(
                         step, working_statement, step_executor_fn, proc_holder=holder,
                     ))
+
+            # Bound real subprocess fan-out per RUN (ADR-0217): wrap each
+            # coroutine in a semaphore so at most MAX_BATCH_CONCURRENCY
+            # claude-CLI processes from THIS run execute at once. This closes
+            # the primary blowup — a single injected all-parallel plan (up to
+            # the 64-step cap) spawning 64 processes at once — bounding it to 8.
+            # (Scope note, 2026-07-24 refutation: the cap is per-run, not
+            # process-global, so K concurrent wide runs can still reach 8·K;
+            # the shared 10/day compute pool limits how many metered runs
+            # coexist, and a process-global asyncio.Semaphore would misbind
+            # across the per-turn event loops.)
+            _sem = asyncio.Semaphore(MAX_BATCH_CONCURRENCY)
+
+            async def _bounded(coro: Any) -> Any:
+                entered = False
+                try:
+                    async with _sem:
+                        entered = True
+                        return await coro
+                except asyncio.CancelledError:
+                    # Cancelled while still queued on the semaphore → the inner
+                    # coroutine was never awaited; close it so it doesn't raise
+                    # a "coroutine was never awaited" RuntimeWarning.
+                    if not entered:
+                        coro.close()
+                    raise
+
+            tasks = [_bounded(t) for t in tasks]
 
             try:
                 batch_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -452,6 +493,7 @@ class AdaptiveDelegationExecutor:
                 error=ipc_result.get("error"),
                 duration_ms=duration,
                 was_delegated=True,
+                token_usage=ipc_result.get("usage"),
             )
         except Exception as e:
             result = StepResult(

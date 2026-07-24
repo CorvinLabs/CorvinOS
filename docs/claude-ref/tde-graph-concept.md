@@ -211,15 +211,16 @@ this is a rendering branch inside the existing `!isUser && m.engine` block, not 
 
 Two things this trigger must respect, both discovered in this investigation:
 
-- **TDE only ever runs as an explicit opt-in today.** `chat_runtime.py:4114-4115` fires the TDE
-  path *only* behind the `/use-engine tiered_delegation` slash command
-  (`_tde_force`); ADR-0214's own "Status Transitions" section
-  (`Corvin-ADR/decisions/0214-tiered-delegation-engine-with-loss-awareness.md:1218,1288-1289`)
-  states auto-routing stays on ADR-0114 and TDE auto-routing requires passing a canary gate
-  first — **not live**, matches memory. So today this badge only ever appears on a turn the
-  user *asked for* by name; it is not yet the mechanism by which a user discovers "this turn was
-  silently routed to TDE for me." That changes the day auto-routing goes live — worth a
-  follow-up note then, not a blocker now.
+- **TDE is the DEFAULT delegation engine since ADR-0217 (2026-07-24).** It fires both behind the
+  explicit `/use-engine tiered_delegation` slash command (`_tde_force`) AND — now the common
+  case — automatically from the ADR-0114 delegated branch: `_delegation_engine_target` routes
+  every non-big-data, non-`/delegate` delegated turn to TDE (`chat_runtime.py`, search
+  `_delegation_engine_target`). ACS runs only for big-data shapes (`_is_big_data_task()`), the
+  explicit `/delegate` override, and the unavailable/pool-exhausted degrade. So this badge now
+  appears both on turns the user asked for by name AND on turns silently auto-routed to TDE —
+  it IS the mechanism by which a user sees "this turn was routed to TDE for me." (The pre-ADR-0217
+  "opt-in only / auto-routing needs a canary" state described in ADR-0214's Status Transitions is
+  superseded by ADR-0217 for the console web-chat surface.)
 - **`tdeProgress` can legitimately be absent even when `m.engine === "tiered_delegation"`.**
   `chat_runtime.py:3491` guards the `engine_progress` yield with `if step_count > 0:` — a TDE
   turn whose plan resolved to zero steps never emits the event, so `m.tdeProgress` stays
@@ -234,7 +235,7 @@ Two things this trigger must respect, both discovered in this investigation:
 | Steps completed/total | `tdeProgress.completed_steps` / `.total_steps` | **Yes** (live + persisted) | |
 | Delegated vs. local count | `tdeProgress.delegated_count` / `.local_count` | **Yes** | |
 | Latency delta vs. local | `tdeProgress.latency_delta_pct` | **Yes**, real measurement | `tde_engine.py::_summarize` computes actual wall-clock delegated-vs-local averages — safe to render as-is |
-| Token savings | `tdeProgress.token_savings_pct` + `.token_usage_instrumented` | Field exists, **always `null`/not-instrumented today** | ADR-0215 honesty contract (`_summarize`, `tde_engine.py:174-211`): no per-call token instrumentation exists (`worker_ipc.run_one_shot` uses `--output-format text`, not `json`). Must render **"not measured"**, never a fabricated percentage — this is the exact bug the 2026-07-24 honesty pass already fixed once for the Audit-panel card; do not reintroduce it in the inline badge |
+| Token savings | `tdeProgress.token_savings_pct` + `.token_usage_instrumented` + `.total_tokens` + `.tokens_by_model` + `.cost_usd` | **ADR-0218 Phase 0 (2026-07-24): real per-step token usage now instrumented.** Delegated workers run `--output-format json` (`worker_ipc.parse_cli_envelope`); `_summarize` sums real `total_tokens`, breaks them down `tokens_by_model`, sums `cost_usd`, and flips `token_usage_instrumented` True when ANY step reported usage. `token_savings_pct` **stays `null`** — a savings *percentage* needs a counterfactual baseline (the Phase-1 measurement), not a single run, and must still never be fabricated. Render `total_tokens`/`cost_usd` when instrumented; render "not measured" when the flag is false. Do NOT synthesize a percentage. |
 | L34 gate outcome | `tdeProgress.l34_forced` | **Yes** | |
 | Task type / complexity | *not yet on `tdeProgress`* — sits in `analysis.classification.{task_type,complexity}`, already in scope in `chat_runtime.py` at the point `tde_progress_dict` is built (line ~3424, currently only used for a delta-text line, not the structured dict) | **No — needs one new field addition, data already exists in-process** | Cheap add: no new computation, just thread an existing local variable into the dict |
 | Chosen engine / detector confidence | `selection.get("engine")` / `.get("confidence")` (`send_integration.py:199-205`) | Exists but **not informative in this path** | Under the explicit `/use-engine tiered_delegation` opt-in, `engine_override` forces the choice (`send_integration.py:140-142`) and confidence stays the hardcoded default `1.0` — it never reflects real detector confidence. **Recommendation: omit from the badge** (would look like a real number but is a constant); becomes meaningful only once ADR-0214 auto-routing (undetected-engine path) is live |

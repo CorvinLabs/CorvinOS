@@ -209,6 +209,27 @@ def _summarize(results: list[StepResult]) -> dict[str, Any]:
     if avg_delegated is not None and avg_local:
         latency_delta_pct = round(100.0 * (avg_local - avg_delegated) / avg_local, 1)
 
+    # ADR-0218 Phase 0: aggregate REAL per-step token usage now that workers run
+    # with --output-format json (worker_ipc.parse_cli_envelope). Only delegated
+    # steps that actually returned a usage block count; steps without one (local
+    # execution, mock IPC, or a fail-soft text envelope) are simply absent, never
+    # fabricated as zero. `token_usage_instrumented` flips True the moment ANY
+    # real usage was captured, so the frontend can tell a measured run from a
+    # not-yet-instrumented one instead of reading a silent default.
+    usages = [r.token_usage for r in results
+              if getattr(r, "token_usage", None) and isinstance(r.token_usage, dict)]
+    tokens_total = sum(int(u.get("total_tokens", 0) or 0) for u in usages)
+    tokens_by_model: dict[str, int] = {}
+    cost_total = 0.0
+    have_cost = False
+    for u in usages:
+        m = str(u.get("model") or "unknown")
+        tokens_by_model[m] = tokens_by_model.get(m, 0) + int(u.get("total_tokens", 0) or 0)
+        c = u.get("cost_usd")
+        if isinstance(c, (int, float)):
+            cost_total += float(c)
+            have_cost = True
+
     return {
         "step_count": len(results),
         "succeeded": sum(1 for r in results if r.success),
@@ -220,9 +241,16 @@ def _summarize(results: list[StepResult]) -> dict[str, Any]:
         "avg_delegated_duration_ms": avg_delegated,
         "avg_local_duration_ms": avg_local,
         "latency_delta_pct": latency_delta_pct,
-        # Never fabricated — no token-usage instrumentation exists yet.
+        # ADR-0218 Phase 0 — real token instrumentation.
+        "token_usage_instrumented": bool(usages),
+        "instrumented_step_count": len(usages),
+        "total_tokens": tokens_total if usages else None,
+        "tokens_by_model": tokens_by_model if usages else None,
+        "cost_usd": round(cost_total, 6) if have_cost else None,
+        # Still None: a savings PERCENTAGE needs a counterfactual (what the
+        # non-delegated baseline would have cost), which is the Phase-1
+        # measurement, not a single run. Present for frontend back-compat.
         "token_savings_pct": None,
-        "token_usage_instrumented": False,
     }
 
 
@@ -368,7 +396,9 @@ class ClaudeCodeLocalEngine:
         context: dict[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
+        analysis: Optional[InitialAnalysisRequest] = None
         if isinstance(plan, InitialAnalysisRequest):
+            analysis = plan
             global_plan = plan.global_plan
         elif hasattr(plan, "steps"):
             global_plan = plan
@@ -376,9 +406,39 @@ class ClaudeCodeLocalEngine:
             return {"engine": self.name, "success": False,
                     "error": "claude_code engine requires an InitialAnalysisRequest or GlobalPlan"}
 
+        # ADR-0216/0217 quota chokepoint (2026-07-24 adversarial review,
+        # CRITICAL): this engine is reached when the L34 prescan FORCES
+        # claude_code away from a TDE run (send_integration), or when the
+        # detector falls back to it. It runs the SAME real per-step claude-CLI
+        # calls as TDE's local executor, so it MUST charge the shared pool too
+        # — otherwise a free-tier user embedding any CONFIDENTIAL token (an
+        # e-mail address) in every message routes every turn through this
+        # engine and consumes unlimited agentic compute past the 10/day cap.
+        # Same metered contract as TieredDelegationEngine.execute: charge only
+        # when the run reaches a real LLM (default local executor), never for
+        # injected stub executors in unit tests.
+        metered = self.local_step_executor is default_local_step_executor
+        quota_info: Optional[dict[str, Any]] = None
+        if metered:
+            denied, quota_info = _enforce_tde_compute_quota(str(kwargs.get("run_id") or ""))
+            if denied is not None:
+                # Attribute the denial to this engine, not TDE.
+                denied = dict(denied)
+                denied["engine"] = self.name
+                return denied
+
         statement = context.get("statement") or {}
         if not isinstance(statement, dict):
             statement = {"statement": statement}
+
+        # An empty plan runs no LLM step — give the charged unit back (refund
+        # symmetry with TieredDelegationEngine, 2026-07-24 refutation).
+        if not global_plan.steps:
+            if metered:
+                _refund_tde_compute_unit()
+            return {"engine": self.name, "success": False,
+                    "error": "empty plan: no steps to execute", "results": [],
+                    "summary": {"step_count": 0}}
 
         results: list[StepResult] = []
         start = time.time()
@@ -399,6 +459,15 @@ class ClaudeCodeLocalEngine:
 
         summary = _summarize(results)
         summary["wall_time_ms"] = int((time.time() - start) * 1000)
+        # Surface the quota state charged above so the console badge renders
+        # "N/limit" for a forced-claude_code turn just like a TDE turn. Also
+        # carry task_type/complexity from the analysis (2026-07-24 round-5
+        # review — parity with TieredDelegationEngine so the badge's
+        # classification line is not blank on an L34-forced turn).
+        summary["quota_used_today"] = quota_info["quota_used_today"] if quota_info else None
+        summary["quota_limit"] = quota_info["quota_limit"] if quota_info else None
+        summary["task_type"] = analysis.classification.task_type if analysis else None
+        summary["complexity"] = analysis.classification.complexity if analysis else None
         return {
             "engine": self.name,
             "success": all(r.success for r in results) and bool(results),
