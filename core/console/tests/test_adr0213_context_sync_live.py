@@ -31,10 +31,30 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "core" / "console"))
 sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
 sys.path.insert(0, str(REPO / "operator" / "forge"))
+
+# Found during the ADR-0215 adversarial review (2026-07-24): this file's
+# original entry point was `main()` + `if __name__ == "__main__":` only —
+# no `def test_*` function — so `pytest core/console/tests/` (the normal
+# way this suite is run) silently collected ZERO items from it despite the
+# filename matching pytest's own `test_*.py` discovery convention. The
+# load-bearing ADR-0213 claim this file verifies ("M1 verified end-to-end,
+# a REAL run") could therefore never actually fire as part of the test
+# suite — only someone who knew to invoke it directly
+# (`python3 test_adr0213_context_sync_live.py`) would ever run it. Fixed
+# below with a thin `test_`-prefixed wrapper, same `CLAUDE_LIVE_E2E=1` +
+# `claude`-on-PATH skip gate as tests/test_tde_e2e_live.py, while keeping
+# `main()`/`__main__` for direct standalone invocation (the docstring's
+# documented "Run:" instruction still works unchanged).
+live = pytest.mark.skipif(
+    os.environ.get("CLAUDE_LIVE_E2E", "") != "1" or shutil.which("claude") is None,
+    reason="live ADR-0213 E2E needs CLAUDE_LIVE_E2E=1 and the claude CLI",
+)
 
 
 def _maybe_skip() -> bool:
@@ -135,6 +155,15 @@ async def main() -> int:
           "with a real ACS run.")
     tmp.cleanup()
     return 0
+
+
+@live
+@pytest.mark.live
+def test_live_adr0213_context_sync_end_to_end():
+    """pytest-discoverable entry point — see module docstring for why this
+    was added. Delegates to the same main() the standalone script uses."""
+    rc = asyncio.run(main())
+    assert rc == 0, "see printed PASS/FAIL diagnostic above for the failure reason"
 
 
 if __name__ == "__main__":
