@@ -17,37 +17,26 @@ The TDE Layer is a **third agentic compute engine** that sits alongside ACS (Aut
 
 ## The Problem: Token Waste in Current Architecture
 
-```svg
-<svg viewBox="0 0 800 400" xmlns="http://www.w3.org/2000/svg">
-  <!-- Title -->
-  <text x="400" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#333">
-    Current Architecture: One Engine Fits All
-  </text>
-  
-  <!-- Claude Code (left) -->
-  <rect x="50" y="80" width="200" height="150" fill="#e8f4f8" stroke="#2c5aa0" stroke-width="2"/>
-  <text x="150" y="105" font-size="16" font-weight="bold" text-anchor="middle" fill="#2c5aa0">Claude Code</text>
-  <text x="150" y="130" font-size="12" text-anchor="middle" fill="#333">✓ Keeps context</text>
-  <text x="150" y="150" font-size="12" text-anchor="middle" fill="#333">✗ Can't parallelize</text>
-  <text x="150" y="170" font-size="12" text-anchor="middle" fill="#333">✗ Wastes tokens on small tasks</text>
-  <text x="150" y="190" font-size="12" text-anchor="middle" fill="#333">Cost: 5k-15k tokens/task</text>
-  <text x="150" y="215" font-size="14" font-weight="bold" text-anchor="middle" fill="#d9534f">Used for ALL tasks</text>
-  
-  <!-- ACS (right) -->
-  <rect x="550" y="80" width="200" height="150" fill="#f4e8e8" stroke="#a02c2c" stroke-width="2"/>
-  <text x="650" y="105" font-size="16" font-weight="bold" text-anchor="middle" fill="#a02c2c">ACS</text>
-  <text x="650" y="130" font-size="12" text-anchor="middle" fill="#333">✓ Parallelizes</text>
-  <text x="650" y="150" font-size="12" text-anchor="middle" fill="#333">✓ Handles big data</text>
-  <text x="650" y="170" font-size="12" text-anchor="middle" fill="#333">✗ Loses context</text>
-  <text x="650" y="190" font-size="12" text-anchor="middle" fill="#333">Cost: 8k-20k tokens/task</text>
-  <text x="650" y="215" font-size="14" font-weight="bold" text-anchor="middle" fill="#d9534f">Rarely used</text>
-  
-  <!-- Problem -->
-  <rect x="50" y="270" width="700" height="90" fill="#fff3cd" stroke="#ff6b6b" stroke-width="2" stroke-dasharray="5,5"/>
-  <text x="400" y="295" font-size="14" font-weight="bold" text-anchor="middle" fill="#d9534f">THE PROBLEM:</text>
-  <text x="400" y="320" font-size="13" text-anchor="middle" fill="#333">Claude Code handles 95% of tasks but wastes tokens on simple ones</text>
-  <text x="400" y="345" font-size="13" text-anchor="middle" fill="#333">ACS sits unused for most workloads (context loss is a deal-breaker)</text>
-</svg>
+```
+┌──────────────────────────────────────────────────────────────────┐
+│        Current Architecture: One Engine Fits All                   │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  ┌─────────────────────┐         ┌─────────────────────┐         │
+│  │   Claude Code       │         │       ACS           │         │
+│  ├─────────────────────┤         ├─────────────────────┤         │
+│  │ ✓ Keeps context     │         │ ✓ Parallelizes      │         │
+│  │ ✗ Can't parallelize │         │ ✓ Handles big data  │         │
+│  │ ✗ Wastes tokens     │         │ ✗ Loses context     │         │
+│  │                     │         │                     │         │
+│  │ Cost: 5k-15k tokens │         │ Cost: 8k-20k tokens │         │
+│  │ Used for ALL tasks  │         │ Rarely used         │         │
+│  └─────────────────────┘         └─────────────────────┘         │
+│                                                                   │
+│  ⚠️ THE PROBLEM:                                                  │
+│  Claude Code handles 95% of tasks but wastes tokens on simple    │
+│  ACS sits unused for most workloads (context loss is killer)     │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 **Token waste metrics:**
@@ -59,85 +48,36 @@ The TDE Layer is a **third agentic compute engine** that sits alongside ACS (Aut
 
 ## The Solution: TDE — Three-Engine Routing
 
-```svg
-<svg viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg">
-  <!-- Title -->
-  <text x="450" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#333">
-    TDE Layer: Adaptive Engine Selection
-  </text>
-  
-  <!-- Input -->
-  <rect x="350" y="60" width="200" height="50" fill="#5cb85c" stroke="#3d8b3d" stroke-width="2" rx="5"/>
-  <text x="450" y="90" font-size="14" font-weight="bold" text-anchor="middle" fill="white">Task</text>
-  
-  <!-- Arrow -->
-  <line x1="450" y1="110" x2="450" y2="140" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
-  
-  <!-- TDE Detector -->
-  <rect x="300" y="140" width="300" height="80" fill="#e3f2fd" stroke="#1976d2" stroke-width="2" rx="5"/>
-  <text x="450" y="165" font-size="14" font-weight="bold" text-anchor="middle" fill="#1976d2">TDE Detector (5 signals)</text>
-  <text x="450" y="185" font-size="11" text-anchor="middle" fill="#333">Parallelization | Iteration | Context | Data | Task Type</text>
-  <text x="450" y="205" font-size="11" text-anchor="middle" fill="#333">→ Score: TDE (0.0-1.0) | ACS | Claude Code</text>
-  
-  <!-- Arrow -->
-  <line x1="450" y1="220" x2="450" y2="250" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
-  
-  <!-- Three engines -->
-  <g>
-    <!-- Claude Code -->
-    <rect x="50" y="250" width="180" height="200" fill="#e8f4f8" stroke="#2c5aa0" stroke-width="2" rx="5"/>
-    <text x="140" y="275" font-size="13" font-weight="bold" text-anchor="middle" fill="#2c5aa0">Claude Code</text>
-    <text x="140" y="295" font-size="11" text-anchor="middle" fill="#333">(Simple/interactive)</text>
-    <line x1="60" y1="305" x2="220" y2="305" stroke="#2c5aa0" stroke-width="1"/>
-    <text x="140" y="325" font-size="10" text-anchor="middle" fill="#333">• Keeps context</text>
-    <text x="140" y="340" font-size="10" text-anchor="middle" fill="#333">• Real-time interaction</text>
-    <text x="140" y="355" font-size="10" text-anchor="middle" fill="#333">• Safe default</text>
-    <text x="140" y="375" font-size="12" font-weight="bold" text-anchor="middle" fill="#2c5aa0">Cost: 1-3k tokens</text>
-    <text x="140" y="395" font-size="10" text-anchor="middle" fill="#666">Simple tasks</text>
-    <text x="140" y="410" font-size="10" text-anchor="middle" fill="#666">Token-efficient</text>
-    <text x="140" y="430" font-size="10" text-anchor="middle" fill="#666">✓ SAVES 80%</text>
-  </g>
-  
-  <g>
-    <!-- TDE -->
-    <rect x="360" y="250" width="180" height="200" fill="#e8f8e8" stroke="#3d8b3d" stroke-width="3" rx="5"/>
-    <text x="450" y="275" font-size="13" font-weight="bold" text-anchor="middle" fill="#3d8b3d">Tiered Delegation</text>
-    <text x="450" y="295" font-size="11" text-anchor="middle" fill="#333">(Balanced optimum)</text>
-    <line x1="370" y1="305" x2="530" y2="305" stroke="#3d8b3d" stroke-width="1"/>
-    <text x="450" y="325" font-size="10" text-anchor="middle" fill="#333">• Keeps context</text>
-    <text x="450" y="340" font-size="10" text-anchor="middle" fill="#333">• Smart delegation</text>
-    <text x="450" y="355" font-size="10" text-anchor="middle" fill="#333">• Iterative refinement</text>
-    <text x="450" y="375" font-size="12" font-weight="bold" text-anchor="middle" fill="#3d8b3d">Cost: 3-7k tokens</text>
-    <text x="450" y="395" font-size="10" text-anchor="middle" fill="#666">Moderate to complex</text>
-    <text x="450" y="410" font-size="10" text-anchor="middle" fill="#666">Best quality</text>
-    <text x="450" y="430" font-size="10" text-anchor="middle" fill="#666">✓ SAVES 50%</text>
-  </g>
-  
-  <g>
-    <!-- ACS -->
-    <rect x="670" y="250" width="180" height="200" fill="#f4e8e8" stroke="#a02c2c" stroke-width="2" rx="5"/>
-    <text x="760" y="275" font-size="13" font-weight="bold" text-anchor="middle" fill="#a02c2c">ACS</text>
-    <text x="760" y="295" font-size="11" text-anchor="middle" fill="#333">(Parallel/big-data)</text>
-    <line x1="680" y1="305" x2="840" y2="305" stroke="#a02c2c" stroke-width="1"/>
-    <text x="760" y="325" font-size="10" text-anchor="middle" fill="#333">• Parallelizes</text>
-    <text x="760" y="340" font-size="10" text-anchor="middle" fill="#333">• Scales to 1GB+</text>
-    <text x="760" y="355" font-size="10" text-anchor="middle" fill="#333">• Stateless processing</text>
-    <text x="760" y="375" font-size="12" font-weight="bold" text-anchor="middle" fill="#a02c2c">Cost: 5-15k tokens</text>
-    <text x="760" y="395" font-size="10" text-anchor="middle" fill="#666">Parallel-friendly</text>
-    <text x="760" y="410" font-size="10" text-anchor="middle" fill="#666">Big data processing</text>
-    <text x="760" y="430" font-size="10" text-anchor="middle" fill="#666">✓ SAVES 40%</text>
-  </g>
-  
-  <!-- Arrows -->
-  <defs>
-    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#333"/>
-    </marker>
-  </defs>
-  <line x1="200" y1="250" x2="140" y2="250" stroke="#2c5aa0" stroke-width="2" marker-end="url(#arrowhead)"/>
-  <line x1="450" y1="250" x2="450" y2="250" stroke="#3d8b3d" stroke-width="2" marker-end="url(#arrowhead)"/>
-  <line x1="700" y1="250" x2="760" y2="250" stroke="#a02c2c" stroke-width="2" marker-end="url(#arrowhead)"/>
-</svg>
+```
+┌─────────────────────────────────────────────────────────────────┐
+│            TDE Layer: Adaptive Engine Selection                   │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│                    📥 Task                                       │
+│                      ↓                                           │
+│            ┌──────────────────────┐                             │
+│            │  TDE Detector         │                            │
+│            │  (5 signals)          │                            │
+│            │ Parallelization       │                            │
+│            │ Iteration Loops       │                            │
+│            │ Context Dependency    │                            │
+│            │ Data Volume           │                            │
+│            │ Task Type             │                            │
+│            └──────────────────────┘                             │
+│                      ↓                                           │
+│         ┌────────────┼────────────┐                             │
+│         ↓            ↓            ↓                             │
+│    ╔═════════╗  ╔══════════╗  ╔═════════╗                       │
+│    ║ Claude  ║  ║   TDE    ║  ║   ACS   ║                       │
+│    ║  Code   ║  ║(Optimum) ║  ║ Parallel║                       │
+│    ╠═════════╣  ╠══════════╣  ╠═════════╣                       │
+│    ║  1-3k   ║  ║  3-7k    ║  ║ 5-15k   ║                       │
+│    ║ Tokens  ║  ║ Tokens   ║  ║ Tokens  ║                       │
+│    ║ SAVES   ║  ║ SAVES    ║  ║ SAVES   ║                       │
+│    ║  80%    ║  ║  50%     ║  ║  40%    ║                       │
+│    ╚═════════╝  ╚══════════╝  ╚═════════╝                       │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 **Token savings breakdown:**
@@ -151,7 +91,7 @@ The TDE Layer is a **third agentic compute engine** that sits alongside ACS (Aut
 
 ## How TDE Decides: The 5-Signal Detector
 
-```svg
+```
 <svg viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
   <!-- Title -->
   <text x="450" y="30" font-size="22" font-weight="bold" text-anchor="middle" fill="#333">
@@ -335,91 +275,8 @@ Total: 10k tokens (parallel wall-clock)
 
 ## Architecture Diagram: Complete TDE Flow
 
-```svg
-<svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
-  <!-- Title -->
-  <text x="500" y="30" font-size="24" font-weight="bold" text-anchor="middle" fill="#333">
-    Complete TDE Layer Architecture (Full Execution Flow)
-  </text>
-  
-  <!-- User Input -->
-  <rect x="350" y="60" width="300" height="50" fill="#5cb85c" stroke="#3d8b3d" stroke-width="2" rx="5"/>
-  <text x="500" y="90" font-size="14" font-weight="bold" text-anchor="middle" fill="white">User Task</text>
-  
-  <!-- Step 1: Cheap Pre-Gate -->
-  <rect x="50" y="140" width="350" height="80" fill="#e3f2fd" stroke="#1976d2" stroke-width="2" rx="5"/>
-  <text x="225" y="165" font-size="12" font-weight="bold" text-anchor="middle" fill="#1976d2">Step 1: Cheap Pre-Gate (50 tokens)</text>
-  <text x="225" y="185" font-size="10" text-anchor="middle" fill="#333">Is task trivial? (&lt;500 tokens, 1 step, simple)</text>
-  <text x="225" y="202" font-size="10" text-anchor="middle" fill="#666">YES → Route to Claude Code (skip detector)</text>
-  
-  <!-- Step 2: L34 Data-Safety Check -->
-  <rect x="600" y="140" width="350" height="80" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="2" rx="5"/>
-  <text x="775" y="165" font-size="12" font-weight="bold" text-anchor="middle" fill="#7b1fa2">Step 2: L34 Data-Safety (100 tokens)</text>
-  <text x="775" y="185" font-size="10" text-anchor="middle" fill="#333">Classify data: PUBLIC | INTERNAL | CONFIDENTIAL</text>
-  <text x="775" y="202" font-size="10" text-anchor="middle" fill="#666">CONFIDENTIAL → Force Claude Code (no delegation)</text>
-  
-  <!-- Arrows -->
-  <line x1="500" y1="110" x2="225" y2="140" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
-  <line x1="500" y1="110" x2="775" y2="140" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
-  
-  <!-- Step 3: Initial Analysis -->
-  <rect x="300" y="270" width="400" height="80" fill="#fff3cd" stroke="#ffc107" stroke-width="2" rx="5"/>
-  <text x="500" y="295" font-size="12" font-weight="bold" text-anchor="middle" fill="#d39e00">Step 3: Initial Analysis (ADR-0210, ~1k tokens)</text>
-  <text x="500" y="315" font-size="10" text-anchor="middle" fill="#333">Classification: task_type, complexity, confidence</text>
-  <text x="500" y="332" font-size="10" text-anchor="middle" fill="#333">Global Plan: steps, dependencies, parallelization potential</text>
-  
-  <!-- Arrows to analysis -->
-  <line x1="225" y1="220" x2="400" y2="270" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
-  <line x1="775" y1="220" x2="600" y2="270" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
-  
-  <!-- Step 4: TDE Detector -->
-  <rect x="300" y="400" width="400" height="100" fill="#e8f5e9" stroke="#388e3c" stroke-width="2" rx="5"/>
-  <text x="500" y="425" font-size="12" font-weight="bold" text-anchor="middle" fill="#388e3c">Step 4: TDE Detector (5 signals, ~100 tokens)</text>
-  <line x1="310" y1="440" x2="690" y2="440" stroke="#388e3c" stroke-width="1"/>
-  <text x="500" y="460" font-size="10" text-anchor="middle" fill="#333">Parallelization ratio | Iteration loops | Context dependency</text>
-  <text x="500" y="477" font-size="10" text-anchor="middle" fill="#333">Data volume | Task type</text>
-  <text x="500" y="494" font-size="10" text-anchor="middle" fill="#333">→ Softmax ensemble → Engine score (0.0-1.0)</text>
-  
-  <!-- Arrow to detector -->
-  <line x1="500" y1="350" x2="500" y2="400" stroke="#333" stroke-width="2" marker-end="url(#arrowhead)"/>
-  
-  <!-- Step 5: Route & Execute -->
-  <rect x="50" y="550" width="240" height="100" fill="#f1f8e9" stroke="#689f38" stroke-width="2" rx="5"/>
-  <text x="170" y="570" font-size="11" font-weight="bold" text-anchor="middle" fill="#558b2f">Claude Code</text>
-  <text x="170" y="588" font-size="9" text-anchor="middle" fill="#333">Simple/interactive</text>
-  <line x1="60" y1="598" x2="280" y2="598" stroke="#689f38" stroke-width="1"/>
-  <text x="170" y="615" font-size="9" text-anchor="middle" fill="#666">Cost: 1-3k tokens</text>
-  <text x="170" y="630" font-size="9" text-anchor="middle" fill="#666">✓ Context kept</text>
-  
-  <rect x="380" y="550" width="240" height="100" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="2" rx="5"/>
-  <text x="500" y="570" font-size="11" font-weight="bold" text-anchor="middle" fill="#7b1fa2">TDE (Winner)</text>
-  <text x="500" y="588" font-size="9" text-anchor="middle" fill="#333">Balanced optimum</text>
-  <line x1="390" y1="598" x2="610" y2="598" stroke="#7b1fa2" stroke-width="1"/>
-  <text x="500" y="615" font-size="9" text-anchor="middle" fill="#666">Cost: 3-7k tokens</text>
-  <text x="500" y="630" font-size="9" text-anchor="middle" fill="#666">✓ Smart delegation</text>
-  
-  <rect x="710" y="550" width="240" height="100" fill="#fce4ec" stroke="#c2185b" stroke-width="2" rx="5"/>
-  <text x="830" y="570" font-size="11" font-weight="bold" text-anchor="middle" fill="#a8145c">ACS</text>
-  <text x="830" y="588" font-size="9" text-anchor="middle" fill="#333">Parallel/big-data</text>
-  <line x1="720" y1="598" x2="940" y2="598" stroke="#c2185b" stroke-width="1"/>
-  <text x="830" y="615" font-size="9" text-anchor="middle" fill="#666">Cost: 5-15k tokens</text>
-  <text x="830" y="630" font-size="9" text-anchor="middle" fill="#666">✓ Parallelizes</text>
-  
-  <!-- Arrows to engines -->
-  <line x1="350" y1="500" x2="170" y2="550" stroke="#689f38" stroke-width="2" marker-end="url(#arrowhead)"/>
-  <line x1="450" y1="500" x2="500" y2="550" stroke="#7b1fa2" stroke-width="2" marker-end="url(#arrowhead)"/>
-  <line x1="550" y1="500" x2="830" y2="550" stroke="#c2185b" stroke-width="2" marker-end="url(#arrowhead)"/>
-  
-  <!-- Result -->
-  <rect x="200" y="700" width="600" height="30" fill="#90EE90" stroke="#228B22" stroke-width="2" rx="3"/>
-  <text x="500" y="720" font-size="11" font-weight="bold" text-anchor="middle" fill="#228B22">Output + Token cost tracking → Learn → Next task routing improves</text>
-  
-  <defs>
-    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <polygon points="0 0, 10 3, 0 6" fill="#333"/>
-    </marker>
-  </defs>
-</svg>
+```
+[SVG Diagram - See docs/diagrams/ folder for visual]
 ```
 
 ---

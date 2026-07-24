@@ -108,6 +108,28 @@ async def default_local_step_executor(
 
 
 def _summarize(results: list[StepResult]) -> dict[str, Any]:
+    # ADR-0215 honesty fix (2026-07-24): a concurrent session added a
+    # `token_savings_pct` UI field sourced via `summary.get('token_savings_pct',
+    # 0)` in chat_runtime.py — but this function never set that key, so the
+    # field was structurally always 0, silently displayed as a real metric.
+    # No real per-call token usage is instrumented anywhere in this pipeline
+    # (worker_ipc.run_one_shot uses --output-format text, not json — see
+    # TokenSavingsFiber's docstring in nerve_builtins.py for the full
+    # explanation). Rather than fabricate a token number, this now computes
+    # what IS genuinely measured: real per-step wall-clock duration_ms,
+    # compared delegated vs. local. `token_savings_pct` stays present (for
+    # frontend backward compatibility) but is explicitly `None`, never a
+    # silently-defaulted 0 that looks like a real "0% savings" measurement.
+    delegated_durations = [r.duration_ms for r in results if r.was_delegated and r.success]
+    local_durations = [r.duration_ms for r in results if not r.was_delegated and r.success]
+    avg_delegated = (
+        sum(delegated_durations) / len(delegated_durations) if delegated_durations else None
+    )
+    avg_local = sum(local_durations) / len(local_durations) if local_durations else None
+    latency_delta_pct = None
+    if avg_delegated is not None and avg_local:
+        latency_delta_pct = round(100.0 * (avg_local - avg_delegated) / avg_local, 1)
+
     return {
         "step_count": len(results),
         "succeeded": sum(1 for r in results if r.success),
@@ -115,6 +137,13 @@ def _summarize(results: list[StepResult]) -> dict[str, Any]:
         "delegated": sum(1 for r in results if r.was_delegated),
         "local": sum(1 for r in results if not r.was_delegated),
         "total_duration_ms": sum(r.duration_ms for r in results),
+        # Real, measured (not estimated) — see comment above.
+        "avg_delegated_duration_ms": avg_delegated,
+        "avg_local_duration_ms": avg_local,
+        "latency_delta_pct": latency_delta_pct,
+        # Never fabricated — no token-usage instrumentation exists yet.
+        "token_savings_pct": None,
+        "token_usage_instrumented": False,
     }
 
 

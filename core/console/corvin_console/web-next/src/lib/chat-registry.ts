@@ -20,7 +20,14 @@ export type MessagePart =
   | { kind: "tool"; name: string; input: Record<string, unknown> }
   | { kind: "artifact"; name: string; path: string; mime: string; size: number; sid: string; label?: string };
 
-/** ADR-0214 Phase 2: TDE progress metrics for audit graph visualization. */
+/** ADR-0214 Phase 2: TDE progress metrics for audit graph visualization.
+ *
+ * ADR-0215 honesty note: token_savings_pct is always `null` (no real
+ * per-call token-usage instrumentation exists yet) — render "not measured",
+ * never treat a missing/null value as 0% savings. latency_delta_pct IS a
+ * real, measured wall-clock comparison (delegated vs. local steps within
+ * this turn) and safe to render as-is.
+ */
 export interface TdeProgress {
   run_id: string;
   total_steps: number;
@@ -28,6 +35,9 @@ export interface TdeProgress {
   delegated_count: number;
   local_count: number;
   l34_forced: boolean;
+  token_savings_pct?: number | null;
+  token_usage_instrumented?: boolean;
+  latency_delta_pct?: number | null;
 }
 
 export interface ChatMessage {
@@ -81,14 +91,25 @@ export interface StreamEvent {
   // emitted by the TDE turn path (chat_runtime.py::_stream_tde_turn).
   tde_run_id?: string;
   // ADR-0214 TDE Phase 1: engine_progress event emitted on TDE turn completion.
-  // Fields: total_steps, completed_steps, delegated_count, local_count,
-  // token_savings_pct. Used by chat badge + audit graph for visualization.
+  // Fields: total_steps, completed_steps, delegated_count, local_count.
+  // Used by chat badge + audit graph for visualization.
+  //
+  // ADR-0215 honesty note (2026-07-24): token_savings_pct is ALWAYS `null`
+  // for now — the TDE pipeline has no real per-call token-usage
+  // instrumentation (see nerve_builtins.py's TokenSavingsFiber docstring).
+  // A prior version of this field silently defaulted to 0 (looked like a
+  // real "0% savings" measurement); it is now explicitly nullable so
+  // consumers can render "not measured" instead of a fabricated number.
+  // latency_delta_pct IS a real, measured value (delegated vs. local
+  // per-step wall-clock duration_ms within this turn) — safe to render.
   run_id?: string;
   total_steps?: number;
   completed_steps?: number;
   delegated_count?: number;
   local_count?: number;
-  token_savings_pct?: number;
+  token_savings_pct?: number | null;
+  token_usage_instrumented?: boolean;
+  latency_delta_pct?: number | null;
   l34_forced?: boolean;
   // ccc_action fields (ADR-0168 M3)
   action_id?: string;
