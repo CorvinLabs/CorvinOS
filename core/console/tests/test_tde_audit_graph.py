@@ -33,44 +33,51 @@ def _fake_session_record():
     )
 
 
-def _write_normal_turn(path: Path, run_id: str, *, base_ts: float = 1_000.0) -> None:
+def _write_normal_turn(path: Path, run_id: str, *, base_ts: float = 1_000.0,
+                       tenant_id: str = "_default") -> None:
     """Write a real hash-chained tde.* trail for one TDE turn: one delegated
-    step (with a shadow loss measurement) + one local step."""
+    step (with a shadow loss measurement) + one local step.
+
+    ``tenant_id`` mirrors production since 2026-07-24: chat_runtime threads the
+    authenticated tenant through SendIntegration/AdaptiveDelegationExecutor
+    into every tde.* record (audit_event's reserved arg → details block), and
+    the graph endpoint refuses records not stamped with the caller's tenant.
+    """
     t = base_ts
     se.write_event(path, "tde.engine_selected", ts=t, details={
         "engine": "tiered_delegation", "confidence": 0.92, "override": False,
         "trivial": False, "task_type": "code_generation", "complexity": "moderate",
-        "tde_run_id": run_id,
+        "tde_run_id": run_id, "tenant_id": tenant_id,
     })
     t += 1
     se.write_event(path, "tde.delegation_decision", ts=t, details={
         "step_action": "generate_code", "delegate": True, "reason_code": "gates_passed",
-        "tde_run_id": run_id, "step_num": 1,
+        "tde_run_id": run_id, "tenant_id": tenant_id, "step_num": 1,
     })
     t += 1
     se.write_event(path, "tde.step_delegated", ts=t, details={
         "step_action": "generate_code", "success": True, "duration_ms": 1200,
-        "ipc": "SubprocessWorkerIPC", "tde_run_id": run_id, "step_num": 1,
+        "ipc": "SubprocessWorkerIPC", "tde_run_id": run_id, "tenant_id": tenant_id, "step_num": 1,
     })
     t += 1
     se.write_event(path, "tde.loss_recorded", ts=t, details={
         "task_type": "generate_code", "engine": "tiered_delegation",
-        "loss_pct": 0.02, "measured": True, "tde_run_id": run_id, "step_num": 1,
+        "loss_pct": 0.02, "measured": True, "tde_run_id": run_id, "tenant_id": tenant_id, "step_num": 1,
     })
     t += 1
     se.write_event(path, "tde.delegation_decision", ts=t, details={
         "step_action": "reason_about", "delegate": False, "reason_code": "budget_exhausted",
-        "tde_run_id": run_id, "step_num": 2,
+        "tde_run_id": run_id, "tenant_id": tenant_id, "step_num": 2,
     })
     t += 1
     se.write_event(path, "tde.step_executed_local", ts=t, details={
         "step_action": "reason_about", "success": True, "duration_ms": 800,
-        "tde_run_id": run_id, "step_num": 2,
+        "tde_run_id": run_id, "tenant_id": tenant_id, "step_num": 2,
     })
     t += 1
     se.write_event(path, "tde.plan_executed", ts=t, details={
         "step_count": 2, "batch_count": 1, "delegated_count": 1, "local_count": 1,
-        "tde_run_id": run_id,
+        "tde_run_id": run_id, "tenant_id": tenant_id,
     })
 
 
@@ -264,3 +271,56 @@ class TestRouteEndToEnd:
 
         payload_b = self._call(run_b, monkeypatch, path)
         assert payload_b["meta"]["chain_verified"] is False
+
+    def test_tamper_outside_run_surfaces_in_global_verdict(self, tmp_path, monkeypatch):
+        """Local-segment scoping must not HIDE a broken chain: the whole-chain
+        verdict rides along in meta.chain_verified_global (review 2026-07-24 —
+        prev-hash linkage is transitive, a break before this segment
+        un-anchors it)."""
+        path = tmp_path / "audit.jsonl"
+        run_a = "tde-888-1111"
+        run_b = "tde-888-2222"
+        _write_normal_turn(path, run_a, base_ts=1_000.0)
+        _write_normal_turn(path, run_b, base_ts=2_000.0)
+
+        lines = path.read_text().splitlines()
+        rec = json.loads(lines[2])  # run_a's segment
+        assert rec["details"].get("tde_run_id") == run_a
+        rec["details"]["success"] = not rec["details"]["success"]
+        lines[2] = json.dumps(rec)
+        path.write_text("\n".join(lines) + "\n")
+
+        payload_b = self._call(run_b, monkeypatch, path)
+        assert payload_b["meta"]["chain_verified"] is True          # own segment intact
+        assert payload_b["meta"]["chain_verified_global"] is False  # chain as a whole is not
+        assert payload_b["meta"]["chain_problems_total"] >= 1
+
+    def test_cross_tenant_run_is_404(self, tmp_path, monkeypatch):
+        """ADR-0007: another tenant's run must be indistinguishable from a
+        nonexistent one (fail-closed 404, no existence oracle)."""
+        path = tmp_path / "audit.jsonl"
+        run_id = "tde-999-aaaa"
+        _write_normal_turn(path, run_id, tenant_id="other-tenant")
+        with pytest.raises(HTTPException) as exc_info:
+            self._call(run_id, monkeypatch, path)  # caller tenant: _default
+        assert exc_info.value.status_code == 404
+
+    def test_unstamped_legacy_run_is_404(self, tmp_path, monkeypatch):
+        """Records without a tenant stamp (pre-2026-07-24 runs, standalone
+        bench) are never served to ANY tenant — deny-by-default."""
+        path = tmp_path / "audit.jsonl"
+        run_id = "tde-999-bbbb"
+        _write_normal_turn(path, run_id, tenant_id="")
+        # Strip the stamp entirely to mimic legacy records.
+        lines = path.read_text().splitlines()
+        out = []
+        for line in lines:
+            rec = json.loads(line)
+            rec["details"].pop("tenant_id", None)
+            out.append(json.dumps(rec))
+        # NOTE: rewriting breaks the hash chain, but the tenant filter runs
+        # BEFORE chain verification and must 404 first.
+        path.write_text("\n".join(out) + "\n")
+        with pytest.raises(HTTPException) as exc_info:
+            self._call(run_id, monkeypatch, path)
+        assert exc_info.value.status_code == 404

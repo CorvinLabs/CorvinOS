@@ -42,6 +42,7 @@ class SendIntegration:
         registry: Optional[EngineRegistry] = None,
         l34_classifier: Optional[Any] = None,
         session_key: str = "default",
+        tenant_id: str = "",
     ):
         """Initialize integration components.
 
@@ -54,9 +55,16 @@ class SendIntegration:
                 pass ``f"{tenant_id}:{sid}"``; standalone/CLI/test callers
                 may omit it (falls back to the old, single, unkeyed
                 behavior under the literal key ``"default"``).
+            tenant_id: ADR-0007 tenant of the caller. Stamped (via the
+                RESERVED audit_event arg, not the details allowlist) on every
+                tde.* chain event so the audit-graph endpoint can scope runs
+                per tenant. Console callers pass the authenticated
+                ``rec.tenant_id``; standalone callers may omit it — their
+                runs are then unscoped and never served cross-tenant.
         """
         self.parser = SlashCommandParser()
         self.session_key = session_key
+        self.tenant_id = str(tenant_id or "")
         self.loss_tracker = get_session_tracker(session_key=session_key)
         self.detector = RobustEngineDetector(loss_tracker=self.loss_tracker)
         self.l34_gate = L34DelegationGate(l34_classifier=l34_classifier)
@@ -122,7 +130,7 @@ class SendIntegration:
                 )
             engine_override = "claude_code"
             tde_audit.emit("l34_blocked", scope="prescan", reason_code="prescan_block",
-                           tde_run_id=run_id)
+                           tde_run_id=run_id, tenant_id=self.tenant_id)
             _logger.warning(f"L34 prescan blocked delegation: {prescan.reason}")
 
         # Step 3: Selection. Precedence: L34/override > trivial > detector.
@@ -156,13 +164,14 @@ class SendIntegration:
             task_type=initial_analysis.classification.task_type,
             complexity=initial_analysis.classification.complexity,
             tde_run_id=run_id,
+            tenant_id=self.tenant_id,
         )
 
         # Step 4: Execute
         _logger.info(f"Executing with {engine_name}")
         result = await self.registry.execute(
             engine_name, initial_analysis, context, task_text=task_text, run_id=run_id,
-            session_key=self.session_key,
+            session_key=self.session_key, tenant_id=self.tenant_id,
         )
         if not isinstance(result, dict):
             result = {"engine": engine_name, "success": bool(result), "output": result}

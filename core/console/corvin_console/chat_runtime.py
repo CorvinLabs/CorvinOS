@@ -3433,6 +3433,10 @@ async def _stream_tde_turn(
                 # process-wide singleton shared (and silently mixed) across
                 # every concurrent tenant/session.
                 session_key=f"{sess.tenant_id}:{sess.sid}",
+                # ADR-0007: stamp every tde.* chain event with the
+                # authenticated tenant so the audit-graph endpoint can scope
+                # runs per tenant (adversarial review 2026-07-24).
+                tenant_id=sess.tenant_id,
             )
             engine_name, result = await integration.select_engine_and_execute(
                 "/use-engine tiered_delegation\n" + task_text, context, analysis,
@@ -3464,13 +3468,25 @@ async def _stream_tde_turn(
                 "token_usage_instrumented": summary.get("token_usage_instrumented", False),
             }
 
-            # GDPR Art. 30 Audit: Log L34 gate decision (compliance-load-bearing per CLAUDE.md).
-            # Required whether delegation happened or not — the gate decision is itself auditable.
-            audit_emit(sess, "tde.l34_prescan",
-                      l34_forced=l34_forced,
-                      delegated=delegated,
-                      local=local_count,
-                      tde_run_id=run_id)
+            # GDPR Art. 30 Audit: Log L34 gate decision (compliance-load-bearing
+            # per CLAUDE.md). Required whether delegation happened or not — the
+            # gate decision is itself auditable. Emitted via tde_audit (the
+            # HASH-CHAINED canonical path), NOT audit_emit: the latter writes a
+            # separate, unchained per-tenant web log, which violated the
+            # "every audit event must hash-chain" baseline (adversarial review
+            # 2026-07-24). Key names must be in tde_audit._ALLOWED_KEYS —
+            # delegated_count/local_count/l34_forced are; bare delegated/local
+            # would be silently scrubbed.
+            try:
+                from tde import tde_audit as _tde_audit  # noqa: PLC0415
+                _tde_audit.emit("l34_prescan",
+                                l34_forced=l34_forced,
+                                delegated_count=delegated,
+                                local_count=local_count,
+                                tde_run_id=run_id,
+                                tenant_id=sess.tenant_id)
+            except Exception:  # noqa: BLE001 — audit is best-effort by contract
+                _log.warning("tde.l34_prescan audit emit failed", exc_info=True)
 
             if step_count > 0:
                 # ADR-0215 (2026-07-24): completes the "TODO: TDE-Engine must
@@ -4043,10 +4059,19 @@ async def stream_turn(
             _dbg_ctx: dict[str, Any] = {
                 "statement": {"task": _task_text}, "task_text": _task_text,
             }
-            _dbg_analysis = await asyncio.to_thread(
-                run_initial_analysis_sync, _task_text, _dbg_ctx,
-                proc_holder=_dbg_holder,
-            )
+            try:
+                _dbg_analysis = await asyncio.to_thread(
+                    run_initial_analysis_sync, _task_text, _dbg_ctx,
+                    proc_holder=_dbg_holder,
+                )
+            finally:
+                # A cancelled to_thread does NOT stop the running `claude -p`
+                # one-shot (ProcHolder's whole reason to exist); without this
+                # kill a client disconnect mid-/debug-engine left the analysis
+                # subprocess burning a real LM call for up to 180s
+                # (adversarial review 2026-07-24; kill() is a no-op when the
+                # process already exited).
+                _dbg_holder.kill()
             _dbg_detector = RobustEngineDetector(
                 loss_tracker=get_session_tracker(session_key=f"{sess.tenant_id}:{sess.sid}")
             )

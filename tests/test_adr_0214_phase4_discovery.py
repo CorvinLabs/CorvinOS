@@ -2,6 +2,8 @@
 import asyncio
 import json
 import sys
+
+import pytest
 import tempfile
 from pathlib import Path
 
@@ -112,6 +114,7 @@ def test_adaptive_chunking_performance():
     print("✅ Adaptive chunking test PASSED")
 
 
+@pytest.mark.asyncio
 async def test_async_plugin_execution():
     """Test executing a loaded plugin asynchronously."""
     registry = DetectorPluginRegistry(cls_tier="free")

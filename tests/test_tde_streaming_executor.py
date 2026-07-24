@@ -122,3 +122,69 @@ class TestExecuteStreaming:
         result = await executor.execute_streaming(step, statement, _executor_fn)
         assert result.success is True
         assert result.output["chunks_seen"] == 0
+
+
+class TestAdaptiveChunkSizesStayScannable:
+    """Adversarial review 2026-07-24: the 10MB LARGE tier exceeded the L34
+    5MB scan ceiling — every chunk of a >=500MB value was RESTRICTED and the
+    'stream' yielded nothing while reporting success."""
+
+    def test_every_tier_is_under_the_gate_scan_ceiling(self, executor):
+        from tde.l34_delegation_gate import _CONTENT_SCAN_MAX_BYTES
+        for size in (
+            executor._adaptive_chunk_size(50 * 1024 * 1024),        # <100MB
+            executor._adaptive_chunk_size(200 * 1024 * 1024),       # 100-500MB
+            executor._adaptive_chunk_size(2 * 1024 * 1024 * 1024),  # >=500MB
+        ):
+            assert size < _CONTENT_SCAN_MAX_BYTES
+
+    def test_bytes_chunks_survive_repr_inflation(self, executor):
+        """The gate scans str(value); b'\\xNN' repr inflates ~4x. A bytes
+        chunk whose repr crosses the ceiling is RESTRICTED wholesale."""
+        from tde.l34_delegation_gate import _CONTENT_SCAN_MAX_BYTES
+        chunk_size = executor._adaptive_chunk_size(600 * 1024 * 1024)
+        bytes_chunk_size = max(1, chunk_size // executor._BYTES_REPR_INFLATION)
+        worst_case = len(str(b"\xff" * bytes_chunk_size))
+        assert worst_case <= _CONTENT_SCAN_MAX_BYTES
+
+    @pytest.mark.asyncio
+    async def test_large_bytes_value_actually_streams(self, executor):
+        """6MB of benign bytes must stream (regression shape of the round-4
+        str finding, for bytes)."""
+        big = b"the quick brown fox jumps over the lazy dog. " * 140_000
+        assert len(big) > 5 * 1024 * 1024
+        chunks = [c async for c in executor.stream_filtered_data({"b": big}, {"b"})]
+        assert len(chunks) > 1
+        assert b"".join(c["b"] for c in chunks) == big
+
+
+class TestSeamScanning:
+    """Adversarial review 2026-07-24: a secret straddling a fixed chunk
+    boundary matched no pattern in either chunk — both halves streamed and
+    the consumer could reassemble the full credential."""
+
+    @pytest.mark.asyncio
+    async def test_boundary_straddling_secret_never_reassembles(self, executor):
+        secret = "sk-live-abcdefghijklmnopqrstuvwxyz0123456789"
+        chunk_size = executor._CHUNK_SIZE_SMALL
+        # Place the secret exactly across the first chunk boundary, preceded
+        # by a word boundary (the gate's patterns are \b-anchored — glueing
+        # the secret to a word char would defeat even an unchunked scan and
+        # test nothing).
+        filler = "benign filler text. " * (chunk_size // 20 + 1)
+        head = filler[: chunk_size - len(secret) // 2 - 1] + " "
+        big_value = head + secret + " " + "b" * chunk_size
+        statement = {"v": big_value}
+
+        chunks = [c async for c in executor.stream_filtered_data(statement, {"v"})]
+        reassembled = "".join(c["v"] for c in chunks)
+        assert secret not in reassembled, (
+            "secret leaked through the L34 stream filter via chunk-seam split"
+        )
+
+    @pytest.mark.asyncio
+    async def test_seam_scan_does_not_break_safe_streams(self, executor):
+        """Seam scanning must not drop safe data (order + completeness)."""
+        big_value = "safe text only here. " * 140_000
+        chunks = [c async for c in executor.stream_filtered_data({"v": big_value}, {"v"})]
+        assert "".join(c["v"] for c in chunks) == big_value

@@ -16,6 +16,18 @@ sys.path.insert(0, str(_REPO / "operator" / "orchestration"))
 from tde import bench  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolated_audit_chain(monkeypatch, tmp_path):
+    """Redirect the audit chain to tmp for EVERY test in this file.
+
+    Adversarial review 2026-07-24 (verified empirically): _emit_snapshot →
+    tde_audit.emit resolves the REAL backend, so each pytest run appended
+    permanent tde.bench_snapshot events to the live hash-chained
+    audit.jsonl — unremovable test noise in a GDPR Art. 30 record, and on a
+    pinned-service host it lands in the production chain."""
+    monkeypatch.setenv("VOICE_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
+
+
 def _fake_analysis(estimated_tokens=1234, steps=1):
     analysis = mock.MagicMock()
     analysis.global_plan.estimated_tokens = estimated_tokens

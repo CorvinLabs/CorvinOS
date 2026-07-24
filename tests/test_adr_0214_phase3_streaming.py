@@ -3,6 +3,8 @@
 Tests large-data streaming with L34 filtering.
 """
 import sys
+
+import pytest
 import asyncio
 from pathlib import Path
 
@@ -13,6 +15,7 @@ from tde.l34_delegation_gate import L34DelegationGate
 from initial_analysis import Step
 
 
+@pytest.mark.asyncio
 async def test_streaming_executor_with_large_data():
     """Test StreamingExecutor with >1GB simulated data."""
     executor = StreamingExecutor(l34_gate=L34DelegationGate())
@@ -67,6 +70,7 @@ async def test_streaming_executor_with_large_data():
     print("✅ Streaming E2E test PASSED")
 
 
+@pytest.mark.asyncio
 async def test_streaming_l34_filtering():
     """Test L34 filtering during streaming."""
     executor = StreamingExecutor(l34_gate=L34DelegationGate())
@@ -104,6 +108,7 @@ async def test_streaming_l34_filtering():
     print("✅ L34 Filtering test PASSED")
 
 
+@pytest.mark.asyncio
 async def test_streaming_executor_small_data_threshold():
     """Test that StreamingExecutor.should_use_streaming() returns False for <1GB."""
     executor = StreamingExecutor(l34_gate=L34DelegationGate())

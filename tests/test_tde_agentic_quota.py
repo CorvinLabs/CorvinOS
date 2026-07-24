@@ -47,8 +47,12 @@ def _analysis() -> InitialAnalysisRequest:
 
 @pytest.fixture()
 def quota_env(monkeypatch, tmp_path):
-    """Isolated corvin_home + free tier, license loading neutralised."""
+    """Isolated corvin_home + free tier, license loading neutralised.
+
+    VOICE_AUDIT_PATH is redirected too: a metered TDE run emits tde.* audit
+    events, which must land in tmp, never in the live hash chain."""
     monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+    monkeypatch.setenv("VOICE_AUDIT_PATH", str(tmp_path / "audit.jsonl"))
     import license.validator as _v  # noqa: PLC0415
     monkeypatch.setattr(_v, "load_license_from_env", lambda *a, **k: None)
     _v._set_active_license(None)  # free tier

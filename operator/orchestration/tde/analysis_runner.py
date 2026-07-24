@@ -77,6 +77,13 @@ def _run_lm_call(prompt: str, timeout_s: int, proc_holder: Optional[Any] = None)
         raise AnalysisUnavailable("claude CLI not found") from exc
     except subprocess.TimeoutExpired as exc:
         raise AnalysisUnavailable(f"analysis timeout after {timeout_s}s") from exc
+    except OSError as exc:
+        # E2BIG et al.: a >128KB chat message exceeds Linux MAX_ARG_STRLEN for
+        # the single `-p` argv element — Popen raises OSError("Argument list
+        # too long"), which previously escaped unmapped and crashed the turn
+        # instead of degrading like every other analysis failure (adversarial
+        # review 2026-07-24).
+        raise AnalysisUnavailable(f"analysis spawn failed: {exc}") from exc
 
     if rc != 0:
         raise AnalysisUnavailable(
