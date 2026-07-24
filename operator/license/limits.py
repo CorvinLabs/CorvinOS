@@ -60,8 +60,13 @@ class LicenseLimitError(Exception):
 # Every field must have a value here — there is no "unknown" state.
 
 FREE_TIER: dict[str, Any] = {
-    # Compute
-    "compute_units_per_day":  1,
+    # Compute — ONE shared daily pool for ALL agentic compute engines: ACS
+    # workflows, TDE runs (tiered delegation, ADR-0214), compute/grid-search
+    # runs (L25), forge compute_run and A2A compute. Every engine chokepoint
+    # charges the SAME counter file (global/license/compute_quota.json), so
+    # this limit is the SUM across engines, not per-engine (maintainer
+    # decision 2026-07-24: 10 agentic turns/day on the free tier, was 1).
+    "compute_units_per_day":  10,
 
     # Chat / design-assistant interactive turns. UNLIMITED on every tier
     # (operator decision 2026-06-23): the conversational assistant must always be

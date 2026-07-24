@@ -397,7 +397,7 @@ class TestFreeTier:
         cap = Capability(client)
         assert cap.active_tier() == "free"
         assert cap.get_feature_config("data_residency") is None
-        assert cap.get_limit("compute_units_per_day") == 1
+        assert cap.get_limit("compute_units_per_day") == 10
         assert cap.get_limit("tenants_max") == 1
 
     def test_no_sob_assert_limit_raises_on_exceed(self, corvin_home):

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -107,6 +108,69 @@ async def default_local_step_executor(
     return await asyncio.to_thread(_run)
 
 
+def _license_corvin_home() -> Path:
+    """Resolve corvin_home the same way the other quota chokepoints do
+    (forge.paths → env → ~/.corvin), so TDE charges the SAME counter file
+    as ACS / compute runs."""
+    _op_root = Path(__file__).resolve().parents[2]  # operator/
+    for _p in (str(_op_root), str(_op_root / "forge")):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
+    try:
+        from forge import paths as _fp  # type: ignore  # noqa: PLC0415
+        return _fp.corvin_home()
+    except ImportError:
+        env = os.environ.get("CORVIN_HOME")
+        return Path(env) if env else Path.home() / ".corvin"
+
+
+def _enforce_tde_compute_quota(run_id: str) -> Optional[dict[str, Any]]:
+    """Charge one unit of the shared daily agentic-compute pool for this run.
+
+    TDE shares ONE pool (``compute_units_per_day``, counter file
+    ``global/license/compute_quota.json``) with ACS workflows and compute
+    (grid-search) runs, so a free-tier operator gets 10 agentic turns/day
+    across ALL engines combined (maintainer decision 2026-07-24). Fail
+    contract mirrors acs_engine_adapter._enforce_acs_compute_quota:
+    missing/shadowed license module → deny (fail-closed, a removed module
+    must not buy unmetered compute); over-quota → deny; transient I/O is
+    handled inside increment_and_check per LIC-2. Returns an error-result
+    dict to surface, or None to proceed.
+    """
+    _op_root = str(Path(__file__).resolve().parents[2])
+    try:
+        if _op_root not in sys.path:
+            sys.path.insert(0, _op_root)
+        from license.compute_quota import increment_and_check as _cq_inc  # type: ignore  # noqa: PLC0415
+        from license.limits import LicenseLimitError as _CQErr  # type: ignore  # noqa: PLC0415
+        from license.validator import load_license_from_env as _load_lic  # type: ignore  # noqa: PLC0415
+        # Load the license so limits reflect the real tier, not FREE_TIER
+        # defaults (idempotent via _LICENSE_INITIALIZED, same as ACS).
+        _load_lic()
+    except ImportError:
+        return {"engine": "tiered_delegation", "success": False,
+                "reason": "enforcement_unavailable",
+                "error": "compute quota enforcement unavailable (fail-closed)"}
+    try:
+        _cq_inc(_license_corvin_home(), channel="tde",
+                chat_key=f"tde:{run_id or 'run'}")
+    except _CQErr as exc:
+        return {"engine": "tiered_delegation", "success": False,
+                "reason": "quota_exhausted",
+                "error": f"compute_units_per_day exceeded: {exc}"}
+    return None
+
+
+def _refund_tde_compute_unit() -> None:
+    """Give back the unit charged for a run that never executed a step
+    (invalid plan rejected at executor construction). Best-effort."""
+    try:
+        from license.compute_quota import refund_one as _refund  # type: ignore  # noqa: PLC0415
+        _refund(_license_corvin_home())
+    except Exception:  # noqa: BLE001 — refund is best-effort by contract
+        pass
+
+
 def _summarize(results: list[StepResult]) -> dict[str, Any]:
     # ADR-0215 honesty fix (2026-07-24): a concurrent session added a
     # `token_savings_pct` UI field sourced via `summary.get('token_savings_pct',
@@ -182,6 +246,17 @@ class TieredDelegationEngine:
             return {"engine": self.name, "success": False,
                     "error": "TDE requires an InitialAnalysisRequest or GlobalPlan"}
 
+        # Agentic-compute quota (shared ADR-0094 pool, maintainer decision
+        # 2026-07-24). Metered whenever this run can reach a real LLM: real
+        # worker IPC, or the default local executor (which spawns the claude
+        # CLI even with real_ipc=False). Unit-test configs (injected stub
+        # executor + mock IPC) consume no real compute and stay unmetered.
+        metered = self.real_ipc or self.local_step_executor is default_local_step_executor
+        if metered:
+            denied = _enforce_tde_compute_quota(str(kwargs.get("run_id") or ""))
+            if denied is not None:
+                return denied
+
         statement = context.get("statement") or {}
         if not isinstance(statement, dict):
             statement = {"statement": statement}
@@ -220,6 +295,9 @@ class TieredDelegationEngine:
             # LM-emitted plans are routinely slightly malformed (0-based step
             # numbers, gaps) — that must yield an explicit error result, not
             # an unhandled crash of the whole send() turn (round-2 finding).
+            if metered:
+                # No step ran — give the charged pool unit back.
+                _refund_tde_compute_unit()
             return {"engine": self.name, "success": False,
                     "error": f"invalid plan: {exc}"}
 

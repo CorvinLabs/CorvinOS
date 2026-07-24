@@ -1736,7 +1736,7 @@ carries the same `<acs_directive>` block the bridges inject):
    fences, repo/branch/commit, traceback, function/class/module). Coding is
    sequential (explore → edit → test → fix), needs the shared session
    workspace and conversation context — ACS workers have neither — and
-   every ACS turn burns one `compute_units_per_day` (free tier: 1/day).
+   every ACS turn burns one `compute_units_per_day` (free tier: 10/day, shared agentic pool with TDE + compute runs).
    The direct turn is un-metered and does its own Task-tool sub-delegation
    when parallelism genuinely helps. Pre-rework, the strong-verb list sent
    every coding task into the fan-out; the historical error classes

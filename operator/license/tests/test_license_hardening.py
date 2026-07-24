@@ -486,7 +486,7 @@ def test_assert_limit_rejects_negative_requested():
     v = _fresh_validator()
     # Import AFTER fresh-reload so we get the same class instance the validator uses.
     LicenseLimitError = importlib.import_module("license.limits").LicenseLimitError
-    v._set_active_license(None)   # free tier (compute_units_per_day = 1)
+    v._set_active_license(None)   # free tier (compute_units_per_day = 10)
     with pytest.raises(LicenseLimitError):
         v.assert_limit("compute_units_per_day", -1)
 
@@ -820,7 +820,7 @@ def test_string_digit_limit_is_rejected(caplog):
     with caplog.at_level(logging.WARNING, logger="corvin.license"):
         result = v.get_limit("compute_units_per_day")
 
-    # Must NOT be 9999 — must fall back to free-tier default (1) not string-coerced 9999.
+    # Must NOT be 9999 — must fall back to free-tier default (10) not string-coerced 9999.
     assert result != 9999, (
         f"String '9999' must not be coerced to int 9999; got {result!r}"
     )
@@ -833,8 +833,8 @@ def test_string_digit_assert_limit_uses_tier_default():
     """With a string digit limit, assert_limit uses the tier default (not 9999)."""
     v = _fresh_validator()
     LicenseLimitError = importlib.import_module("license.limits").LicenseLimitError
-    # free tier: compute_units_per_day = 1.  String "9999" must be ignored.
-    # Requesting 9999 must therefore raise because free-tier limit is 1.
+    # free tier: compute_units_per_day = 10.  String "9999" must be ignored.
+    # Requesting 9999 must therefore raise because free-tier limit is 10.
     v._set_active_license({
         "tier": "free",
         "limits": {"compute_units_per_day": "9999"},
@@ -898,8 +898,8 @@ def test_unknown_string_limit_falls_through_to_tier():
         "limits": {"compute_units_per_day": "unlimited"},
     })
     result = v.get_limit("compute_units_per_day")
-    # "unlimited" string — invalid type, falls through to FREE_TIER default = 1
-    assert result == 1, (
+    # "unlimited" string — invalid type, falls through to FREE_TIER default = 10
+    assert result == 10, (
         f"Non-digit string must fall through to FREE_TIER; got {result!r}"
     )
 
