@@ -23,7 +23,7 @@ sys.path.insert(0, str(_REPO / "operator" / "orchestration"))
 sys.path.insert(0, str(_REPO / "operator"))
 
 from tde.tde_engine import StepResult, TieredDelegationEngine, _summarize  # noqa: E402
-from tde.worker_ipc import MockWorkerIPC  # noqa: E402
+from tde.worker_ipc import MockWorkerIPC, parse_cli_envelope, parse_worker_output  # noqa: E402
 from tde.loss_profile_tracker import clear_session_tracker  # noqa: E402
 from initial_analysis import (  # noqa: E402
     Classification,
@@ -50,6 +50,14 @@ def _sr(step_num, *, delegated, duration_ms, success=True):
     )
 
 
+def _sr_tok(step_num, total_tokens, *, model="haiku", cost=None, delegated=True):
+    return StepResult(
+        step_num=step_num, action="read_file", success=True,
+        duration_ms=100, was_delegated=delegated,
+        token_usage={"total_tokens": total_tokens, "model": model, "cost_usd": cost},
+    )
+
+
 def test_token_savings_pct_is_always_none_never_fabricated():
     results = [
         _sr(1, delegated=True, duration_ms=100),
@@ -58,6 +66,67 @@ def test_token_savings_pct_is_always_none_never_fabricated():
     summary = _summarize(results)
     assert summary["token_savings_pct"] is None
     assert summary["token_usage_instrumented"] is False
+
+
+# ── ADR-0218 Phase 0: real token instrumentation ────────────────────────────
+
+def test_token_usage_summed_and_flag_flips_when_usage_present():
+    summary = _summarize([_sr_tok(1, 1580, cost=0.0021), _sr_tok(2, 800, cost=0.001)])
+    assert summary["token_usage_instrumented"] is True
+    assert summary["total_tokens"] == 2380
+    assert summary["instrumented_step_count"] == 2
+    assert round(summary["cost_usd"], 4) == 0.0031
+    # A savings PERCENTAGE still needs a counterfactual (Phase 1), never faked.
+    assert summary["token_savings_pct"] is None
+
+
+def test_tokens_broken_down_by_model():
+    summary = _summarize([
+        _sr_tok(1, 1000, model="claude-haiku-4-5"),
+        _sr_tok(2, 500, model="claude-haiku-4-5"),
+        _sr_tok(3, 4000, model="claude-sonnet-5"),
+    ])
+    assert summary["tokens_by_model"] == {"claude-haiku-4-5": 1500, "claude-sonnet-5": 4000}
+    assert summary["total_tokens"] == 5500
+
+
+def test_absent_usage_is_omitted_never_counted_as_zero():
+    # One instrumented delegated step + one local step with no usage: the local
+    # step must not dilute the total to a fake 0, and the flag still flips True.
+    summary = _summarize([_sr_tok(1, 1200), _sr(2, delegated=False, duration_ms=90)])
+    assert summary["token_usage_instrumented"] is True
+    assert summary["total_tokens"] == 1200
+    assert summary["instrumented_step_count"] == 1
+
+
+def test_cost_none_when_no_step_reported_cost():
+    summary = _summarize([_sr_tok(1, 1000, cost=None)])
+    assert summary["cost_usd"] is None
+    assert summary["total_tokens"] == 1000
+
+
+def test_cli_envelope_extracts_result_and_usage():
+    env = (
+        '{"type":"result","result":"{\\"output\\": \\"done\\"}",'
+        '"usage":{"input_tokens":1200,"output_tokens":80,'
+        '"cache_read_input_tokens":300,"cache_creation_input_tokens":0},'
+        '"total_cost_usd":0.0021,"model":"claude-haiku-4-5"}'
+    )
+    text, usage = parse_cli_envelope(env, model="fallback")
+    assert parse_worker_output(text) == "done"
+    assert usage["total_tokens"] == 1580  # 1200+80+300+0
+    assert usage["cost_usd"] == 0.0021
+    assert usage["model"] == "claude-haiku-4-5"
+
+
+def test_cli_envelope_failsoft_on_plain_text_and_missing_result():
+    # Old --output-format text reply (not an envelope) → passthrough, no usage.
+    assert parse_cli_envelope("just text") == ("just text", None)
+    # JSON without a result field → treated as not-an-envelope, no usage.
+    assert parse_cli_envelope('{"foo":1}')[1] is None
+    # A non-string result is still returned as a string (never crashes).
+    text, usage = parse_cli_envelope('{"result":{"a":1},"usage":{"input_tokens":5}}')
+    assert isinstance(text, str) and usage["total_tokens"] == 5
 
 
 def test_latency_delta_pct_is_genuinely_computed():
