@@ -8,10 +8,28 @@ This demonstrates how to:
 """
 import asyncio
 import os
+import sys
 from pathlib import Path
 
-from operator.bridges.shared.rag_orchestrator import RAGOrchestrator
-from operator.bridges.shared.rag_query_engine import RAGQuery
+# ADR-0215 F5: the dotted `from operator.bridges.shared...` imports below
+# used to be the only import path in this example — they can never resolve
+# (stdlib `operator` always shadows the repo's operator/ directory), so
+# this example script itself was broken from inception, exactly the kind of
+# "looks done but was never actually run" bug this ADR closes.
+#
+# Unlike most operator/bridges/shared modules (which use bare imports and
+# are fixed by putting shared/ itself on sys.path), rag_orchestrator.py
+# does `from .rag_query_engine import ...` — a package-relative import that
+# only resolves when the module is loaded AS PART OF a package. shared/
+# does have an __init__.py (unlike operator/ itself), so the fix is to put
+# its PARENT (operator/bridges) on sys.path and import `shared.rag_orchestrator`
+# — the exact pattern core/console/corvin_console/routes/rag.py already
+# uses in production (`from shared.rag_orchestrator import RAGOrchestrator`).
+_bridges = Path(__file__).resolve().parents[2] / "bridges"
+if _bridges.is_dir() and str(_bridges) not in sys.path:
+    sys.path.insert(0, str(_bridges))
+from shared.rag_orchestrator import RAGOrchestrator
+from shared.rag_query_engine import RAGQuery
 
 
 async def main():

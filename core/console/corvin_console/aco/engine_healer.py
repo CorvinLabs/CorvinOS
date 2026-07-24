@@ -98,7 +98,17 @@ def _claude_binary_ok() -> bool:
 def _hermes_reachable() -> bool:
     """Return True if Ollama HTTP API answers on its configured URL."""
     try:
-        from operator.bridges.shared.hermes_bootstrap import is_ollama_reachable
+        # ADR-0215 F5: the dotted `from operator.bridges.shared...` import
+        # here could never resolve (stdlib `operator` always shadows the
+        # repo's operator/ directory) — this silently skipped straight to
+        # the generic HTTP fallback below on every call, never exercising
+        # hermes_bootstrap's actual reachability logic. Fixed via the
+        # repo's working sys.path + bare-import pattern.
+        from pathlib import Path
+        _shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+        if _shared.is_dir() and str(_shared) not in sys.path:
+            sys.path.insert(0, str(_shared))
+        from hermes_bootstrap import is_ollama_reachable
         return is_ollama_reachable()
     except Exception:
         pass
@@ -141,7 +151,12 @@ def _try_start_ollama() -> bool:
     Returns True if Ollama is reachable after the attempt.
     """
     try:
-        from operator.bridges.shared.hermes_bootstrap import ensure_ollama_running
+        # ADR-0215 F5: same fix as _hermes_reachable() above.
+        from pathlib import Path
+        _shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+        if _shared.is_dir() and str(_shared) not in sys.path:
+            sys.path.insert(0, str(_shared))
+        from hermes_bootstrap import ensure_ollama_running
         return ensure_ollama_running(timeout=40.0)
     except Exception:
         pass

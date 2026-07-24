@@ -1583,10 +1583,19 @@ def write_event(
                     # the chain integrity computation (they are out-of-band attestation,
                     # not chain state). Best-effort: any failure skips silently.
                     try:
-                        try:
-                            from operator.bridges.shared import instance_identity as _iid  # type: ignore[import]
-                        except ImportError:
-                            import instance_identity as _iid  # type: ignore[import]
+                        # ADR-0215 F5: the dotted `from operator.bridges.shared
+                        # import ...` primary attempt below can NEVER
+                        # resolve (stdlib `operator` always shadows the
+                        # repo's operator/ directory) — this whole block is
+                        # best-effort already, so a self-contained
+                        # sys.path insert (rather than relying on some
+                        # other module having already done it) makes the
+                        # bare import actually reliable instead of luck.
+                        import sys as _sys
+                        _shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+                        if _shared.is_dir() and str(_shared) not in _sys.path:
+                            _sys.path.insert(0, str(_shared))
+                        import instance_identity as _iid  # type: ignore[import]
                         _iid_str = _iid.get_instance_id()
                         _sig_payload = hashlib.sha256(
                             (
@@ -1858,10 +1867,15 @@ def verify_chain(path: Path, *, initial_prev: str = "") -> tuple[bool, list[dict
             # caller can report them without crashing the verification loop.
             if _VERIFY_SIGS and "instance_sig" in rec and "instance_id" in rec:
                 try:
-                    try:
-                        from operator.bridges.shared import instance_identity as _iid  # type: ignore[import]
-                    except ImportError:
-                        import instance_identity as _iid  # type: ignore[import]
+                    # ADR-0215 F5: same fix as the sibling block above — the
+                    # dotted primary attempt can never resolve; use a
+                    # self-contained sys.path insert instead of relying on
+                    # another module to have already done it.
+                    import sys as _sys
+                    _shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+                    if _shared.is_dir() and str(_shared) not in _sys.path:
+                        _sys.path.insert(0, str(_shared))
+                    import instance_identity as _iid  # type: ignore[import]
                     _sig_payload = hashlib.sha256(
                         (
                             str(rec.get("event_type", ""))

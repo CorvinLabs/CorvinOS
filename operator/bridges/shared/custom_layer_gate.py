@@ -90,10 +90,9 @@ def _get_limit() -> "int | None":
         _lic_path = Path(__file__).resolve().parents[2] / "license"
         if str(_lic_path) not in sys.path:
             sys.path.insert(0, str(_lic_path))
-        try:
-            from operator.license.validator import get_limit as _gl  # type: ignore[import]
-        except ImportError:
-            from validator import get_limit as _gl  # type: ignore[import]
+        # ADR-0215 F5: dead dotted primary removed — the sys.path insert
+        # above already makes the bare form below resolve directly.
+        from validator import get_limit as _gl  # type: ignore[import]
         val = _gl(_FEATURE_KEY)
         # None = unlimited; int = hard cap; 0 = denied (also valid).
         if val is None:
@@ -114,10 +113,8 @@ def _get_active_tier() -> str:
         _lic_path = Path(__file__).resolve().parents[2] / "license"
         if str(_lic_path) not in sys.path:
             sys.path.insert(0, str(_lic_path))
-        try:
-            from operator.license.validator import active_tier as _at  # type: ignore[import]
-        except ImportError:
-            from validator import active_tier as _at  # type: ignore[import]
+        # ADR-0215 F5: dead dotted primary removed (see _get_limit above).
+        from validator import active_tier as _at  # type: ignore[import]
         return _at()
     except Exception:
         return "free"

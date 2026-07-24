@@ -996,10 +996,10 @@ def _check_instance_key() -> list[CheckResult]:
     out: list[CheckResult] = []
     try:
         _ensure_sys_path()
-        try:
-            from instance_identity import instance_key_path  # type: ignore
-        except ImportError:
-            from operator.bridges.shared.instance_identity import instance_key_path  # type: ignore
+        # ADR-0215 F5: dead dotted fallback removed — _ensure_sys_path()
+        # above already makes the bare import reliable; the dotted form
+        # could never have worked as a fallback in the first place.
+        from instance_identity import instance_key_path  # type: ignore
         kp = instance_key_path()
         if not kp.exists():
             out.append(CheckResult("instance_key.pem", WARNING, True,
