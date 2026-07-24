@@ -668,6 +668,311 @@ class TdeDelegationFiber(NerveFiber):
         return signals
 
 
+def _load_wiring_manifests() -> list[dict]:
+    """Load every WIRING.yaml this Fiber cares about (best-effort)."""
+    try:
+        import yaml
+    except ImportError:
+        return []
+    repo_root = Path(__file__).resolve().parents[4]
+    manifest_paths = [
+        repo_root / "operator" / "orchestration" / "WIRING.yaml",
+        repo_root / "operator" / "orchestration" / "tde" / "WIRING.yaml",
+    ]
+    components: list[dict] = []
+    for mpath in manifest_paths:
+        if not mpath.is_file():
+            continue
+        try:
+            data = yaml.safe_load(mpath.read_text()) or {}
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[WiringIntegrityFiber] %s unreadable: %s", mpath, exc)
+            continue
+        for entry in data.get("components", []):
+            entry = dict(entry)
+            entry["_manifest"] = str(mpath)
+            components.append(entry)
+    return components
+
+
+class WiringIntegrityFiber(NerveFiber):
+    """ADR-0215 Phase 2 — runtime proof that WIRING.yaml's claims still hold.
+
+    Two independent checks, re-run on every scan (not just at CI time):
+
+    1. **Static re-check.** Re-resolves every `live` entry_point exactly like
+       ``operator/orchestration/wiring_gate.py`` does at CI time. A CI gate
+       only proves reachability at merge time — a dependency removed later,
+       a Python-version bump, or an editable-install gone stale can silently
+       break a `live` entry_point AFTER merge. This catches that drift in
+       production, not just at PR time.
+    2. **Traffic cross-check.** If ANY component under the tde/ manifest is
+       declared `live`, at least one `tde.*` audit event should appear in a
+       real, running install over time. Zero `tde.*` events despite `live`
+       declarations is a signal worth surfacing — either TDE genuinely never
+       gets selected (auto-routing/dispatch may be broken) or the audit
+       pipe itself is broken (see AuditChainFiber for that specific check).
+
+    Known limitation (documented, not hidden): there is no per-MODULE audit
+    signal today — the tde.* namespace instruments the pipeline's high-level
+    flow (engine_selected, plan_executed, step_*), not "was
+    streaming_executor.py specifically invoked". A `deferred` component that
+    gets silently wired without an accompanying audit-event addition would
+    not be caught by check 2 alone; check 1 (does `deferred`'s reason still
+    match reality — i.e. does grepping for real callers still find none) is
+    NOT re-run here on purpose (that is a static source-tree check,
+    appropriate for CI, not for a per-scan runtime Fiber that must stay
+    cheap and never touch the source tree of a packaged install).
+    """
+    fiber_id = "aco.wiring_integrity"
+    fiber_version = "1.0.0"
+    fiber_description = (
+        "ADR-0215: re-verifies WIRING.yaml `live` entry_points at runtime "
+        "and cross-checks TDE traffic evidence against `live` claims"
+    )
+    _TAIL_LINES = 2000
+
+    def scan(self) -> list[NerveSignal]:
+        signals: list[NerveSignal] = []
+        components = _load_wiring_manifests()
+        if not components:
+            return signals  # PyYAML unavailable or manifests missing — silent no-op, not an error
+
+        live = [c for c in components if c.get("status") == "live"]
+        deferred = [c for c in components if c.get("status") == "deferred"]
+        broken: list[dict] = []
+
+        repo_root = Path(__file__).resolve().parents[4]
+        orch_dir = repo_root / "operator" / "orchestration"
+        for entry in live:
+            entry_point = entry.get("entry_point")
+            name = entry.get("name", "?")
+            if not entry_point:
+                broken.append({"name": name, "reason": "no entry_point declared"})
+                continue
+            module_name, _, symbol = entry_point.partition(":")
+            sp = str(orch_dir)
+            added = sp not in sys.path
+            if added:
+                sys.path.insert(0, sp)
+            try:
+                import importlib
+                mod = importlib.import_module(module_name)
+                if symbol and not hasattr(mod, symbol):
+                    broken.append({"name": name, "reason": f"module ok, no attribute `{symbol}`"})
+            except Exception as exc:  # noqa: BLE001
+                broken.append({"name": name, "reason": f"{type(exc).__name__}: {exc}"})
+            finally:
+                if added and sp in sys.path:
+                    sys.path.remove(sp)
+
+        signals.append(NerveSignal(
+            fiber_id=self.fiber_id,
+            signal_type="wiring.manifest_stats",
+            severity=SEVERITY_OK,
+            message=(
+                f"Wiring-Manifest: {len(live)} live, {len(deferred)} deferred, "
+                f"{len(broken)} gebrochen"
+            ),
+            data={"live_count": len(live), "deferred_count": len(deferred),
+                  "broken_count": len(broken)},
+            audit=False,
+        ))
+
+        for b in broken:
+            signals.append(NerveSignal(
+                fiber_id=self.fiber_id,
+                signal_type="wiring.live_entry_point_broken",
+                severity=SEVERITY_HIGH,
+                message=(
+                    f"WIRING.yaml behauptet `{b['name']}` sei live, aber der "
+                    f"entry_point ist kaputt: {b['reason']}"
+                ),
+                data=b,
+                repair_hint="operator/orchestration/wiring_gate.py lokal laufen lassen "
+                            "und WIRING.yaml oder den Code korrigieren",
+            ))
+
+        # Traffic cross-check: any tde.* evidence at all?
+        tde_live = [c for c in live if c.get("_manifest", "").endswith("tde/WIRING.yaml")]
+        if tde_live:
+            try:
+                _ensure_bridges_on_path()
+                from audit import audit_path  # type: ignore[import-not-found]
+                path = audit_path()
+                tde_events_seen = 0
+                if path.exists():
+                    with path.open("r", encoding="utf-8", errors="replace") as fh:
+                        tail = fh.readlines()[-self._TAIL_LINES:]
+                    import json as _json
+                    for line in tail:
+                        try:
+                            event = _json.loads(line.strip() or "{}")
+                        except _json.JSONDecodeError:
+                            continue
+                        if str(event.get("event_type", "")).startswith("tde."):
+                            tde_events_seen += 1
+                if tde_events_seen == 0:
+                    signals.append(NerveSignal(
+                        fiber_id=self.fiber_id,
+                        signal_type="wiring.tde_declared_live_but_silent",
+                        severity=SEVERITY_MEDIUM,
+                        message=(
+                            f"{len(tde_live)} TDE-Komponenten sind `live` deklariert, "
+                            f"aber die letzten {self._TAIL_LINES} Audit-Zeilen enthalten "
+                            f"kein einziges tde.*-Event — TDE wird evtl. nie aufgerufen"
+                        ),
+                        data={"tde_live_count": len(tde_live), "tde_events_in_tail": 0},
+                        repair_hint="Prüfen ob /use-engine tiered_delegation oder "
+                                    "Auto-Routing überhaupt erreicht werden; alternativ "
+                                    "AuditChainFiber prüfen (evtl. ist die Chain selbst kaputt)",
+                    ))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[WiringIntegrityFiber] Traffic-Check fehlgeschlagen: %s", exc)
+
+        return signals
+
+
+class TokenSavingsFiber(NerveFiber):
+    """ADR-0215 Phase 2 — makes ADR-0210/ADR-0214's headline savings claims
+    (56-70% tokens, 50% latency) continuously, empirically checked instead
+    of asserted once at write-time.
+
+    HONESTY NOTE (found during ADR-0215 implementation, not hidden): the TDE
+    pipeline does not currently instrument REAL per-call token usage
+    anywhere — ``worker_ipc.run_one_shot`` invokes the worker CLI with
+    ``--output-format text``, not ``json``, so no structured usage/token
+    count is ever captured; the only token-shaped number available
+    (``Step.estimated_tokens`` / ``GlobalPlan.estimated_tokens``) is the
+    LM's OWN pre-execution guess from the InitialAnalysis call, not a
+    measured actual. Reporting that guess as "token savings" would be
+    exactly the kind of unverified claim ADR-0215 exists to stop making.
+    This Fiber therefore reports only what IS genuinely measured today —
+    real wall-clock ``duration_ms`` per step, delegated vs. local — and
+    reports the estimated-token figure under a name that says what it is
+    (``avg_estimated_tokens_per_step``, never "savings"). Real token-usage
+    instrumentation is a separate, tracked follow-up (would need
+    ``--output-format json`` parsing in worker_ipc.py), not silently
+    faked here.
+    """
+    fiber_id = "aco.token_savings"
+    fiber_version = "1.0.0"
+    fiber_description = (
+        "ADR-0215: real measured latency (delegated vs. local) from tde.* "
+        "audit traffic — NOT a token-savings measurement (see class docstring)"
+    )
+    _TAIL_LINES = 5000
+    _MIN_SAMPLES = 5
+
+    def scan(self) -> list[NerveSignal]:
+        signals: list[NerveSignal] = []
+        try:
+            _ensure_bridges_on_path()
+            from audit import audit_path  # type: ignore[import-not-found]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[TokenSavingsFiber] audit-Modul nicht importierbar: %s", exc)
+            return signals
+
+        try:
+            path = audit_path()
+            if not path.exists():
+                return signals
+            with path.open("r", encoding="utf-8", errors="replace") as fh:
+                tail = fh.readlines()[-self._TAIL_LINES:]
+        except OSError as exc:
+            logger.debug("[TokenSavingsFiber] Audit-Datei nicht lesbar: %s", exc)
+            return signals
+
+        import json as _json
+        delegated_durations: list[float] = []
+        local_durations: list[float] = []
+        engine_selection_counts: dict[str, int] = {}
+
+        for line in tail:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            event_type = event.get("event_type", "")
+            if not event_type.startswith("tde."):
+                continue
+            details = event.get("details") or {}
+
+            if event_type == "tde.step_delegated" and details.get("success"):
+                dur = details.get("duration_ms")
+                if isinstance(dur, (int, float)):
+                    delegated_durations.append(float(dur))
+            elif event_type == "tde.step_executed_local" and details.get("success"):
+                dur = details.get("duration_ms")
+                if isinstance(dur, (int, float)):
+                    local_durations.append(float(dur))
+            elif event_type == "tde.engine_selected":
+                engine = details.get("engine", "unknown")
+                engine_selection_counts[engine] = engine_selection_counts.get(engine, 0) + 1
+
+        avg_delegated = (
+            sum(delegated_durations) / len(delegated_durations) if delegated_durations else None
+        )
+        avg_local = sum(local_durations) / len(local_durations) if local_durations else None
+        latency_delta_pct = None
+        if avg_delegated is not None and avg_local not in (None, 0):
+            latency_delta_pct = round(100.0 * (avg_local - avg_delegated) / avg_local, 1)
+
+        signals.append(NerveSignal(
+            fiber_id=self.fiber_id,
+            signal_type="wiring.tde_latency_stats",
+            severity=SEVERITY_OK,
+            message=(
+                f"TDE Latenz (real gemessen, {len(delegated_durations)} delegierte / "
+                f"{len(local_durations)} lokale Steps): "
+                f"avg_delegated={f'{avg_delegated:.0f}ms' if avg_delegated else 'n/a'}, "
+                f"avg_local={f'{avg_local:.0f}ms' if avg_local else 'n/a'}, "
+                f"delta={f'{latency_delta_pct:+.1f}%' if latency_delta_pct is not None else 'n/a'} "
+                f"| Engine-Wahl: {engine_selection_counts} "
+                f"| Tokens: NICHT instrumentiert (siehe Klassen-Docstring)"
+            ),
+            data={
+                "sample_delegated": len(delegated_durations),
+                "sample_local": len(local_durations),
+                "avg_delegated_duration_ms": avg_delegated,
+                "avg_local_duration_ms": avg_local,
+                "latency_delta_pct_delegated_vs_local": latency_delta_pct,
+                "engine_selection_counts": engine_selection_counts,
+                "token_usage_instrumented": False,
+            },
+            audit=False,
+        ))
+
+        if (
+            latency_delta_pct is not None
+            and len(delegated_durations) >= self._MIN_SAMPLES
+            and len(local_durations) >= self._MIN_SAMPLES
+            and latency_delta_pct < 0
+        ):
+            # Delegation is measurably SLOWER than local execution on average
+            # — the opposite of ADR-0214's "50% latency reduction" claim.
+            signals.append(NerveSignal(
+                fiber_id=self.fiber_id,
+                signal_type="wiring.tde_delegation_slower_than_local",
+                severity=SEVERITY_MEDIUM,
+                message=(
+                    f"TDE-Delegation ist im Mittel {abs(latency_delta_pct):.1f}% "
+                    f"LANGSAMER als lokale Ausführung — widerspricht der "
+                    f"ADR-0214-Latenz-Ersparnis-Behauptung"
+                ),
+                data={"latency_delta_pct": latency_delta_pct,
+                      "sample_delegated": len(delegated_durations),
+                      "sample_local": len(local_durations)},
+                repair_hint="RPC-Overhead (DELEGATION_OVERHEAD_TOKENS/Netzwerk) prüfen — "
+                            "siehe operator/orchestration/tde/adaptive_delegation_executor.py",
+            ))
+
+        return signals
+
+
 # ── Registry der Built-in Fibers (wird von nerve.py importiert) ───────────────
 
 def _make_htrace_fiber():
@@ -691,5 +996,7 @@ _BUILTIN_FIBERS: list[NerveFiber] = [
     ConfigDriftFiber(),   # Beschädigte Configs
     RemoteLogFiber(),     # Remote-Instanz-Logs, z.B. Hetzner
     TdeDelegationFiber(), # ADR-0214 TDE Delegation Runner
+    WiringIntegrityFiber(), # ADR-0215 Wiring-Manifest Runtime-Proof
+    TokenSavingsFiber(),    # ADR-0215 Latenz/Token-Ehrlichkeitsmessung
     *([f] if (f := _make_htrace_fiber()) else []),  # ADR-0180 HealingTrace-Uploader
 ]
