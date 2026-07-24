@@ -31,6 +31,46 @@ _logger = logging.getLogger(__name__)
 
 _WORKER_TIMEOUT_S = 120
 
+# ── ADR-0219 R3: transient-failure retry policy ───────────────────────────────
+import os as _os  # noqa: E402
+import random as _random  # noqa: E402
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(_os.environ.get(name, "").strip() or default))
+    except (TypeError, ValueError):
+        return default
+
+
+# Total attempts (1 = no retry). Bounded so a persistent outage can't loop.
+_WORKER_MAX_ATTEMPTS = _env_int("CORVIN_TDE_WORKER_MAX_ATTEMPTS", 3)
+_WORKER_BACKOFF_BASE_S = 2.0
+_WORKER_BACKOFF_CAP_S = 30.0
+
+# Substrings that mark a RETRYABLE failure. Deliberately PRECISE (adversarial
+# review): a broad "api_error" would also retry an auth / invalid-key failure —
+# terminal, so retrying just wastes 3× the tokens. Everything not listed here —
+# a genuine model error, a bad step, error_max_turns (the step structurally
+# needs >1 turn, the B1 boundary) — is terminal and fails fast.
+_TRANSIENT_MARKERS = (
+    "rate_limit", "rate limit", "overloaded", "timeout", "timed out",
+    "429", "529", "503", "temporarily", "connection", "econnreset",
+    "reset by peer", "service unavailable",
+)
+
+
+def _is_transient_error(error: "Optional[str]") -> bool:
+    if not error:
+        return False
+    low = str(error).lower()
+    return any(m in low for m in _TRANSIENT_MARKERS)
+
+
+def _jitter(delay: float) -> float:
+    """±20% jitter so parallel retries don't thundering-herd the same backend."""
+    return _random.uniform(-0.2, 0.2) * delay
+
 
 class WorkerIPCInterface(Protocol):
     """Protocol for worker IPC backends."""
@@ -350,12 +390,33 @@ class SubprocessWorkerIPC:
         *,
         proc_holder: "Optional[ProcHolder]" = None,
     ) -> dict[str, Any]:
-        """Run the step as a one-shot claude CLI call (off the event loop)."""
+        """Run the step as a one-shot claude CLI call (off the event loop).
+
+        ADR-0219 R3: transient failures (rate limits, overload, timeouts) are
+        retried with bounded exponential backoff; terminal failures (a real
+        model error, a bad step) fail fast with no retry. Without this a single
+        rate-limit dropped the step AND every dependent — brittle under load.
+        """
         prompt = self._build_prompt(envelope)
-        try:
-            return await asyncio.to_thread(self._run_worker, prompt, proc_holder)
-        except Exception as e:
-            return {"success": False, "output": None, "error": str(e)}
+        attempts = _WORKER_MAX_ATTEMPTS
+        for attempt in range(1, attempts + 1):
+            try:
+                result = await asyncio.to_thread(self._run_worker, prompt, proc_holder)
+            except Exception as e:  # noqa: BLE001 — _run_worker is already fail-soft; belt-and-braces
+                result = {"success": False, "output": None, "error": str(e)}
+            if result.get("success") or attempt >= attempts:
+                if attempt > 1 and result.get("success"):
+                    result = {**result, "retries": attempt - 1}
+                return result
+            if not _is_transient_error(result.get("error")):
+                return result  # terminal → fail fast, no retry
+            # Transient → exponential backoff with jitter, capped.
+            delay = min(_WORKER_BACKOFF_BASE_S * (2 ** (attempt - 1)), _WORKER_BACKOFF_CAP_S)
+            delay += _jitter(delay)
+            _logger.info("tde worker transient failure (attempt %d/%d): %s — retrying in %.1fs",
+                         attempt, attempts, str(result.get("error"))[:120], delay)
+            await asyncio.sleep(delay)
+        return {"success": False, "output": None, "error": "worker retries exhausted"}
 
     def _run_worker(
         self, prompt: str, proc_holder: "Optional[ProcHolder]" = None,
