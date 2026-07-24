@@ -845,6 +845,36 @@ def _build_input(text: str, task: str, lang: str) -> str:
     return f"[TASK]\n{task.strip()}\n\n[{answer_label}]\n{text}"
 
 
+def _cap_to_budget(text: str, max_chars: int) -> str:
+    """Hard-bound a degraded (no-LLM) fallback to the spoken budget.
+
+    The old degraded path returned the whole answer whitespace-collapsed
+    ("completeness over length") — which is exactly the "reads the whole
+    thing out loud" symptom whenever both LLM backends are down. When we
+    cannot summarise we must at least never read the full text: keep whole
+    sentences up to the budget, always at least the first one, and only
+    ever hard-cut mid-sentence if a single sentence already overruns.
+    """
+    t = re.sub(r"\s+", " ", text or "").strip()
+    if len(t) <= max_chars:
+        return t
+    # Split on sentence enders while keeping the punctuation.
+    sentences = re.findall(r"[^.!?…]+[.!?…]+|\S[^.!?…]*$", t)
+    out = ""
+    for s in sentences:
+        s = s.strip()
+        if not s:
+            continue
+        cand = (out + " " + s).strip() if out else s
+        if len(cand) > max_chars:
+            break
+        out = cand
+    if not out:  # first sentence alone overruns → hard cut at a word boundary
+        cut = t[:max_chars].rsplit(" ", 1)[0].strip()
+        out = (cut or t[:max_chars]).rstrip(",;:") + "…"
+    return out
+
+
 def _system_for(lang: str, target_chars: int, has_task: bool,
                 persona: str = "", audience: str = "",
                 output_language: str = "") -> str:
@@ -853,7 +883,9 @@ def _system_for(lang: str, target_chars: int, has_task: bool,
     Layer order — base prompt → persona-tone (the *speaker*) → audience
     (the *listener*, layer 12) → SELF-CHECK (the *truthfulness loop*,
     layer 11 inline integration) → OUTPUT LANGUAGE directive (i18n,
-    only when the requested locale is neither `de` nor `en`). Each
+    emitted for EVERY locale including `de`/`en` since 2026-07-24, so the
+    profile language is always hard-pinned and never drifts to the source
+    text's language). Each
     addendum is a pure tone / pin modulator; the base prompt's
     faithfulness / completeness rules stay load-bearing regardless of
     what any later block requests.
@@ -897,9 +929,18 @@ def _system_for(lang: str, target_chars: int, has_task: bool,
     # variants of de/en need no translation directive any more than bare
     # de/en do — the base prompts already write those languages natively
     # (adversarial round, 2026-07-17).
-    if output_language and _i18n is not None:
-        code = _i18n.normalise(output_language)
-        if code and code.split("-")[0] not in ("de", "en"):
+    # 2026-07-24 — pin the output language for EVERY code, including de/en.
+    # The old build emitted the directive only for non-de/en and relied on the
+    # base prompt's native prose to hold German/English. That reliance was the
+    # confirmed source of "spoken in English for a German user": whenever the
+    # source answer was English (or a host-level 'reply in English' rule was in
+    # scope), the de base prompt had nothing explicit to counter it and the
+    # summary — and therefore the voice — drifted to English. The directive is
+    # the absolute last-pin (see i18n.language_directive), so making it
+    # unconditional is what guarantees "always the profile language".
+    if _i18n is not None:
+        code = _i18n.normalise(output_language) or (lang if lang in ("de", "en") else "de")
+        if code:
             directive = _i18n.language_directive(code, audience="voice")
             base = directive + "\n\n" + base + "\n\n" + directive
     return base
@@ -1703,61 +1744,17 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
 
     _backend = os.environ.get("VOICE_SUMMARIZE_BACKEND", "auto")
 
-    # Short-circuit: a reply that ALREADY fits the spoken budget needs no LLM
-    # summary. Spawning `claude -p` / Hermes here is pure latency — the dominant
-    # voice-reply delay (a cold `claude -p` first-spawn is ~tens of seconds) —
-    # AND it risks the model DRIFTING: e.g. a 3-word "Erledigt, alles gut." was
-    # being rewritten into a DIFFERENT sentence ("Prima, gerne! Falls noch mehr
-    # anliegt …"), inventing content the source never had. Speak it verbatim
-    # (the same faithful structural path Backend 3 uses) — instant and exact.
-    # Only genuinely-too-long replies pay for a real LLM summary below. Explicit
-    # backend pins (cli/hermes, used by tests) still exercise the LLM path.
-    #
-    # Gated on persona/audience both being unset: a user who explicitly
-    # configured either wants that tone/steering applied to EVERY reply, not
-    # just long ones — the pre-existing behavior before this short-circuit was
-    # added. Skipping the LLM pass for those users silently dropped the
-    # feature they opted into, so they still pay the LLM-latency cost here
-    # (same as before this fix existed); everyone else gets the instant,
-    # faithful verbatim path.
-    #
-    # Also gated on output_language being empty or de/en: for any other
-    # locale the verbatim return would hand back UN-translated text — a
-    # zh-Hans/fr/ja-pinned user then hears e.g. German words read with a
-    # French TTS voice (found 2026-07-17). de/en stay on the fast path
-    # because `lang` already matches them and no translation directive would
-    # have been emitted anyway (see _system_for — de/en is a silent no-op).
-    # Compared on the PRIMARY subtag: normalise("de-DE") == "de-DE" (region
-    # variants pass through i18n untouched), and de-DE/en-US are the most
-    # common locale spellings — system_language() and raw profile pins
-    # deliver exactly those, so an exact-match gate threw the mainstream
-    # case off the fast path (adversarial round, 2026-07-17).
-    _ol_code = (output_language or "").strip()
-    if _ol_code and _i18n is not None:
-        try:
-            _ol_code = _i18n.normalise(_ol_code) or _ol_code
-        except Exception:  # noqa: BLE001 — keep the raw code, stay conservative
-            pass
-    if (
-        _backend == "auto"
-        and not persona.strip()
-        and not audience.strip()
-        and _ol_code.split("-")[0] in ("", "de", "en")
-        and len(text.strip()) <= max_chars
-    ):
-        # Text already fits the budget → return it TRULY VERBATIM. NOT via
-        # naive_truncate: that runs per-line first-clause compression which drops
-        # the description sentence of each item in a short multi-sentence list
-        # ("choices are sacred" violation, caught in review). Verbatim is exact
-        # AND in-budget (len <= max_chars), so nothing needs shortening.
-        body = text.strip()
-        prefixed = _task_prefix(task, lang) + body if task.strip() else body
-        # The task-prefix check above only verified `body` alone fits the
-        # budget — re-check AFTER prefixing, since _task_prefix can add up to
-        # ~140 chars. Only fall through to a real summary pass (which DOES
-        # enforce the budget) if the prefixed text overruns it.
-        if len(prefixed) <= max_chars:
-            return prefixed
+    # 2026-07-24 — the in-budget verbatim short-circuit is GONE. It was the
+    # confirmed cause of "reads it out word-for-word, in English": any answer at
+    # or under the char budget was returned exactly as written, in its source
+    # language, with no humanisation and no language pin. The product rule is now
+    # "always a spoken summary in the profile language, never verbatim", so ALL
+    # text — short included — goes through the real summary pass below. The
+    # prompt keeps short input short ("shorter original → shorter result, never
+    # pad") and the unconditional language directive renders even a one-word
+    # foreign acknowledgement in the profile language instead of reading it raw.
+    # No length-based bypass survives; the only fast exit is genuinely empty
+    # input, handled by the caller.
 
     # Backend 1: CLI — preferred for users with Claude Max who don't want
     # to manage a separate API key.
@@ -1793,9 +1790,18 @@ def summarize(text: str, lang: str, max_chars: int, model: str, task: str = "", 
         # stdout) — found investigating why fresh installs read the raw
         # answer word-for-word instead of a real summary, 2026-07-14.
         print("[summarize] degraded: both LLM backends unavailable — "
-              "using naive_truncate (near-verbatim) structural fallback",
+              "using bounded structural fallback (never full verbatim)",
               file=sys.stderr)
-        body = naive_truncate(text, target)
+        # naive_truncate keeps list structure (intro + items + outro), then we
+        # hard-cap to the spoken budget so a prose answer can never come back as
+        # the whole text read word-for-word (2026-07-24). Cap to the HARD
+        # `max_chars` (a spoken voice note is ~400 chars), NOT the adaptive
+        # `target` — adaptive_target scales up for long input (a 2.4k-char
+        # answer yields ~2k), which on the no-LLM path would still read almost
+        # everything. This is a DEGRADED result — it cannot translate or
+        # rephrase — but it is short and bounded, honouring "never read the
+        # whole thing" even when no LLM backend is reachable.
+        body = _cap_to_budget(naive_truncate(text, max_chars), max_chars)
         candidate = _task_prefix(task, lang) + body if task.strip() else body
 
     # Layer-11 dialectic faithfulness check (independent second-model

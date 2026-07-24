@@ -206,8 +206,11 @@ def test_build_voice_summary_no_preference_detects_language(
     idx = argv.index("--lang")
     # Auto-detected as German, so base language is de
     assert argv[idx + 1] == "de", "Auto-detected language should be de"
-    # No --output-language for de/en (they're handled by --lang)
-    assert "--output-language" not in argv or argv.count("--output-language") == 0
+    # 2026-07-24: --output-language is now ALWAYS passed, de/en included, so the
+    # profile language is hard-pinned in summarize.py's prompt and can never
+    # drift to the source text's language. Previously it was omitted for de/en.
+    assert "--output-language" in argv, "output language must always be pinned"
+    assert argv[argv.index("--output-language") + 1] == "de"
 
 
 def test_build_voice_summary_with_zh_preference_uses_zh_flag(

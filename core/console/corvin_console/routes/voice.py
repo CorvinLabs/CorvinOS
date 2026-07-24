@@ -693,13 +693,21 @@ def _summarize_for_speech(text: str, lang: str) -> str | None:
     # the console voice has therefore NEVER spoken the LERN-ZUGABE / metaphor
     # annex, while every messenger bridge did (adapter.py::build_voice_summary
     # passes it). Same profile, same block, same summarizer — bridge parity.
-    audience = _tts_audience_block(lang)
+    #
+    # 2026-07-24: use resolved_lang everywhere, not the frontend `lang` param.
+    # The audience block and the OUTPUT-LANGUAGE pin were keyed off `lang`
+    # (body.lang) while --lang was keyed off resolved_lang (server-side profile
+    # resolution) — the two could disagree, so the summary language and the
+    # audience-block language could drift apart.
+    audience = _tts_audience_block(resolved_lang)
     if audience:
         cmd += ["--audience", audience]
-    # summarize.py's --lang is the pivot (de|en); a third language needs the
-    # explicit OUTPUT-LANGUAGE directive or the summary comes back in German.
-    if lang and lang not in ("de", "en"):
-        cmd += ["--output-language", lang]
+    # Always pin the resolved output language — de/en included. summarize.py now
+    # emits an explicit OUTPUT-LANGUAGE directive for every locale, so this is
+    # what guarantees "always the profile language" even when the answer text is
+    # in a different language. Previously omitted for de/en, which let an English
+    # answer be summarised — and spoken — in English for a German-pinned user.
+    cmd += ["--output-language", resolved_lang or "de"]
     try:
         proc = subprocess.run(
             cmd,
