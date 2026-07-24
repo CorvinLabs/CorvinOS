@@ -41,6 +41,7 @@ class SendIntegration:
         self,
         registry: Optional[EngineRegistry] = None,
         l34_classifier: Optional[Any] = None,
+        session_key: str = "default",
     ):
         """Initialize integration components.
 
@@ -48,9 +49,15 @@ class SendIntegration:
             registry: Engine registry (injectable for tests). Defaults to the
                 global singleton.
             l34_classifier: Real L34 Flow Guard classifier when available.
+            session_key: ADR-0215 F4 — identifies which (tenant, session)
+                this instance's loss evidence belongs to. Console callers
+                pass ``f"{tenant_id}:{sid}"``; standalone/CLI/test callers
+                may omit it (falls back to the old, single, unkeyed
+                behavior under the literal key ``"default"``).
         """
         self.parser = SlashCommandParser()
-        self.loss_tracker = get_session_tracker()
+        self.session_key = session_key
+        self.loss_tracker = get_session_tracker(session_key=session_key)
         self.detector = RobustEngineDetector(loss_tracker=self.loss_tracker)
         self.l34_gate = L34DelegationGate(l34_classifier=l34_classifier)
         self.registry = registry or get_registry()
@@ -155,6 +162,7 @@ class SendIntegration:
         _logger.info(f"Executing with {engine_name}")
         result = await self.registry.execute(
             engine_name, initial_analysis, context, task_text=task_text, run_id=run_id,
+            session_key=self.session_key,
         )
         if not isinstance(result, dict):
             result = {"engine": engine_name, "success": bool(result), "output": result}

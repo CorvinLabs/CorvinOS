@@ -3414,7 +3414,14 @@ async def _stream_tde_turn(
                 f"parallele Ausführung startet…\n"
             )}
 
-            integration = SendIntegration(registry=EngineRegistry(real_ipc=True))
+            integration = SendIntegration(
+                registry=EngineRegistry(real_ipc=True),
+                # ADR-0215 F4: scope this turn's loss-tracker evidence to
+                # this (tenant, session) — was previously a single
+                # process-wide singleton shared (and silently mixed) across
+                # every concurrent tenant/session.
+                session_key=f"{sess.tenant_id}:{sess.sid}",
+            )
             engine_name, result = await integration.select_engine_and_execute(
                 "/use-engine tiered_delegation\n" + task_text, context, analysis,
                 run_id=run_id,
@@ -3600,37 +3607,63 @@ async def stream_turn(
     _force_delegate = prompt.strip().lower().startswith(_DELEGATE_PREFIX)
     _task_text = (prompt.strip()[len(_DELEGATE_PREFIX):].strip()
                   if _force_delegate else prompt)
-    # ADR-0214 — explicit engine override (`/use-engine <engine> <task>`).
-    # A routing directive like /delegate (the slash dispatcher passes
-    # /use-engine through). tiered_delegation → TDE turn path below
-    # (pre-spawn gates classify it as delegation); acs → ADR-0114 delegation
-    # branch; claude_code → normal turn with the directive stripped.
+    # ADR-0214 — explicit engine override (`/use-engine <engine> <task>`,
+    # `/engine-auto <task>`, `/debug-engine <task>`).
+    #
+    # ADR-0215 F3: this used to be a second, hand-rolled regex
+    # (`re.IGNORECASE` + `.lower()`) living side-by-side with
+    # `tde.slash_command_parser.SlashCommandParser` (no `IGNORECASE`, no
+    # `.lower()`) — two parsers for the same grammar that could silently
+    # diverge, plus `/engine-auto` and `/debug-engine` were parseable by
+    # SlashCommandParser but never reachable here, so both advertised
+    # commands (`slash_command_parser.format_help()`) were dead in the
+    # console. Fixed: this is now the single call site that parses
+    # `/use-engine` et al.; `_stream_tde_turn`'s call into `SendIntegration`
+    # re-parses the same grammar internally (that duplication is intentional
+    # — `SendIntegration` is also the standalone CLI/bridge entry point per
+    # its own module docstring — but both now share one implementation, not
+    # two divergent regexes).
     _tde_force = False
+    _debug_engine = False
     _ue_unknown: "str | None" = None
-    _use_engine_m = re.match(
-        r"^/use-engine\s+(\w+)(?:\s+|\s*\n|$)(.*)",
-        prompt.strip(), re.IGNORECASE | re.DOTALL,
-    )
-    if _use_engine_m:
-        _ue_engine = _use_engine_m.group(1).lower()
-        _ue_task = _use_engine_m.group(2).strip()
-        if _ue_engine == "tiered_delegation":
+    try:
+        _orch_dir = Path(__file__).resolve().parents[3] / "operator" / "orchestration"
+        if _orch_dir.is_dir() and str(_orch_dir) not in sys.path:
+            sys.path.insert(0, str(_orch_dir))
+        from tde.slash_command_parser import SlashCommandParser as _SlashCommandParser  # noqa: PLC0415
+
+        _parsed = _SlashCommandParser().parse(prompt.strip())
+    except ImportError:
+        _parsed = None  # TDE modules unavailable (e.g. wheel install without
+                         # the orchestration tree) — fall through as a plain
+                         # prompt, same degrade-gracefully contract as the
+                         # `_stream_tde_turn` import guard below.
+    except ValueError as _parse_exc:
+        # Unknown /use-engine target.
+        _parsed = None
+        _ue_unknown = str(_parse_exc).split(":", 1)[-1].split(".", 1)[0].strip() or "?"
+
+    if _parsed is not None:
+        _ue_task = _parsed.task_text
+        if _parsed.debug_mode:
+            _debug_engine = True
+            _task_text = _ue_task
+        elif _parsed.engine_override == "tiered_delegation":
             _tde_force = True
             _task_text = _ue_task
-        elif _ue_engine == "acs":
+        elif _parsed.engine_override == "acs":
             _force_delegate = True
             _task_text = _ue_task
             # Strip the directive from the OS prompt too — the delegation
             # branch can fall back to the normal turn (quota/import), which
             # must not hand the raw command text to the LLM (round-3 finding).
             prompt = _ue_task or prompt
-        elif _ue_engine == "claude_code":
+        elif _parsed.engine_override == "claude_code":
             prompt = _ue_task or prompt
-        else:
-            # Unknown engine: explicit feedback (mirrors SlashCommandParser's
-            # ValueError semantics) instead of silently prompting the LLM
-            # with the command text (round-3 finding).
-            _ue_unknown = _ue_engine
+        elif _parsed.original_message.strip().lower().startswith("/engine-auto"):
+            # Explicit auto-detect request: identical to a plain prompt —
+            # just strip the directive and continue normally.
+            prompt = _ue_task or prompt
 
     # Resolve engine early so turn.start debug event can record it.
     # The full pre-spawn gate check (line ~1958) also uses this value.
@@ -3898,6 +3931,88 @@ async def stream_turn(
         yield {"type": "result", "text": _ue_msg, "usage": None}
         touch(sess, increment_turn=False)
         _append_turn(sess, "assistant", [{"kind": "text", "text": _ue_msg}])
+        yield {"type": "done"}
+        return
+
+    # ── ADR-0214/ADR-0215 — /debug-engine: show selection signals, run
+    # nothing. Previously unreachable (see F3 note above) because this
+    # command never made it past slash_commands.py's dispatcher; now that
+    # it does, it runs Phase 1 (InitialAnalysis) + Phase 1.5
+    # (RobustEngineDetector) and reports the signals as the assistant
+    # reply — it never calls EngineRegistry.execute(), so no engine (TDE,
+    # ACS, or claude_code) actually runs the task.
+    if _debug_engine:
+        if not _task_text:
+            _dbg_hint = "Bitte Task angeben: /debug-engine <task>"
+            _os_audit("os_turn.started", {"model": _os_model_used})
+            tm.record_event(task_id, {
+                "event": "task.failed", "exit_code": 1,
+                "error": "debug-engine command without task text",
+            })
+            _audit_emit(sess, "web.turn.completed", rc=1,
+                        result_chars=len(_dbg_hint), usage=None,
+                        reason="debug_engine_empty_task")
+            _os_emit_completed(1)
+            yield {"type": "delta", "text": _dbg_hint}
+            yield {"type": "result", "text": _dbg_hint, "usage": None}
+            touch(sess, increment_turn=False)
+            _append_turn(sess, "assistant", [{"kind": "text", "text": _dbg_hint}])
+            yield {"type": "done"}
+            return
+
+        _os_audit("os_turn.started", {"model": _os_model_used})
+        try:
+            _orch_dir = Path(__file__).resolve().parents[3] / "operator" / "orchestration"
+            if _orch_dir.is_dir() and str(_orch_dir) not in sys.path:
+                sys.path.insert(0, str(_orch_dir))
+            from tde.analysis_runner import run_initial_analysis_sync  # noqa: PLC0415
+            from tde.robust_engine_detector import RobustEngineDetector  # noqa: PLC0415
+            from tde.loss_profile_tracker import get_session_tracker  # noqa: PLC0415
+            from tde.worker_ipc import ProcHolder  # noqa: PLC0415
+
+            _dbg_holder = ProcHolder()
+            _dbg_ctx: dict[str, Any] = {
+                "statement": {"task": _task_text}, "task_text": _task_text,
+            }
+            _dbg_analysis = await asyncio.to_thread(
+                run_initial_analysis_sync, _task_text, _dbg_ctx,
+                proc_holder=_dbg_holder,
+            )
+            _dbg_detector = RobustEngineDetector(
+                loss_tracker=get_session_tracker(session_key=f"{sess.tenant_id}:{sess.sid}")
+            )
+            _dbg_engine, _dbg_conf, _dbg_signals = _dbg_detector.detect_engine(
+                _task_text, _dbg_ctx, _dbg_analysis,
+            )
+            _dbg_lines = [
+                f"**Engine-Auswahl (Debug):** `{_dbg_engine}` "
+                f"({_dbg_conf:.1%} Konfidenz)",
+                f"- Task-Typ: `{_dbg_analysis.classification.task_type}` "
+                f"/ Komplexität: `{_dbg_analysis.classification.complexity}`",
+                "- Signale:",
+            ]
+            for _sig_k, _sig_v in _dbg_signals.items():
+                _dbg_lines.append(f"  - `{_sig_k}`: {_sig_v}")
+            _dbg_lines.append(
+                "\n_Kein Engine wurde ausgeführt — nur die Auswahl-Signale "
+                "wurden berechnet. Mit `/use-engine <name> <task>` erzwingen._"
+            )
+            _dbg_msg = "\n".join(_dbg_lines)
+        except ImportError as _dbg_imp_err:
+            _dbg_msg = f"TDE ist auf dieser Installation nicht verfügbar (Modul fehlt: {_dbg_imp_err})."
+        except Exception as _dbg_err:  # noqa: BLE001 — debug command must never 500 the turn
+            _log.warning("[/debug-engine] Analyse fehlgeschlagen: %s", _dbg_err)
+            _dbg_msg = f"Engine-Debug-Analyse fehlgeschlagen: {_dbg_err}"
+
+        tm.record_event(task_id, {"event": "task.completed", "exit_code": 0})
+        _audit_emit(sess, "web.turn.completed", rc=0,
+                    result_chars=len(_dbg_msg), usage=None,
+                    reason="debug_engine")
+        _os_emit_completed(0)
+        yield {"type": "delta", "text": _dbg_msg}
+        yield {"type": "result", "text": _dbg_msg, "usage": None}
+        touch(sess, increment_turn=True)
+        _append_turn(sess, "assistant", [{"kind": "text", "text": _dbg_msg}])
         yield {"type": "done"}
         return
 

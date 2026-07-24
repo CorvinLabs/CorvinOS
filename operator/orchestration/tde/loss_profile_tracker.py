@@ -9,11 +9,24 @@ Features:
 - Exponential decay weighting (half-life 7 days) + pruning of dead entries
 - Separates measured loss from proxy-derived loss (proxy entries carry
   lower evidence weight so fabricated defaults can't dominate learning)
+
+ADR-0215 F4: ``get_session_tracker()`` used to be a single process-wide
+singleton with no session/tenant key, directly contradicting the "In-session
+only" claim above — one tenant's delegation-quality evidence silently
+influenced every other concurrent tenant's delegation decisions in the same
+process (a real ADR-0007 tenant-isolation bug, not just a docstring lie).
+Fixed: the module now keeps a *keyed* registry of trackers
+(``session_key -> LossProfileTracker``), bounded by a simple LRU eviction so
+long-running processes with many short-lived sessions don't grow this dict
+without limit. Callers that don't pass a ``session_key`` fall back to the
+literal string ``"default"`` — this preserves old single-tenant/CLI behavior
+byte-for-byte, it just stops silently mixing keyed and unkeyed callers.
 """
 from __future__ import annotations
 
 import logging
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -254,14 +267,42 @@ class LossProfileTracker:
         _logger.info("Loss profile cleared")
 
 
-# Module-level singleton: in-session learning must survive per-request
-# construction of SendIntegration / engines (F26).
-_session_tracker: Optional[LossProfileTracker] = None
+# Keyed registry: in-session learning must survive per-request construction
+# of SendIntegration / engines (F26), but MUST NOT bleed across sessions or
+# tenants (ADR-0215 F4). Bounded LRU — see module docstring.
+_MAX_SESSION_TRACKERS = 500
+_session_trackers: "OrderedDict[str, LossProfileTracker]" = OrderedDict()
 
 
-def get_session_tracker(model_id: str = "default") -> LossProfileTracker:
-    """Get or create the session-wide loss tracker."""
-    global _session_tracker
-    if _session_tracker is None:
-        _session_tracker = LossProfileTracker(model_id=model_id)
-    return _session_tracker
+def get_session_tracker(
+    model_id: str = "default", session_key: str = "default"
+) -> LossProfileTracker:
+    """Get or create the loss tracker for ``session_key``.
+
+    ``session_key`` should uniquely identify the (tenant, session) this
+    tracker's evidence is allowed to influence — callers in this codebase use
+    ``f"{tenant_id}:{sid}"`` (see ``chat_runtime._stream_tde_turn``). The
+    default ``"default"`` preserves prior single-tenant/CLI behavior for
+    callers (tests, standalone scripts) that have no session concept.
+    """
+    global _session_trackers
+    if session_key in _session_trackers:
+        _session_trackers.move_to_end(session_key)  # LRU touch
+        return _session_trackers[session_key]
+
+    tracker = LossProfileTracker(model_id=model_id)
+    _session_trackers[session_key] = tracker
+    if len(_session_trackers) > _MAX_SESSION_TRACKERS:
+        evicted_key, _ = _session_trackers.popitem(last=False)
+        _logger.info("Evicted loss tracker for session_key=%s (LRU cap)", evicted_key)
+    return tracker
+
+
+def clear_session_tracker(session_key: str = "default") -> None:
+    """Drop the tracker for ``session_key`` (e.g. on session teardown)."""
+    _session_trackers.pop(session_key, None)
+
+
+def _reset_all_session_trackers_for_tests() -> None:
+    """Test-only: wipe the keyed registry between test cases."""
+    _session_trackers.clear()

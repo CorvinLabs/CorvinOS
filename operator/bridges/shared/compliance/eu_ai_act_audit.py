@@ -25,6 +25,7 @@ Compliance Gate: FAIL-CLOSED (any violation = reject operation)
 
 import logging
 import sys
+from pathlib import Path
 from typing import Dict, Any, List, Tuple
 from dataclasses import dataclass
 from enum import Enum
@@ -94,14 +95,28 @@ class ComplianceAuditor:
                     )
 
                 # Check self-test
+                # ADR-0215 F5: dotted `from operator.voice.hooks...` can never
+                # resolve (stdlib `operator` always wins) — this check has
+                # structurally always reported "fail" for L10, never actually
+                # running the self-test. Fixed via repo-relative sys.path
+                # insert + bare leaf-module import.
                 try:
-                    from operator.voice.hooks.path_gate import self_test
-                    if not self_test():
+                    _hooks_dir = Path(__file__).resolve().parents[4] / "operator" / "voice" / "hooks"
+                    if _hooks_dir.is_dir() and str(_hooks_dir) not in sys.path:
+                        sys.path.insert(0, str(_hooks_dir))
+                    # ADR-0215 secondary bug, exposed by the import fix above:
+                    # the real function is `path_gate_self_test` (returns
+                    # `(ok, failures)`), not `self_test` — the old name never
+                    # existed, so this branch could never have run even with
+                    # a working import.
+                    from path_gate import path_gate_self_test
+                    _ok, _failures = path_gate_self_test()
+                    if not _ok:
                         return ComplianceCheck(
                             layer=ComplianceLayer.L10_PATH_GATE,
                             engine_id=engine_id,
                             status="fail",
-                            error="path_gate self-test failed",
+                            error=f"path_gate self-test failed: {_failures}",
                         )
                 except Exception as e:
                     return ComplianceCheck(
@@ -328,7 +343,15 @@ class ComplianceAuditor:
           - Per-engine locality/egress matrix enforced
         """
         try:
-            from operator.bridges.shared.data_classification import (
+            # ADR-0215 F5: dotted `from operator.bridges.shared...` can never
+            # resolve — this L34 check has structurally always failed. Fixed
+            # via repo-relative sys.path insert + bare leaf-module import
+            # (this file already lives inside operator/bridges/shared/, so
+            # the sibling directory itself is the target).
+            _shared_dir = Path(__file__).resolve().parents[1]
+            if str(_shared_dir) not in sys.path:
+                sys.path.insert(0, str(_shared_dir))
+            from data_classification import (
                 DEFAULT_ENGINE_COMPLIANCE,
                 DataClassification,
             )
@@ -344,10 +367,15 @@ class ComplianceAuditor:
 
             engine_config = DEFAULT_ENGINE_COMPLIANCE[engine_id]
 
-            # Verify classification levels
+            # ADR-0215 secondary bug, exposed by the import fix above:
+            # `engine_config` is a frozen `EngineCompliance` dataclass, not a
+            # dict — `field not in engine_config` raised TypeError
+            # ("not iterable") on every call, which the outer `except
+            # Exception` (below) silently turned into another "fail". Use
+            # `hasattr`, matching the dataclass's actual field names.
             required_fields = ["locality", "network_egress"]
             for field in required_fields:
-                if field not in engine_config:
+                if not hasattr(engine_config, field):
                     return ComplianceCheck(
                         layer=ComplianceLayer.L34_DATA_CLASSIFICATION,
                         engine_id=engine_id,
@@ -384,7 +412,13 @@ class ComplianceAuditor:
           - Fail-closed (default=deny)
         """
         try:
-            from operator.bridges.shared.egress_gate import EgressGate
+            # ADR-0215 F5: dotted `from operator.bridges.shared...` can never
+            # resolve — this L35 check has structurally always failed. Fixed
+            # the same way as the L34 check above.
+            _shared_dir = Path(__file__).resolve().parents[1]
+            if str(_shared_dir) not in sys.path:
+                sys.path.insert(0, str(_shared_dir))
+            from egress_gate import EgressGate
 
             # Check EU_PRODUCTION presets
             import os

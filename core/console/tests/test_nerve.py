@@ -399,12 +399,50 @@ class TestBuiltinFibers(unittest.TestCase):
         self.assertIsInstance(signals, list)
 
     def test_compliance_fiber_detects_missing_module(self):
+        """Real repro, not a global mock.
+
+        ADR-0215 F5 / ADR-0214 Finding 6: the old version of this test
+        globally mocked ``importlib.util.find_spec`` to always return
+        ``None`` — which matches BOTH "module genuinely absent" (find_spec
+        returns None) AND "dotted import of a non-package parent" (find_spec
+        RAISES ImportError/ValueError, never returns None). A regression
+        back to the dotted form (``operator.bridges.shared.house_rules``)
+        would still make this test pass, because the mock intercepts the
+        call before the real (broken) argument ever matters. Fixed: patch
+        ``importlib.util.find_spec`` with a real function that raises on the
+        dotted form (reproducing the actual bug) and returns None only for a
+        genuinely-nonexistent bare name — this can only pass if ComplianceFiber
+        (a) uses bare names and (b) has a ``except (ImportError, ValueError)``
+        guard around the call.
+        """
         from corvin_console.aco.nerve_builtins import ComplianceFiber
+        import importlib.util
         import unittest.mock as mock
-        with mock.patch("importlib.util.find_spec", return_value=None):
+
+        real_find_spec = importlib.util.find_spec
+
+        def _repro_find_spec(name, *args, **kwargs):
+            if "." in name:
+                # Exactly what CPython does for a dotted name whose parent
+                # (here: the real stdlib ``operator``) is not a package
+                # containing the requested submodule.
+                raise ModuleNotFoundError(f"No module named {name!r}")
+            return None  # bare name: genuinely not found, not raised
+
+        with mock.patch("importlib.util.find_spec", side_effect=_repro_find_spec):
             signals = ComplianceFiber().scan()
             critical = [s for s in signals if s.severity == "CRITICAL"]
-            self.assertGreater(len(critical), 0)
+            # Must find all three (house_rules, consent, disclosure) missing —
+            # if the code still used a dotted name anywhere, find_spec would
+            # raise past the first module and the loop would silently stop,
+            # yielding fewer than 3 CRITICAL signals.
+            self.assertEqual(len(critical), 3)
+
+        # Sanity check on the repro helper itself: prove the dotted form
+        # really does raise via the real interpreter, not just our stub —
+        # this is the empirical basis for the whole test.
+        with self.assertRaises((ImportError, ValueError)):
+            real_find_spec("operator.bridges.shared.house_rules")
 
     def test_audit_chain_fiber_does_not_raise(self):
         from corvin_console.aco.nerve_builtins import AuditChainFiber

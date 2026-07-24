@@ -9,14 +9,23 @@ NOTE: This is an integration test that requires access to task queue and
 
 from __future__ import annotations
 
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-# These imports will work when tests run in the project context
+# ADR-0215 F5: the dotted `from operator.bridges.shared import ...` can never
+# resolve (stdlib `operator` always wins over the repo's `operator/` dir),
+# so HAS_DEPS was always False and both tests below were permanently skipped
+# since this file's inception — `core.console...` resolves fine on its own
+# (no stdlib `core` module to collide with), it was never the actual blocker.
 try:
-    from operator.bridges.shared import context_checkpoint, worker_engine_continuation
+    _shared_dir = Path(__file__).resolve().parent
+    if str(_shared_dir) not in sys.path:
+        sys.path.insert(0, str(_shared_dir))
+    import context_checkpoint
+    import worker_engine_continuation
     from core.console.corvin_console.task_queue import TaskQueueEntry, TaskStatus
     HAS_DEPS = True
 except ImportError:
