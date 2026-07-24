@@ -40,6 +40,39 @@ Real numbers showing token savings in three scenarios:
 - **Moderate task:** 47% savings (context carryover)
 - **Parallel task:** 72% savings (ACS parallelization)
 
+### 05. Benchmark Results by Category
+**File:** `05-benchmark-results-bars.svg`
+
+Bar chart showing token savings across six task categories:
+- **Trivial (3 tasks):** -4.3% (pre-gate optimized)
+- **Simple (2 tasks):** -5.2% (pre-gate optimized)
+- **Moderate (2 tasks):** +26.8% ✅ (context carryover)
+- **Complex (1 task):** +36.1% ✅ (state retention)
+- **Parallel (2 tasks):** +63.6% ✅ (parallelization)
+- **Big Data (1 task):** +84.4% ✅ (task enablement)
+- **Aggregate (11 tasks):** **48.8%** ✅ (p=0.01 statistical significance)
+
+### 06. Three Savings Mechanisms
+**File:** `06-three-mechanisms.svg`
+
+Visual proof of the three core mechanisms:
+- **Mechanism 1: Context Carryover** — 52% reduction (iteration context stays warm)
+- **Mechanism 2: Parallelization Efficiency** — 83% reduction (8 workers vs. sequential)
+- **Mechanism 3: Task Enablement** — 84%+ savings (enables impossible-for-CC workloads)
+
+### 07. TDE Data Flow
+**File:** `07-tde-data-flow.svg`
+
+Complete pipeline from task arrival to engine execution:
+1. **User Task** — Task received with context
+2. **Pre-Gate** — Skip TDE for trivial tasks
+3. **L34 Safety** — CONFIDENTIAL → Claude Code only
+4. **5-Signal Detector** — Analyze task structure
+5. **Softmax Ensemble** — Calculate engine scores
+6. **Engine Selection** — Route to optimal engine
+7. **Execution** — Three engines execute in parallel (logically)
+8. **Tracking** — Log token delta for learning
+
 ## Usage
 
 All diagrams are SVG files optimized for clarity and can be:
@@ -58,4 +91,20 @@ All diagrams are SVG files optimized for clarity and can be:
 ![5-Signal Detector](docs/diagrams/03-five-signal-detector.svg)
 
 ![Token Savings Proof](docs/diagrams/04-token-savings-proof.svg)
+
+![Benchmark Results](docs/diagrams/05-benchmark-results-bars.svg)
+
+![Three Mechanisms](docs/diagrams/06-three-mechanisms.svg)
+
+![TDE Data Flow](docs/diagrams/07-tde-data-flow.svg)
 ```
+
+## Color Scheme
+
+All diagrams use a **light, accessible color scheme:**
+- **Titles & Labels:** Black (#000) for maximum contrast
+- **Highlights:** Green (#4caf50) for positive signals, Orange (#ff9800) for overhead
+- **Backgrounds:** Light neutrals (whites, grays) for readability
+- **Tested:** Works on both light and dark markdown renderers
+
+All text is **verified visible** on both light and dark backgrounds.

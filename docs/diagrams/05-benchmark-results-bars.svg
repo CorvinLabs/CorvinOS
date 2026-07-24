@@ -1,10 +1,10 @@
 <svg viewBox="0 0 1200 600" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
-      .title { font-size: 28px; font-weight: bold; fill: #1a1a1a; }
-      .axis-label { font-size: 13px; fill: #333; }
-      .category { font-size: 14px; font-weight: bold; }
-      .metric { font-size: 12px; fill: #666; }
+      .title { font-size: 28px; font-weight: bold; fill: #000; }
+      .axis-label { font-size: 13px; fill: #222; }
+      .category { font-size: 14px; font-weight: bold; fill: #111; }
+      .metric { font-size: 12px; fill: #333; }
       .savings-good { fill: #4caf50; }
       .savings-neutral { fill: #999; }
       .savings-negative { fill: #ff9800; }

@@ -1,10 +1,10 @@
 <svg viewBox="0 0 1000 600" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
-      .title { font-size: 28px; font-weight: bold; fill: #1a1a1a; }
-      .box-label { font-size: 16px; font-weight: bold; }
-      .box-text { font-size: 12px; fill: #333; }
-      .subtitle { font-size: 14px; fill: #666; }
+      .title { font-size: 28px; font-weight: bold; fill: #000; }
+      .box-label { font-size: 16px; font-weight: bold; fill: #000; }
+      .box-text { font-size: 12px; fill: #222; }
+      .subtitle { font-size: 14px; fill: #555; }
       .arrow { stroke: #333; stroke-width: 2; marker-end: url(#arrowhead); }
       .box { rx: 8; stroke-width: 2; }
       .input-box { fill: #5cb85c; stroke: #3d8b3d; }
@@ -13,7 +13,7 @@
       .engine-box-tde { fill: #e8f8e8; stroke: #3d8b3d; }
       .engine-box-acs { fill: #f4e8e8; stroke: #a02c2c; }
       .divider { stroke: #ddd; stroke-width: 1; }
-      .savings { font-size: 13px; font-weight: bold; }
+      .savings { font-size: 13px; font-weight: bold; fill: #2e7d32; }
     </style>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
       <polygon points="0 0, 10 3, 0 6" fill="#333"/>

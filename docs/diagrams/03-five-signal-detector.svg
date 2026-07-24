@@ -1,11 +1,11 @@
 <svg viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
-      .title { font-size: 26px; font-weight: bold; fill: #1a1a1a; }
-      .signal-label { font-size: 14px; font-weight: bold; }
-      .signal-text { font-size: 11px; fill: #333; }
+      .title { font-size: 26px; font-weight: bold; fill: #000; }
+      .signal-label { font-size: 14px; font-weight: bold; fill: #000; }
+      .signal-text { font-size: 11px; fill: #222; }
       .weight-text { font-size: 12px; font-weight: bold; fill: #d39e00; }
-      .example-text { font-size: 12px; fill: #333; }
+      .example-text { font-size: 12px; fill: #222; }
       .signal-box { rx: 6; stroke-width: 2; }
       .signal1 { fill: #fff3cd; stroke: #ffc107; }
       .signal2 { fill: #e3f2fd; stroke: #2196f3; }
