@@ -2,12 +2,11 @@
  * TdeAuditGraphPanel — "TDE Graph" tab of the chat Audit panel (ADR-0214).
  *
  * Thin wrapper around ComputeGraphView(mode="tde"): resolves which TDE turn
- * to show (the most recent one this chat session actually ran, stamped on
- * the ChatMessage via the `engine` stream event's `tde_run_id` field — see
- * chat_runtime.py::_stream_tde_turn / chat-registry.ts's "engine" case),
- * with a manual override input as a fallback for older turns that predate
- * that plumbing (their run id only ever appeared inside the free-text
- * "task.completed" summary, never as a structured field).
+ * to show (the most recent one this chat session actually ran — stamped on
+ * the ChatMessage live via the `engine`/`engine_progress` stream events and
+ * re-derived from the persisted tde_progress on reload, see
+ * chat-registry.ts / chat.tsx hydration), with a manual override input as a
+ * fallback for older turns that predate that plumbing.
  */
 import * as React from "react";
 import { GitGraph } from "lucide-react";
@@ -18,27 +17,40 @@ interface Props {
   sid: string;
 }
 
+// chat_runtime generates run ids as `tde-<epoch>-<token_hex(4)>`. The manual
+// override only fires a request once the input matches this shape — anything
+// else would 404 per keystroke and write one tde.audit_graph_viewed audit
+// record per successful keystroke-hit (review 2026-07-24).
+const RUN_ID_RE = /^tde-\d{1,20}-[0-9a-f]{8}$/i;
+
 export function TdeAuditGraphPanel({ sid }: Props) {
-  const { messages } = useChatSession(sid);
+  const { messages, streaming } = useChatSession(sid);
 
-  const latestTdeRunId = React.useMemo(() => {
+  // Resolve run id AND metrics from the SAME (latest) TDE message — two
+  // independent backward scans could pair a newer run's graph with an older
+  // run's metrics card (review 2026-07-24).
+  const latestTde = React.useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
-      const runId = messages[i].tdeRunId;
-      if (runId) return runId;
+      const m = messages[i];
+      if (m.tdeRunId || m.tdeProgress) {
+        return {
+          runId: m.tdeRunId ?? m.tdeProgress?.run_id ?? null,
+          progress: m.tdeProgress ?? null,
+        };
+      }
     }
-    return null;
+    return { runId: null, progress: null };
   }, [messages]);
 
-  const latestTdeProgress = React.useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const progress = messages[i].tdeProgress;
-      if (progress) return progress;
-    }
-    return null;
-  }, [messages]);
+  const latestTdeRunId = latestTde.runId;
+  const latestTdeProgress = latestTde.progress;
 
   const [manualRunId, setManualRunId] = React.useState("");
-  const activeRunId = manualRunId.trim() || latestTdeRunId;
+  const manualTrimmed = manualRunId.trim();
+  const manualValid = RUN_ID_RE.test(manualTrimmed);
+  const activeRunId = (manualValid ? manualTrimmed : "") || latestTdeRunId;
+
+  const latencyDelta = latestTdeProgress?.latency_delta_pct;
 
   return (
     <div className="flex flex-col gap-3 p-4 h-full overflow-y-auto bg-slate-950">
@@ -75,13 +87,26 @@ export function TdeAuditGraphPanel({ sid }: Props) {
                 {latestTdeProgress.l34_forced ? "Blocked" : "Allowed"}
               </span>
             </div>
-          </div>
-
-          {/* k=7: Token-Savings visualization (placeholder until TDE-Engine calculates) */}
-          <div className="text-xs bg-amber-900/20 border border-amber-700 rounded p-2">
-            <div className="font-semibold text-amber-200 mb-1">⏳ Token Savings (TDE-Engine calculation pending)</div>
-            <div className="text-amber-300 text-[10px]">
-              TDE-Engine will compute actual savings once integrated. Estimated range: 30-70% vs. full model.
+            <div className="flex justify-between">
+              <span className="text-slate-400">Latency vs. local:</span>
+              <span className="text-slate-200 font-mono">
+                {typeof latencyDelta === "number"
+                  ? `${latencyDelta > 0 ? "+" : ""}${latencyDelta.toFixed(1)}%`
+                  : "n/a"}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Token savings:</span>
+              {/* ADR-0215 honesty: token_savings_pct is null until real
+                  per-call token instrumentation exists — render the truth,
+                  never an invented estimate (review 2026-07-24 removed the
+                  fabricated "30-70%" placeholder). */}
+              <span className="text-slate-500 font-mono">
+                {latestTdeProgress.token_usage_instrumented &&
+                 typeof latestTdeProgress.token_savings_pct === "number"
+                  ? `${latestTdeProgress.token_savings_pct.toFixed(1)}%`
+                  : "not measured"}
+              </span>
             </div>
           </div>
         </div>
@@ -97,9 +122,17 @@ export function TdeAuditGraphPanel({ sid }: Props) {
           className="flex-1 rounded border border-slate-700 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </label>
+      {manualTrimmed !== "" && !manualValid && (
+        <div className="text-[10px] text-amber-400">
+          Not a TDE run id yet — expected shape <code className="font-mono">tde-&lt;epoch&gt;-&lt;8 hex&gt;</code>.
+        </div>
+      )}
 
       {activeRunId ? (
-        <ComputeGraphView mode="tde" runId={activeRunId} />
+        // Poll while this chat is still streaming: the run id is stamped at
+        // turn START, before any tde.* audit record exists — a one-shot
+        // fetch latched a sticky 404 for the whole run (review 2026-07-24).
+        <ComputeGraphView mode="tde" runId={activeRunId} pollMs={streaming ? 2000 : 0} />
       ) : (
         <div className="text-xs text-slate-500 py-8 text-center">
           No TDE run selected — start a TDE turn or paste a run id above.

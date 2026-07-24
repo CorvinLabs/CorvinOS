@@ -56,8 +56,9 @@ export interface ChatMessage {
   /** ADR-0214: TDE turn correlation id ("tde-<epoch>-<hex>"), stamped from
    *  the `engine` stream event when this turn ran through the Tiered
    *  Delegation Engine. Lets the Audit panel's TDE Graph tab find the
-   *  matching GET /compute/tde/{run_id}/graph payload. Live-only, same as
-   *  engine/engineLabel above. */
+   *  matching GET /compute/tde/{run_id}/graph payload. Live: `engine` +
+   *  `engine_progress` events; reload: re-derived from the persisted
+   *  tde_progress.run_id during history hydration (k=8). */
   tdeRunId?: string;
   /** ADR-0214 Phase 2: TDE delegation progress (steps, counts, L34 status).
    *  Persisted to turns.jsonl so audit graph survives reload/reconnect.
@@ -353,6 +354,37 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
                 // didn't carry one (e.g. a non-TDE fallback re-stamp).
                 ...(evt.tde_run_id ? { tdeRunId: evt.tde_run_id } : {}),
               }
+            : m
+        );
+      }
+      return;
+    }
+
+    case "engine_progress": {
+      // ADR-0214 Phase 4b / k=8 fix (adversarial review 2026-07-24): this
+      // event previously had NO reducer — tdeProgress was declared on
+      // ChatMessage but assigned nowhere, so the TDE metrics card never
+      // rendered live. The backend persists the same dict to turns.jsonl
+      // (snake_case `tde_progress`); hydration maps that on reload, this
+      // case covers the live turn. The event arrives before "done", so
+      // currentAssistantId is still set (lastAssistantId is the fallback for
+      // a late event racing "done").
+      const aid = entry.currentAssistantId ?? entry.lastAssistantId;
+      if (aid && evt.engine === "tiered_delegation" && evt.run_id) {
+        const tp: TdeProgress = {
+          run_id: String(evt.run_id),
+          total_steps: Number(evt.total_steps ?? 0),
+          completed_steps: Number(evt.completed_steps ?? 0),
+          delegated_count: Number(evt.delegated_count ?? 0),
+          local_count: Number(evt.local_count ?? 0),
+          l34_forced: Boolean(evt.l34_forced),
+          token_savings_pct: evt.token_savings_pct ?? null,
+          token_usage_instrumented: Boolean(evt.token_usage_instrumented),
+          latency_delta_pct: evt.latency_delta_pct ?? null,
+        };
+        entry.messages = entry.messages.map((m) =>
+          m.id === aid
+            ? { ...m, tdeProgress: tp, tdeRunId: m.tdeRunId ?? tp.run_id }
             : m
         );
       }
