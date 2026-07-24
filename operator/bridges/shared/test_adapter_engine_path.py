@@ -159,6 +159,44 @@ for raw in sys.stdin:
 """)
 
 
+def _pop_claude_bin_pins() -> dict:
+    """Clear CORVIN_CLAUDE_BIN/CLAUDE_BIN and return their prior values.
+
+    ADR-0215 adversarial review (2026-07-24), CRITICAL finding: every test
+    below that fakes the `claude` binary via a PATH prepend alone — without
+    also clearing these two pins — silently calls the REAL, locally
+    installed `claude` CLI instead of the fake test double whenever
+    CORVIN_CLAUDE_BIN happens to be set in the environment. That is not a
+    hypothetical: `helper_model.resolve_claude_bin()` and
+    `agents.claude_code._configured_claude_bin()` BOTH check
+    CORVIN_CLAUDE_BIN (then CLAUDE_BIN) BEFORE ever consulting PATH — by
+    design, so a real deployment's pin survives a stripped systemd PATH
+    (see house_rules.py's docstring, "[Engine-Autodetect Stripped-PATH]").
+    The same design makes an unset-CORVIN_CLAUDE_BIN assumption in a test
+    silently wrong on any machine where that canonical production pin is
+    exported — which is to say, on exactly the machines these tests exist
+    to protect. Reproduced directly: with CORVIN_CLAUDE_BIN set, this
+    file's simple-prompt test took 12s and failed on an idle-timeout
+    instead of the fake script's instant echo; with it unset, 0.3s and
+    green. Real cost/PII risk: a real `claude -p` subprocess receiving the
+    fake test's synthetic stream-json input is a real, billable API call
+    with unpredictable (and potentially personalized, real-account) output
+    asserted against as if it were the deterministic fake.
+    """
+    saved = {k: os.environ.get(k) for k in ("CORVIN_CLAUDE_BIN", "CLAUDE_BIN")}
+    os.environ.pop("CORVIN_CLAUDE_BIN", None)
+    os.environ.pop("CLAUDE_BIN", None)
+    return saved
+
+
+def _restore_claude_bin_pins(saved: dict) -> None:
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
 def _setup_fake(name: str, script: str) -> tuple[Path, Path]:
     work = Path(tempfile.mkdtemp(prefix=f"engine-path-{name}-"))
     fake_dir = work / "bin"
@@ -179,6 +217,7 @@ def test_engine_path_simple_prompt() -> None:
     work, fake_dir = _setup_fake("simple", _FAKE_ECHO_SCRIPT)
     saved_path = os.environ.get("PATH", "")
     saved_home = os.environ.get("CORVIN_HOME")
+    saved_claude_bin = _pop_claude_bin_pins()
     try:
         os.environ["PATH"] = f"{fake_dir}:{saved_path}"
         os.environ["CORVIN_HOME"] = str(work / "corvinos")
@@ -203,6 +242,7 @@ def test_engine_path_simple_prompt() -> None:
             os.environ.pop("CORVIN_HOME", None)
         os.environ.pop("CORVIN_USE_ENGINE_LAYER", None)
         os.environ.pop("ADAPTER_STREAM_IDLE_TIMEOUT", None)
+        _restore_claude_bin_pins(saved_claude_bin)
         shutil.rmtree(work, ignore_errors=True)
 
 
@@ -216,6 +256,7 @@ def test_engine_path_tool_use_status() -> None:
     work, fake_dir = _setup_fake("tools", _FAKE_TOOL_SCRIPT)
     saved_path = os.environ.get("PATH", "")
     saved_home = os.environ.get("CORVIN_HOME")
+    saved_claude_bin = _pop_claude_bin_pins()
     try:
         os.environ["PATH"] = f"{fake_dir}:{saved_path}"
         os.environ["CORVIN_HOME"] = str(work / "corvinos")
@@ -254,6 +295,7 @@ def test_engine_path_tool_use_status() -> None:
             os.environ.pop("CORVIN_HOME", None)
         os.environ.pop("CORVIN_USE_ENGINE_LAYER", None)
         os.environ.pop("ADAPTER_STREAM_IDLE_TIMEOUT", None)
+        _restore_claude_bin_pins(saved_claude_bin)
         shutil.rmtree(work, ignore_errors=True)
 
 
@@ -267,6 +309,7 @@ def test_engine_path_mid_stream_cancel() -> None:
     work, fake_dir = _setup_fake("hang", _FAKE_HANG_SCRIPT)
     saved_path = os.environ.get("PATH", "")
     saved_home = os.environ.get("CORVIN_HOME")
+    saved_claude_bin = _pop_claude_bin_pins()
     try:
         os.environ["PATH"] = f"{fake_dir}:{saved_path}"
         os.environ["CORVIN_HOME"] = str(work / "corvinos")
@@ -325,6 +368,7 @@ def test_engine_path_mid_stream_cancel() -> None:
             os.environ.pop("CORVIN_HOME", None)
         os.environ.pop("CORVIN_USE_ENGINE_LAYER", None)
         os.environ.pop("ADAPTER_STREAM_IDLE_TIMEOUT", None)
+        _restore_claude_bin_pins(saved_claude_bin)
         shutil.rmtree(work, ignore_errors=True)
 
 
@@ -368,6 +412,7 @@ def test_engine_path_btw_routes_through_engine() -> None:
     work, fake_dir = _setup_fake("btw-route", _FAKE_BTW_SCRIPT)
     saved_path = os.environ.get("PATH", "")
     saved_home = os.environ.get("CORVIN_HOME")
+    saved_claude_bin = _pop_claude_bin_pins()
     try:
         os.environ["PATH"] = f"{fake_dir}:{saved_path}"
         os.environ["CORVIN_HOME"] = str(work / "corvinos")
@@ -437,6 +482,7 @@ def test_engine_path_btw_routes_through_engine() -> None:
             os.environ.pop("CORVIN_HOME", None)
         os.environ.pop("CORVIN_USE_ENGINE_LAYER", None)
         os.environ.pop("ADAPTER_STREAM_IDLE_TIMEOUT", None)
+        _restore_claude_bin_pins(saved_claude_bin)
         shutil.rmtree(work, ignore_errors=True)
 
 

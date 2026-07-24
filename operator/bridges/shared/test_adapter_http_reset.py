@@ -104,8 +104,31 @@ def _make_two_phase_claude(tmp: Path, *, naked: bool) -> Path:
     return bin_dir
 
 
+_saved_env_for_teardown: dict = {}
+
+
 def _common_setup(tmp: Path, bin_dir: Path) -> None:
+    global _saved_env_for_teardown
+    # ADR-0215 adversarial review (2026-07-24), CRITICAL finding (same bug
+    # class fixed in test_adapter_engine_path.py's _pop_claude_bin_pins()):
+    # helper_model.resolve_claude_bin() / agents.claude_code.
+    # _configured_claude_bin() BOTH check CORVIN_CLAUDE_BIN (then
+    # CLAUDE_BIN) BEFORE consulting PATH — a pin set in the ambient
+    # environment (the CANONICAL production pin per house_rules.py's own
+    # docstring) silently bypasses this file's fake `claude` entirely,
+    # spawning the REAL CLI against synthetic 400/429/500-simulation input
+    # instead. Also: PATH was set here but never restored in _teardown()
+    # (only ever prepended-to across the whole test session, and
+    # CORVIN_CLAUDE_BIN/CLAUDE_BIN — if genuinely set in the ambient
+    # environment — must be RESTORED, not just popped, so other tests in
+    # the same pytest process don't lose a real pin they depend on).
+    _saved_env_for_teardown = {
+        k: os.environ.get(k)
+        for k in ("PATH", "CORVIN_CLAUDE_BIN", "CLAUDE_BIN")
+    }
     os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+    os.environ.pop("CORVIN_CLAUDE_BIN", None)
+    os.environ.pop("CLAUDE_BIN", None)
     os.environ["ADAPTER_STREAM_IDLE_TIMEOUT"] = "30"
     os.environ["ADAPTER_HEARTBEAT_INTERVAL"] = "0"
     os.environ["ADAPTER_INBOX"] = str(tmp / "inbox")
@@ -118,6 +141,13 @@ def _common_setup(tmp: Path, bin_dir: Path) -> None:
 
 
 def _teardown() -> None:
+    global _saved_env_for_teardown
+    for k, v in _saved_env_for_teardown.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    _saved_env_for_teardown = {}
     for v in ("ADAPTER_STREAM_IDLE_TIMEOUT", "ADAPTER_HEARTBEAT_INTERVAL",
               "ADAPTER_INBOX", "ADAPTER_OUTBOX", "CORVIN_HOME",
               "VOICE_AUDIT_PATH", "CORVIN_USE_ENGINE_LAYER"):
