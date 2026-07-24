@@ -2844,7 +2844,7 @@ def _build_delegation_spec(task: str, budget: dict) -> dict:
             "engine": "delegation_loop",
             "delegation_loop": {"budget": dict(budget)},
         },
-        "state": {"initial": {"task": "web-chat delegated turn (ADR-0114)"}},
+        "state": {"initial": {"task": task}},
     }
 
 

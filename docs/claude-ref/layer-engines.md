@@ -1737,6 +1737,10 @@ carries the same `<acs_directive>` block the bridges inject):
    sequential (explore → edit → test → fix), needs the shared session
    workspace and conversation context — ACS workers have neither — and
    every ACS turn burns one `compute_units_per_day` (free tier: 10/day, shared agentic pool with TDE + compute runs).
+   A TDE turn's `quota_used_today`/`quota_limit` against this same pool is
+   surfaced to the user directly on the per-turn chat badge (`Quota: N/limit
+   today`, omitted on an unlimited tier) — see
+   [delegation-routing.md § 8](delegation-routing.md#8-tde-inline-badge-chat-ui-adr-02140216).
    The direct turn is un-metered and does its own Task-tool sub-delegation
    when parallelism genuinely helps. Pre-rework, the strong-verb list sent
    every coding task into the fan-out; the historical error classes

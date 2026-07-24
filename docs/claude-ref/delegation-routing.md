@@ -44,7 +44,10 @@ E2E-proven in `SendIntegration`, but does NOT drive console Tier-1 routing
 yet: per ADR-0214 that requires a canary; the console runs TDE only on the
 explicit `/use-engine tiered_delegation` command, gated as delegation by the
 pre-spawn gates. Which mechanism actually ran a turn is now visible in the
-chat UI via the per-turn `engine` badge, and on bridges via the
+chat UI via the per-turn `engine` badge — for `tiered_delegation` turns with
+step data (`tdeProgress`, `total_steps > 0`) this is the rich **TDE inline
+badge** (`TdeInlineBadge` in `chat.tsx`, ADR-0214/0216) rather than the
+generic "Engine: X" line; see § 8 below — and on bridges via the
 `[⚙ ACS: <primitive>]` context-bar segment.) Explicit user commands
 (`/delegate`, `/task`, `/goal`, schedule requests) are Tier-1 overrides:
 the user has already chosen the mechanism; classifiers never override them.
@@ -198,3 +201,33 @@ only via `run_delegate(budget_ceiling_s=…)`, never from the MCP tool surface
   the manager semantics instead of reusing `acs_runtime._manager_loop`.
 - ATO (`ato_classify.py`) overlaps ACS-X vocabulary but stays advisory-only;
   candidates for merging into the shared table.
+
+## 8. TDE inline badge (chat UI, ADR-0214/0216)
+
+For an assistant turn where `engine === "tiered_delegation"` AND the turn
+carries step data (`tdeProgress` present, `total_steps > 0`), the per-turn
+chat-bubble badge (`MessageBubble` in `chat.tsx`) branches from the generic
+"Engine: X" line to a richer `TdeInlineBadge`. This is a pure display
+concern — it does not change routing, gating, or metering, only what the
+already-computed `TdeProgress` payload (`chat-registry.ts`) renders as:
+
+| Field | Rendered as | Source |
+|---|---|---|
+| `completed_steps` / `total_steps` | `Steps: X/Y` | `TieredDelegationEngine.execute` step loop |
+| `delegated_count` / `local_count` | `Delegated: N · Local: M` | per-step three-gate delegation outcome |
+| `l34_forced` | `L34 gate: forced` / `L34 gate: clear` | L34 fail-closed pre-step gate |
+| `latency_delta_pct` | `Latency Δ: ±N% (measured)` — omitted if `null` | real wall-clock measurement in `_summarize()`, never estimated |
+| `token_savings_pct` / `token_usage_instrumented` | **always** `Token savings: not instrumented` unless `token_usage_instrumented === true` | ADR-0215 honesty contract: no real token-usage instrumentation exists, so this field is structurally always `null` today — the badge must never render it as `0%` or any number, which would misrepresent an unmeasured quantity as a measured saving |
+| `task_type` / `complexity` | `<task_type> · <complexity>` — omitted if both absent | turn's `InitialAnalysisRequest.classification` |
+| `quota_used_today` / `quota_limit` | `Quota: N/limit today` — the **whole chip is omitted** when `quota_limit === null` (unlimited tier); never fabricated as `N/0` or `N/∞` | ADR-0216 shared agentic-compute pool chokepoint (`_enforce_tde_compute_quota`) |
+
+A **"View graph →"** link sets the chat page's `auditTab` state to
+`"tde-graph"` and opens the Audit panel (`auditOpen = true`); the existing
+`TdeAuditGraphPanel` then resolves the same session's latest TDE turn on its
+own (it already scans `messages` for `tdeRunId`/`tdeProgress` — no run id is
+threaded through the click handler).
+
+**Fallback (unchanged):** the generic "Engine: X" line renders for every
+non-TDE engine, and for the zero-step edge case (`total_steps === 0` — the
+`engine_progress` event never fires for a TDE run with no steps), so a TDE
+turn is never left without an engine attribution line.

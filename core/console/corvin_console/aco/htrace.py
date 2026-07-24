@@ -83,12 +83,43 @@ _HASH_FIELDS = frozenset({
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _version_from_pyproject(start: Path) -> str:
+    """Source-checkout fallback: walk up from *start* looking for the CorvinOS
+    pyproject.toml and return its ``project.version``. Returns "" when nothing
+    matching is found (installed wheels have no pyproject on disk — there
+    importlib.metadata is authoritative)."""
+    try:
+        import tomllib
+    except Exception:  # noqa: BLE001 — py<3.11 has no tomllib; give up quietly
+        return ""
+    cur = start.resolve()
+    for cand in [cur, *cur.parents][:8]:
+        pp = cand / "pyproject.toml"
+        if not pp.is_file():
+            continue
+        try:
+            data = tomllib.loads(pp.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        proj = data.get("project") or {}
+        name = str(proj.get("name", "")).lower().replace("-", "_")
+        if name == "corvinos":
+            v = str(proj.get("version", ""))
+            if re.match(r"^[0-9]+\.[0-9]+\.[0-9]+", v):
+                return v
+    return ""
+
+
 def _corvin_version() -> str:
     try:
         from importlib.metadata import version
         return version("corvinOS")
     except Exception:  # noqa: BLE001
-        return "unknown"
+        # Not an installed distribution in THIS interpreter (e.g. the systemd
+        # maintenance timer running the source checkout under the system
+        # python) — fall back to the checkout's own pyproject.toml. Fixed
+        # 2026-07-24: 59% of published CorvinLogs traces carried "unknown".
+        return _version_from_pyproject(Path(__file__).parent) or "unknown"
 
 
 def _platform_string() -> str:

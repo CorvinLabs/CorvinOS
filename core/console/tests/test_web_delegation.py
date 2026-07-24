@@ -349,6 +349,9 @@ def test_delegation_spec_is_valid_awp() -> None:
     spec = cr._build_delegation_spec("do the thing", cr._DELEGATION_BUDGET_DEFAULTS)
     assert spec["awp"] == "1.0.0"
     assert spec["workflow"]["description"] == "do the thing"
+    # Regression guard: state.initial.task must carry the real task text,
+    # not the historical "web-chat delegated turn (ADR-0114)" placeholder.
+    assert spec["state"]["initial"]["task"] == "do the thing"
     assert spec["orchestration"]["engine"] == "delegation_loop"
     assert spec["orchestration"]["delegation_loop"]["budget"] == cr._DELEGATION_BUDGET_DEFAULTS
     # The budget dict must be a copy — callers must not share mutable state.
@@ -414,3 +417,101 @@ def test_acs1_inflated_budget_would_be_rejected_by_validator() -> None:
     result = validate_workflow_dict(spec)
     rule_ids = {i.rule_id for i in result.errors}
     assert "R35" in rule_ids and "R36" in rule_ids, rule_ids
+
+
+# ── real E2E through acs_runtime.delegation_loop (2026-07-24 root-cause fix) ──
+#
+# Everything above only ever asserted on the dict `_build_delegation_spec`
+# returns — a pure string comparison. It never proved that the real
+# `acs_runtime.ACSRuntime.run()` delegation_loop actually threads that dict
+# into what a worker subprocess receives. This test drives the REAL manager
+# loop (`_manager_loop` / `_dispatch_workers` / `_build_worker_prompt`) with
+# only the two LLM subprocess boundaries faked (`_call_manager_sync`,
+# `_call_worker_sync`) — the same seam the existing acs_runtime test suite
+# already fakes at (see test_call_worker_sync_prompt_delivered_via_stdin) —
+# and captures the literal prompt string a worker would be launched with.
+
+def test_delegation_spec_e2e_worker_receives_real_task_not_placeholder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    if str(shared) not in sys.path:
+        sys.path.insert(0, str(shared))
+    try:
+        import acs_runtime as _rt  # type: ignore
+        import spawn_gates as _sg  # type: ignore
+    except ImportError:
+        pytest.skip("acs_runtime/spawn_gates not importable in this environment")
+    import asyncio
+    import json as _json
+    from unittest.mock import patch
+
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+
+    real_task = "Analysiere die Verkaufszahlen aus drei Quellen und vergleiche sie"
+    placeholder = "web-chat delegated turn (ADR-0114)"
+
+    # Exact production call: chat_runtime._build_delegation_spec is what the
+    # web-chat delegation route hands to ACSRuntime.run().
+    spec = cr._build_delegation_spec(real_task, cr._DELEGATION_BUDGET_DEFAULTS)
+
+    manager_calls = {"n": 0}
+    worker_prompts: list[str] = []
+
+    def _fake_manager_sync(prompt, model, tenant_id="_default", proc_holder=None):
+        manager_calls["n"] += 1
+        if manager_calls["n"] == 1:
+            decision = {
+                "decision": "DELEGATE",
+                "reasoning": "fan out one worker",
+                "subtasks": [
+                    {"id": "s1", "instructions": "do the sales comparison",
+                     "expected_output": {}},
+                ],
+            }
+        else:
+            decision = {"decision": "COMPLETE",
+                        "complete_artifacts": {"summary": "done"}}
+        return _json.dumps(decision), 100
+
+    def _fake_worker_sync(prompt, system, model, budget, extra_env=None,
+                           tenant_id="_default", proc_holder=None):
+        worker_prompts.append(prompt)
+        return (
+            _json.dumps({"status": "success", "result": {"ok": True},
+                        "confidence": 0.9}),
+            50,
+            {"engine_id": "claude_code", "model_id": model, "attested": True,
+             "locality": "us_cloud"},
+        )
+
+    with (
+        patch.object(_rt, "_call_manager_sync", side_effect=_fake_manager_sync),
+        patch.object(_rt, "_call_worker_sync", side_effect=_fake_worker_sync),
+        patch.object(_rt, "_resolve_worker_engine",
+                     return_value=("claude_code", "test-model")),
+        patch.object(_sg, "check_l44", return_value=None),
+        patch.object(_sg, "check_l34", return_value=None),
+        patch.object(_sg, "check_l35", return_value=None),
+    ):
+        runtime = _rt.ACSRuntime(tenant_id="_test", bridge="web", chat="e2e-test",
+                                  enable_gate_chain=False)
+        result = asyncio.run(runtime.run(spec))
+
+    assert result.status == "success", (result.status, result.error)
+    assert manager_calls["n"] == 2
+    assert len(worker_prompts) == 1, "expected exactly one worker to be dispatched"
+
+    worker_prompt = worker_prompts[0]
+    # The worker prompt renders ctx.state (= spec["state"]["initial"], i.e.
+    # `{"task": real_task}` post-fix) verbatim as "CONTEXT STATE" — this is
+    # the exact mechanism the root-cause doc describes, proven end-to-end
+    # rather than asserted on the spec dict alone.
+    assert real_task in worker_prompt, (
+        "worker did not receive the real task text through the real "
+        "delegation_loop codepath"
+    )
+    assert placeholder not in worker_prompt, (
+        "worker received the historical ADR-0114 placeholder instead of "
+        "the real task text"
+    )

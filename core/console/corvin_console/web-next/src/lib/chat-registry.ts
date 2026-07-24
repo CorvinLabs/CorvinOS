@@ -38,6 +38,14 @@ export interface TdeProgress {
   token_savings_pct?: number | null;
   token_usage_instrumented?: boolean;
   latency_delta_pct?: number | null;
+  /** ADR-0216 shared agentic-compute pool: today's usage/cap for this run's
+   *  chokepoint. quota_limit is `null` on an unlimited tier — render
+   *  "unlimited" (omit the "/N" suffix), never fabricate a cap. */
+  quota_used_today?: number;
+  quota_limit?: number | null;
+  /** From the turn's InitialAnalysisRequest.classification. */
+  task_type?: string;
+  complexity?: string;
 }
 
 export interface ChatMessage {
@@ -112,6 +120,12 @@ export interface StreamEvent {
   token_usage_instrumented?: boolean;
   latency_delta_pct?: number | null;
   l34_forced?: boolean;
+  // ADR-0216 shared agentic-compute pool fields + analysis classification
+  // (badge concept, docs/claude-ref/tde-graph-concept.md).
+  quota_used_today?: number;
+  quota_limit?: number | null;
+  task_type?: string;
+  complexity?: string;
   // ccc_action fields (ADR-0168 M3)
   action_id?: string;
   entity_type?: string;
@@ -381,6 +395,10 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
           token_savings_pct: evt.token_savings_pct ?? null,
           token_usage_instrumented: Boolean(evt.token_usage_instrumented),
           latency_delta_pct: evt.latency_delta_pct ?? null,
+          quota_used_today: evt.quota_used_today ?? undefined,
+          quota_limit: evt.quota_limit ?? null,
+          task_type: evt.task_type ?? undefined,
+          complexity: evt.complexity ?? undefined,
         };
         entry.messages = entry.messages.map((m) =>
           m.id === aid

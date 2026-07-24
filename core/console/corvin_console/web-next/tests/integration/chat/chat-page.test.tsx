@@ -20,7 +20,8 @@ import { ChatPage } from '../../fixtures/mock-pages';
 // runs through the real `useVoicePlayback` hook.
 import { ChatPage as RealChatPage } from '@/pages/chat';
 import { SetupGate } from '@/components/setup/SetupGate';
-import type { StreamEvent } from '@/lib/chat-registry';
+import { useChatSession } from '@/lib/chat-registry';
+import type { StreamEvent, ChatMessage } from '@/lib/chat-registry';
 
 const { subscribeEventsMock, capturedEventCallbacks } = vi.hoisted(() => {
   const capturedEventCallbacks = new Map<string, (evt: unknown) => void>();
@@ -223,6 +224,133 @@ describe('ChatPage voice wiring (real components, ADR-0185-adjacent regression c
     expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
     // Voice is off now — the Replay affordance is gated on voiceOut too.
     expect(screen.queryByLabelText('Replay last response')).not.toBeInTheDocument();
+  });
+});
+
+describe('ChatPage TDE inline badge (real components, ADR-0214/0216)', () => {
+  const SID = 'sid-tde-1';
+
+  const baseTdeMessage: ChatMessage = {
+    id: 'm-tde-1',
+    role: 'assistant',
+    parts: [{ kind: 'text', text: 'Done.' }],
+    ts: 1,
+    engine: 'tiered_delegation',
+    engineLabel: 'TDE',
+    tdeRunId: 'tde-1753000000-aaaaaaaa',
+    tdeProgress: {
+      run_id: 'tde-1753000000-aaaaaaaa',
+      total_steps: 5,
+      completed_steps: 5,
+      delegated_count: 3,
+      local_count: 2,
+      l34_forced: true,
+      token_savings_pct: null,
+      token_usage_instrumented: false,
+      latency_delta_pct: -12,
+      quota_used_today: 4,
+      quota_limit: 10,
+      task_type: 'coding',
+      complexity: 'medium',
+    },
+  };
+
+  afterEach(() => {
+    // Restore the module-level default so later describe blocks in this file
+    // (which don't care about useChatSession) see the original empty state.
+    vi.mocked(useChatSession).mockReturnValue({
+      messages: [],
+      streaming: false,
+      error: null,
+      reconnecting: false,
+      latestResultText: null,
+      pendingTitle: null,
+    });
+    vi.clearAllMocks();
+  });
+
+  it('renders the rich TDE badge (steps/split/L34/latency/quota) and honestly labels unmeasured token savings', async () => {
+    vi.mocked(useChatSession).mockReturnValue({
+      messages: [baseTdeMessage],
+      streaming: false,
+      error: null,
+      reconnecting: false,
+      latestResultText: null,
+      pendingTitle: null,
+    });
+
+    renderRealChatPage(SID);
+
+    expect(await screen.findByText(/Steps: 5\/5/)).toBeInTheDocument();
+    expect(screen.getByText(/Delegated: 3/)).toBeInTheDocument();
+    expect(screen.getByText(/Local: 2/)).toBeInTheDocument();
+    expect(screen.getByText(/L34 gate: forced/)).toBeInTheDocument();
+    expect(screen.getByText(/Latency Δ: -12% \(measured\)/)).toBeInTheDocument();
+    // ADR-0215 honesty contract: never render a number/0% for token savings.
+    expect(screen.getByText(/not instrumented/)).toBeInTheDocument();
+    expect(screen.getByText(/coding · medium/)).toBeInTheDocument();
+    expect(screen.getByText(/Quota: 4\/10 today/)).toBeInTheDocument();
+    // The generic "Engine: X" fallback line must NOT render for a
+    // TDE turn with real step data — the rich badge replaces it.
+    expect(screen.queryByText(/^Engine:/)).not.toBeInTheDocument();
+  });
+
+  it('omits the quota chip on an unlimited tier (quota_limit === null)', async () => {
+    vi.mocked(useChatSession).mockReturnValue({
+      messages: [{
+        ...baseTdeMessage,
+        tdeProgress: { ...baseTdeMessage.tdeProgress!, quota_used_today: 4, quota_limit: null },
+      }],
+      streaming: false,
+      error: null,
+      reconnecting: false,
+      latestResultText: null,
+      pendingTitle: null,
+    });
+
+    renderRealChatPage(SID);
+
+    await screen.findByText(/Steps: 5\/5/);
+    expect(screen.queryByText(/today/)).not.toBeInTheDocument();
+  });
+
+  it('falls back to the generic "Engine: X" line on the zero-step edge case (total_steps === 0)', async () => {
+    vi.mocked(useChatSession).mockReturnValue({
+      messages: [{
+        ...baseTdeMessage,
+        tdeProgress: { ...baseTdeMessage.tdeProgress!, total_steps: 0, completed_steps: 0 },
+      }],
+      streaming: false,
+      error: null,
+      reconnecting: false,
+      latestResultText: null,
+      pendingTitle: null,
+    });
+
+    renderRealChatPage(SID);
+
+    expect(await screen.findByText(/Engine: TDE \(Tiered Delegation Engine\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/Steps: 0\/0/)).not.toBeInTheDocument();
+  });
+
+  it('"View graph →" opens the Audit panel on the TDE Graph tab for the badge\'s turn', async () => {
+    vi.mocked(useChatSession).mockReturnValue({
+      messages: [baseTdeMessage],
+      streaming: false,
+      error: null,
+      reconnecting: false,
+      latestResultText: null,
+      pendingTitle: null,
+    });
+
+    renderRealChatPage(SID);
+
+    const viewGraph = await screen.findByText('View graph →');
+    fireEvent.click(viewGraph);
+
+    // TdeAuditGraphPanel resolves the same latest TDE message from the
+    // (mocked) registry and displays its run id once the tab is active.
+    expect(await screen.findByText(/tde-1753000000-aaaaaaaa/)).toBeInTheDocument();
   });
 });
 
