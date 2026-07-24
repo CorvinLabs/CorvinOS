@@ -90,6 +90,13 @@ components:
     entry_point: "tde.loss_judge:judge_loss_sync"
     reason: "semantic-judge fallback path, called from adaptive_delegation_executor._record_outcome"
 
+  - name: bench
+    module: tde.bench
+    status: live
+    entry_point: "tde.bench:run_default_suite"
+    benchmark_target: true
+    reason: "ADR-0215 Phase 3 — extensible token/latency benchmark harness, run via CLI/cron, not per-turn"
+
   - name: streaming_executor
     module: tde.streaming_executor
     status: deferred
