@@ -4109,8 +4109,29 @@ async def stream_turn(
                 from license.compute_quota import increment_and_check as _cq_inc  # type: ignore  # noqa: PLC0415
                 from license.limits import LicenseLimitError as _CQErr  # type: ignore  # noqa: PLC0415
             except ImportError:
-                yield {"type": "error", "code": 402,
-                       "message": "compute quota enforcement unavailable (fail-closed)"}
+                # ADR-0215 adversarial review (2026-07-24): this early return
+                # used to skip touch()/_append_turn() entirely — since the
+                # user's prompt was already persisted earlier in this turn
+                # (_append_turn for the user message runs before this
+                # branch), that left an orphaned user turn with no assistant
+                # reply in history and a stale sess.last_active_at. Mirrors
+                # the bookkeeping the _gate_refusal branch above already
+                # does for the same class of system-level (not user-input)
+                # rejection.
+                _cq_msg = "compute quota enforcement unavailable (fail-closed)"
+                _os_audit("os_turn.started", {"model": _os_model_used})
+                tm.record_event(task_id, {
+                    "event": "task.failed", "exit_code": 1,
+                    "error": "compute_quota module unavailable",
+                })
+                _audit_emit(sess, "web.turn.completed", rc=1,
+                            result_chars=len(_cq_msg), usage=None,
+                            reason="compute_quota_unavailable")
+                _os_emit_completed(rc=1)
+                yield {"type": "error", "code": 402, "message": _cq_msg}
+                yield {"type": "result", "text": _cq_msg, "usage": None}
+                touch(sess, increment_turn=True)
+                _append_turn(sess, "assistant", [{"kind": "text", "text": _cq_msg}])
                 yield {"type": "done"}
                 return
             # Use the CANONICAL resolver (CORVIN_HOME → service.env pin → repo marker
