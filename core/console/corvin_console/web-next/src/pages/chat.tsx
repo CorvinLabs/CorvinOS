@@ -80,6 +80,8 @@ import {
   closeSession,
   useChatSession,
   type StreamEvent,
+  type SessionState,
+  type TdeProgress,
 } from "@/lib/chat-registry";
 import {
   markStreaming,
@@ -1124,20 +1126,31 @@ function ChatPane({
         });
       }
       if (evt.type === "engine_progress" && evt.engine === "tiered_delegation") {
-        // ADR-0214 Phase 1: TDE completion progress. Store for audit panel rendering.
-        // Similar to ACS's worker-completion tracking but with decision-tree semantics.
-        // Attached to ChatMessage so audit graph can visualize the full delegation tree.
-        const tdeProgress = {
-          run_id: evt.run_id,
+        // ADR-0214 Phase 4b: Attach TDE progress to the latest assistant message.
+        // This persists the delegation metrics to turns.jsonl so the audit graph
+        // can reconstruct the decision tree on reload/reconnect (not ephemeral).
+        const tdeProgress: TdeProgress = {
+          run_id: evt.run_id || "",
           total_steps: evt.total_steps ?? 0,
           completed_steps: evt.completed_steps ?? 0,
           delegated_count: evt.delegated_count ?? 0,
           local_count: evt.local_count ?? 0,
-          token_savings_pct: evt.token_savings_pct ?? 0,
           l34_forced: evt.l34_forced ?? false,
         };
-        // Store for later attachment to message (Phase 2)
-        console.debug("[TDE Progress]", tdeProgress);
+        // Find the latest assistant message and attach tdeProgress.
+        // The message subscription feeds React Query, which auto-persists to turns.jsonl.
+        const cached = qc.getQueryData<SessionState>(["chat", "messages", sid]);
+        if (cached?.messages) {
+          qc.setQueryData<SessionState>(["chat", "messages", sid], (old: SessionState | undefined) => {
+            if (!old) return old;
+            const updated = [...old.messages];
+            const last = updated[updated.length - 1];
+            if (last && last.role === "assistant") {
+              last.tdeProgress = tdeProgress;
+            }
+            return { ...old, messages: updated };
+          });
+        }
       }
     });
 
