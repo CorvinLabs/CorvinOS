@@ -1,0 +1,115 @@
+# ADR-0215 Wiring Manifest — operator/orchestration/tde/ (ADR-0214, TDE)
+#
+# Every production module in this package must have exactly one entry here,
+# declared `live` (reachable from a real production entry point — the
+# wiring_gate CI check verifies this) or `deferred` (known, ADR-tracked
+# future work with no caller yet — checked into git on purpose, not a silent
+# gap). A module with neither is a build failure: see
+# operator/orchestration/wiring_gate.py.
+#
+# Backfilled 2026-07-23 by ADR-0215 from a full adversarial review of this
+# package's actual call graph (chat_runtime.py -> SendIntegration ->
+# EngineRegistry -> TieredDelegationEngine -> AdaptiveDelegationExecutor).
+
+components:
+  - name: __init__
+    module: tde
+    status: live
+    entry_point: "tde:EngineRegistry"
+    reason: "package re-export surface, imported by every other entry"
+
+  - name: analysis_runner
+    module: tde.analysis_runner
+    status: live
+    entry_point: "tde.analysis_runner:run_initial_analysis_sync"
+    reason: "called from chat_runtime._stream_tde_turn (Phase 1 InitialAnalysis)"
+
+  - name: engine_registry
+    module: tde.engine_registry
+    status: live
+    entry_point: "tde.engine_registry:EngineRegistry"
+    reason: "constructed in chat_runtime._stream_tde_turn; central engine dispatch"
+
+  - name: send_integration
+    module: tde.send_integration
+    status: live
+    entry_point: "tde.send_integration:SendIntegration"
+    reason: "L22 send() hookpoint per ADR-0214, called from chat_runtime._stream_tde_turn"
+
+  - name: tde_engine
+    module: tde.tde_engine
+    status: live
+    entry_point: "tde.tde_engine:TieredDelegationEngine"
+    reason: "registered in EngineRegistry as the tiered_delegation engine"
+
+  - name: adaptive_delegation_executor
+    module: tde.adaptive_delegation_executor
+    status: live
+    entry_point: "tde.adaptive_delegation_executor:AdaptiveDelegationExecutor"
+    reason: "instantiated by TieredDelegationEngine.execute() for every TDE run"
+
+  - name: l34_delegation_gate
+    module: tde.l34_delegation_gate
+    status: live
+    entry_point: "tde.l34_delegation_gate:L34DelegationGate"
+    reason: "data-safety gate used by both send_integration and the executor"
+
+  - name: loss_profile_tracker
+    module: tde.loss_profile_tracker
+    status: live
+    entry_point: "tde.loss_profile_tracker:get_session_tracker"
+    reason: "loss-gate evidence store, session/tenant-keyed since ADR-0215 F4"
+
+  - name: robust_engine_detector
+    module: tde.robust_engine_detector
+    status: live
+    entry_point: "tde.robust_engine_detector:RobustEngineDetector"
+    reason: "engine auto-detection; called from send_integration and /debug-engine"
+
+  - name: slash_command_parser
+    module: tde.slash_command_parser
+    status: live
+    entry_point: "tde.slash_command_parser:SlashCommandParser"
+    reason: "single source of truth for /use-engine, /engine-auto, /debug-engine (ADR-0215 F3)"
+
+  - name: tde_audit
+    module: tde.tde_audit
+    status: live
+    entry_point: "tde.tde_audit:emit"
+    reason: "hash-chained tde.* audit event emission, used throughout the package"
+
+  - name: worker_ipc
+    module: tde.worker_ipc
+    status: live
+    entry_point: "tde.worker_ipc:ProcHolder"
+    reason: "subprocess lifecycle + kill-on-cancel, used by analysis_runner and the executor"
+
+  - name: loss_judge
+    module: tde.loss_judge
+    status: live
+    entry_point: "tde.loss_judge:judge_loss_sync"
+    reason: "semantic-judge fallback path, called from adaptive_delegation_executor._record_outcome"
+
+  - name: streaming_executor
+    module: tde.streaming_executor
+    status: deferred
+    reason: >
+      ADR-0214 Phase 2 (big-data >1GB streaming path). Adaptive-chunking
+      logic is correct and unit-tested (test_tde_streaming_executor.py) but
+      has zero production callers — no streaming-capable WorkerIPC exists
+      yet to delegate a chunked stream to (see tde/README.md). Found unwired
+      for the 4th consecutive review round by ADR-0215; do not wire this in
+      speculatively — wire it when a real remote-streaming IPC lands.
+    target_adr: "0214"
+
+  - name: detector_plugin_registry
+    module: tde.detector_plugin_registry
+    status: deferred
+    reason: >
+      ADR-0214 Phase 3 (Marketplace detector plugins, CLS-tier-gated).
+      Plugin-loading logic is correct and unit-tested
+      (test_adr_0214_phase3_plugins.py, test_adr_0214_phase4_discovery.py)
+      but RobustEngineDetector remains the only detector reachable from the
+      real send() path — no marketplace plugin has ever been installed to
+      exercise this. Do not wire in without a real plugin to load.
+    target_adr: "0214"

@@ -132,22 +132,20 @@ def check_audit_chain_integrity(tenant_id: str) -> list[IntegrityFinding]:
     """
     findings: list[IntegrityFinding] = []
     try:
-        from operator.bridges.shared.audit import verify_audit, audit_path
-    except ImportError:
-        try:
-            # parents[4] is the repo root (core/console/corvin_console/aco/
-            # integrity_monitor.py -> aco -> corvin_console -> console -> core
-            # -> repo root); parents[5] pointed one level ABOVE the repo and
-            # never existed, so this fallback silently never ran (masked
-            # because *some* other module usually already put the real
-            # bridges/shared dir on sys.path first — order-dependent bug).
-            bridge_shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
-            import sys
+        # ADR-0215 F5: the dotted `from operator.bridges.shared...` primary
+        # attempt this used to have can never resolve (stdlib `operator`
+        # always shadows the repo's operator/ directory) — dead code,
+        # removed. parents[4] is the repo root (core/console/corvin_console/
+        # aco/integrity_monitor.py -> aco -> corvin_console -> console ->
+        # core -> repo root).
+        bridge_shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+        import sys
+        if str(bridge_shared) not in sys.path:
             sys.path.insert(0, str(bridge_shared))
-            from audit import verify_audit, audit_path  # type: ignore
-        except ImportError:
-            logger.debug("[ACO-Integrity] verify_audit not importable — skipping chain check")
-            return findings
+        from audit import verify_audit, audit_path  # type: ignore
+    except ImportError:
+        logger.debug("[ACO-Integrity] verify_audit not importable — skipping chain check")
+        return findings
 
     try:
         audit_file = audit_path()
@@ -318,18 +316,13 @@ def check_global_acs_anomaly(tenant_id: str) -> list[IntegrityFinding]:
     """
     findings: list[IntegrityFinding] = []
     try:
-        try:
-            from operator.bridges.shared.audit import audit_path
-        except ImportError:
-            # Same operator/-shadows-stdlib issue as check_audit_chain_integrity()
-            # above — "operator.bridges.shared.X" can never resolve; this path
-            # had NO fallback at all, so the anomaly check always silently
-            # no-op'd (caught by the broad except below).
-            bridge_shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
-            import sys
-            if str(bridge_shared) not in sys.path:
-                sys.path.insert(0, str(bridge_shared))
-            from audit import audit_path  # type: ignore
+        # ADR-0215 F5: dead dotted primary removed (see
+        # check_audit_chain_integrity() above for the same fix).
+        bridge_shared = Path(__file__).resolve().parents[4] / "operator" / "bridges" / "shared"
+        import sys
+        if str(bridge_shared) not in sys.path:
+            sys.path.insert(0, str(bridge_shared))
+        from audit import audit_path  # type: ignore
         audit_file = audit_path()
         if not audit_file.exists():
             return findings

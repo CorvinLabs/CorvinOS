@@ -31,20 +31,19 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-# Reuse existing crypto primitives from sob_crypto
-try:
-    from operator.license.sob_crypto import (
-        chacha20_decrypt,
-        chacha20_encrypt,
-        hkdf_derive,
-    )
-except ImportError:
-    # Fallback for direct module import / testing
-    from sob_crypto import (  # noqa: E402
-        chacha20_decrypt,
-        chacha20_encrypt,
-        hkdf_derive,
-    )
+# Reuse existing crypto primitives from sob_crypto.
+# ADR-0215 F5: the dotted `from operator.license.sob_crypto import ...` that
+# used to be the primary attempt here can NEVER resolve (stdlib `operator`
+# always shadows the repo's operator/ directory) — it was dead code, and the
+# bare form below was doing all the real work via the `except` branch. Made
+# the working form primary; no fallback needed since this module already
+# lives inside operator/license/ (its own sibling directory is always on
+# sys.path when this file itself was importable at all).
+from sob_crypto import (  # noqa: E402
+    chacha20_decrypt,
+    chacha20_encrypt,
+    hkdf_derive,
+)
 
 
 @dataclass(frozen=True)

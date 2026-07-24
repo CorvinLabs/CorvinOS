@@ -528,14 +528,15 @@ def _verify_segment_manifest(audit_dir: Path, live_first_prev_hash: str):
             manifest_mac_active,
         )
     except ImportError:
-        try:
-            from operator.bridges.shared.audit_sealer import (  # type: ignore
-                segment_manifest_path, list_sealed_segments,
-                _manifest_anchor_key, _manifest_canonical, _sha256_file,
-                manifest_mac_active,
-            )
-        except ImportError:
-            return True, [], ["audit_sealer unavailable — manifest check skipped"]
+        # ADR-0215 F5: the second-level fallback here used to be a dotted
+        # `from operator.bridges.shared.audit_sealer import ...`, which can
+        # NEVER resolve (stdlib `operator` always shadows the repo's
+        # operator/ directory) — dead code, since module load time this
+        # file already inserts `operator/bridges/shared` onto sys.path
+        # (line 25), so the bare import above should already succeed in
+        # every real deployment. No working second-level fallback exists;
+        # degrade gracefully instead of pretending one does.
+        return True, [], ["audit_sealer unavailable — manifest check skipped"]
 
     problems: list[dict] = []
     warnings: list[str] = []
