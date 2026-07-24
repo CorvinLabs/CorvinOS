@@ -186,8 +186,8 @@ def parse_worker_output(raw: str) -> Any:
     return raw
 
 
-def parse_cli_envelope(stdout: str, *, model: str = "") -> "tuple[str, Optional[dict[str, Any]]]":
-    """Split a ``claude -p --output-format json`` reply into (result_text, usage).
+def parse_cli_envelope(stdout: str, *, model: str = "") -> "tuple[str, Optional[dict[str, Any]], Optional[str]]":
+    """Split a ``claude -p --output-format json`` reply into (result_text, usage, error).
 
     ADR-0218 Phase 0 — the whole point of switching workers to the json output
     format is to capture real token usage, which ``--output-format text`` never
@@ -196,21 +196,41 @@ def parse_cli_envelope(stdout: str, *, model: str = "") -> "tuple[str, Optional[
     The json envelope wraps the model's own text in ``result`` and carries a
     ``usage`` block (input/output/cache tokens) plus ``total_cost_usd``. We
     return the inner ``result`` text (so the existing parse_worker_output
-    unwraps the {"output": …} shape unchanged) and a normalised usage dict.
+    unwraps the {"output": …} shape unchanged), a normalised usage dict, and an
+    error marker.
 
-    Fail-soft: if stdout is not the expected envelope (older CLI, an error line,
-    a plain-text reply), return (stdout, None) — the caller then behaves exactly
-    as it did on the text format, and instrumentation is simply absent for that
-    call rather than crashing the step.
+    ``error``: the envelope's ``subtype`` (e.g. "error_max_turns",
+    "error_during_execution") when ``is_error`` is true, else None. The CLI
+    returns an is_error=true envelope with rc=0 for soft failures (max-turns hit,
+    API error) — the caller MUST treat those as a failed step, or the error text
+    would be recorded as a successful step's output and fed to dependents
+    (adversarial-review finding, 2026-07-24). Usage is still returned on error —
+    the tokens were spent and must be counted for cost.
+
+    Fail-soft: if stdout is not the expected envelope (older CLI, a plain-text
+    reply), return (stdout, None, None) — the caller then behaves exactly as it
+    did on the text format, and instrumentation is simply absent for that call
+    rather than crashing the step.
     """
     s = (stdout or "").strip()
     try:
         env = json.loads(s)
     except (json.JSONDecodeError, ValueError):
-        return stdout, None
-    if not isinstance(env, dict) or "result" not in env:
-        return stdout, None
-    result_text = env.get("result")
+        return stdout, None, None
+    if not isinstance(env, dict):
+        return stdout, None, None
+    # Distinguish a real CLI result envelope from arbitrary JSON the worker might
+    # legitimately have returned as its answer ({"foo":1}). Only the former is
+    # unwrapped; the latter fails soft to the old text behaviour. An ERROR
+    # envelope can OMIT `result`, so we must recognise it by its markers too —
+    # otherwise the fail-soft branch below would dump the whole envelope JSON as
+    # the step output (adversarial-review finding 2, 2026-07-24).
+    is_envelope = (
+        "result" in env or env.get("type") == "result" or "is_error" in env
+    )
+    if not is_envelope:
+        return stdout, None, None
+    result_text = env.get("result", "") or ""
     if not isinstance(result_text, str):
         result_text = json.dumps(result_text)
     raw_usage = env.get("usage") if isinstance(env.get("usage"), dict) else {}
@@ -223,13 +243,23 @@ def parse_cli_envelope(stdout: str, *, model: str = "") -> "tuple[str, Optional[
         "output_tokens": out,
         "cache_read_input_tokens": cache_read,
         "cache_creation_input_tokens": cache_create,
-        # billed volume = all input variants + output; a single scalar the
-        # Phase-1 measurement and the break-even guard can sum over.
+        # billed VOLUME (not cost): all input variants + output. cache_read is
+        # cheaper per token, so this scalar is a token-count, not a cost proxy —
+        # cost_usd below is the authoritative price. Kept as one summable number
+        # for the Phase-1 volume analysis.
         "total_tokens": inp + out + cache_read + cache_create,
         "cost_usd": env.get("total_cost_usd"),
         "model": env.get("model") or model or "",
     }
-    return result_text, usage
+    # Error detection mirrors the proven sibling parser
+    # (agents/claude_code.py: `is_error or subtype not in ("success", None)`).
+    # is_error=true OR any non-success subtype is a failed step; precedence for
+    # the marker is the machine-readable api_error_status, then subtype.
+    error = None
+    subtype = env.get("subtype")
+    if env.get("is_error") is True or subtype not in ("success", None):
+        error = str(env.get("api_error_status") or subtype or "error")
+    return result_text, usage, error
 
 
 class SubprocessWorkerIPC:
@@ -345,7 +375,18 @@ class SubprocessWorkerIPC:
                 "error": f"worker exit {rc}: {stderr.strip()[:300]}",
             }
 
-        result_text, usage = parse_cli_envelope(stdout, model=model_tag)
+        result_text, usage, env_error = parse_cli_envelope(stdout, model=model_tag)
+        if env_error:
+            # is_error=true envelope with rc=0 (soft failure: max-turns, API
+            # error). Record it as a FAILED step so dependents are skipped
+            # rather than fed the error text as if it were valid output; keep
+            # the usage — those tokens were still spent.
+            return {
+                "success": False,
+                "output": None,
+                "error": f"worker envelope error: {env_error}",
+                "usage": usage,
+            }
         return {
             "success": True,
             "output": parse_worker_output(result_text),
