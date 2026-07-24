@@ -73,14 +73,14 @@ class TestFreeTierBoundaries:
     """Every numeric FREE_TIER limit: N passes, N+1 raises LicenseLimitError."""
 
     def test_compute_units_exactly_at_limit_passes(self):
-        """1 compute unit → OK on FREE_TIER."""
-        assert FREE_TIER["compute_units_per_day"] == 1
-        _v.assert_limit("compute_units_per_day", 1)  # must not raise
+        """10 compute units → OK on FREE_TIER (ADR-0216 shared agentic pool)."""
+        assert FREE_TIER["compute_units_per_day"] == 10
+        _v.assert_limit("compute_units_per_day", 10)  # must not raise
 
     def test_compute_units_over_limit_blocked(self):
-        """2nd compute unit → LicenseLimitError on FREE_TIER."""
+        """11th compute unit → LicenseLimitError on FREE_TIER."""
         with pytest.raises(LicenseLimitError) as exc:
-            _v.assert_limit("compute_units_per_day", 2)
+            _v.assert_limit("compute_units_per_day", 11)
         assert "compute_units_per_day" in str(exc.value)
         assert "free" in str(exc.value).lower() or "tier" in str(exc.value).lower()
 
@@ -318,7 +318,7 @@ class TestTokenSecurity:
         assert _v._ACTIVE_LICENSE is None
         assert _v.active_tier() == "free"
         assert _v.is_loaded() is False
-        assert _v.get_limit("compute_units_per_day") == 1
+        assert _v.get_limit("compute_units_per_day") == 10
 
 
 # ── Phase 6: Compute quota counter ────────────────────────────────────────────
@@ -332,12 +332,15 @@ class TestComputeQuotaCounter:
         # First call → counter goes to 1, FREE_TIER limit is 1 → OK
         increment_and_check(corvin_home, channel="test", chat_key="test")
 
-    def test_free_tier_second_job_blocked(self, tmp_path):
+    def test_free_tier_over_quota_job_blocked(self, tmp_path):
         from license.compute_quota import increment_and_check
+        from license.validator import get_limit
         corvin_home = tmp_path / ".corvin"
-        # First call → OK
-        increment_and_check(corvin_home, channel="test", chat_key="test")
-        # Second call → LicenseLimitError (FREE_TIER = 1/day)
+        # Burn the whole shared daily pool (ADR-0216: free tier = 10/day,
+        # read dynamically so a future tier change doesn't rot this test).
+        for _ in range(int(get_limit("compute_units_per_day"))):
+            increment_and_check(corvin_home, channel="test", chat_key="test")
+        # Next call → LicenseLimitError
         with pytest.raises(LicenseLimitError):
             increment_and_check(corvin_home, channel="test", chat_key="test")
 
@@ -369,16 +372,18 @@ class TestComputeQuotaCounter:
         assert mode == 0o600, f"Expected 0600, got {oct(mode)}"
 
     def test_rejected_job_does_not_increment_counter(self, tmp_path):
-        """Counter must not be incremented on rejection (2nd attempt on FREE_TIER)."""
+        """Counter must not be incremented on an over-quota rejection."""
         from license.compute_quota import increment_and_check, get_today_count
+        from license.validator import get_limit
         corvin_home = tmp_path / ".corvin"
-        # First call succeeds, counter → 1
-        increment_and_check(corvin_home, channel="test", chat_key="test")
-        assert get_today_count(corvin_home) == 1
-        # Second call fails, counter stays at 1
+        limit = int(get_limit("compute_units_per_day"))
+        for _ in range(limit):
+            increment_and_check(corvin_home, channel="test", chat_key="test")
+        assert get_today_count(corvin_home) == limit
+        # Over-quota call fails, counter stays at the cap
         with pytest.raises(LicenseLimitError):
             increment_and_check(corvin_home, channel="test", chat_key="test")
-        assert get_today_count(corvin_home) == 1, "Counter must not change on rejection"
+        assert get_today_count(corvin_home) == limit, "Counter must not change on rejection"
 
 
 # ── Phase 7: get_limit resolution order ──────────────────────────────────────

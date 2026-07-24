@@ -140,36 +140,43 @@ class TestComputeQuotaCounterIntegration(unittest.TestCase):
     def test_free_tier_first_call_succeeds(self):
         from license.compute_quota import increment_and_check
         from license.limits import LicenseLimitError
-        # First call: free tier allows 1 unit/day
+        # First call: free tier allows 10 units/day (ADR-0216)
         try:
             increment_and_check(self._corvin_home, channel="console", chat_key="test:t1")
         except LicenseLimitError:
             self.fail("First compute call on free tier should NOT be blocked")
 
-    def test_free_tier_second_call_blocked(self):
+    def test_free_tier_over_quota_call_blocked(self):
         from license.compute_quota import increment_and_check, get_today_count
         from license.limits import LicenseLimitError
-        # First call succeeds
-        increment_and_check(self._corvin_home, channel="console", chat_key="test:t1")
-        self.assertEqual(get_today_count(self._corvin_home), 1)
-        # Second call should be blocked (free tier limit = 1/day)
+        from license.validator import get_limit
+        # Burn the whole shared daily pool (ADR-0216: free tier = 10/day,
+        # read dynamically so a future tier change doesn't rot this test).
+        limit = int(get_limit("compute_units_per_day"))
+        for _ in range(limit):
+            increment_and_check(self._corvin_home, channel="console", chat_key="test:t1")
+        self.assertEqual(get_today_count(self._corvin_home), limit)
+        # Next call should be blocked
         with self.assertRaises(LicenseLimitError) as ctx:
             increment_and_check(self._corvin_home, channel="console", chat_key="test:t1")
         e = ctx.exception
         self.assertEqual(e.feature, "compute_units_per_day")
-        self.assertEqual(e.limit, 1)
+        self.assertEqual(e.limit, limit)
         self.assertEqual(e.tier, "free")
 
     def test_counter_not_incremented_on_rejection(self):
         from license.compute_quota import increment_and_check, get_today_count
         from license.limits import LicenseLimitError
-        increment_and_check(self._corvin_home)  # succeeds → counter = 1
+        from license.validator import get_limit
+        limit = int(get_limit("compute_units_per_day"))
+        for _ in range(limit):
+            increment_and_check(self._corvin_home)
         try:
-            increment_and_check(self._corvin_home)  # rejected
+            increment_and_check(self._corvin_home)  # rejected (over quota)
         except LicenseLimitError:
             pass
-        # Counter should still be 1 (rejected call does not increment)
-        self.assertEqual(get_today_count(self._corvin_home), 1)
+        # Counter should still be at the cap (rejected call does not increment)
+        self.assertEqual(get_today_count(self._corvin_home), limit)
 
     def test_pro_tier_allows_500_units(self):
         import license.validator as _v
@@ -206,14 +213,17 @@ class TestComputeQuotaCounterIntegration(unittest.TestCase):
         """chmod world-readable should trigger a warning but NOT reset counter to 0."""
         from license.compute_quota import increment_and_check, get_today_count, _quota_path
         from license.limits import LicenseLimitError
-        increment_and_check(self._corvin_home)  # counter = 1
+        from license.validator import get_limit
+        limit = int(get_limit("compute_units_per_day"))
+        for _ in range(limit):
+            increment_and_check(self._corvin_home)  # counter → cap
         qp = _quota_path(self._corvin_home)
         os.chmod(qp, 0o644)  # tamper: make world-readable
-        # Counter should still read as 1 (not reset to 0)
+        # Counter should still read the real count (not reset to 0)
         count = get_today_count(self._corvin_home)
-        self.assertEqual(count, 1,
+        self.assertEqual(count, limit,
             "World-readable quota file must still return real count (bypass-prevention)")
-        # Second call should still be blocked
+        # Over-quota call should still be blocked
         with self.assertRaises(LicenseLimitError):
             increment_and_check(self._corvin_home)
 
