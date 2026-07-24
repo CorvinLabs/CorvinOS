@@ -21,6 +21,8 @@ import { ChatPage } from '../../fixtures/mock-pages';
 import { ChatPage as RealChatPage } from '@/pages/chat';
 import { SetupGate } from '@/components/setup/SetupGate';
 import { useChatSession } from '@/lib/chat-registry';
+import { hydrateChatTurn } from '@/pages/chat';
+import type { ChatTurn } from '@/lib/chat-registry';
 import type { StreamEvent, ChatMessage } from '@/lib/chat-registry';
 
 const { subscribeEventsMock, capturedEventCallbacks } = vi.hoisted(() => {
@@ -351,6 +353,88 @@ describe('ChatPage TDE inline badge (real components, ADR-0214/0216)', () => {
     // TdeAuditGraphPanel resolves the same latest TDE message from the
     // (mocked) registry and displays its run id once the tab is active.
     expect(await screen.findByText(/tde-1753000000-aaaaaaaa/)).toBeInTheDocument();
+  });
+
+  // Round-4 regression: the backend never persists the `engine` stream event,
+  // so on reload the hydrated turn has tde_progress but no engine. The badge
+  // render gate keys off m.engine — hydration must DERIVE engine from
+  // tde_progress presence or the whole metrics card vanishes after reload.
+  // hydrateChatTurn is the exact mapping the getChatTurns → loadHistory path
+  // uses (the full render path can't be driven here because useChatSession is
+  // mocked away, bypassing the store loadHistory populates).
+  it('hydrateChatTurn derives engine="tiered_delegation" from persisted tde_progress', () => {
+    const msg = hydrateChatTurn(
+      {
+        role: 'assistant',
+        ts: 1,
+        parts: [{ kind: 'text', text: 'Done.' }],
+        // NOTE: no `engine` field — exactly what the backend persists.
+        tde_progress: {
+          run_id: 'tde-reload-bbbbbbbb',
+          total_steps: 5,
+          completed_steps: 5,
+          delegated_count: 3,
+          local_count: 2,
+          l34_forced: false,
+          token_savings_pct: null,
+          token_usage_instrumented: false,
+          latency_delta_pct: -12,
+          quota_used_today: 4,
+          quota_limit: 10,
+          task_type: 'coding',
+          complexity: 'moderate',
+        },
+      } as unknown as ChatTurn,
+      0,
+      SID,
+    );
+    // engine derived → the badge render gate (m.engine && …) will fire.
+    expect(msg.engine).toBe('tiered_delegation');
+    expect(msg.tdeRunId).toBe('tde-reload-bbbbbbbb');
+    expect(msg.tdeProgress?.total_steps).toBe(5);
+    expect(msg.tdeProgress?.quota_limit).toBe(10);
+  });
+
+  it('hydrateChatTurn attributes an L34-forced turn to claude_code, not TDE', () => {
+    // Round-5 regression: an L34-forced turn persists tde_progress but ran
+    // claude_code. Reload attribution must mirror the live corrective event.
+    const msg = hydrateChatTurn(
+      {
+        role: 'assistant',
+        ts: 3,
+        parts: [{ kind: 'text', text: 'blocked' }],
+        tde_progress: {
+          run_id: 'tde-forced-cccccccc',
+          total_steps: 2,
+          completed_steps: 2,
+          delegated_count: 0,
+          local_count: 2,
+          l34_forced: true,
+          token_savings_pct: null,
+          token_usage_instrumented: false,
+          latency_delta_pct: null,
+          quota_used_today: 1,
+          quota_limit: 10,
+          task_type: 'reasoning',
+          complexity: 'simple',
+        },
+      } as unknown as ChatTurn,
+      0,
+      SID,
+    );
+    expect(msg.engine).toBe('claude_code');
+    // tdeProgress is still carried (the audit graph / L34 signal survive).
+    expect(msg.tdeProgress?.l34_forced).toBe(true);
+  });
+
+  it('hydrateChatTurn leaves a non-TDE turn without an engine', () => {
+    const msg = hydrateChatTurn(
+      { role: 'assistant', ts: 2, parts: [{ kind: 'text', text: 'hi' }] } as unknown as ChatTurn,
+      0,
+      SID,
+    );
+    expect(msg.engine).toBeUndefined();
+    expect(msg.tdeProgress).toBeUndefined();
   });
 });
 

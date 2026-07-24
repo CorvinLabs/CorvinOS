@@ -14,6 +14,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -631,3 +632,43 @@ class TestRevokeFlowStopsCollection:
             assert data["spec"]["telemetry"]["healing_traces"] is False
             assert data["spec"]["telemetry"]["ping_enabled"] is True  # untouched
             assert data["spec"]["aco"]["l5_enabled"] is True          # untouched
+
+
+# ── corvin_version fallback (2026-07-24, CorvinLogs review) ───────────────────
+# 59% of published CorvinLogs traces carried corvin_version="unknown" — every
+# one from a runtime where the source checkout runs under an interpreter that
+# has no corvinOS dist-info (e.g. the systemd maintenance timer on the system
+# python). The fallback reads the checkout's own pyproject.toml.
+
+class TestCorvinVersionFallback:
+    def test_pyproject_fallback_resolves_checkout_version(self, monkeypatch):
+        import importlib.metadata as md
+        from corvin_console.aco import htrace as ht
+
+        def _boom(_name):
+            raise md.PackageNotFoundError("corvinOS")
+
+        monkeypatch.setattr(md, "version", _boom)
+        v = ht._corvin_version()
+        assert v != "unknown"
+        assert re.match(r"^[0-9]+\.[0-9]+\.[0-9]+", v)
+
+    def test_version_from_pyproject_ignores_foreign_project(self, tmpdir):
+        from corvin_console.aco import htrace as ht
+        root = Path(str(tmpdir))
+        (root / "pyproject.toml").write_text(
+            '[project]\nname = "not-corvin"\nversion = "9.9.9"\n', encoding="utf-8"
+        )
+        sub = root / "a" / "b"
+        sub.mkdir(parents=True)
+        assert ht._version_from_pyproject(sub) == ""
+
+    def test_version_from_pyproject_finds_corvinos(self, tmpdir):
+        from corvin_console.aco import htrace as ht
+        root = Path(str(tmpdir))
+        (root / "pyproject.toml").write_text(
+            '[project]\nname = "corvinOS"\nversion = "1.2.3"\n', encoding="utf-8"
+        )
+        sub = root / "x"
+        sub.mkdir()
+        assert ht._version_from_pyproject(sub) == "1.2.3"

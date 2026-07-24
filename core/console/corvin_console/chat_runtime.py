@@ -1651,7 +1651,8 @@ _CONTEXT_SYNC_TIMEOUT = 90.0  # seconds — tool-less, --max-turns 1, should be 
 _CONTEXT_SYNC_OUTPUT_CAP = 20_000  # chars retained from the ack subprocess's own stdout/stderr
 
 
-def _compress_acs_result_for_context(res: Any, task_text: str, run_id: str) -> str:
+def _compress_acs_result_for_context(res: Any, task_text: str, run_id: str,
+                                     engine_label: str = "ACS workers") -> str:
     """Build the compressed, tool-less acknowledgement note for the
     context-sync call (ADR-0213). Truncates both the echoed task and the
     ACS result to hard character caps — see the caps' docstring above for
@@ -1681,7 +1682,7 @@ def _compress_acs_result_for_context(res: Any, task_text: str, run_id: str) -> s
     if len(body) > _CONTEXT_SYNC_RESULT_CAP:
         body_preview += "…"
     return (
-        "[Background note — a task you delegated to ACS workers has "
+        f"[Background note — a task you delegated to {engine_label} has "
         "finished. This note is informational only; no action is "
         "requested.]\n\n"
         f"Delegated task: {task_preview}\n"
@@ -1720,6 +1721,7 @@ def _sync_acs_result_to_transcript(sess: WebChatSession, res: Any, run_id: str,
                                     task_text: str, *, model: str | None,
                                     resume: bool,
                                     proc_holder: "_ContextSyncProcHolder | None" = None,
+                                    engine_label: str = "ACS workers",
                                     ) -> bool:
     """ADR-0213 — write a compressed acknowledgement of an ACS delegation
     result into the REAL claude CLI transcript via a tool-less
@@ -1745,7 +1747,7 @@ def _sync_acs_result_to_transcript(sess: WebChatSession, res: Any, run_id: str,
     happened" and apply the C1 fallback (``touch(increment_turn=False)``),
     exactly like a first-turn-ever spawn failure. Never raises."""
     try:
-        note = _compress_acs_result_for_context(res, task_text, run_id)
+        note = _compress_acs_result_for_context(res, task_text, run_id, engine_label)
         import acs_runtime as _acs  # type: ignore  # noqa: PLC0415 — path already on sys.path by the caller
         args = _build_args(sess, resume=resume, model=model,
                             task_text=task_text, purpose="context_sync")
@@ -2777,7 +2779,12 @@ def _should_delegate(prompt: str) -> bool:
     Regex anchors prevent false-positives: "latest" ≁ test, "prefix" ≁ fix.
     """
     p = prompt.strip()
-    if p.lower().startswith(_DELEGATE_PREFIX):
+    # Word-boundary match, in lockstep with stream_turn's `_force_delegate`
+    # (2026-07-24 refutation: a bare `startswith` here made "/delegatex …"
+    # delegate while stream_turn treated it as a plain prompt — two parsers
+    # for one grammar, the exact divergence ADR-0215 F3 removed).
+    _pl = p.lower()
+    if _pl == _DELEGATE_PREFIX or _pl.startswith(_DELEGATE_PREFIX + " "):
         return True
     # D6 (adversarial review 2026-07-20): the coding triage and the
     # LOOP/GOAL/COMPUTE blueprint are evaluated BEFORE rule 1b fires. Rule 1b
@@ -2804,6 +2811,25 @@ def _should_delegate(prompt: str) -> bool:
     # DIRECT) and rule 3 (which demands a substantive multi-source shape).
     if _EXPLICIT_WORKER_RE.search(p):
         return True
+    # Rule 1c (ADR-0217) — big-data shapes are delegation-AFFIRMATIVE: they
+    # route into the delegated branch, where _delegation_engine_target sends
+    # them to the ACS manager/worker fan-out ("ACS only for big data",
+    # maintainer decision 2026-07-24). Without this, the COMPUTE blueprint at
+    # rule 2 swallowed e.g. "Analysiere 500 GB Serverlogs … vergleiche die
+    # Regionen" into a DIRECT turn and the big-data→ACS mapping never fired
+    # (found by the ADR-0217 real-E2E run). Two carve-outs keep their
+    # structurally cheaper mechanism: recurrence/goal shapes (scheduler /
+    # goal system — a DAILY big-data scan is still a scheduler task) and a
+    # NAMED worker engine (the direct delegate_* path).
+    if _is_big_data_task(p):
+        _named_delegate = bool(
+            _bp is not None and _bp.primitive == "DELEGATE"
+            and _NAMED_ENGINE_RE.search(p)
+        )
+        if not _named_delegate and (
+            _bp is None or _bp.primitive not in ("LOOP", "GOAL")
+        ):
+            return True
     # Rule 2 — non-fan-out ACS-X primitives route to their correct mechanism.
     if _bp is not None and _bp.primitive in _NON_FANOUT_PRIMITIVES:
         if _bp.primitive == "DELEGATE":
@@ -2829,6 +2855,267 @@ def _should_delegate(prompt: str) -> bool:
     has_verb = bool(_TRIAGE_VERB_RE.search(p))
     has_multi = bool(_TRIAGE_MULTI_RE.search(p))
     return has_verb and (has_multi or len(p) >= 160)
+
+
+# ── ADR-0217 — TDE-first delegation: big-data discriminator ───────────────────
+# Maintainer decision 2026-07-24: within the delegated branch, TDE (ADR-0214)
+# is the DEFAULT engine; the ACS manager/worker fan-out remains ONLY for
+# (a) the explicit `/delegate` override and (b) big-data-shaped tasks, where
+# the manager/worker pattern's per-worker context isolation genuinely beats
+# TDE's full-context steps. Deterministic, 0 ms, no API — same contract as the
+# rest of the triage (§6 invariant: the triage path never spawns a subprocess).
+# Big-data detection (ADR-0217). REBUILT 2026-07-24 (round-2 refutation): the
+# earlier single mega-regex (bounded volume/count token + "[^.!?]{0,30}" window
+# + data noun) had catastrophic O(n²) backtracking — a pasted digit blob froze
+# the whole console event loop for tens of seconds. This version instead uses
+# small, individually non-backtracking token regexes and does the "is a data
+# noun nearby?" proximity test in Python against the CLAUSE the token sits in
+# (bounded by . ! ? ; , : and newlines). No regex ever combines a variable-
+# length run with a trailing window, so there is no backtracking blowup, and
+# clause-scoping stops "3 GB RAM, welche Dateien?" from binding "Dateien"
+# across the comma (the round-2 false-positive class).
+
+# A data noun — the thing a big-data volume/count is ABOUT. Two tiers:
+#  (a) an anchored regex (\b…\b) for the short / English / ambiguous nouns
+#      where a compound-suffix match would be a false positive
+#      (blogs→"logs", arrows→"rows", profiles→"files");
+#  (b) plain substring checks for the German data HEADS that legitimately form
+#      compounds (Kundentransaktionen, Verkaufsdaten, Messwerte) — done with
+#      `in` on the lowercased clause, which is linear and cannot backtrack
+#      (a "\b\w*(head)\b" regex would reintroduce the O(n²) blowup).
+_DATA_NOUN_RE = re.compile(
+    r"\b(?:logs?|logfiles?|logdatei\w*|serverlogs?|clickstreams?|"
+    r"records?|rows?|zeilen|eintr[äa]ge?n?|entries|events?|"
+    r"dokumente?n?|documents?|dateien|files?|exporte?\w*|dumps?|"
+    r"datasets?|corpus|korpus|transactions|measurements|"
+    r"backups?|buckets?|s3)\b",
+    re.IGNORECASE,
+)
+_DATA_SUBSTR = (
+    # Compound-prone data HEADS. "messung" is deliberately EXCLUDED — it is a
+    # substring of the unrelated "Vermessung" (surveying), a false-positive
+    # that would burn a quota unit; the more data-specific "messwert" is kept.
+    "daten", "transaktion", "messwert",
+    "datensatz", "datensätz", "datenbank", "datenmeng",
+)
+# Common words that END in "…daten" but are NOT data (Kandidaten, Mandaten,
+# Soldaten, Sedaten). Stripped before the "daten" substring test so
+# "5 Millionen Kandidaten" is not mis-read as a big-data task (2026-07-24
+# round-3 refutation, "daten" false-friend class).
+_DATA_FALSE_FRIENDS_RE = re.compile(
+    r"kandidaten|mandaten|soldaten|sedaten|pedanten", re.IGNORECASE)
+
+
+def _clause_has_data_noun(clause: str) -> bool:
+    if _DATA_NOUN_RE.search(clause):
+        return True
+    low = _DATA_FALSE_FRIENDS_RE.sub("", clause.lower())
+    return any(s in low for s in _DATA_SUBSTR)
+# Hardware nouns that make a volume NOT about data ("2 TB SSD", "3 GB RAM").
+_HW_NOUN_RE = re.compile(
+    r"\b(?:ram|arbeitsspeicher|vram|ssds?|hdds?|festplatten?|disks?|drives?|"
+    r"speicher)\b",
+    re.IGNORECASE,
+)
+_BIGDATA_VOCAB_RE = re.compile(
+    r"\bbig[\s\-]?data\b|\bdata[\s\-]*lakes?\b|\bdata[\s\-]*warehouses?\b|"
+    r"\b(?:riesige[nrms]?|gewaltige[nrms]?|huge|massive|large[\s\-]*scale)\s+"
+    r"(?:datenmengen?|datens[äa]tze?n?|datasets?|logfiles?|corpus|korpus)\b",
+    re.IGNORECASE,
+)
+# TB/PB volume token — bounded digits, no trailing window (no backtracking).
+_TBPB_RE = re.compile(
+    r"\b\d{1,6}(?:[.,]\d{1,3})?\s?(?:tb|tib|pb|pib|terabytes?|petabytes?)\b",
+    re.IGNORECASE,
+)
+_GB_RE = re.compile(
+    r"\b\d{1,7}(?:[.,]\d{1,3})?\s?(?:gb|gib|gigabytes?)\b",
+    re.IGNORECASE,
+)
+# A "big count" token: magnitude words, grouped ≥1e6, bare ≥7-digit run, or a
+# k/m magnitude suffix (NOT followed by a letter, so "km"/"3m fertig" that is
+# a unit/word is excluded). All bounded → each is linear-time.
+_BIG_COUNT_RE = re.compile(
+    r"\b(?:million(?:en)?|mio\.?|mrd\.?|milliarden?|billions?|millions?)\b"
+    r"|\b\d{1,3}(?:[.,]\d{3}){2,6}\b"
+    r"|\b\d{7,15}\b"
+    r"|\b\d{1,6}(?:[.,]\d{1,3})?[km](?![a-z])",
+    re.IGNORECASE,
+)
+_CLAUSE_DELIMS = ".!?;,:\n\r"
+
+
+def _clause_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    """[lo, hi) of the clause containing [start, end): extend to the nearest
+    clause delimiter on each side."""
+    lo = start
+    while lo > 0 and text[lo - 1] not in _CLAUSE_DELIMS:
+        lo -= 1
+    hi = end
+    n = len(text)
+    while hi < n and text[hi] not in _CLAUSE_DELIMS:
+        hi += 1
+    return lo, hi
+
+
+def _clause_around(text: str, start: int, end: int) -> str:
+    lo, hi = _clause_bounds(text, start, end)
+    return text[lo:hi]
+
+
+_ABBREV_DOT_RE = re.compile(r"\b(mio|mrd)\.", re.IGNORECASE)
+# The big-data signal (a volume/count + a nearby data noun) is a property of the
+# TASK DESCRIPTION, which comes first; anything past this is pasted data, which
+# needn't be scanned to know the task is big-data-shaped. Capping the scanned
+# length bounds the routine to O(cap): without it, a delimiter-free numeric blob
+# with many count tokens made the per-match clause scans O(n²) overall — ~2 min
+# CPU on a 128 KB paste, on the async event loop (2026-07-24 round-3 refutation).
+_BIG_DATA_MAX_SCAN = 2000
+
+
+def _is_big_data_task(prompt: str) -> bool:
+    """Deterministic big-data signal for the TDE-vs-ACS split (ADR-0217).
+
+    Bounded: only the first _BIG_DATA_MAX_SCAN chars are scanned, so the whole
+    routine (including the per-match clause scans) is O(_BIG_DATA_MAX_SCAN²)
+    worst case (~a few hundred K ops), constant in the real prompt length — no
+    O(n²) blowup on a pasted numeric blob (2026-07-24 round-3 refutation)."""
+    prompt = prompt[:_BIG_DATA_MAX_SCAN]
+    # Drop the period in "Mio."/"Mrd." so it isn't read as a clause boundary
+    # that would split the magnitude word off its data noun.
+    prompt = _ABBREV_DOT_RE.sub(r"\1", prompt)
+    if _BIGDATA_VOCAB_RE.search(prompt):
+        return True
+    # TB/PB: big data unless the clause names hardware (SSD/HDD/…).
+    for m in _TBPB_RE.finditer(prompt):
+        lo, hi = _clause_bounds(prompt, m.start(), m.end())
+        if not _HW_NOUN_RE.search(prompt[lo:hi]):
+            return True
+    # GB and big counts: require a data noun in the SAME clause. Dedup by
+    # clause: once a clause has been checked and lacked a data noun, skip the
+    # other volume/count tokens inside it — this makes a delimiter-free numeric
+    # blob (all tokens in one clause) O(n) instead of O(n²) even before the
+    # length cap (round-3 refutation).
+    for rx in (_GB_RE, _BIG_COUNT_RE):
+        _checked_hi = -1
+        for m in rx.finditer(prompt):
+            if m.start() < _checked_hi:
+                continue  # same clause as a previous no-data-noun match
+            lo, hi = _clause_bounds(prompt, m.start(), m.end())
+            if _clause_has_data_noun(prompt[lo:hi]):
+                return True
+            _checked_hi = hi
+    return False
+
+
+def _tde_available() -> bool:
+    """Availability probe for the ADR-0217 auto-route: can THIS install actually
+    RUN a TDE turn? Two conditions, both required (2026-07-24 review):
+
+    1. The full TDE module set imports. Covers the source tree (repo-relative
+       injection) and wheel installs (vendored `_vendor/operator/orchestration`
+       — now on sys.path via `_operator_bootstrap._OPERATOR_SUBTREES`).
+    2. The `claude` CLI resolves. `_stream_tde_turn`'s very first action is a
+       real `claude -p` InitialAnalysis call (analysis_runner → helper_model.
+       resolve_claude_bin), which raises `AnalysisUnavailable` when the binary
+       is absent. On a Hermes-only / no-API-key install that would make every
+       auto-delegated turn a guaranteed terminal failure — the TDE path has no
+       degrade ladder of its own — so if the CLI is missing we report
+       unavailable and let the ACS branch (which pins a local worker model)
+       handle delegation instead.
+
+    Import cost is paid once — subsequent calls hit sys.modules."""
+    try:
+        _orch = Path(__file__).resolve().parents[3] / "operator" / "orchestration"
+        if _orch.is_dir() and str(_orch) not in sys.path:
+            sys.path.insert(0, str(_orch))
+        import tde.analysis_runner  # noqa: F401, PLC0415
+        import tde.engine_registry  # noqa: F401, PLC0415
+        import tde.send_integration  # noqa: F401, PLC0415
+        import tde.worker_ipc  # noqa: F401, PLC0415
+        import helper_model  # noqa: PLC0415
+
+        # resolve_claude_bin never raises and falls back to the bare name
+        # "claude" — so a truthy return does NOT prove the CLI exists. Verify
+        # the resolved value is an actual executable (absolute path on disk, or
+        # resolvable on PATH).
+        import os as _os  # noqa: PLC0415
+        import shutil as _shutil  # noqa: PLC0415
+        # expanduser: resolve_claude_bin returns a "~/…" pin verbatim, so a
+        # tilde pin set in a non-shell context (systemd Environment=, .env)
+        # would otherwise hit the relative-with-sep branch and report TDE
+        # unavailable (2026-07-24 round-3 refutation).
+        _bin = _os.path.expanduser(helper_model.resolve_claude_bin())
+        if _os.path.isabs(_bin):
+            _resolved = _os.path.isfile(_bin) and _os.access(_bin, _os.X_OK)
+        elif _os.sep in _bin or "/" in _bin:
+            # A RELATIVE pin with a separator ("./bin/claude") resolves against
+            # the process cwd — but the worker spawns with cwd=tempdir
+            # (worker_ipc.run_one_shot), so a console-cwd isfile() check would
+            # be a false positive that then fails at spawn with a terminal
+            # error instead of degrading to ACS. Treat it as unavailable
+            # (fail-safe → ACS degrade), 2026-07-24 refutation.
+            _resolved = False
+        else:
+            _resolved = bool(_shutil.which(_bin))
+        return _resolved
+    except Exception:  # noqa: BLE001 — any import/resolution defect → not available
+        return False
+
+
+def _tde_quota_peek_ok() -> bool:
+    """Non-charging peek at the shared agentic-compute pool (ADR-0216).
+
+    The AUTHORITATIVE charge stays inside TieredDelegationEngine.execute's
+    `_enforce_tde_compute_quota` chokepoint — this peek only steers the
+    auto-route AWAY from TDE when the pool is already exhausted, so the turn
+    lands in the ACS branch below whose `_cq_inc` denial feeds the hardened
+    ADR-0201 degrade ladder (single direct turn + notice) instead of TDE's
+    terminal quota error. Fail-closed: a missing/broken license module returns
+    False → the ACS branch repeats its own fail-closed check and surfaces the
+    canonical 402."""
+    try:
+        _op_root = str(Path(__file__).resolve().parents[3] / "operator")
+        if _op_root not in sys.path:
+            sys.path.insert(0, _op_root)
+        from license.compute_quota import get_today_count as _peek_count  # type: ignore  # noqa: PLC0415
+        from license.validator import (  # type: ignore  # noqa: PLC0415
+            get_limit as _peek_limit,
+            load_license_from_env as _peek_load,
+        )
+        _peek_load()
+        limit = _peek_limit("compute_units_per_day")
+        if limit is None:
+            return True
+        return _peek_count(_forge_paths.corvin_home()) < int(limit)
+    except Exception:  # noqa: BLE001 — fail-closed toward the ACS branch's own gate
+        return False
+
+
+def _delegation_engine_target(
+    prompt: str,
+    *,
+    force_delegate: bool,
+    tde_available: bool,
+    quota_ok: bool,
+) -> str:
+    """ADR-0217 engine choice WITHIN the delegated branch: "tde" | "acs".
+
+    Pure + deterministic so the routing matrix is unit-testable:
+      1. `/delegate` (force_delegate) → ACS — explicit user commands beat
+         every classifier (§6 invariant, unchanged).
+      2. Big-data shape → ACS — the ONLY auto-routed ACS trigger left.
+      3. TDE unavailable or pool exhausted (peek) → ACS — its branch owns the
+         hardened ADR-0201 degrade ladder.
+      4. Everything else → TDE (the default delegation engine).
+    """
+    if force_delegate:
+        return "acs"
+    if _is_big_data_task(prompt):
+        return "acs"
+    if not (tde_available and quota_ok):
+        return "acs"
+    return "tde"
 
 
 def _build_delegation_spec(task: str, budget: dict) -> dict:
@@ -3314,8 +3601,11 @@ async def _stream_tde_turn(
     loss) via SubprocessWorkerIPC. Yields the same event shapes as the other
     turn paths, plus the `engine` event that feeds the per-turn badge.
 
-    This path never replaces auto-routing — it exists only behind the
-    explicit slash command (ADR-0214: Implemented→Live requires canary).
+    Reached two ways since ADR-0217 (maintainer decision 2026-07-24): the
+    explicit `/use-engine tiered_delegation` opt-in (the original ADR-0214
+    canary path), and the ADR-0114 auto-delegation branch, where TDE is now
+    the DEFAULT delegation engine (`_delegation_engine_target`; ACS keeps
+    only /delegate, big-data shapes, and the unavailable/exhausted degrade).
 
     Attribution note: the ADR-0171 engine span emitted via os_audit
     ("os_turn.started") is attributed to the configured OS engine — which is
@@ -3358,6 +3648,7 @@ async def _stream_tde_turn(
         emit_completed(rc_val)
 
     books_closed = False
+    _reply_persisted = False
     try:
         # tde_run_id (ADR-0214 audit-graph endpoint): the frontend has no other
         # way to learn this turn's correlation id — it never appears as a
@@ -3466,6 +3757,14 @@ async def _stream_tde_turn(
                 "latency_delta_pct": summary.get("latency_delta_pct"),
                 "token_savings_pct": summary.get("token_savings_pct"),
                 "token_usage_instrumented": summary.get("token_usage_instrumented", False),
+                # ADR-0216 badge fields (2026-07-24 round-4 review): the badge's
+                # quota + classification lines were dead because these were never
+                # forwarded from summary. quota_* are None on an unmetered run;
+                # the badge omits the chip when quota_limit is None.
+                "quota_used_today": summary.get("quota_used_today"),
+                "quota_limit": summary.get("quota_limit"),
+                "task_type": summary.get("task_type"),
+                "complexity": summary.get("complexity"),
             }
 
             # GDPR Art. 30 Audit: Log L34 gate decision (compliance-load-bearing
@@ -3510,7 +3809,11 @@ async def _stream_tde_turn(
                        "l34_forced": l34_forced,
                        "latency_delta_pct": summary.get("latency_delta_pct"),
                        "token_savings_pct": summary.get("token_savings_pct"),
-                       "token_usage_instrumented": summary.get("token_usage_instrumented", False)}
+                       "token_usage_instrumented": summary.get("token_usage_instrumented", False),
+                       "quota_used_today": summary.get("quota_used_today"),
+                       "quota_limit": summary.get("quota_limit"),
+                       "task_type": summary.get("task_type"),
+                       "complexity": summary.get("complexity")}
 
             if engine_name != "tiered_delegation":
                 # Round-4 finding: the FIRST "engine" stream event above is
@@ -3528,6 +3831,30 @@ async def _stream_tde_turn(
                        "label": f"{engine_name} (L34-Pre-Gate erzwungen)"
                                 if selection.get("l34_forced") else engine_name,
                        "tde_run_id": run_id}
+            # Peek/charge TOCTOU (2026-07-24 round-5 review): the auto-route's
+            # non-charging `_tde_quota_peek_ok` can pass, then a parallel channel
+            # consumes the last shared-pool unit before this run's authoritative
+            # charge — TDE returns reason="quota_exhausted". Surface the SAME
+            # friendly upgrade notice the ACS branch shows instead of the raw
+            # "compute_units_per_day exceeded" error, honouring the ADR-0201
+            # "quota degrades, never hard-fails" invariant on the TDE path too.
+            if result.get("reason") == "quota_exhausted":
+                final = (
+                    "Dein tägliches Agentic-Compute-Kontingent ist ausgeschöpft "
+                    "(geteilter Pool für TDE-, ACS- und Compute-Runs im "
+                    "Free-Tier). Bitte versuche es morgen erneut oder erhöhe "
+                    "dein Kontingent: "
+                    "[Member-Upgrade](https://corvin-labs.com/pricing)"
+                )
+                _close_books(1, reason="tde_quota_exhausted")
+                books_closed = True
+                yield {"type": "notice", "subtype": "quota_fallback", "message": final}
+                yield {"type": "delta", "text": final}
+                yield {"type": "result", "text": final, "usage": None}
+                touch(sess, increment_turn=False)
+                _append_turn(sess, "assistant", [{"kind": "text", "text": final}])
+                yield {"type": "done"}
+                return
             parts: list[str] = []
             for r in result.get("results", []) or []:
                 out = getattr(r, "output", None)
@@ -3556,6 +3883,15 @@ async def _stream_tde_turn(
         _close_books(rc)
         books_closed = True
 
+        # Persist the assistant turn BEFORE the result yields too (2026-07-24
+        # round-5 review, Area #5): _close_books already marked the task
+        # completed, so a cancel on either yield below must not leave a
+        # completed task with no persisted reply. Guarded by _reply_persisted
+        # so the post-try block does not double-append.
+        _append_turn(sess, "assistant", [{"kind": "text", "text": final}],
+                     tde_progress=tde_progress_dict)
+        _reply_persisted = True
+
         yield {"type": "delta", "text": "\n" + final + "\n"}
         yield {"type": "result", "text": final, "usage": None}
     except (asyncio.CancelledError, GeneratorExit):
@@ -3580,31 +3916,42 @@ async def _stream_tde_turn(
             emit_completed(-1)
         raise
 
-    # ADR-0213 (same root cause as the ACS branch): this turn never advanced
-    # the claude CLI transcript, so sync the result back before incrementing
-    # the turn counter — otherwise the next `--continue` resumes a transcript
-    # that never saw this TDE turn.
-    _shim = _types.SimpleNamespace(
-        summary=final[:_CONTEXT_SYNC_RESULT_CAP],
-        final_output=None, error=None,
-        status="completed" if rc == 0 else "failed",
-    )
-    _sync_holder = _ContextSyncProcHolder()
-    try:
-        _sync_ok = await asyncio.to_thread(
-            _sync_acs_result_to_transcript, sess, _shim, run_id,
-            task_text, model=os_model, resume=resume,
-            proc_holder=_sync_holder,
+    # The reply is normally already persisted before the result yields (Area #5
+    # above); this is the fallback for any path that reached here without
+    # setting _reply_persisted. k=8: tdeProgress attached for backend
+    # persistence so the audit graph survives reload.
+    if not _reply_persisted:
+        _append_turn(sess, "assistant", [{"kind": "text", "text": final}],
+                     tde_progress=tde_progress_dict)
+
+    # ADR-0213 context-sync: advance the claude CLI transcript so the next
+    # `--continue` sees this turn. Run it ONLY for a successful turn (rc == 0):
+    # a failed / quota-denied TDE turn produced no assistant content worth
+    # carrying forward, and the sync is a real `claude -p --continue` on the
+    # EXPENSIVE user OS model (Opus/Sonnet) that is NOT metered against the
+    # compute pool — spending it on a dead turn is pure waste (2026-07-24
+    # review, Area #2; mirrors the import-failure path that already skips it).
+    _sync_ok = False
+    if rc == 0:
+        _shim = _types.SimpleNamespace(
+            summary=final[:_CONTEXT_SYNC_RESULT_CAP],
+            final_output=None, error=None, status="completed",
         )
-    except (asyncio.CancelledError, GeneratorExit):
-        _sync_holder.kill()
-        raise
-    except Exception:  # noqa: BLE001 — best-effort, C1 fallback below
-        _sync_ok = False
-    os_audit("os_turn.context_sync", {"delegated_run_id": run_id, "synced": _sync_ok})
+        _sync_holder = _ContextSyncProcHolder()
+        try:
+            _sync_ok = await asyncio.to_thread(
+                _sync_acs_result_to_transcript, sess, _shim, run_id,
+                task_text, model=os_model, resume=resume,
+                proc_holder=_sync_holder,
+                engine_label="the Tiered Delegation Engine (TDE)",
+            )
+        except (asyncio.CancelledError, GeneratorExit):
+            _sync_holder.kill()
+            raise
+        except Exception:  # noqa: BLE001 — best-effort, C1 fallback below
+            _sync_ok = False
+        os_audit("os_turn.context_sync", {"delegated_run_id": run_id, "synced": _sync_ok})
     touch(sess, increment_turn=_sync_ok)
-    # k=8: Attach tdeProgress for backend persistence so audit graph survives reload
-    _append_turn(sess, "assistant", [{"kind": "text", "text": final}], tde_progress=tde_progress_dict)
     yield {"type": "done"}
 
 
@@ -3689,9 +4036,23 @@ async def stream_turn(
     # spawns so a crashed turn still gets a useful sidebar entry.
     # /delegate is a routing directive, not part of the task — strip it for
     # the title AND reuse the flag in the delegation branch below.
-    _force_delegate = prompt.strip().lower().startswith(_DELEGATE_PREFIX)
-    _task_text = (prompt.strip()[len(_DELEGATE_PREFIX):].strip()
+    # Word-boundary guard (2026-07-24 review, LOW): require the prefix to be
+    # the whole token, so "/delegatex foo" is a plain prompt, not a command
+    # that turns "x foo" into the task.
+    _p_stripped = prompt.strip()
+    _pl = _p_stripped.lower()
+    _force_delegate = _pl == _DELEGATE_PREFIX or _pl.startswith(_DELEGATE_PREFIX + " ")
+    _task_text = (_p_stripped[len(_DELEGATE_PREFIX):].strip()
                   if _force_delegate else prompt)
+    # Strip the directive from the OS prompt too: the delegation branch can
+    # degrade to the normal direct turn (quota/import/uncreatable-dir), which
+    # must never hand the raw "/delegate …" command text to the LLM — the same
+    # class the `/use-engine acs` branch already fixed (2026-07-24 review).
+    # Use the stripped text even when empty (bare "/delegate"): `or prompt`
+    # would restore the raw command and leak it to the LLM on the fallback
+    # turn (2026-07-24 refutation).
+    if _force_delegate:
+        prompt = _task_text
     # ADR-0214 — explicit engine override (`/use-engine <engine> <task>`,
     # `/engine-auto <task>`, `/debug-engine <task>`).
     #
@@ -3709,6 +4070,8 @@ async def stream_turn(
     # its own module docstring — but both now share one implementation, not
     # two divergent regexes).
     _tde_force = False
+    _force_direct = False  # ADR-0217 HIGH-1: explicit `/use-engine claude_code`
+                           # must win over the auto-delegation heuristic.
     _debug_engine = False
     _ue_unknown: "str | None" = None
     try:
@@ -3744,11 +4107,24 @@ async def stream_turn(
             # must not hand the raw command text to the LLM (round-3 finding).
             prompt = _ue_task or prompt
         elif _parsed.engine_override == "claude_code":
-            prompt = _ue_task or prompt
+            # ADR-0217 HIGH-1/HIGH-2: an explicit sequential-engine choice must
+            # beat the auto-delegation heuristic (§6: explicit user commands
+            # beat every classifier) AND strip the directive from BOTH the OS
+            # prompt and _task_text — otherwise the raw "/use-engine claude_code
+            # <task>" string leaks into the delegated pipeline (worker prompts,
+            # analysis, auto-title, pre-spawn gate).
+            _force_direct = True
+            # Use _ue_task even when empty (bare "/use-engine claude_code"):
+            # `or _task_text`/`or prompt` would keep the raw command and leak
+            # it to the LLM + auto-title + pre-spawn gate (2026-07-24 refutation).
+            _task_text = _ue_task
+            prompt = _ue_task
         elif _parsed.original_message.strip().lower().startswith("/engine-auto"):
             # Explicit auto-detect request: identical to a plain prompt —
-            # just strip the directive and continue normally.
-            prompt = _ue_task or prompt
+            # just strip the directive and continue normally. _task_text is
+            # cleaned too (HIGH-2) so the delegated path never sees the command.
+            _task_text = _ue_task
+            prompt = _ue_task
 
     # Resolve engine early so turn.start debug event can record it.
     # The full pre-spawn gate check (line ~1958) also uses this value.
@@ -3907,8 +4283,19 @@ async def stream_turn(
         _del_throttled = _is_acs_throttled(sess.workdir)
     except Exception:  # noqa: BLE001 — repair module unavailable → no throttle
         _del_throttled = False
-    _will_delegate = (_delegation_enabled(sess.tenant_id)
+    # `not _force_direct` MUST mirror `_del_will_delegate` below (2026-07-24
+    # review, D2 class): if the gate classifies as DELEGATION_ENGINE_ID but the
+    # turn actually runs on _os_engine (because `/use-engine claude_code`
+    # suppressed delegation), the pre-spawn L34/L35 gate would check the wrong
+    # compliance row. Keep the two `_will_delegate` computations in lockstep.
+    # Read `_delegation_enabled` ONCE here and reuse it at the decision below —
+    # the two sites straddle an `await _ccc_dispatch`, and re-reading it there
+    # would let a mid-turn tenant.corvin.yaml mtime flip diverge the gate's
+    # compliance row from the engine that actually spawns (round-4 review).
+    _del_enabled = _delegation_enabled(sess.tenant_id)
+    _will_delegate = (_del_enabled
                       and not _del_throttled
+                      and not _force_direct
                       and (_force_delegate or _should_delegate(prompt)))
     # _os_engine already resolved above (before turn.start debug event)
     _gate_refusal = _spawn_gates.check_console_spawn_or_refusal(
@@ -4111,7 +4498,8 @@ async def stream_turn(
         return
 
     # ── ADR-0214 — TDE explicit opt-in path ──────────────────────────────
-    # Fires ONLY on the slash command; auto-routing stays ADR-0114 (below).
+    # Fires on the slash command. Since ADR-0217 the ADR-0114 delegation
+    # branch below ALSO routes to TDE by default (`_delegation_engine_target`).
     if _tde_force:
         if not _task_text:
             _tde_hint = "Bitte Task angeben: /use-engine tiered_delegation <task>"
@@ -4144,16 +4532,47 @@ async def stream_turn(
             yield _ev
         return
 
+    # ── ADR-0217 — bare `/use-engine claude_code` (no task) ──────────────
+    # `_force_direct` with an empty task means the whole message was just the
+    # directive; prompt is now "" (stripped, HIGH-2). Without this guard the
+    # turn would run the OS engine on an empty prompt — a degenerate LLM call
+    # that still burns a chat turn (2026-07-24 round-3 refutation). Give the
+    # same hint the other empty-directive branches give, with paired
+    # bookkeeping so the pre-created task never lingers PENDING.
+    if _force_direct and not _task_text:
+        _cc_hint = "Bitte Task angeben: /use-engine claude_code <task>"
+        _os_audit("os_turn.started", {"model": _os_model_used})
+        tm.record_event(task_id, {
+            "event": "task.failed", "exit_code": 1,
+            "error": "claude_code command without task text",
+        })
+        _audit_emit(sess, "web.turn.completed", rc=1,
+                    result_chars=len(_cc_hint), usage=None,
+                    reason="claude_code_empty_task")
+        _os_emit_completed(1)
+        yield {"type": "delta", "text": _cc_hint}
+        yield {"type": "result", "text": _cc_hint, "usage": None}
+        touch(sess, increment_turn=False)
+        _append_turn(sess, "assistant", [{"kind": "text", "text": _cc_hint}])
+        yield {"type": "done"}
+        return
+
     # ── ADR-0114 M1/M2 — delegation path ─────────────────────────────────
     # Tenant opt-in + triage: substantive tasks run on ACS workers (which
     # inherit the user/tenant model per ADR-0112); the OS side only manages.
-    _del_enabled = _delegation_enabled(sess.tenant_id)
+    # Reuse `_del_enabled` computed at the pre-spawn gate above — NOT a fresh
+    # read — so a tenant.corvin.yaml mtime flip during the CCC await cannot
+    # diverge the gate's compliance row from this decision (round-4 review).
     _del_heuristic = _should_delegate(prompt)
     # Layer 5 repair throttle (acs_error_rate anomaly) was already resolved into
     # `_del_throttled` above, where it also fed the pre-spawn gate's engine
     # classification (ACS-3). Reuse that single value so the gate and the real
     # decision cannot diverge.
-    _del_will_delegate = _del_enabled and not _del_throttled and (_force_delegate or _del_heuristic)
+    # `_force_direct` (explicit `/use-engine claude_code`) hard-suppresses
+    # delegation — it is mutually exclusive with `_force_delegate`
+    # (`/use-engine acs`), so the two flags never conflict (HIGH-1).
+    _del_will_delegate = (_del_enabled and not _del_throttled and not _force_direct
+                          and (_force_delegate or _del_heuristic))
     _dbg(sess.workdir, "delegation.decision",
          delegation_enabled=_del_enabled,
          force_delegate=_force_delegate,
@@ -4163,6 +4582,32 @@ async def stream_turn(
          prompt_len=len(prompt),
     )
     if _del_will_delegate:
+        # ── ADR-0217 — TDE-first delegation (maintainer decision 2026-07-24) ──
+        # Within the delegated branch TDE is now the DEFAULT engine; ACS runs
+        # only for the explicit /delegate override, big-data-shaped tasks, or
+        # when TDE is unavailable / the shared pool is exhausted (peek) — the
+        # ACS branch below then owns the hardened ADR-0201 degrade ladder.
+        # The pre-spawn gate above already classified this turn as delegation
+        # (DELEGATION_ENGINE_ID covers both engines' spawn class).
+        _tde_target = _delegation_engine_target(
+            prompt,
+            force_delegate=_force_delegate,
+            tde_available=_tde_available(),
+            quota_ok=_tde_quota_peek_ok(),
+        )
+        _dbg(sess.workdir, "delegation.engine_choice",
+             target=_tde_target,
+             force_delegate=_force_delegate,
+             big_data=_is_big_data_task(prompt))
+        if _tde_target == "tde":
+            async for _ev in _stream_tde_turn(
+                sess, _task_text, tm, task_id,
+                os_audit=_os_audit, audit_emit=_audit_emit,
+                emit_completed=_os_emit_completed,
+                os_model=_os_model, resume=resume,
+            ):
+                yield _ev
+            return
         task_text = _task_text
         _acs = None
         # Fallback flag: any "no ACS run possible" condition — runtime import
@@ -4295,11 +4740,16 @@ async def stream_turn(
                 yield {"type": "done"}
                 return
             if _fb_quota_exceeded:
+                # ADR-0216/0217: the pool is compute_units_per_day (default 10
+                # on free tier), SHARED across TDE + ACS + compute runs — not
+                # "1 Delegation-Run/Tag". Since ADR-0217 this branch is the
+                # central degrade target for ALL delegated traffic, so the text
+                # must name the real pool semantics (2026-07-24 review).
                 _quota_notice = (
-                    "Dein tägliches ACS-Kontingent ist ausgeschöpft "
-                    "(1 Delegation-Run/Tag im Free-Tier). "
+                    "Dein tägliches Agentic-Compute-Kontingent ist ausgeschöpft "
+                    "(geteilter Pool für TDE-, ACS- und Compute-Runs im Free-Tier). "
                     "Der Task wird über Claude Code ausgeführt — ohne parallele Worker.\n"
-                    "Für unbegrenzte ACS-Runs: [Member-Upgrade](https://corvin-labs.com/pricing)\n\n"
+                    "Für ein höheres Kontingent: [Member-Upgrade](https://corvin-labs.com/pricing)\n\n"
                 )
                 yield {"type": "notice", "subtype": "quota_fallback",
                        "message": _quota_notice}

@@ -10,14 +10,14 @@ hints) — and they could disagree.
 | # | Mechanism | Right for | Entry points | Metered? |
 |---|---|---|---|---|
 | 1 | **Direct OS-turn** (Claude Code `-p`, session workspace, built-in Task-tool sub-delegation) | default; ALL coding; anything sequential/context-heavy | every surface | no |
-| 2 | **ACS delegation_loop** (manager/worker fan-out, `acs_runtime.py`) | N *independent* subtasks: multi-source research, comparisons, multi-perspective review, per-item bulk | console triage / `/delegate` / `acs_delegate` MCP / AWP `engine: delegation_loop` | **yes** — 1 compute unit/run |
+| 2 | **ACS delegation_loop** (manager/worker fan-out, `acs_runtime.py`) | **big-data-shaped tasks** (explicit volumes, million-row/GB-scale corpora — `_is_big_data_task()`), plus the explicit `/delegate` override; pre-ADR-0217 it was the default for ALL fan-out shapes | `/delegate` / big-data auto-route / `acs_delegate` MCP / AWP `engine: delegation_loop` | **yes** — 1 compute unit/run |
 | 3 | **AWP DAG workflows** (`corvin_workflows`, deterministic node graph; "dynamic workflows" = generated/exported specs, awpkg) | fixed repeatable pipelines, branching, human-in-the-loop pauses | `workflow_run` MCP / console routes / CLI / scheduler | **yes** — compute units |
 | 4 | **Loop / recurring** (`scheduler.py` cron+reminders; `/loop`-style self-paced iteration inside a turn) | time-based recurrence, monitoring, retry-until-green | scheduler; LOOP directive → model iterates | per-fire = normal turn |
 | 5 | **Goal system** (`goal.py`, `<session_goal>` block, `/goal`) | persistent multi-session objectives | `/goal` (bridges); GOAL directive | no |
 | 6 | **L25 Compute** (deterministic data processing, DSI datasources) | statistics, charts, CSV/dataset transforms, ML | COMPUTE directive → `compute_run`; console compute routes | **yes** — compute units |
 | 7 | **Normal delegation** (`corvin_delegate` MCP: `delegate_claude_code/codex/opencode/hermes/copilot`) | one bounded call to a *named* engine | model-chosen tool; DELEGATE directive | no (deliberate, LIC-DELEGATE-MCP-COMPUTE-01) |
 | 8 | **Background tasks** (`/task`·`/bg` bridges; console TaskManager) | long-running detached jobs with completion notify | explicit user command / CCC `/create task` | task-count quotas |
-| 9 | **TDE — Tiered Delegation Engine** (ADR-0214, `operator/orchestration/tde/`): one InitialAnalysis LM call → parallel step batches → per-step three-gate delegation (L34 fail-closed → budget → learned loss) to subprocess one-shot workers | parallelizable coding/analysis plans where full-context steps can fan out safely | EXPLICIT opt-in only: console `/use-engine tiered_delegation <task>`; `SendIntegration` for embedders; live E2E suite | no (helper-model one-shots) |
+| 9 | **TDE — Tiered Delegation Engine** (ADR-0214, `operator/orchestration/tde/`): one InitialAnalysis LM call → parallel step batches → per-step three-gate delegation (L34 fail-closed → budget → learned loss) to subprocess one-shot workers | **the DEFAULT delegation engine since ADR-0217** — every auto-delegated console turn that is not big-data-shaped and not an explicit `/delegate` | ADR-0114 delegated branch (auto, `_delegation_engine_target`); console `/use-engine tiered_delegation <task>`; `SendIntegration` for embedders | **yes** — shared agentic-compute pool (ADR-0216), charged at the `TieredDelegationEngine.execute` chokepoint |
 
 **Remote instances (A2A, L38)** are not a ladder mechanism: like mechanism 7
 they are a model-chosen tool (`a2a_send` MCP, persona flag
@@ -38,12 +38,17 @@ and they must not be conflated.
 **Tier 1 — authoritative runtime routing.** The runtime *forces* an execution
 path before any model sees the task. Today exactly one Tier-1 decision
 exists: the console web-chat triage (`chat_runtime._should_delegate`) that
-either spawns the ACS fan-out or the direct OS-turn. (ADR-0214's
-RobustEngineDetector — TDE vs ACS vs claude_code — is implemented and
-E2E-proven in `SendIntegration`, but does NOT drive console Tier-1 routing
-yet: per ADR-0214 that requires a canary; the console runs TDE only on the
-explicit `/use-engine tiered_delegation` command, gated as delegation by the
-pre-spawn gates. Which mechanism actually ran a turn is now visible in the
+either enters the delegated branch or the direct OS-turn. **Within the
+delegated branch, ADR-0217 (maintainer decision 2026-07-24) makes TDE the
+default engine**: `_delegation_engine_target` routes to ACS only for the
+explicit `/delegate` override, a big-data shape (`_is_big_data_task()` — explicit
+GB/TB volumes, million-row corpora, big-data/data-lake vocabulary), or when
+TDE is unavailable / the shared pool is exhausted (non-charging peek) — in
+those degrade cases the ACS branch's hardened ADR-0201 ladder takes over.
+(ADR-0214's RobustEngineDetector — TDE vs ACS vs claude_code — remains the
+embedder-facing selector in `SendIntegration`; the console's Tier-1 choice is
+the deterministic function above, not the softmax detector. TDE turns stay
+gated as delegation by the pre-spawn gates. Which mechanism actually ran a turn is now visible in the
 chat UI via the per-turn `engine` badge — for `tiered_delegation` turns with
 step data (`tdeProgress`, `total_steps > 0`) this is the rich **TDE inline
 badge** (`TdeInlineBadge` in `chat.tsx`, ADR-0214/0216) rather than the
@@ -81,13 +86,21 @@ First match wins:
     (review D6): it is too weak to force the quota-burning fan-out and falls
     through to rule 2/3 — "überwache … parallel" is monitoring (LOOP),
     "prüfe alle 10 Minuten parallel" is a scheduler task
+1c. BIG-DATA shape (`_is_big_data_task()`, ADR-0217) → delegated branch → ACS
+    (the "ACS only for big data" mapping is affirmative: a big-data task
+    delegates even when the COMPUTE blueprint would have said DIRECT).
+    Carve-outs keep their cheaper mechanism: recurrence/goal shapes
+    (a DAILY 500-GB scan is still a scheduler task) and a NAMED worker
+    engine (direct delegate_* path)
 2.  RECURRING/PERSISTENT/DATA     → scheduler / goal / L25 compute — NEVER ACS
     LOOP·GOAL·COMPUTE at ANY real signal (≥0.50 render floor, review F1:
     "stündlich"/"täglich" weigh 0.60-0.65 and must still not burn quota)
     DELEGATE only when a real ENGINE is NAMED (review F2: bare "delegiere" /
     "mit Hermes" the parcel carrier must not steer off the fan-out)
-3.  FAN-OUT shape                → ACS delegation_loop (console) / Workflow tool
-    (multi-source/multi-perspective/per-item with substantive shape)
+3.  FAN-OUT shape                → delegated branch (console) / Workflow tool
+    (multi-source/multi-perspective/per-item with substantive shape).
+    WITHIN the delegated branch (ADR-0217): big-data shape → ACS
+    delegation_loop; everything else → TDE (default delegation engine)
 4.  CODING shape                 → direct OS-turn + built-in Task tool — NEVER ACS
     (sequential, context-heavy, workspace-bound; incl. crash/freeze; ADR-0202)
 5.  REMAINING SUBSTANTIVE         → ACS (console legacy: strong verbs, long/multi-step)
@@ -150,7 +163,7 @@ a capability the surface lacks.
 | Direct OS-turn (incl. its Task-tool subagents) | **no** |
 | `delegate_*` single calls | **no** (maintainer decision) |
 | ACS fan-out (any entry) | **yes** — web-chat charges at `chat_runtime` (direct-`ACSRuntime` path), everything else at the `run_acs_workflow` chokepoint; quota exhausted → single-turn fallback (ADR-0201) |
-| TDE run (`/use-engine tiered_delegation`, ADR-0214) | **yes** — charged at the `TieredDelegationEngine.execute` chokepoint; only real-compute configs are metered (real IPC or the default claude-CLI local executor), stub/mock test configs are not; invalid plans refund the unit |
+| TDE run (auto-routed default since ADR-0217, or `/use-engine tiered_delegation`) | **yes** — charged at the `TieredDelegationEngine.execute` chokepoint. **The L34-forced-`claude_code` fallback is metered too** (`ClaudeCodeLocalEngine.execute` charges the same pool when it runs the real local executor — closes the 2026-07-24 review bypass where a CONFIDENTIAL token in the prompt forced claude_code and ran unmetered). Only real-compute configs are metered (real IPC or the default claude-CLI local executor), stub/mock test configs are not; invalid plans refund the unit. The auto-route additionally peeks the pool WITHOUT charging (`_tde_quota_peek_ok`) and steers an exhausted pool into the ACS branch's ADR-0201 degrade ladder |
 | ACS quota fallback (single direct turn) | **no** (un-metered `run_delegate`) — but bounded by `_FALLBACK_MAX_PER_DAY`=50/tenant/day (race-safe LIC-1 lock, review D3), an elevated-but-fixed `BUDGET_FALLBACK_MAX_S` wall-clock ceiling (review F6/F7; caller `budget_override` threads through route AND chokepoint, F8/D1), and max `_ACS_FB_MAX_CONCURRENT`=2 concurrent fallback turns per tenant on the console route (typed 429 beyond, review D4) |
 | `workflow_run` / compute routes | **yes** |
 | Scheduler fires / background tasks | normal-turn cost / task-count quotas |
@@ -163,7 +176,10 @@ only via `run_delegate(budget_ceiling_s=…)`, never from the MCP tool surface
 ## 6. Invariants (must NOT be weakened)
 
 - Explicit user commands beat every classifier (Tier-1 override).
-- LOOP/GOAL/COMPUTE/DELEGATE shapes never route into the ACS fan-out.
+- LOOP/GOAL/COMPUTE/DELEGATE shapes never route into the ACS fan-out —
+  with exactly ONE exception since ADR-0217: a big-data-shaped COMPUTE task
+  (rule 1c) delegates to ACS; LOOP/GOAL and named-engine DELEGATE shapes
+  keep their mechanism even when big-data-shaped.
 - Coding never routes into the ACS fan-out (ADR-0202) — `/delegate` remains
   the escape hatch.
 - Tier 2 stays **fail-open and advisory**: classifier failure → no
@@ -172,6 +188,29 @@ only via `run_delegate(budget_ceiling_s=…)`, never from the MCP tool surface
   mis-routed fan-out burns quota).
 - The triage path never spawns a subprocess (heuristic stage only — the
   Haiku fallback is reserved for the bridge adapter's Tier-2 injection).
+- TDE is the default delegation engine (ADR-0217); the auto-route may pick
+  ACS ONLY on a big-data shape or as the degrade target (TDE unavailable /
+  pool-peek exhausted). `/delegate` remains the explicit ACS override;
+  `/use-engine claude_code` is the explicit sequential override (`_force_direct`)
+  and hard-suppresses delegation — kept in lockstep with the pre-spawn gate's
+  `_will_delegate` so the L34/L35 compliance row always matches the engine that
+  actually spawns. The engine choice (`_delegation_engine_target`) stays pure +
+  deterministic — no subprocess, no LM call, unit-tested as a matrix.
+- `_tde_available()` requires BOTH the TDE module set (source tree or the
+  wheel-vendored `_vendor/operator/orchestration`, wired via
+  `_operator_bootstrap._OPERATOR_SUBTREES`) AND a resolvable `claude` CLI — a
+  Hermes-only / no-API-key install reports TDE unavailable and delegates via
+  ACS (which pins a local worker model) rather than failing every turn.
+- Big-data detection (`_is_big_data_task()`, bounded/non-backtracking — a
+  scan-capped multi-regex + Python clause-proximity test, NOT one mega-regex)
+  ties volumes to a DATA noun in either
+  order, so "3 GB RAM" / "128 GB Arbeitsspeicher" (hardware) never route to
+  the ACS fan-out; grouped ("1.000.000") and suffixed ("500k") counts match.
+- The TDE plan is untrusted LM output: `initial_analysis.from_dict` REJECTS a
+  plan over `MAX_PLAN_STEPS` (64) and clamps per-step / total token estimates,
+  and the executor bounds real subprocess fan-out per batch
+  (`MAX_BATCH_CONCURRENCY`) — one charged pool unit cannot self-authorize an
+  unbounded number of concurrent `claude` processes.
 - Quota exhaustion degrades (ADR-0201), never hard-fails — but the degraded
   path is itself bounded (`_FALLBACK_MAX_PER_DAY`, `budget_ceiling_s`,
   per-tenant fallback concurrency) so it cannot become an unbounded
@@ -186,6 +225,26 @@ only via `run_delegate(budget_ceiling_s=…)`, never from the MCP tool surface
   F9): that turn is un-metered, and "use the Workflow tool" would route it
   back into quota-charging compute — a contradiction. Bridges (no fan-out
   path of their own) keep the WORKFLOW directive.
+
+## 6a. TDE worker capability (design characteristic, ADR-0217)
+
+TDE steps — delegated and local — run as **tool-less single-turn one-shots**
+(`claude -p --max-turns 1 --disallowedTools "*"`) over the InitialAnalysis
+statement, by ADR-0214 design. ACS workers, by contrast, run with full tools
+and up to `--max-turns 20`. This is deliberate and safe for what each engine
+now handles:
+
+- **Coding tasks never reach TDE** — rule 4 routes every coding-shaped task to
+  the DIRECT Claude Code OS-turn (full tools, real Task-tool sub-delegation,
+  cwd/repo context). So a "fix the bug in foo.py" is unaffected by TDE's
+  tool-less workers (verified: `_should_delegate` returns False for coding).
+- **TDE handles parallel analysis/reasoning/synthesis** over the full context
+  it is given, where tool-less full-context one-shots are the right shape.
+- **Tasks that genuinely need live tools AND aren't coding AND aren't big
+  data** (e.g. "fetch from these 3 live APIs and compare") are the narrow band
+  where ACS's tool-capable workers would do more. Per the maintainer's ADR-0217
+  scope ("ACS only for big data") these currently route to TDE; if this band
+  proves material, the fix is a routing carve-out, not a change to TDE workers.
 
 ## 7. Known gaps (documented, not hidden)
 

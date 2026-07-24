@@ -346,5 +346,38 @@ def test_voice_tts_pinned_provider_reset_skips_usable_provider(tmp_path, monkeyp
     assert faults == [], "should not fire when OpenAI key is present"
 
 
+# ── stale_lock: flock guard (2026-07-24, CorvinLogs review) ───────────────────
+
+@pytest.mark.skipif(os.name == "nt", reason="flock is POSIX-only")
+def test_stale_lock_sweep_skips_currently_held_flock(tmp_path):
+    """flock does not update mtime — an old-looking lock file may be HELD right
+    now (e.g. quota.py's _save_store). Sweeping it would break mutual exclusion:
+    the next acquirer creates a fresh inode and both proceed."""
+    import fcntl
+
+    home = tmp_path
+    (home / "global").mkdir(parents=True)
+    held = home / "global" / "held.lock"
+    residue = home / "global" / "residue.lock"
+    held.write_text("")          # no pid content — the common flock pattern
+    residue.write_text("")
+    old_t = time.time() - 25200  # 7 h (> 6 h TTL) for both
+    os.utime(held, (old_t, old_t))
+    os.utime(residue, (old_t, old_t))
+
+    fd = os.open(str(held), os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)   # simulate a live holder
+        RA.run_local_repairs(_ctx(home, now=time.time()))
+        assert held.exists(), "a currently-held flock file must never be swept"
+        assert not residue.exists(), "unheld residue past TTL is still swept"
+    finally:
+        os.close(fd)
+
+    # After release the same file becomes sweepable again.
+    RA.run_local_repairs(_ctx(home, now=time.time()))
+    assert not held.exists()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
