@@ -3108,14 +3108,19 @@ def _delegation_engine_target(
       3. TDE unavailable or pool exhausted (peek) → ACS — its branch owns the
          hardened ADR-0201 degrade ladder.
       4. Everything else → TDE (the default delegation engine).
+
+    ADR-0221 P1: the decision itself now lives in the shared
+    ``delegation_policy`` module so the bridge adapter routes identically from
+    one source of truth. This wrapper computes the surface-specific big-data
+    signal and delegates the rule.
     """
-    if force_delegate:
-        return "acs"
-    if _is_big_data_task(prompt):
-        return "acs"
-    if not (tde_available and quota_ok):
-        return "acs"
-    return "tde"
+    from delegation_policy import delegation_engine_target as _shared_target  # noqa: PLC0415
+    return _shared_target(
+        force_delegate=force_delegate,
+        is_big_data=_is_big_data_task(prompt),
+        tde_available=tde_available,
+        quota_ok=quota_ok,
+    )
 
 
 def _build_delegation_spec(task: str, budget: dict) -> dict:

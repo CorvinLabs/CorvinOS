@@ -61,6 +61,18 @@ try:
 except ImportError:  # pragma: no cover
     _context_budget = None
 
+# ADR-0221 P1 — put operator/orchestration on the path so the bridge CAN reach
+# the engine-agnostic TDE modules (`from tde....`) the console already uses. This
+# only makes them importable; actual bridge→TDE routing is gated behind
+# CORVIN_BRIDGE_TDE (P3) and not wired here. `operator/bridges/shared` (this dir)
+# is already on the path via the daemon launcher, so `delegation_policy` imports.
+try:
+    _orch_root = Path(__file__).resolve().parents[2] / "orchestration"
+    if _orch_root.is_dir() and str(_orch_root) not in sys.path:
+        sys.path.insert(0, str(_orch_root))
+except Exception:  # noqa: BLE001 — path prep must never break adapter boot
+    pass
+
 # ADR-0080 M1 — Task lifecycle manager. Optional; fails gracefully when absent.
 # Enables persistent task tracking across bridges (WhatsApp, Discord, web-chat).
 try:
