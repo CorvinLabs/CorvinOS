@@ -689,6 +689,38 @@ def _port_open(port: int, host: str = "127.0.0.1") -> bool:
         return False
 
 
+def _systemd_unit_active(channel: str) -> bool:
+    """True if ``corvin-voice-bridge-<channel>.service`` is active/activating.
+
+    Found during the ADR-0215 adversarial review (2026-07-24): the
+    onboarding wizard's WhatsApp start path (`_run_wa_start_job` in
+    routes/setup.py) calls `start_channel_detached()`, whose ONLY
+    duplicate-start guard was `_port_open()` — a TCP probe. In the race
+    window between a systemd unit start (`corvin-voice-bridge-whatsapp.
+    service`) and that daemon actually binding its pairing-QR port, a
+    concurrent wizard click could spawn a SECOND daemon via a raw
+    `subprocess.Popen(..., start_new_session=True)`, entirely outside the
+    systemd cgroup — `systemctl stop` would never see or kill it (orphan
+    process). This check closes that window: if the unit is already
+    active OR in the middle of starting, treat the channel as already
+    running instead of racing a second raw spawn. Mirrors
+    `routes/bridges.py::_unit_active()` (kept independent, not imported,
+    since this module must not depend on the FastAPI console package).
+    Best-effort: `systemctl` absent/erroring means "no unit control here"
+    (e.g. non-systemd platform), so the existing port-probe guard still
+    applies — this is additive, not a replacement.
+    """
+    try:
+        proc = subprocess.run(
+            ["systemctl", "--user", "is-active", f"corvin-voice-bridge-{channel}.service"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+    state = proc.stdout.strip()
+    return state in ("active", "activating", "reloading")
+
+
 def _adapter_pidfile() -> Path:
     return _corvin_home() / "run" / "adapter.pid"
 
@@ -884,6 +916,11 @@ def start_channel_detached(
         port = _CHANNEL_HTTP_PORT.get(channel)
         if port and _port_open(port):
             return {"ok": True, "already_running": True}
+        # ADR-0215: close the systemd-unit-starting-but-port-not-bound-yet
+        # race window (see _systemd_unit_active() docstring) before falling
+        # through to a raw, non-systemd-tracked spawn below.
+        if _systemd_unit_active(channel):
+            return {"ok": True, "already_running": True, "via": "systemd"}
 
         # Node.js: a fresh box has none → ensure_node downloads ~25 MB. Tell the
         # user that's what the (otherwise silent, minute-long) wait is.

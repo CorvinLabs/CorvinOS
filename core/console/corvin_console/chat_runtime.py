@@ -3447,6 +3447,17 @@ async def _stream_tde_turn(
                       tde_run_id=run_id)
 
             if step_count > 0:
+                # ADR-0215 (2026-07-24): completes the "TODO: TDE-Engine must
+                # calculate actual savings" note from commit fcb6aaf, which
+                # removed a `token_savings_pct` field that was always 0 (no
+                # real token-usage instrumentation exists — worker_ipc.
+                # run_one_shot uses --output-format text, not json). Rather
+                # than re-add a fabricated token number, this surfaces what
+                # tde_engine._summarize() now genuinely measures: real
+                # wall-clock latency, delegated vs. local. `token_savings_pct`
+                # stays explicitly None (never a silently-defaulted 0 that
+                # looks like a real measurement) until real token
+                # instrumentation lands.
                 yield {"type": "engine_progress",
                        "engine": "tiered_delegation",
                        "run_id": run_id,
@@ -3454,7 +3465,10 @@ async def _stream_tde_turn(
                        "completed_steps": succeeded,
                        "delegated_count": delegated,
                        "local_count": local_count,
-                       "l34_forced": l34_forced}
+                       "l34_forced": l34_forced,
+                       "latency_delta_pct": summary.get("latency_delta_pct"),
+                       "token_savings_pct": summary.get("token_savings_pct"),
+                       "token_usage_instrumented": summary.get("token_usage_instrumented", False)}
 
             if engine_name != "tiered_delegation":
                 # Round-4 finding: the FIRST "engine" stream event above is

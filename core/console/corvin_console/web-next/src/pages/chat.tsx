@@ -1136,6 +1136,11 @@ function ChatPane({
           delegated_count: evt.delegated_count ?? 0,
           local_count: evt.local_count ?? 0,
           l34_forced: evt.l34_forced ?? false,
+          // ADR-0215: token_savings_pct stays null (not measured — see
+          // TdeProgress docstring); latency_delta_pct is real and safe.
+          token_savings_pct: evt.token_savings_pct ?? null,
+          token_usage_instrumented: evt.token_usage_instrumented ?? false,
+          latency_delta_pct: evt.latency_delta_pct ?? null,
         };
         // Find the latest assistant message and attach tdeProgress.
         // The message subscription feeds React Query, which auto-persists to turns.jsonl.
