@@ -191,14 +191,14 @@ def _summarize(results: list[StepResult]) -> dict[str, Any]:
     # `token_savings_pct` UI field sourced via `summary.get('token_savings_pct',
     # 0)` in chat_runtime.py — but this function never set that key, so the
     # field was structurally always 0, silently displayed as a real metric.
-    # No real per-call token usage is instrumented anywhere in this pipeline
-    # (worker_ipc.run_one_shot uses --output-format text, not json — see
-    # TokenSavingsFiber's docstring in nerve_builtins.py for the full
-    # explanation). Rather than fabricate a token number, this now computes
-    # what IS genuinely measured: real per-step wall-clock duration_ms,
-    # compared delegated vs. local. `token_savings_pct` stays present (for
-    # frontend backward compatibility) but is explicitly `None`, never a
-    # silently-defaulted 0 that looks like a real "0% savings" measurement.
+    # ADR-0218 Phase 0 (2026-07-24) then added real per-step token usage:
+    # DELEGATED workers now run --output-format json and their usage is captured
+    # (worker_ipc.parse_cli_envelope) and aggregated below. LOCAL steps still use
+    # --output-format text and carry no usage, so they are simply omitted from
+    # the token totals. `token_savings_pct` stays `None` regardless — a savings
+    # PERCENTAGE needs a counterfactual baseline (Phase-1 measurement), not a
+    # single run, and must never be a silently-defaulted 0 that reads as a real
+    # "0% savings". Latency below is the other genuinely-measured signal.
     delegated_durations = [r.duration_ms for r in results if r.was_delegated and r.success]
     local_durations = [r.duration_ms for r in results if not r.was_delegated and r.success]
     avg_delegated = (
@@ -220,11 +220,20 @@ def _summarize(results: list[StepResult]) -> dict[str, Any]:
               if getattr(r, "token_usage", None) and isinstance(r.token_usage, dict)]
     tokens_total = sum(int(u.get("total_tokens", 0) or 0) for u in usages)
     tokens_by_model: dict[str, int] = {}
+    # Keep the price tiers SEPARATE, not just the blended total_tokens scalar
+    # (adversarial-review finding 3): cache-read bills ~0.1x, cache-creation
+    # ~1.25x, output ~5x input — so a single sum is a biased gradient. Phase-1
+    # analysis weights these; cost_usd is the authoritative price.
+    _kinds = ("input_tokens", "output_tokens",
+              "cache_read_input_tokens", "cache_creation_input_tokens")
+    tokens_by_kind = {k: 0 for k in _kinds}
     cost_total = 0.0
     have_cost = False
     for u in usages:
         m = str(u.get("model") or "unknown")
         tokens_by_model[m] = tokens_by_model.get(m, 0) + int(u.get("total_tokens", 0) or 0)
+        for k in _kinds:
+            tokens_by_kind[k] += int(u.get(k, 0) or 0)
         c = u.get("cost_usd")
         if isinstance(c, (int, float)):
             cost_total += float(c)
@@ -246,6 +255,7 @@ def _summarize(results: list[StepResult]) -> dict[str, Any]:
         "instrumented_step_count": len(usages),
         "total_tokens": tokens_total if usages else None,
         "tokens_by_model": tokens_by_model if usages else None,
+        "tokens_by_kind": tokens_by_kind if usages else None,
         "cost_usd": round(cost_total, 6) if have_cost else None,
         # Still None: a savings PERCENTAGE needs a counterfactual (what the
         # non-delegated baseline would have cost), which is the Phase-1

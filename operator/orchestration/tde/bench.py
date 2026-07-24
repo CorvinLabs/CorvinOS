@@ -15,13 +15,17 @@ flag would auto-include modules — that manifest scan was never
 implemented and the claim (plus the inert flag) has been removed rather
 than shipped as dead configuration.
 
-HONESTY NOTE (see also TokenSavingsFiber in nerve_builtins.py): this
-harness does NOT measure real token usage — the underlying worker
-subprocess calls use ``--output-format text``, so no structured usage is
-captured anywhere in the pipeline yet. ``BenchResult.estimated_tokens``
-comes from the LM's own InitialAnalysis guess (``GlobalPlan.
-estimated_tokens``), clearly labeled as an estimate. ``BenchResult.
-duration_ms`` is real, measured wall-clock time — that is the only
+HONESTY NOTE (see also TokenSavingsFiber in nerve_builtins.py): since
+ADR-0218 Phase 0, DELEGATED worker steps DO capture real token usage
+(``--output-format json`` + ``worker_ipc.parse_cli_envelope``, surfaced in
+the engine summary as ``total_tokens`` / ``tokens_by_model`` /
+``tokens_by_kind`` / ``cost_usd``). This harness's ``BenchResult.
+estimated_tokens`` is still the LM's own InitialAnalysis guess
+(``GlobalPlan.estimated_tokens``), clearly labeled as an estimate, and it
+does not yet read the real per-step usage from the summary — a follow-up.
+LOCAL (non-delegated) steps remain on ``--output-format text`` and carry no
+usage (ADR-0218 Phase-0 follow-up). ``BenchResult.duration_ms`` is real,
+measured wall-clock time — that is the
 genuinely "proven" number this harness produces until real token
 instrumentation lands (tracked, not done here — see nerve_builtins.py's
 TokenSavingsFiber docstring for the same caveat).

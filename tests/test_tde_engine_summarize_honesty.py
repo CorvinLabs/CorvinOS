@@ -112,21 +112,70 @@ def test_cli_envelope_extracts_result_and_usage():
         '"cache_read_input_tokens":300,"cache_creation_input_tokens":0},'
         '"total_cost_usd":0.0021,"model":"claude-haiku-4-5"}'
     )
-    text, usage = parse_cli_envelope(env, model="fallback")
+    text, usage, error = parse_cli_envelope(env, model="fallback")
     assert parse_worker_output(text) == "done"
     assert usage["total_tokens"] == 1580  # 1200+80+300+0
     assert usage["cost_usd"] == 0.0021
     assert usage["model"] == "claude-haiku-4-5"
+    assert error is None
 
 
 def test_cli_envelope_failsoft_on_plain_text_and_missing_result():
     # Old --output-format text reply (not an envelope) → passthrough, no usage.
-    assert parse_cli_envelope("just text") == ("just text", None)
+    assert parse_cli_envelope("just text") == ("just text", None, None)
     # JSON without a result field → treated as not-an-envelope, no usage.
     assert parse_cli_envelope('{"foo":1}')[1] is None
     # A non-string result is still returned as a string (never crashes).
-    text, usage = parse_cli_envelope('{"result":{"a":1},"usage":{"input_tokens":5}}')
-    assert isinstance(text, str) and usage["total_tokens"] == 5
+    text, usage, error = parse_cli_envelope('{"result":{"a":1},"usage":{"input_tokens":5}}')
+    assert isinstance(text, str) and usage["total_tokens"] == 5 and error is None
+
+
+def test_cli_envelope_flags_is_error_but_still_returns_usage():
+    # is_error=true with rc=0 (soft failure) must surface the subtype so the
+    # caller marks the step failed — but the spent tokens still count.
+    env = (
+        '{"type":"result","subtype":"error_max_turns","is_error":true,'
+        '"result":"I could not finish in one turn.",'
+        '"usage":{"input_tokens":10,"output_tokens":5},"total_cost_usd":0.001}'
+    )
+    text, usage, error = parse_cli_envelope(env)
+    assert error == "error_max_turns"
+    assert usage["total_tokens"] == 15  # tokens were spent even on the error
+    assert "could not finish" in text
+
+
+def test_cli_envelope_error_without_result_does_not_leak_json():
+    # Finding 2: a result-LESS error envelope must be recognised as an envelope
+    # (via is_error/subtype/type markers) and NOT dumped verbatim as the output.
+    env = ('{"type":"result","subtype":"error_during_execution","is_error":true,'
+           '"usage":{"input_tokens":3,"output_tokens":0}}')
+    text, usage, error = parse_cli_envelope(env)
+    assert error == "error_during_execution"
+    assert text == ""                      # no result field → empty, not the JSON
+    assert usage["total_tokens"] == 3
+    # parse_worker_output on "" must not resurrect the envelope
+    assert parse_worker_output(text) == ""
+
+
+def test_cli_envelope_non_success_subtype_is_an_error_even_without_is_error():
+    # Mirrors claude_code.py: subtype not in ("success", None) is an error.
+    env = '{"type":"result","subtype":"error_max_turns","result":"partial"}'
+    _text, _usage, error = parse_cli_envelope(env)
+    assert error == "error_max_turns"
+
+
+def test_summarize_reports_tokens_by_kind():
+    # Finding 3: price tiers kept separate, not only the blended total.
+    sr = StepResult(step_num=1, action="x", success=True, duration_ms=10,
+                    was_delegated=True, token_usage={
+                        "input_tokens": 10, "output_tokens": 20,
+                        "cache_read_input_tokens": 300, "cache_creation_input_tokens": 40,
+                        "total_tokens": 370, "model": "haiku"})
+    s = _summarize([sr])
+    assert s["tokens_by_kind"] == {
+        "input_tokens": 10, "output_tokens": 20,
+        "cache_read_input_tokens": 300, "cache_creation_input_tokens": 40}
+    assert s["total_tokens"] == 370
 
 
 def test_latency_delta_pct_is_genuinely_computed():
