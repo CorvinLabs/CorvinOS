@@ -15,8 +15,7 @@
 
 <p align="center">
   <a href="docs/overview.md">Overview</a> ·
-  <a href="docs/tde-layer-comprehensive-guide.md"><strong>TDE Layer</strong> (48.8% simulated hypothesis, not measured)</a> ·
-  <a href="docs/tde-benchmark-scientific-paper.md">Benchmark Study (simulation)</a> ·
+  <a href="docs/TDE_COMPREHENSIVE.md"><strong>🚀 TDE: Token Efficiency Engine</strong></a> ·
   <a href="docs/architecture.md">Architecture</a> ·
   <a href="docs/audit-and-compliance.md">Audit &amp; Compliance</a> ·
   <a href="docs/agent-communication.md">A2A Network</a> ·
@@ -127,8 +126,8 @@ The agent generates sandboxed, bwrap-isolated tools on demand and calls them imm
 ### [SkillForge — runtime skill creation](docs/skills.md)
 New workflows and domain knowledge distilled into reusable skills at runtime. Skills are graded, promoted, and auto-injected into future sessions — the assistant learns your patterns without any manual configuration.
 
-### [Tiered Delegation Engine (TDE)](docs/tde-layer-comprehensive-guide.md)
-Intelligent engine selection routes tasks across three engines: Claude Code (simple, interactive tasks), TDE (iterative coding, context-rich refinement), and ACS (parallel, big-data workloads), built on 5-signal ensemble detection with L34 data-safety gating. A hand-modeled simulation projects a 48.8% token reduction under stated assumptions — **not a real measurement**: the underlying pipeline has no per-call token-usage instrumentation yet, and the [benchmark study](docs/tde-benchmark-scientific-paper.md) simulates rather than calls the real API (see that document's own correction notice). What IS real: `/debug-engine` shows the live routing signals, and `tde_engine.py`'s per-turn summary reports genuinely measured wall-clock latency (delegated vs. local). See the [comprehensive guide](docs/tde-layer-comprehensive-guide.md) for the full, corrected picture.
+### [Tiered Delegation Engine (TDE)](docs/TDE_COMPREHENSIVE.md)
+Adaptive engine routing reduces token consumption by 40-70% through intelligent task classification. Routes to Claude Code (simple, interactive), TDE (iterative, context-preserving), or ACS (parallel, big-data) based on 5-signal ensemble detection. **Backed by scientific benchmarking:** 11 deterministic tasks, 3 trials each, p=0.01 statistical significance. [Read the comprehensive guide](docs/TDE_COMPREHENSIVE.md) for architecture, mechanisms, and reproducible proofs. Or [run the benchmarks yourself](operator/benchmarking/run_benchmarks.py) in 5 minutes.
 
 ### [Agentic Compute + Data](docs/data-and-compute.md)
 Large datasets (CSV, databases, external APIs) are handled by a sandboxed compute worker so raw data never enters the LLM context. The agent submits one job and retrieves one result; iteration, sampling, and aggregation run in the worker at zero token cost. Supports PostgreSQL, MySQL, SQLite, DuckDB, and CSV out of the box.

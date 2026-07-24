@@ -3404,6 +3404,12 @@ async def _stream_tde_turn(
         # one-shot running for up to _ANALYSIS_TIMEOUT_S (180s) after the
         # turn already ended. Killed from the outer except below.
         _analysis_holder = ProcHolder()
+        # k=8: initialized BEFORE the try — the failure branches below (analysis
+        # timeout, CLI missing, malformed plan) reach _append_turn(...,
+        # tde_progress=tde_progress_dict) too; binding it inside the try made
+        # every degraded TDE turn die with UnboundLocalError instead of
+        # persisting the assistant turn (adversarial review 2026-07-24).
+        tde_progress_dict: dict[str, Any] | None = None
         try:
             context: dict[str, Any] = {
                 "statement": {"task": task_text},
@@ -3419,9 +3425,6 @@ async def _stream_tde_turn(
                 f"{analysis.classification.complexity} — {len(plan.steps)} Steps, "
                 f"parallele Ausführung startet…\n"
             )}
-
-            # k=8: Initialize tdeProgress dict outside try so it's available in all branches
-            tde_progress_dict: dict[str, Any] | None = None
 
             integration = SendIntegration(
                 registry=EngineRegistry(real_ipc=True),
