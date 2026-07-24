@@ -97,10 +97,9 @@ export function TdeAuditGraphPanel({ sid }: Props) {
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">Token savings:</span>
-              {/* ADR-0215 honesty: token_savings_pct is null until real
-                  per-call token instrumentation exists — render the truth,
-                  never an invented estimate (review 2026-07-24 removed the
-                  fabricated "30-70%" placeholder). */}
+              {/* ADR-0215 honesty: token_savings_pct is null until a
+                  counterfactual baseline exists (ADR-0218 Phase-1 measurement) —
+                  render the truth, never an invented estimate. */}
               <span className="text-slate-500 font-mono">
                 {latestTdeProgress.token_usage_instrumented &&
                  typeof latestTdeProgress.token_savings_pct === "number"
@@ -108,6 +107,46 @@ export function TdeAuditGraphPanel({ sid }: Props) {
                   : "not measured"}
               </span>
             </div>
+            {/* ADR-0219 R2: the REAL measured token numbers, shown only when the
+                run was instrumented. The delegated/local split is the break-even
+                signal; cost is the authoritative price. */}
+            {latestTdeProgress.token_usage_instrumented &&
+              typeof latestTdeProgress.total_tokens === "number" && (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Tokens (total):</span>
+                  <span className="text-slate-300 font-mono">
+                    {latestTdeProgress.total_tokens.toLocaleString()}
+                    {typeof latestTdeProgress.cost_usd === "number" &&
+                      ` · $${latestTdeProgress.cost_usd.toFixed(4)}`}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Delegated / local:</span>
+                  <span className="text-slate-300 font-mono">
+                    {(latestTdeProgress.tokens_delegated ?? 0).toLocaleString()}
+                    {" / "}
+                    {(latestTdeProgress.tokens_local ?? 0).toLocaleString()}
+                  </span>
+                </div>
+                {latestTdeProgress.tokens_by_kind && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Context vs work:</span>
+                    <span className="text-slate-500 font-mono text-[10px]">
+                      cache {(
+                        (latestTdeProgress.tokens_by_kind.cache_read_input_tokens ?? 0) +
+                        (latestTdeProgress.tokens_by_kind.cache_creation_input_tokens ?? 0)
+                      ).toLocaleString()}
+                      {" · io "}
+                      {(
+                        (latestTdeProgress.tokens_by_kind.input_tokens ?? 0) +
+                        (latestTdeProgress.tokens_by_kind.output_tokens ?? 0)
+                      ).toLocaleString()}
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}

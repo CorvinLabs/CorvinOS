@@ -37,6 +37,13 @@ export interface TdeProgress {
   l34_forced: boolean;
   token_savings_pct?: number | null;
   token_usage_instrumented?: boolean;
+  // ADR-0219 R2: real measured token numbers (null until instrumented).
+  total_tokens?: number | null;
+  tokens_delegated?: number | null;
+  tokens_local?: number | null;
+  tokens_by_model?: Record<string, number> | null;
+  tokens_by_kind?: Record<string, number> | null;
+  cost_usd?: number | null;
   latency_delta_pct?: number | null;
   /** ADR-0216 shared agentic-compute pool: today's usage/cap for this run's
    *  chokepoint. quota_limit is `null` on an unlimited tier — render
@@ -118,6 +125,13 @@ export interface StreamEvent {
   local_count?: number;
   token_savings_pct?: number | null;
   token_usage_instrumented?: boolean;
+  // ADR-0219 R2: real measured token numbers (null until instrumented).
+  total_tokens?: number | null;
+  tokens_delegated?: number | null;
+  tokens_local?: number | null;
+  tokens_by_model?: Record<string, number> | null;
+  tokens_by_kind?: Record<string, number> | null;
+  cost_usd?: number | null;
   latency_delta_pct?: number | null;
   l34_forced?: boolean;
   // ADR-0216 shared agentic-compute pool fields + analysis classification
@@ -394,6 +408,12 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
           l34_forced: Boolean(evt.l34_forced),
           token_savings_pct: evt.token_savings_pct ?? null,
           token_usage_instrumented: Boolean(evt.token_usage_instrumented),
+          total_tokens: (evt.total_tokens as number | null | undefined) ?? null,
+          tokens_delegated: (evt.tokens_delegated as number | null | undefined) ?? null,
+          tokens_local: (evt.tokens_local as number | null | undefined) ?? null,
+          tokens_by_model: (evt.tokens_by_model as Record<string, number> | null | undefined) ?? null,
+          tokens_by_kind: (evt.tokens_by_kind as Record<string, number> | null | undefined) ?? null,
+          cost_usd: (evt.cost_usd as number | null | undefined) ?? null,
           latency_delta_pct: evt.latency_delta_pct ?? null,
           quota_used_today: evt.quota_used_today ?? undefined,
           quota_limit: evt.quota_limit ?? null,
