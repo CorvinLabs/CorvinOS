@@ -20,6 +20,16 @@ export type MessagePart =
   | { kind: "tool"; name: string; input: Record<string, unknown> }
   | { kind: "artifact"; name: string; path: string; mime: string; size: number; sid: string; label?: string };
 
+/** ADR-0214 Phase 2: TDE progress metrics for audit graph visualization. */
+export interface TdeProgress {
+  run_id: string;
+  total_steps: number;
+  completed_steps: number;
+  delegated_count: number;
+  local_count: number;
+  l34_forced: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
@@ -39,6 +49,10 @@ export interface ChatMessage {
    *  matching GET /compute/tde/{run_id}/graph payload. Live-only, same as
    *  engine/engineLabel above. */
   tdeRunId?: string;
+  /** ADR-0214 Phase 2: TDE delegation progress (steps, counts, L34 status).
+   *  Persisted to turns.jsonl so audit graph survives reload/reconnect.
+   *  Only present on TDE turns (when engine === "tiered_delegation"). */
+  tdeProgress?: TdeProgress;
 }
 
 export interface StreamEvent {
