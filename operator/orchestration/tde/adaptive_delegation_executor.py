@@ -532,16 +532,22 @@ class AdaptiveDelegationExecutor:
         start = time.time()
         try:
             if proc_holder is not None and _accepts_proc_holder(executor_fn):
-                result = await executor_fn(step, statement, proc_holder=proc_holder)
+                raw = await executor_fn(step, statement, proc_holder=proc_holder)
             else:
-                result = await executor_fn(step, statement)
+                raw = await executor_fn(step, statement)
+            # ADR-0219 R1: the default local executor now returns a LocalResult
+            # (output + real token usage); a custom injected executor keeps the
+            # plain-value contract. unwrap_local_result normalises both.
+            from .worker_ipc import unwrap_local_result  # noqa: PLC0415
+            output, usage = unwrap_local_result(raw)
             return StepResult(
                 step_num=step.step,
                 action=step.action,
                 success=True,
-                output=result,
+                output=output,
                 duration_ms=int((time.time() - start) * 1000),
                 was_delegated=False,
+                token_usage=usage,
             )
         except Exception as e:
             return StepResult(

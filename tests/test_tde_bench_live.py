@@ -52,7 +52,10 @@ def test_live_bench_real_and_fictional_task_through_real_pipeline():
     ))
 
     assert report["calls_spent"] > 0
-    assert report["token_usage_instrumented"] is False  # honesty contract, see bench.py
+    # The BENCH HARNESS still reports only estimated_tokens, so its own flag is
+    # False — even though the ENGINE instruments real per-step tokens since
+    # ADR-0219 R1 (aggregating them into the bench report is the R2 follow-up).
+    assert report["token_usage_instrumented"] is False  # bench harness only
 
     real_result = next(r for r in report["results"] if r.task_id == "real_01_simple_function")
     assert real_result.engine == "claude_code"

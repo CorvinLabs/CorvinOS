@@ -405,7 +405,12 @@ def _summarize(
         "max_real_calls": max_real_calls,
         "truncated": truncated,
         "per_engine": per_engine_stats,
-        "token_usage_instrumented": False,  # see module docstring
+        # The ENGINE now instruments real per-step tokens (ADR-0219 R1), but this
+        # BENCH HARNESS does not yet aggregate them from the engine summaries into
+        # the report — it still reports only the LM's estimated_tokens guess. This
+        # flag therefore describes the BENCH's own numbers, not the pipeline's.
+        # Aggregating the real summary usage here is the R2 follow-up.
+        "token_usage_instrumented": False,  # bench harness only; engine IS instrumented
         "results": results,
     }
 

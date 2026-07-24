@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
@@ -161,6 +162,26 @@ def run_one_shot(
         except Exception:  # noqa: BLE001 — group already killed; reap best-effort
             pass
         raise
+
+
+@dataclass
+class LocalResult:
+    """Return type of the DEFAULT local step executor (ADR-0219 R1).
+
+    Carries the step output AND the real token usage, so local (non-delegated)
+    steps are instrumented like delegated ones. An explicit marker type — not a
+    bare (output, usage) tuple — so callers unwrap it unambiguously and a
+    custom injected executor that returns a plain value (or its own tuple) is
+    never misread as usage-bearing."""
+    output: Any
+    usage: "Optional[dict[str, Any]]" = None
+
+
+def unwrap_local_result(result: Any) -> "tuple[Any, Optional[dict[str, Any]]]":
+    """(output, usage) from a local executor result. Plain values → (value, None)."""
+    if isinstance(result, LocalResult):
+        return result.output, result.usage
+    return result, None
 
 
 def parse_worker_output(raw: str) -> Any:
