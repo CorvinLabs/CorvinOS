@@ -147,6 +147,7 @@ a capability the surface lacks.
 | Direct OS-turn (incl. its Task-tool subagents) | **no** |
 | `delegate_*` single calls | **no** (maintainer decision) |
 | ACS fan-out (any entry) | **yes** — web-chat charges at `chat_runtime` (direct-`ACSRuntime` path), everything else at the `run_acs_workflow` chokepoint; quota exhausted → single-turn fallback (ADR-0201) |
+| TDE run (`/use-engine tiered_delegation`, ADR-0214) | **yes** — charged at the `TieredDelegationEngine.execute` chokepoint; only real-compute configs are metered (real IPC or the default claude-CLI local executor), stub/mock test configs are not; invalid plans refund the unit |
 | ACS quota fallback (single direct turn) | **no** (un-metered `run_delegate`) — but bounded by `_FALLBACK_MAX_PER_DAY`=50/tenant/day (race-safe LIC-1 lock, review D3), an elevated-but-fixed `BUDGET_FALLBACK_MAX_S` wall-clock ceiling (review F6/F7; caller `budget_override` threads through route AND chokepoint, F8/D1), and max `_ACS_FB_MAX_CONCURRENT`=2 concurrent fallback turns per tenant on the console route (typed 429 beyond, review D4) |
 | `workflow_run` / compute routes | **yes** |
 | Scheduler fires / background tasks | normal-turn cost / task-count quotas |

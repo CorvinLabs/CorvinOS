@@ -27,7 +27,7 @@ Think of it as "the AI writing its own API clients and calculators, with cryptog
 A one-line summary of your current licence limits relevant to Forge:
 
 ```
-LICENCE  free   a2a_peers_max: 1   compute_units_per_day: 1   rag_providers_max: 1   ...
+LICENCE  free   a2a_peers_max: 1   compute_units_per_day: 10   rag_providers_max: 1   ...
 ```
 
 This reminds you which limits apply before you start creating tools.
