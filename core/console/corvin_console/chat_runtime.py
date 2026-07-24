@@ -3757,6 +3757,15 @@ async def _stream_tde_turn(
                 "latency_delta_pct": summary.get("latency_delta_pct"),
                 "token_savings_pct": summary.get("token_savings_pct"),
                 "token_usage_instrumented": summary.get("token_usage_instrumented", False),
+                # ADR-0219 R2: surface the REAL token numbers the engine now
+                # measures (ADR-0218 Phase 0 + R1 local/delegated split). None on
+                # an un-instrumented run; the panel shows them only when present.
+                "total_tokens": summary.get("total_tokens"),
+                "tokens_delegated": summary.get("tokens_delegated"),
+                "tokens_local": summary.get("tokens_local"),
+                "tokens_by_model": summary.get("tokens_by_model"),
+                "tokens_by_kind": summary.get("tokens_by_kind"),
+                "cost_usd": summary.get("cost_usd"),
                 # ADR-0216 badge fields (2026-07-24 round-4 review): the badge's
                 # quota + classification lines were dead because these were never
                 # forwarded from summary. quota_* are None on an unmetered run;
@@ -3810,6 +3819,13 @@ async def _stream_tde_turn(
                        "latency_delta_pct": summary.get("latency_delta_pct"),
                        "token_savings_pct": summary.get("token_savings_pct"),
                        "token_usage_instrumented": summary.get("token_usage_instrumented", False),
+                       # ADR-0219 R2: real token numbers (see the persisted dict above).
+                       "total_tokens": summary.get("total_tokens"),
+                       "tokens_delegated": summary.get("tokens_delegated"),
+                       "tokens_local": summary.get("tokens_local"),
+                       "tokens_by_model": summary.get("tokens_by_model"),
+                       "tokens_by_kind": summary.get("tokens_by_kind"),
+                       "cost_usd": summary.get("cost_usd"),
                        "quota_used_today": summary.get("quota_used_today"),
                        "quota_limit": summary.get("quota_limit"),
                        "task_type": summary.get("task_type"),
