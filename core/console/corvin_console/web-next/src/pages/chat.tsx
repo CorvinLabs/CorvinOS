@@ -80,7 +80,6 @@ import {
   closeSession,
   useChatSession,
   type StreamEvent,
-  type SessionState,
   type TdeProgress,
 } from "@/lib/chat-registry";
 import {
@@ -1015,6 +1014,19 @@ function ChatPane({
           id: `h-${t.ts}-${i}`,
           role: t.role === "system" ? "system" : t.role,
           ts: t.ts,
+          // ADR-0214 k=8 (adversarial review 2026-07-24): the backend
+          // persists tde_progress (snake_case wrapper) per TDE turn; without
+          // this mapping the metrics card and the TDE Graph tab were empty
+          // after every reload. tdeRunId is re-derived from the same dict —
+          // the `engine` stream event that stamps it live is not persisted.
+          ...(t.tde_progress && typeof t.tde_progress === "object"
+            ? {
+                tdeProgress: t.tde_progress as unknown as TdeProgress,
+                ...(typeof (t.tde_progress as Record<string, unknown>).run_id === "string"
+                  ? { tdeRunId: (t.tde_progress as Record<string, unknown>).run_id as string }
+                  : {}),
+              }
+            : {}),
           parts: (t.parts ?? []).map((p): MessagePart => {
             if (p.kind === "text") return { kind: "text", text: String(p.text ?? "") };
             if (p.kind === "artifact") return {
@@ -1125,13 +1137,10 @@ function ChatPane({
           return [...prev, evt];
         });
       }
-      if (evt.type === "engine_progress" && evt.engine === "tiered_delegation") {
-        // ADR-0214 Phase 4b: Attach TDE progress to the latest assistant message.
-        // k=8: tdeProgress is now persisted by the backend (chat_runtime.py::_append_turn),
-        // so frontend does not need to compute or cache it. The ChatMessage from
-        // turns.jsonl will already have the tdeProgress field populated. TdeAuditGraphPanel
-        // reads directly from useChatSession() which hydrates from the persisted messages.
-      }
+      // "engine_progress" needs no handling here: chat-registry's applyEvent
+      // stamps tdeProgress/tdeRunId onto the live ChatMessage (reducer case),
+      // and history hydration above maps the backend-persisted tde_progress
+      // for reloads (ADR-0214 k=8, adversarial review 2026-07-24).
     });
 
     return () => {

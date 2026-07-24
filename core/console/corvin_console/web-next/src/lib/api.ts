@@ -1394,6 +1394,11 @@ export interface ChatTurn {
   role: "user" | "assistant" | "system";
   ts: number;
   parts: ChatTurnPart[];
+  /** ADR-0214 k=8: TDE delegation metrics persisted by the backend
+   *  (chat_runtime.py::_append_turn, snake_case wrapper key). Present only
+   *  on assistant turns that ran through the Tiered Delegation Engine.
+   *  Inner field names match chat-registry's TdeProgress 1:1. */
+  tde_progress?: Record<string, unknown> | null;
 }
 
 export interface ChatTurnsResponse {
