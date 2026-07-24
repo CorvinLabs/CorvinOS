@@ -30,27 +30,7 @@ The TDE Layer is a **third agentic compute engine** that sits alongside ACS (Aut
 
 ## The Problem: Token Waste in Current Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│        Current Architecture: One Engine Fits All                   │
-├──────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌─────────────────────┐         ┌─────────────────────┐         │
-│  │   Claude Code       │         │       ACS           │         │
-│  ├─────────────────────┤         ├─────────────────────┤         │
-│  │ ✓ Keeps context     │         │ ✓ Parallelizes      │         │
-│  │ ✗ Can't parallelize │         │ ✓ Handles big data  │         │
-│  │ ✗ Wastes tokens     │         │ ✗ Loses context     │         │
-│  │                     │         │                     │         │
-│  │ Cost: 5k-15k tokens │         │ Cost: 8k-20k tokens │         │
-│  │ Used for ALL tasks  │         │ Rarely used         │         │
-│  └─────────────────────┘         └─────────────────────┘         │
-│                                                                   │
-│  ⚠️ THE PROBLEM:                                                  │
-│  Claude Code handles 95% of tasks but wastes tokens on simple    │
-│  ACS sits unused for most workloads (context loss is killer)     │
-└──────────────────────────────────────────────────────────────────┘
-```
+![Current Architecture Problem](diagrams/01-problem-current-architecture.svg)
 
 **Token waste metrics:**
 - Simple tasks (rename, fix typo, small refactor): 5k-8k tokens spent, could be 1k-2k
@@ -61,37 +41,7 @@ The TDE Layer is a **third agentic compute engine** that sits alongside ACS (Aut
 
 ## The Solution: TDE — Three-Engine Routing
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│            TDE Layer: Adaptive Engine Selection                   │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│                    📥 Task                                       │
-│                      ↓                                           │
-│            ┌──────────────────────┐                             │
-│            │  TDE Detector         │                            │
-│            │  (5 signals)          │                            │
-│            │ Parallelization       │                            │
-│            │ Iteration Loops       │                            │
-│            │ Context Dependency    │                            │
-│            │ Data Volume           │                            │
-│            │ Task Type             │                            │
-│            └──────────────────────┘                             │
-│                      ↓                                           │
-│         ┌────────────┼────────────┐                             │
-│         ↓            ↓            ↓                             │
-│    ╔═════════╗  ╔══════════╗  ╔═════════╗                       │
-│    ║ Claude  ║  ║   TDE    ║  ║   ACS   ║                       │
-│    ║  Code   ║  ║(Optimum) ║  ║ Parallel║                       │
-│    ╠═════════╣  ╠══════════╣  ╠═════════╣                       │
-│    ║  1-3k   ║  ║  3-7k    ║  ║ 5-15k   ║                       │
-│    ║ Tokens  ║  ║ Tokens   ║  ║ Tokens  ║                       │
-│    ║ SAVES   ║  ║ SAVES    ║  ║ SAVES   ║                       │
-│    ║  80%    ║  ║  50%     ║  ║  40%    ║                       │
-│    ╚═════════╝  ╚══════════╝  ╚═════════╝                       │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+![TDE Routing Solution](diagrams/02-solution-tde-routing.svg)
 
 **Token savings breakdown:**
 - 60% of tasks are simple → Claude Code (saves 80% vs current)
@@ -104,89 +54,7 @@ The TDE Layer is a **third agentic compute engine** that sits alongside ACS (Aut
 
 ## How TDE Decides: The 5-Signal Detector
 
-```
-<svg viewBox="0 0 900 600" xmlns="http://www.w3.org/2000/svg">
-  <!-- Title -->
-  <text x="450" y="30" font-size="22" font-weight="bold" text-anchor="middle" fill="#333">
-    TDE Engine Selection: 5 Independent Signals
-  </text>
-  
-  <!-- Signal 1: Parallelization -->
-  <rect x="50" y="70" width="160" height="140" fill="#fff3cd" stroke="#ffc107" stroke-width="2" rx="5"/>
-  <text x="130" y="95" font-size="12" font-weight="bold" text-anchor="middle" fill="#d39e00">Signal 1</text>
-  <text x="130" y="110" font-size="11" font-weight="bold" text-anchor="middle" fill="#333">Parallelization</text>
-  <line x1="60" y1="120" x2="200" y2="120" stroke="#ffc107" stroke-width="1"/>
-  <text x="130" y="135" font-size="10" text-anchor="middle" fill="#333">% of steps can run</text>
-  <text x="130" y="150" font-size="10" text-anchor="middle" fill="#333">in parallel</text>
-  <text x="130" y="165" font-size="10" text-anchor="middle" fill="#333">Weight: 35%</text>
-  <text x="130" y="185" font-size="9" text-anchor="middle" fill="#666">0% → TDE/CC</text>
-  <text x="130" y="195" font-size="9" text-anchor="middle" fill="#666">>60% → ACS</text>
-  
-  <!-- Signal 2: Iteration Loops -->
-  <rect x="240" y="70" width="160" height="140" fill="#e3f2fd" stroke="#2196f3" stroke-width="2" rx="5"/>
-  <text x="320" y="95" font-size="12" font-weight="bold" text-anchor="middle" fill="#1976d2">Signal 2</text>
-  <text x="320" y="110" font-size="11" font-weight="bold" text-anchor="middle" fill="#333">Iteration Loops</text>
-  <line x1="250" y1="120" x2="390" y2="120" stroke="#2196f3" stroke-width="1"/>
-  <text x="320" y="135" font-size="10" text-anchor="middle" fill="#333">Steps that re-read</text>
-  <text x="320" y="150" font-size="10" text-anchor="middle" fill="#333">prior outputs</text>
-  <text x="320" y="165" font-size="10" text-anchor="middle" fill="#333">Weight: 25%</text>
-  <text x="320" y="185" font-size="9" text-anchor="middle" fill="#666">1-2 → ACS OK</text>
-  <text x="320" y="195" font-size="9" text-anchor="middle" fill="#666">>2 → TDE wins</text>
-  
-  <!-- Signal 3: Context Dependency -->
-  <rect x="430" y="70" width="160" height="140" fill="#f3e5f5" stroke="#9c27b0" stroke-width="2" rx="5"/>
-  <text x="510" y="95" font-size="12" font-weight="bold" text-anchor="middle" fill="#7b1fa2">Signal 3</text>
-  <text x="510" y="110" font-size="11" font-weight="bold" text-anchor="middle" fill="#333">Context</text>
-  <line x1="440" y1="120" x2="580" y2="120" stroke="#9c27b0" stroke-width="1"/>
-  <text x="510" y="135" font-size="10" text-anchor="middle" fill="#333">State flows between</text>
-  <text x="510" y="150" font-size="10" text-anchor="middle" fill="#333">steps?</text>
-  <text x="510" y="165" font-size="10" text-anchor="middle" fill="#333">Weight: 20%</text>
-  <text x="510" y="185" font-size="9" text-anchor="middle" fill="#666">High → TDE</text>
-  <text x="510" y="195" font-size="9" text-anchor="middle" fill="#666">Low → ACS</text>
-  
-  <!-- Signal 4: Data Volume -->
-  <rect x="620" y="70" width="160" height="140" fill="#f1f8e9" stroke="#689f38" stroke-width="2" rx="5"/>
-  <text x="700" y="95" font-size="12" font-weight="bold" text-anchor="middle" fill="#558b2f">Signal 4</text>
-  <text x="700" y="110" font-size="11" font-weight="bold" text-anchor="middle" fill="#333">Data Volume</text>
-  <line x1="630" y1="120" x2="770" y2="120" stroke="#689f38" stroke-width="1"/>
-  <text x="700" y="135" font-size="10" text-anchor="middle" fill="#333">Size of input</text>
-  <text x="700" y="150" font-size="10" text-anchor="middle" fill="#333">data (MB)</text>
-  <text x="700" y="165" font-size="10" text-anchor="middle" fill="#333">Weight: 15%</text>
-  <text x="700" y="185" font-size="9" text-anchor="middle" fill="#666"><100MB → CC</text>
-  <text x="700" y="195" font-size="9" text-anchor="middle" fill="#666">>1GB → ACS</text>
-  
-  <!-- Signal 5: Task Type -->
-  <rect x="810" y="70" width="80" height="140" fill="#fce4ec" stroke="#c2185b" stroke-width="2" rx="5"/>
-  <text x="850" y="95" font-size="12" font-weight="bold" text-anchor="middle" fill="#a8145c">Signal 5</text>
-  <text x="850" y="110" font-size="11" font-weight="bold" text-anchor="middle" fill="#333">Task Type</text>
-  <line x1="820" y1="120" x2="880" y2="120" stroke="#c2185b" stroke-width="1"/>
-  <text x="850" y="135" font-size="9" text-anchor="middle" fill="#333">code_gen,</text>
-  <text x="850" y="145" font-size="9" text-anchor="middle" fill="#333">reasoning,</text>
-  <text x="850" y="155" font-size="9" text-anchor="middle" fill="#333">etc.</text>
-  <text x="850" y="170" font-size="10" text-anchor="middle" fill="#333">Weight: 5%</text>
-  <text x="850" y="185" font-size="9" text-anchor="middle" fill="#666">Tiebreaker</text>
-  
-  <!-- Softmax Normalization -->
-  <rect x="50" y="250" width="840" height="100" fill="#f5f5f5" stroke="#666" stroke-width="2" rx="5"/>
-  <text x="450" y="275" font-size="12" font-weight="bold" text-anchor="middle" fill="#333">Softmax Ensemble with Logit Scaling (×5)</text>
-  <line x1="60" y1="290" x2="880" y2="290" stroke="#999" stroke-width="1"/>
-  <text x="450" y="310" font-size="11" text-anchor="middle" fill="#333">Real probability distribution across 3 engines</text>
-  <text x="450" y="330" font-size="10" text-anchor="middle" fill="#666">TDE: 75% confidence | ACS: 20% | CC: 5%</text>
-  
-  <!-- Example -->
-  <rect x="50" y="400" width="840" height="160" fill="#e8f5e9" stroke="#388e3c" stroke-width="2" rx="5"/>
-  <text x="450" y="425" font-size="12" font-weight="bold" text-anchor="middle" fill="#1b5e20">Example: Complex Refactor (iterative)</text>
-  <line x1="60" y1="440" x2="880" y2="440" stroke="#388e3c" stroke-width="1"/>
-  
-  <text x="80" y="460" font-size="10" fill="#333">Signal 1 (Parallelization: 20%):  CC wins (+0.2)</text>
-  <text x="80" y="477" font-size="10" fill="#333">Signal 2 (Iteration: 4 loops):    TDE wins (+0.8)</text>
-  <text x="80" y="494" font-size="10" fill="#333">Signal 3 (Context: HIGH):       TDE wins (+0.9)</text>
-  <text x="80" y="511" font-size="10" fill="#333">Signal 4 (Data: 50MB):           CC wins (+0.1)</text>
-  <text x="80" y="528" font-size="10" fill="#333">Signal 5 (Task: code_generation): TDE bonus (+0.2)</text>
-  
-  <text x="450" y="545" font-size="11" font-weight="bold" text-anchor="middle" fill="#1b5e20">Result: TDE wins with 72% confidence</text>
-</svg>
-```
+![5-Signal Detector](diagrams/03-five-signal-detector.svg)
 
 ---
 

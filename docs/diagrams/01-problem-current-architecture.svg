@@ -1,0 +1,54 @@
+<svg viewBox="0 0 900 450" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-size: 28px; font-weight: bold; fill: #1a1a1a; }
+      .box-label { font-size: 18px; font-weight: bold; }
+      .box-text { font-size: 13px; fill: #333; }
+      .problem-title { font-size: 16px; font-weight: bold; fill: #c00; }
+      .problem-text { font-size: 12px; fill: #333; }
+      .box-good { fill: #c8e6c9; stroke: #388e3c; stroke-width: 2; }
+      .box-bad { fill: #ffcdd2; stroke: #d32f2f; stroke-width: 2; }
+      .divider { stroke: #999; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="450" y="40" class="title" text-anchor="middle">Current Architecture: One Engine Fits All</text>
+
+  <!-- Claude Code Box -->
+  <rect x="60" y="80" width="320" height="280" class="box-bad" rx="8"/>
+  <text x="220" y="115" class="box-label" text-anchor="middle" fill="#c00">Claude Code</text>
+  <line x1="70" y1="130" x2="370" y2="130" class="divider"/>
+
+  <text x="85" y="160" class="box-text">✓ Keeps context</text>
+  <text x="85" y="185" class="box-text">✓ Real-time interaction</text>
+  <text x="85" y="210" class="box-text">✓ Safe default</text>
+
+  <text x="85" y="245" class="box-text">✗ Can't parallelize</text>
+  <text x="85" y="270" class="box-text">✗ Wastes tokens on small tasks</text>
+  <text x="85" y="295" class="box-text">✗ Loses context on iteration</text>
+
+  <line x1="70" y1="320" x2="370" y2="320" class="divider"/>
+  <text x="220" y="350" class="problem-text" text-anchor="middle" font-weight="bold">Cost: 5k-15k tokens/task</text>
+
+  <!-- ACS Box -->
+  <rect x="520" y="80" width="320" height="280" class="box-bad" rx="8"/>
+  <text x="680" y="115" class="box-label" text-anchor="middle" fill="#c00">ACS</text>
+  <line x1="530" y1="130" x2="830" y2="130" class="divider"/>
+
+  <text x="545" y="160" class="box-text">✓ Parallelizes efficiently</text>
+  <text x="545" y="185" class="box-text">✓ Handles big data (1GB+)</text>
+  <text x="545" y="210" class="box-text">✓ Scales across workers</text>
+
+  <text x="545" y="245" class="box-text">✗ Loses context</text>
+  <text x="545" y="270" class="box-text">✗ Not suitable for iterative work</text>
+  <text x="545" y="295" class="box-text">✗ Rarely used</text>
+
+  <line x1="530" y1="320" x2="830" y2="320" class="divider"/>
+  <text x="680" y="350" class="problem-text" text-anchor="middle" font-weight="bold">Cost: 8k-20k tokens/task</text>
+
+  <!-- Problem statement -->
+  <rect x="60" y="390" width="780" height="45" fill="#fff3cd" stroke="#ff6b6b" stroke-width="2" rx="4" stroke-dasharray="5,5"/>
+  <text x="450" y="410" class="problem-title" text-anchor="middle">⚠️ THE PROBLEM: Claude Code used for ALL tasks (wasteful)</text>
+  <text x="450" y="428" class="problem-text" text-anchor="middle">95% of workload uses inefficient engine; ACS sits unused</text>
+</svg>
