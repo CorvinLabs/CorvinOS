@@ -1025,6 +1025,49 @@ def _resolve_hermes_model_for_summary() -> str:
         return os.environ.get("CORVIN_HERMES_MODEL", "").strip() or "qwen3:8b"
 
 
+def _hermes_base_url() -> str:
+    """Ollama/Hermes base URL, honouring the same env keys the summary uses."""
+    for env_key in ("CORVIN_OLLAMA_BASE_URL", "OLLAMA_HOST", "CORVIN_HERMES_URL"):
+        v = os.environ.get(env_key, "").strip()
+        if v:
+            v = v.rstrip("/")
+            return v if v.startswith("http") else f"http://{v}"
+    return "http://localhost:11434"
+
+
+def prewarm_summary_model(timeout_s: float = 120.0) -> bool:
+    """Load the summary model into Ollama so the FIRST voice note is not a cold
+    start (a cold qwen3:8b load is ~20-30 s and blows the 60 s summary timeout,
+    which is what drops the turn to the bounded no-LLM fallback on a fresh boot).
+
+    Fire-and-forget by design: the bridge calls this in a daemon thread at boot.
+    Fail-soft — if Ollama is not running (a Claude-CLI-only or cloud install),
+    this simply returns False and nothing downstream is worse off than before.
+    The house-rules classifier keeps the SAME model resident afterwards, so this
+    only has to cover the boot / long-idle gap, not steady state."""
+    import json as _json
+    import urllib.request as _ur
+    try:
+        model = _resolve_hermes_model_for_summary()
+        payload = _json.dumps({
+            "model": model,
+            "prompt": "ok",
+            "stream": False,
+            "think": False,
+            "options": {"num_predict": 1},
+            # -1 would pin RAM forever; 30m matches house_rules + the summary
+            # call, so all three keep the one resident instance warm together.
+            "keep_alive": os.environ.get("CORVIN_VOICE_KEEP_ALIVE", "").strip() or "30m",
+        }).encode()
+        req = _ur.Request(f"{_hermes_base_url()}/api/generate", data=payload,
+                          headers={"Content-Type": "application/json"}, method="POST")
+        with _ur.urlopen(req, timeout=timeout_s) as resp:
+            resp.read()
+        return True
+    except Exception:  # noqa: BLE001 — Ollama absent / unreachable → no-op
+        return False
+
+
 def _summarize_via_hermes(text: str, task: str, lang: str, target_chars: int, model: str, persona: str = "", audience: str = "", output_language: str = "") -> str | None:
     """Backend 2: the local Hermes engine (Ollama). This is the DEFAULT zero-config
     engine, so without it a Hermes-only install had no LLM summarizer at all and
@@ -1938,7 +1981,17 @@ def main() -> int:
             "differently, not just re-synthesized audio of the same words."
         ),
     )
+    ap.add_argument(
+        "--prewarm", action="store_true",
+        help=("Load the summary model into Ollama and exit (no stdin needed). "
+              "The bridge fires this at boot so the first voice note is warm."),
+    )
     args = ap.parse_args()
+
+    if args.prewarm:
+        ok = prewarm_summary_model()
+        print("prewarmed" if ok else "prewarm-skipped (no Hermes backend)")
+        return 0
 
     text = sys.stdin.read()
     if not text.strip():

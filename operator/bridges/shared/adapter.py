@@ -10552,6 +10552,28 @@ def main() -> int:
     )
     log(f"adapter started, polling {INBOX} every {POLL_INTERVAL}s "
         f"(MAX_PARALLEL={MAX_PARALLEL}, per-chat sequential)")
+
+    # Voice-summary model prewarm (2026-07-24). The voice summary falls back to
+    # a bounded no-LLM readout only when BOTH backends fail; the realistic way
+    # that happens for an active user is a COLD local model on the very first
+    # voice note after boot (a cold qwen3:8b load overruns the 60 s summary
+    # timeout). House-rules keeps the same model warm on every task afterwards,
+    # so we only need to cover the boot gap: fire one fire-and-forget prewarm in
+    # a daemon thread. Fail-soft — no Ollama (Claude-CLI-only / cloud install) →
+    # it prints "prewarm-skipped" and exits 0, nothing downstream is affected.
+    # Opt out with CORVIN_VOICE_PREWARM=0.
+    if os.environ.get("CORVIN_VOICE_PREWARM", "1").strip().lower() not in ("0", "false", "no"):
+        def _prewarm_voice_model() -> None:
+            try:
+                subprocess.run(
+                    [sys.executable, str(SCRIPTS_DIR / "summarize.py"), "--prewarm"],
+                    capture_output=True, text=True, timeout=150,
+                )
+            except Exception:  # noqa: BLE001 — best-effort; never affects boot
+                pass
+        threading.Thread(target=_prewarm_voice_model, name="voice-prewarm",
+                         daemon=True).start()
+
     # Boot snapshot — useful when grepping /var/log for "why is this run
     # different". Covers logger config, env flags, parallelism budget,
     # idle/heartbeat tuning, and active engine layer.

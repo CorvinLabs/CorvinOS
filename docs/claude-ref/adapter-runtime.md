@@ -52,8 +52,18 @@ It used to return `naive_truncate` = the whole answer whitespace-collapsed —
 which is exactly a verbatim readout. It now hard-caps that to `max_chars` via
 `_cap_to_budget` (whole sentences up to the budget, at least one, hard-cut only a
 single overrunning sentence). This is still a degraded result — it cannot
-translate — but it is short and bounded. Keeping a backend reliably warm (so this
-path rarely fires) is the remaining reliability follow-up.
+translate — but it is short and bounded.
+
+**Keeping the backend warm.** The bounded degraded path realistically only fires
+for an active user on a COLD local model at the first voice note after boot
+(a cold qwen3:8b load overruns the 60 s summary timeout). Two things prevent
+that: (1) the L44 house-rules classifier runs on *every* task with `keep_alive`
+30m and uses the *same* model the summary resolves to (`_resolve_default_model`),
+so steady-state it is always resident; (2) the adapter fires a fire-and-forget
+`summarize.py --prewarm` in a daemon thread at boot (`CORVIN_VOICE_PREWARM=0` to
+opt out) to cover the boot gap before the first task. Both are fail-soft: a
+Claude-CLI-only or cloud install has no Ollama, so prewarm is a no-op and the
+CLI backend serves the summary.
 
 The console `/voice/segment` "Read the full answer aloud" button is a deliberate
 exception — it reads the raw answer verbatim by design and is a separate,
