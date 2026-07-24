@@ -1,0 +1,148 @@
+<svg viewBox="0 0 1000 1100" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-size: 26px; font-weight: bold; fill: #000; }
+      .step-title { font-size: 14px; font-weight: bold; fill: #fff; }
+      .step-text { font-size: 11px; fill: #fff; }
+      .step-number { font-size: 12px; font-weight: bold; fill: #fff; }
+      .label { font-size: 12px; fill: #222; }
+      .metric { font-size: 11px; fill: #666; }
+      .arrow { stroke: #333; stroke-width: 2; marker-end: url(#arrowhead); }
+      .step-box { rx: 6; stroke-width: 2; }
+      .pregate { fill: #ff9800; stroke: #e65100; }
+      .l34 { fill: #9c27b0; stroke: #6a1b9a; }
+      .detector { fill: #2196f3; stroke: #1565c0; }
+      .routing { fill: #4caf50; stroke: #2e7d32; }
+      .engines { fill: #607d8b; stroke: #37474f; }
+      .tracking { fill: #f57c00; stroke: #e65100; }
+      .engine-box { fill: #fafafa; stroke: #999; stroke-width: 1; rx: 4; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#333"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="500" y="35" class="title" text-anchor="middle">TDE Data Flow: From Task to Engine</text>
+
+  <!-- Step 1: User Task -->
+  <g>
+    <rect x="250" y="60" width="500" height="70" class="step-box" fill="#e3f2fd" stroke="#1976d2" stroke-width="2"/>
+    <text x="500" y="85" class="step-number" text-anchor="middle" fill="#1976d2" font-size="16">1</text>
+    <text x="500" y="105" class="label" text-anchor="middle" font-weight="bold" fill="#1565c0">User Task Received</text>
+    <text x="500" y="122" class="metric" text-anchor="middle" fill="#1565c0">(code_generation, reasoning, batch_analysis, etc)</text>
+  </g>
+
+  <!-- Arrow -->
+  <line x1="500" y1="130" x2="500" y2="160" class="arrow"/>
+
+  <!-- Step 2: Cheap Pre-Gate -->
+  <g>
+    <rect x="200" y="160" width="600" height="90" class="step-box pregate"/>
+    <text x="500" y="175" class="step-number" text-anchor="middle" font-size="16">2</text>
+    <text x="500" y="195" class="step-title" text-anchor="middle">Cheap Pre-Gate (50 tokens)</text>
+    <text x="520" y="213" class="step-text">Is task trivial (&lt;1k tokens)?</text>
+    <text x="520" y="228" class="step-text">YES → Skip TDE detection, route to Claude Code</text>
+    <text x="520" y="243" class="step-text">NO → Continue to L34 safety check</text>
+  </g>
+
+  <!-- Arrow -->
+  <line x1="500" y1="250" x2="500" y2="280" class="arrow"/>
+
+  <!-- Step 3: L34 Data-Safety Gate -->
+  <g>
+    <rect x="200" y="280" width="600" height="100" class="step-box l34"/>
+    <text x="500" y="295" class="step-number" text-anchor="middle" font-size="16">3</text>
+    <text x="500" y="315" class="step-title" text-anchor="middle">L34 Data-Safety Check</text>
+    <text x="520" y="333" class="step-text">Classify data sensitivity</text>
+    <text x="520" y="348" class="step-text">CONFIDENTIAL → Claude Code only</text>
+    <text x="520" y="363" class="step-text">PUBLIC/INTERNAL → Continue to detector</text>
+  </g>
+
+  <!-- Arrow -->
+  <line x1="500" y1="380" x2="500" y2="410" class="arrow"/>
+
+  <!-- Step 4: TDE Detector -->
+  <g>
+    <rect x="150" y="410" width="700" height="130" class="step-box detector"/>
+    <text x="500" y="425" class="step-number" text-anchor="middle" font-size="16">4</text>
+    <text x="500" y="445" class="step-title" text-anchor="middle">TDE Detector: 5-Signal Ensemble</text>
+    <text x="520" y="463" class="step-text">• Parallelization ratio (35% weight)</text>
+    <text x="520" y="478" class="step-text">• Iteration loops (25% weight)</text>
+    <text x="520" y="493" class="step-text">• Context dependency (20% weight)</text>
+    <text x="520" y="508" class="step-text">• Data volume (15% weight)</text>
+    <text x="520" y="523" class="step-text">• Task type (5% weight)</text>
+  </g>
+
+  <!-- Arrow -->
+  <line x1="500" y1="540" x2="500" y2="570" class="arrow"/>
+
+  <!-- Step 5: Engine Routing Decision -->
+  <g>
+    <rect x="200" y="570" width="600" height="90" class="step-box routing"/>
+    <text x="500" y="585" class="step-number" text-anchor="middle" font-size="16">5</text>
+    <text x="500" y="605" class="step-title" text-anchor="middle">Softmax Engine Selection</text>
+    <text x="520" y="623" class="step-text">Confidence scores via softmax normalization</text>
+    <text x="520" y="638" class="step-text">Select engine with highest confidence (TDE/ACS/CC)</text>
+    <text x="520" y="653" class="step-text">Log selection decision for audit trail</text>
+  </g>
+
+  <!-- Arrow -->
+  <line x1="500" y1="660" x2="500" y2="690" class="arrow"/>
+
+  <!-- Step 6: Three-Engine Execution (Parallel Boxes) -->
+  <g>
+    <text x="500" y="710" class="label" text-anchor="middle" font-weight="bold">Selected Engine Executes</text>
+
+    <!-- Claude Code -->
+    <g>
+      <rect x="50" y="730" width="280" height="120" class="engine-box"/>
+      <text x="190" y="755" class="step-title" text-anchor="middle" fill="#1976d2" font-weight="bold">Claude Code</text>
+      <text x="70" y="775" class="metric">Interactive, context</text>
+      <text x="70" y="790" class="metric">preserving, low-latency</text>
+      <text x="70" y="805" class="metric">Cost: 1-3k tokens</text>
+      <text x="70" y="820" class="metric">Best for: Simple,</text>
+      <text x="70" y="835" class="metric">iterative tasks</text>
+    </g>
+
+    <!-- TDE -->
+    <g>
+      <rect x="360" y="730" width="280" height="120" class="engine-box"/>
+      <text x="500" y="755" class="step-title" text-anchor="middle" fill="#4caf50" font-weight="bold">TDE (Balanced)</text>
+      <text x="380" y="775" class="metric">Context warm +</text>
+      <text x="380" y="790" class="metric">strategic delegation</text>
+      <text x="380" y="805" class="metric">Cost: 3-7k tokens</text>
+      <text x="380" y="820" class="metric">Best for: Moderate,</text>
+      <text x="380" y="835" class="metric">iterative work</text>
+    </g>
+
+    <!-- ACS -->
+    <g>
+      <rect x="670" y="730" width="280" height="120" class="engine-box"/>
+      <text x="810" y="755" class="step-title" text-anchor="middle" fill="#ff6f00" font-weight="bold">ACS (Parallel)</text>
+      <text x="690" y="775" class="metric">8x parallelization</text>
+      <text x="690" y="790" class="metric">big-data ready</text>
+      <text x="690" y="805" class="metric">Cost: 5-15k tokens</text>
+      <text x="690" y="820" class="metric">Best for: Parallel,</text>
+      <text x="690" y="835" class="metric">big-data tasks</text>
+    </g>
+  </g>
+
+  <!-- Arrow -->
+  <line x1="500" y1="860" x2="500" y2="890" class="arrow"/>
+
+  <!-- Step 7: Token Delta Tracking -->
+  <g>
+    <rect x="200" y="890" width="600" height="100" class="step-box tracking"/>
+    <text x="500" y="905" class="step-number" text-anchor="middle" font-size="16">7</text>
+    <text x="500" y="925" class="step-title" text-anchor="middle">Token Delta Tracking &amp; Feedback</text>
+    <text x="520" y="943" class="step-text">Measure: tokens_used_actual vs tokens_predicted</text>
+    <text x="520" y="958" class="step-text">Log delta for next iteration</text>
+    <text x="520" y="973" class="step-text">Feeds continuous learning loop</text>
+  </g>
+
+  <!-- Result Box -->
+  <rect x="250" y="1010" width="500" height="60" fill="#e8f5e9" stroke="#4caf50" stroke-width="2" rx="6"/>
+  <text x="500" y="1030" class="label" text-anchor="middle" font-weight="bold" fill="#2e7d32">Result: 40-70% token savings</text>
+  <text x="500" y="1050" class="metric" text-anchor="middle" fill="#2e7d32">48.8% aggregate (p=0.01)</text>
+</svg>

@@ -245,58 +245,18 @@ benchmark/results/2026-07-24_HHMMSS/
 
 ## 7. Architecture: Data Flow & Integration
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     User Task                               │
-│    (code_generation, reasoning, batch_analysis, etc)        │
-└──────────────────────┬──────────────────────────────────────┘
-                       ↓
-        ┌──────────────────────────────┐
-        │  Cheap Pre-Gate (50 tokens)  │
-        │  Is task trivial (<1k)?      │
-        │  YES → Skip detection        │
-        │  NO → Continue               │
-        └──────────────┬───────────────┘
-                       ↓
-        ┌──────────────────────────────┐
-        │  L34 Data-Safety Check       │
-        │  Classify data sensitivity   │
-        │  CONFIDENTIAL → CC only      │
-        │  PUBLIC → Continue           │
-        └──────────────┬───────────────┘
-                       ↓
-        ┌──────────────────────────────────────┐
-        │  TDE Detector: 5-Signal Analysis     │
-        │  • Parallelization ratio             │
-        │  • Iteration loops                   │
-        │  • Context dependency                │
-        │  • Data volume                       │
-        │  • Task type                         │
-        │  → Softmax ensemble (0.0-1.0)        │
-        └──────────────┬───────────────────────┘
-                       ↓
-        ┌──────────────────────────────┐
-        │  Engine Selection            │
-        │  TDE: 75% → Route to TDE      │
-        │  ACS: 20% → Route to ACS     │
-        │  CC: 5% → Route to CC        │
-        └──────────────┬───────────────┘
-                       ↓
-    ┌──────────┬──────────────┬──────────┐
-    ↓          ↓              ↓          ↓
-┌────────┐ ┌────────┐ ┌────────────┐ ┌────────┐
-│Claude  │ │  TDE   │ │    ACS     │ │ Result │
-│ Code   │ │ (Local)│ │ (8 workers)│ │Tracking│
-└────────┘ └────────┘ └────────────┘ └────────┘
-    │          │              │          │
-    └──────────┴──────────────┴──────────┘
-              ↓
-    ┌─────────────────────────┐
-    │  Token Delta Tracking   │
-    │  Logged for next task   │
-    │  Feeds learning loop    │
-    └─────────────────────────┘
-```
+![TDE Data Flow: Task to Engine Selection](diagrams/07-tde-data-flow.svg)
+
+**Flow Summary:**
+
+1. **User Task Received** — Task arrives with prompt + context
+2. **Cheap Pre-Gate** (50 tokens) — Skip TDE for trivial tasks (<1k tokens)
+3. **L34 Data-Safety Gate** — CONFIDENTIAL data → Claude Code only
+4. **5-Signal Detector** — Analyze parallelization, iteration, context, data volume, task type
+5. **Softmax Ensemble** — Calculate engine confidence scores (0.0-1.0)
+6. **Engine Selection** — Route to Claude Code, TDE, or ACS based on highest confidence
+7. **Execution** — Selected engine processes task
+8. **Token Delta Tracking** — Log actual vs. predicted tokens for future learning
 
 ---
 

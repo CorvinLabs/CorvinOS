@@ -1,11 +1,11 @@
 <svg viewBox="0 0 900 450" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
-      .title { font-size: 28px; font-weight: bold; fill: #1a1a1a; }
-      .box-label { font-size: 18px; font-weight: bold; }
-      .box-text { font-size: 13px; fill: #333; }
+      .title { font-size: 28px; font-weight: bold; fill: #000; }
+      .box-label { font-size: 18px; font-weight: bold; fill: #000; }
+      .box-text { font-size: 13px; fill: #222; }
       .problem-title { font-size: 16px; font-weight: bold; fill: #c00; }
-      .problem-text { font-size: 12px; fill: #333; }
+      .problem-text { font-size: 12px; fill: #222; }
       .box-good { fill: #c8e6c9; stroke: #388e3c; stroke-width: 2; }
       .box-bad { fill: #ffcdd2; stroke: #d32f2f; stroke-width: 2; }
       .divider { stroke: #999; stroke-width: 1; }

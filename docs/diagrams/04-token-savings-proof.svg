@@ -1,11 +1,11 @@
 <svg viewBox="0 0 1000 750" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <style>
-      .title { font-size: 26px; font-weight="bold; fill: #1a1a1a; }
-      .scenario-title { font-size: 16px; font-weight: bold; }
-      .metric-label { font-size: 12px; fill: #333; }
-      .metric-value { font-size: 14px; font-weight: bold; }
-      .metric-good { fill: #388e3c; }
+      .title { font-size: 26px; font-weight: bold; fill: #000; }
+      .scenario-title { font-size: 16px; font-weight: bold; fill: #000; }
+      .metric-label { font-size: 12px; fill: #222; }
+      .metric-value { font-size: 14px; font-weight: bold; fill: #000; }
+      .metric-good { fill: #2e7d32; }
       .metric-bad { fill: #d32f2f; }
       .scenario-box { rx: 6; stroke-width: 2; }
       .scenario-cc { fill: #f5f5f5; stroke: #999; }
