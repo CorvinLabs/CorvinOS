@@ -3436,7 +3436,15 @@ async def _stream_tde_turn(
             step_count = summary.get('step_count', 0)
             delegated = summary.get('delegated', 0)
             local_count = summary.get('local', 0)
-            token_savings = summary.get('token_savings_pct', 0)
+            l34_forced = selection.get("l34_forced", False)
+
+            # GDPR Art. 30 Audit: Log L34 gate decision (compliance-load-bearing per CLAUDE.md).
+            # Required whether delegation happened or not — the gate decision is itself auditable.
+            audit_emit(sess, "tde.l34_prescan",
+                      l34_forced=l34_forced,
+                      delegated=delegated,
+                      local=local_count,
+                      tde_run_id=run_id)
 
             if step_count > 0:
                 yield {"type": "engine_progress",
@@ -3446,8 +3454,7 @@ async def _stream_tde_turn(
                        "completed_steps": succeeded,
                        "delegated_count": delegated,
                        "local_count": local_count,
-                       "token_savings_pct": token_savings,
-                       "l34_forced": selection.get("l34_forced", False)}
+                       "l34_forced": l34_forced}
 
             if engine_name != "tiered_delegation":
                 # Round-4 finding: the FIRST "engine" stream event above is
