@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { api, ApiError, setOn401Handler } from '@/lib/api';
+import { api, ApiError, setOn401Handler, setOnCsrfErrorHandler, isCsrfError } from '@/lib/api';
 
 describe('API Client', () => {
   beforeEach(() => {
@@ -40,6 +40,53 @@ describe('API Client', () => {
 
       await api('/license/info');
       expect(handler).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('CSRF-error handling (stale token recovery)', () => {
+    afterEach(() => {
+      setOnCsrfErrorHandler(null);
+      vi.unstubAllGlobals();
+    });
+
+    it('isCsrfError only matches a 403 whose detail mentions CSRF', () => {
+      expect(isCsrfError(403, { detail: 'invalid CSRF token' })).toBe(true);
+      expect(isCsrfError(403, { detail: 'Invalid CSRF token' })).toBe(true);
+      // raw JSON string (the tts blob endpoints throw text, not parsed objects)
+      expect(isCsrfError(403, '{"detail":"invalid CSRF token"}')).toBe(true);
+      expect(isCsrfError(403, { detail: 're-auth failed' })).toBe(false);
+      expect(isCsrfError(401, { detail: 'invalid CSRF token' })).toBe(false);
+      expect(isCsrfError(200, { detail: 'invalid CSRF token' })).toBe(false);
+    });
+
+    it('invokes the csrf handler on a 403 invalid-CSRF response', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        status: 403,
+        ok: false,
+        text: () => Promise.resolve(JSON.stringify({ detail: 'invalid CSRF token' })),
+      }));
+      const csrf = vi.fn();
+      const auth = vi.fn();
+      setOnCsrfErrorHandler(csrf);
+      setOn401Handler(auth);
+
+      await expect(api('/voice/tts', { method: 'POST', csrf: 'stale' })).rejects.toBeInstanceOf(ApiError);
+      expect(csrf).toHaveBeenCalledTimes(1);
+      expect(auth).not.toHaveBeenCalled();
+      setOn401Handler(null);
+    });
+
+    it('does NOT invoke the csrf handler for a non-CSRF 403 (e.g. re-auth)', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        status: 403,
+        ok: false,
+        text: () => Promise.resolve(JSON.stringify({ detail: 're-auth failed' })),
+      }));
+      const csrf = vi.fn();
+      setOnCsrfErrorHandler(csrf);
+
+      await expect(api('/browser/attach', { method: 'POST', csrf: 'x' })).rejects.toBeInstanceOf(ApiError);
+      expect(csrf).not.toHaveBeenCalled();
     });
   });
 

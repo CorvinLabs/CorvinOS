@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, logout as apiLogout, setOn401Handler, whoami, type WhoamiResponse } from "@/lib/api";
+import { ApiError, logout as apiLogout, setOn401Handler, setOnCsrfErrorHandler, whoami, type WhoamiResponse } from "@/lib/api";
 
 interface AuthContextValue {
   status: "loading" | "anonymous" | "authenticated";
@@ -35,7 +35,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setOn401Handler(() => {
       void qc.invalidateQueries({ queryKey: ["auth"] });
     });
-    return () => setOn401Handler(null);
+    // A 403 "invalid CSRF token" from any mutation (most visibly the automatic
+    // voice-note TTS) means the cached csrf_token no longer matches the session
+    // — after a session rotation or a console restart's session-store rewrite.
+    // Re-fetch whoami so the shared session (and every csrf-dependent callback,
+    // e.g. useVoicePlayback) picks up the current token; the next mutation then
+    // works without a manual page reload.
+    setOnCsrfErrorHandler(() => {
+      void qc.invalidateQueries({ queryKey: ["auth", "whoami"] });
+    });
+    return () => {
+      setOn401Handler(null);
+      setOnCsrfErrorHandler(null);
+    };
   }, [qc]);
 
   // Treat 401 as anonymous, surface anything else.

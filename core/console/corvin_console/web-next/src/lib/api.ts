@@ -73,6 +73,34 @@ export function setOn401Handler(fn: (() => void) | null): void {
   _on401 = fn;
 }
 
+// A 403 "invalid CSRF token" means the frontend's cached csrf_token no longer
+// matches the server's session. The token is a pure HMAC of the session id with
+// the session's csrf_secret, so it survives a server restart — but it goes
+// stale when the session rotates (re-login, tier change) or during the brief
+// window a restart is draining/rewriting the session store. Without recovery,
+// the stale token leaves EVERY mutation failing 403 — most visibly the
+// automatic voice-note TTS ("TTS failed: invalid CSRF token") — until a manual
+// page reload. AuthProvider registers a handler here that re-fetches whoami, so
+// the shared session cache (and every csrf-dependent callback) picks up the
+// current token; the next mutation then succeeds without a reload.
+let _onCsrfError: (() => void) | null = null;
+export function setOnCsrfErrorHandler(fn: (() => void) | null): void {
+  _onCsrfError = fn;
+}
+export function isCsrfError(status: number, payload: unknown): boolean {
+  if (status !== 403) return false;
+  const detail =
+    payload && typeof payload === "object"
+      ? (payload as { detail?: unknown }).detail
+      : payload;
+  return typeof detail === "string" && detail.toLowerCase().includes("csrf");
+}
+// Raw fetch helpers that bypass api() (the TTS blob endpoints) call this on a
+// 403 CSRF so they trigger the same session refresh.
+export function notifyCsrfError(): void {
+  _onCsrfError?.();
+}
+
 // Default wall-clock budget for a single console API call. Without this a
 // hung backend leaves react-query queries pending forever, which the UI
 // renders as a perpetual "Loading…" spinner. With it, a stalled request
@@ -156,6 +184,8 @@ export async function api<T = unknown>(path: string, opts: RequestOptions = {}):
   if (!res.ok) {
     if (res.status === 401) {
       _on401?.();
+    } else if (isCsrfError(res.status, payload)) {
+      _onCsrfError?.();
     }
     throw new ApiError(res.status, payload);
   }
@@ -3840,7 +3870,11 @@ export async function ttsSegment(text: string, lang: string, csrf: string,
     signal,
   });
   if (res.status === 204) return null;
-  if (!res.ok) throw new ApiError(res.status, await res.text());
+  if (!res.ok) {
+    const t = await res.text();
+    if (isCsrfError(res.status, t)) notifyCsrfError();
+    throw new ApiError(res.status, t);
+  }
   // The server owns the real count (it applies its own cap) — trust the header,
   // not a client-side guess at how the text will split.
   const total = Number(res.headers.get("X-Corvin-Voice-Segments") || "");
@@ -3883,6 +3917,9 @@ export async function ttsBlob(text: string, lang: string, csrf: string,
   }
   if (!res.ok) {
     const errText = await res.text();
+    // Stale csrf → refresh the session so the next turn's TTS succeeds without
+    // a manual page reload (the whole reason the automatic voice note broke).
+    if (isCsrfError(res.status, errText)) notifyCsrfError();
     throw new ApiError(res.status, errText);
   }
   _lastTtsReason = null;
@@ -3912,7 +3949,11 @@ export async function sessionSummaryBlob(sid: string, lang: string,
     signal,
   });
   if (res.status === 204) return null;
-  if (!res.ok) throw new ApiError(res.status, await res.text());
+  if (!res.ok) {
+    const t = await res.text();
+    if (isCsrfError(res.status, t)) notifyCsrfError();
+    throw new ApiError(res.status, t);
+  }
   return res.blob();
 }
 
