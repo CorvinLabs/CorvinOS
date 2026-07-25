@@ -3913,6 +3913,28 @@ async def _stream_tde_turn(
                      tde_progress=tde_progress_dict)
         _reply_persisted = True
 
+        # ADR-0222 Phase 2: Measurement week hook (k=4)
+        # Feature-flagged real-traffic sampler for TDE token-saving validation.
+        if os.getenv("TDE_MEASUREMENT_ENABLED") == "1" and ok:
+            try:
+                from operator.orchestration.tde.tde_measurement import (
+                    MeasurementRecorder,
+                    MockTdeOrchestrator,
+                )
+                recorder = MeasurementRecorder.get_instance()
+                sample = await MockTdeOrchestrator.orchestrate_measurement(
+                    prompt=task_text,
+                    tde_tokens=result.get("usage", {}).get("total_tokens", 0),
+                    tde_output=final,
+                    task_complexity=getattr(
+                        analysis.classification, "task_type", None
+                    ) if hasattr(analysis, "classification") else None,
+                )
+                if sample:
+                    await recorder.record_sample(sample)
+            except (ImportError, Exception):
+                pass  # Measurement failure doesn't block chat
+
         yield {"type": "delta", "text": "\n" + final + "\n"}
         yield {"type": "result", "text": final, "usage": None}
     except (asyncio.CancelledError, GeneratorExit):
