@@ -159,6 +159,92 @@ async def default_local_step_executor(
     return await asyncio.to_thread(_run)
 
 
+async def whole_task_tier_baseline(
+    statement: dict[str, Any],
+    *,
+    engine_id: str = "claude_code",
+    user_model: Optional[str] = None,
+    workload_type: "Optional[str]" = None,
+    confidence: Optional[float] = None,
+    proc_holder: Optional[Any] = None,
+) -> Any:
+    """ADR-0222 F5 — the WHOLE-TASK-TIER baseline: the simplest alternative that
+    per-step TDE must beat.
+
+    Runs the ENTIRE task as ONE tool-less turn on a TIER-resolved model
+    (``resolve_model_for_workload`` — one call, no decomposition, pays the context
+    tax exactly ONCE, warm), and returns its output + real token usage. This is
+    the honest yardstick for the decision gate: if one warm tier-appropriate turn
+    already gets the savings at held quality, splitting the task into a cold Haiku
+    swarm adds complexity for nothing (see decision_gate.py).
+
+    Default-OFF primitive: nothing in the hot path calls this. It is invoked only
+    by the measurement harness during the Phase-2 measurement week, so building it
+    now changes no production behaviour. Returns a ``LocalResult`` (output + usage)
+    exactly like ``default_local_step_executor`` so the same loss judge / token
+    accounting apply unchanged.
+
+    KNOWN LIMITATION (documented for later — ADR-0222 Phase 2): today
+    ``resolve_model_for_workload`` only routes CHAT (high-confidence) down to the
+    fast tier; ``code`` and ``uncertain`` resolve back to ``user_model``. So this
+    baseline is only cheaper-than-direct on the CHAT band; on code tasks it equals
+    the direct turn (net savings 0) until tier routing is EXTENDED to more workload
+    types. The gate reads that honestly (tier_net≈0 on code) — it does not fake a
+    cheaper baseline. Extending the tier map is the follow-up if the chat band
+    shows the play has legs.
+    """
+    _ensure_bridges_on_path()
+    import helper_model  # noqa: PLC0415
+    try:
+        import engine_models as _em  # noqa: PLC0415
+        model = _em.resolve_model_for_workload(
+            engine_id, workload_type=workload_type,
+            user_chosen_model=user_model, confidence=confidence,
+            fast_chat_enabled=True,
+        ) or user_model
+    except Exception:
+        # Fail-safe: an unresolvable tier falls back to the user's own model —
+        # the baseline then equals the direct turn (net savings 0), which is the
+        # honest, conservative reading, never a fabricated cheaper number.
+        model = user_model
+
+    prompt = (
+        "You are completing an ENTIRE task in a single turn with full context.\n"
+        "Respond in English. Ignore any repository, project or user context of "
+        "the machine you run on; your ONLY task is the one described below.\n"
+        f"Task context:\n{json.dumps(statement, default=str, indent=2)[:20000]}\n\n"
+        'Complete the whole task and return ONLY a JSON object on one line: '
+        '{"output": <result>}\n'
+    )
+    model_args = ["--model", model] if model else []
+    model_tag = model or ""
+
+    def _run() -> Any:
+        from .worker_ipc import (  # noqa: PLC0415 — avoid import cycle
+            LocalResult,
+            parse_cli_envelope,
+            parse_worker_output,
+            run_one_shot,
+        )
+
+        cmd = [
+            helper_model.resolve_claude_bin(), "-p", prompt,
+            "--max-turns", "1",
+            "--output-format", "json",
+            "--disallowedTools", "*",
+            *model_args,
+        ]
+        rc, stdout, stderr = run_one_shot(cmd, _LOCAL_STEP_TIMEOUT_S, proc_holder=proc_holder)
+        if rc != 0:
+            raise RuntimeError(f"whole-task baseline exit {rc}: {stderr.strip()[:300]}")
+        result_text, usage, env_error = parse_cli_envelope(stdout, model=model_tag)
+        if env_error:
+            raise RuntimeError(f"whole-task baseline error: {env_error}")
+        return LocalResult(parse_worker_output(result_text), usage)
+
+    return await asyncio.to_thread(_run)
+
+
 def _license_corvin_home() -> Path:
     """Resolve corvin_home the same way the other quota chokepoints do
     (forge.paths → env → ~/.corvin), so TDE charges the SAME counter file
