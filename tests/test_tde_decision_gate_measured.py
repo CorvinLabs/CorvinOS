@@ -1,7 +1,14 @@
 """Tests for decision_gate with MEASURED evidence (ADR-0222 Phase 2)."""
 
+import sys
+from pathlib import Path
+
 import pytest
-from operator.orchestration.tde.decision_gate import (
+
+_REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO / "operator" / "orchestration"))
+
+from tde.decision_gate import (  # noqa: E402
     BandEvidence,
     GateAssumptions,
     TdeVerdict,
