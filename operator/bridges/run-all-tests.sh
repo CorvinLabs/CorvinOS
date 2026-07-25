@@ -370,7 +370,7 @@ run "Bash: say.py TTS helper"    bash ../voice/scripts/test_say.sh >/dev/null   
 run "Python: audit-verify notify" python3 ../voice/scripts/test_audit_verify_notify.py >/dev/null || fails=$((fails+1))
 run "Node: shared/js/ modules"   node shared/js/test_modules.js >/dev/null            || fails=$((fails+1))
 run "Node: net probe (outage detection)" node shared/js/test_net_probe.js >/dev/null  || fails=$((fails+1))
-run "Node: outbox poller (preCheck+dedup)" node shared/js/test_outbox_poller.js >/dev/null || fails=$((fails+1))
+run "Node: outbox poller (preCheck+dedup+dead-letter)" node shared/js/test_outbox_poller.js >/dev/null || fails=$((fails+1))
 run "Node: in-chat commands"     node shared/js/test_in_chat_commands.js >/dev/null   || fails=$((fails+1))
 run "Node: discord slash-cmds"   node discord/test_slash_commands.js >/dev/null       || fails=$((fails+1))
 run "Node: discord intent-preflight" node discord/test_intent_preflight.js >/dev/null || fails=$((fails+1))

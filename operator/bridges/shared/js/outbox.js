@@ -21,10 +21,24 @@ const path = require('path');
  *                                        WhatsApp-Socket nicht ready).
  * @param {function} [cfg.logger]
  * @param {number}   [cfg.intervalMs=500]
+ * @param {string} [cfg.deadLetterDir]  — opt-in. Wenn gesetzt, werden dauerhaft
+ *                                        unzustellbare Envelopes dorthin verschoben
+ *                                        statt endlos retried. Ohne diese Option
+ *                                        bleibt das alte Verhalten (infinite retry)
+ *                                        unverändert — kein stiller Wechsel für
+ *                                        Bridges, die das nicht konfiguriert haben.
+ * @param {function} [cfg.isPermanent]  — sync (err) => boolean. Channel-spezifische
+ *                                        Klassifikation: true → sofort dead-lettern,
+ *                                        kein Retry (z.B. Discord 50035 Invalid Form
+ *                                        Body — retrien kann das nie heilen).
+ * @param {number}   [cfg.maxAttempts=10] — Fallback für unklassifizierte Fehler:
+ *                                        nach so vielen Fehlversuchen dead-lettern.
+ *                                        Nur wirksam wenn deadLetterDir gesetzt ist.
  * @returns {{stop: function}}          — handle mit stop() zum Cleanup
  */
 function startOutboxPoller({
   outboxDir, channel, sendFn, preCheck, logger, intervalMs = 500,
+  deadLetterDir = null, isPermanent = null, maxAttempts = 10,
 }) {
   let running = false;
   // Sent-once guard: track files that were successfully sent but whose
@@ -45,6 +59,43 @@ function startOutboxPoller({
     if (prev && prev.msg === msg && now - prev.ts < LOG_DEDUP_MS) return;
     _lastFailLog.set(fpath, { msg, ts: now });
     logger(`outbox: send failed for ${f}: ${msg}`);
+  }
+
+  // Dead-letter bookkeeping. Without this a permanently undeliverable envelope
+  // (deleted channel, malformed chat_id) is retried every tick forever: 328 such
+  // files accumulated in the Discord outbox and made a full poll pass take ~65 s,
+  // delaying every real reply behind the poison backlog (incident 2026-07-25).
+  const _attempts = new Map(); // fpath → failure count
+
+  function deadLetter(fpath, f, reason, errMsg, attempts) {
+    try {
+      fs.mkdirSync(deadLetterDir, { recursive: true });
+      const target = path.join(deadLetterDir, f);
+      try {
+        fs.renameSync(fpath, target);
+      } catch {
+        // rename() fails across filesystem boundaries — fall back to copy+unlink
+        // so a bind-mounted outbox still drains instead of retrying forever.
+        fs.copyFileSync(fpath, target);
+        fs.unlinkSync(fpath);
+      }
+      // Sidecar with the diagnosis: the envelope itself stays byte-identical so
+      // it can be re-queued by moving it back once the cause is fixed.
+      try {
+        fs.writeFileSync(`${target}.reason.json`, JSON.stringify({
+          reason, error: errMsg, attempts, channel,
+          dead_lettered_at: new Date().toISOString(),
+        }, null, 2));
+      } catch { /* sidecar is diagnostics-only — never block the move */ }
+      if (logger) {
+        logger(`outbox: dead-lettered ${f} after ${attempts} attempt(s) ` +
+               `(${reason}): ${errMsg}`);
+      }
+      return true;
+    } catch (e) {
+      if (logger) logger(`outbox: dead-letter move failed for ${f}: ${e.message}`);
+      return false;
+    }
   }
 
   async function tick() {
@@ -94,15 +145,32 @@ function startOutboxPoller({
         // entry so the next tick knows the message was already sent and only
         // retries the unlink (no re-send → prevents duplicate Discord messages).
         _lastFailLog.delete(fpath);
+        _attempts.delete(fpath);
       } catch (e) {
         logSendFailure(fpath, f, e.message);
-        // File bleibt → nextr Tick versucht es erneut.
+        const attempts = (_attempts.get(fpath) || 0) + 1;
+        _attempts.set(fpath, attempts);
+        // File bleibt → nextr Tick versucht es erneut, es sei denn der Fehler ist
+        // dauerhaft (oder das Retry-Budget ist aufgebraucht) und eine
+        // Dead-Letter-Ablage ist konfiguriert.
+        if (deadLetterDir) {
+          let permanent = false;
+          try { permanent = isPermanent ? isPermanent(e) === true : false; } catch { permanent = false; }
+          if (permanent || attempts >= maxAttempts) {
+            const reason = permanent ? 'permanent send error' : `${maxAttempts} attempts exhausted`;
+            if (deadLetter(fpath, f, reason, e.message, attempts)) {
+              _lastFailLog.delete(fpath);
+              _attempts.delete(fpath);
+            }
+          }
+        }
       }
     }
-    // Keep the dedup map bounded: drop entries for files no longer present.
-    if (_lastFailLog.size) {
+    // Keep the bookkeeping maps bounded: drop entries for files no longer present.
+    if (_lastFailLog.size || _attempts.size) {
       const present = new Set(files.map((f) => path.join(outboxDir, f)));
       for (const k of _lastFailLog.keys()) if (!present.has(k)) _lastFailLog.delete(k);
+      for (const k of _attempts.keys()) if (!present.has(k)) _attempts.delete(k);
     }
   }
 
