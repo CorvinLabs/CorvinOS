@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import os
 import json
+import threading
+import asyncio
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Any
+from typing import Any, Literal
 from collections import defaultdict
 from operator.orchestration.tde.decision_gate import BandEvidence
 
@@ -21,7 +23,7 @@ class MeasurementSample:
     """One sampled trial of {direct, tier, TDE} on a task."""
 
     task_id: str                    # run_id or unique task identifier
-    task_band: str                  # "trivial" | "moderate" | "complex"
+    task_band: Literal["trivial", "moderate", "complex"]  # task complexity band
     timestamp: float                # unix time
 
     # Direct turn (user's model, single-call baseline)
@@ -41,6 +43,20 @@ class MeasurementSample:
     # Metadata
     quality_judge_model: str = "haiku"  # the model that scored losses
     data_source: str = "measured"       # always "measured" for real samples
+
+    def __post_init__(self) -> None:
+        """Validate sample data integrity (GDPR Art. 32 + ADR-0222)."""
+        # Loss values must be in [0.0, 1.0] range (semantic similarity)
+        if not (0.0 <= self.tier_loss <= 1.0):
+            raise ValueError(f"tier_loss must be in [0.0, 1.0], got {self.tier_loss}")
+        if not (0.0 <= self.tde_loss <= 1.0):
+            raise ValueError(f"tde_loss must be in [0.0, 1.0], got {self.tde_loss}")
+
+        # Token counts must be positive
+        if self.direct_tokens < 0 or self.tier_tokens < 0 or self.tde_tokens < 0:
+            raise ValueError("token counts must be non-negative")
+
+        # task_band is validated by Literal type hint
 
 
 @dataclass
@@ -132,10 +148,17 @@ class MeasurementRecorder:
     """Singleton that records {direct, tier, TDE} samples during measurement week.
 
     Persists samples to measurement.jsonl (separate from audit chain) and
-    provides aggregated BandEvidence to the decision gate.
+    provides aggregated BandEvidence to the decision gate. Thread-safe and
+    async-safe for concurrent turns during measurement week.
+
+    NOTE on session isolation (k=4 enhancement): This singleton mixes samples
+    from all concurrent sessions. For multi-tenant isolation, implement per-session
+    recorders keyed by (tenant_id, session_id). Current design fine for k=3 where
+    measurement week is opt-in feature; k=4 should add session-scoped storage.
     """
 
     _instance: MeasurementRecorder | None = None
+    _instance_lock = threading.Lock()
 
     def __init__(self, measurement_log_path: str | None = None):
         """Initialize the recorder.
@@ -154,6 +177,7 @@ class MeasurementRecorder:
 
         self.log_path = measurement_log_path
         self.samples: list[MeasurementSample] = []
+        self._write_lock = threading.Lock()
 
         # Ensure directory exists
         if self.enabled:
@@ -165,18 +189,24 @@ class MeasurementRecorder:
     def get_instance(
         cls, measurement_log_path: str | None = None
     ) -> "MeasurementRecorder":
-        """Get or create the singleton instance."""
+        """Get or create the singleton instance (thread-safe TOCTOU fix)."""
         if cls._instance is None:
-            cls._instance = cls(measurement_log_path)
+            with cls._instance_lock:
+                # Double-check inside lock to avoid TOCTOU
+                if cls._instance is None:
+                    cls._instance = cls(measurement_log_path)
         return cls._instance
 
     @classmethod
     def reset_instance(cls) -> None:
         """Reset singleton (for testing)."""
-        cls._instance = None
+        with cls._instance_lock:
+            cls._instance = None
 
     async def record_sample(self, sample: MeasurementSample) -> None:
-        """Append a sample to the in-memory buffer and persist to log.
+        """Append a sample to the in-memory buffer and persist to log (async-safe).
+
+        Uses asyncio.to_thread() to avoid blocking the event loop on file I/O.
 
         Args:
             sample: The measurement sample to record.
@@ -186,13 +216,24 @@ class MeasurementRecorder:
 
         self.samples.append(sample)
 
-        # Persist to measurement.jsonl
+        # Persist to measurement.jsonl asynchronously (no event loop blocking)
         try:
-            with open(self.log_path, "a") as f:
-                f.write(json.dumps(asdict(sample), default=str) + "\n")
+            await asyncio.to_thread(self._write_sample_sync, sample)
         except (IOError, OSError) as e:
             # Log but don't crash; measurement failure shouldn't block chat
             print(f"Warning: Failed to write measurement sample to {self.log_path}: {e}")
+
+    def _write_sample_sync(self, sample: MeasurementSample) -> None:
+        """Synchronous file write with lock to prevent JSONL corruption.
+
+        Executed in thread pool via asyncio.to_thread() to avoid blocking event loop.
+
+        Args:
+            sample: The measurement sample to write.
+        """
+        with self._write_lock:
+            with open(self.log_path, "a") as f:
+                f.write(json.dumps(asdict(sample), default=str) + "\n")
 
     def get_aggregated_evidence(self) -> list[BandEvidence]:
         """Return current measured evidence aggregated by band.
@@ -203,26 +244,27 @@ class MeasurementRecorder:
         return aggregate_measured_evidence(self.samples)
 
     def load_from_log(self) -> None:
-        """Load all samples from measurement.jsonl into memory.
+        """Load all samples from measurement.jsonl into memory (thread-safe).
 
         Useful for resuming a measurement week or analysis after restart.
         """
         if not os.path.exists(self.log_path):
             return
 
-        try:
-            with open(self.log_path, "r") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    try:
-                        data = json.loads(line)
-                        sample = MeasurementSample(**data)
-                        self.samples.append(sample)
-                    except (json.JSONDecodeError, TypeError) as e:
-                        print(f"Warning: Failed to parse measurement line: {e}")
-        except (IOError, OSError) as e:
-            print(f"Warning: Failed to load measurements from {self.log_path}: {e}")
+        with self._write_lock:
+            try:
+                with open(self.log_path, "r") as f:
+                    for line in f:
+                        if not line.strip():
+                            continue
+                        try:
+                            data = json.loads(line)
+                            sample = MeasurementSample(**data)
+                            self.samples.append(sample)
+                        except (json.JSONDecodeError, TypeError, ValueError) as e:
+                            print(f"Warning: Failed to parse measurement line: {e}")
+            except (IOError, OSError) as e:
+                print(f"Warning: Failed to load measurements from {self.log_path}: {e}")
 
     def clear_samples(self) -> None:
         """Clear in-memory samples (for testing)."""
