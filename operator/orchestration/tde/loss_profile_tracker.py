@@ -59,6 +59,9 @@ class LossEntry:
     complexity: str = "moderate"
     measured: bool = True  # True = real local-vs-remote comparison, False = proxy
     alternative_scores: dict[str, float] = field(default_factory=dict)
+    # Gap #2: Real token measurement (ADR-0218/0219)
+    tokens_delegated: Optional[int] = None
+    tokens_local: Optional[int] = None
 
 
 class LossProfileTracker:
@@ -106,6 +109,8 @@ class LossProfileTracker:
         measured: bool = True,
         alternative_scores: Optional[dict[str, float]] = None,
         model_id: Optional[str] = None,
+        tokens_delegated: Optional[int] = None,
+        tokens_local: Optional[int] = None,
     ):
         """Record a delegation outcome.
 
@@ -125,6 +130,8 @@ class LossProfileTracker:
                 fit meant to evaluate that other model. Now the real per-step
                 model is recorded. Falls back to ``current_model_id`` only when a
                 caller has no per-step model (proxy / legacy).
+            tokens_delegated: Gap #2 — actual tokens consumed by delegated execution
+            tokens_local: Gap #2 — actual tokens consumed by local execution
         """
 
         entry = LossEntry(
@@ -136,6 +143,8 @@ class LossProfileTracker:
             complexity=complexity,
             measured=measured,
             alternative_scores=alternative_scores or {},
+            tokens_delegated=tokens_delegated,
+            tokens_local=tokens_local,
         )
 
         self.history.append(entry)
@@ -280,6 +289,48 @@ class LossProfileTracker:
             return self._evidence_mass(same_complexity)
         return self._evidence_mass(relevant)
 
+    def estimate_cost_ratio(
+        self,
+        task_type: str,
+        model_id: Optional[str] = None,
+    ) -> Optional[float]:
+        """Estimate cost ratio (delegated_tokens / local_tokens) for a task type.
+
+        Gap #2 Token Measurement: Calculate whether delegation saves tokens.
+        Used by Gate 4 (cost-aware delegation gate) to block expensive delegations.
+
+        Args:
+            task_type: Task classification
+            model_id: Which model's arm to estimate (defaults to current worker model)
+
+        Returns:
+            Cost ratio (delegated/local), or None if insufficient data.
+            Ratio < 1.0: delegation saves tokens (cheap)
+            1.0 <= ratio <= 1.5: break-even, still allow for learning
+            ratio > 1.5: expensive, block delegation (Gate 4)
+        """
+
+        self._prune_history()
+
+        _arm_model = model_id or self.current_model_id
+        relevant = [
+            e for e in self.history
+            if e.task_type == task_type
+            and e.model_id == _arm_model
+            and e.tokens_delegated is not None
+            and e.tokens_local is not None
+        ]
+
+        if len(relevant) < self.MIN_SAMPLES:
+            return None
+
+        # Simple arithmetic mean of cost ratios (not exponential decay like loss)
+        ratios = [e.tokens_delegated / e.tokens_local for e in relevant if e.tokens_local > 0]
+        if not ratios:
+            return None
+
+        return sum(ratios) / len(ratios)
+
     def _prune_history(self):
         """Drop entries so old their decay weight is negligible."""
         now = time.time()
@@ -392,6 +443,8 @@ class LossProfileTracker:
                             complexity=str(d.get("complexity", "moderate")),
                             measured=bool(d.get("measured", True)),
                             alternative_scores=dict(d.get("alternative_scores", {}) or {}),
+                            tokens_delegated=int(d.get("tokens_delegated")) if d.get("tokens_delegated") is not None else None,
+                            tokens_local=int(d.get("tokens_local")) if d.get("tokens_local") is not None else None,
                         ))
                     except (TypeError, ValueError):
                         continue
