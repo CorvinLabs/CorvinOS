@@ -196,6 +196,7 @@ class AdaptiveDelegationExecutor:
         task_analysis: Optional[InitialAnalysisRequest],
         step_executor_fn: Callable[[Step, dict[str, Any]], Any],
         reference_executor_fn: Optional[Callable[[Step, dict[str, Any]], Any]] = None,
+        explore_executor_fns: Optional[list[tuple[str, Callable[[Step, dict[str, Any]], Any]]]] = None,
     ) -> list[StepResult]:
         """
         Execute plan with adaptive delegation.
@@ -209,8 +210,17 @@ class AdaptiveDelegationExecutor:
                 runs on (a STRONGER model), so the measured loss is
                 cheap-worker-vs-strong-reference, not cheap-vs-cheap. None = the
                 shadow re-runs step_executor_fn (legacy Haiku-vs-Haiku).
+            explore_executor_fns: ADR-0222 F4 — a list of (model_id, executor)
+                CANDIDATE arms. During a shadow measurement the executor runs ONE
+                rotating candidate on the step and logs a measured (action, model)
+                entry, so the loss log accrues genuine multi-arm evidence. Only
+                active when reference_executor_fn is also set (candidates need a
+                strong yardstick). None/[] = no exploration (default).
         """
         self._reference_executor_fn = reference_executor_fn
+        self._explore_executor_fns = explore_executor_fns or []
+        if not hasattr(self, "_explore_rotor"):
+            self._explore_rotor = 0
         # Lazy: worker_ipc imports DelegationEnvelope from this module at
         # module level, so a top-level import here would cycle.
         from .worker_ipc import ProcHolder  # noqa: PLC0415
@@ -635,6 +645,57 @@ class AdaptiveDelegationExecutor:
                     loss_pct=loss_pct, measured=True, model_id=_delegated_model,
                     tde_run_id=self.run_id, tenant_id=self.tenant_id, step_num=step.step,
                 )
+                # ADR-0222 F4: cross-model exploration. Run ONE rotating CANDIDATE
+                # model on this same step and log a measured (action, candidate)
+                # entry judged against the SAME strong reference yardstick — so the
+                # loss log accrues genuine MULTI-ARM evidence (haiku vs qwen vs
+                # sonnet on `action`) instead of only the worker's arm. Gated on a
+                # strong reference being in play (F1 on) so candidates are scored
+                # against a real yardstick, not Haiku. One candidate per shadow
+                # (rotor) bounds the added cost to a single extra one-shot.
+                _explore = getattr(self, "_explore_executor_fns", None) or []
+                if _explore and getattr(self, "_reference_executor_fn", None) is not None:
+                    _idx = self._explore_rotor % len(_explore)
+                    self._explore_rotor += 1
+                    _cand_model, _cand_fn = _explore[_idx]
+                    # Never explore the arm the worker already just measured.
+                    if _cand_model and _cand_model != _delegated_model:
+                        if self.budget is not None:
+                            self.budget.charge(step.estimated_tokens)
+                        from .worker_ipc import ProcHolder  # noqa: PLC0415
+                        _cand_holder = ProcHolder()
+                        try:
+                            _cand_result = await self._execute_local(
+                                step, statement, _cand_fn, proc_holder=_cand_holder,
+                            )
+                        finally:
+                            _cand_holder.kill()
+                        if _cand_result.success:
+                            _cand_loss = await self._measure_loss(
+                                step, local_result.output, _cand_result.output)
+                            # Prefer the candidate's CLI-REPORTED model (symmetric
+                            # with F2's worker arm) so both arms key on the same
+                            # id space; fall back to the configured alias only if
+                            # the run reported none.
+                            _cand_arm = _cand_model
+                            if isinstance(_cand_result.token_usage, dict):
+                                _cand_arm = (_cand_result.token_usage.get("model")
+                                             or _cand_model)
+                            self.loss_tracker.record_delegation_result(
+                                task_type=step.action,
+                                engine="tiered_delegation",
+                                loss_pct=_cand_loss,
+                                complexity=self.complexity,
+                                measured=True,
+                                model_id=_cand_arm,
+                            )
+                            tde_audit.emit(
+                                "loss_recorded", task_type=step.action,
+                                engine="tiered_delegation", loss_pct=_cand_loss,
+                                measured=True, model_id=_cand_arm, explore=True,
+                                tde_run_id=self.run_id, tenant_id=self.tenant_id,
+                                step_num=step.step,
+                            )
             else:
                 # The LOCAL comparison run itself failed (e.g. a transient
                 # worker timeout) — that says nothing about the DELEGATED

@@ -373,3 +373,141 @@ class TestF1RealCounterfactual:
             {"data": "clean"}, None, _echo_executor, reference_executor_fn=ref,
         )
         assert ex._reference_executor_fn is ref
+
+
+class TestF3CanonicalActionKey:
+    """ADR-0222 F3: the loss log is keyed on step.action (the canonical key),
+    never a phantom step_kind. A recorded entry's task_type must equal the
+    executed step's action verbatim."""
+
+    @pytest.mark.asyncio
+    async def test_recorded_task_type_is_the_step_action(self):
+        from tde.adaptive_delegation_executor import StepResult
+
+        tracker = LossProfileTracker()
+        plan = _plan([Step(step=1, action="synthesize")])
+        ex = AdaptiveDelegationExecutor(
+            plan, L34DelegationGate(), tracker, worker_ipc=MockWorkerIPC(),
+            use_semantic_judge=False,
+        )
+
+        async def worker_exec(step, statement, *, proc_holder=None):
+            return {"output": "answer"}
+
+        step = ex.plan.steps[0]
+        delegated = StepResult(
+            step_num=1, action="synthesize", success=True,
+            output={"output": "answer"}, was_delegated=True,
+            token_usage={"model": "claude-haiku-4-5"},
+        )
+        await ex._record_outcome(step, {"x": 1}, delegated, worker_exec,
+                                 force_measure=True)
+        assert tracker.history, "a measured shadow must record an entry"
+        assert tracker.history[0].task_type == step.action == "synthesize"
+
+    def test_loss_entry_has_no_step_kind_field(self):
+        # Guard against re-introducing the deleted framing at the schema level.
+        from tde.loss_profile_tracker import LossEntry
+        import dataclasses
+        field_names = {f.name for f in dataclasses.fields(LossEntry)}
+        assert "step_kind" not in field_names
+        assert "task_type" in field_names
+
+
+class TestF4CrossModelExploration:
+    """ADR-0222 F4: the shadow additionally runs ONE rotating CANDIDATE arm and
+    logs a measured (action, candidate_model) entry — genuine multi-arm evidence,
+    gated on a strong reference being in play."""
+
+    def _delegated(self, model="claude-haiku-4-5"):
+        from tde.adaptive_delegation_executor import StepResult
+        return StepResult(
+            step_num=1, action="analyze_data", success=True,
+            output={"output": "worker"}, was_delegated=True,
+            token_usage={"model": model},
+        )
+
+    def _executor(self, tracker):
+        plan = _plan([Step(step=1, action="analyze_data")])
+        return AdaptiveDelegationExecutor(
+            plan, L34DelegationGate(), tracker, worker_ipc=MockWorkerIPC(),
+            use_semantic_judge=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_candidate_arm_is_run_and_logged_with_its_model(self):
+        tracker = LossProfileTracker(model_id="claude-haiku-4-5")
+        ex = self._executor(tracker)
+
+        seen = {"cand": 0}
+
+        async def worker_exec(step, statement, *, proc_holder=None):
+            return {"output": "worker"}
+
+        async def ref_exec(step, statement, *, proc_holder=None):
+            return {"output": "reference"}
+
+        async def cand_exec(step, statement, *, proc_holder=None):
+            seen["cand"] += 1
+            return {"output": "candidate"}
+
+        ex._reference_executor_fn = ref_exec
+        ex._explore_executor_fns = [("qwen3", cand_exec)]
+        ex._explore_rotor = 0
+
+        await ex._record_outcome(step=ex.plan.steps[0], statement={"x": 1},
+                                 step_result=self._delegated(), step_executor_fn=worker_exec,
+                                 force_measure=True)
+        # The candidate arm ran and produced its own MEASURED entry.
+        assert seen["cand"] == 1
+        arms = {e.model_id for e in tracker.history if e.measured}
+        assert "qwen3" in arms                     # candidate arm logged
+        assert "claude-haiku-4-5" in arms          # worker arm still logged
+
+    @pytest.mark.asyncio
+    async def test_exploration_is_off_without_a_reference(self):
+        # F4 is gated on F1: no strong reference → no candidate exploration.
+        tracker = LossProfileTracker(model_id="claude-haiku-4-5")
+        ex = self._executor(tracker)
+        seen = {"cand": 0}
+
+        async def worker_exec(step, statement, *, proc_holder=None):
+            return {"output": "worker"}
+
+        async def cand_exec(step, statement, *, proc_holder=None):
+            seen["cand"] += 1
+            return {"output": "candidate"}
+
+        ex._reference_executor_fn = None            # F1 OFF
+        ex._explore_executor_fns = [("qwen3", cand_exec)]
+        ex._explore_rotor = 0
+        await ex._record_outcome(step=ex.plan.steps[0], statement={"x": 1},
+                                 step_result=self._delegated(), step_executor_fn=worker_exec,
+                                 force_measure=True)
+        assert seen["cand"] == 0
+        assert not any(e.model_id == "qwen3" for e in tracker.history)
+
+    @pytest.mark.asyncio
+    async def test_candidate_equal_to_worker_arm_is_skipped(self):
+        # Don't waste a call re-measuring the arm the worker already measured.
+        tracker = LossProfileTracker(model_id="claude-haiku-4-5")
+        ex = self._executor(tracker)
+        seen = {"cand": 0}
+
+        async def worker_exec(step, statement, *, proc_holder=None):
+            return {"output": "worker"}
+
+        async def ref_exec(step, statement, *, proc_holder=None):
+            return {"output": "reference"}
+
+        async def cand_exec(step, statement, *, proc_holder=None):
+            seen["cand"] += 1
+            return {"output": "candidate"}
+
+        ex._reference_executor_fn = ref_exec
+        ex._explore_executor_fns = [("claude-haiku-4-5", cand_exec)]  # same as worker
+        ex._explore_rotor = 0
+        await ex._record_outcome(step=ex.plan.steps[0], statement={"x": 1},
+                                 step_result=self._delegated("claude-haiku-4-5"),
+                                 step_executor_fn=worker_exec, force_measure=True)
+        assert seen["cand"] == 0  # skipped

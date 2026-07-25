@@ -39,9 +39,20 @@ _logger = logging.getLogger(__name__)
 
 @dataclass
 class LossEntry:
-    """Single loss measurement."""
+    """Single loss measurement.
+
+    ADR-0222 F3 — CANONICAL KEY. The loss profile is keyed on
+    ``(task_type, model_id)`` where ``task_type`` IS the step's ``step.action``
+    (``read_file``, ``analyze_data``, …), passed straight through by the
+    executor. There is deliberately NO finer ``step_kind`` /
+    "mechanical vs reasoning-dense" dimension: 0218/0219/0220 planned one but it
+    was never implemented and had no measured justification. Do NOT re-introduce
+    a ``step_kind`` key without first shipping a real classifier as its own item
+    and showing (per F1's counterfactual) that the finer key lowers loss —
+    otherwise it just fragments the evidence and slows learning.
+    """
     timestamp: float
-    task_type: str
+    task_type: str  # == step.action (the canonical action key; NOT a step_kind)
     model_id: str
     loss_pct: float  # 0-100
     engine: str  # Which engine was chosen
