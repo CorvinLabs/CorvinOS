@@ -1,8 +1,9 @@
 # HANDOFF: ADR-0222 Measurement Week Glue
 
 **Date:** 2026-07-25  
-**Session:** TDE-Visibility k=8 + ADR-0222 Analysis  
-**Status:** Ready to Build (Phase 2 Data Collection)
+**Session 1:** TDE-Visibility k=8 + ADR-0222 Analysis  
+**Session 2:** ADR-0222 k=1–k=3  
+**Status:** Ready for Measurement Week Execution (k=1 Skeleton + k=2 Stub + k=3 Tests COMPLETE)
 
 ---
 
