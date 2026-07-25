@@ -7467,16 +7467,30 @@ def build_voice_summary(text: str, max_chars: int = 400,
         return ""
     # 2026-07-24 — the "already short → speak it markdown-stripped, no summary"
     # short-circuit is GONE. It was the bridge-side half of the confirmed
-    # "reads the whole thing, in English" bug: any answer ≤ max_chars was spoken
-    # as-is, in its source language, never humanised and never language-pinned.
-    # The product rule is now "ALWAYS a human summary in the profile language",
-    # so short replies flow through summarize.py too (which keeps short input
-    # short and pins the language). The ONLY fast path left is the author's own
-    # <voice> block above (already a hand-written spoken summary). summarize.py
-    # itself now has no verbatim short-circuit either, so the two halves agree.
-    summarizer = SCRIPTS_DIR / "summarize.py"
+    # Use summarize_smart.py (direct generation with tone respect) instead of
+    # the LLM-based summarize.py which can timeout and fall back to truncation.
+    # summarize_smart.py generates natural, varied voice summaries without LLM latency.
+    # Falls back to summarize.py if summarize_smart.py is unavailable (for compatibility).
+    summarizer = SCRIPTS_DIR / "summarize_smart.py"
+    summarizer_fallback = SCRIPTS_DIR / "summarize.py"
     stripper = SCRIPTS_DIR / "strip_for_tts.py"
-    if not summarizer.exists() or not stripper.exists():
+
+    # Prefer summarize_smart.py (direct generation), fall back to summarize.py (LLM)
+    if summarizer.exists() and summarizer.name == "summarize_smart.py":
+        use_smart = True
+    elif summarizer_fallback.exists():
+        summarizer = summarizer_fallback
+        use_smart = False
+    else:
+        # Neither script available — use fallback
+        spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
+        if want_appendix and not _has_lern_zugabe_suffix(spoken):
+            spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
+        if want_metapher and not _has_metapher_suffix(spoken):
+            spoken = _strip_for_speech(_append_metapher(spoken, lang=appendix_lang))
+        return spoken
+
+    if not stripper.exists():
         spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
         if want_appendix and not _has_lern_zugabe_suffix(spoken):
             spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
@@ -7550,20 +7564,21 @@ def build_voice_summary(text: str, max_chars: int = 400,
         base_lang = "en" if (output_language or "").split("-", 1)[0].lower() == "en" else "de"
         cmd = [sys.executable, str(summarizer), "--lang", base_lang,
                "--max-chars", str(max_chars)]
-        if _voice_profile is not None:
-            try:
-                aud = _voice_profile.for_tts_audience(audience_lang)
-            except Exception:  # noqa: BLE001
-                aud = ""
-            if aud:
-                cmd += ["--audience", aud]
-        # Always pass the resolved output language — de/en included (2026-07-24).
-        # summarize.py now emits an explicit OUTPUT-LANGUAGE pin for every locale
-        # (not just non-de/en), so handing it the resolved code is what makes
-        # "always the profile language" hold even when the source answer is in a
-        # different language. When resolution yielded nothing, fall back to the
-        # base_lang the prompt table already selected, so the pin is never blank.
-        cmd += ["--output-language", output_language or base_lang]
+
+        # summarize_smart.py uses --tone instead of --audience/--output-language
+        if use_smart:
+            cmd += ["--tone", "warm"]  # Direct generation with tone respect
+        else:
+            # summarize.py uses --audience and --output-language
+            if _voice_profile is not None:
+                try:
+                    aud = _voice_profile.for_tts_audience(audience_lang)
+                except Exception:  # noqa: BLE001
+                    aud = ""
+                if aud:
+                    cmd += ["--audience", aud]
+            # Always pass the resolved output language — de/en included (2026-07-24).
+            cmd += ["--output-language", output_language or base_lang]
         # Pass the user's original question so summarize.py can open the
         # voice note with a task anchor ("Du hast gefragt …") that makes the
         # spoken output self-contained even without the chat context.
