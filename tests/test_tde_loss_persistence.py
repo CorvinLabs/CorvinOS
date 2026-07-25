@@ -147,6 +147,35 @@ def test_measured_count_for_counts_only_measured_same_model():
     assert t.measured_count_for("nonexistent") == 0
 
 
+def test_f2_records_the_real_executed_model_not_the_session_constant():
+    # ADR-0222 F2: the log must be multi-arm. An entry recorded with an explicit
+    # model_id carries THAT model, not the tracker's session constant.
+    t = LossProfileTracker(model_id="claude-haiku-4-5")
+    t.record_delegation_result("analyze", "tiered_delegation", 5.0, measured=True,
+                               model_id="claude-sonnet-5")
+    assert t.history[0].model_id == "claude-sonnet-5"
+    # No override → falls back to the session constant (proxy/legacy path).
+    t.record_delegation_result("analyze", "tiered_delegation", 5.0, measured=True)
+    assert t.history[1].model_id == "claude-haiku-4-5"
+
+
+def test_f2_per_arm_estimate_does_not_cross_contaminate():
+    # Sonnet's loss must not count as evidence about Haiku and vice-versa —
+    # the exact single-arm corruption F2 fixes.
+    t = LossProfileTracker(model_id="claude-haiku-4-5")
+    for _ in range(t.MIN_SAMPLES + 2):
+        t.record_delegation_result("analyze", "tiered_delegation", 2.0, measured=True,
+                                   model_id="claude-haiku-4-5")   # haiku: low loss
+        t.record_delegation_result("analyze", "tiered_delegation", 40.0, measured=True,
+                                   model_id="claude-sonnet-5")    # sonnet arm: high (contrived)
+    haiku = t.estimate_loss_for_task_type("analyze", model_id="claude-haiku-4-5")
+    sonnet = t.estimate_loss_for_task_type("analyze", model_id="claude-sonnet-5")
+    assert haiku < 0.10, haiku      # ~2% — only haiku entries
+    assert sonnet > 0.30, sonnet    # ~40% — only sonnet entries
+    # Default (no model_id) estimates the current worker arm (haiku).
+    assert t.estimate_loss_for_task_type("analyze") == haiku
+
+
 def test_malicious_tenant_is_rejected_fail_soft(monkeypatch):
     # A path-traversal session_key must not produce a path — validate_tenant_id
     # rejects it and _persist_path_for fails soft to None (in-session only),

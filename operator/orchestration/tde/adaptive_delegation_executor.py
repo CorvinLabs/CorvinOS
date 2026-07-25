@@ -608,16 +608,24 @@ class AdaptiveDelegationExecutor:
                 _shadow_holder.kill()
             if local_result.success:
                 loss_pct = await self._measure_loss(step, local_result.output, step_result.output)
+                # ADR-0222 F2: record the model that ACTUALLY produced the
+                # delegated output being evaluated, not the session constant, so
+                # the log is multi-arm and a future route-up step's loss is tagged
+                # with the model that earned it.
+                _delegated_model = None
+                if isinstance(step_result.token_usage, dict):
+                    _delegated_model = step_result.token_usage.get("model") or None
                 self.loss_tracker.record_delegation_result(
                     task_type=step.action,
                     engine="tiered_delegation",
                     loss_pct=loss_pct,
                     complexity=self.complexity,
                     measured=True,
+                    model_id=_delegated_model,
                 )
                 tde_audit.emit(
                     "loss_recorded", task_type=step.action, engine="tiered_delegation",
-                    loss_pct=loss_pct, measured=True,
+                    loss_pct=loss_pct, measured=True, model_id=_delegated_model,
                     tde_run_id=self.run_id, tenant_id=self.tenant_id, step_num=step.step,
                 )
             else:

@@ -94,6 +94,7 @@ class LossProfileTracker:
         complexity: str = "moderate",
         measured: bool = True,
         alternative_scores: Optional[dict[str, float]] = None,
+        model_id: Optional[str] = None,
     ):
         """Record a delegation outcome.
 
@@ -104,12 +105,21 @@ class LossProfileTracker:
             complexity: Task complexity bucket (simple/moderate/complex)
             measured: True for real local-vs-remote comparison, False for proxy
             alternative_scores: Softmax scores of other engines (for off-policy learning)
+            model_id: ADR-0222 F2 — the model that ACTUALLY produced this step's
+                output. Previously every entry was stamped with
+                ``current_model_id`` (a session constant), so the log was
+                single-arm: an argmin over models degenerated to "keep the one
+                worker model", and the moment a step ran on a different model its
+                loss was still logged under the constant — silently corrupting the
+                fit meant to evaluate that other model. Now the real per-step
+                model is recorded. Falls back to ``current_model_id`` only when a
+                caller has no per-step model (proxy / legacy).
         """
 
         entry = LossEntry(
             timestamp=time.time(),
             task_type=task_type,
-            model_id=self.current_model_id,
+            model_id=(model_id or self.current_model_id),
             loss_pct=max(0.0, min(100.0, float(loss_pct))),
             engine=engine,
             complexity=complexity,
@@ -176,7 +186,8 @@ class LossProfileTracker:
         )
 
     def estimate_loss_for_task_type(
-        self, task_type: str, complexity: str = "moderate", engine: Optional[str] = None
+        self, task_type: str, complexity: str = "moderate", engine: Optional[str] = None,
+        model_id: Optional[str] = None,
     ) -> float:
         """
         Estimate loss for a task type (used in detection and delegation gates).
@@ -189,6 +200,12 @@ class LossProfileTracker:
             engine: When given, only entries for that engine count — a
                 learned claude_code outcome must not masquerade as evidence
                 about TDE delegation quality.
+            model_id: ADR-0222 F2 — which model's arm to estimate. Defaults to
+                the current worker model (legacy behaviour). Now that entries
+                carry the REAL executed model, passing a different model_id
+                estimates THAT arm — the per-arm query the (action, model) fit
+                needs. A route-up Sonnet step's loss no longer masquerades as
+                Haiku evidence and vice-versa.
 
         Returns:
             Estimated loss as fraction (0.0-1.0). DEFAULT until enough evidence.
@@ -196,9 +213,10 @@ class LossProfileTracker:
 
         self._prune_history()
 
+        _arm_model = model_id or self.current_model_id
         relevant = [
             e for e in self.history
-            if e.task_type == task_type and e.model_id == self.current_model_id
+            if e.task_type == task_type and e.model_id == _arm_model
             and (engine is None or e.engine == engine)
         ]
 
