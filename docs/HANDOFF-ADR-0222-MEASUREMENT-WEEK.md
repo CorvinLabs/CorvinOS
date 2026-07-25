@@ -31,7 +31,34 @@
 
 ---
 
-## What's Missing: Measurement Week Glue
+## k=3: Production Hardening Complete ✅
+
+**Session 2 k=1–k=3 Completion (2026-07-25):**
+
+### k=1: Skeleton (5c57c27)
+- MeasurementSample + AggregatedBandEvidence dataclasses
+- aggregate_measured_evidence() function
+- 10 unit tests (feature flag, persistence, aggregation)
+
+### k=2: Integration Tests (71b7993)
+- Feature-flag gating tests
+- Sample flow (disabled/enabled paths)
+- Aggregation pipeline + multi-band grouping
+- Mock gate integration
+- 7 integration tests (all green)
+
+### k=3: Production Hardening (4903e0b)
+- **Thread-safety:** Double-check locking in get_instance() (TOCTOU fix)
+- **Async-safety:** asyncio.to_thread() for file I/O (no event loop blocking)
+- **Persistence safety:** Threading lock in _write_sample_sync() (atomic JSONL writes)
+- **Data validation:** MeasurementSample.__post_init__() validates loss ranges [0.0–1.0] and task_band enum
+- **Architectural note:** Session isolation as k=4 enhancement (documented debt)
+
+**All 17 tests green.** Production-ready for k=4 integration.
+
+---
+
+## What's Missing: chat_runtime Integration (k=4)
 
 The **sampled real-traffic recorder** that runs {direct, F5-tier, TDE} in parallel and collects BandEvidence.
 
