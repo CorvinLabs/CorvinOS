@@ -195,6 +195,7 @@ class AdaptiveDelegationExecutor:
         statement: dict[str, Any],
         task_analysis: Optional[InitialAnalysisRequest],
         step_executor_fn: Callable[[Step, dict[str, Any]], Any],
+        reference_executor_fn: Optional[Callable[[Step, dict[str, Any]], Any]] = None,
     ) -> list[StepResult]:
         """
         Execute plan with adaptive delegation.
@@ -204,10 +205,12 @@ class AdaptiveDelegationExecutor:
             task_analysis: Classification + plan from Phase 1 (optional; refines
                 complexity for loss bookkeeping)
             step_executor_fn: Async function to execute a single step locally
-
-        Returns:
-            List of StepResult
+            reference_executor_fn: ADR-0222 F1 — the executor the SHADOW REFERENCE
+                runs on (a STRONGER model), so the measured loss is
+                cheap-worker-vs-strong-reference, not cheap-vs-cheap. None = the
+                shadow re-runs step_executor_fn (legacy Haiku-vs-Haiku).
         """
+        self._reference_executor_fn = reference_executor_fn
         # Lazy: worker_ipc imports DelegationEnvelope from this module at
         # module level, so a top-level import here would cycle.
         from .worker_ipc import ProcHolder  # noqa: PLC0415
@@ -600,9 +603,13 @@ class AdaptiveDelegationExecutor:
             # review 2026-07-24). kill() is a no-op on normal completion.
             from .worker_ipc import ProcHolder  # noqa: PLC0415
             _shadow_holder = ProcHolder()
+            # ADR-0222 F1: the shadow REFERENCE runs on the stronger reference
+            # executor when configured, so the loss is worker-vs-strong, not
+            # cheap-vs-cheap. Falls back to the same local executor (legacy).
+            _ref_fn = getattr(self, "_reference_executor_fn", None) or step_executor_fn
             try:
                 local_result = await self._execute_local(
-                    step, statement, step_executor_fn, proc_holder=_shadow_holder,
+                    step, statement, _ref_fn, proc_holder=_shadow_holder,
                 )
             finally:
                 _shadow_holder.kill()
