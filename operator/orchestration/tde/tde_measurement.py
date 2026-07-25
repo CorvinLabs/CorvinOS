@@ -7,7 +7,10 @@ predictions to measured verdicts once min_samples_per_band accumulates.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import os
+import json
+from pathlib import Path
+from dataclasses import dataclass, field, asdict
 from typing import Any
 from collections import defaultdict
 from operator.orchestration.tde.decision_gate import BandEvidence
@@ -123,3 +126,104 @@ def aggregate_measured_evidence(
         evidence_list.append(evidence)
 
     return evidence_list
+
+
+class MeasurementRecorder:
+    """Singleton that records {direct, tier, TDE} samples during measurement week.
+
+    Persists samples to measurement.jsonl (separate from audit chain) and
+    provides aggregated BandEvidence to the decision gate.
+    """
+
+    _instance: MeasurementRecorder | None = None
+
+    def __init__(self, measurement_log_path: str | None = None):
+        """Initialize the recorder.
+
+        Args:
+            measurement_log_path: Path to write JSONL samples. If None, uses default
+                ~/.corvin/measurement-week/measurement.jsonl.
+        """
+        self.enabled = os.getenv("TDE_MEASUREMENT_ENABLED") == "1"
+
+        if measurement_log_path is None:
+            corvin_home = os.getenv("CORVIN_HOME", os.path.expanduser("~/.corvin"))
+            measurement_log_path = os.path.join(
+                corvin_home, "measurement-week", "measurement.jsonl"
+            )
+
+        self.log_path = measurement_log_path
+        self.samples: list[MeasurementSample] = []
+
+        # Ensure directory exists
+        if self.enabled:
+            log_dir = os.path.dirname(self.log_path)
+            if log_dir:
+                Path(log_dir).mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def get_instance(
+        cls, measurement_log_path: str | None = None
+    ) -> "MeasurementRecorder":
+        """Get or create the singleton instance."""
+        if cls._instance is None:
+            cls._instance = cls(measurement_log_path)
+        return cls._instance
+
+    @classmethod
+    def reset_instance(cls) -> None:
+        """Reset singleton (for testing)."""
+        cls._instance = None
+
+    async def record_sample(self, sample: MeasurementSample) -> None:
+        """Append a sample to the in-memory buffer and persist to log.
+
+        Args:
+            sample: The measurement sample to record.
+        """
+        if not self.enabled:
+            return
+
+        self.samples.append(sample)
+
+        # Persist to measurement.jsonl
+        try:
+            with open(self.log_path, "a") as f:
+                f.write(json.dumps(asdict(sample), default=str) + "\n")
+        except (IOError, OSError) as e:
+            # Log but don't crash; measurement failure shouldn't block chat
+            print(f"Warning: Failed to write measurement sample to {self.log_path}: {e}")
+
+    def get_aggregated_evidence(self) -> list[BandEvidence]:
+        """Return current measured evidence aggregated by band.
+
+        Returns:
+            List of BandEvidence ready for decision_gate.evaluate_tde_verdict().
+        """
+        return aggregate_measured_evidence(self.samples)
+
+    def load_from_log(self) -> None:
+        """Load all samples from measurement.jsonl into memory.
+
+        Useful for resuming a measurement week or analysis after restart.
+        """
+        if not os.path.exists(self.log_path):
+            return
+
+        try:
+            with open(self.log_path, "r") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                        sample = MeasurementSample(**data)
+                        self.samples.append(sample)
+                    except (json.JSONDecodeError, TypeError) as e:
+                        print(f"Warning: Failed to parse measurement line: {e}")
+        except (IOError, OSError) as e:
+            print(f"Warning: Failed to load measurements from {self.log_path}: {e}")
+
+    def clear_samples(self) -> None:
+        """Clear in-memory samples (for testing)."""
+        self.samples.clear()

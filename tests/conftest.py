@@ -11,7 +11,19 @@ still win: monkeypatch.setenv overrides this env for their own scope.
 """
 from __future__ import annotations
 
+import sys
+import os
 import pytest
+
+# Fix Python's builtin 'operator' module shadowing our 'operator/' package directory.
+# pytest loads conftest early enough that we can fix sys.modules before test imports.
+repo_root = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, repo_root)
+
+# Import our operator package to shadow the builtin
+import operator as builtin_operator
+sys.modules['_builtin_operator'] = builtin_operator
+del sys.modules['operator']
 
 
 @pytest.fixture(autouse=True)
