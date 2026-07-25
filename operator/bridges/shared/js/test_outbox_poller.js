@@ -95,6 +95,88 @@ async function main() {
   assert(!fs.existsSync(path.join(tmpRoot, 'a.json')), 'file delivered and unlinked');
   assert(logs3.length === 0, 'clean delivery logs nothing');
 
+  // 5. Without deadLetterDir the poller keeps retrying forever — bridges that
+  //    never configured a dead-letter dir must not silently change behavior.
+  writeEnvelope('b.json', { channel: 'testchan', text: 'permanent-fail' });
+  const poller5 = startOutboxPoller({
+    outboxDir: tmpRoot,
+    channel: 'testchan',
+    sendFn: async () => { const e = new Error('nope'); e.code = 50035; throw e; },
+    isPermanent: (e) => e.code === 50035,
+    logger: () => {},
+    intervalMs: 20,
+  });
+  await sleep(200);
+  poller5.stop();
+  assert(fs.existsSync(path.join(tmpRoot, 'b.json')),
+         'no deadLetterDir → permanent failure still retried, file stays put');
+
+  // 6. deadLetterDir + isPermanent → retired on the FIRST failure, not retried.
+  const deadDir = path.join(tmpRoot, 'dead');
+  const logs6 = [];
+  let sends6 = 0;
+  const poller6 = startOutboxPoller({
+    outboxDir: tmpRoot,
+    channel: 'testchan',
+    sendFn: async () => { sends6++; const e = new Error('Invalid Form Body'); e.code = 50035; throw e; },
+    isPermanent: (e) => e.code === 50035,
+    deadLetterDir: deadDir,
+    logger: (m) => logs6.push(m),
+    intervalMs: 20,
+  });
+  await sleep(200);
+  poller6.stop();
+  assert(!fs.existsSync(path.join(tmpRoot, 'b.json')), 'permanent failure left the outbox');
+  assert(fs.existsSync(path.join(deadDir, 'b.json')), 'envelope moved to dead-letter dir');
+  assert(sends6 === 1, `permanent error not retried (sends=${sends6})`);
+  assert(logs6.some((m) => m.includes('dead-lettered b.json')), 'dead-letter is logged');
+  const preserved = JSON.parse(fs.readFileSync(path.join(deadDir, 'b.json'), 'utf8'));
+  assert(preserved.text === 'permanent-fail', 'envelope preserved byte-for-byte for re-queueing');
+  const sidecar = JSON.parse(fs.readFileSync(path.join(deadDir, 'b.json.reason.json'), 'utf8'));
+  assert(sidecar.reason === 'permanent send error' && sidecar.attempts === 1,
+         'sidecar records reason and attempt count');
+
+  // 7. Transient (unclassified) failures exhaust maxAttempts before retiring —
+  //    a network blip must not retire a deliverable message on the first tick.
+  writeEnvelope('c.json', { channel: 'testchan', text: 'transient' });
+  let sends7 = 0;
+  const poller7 = startOutboxPoller({
+    outboxDir: tmpRoot,
+    channel: 'testchan',
+    sendFn: async () => { sends7++; throw new Error('ECONNRESET'); },
+    isPermanent: () => false,
+    deadLetterDir: deadDir,
+    maxAttempts: 3,
+    logger: () => {},
+    intervalMs: 20,
+  });
+  await sleep(250);
+  poller7.stop();
+  assert(sends7 === 3, `transient error retried up to maxAttempts (sends=${sends7})`);
+  assert(fs.existsSync(path.join(deadDir, 'c.json')), 'transient failure retired after budget');
+  const sidecar7 = JSON.parse(fs.readFileSync(path.join(deadDir, 'c.json.reason.json'), 'utf8'));
+  assert(sidecar7.reason === '3 attempts exhausted', 'sidecar distinguishes exhaustion from permanent');
+
+  // 8. Regression (incident 2026-07-25): a sendFn that returns normally is
+  //    treated as delivered. The Discord daemon's `if (!ch) return` therefore
+  //    unlinked finished replies. Any not-delivered path MUST throw — this test
+  //    pins the contract the daemon relies on.
+  writeEnvelope('d.json', { channel: 'testchan', text: 'must-not-vanish' });
+  const poller8 = startOutboxPoller({
+    outboxDir: tmpRoot,
+    channel: 'testchan',
+    sendFn: async () => { throw new Error('channel 123 not found (cache miss or deleted)'); },
+    isPermanent: () => false,
+    deadLetterDir: deadDir,
+    maxAttempts: 999,
+    logger: () => {},
+    intervalMs: 20,
+  });
+  await sleep(120);
+  poller8.stop();
+  assert(fs.existsSync(path.join(tmpRoot, 'd.json')),
+         'throwing send keeps the envelope — reply is never silently lost');
+
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 
   if (failures > 0) {

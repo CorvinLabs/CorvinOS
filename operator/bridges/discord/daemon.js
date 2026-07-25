@@ -91,6 +91,10 @@ function synthesizeVoiceNoteForText(text, lang = 'de', voice = 'shimmer', timeou
 }
 const INBOX  = path.join(SHARED, 'inbox');
 const OUTBOX = path.join(SHARED, 'outbox');
+// Permanently undeliverable envelopes are parked here instead of being retried
+// forever. Lives inside outbox/ but is invisible to the poller, which only picks
+// up *.json files. Re-queue by moving an envelope back one level up.
+const DEAD_LETTER = path.join(OUTBOX, 'dead');
 // ADR-0008 §8.3: settings live in <corvin_home>/bridges/discord/.
 // Auto-migrate from legacy in-repo location on first boot.
 const SETTINGS_FILE = (ch => {
@@ -840,7 +844,13 @@ async function sendDiscord(payload, _fpath) {
   }
 
   const ch = await client.channels.fetch(chId);
-  if (!ch) { log(`channel ${chId} not found`); return; }
+  // A null channel here is NOT a delivered message. Returning normally told the
+  // outbox poller "sent successfully" and it unlinked the file — a reply the
+  // agent had already produced vanished silently (incident 2026-07-25: the
+  // post-reboot poller ran 300 ms before the READY event, hit an empty channel
+  // cache, and dropped a finished turn). Throw so the file stays queued; a
+  // genuinely dead channel is retired by the dead-letter path instead.
+  if (!ch) throw new Error(`channel ${chId} not found (cache miss or deleted)`);
 
   // Progress updates: edit a single sticky message instead of flooding the
   // chat with one message per tool call. On the first _progress payload we
@@ -951,13 +961,38 @@ async function sendDiscord(payload, _fpath) {
   }
 }
 
+// Errors that are permanent by CONSTRUCTION — the envelope itself is malformed,
+// so no amount of waiting can make it deliverable. These skip the retry budget
+// entirely. The 328-envelope backlog of 2026-07-25 was 289× a non-snowflake
+// chat_id ("owner-chat"), i.e. exactly this class: retried every tick forever,
+// stretching a full poll pass to ~65 s and queueing real replies behind it.
+//
+// Deliberately NOT listed: 10003 Unknown Channel / 10004 Unknown Guild /
+// 50001 Missing Access / 50013 Missing Permissions and HTTP 403/404. Those say
+// "not reachable right now", which a Discord outage or a briefly-removed bot
+// also produces — retiring a finished reply on the first such error would
+// recreate the very data loss this change fixes. They still leave the outbox,
+// just via the maxAttempts budget instead of on attempt #1.
+const PERMANENT_DISCORD_CODES = new Set([
+  50035, // Invalid Form Body — e.g. chat_id is not a snowflake
+  50006, // Cannot send an empty message
+  40005, // Request entity too large
+]);
+
 startOutboxPoller({
   outboxDir: OUTBOX, channel: CHANNEL, sendFn: sendDiscord, logger: log,
-  // Don't attempt REST sends before login() has handed the token to the
-  // REST manager — every attempt throws "Expected token to be set" and the
-  // 500 ms tick turned a 20-minute offline login wait into 1000+ log lines
-  // of futile sends (incident 2026-07-10). Files simply wait in the outbox.
-  preCheck: () => client.token != null,
+  // Wait for READY, not just for the token. The token is set on the REST
+  // manager ~300 ms before the gateway hands us the channel cache, and sends
+  // issued in that window resolve to a null channel (incident 2026-07-25).
+  // isReady() also implies token != null, so this still covers the original
+  // "Expected token to be set" log-flood case (incident 2026-07-10).
+  preCheck: () => client.isReady(),
+  deadLetterDir: DEAD_LETTER,
+  isPermanent: (e) => PERMANENT_DISCORD_CODES.has(e?.code),
+  // 20 ticks ≈ 10 s of retrying before an unreachable channel is retired.
+  // Long enough to ride out a gateway hiccup, short enough that a genuinely
+  // dead channel stops blocking the queue within one poll cycle.
+  maxAttempts: 20,
 });
 
 process.on('unhandledRejection', r => log(`unhandledRejection: ${r && r.message || r}`));

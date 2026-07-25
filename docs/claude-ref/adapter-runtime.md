@@ -481,13 +481,55 @@ for tests). Consumers in `discord/daemon.js`:
 | `loginWithBackoff` | connection-shaped error **and** probe confirms offline → probe every 15 s, retry login immediately on recovery; ladder counter NOT advanced | ALL failures take the 60 s→5 m→15 m→30 m→60 m ladder — including connection-shaped ones (an `ECONNRESET` from a Cloudflare edge ban is remote-caused and may have consumed an IDENTIFY; the error signature alone cannot distinguish local from remote, the probe is the gate) |
 | stuck-reconnect detector (3 strikes/60 s) | strikes reset, no exit — discord.js's own resume loop keeps running and resumes without a fresh IDENTIFY | 3 strikes without resume → exit 2 for a systemd restart |
 | zombie watchdog (3×60 s) | strikes frozen (offline ≠ silent half-connect) | not-READY accumulates strikes → exit 2 |
-| outbox poller | `preCheck: client.token != null` — no REST sends before login; files wait in the outbox | normal delivery |
+| outbox poller | `preCheck: client.isReady()` — no REST sends before the gateway is READY; files wait in the outbox | normal delivery |
 
 `shared/js/outbox.js` additionally dedups send-failure log lines (same file +
 same message logged once per 60 s instead of twice per second — the incident
 produced 1000+ identical journal lines while waiting out an offline login).
 
-Unit tests: `shared/js/test_net_probe.js`, `shared/js/test_outbox_poller.js`.
+### Delivery contract: return = delivered
+
+`startOutboxPoller` unlinks the envelope whenever `sendFn` **returns normally**.
+A `sendFn` that returns without having delivered therefore destroys the message.
+Every not-delivered path MUST throw so the file stays queued.
+
+This was violated in incident 2026-07-25: `sendDiscord` had
+`if (!ch) { log('channel … not found'); return; }`. After a reboot the poller ran
+~300 ms before the READY event (`preCheck` only checked `client.token`, which the
+REST manager receives earlier), `channels.fetch()` hit an empty channel cache and
+returned null, and a finished 1304-char reply was silently unlinked. Both halves
+are fixed: the gate now waits for `isReady()`, and the null-channel path throws.
+
+### Dead-letter path (opt-in)
+
+Infinite retry is only correct for *transient* failures. Permanent ones
+(non-snowflake `chat_id`, deleted channel) accumulated to **328 envelopes** by
+2026-07-25; at ~200 ms per failed REST call a full poll pass took ~65 s, so every
+real reply queued behind the poison backlog.
+
+`startOutboxPoller` takes three optional parameters:
+
+| Parameter | Meaning |
+|---|---|
+| `deadLetterDir` | Where to park undeliverable envelopes. **Unset → old behavior (retry forever), unchanged.** |
+| `isPermanent(err)` | Channel-specific classifier; `true` retires on the *first* failure without retrying |
+| `maxAttempts` (default 10) | Fallback budget for unclassified errors |
+
+Discord sets `deadLetterDir: outbox/dead` and `maxAttempts: 20` (≈10 s of ticks).
+`isPermanent` covers only errors that are permanent *by construction* — 50035
+Invalid Form Body (non-snowflake `chat_id`), 50006 empty message, 40005 payload
+too large. "Not reachable right now" codes (10003 Unknown Channel, 50001 Missing
+Access, HTTP 403/404) are deliberately **excluded**: a Discord outage or a
+briefly-removed bot produces those too, and retiring a finished reply on attempt
+#1 would recreate the data loss this mechanism exists to prevent. They leave the
+queue via the attempt budget instead. The envelope is moved byte-identical
+(re-queue by moving it one level back up) next to a `<file>.reason.json` sidecar
+recording reason, error, attempt count and timestamp.
+`dead/` lives inside `outbox/` but is invisible to the poller and to
+`pending_outbox`, both of which only match `*.json` files.
+
+Unit tests: `shared/js/test_net_probe.js`, `shared/js/test_outbox_poller.js`
+(the latter pins the return-means-delivered contract and both dead-letter modes).
 
 **Must NOT do:**
 - Don't take the fast login path on error signature alone — the probe must
