@@ -58,7 +58,52 @@
 
 ---
 
-## What's Missing: chat_runtime Integration (k=4)
+## k=4: Phase 1 Scaffold (Session 3, 2026-07-25)
+
+**k=4 Phase 1: Mock orchestration + feature-flag hook (INCOMPLETE)**
+
+Added to tde_measurement.py:
+- MockTdeOrchestrator class (band classification + mock {direct, tier} execution)
+- orchestrate_measurement() method (creates MeasurementSample from fake results)
+- Integration test skeleton (test_tde_measurement_k4_integration.py — tests pending k=5 import resolution)
+
+**Feature-flag design:**
+```python
+if os.getenv("TDE_MEASUREMENT_ENABLED") == "1":
+    # After TDE execution, in _stream_tde_turn():
+    sample = await MockTdeOrchestrator.orchestrate_measurement(
+        prompt=task_text,
+        tde_tokens=result.usage.total_tokens,
+        tde_output=final,
+        task_complexity=analysis.classification.task_type,
+    )
+    await measurement_recorder.record_sample(sample)
+```
+
+**k=4 Phase 1 Status:** BLOCKED on test imports (operator/tde/__init__.py dependency chain). Ready to build real hook once resolved. Real orchestration (parallel {direct, tier} execution) deferred to k=5.
+
+---
+
+## k=5: Phase 2 — Real Integration (Next Session)
+
+**Real orchestration of {direct, tier, TDE}:**
+1. Run direct turn (user model single-call) — collect tokens + output
+2. Run tier baseline (F5 whole-task) — collect tokens + output
+3. Judge tier vs direct (F1-judge) — loss calculation
+4. Judge TDE vs direct (F1-judge) — loss calculation
+5. Create valid MeasurementSample (full metrics, not mocked)
+6. Record to measurement.jsonl
+7. Gate aggregates and evaluates verdict
+
+**k=5 also includes:**
+- Fix integration test import issues (resolve tde/__init__.py chain or refactor test structure)
+- Session-scoped MeasurementRecorder (k=3 architectural debt)
+- Real E2E measurement week simulation
+- Adversarial review of chat_runtime integration
+
+---
+
+## What's Missing: Real chat_runtime Integration (k=5)
 
 The **sampled real-traffic recorder** that runs {direct, F5-tier, TDE} in parallel and collects BandEvidence.
 
