@@ -30,9 +30,9 @@
   <!-- Arrow -->
   <line x1="500" y1="100" x2="500" y2="130" class="arrow"/>
 
-  <!-- TDE Detector -->
+  <!-- TDE Router -->
   <rect x="250" y="130" width="500" height="100" class="detector-box box"/>
-  <text x="500" y="160" class="box-label" text-anchor="middle" fill="#1976d2">TDE Detector: 5-Signal Ensemble</text>
+  <text x="500" y="160" class="box-label" text-anchor="middle" fill="#1976d2">TDE Router: 5-Signal Ensemble</text>
   <line x1="260" y1="175" x2="740" y2="175" class="divider"/>
   <text x="500" y="195" class="subtitle" text-anchor="middle">Parallelization | Iteration | Context | Data Volume | Task Type</text>
   <text x="500" y="215" class="subtitle" text-anchor="middle">→ Score each engine via Softmax (0.0-1.0)</text>

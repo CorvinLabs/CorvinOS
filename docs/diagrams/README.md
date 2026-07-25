@@ -16,7 +16,7 @@ Shows the current one-engine-fits-all architecture problem:
 **File:** `02-solution-tde-routing.svg`
 
 Demonstrates TDE's adaptive engine selection:
-- Task → TDE Detector (5-signal ensemble) → Optimal engine
+- Task → TDE Router (5-signal ensemble) → Optimal engine
 - Shows three-engine routing with cost breakdown
 - Result: **48.8% projected aggregate savings (simulation)**
 
