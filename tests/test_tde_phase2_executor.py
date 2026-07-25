@@ -295,3 +295,81 @@ class TestEngines:
         result = await engine.execute({}, {})
         assert result["success"] is False
         assert "error" in result
+
+
+class TestF1RealCounterfactual:
+    """ADR-0222 F1: the SHADOW REFERENCE must run on the reference executor
+    (a stronger model) when one is provided — not re-run the worker's own
+    cheap executor. Without this the loss measures cheap-vs-cheap and is
+    structurally blind to the real quality drop."""
+
+    def _executor(self, *, tracker=None):
+        plan = _plan([Step(step=1, action="analyze_data")])
+        return AdaptiveDelegationExecutor(
+            plan, L34DelegationGate(), tracker or LossProfileTracker(),
+            worker_ipc=MockWorkerIPC(),
+            use_semantic_judge=False,  # lexical fallback → no real claude subprocess
+        )
+
+    @pytest.mark.asyncio
+    async def test_shadow_uses_reference_executor_when_set(self):
+        from tde.adaptive_delegation_executor import StepResult
+
+        called = {"worker": 0, "reference": 0}
+
+        async def worker_exec(step, statement, *, proc_holder=None):
+            called["worker"] += 1
+            return {"output": "worker answer"}
+
+        async def reference_exec(step, statement, *, proc_holder=None):
+            called["reference"] += 1
+            return {"output": "reference answer"}
+
+        ex = self._executor()
+        ex._reference_executor_fn = reference_exec
+        step = ex.plan.steps[0]
+        delegated = StepResult(
+            step_num=1, action="analyze_data", success=True,
+            output={"output": "worker answer"}, was_delegated=True,
+            token_usage={"model": "claude-haiku-4-5"},
+        )
+        # force_measure=True guarantees the shadow fires deterministically.
+        await ex._record_outcome(step, {"x": 1}, delegated, worker_exec,
+                                 force_measure=True)
+        # The shadow REFERENCE ran the strong executor, NOT the worker executor.
+        assert called["reference"] == 1
+        assert called["worker"] == 0
+
+    @pytest.mark.asyncio
+    async def test_shadow_falls_back_to_worker_executor_when_no_reference(self):
+        from tde.adaptive_delegation_executor import StepResult
+
+        called = {"worker": 0}
+
+        async def worker_exec(step, statement, *, proc_holder=None):
+            called["worker"] += 1
+            return {"output": "worker answer"}
+
+        ex = self._executor()  # no reference set → legacy behaviour
+        step = ex.plan.steps[0]
+        delegated = StepResult(
+            step_num=1, action="analyze_data", success=True,
+            output={"output": "worker answer"}, was_delegated=True,
+            token_usage={"model": "claude-haiku-4-5"},
+        )
+        await ex._record_outcome(step, {"x": 1}, delegated, worker_exec,
+                                 force_measure=True)
+        assert called["worker"] == 1  # the shadow re-ran the worker executor
+
+    @pytest.mark.asyncio
+    async def test_execute_accepts_and_stores_reference_executor(self):
+        async def ref(step, statement, *, proc_holder=None):
+            return {"output": "ref"}
+
+        ex = self._executor()
+        # execute() with an empty plan of one local step + reference_executor_fn
+        # must accept the kwarg and stash it for the shadow path.
+        await ex.execute(
+            {"data": "clean"}, None, _echo_executor, reference_executor_fn=ref,
+        )
+        assert ex._reference_executor_fn is ref

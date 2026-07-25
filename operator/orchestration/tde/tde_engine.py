@@ -55,8 +55,21 @@ def _ensure_bridges_on_path() -> None:
         sys.path.insert(0, str(shared))
 
 
+def _tde_reference_model() -> str:
+    """ADR-0222 F1: the model the SHADOW REFERENCE runs on, to fix the
+    Haiku-vs-Haiku counterfactual. Default empty = OFF (shadow uses the worker
+    model, legacy behaviour). Set CORVIN_TDE_REFERENCE_MODEL to a STRONGER model
+    (ideally the user's tier, e.g. claude-sonnet-5) to measure the real drop:
+    'did the cheap worker match the strong reference?'. This costs a stronger
+    call per shadow (bounded by the 5-25% sample) — the honest price of the
+    measurement; if it can't be afforded, that is itself the answer (ADR-0222)."""
+    import os as _os  # noqa: PLC0415
+    return _os.environ.get("CORVIN_TDE_REFERENCE_MODEL", "").strip()
+
+
 async def default_local_step_executor(
     step: Step, statement: dict[str, Any], *, proc_holder: Optional[Any] = None,
+    model_override: Optional[str] = None,
 ) -> Any:
     """Default LOCAL step execution: tool-less one-shot LLM with FULL context.
 
@@ -87,12 +100,18 @@ async def default_local_step_executor(
         'Execute the step and return ONLY a JSON object on one line: {"output": <result>}\n'
     )
 
-    model_args = helper_model.claude_args(helper_model.SITE_TDE_WORKER)
-    model_tag = ""
-    for i, a in enumerate(model_args):
-        if a == "--model" and i + 1 < len(model_args):
-            model_tag = model_args[i + 1]
-            break
+    # ADR-0222 F1: a model_override (used by the shadow REFERENCE run) pins a
+    # stronger model directly; otherwise the normal worker-model resolution.
+    if model_override:
+        model_args = ["--model", model_override]
+        model_tag = model_override
+    else:
+        model_args = helper_model.claude_args(helper_model.SITE_TDE_WORKER)
+        model_tag = ""
+        for i, a in enumerate(model_args):
+            if a == "--model" and i + 1 < len(model_args):
+                model_tag = model_args[i + 1]
+                break
 
     def _run() -> Any:
         from .worker_ipc import (  # noqa: PLC0415 — avoid import cycle
@@ -393,7 +412,19 @@ class TieredDelegationEngine:
 
         start = time.time()
         try:
-            results = await executor.execute(statement, analysis, self.local_step_executor)
+            # ADR-0222 F1: when a reference model is configured, the shadow runs
+            # its comparison on that stronger model (cheap-vs-strong measurement).
+            # Only meaningful with the DEFAULT executor (a custom injected one owns
+            # its own model); OFF by default so behaviour is unchanged.
+            _ref_model = _tde_reference_model()
+            _reference_executor = None
+            if _ref_model and self.local_step_executor is default_local_step_executor:
+                import functools as _functools  # noqa: PLC0415
+                _reference_executor = _functools.partial(
+                    default_local_step_executor, model_override=_ref_model)
+            results = await executor.execute(
+                statement, analysis, self.local_step_executor,
+                reference_executor_fn=_reference_executor)
         except ExecutionError as exc:
             # _group_parallel_batches' defense-in-depth "unschedulable steps"
             # raise fires during grouping, before any step ran — previously

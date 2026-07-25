@@ -97,12 +97,20 @@ def judge_loss_sync(
         'Return ONLY one line of JSON: {"equivalence": <0-100 integer>}\n'
     )
 
+    # ADR-0222 F1: a Haiku judge scoring a Haiku-vs-Haiku comparison is blind to
+    # the real quality drop. When a stronger reference is in play the judge must
+    # be at least as strong, so it can actually SEE the difference. Env override
+    # CORVIN_TDE_JUDGE_MODEL; unset = legacy site-configured judge (Haiku).
+    import os as _os  # noqa: PLC0415
+    _judge_override = _os.environ.get("CORVIN_TDE_JUDGE_MODEL", "").strip()
+    _judge_args = (["--model", _judge_override] if _judge_override
+                   else list(helper_model.claude_args(helper_model.SITE_DELEGATE_OUTPUT_JUDGE)))
     cmd = [
         helper_model.resolve_claude_bin(), "-p", prompt,
         "--max-turns", "1",
         "--output-format", "text",
         "--disallowedTools", "*",
-        *helper_model.claude_args(helper_model.SITE_DELEGATE_OUTPUT_JUDGE),
+        *_judge_args,
     ]
     try:
         from .worker_ipc import run_one_shot  # noqa: PLC0415 — avoid import cycle
