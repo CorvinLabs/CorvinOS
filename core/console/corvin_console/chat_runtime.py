@@ -3587,6 +3587,127 @@ async def _stream_hermes_turn(
 # path in ``stream_turn``.
 
 
+# ---------------------------------------------------------------------------
+# ADR-0222 Phase 2 — measurement-week sampler (default OFF)
+# ---------------------------------------------------------------------------
+
+#: Strong refs to in-flight measurement tasks. asyncio only holds a WEAK
+#: reference to a bare create_task() result, so without this set a measurement
+#: can be garbage-collected mid-run and vanish without a trace.
+_MEASUREMENT_TASKS: "set[asyncio.Task[Any]]" = set()
+
+#: How many measurements may run at once. Each one is two `claude -p` one-shots
+#: plus two judge calls, so letting them pile up per concurrent chat turn would
+#: saturate the CLI/rate-limit budget and distort the very token and latency
+#: numbers being measured. Excess turns are simply not sampled.
+_MEASUREMENT_MAX_CONCURRENT = 1
+
+_MEASUREMENT_ENABLED_ENV = "TDE_MEASUREMENT_ENABLED"
+_MEASUREMENT_SAMPLE_RATE_ENV = "TDE_MEASUREMENT_SAMPLE_RATE"
+
+
+def _measurement_should_sample() -> bool:
+    """Decide whether THIS turn gets measured.
+
+    Off unless ``TDE_MEASUREMENT_ENABLED=1``. ``TDE_MEASUREMENT_SAMPLE_RATE``
+    (0.0–1.0, default 1.0) thins that further: a measured turn costs roughly 3x
+    the tokens of an unmeasured one (TDE + direct + tier, plus two judge calls),
+    so an operator running the measurement week on live traffic can trade sample
+    density for spend. An unparseable or out-of-range rate reads as 0.0 — a
+    typo'd rate must not silently triple every turn's cost.
+    """
+    if os.getenv(_MEASUREMENT_ENABLED_ENV) != "1":
+        return False
+    raw = os.getenv(_MEASUREMENT_SAMPLE_RATE_ENV, "").strip()
+    if not raw:
+        return True
+    try:
+        rate = float(raw)
+    except ValueError:
+        _log.warning("%s=%r is not a number — not sampling this turn",
+                     _MEASUREMENT_SAMPLE_RATE_ENV, raw)
+        return False
+    if not (0.0 <= rate <= 1.0):
+        _log.warning("%s=%r outside [0.0, 1.0] — not sampling this turn",
+                     _MEASUREMENT_SAMPLE_RATE_ENV, raw)
+        return False
+    if rate >= 1.0:
+        return True
+    import random  # noqa: PLC0415 — sampling only, no crypto requirement
+    return random.random() < rate
+
+
+async def _run_tde_measurement(ctx: dict[str, Any]) -> None:
+    """Body of one detached measurement. Never raises into the caller."""
+    try:
+        from tde.tde_measurement import (  # noqa: PLC0415
+            MeasurementRecorder,
+            RealTdeOrchestrator,
+        )
+    except ImportError:
+        # Orchestration tree absent (e.g. a wheel install) — nothing to measure.
+        _log.warning("TDE measurement skipped: tde.tde_measurement unavailable",
+                     exc_info=True)
+        return
+
+    sample = await RealTdeOrchestrator.orchestrate(
+        task_id=ctx["task_id"],
+        task_text=ctx["task_text"],
+        tde_tokens=ctx["tde_tokens"],
+        tde_output=ctx["tde_output"],
+        task_complexity=ctx["task_complexity"],
+        user_model=ctx["user_model"],
+        workload_type=ctx["workload_type"],
+        confidence=ctx["confidence"],
+    )
+    if sample is None:
+        # RealTdeOrchestrator already logged the specific reason it refused.
+        return
+    await MeasurementRecorder.get_instance().record_sample(sample)
+    _log.info("ADR-0222 measurement recorded for %s (band=%s)",
+              sample.task_id, sample.task_band)
+
+
+def _spawn_tde_measurement(ctx: dict[str, Any]) -> None:
+    """Fire the measurement OFF the turn's critical path.
+
+    Detached on purpose: the two baseline turns take minutes, and the user's TDE
+    answer has already been streamed and persisted by the time this runs. Doing
+    it inline (as the k=4 hook did — it sat BEFORE the result yields) made every
+    measured turn appear to hang with a finished answer in hand.
+
+    Trade-off accepted: a process shutdown mid-measurement loses that sample.
+    Measurement-week data collection is best-effort by design, and a lost sample
+    is strictly better than a delayed chat turn or a partial one written to the log.
+    """
+    if len(_MEASUREMENT_TASKS) >= _MEASUREMENT_MAX_CONCURRENT:
+        _log.info("TDE measurement skipped for %s: %d already in flight",
+                  ctx.get("task_id"), len(_MEASUREMENT_TASKS))
+        return
+    coro = _run_tde_measurement(ctx)
+    try:
+        task = asyncio.create_task(coro)
+    except RuntimeError:
+        # No running loop (shouldn't happen inside the turn, but never let
+        # measurement bookkeeping break a turn). Close the coroutine we just
+        # created, otherwise it is reported as "never awaited" on GC.
+        coro.close()
+        _log.warning("TDE measurement not started: no running event loop")
+        return
+    _MEASUREMENT_TASKS.add(task)
+
+    def _done(t: "asyncio.Task[Any]") -> None:
+        _MEASUREMENT_TASKS.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()  # retrieve, else asyncio logs "never retrieved"
+        if exc is not None:
+            _log.warning("TDE measurement failed for %s: %r",
+                         ctx.get("task_id"), exc)
+
+    task.add_done_callback(_done)
+
+
 async def _stream_tde_turn(
     sess: "WebChatSession",
     task_text: str,
@@ -3628,6 +3749,20 @@ async def _stream_tde_turn(
 
     rc = 1
     final = ""
+    # ok / _tde_bare_output are read by the ADR-0222 measurement hook AFTER the
+    # try block. Both are only assigned on the success path, so without these
+    # initialisers an exception inside the TDE block left `ok` unbound and the
+    # hook's own guard (`and ok`) raised UnboundLocalError OUTSIDE the try that
+    # was meant to contain measurement failures — turning a failed TDE turn into
+    # a crashed generator whenever the measurement flag was on.
+    ok = False
+    #: TDE answer WITHOUT the UI engine badge. The badge is display chrome; the
+    #: judge must score model content only, or it reads the badge as a quality
+    #: difference the TDE arm never actually incurred.
+    _tde_bare_output = ""
+    #: Populated inside the try only when this turn is selected for ADR-0222
+    #: sampling; stays None otherwise (and on every failure path).
+    _measure_ctx: "dict[str, Any] | None" = None
     # Unique run id — second-granularity time.time() collides across
     # concurrent sessions (round-2 finding).
     run_id = f"tde-{int(time.time())}-{secrets.token_hex(4)}"
@@ -3884,6 +4019,7 @@ async def _stream_tde_turn(
             final = ("\n\n".join(parts)).strip() or str(result.get("error") or "")
             ok = bool(result.get("success"))
             rc = 0 if ok else 1
+            _tde_bare_output = final  # capture BEFORE the badge is appended
 
             badge = (
                 f"\n\n—\n⚙ Engine: {engine_name} · Steps: "
@@ -3894,6 +4030,50 @@ async def _stream_tde_turn(
             if selection.get("l34_forced"):
                 badge += " · L34-Pre-Gate: Delegation blockiert (claude_code erzwungen)"
             final = (final + badge).strip()
+
+            # ADR-0222 Phase 2 (k=5): capture the measurement inputs HERE, where
+            # summary/selection/os_model are all bound, so the sampler itself can
+            # be started safely after the try block. `total_tokens` is the REAL
+            # instrumented figure (ADR-0219 R1) and is None on an uninstrumented
+            # run — the orchestrator drops such samples rather than booking a zero
+            # that would read as 100% savings. The k=4 hook read result["usage"],
+            # a key that does not exist on this result, so EVERY sample it could
+            # have produced carried tde_tokens=0.
+            # PARTIAL instrumentation must not be measured. summary["total_tokens"]
+            # sums ONLY the steps that returned a usage block
+            # (instrumented_step_count), so on a run where some steps reported
+            # usage and others did not, it is an UNDER-count of what TDE actually
+            # spent — biasing every savings figure in TDE's own favour, which is
+            # the exact class of fabricated evidence ADR-0222 exists to prevent.
+            # Requiring full coverage keeps the comparison honest; the run is
+            # simply not sampled otherwise.
+            _steps_total = summary.get("step_count") or 0
+            _steps_instrumented = summary.get("instrumented_step_count") or 0
+            _fully_instrumented = (_steps_total > 0
+                                   and _steps_instrumented == _steps_total)
+            if ok and _measurement_should_sample() and not _fully_instrumented:
+                # Logged, never silent: an operator watching a measurement week
+                # produce no samples must be able to see WHY, rather than
+                # concluding the sampler is broken.
+                _log.info(
+                    "ADR-0222: not sampling %s — only %d/%d TDE steps were "
+                    "token-instrumented, so total_tokens would under-count",
+                    run_id, _steps_instrumented, _steps_total)
+            if ok and _fully_instrumented and _measurement_should_sample():
+                _measure_ctx = {
+                    "task_id": run_id,
+                    "task_text": task_text,
+                    "tde_tokens": summary.get("total_tokens"),
+                    "tde_output": _tde_bare_output,
+                    "task_complexity": summary.get("complexity"),
+                    "user_model": os_model,
+                    "workload_type": summary.get("task_type"),
+                    # No per-turn confidence is threaded through the TDE path;
+                    # None makes the tier baseline fall back to the user's model
+                    # (net savings 0 — the honest conservative reading, per
+                    # whole_task_tier_baseline's documented limitation).
+                    "confidence": None,
+                }
         except Exception as e:  # noqa: BLE001 — surface, never crash the socket
             final = f"TDE-Turn fehlgeschlagen: {e}"
             rc = 1
@@ -3912,28 +4092,6 @@ async def _stream_tde_turn(
         _append_turn(sess, "assistant", [{"kind": "text", "text": final}],
                      tde_progress=tde_progress_dict)
         _reply_persisted = True
-
-        # ADR-0222 Phase 2: Measurement week hook (k=4)
-        # Feature-flagged real-traffic sampler for TDE token-saving validation.
-        if os.getenv("TDE_MEASUREMENT_ENABLED") == "1" and ok:
-            try:
-                from tde.tde_measurement import (
-                    MeasurementRecorder,
-                    MockTdeOrchestrator,
-                )
-                recorder = MeasurementRecorder.get_instance()
-                sample = await MockTdeOrchestrator.orchestrate_measurement(
-                    prompt=task_text,
-                    tde_tokens=result.get("usage", {}).get("total_tokens", 0),
-                    tde_output=final,
-                    task_complexity=getattr(
-                        analysis.classification, "task_type", None
-                    ) if hasattr(analysis, "classification") else None,
-                )
-                if sample:
-                    await recorder.record_sample(sample)
-            except (ImportError, Exception):
-                pass  # Measurement failure doesn't block chat
 
         yield {"type": "delta", "text": "\n" + final + "\n"}
         yield {"type": "result", "text": final, "usage": None}
@@ -3995,6 +4153,21 @@ async def _stream_tde_turn(
             _sync_ok = False
         os_audit("os_turn.context_sync", {"delegated_run_id": run_id, "synced": _sync_ok})
     touch(sess, increment_turn=_sync_ok)
+
+    # ADR-0222 Phase 2 (k=5): start the measurement-week sampler LAST — after the
+    # answer is streamed, after it is persisted, and after the ADR-0213
+    # context-sync has finished. Placed here rather than earlier because the
+    # context-sync is itself an awaited `claude -p --continue` on the expensive
+    # user model: starting the sampler before it would put two baseline turns in
+    # flight alongside it, and the CLI/rate-limit contention would land in the
+    # very token and latency numbers being measured — the same contention noise
+    # that made the baselines sequential in the first place.
+    #
+    # Unreachable on the cancellation path (that branch re-raises above), so a
+    # disconnected client never pays for two baseline turns.
+    if _measure_ctx is not None:
+        _spawn_tde_measurement(_measure_ctx)
+
     yield {"type": "done"}
 
 

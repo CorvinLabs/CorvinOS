@@ -40,6 +40,8 @@ send(task)
 | `tde_audit.py` | Hash-chained `tde.*` events via bridges audit; allowlisted scalar details only (content-free); every event carries `tde_run_id`/`step_num` correlation |
 | `slash_command_parser.py` | `/use-engine <name>` (same-line or newline task), `/engine-auto`, `/debug-engine` |
 | `streaming_executor.py` | Phase 3 partial: L34-filtered streaming into a LOCAL executor (remote streaming IPC not built yet). Round 4: values are chunked below the L34 content-scan ceiling so streaming actually succeeds for its designed use case (>1GB data) instead of always failing closed; unsafe chunks are skipped (not a full-stream abort); emits `tde.streaming_step_executed` |
+| `decision_gate.py` | ADR-0222 pure verdict logic: per-band `evaluate_band` / overall `evaluate_tde_verdict`. TDE must beat BOTH the direct turn and the F5 tier baseline at held quality. Honesty invariant: a win only counts on `data_source="measured"` with `n_measured ≥ min_samples_per_band` (30); assumption-sourced wins stay predictions |
+| `tde_measurement.py` | ADR-0222 k=5 measurement-week sampler: `RealTdeOrchestrator` runs the {direct, F5-tier} baselines and judges both against direct, `MeasurementRecorder` persists samples to `measurement.jsonl`, `aggregate_measured_evidence` rolls them into `BandEvidence`. Default OFF (`TDE_MEASUREMENT_ENABLED=1`); fail-closed — a missing token count or an unavailable judge drops the sample rather than booking a fabricated number |
 
 ## Surfaces
 
