@@ -62,11 +62,11 @@
   <!-- Arrow -->
   <line x1="500" y1="380" x2="500" y2="410" class="arrow"/>
 
-  <!-- Step 4: TDE Detector -->
+  <!-- Step 4: TDE Router -->
   <g>
     <rect x="150" y="410" width="700" height="130" class="step-box detector"/>
     <text x="500" y="425" class="step-number" text-anchor="middle" font-size="16">4</text>
-    <text x="500" y="445" class="step-title" text-anchor="middle">TDE Detector: 5-Signal Ensemble</text>
+    <text x="500" y="445" class="step-title" text-anchor="middle">TDE Router: 5-Signal Ensemble</text>
     <text x="520" y="463" class="step-text">• Parallelization ratio (35% weight)</text>
     <text x="520" y="478" class="step-text">• Iteration loops (25% weight)</text>
     <text x="520" y="493" class="step-text">• Context dependency (20% weight)</text>

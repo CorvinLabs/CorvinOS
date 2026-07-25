@@ -80,7 +80,7 @@ Total: 1,100 tokens
 
 **With TDE:**
 ```
-TDE Detector (50 tokens):
+TDE Router (50 tokens):
 - Detects: 0% parallelizable, 1 step, low complexity
 - Routes to: Claude Code (safe, efficient)
 
@@ -114,7 +114,7 @@ Total: 10.5k tokens
 
 **With TDE:**
 ```
-TDE Detector (100 tokens):
+TDE Router (100 tokens):
 - Detects: 20% parallelizable, 4 iteration loops, high context dependency
 - Routes to: Tiered Delegation
 
@@ -141,7 +141,7 @@ Claude Code (can't parallelize):
 
 **With TDE:**
 ```
-TDE Detector (100 tokens):
+TDE Router (100 tokens):
 - Detects: 85% parallelizable, 1 loop, low context dependency, 1GB data
 - Routes to: ACS
 

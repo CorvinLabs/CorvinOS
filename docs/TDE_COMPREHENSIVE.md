@@ -68,7 +68,7 @@ A 5-signal intelligent router that selects the optimal engine for each task **in
 
 ### How Routing Works
 
-1. **Task arrives** → TDE Detector analyzes 5 signals
+1. **Task arrives** → TDE Router analyzes 5 signals
 2. **Signals scored** → Softmax ensemble calculates engine confidence
 3. **Engine selected** → Task routed to optimal engine
 4. **Result returned** → Token delta tracked for future learning
@@ -77,7 +77,7 @@ A 5-signal intelligent router that selects the optimal engine for each task **in
 
 ## 4. Deep Dive: The 5-Signal Detector
 
-![TDE Detector: 5-Signal Ensemble](diagrams/03-five-signal-detector.svg)
+![TDE Router: 5-Signal Ensemble](diagrams/03-five-signal-detector.svg)
 
 ### Signal Weights & Decision Logic
 

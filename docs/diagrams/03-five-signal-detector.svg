@@ -18,7 +18,7 @@
   </defs>
 
   <!-- Title -->
-  <text x="500" y="35" class="title" text-anchor="middle">TDE Detector: 5-Signal Ensemble</text>
+  <text x="500" y="35" class="title" text-anchor="middle">TDE Router: 5-Signal Ensemble</text>
 
   <!-- Signal 1: Parallelization -->
   <rect x="30" y="60" width="160" height="140" class="signal-box signal1"/>
