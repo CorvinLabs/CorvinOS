@@ -67,6 +67,19 @@ def _tde_reference_model() -> str:
     return _os.environ.get("CORVIN_TDE_REFERENCE_MODEL", "").strip()
 
 
+def _tde_explore_models() -> list[str]:
+    """ADR-0222 F4: candidate WORKER arms to explore, comma-separated in
+    CORVIN_TDE_EXPLORE_MODELS (e.g. 'claude-haiku-4-5,qwen3'). Default empty =
+    OFF (no exploration). Each shadow measurement runs ONE rotating candidate on
+    the step and logs a measured (action, candidate) loss entry, so the log
+    accrues real multi-arm evidence instead of only the worker's arm. Only takes
+    effect when CORVIN_TDE_REFERENCE_MODEL is also set (candidates are judged
+    against that strong yardstick)."""
+    import os as _os  # noqa: PLC0415
+    raw = _os.environ.get("CORVIN_TDE_EXPLORE_MODELS", "").strip()
+    return [m.strip() for m in raw.split(",") if m.strip()]
+
+
 async def default_local_step_executor(
     step: Step, statement: dict[str, Any], *, proc_holder: Optional[Any] = None,
     model_override: Optional[str] = None,
@@ -418,13 +431,25 @@ class TieredDelegationEngine:
             # its own model); OFF by default so behaviour is unchanged.
             _ref_model = _tde_reference_model()
             _reference_executor = None
+            _explore_executors: Optional[list[tuple[str, Any]]] = None
             if _ref_model and self.local_step_executor is default_local_step_executor:
                 import functools as _functools  # noqa: PLC0415
                 _reference_executor = _functools.partial(
                     default_local_step_executor, model_override=_ref_model)
+                # ADR-0222 F4: build one candidate executor per explore-model, each
+                # pinned to that model. Only when a reference is in play (candidates
+                # need a strong yardstick) and the default executor is in use.
+                _explore = _tde_explore_models()
+                if _explore:
+                    _explore_executors = [
+                        (m, _functools.partial(default_local_step_executor,
+                                               model_override=m))
+                        for m in _explore
+                    ]
             results = await executor.execute(
                 statement, analysis, self.local_step_executor,
-                reference_executor_fn=_reference_executor)
+                reference_executor_fn=_reference_executor,
+                explore_executor_fns=_explore_executors)
         except ExecutionError as exc:
             # _group_parallel_batches' defense-in-depth "unschedulable steps"
             # raise fires during grouping, before any step ran — previously
