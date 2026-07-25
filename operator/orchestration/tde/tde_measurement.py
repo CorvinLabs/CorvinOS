@@ -3,20 +3,59 @@
 Collects {direct, F5-tier, TDE} trials on the same tasks and aggregates them
 into BandEvidence for the gate to consume. The gate upgrades from assumption-sourced
 predictions to measured verdicts once min_samples_per_band accumulates.
+
+OPERATOR NOTES (k=5, read before enabling a measurement week)
+-------------------------------------------------------------
+COST: a sampled turn runs the whole task THREE times — the TDE run itself plus a
+direct baseline and an F5 tier baseline — and then two judge calls. Budget ~3x the
+tokens of an unmeasured turn. ``TDE_MEASUREMENT_SAMPLE_RATE`` thins this.
+
+QUOTA: the two baseline turns are NOT charged against the shared daily
+agentic-compute pool (``compute_units_per_day``, the counter TDE/ACS/compute runs
+share). Only the user's own TDE turn is charged, by the normal chokepoint. This is
+deliberate — charging the diagnostic arms would end a free-tier measurement week
+after ~3 sampled turns and defeat its purpose — but it means the flag lets an
+instance spend un-metered compute. It is therefore a MAINTAINER-ONLY switch
+(default OFF, exact opt-in ``TDE_MEASUREMENT_ENABLED=1``); do not enable it on an
+instance whose compute budget is supposed to be capped by the pool.
+
+DATA: measurement.jsonl is written outside the hash-chained audit log and, by
+default, WITHOUT model output text — only tokens, losses and output lengths (see
+``PERSIST_OUTPUTS_ENV``). The task prompt itself is never persisted.
+
+WHY NO SAMPLES? Every refusal path logs its reason. The most common is a run whose
+steps were only partially token-instrumented: the sampler skips it rather than
+book an under-counted TDE cost (see chat_runtime's coverage gate).
 """
 
 from __future__ import annotations
 
 import os
 import json
+import logging
 import time
 import threading
 import asyncio
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 from collections import defaultdict
 from .decision_gate import BandEvidence
+
+_log = logging.getLogger(__name__)
+
+#: Bands the gate groups evidence by. Kept as a runtime tuple because a
+#: ``Literal`` annotation is NOT enforced at runtime — validation needs a real
+#: membership check (see MeasurementSample.__post_init__).
+VALID_BANDS: tuple[str, ...] = ("trivial", "moderate", "complex")
+
+#: Persist the full LLM outputs into measurement.jsonl. Default OFF: the gate
+#: reads ONLY tokens and losses, so writing the raw text of a user's task and
+#: three model answers to disk would be collection without analytic purpose
+#: (GDPR Art. 5(1)(c) data minimisation). Opt-in strictly for locally debugging
+#: the judge. When off, samples persist output LENGTHS instead of text, which is
+#: all that is ever needed to sanity-check a suspicious loss score.
+PERSIST_OUTPUTS_ENV = "TDE_MEASUREMENT_PERSIST_OUTPUTS"
 
 
 @dataclass
@@ -46,18 +85,58 @@ class MeasurementSample:
     data_source: str = "measured"       # always "measured" for real samples
 
     def __post_init__(self) -> None:
-        """Validate sample data integrity (GDPR Art. 32 + ADR-0222)."""
+        """Validate sample data integrity — FAIL-CLOSED (ADR-0222 honesty invariant).
+
+        A sample that reaches the gate is evidence a routing default gets flipped
+        on. Every field that could carry a FABRICATED number is rejected here
+        rather than defaulted, because the failure mode is silent and one-directional:
+        a missing token count read as 0 becomes "(direct - 0) / direct = 100% savings",
+        i.e. the strongest possible pro-TDE evidence produced by an absent measurement.
+        Refusing the sample loses one data point; accepting it corrupts the verdict.
+        """
         # Loss values must be in [0.0, 1.0] range (semantic similarity)
         if not (0.0 <= self.tier_loss <= 1.0):
             raise ValueError(f"tier_loss must be in [0.0, 1.0], got {self.tier_loss}")
         if not (0.0 <= self.tde_loss <= 1.0):
             raise ValueError(f"tde_loss must be in [0.0, 1.0], got {self.tde_loss}")
 
-        # Token counts must be positive
-        if self.direct_tokens < 0 or self.tier_tokens < 0 or self.tde_tokens < 0:
-            raise ValueError("token counts must be non-negative")
+        # Token counts must be STRICTLY POSITIVE, not merely non-negative. A zero
+        # is never a real measurement of an LLM turn that produced output — it is
+        # an unwired usage field (exactly the k=4 defect: result["usage"] did not
+        # exist, so every sample would have carried tde_tokens=0). direct_tokens=0
+        # additionally divides by zero in the gate's savings formula.
+        for _name in ("direct_tokens", "tier_tokens", "tde_tokens"):
+            _val = getattr(self, _name)
+            if _val <= 0:
+                raise ValueError(
+                    f"{_name} must be > 0 (got {_val}) — a zero token count is an "
+                    "unmeasured turn, and would read as fabricated savings"
+                )
 
-        # task_band is validated by Literal type hint
+        # task_band must be a band the gate actually groups by. The Literal
+        # annotation does NOT enforce this at runtime, so an unknown band would
+        # silently create a phantom evidence group that never reaches
+        # min_samples_per_band and quietly starves the verdict.
+        if self.task_band not in VALID_BANDS:
+            raise ValueError(
+                f"task_band must be one of {VALID_BANDS}, got {self.task_band!r}"
+            )
+
+    def to_persistable_dict(self) -> dict[str, Any]:
+        """Serialise for measurement.jsonl, redacting raw model output by default.
+
+        The gate needs tokens + losses only. Full outputs stay in memory for the
+        judge and are written to disk ONLY under PERSIST_OUTPUTS_ENV (see module
+        docstring). Lengths are always kept — enough to spot a truncated or empty
+        answer behind a surprising loss score, without storing the text itself.
+        """
+        data = asdict(self)
+        if os.getenv(PERSIST_OUTPUTS_ENV) == "1":
+            return data
+        for _field in ("direct_output", "tier_output", "tde_output"):
+            data[f"{_field}_chars"] = len(data.get(_field) or "")
+            data[_field] = "<redacted>"
+        return data
 
 
 @dataclass
@@ -222,7 +301,8 @@ class MeasurementRecorder:
             await asyncio.to_thread(self._write_sample_sync, sample)
         except (IOError, OSError) as e:
             # Log but don't crash; measurement failure shouldn't block chat
-            print(f"Warning: Failed to write measurement sample to {self.log_path}: {e}")
+            _log.warning("Failed to write measurement sample to %s: %s",
+                         self.log_path, e)
 
     def _write_sample_sync(self, sample: MeasurementSample) -> None:
         """Synchronous file write with lock to prevent JSONL corruption.
@@ -234,7 +314,7 @@ class MeasurementRecorder:
         """
         with self._write_lock:
             with open(self.log_path, "a") as f:
-                f.write(json.dumps(asdict(sample), default=str) + "\n")
+                f.write(json.dumps(sample.to_persistable_dict(), default=str) + "\n")
 
     def get_aggregated_evidence(self) -> list[BandEvidence]:
         """Return current measured evidence aggregated by band.
@@ -245,14 +325,21 @@ class MeasurementRecorder:
         return aggregate_measured_evidence(self.samples)
 
     def load_from_log(self) -> None:
-        """Load all samples from measurement.jsonl into memory (thread-safe).
+        """Replace the in-memory buffer with what measurement.jsonl holds.
 
         Useful for resuming a measurement week or analysis after restart.
+
+        REPLACES rather than appends: this used to extend ``self.samples``, so a
+        second call — or a call on a recorder that had already recorded this
+        session — double-counted every sample. ``n_measured`` is the gate's
+        sample-size guard, so inflating it is exactly how thin evidence sneaks
+        past ``min_samples_per_band``. The log on disk is the single truth.
         """
         if not os.path.exists(self.log_path):
             return
 
         with self._write_lock:
+            loaded: list[MeasurementSample] = []
             try:
                 with open(self.log_path, "r") as f:
                     for line in f:
@@ -260,12 +347,23 @@ class MeasurementRecorder:
                             continue
                         try:
                             data = json.loads(line)
-                            sample = MeasurementSample(**data)
-                            self.samples.append(sample)
+                            # Drop the redaction bookkeeping fields written by
+                            # to_persistable_dict() — they are not constructor
+                            # args, and passing them through would raise
+                            # TypeError on every redacted line (i.e. on the
+                            # DEFAULT log format), silently losing the whole log.
+                            data = {k: v for k, v in data.items()
+                                    if not k.endswith("_chars")}
+                            loaded.append(MeasurementSample(**data))
                         except (json.JSONDecodeError, TypeError, ValueError) as e:
-                            print(f"Warning: Failed to parse measurement line: {e}")
+                            _log.warning("Failed to parse measurement line: %s", e)
             except (IOError, OSError) as e:
-                print(f"Warning: Failed to load measurements from {self.log_path}: {e}")
+                # Partial read: keep the buffer untouched rather than swapping in
+                # a truncated set that would under-report n_measured.
+                _log.warning("Failed to load measurements from %s: %s",
+                             self.log_path, e)
+                return
+            self.samples = loaded
 
     def clear_samples(self) -> None:
         """Clear in-memory samples (for testing)."""
@@ -273,25 +371,274 @@ class MeasurementRecorder:
 
 
 # ============================================================================
-# k=4 Mock Orchestrator (for Phase 1 integration testing)
+# k=5 Real Orchestrator — the measurement the gate actually consumes
+# ============================================================================
+
+#: InitialAnalysis complexity value -> decision_gate band name.
+#:
+#: The two vocabularies genuinely differ and must be translated, not assumed
+#: equal: the classifier emits ``simple | moderate | complex``
+#: (loss_profile_tracker "Task complexity bucket", and send_integration's
+#: fast-path test compares against ``"simple"``), while the gate's bands are
+#: ``trivial | moderate | complex`` (decision_gate.synthetic_evidence_from_assumptions).
+#: Passing "simple" through unmapped silently routed every simple task into the
+#: moderate band — leaving the trivial band permanently at n_measured=0 (so it
+#: could only ever read INSUFFICIENT_DATA) while diluting the moderate band with
+#: tasks that belong to a cheaper one. "trivial" is accepted as well so an
+#: aligned classifier keeps working.
+_COMPLEXITY_TO_BAND: dict[str, str] = {
+    "simple": "trivial",
+    "trivial": "trivial",
+    "moderate": "moderate",
+    "medium": "moderate",
+    "complex": "complex",
+    "hard": "complex",
+}
+
+
+def classify_band(task_complexity: str | None) -> Literal["trivial", "moderate", "complex"]:
+    """Map an InitialAnalysis complexity string onto a decision_gate band.
+
+    Unrecognised or absent values fall to "moderate" — the middle band — so a
+    classifier label nobody anticipated can neither inflate the trivial band
+    (where TDE looks best) nor the complex band (where it looks worst).
+    """
+    key = (task_complexity or "").strip().lower()
+    band = _COMPLEXITY_TO_BAND.get(key)
+    if band is None:
+        # Never silent: an unmapped label routes a whole class of tasks into the
+        # middle band, which looks like normal data. If the classifier's
+        # vocabulary drifts, this line is the only way to notice before the
+        # measurement week's evidence is already skewed.
+        if key:
+            _log.warning(
+                "ADR-0222: unmapped complexity label %r — filing under "
+                "'moderate'. Add it to _COMPLEXITY_TO_BAND if the classifier "
+                "vocabulary changed.", task_complexity)
+        return "moderate"
+    return band  # type: ignore[return-value]
+
+
+class RealTdeOrchestrator:
+    """ADR-0222 k=5 — runs the REAL {direct, tier} baselines and judges them.
+
+    Given a task that TDE has ALREADY completed (its tokens + output are passed
+    in), this runs the two comparison arms and scores quality:
+
+      1. ``whole_task_direct_baseline`` — whole task, one turn, USER's model.
+         This is the reference: its loss is 0 by definition, its token count is
+         the denominator of every savings figure.
+      2. ``whole_task_tier_baseline`` (F5) — whole task, one turn, tier-resolved
+         model. The simplest alternative per-step TDE has to beat.
+      3. ``judge_loss_sync`` twice — tier-vs-direct and TDE-vs-direct — using the
+         F1-upgraded judge (``CORVIN_TDE_JUDGE_MODEL``).
+
+    SEQUENTIAL, not parallel, deliberately: the arms are each a `claude -p`
+    one-shot, and running them concurrently would have them contend for the same
+    CLI/rate-limit budget, putting contention noise into the very latency and
+    token numbers being measured. The handoff's recommendation ("start sequential
+    for a clean baseline") is kept.
+
+    FAIL-CLOSED throughout: if an arm raises, a token count is missing, or the
+    judge cannot produce a verdict, this returns ``None`` and NO sample is
+    recorded. A dropped data point costs one turn of evidence; a fabricated one
+    corrupts a verdict that flips a routing default.
+    """
+
+    #: Ceiling for one full measurement (both baselines + both judge calls).
+    #: Beyond this the sample is abandoned — a measurement that outlives its
+    #: usefulness must not keep burning quota in the background.
+    TOTAL_TIMEOUT_S = 900
+
+    @staticmethod
+    def _tokens_of(local_result: Any) -> Optional[int]:
+        """Extract total_tokens from a LocalResult, or None when unmeasured.
+
+        Returns None (never 0) for a missing usage block, so the caller drops the
+        sample instead of booking a zero that reads as 100% savings.
+        """
+        usage = getattr(local_result, "usage", None)
+        if not isinstance(usage, dict):
+            return None
+        raw = usage.get("total_tokens")
+        try:
+            tokens = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return tokens if tokens > 0 else None
+
+    @staticmethod
+    def _output_of(local_result: Any) -> str:
+        """Stringify a LocalResult's output for judging."""
+        out = getattr(local_result, "output", None)
+        if isinstance(out, str):
+            return out
+        return json.dumps(out, default=str) if out is not None else ""
+
+    @classmethod
+    async def orchestrate(
+        cls,
+        *,
+        task_id: str,
+        task_text: str,
+        tde_tokens: int,
+        tde_output: str,
+        task_complexity: str | None = None,
+        user_model: str | None = None,
+        engine_id: str = "claude_code",
+        workload_type: str | None = None,
+        confidence: float | None = None,
+        proc_holder: Any = None,
+    ) -> MeasurementSample | None:
+        """Run both baselines, judge both arms, and build one MeasurementSample.
+
+        ``tde_tokens`` / ``tde_output`` describe the TDE run that already
+        happened. ``tde_output`` MUST be the bare model answer — strip any UI
+        badge before passing it, or the judge scores the badge as content and
+        reports a quality loss TDE did not incur.
+
+        Returns None when the sample cannot be honestly completed.
+        """
+        # Guard the TDE arm's own numbers first — cheapest possible rejection,
+        # before spending two LLM turns on a sample that can never be valid.
+        if not isinstance(tde_tokens, int) or tde_tokens <= 0:
+            _log.warning(
+                "measurement %s dropped: TDE token count is %r — the TDE arm was "
+                "not usage-instrumented, so no honest comparison is possible",
+                task_id, tde_tokens)
+            return None
+        if not (tde_output or "").strip():
+            _log.warning("measurement %s dropped: empty TDE output", task_id)
+            return None
+
+        band = classify_band(task_complexity)
+        statement = {"statement": task_text}
+
+        try:
+            async with _timeout_after(cls.TOTAL_TIMEOUT_S):
+                from .tde_engine import (  # noqa: PLC0415 — avoid import cycle
+                    whole_task_direct_baseline,
+                    whole_task_tier_baseline,
+                )
+
+                direct = await whole_task_direct_baseline(
+                    statement, user_model=user_model, proc_holder=proc_holder)
+                tier = await whole_task_tier_baseline(
+                    statement, engine_id=engine_id, user_model=user_model,
+                    workload_type=workload_type, confidence=confidence,
+                    proc_holder=proc_holder)
+
+                direct_tokens = cls._tokens_of(direct)
+                tier_tokens = cls._tokens_of(tier)
+                if direct_tokens is None or tier_tokens is None:
+                    _log.warning(
+                        "measurement %s dropped: baseline usage missing "
+                        "(direct=%r, tier=%r)", task_id, direct_tokens, tier_tokens)
+                    return None
+
+                direct_output = cls._output_of(direct)
+                tier_output = cls._output_of(tier)
+                if not direct_output.strip():
+                    _log.warning(
+                        "measurement %s dropped: direct baseline returned no "
+                        "output, so there is no reference to judge against",
+                        task_id)
+                    return None
+
+                from .loss_judge import judge_loss_sync  # noqa: PLC0415
+
+                desc = f"whole task: {task_text[:200]}"
+                tier_loss_pct = await asyncio.to_thread(
+                    judge_loss_sync, desc, direct_output, tier_output)
+                tde_loss_pct = await asyncio.to_thread(
+                    judge_loss_sync, desc, direct_output, tde_output)
+        except asyncio.TimeoutError:
+            _log.warning("measurement %s dropped: exceeded %ss budget",
+                         task_id, cls.TOTAL_TIMEOUT_S)
+            return None
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except Exception:
+            # Any arm failing (CLI missing, non-zero exit, unparseable envelope)
+            # means this task has no honest sample. Logged with traceback, never
+            # swallowed silently — the k=4 hook's bare `except: pass` is exactly
+            # why two hard defects in it went unnoticed until they were read.
+            _log.warning("measurement %s dropped: baseline arm failed",
+                         task_id, exc_info=True)
+            return None
+
+        # judge_loss_sync returns None when the judge stack is unavailable or its
+        # verdict is unparseable. Substituting a number here (0.0, or the lexical
+        # fallback) would book a fabricated quality score — the precise defect
+        # ADR-0222 F1 was written to close. No verdict, no sample.
+        if tier_loss_pct is None or tde_loss_pct is None:
+            _log.warning(
+                "measurement %s dropped: judge returned no verdict "
+                "(tier=%r, tde=%r)", task_id, tier_loss_pct, tde_loss_pct)
+            return None
+
+        judge_model = os.getenv("CORVIN_TDE_JUDGE_MODEL", "").strip() or "haiku"
+
+        try:
+            return MeasurementSample(
+                task_id=task_id,
+                task_band=band,
+                timestamp=time.time(),
+                direct_tokens=direct_tokens,
+                direct_output=direct_output,
+                tier_tokens=tier_tokens,
+                tier_output=tier_output,
+                tier_loss=tier_loss_pct / 100.0,
+                tde_tokens=tde_tokens,
+                tde_output=tde_output,
+                tde_loss=tde_loss_pct / 100.0,
+                quality_judge_model=judge_model,
+            )
+        except ValueError:
+            # __post_init__ rejected the sample (out-of-range loss, non-positive
+            # tokens). It is the last fail-closed backstop; honour it.
+            _log.warning("measurement %s dropped: failed validation",
+                         task_id, exc_info=True)
+            return None
+
+
+def _timeout_after(seconds: float) -> Any:
+    """asyncio.timeout on 3.11+, falling back to a no-op on older runtimes.
+
+    The repo targets 3.11 (asyncio.timeout landed there), but the fallback keeps
+    the module importable rather than failing at definition time on 3.10.
+    """
+    _timeout = getattr(asyncio, "timeout", None)
+    if _timeout is not None:
+        return _timeout(seconds)
+
+    class _NullCtx:
+        async def __aenter__(self) -> None:
+            return None
+
+        async def __aexit__(self, *exc: Any) -> bool:
+            return False
+
+    return _NullCtx()
+
+
+# ============================================================================
+# Test double — NOT used by any production path
 # ============================================================================
 
 class MockTdeOrchestrator:
-    """Stub orchestrator for measurement week Phase 1.
+    """Fixed-number stand-in for RealTdeOrchestrator, for tests only.
 
-    k=4 Phase 1: Mock {direct, tier, TDE} execution for testing hook.
-    k=5: Real orchestration (parallel direct + tier + TDE runs).
+    Kept so the recorder/aggregation/gate pipeline can be exercised without
+    spending LLM calls. The chat_runtime hook calls RealTdeOrchestrator; wiring
+    this one into a production path would feed the decision gate invented
+    numbers, which the honesty invariant forbids.
     """
 
     @staticmethod
     def classify_band(task_complexity: str | None) -> Literal["trivial", "moderate", "complex"]:
-        """Classify task into measurement band."""
-        if task_complexity == "trivial":
-            return "trivial"
-        elif task_complexity == "complex":
-            return "complex"
-        else:
-            return "moderate"
+        """Delegate to the module-level classifier — one banding rule, not two."""
+        return classify_band(task_complexity)
 
     @staticmethod
     def mock_direct_execution(prompt: str) -> dict[str, Any]:

@@ -159,6 +159,87 @@ async def default_local_step_executor(
     return await asyncio.to_thread(_run)
 
 
+async def _whole_task_single_turn(
+    statement: dict[str, Any],
+    *,
+    model: Optional[str],
+    proc_holder: Optional[Any] = None,
+    label: str = "whole-task baseline",
+) -> Any:
+    """Run an ENTIRE task as ONE tool-less turn on ``model``. Shared core of the
+    F5 tier baseline and the ADR-0222 k=5 direct baseline.
+
+    Extracted so the two baselines differ in EXACTLY ONE variable — the model.
+    Same prompt, same CLI flags, same envelope parsing, same token accounting.
+    A direct baseline built on a different code path would confound the
+    comparison the decision gate rests on: a loss/token delta could then come
+    from the prompt or the parser rather than from the model tier, and the gate
+    would read that as evidence about tiering. Keeping one core makes the
+    difference attributable by construction.
+    """
+    _ensure_bridges_on_path()
+    import helper_model  # noqa: PLC0415
+
+    prompt = (
+        "You are completing an ENTIRE task in a single turn with full context.\n"
+        "Respond in English. Ignore any repository, project or user context of "
+        "the machine you run on; your ONLY task is the one described below.\n"
+        f"Task context:\n{json.dumps(statement, default=str, indent=2)[:20000]}\n\n"
+        'Complete the whole task and return ONLY a JSON object on one line: '
+        '{"output": <result>}\n'
+    )
+    model_args = ["--model", model] if model else []
+    model_tag = model or ""
+
+    def _run() -> Any:
+        from .worker_ipc import (  # noqa: PLC0415 — avoid import cycle
+            LocalResult,
+            parse_cli_envelope,
+            parse_worker_output,
+            run_one_shot,
+        )
+
+        cmd = [
+            helper_model.resolve_claude_bin(), "-p", prompt,
+            "--max-turns", "1",
+            "--output-format", "json",
+            "--disallowedTools", "*",
+            *model_args,
+        ]
+        rc, stdout, stderr = run_one_shot(cmd, _LOCAL_STEP_TIMEOUT_S, proc_holder=proc_holder)
+        if rc != 0:
+            raise RuntimeError(f"{label} exit {rc}: {stderr.strip()[:300]}")
+        result_text, usage, env_error = parse_cli_envelope(stdout, model=model_tag)
+        if env_error:
+            raise RuntimeError(f"{label} error: {env_error}")
+        return LocalResult(parse_worker_output(result_text), usage)
+
+    return await asyncio.to_thread(_run)
+
+
+async def whole_task_direct_baseline(
+    statement: dict[str, Any],
+    *,
+    user_model: Optional[str] = None,
+    proc_holder: Optional[Any] = None,
+) -> Any:
+    """ADR-0222 k=5 — the DIRECT baseline: the whole task in ONE turn on the
+    USER's own model. This is the REFERENCE the gate measures everything against
+    (``BandEvidence.direct_tokens``; direct loss is 0 by definition).
+
+    Deliberately NOT tier-resolved: it pins ``user_model`` so it captures what
+    the user would have paid and received without any delegation machinery. It
+    shares ``_whole_task_single_turn`` with the F5 tier baseline, so tier-vs-direct
+    differs in the model and nothing else.
+
+    Default-OFF primitive: only the ADR-0222 measurement harness calls it.
+    """
+    return await _whole_task_single_turn(
+        statement, model=user_model, proc_holder=proc_holder,
+        label="whole-task direct baseline",
+    )
+
+
 async def whole_task_tier_baseline(
     statement: dict[str, Any],
     *,
@@ -194,7 +275,6 @@ async def whole_task_tier_baseline(
     shows the play has legs.
     """
     _ensure_bridges_on_path()
-    import helper_model  # noqa: PLC0415
     try:
         import engine_models as _em  # noqa: PLC0415
         model = _em.resolve_model_for_workload(
@@ -208,41 +288,10 @@ async def whole_task_tier_baseline(
         # honest, conservative reading, never a fabricated cheaper number.
         model = user_model
 
-    prompt = (
-        "You are completing an ENTIRE task in a single turn with full context.\n"
-        "Respond in English. Ignore any repository, project or user context of "
-        "the machine you run on; your ONLY task is the one described below.\n"
-        f"Task context:\n{json.dumps(statement, default=str, indent=2)[:20000]}\n\n"
-        'Complete the whole task and return ONLY a JSON object on one line: '
-        '{"output": <result>}\n'
+    return await _whole_task_single_turn(
+        statement, model=model, proc_holder=proc_holder,
+        label="whole-task baseline",
     )
-    model_args = ["--model", model] if model else []
-    model_tag = model or ""
-
-    def _run() -> Any:
-        from .worker_ipc import (  # noqa: PLC0415 — avoid import cycle
-            LocalResult,
-            parse_cli_envelope,
-            parse_worker_output,
-            run_one_shot,
-        )
-
-        cmd = [
-            helper_model.resolve_claude_bin(), "-p", prompt,
-            "--max-turns", "1",
-            "--output-format", "json",
-            "--disallowedTools", "*",
-            *model_args,
-        ]
-        rc, stdout, stderr = run_one_shot(cmd, _LOCAL_STEP_TIMEOUT_S, proc_holder=proc_holder)
-        if rc != 0:
-            raise RuntimeError(f"whole-task baseline exit {rc}: {stderr.strip()[:300]}")
-        result_text, usage, env_error = parse_cli_envelope(stdout, model=model_tag)
-        if env_error:
-            raise RuntimeError(f"whole-task baseline error: {env_error}")
-        return LocalResult(parse_worker_output(result_text), usage)
-
-    return await asyncio.to_thread(_run)
 
 
 def _license_corvin_home() -> Path:
@@ -330,9 +379,18 @@ def _summarize(results: list[StepResult]) -> dict[str, Any]:
     # field was structurally always 0, silently displayed as a real metric.
     # ADR-0218 Phase 0 (2026-07-24) then added real per-step token usage:
     # DELEGATED workers now run --output-format json and their usage is captured
-    # (worker_ipc.parse_cli_envelope) and aggregated below. LOCAL steps still use
-    # --output-format text and carry no usage, so they are simply omitted from
-    # the token totals. `token_savings_pct` stays `None` regardless — a savings
+    # (worker_ipc.parse_cli_envelope) and aggregated below. ADR-0219 R1 extended
+    # the SAME instrumentation to local steps (default_local_step_executor also
+    # runs --output-format json, and the local branch of
+    # AdaptiveDelegationExecutor sets StepResult.token_usage), so both sides now
+    # carry real usage — see the R1 note further down. Steps still lacking a
+    # usage block (mock IPC, a fail-soft text envelope) are omitted from the
+    # totals rather than counted as zero, which is why
+    # `instrumented_step_count` is reported separately: a consumer comparing
+    # token totals across runs MUST check it against `step_count`, since a
+    # partial count under-reports what the run actually spent (ADR-0222 k=5
+    # relies on exactly that check before recording a measurement sample).
+    # `token_savings_pct` stays `None` regardless — a savings
     # PERCENTAGE needs a counterfactual baseline (Phase-1 measurement), not a
     # single run, and must never be a silently-defaulted 0 that reads as a real
     # "0% savings". Latency below is the other genuinely-measured signal.

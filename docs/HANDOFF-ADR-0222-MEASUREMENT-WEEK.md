@@ -1,351 +1,221 @@
-# HANDOFF: ADR-0222 Measurement Week Glue
+# ADR-0222 Measurement Week — Status and Operator Guide
 
-**Date:** 2026-07-25  
-**Session 1:** TDE-Visibility k=8 + ADR-0222 Analysis  
-**Session 2:** ADR-0222 k=1–k=3  
-**Status:** Ready for Measurement Week Execution (k=1 Skeleton + k=2 Stub + k=3 Tests COMPLETE)
+**Last updated:** 2026-07-25 (k=5)
+**Status:** Sampler BUILT and wired. Measurement week not yet run — no measured evidence exists.
 
----
-
-## What's Done
-
-### ✅ TDE Visibility (ADR-0214)
-- k=1–7: Voice-summary fixes + metrics visualization (commits cd1fce7..5956239)
-- k=8: Backend persistence (commit a6293f0)
-  - `_append_turn()` extended with `tde_progress` kwarg
-  - TDE execution constructs TdeProgress dict (run_id, steps, delegated, local, L34-gate)
-  - persists to turns.jsonl automatically
-- Metrics card + TDE Graph tab now survive page reload ✅
-
-### ✅ Measurement Foundation (ADR-0222 F1–F4)
-- F1: Real counterfactual (strong reference models via `CORVIN_TDE_REFERENCE_MODEL`)
-- F2: Record executed model per step (multi-arm log live)
-- F3: Standardized on `step.action` as canonical key
-- F4: Cross-model exploration primitive (`CORVIN_TDE_EXPLORE_MODELS`)
-
-### ✅ Whole-Task Baseline + Decision Gate (F5)
-- `whole_task_tier_baseline()` implemented (tde/tde_engine.py)
-- `decision_gate.py` pure logic (evaluate_band, evaluate_tde_verdict)
-- `GateAssumptions` (quality_floor_loss, min_net_savings, min_margin_over_tier, min_samples_per_band)
-- Honesty invariant enforced: verdicts only on measured data (data_source="measured")
+This was a build-plan handoff through k=4. It now documents what actually EXISTS,
+because the plan and the code diverged in ways that mattered (see *Corrections* at
+the end — three claims in the previous version of this file were false).
 
 ---
 
-## k=3: Production Hardening Complete ✅
+## What the sampler does
 
-**Session 2 k=1–k=3 Completion (2026-07-25):**
+The decision gate (`decision_gate.py`) answers one question per task band: *does
+per-step TDE net-save tokens at held quality?* It may only answer on MEASURED data
+(`data_source="measured"`, `n_measured ≥ min_samples_per_band`, currently 30).
+Producing that data is what the measurement week is for.
 
-### k=1: Skeleton (5c57c27)
-- MeasurementSample + AggregatedBandEvidence dataclasses
-- aggregate_measured_evidence() function
-- 10 unit tests (feature flag, persistence, aggregation)
+For a sampled turn, three arms run on the SAME task:
 
-### k=2: Integration Tests (71b7993)
-- Feature-flag gating tests
-- Sample flow (disabled/enabled paths)
-- Aggregation pipeline + multi-band grouping
-- Mock gate integration
-- 7 integration tests (all green)
+| Arm | What it is | Role |
+|---|---|---|
+| **TDE** | The per-step decomposition the user's turn already ran | The candidate |
+| **direct** | Whole task, ONE turn, the user's own model (`whole_task_direct_baseline`) | The REFERENCE — loss 0 by definition, its token count is the denominator of every savings figure |
+| **tier** (F5) | Whole task, ONE turn, tier-resolved model (`whole_task_tier_baseline`) | The simplest alternative TDE must beat |
 
-### k=3: Production Hardening (4903e0b)
-- **Thread-safety:** Double-check locking in get_instance() (TOCTOU fix)
-- **Async-safety:** asyncio.to_thread() for file I/O (no event loop blocking)
-- **Persistence safety:** Threading lock in _write_sample_sync() (atomic JSONL writes)
-- **Data validation:** MeasurementSample.__post_init__() validates loss ranges [0.0–1.0] and task_band enum
-- **Architectural note:** Session isolation as k=4 enhancement (documented debt)
+Both baselines then get judged against direct by the F1-upgraded semantic judge
+(`loss_judge.judge_loss_sync`, model via `CORVIN_TDE_JUDGE_MODEL`). The result is
+one `MeasurementSample` appended to `measurement.jsonl`.
 
-**All 17 tests green.** Production-ready for k=4 integration.
+### Sequential, not parallel
 
----
+The arms run one after another. Concurrent arms would contend for the same
+CLI/rate-limit budget and put contention noise into the very token and latency
+numbers being measured. For the same reason the sampler starts only after the
+turn's ADR-0213 context-sync has completed — that sync is itself an awaited
+`claude -p --continue` on the expensive user model.
 
-## k=4: Phase 1 Scaffold (Session 3, 2026-07-25)
+### Off the response path
 
-**k=4 Phase 1: Mock orchestration + feature-flag hook (INCOMPLETE)**
+The sampler is a detached task started at the very END of `_stream_tde_turn`,
+after the answer is streamed, after it is persisted, and after the context-sync.
+The user never waits for it. Trade-off accepted: a process shutdown mid-measurement
+loses that sample; measurement-week collection is best-effort by design.
 
-Added to tde_measurement.py:
-- MockTdeOrchestrator class (band classification + mock {direct, tier} execution)
-- orchestrate_measurement() method (creates MeasurementSample from fake results)
-- Integration test skeleton (test_tde_measurement_k4_integration.py — tests pending k=5 import resolution)
-
-**Feature-flag design:**
-```python
-if os.getenv("TDE_MEASUREMENT_ENABLED") == "1":
-    # After TDE execution, in _stream_tde_turn():
-    sample = await MockTdeOrchestrator.orchestrate_measurement(
-        prompt=task_text,
-        tde_tokens=result.usage.total_tokens,
-        tde_output=final,
-        task_complexity=analysis.classification.task_type,
-    )
-    await measurement_recorder.record_sample(sample)
-```
-
-**k=4 Phase 1 Status:** BLOCKED on test imports (operator/tde/__init__.py dependency chain). Ready to build real hook once resolved. Real orchestration (parallel {direct, tier} execution) deferred to k=5.
+It is unreachable on the cancellation path, so a disconnected client never pays
+for two baseline turns.
 
 ---
 
-## k=5: Phase 2 — Real Integration (Next Session)
+## Operator guide
 
-**Real orchestration of {direct, tier, TDE}:**
-1. Run direct turn (user model single-call) — collect tokens + output
-2. Run tier baseline (F5 whole-task) — collect tokens + output
-3. Judge tier vs direct (F1-judge) — loss calculation
-4. Judge TDE vs direct (F1-judge) — loss calculation
-5. Create valid MeasurementSample (full metrics, not mocked)
-6. Record to measurement.jsonl
-7. Gate aggregates and evaluates verdict
+### Environment variables
 
-**k=5 also includes:**
-- Fix integration test import issues (resolve tde/__init__.py chain or refactor test structure)
-- Session-scoped MeasurementRecorder (k=3 architectural debt)
-- Real E2E measurement week simulation
-- Adversarial review of chat_runtime integration
+| Variable | Default | Effect |
+|---|---|---|
+| `TDE_MEASUREMENT_ENABLED` | unset (OFF) | Must be exactly `"1"`. Anything else — including `true`, `yes`, `TRUE` — stays off. |
+| `TDE_MEASUREMENT_SAMPLE_RATE` | `1.0` | Fraction of eligible turns to sample, `0.0`–`1.0`. Unparseable or out-of-range reads as `0.0` (a typo must not silently triple every turn's cost). |
+| `TDE_MEASUREMENT_PERSIST_OUTPUTS` | unset (OFF) | `"1"` writes raw model output text into `measurement.jsonl`. Debug only — see *Data* below. |
+| `CORVIN_TDE_JUDGE_MODEL` | site default (Haiku) | The judge. Set this to a STRONG model for the measurement week: a Haiku judge scoring Haiku-vs-Haiku is blind to the real quality drop (ADR-0222 F1). |
+| `CORVIN_TDE_REFERENCE_MODEL` | unset | ADR-0222 F1 stronger shadow reference (pre-existing, unchanged by k=5). |
+| `CORVIN_HOME` | `~/.corvin` | `measurement.jsonl` lives in `<CORVIN_HOME>/measurement-week/`. |
 
----
+### Cost
 
-## What's Missing: Real chat_runtime Integration (k=5)
+A sampled turn runs the whole task THREE times plus two judge calls — budget ~3x
+the tokens of an unmeasured turn. `TDE_MEASUREMENT_SAMPLE_RATE` thins this.
 
-The **sampled real-traffic recorder** that runs {direct, F5-tier, TDE} in parallel and collects BandEvidence.
+### Quota — read this before enabling
 
-### Architecture (Phase 2 Data Collection)
+The two baseline turns are **NOT charged** against the shared daily
+agentic-compute pool (`compute_units_per_day`, shared by TDE/ACS/compute). Only
+the user's own TDE turn is charged, through the normal chokepoint.
 
-```python
-# When a TDE-eligible turn arrives:
-if measurement_week_enabled:
-    # 1. Run all 3 variants in parallel (or sequential with isolation)
-    direct_result = await run_direct_turn(task, user_model)
-    tier_result = await run_tier_baseline(task)  # F5 already built
-    tde_result = await run_tde_turn(task)  # already exists
-    
-    # 2. Collect metrics from each
-    direct_tokens = direct_result.usage.total_tokens
-    direct_quality = judge(direct_result, reference=user_model_output)
-    
-    tier_tokens = tier_result.usage.total_tokens
-    tier_loss = judge(tier_result, reference=direct_output)
-    
-    tde_tokens = tde_result.usage.total_tokens
-    tde_loss = judge(tde_result, reference=direct_output)
-    
-    # 3. Write to measurement log
-    measurement_log.append({
-        "task_band": classify_band(task),  # "trivial" | "moderate" | "complex"
-        "direct_tokens": direct_tokens,
-        "tier_tokens": tier_tokens,
-        "tier_loss": tier_loss,
-        "tde_tokens": tde_tokens,
-        "tde_loss": tde_loss,
-        "data_source": "measured",  # <- this upgrades from "assumptions"
-    })
-    
-    # 4. Gate consumes aggregated evidence
-    if len(measurement_log) >= min_samples_per_band * num_bands:
-        evidence = aggregate_measured_evidence(measurement_log)
-        verdict = evaluate_tde_verdict(evidence)
-        # verdicts now have data_source="measured" -> amplifier_survives can be TRUE
-```
+This is deliberate — charging the diagnostic arms would end a free-tier
+measurement week after ~3 sampled turns — but it means the flag lets an instance
+spend un-metered compute. **It is a MAINTAINER-ONLY switch.** Do not enable it on
+an instance whose compute budget is supposed to be capped by the pool.
+
+### Data
+
+`measurement.jsonl` is written OUTSIDE the hash-chained audit log. By default it
+carries no model output text — only tokens, losses, and output *lengths* (GDPR
+Art. 5(1)(c) data minimisation; the gate reads tokens and losses only). The task
+prompt itself is never persisted. `TDE_MEASUREMENT_PERSIST_OUTPUTS=1` opts into
+full text for locally debugging a suspicious judge score.
+
+### "The week is running but no samples appear"
+
+Every refusal path logs its reason. In order of likelihood:
+
+1. **Partially instrumented run** — the most common. `summary["total_tokens"]`
+   sums only the steps that returned a usage block, so on a run where some steps
+   reported usage and others did not it UNDER-counts what TDE spent, biasing
+   savings in TDE's favour. The sampler requires
+   `instrumented_step_count == step_count` and logs the skip with both numbers.
+2. **Baseline arm failed** — CLI missing, non-zero exit, unparseable envelope.
+3. **Judge returned no verdict** — judge stack unavailable or its answer
+   unparseable. Never substituted with a number.
+4. **Turn was not successful** (`ok` false) — failed turns are not sampled.
+5. **Sampling rate** — see above; an out-of-range value samples nothing.
 
 ---
 
-## Files to Build
+## The honesty invariant (why the code refuses so much)
 
-### 1. `operator/orchestration/tde/tde_measurement.py` (NEW)
-**Data structures:**
-```python
-@dataclass
-class MeasurementSample:
-    """One sampled trial of {direct, tier, TDE} on a task."""
-    task_id: str
-    task_band: str  # from task classification
-    timestamp: float
-    
-    # Results from each variant
-    direct_tokens: int
-    direct_output: str
-    
-    tier_tokens: int
-    tier_output: str
-    tier_loss: float  # vs direct
-    
-    tde_tokens: int
-    tde_output: str
-    tde_loss: float  # vs direct
-    
-    quality_judge_model: str  # the judge that scored losses
+A sample that reaches the gate flips a routing default. Every field that could
+carry a fabricated number is rejected rather than defaulted:
 
-@dataclass
-class AggregatedBandEvidence:
-    """Rolled-up stats for a band (avg tokens, losses, sample count)."""
-    band: str
-    samples: list[MeasurementSample]
-    
-    @property
-    def direct_tokens(self) -> float:
-        return sum(s.direct_tokens for s in self.samples) / len(self.samples)
-    
-    @property
-    def tde_tokens(self) -> float:
-        return sum(s.tde_tokens for s in self.samples) / len(self.samples)
-    
-    # ... etc (all aggregate to BandEvidence after transformation)
+- **Token counts must be > 0**, not merely non-negative. A zero is never a real
+  measurement of a turn that produced output — and `(direct - 0) / direct` reads as
+  **100% savings**, i.e. the strongest possible pro-TDE evidence produced by an
+  *absent* measurement. `direct_tokens = 0` additionally divides by zero in the gate.
+- **A judge verdict of `None` drops the sample.** Substituting `0.0` or the lexical
+  fallback would book a fabricated quality score — the exact defect ADR-0222 F1 closed.
+- **`task_band` is checked against a real tuple.** The `Literal` annotation is not
+  enforced at runtime; an unknown band would create a phantom evidence group that
+  never reaches `min_samples_per_band` and quietly starves the verdict.
+- **`load_from_log()` REPLACES the buffer.** It used to append, so a second call
+  double-counted every sample — and `n_measured` is the gate's sample-size guard.
+- **Band-name translation is explicit.** The classifier emits
+  `simple | moderate | complex`; the gate's bands are `trivial | moderate | complex`.
+  `simple` maps to `trivial`. Unmapped, every simple task landed in `moderate`,
+  leaving `trivial` permanently at `n_measured=0` while diluting `moderate`.
+  Unrecognised labels fall to `moderate` (the middle band, so they can bias neither
+  direction) and are logged.
 
-def aggregate_measured_evidence(samples: list[MeasurementSample]) -> list[BandEvidence]:
-    """Rolls MeasurementSamples into the BandEvidence format decision_gate expects."""
-    by_band = defaultdict(list)
-    for s in samples:
-        by_band[s.task_band].append(s)
-    
-    return [
-        BandEvidence(
-            band=band,
-            direct_tokens=agg.direct_tokens,
-            tde_tokens=agg.tde_tokens,
-            tde_loss=agg.tde_loss,
-            tier_tokens=agg.tier_tokens,
-            tier_loss=agg.tier_loss,
-            n_measured=len(agg.samples),
-            data_source="measured",  # <- THE KEY: upgrades from assumptions
-        )
-        for band, samples in by_band.items()
-        for agg in [AggregatedBandEvidence(band, samples)]
-    ]
-```
-
-### 2. `operator/orchestration/tde/tde_measurement.py` (continued)
-**Sampler hook interface:**
-```python
-class MeasurementRecorder:
-    """Singleton that records {direct, tier, TDE} samples during measurement week."""
-    
-    def __init__(self, measurement_log_path: str):
-        self.log_path = measurement_log_path
-        self.enabled = os.getenv("TDE_MEASUREMENT_ENABLED") == "1"
-        self.samples: list[MeasurementSample] = []
-    
-    async def record_sample(self, sample: MeasurementSample) -> None:
-        """Append to in-memory buffer and persist to log."""
-        self.samples.append(sample)
-        # Write to turns.jsonl-like format or separate measurement.jsonl
-        with open(self.log_path, "a") as f:
-            f.write(json.dumps(asdict(sample), default=str) + "\n")
-    
-    def get_aggregated_evidence(self) -> list[BandEvidence]:
-        """Return current measured evidence for the gate."""
-        return aggregate_measured_evidence(self.samples)
-```
-
-### 3. `chat_runtime.py` integration point
-**In `_stream_tde_turn()`, wrap execution:**
-```python
-# Pseudocode; actual implementation needs async wiring
-if measurement_recorder.enabled and should_measure_this_band(task):
-    # Run all 3 in parallel or with fork/wait
-    direct_result = await run_direct_turn_for_comparison(...)
-    tier_result = whole_task_tier_baseline(...)  # F5 already built
-    tde_result = ... # existing TDE execution
-    
-    sample = MeasurementSample(
-        task_id=run_id,
-        task_band=analysis.classification.task_type,
-        direct_tokens=direct_result.usage.total_tokens,
-        direct_output=direct_result.text,
-        tier_tokens=tier_result.usage.total_tokens,
-        tier_output=tier_result.text,
-        tier_loss=judge(tier_result, direct_result),  # F1 judge
-        tde_tokens=result.get("usage", {}).get("total_tokens", 0),
-        tde_output=final,
-        tde_loss=judge(final, direct_result),
-        quality_judge_model=os.getenv("CORVIN_TDE_JUDGE_MODEL", "haiku"),
-    )
-    await measurement_recorder.record_sample(sample)
-```
-
-### 4. `decision_gate.py` (minimal change)
-The decision gate already accepts `BandEvidence` with `data_source="measured"`.  
-Just ensure `evaluate_tde_verdict()` is called with measured evidence once available:
-```python
-# In chat_runtime.py or routing decision:
-if measurement_recorder.enabled:
-    measured_evidence = measurement_recorder.get_aggregated_evidence()
-    if len(measured_evidence) >= 1:  # threshold to flip from assumptions
-        verdict = evaluate_tde_verdict(measured_evidence)
-        if verdict["amplifier_survives"]:
-            # TDE is empirically winning; safe to route
-            ...
-        else:
-            # Premise falsified; revert to direct / tier-only
-            ...
-```
+Losing a data point costs one turn of evidence. Accepting a fabricated one corrupts
+a verdict that ADR-0220 then builds on.
 
 ---
 
-## Key Design Points
+## Known limitations
 
-1. **Feature-flagged** — controlled by `TDE_MEASUREMENT_ENABLED=1` env var
-   - Measurement week runs in isolation (not interfering with production routing)
-   - Data flows to measurement.jsonl, not the main audit chain
-
-2. **Honesty invariant**
-   - Every `BandEvidence` from measured data has `data_source="measured"`
-   - Gate only sets `amplifier_survives=True` on measured wins
-   - Assumption-sourced wins remain `predicted_winning_bands` (informational)
-
-3. **Parallel or sequential?**
-   - Parallel: {direct, tier, TDE} run at the same time → captures real contention
-   - Sequential (easier): run each in isolation → cleaner comparison, no contention noise
-   - **Recommendation:** start sequential for clean baseline, add contention study later
-
-4. **Task band classification**
-   - Use `analysis.classification.task_type` (already measured in InitialAnalysis)
-   - Bands: "trivial" | "moderate" | "complex" (or richer classification)
-   - Gate needs min 30 samples per band before decisive verdict
-
-5. **Quality judge**
-   - Use F1-upgraded judge (`CORVIN_TDE_JUDGE_MODEL` env, strong model like Opus)
-   - Judge compares tier/TDE outputs against direct output (reference)
-   - Loss = fractional semantic difference (0.0 = identical, 1.0 = unrelated)
+- **Tier routing only pays off on the chat band.** `resolve_model_for_workload`
+  currently routes only high-confidence CHAT down to the fast tier; `code` and
+  `uncertain` resolve back to `user_model`, so the tier baseline EQUALS the direct
+  turn there (net savings 0). The gate reads that honestly rather than faking a
+  cheaper baseline. Extending the tier map is the follow-up if the chat band shows
+  the play has legs.
+- **No per-turn confidence is threaded through the TDE path**, so the tier baseline
+  is resolved with `confidence=None` — the conservative reading.
+- **Output-shape confound.** The TDE arm's answer is `"\n\n".join(step outputs)`
+  while the baselines return a single answer. The judge scores substance, not
+  formatting, but a systematic shape difference between arms is a real confound to
+  keep in mind when reading the first results.
+- **Judge threads are not cancellable.** `judge_loss_sync` runs via
+  `asyncio.to_thread`; on the orchestrator's overall timeout the thread finishes on
+  its own (bounded by the judge's own 60s subprocess timeout).
+- **One measurement at a time** (`_MEASUREMENT_MAX_CONCURRENT = 1`). Excess
+  concurrent turns are not sampled, and the skip is logged.
 
 ---
 
-## Test Surface (for next session's k=1–k=3)
+## Code map
 
-### k=1: Skeleton + Unit Tests
-- `test_tde_measurement.py` — MeasurementSample, AggregatedBandEvidence, aggregate_measured_evidence
-- Mock samples → verify BandEvidence construction
-- Verify data_source="measured" propagates correctly
+| Piece | Where |
+|---|---|
+| `RealTdeOrchestrator` (runs + judges the arms) | `operator/orchestration/tde/tde_measurement.py` |
+| `MeasurementSample`, `MeasurementRecorder`, `aggregate_measured_evidence` | same file |
+| `classify_band` + `_COMPLEXITY_TO_BAND` | same file |
+| `MockTdeOrchestrator` | same file — **test double, no production caller** |
+| `whole_task_direct_baseline`, `whole_task_tier_baseline`, shared `_whole_task_single_turn` | `operator/orchestration/tde/tde_engine.py` |
+| Gate verdicts (`evaluate_band`, `evaluate_tde_verdict`) | `operator/orchestration/tde/decision_gate.py` |
+| Hook: coverage gate, ctx capture, detached spawn | `core/console/corvin_console/chat_runtime.py` (`_stream_tde_turn`, `_measurement_should_sample`, `_run_tde_measurement`, `_spawn_tde_measurement`) |
+| Wiring declarations | `operator/orchestration/tde/WIRING.yaml` |
 
-### k=2: Decision Gate Tests (already mostly there)
-- `test_tde_decision_gate.py` — verify evaluate_tde_verdict accepts measured evidence
-- Run synthetic_evidence_from_assumptions (predictions)
-- Run measured evidence (verdicts)
-- Assert amplifier_survives flips correctly
+Both baselines share `_whole_task_single_turn` deliberately: they must differ in
+EXACTLY ONE variable, the model. Two code paths would let a prompt or parser
+difference masquerade as a model-tier difference in the gate's evidence.
 
-### k=3: Integration + Feature Flag
-- Mock chat_runtime with measurement_recorder
-- Verify sample recording works
-- Verify feature flag gating
+### Tests
 
----
+| File | Covers |
+|---|---|
+| `tests/test_tde_measurement_k5_real_orchestration.py` | Real orchestration, every fail-closed refusal path, band mapping, redaction round-trip, log idempotency |
+| `tests/test_tde_measurement_k5_hook.py` | Sampling gate, detached spawn/concurrency/logging, and structural invariants of the turn wiring |
+| `tests/test_tde_measurement.py`, `test_tde_measurement_recorder.py` | Sample/aggregation units |
+| `tests/test_tde_decision_gate.py`, `test_tde_decision_gate_measured.py` | Gate verdicts + honesty invariant |
 
-## Success Criteria
-
-Once complete (and measurement week runs):
-- ✅ Real {direct, tier, TDE} samples collected
-- ✅ BandEvidence aggregated with `data_source="measured"`
-- ✅ decision_gate.evaluate_tde_verdict accepts measured data
-- ✅ amplifier_survives flips to TRUE iff TDE empirically wins on measured
-- ✅ ADR-0222 Phase 2 fulfilled: honest baseline + decision gate
-
----
-
-## Notes
-
-- **No changes to existing TDE execution logic** — sampler is additive, feature-flagged
-- **Reuse F5 baseline already built** — don't recompute
-- **Judge is F1-upgraded** — set CORVIN_TDE_JUDGE_MODEL env during measurement week
-- **Minimal chatroom impact** — sampler runs out-of-band or with sampling (e.g., 5% of turns)
-- **Persistence:** turns.jsonl stays clean; measurement.jsonl is separate log
+The hook tests assert on `inspect.getsource` because the properties at stake are
+*placement* properties (measurement after the result yields, coverage gate before
+the context build) that no unit-level call can observe.
 
 ---
 
-**Ready for next session.** Grab the skeleton in k=1, unit tests in k=2, integration in k=3.
+## What's next
+
+1. **Run the week.** Set `TDE_MEASUREMENT_ENABLED=1` and a strong
+   `CORVIN_TDE_JUDGE_MODEL` on a maintainer instance. Collect ≥30 samples per band.
+2. **Read the verdict.** `MeasurementRecorder.get_aggregated_evidence()` →
+   `evaluate_tde_verdict()`. `amplifier_survives` can now legitimately turn true —
+   or falsify the premise.
+3. **Only then** wire the verdict into routing (`decision_gate` is deliberately
+   `deferred` in `WIRING.yaml` until real evidence exists). ADR-0220 stays BLOCKED
+   until this resolves.
+
+---
+
+## Corrections to the previous version of this file
+
+Recorded because they were load-bearing and would otherwise be inherited again:
+
+- **"All 17 tests green. Production-ready for k=4 integration."** — Those tests
+  passed only because `tests/conftest.py` deleted the real stdlib `operator` module
+  from `sys.modules` to make `operator.orchestration.tde…` imports resolve. That
+  hack also made `operator/` a package for any process rooted at the repo, which
+  crash-looped `corvin-webui.service` (~80 systemd restarts; `asyncio` needs
+  `operator.eq`). Fixed in `5187bd4` by deleting `operator/__init__.py`, reverting
+  the conftest hack, and moving to the repo's existing `tde.X` import convention.
+  Without the hack, 10 of those tests failed on collection.
+- **"k=4 Phase 2 wiring complete."** — The k=4 hook could never have run: its
+  import path did not exist, and `orchestrate_measurement` called `time.time()`
+  without importing `time`. Both were invisible because the hook wrapped everything
+  in `except (ImportError, Exception): pass`.
+- **"Use `analysis.classification.task_type`" for band classification.** — Wrong
+  field (that is the task TYPE, not its complexity) and wrong vocabulary. k=5 uses
+  `summary["complexity"]` through `_COMPLEXITY_TO_BAND`.
+- The old sketch also read `result["usage"]["total_tokens"]`, a key this result does
+  not have; the real figure is `summary["total_tokens"]` (ADR-0219 R1), and it needs
+  the instrumentation-coverage check described above.

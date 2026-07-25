@@ -119,3 +119,32 @@ components:
       real send() path — no marketplace plugin has ever been installed to
       exercise this. Do not wire in without a real plugin to load.
     target_adr: "0214"
+
+  - name: tde_measurement
+    module: tde.tde_measurement
+    status: live
+    entry_point: "tde.tde_measurement:RealTdeOrchestrator"
+    reason: >
+      ADR-0222 Phase 2 (k=5) — measurement-week sampler. Reached from
+      chat_runtime._run_tde_measurement, which _stream_tde_turn starts as a
+      detached task after the answer is streamed. Live but DEFAULT-OFF: gated
+      behind TDE_MEASUREMENT_ENABLED=1 plus TDE_MEASUREMENT_SAMPLE_RATE, since
+      a measured turn costs ~3x the tokens of an unmeasured one (TDE + direct +
+      tier baselines, plus two judge calls).
+    target_adr: "0222"
+
+  - name: decision_gate
+    module: tde.decision_gate
+    status: deferred
+    reason: >
+      ADR-0222 Phase 2 decision logic. Its BandEvidence dataclass IS reached in
+      production (tde_measurement imports it to shape recorded samples), but the
+      verdict functions — evaluate_band / evaluate_tde_verdict — have no
+      production caller yet ON PURPOSE: they may only decide once measured
+      evidence reaches min_samples_per_band, which is the outcome of the
+      measurement week, not an input to it. Pure logic, fully unit-tested
+      (test_tde_decision_gate.py, test_tde_decision_gate_measured.py). Wire the
+      verdict into routing only when the aggregated evidence is real — wiring it
+      earlier would let assumption-sourced numbers flip a routing default, which
+      the ADR's honesty invariant forbids.
+    target_adr: "0222"
