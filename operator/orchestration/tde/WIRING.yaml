@@ -84,6 +84,16 @@ components:
     entry_point: "tde.worker_ipc:ProcHolder"
     reason: "subprocess lifecycle + kill-on-cancel, used by analysis_runner and the executor"
 
+  - name: contextual_worker_ipc
+    module: tde.contextual_worker_ipc
+    status: deferred
+    reason: >
+      Gap #1 Context Carryover (Task #10, LDD k=1 COMPLETE). Implementation
+      finished and unit-tested (13 tests green). Depends on verdrahtung in
+      worker_ipc.get_worker_ipc() to wire the ContextualSubprocessWorkerIPC
+      into the real execution path. Wiring happens in Task #13 E2E integration.
+    target_adr: "0214"
+
   - name: loss_judge
     module: tde.loss_judge
     status: live
