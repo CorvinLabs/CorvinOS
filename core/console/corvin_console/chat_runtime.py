@@ -3917,7 +3917,7 @@ async def _stream_tde_turn(
         # Feature-flagged real-traffic sampler for TDE token-saving validation.
         if os.getenv("TDE_MEASUREMENT_ENABLED") == "1" and ok:
             try:
-                from operator.orchestration.tde.tde_measurement import (
+                from tde.tde_measurement import (
                     MeasurementRecorder,
                     MockTdeOrchestrator,
                 )

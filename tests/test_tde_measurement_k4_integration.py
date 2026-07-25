@@ -4,9 +4,15 @@ Tests mock orchestration and feature-flag gating for Phase 1 integration.
 """
 
 import os
+import sys
+from pathlib import Path
+
 import pytest
 import asyncio
 import time
+
+_REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO / "operator" / "orchestration"))
 
 
 @pytest.fixture(autouse=True)
@@ -20,17 +26,7 @@ def enable_measurement():
 
 def test_mock_orchestrator_band_classification():
     """Verify band classification for measurement."""
-    # Import directly from module, avoid tde/__init__.py dependency chain
-    import sys
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "tde_measurement",
-        "/home/shumway/projects/CorvinOS/operator/orchestration/tde/tde_measurement.py"
-    )
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["tde_measurement"] = mod
-    spec.loader.exec_module(mod)
-    MockTdeOrchestrator = mod.MockTdeOrchestrator
+    from tde.tde_measurement import MockTdeOrchestrator
 
     assert MockTdeOrchestrator.classify_band("trivial") == "trivial"
     assert MockTdeOrchestrator.classify_band("complex") == "complex"
@@ -40,7 +36,7 @@ def test_mock_orchestrator_band_classification():
 
 def test_mock_direct_execution():
     """Mock direct baseline execution."""
-    from operator.orchestration.tde.tde_measurement import MockTdeOrchestrator
+    from tde.tde_measurement import MockTdeOrchestrator
 
     result = MockTdeOrchestrator.mock_direct_execution("test prompt")
 
@@ -51,7 +47,7 @@ def test_mock_direct_execution():
 
 def test_mock_tier_execution():
     """Mock tier baseline execution."""
-    from operator.orchestration.tde.tde_measurement import MockTdeOrchestrator
+    from tde.tde_measurement import MockTdeOrchestrator
 
     result = MockTdeOrchestrator.mock_tier_execution("test prompt")
 
@@ -63,7 +59,7 @@ def test_mock_tier_execution():
 @pytest.mark.asyncio
 async def test_orchestrate_measurement_sample():
     """Mock orchestration produces valid MeasurementSample."""
-    from operator.orchestration.tde.tde_measurement import MockTdeOrchestrator
+    from tde.tde_measurement import MockTdeOrchestrator
 
     sample = await MockTdeOrchestrator.orchestrate_measurement(
         prompt="test task",
@@ -88,7 +84,7 @@ async def test_k4_hook_measurement_disabled():
     if "TDE_MEASUREMENT_ENABLED" in os.environ:
         del os.environ["TDE_MEASUREMENT_ENABLED"]
 
-    from operator.orchestration.tde.tde_measurement import (
+    from tde.tde_measurement import (
         MeasurementRecorder,
         MockTdeOrchestrator,
     )
@@ -110,7 +106,7 @@ async def test_k4_hook_measurement_enabled():
     """When enabled, hook collects sample from orchestrator."""
     os.environ["TDE_MEASUREMENT_ENABLED"] = "1"
 
-    from operator.orchestration.tde.tde_measurement import (
+    from tde.tde_measurement import (
         MeasurementRecorder,
         MockTdeOrchestrator,
     )
@@ -137,7 +133,7 @@ async def test_k4_hook_aggregates_multiple_samples():
     """Hook runs multiple times, samples aggregate by band."""
     os.environ["TDE_MEASUREMENT_ENABLED"] = "1"
 
-    from operator.orchestration.tde.tde_measurement import (
+    from tde.tde_measurement import (
         MeasurementRecorder,
         MockTdeOrchestrator,
     )
@@ -179,7 +175,7 @@ async def test_k4_hook_gate_ready():
     """Aggregated samples ready for decision gate."""
     os.environ["TDE_MEASUREMENT_ENABLED"] = "1"
 
-    from operator.orchestration.tde.tde_measurement import (
+    from tde.tde_measurement import (
         MeasurementRecorder,
         MockTdeOrchestrator,
     )

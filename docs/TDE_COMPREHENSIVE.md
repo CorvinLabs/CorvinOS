@@ -314,7 +314,9 @@ tests/
 ### Enable TDE Routing
 
 ```python
-from operator.orchestration.tde import SendIntegration
+import sys
+sys.path.insert(0, "operator/orchestration")  # repo-relative
+from tde import SendIntegration
 
 integration = SendIntegration()
 engine, result = await integration.select_engine_and_execute(

@@ -1,12 +1,19 @@
 """Tests for ADR-0222 Phase 2 measurement sampler."""
 
+import sys
+from pathlib import Path
+
 import pytest
-from operator.orchestration.tde.tde_measurement import (
+
+_REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPO / "operator" / "orchestration"))
+
+from tde.tde_measurement import (  # noqa: E402
     MeasurementSample,
     AggregatedBandEvidence,
     aggregate_measured_evidence,
 )
-from operator.orchestration.tde.decision_gate import BandEvidence
+from tde.decision_gate import BandEvidence  # noqa: E402
 
 
 def test_measurement_sample_creation():
@@ -91,7 +98,7 @@ def test_aggregated_band_evidence_multiple_samples():
     assert agg.tier_tokens == 9500.0  # (9000 + 10000) / 2
     assert agg.tier_loss == 0.055  # (0.05 + 0.06) / 2
     assert agg.tde_tokens == 7500.0  # (7000 + 8000) / 2
-    assert agg.tde_loss == 0.085  # (0.08 + 0.09) / 2
+    assert agg.tde_loss == pytest.approx(0.085)  # (0.08 + 0.09) / 2
     assert agg.n_measured == 2
 
 
