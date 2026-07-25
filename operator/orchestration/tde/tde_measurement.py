@@ -269,3 +269,77 @@ class MeasurementRecorder:
     def clear_samples(self) -> None:
         """Clear in-memory samples (for testing)."""
         self.samples.clear()
+
+
+# ============================================================================
+# k=4 Mock Orchestrator (for Phase 1 integration testing)
+# ============================================================================
+
+class MockTdeOrchestrator:
+    """Stub orchestrator for measurement week Phase 1.
+
+    k=4 Phase 1: Mock {direct, tier, TDE} execution for testing hook.
+    k=5: Real orchestration (parallel direct + tier + TDE runs).
+    """
+
+    @staticmethod
+    def classify_band(task_complexity: str | None) -> Literal["trivial", "moderate", "complex"]:
+        """Classify task into measurement band."""
+        if task_complexity == "trivial":
+            return "trivial"
+        elif task_complexity == "complex":
+            return "complex"
+        else:
+            return "moderate"
+
+    @staticmethod
+    def mock_direct_execution(prompt: str) -> dict[str, Any]:
+        """Stub: direct turn (user model, single-call baseline)."""
+        return {
+            "tokens": 4500,
+            "output": f"direct_answer_to_{prompt[:20]}",
+            "loss": 0.0,  # Direct is reference
+        }
+
+    @staticmethod
+    def mock_tier_execution(prompt: str) -> dict[str, Any]:
+        """Stub: F5 whole-task-tier baseline."""
+        return {
+            "tokens": 4200,
+            "output": f"tier_answer_to_{prompt[:20]}",
+            "loss": 0.02,  # ~2% loss vs direct
+        }
+
+    @staticmethod
+    async def orchestrate_measurement(
+        prompt: str,
+        tde_tokens: int,
+        tde_output: str,
+        task_complexity: str | None = None,
+    ) -> MeasurementSample | None:
+        """Orchestrate {direct, tier, TDE} and return sample for recording.
+
+        k=4 Phase 1: Mock execution.
+        k=5: Real parallel execution of direct + tier variants.
+        """
+        band = MockTdeOrchestrator.classify_band(task_complexity)
+        direct = MockTdeOrchestrator.mock_direct_execution(prompt)
+        tier = MockTdeOrchestrator.mock_tier_execution(prompt)
+
+        # Synthetic TDE loss (worse than tier for demo)
+        tde_loss = 0.05
+
+        return MeasurementSample(
+            task_id=f"tde-sample-{int(time.time())}",
+            task_band=band,
+            timestamp=time.time(),
+            direct_tokens=direct["tokens"],
+            direct_output=direct["output"],
+            tier_tokens=tier["tokens"],
+            tier_output=tier["output"],
+            tier_loss=tier["loss"],
+            tde_tokens=tde_tokens,
+            tde_output=tde_output,
+            tde_loss=tde_loss,
+            quality_judge_model="haiku",
+        )
