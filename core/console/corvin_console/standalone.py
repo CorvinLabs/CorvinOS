@@ -21,11 +21,18 @@ Or via ``corvin serve`` / ``corvin start`` (pip-install path).
 The app exposes:
   /v1/console/...   Console REST API (all existing routes)
   /console/         React SPA (served from web-next/dist/)
+  /local-stats      Local stats HTML dashboard
   /                 Redirect → /v1/console/auth/local-login
 
 local-login creates a session automatically for localhost operators and
 redirects to /console/. The SetupGate component then guides first-time
 configuration (engine key, optional bridge channel).
+
+Headless API-only mode (ADR-0241/0243, feature flag ``headless_api_mode``,
+default off) removes every browser surface from THIS app: no /console/ mount,
+no /local-stats, and / answers ``{"status": "ok", "ui": "headless"}`` instead of
+redirecting into a login hop that ends at a SPA which is not there. The REST API
+is untouched — the mode is API-only, not off.
 """
 from __future__ import annotations
 
@@ -220,18 +227,46 @@ def create_app() -> FastAPI:
     # Mount the pre-built React SPA at /console
     mount_static(app, url_prefix="/console")
 
-    # Local stats page — no Railway, no remote API, reads only local state.
-    # Served at /local-stats (outside the SPA prefix /console so it's a bare page).
-    @app.get("/local-stats", include_in_schema=False)
-    def _local_stats_page() -> HTMLResponse:
-        return HTMLResponse(content=_LOCAL_STATS_HTML)
+    # ADR-0241/0243 — headless API-only mode. This factory, not the gateway, is
+    # what `corvin serve` runs (ops/launcher/corvin/serve_backend.py pins
+    # `corvin_console.standalone:create_app`), so gating the browser surfaces in
+    # the gateway alone left every pip-install serving them. mount_static()
+    # already declines /console; /local-stats and / are the OTHER two browser
+    # surfaces on this app and have to make the same decision.
+    #
+    # Defensive: any failure to answer the question means "serve the UI", i.e.
+    # exactly the behaviour that existed before the flag.
+    headless = False
+    try:
+        from .app import headless_enabled
 
-    # Root redirect → local-login → session cookie → /console/
-    @app.get("/", include_in_schema=False)
-    def _root() -> RedirectResponse:
-        return RedirectResponse("/v1/console/auth/local-login", status_code=302)
+        headless = bool(headless_enabled())
+    except Exception:  # noqa: BLE001 — unreadable flag means "serve as usual"
+        headless = False
 
-    log.info("CorvinOS standalone app ready — local-login enabled by default")
+    if not headless:
+        # Local stats page — no Railway, no remote API, reads only local state.
+        # Served at /local-stats (outside the SPA prefix /console so it's a bare page).
+        @app.get("/local-stats", include_in_schema=False)
+        def _local_stats_page() -> HTMLResponse:
+            return HTMLResponse(content=_LOCAL_STATS_HTML)
+
+        # Root redirect → local-login → session cookie → /console/
+        @app.get("/", include_in_schema=False)
+        def _root() -> RedirectResponse:
+            return RedirectResponse("/v1/console/auth/local-login", status_code=302)
+    else:
+        # The login hop this used to redirect to ends at /console/, which is not
+        # mounted here — so the redirect would hand every visitor a 302 into a
+        # 404. Answer the liveness shape instead, like the gateway root does.
+        @app.get("/", include_in_schema=False)
+        def _root_headless() -> JSONResponse:
+            return JSONResponse({"status": "ok", "ui": "headless"})
+
+    log.info(
+        "CorvinOS standalone app ready — headless=%s, local-login enabled by default",
+        headless,
+    )
     return app
 
 

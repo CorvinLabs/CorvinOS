@@ -32,6 +32,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -636,6 +637,319 @@ class TestTenantIsolation(_Base):
         )
 
 
+# ── 6b. The tenant a plugin claims is checked against the one it was loaded for ─
+
+
+class _Hooky:
+    """A plugin whose ``on_load`` registers a hook, like a real one would."""
+
+    plugin_type = "notification_backend"
+    version = "1.0.0"
+    display_name = "Hooky"
+
+    def __init__(self, plugin_id: str, *, point: str = "engine.model_selection",
+                 tenant_id: str | None = None):
+        self.plugin_id = plugin_id
+        self._point = point
+        self._tenant_id = tenant_id
+        self.registered_from_on_load = False
+        self.on_load_error: BaseException | None = None
+
+    def on_load(self, ctx):
+        try:
+            ep.register_hook(
+                self._point,
+                lambda *a, **k: "from-on-load",
+                plugin_id=self.plugin_id,
+                tenant_id=self._tenant_id or ctx.tenant_id,
+            )
+            self.registered_from_on_load = True
+        except BaseException as exc:  # noqa: BLE001 — the test inspects it
+            self.on_load_error = exc
+
+    def on_unload(self):
+        ep.unregister_all(self.plugin_id)
+
+    def health_check(self):
+        from corvin_plugins.protocol import HealthStatus
+
+        return HealthStatus(ok=True)
+
+
+class TestTenantIsAuthorised(_Base):
+    """`tenant_id` was made mandatory so nobody lands in `_default` by accident.
+
+    Mandatory is not the same as checked, and unchecked it bought nothing: a
+    plugin loaded for tenant A could still pass tenant B's id and — because last
+    registration wins — TAKE OVER tenant B's fail-closed `workflow.workflow_gate`
+    rather than collide with it.  The registry knows which tenant a plugin was
+    loaded for, so the claim is now verified against it.
+    """
+
+    FLAG = True
+
+    def setUp(self):
+        super().setUp()
+        import corvin_plugins.registry as _reg
+        from corvin_plugins.registry import PluginRegistry
+
+        self._reg_module = _reg
+        self._orig_registry = _reg._registry
+        _reg._registry = PluginRegistry()
+
+    def tearDown(self):
+        self._reg_module._registry = self._orig_registry
+        super().tearDown()
+
+    def _load(self, plugin, tenant_id: str):
+        """Register a plugin through the REAL registry, for ``tenant_id``."""
+        from corvin_plugins.protocol import PluginContext
+
+        ctx = PluginContext(
+            plugin_id=plugin.plugin_id,
+            tenant_id=tenant_id,
+            corvin_home=Path(self._tmp.name),
+            config={},
+            audit_emit=lambda event, details: None,
+        )
+        self._reg_module._registry.register(plugin, ctx)
+        return ctx
+
+    # — the reported defect —
+
+    def test_a_plugin_may_not_take_over_another_tenants_fail_closed_gate(self):
+        # The reviewer's reproduction, verbatim in intent: a plugin loaded for
+        # tenant-a registers a deny-everything gate hook for tenant-b.
+        victim_gate_ran: list[str] = []
+        ep.register_hook(
+            "workflow.workflow_gate",
+            lambda wf: victim_gate_ran.append("b") or True,
+            plugin_id="tenant-b-plugin",
+            tenant_id="tenant-b",
+        )
+        self._load(_Hooky("tenant-a-plugin"), "tenant-a")
+
+        with self.assertRaises(ep.CrossTenantHookRefused):
+            ep.register_hook(
+                "workflow.workflow_gate",
+                lambda wf: False,
+                plugin_id="tenant-a-plugin",
+                tenant_id="tenant-b",
+            )
+
+        self.assertEqual(
+            ep.describe("tenant-b"), {"workflow.workflow_gate": "tenant-b-plugin"},
+            "tenant-b's gate must still belong to tenant-b",
+        )
+        self.assertTrue(
+            ep.invoke("workflow.workflow_gate", {}, default=False, tenant_id="tenant-b")
+        )
+        self.assertEqual(victim_gate_ran, ["b"])
+
+    def test_the_refusal_is_its_own_exception_type(self):
+        self._load(_Hooky("a-plugin"), "tenant-a")
+        with self.assertRaises(ep.CrossTenantHookRefused) as caught:
+            ep.register_hook(
+                "engine.model_selection", lambda r: 1,
+                plugin_id="a-plugin", tenant_id="tenant-b",
+            )
+        exc = caught.exception
+        self.assertIsInstance(exc, ep.ExtensionPointError)
+        self.assertEqual(exc.plugin_id, "a-plugin")
+        self.assertEqual(exc.requested_tenant_id, "tenant-b")
+        self.assertEqual(exc.actual_tenant_id, "tenant-a")
+
+    def test_a_normal_point_is_protected_too(self):
+        # Not only the gate: routing another tenant's turns to an engine of your
+        # choosing is not a lesser thing because it degrades gracefully.
+        self._load(_Hooky("a-plugin"), "tenant-a")
+        for point in sorted(ep.KNOWN_EXTENSION_POINTS):
+            with self.subTest(point=point):
+                with self.assertRaises(ep.CrossTenantHookRefused):
+                    ep.register_hook(
+                        point, lambda *a, **k: "mine",
+                        plugin_id="a-plugin", tenant_id="tenant-b",
+                    )
+        self.assertEqual(ep.describe("tenant-b"), {})
+
+    def test_the_rejection_is_audited_with_both_tenants(self):
+        self._load(_Hooky("a-plugin"), "tenant-a")
+        with self.assertRaises(ep.CrossTenantHookRefused):
+            ep.register_hook(
+                "workflow.workflow_gate", lambda w: False,
+                plugin_id="a-plugin", tenant_id="tenant-b",
+            )
+        rejected = self.events("plugin.extension_hook_rejected")
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0]["reason"], "tenant_mismatch")
+        self.assertEqual(rejected[0]["plugin_id"], "a-plugin")
+        self.assertEqual(rejected[0]["tenant_id"], "tenant-a")
+        self.assertEqual(rejected[0]["requested_tenant_id"], "tenant-b")
+        self.assertEqual(rejected[0]["point"], "workflow.workflow_gate")
+
+    def test_the_rejection_detail_carries_no_free_text_and_is_clipped(self):
+        # Same rule as every other refusal path: the chain is append-only, so an
+        # oversized or author-controlled string written there is permanent.
+        long_tenant = "t" * 5000
+        self._load(_Hooky("a-plugin"), "tenant-a")
+        with self.assertRaises(ep.CrossTenantHookRefused):
+            ep.register_hook(
+                "engine.model_selection", lambda r: 1,
+                plugin_id="a-plugin", tenant_id=long_tenant,
+            )
+        detail = self.events("plugin.extension_hook_rejected")[0]
+        for key, value in detail.items():
+            with self.subTest(key=key):
+                self.assertLessEqual(len(str(value)), ep.MAX_AUDITED_NAME_CHARS)
+        self.assertNotIn("error", detail)
+
+    # — the allowed paths —
+
+    def test_a_plugin_registering_for_its_own_tenant_is_allowed_and_marked(self):
+        self._load(_Hooky("a-plugin"), "tenant-a")
+        ep.register_hook(
+            "engine.model_selection", lambda r: "mine",
+            plugin_id="a-plugin", tenant_id="tenant-a",
+        )
+        self.assertEqual(ep.describe("tenant-a"), {"engine.model_selection": "a-plugin"})
+        registered = self.events("plugin.extension_hook_registered")
+        self.assertEqual(registered[-1]["tenant_check"], "verified")
+
+    def test_a_plugin_can_register_from_its_own_on_load(self):
+        # The load-bearing precondition for the whole check: register() reserves
+        # the slot and stores the context BEFORE calling on_load(), so a plugin
+        # hooking from on_load is already findable and passes as VERIFIED.  If
+        # that order ever flipped, every plugin would silently drop to
+        # "unregistered" and the check would protect nothing.
+        plugin = _Hooky("a-plugin")
+        self._load(plugin, "tenant-a")
+        self.assertIsNone(plugin.on_load_error)
+        self.assertTrue(plugin.registered_from_on_load)
+        self.assertEqual(ep.describe("tenant-a"), {"engine.model_selection": "a-plugin"})
+        self.assertEqual(
+            self.events("plugin.extension_hook_registered")[-1]["tenant_check"],
+            "verified",
+        )
+
+    def test_a_plugin_that_lies_from_its_own_on_load_fails_the_load(self):
+        plugin = _Hooky("a-plugin", tenant_id="tenant-b")
+        self._load(plugin, "tenant-a")
+        self.assertIsInstance(plugin.on_load_error, ep.CrossTenantHookRefused)
+        self.assertEqual(ep.describe("tenant-b"), {})
+
+    def test_an_unregistered_caller_is_allowed_but_not_marked_verified(self):
+        # The documented decision (see register_hook.__doc__): a caller the
+        # registry does not know is not a loaded plugin claiming a foreign
+        # tenant — it is bundled reference code, an embedding host, or a test.
+        # Refusing it would break those and buy nothing, since the same line
+        # that names a foreign tenant can name an unknown plugin_id.  It is
+        # allowed, and the record says the claim was never verified.
+        ep.register_hook(
+            "engine.model_selection", lambda r: "x",
+            plugin_id="not-in-the-registry", tenant_id="tenant-b",
+        )
+        self.assertEqual(
+            ep.describe("tenant-b"), {"engine.model_selection": "not-in-the-registry"}
+        )
+        self.assertEqual(
+            self.events("plugin.extension_hook_registered")[-1]["tenant_check"],
+            "unregistered",
+        )
+
+    def test_an_unreachable_registry_does_not_break_a_registration(self):
+        # Headless layouts import this module without a usable registry
+        # (ADR-0241).  A lookup that cannot run must not turn every plugin load
+        # into a crash — but it must not be mistaken for agreement either.
+        import corvin_plugins.registry as _reg
+
+        real = _reg.get_registry
+
+        def boom():
+            raise RuntimeError("no registry here")
+
+        _reg.get_registry = boom  # type: ignore[assignment]
+        try:
+            ep.register_hook(
+                "engine.model_selection", lambda r: "x",
+                plugin_id="a-plugin", tenant_id="tenant-b",
+            )
+            self.assertEqual(
+                self.events("plugin.extension_hook_registered")[-1]["tenant_check"],
+                "unavailable",
+            )
+        finally:
+            _reg.get_registry = real  # type: ignore[assignment]
+
+    def test_the_takeover_rule_still_works_inside_one_tenant(self):
+        # The check must not break ADR-0237's override: a user plugin beating a
+        # bundled default is a takeover WITHIN a tenant and stays legal.
+        self._load(_Hooky("bundled"), "tenant-a")
+        self._load(_Hooky("override"), "tenant-a")
+        self.assertEqual(ep.describe("tenant-a"), {"engine.model_selection": "override"})
+        replaced = self.events("plugin.extension_hook_replaced")
+        self.assertEqual(len(replaced), 1)
+        self.assertEqual(replaced[0]["replaced_plugin_id"], "bundled")
+        self.assertEqual(replaced[0]["tenant_check"], "verified")
+
+    def test_unregister_all_still_reaches_across_tenants(self):
+        # A plugin legitimately serving two tenants is loaded twice under two
+        # ids; unloading either must still be able to clean up.
+        self._load(_Hooky("a-plugin"), "tenant-a")
+        self.assertEqual(ep.unregister_all("a-plugin"), 1)
+        self.assertEqual(ep.describe("tenant-a"), {})
+
+
+# ── 6c. The degradation memo is bounded and its check-and-set is atomic ────────
+
+
+class TestDegradationMemo(_Base):
+    FLAG = True
+
+    def setUp(self):
+        super().setUp()
+        ep._degraded_reported.clear()
+
+    def tearDown(self):
+        ep._degraded_reported.clear()
+        super().tearDown()
+
+    def test_the_first_report_wins_and_the_rest_are_suppressed(self):
+        self.assertTrue(ep._note_degraded("t", "workflow.workflow_gate"))
+        for _ in range(5):
+            self.assertFalse(ep._note_degraded("t", "workflow.workflow_gate"))
+
+    def test_it_does_not_grow_without_bound(self):
+        # Process-wide, keyed by tenant, in a process that runs for months.
+        for i in range(ep.MAX_DEGRADED_REPORTED):
+            ep._note_degraded(f"tenant-{i}", "workflow.workflow_gate")
+        self.assertEqual(len(ep._degraded_reported), ep.MAX_DEGRADED_REPORTED)
+
+        # At the cap the memo is dropped rather than the new key refused: a NEW
+        # degradation must never be silenced, only possibly re-reported.
+        self.assertTrue(ep._note_degraded("one-too-many", "workflow.workflow_gate"))
+        self.assertEqual(len(ep._degraded_reported), 1)
+
+    def test_concurrent_first_reports_produce_exactly_one_record(self):
+        # `if key not in set: set.add(key)` is two steps; two turns for the same
+        # tenant hitting the same broken features.json both saw "not yet
+        # reported" and both appended to an append-only chain.
+        results: list[bool] = []
+        start = threading.Barrier(8)
+
+        def run():
+            start.wait(timeout=5)
+            results.append(ep._note_degraded("t", "workflow.workflow_gate"))
+
+        threads = [threading.Thread(target=run) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        self.assertEqual(len(results), 8)
+        self.assertEqual(results.count(True), 1)
+
+
 # ── 7. The declared shape of the points themselves ────────────────────────────
 
 
@@ -802,6 +1116,55 @@ class TestDefensiveEdges(_Base):
             with self.subTest(name=name):
                 self.assertIn(name, corvin_plugins.__all__)
                 self.assertTrue(hasattr(corvin_plugins, name))
+
+    def test_a_broken_console_is_reported_as_broken_not_as_absent(self):
+        # The blanket `except Exception` around the IMPORT used to fold three
+        # cases into two: Console absent (a complete answer), Console present
+        # but its flag registry unimportable (a broken install), and a raising
+        # lookup.  The middle one is where the operator most plausibly DID
+        # enable the flag, and it read as a deliberate "off".
+        saved = {k: v for k, v in sys.modules.items() if k.startswith("corvin_console")}
+        broken_root = Path(self._tmp.name) / "broken-console"
+        pkg = broken_root / "corvin_console"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "feature_flags.py").write_text(
+            "import _a_dependency_this_install_is_missing\n", encoding="utf-8"
+        )
+        for key in saved:
+            del sys.modules[key]
+        sys.path.insert(0, str(broken_root))
+        try:
+            self.assertEqual(ep._flag_state("_default"), (False, True))
+
+            # …and on a fail-closed point that now leaves a record, instead of
+            # weakened enforcement that looks exactly like "never switched on".
+            ep._degraded_reported.clear()
+            self.audited.clear()
+            self.assertTrue(ep.invoke("workflow.workflow_gate", {}, default=True))
+            degraded = self.events("plugin.extension_flag_degraded")
+            self.assertEqual(len(degraded), 1)
+            self.assertEqual(degraded[0]["point"], "workflow.workflow_gate")
+        finally:
+            sys.path.remove(str(broken_root))
+            for key in [k for k in sys.modules if k.startswith("corvin_console")]:
+                del sys.modules[key]
+            sys.modules.update(saved)
+            ep._degraded_reported.clear()
+
+    def test_an_absent_console_is_still_not_a_broken_one(self):
+        # The other side of the same distinction — guarded here as well so a
+        # future tightening of the import classification cannot start reporting
+        # a headless layout (ADR-0241) as a degradation on every gate.
+        saved = {k: v for k, v in sys.modules.items() if k.startswith("corvin_console")}
+        for key in saved:
+            del sys.modules[key]
+        sys.modules["corvin_console"] = None  # type: ignore[assignment]
+        try:
+            self.assertEqual(ep._flag_state("_default"), (False, False))
+        finally:
+            del sys.modules["corvin_console"]
+            sys.modules.update(saved)
 
     def test_no_call_site_is_wired_yet(self):
         # Phase 3 defines the bus; the call sites land in a follow-up.  This

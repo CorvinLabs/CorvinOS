@@ -142,44 +142,17 @@ class TestMountBehaviour(unittest.TestCase):
         )
 
 
-class TestEveryBrowserSurfaceIsCovered(unittest.TestCase):
-    """The SPA is not the only browser surface on the gateway app.
-
-    The mount test above builds a bare ``FastAPI()`` and calls ``mount_static``
-    on it, which proves what that ONE function does and nothing about the
-    process. The gateway also serves ``/local-stats`` (a full HTML dashboard)
-    and redirects ``/`` into ``/console/``. Both were untouched by headless mode
-    — so "no browser surface" was true of the function under test and false of
-    the deployment. This pins the other two at their registration site.
-    """
-
-    @staticmethod
-    def _gateway_source() -> str:
-        return (
-            _REPO / "core" / "gateway" / "corvin_gateway" / "app.py"
-        ).read_text(encoding="utf-8")
-
-    def test_local_stats_dashboard_is_gated(self):
-        src = self._gateway_source()
-        idx = src.find('"/local-stats"')
-        self.assertGreater(idx, 0, "/local-stats route not found — did it move?")
-        # The gate has to be established BEFORE the route is registered.
-        self.assertIn(
-            "headless_enabled", src[:idx],
-            "/local-stats serves a full HTML dashboard and is registered "
-            "without consulting headless mode",
-        )
-
-    def test_root_redirect_does_not_point_into_a_404(self):
-        src = self._gateway_source()
-        idx = src.find("async def root_redirect")
-        self.assertGreater(idx, 0)
-        body = src[idx:idx + 1200]
-        self.assertIn(
-            "headless_enabled", body,
-            "GET / redirects to /console/, which does not exist in headless "
-            "mode — a 302 into a 404",
-        )
+#: The "is every browser surface covered?" question used to be answered HERE, by
+#: reading core/gateway/corvin_gateway/app.py as text and looking for the string
+#: ``headless_enabled`` near the route registrations. That guard was green while
+#: three surfaces were open, because the question it asked ("does this file
+#: mention the flag?") is not the question that matters ("does this process
+#: answer on a browser path?"). It also read exactly one file, and the app
+#: `corvin serve` actually runs is a different one.
+#:
+#: Replaced by tests/test_headless_browser_surfaces.py, which builds BOTH apps
+#: (corvin_console.standalone:create_app and corvin_gateway.app:app) and drives
+#: them with a TestClient.
 
 
 class TestNoHiddenCoupling(unittest.TestCase):

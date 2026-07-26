@@ -231,6 +231,7 @@ plugin's answer.
 | Unknown point name | `UnknownExtensionPoint` — at `register_hook` **and** at `invoke` |
 | Name in `_NEVER_EXTENSIBLE` | `ImmutableExtensionPoint` |
 | Provider-registry name | `UnknownExtensionPoint` naming the right `ctx` handle |
+| `tenant_id` ≠ the tenant the plugin was loaded for | `CrossTenantHookRefused`, audited as `reason: tenant_mismatch` |
 
 `default` is keyword-only and **required**. Every call site has to spell out its
 pre-feature behaviour, because that behaviour is what runs on a default install.
@@ -275,10 +276,32 @@ idempotent and audited as a normal registration, not as a takeover.
 
 | Event | When |
 |---|---|
-| `plugin.extension_hook_registered` | a hook is accepted (or re-registered by its owner) |
-| `plugin.extension_hook_replaced` | a different plugin took over a point — carries `replaced_plugin_id` |
-| `plugin.extension_hook_rejected` | `reason: unknown_point` or `reason: never_extensible` |
+| `plugin.extension_hook_registered` | a hook is accepted (or re-registered by its owner) — carries `tenant_check: verified \| unregistered` |
+| `plugin.extension_hook_replaced` | a different plugin took over a point — carries `replaced_plugin_id` and `tenant_check` |
+| `plugin.extension_hook_rejected` | `reason: unknown_point`, `never_extensible` or `tenant_mismatch` |
 | `plugin.extension_hook_failed` | a hook raised — carries `error_type` and `outcome: default \| deny` |
+
+### A hook belongs to the tenant its plugin was loaded for
+
+`tenant_id` is keyword-**required** on `register_hook`, and it is **checked**
+against the tenant the registering plugin was actually loaded for. Requiring it
+without checking it only removed the *silent* path: a plugin loaded for tenant A
+could still pass tenant B's id and, because last-registration-wins, take over
+B's `workflow.workflow_gate` — a fail-closed point.
+
+A mismatch raises `CrossTenantHookRefused` and is audited as
+`reason: tenant_mismatch`. The rejection is written to the **registering
+plugin's own** tenant chain; recording it in the target's would be the same
+cross-tenant write the check denies.
+
+**Callers the registry cannot resolve are allowed**, and audited as
+`tenant_check: unregistered` rather than `verified`. `PluginRegistry.register()`
+populates the plugin's context *before* calling `on_load()`, so a real plugin
+registering a hook during load is resolvable and gets verified — an unresolvable
+caller is bundled reference code, an embedding host, or a test. Refusing those
+would break them and buy nothing: the same line that names a foreign tenant can
+name an unknown `plugin_id`, and in-process code reaches the bus internals
+regardless. This is an attribution guarantee, not a sandbox.
 
 Registration is deliberately **not** gated on the flag: a plugin's `on_load` may
 run before an operator flips it, and a hook whose registration had to be ordered

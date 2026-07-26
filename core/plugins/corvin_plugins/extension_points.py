@@ -42,6 +42,11 @@ Behavioural contract
 * **…except on a fail-closed point,** where the permissive default is the wrong
   answer.  See :data:`_FAIL_CLOSED_POINTS`.
 * **Last registration wins, and is audited.**  See :func:`register_hook`.
+* **A plugin registers for its own tenant, or not at all.**  ``tenant_id`` is
+  checked against the tenant the plugin was LOADED for, so "last wins" cannot be
+  turned into a cross-tenant takeover of somebody else's fail-closed gate.  See
+  :func:`register_hook` for the exact rule and for what happens to a caller the
+  registry does not know.
 
 Nothing in this module calls a hook by itself.  Call sites are wired in a
 follow-up phase; today the bus is defined, tested and documented, and every
@@ -88,6 +93,26 @@ class ImmutableExtensionPoint(ExtensionPointError):
     A distinct class from :class:`UnknownExtensionPoint` so the answer to "why
     was my hook refused" is "this may never have one", not "you misspelled it".
     """
+
+
+class CrossTenantHookRefused(ExtensionPointError):
+    """A loaded plugin named a tenant other than the one it was loaded for.
+
+    Its own class, not :class:`ExtensionPointError`, because the answer to "why
+    was my hook refused" is a different sentence from every other refusal here:
+    the point is fine, the callable is fine, the plugin simply has no standing
+    in that tenant.  See :func:`register_hook` for the full rule.
+    """
+
+    def __init__(self, plugin_id: str, requested: str, actual: str):
+        super().__init__(
+            f"plugin {plugin_id!r} is loaded for tenant {actual!r} and may not "
+            f"register an extension hook for tenant {requested!r}; pass "
+            f"ctx.tenant_id from its own PluginContext"
+        )
+        self.plugin_id = plugin_id
+        self.requested_tenant_id = requested
+        self.actual_tenant_id = actual
 
 
 class ExtensionPointDenied(ExtensionPointError):
@@ -278,6 +303,84 @@ def _clip(value: object) -> str:
     return str(value)[:MAX_AUDITED_NAME_CHARS]
 
 
+# ── Who is asking ─────────────────────────────────────────────────────────────
+
+#: The plugin is registered and its context named a tenant.
+_TENANT_VERIFIED = "verified"
+#: The registry answered and holds no plugin under this id.
+_TENANT_UNREGISTERED = "unregistered"
+#: The lookup could not run, or ran and produced no usable tenant.
+_TENANT_UNAVAILABLE = "unavailable"
+
+
+def _loaded_tenant(plugin_id: str) -> Tuple[Optional[str], str]:
+    """The tenant ``plugin_id`` was LOADED for, read from the plugin registry.
+
+    ``(tenant_id, _TENANT_VERIFIED)`` for a registered plugin,
+    ``(None, _TENANT_UNREGISTERED)`` when the registry answered and holds no
+    such plugin, ``(None, _TENANT_UNAVAILABLE)`` when the lookup could not run
+    — the registry module is not importable in every layout that imports this
+    one (ADR-0241 headless core), and a lookup that raises must not turn a
+    registration into a crash.
+
+    Fail-closed in the sense that matters here: it never *invents* agreement.  A
+    tenant id comes back only when it was actually read off a live
+    :class:`PluginContext`, so no error path and no missing plugin can be
+    mistaken for "the tenants match".
+
+    This is deliberately the ONLY place that touches the registry's private
+    context map.  ``PluginRegistry`` publishes no accessor for a plugin's
+    context (it has ``get`` for the plugin object and ``boot_layer_of`` for the
+    layer, neither of which carries the tenant), and one guarded, documented
+    reach is better than the same reach sprinkled through the bus.  If the
+    registry ever grows a public ``tenant_of()``, this function is the single
+    edit.
+    """
+    try:
+        from .registry import get_registry
+
+        ctx = get_registry()._contexts.get(plugin_id)
+    except Exception:  # noqa: BLE001 — a missing registry must not break a load
+        log.debug("plugin registry lookup for %r is unavailable", plugin_id)
+        return None, _TENANT_UNAVAILABLE
+    if ctx is None:
+        return None, _TENANT_UNREGISTERED
+    tenant = getattr(ctx, "tenant_id", None)
+    if not isinstance(tenant, str) or not tenant:
+        return None, _TENANT_UNAVAILABLE
+    return tenant, _TENANT_VERIFIED
+
+
+def _check_tenant(point: str, *, plugin_id: str, tenant_id: str) -> str:
+    """Refuse a hook for a tenant the plugin was not loaded for.
+
+    Returns the verification status for the audit record.  Raises
+    :class:`CrossTenantHookRefused` on a proven mismatch.
+
+    The rejection is recorded in the plugin's OWN tenant, not in the one it
+    asked for.  Emitting it into the target tenant's chain would mean a plugin
+    belonging to tenant A appends a record to tenant B's hash-chained trail on
+    input A controls — the very cross-tenant write being refused.  Both ids are
+    in the details, so the record is complete either way.
+    """
+    actual, status = _loaded_tenant(plugin_id)
+    if status == _TENANT_VERIFIED and actual != tenant_id:
+        log.error(
+            "extension point %s: plugin %r is loaded for tenant %r and asked to "
+            "register for tenant %r — refused",
+            point, plugin_id, actual, tenant_id,
+        )
+        _audit("plugin.extension_hook_rejected", {
+            "point": _clip(point),
+            "plugin_id": _clip(plugin_id),
+            "tenant_id": _clip(actual),
+            "requested_tenant_id": _clip(tenant_id),
+            "reason": "tenant_mismatch",
+        }, tenant_id=str(actual))
+        raise CrossTenantHookRefused(plugin_id, tenant_id, str(actual))
+    return status
+
+
 # ── Flag ──────────────────────────────────────────────────────────────────────
 
 
@@ -285,6 +388,43 @@ def _clip(value: object) -> str:
 #: costs one audit record per pair rather than one per turn.  The audit chain is
 #: append-only; a per-invocation event on a hot path would be chain spam.
 _degraded_reported: set[tuple[str, str]] = set()
+_degraded_lock = threading.Lock()
+
+#: Cap on :data:`_degraded_reported`, in the spirit of ``healing.MAX_PLUGIN_LOCKS``.
+#: The set is process-wide and keyed by tenant, in a process that runs for
+#: months; on a host with many tenants an unbounded "already reported" memo is a
+#: slow leak.
+MAX_DEGRADED_REPORTED = 1024
+
+
+def _note_degraded(tenant_id: str, point: str) -> bool:
+    """True the first time this ``(tenant, point)`` degrades.  Bounded, atomic.
+
+    The membership test and the insert are one critical section: two concurrent
+    turns for the same tenant hitting the same broken ``features.json`` would
+    otherwise both read "not reported yet" and both append to an append-only
+    chain — the duplicate cannot be removed afterwards.
+
+    At :data:`MAX_DEGRADED_REPORTED` the memo is dropped wholesale rather than
+    refusing further keys.  Losing it costs at most one repeated record per
+    pair; refusing new keys would silence a NEW degradation for the life of the
+    process, which is precisely the blind spot this record exists to close.
+    """
+    key = (tenant_id, point)
+    with _degraded_lock:
+        if key in _degraded_reported:
+            return False
+        if len(_degraded_reported) >= MAX_DEGRADED_REPORTED:
+            log.debug("degradation memo full — dropping it and starting over")
+            _degraded_reported.clear()
+        _degraded_reported.add(key)
+        return True
+
+
+#: The flag registry lives in the Console package.  An ImportError naming one of
+#: these is "there is no Console here" (headless core, ADR-0241); an ImportError
+#: naming anything else came from INSIDE the Console and is a broken install.
+_FLAG_MODULES = frozenset({"corvin_console", "corvin_console.feature_flags"})
 
 
 def _flag_state(tenant_id: str) -> tuple[bool, bool]:
@@ -306,11 +446,36 @@ def _flag_state(tenant_id: str) -> tuple[bool, bool]:
     Both still resolve to "off" for the actual decision: a broken config must
     not break a turn, and refusing every gated workflow because a JSON file lost
     a brace would be a self-inflicted denial of service.
+
+    The distinction covers the IMPORT too, not only the lookup.  A blanket
+    ``except Exception`` around the import folded a third case into "absent" —
+    Console installed, but ``feature_flags`` unimportable (a half-installed
+    dependency, a SyntaxError, a failing module-level init).  That is a broken
+    install, indistinguishable at the call site from a deliberate "off", and it
+    is the case where the operator most likely DID enable the flag.  The import
+    error is therefore classified rather than swallowed: an ``ImportError``
+    naming the Console modules themselves is "absent"; anything else — an
+    ImportError raised from inside the Console, or a non-import failure — is
+    "broken".
     """
     try:
         from corvin_console import feature_flags  # type: ignore[import-not-found]
-    except Exception:  # noqa: BLE001
-        return False, False
+    except ImportError as exc:
+        if getattr(exc, "name", None) in _FLAG_MODULES:
+            return False, False
+        log.warning(
+            "the Console is installed but %s is not importable (%s) — running "
+            "the default path", FLAG_ID, type(exc).__name__,
+        )
+        return False, True
+    except Exception as exc:  # noqa: BLE001 — a broken Console must not break a turn
+        # Class only, never str(exc): a module-level failure inside the Console
+        # can quote a path or a config value, and this line is written per turn.
+        log.warning(
+            "importing the flag registry for %s failed (%s) — running the "
+            "default path", FLAG_ID, type(exc).__name__,
+        )
+        return False, True
     try:
         return bool(feature_flags.is_enabled(FLAG_ID, tenant_id)), False
     except Exception:  # noqa: BLE001 — a broken config must not break a turn
@@ -339,7 +504,13 @@ class _ExtensionPointBus:
         self._hooks: Dict[Tuple[str, str], _Hook] = {}
 
     def register(
-        self, point: str, fn: Callable[..., Any], *, plugin_id: str, tenant_id: str
+        self,
+        point: str,
+        fn: Callable[..., Any],
+        *,
+        plugin_id: str,
+        tenant_id: str,
+        tenant_check: str = _TENANT_UNAVAILABLE,
     ) -> None:
         if not callable(fn):
             raise ExtensionPointError(
@@ -358,6 +529,9 @@ class _ExtensionPointBus:
                 "point": point,
                 "plugin_id": plugin_id,
                 "tenant_id": tenant_id,
+                # Whether the claim on this tenant was checked against the
+                # registry or merely asserted — see register_hook().
+                "tenant_check": tenant_check,
             }, tenant_id=tenant_id)
             return
 
@@ -378,6 +552,7 @@ class _ExtensionPointBus:
             "plugin_id": plugin_id,
             "replaced_plugin_id": previous.plugin_id,
             "tenant_id": tenant_id,
+            "tenant_check": tenant_check,
         }, tenant_id=tenant_id)
 
     def get(self, point: str, tenant_id: str) -> Optional[_Hook]:
@@ -475,14 +650,46 @@ def register_hook(
     default tenant's hooks inside somebody else's turn), and a plugin loaded for
     tenant A can pass tenant B's id and take over a point there — including the
     fail-closed ``workflow.workflow_gate``, since last-registration-wins makes
-    that a takeover rather than a collision. Requiring the argument does not by
-    itself authorise it; it removes the silent path. The value a plugin should
-    pass is ``ctx.tenant_id`` from its own :class:`PluginContext`, which the
-    bootstrap sets to the tenant it was loaded for.
+    that a takeover rather than a collision. The value a plugin should pass is
+    ``ctx.tenant_id`` from its own :class:`PluginContext`, which the bootstrap
+    sets to the tenant it was loaded for.
+
+    **Requiring the argument does not validate it, so it is validated.** The
+    tenant a plugin was loaded for is knowable: ``PluginRegistry.register()``
+    stores the :class:`PluginContext` — and reserves the slot — BEFORE it calls
+    ``on_load()``, so a plugin registering a hook from its own ``on_load`` is
+    already findable in the registry. Three outcomes:
+
+    * **Registered, tenants agree** — allowed, audited as ``verified``.
+    * **Registered, tenants differ** — refused with
+      :class:`CrossTenantHookRefused` and a ``plugin.extension_hook_rejected``
+      record carrying both the requested and the actual tenant. This is the
+      takeover case, and no legitimate caller reaches it: a plugin that wants
+      its own tenant has ``ctx.tenant_id`` in hand.
+    * **Not registered** — ALLOWED, and audited as ``unregistered`` rather than
+      ``verified``.
+
+    The third decision is the load-bearing one, so here is the reasoning.
+    Rejecting an unregistered id would refuse every caller that legitimately has
+    no registry identity — bundled reference code registering a default before
+    any lifecycle runs, an embedding host, and the bus's own test suite — while
+    buying no protection worth the name: the same single line that names a
+    foreign tenant can name an id that is not in the registry, and any code
+    already running in this process can reach ``_bus._hooks`` directly. An
+    in-process check is not a sandbox and pretending otherwise would be worse
+    than being honest about it.
+
+    So the rule is scoped to what it can actually prove: a plugin the registry
+    knows is held to the tenant the registry loaded it for, and a registration
+    that cannot be verified is not silently treated as if it had been — it goes
+    into the trail marked as unverified, so "which hooks were provably
+    attributable" is a question the audit log can answer.
 
     Refused — with a raised exception, never a silent no-op — when the point is
     unknown (:class:`UnknownExtensionPoint`), names an immutable mechanism
-    (:class:`ImmutableExtensionPoint`) or when ``fn`` is not callable.
+    (:class:`ImmutableExtensionPoint`), when the plugin is loaded for a
+    different tenant (:class:`CrossTenantHookRefused`) or when ``fn`` is not
+    callable.
 
     **Conflict rule: the last registration wins, and it is audited.**  A second
     plugin registering on a point already claimed by another one replaces it and
@@ -501,7 +708,10 @@ def register_hook(
     registered hooks inert.
     """
     _check_name(point, plugin_id=plugin_id, tenant_id=tenant_id)
-    _bus.register(point, fn, plugin_id=plugin_id, tenant_id=tenant_id)
+    status = _check_tenant(point, plugin_id=plugin_id, tenant_id=tenant_id)
+    _bus.register(
+        point, fn, plugin_id=plugin_id, tenant_id=tenant_id, tenant_check=status
+    )
 
 
 def unregister_all(plugin_id: str) -> int:
@@ -568,9 +778,7 @@ def invoke(
         # a deliberate "off" — recorded once per (tenant, point) so a hot path
         # cannot spam an append-only chain.
         if lookup_broken and point in _FAIL_CLOSED_POINTS:
-            key = (tenant_id, point)
-            if key not in _degraded_reported:
-                _degraded_reported.add(key)
+            if _note_degraded(tenant_id, point):
                 _audit("plugin.extension_flag_degraded", {
                     "point": point,
                     "tenant_id": tenant_id,
@@ -631,6 +839,7 @@ def clear_all() -> None:
 __all__ = [
     "FLAG_ID",
     "KNOWN_EXTENSION_POINTS",
+    "CrossTenantHookRefused",
     "ExtensionPointDenied",
     "ExtensionPointError",
     "ExtensionPointSpec",

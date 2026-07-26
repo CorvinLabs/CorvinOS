@@ -6,7 +6,7 @@ import importlib.metadata
 import json
 import logging
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Collection
 
 from .protocol import CorvinPlugin
 
@@ -14,29 +14,110 @@ log = logging.getLogger(__name__)
 
 
 # ── Entry-point loader ────────────────────────────────────────────────────────
+#
+# Enumerating an entry point and LOADING one are two very different acts, and
+# keeping them apart is the whole point of this section.  ``entry_points()``
+# only reads distribution metadata: it yields ``name`` / ``value`` / ``group``
+# strings and imports nothing.  ``ep.load()`` imports the module named in
+# ``value`` and therefore executes third-party code at module scope.
+#
+# ``spec.plugins.auto_discover_entry_points`` defaults to false precisely so
+# that the second act needs an operator decision (bootstrap.bootstrap_declared:
+# "on a machine with third-party packages installed, flipping it means loading
+# code nobody listed").  Any code path that calls ``ep.load()`` without that
+# opt-in, or without a declaration that names this exact entry point, hands the
+# default back for free.
 
-def load_from_entry_points(group: str = "corvin.plugins") -> list[type]:
+
+def _iter_entry_points(group: str) -> list[importlib.metadata.EntryPoint]:
+    """Metadata for the group.  Reads only — imports nothing."""
+    try:
+        return list(importlib.metadata.entry_points(group=group))
+    except Exception:
+        log.exception("failed to read entry_points group %r", group)
+        return []
+
+
+def _load_one(ep: importlib.metadata.EntryPoint, group: str) -> type | None:
+    """``ep.load()``, i.e. IMPORT the third-party module.  None on failure."""
+    try:
+        cls = ep.load()
+    except Exception:  # noqa: BLE001
+        log.exception("failed to load entry_point %r in group %r", ep.name, group)
+        return None
+    log.debug("loaded entry_point %r -> %r", ep.name, cls)
+    return cls
+
+
+def load_from_entry_points(
+    group: str = "corvin.plugins",
+    *,
+    names: Collection[str] | None = None,
+) -> list[type]:
     """Load plugin classes declared under the given entry-point group.
 
     Returns a list of plugin *classes* (not instances).  Errors per entry
     point are logged and skipped so one broken package does not block others.
+
+    ``names`` restricts which entry points are IMPORTED.  ``None`` (the
+    default) keeps the historical behaviour — every entry point in the group is
+    imported — and is only appropriate once the operator has opted in via
+    ``auto_discover_entry_points``.  Passing a collection imports exactly the
+    entry points whose ``name`` appears in it; the rest are enumerated and
+    skipped without their module ever being executed.
     """
     classes: list[type] = []
-    try:
-        eps = importlib.metadata.entry_points(group=group)
-    except Exception:
-        log.exception("failed to read entry_points group %r", group)
-        return classes
-
-    for ep in eps:
-        try:
-            cls = ep.load()
+    for ep in _iter_entry_points(group):
+        if names is not None and ep.name not in names:
+            log.debug(
+                "entry_point %r in group %r not imported: no declaration needs "
+                "it and auto_discover_entry_points is off",
+                ep.name, group,
+            )
+            continue
+        cls = _load_one(ep, group)
+        if cls is not None:
             classes.append(cls)
-            log.debug("loaded entry_point %r -> %r", ep.name, cls)
-        except Exception:  # noqa: BLE001
-            log.exception("failed to load entry_point %r in group %r", ep.name, group)
-
     return classes
+
+
+def resolve_declared_entry_points(
+    needed: Collection[str],
+    group: str = "corvin.plugins",
+) -> dict[str, type]:
+    """``{id: class}`` for the declared ids that name an installed entry point.
+
+    The fallback map for ``spec.plugins.installed`` entries that carry no
+    ``class_path``.  Only entry points whose ``name`` is in ``needed`` are
+    imported — a declaration is the operator asking for that one package, which
+    is a different thing from asking for every package on the machine.
+
+    Keyed by the entry-point NAME (the id the declaration matched on, as
+    documented by :func:`discover_and_load`) and additionally by the loaded
+    class's own ``plugin_id`` when it differs, so a distribution whose entry
+    point is named after the package rather than the plugin still resolves.
+
+    The one case this deliberately no longer covers is a declared id that
+    matches *no* entry-point name but happens to equal the ``plugin_id``
+    attribute of some other package's class: finding that requires importing
+    every candidate, which is the cost the default exists to avoid.  Set
+    ``auto_discover_entry_points: true`` if that is what you want.
+    """
+    wanted = {n for n in needed if n}
+    resolved: dict[str, type] = {}
+    if not wanted:
+        return resolved
+    for ep in _iter_entry_points(group):
+        if ep.name not in wanted:
+            continue
+        cls = _load_one(ep, group)
+        if cls is None:
+            continue
+        resolved[ep.name] = cls
+        pid = getattr(cls, "plugin_id", None)
+        if isinstance(pid, str) and pid and pid not in resolved:
+            resolved[pid] = cls
+    return resolved
 
 
 # ── Class-path loader ─────────────────────────────────────────────────────────
@@ -90,11 +171,14 @@ def discover_and_load(
     Reads ``tenant_config["spec"]["plugins"]["installed"]``.  Each entry must
     have an ``id`` key and optionally a ``class_path`` key.  If ``class_path``
     is absent the loader searches installed entry points for an entry whose
-    name matches the ``id``.
+    name matches the ``id`` — and imports THAT one, nothing else.
 
     Also loads from entry points if
     ``tenant_config["spec"]["plugins"].get("auto_discover_entry_points")`` is
-    True.
+    True.  That flag is the only thing that makes this function import a
+    package nobody listed; with it off, the set of modules imported here is a
+    function of the declarations alone (see
+    :func:`resolve_declared_entry_points`).
 
     Returns a list of plugin *instances* (no-arg constructor).  Failed loads
     are skipped — one bad declaration must not cost the operator the good ones.
@@ -121,15 +205,31 @@ def discover_and_load(
 
     instances: list[CorvinPlugin] = []
 
-    # Build an entry-point name→class map for fallback resolution.
+    # Build the fallback id→class map for declarations without a class_path.
+    #
+    # This used to run on ``auto_ep or installed``, which meant a SINGLE line in
+    # spec.plugins.installed — the most common configuration there is — imported
+    # every corvin.plugins entry point on the machine.  That is exactly the act
+    # ``auto_discover_entry_points: false`` exists to prevent, and it happened
+    # even for a declaration that names its own class_path and needs no
+    # fallback at all.  Now: opt-in imports everything, otherwise only the entry
+    # points a declaration actually has to resolve.
     ep_map: dict[str, type] = {}
-    if auto_ep or installed:
+    if auto_ep:
         for cls in load_from_entry_points():
             # Use plugin_id class attribute as key if available, else rely on
             # ep.name matching — classes loaded here get checked below.
             pid = getattr(cls, "plugin_id", None)
             if pid:
                 ep_map[pid] = cls
+    else:
+        ep_map = resolve_declared_entry_points(
+            [
+                entry.get("id", "")
+                for entry in installed
+                if isinstance(entry, dict) and not entry.get("class_path")
+            ]
+        )
 
     for entry in installed:
         pid = entry.get("id", "")
