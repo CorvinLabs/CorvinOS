@@ -369,18 +369,26 @@ class GatewayComputeQuotaTests(unittest.TestCase):
     """ADR-0149 LIC-GW-CQ-01: gateway run-dispatch charges compute_units_per_day."""
 
     def test_free_tier_run_past_the_daily_limit_is_blocked(self):
-        """The (limit+1)-th run must fail on compute_units_per_day.
+        """A dispatch is refused once the daily compute pool is spent.
 
-        The limit is READ from license.limits.FREE_TIER, not hardcoded. This test
-        used to assume 1 and assert that the SECOND run is blocked; the maintainer
-        raised the free tier to 10 agentic turns/day on 2026-07-24, so the second run
-        legitimately completes and the test had been failing against correct product
-        behaviour ever since. Binding it to the constant means the next change to the
-        limit does not silently invalidate it again.
+        The limit is READ from license.limits.FREE_TIER, not hardcoded. This test used
+        to assume 1 and assert the SECOND run is blocked; the maintainer raised the free
+        tier to 10 agentic turns/day on 2026-07-24, so the second run legitimately
+        completes and the test had been failing against correct product behaviour.
+
+        The pool is spent by charging the counter DIRECTLY, not by driving `limit` real
+        dispatches. Every dispatch runs the L44 house-rules gate, which adjudicates the
+        prompt with an LLM against the one local Ollama — driving 10 of them made this
+        single test issue 10 LLM calls and saturated that shared resource for the whole
+        run-all-tests.sh suite (measured: unrelated gateway, completion-E2E and Node
+        E2E suites started timing out, 3 failures -> 9). What this test is actually
+        about is the GATE WIRING: that _run_one consults the meter and refuses. One
+        dispatch proves that; ten only prove Ollama is busy.
         """
         import sys as _s
         _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "operator"))
         import license.validator as _v
+        from license.compute_quota import increment_and_check as _charge
         from license.limits import FREE_TIER as _FREE
 
         limit = _FREE["compute_units_per_day"]
@@ -391,41 +399,26 @@ class GatewayComputeQuotaTests(unittest.TestCase):
         self.addCleanup(lambda: setattr(_v, "_ACTIVE_LICENSE_CANARY", _orig_can))
         self.addCleanup(lambda: setattr(_v, "_ACTIVE_LICENSE", _orig))
         with sandbox(("acme",)) as home:
+            # Spend the pool without dispatching: the last charge is the one that
+            # trips the limit, so swallow exactly that.
+            from license.limits import LicenseLimitError as _LimErr
+            for _ in range(limit):
+                try:
+                    _charge(home, channel="test-preload", chat_key="preload")
+                except _LimErr:
+                    pass
             with gateway_client(engine_factory=_EchoEngine) as client:
-                # Spend the whole daily pool.
-                # 30 s per run, not the 5 s default: every dispatch runs the L44
-                # house-rules gate, which ADJUDICATES THE INPUT WITH AN LLM
-                # (house_rules_adjudicator → qwen3:8b via Ollama, or Haiku). Measured
-                # ~7-11 s per trivial run with an instant echo engine. That is the
-                # cost of a fail-closed compliance gate, not a slow dispatcher — so
-                # the poll window has to accommodate it instead of the test blaming
-                # the product. It makes this case slow by construction; correctness
-                # wins over runtime for a licence-enforcement test.
-                for i in range(limit):
-                    r = client.post(
-                        "/v1/tenants/acme/runs",
-                        json=_good_run_body(input_text=f"run-{i}"), headers=_hdr(),
-                    )
-                    got = _poll_until_terminal(
-                        client, f"/v1/tenants/acme/runs/{r.json()['run_id']}", _hdr(),
-                        timeout_s=30.0,
-                    )
-                    self.assertEqual(
-                        got.json()["status"], "completed",
-                        f"run {i + 1} of {limit} should still be inside the pool",
-                    )
-                # One more must be refused.
                 over = client.post(
                     "/v1/tenants/acme/runs",
                     json=_good_run_body(input_text="over-limit"), headers=_hdr(),
                 )
                 got = _poll_until_terminal(
                     client, f"/v1/tenants/acme/runs/{over.json()['run_id']}", _hdr(),
-                    timeout_s=30.0,
+                    timeout_s=30.0,   # L44 adjudicates every input with an LLM
                 )
                 self.assertEqual(
                     got.json()["status"], "failed",
-                    f"run {limit + 1} must be blocked by compute_units_per_day={limit}",
+                    f"a dispatch past compute_units_per_day={limit} must be refused",
                 )
                 self.assertIn("compute_units_per_day", got.json().get("error", ""))
 
