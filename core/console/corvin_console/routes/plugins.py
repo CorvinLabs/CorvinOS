@@ -191,7 +191,14 @@ def _lifecycle(tenant_id: str) -> Any:
 
 
 def _runtime_state(plugin_id: str) -> tuple[bool, str | None]:
-    """(is_registered_now, why_not) for one plugin.  Never raises."""
+    """(is_registered_now, why_not) for one plugin.  Never raises.
+
+    The reason is DERIVED, never assumed. Reporting "healing_unloaded" for anything
+    that merely is not loaded would be a false statement in an operator-facing
+    surface: a record with no class_path was never loadable, and a boot that has not
+    reached the plugin yet has not healed anything either. Only an actual healing
+    action in the orchestrator's history justifies that label.
+    """
     try:
         from corvin_plugins import circuit_breaker as _cb
         from corvin_plugins.registry import get_registry
@@ -199,11 +206,29 @@ def _runtime_state(plugin_id: str) -> tuple[bool, str | None]:
         loaded = plugin_id in get_registry().discover()
         breaker = _cb.snapshot().get(plugin_id) or {}
         state = breaker.get("state", "closed")
-        if not loaded:
-            return False, "healing_unloaded"
-        if state != "closed":
-            return True, f"breaker_{state}"
-        return True, None
+
+        if loaded:
+            return True, (f"breaker_{state}" if state != "closed" else None)
+
+        # Not loaded — ask the healer whether it did that, rather than guessing.
+        collector = _collector()
+        healer = getattr(collector, "_healer", None) if collector else None
+        if healer is not None:
+            try:
+                from corvin_plugins.healing import HealingAction
+
+                acted = {
+                    rec.action
+                    for rec in healer.history(plugin_id)
+                    if rec.succeeded
+                }
+                if HealingAction.DISABLE in acted:
+                    return False, "healing_unloaded"
+                if HealingAction.ESCALATE in acted:
+                    return False, "healing_escalated"
+            except Exception:  # noqa: BLE001
+                pass
+        return False, "not_loaded"
     except Exception:  # noqa: BLE001 - a status read must not fail the request
         return False, None
 

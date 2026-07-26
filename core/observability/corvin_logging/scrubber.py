@@ -20,17 +20,26 @@ from typing import Any, Dict, Tuple
 
 #: (kind, pattern). Order matters only for overlapping matches; each is replaced
 #: by ``[REDACTED:<kind>]``.
+#: Every quantifier here is BOUNDED. An unbounded `[\w.+-]+` in the email pattern
+#: took 3.2 SECONDS on 50 000 non-matching characters — it consumed the whole run
+#: and then backtracked from every position, never finding an "@". On a large log
+#: payload that is a denial of service through the logging path (the same ReDoS
+#: class as the big-data classifier fix in 0.10.62). Bounded parts cannot exhibit
+#: that behaviour, and scrubbing now runs AFTER truncation so the input is small
+#: anyway — two independent guards, because one regex edit away is too close.
 _PATTERNS: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
-    ("email", re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]{2,}")),
+    ("email", re.compile(r"[\w.+-]{1,64}@[\w-]{1,63}\.[\w.-]{2,63}")),
     # Bearer/API-token shapes that show up in error strings.
     ("token", re.compile(r"\b(?:sk|pk|ghp|gho|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")),
     # A URL with embedded credentials — the classic connection-string leak.
-    ("url_credentials", re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/@]+:[^\s/@]+@")),
+    ("url_credentials", re.compile(r"\b[a-z][a-z0-9+.-]{0,15}://[^\s/@]{1,64}:[^\s/@]{1,64}@")),
     ("iban", re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b")),
     # 13-19 digit card-like runs, optionally grouped. Kept after IBAN so an IBAN
     # is not partially matched as a card number.
-    ("card", re.compile(r"\b(?:\d[ -]?){13,19}\b")),
+    # Anchored on digit runs with a bounded separator class instead of a nested
+    # quantifier over an optional separator.
+    ("card", re.compile(r"\b\d{4}[ -]?\d{4}[ -]?\d{4}[ -]?\d{1,7}\b")),
     ("ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
     # IPv4 that is not obviously loopback/link-local. An IP is personal data under
     # GDPR, and log aggregators are the classic place it accumulates.

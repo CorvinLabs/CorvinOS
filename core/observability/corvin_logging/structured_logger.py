@@ -28,6 +28,17 @@ from typing import Any, Dict, Optional
 from . import context as _ctx
 from .scrubber import scrub
 
+#: Per-field character cap. A record is one line in a log stream, and aggregators
+#: (Loki, ELK, journald) drop lines past their own limit — so an oversized field
+#: does not merely bloat the log, it makes the whole event disappear. Truncating
+#: keeps the operational signal. The rule remains "log metadata, not payloads";
+#: this is the backstop for when someone forgets.
+MAX_FIELD_CHARS = 2048
+#: Cap on the serialised record. Beyond this the context is dropped entirely and
+#: replaced with a marker: the message and the schema fields matter more than a
+#: context nobody can read.
+MAX_RECORD_CHARS = 16384
+
 #: Fields that always appear (in this order) so a reader can grep positionally.
 _ORDER = (
     "timestamp",
@@ -61,6 +72,43 @@ class JsonFormatter(logging.Formatter):
                 "message": record.getMessage(),
             }
         return json.dumps(payload, default=str, ensure_ascii=False)
+
+
+#: Depth ceiling for the size walk, mirroring the scrubber's.
+_MAX_TRUNCATE_DEPTH = 6
+
+
+def _truncate(event: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+    """Cap field and record size.  Returns ``(event, was_truncated)``."""
+    truncated = False
+
+    def cap(value: Any, depth: int = 0) -> Any:
+        nonlocal truncated
+        # Depth ceiling, like the scrubber has. Without it a self-referencing
+        # context (context["self"] = context) recursed until RecursionError, which
+        # the outer handler swallowed — so the record was silently LOST instead of
+        # merely being oversized. A guard that drops the event is worse than the
+        # problem it guards against.
+        if depth > _MAX_TRUNCATE_DEPTH:
+            truncated = True
+            return "…[too deep]"
+        if isinstance(value, str) and len(value) > MAX_FIELD_CHARS:
+            truncated = True
+            return value[:MAX_FIELD_CHARS] + f"…[+{len(value) - MAX_FIELD_CHARS} chars]"
+        if isinstance(value, dict):
+            return {k: cap(v, depth + 1) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [cap(v, depth + 1) for v in value]
+        return value
+
+    event = {k: cap(v) for k, v in event.items()}
+
+    # Still too big (many capped fields, or a huge nested structure): the context is
+    # the expendable part — the schema fields and the message are what a reader needs.
+    if len(json.dumps(event, default=str)) > MAX_RECORD_CHARS and "context" in event:
+        event["context"] = {"dropped": "record exceeded MAX_RECORD_CHARS"}
+        truncated = True
+    return event, truncated
 
 
 def _now() -> str:
@@ -140,9 +188,16 @@ class CorvinLogger:
             ambient.pop("component", None)
             event.update(ambient)
 
+            # Truncate FIRST, scrub SECOND. The scrubber is regex-based, and a
+            # multi-hundred-kilobyte value made it the slowest thing in the process
+            # (measured: seconds per call, unbounded with size). Capping first means
+            # the patterns only ever see a few kilobytes.
+            event, truncated = _truncate(event)
             scrubbed, redacted = scrub(event)
             if redacted:
                 scrubbed["pii_redacted"] = True
+            if truncated:
+                scrubbed["truncated"] = True
 
             ordered = {k: scrubbed[k] for k in _ORDER if k in scrubbed}
             ordered.update({k: v for k, v in scrubbed.items() if k not in ordered})
@@ -217,6 +272,8 @@ def install_json_handler(level: int = logging.INFO) -> logging.Handler:
 
 
 __all__ = [
+    "MAX_FIELD_CHARS",
+    "MAX_RECORD_CHARS",
     "CorvinLogger",
     "JsonFormatter",
     "get_logger",
