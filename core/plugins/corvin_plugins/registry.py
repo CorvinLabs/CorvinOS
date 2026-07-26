@@ -5,7 +5,7 @@ import logging
 import threading
 
 from . import circuit_breaker as _breakers
-from .manifest import PluginLayer
+from .manifest import _PRIVILEGED_BOOT_LAYERS, BootLayer
 from .protocol import (
     CorvinPlugin,
     HealthStatus,
@@ -105,54 +105,68 @@ class PluginRegistry:
     def __init__(self) -> None:
         self._plugins: dict[str, CorvinPlugin] = {}
         self._contexts: dict[str, PluginContext] = {}
-        self._layers: dict[str, PluginLayer] = {}
+        self._boot_layers: dict[str, BootLayer] = {}
         self._lock = threading.Lock()
 
     # ── Registration ──────────────────────────────────────────────────────────
 
     @staticmethod
-    def _resolve_layer(plugin: CorvinPlugin, layer: PluginLayer | str | None) -> PluginLayer:
-        """Decide which layer a runtime plugin object belongs to.
+    def _resolve_boot_layer(
+        plugin: CorvinPlugin, boot_layer: BootLayer | str | None
+    ) -> BootLayer:
+        """Decide which boot layer a runtime plugin object belongs to.
 
-        Order: explicit argument (the loader passes the registry record's value)
-        → the plugin object's own ``layer`` attribute → ``installed``.  The
-        fallback is the least privileged value on purpose: an object that does
-        not declare a layer must not land in ``compliance`` by accident, because
-        that would make it undisableable.
+        Order: explicit argument (the caller holds the provenance chain — the
+        bootstrap paths pass the value they already gated) → the plugin object's
+        own ``boot_layer`` attribute, **capped at the unprivileged boot layers**
+        → ``installed``.
 
-        The plugin's self-declaration is trusted only as far as the manifest
-        gate allows — :class:`~.manifest.PluginRecord` already refuses a
-        community-origin record that claims a privileged layer, and the loader
-        passes the vetted record value explicitly.
+        The cap is the load-bearing part. An attribute on a plugin OBJECT has
+        passed no gate at all: there is no ``PluginRecord`` behind it, so
+        neither ``_PRIVILEGED_BOOT_LAYERS`` nor the tenant-scope downgrade in
+        ``bootstrap._declared_boot_layer`` has run. Honouring ``self.boot_layer =
+        "compliance"`` would let any plugin promote itself the moment something
+        re-registers it without an explicit boot layer — which is exactly what a
+        healing soft-restart does. Trust travels with the caller, not with the
+        object being registered.
         """
-        if layer is not None:
-            return PluginLayer(layer)
-        declared = getattr(plugin, "layer", None)
+        if boot_layer is not None:
+            return BootLayer(boot_layer)
+        declared = getattr(plugin, "boot_layer", None)
         if declared is None:
-            return PluginLayer.INSTALLED
+            return BootLayer.INSTALLED
         try:
-            return PluginLayer(declared)
-        except ValueError:
+            resolved = BootLayer(declared)
+        except (ValueError, TypeError):
             log.warning(
-                "plugin %r declares unknown layer %r — treating as installed",
+                "plugin %r declares unknown boot_layer %r — treating as installed",
                 getattr(plugin, "plugin_id", "?"), declared,
             )
-            return PluginLayer.INSTALLED
+            return BootLayer.INSTALLED
+        if resolved in _PRIVILEGED_BOOT_LAYERS:
+            log.warning(
+                "plugin %r claims privileged boot_layer %s on its own object — "
+                "treating as installed; privileged boot layers are assigned by "
+                "the caller, never self-declared",
+                getattr(plugin, "plugin_id", "?"), resolved.value,
+            )
+            return BootLayer.INSTALLED
+        return resolved
 
     def register(
         self,
         plugin: CorvinPlugin,
         ctx: PluginContext,
         *,
-        layer: PluginLayer | str | None = None,
+        boot_layer: BootLayer | str | None = None,
     ) -> None:
         """Call plugin.on_load(ctx) and store the plugin.
 
         Raises PluginAlreadyRegistered if plugin.plugin_id is already registered.
-        ``layer`` (ADR-0243) records which boot layer the plugin belongs to; it is
-        keyword-only and defaults to the least privileged value.
+        ``boot_layer`` (ADR-0243) records which boot layer the plugin belongs to;
+        it is keyword-only and defaults to the least privileged value.
         """
-        resolved = self._resolve_layer(plugin, layer)
+        resolved = self._resolve_boot_layer(plugin, boot_layer)
         with self._lock:
             if plugin.plugin_id in self._plugins:
                 raise PluginAlreadyRegistered(
@@ -162,7 +176,7 @@ class PluginRegistry:
             # call from on_load() (e.g. in tests) also gets the collision guard.
             self._plugins[plugin.plugin_id] = plugin
             self._contexts[plugin.plugin_id] = ctx
-            self._layers[plugin.plugin_id] = resolved
+            self._boot_layers[plugin.plugin_id] = resolved
 
         try:
             plugin.on_load(ctx)
@@ -171,7 +185,7 @@ class PluginRegistry:
             with self._lock:
                 self._plugins.pop(plugin.plugin_id, None)
                 self._contexts.pop(plugin.plugin_id, None)
-                self._layers.pop(plugin.plugin_id, None)
+                self._boot_layers.pop(plugin.plugin_id, None)
             raise
 
         log.info(
@@ -187,7 +201,7 @@ class PluginRegistry:
         ctx.audit_emit("plugin.loaded", {
             "plugin_id": plugin.plugin_id,
             "plugin_type": plugin.plugin_type,
-            "layer": resolved.value,
+            "boot_layer": resolved.value,
             "version": plugin.version,
             "tenant_id": ctx.tenant_id,
         })
@@ -200,14 +214,14 @@ class PluginRegistry:
         ``operator_initiated`` separates the two callers that both end up here.
         Shutdown, hot-reload and replacement are machinery and may unload
         anything.  An operator action routed through the Console or the admin API
-        may not switch off a compliance-layer plugin, so it passes True and gets
-        :class:`PluginDisableRefused`.  Without the distinction the admin surface
-        could reach past :meth:`disable` and unload the audit writer by calling
-        the primitive directly.
+        may not switch off a compliance-boot-layer plugin, so it passes True and
+        gets :class:`PluginDisableRefused`.  Without the distinction the admin
+        surface could reach past :meth:`disable` and unload the audit writer by
+        calling the primitive directly.
         """
         if operator_initiated and not self.can_disable(plugin_id):
             raise PluginDisableRefused(
-                f"{plugin_id!r} is on the compliance layer and cannot be disabled"
+                f"{plugin_id!r} is on the compliance boot layer and cannot be disabled"
             )
         with self._lock:
             plugin = self._plugins.get(plugin_id)
@@ -219,7 +233,7 @@ class PluginRegistry:
             # already gone from _plugins and on_unload() never called.
             self._plugins.pop(plugin_id, None)
             self._contexts.pop(plugin_id, None)
-            layer = self._layers.pop(plugin_id, PluginLayer.INSTALLED)
+            boot_layer = self._boot_layers.pop(plugin_id, BootLayer.INSTALLED)
 
         try:
             plugin.on_unload()
@@ -236,14 +250,14 @@ class PluginRegistry:
         if ctx is not None:
             ctx.audit_emit("plugin.unloaded", {
                 "plugin_id": plugin_id,
-                "layer": layer.value,
+                "boot_layer": boot_layer.value,
                 "operator_initiated": operator_initiated,
                 "tenant_id": ctx.tenant_id,
             })
 
-    # ── Layers (ADR-0243) ─────────────────────────────────────────────────────
+    # ── Boot layers (ADR-0243) ────────────────────────────────────────────────
 
-    def layer_of(self, plugin_id: str) -> PluginLayer:
+    def boot_layer_of(self, plugin_id: str) -> BootLayer:
         """Return the boot layer of a registered plugin.
 
         Raises PluginNotFound if plugin_id is not registered.
@@ -251,15 +265,15 @@ class PluginRegistry:
         with self._lock:
             if plugin_id not in self._plugins:
                 raise PluginNotFound(plugin_id)
-            return self._layers.get(plugin_id, PluginLayer.INSTALLED)
+            return self._boot_layers.get(plugin_id, BootLayer.INSTALLED)
 
-    def plugins_by_layer(self, layer: PluginLayer | str) -> list[CorvinPlugin]:
+    def plugins_by_boot_layer(self, layer: BootLayer | str) -> list[CorvinPlugin]:
         """Return all registered plugins on the given layer."""
-        wanted = PluginLayer(layer)
+        wanted = BootLayer(layer)
         with self._lock:
             return [
                 p for pid, p in self._plugins.items()
-                if self._layers.get(pid, PluginLayer.INSTALLED) is wanted
+                if self._boot_layers.get(pid, BootLayer.INSTALLED) is wanted
             ]
 
     def can_disable(self, plugin_id: str) -> bool:
@@ -267,12 +281,12 @@ class PluginRegistry:
 
         An unregistered id answers True: "nothing here to protect".  Callers that
         need the difference between "absent" and "present but protected" ask
-        :meth:`layer_of`, which raises.
+        :meth:`boot_layer_of`, which raises.
         """
         with self._lock:
             if plugin_id not in self._plugins:
                 return True
-            return self._layers.get(plugin_id, PluginLayer.INSTALLED) is not PluginLayer.COMPLIANCE
+            return self._boot_layers.get(plugin_id, BootLayer.INSTALLED) is not BootLayer.COMPLIANCE
 
     def disable(self, plugin_id: str) -> None:
         """Operator-facing unload.  Refuses the compliance layer.
@@ -289,7 +303,7 @@ class PluginRegistry:
         ctx: PluginContext,
         *,
         replaces: str,
-        layer: PluginLayer | str | None = None,
+        layer: BootLayer | str | None = None,
     ) -> None:
         """Swap a ``layer=core`` reference implementation for an alternative.
 
@@ -311,9 +325,9 @@ class PluginRegistry:
                     f"{plugin.plugin_id!r} declares replaces={replaces!r}, "
                     f"which is not registered"
                 )
-            target_layer = self._layers.get(replaces, PluginLayer.INSTALLED)
+            target_layer = self._boot_layers.get(replaces, BootLayer.INSTALLED)
             already = plugin.plugin_id in self._plugins
-        if target_layer is not PluginLayer.CORE:
+        if target_layer is not BootLayer.CORE:
             raise PluginReplacementRefused(
                 f"{replaces!r} is on layer {target_layer.value}; only "
                 f"layer=core reference implementations are replaceable"
@@ -331,7 +345,7 @@ class PluginRegistry:
             "replaces": replaces,
             "tenant_id": ctx.tenant_id,
         })
-        self.register(plugin, ctx, layer=layer if layer is not None else PluginLayer.CORE)
+        self.register(plugin, ctx, layer=layer if layer is not None else BootLayer.CORE)
 
     # ── Lookup ────────────────────────────────────────────────────────────────
 
@@ -452,7 +466,7 @@ def register(
     plugin: CorvinPlugin,
     ctx: PluginContext,
     *,
-    layer: PluginLayer | str | None = None,
+    layer: BootLayer | str | None = None,
 ) -> None:
     _registry.register(plugin, ctx, layer=layer)
 
@@ -469,12 +483,12 @@ def can_disable(plugin_id: str) -> bool:
     return _registry.can_disable(plugin_id)
 
 
-def layer_of(plugin_id: str) -> PluginLayer:
-    return _registry.layer_of(plugin_id)
+def boot_layer_of(plugin_id: str) -> BootLayer:
+    return _registry.boot_layer_of(plugin_id)
 
 
-def plugins_by_layer(layer: PluginLayer | str) -> list[CorvinPlugin]:
-    return _registry.plugins_by_layer(layer)
+def plugins_by_boot_layer(layer: BootLayer | str) -> list[CorvinPlugin]:
+    return _registry.plugins_by_boot_layer(layer)
 
 
 def replace(
@@ -482,7 +496,7 @@ def replace(
     ctx: PluginContext,
     *,
     replaces: str,
-    layer: PluginLayer | str | None = None,
+    layer: BootLayer | str | None = None,
 ) -> None:
     _registry.replace(plugin, ctx, replaces=replaces, layer=layer)
 

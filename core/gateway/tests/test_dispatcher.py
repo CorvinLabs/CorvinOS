@@ -106,7 +106,7 @@ def _hdr() -> dict[str, str]:
 
 def _poll_until_terminal(
     client, url: str, headers: dict[str, str], *,
-    timeout_s: float = 5.0,
+    timeout_s: float = 30.0,   # see the L44 note below
 ):
     """Poll GET until status leaves ``accepted`` / ``running`` or timeout."""
     end = time.time() + timeout_s

@@ -258,7 +258,7 @@ def gateway_client(
     *,
     max_retries: int = 2,
     backoff_s: tuple[float, ...] = (0.05, 0.05, 0.05),
-    timeout_s: float = 5.0,
+    timeout_s: float = 30.0,   # see the L44 note below
     guard_bypass: bool = True,
 ):
     """Engage lifespan with a fast-backoff webhook dispatcher.
@@ -296,7 +296,14 @@ def gateway_client(
             app.state.dispatcher = None
 
 
-def _poll_until_terminal(client, url, headers, *, timeout_s: float = 5.0):
+# 30 s, not 5 s. Every gateway dispatch runs the L44 house-rules gate, which
+# ADJUDICATES THE PROMPT WITH AN LLM (house_rules_adjudicator -> qwen3:8b via the one
+# local Ollama, or Haiku). Measured 2026-07-26: ~7-11 s for a trivial run with an
+# instant stub engine. A 5 s budget therefore passed or failed depending on how warm
+# Ollama happened to be — engine-policy, zone-policy, durable-queue and dispatcher all
+# flipped between runs of the same commit. That is a fail-closed compliance gate doing
+# its job, so the poll accommodates its cost instead of the suite blaming the product.
+def _poll_until_terminal(client, url, headers, *, timeout_s: float = 30.0):
     end = time.time() + timeout_s
     last = None
     while time.time() < end:

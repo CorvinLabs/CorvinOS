@@ -393,12 +393,22 @@ try:
     from corvin_console import app as _console_app  # type: ignore[import-not-found]
     app.include_router(_console_app.router, prefix="/v1/console")
     _console_app.mount_static(app)
-    # Local stats HTML dashboard — bare /local-stats (outside /console/ SPA prefix)
-    from fastapi.responses import HTMLResponse as _HTMLResponse
-    from corvin_console.standalone import _LOCAL_STATS_HTML as _ls_html  # type: ignore
-    @app.get("/local-stats", include_in_schema=False)
-    def _local_stats_page() -> _HTMLResponse:
-        return _HTMLResponse(content=_ls_html)
+    # ADR-0241/0243: in headless mode this process serves no browser surface.
+    # mount_static() already declines the SPA; the HTML dashboards below are the
+    # OTHER browser surfaces on this app and have to make the same decision, or
+    # "headless" would mean "the SPA is gone and two full HTML pages remain".
+    _headless = False
+    try:
+        _headless = _console_app.headless_enabled()
+    except Exception:  # noqa: BLE001 — unreadable flag means "serve as usual"
+        pass
+    if not _headless:
+        # Local stats HTML dashboard — bare /local-stats (outside /console/ SPA prefix)
+        from fastapi.responses import HTMLResponse as _HTMLResponse
+        from corvin_console.standalone import _LOCAL_STATS_HTML as _ls_html  # type: ignore
+        @app.get("/local-stats", include_in_schema=False)
+        def _local_stats_page() -> _HTMLResponse:
+            return _HTMLResponse(content=_ls_html)
 
     # Operator dashboards — bare /op.html, /analytics.html, /telemetry.html (outside SPA).
     # Dev-machine convenience only: the sibling Corvin-Website checkout does not
@@ -610,7 +620,28 @@ async def favicon():
 
 @app.get("/", include_in_schema=False)
 async def root_redirect():
+    """Send a browser to the console — unless there is no console to send it to.
+
+    In headless mode (ADR-0241/0243) ``/console/`` is not mounted, so the
+    redirect would hand every visitor a 302 into a 404. Answering with the
+    liveness shape instead keeps the root useful for the API-only deployment
+    this mode exists for.
+    """
     from starlette.responses import RedirectResponse
+
+    try:
+        import sys as _s
+        from pathlib import Path as _P
+
+        _cp = _P(__file__).resolve().parents[2] / "console"
+        if str(_cp) not in _s.path:
+            _s.path.insert(0, str(_cp))
+        from corvin_console.app import headless_enabled  # type: ignore[import-not-found]
+
+        if headless_enabled():
+            return {"status": "ok", "version": __version__, "ui": "headless"}
+    except Exception:  # noqa: BLE001 — no console package means "redirect as usual"
+        pass
     return RedirectResponse(url="/console/", status_code=302)
 
 

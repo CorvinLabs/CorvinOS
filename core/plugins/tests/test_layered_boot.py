@@ -25,7 +25,7 @@ for _p in (str(_PKG), str(_REPO)):
         sys.path.insert(0, _p)
 
 import corvin_plugins.bootstrap as boot  # noqa: E402
-from corvin_plugins.manifest import PluginLayer, PluginOrigin, PluginRecord  # noqa: E402
+from corvin_plugins.manifest import BootLayer, PluginOrigin, PluginRecord  # noqa: E402
 from corvin_plugins.protocol import HealthStatus, PluginContext  # noqa: E402
 from corvin_plugins.registry import get_registry  # noqa: E402
 
@@ -93,7 +93,7 @@ class _BootTestCase(unittest.TestCase):
 
 class TestRegisterGlobalPlugin(_BootTestCase):
     def test_compliance_and_core_are_accepted(self):
-        boot.register_global_plugin("a:B", layer=PluginLayer.COMPLIANCE)
+        boot.register_global_plugin("a:B", layer=BootLayer.COMPLIANCE)
         boot.register_global_plugin("c:D", layer="core")
         self.assertEqual(len(boot._GLOBAL_SPECS), 2)
 
@@ -182,7 +182,7 @@ class TestGlobalBootFailureSemantics(_BootTestCase):
         ):
             loaded = boot.bootstrap_global(tenant_id="t", corvin_home=Path("/tmp"))
         self.assertEqual(loaded, ["gate"])
-        self.assertIs(get_registry().layer_of("gate"), PluginLayer.COMPLIANCE)
+        self.assertIs(get_registry().boot_layer_of("gate"), BootLayer.COMPLIANCE)
         self.assertFalse(get_registry().can_disable("gate"))
 
 
@@ -191,46 +191,46 @@ class TestGlobalBootFailureSemantics(_BootTestCase):
 
 class TestTenantCannotClaimPrivilegedLayers(_BootTestCase):
     def test_declared_entry_may_claim_bundled(self):
-        layer = boot._declared_layer(
+        layer = boot._declared_boot_layer(
             {"layer": "bundled"}, plugin_id="p", tenant_id="t"
         )
-        self.assertIs(layer, PluginLayer.BUNDLED)
+        self.assertIs(layer, BootLayer.BUNDLED)
         self.assertEqual(self._events("plugin.layer_rejected"), [])
 
     def test_declared_entry_claiming_compliance_is_downgraded_and_audited(self):
-        layer = boot._declared_layer(
+        layer = boot._declared_boot_layer(
             {"layer": "compliance"}, plugin_id="evil", tenant_id="t"
         )
-        self.assertIs(layer, PluginLayer.INSTALLED)
+        self.assertIs(layer, BootLayer.INSTALLED)
         rejected = self._events("plugin.layer_rejected")
         self.assertEqual(rejected[0]["reason"], "privileged_layer_from_tenant")
         self.assertEqual(rejected[0]["plugin_id"], "evil")
 
     def test_declared_entry_claiming_core_is_downgraded(self):
         self.assertIs(
-            boot._declared_layer({"layer": "core"}, plugin_id="p", tenant_id="t"),
-            PluginLayer.INSTALLED,
+            boot._declared_boot_layer({"layer": "core"}, plugin_id="p", tenant_id="t"),
+            BootLayer.INSTALLED,
         )
 
     def test_unknown_layer_string_is_downgraded_and_audited(self):
         self.assertIs(
-            boot._declared_layer({"layer": "root"}, plugin_id="p", tenant_id="t"),
-            PluginLayer.INSTALLED,
+            boot._declared_boot_layer({"layer": "root"}, plugin_id="p", tenant_id="t"),
+            BootLayer.INSTALLED,
         )
         self.assertEqual(
             self._events("plugin.layer_rejected")[0]["reason"], "unknown_layer"
         )
 
     def test_audited_layer_value_is_length_capped(self):
-        boot._declared_layer({"layer": "x" * 500}, plugin_id="p", tenant_id="t")
+        boot._declared_boot_layer({"layer": "x" * 500}, plugin_id="p", tenant_id="t")
         self.assertLessEqual(
             len(self._events("plugin.layer_rejected")[0]["declared_layer"]), 32
         )
 
     def test_absent_layer_defaults_to_installed_without_noise(self):
         self.assertIs(
-            boot._declared_layer({}, plugin_id="p", tenant_id="t"),
-            PluginLayer.INSTALLED,
+            boot._declared_boot_layer({}, plugin_id="p", tenant_id="t"),
+            BootLayer.INSTALLED,
         )
         self.assertEqual(self.audited, [])
 
@@ -242,7 +242,7 @@ class TestTenantCannotClaimPrivilegedLayers(_BootTestCase):
             version="1.0.0",
             display_name="S",
             plugin_type="compute_engine",
-            layer=PluginLayer.CORE,
+            layer=BootLayer.CORE,
             origin=PluginOrigin.VETTED,
             class_path="x:Y",
         )
@@ -251,7 +251,7 @@ class TestTenantCannotClaimPrivilegedLayers(_BootTestCase):
         ):
             ok = boot._load_one(rec, tenant_id="t", corvin_home=Path("/tmp"))
         self.assertTrue(ok)
-        self.assertIs(get_registry().layer_of("sneaky"), PluginLayer.INSTALLED)
+        self.assertIs(get_registry().boot_layer_of("sneaky"), BootLayer.INSTALLED)
         self.assertEqual(
             self._events("plugin.layer_rejected")[0]["reason"],
             "privileged_layer_from_tenant",

@@ -158,7 +158,7 @@ def uvicorn_server(fast_webhook: bool = True):
     t.start()
 
     # Wait for uvicorn to bind + accept connections
-    deadline = time.time() + 5.0
+    deadline = time.time() + 30.0   # L44 adjudicates with an LLM
     while time.time() < deadline:
         if server.started and server.servers:
             for sock in server.servers[0].sockets:

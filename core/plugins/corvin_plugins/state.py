@@ -31,6 +31,7 @@ import logging
 import os
 import tempfile
 import threading
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, Iterator, Optional
@@ -40,6 +41,7 @@ import yaml
 from .manifest import (
     DependencyResolver,
     Locality,
+    BootLayer,
     NetworkEgress,
     PIIRisk,
     PluginError,
@@ -49,6 +51,7 @@ from .manifest import (
     SettingsValidator,
     validate_plugin_id,
 )
+from .protocol import PluginDisableRefused
 
 log = logging.getLogger("corvin.plugins.state")
 
@@ -218,6 +221,46 @@ def instance_dir(
 # ── Persistence ───────────────────────────────────────────────────────────────
 
 
+#: Layers a per-tenant ``registry.yaml`` may express.  Mirrors
+#: ``bootstrap._TENANT_DECLARABLE_BOOT_LAYERS`` — same trust boundary, other file.
+_TENANT_RECORD_BOOT_LAYERS = frozenset({BootLayer.BUNDLED, BootLayer.INSTALLED})
+
+
+def _downgrade_privileged_boot_layer(record: PluginRecord, *, path: Path) -> PluginRecord:
+    """Force a tenant-written record down to ``installed`` if it claims more.
+
+    ``registry.yaml`` is per-tenant, operator-writable state, so it sits on the
+    same side of the trust boundary as ``tenant.corvin.yaml``. ``bootstrap``
+    already downgrades a privileged claim from there — but it does so when
+    REGISTERING, which only fixes the runtime layer. The record itself kept
+    ``layer: compliance``, and ``PluginRecord.can_disable()`` reads the record:
+    the admin API then answered 403 forever for a plugin that was running as
+    ``installed``. A tenant could mint an un-disableable entry with one line of
+    YAML, which is the exact escalation the boot guard exists to prevent.
+
+    Downgrading rather than raising is deliberate: a corrupt or over-reaching
+    line should cost that entry its privilege, not make the whole registry
+    unreadable (which would take every other plugin down with it).
+    """
+    if record.layer in _TENANT_RECORD_BOOT_LAYERS:
+        return record
+    log.error(
+        "registry record %r in %s claims privileged layer %s — "
+        "downgrading to installed (privileged layers come from the wheel)",
+        record.plugin_id, path.name, record.layer.value,
+    )
+    _audit(
+        "plugin.layer_rejected",
+        {
+            "plugin_id": record.plugin_id,
+            "declared_layer": record.layer.value,
+            "reason": "privileged_layer_from_tenant_registry",
+        },
+        tenant_id="_default",
+    )
+    return replace(record, layer=BootLayer.INSTALLED)
+
+
 class TenantRegistry:
     """The set of plugin records for one tenant, backed by registry.yaml."""
 
@@ -254,7 +297,9 @@ class TenantRegistry:
         for pid, data in (raw.get("plugins") or {}).items():
             if not isinstance(data, dict):
                 raise RegistryCorrupt(f"{path}: record {pid!r} is not a mapping")
-            records[pid] = PluginRecord.from_dict(data)
+            records[pid] = _downgrade_privileged_boot_layer(
+                PluginRecord.from_dict(data), path=path
+            )
         return cls(path, records)
 
     def save(self) -> None:
@@ -576,12 +621,28 @@ class PluginLifecycle:
             return False
 
     def _deactivate(self, record: PluginRecord) -> None:
-        """Unregister the plugin for this record, right now.  Never raises."""
+        """Unregister the plugin for this record, right now.
+
+        Raises :class:`PluginDisableRefused` when the id currently occupies the
+        compliance layer in the process registry; every other failure is logged
+        and swallowed as before.
+
+        The refusal has to live here rather than only in the caller. This is
+        reached from ``PluginLifecycle.disable()``, which the older Console
+        route ``POST /plugins/{id}/disable`` calls directly — that route checks
+        no layer at all. Without this guard a tenant record sharing an id with a
+        global compliance plugin would unregister it from the process, taking
+        its provider slot with it, while the ADR-0239 admin API correctly
+        answers 403 for the same request. One mechanism, two doors, and the
+        older door was unlocked.
+        """
         try:
             from .registry import get_registry, unregister
 
             if record.plugin_id in get_registry().discover():
-                unregister(record.plugin_id)
+                unregister(record.plugin_id, operator_initiated=True)
+        except PluginDisableRefused:
+            raise
         except Exception as exc:  # noqa: BLE001
             log.error(
                 "hot-unload of %r failed (%s)", record.plugin_id, type(exc).__name__

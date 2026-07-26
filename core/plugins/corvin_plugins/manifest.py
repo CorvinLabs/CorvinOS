@@ -24,6 +24,7 @@ Deliberate differences from the prototype (see ADR-0233 § Findings):
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -35,6 +36,8 @@ from .protocol import (
     PluginAlreadyRegistered,
     PluginNotFound,
 )
+
+log = logging.getLogger("corvin.plugins.manifest")
 
 # ── Enums ─────────────────────────────────────────────────────────────────────
 
@@ -51,13 +54,13 @@ class PluginOrigin(str, Enum):
     COMMUNITY = "community"  # third-party, unreviewed
 
 
-class PluginLayer(str, Enum):
-    """Which boot layer a plugin belongs to — load order and disableability.
+class BootLayer(str, Enum):
+    """Which boot stage a plugin belongs to — load order and disableability.
 
     ADR-0243 (formerly the second ADR-0234).  This is a THIRD axis, orthogonal to
     the two that already exist, and the naming is deliberate:
 
-    * ``layer``  — this one.  When is it loaded, and may it be switched off?
+    * ``boot_layer`` — this one.  When is it loaded, may it be switched off?
     * ``tier``   — ADR-0156's capability boundary plus license gate.  The words
       "Tier A/B/C" mean that repo-wide and are NOT reused here (CLAUDE.md).
     * ``origin`` — provenance (builtin | vetted | community), see
@@ -66,6 +69,12 @@ class PluginLayer(str, Enum):
     The draft ADRs spelled this axis "tier_0 / tier_1_core / tier_2_bundled",
     which collided head-on with both of the above.  Same concept, third meaning
     of the same word — so the word changed, not the concept.
+
+    The ``boot_`` prefix carries the second half of that same lesson.  A bare
+    ``layer`` was already taken four times over in this repo — the L1–L44
+    architecture stack, ADR-0124 custom audit layers, the ADR-0142 layer
+    extension API and the quality layers — so this axis, the newest and by far
+    the smallest of the five, spells out which kind of layer it means.
     """
 
     COMPLIANCE = "compliance"  # GDPR / EU AI Act.  Never disableable, never replaceable.
@@ -74,13 +83,13 @@ class PluginLayer(str, Enum):
     INSTALLED = "installed"    # operator-installed third party.
 
 
-#: Layers a plugin may NOT claim for itself unless it ships with CorvinOS or was
-#: reviewed by the maintainer.  Without this, a community manifest could declare
-#: ``layer: compliance`` and thereby become (a) undisableable, (b) loaded before
-#: everything else, and (c) exempt from the consent prompt path — a privilege
-#: escalation via a single YAML line.
-_PRIVILEGED_LAYERS: frozenset[PluginLayer] = frozenset(
-    {PluginLayer.COMPLIANCE, PluginLayer.CORE}
+#: Boot layers a plugin may NOT claim for itself unless it ships with CorvinOS or
+#: was reviewed by the maintainer.  Without this, a community manifest could
+#: declare ``boot_layer: compliance`` and thereby become (a) undisableable, (b)
+#: loaded before everything else, and (c) exempt from the consent prompt path — a
+#: privilege escalation via a single YAML line.
+_PRIVILEGED_BOOT_LAYERS: frozenset[BootLayer] = frozenset(
+    {BootLayer.COMPLIANCE, BootLayer.CORE}
 )
 
 
@@ -363,8 +372,8 @@ class PluginRecord:
 
     # Boot layer (ADR-0243).  Defaults to the LEAST privileged value: a record
     # that does not say what it is gets loaded last and stays disableable.
-    layer: PluginLayer = PluginLayer.INSTALLED
-    #: plugin_id of the ``layer=core`` reference implementation this plugin takes
+    boot_layer: BootLayer = BootLayer.INSTALLED
+    #: plugin_id of the ``boot_layer=core`` reference implementation this takes
     #: over from (ADR-0237 "full replacement").  ``None`` for the normal case.
     #: A compliance plugin can never be named here — see ``__post_init__``.
     replaces: Optional[str] = None
@@ -423,44 +432,45 @@ class PluginRecord:
                 f"{self.plugin_id}: locality={self.locality.value} contradicts "
                 f"network_egress=none — a cloud plugin cannot be air-gapped"
             )
-        # ADR-0243: a privileged layer is a claim about trust, so it may only be
-        # claimed by something that shipped with CorvinOS or was reviewed. A
-        # community manifest asserting `layer: compliance` would otherwise buy
-        # itself boot priority and permanent undisableability for free.
+        # ADR-0243: a privileged boot layer is a claim about trust, so it may
+        # only be claimed by something that shipped with CorvinOS or was
+        # reviewed. A community manifest asserting `boot_layer: compliance`
+        # would otherwise buy itself boot priority and permanent
+        # undisableability for free.
         if (
-            self.layer in _PRIVILEGED_LAYERS
+            self.boot_layer in _PRIVILEGED_BOOT_LAYERS
             and self.origin is PluginOrigin.COMMUNITY
         ):
             raise PluginError(
                 f"{self.plugin_id}: origin=community may not claim "
-                f"layer={self.layer.value} — privileged layers require "
-                f"origin=builtin or origin=vetted"
+                f"boot_layer={self.boot_layer.value} — privileged boot layers "
+                f"require origin=builtin or origin=vetted"
             )
         if self.replaces is not None:
             validate_plugin_id(self.replaces)
             if self.replaces == self.plugin_id:
                 raise PluginError(f"{self.plugin_id}: cannot replace itself")
-            # Compliance is the one layer with no replacement path at all — the
-            # audit chain, the consent gate and the house-rules gate are not
+            # Compliance is the one boot layer with no replacement path at all —
+            # the audit chain, the consent gate and the house-rules gate are not
             # pluggable (CLAUDE.md § Compliance Baseline). A plugin declaring
             # itself the replacement FOR compliance is refused here; that the
             # named target actually is a core plugin is re-checked by the
-            # registry, which is the only place that knows the target's layer.
-            if self.layer is PluginLayer.COMPLIANCE:
+            # registry, the only place that knows the target's boot layer.
+            if self.boot_layer is BootLayer.COMPLIANCE:
                 raise PluginError(
-                    f"{self.plugin_id}: layer=compliance may not declare "
+                    f"{self.plugin_id}: boot_layer=compliance may not declare "
                     f"replaces — compliance mechanisms are not replaceable"
                 )
 
     def can_disable(self) -> bool:
-        """False for the compliance layer, True for every other layer.
+        """False for the compliance boot layer, True for every other one.
 
-        The compliance layer carries the mechanisms CLAUDE.md marks as
+        The compliance boot layer carries the mechanisms CLAUDE.md marks as
         non-disableable (audit hash-chain, consent gate, path gate, house rules,
         flow guard). "Disable" for them is the same violation as an env kill-flag,
         so the answer is structural rather than configurable.
         """
-        return self.layer is not PluginLayer.COMPLIANCE
+        return self.boot_layer is not BootLayer.COMPLIANCE
 
     @property
     def full_id(self) -> str:
@@ -489,7 +499,7 @@ class PluginRecord:
             "version": self.version,
             "display_name": self.display_name,
             "plugin_type": self.plugin_type,
-            "layer": self.layer.value,
+            "boot_layer": self.boot_layer.value,
             "replaces": self.replaces,
             "origin": self.origin.value,
             "pii_risk": self.pii_risk.value,
@@ -522,7 +532,22 @@ class PluginRecord:
         the truncated version back).
         """
         known = set(cls.__dataclass_fields__)
-        unknown = set(data) - known
+        # BACKWARD COMPATIBILITY (remove after 0.11): the boot-layer axis was
+        # briefly persisted under the bare key ``layer`` before it was renamed to
+        # ``boot_layer`` (the word was already taken four times over in this
+        # repo).  A registry.yaml written in that window must not hit the
+        # unknown-field guard below and take the whole tenant registry down, so
+        # the legacy key is accepted, loudly, and re-persisted under the new name
+        # on the next write.
+        legacy_boot_layer = None
+        if "layer" in data and "boot_layer" not in data:
+            legacy_boot_layer = data.get("layer")
+            log.warning(
+                "registry record %r uses the legacy key 'layer' for the boot-layer "
+                "axis — reading it as 'boot_layer'; it is rewritten on the next save",
+                data.get("plugin_id"),
+            )
+        unknown = set(data) - known - {"layer"}
         if unknown:
             raise PluginError(
                 f"registry record for {data.get('plugin_id')!r} has unknown fields "
@@ -534,9 +559,11 @@ class PluginRecord:
                 version=data["version"],
                 display_name=data.get("display_name") or data["plugin_id"],
                 plugin_type=data["plugin_type"],
-                # Absent layer means "written before ADR-0243" — read as the
-                # least privileged value, never as core.
-                layer=PluginLayer(data.get("layer") or "installed"),
+                # Absent boot_layer means "written before ADR-0243" — read as
+                # the least privileged value, never as core.
+                boot_layer=BootLayer(
+                    data.get("boot_layer") or legacy_boot_layer or "installed"
+                ),
                 replaces=data.get("replaces") or None,
                 origin=PluginOrigin(data.get("origin", "community")),
                 pii_risk=PIIRisk(data.get("pii_risk", "low")),
@@ -700,7 +727,7 @@ __all__ = [
     "PluginAlreadyRegistered",
     "PluginDependency",
     "PluginError",
-    "PluginLayer",
+    "BootLayer",
     "PluginManifest",
     "PluginNotFound",
     "PluginOrigin",
