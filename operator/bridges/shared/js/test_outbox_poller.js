@@ -80,8 +80,14 @@ async function main() {
   assert(logs2.filter((m) => m.includes('err-A')).length === 1, 'err-A logged exactly once');
   assert(logs2.filter((m) => m.includes('err-B')).length === 1, 'err-B logged exactly once');
 
-  // 4. Successful send removes the file (dedup entry cleanup is internal —
-  //    observable behavior: file gone, no further logs).
+  // 4. Successful send removes the file and says so.
+  //    The assertion here used to be `logs.length === 0`. Its stated intent was
+  //    "the dedup bookkeeping must not leak log lines" — silence was the proxy, not
+  //    the goal. Taken literally it mandated that a DELIVERED message look exactly
+  //    like a silently dropped one, which is how verifying a single Discord
+  //    round-trip on 2026-07-26 ended up requiring a Discord REST query: the daemon
+  //    had been quiet for two hours and the journal could not tell the two apart.
+  //    Now: success logs exactly one line, and no failure line appears.
   const logs3 = [];
   const poller3 = startOutboxPoller({
     outboxDir: tmpRoot,
@@ -93,7 +99,10 @@ async function main() {
   await sleep(150);
   poller3.stop();
   assert(!fs.existsSync(path.join(tmpRoot, 'a.json')), 'file delivered and unlinked');
-  assert(logs3.length === 0, 'clean delivery logs nothing');
+  assert(logs3.length === 1, `clean delivery logs exactly one line (got ${logs3.length})`);
+  assert(logs3[0].includes('outbox: sent'), 'the line names the delivery');
+  assert(logs3[0].includes('testchan'), 'the line names the channel');
+  assert(!logs3.some((m) => m.includes('failed')), 'no failure line on a clean send');
 
   // 5. Without deadLetterDir the poller keeps retrying forever — bridges that
   //    never configured a dead-letter dir must not silently change behavior.
@@ -235,6 +244,39 @@ async function main() {
   const st10 = poller10.stats();
   assert(typeof st10.stalled_s === 'number',
          'stats() exposes stall duration for /status + watchdog');
+
+  // 11. A FINISHED ANSWER is never destroyed by a writer bug.
+  //     Both of these paths used to unlink() the envelope. The file in the outbox is
+  //     an answer the engine already produced and the user is waiting for: an
+  //     unparseable envelope is usually a truncated write (crash mid-write, disk
+  //     full) whose text is still recoverable by hand, and a missing `channel` is a
+  //     writer bug that will be fixed and the envelope re-queued. Deleting the only
+  //     copy makes both unrecoverable. Dead-letter instead.
+  const dlRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'outbox-dl-'));
+  const dlDead = path.join(dlRoot, 'dead');
+  fs.writeFileSync(path.join(dlRoot, 'truncated.json'), '{"channel":"testchan","text":"half a rep');
+  fs.writeFileSync(path.join(dlRoot, 'nochannel.json'), JSON.stringify({ text: 'answer without a channel' }));
+  const logs11 = [];
+  const poller11 = startOutboxPoller({
+    outboxDir: dlRoot,
+    channel: 'testchan',
+    sendFn: async () => {},
+    logger: (m) => logs11.push(m),
+    intervalMs: 20,
+    deadLetterDir: dlDead,
+  });
+  await sleep(200);
+  poller11.stop();
+  assert(!fs.existsSync(path.join(dlRoot, 'truncated.json')), 'the bad envelope left the outbox');
+  assert(fs.existsSync(path.join(dlDead, 'truncated.json')),
+         'an unparseable envelope is dead-lettered, not deleted');
+  assert(fs.readFileSync(path.join(dlDead, 'truncated.json'), 'utf8').includes('half a rep'),
+         'the recoverable text survived');
+  assert(fs.existsSync(path.join(dlDead, 'nochannel.json')),
+         'an envelope with no channel is dead-lettered, not deleted');
+  assert(fs.existsSync(path.join(dlDead, 'truncated.json.reason.json')),
+         'the diagnosis sidecar says why');
+  fs.rmSync(dlRoot, { recursive: true, force: true });
 
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 
