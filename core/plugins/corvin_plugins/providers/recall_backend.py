@@ -37,7 +37,8 @@ class SqliteRecallBackend:
         except ImportError:
             pass
         try:
-            import importlib.util, sys  # noqa: E401
+            import importlib.util  # noqa: E401
+            import sys
             from pathlib import Path
             for _p in [
                 Path(__file__).resolve().parents[6]

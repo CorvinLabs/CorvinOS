@@ -28,7 +28,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from . import circuit_breaker as _breakers
 from .registry import get_registry
@@ -88,12 +88,17 @@ class HealthCollector:
         interval_s: float = DEFAULT_INTERVAL_S,
         alert_after: int = DEFAULT_ALERT_AFTER,
         audit_emit: Optional[Callable[[str, dict], None]] = None,
+        healer: Optional[Any] = None,
     ):
         if interval_s <= 0:
             raise ValueError("interval_s must be > 0")
         self.interval_s = interval_s
         self.alert_after = alert_after
         self._audit_emit = audit_emit
+        #: Optional HealingOrchestrator (ADR-0231 Stage 3). The collector is the
+        #: only poller in the system, so healing is driven from here rather than
+        #: from a second timer that would double the health-check load.
+        self._healer = healer
         self._snapshot = HealthSnapshot(taken_at=0.0)
         self._failure_runs: Dict[str, int] = {}
         self._alerted: set[str] = set()
@@ -131,6 +136,7 @@ class HealthCollector:
                 details=status.details or {},
             )
             self._maybe_alert(pid, run, samples[pid])
+            self._maybe_heal(pid, run, samples[pid])
 
         # A plugin that vanished stops counting toward an alert.
         for gone in set(self._failure_runs) - set(statuses):
@@ -162,6 +168,31 @@ class HealthCollector:
             self._alerted.discard(plugin_id)
             self._emit_audit("plugin.health_recovered", {"plugin_id": plugin_id})
             log.info("plugin %r recovered", plugin_id)
+
+    def _maybe_heal(self, plugin_id: str, run: int, sample: PluginHealthSample) -> None:
+        """Hand an unhealthy plugin to the orchestrator, if one is installed.
+
+        The orchestrator decides everything (policy, budget, whether healing is
+        enabled at all); the collector only reports. Never raises into the poll.
+        """
+        if self._healer is None or run == 0:
+            return
+        try:
+            plugin_type = ""
+            try:
+                from .registry import get_registry
+
+                plugin_type = getattr(get_registry().get(plugin_id), "plugin_type", "")
+            except Exception:  # noqa: BLE001 - a vanished plugin needs no healing
+                return
+            self._healer.consider(
+                plugin_id,
+                plugin_type=plugin_type,
+                consecutive_failures=run,
+                error_code=sample.message,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("healing consideration failed (%s)", type(exc).__name__)
 
     def _emit_audit(self, event_type: str, details: dict) -> None:
         if self._audit_emit is None:

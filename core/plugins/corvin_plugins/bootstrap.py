@@ -175,6 +175,97 @@ def _assert_core_audit_inline() -> list[Any]:
     return []
 
 
+def load_tenant_spec(tenant_id: str, corvin_home: Path) -> dict:
+    """Read ``tenant.corvin.yaml`` for this tenant.  Returns ``{}`` when absent.
+
+    Best-effort by design: a missing or unreadable tenant config means "no
+    declared plugins", never a boot failure — the declarative path is opt-in.
+    """
+    path = corvin_home / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
+    try:
+        if not path.is_file():
+            return {}
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:  # noqa: BLE001
+        log.error(
+            "tenant config unreadable for %r (%s) — no declared plugins",
+            tenant_id,
+            type(exc).__name__,
+        )
+        return {}
+
+
+def bootstrap_declared(
+    *,
+    tenant_id: str,
+    corvin_home: Path,
+    tenant_config: dict | None = None,
+    **registries: Any,
+) -> list[str]:
+    """Load the plugins DECLARED in ``spec.plugins.installed`` (ADR-0030 Phase 7).
+
+    This is the declarative path ADR-0030 specified and that had no caller: the
+    config was documented, `loader.discover_and_load()` implemented it, and nothing
+    ever invoked either. Entries there are loaded unconditionally, because writing
+    a plugin into a version-controlled tenant config IS the explicit opt-in the ADR
+    asks for — it needs no feature flag on top.
+
+    ``auto_discover_entry_points: true`` additionally loads every installed
+    ``corvin.plugins`` entry point. It stays default-false: on a machine with
+    third-party packages installed, flipping it means loading code nobody listed.
+    """
+    config = tenant_config if tenant_config is not None else load_tenant_spec(
+        tenant_id, corvin_home
+    )
+    plugins_cfg = (config.get("spec") or {}).get("plugins") or {}
+    declared: list[dict] = list(plugins_cfg.get("installed") or [])
+    auto_ep = bool(plugins_cfg.get("auto_discover_entry_points", False))
+    if not declared and not auto_ep:
+        return []
+
+    from .loader import discover_and_load
+
+    try:
+        instances = discover_and_load(config, corvin_home=corvin_home)
+    except Exception as exc:  # noqa: BLE001 — a bad config must not stop the boot
+        log.error(
+            "declared-plugin discovery failed for %r (%s)",
+            tenant_id,
+            type(exc).__name__,
+        )
+        return []
+
+    loaded: list[str] = []
+    for instance in instances:
+        plugin_id = getattr(instance, "plugin_id", "")
+        if not plugin_id:
+            log.error("declared plugin %r has no plugin_id — skipping", type(instance).__name__)
+            continue
+        # Per-plugin config from the declaration, so a declared plugin gets its
+        # settings without a registry entry.
+        entry_config = next(
+            (e.get("config") or {} for e in declared if e.get("id") == plugin_id), {}
+        )
+        if _register_instance(
+            instance,
+            plugin_id=plugin_id,
+            tenant_id=tenant_id,
+            corvin_home=corvin_home,
+            config=entry_config,
+            **registries,
+        ):
+            loaded.append(plugin_id)
+
+    if loaded:
+        log.info(
+            "loaded %d declared plugin(s) for tenant %r: %s", len(loaded), tenant_id, loaded
+        )
+    return loaded
+
+
 def bootstrap_tenant(
     *,
     tenant_id: str,
@@ -191,6 +282,10 @@ def bootstrap_tenant(
     registry is not consulted at all and this is a no-op returning ``[]`` — an
     install that predates the operator turning the flag on must not start
     loading plugins behind their back.
+
+    NOTE: this is the RUNTIME registry path. The declarative
+    ``spec.plugins.installed`` path is :func:`bootstrap_declared`, and it runs
+    FIRST at boot — see :func:`bootstrap_all` for the precedence rule.
     """
     if not lifecycle_enabled:
         log.debug("plugin_runtime_lifecycle off — skipping registry bootstrap")
@@ -230,6 +325,84 @@ def bootstrap_tenant(
     return loaded
 
 
+def _register_instance(
+    instance: Any,
+    *,
+    plugin_id: str,
+    tenant_id: str,
+    corvin_home: Path,
+    config: dict | None = None,
+    **registries: Any,
+) -> bool:
+    """Build a context and register one already-instantiated plugin.
+
+    Shared by the declarative and the registry path so both get every provider
+    handle and identical failure behaviour.
+    """
+    from .registry import get_registry, register
+
+    if plugin_id in get_registry().discover():
+        log.debug("plugin %r already registered — skipping", plugin_id)
+        return True
+
+    ctx = build_context(
+        plugin_id=plugin_id,
+        tenant_id=tenant_id,
+        corvin_home=corvin_home,
+        config=config or {},
+        **registries,
+    )
+    try:
+        register(instance, ctx)
+    except Exception as exc:  # noqa: BLE001
+        log.error(
+            "plugin %r failed to register (%s) — skipping",
+            plugin_id,
+            type(exc).__name__,
+        )
+        return False
+    return True
+
+
+def bootstrap_all(
+    *,
+    tenant_id: str,
+    corvin_home: Path,
+    lifecycle_enabled: bool = False,
+    tenant_config: dict | None = None,
+    **registries: Any,
+) -> list[str]:
+    """Run BOTH load paths in the order their precedence demands.
+
+    Precedence: the **declarative** config wins over the runtime registry. A plugin
+    written into a version-controlled ``tenant.corvin.yaml`` is the operator's
+    stronger, reviewable statement of intent; a registry entry is a Console click.
+    Because ``_register_instance`` treats an already-registered id as loaded, a
+    plugin present in both is loaded once — from the declaration — and the registry
+    pass logs it as already-registered rather than colliding.
+    """
+    declared = bootstrap_declared(
+        tenant_id=tenant_id,
+        corvin_home=corvin_home,
+        tenant_config=tenant_config,
+        **registries,
+    )
+    runtime = bootstrap_tenant(
+        tenant_id=tenant_id,
+        corvin_home=corvin_home,
+        lifecycle_enabled=lifecycle_enabled,
+        **registries,
+    )
+    overlap = sorted(set(declared) & set(runtime))
+    if overlap:
+        log.info(
+            "plugin(s) %s are both declared and in the registry — the declaration won",
+            overlap,
+        )
+    # Preserve order: declarations first, then registry-only ids.
+    return declared + [pid for pid in runtime if pid not in set(declared)]
+
+
 def _load_one(
     record: PluginRecord,
     *,
@@ -239,7 +412,6 @@ def _load_one(
 ) -> bool:
     """Instantiate + register one record.  Returns False on any failure."""
     from .loader import load_from_class_path
-    from .registry import register
 
     if not record.class_path:
         log.error("plugin %r has no class_path — skipping", record.plugin_id)
@@ -266,23 +438,14 @@ def _load_one(
         )
         return False
 
-    ctx = build_context(
+    return _register_instance(
+        instance,
         plugin_id=record.plugin_id,
         tenant_id=tenant_id,
         corvin_home=corvin_home,
         config=record.settings,
         **registries,
     )
-    try:
-        register(instance, ctx)
-    except Exception as exc:  # noqa: BLE001
-        log.error(
-            "plugin %r failed to register (%s) — skipping",
-            record.plugin_id,
-            type(exc).__name__,
-        )
-        return False
-    return True
 
 
 def shutdown(plugin_ids: Iterable[str]) -> None:
@@ -298,4 +461,12 @@ def shutdown(plugin_ids: Iterable[str]) -> None:
             )
 
 
-__all__ = ["assert_compliance", "bootstrap_tenant", "build_context", "shutdown"]
+__all__ = [
+    "assert_compliance",
+    "bootstrap_all",
+    "bootstrap_declared",
+    "bootstrap_tenant",
+    "build_context",
+    "load_tenant_spec",
+    "shutdown",
+]

@@ -152,11 +152,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         # fresh install loads nothing; failures here are per-plugin and logged.
         try:
             from corvin_console import feature_flags as _flags
-            from corvin_plugins.bootstrap import bootstrap_tenant as _bootstrap
+            from corvin_plugins.bootstrap import bootstrap_all as _bootstrap
             from forge.paths import corvin_home as _corvin_home
             from forge.tenants import current_tenant as _current_tenant
 
             _tid = _current_tenant()
+            # BOTH load paths: the declarative spec.plugins.installed (ADR-0030
+            # Phase 7, always honoured — writing it into a version-controlled
+            # tenant config IS the opt-in) and the runtime registry (flag-gated).
             _plugins_loaded = _bootstrap(
                 tenant_id=_tid,
                 corvin_home=_corvin_home(),
@@ -181,12 +184,23 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             _htid = _hc_tenant()
             if _hflags.is_enabled("plugin_health_monitoring", _htid):
+                _hc_audit = _build_ctx(
+                    plugin_id="health-collector",
+                    tenant_id=_htid,
+                    corvin_home=_hc_home(),
+                ).audit_emit
+                # ADR-0231 Stage 3 — self-healing, its own flag and default off.
+                # The collector is the only poller, so healing hangs off it rather
+                # than adding a second timer that would double the health load.
+                from corvin_plugins.healing import HealingOrchestrator as _Healer
+
+                _healer = _Healer(
+                    enabled=lambda: _hflags.is_enabled("plugin_self_healing", _htid),
+                    audit_emit=_hc_audit,
+                )
                 _health_collector = _HealthCollector(
-                    audit_emit=_build_ctx(
-                        plugin_id="health-collector",
-                        tenant_id=_htid,
-                        corvin_home=_hc_home(),
-                    ).audit_emit,
+                    audit_emit=_hc_audit,
+                    healer=_healer,
                 )
                 _health_collector.start()
                 _plugins_route.set_collector(_health_collector)

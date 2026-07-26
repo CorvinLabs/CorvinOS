@@ -19,9 +19,9 @@ from .manifest import (
     plan_settings_migration,
 )
 from .protocol import (
+    KNOWN_PLUGIN_TYPES,
     CorvinPlugin,
     HealthStatus,
-    KNOWN_PLUGIN_TYPES,
     PluginAlreadyRegistered,
     PluginContext,
     PluginNotFound,
