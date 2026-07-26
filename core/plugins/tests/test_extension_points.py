@@ -1188,12 +1188,40 @@ class TestDefensiveEdges(_Base):
                 "corvin_plugins/__init__.py",
                 "tests/test_extension_points.py",
                 ".md",
+                # LIFECYCLE, not usage. registry.py calls verify_owner() when a
+                # plugin finishes loading, to revoke hooks it claimed for a
+                # foreign tenant before it was resolvable. That is the bus being
+                # administered, not consulted — no `invoke()` runs, so the
+                # "call sites land in a follow-up" statement is unaffected. The
+                # narrower assertion below is what actually guards it.
+                "corvin_plugins/registry.py",
             ))
         ]
         self.assertEqual(
             unexpected, [],
             "a call site now uses the bus — update docs/EXTENSIBLE_CORE_PLUGINS.md "
             "in the same commit (CLAUDE.md § Testing + Docs Sync)",
+        )
+
+        # The claim that matters: nothing INVOKES a hook yet. Administering the
+        # bus (verify_owner / unregister_all) does not make a hook run.
+        invokers = subprocess.run(
+            ["git", "grep", "-lE", r"extension_points\.invoke|\binvoke\(\s*[\"']"],
+            cwd=str(_REPO), capture_output=True, text=True,
+        ).stdout.split()
+        unexpected_invokers = [
+            p for p in invokers
+            if not p.endswith((
+                "corvin_plugins/extension_points.py",
+                "tests/test_extension_points.py",
+                ".md",
+            ))
+        ]
+        self.assertEqual(
+            unexpected_invokers, [],
+            "something now invokes an extension point — the bus is live, and "
+            "docs/EXTENSIBLE_CORE_PLUGINS.md still says the call sites are "
+            "wired in a follow-up",
         )
 
 
