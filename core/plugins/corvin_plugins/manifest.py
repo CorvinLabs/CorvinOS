@@ -24,6 +24,7 @@ Deliberate differences from the prototype (see ADR-0233 § Findings):
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -95,6 +96,48 @@ class ValidationError(PluginError):
 
 class UnknownPluginType(PluginError):
     """plugin_type is not in KNOWN_PLUGIN_TYPES (protocol.py)."""
+
+
+class InvalidPluginID(PluginError):
+    """plugin_id fails the charset rule."""
+
+
+# ── plugin_id charset ─────────────────────────────────────────────────────────
+
+#: A plugin_id is used as a DIRECTORY NAME (per-plugin state dir) and lands in
+#: audit details, log lines and the Console. It therefore gets an allowlist, not a
+#: denylist — the same shape as ``validate_tenant_id``. A denylist on "/" alone
+#: missed backslashes, which are path separators on Windows (a supported platform
+#: per ADR-0159), so ``..\\..\\etc`` escaped the tenant directory and reached
+#: ``shutil.rmtree`` on uninstall.
+_PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+#: Sequences that are never acceptable even inside the allowed charset.
+_PLUGIN_ID_FORBIDDEN = ("..", "./", "/.")
+
+
+def validate_plugin_id(plugin_id: object) -> str:
+    """Return ``plugin_id`` when it is safe as an identifier AND a path segment.
+
+    Raises :class:`InvalidPluginID` otherwise.  Lower-case only, must start
+    alphanumeric, and no ``..`` anywhere — reverse-domain ids like
+    ``com.example.my-notifier`` pass, path tricks do not.
+    """
+    if not isinstance(plugin_id, str):
+        raise InvalidPluginID(
+            f"plugin_id must be str, got {type(plugin_id).__name__}"
+        )
+    if not plugin_id:
+        raise InvalidPluginID("plugin_id must not be empty")
+    if not _PLUGIN_ID_RE.match(plugin_id):
+        raise InvalidPluginID(
+            f"plugin_id {plugin_id!r} fails charset rule "
+            f"[a-z0-9][a-z0-9._-]{{0,63}} (lower-case, no separators)"
+        )
+    for bad in _PLUGIN_ID_FORBIDDEN:
+        if bad in plugin_id:
+            raise InvalidPluginID(f"plugin_id {plugin_id!r} contains {bad!r}")
+    return plugin_id
 
 
 # ── Version constraints ───────────────────────────────────────────────────────
@@ -297,8 +340,7 @@ class PluginRecord:
                 f"plugin_type {self.plugin_type!r} is not a known extension point; "
                 f"expected one of {sorted(KNOWN_PLUGIN_TYPES)}"
             )
-        if not self.plugin_id:
-            raise PluginError("plugin_id must not be empty")
+        validate_plugin_id(self.plugin_id)
 
     @property
     def full_id(self) -> str:
@@ -516,6 +558,7 @@ class SettingsValidator:
 
 __all__ = [
     "BreakingChange",
+    "InvalidPluginID",
     "CircularDependencyError",
     "DependencyConflictError",
     "DependencyResolver",
@@ -532,4 +575,5 @@ __all__ = [
     "UpdatePolicy",
     "ValidationError",
     "plan_settings_migration",
+    "validate_plugin_id",
 ]

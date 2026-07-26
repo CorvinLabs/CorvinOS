@@ -41,6 +41,7 @@ from .manifest import (
     PluginNotFound,
     PluginRecord,
     SettingsValidator,
+    validate_plugin_id,
 )
 
 log = logging.getLogger("corvin.plugins.state")
@@ -114,11 +115,27 @@ def instance_dir(
     tenant_id: Optional[str] = None,
     corvin_home_path: Optional[Path] = None,
 ) -> Path:
-    """Where a plugin may keep its own state.  Created on install."""
-    safe = plugin_id.replace("/", "_")
-    if safe != plugin_id or safe in ("", ".", ".."):
-        raise PluginError(f"plugin_id {plugin_id!r} is not usable as a directory name")
-    return _tenant_root(tenant_id, corvin_home_path) / "instances" / safe
+    """Where a plugin may keep its own state.  Created on install.
+
+    Two independent guards, because this path is handed to ``shutil.rmtree`` on
+    uninstall and one guard is one bug away from a delete outside the tenant:
+
+    1. ``validate_plugin_id`` — an allowlist charset. The previous denylist only
+       rejected ``/``, so ``..\\..\\etc`` passed and is a real traversal on
+       Windows (a supported platform, ADR-0159).
+    2. a resolved-containment check — even a future id that slips the charset
+       cannot resolve outside ``<tenant>/plugins/instances``.
+    """
+    validate_plugin_id(plugin_id)
+    root = _tenant_root(tenant_id, corvin_home_path) / "instances"
+    candidate = root / plugin_id
+    resolved_root = root.resolve(strict=False)
+    resolved = candidate.resolve(strict=False)
+    if resolved != resolved_root and resolved_root not in resolved.parents:
+        raise PluginError(
+            f"plugin_id {plugin_id!r} resolves outside the tenant instance dir"
+        )
+    return candidate
 
 
 # ── Persistence ───────────────────────────────────────────────────────────────

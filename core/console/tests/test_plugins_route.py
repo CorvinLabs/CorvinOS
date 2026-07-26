@@ -350,3 +350,33 @@ class TestCsrf(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMalformedPluginId(_Base):
+    """A rejected plugin_id must read as unprocessable input, not as a conflict."""
+
+    def test_backslash_traversal_is_422(self):
+        with _sandbox(Path(self._tmp)) as (client, csrf, home):
+            self._flag(client, csrf, "plugin_console_surface", True)
+            self._flag(client, csrf, "plugin_runtime_lifecycle", True)
+            resp = client.post(
+                "/v1/console/plugins",
+                json={**_RECORD, "plugin_id": "..\\..\\windows"},
+                headers=self._hdr(csrf),
+            )
+            self.assertEqual(resp.status_code, 422, resp.text)
+            self.assertFalse(
+                (home / "tenants" / "_default" / "plugins" / "registry.yaml").exists(),
+                "a rejected id must not create a registry",
+            )
+
+    def test_uppercase_id_is_422(self):
+        with _sandbox(Path(self._tmp)) as (client, csrf, _home):
+            self._flag(client, csrf, "plugin_console_surface", True)
+            self._flag(client, csrf, "plugin_runtime_lifecycle", True)
+            resp = client.post(
+                "/v1/console/plugins",
+                json={**_RECORD, "plugin_id": "Acme-Notify"},
+                headers=self._hdr(csrf),
+            )
+            self.assertEqual(resp.status_code, 422, resp.text)

@@ -241,8 +241,9 @@ class TestAuditFanout(unittest.TestCase):
 
     def test_provider_exposes_no_trail_owning_api(self):
         """ADR-0233 D4: there must be no way for a plugin to become the trail."""
-        for forbidden in ("set_writer", "replace_writer", "set_audit_path",
-                          "disable_core", "write_event"):
+        # Read the SAME constant the boot tripwire reads, so the two cannot drift.
+        self.assertTrue(audit_provider.TRAIL_OWNING_ATTRS)
+        for forbidden in audit_provider.TRAIL_OWNING_ATTRS:
             self.assertFalse(
                 hasattr(audit_provider, forbidden),
                 f"audit provider must not expose {forbidden}",
@@ -556,3 +557,100 @@ class TestTripwire(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── Adversarial-review regressions (ADR-0233 review round) ────────────────────
+
+
+class _HostileIdBackend:
+    """A backend whose plugin_id ACCESS raises — the leak path F3 found."""
+
+    plugin_type = "audit_backend"
+    version = "1.0.0"
+    display_name = "Hostile Id"
+
+    @property
+    def plugin_id(self):
+        raise RuntimeError("plugin_id property explodes: postgres://u:pw@host/db")
+
+    def fanout(self, event_type, details, *, severity="INFO", tenant_id="_default"):
+        pass
+
+    def verify_chain(self):
+        return HealthStatus(ok=True)
+
+    def enforce_retention(self, max_age_days, *, tenant_id="_default"):
+        return {"deleted": 0}
+
+
+class TestFanoutNeverLeaks(unittest.TestCase):
+    """F3: 'fanout never raises into the caller' was only true inside one try.
+
+    The registry guarded ``backend.fanout(...)`` but not the breaker lookup or the
+    plugin_id read around it. A leak reached audit.py's handler, which logs
+    "audit_event(...): dropped on non-IO error" — a false compliance alarm, since
+    the core record had already committed.
+    """
+
+    def setUp(self):
+        _reset_breakers()
+
+    def tearDown(self):
+        audit_provider.clear()
+        _reset_breakers()
+
+    def test_a_raising_plugin_id_property_is_contained(self):
+        audit_provider.set_active(_HostileIdBackend())
+        with self.assertLogs("corvin.audit.fanout", level="ERROR") as logs:
+            result = audit_provider.fanout("bridge.login", {"a": 1})
+        self.assertFalse(result)
+        joined = "\n".join(logs.output)
+        self.assertIn("RuntimeError", joined)
+        self.assertNotIn("postgres://", joined, "no credentials in the log line")
+        self.assertNotIn("pw@host", joined)
+
+    def test_the_callers_dict_is_untouched_after_a_leak(self):
+        audit_provider.set_active(_HostileIdBackend())
+        body = {"channel": "discord", "user": "hashed"}
+        with self.assertLogs("corvin.audit.fanout", level="ERROR"):
+            audit_provider.fanout("bridge.login", body)
+        self.assertEqual(body, {"channel": "discord", "user": "hashed"})
+
+    def test_core_write_is_not_reported_as_dropped_when_the_sink_leaks(self):
+        """The false-alarm case: core committed, sink leaked, log must not lie."""
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "audit.jsonl"
+            os.environ["VOICE_AUDIT_PATH"] = str(path)
+            try:
+                import audit as _audit  # type: ignore[import-not-found]
+
+                if _audit._se is None:
+                    self.skipTest("forge.security_events not importable in this layout")
+                audit_provider.set_active(_HostileIdBackend())
+                with self.assertLogs("corvin.audit.fanout", level="ERROR"):
+                    _audit.audit_event("bridge.login", channel="test", user="u")
+                self.assertIn("bridge.login", path.read_text())
+                ok, problems = _audit.verify_audit(path)
+                self.assertTrue(ok, f"core chain must still verify: {problems}")
+            finally:
+                os.environ.pop("VOICE_AUDIT_PATH", None)
+
+    def test_fanout_runs_outside_the_core_write_try_block(self):
+        """Structural pin: the sink call must not sit inside the core write's try."""
+        import audit as _audit  # type: ignore[import-not-found]
+
+        source = Path(_audit.__file__).read_text()
+        marker = "core_write_committed = True"
+        self.assertIn(marker, source, "the commit flag is the ordering guard")
+        commit_pos = source.index(marker)
+        sink_pos = source.index("_audit_sink.fanout(")
+        self.assertGreater(
+            sink_pos, commit_pos,
+            "fan-out must come AFTER the core write block, not inside it",
+        )
+        # And it must be gated on the flag, so a failed core write skips the sink.
+        gate = source.index("if core_write_committed and _audit_sink is not None:")
+        self.assertLess(gate, sink_pos)
