@@ -84,6 +84,14 @@ class PluginOut(BaseModel):
     network_egress: str
     egress_hosts: list[str]
     enabled: bool
+    #: Whether the plugin is registered in THIS process right now. It can diverge
+    #: from `enabled`: self-healing may contain or unload a plugin without
+    #: rewriting the operator's registry (an autonomous action must not edit
+    #: configuration). Showing only `enabled` would repeat exactly the silent
+    #: false display that hot-reload was introduced to remove.
+    runtime_loaded: bool = False
+    #: Set when the runtime state was changed by healing rather than by an operator.
+    contained_by: str | None = None
     requires_consent: bool
     settings: dict[str, Any]
     settings_schema: dict[str, Any]
@@ -182,7 +190,26 @@ def _lifecycle(tenant_id: str) -> Any:
     )
 
 
+def _runtime_state(plugin_id: str) -> tuple[bool, str | None]:
+    """(is_registered_now, why_not) for one plugin.  Never raises."""
+    try:
+        from corvin_plugins import circuit_breaker as _cb
+        from corvin_plugins.registry import get_registry
+
+        loaded = plugin_id in get_registry().discover()
+        breaker = _cb.snapshot().get(plugin_id) or {}
+        state = breaker.get("state", "closed")
+        if not loaded:
+            return False, "healing_unloaded"
+        if state != "closed":
+            return True, f"breaker_{state}"
+        return True, None
+    except Exception:  # noqa: BLE001 - a status read must not fail the request
+        return False, None
+
+
 def _to_out(record: Any) -> PluginOut:
+    runtime_loaded, contained_by = _runtime_state(record.plugin_id)
     return PluginOut(
         plugin_id=record.plugin_id,
         version=record.version,
@@ -194,6 +221,8 @@ def _to_out(record: Any) -> PluginOut:
         network_egress=record.network_egress.value,
         egress_hosts=list(record.egress_hosts),
         enabled=record.enabled,
+        runtime_loaded=runtime_loaded,
+        contained_by=contained_by if record.enabled else None,
         requires_consent=record.consent_required(),
         settings=record.settings,
         settings_schema=record.settings_schema,

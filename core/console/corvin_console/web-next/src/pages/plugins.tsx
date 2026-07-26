@@ -155,6 +155,17 @@ function PluginCard({ plugin, csrf, mutable }: CardProps) {
               <ShieldAlert className="h-3 w-3" /> consent required
             </span>
           )}
+          {plugin.enabled && !plugin.runtime_loaded && (
+            <span className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
+              <AlertTriangle className="h-3 w-3" /> enabled but not running
+              {plugin.contained_by === "healing_unloaded" && " — contained by self-healing"}
+            </span>
+          )}
+          {plugin.enabled && plugin.runtime_loaded && plugin.contained_by?.startsWith("breaker_") && (
+            <span className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
+              <AlertTriangle className="h-3 w-3" /> circuit {plugin.contained_by.replace("breaker_", "")}
+            </span>
+          )}
           {plugin.last_error_type && (
             <span className="flex items-center gap-1 text-xs text-red-600 dark:text-red-400">
               <AlertTriangle className="h-3 w-3" /> last error: {plugin.last_error_type}
