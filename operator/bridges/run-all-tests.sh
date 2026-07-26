@@ -163,6 +163,24 @@ run "Python: tenant-aware paths (ADR-0007 Phase 1.2)" bash -c 'cd ../forge && py
 run "Python: tenant-aware state stores (ADR-0007 Phase 1.3)" python3 shared/test_state_stores_tenant.py >/dev/null || fails=$((fails+1))
 run "Python: tenant migration helper (ADR-0007 Phase 1.4)" bash -c 'cd ../forge && python3 tests/test_tenant_migrate.py >/dev/null' || fails=$((fails+1))
 run "Python: tenant migration→state-store roundtrip (ADR-0007 Phase 1.3+1.4)" bash -c 'cd ../forge && python3 tests/test_tenant_migration_roundtrip.py >/dev/null' || fails=$((fails+1))
+# The gateway venv is deliberately isolated (its own FastAPI stack), but
+# corvin_gateway.dispatcher imports `spawn_gates` BARE at module scope, and
+# corvin_gateway.app pulls in forge/console modules. Production supplies those via
+# the systemd unit's PYTHONPATH; the isolated venv had no equivalent, so
+# `import corvin_gateway.app` raised "No module named 'spawn_gates'" and four suites
+# failed for a reason that does not exist in production. Mirror the unit's PYTHONPATH
+# here so the harness tests the app the way it actually runs.
+_REPO_ABS="$(cd ../.. && pwd)"
+GW_PYTHONPATH="${_REPO_ABS}/operator/bridges/shared:${_REPO_ABS}/operator/forge:${_REPO_ABS}/core/console:${_REPO_ABS}/core/gateway:${_REPO_ABS}/core/license:${_REPO_ABS}/core/compliance:${_REPO_ABS}/operator/skill-forge"
+export GW_PYTHONPATH
+
+# Gateway suites: the guard below asks whether the venv WORKS, not whether it
+# exists. `[ -x .venv/bin/python ]` was true for a half-built venv (an editable
+# corvin_gateway install with none of its dependencies), so 16 suites reported
+# "ModuleNotFoundError: No module named 'fastapi'" and FAILED instead of skipping.
+# CLAUDE.md makes this script the mandatory gate before touching adapter.py /
+# daemon.js / shared/js, and a gate that is permanently 17-suites-red is a gate
+# everyone learns to ignore. Repair with: bash core/gateway/bootstrap.sh
 run "Python: corvin-gateway auth (ADR-0007 Phase 2.1)" bash -c 'cd ../../core/gateway && python3 tests/test_auth.py >/dev/null' || fails=$((fails+1))
 # Phase 2.2's TestClient suite needs FastAPI + pydantic v2 + httpx; the
 # plugin ships a self-contained venv (bootstrap.sh). If the venv is
@@ -170,7 +188,8 @@ run "Python: corvin-gateway auth (ADR-0007 Phase 2.1)" bash -c 'cd ../../core/ga
 # the Gateway and shouldn't be forced to install its dependencies.
 run "Python: corvin-gateway app (ADR-0007 Phase 2.2)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_app.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -178,7 +197,8 @@ run "Python: corvin-gateway app (ADR-0007 Phase 2.2)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway dispatcher (ADR-0007 Phase 2.3)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_dispatcher.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -186,7 +206,8 @@ run "Python: corvin-gateway dispatcher (ADR-0007 Phase 2.3)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway webhooks (ADR-0007 Phase 2.4)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_webhooks.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -194,7 +215,8 @@ run "Python: corvin-gateway webhooks (ADR-0007 Phase 2.4)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway SSE (ADR-0007 Phase 2.5)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_sse.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -202,7 +224,8 @@ run "Python: corvin-gateway SSE (ADR-0007 Phase 2.5)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway end-to-end smoke (ADR-0007 Phase 2.6)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_smoke.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -210,7 +233,8 @@ run "Python: corvin-gateway end-to-end smoke (ADR-0007 Phase 2.6)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway tenant-config (ADR-0007 Phase 3.1)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_tenant_config.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -218,7 +242,8 @@ run "Python: corvin-gateway tenant-config (ADR-0007 Phase 3.1)" bash -c '
 ' || fails=$((fails+1))
 run "Python: tenant cross-plugin integration (ADR-0007 Phase 1+6)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_tenant_cross_plugin.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -226,7 +251,8 @@ run "Python: tenant cross-plugin integration (ADR-0007 Phase 1+6)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway engine-policy (ADR-0007 Phase 3.2)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_engine_policy.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -234,7 +260,8 @@ run "Python: corvin-gateway engine-policy (ADR-0007 Phase 3.2)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway zone-policy (ADR-0007 Phase 3.3)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_zone_policy.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -242,7 +269,8 @@ run "Python: corvin-gateway zone-policy (ADR-0007 Phase 3.3)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway OIDC/JWT (ADR-0007 Phase 3.4)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_oidc.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -250,7 +278,8 @@ run "Python: corvin-gateway OIDC/JWT (ADR-0007 Phase 3.4)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway SCIM 2.0 (ADR-0007 Phase 3.5)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_scim.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -258,7 +287,8 @@ run "Python: corvin-gateway SCIM 2.0 (ADR-0007 Phase 3.5)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway Keycloak-shape smoke (ADR-0007 Phase 3.6)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_keycloak_smoke.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -266,7 +296,8 @@ run "Python: corvin-gateway Keycloak-shape smoke (ADR-0007 Phase 3.6)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway container + Helm (ADR-0007 Phase 4)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_container.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -274,7 +305,8 @@ run "Python: corvin-gateway container + Helm (ADR-0007 Phase 4)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway packaging (ADR-0007 Phase 5)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_packaging.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -282,7 +314,8 @@ run "Python: corvin-gateway packaging (ADR-0007 Phase 5)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway durable-queue + rate-limit + gRPC (Phase 7)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_phase7.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -290,7 +323,8 @@ run "Python: corvin-gateway durable-queue + rate-limit + gRPC (Phase 7)" bash -c
 ' || fails=$((fails+1))
 run "Python: observability Grafana templates (ADR-0007 Phase 6.4)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_observability_dashboards.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -298,7 +332,8 @@ run "Python: observability Grafana templates (ADR-0007 Phase 6.4)" bash -c '
 ' || fails=$((fails+1))
 run "Python: Phase 7 follow-up (gRPC server + SSE TTL eviction)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_phase7_followup.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -306,7 +341,8 @@ run "Python: Phase 7 follow-up (gRPC server + SSE TTL eviction)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway audit-metrics (ADR-0007 Phase 6.1)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_audit_metrics.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -314,7 +350,8 @@ run "Python: corvin-gateway audit-metrics (ADR-0007 Phase 6.1)" bash -c '
 ' || fails=$((fails+1))
 run "Python: corvin-gateway /metrics endpoint (ADR-0007 Phase 6.2)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python tests/test_metrics_endpoint.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
@@ -322,7 +359,8 @@ run "Python: corvin-gateway /metrics endpoint (ADR-0007 Phase 6.2)" bash -c '
 ' || fails=$((fails+1))
 run "Python: voice-audit metrics CLI (ADR-0007 Phase 6.3)" bash -c '
   cd ../../core/gateway
-  if [ -x .venv/bin/python ]; then
+  if .venv/bin/python -c "import fastapi" 2>/dev/null; then
+    export PYTHONPATH="${GW_PYTHONPATH}"
     .venv/bin/python ../../operator/voice/scripts/test_voice_audit_metrics.py >/dev/null
   else
     echo "(skip: run core/gateway/bootstrap.sh to enable)"
