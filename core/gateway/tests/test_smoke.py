@@ -368,25 +368,33 @@ class FullPipelineTests(unittest.TestCase):
                     self.assertGreaterEqual(len(sse_frames), 1, sse_frames)
                     self.assertEqual(sse_frames[-1]["event"], "run.completed")
 
-                    # 5) Webhook callback verified
-                    self.assertTrue(
-                        _wait_for(lambda: len(stub.received) >= 1, timeout=5.0),
-                        "webhook never arrived",
+                    # 5) Webhook: the stub listens on 127.0.0.1, and the SSRF guard
+                    # REFUSES loopback/private targets. So the correct end-to-end
+                    # expectation here is a refusal, not a delivery.
+                    #
+                    # This block used to assert "webhook never arrived" as a FAILURE
+                    # and then verify the signature of a request that could not exist.
+                    # It contradicted test_webhooks.py::test_loopback_url_blocked in
+                    # the same repo — two tests asserting opposite things about the
+                    # same URL, and the security mechanism was the one being called
+                    # wrong. Verified 2026-07-26: _ssrf_validated_pinned_ip() on
+                    # https://127.0.0.1:… raises "target IP is
+                    # private/loopback/link-local/reserved/metadata".
+                    #
+                    # Signing, payload shape and successful delivery are covered
+                    # properly (with a non-loopback target) by test_webhooks.py:
+                    # test_sign_body_*, test_verify_signature_*, and
+                    # test_terminal_status_triggers_signed_webhook. Duplicating them
+                    # here bought nothing and cost a permanently red suite.
+                    self.assertFalse(
+                        _wait_for(lambda: len(stub.received) >= 1, timeout=3.0),
+                        "a loopback webhook target must be refused by the SSRF guard, "
+                        "not delivered",
                     )
 
-                self.assertEqual(len(stub.received), 1)
-                wh_req = stub.received[0]
-                # Signature verifies with the operator's secret
-                sig = wh_req["headers"][SIGNATURE_HEADER.lower()]
-                self.assertTrue(verify_signature(
-                    "topsecret-smoke", wh_req["body"], sig,
-                ))
-                # Payload structure
-                payload = json.loads(wh_req["body"])
-                self.assertEqual(payload["event"], "run.completed")
-                self.assertEqual(payload["run_id"], run_id)
-                self.assertEqual(payload["tenant_id"], "acme")
-                self.assertEqual(payload["status"], "completed")
+                # A blocked webhook is best-effort and must NOT change the run.
+                self.assertEqual(len(stub.received), 0)
+                self.assertEqual(final["status"], "completed")
 
             # 6) Audit chain integrity end-to-end
             chain = home / "tenants" / "acme" / "global" / "forge" / "audit.jsonl"
@@ -394,10 +402,11 @@ class FullPipelineTests(unittest.TestCase):
             self.assertTrue(ok, f"chain broken: {problems}")
             lines = [json.loads(l) for l in chain.read_text().splitlines() if l]
             event_types = {e["event_type"] for e in lines}
+            # gateway.webhook_dispatched is deliberately NOT required: this run's
+            # webhook target is loopback and was refused before dispatch (see step 5).
             for required in (
                 "gateway.run_created",
                 "gateway.run_status_changed",
-                "gateway.webhook_dispatched",
             ):
                 self.assertIn(required, event_types, event_types)
 
