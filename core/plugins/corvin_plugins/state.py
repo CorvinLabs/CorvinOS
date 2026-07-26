@@ -641,8 +641,25 @@ class PluginLifecycle:
         try:
             from .registry import get_registry, unregister
 
-            if record.plugin_id in get_registry().discover():
-                unregister(record.plugin_id, operator_initiated=True)
+            registry = get_registry()
+            if record.plugin_id not in registry.discover():
+                return
+            # The process registry is keyed by plugin_id alone, so the loaded
+            # object may belong to a DIFFERENT tenant that installed the same
+            # plugin. Disabling our own record must not stop their instance:
+            # that was a cross-tenant control path reachable with an ordinary
+            # 200, and it wrote nothing into the victim's audit chain. Our
+            # record still flips to disabled — we simply do not touch an object
+            # that is not ours.
+            owner = registry.tenant_of(record.plugin_id)
+            if owner is not None and owner != self.tenant_id:
+                log.info(
+                    "not unloading %r: the loaded instance belongs to another "
+                    "tenant; this tenant's record is disabled only",
+                    record.plugin_id,
+                )
+                return
+            unregister(record.plugin_id, operator_initiated=True)
         except PluginDisableRefused:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -718,11 +735,19 @@ class PluginLifecycle:
         reg.records[plugin_id] = disabled
 
         # Hot-unload (ADR-0124 Inv. 6): stop the plugin NOW rather than at the
-        # next boot. unregister() runs its on_unload() hook; the provider slot is
-        # cleared afterwards so a plugin that ignores on_unload still stops
-        # receiving traffic.
+        # next boot. `_deactivate` -> `registry.unregister()` already releases
+        # the provider slot INSTANCE-CHECKED.
+        #
+        # This used to be followed by an unconditional `_detach_providers(
+        # record.plugin_type)`, and that second call was a compliance hole with
+        # a 200 on it: disabling any ordinary `audit_backend` plugin cleared the
+        # slot held by a DIFFERENT, compliance-boot-layer plugin — the one whose
+        # own disable correctly answers 403. Same effect, neighbouring request,
+        # no audit record naming it. Clearing by TYPE cannot distinguish "the
+        # plugin I am disabling" from "whoever happens to hold this slot", so
+        # the type-wide call is gone and the instance-checked one in
+        # `unregister()` is the only path.
         self._deactivate(record)
-        _detach_providers(record.plugin_type)
 
         _audit(
             "plugin.disabled", {"plugin_id": disabled.full_id}, tenant_id=self.tenant_id

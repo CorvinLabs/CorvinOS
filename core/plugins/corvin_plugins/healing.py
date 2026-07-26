@@ -390,13 +390,12 @@ class HealingOrchestrator:
                 plugin_id, HealingAction.DISABLE, "unregister_failed", succeeded=False
             )
 
-        try:
-            from .state import _detach_providers
-
-            _detach_providers(plugin_type)
-        except Exception as exc:  # noqa: BLE001
-            log.error("provider detach failed (%s)", type(exc).__name__)
-
+        # No type-wide `_detach_providers(plugin_type)` here: `unregister()`
+        # above already released this plugin's slot, instance-checked. Clearing
+        # by type would evict whichever plugin currently holds the slot — which
+        # may be a compliance-boot-layer one this orchestrator just refused to
+        # touch two lines earlier.
+        del plugin_type  # kept above only for the guard; nothing else needs it
         return self._record(plugin_id, HealingAction.DISABLE, error_code or "unhealthy")
 
     # ── bookkeeping ──────────────────────────────────────────────────────────

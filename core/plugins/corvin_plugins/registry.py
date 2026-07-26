@@ -293,6 +293,20 @@ class PluginRegistry:
                 raise PluginNotFound(plugin_id)
             return self._boot_layers.get(plugin_id, BootLayer.INSTALLED)
 
+    def tenant_of(self, plugin_id: str) -> str | None:
+        """The tenant this plugin instance was loaded for, or None if unknown.
+
+        The registry is keyed by ``plugin_id`` alone — one process holds ONE
+        instance per id, whichever tenant loaded it first. That is fine for the
+        global boot layers, which are process-wide by construction, and it is a
+        trap everywhere else: two tenants installing the same marketplace plugin
+        share one object, and without this accessor an admin surface cannot tell
+        "my plugin" from "someone else's plugin with the same name".
+        """
+        with self._lock:
+            ctx = self._contexts.get(plugin_id)
+        return getattr(ctx, "tenant_id", None) if ctx is not None else None
+
     def plugins_by_boot_layer(self, boot_layer: BootLayer | str) -> list[CorvinPlugin]:
         """Return all registered plugins on the given boot layer."""
         wanted = BootLayer(boot_layer)
@@ -426,27 +440,40 @@ class PluginRegistry:
         """
         with self._lock:
             snapshot = list(self._plugins.items())
+            layers = dict(self._boot_layers)
 
         results: dict[str, HealthStatus] = {}
         for pid, plugin in snapshot:
             breaker = _breakers.get_breaker(pid)
-            try:
-                breaker.guard()
-            except _breakers.CircuitOpen as exc:
-                results[pid] = HealthStatus(
-                    ok=False,
-                    message="circuit open — calls contained",
-                    details={
-                        "breaker": breaker.stats().to_dict(),
-                        "retry_in_s": round(exc.retry_in_s, 1),
-                    },
-                )
-                continue
+            # ADR-0243: an open breaker is functionally a disable — the plugin
+            # stops being called. For the compliance boot layer that is the
+            # automatic off switch CLAUDE.md forbids, and it was reachable
+            # WITHOUT the healing flag: health_check_all() records a failure on
+            # every ok=False, `_health_map()` runs on every GET /api/admin/*,
+            # so five ordinary page loads on a plugin whose SIEM was briefly
+            # unreachable were enough to contain it. Health is still evaluated
+            # and still reported — it simply may not silence a compliance
+            # mechanism on its own.
+            contained = layers.get(pid, BootLayer.INSTALLED) is not BootLayer.COMPLIANCE
+            if contained:
+                try:
+                    breaker.guard()
+                except _breakers.CircuitOpen as exc:
+                    results[pid] = HealthStatus(
+                        ok=False,
+                        message="circuit open — calls contained",
+                        details={
+                            "breaker": breaker.stats().to_dict(),
+                            "retry_in_s": round(exc.retry_in_s, 1),
+                        },
+                    )
+                    continue
 
             try:
                 status = plugin.health_check()
             except Exception as exc:  # noqa: BLE001
-                breaker.record_failure(exc)
+                if contained:
+                    breaker.record_failure(exc)
                 log.warning("health_check failed for plugin %r: %s", pid, type(exc).__name__)
                 if (slog := _structured(pid)) is not None:
                     slog.error(
@@ -474,7 +501,13 @@ class PluginRegistry:
 
             if status.ok:
                 breaker.record_success()
-            else:
+            elif contained:
+                # An unhealthy compliance plugin is reported, never contained:
+                # containment means "stop calling it", and for this boot layer
+                # that is an automatic off switch. This is the path that
+                # actually fired in practice — a cooperative ok=False, not an
+                # exception — because a backend being briefly unreachable is
+                # the normal way a healthy plugin reports trouble.
                 breaker.record_failure()
             # Scrub the PLUGIN's contribution, then merge our own trusted breaker
             # stats on top — scrubbing after the merge would run the PII patterns
