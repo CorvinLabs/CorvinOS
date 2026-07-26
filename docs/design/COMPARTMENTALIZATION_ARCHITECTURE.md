@@ -1,11 +1,26 @@
-# ADR-0XXX: CorvinOS Compartmentalization System
+# CorvinOS Compartmentalization — Architecture Study
 ## Staged Plugin Architecture + Observability + Self-Healing
 
-**Date:** 2026-07-26  
-**Status:** Proposed  
-**Authors:** Claude Code (Architecture)  
-**Stakeholders:** Security, Ops, Eng leads  
-**Relates to:** ADR-0030 (Plugin System), ADR-0177 (Nervous System)
+**Date:** 2026-07-26
+**Status:** Long-form study. **Canonical decision: ADR-0231**, as corrected by
+**ADR-0233** (both in the `Corvin-ADR` repo).
+**Authors:** Claude Code (Architecture)
+**Stakeholders:** Security, Ops, Eng leads
+**Relates to:** ADR-0030 (plugin lifecycle contract), ADR-0177 (Nervous System)
+
+> **Corrections from ADR-0233 — apply these when implementing:**
+> 1. **Stage 1 is additive, not extractive.** "Every core feature becomes a plugin"
+>    does NOT apply to L16 audit or L18-21 auth. Core keeps writing its own
+>    hash-chained `audit.jsonl` unconditionally; a backend plugin gets a copy and may
+>    fan it out, and its failure is swallowed after logging. A `user_backend` that
+>    raises, times out, or returns `None` means **deny** — never guest admission.
+> 2. **House rules and data classification are not pluginifiable in any tier** —
+>    ADR-0232 declares them mandatory and non-disableable.
+> 3. **Stage 1 runs on `core/plugins/corvin_plugins/`** (ADR-0030), not on the
+>    retired `core/orchestration/plugin_system/`.
+> 4. **Stages 3–4 (self-healing, intelligent healing) are out of scope** until
+>    Stage 2 has been stable for one release — this document's own gate.
+> 5. Execution sequence: [`PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md`](../implementation/PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md).
 
 ---
 

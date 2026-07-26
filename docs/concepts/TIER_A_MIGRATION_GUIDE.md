@@ -1,8 +1,24 @@
-# Tier A Migration Guide — Convert Built-in Skills to Plugins
+# Tier A Migration Guide — SUPERSEDED
 
-## Overview
+**Status:** **Superseded** by [ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md).
+Every path in this guide points at code that no longer exists
+(`core/orchestration/plugin_system/plugins/`, a `corvin_plugin` SDK, an
+`operator/orchestration/plugin_system/models.py`). Do not follow it.
 
-This guide documents how to migrate a built-in Tier A skill to the Plugin System.
+**Replacement:** built-in extensions implement the `CorvinPlugin` protocol in
+`core/plugins/corvin_plugins/protocol.py` and self-register with their layer registry
+in `on_load(ctx)`. See `core/plugins/templates/` for seven working templates
+(worker engine, compute engine, bridge channel, notification, recall, summary, router)
+and § Phase 1 of [`PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md`](../implementation/PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md)
+for the audit/user backend additions.
+
+**Naming note:** "Tier A" as used below (built-in, always-on) is *not* the repo's Tier
+vocabulary. ADR-0233 D7: tiers are ADR-0156's capability boundary; provenance is the
+separate `origin` field (`builtin` | `vetted` | `community`).
+
+## Overview (historical)
+
+This guide documented how to migrate a built-in Tier A skill to the Plugin System.
 
 **Tier A Plugins** are built-in, always-on skills that ship with CorvinOS. They run without sandbox restrictions and are part of the core feature set.
 
