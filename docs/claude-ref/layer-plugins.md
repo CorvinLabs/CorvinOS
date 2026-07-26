@@ -739,3 +739,110 @@ file. The call is best-effort (silent fallback if mcp_manager is absent).
 - Let a persona bypass `mcp_plugins_allowed` via `append_system`.
 - Use `import anthropic` in any `operator/mcp_manager/` module (CI AST lint enforces).
 
+
+---
+
+## Plugin registry — `corvin_plugins` (ADR-0030 + ADR-0033 + ADR-0233)
+
+**Status:** Implemented. This is the ONE lifecycle contract for extensions.
+**Module:** `core/plugins/corvin_plugins/` · **Templates:** `core/plugins/templates/` (9)
+
+ADR-0233 consolidated the plugin work here after an audit found five different
+things called "the plugin system". The retired `core/orchestration/plugin_system/`
+prototype (unwired, `api.py` not importable, three 0-byte modules, 22
+`pytest.skip`s standing in for tests) is gone; its data model was salvaged into
+`manifest.py`.
+
+### Module map
+
+| File | Role |
+|---|---|
+| `protocol.py` | `CorvinPlugin` (on_load / on_unload / health_check), `PluginContext`, `HealthStatus`, the ADR-0033 provider protocols, plus `AuditBackend` + `UserBackend` (ADR-0233). `KNOWN_PLUGIN_TYPES` is the single taxonomy. |
+| `registry.py` | Runtime registration + `health_check_all()` (now breaker-aware) |
+| `loader.py` | Discovery: `corvin.plugins` entry points or explicit `class_path` |
+| `manifest.py` | `PluginRecord`, `PluginDependency`, `DependencyResolver`, `SettingsValidator`, `plan_settings_migration` |
+| `state.py` | Per-tenant `registry.yaml` + `PluginLifecycle` (install/enable/settings/disable/uninstall) |
+| `circuit_breaker.py` | Per-`plugin_id` breaker: closed → open → half-open |
+| `providers/` | One active provider per type: notification, recall, summary, router, **audit**, **user** |
+
+### Vocabulary — `tier` vs `origin` (ADR-0233 D7)
+
+"Tier A/B/C" means **ADR-0156's capability boundary + license gate**, repo-wide.
+Provenance is a separate field: `origin ∈ {builtin, vetted, community}`. Three
+different Tier A/B/C meanings existed before this rule; do not reintroduce one.
+
+### Additive backends — extension never replaces core (ADR-0233 D4)
+
+`audit_backend` and `user_backend` are the first two backends for *mandatory* core
+mechanisms, and they are deliberately **additive only**:
+
+- **Audit.** Core writes every event to its own hash-chained `audit.jsonl` first
+  and unconditionally. `audit.py::audit_event` then calls
+  `providers.audit_backend.fanout(...)` — *after* the core write has committed —
+  so a plugin sees a copy and can forward it to Postgres/S3/a SIEM. A backend
+  cannot suppress, rewrite, reorder or delay a compliance record. `fanout()`
+  never raises into the caller; failures are logged (exception class only) and
+  the breaker stops calling a dead sink.
+- **Users.** `providers.user_backend` has **no default backend**:
+  `get_active()` returns `None` meaning "core auth is responsible". Its
+  `authenticate()` collapses exception, timeout, non-dict and missing `user_id`
+  into `None` = **deny**, and strips secret-shaped keys from the principal.
+  A rejected credential counts as a *working* backend — only infrastructure
+  failures may open its breaker, otherwise three wrong passwords would lock out
+  every user.
+
+### Boot tripwire (ADR-0233 D5)
+
+`core/compliance/corvin_compliance_reports/tripwire.py::assert_all()` fails the
+boot closed when a mandatory mechanism is unavailable: audit path not writable,
+existing chain does not verify, or the audit provider grew a trail-owning API.
+There is **no override** — no env var, no config key, no flag. A test or dev box
+redirects `VOICE_AUDIT_PATH` instead, which leaves the tripwire fully armed.
+
+### Per-tenant registry
+
+```
+<corvin_home>/tenants/<tid>/plugins/
+├── registry.yaml            # PluginRecord.to_dict(), atomic write, mode 0600
+└── instances/<plugin_id>/   # per-plugin state, removed on uninstall
+```
+
+Tenant resolution always goes `current_tenant()` → `validate_tenant_id()` →
+`tenant_home()`; console routes pass `rec.tenant_id` from the authenticated
+`SessionRecord`, never an env var. A registry that does not parse raises
+`RegistryCorrupt` — it is never treated as "no plugins" and overwritten.
+
+Audit events: `plugin.installed`, `plugin.enabled`, `plugin.enable_denied`,
+`plugin.config_changed`, `plugin.disabled`, `plugin.disable_denied`,
+`plugin.uninstalled` — all real, hash-chained, and `config_changed` records
+**key names only** (setting values can contain a webhook URL or an account id).
+
+### Console surface
+
+Routes in `core/console/corvin_console/routes/plugins.py`, page at `/app/plugins`
+with `JsonSchemaForm` generating the settings form from the plugin's schema.
+Three flags, all default-off:
+
+| Flag | Effect when off |
+|---|---|
+| `plugin_console_surface` | every `/plugins` route 404s; the page says the feature is off |
+| `plugin_runtime_lifecycle` | registry is read-only at runtime; mutations 403 |
+| `plugin_health_monitoring` | no polling, no metrics; breaker state still readable |
+
+The surface gate is a **FastAPI dependency**, not an in-body check: FastAPI
+validates the request body only after dependencies resolve, so an in-function
+check would answer 422 on a malformed POST while the flag is off — telling the
+caller the route exists.
+
+### Must NOT do
+
+- Don't add a second `PluginRegistry`, lifecycle, or plugin taxonomy.
+- Don't let an `audit_backend` reach the core chain: no `set_writer`,
+  no `replace_writer`, no writing to `audit.jsonl`. The tripwire enforces this.
+- Don't translate a `user_backend` failure into a guest/anonymous session.
+- Don't count auth *denials* as circuit-breaker failures (self-inflicted DoS).
+- Don't put setting VALUES, principals, or `str(exc)` into audit details or
+  `HealthStatus.message` — exception class names only.
+- Don't add an override switch to the tripwire in any form.
+- Don't build a new marketplace downloader: distribution goes through ADR-0096
+  (`mcp_manager`, per-spawn SHA256/digest verification) or ADR-0142/0156.

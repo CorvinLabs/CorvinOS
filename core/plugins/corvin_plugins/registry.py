@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import threading
 
+from . import circuit_breaker as _breakers
 from .protocol import (
     CorvinPlugin,
     HealthStatus,
@@ -83,6 +84,10 @@ class PluginRegistry:
         except Exception:
             log.exception("plugin %r raised during on_unload", plugin_id)
 
+        # Drop the breaker with the plugin: a re-registered plugin must start
+        # from a clean slate, not inherit the failure count that unloaded it.
+        _breakers.forget(plugin_id)
+
         log.info("plugin unloaded: id=%r", plugin_id)
         if ctx is not None:
             ctx.audit_emit("plugin.unloaded", {
@@ -106,19 +111,40 @@ class PluginRegistry:
     # ── Health ────────────────────────────────────────────────────────────────
 
     def health_check_all(self) -> dict[str, HealthStatus]:
-        """Call health_check() on every plugin.
+        """Call health_check() on every plugin, under its circuit breaker.
 
         Catches per-plugin exceptions and returns HealthStatus(ok=False, ...)
-        so one broken plugin never blocks the rest.
+        so one broken plugin never blocks the rest.  Each result carries the
+        plugin's breaker state under ``details["breaker"]`` (ADR-0233 Phase 2),
+        so a plugin whose breaker is open is visibly contained rather than
+        silently absent.
+
+        A plugin whose breaker is OPEN is not called at all — that is the point
+        of containment; its status reports ``ok=False`` with the breaker detail.
         """
         with self._lock:
             snapshot = list(self._plugins.items())
 
         results: dict[str, HealthStatus] = {}
         for pid, plugin in snapshot:
+            breaker = _breakers.get_breaker(pid)
             try:
-                results[pid] = plugin.health_check()
+                breaker.guard()
+            except _breakers.CircuitOpen as exc:
+                results[pid] = HealthStatus(
+                    ok=False,
+                    message="circuit open — calls contained",
+                    details={
+                        "breaker": breaker.stats().to_dict(),
+                        "retry_in_s": round(exc.retry_in_s, 1),
+                    },
+                )
+                continue
+
+            try:
+                status = plugin.health_check()
             except Exception as exc:  # noqa: BLE001
+                breaker.record_failure(exc)
                 log.warning("health_check failed for plugin %r: %s", pid, type(exc).__name__)
                 ctx = self._contexts.get(pid)
                 if ctx is not None:
@@ -126,7 +152,25 @@ class PluginRegistry:
                         "plugin_id": pid,
                         "error_type": type(exc).__name__,  # class name only — no PII
                     })
-                results[pid] = HealthStatus(ok=False, message=str(exc))
+                # Exception CLASS only. str(exc) reaches the Console and the logs;
+                # a plugin's message routinely carries a path, a host or a record
+                # fragment, and this surface must stay PII-free.
+                results[pid] = HealthStatus(
+                    ok=False,
+                    message=f"health_check raised {type(exc).__name__}",
+                    details={"breaker": breaker.stats().to_dict()},
+                )
+                continue
+
+            if status.ok:
+                breaker.record_success()
+            else:
+                breaker.record_failure()
+            merged = dict(status.details or {})
+            merged["breaker"] = breaker.stats().to_dict()
+            results[pid] = HealthStatus(
+                ok=status.ok, message=status.message, details=merged
+            )
         return results
 
     # ── Filtered lookup ───────────────────────────────────────────────────────

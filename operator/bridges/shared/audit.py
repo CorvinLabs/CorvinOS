@@ -116,6 +116,21 @@ except Exception:
         "voice-audit verify will report OK with 0 events (not an error in standalone mode)"
     )
 
+# ── ADR-0233 — optional secondary sink (audit_backend plugin) ────────────────
+# Optional exactly like cowork/forge: the only permitted form is the
+# `_audit_sink is not None` guard below.  This is a FAN-OUT hook, not a writer:
+# it runs AFTER the core hash-chained write has committed, so no plugin can
+# suppress, rewrite, reorder or delay a compliance record (ADR-0232, ADR-0233 D4).
+_audit_sink = None
+try:
+    _core_plugins = Path(__file__).resolve().parents[3] / "core" / "plugins"
+    if (_core_plugins / "corvin_plugins").is_dir():
+        if str(_core_plugins) not in sys.path:
+            sys.path.insert(0, str(_core_plugins))
+        from corvin_plugins.providers import audit_backend as _audit_sink  # type: ignore
+except Exception:  # noqa: BLE001 - absent plugin package must never break audit
+    _audit_sink = None
+
 
 # Voice-specific severity mapping; forge's mapping is reused for tool/policy
 # events, so we don't duplicate those.
@@ -252,6 +267,15 @@ def audit_event(
             tool=tool, run_id="",
             details=body, hash_chain=True,
         )
+        # Core record has COMMITTED. Only now may a secondary sink see a copy
+        # (ADR-0233 D4). fanout() never raises and never blocks on failure; a
+        # broken backend cannot make this call site behave differently.
+        if _audit_sink is not None:
+            _audit_sink.fanout(
+                event_type, body,
+                severity=effective_severity,
+                tenant_id=tenant_id or "_default",
+            )
     except OSError:
         # I/O resilience contract: a write-protected / full fs must never
         # crash the bridge. Prefer silence + missing entry over a crash-loop.

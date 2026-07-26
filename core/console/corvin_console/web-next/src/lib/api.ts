@@ -5885,3 +5885,86 @@ export function browserAgentStop(sid: string, csrf: string): Promise<{ stopped: 
 export function browserAgentContinue(sid: string, csrf: string): Promise<{ resumed: boolean }> {
   return api(`/browser/${sid}/agent/continue`, { method: "POST", csrf });
 }
+
+// ── Plugin registry (ADR-0233) ─────────────────────────────────────────────
+//
+// Behind the `plugin_console_surface` feature flag: every endpoint here answers
+// 404 while the flag is off, which the caller must treat as "feature absent",
+// not as an error worth showing.
+
+export interface PluginSummary {
+  plugin_id: string;
+  version: string;
+  display_name: string;
+  plugin_type: string;
+  /** Provenance, NOT a capability tier: builtin | vetted | community. */
+  origin: string;
+  pii_risk: string;
+  enabled: boolean;
+  requires_consent: boolean;
+  settings: Record<string, unknown>;
+  settings_schema: Record<string, unknown>;
+  dependencies: string[];
+  installed_at: string | null;
+  last_error_type: string | null;
+}
+
+export interface PluginListResponse {
+  plugins: PluginSummary[];
+  total: number;
+  /** False when plugin_runtime_lifecycle is off — the UI must render read-only. */
+  lifecycle_enabled: boolean;
+}
+
+export interface PluginHealthResponse {
+  monitoring_enabled: boolean;
+  plugins?: Record<string, { ok: boolean; message: string; details: Record<string, unknown> }>;
+  breakers: Record<string, Record<string, unknown>>;
+}
+
+export async function listPlugins(signal?: AbortSignal): Promise<PluginListResponse> {
+  return api<PluginListResponse>("/plugins", { signal });
+}
+
+export async function getPluginHealth(signal?: AbortSignal): Promise<PluginHealthResponse> {
+  return api<PluginHealthResponse>("/plugins/health", { signal });
+}
+
+export async function enablePlugin(
+  pluginId: string,
+  csrf: string,
+  consentGranted = false,
+): Promise<PluginSummary> {
+  return api<PluginSummary>(`/plugins/${encodeURIComponent(pluginId)}/enable`, {
+    method: "POST",
+    csrf,
+    body: { consent_granted: consentGranted },
+  });
+}
+
+export async function disablePlugin(pluginId: string, csrf: string): Promise<PluginSummary> {
+  return api<PluginSummary>(`/plugins/${encodeURIComponent(pluginId)}/disable`, {
+    method: "POST",
+    csrf,
+    body: {},
+  });
+}
+
+export async function updatePluginSettings(
+  pluginId: string,
+  settings: Record<string, unknown>,
+  csrf: string,
+): Promise<PluginSummary> {
+  return api<PluginSummary>(`/plugins/${encodeURIComponent(pluginId)}/settings`, {
+    method: "POST",
+    csrf,
+    body: { settings },
+  });
+}
+
+export async function uninstallPlugin(
+  pluginId: string,
+  csrf: string,
+): Promise<{ uninstalled: string; audit_retained: boolean }> {
+  return api(`/plugins/${encodeURIComponent(pluginId)}`, { method: "DELETE", csrf });
+}

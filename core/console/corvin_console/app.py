@@ -96,6 +96,7 @@ from .routes import (
     rag_hub_analytics as rag_hub_analytics_route,
     custom_provider as custom_provider_route,
     mcp_plugins as mcp_plugins_route,
+    plugins as plugins_route,
     data_sources as data_sources_route,
     chain_dual_track as chain_dual_track_route,
     flows as flows_route,
@@ -219,6 +220,10 @@ router.include_router(license_route.router, tags=["console-license"])
 router.include_router(instance_route.router, tags=["console-instance"])
 # ADR-0096 M3 — MCP Plugin Manager console UI.
 router.include_router(mcp_plugins_route.router, tags=["console-mcp-plugins"])
+# ADR-0233 — plugin registry surface. The routes are always mounted; each one
+# 404s while the `plugin_console_surface` flag is off (ships dark), so the gate
+# lives in one place instead of in the mount condition.
+router.include_router(plugins_route.router, tags=["console-plugins"])
 # ADR-0106 — DSI v1 Data Source management.
 router.include_router(data_sources_route.router, tags=["console-data-sources"])
 # ADR-0121 — CorvinFlow FlowRun timeline viewer + checkpoint approve.
