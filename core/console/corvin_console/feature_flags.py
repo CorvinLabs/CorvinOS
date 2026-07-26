@@ -283,6 +283,19 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         target_release="0.11.x",
         tags=("tools",),
     ),
+    FeatureFlag(
+        id="live_model_discovery",
+        label="Live model discovery",
+        description=(
+            "Fetch the latest model list from Anthropic (and other providers) in "
+            "real time instead of using the static catalog. Refreshes every 5 "
+            "minutes in the background; if fetch fails, falls back to cached list. "
+            "Console UI shows model status (online/offline) and refresh timestamp."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("models", "console"),
+    ),
 )
 
 
