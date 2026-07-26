@@ -30,6 +30,9 @@ class PluginContext:
     recall_registry: Any | None = None         # providers.recall_backend._registry
     summary_registry: Any | None = None        # providers.summary_provider._registry
     router_registry: Any | None = None         # providers.router_backend._registry
+    # ADR-0233 additive-backend registries
+    audit_registry: Any | None = None          # providers.audit_backend._registry
+    user_registry: Any | None = None           # providers.user_backend._registry
     extra: dict = field(default_factory=dict)
 
 
@@ -173,6 +176,72 @@ class RouterBackend(Protocol):
     ) -> dict | None: ...
 
 
+@runtime_checkable
+class AuditBackend(Protocol):
+    """Receive a COPY of an audit event for fan-out to an external sink (ADR-0233).
+
+    **This protocol never owns the audit trail.**  Core writes every event to its
+    own hash-chained ``audit.jsonl`` first and unconditionally (GDPR Art. 30/32,
+    ADR-0232); a backend is a secondary sink that may forward the same event to
+    Postgres, S3, a SIEM, whatever.  Consequences of that ordering, all
+    load-bearing:
+
+    * A backend CANNOT suppress, rewrite, reorder or delay a core record.  By the
+      time ``fanout()`` is called the core write has already committed.
+    * ``fanout()`` MUST NOT raise.  A raising or slow backend is logged (exception
+      class name only) and dropped — it never fails the caller and never fails
+      core.  Do not "improve" this into a retry queue inside the caller's thread.
+    * ``fanout()`` receives metadata that already passed the core write_event
+      floor.  A backend MUST NOT enrich it with PII, prompts or user content.
+    * ``verify_chain()`` reports on the BACKEND's own copy, if it keeps one.  It is
+      never consulted to decide whether the core chain is intact — that is
+      ``core/compliance/tripwire.py``'s job against the core writer.
+    """
+
+    def fanout(
+        self,
+        event_type: str,
+        details: dict,
+        *,
+        severity: str = "INFO",
+        tenant_id: str = "_default",
+    ) -> None: ...
+
+    def verify_chain(self) -> HealthStatus: ...
+
+    def enforce_retention(self, max_age_days: int, *, tenant_id: str = "_default") -> dict: ...
+
+
+@runtime_checkable
+class UserBackend(Protocol):
+    """Authenticate and describe users from an external directory (ADR-0233).
+
+    **Deny is the only safe failure.**  ``authenticate()`` returns a dict on
+    success and ``None`` on failure; an exception, a timeout and ``None`` all mean
+    *deny*.  A caller MUST NOT translate any of them into a guest session, an
+    anonymous admit, or a cached-credential admit (CLAUDE.md: no auto-admit, no
+    trusted-observer allowlist).
+
+    Note the registry deliberately has **no default backend**:
+    ``providers.user_backend.get_active()`` returns ``None`` when no plugin is
+    installed, meaning "core auth is responsible".  A default that denied
+    everything would lock out every install the moment a call site appeared; a
+    default that admitted anything would be an auth bypass.  Absence is the
+    honest third state.
+
+    Returned dicts carry ``user_id`` and ``roles``; they MUST NOT carry secrets
+    (no password hashes, no tokens) — the caller may log the shape.
+    """
+
+    async def authenticate(self, credentials: dict) -> dict | None: ...
+
+    async def get_user(self, user_id: str) -> dict | None: ...
+
+    async def list_users(self) -> list[dict]: ...
+
+    async def enforce_quota(self, user_id: str, resource: str) -> None: ...
+
+
 # ── Exceptions ────────────────────────────────────────────────────────────────
 
 class PluginAlreadyRegistered(ValueError):
@@ -198,4 +267,6 @@ KNOWN_PLUGIN_TYPES: frozenset[str] = frozenset({
     "recall_backend",        # L28  — RecallBackend
     "summary_provider",      # L11  — SummaryProvider
     "router_backend",        # L5   — RouterBackend
+    # ADR-0233 (additive backends; core keeps its own guarantees)
+    "user_backend",          # L18-21 — UserBackend
 })

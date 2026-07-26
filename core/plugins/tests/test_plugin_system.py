@@ -254,9 +254,17 @@ class TestHealthCheckAll(unittest.TestCase):
 class TestHealthCheckAllCatchesExceptions(unittest.TestCase):
 
     def test_exception_in_health_check_returns_ok_false(self) -> None:
+        """A raising health_check reports the exception CLASS, never its message.
+
+        Changed by ADR-0233: this assertion used to require the message text
+        ("exploded") to appear in HealthStatus.message. That surface now reaches
+        the Console and the logs, and a plugin's exception message routinely
+        carries a path, a hostname or a record fragment — so only the class name
+        is propagated.
+        """
         class BrokenPlugin(_StubPlugin):
             def health_check(self) -> HealthStatus:
-                raise RuntimeError("health exploded")
+                raise RuntimeError("health exploded for user jdoe at /home/secret")
 
         registry = PluginRegistry()
         bp = BrokenPlugin(plugin_id="broken")
@@ -264,7 +272,12 @@ class TestHealthCheckAllCatchesExceptions(unittest.TestCase):
         result = registry.health_check_all()
         self.assertIn("broken", result)
         self.assertFalse(result["broken"].ok)
-        self.assertIn("exploded", result["broken"].message)
+        self.assertIn("RuntimeError", result["broken"].message)
+        self.assertNotIn("exploded", result["broken"].message)
+        self.assertNotIn("jdoe", result["broken"].message)
+        self.assertNotIn("/home/secret", result["broken"].message)
+        # The breaker state travels with the status (ADR-0233 Phase 2).
+        self.assertIn("breaker", result["broken"].details)
 
     def test_other_plugins_unaffected_by_exception(self) -> None:
         class BrokenPlugin(_StubPlugin):

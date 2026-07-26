@@ -190,6 +190,59 @@ HTTP ports, structural daemon code changes.
 
 ---
 
+## 5. Plugin Registry — installable extensions (ADR-0233)
+
+The four surfaces above extend Corvin *declaratively*. The plugin registry extends it
+with **code**: a Python class that implements the `CorvinPlugin` lifecycle
+(`on_load` / `on_unload` / `health_check`) and registers itself with the layer it
+extends — an engine, a compute backend, a bridge channel, an STT provider, a
+notification / recall / summary / router provider, or an audit / user backend.
+
+**Ships dark.** Three flags in **Settings → Features**, all off on a fresh install
+and after an upgrade:
+
+| Flag | What it turns on |
+|---|---|
+| `plugin_console_surface` | the **Plugins** page and its REST routes |
+| `plugin_runtime_lifecycle` | installing / enabling / reconfiguring at runtime |
+| `plugin_health_monitoring` | health polling + metrics export |
+
+With all three off, plugins load exactly as before: from `spec.plugins.installed`
+in the tenant config at boot.
+
+**Per-tenant, not global:**
+
+```
+~/.corvin/tenants/<tenant>/plugins/
+├── registry.yaml            # what is installed, enabled, and configured (mode 0600)
+└── instances/<plugin_id>/   # the plugin's own state
+```
+
+**Settings without UI code.** A plugin declares a JSON Schema; the Console renders
+the form from it (text, select, slider, checkbox, nested objects) and the backend
+re-validates against the same schema before saving. A rejected save leaves the
+previous configuration intact.
+
+**Consent before enable.** A plugin whose `origin` is `community`, or whose declared
+`pii_risk` is `high`, cannot be enabled without an explicit confirmation; the grant
+is recorded in the audit chain (GDPR Art. 6, 7).
+
+**Extension is additive — never a replacement.** This is the part that matters for
+compliance: an `audit_backend` plugin does **not** own the audit trail. Corvin writes
+every event to its own hash-chained `audit.jsonl` first, and only then hands the
+plugin a copy to forward elsewhere. A plugin cannot suppress, rewrite or delay a
+compliance record, and a boot tripwire refuses to start Corvin if the core audit
+writer is unreachable or its chain does not verify. A `user_backend` that fails,
+times out, or rejects a credential always means **deny** — never a guest session.
+
+**Failure containment.** Each plugin has its own circuit breaker: after repeated
+failures it stops being called for a cooldown instead of slowing every request that
+touches it. Health and breaker state are visible on the Plugins page.
+
+→ Details: [Layer Plugins Ref](claude-ref/layer-plugins.md)
+
+---
+
 ## Scope Model
 
 Forge tools and skills share the same five-scope model:

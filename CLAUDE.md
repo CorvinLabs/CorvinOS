@@ -30,6 +30,8 @@ Corvin is **structurally constrained** by EU AI Act 2026 + GDPR. Every feature m
 | Voice-transcribe audit (metadata only, never text) | GDPR Art. 5 | [Layer 23](docs/claude-ref/layer-23-stt.md) |
 | House-rules gate (acceptable-use, fail-closed) | EU AI Act Art. 5, 50 | [Layer 44](docs/claude-ref/layer-44-house-rules.md) |
 | Error/healing telemetry (default-ON, opt-out; CONTENT-FREE scrubbed signatures only, fail-closed `_assert_safe`) | GDPR Art. 6(1)(f) legitimate interest | ADR-0179/0180 (`aco/telemetry.py::consent_granted`, `htrace_consent.py::healing_traces_enabled`) |
+| Boot tripwire (fail-closed; asserts the CORE audit writer is reachable + its chain verifies, independent of any plugin; **no override — no env var, no flag**) | GDPR Art. 30, 32 | ADR-0232/0233 (`core/compliance/corvin_compliance_reports/tripwire.py::assert_all`) |
+| Plugin extension is additive-only (an `audit_backend` gets a COPY after the core write commits and can never suppress/rewrite it; a `user_backend` failure/timeout/rejection = deny, never guest) | GDPR Art. 6, 30, 32 | ADR-0233 (`core/plugins/corvin_plugins/providers/{audit,user}_backend.py`) |
 | Anonymous instance-count ping (default-ON, opt-out; random uuid4 + version + coarse allowlisted environment enums [platform, python minor, engine id], no PII) | GDPR Art. 6(1)(f) legitimate interest | ADR-0180 (`aco/htrace_consent.py::ping_enabled`) |
 | Presence heartbeat (default-ON, opt-out; gated by the SAME `ping_enabled` flag; empty body + pseudonymous instance_id/token headers only, no PII; ~5-min cadence — finer than the daily ping) | GDPR Art. 6(1)(f) legitimate interest | ADR-0186 (`aco/heartbeat.py`) |
 | Tier 1/2/3 geo-tracking (country/region/city with 10km grid, default-ON / opt-out; Cloudflare-edge-resolved, never a raw IP; file-based TTL 30d/14d) | GDPR Art. 6(1)(f) legitimate interest | ADR-0205/0206/0208 (`aco/htrace_consent.py::geo_tracking_tier`/`geo_tracking_consent_given`, `corvin_features/telemetry/geo_tiers.py`) |
@@ -132,6 +134,10 @@ Canonical runtime root: `~/.corvin/`; voice/secret config: `~/.config/corvin-voi
 36 security + compliance layers. **Mandatory reading:**
 
 - **L4** Cowork (multi-persona hub) — [layer-plugins.md](docs/claude-ref/layer-plugins.md)
+- **Plugin registry** (ADR-0030/0033/0233) — ONE lifecycle contract in
+  `core/plugins/corvin_plugins/`. "Tier A/B/C" always means ADR-0156's capability
+  boundary; provenance is the separate `origin` field. Don't add a second registry,
+  lifecycle, taxonomy, or marketplace downloader — [layer-plugins.md](docs/claude-ref/layer-plugins.md)
 - **L5** Auto-routing (keyword-based persona selection)
 - **L6** Forge (runtime tool generation, MCP server)
 - **L7** SkillForge (runtime skill generation)

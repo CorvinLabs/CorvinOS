@@ -44,6 +44,7 @@ import {
   AgentsPage,
   ExtensionsPage,
   McpPluginsPage,
+  PluginsPage,
   ActivityFeedPage,
   LearningObjectivesPage,
 } from "@/lazy-pages";
@@ -184,6 +185,7 @@ export default function App() {
             <Route path="agents" element={<AgentsPage />} />
             <Route path="extensions" element={<ExtensionsPage />} />
             <Route path="mcp-plugins" element={<McpPluginsPage />} />
+            <Route path="plugins" element={<PluginsPage />} />
             <Route path="activity" element={<ActivityFeedPage />} />
             <Route path="learning-objectives" element={<LearningObjectivesPage />} />
           </Route>

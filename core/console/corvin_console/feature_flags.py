@@ -161,6 +161,47 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("delegation", "bridges"),
     ),
     FeatureFlag(
+        id="plugin_health_monitoring",
+        label="Plugin health monitoring",
+        description=(
+            "Poll every registered plugin's health_check() on a timer and export "
+            "the results (including circuit-breaker state) for the Console and "
+            "NerveFiber. Off means health is only evaluated when something asks "
+            "for it — no background polling, no metrics endpoint. Circuit "
+            "breakers themselves stay active either way; this flag only controls "
+            "the polling and the reporting surface."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("plugins", "observability"),
+    ),
+    FeatureFlag(
+        id="plugin_runtime_lifecycle",
+        label="Runtime plugin install/enable",
+        description=(
+            "Allow plugins to be installed, enabled, reconfigured and removed at "
+            "runtime against the per-tenant registry, instead of only at boot "
+            "from spec.plugins.installed. Off means the registry is read-only at "
+            "runtime and plugins load exactly as they do today."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("plugins",),
+    ),
+    FeatureFlag(
+        id="plugin_console_surface",
+        label="Plugins page in the Console",
+        description=(
+            "Serve the /plugins REST routes and show the Plugins page with its "
+            "schema-generated settings forms. Off means the routes 404 and the "
+            "nav entry is absent; plugin state is then only reachable from the "
+            "tenant config file."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("plugins", "console"),
+    ),
+    FeatureFlag(
         id="browser_automation",
         label="Browser automation",
         description=(

@@ -167,6 +167,10 @@ export const McpPluginsPage = React.lazy(() =>
   import("@/pages/mcp-plugins").then((m) => ({ default: m.default }))
 );
 
+export const PluginsPage = React.lazy(() =>
+  import("@/pages/plugins").then((m) => ({ default: m.PluginsPage }))
+);
+
 export const LearningObjectivesPage = React.lazy(() =>
   import("@/pages/learning-objectives").then((m) => ({ default: m.LearningObjectivesPage }))
 );

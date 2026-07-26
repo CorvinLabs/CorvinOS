@@ -1,9 +1,26 @@
 # Plugin System — Implementation Plan
 
 **Date:** 2026-07-26
-**Status:** Proposed — supersedes the execution plans listed under § Superseded
+**Status:** **Phases 0–4 implemented** (2026-07-26). Phase 5 not started by design.
 **Author:** Claude Code (dialectical review of the 2026-07-26 design docs)
 **Audience:** maintainer (solo) + Claude Code sessions
+**Decision of record:** [ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md)
+
+## Delivery status
+
+| Phase | State | Evidence |
+|---|---|---|
+| 0 Ground truth | ✅ done | prototype retired, model salvaged to `corvin_plugins/manifest.py`, 44 real tests replace 22 skips, `tsc` green again |
+| 1 Additive backends | ✅ done | `AuditBackend`/`UserBackend` protocols, passthrough providers, 2 templates, boot tripwire, 33 tests incl. hostile-backend chain verification |
+| 2 Fault isolation | ✅ done | `circuit_breaker.py`, breaker state in `health_check_all()`, `plugin_health_monitoring` flag, 31 tests |
+| 3 Runtime lifecycle | ✅ done | `state.py` per-tenant registry (atomic, 0600, fail-closed) + real chained audit events, `plugin_runtime_lifecycle` flag, 45 tests |
+| 4 Console surface | ✅ done | `routes/plugins.py`, `/app/plugins` page, `JsonSchemaForm`, `plugin_console_surface` flag, 17 route tests + 9 E2E specs (specs need a live console to run) |
+| 5 Distribution | ⛔ not started | blocked on the D7 tier-vocabulary rename and its own ADR, by design |
+
+**Test totals after implementation:** 176 in `core/plugins/tests` + 17 console route
+tests; 106 forge audit/chain tests still green; `tsc --noEmit` clean; `npm run build`
+succeeds. The Playwright specs were type-checked but not executed (they need a
+running console with auth state).
 
 ---
 
