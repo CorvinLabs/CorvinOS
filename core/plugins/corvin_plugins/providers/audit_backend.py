@@ -123,22 +123,44 @@ class AuditBackendRegistry:
                 _log.error(
                     "audit fan-out worker caught %s — continuing", type(exc).__name__
                 )
+            finally:
+                # Pairs with the get() above. drain_now() waits on this counter, so a
+                # missed task_done() would hang shutdown for the full timeout.
+                self._queue.task_done()
 
     def drain_now(self, timeout: float = 2.0) -> int:
-        """Deliver everything queued, synchronously.  For tests and shutdown.
+        """Wait for the queue to drain.  For tests and shutdown.
 
-        Returns the number of events delivered.
+        Returns the number of copies that were still pending when we started (0 when
+        the pipeline was already empty).
+
+        The caller NEVER delivers. An earlier version pulled items and called the
+        backend on the calling thread, which made ``timeout`` a lie: it bounded the
+        loop *between* items, not a single delivery, so one wedged sink held the
+        shutdown open for as long as it felt like — measured 30 s against a 0.5 s
+        timeout. That is the outbox-poller failure class (a hanging sendFn stalled
+        delivery for 38 minutes with no log line). Delivery stays on the worker
+        thread, which is a daemon and dies with the process; this method only ever
+        waits, and the deadline is therefore real.
         """
-        delivered = 0
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                item = self._queue.get_nowait()
-            except queue.Empty:
-                break
-            self._deliver(*item)
-            delivered += 1
-        return delivered
+        pending = self._queue.unfinished_tasks
+        if not pending:
+            return 0
+        # The worker may have been stopped (or never started, if fanout() was never
+        # called on this registry) — without it nothing would ever drain.
+        self._ensure_worker()
+        with self._queue.all_tasks_done:
+            while self._queue.unfinished_tasks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _log.warning(
+                        "audit fan-out drain timed out with %d copy(ies) pending",
+                        self._queue.unfinished_tasks,
+                    )
+                    break
+                self._queue.all_tasks_done.wait(timeout=min(0.05, remaining))
+        return pending
 
     def queue_depth(self) -> int:
         return self._queue.qsize()
@@ -161,6 +183,8 @@ class AuditBackendRegistry:
                 self._queue.get_nowait()
             except queue.Empty:
                 break
+            else:
+                self._queue.task_done()
 
     def get_active(self) -> _ABProto | None:
         with self._lock:
@@ -197,6 +221,7 @@ class AuditBackendRegistry:
                 # Drop the OLDEST, keep the newest, never block.
                 try:
                     self._queue.get_nowait()
+                    self._queue.task_done()  # the discarded copy is accounted for
                     self._queue.put_nowait(item)
                 except (queue.Empty, queue.Full):
                     pass

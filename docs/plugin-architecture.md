@@ -188,7 +188,16 @@ still visible.
 
 Both the delivery function and the drain loop are fully guarded: if that thread
 died, every later copy would sit in the queue and monitoring would go silent with no
-signal at all. The fan-out call also sits *outside* the core write's `try/except` —
+signal at all.
+
+On shutdown the gateway flushes the queue **before** unloading plugins — `on_unload()`
+detaches the backend and discards the queue on purpose, so without the flush every
+clean shutdown lost whatever was pending. The flush waits on the *unfinished-task*
+count, not on the queue being empty: an empty queue only means the worker has picked
+the last item up, and returning there dropped the copy in flight. It is bounded, and
+the bound is real because the caller never delivers anything itself — a version that
+did made the timeout a lie, letting one wedged sink hold the shutdown open for 30 s
+against a 0.5 s limit. The fan-out call also sits *outside* the core write's `try/except` —
 inside it, a leak was logged as "audit_event dropped" although the record had
 committed, which is a false compliance alarm on a healthy chain.
 
