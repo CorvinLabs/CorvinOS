@@ -287,6 +287,43 @@ Admin routes sit behind the `admin_control_plane` flag (default `false`); off me
 routes are absent (404), not an error. Auth uses the existing `SessionRecord`; the tenant
 comes from `rec.tenant_id`, never an env var (ADR-0007).
 
+### Headless mode — implemented (Phase 6)
+
+`headless_api_mode` (default `false`, Console → Settings → Features) decides whether
+this process serves a **browser surface**. With the flag on, `mount_static()` returns
+without mounting the SPA and registers no fallback route: `/console` 404s. The friendly
+"SPA not built" placeholder is deliberately also suppressed — a placeholder is still a
+browser surface, and an API-only deployment should not have one.
+
+Two properties are worth stating because they are easy to assume wrongly:
+
+**It is a process property read from a tenant flag.** The SPA mount belongs to the
+process, not to a tenant, so `headless_enabled()` resolves once for the boot tenant and
+then applies process-wide. A second tenant in the same process does not get its UI back.
+An env var would have modelled this more naturally, but CLAUDE.md requires new features
+to be toggleable from Settings, and this repo has ruled out env kill-flags. If
+per-process configuration becomes a real requirement, it needs its own mechanism rather
+than a second meaning for this flag.
+
+**It does NOT switch off bridges.** That is `bridge_supervisor_plugins`, and the two are
+independent on purpose. Coupling them would make "core + CLI + bridges, no browser UI"
+unreachable. A test (`test_headless_mode.py::TestNoHiddenCoupling`) fails if the bridge
+supervisor ever starts reading `headless_api_mode`.
+
+### Deployment models = flag combinations
+
+There is no "deployment mode" setting. The four models in this document are combinations
+of independent flags, which is why none of them needs new code:
+
+| Model | `headless_api_mode` | `bridge_supervisor_plugins` | Result |
+|---|---|---|---|
+| **A — Complete** | `false` | `true` | Console UI + supervised bridges |
+| **B — Typical (today's default)** | `false` | `false` | Console UI; bridges managed by `bridge.sh` / systemd as before |
+| **C — API only** | `true` | `false` | REST API only; no UI, no supervised bridges |
+| **D — Custom UI / CLI** | `true` | `true` | No built-in UI, bridges still supervised; an external UI talks to the API |
+
+Model B is what a fresh install gets, because both flags ship dark.
+
 ### gRPC: deferred — not in Phase 1
 
 An earlier draft of this document specified a `corvin.proto` service alongside REST.
