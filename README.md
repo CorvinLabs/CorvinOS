@@ -15,7 +15,7 @@
 
 <p align="center">
   <a href="docs/overview.md">Overview</a> ·
-  <a href="docs/TDE_COMPREHENSIVE.md"><strong>🚀 TDE: Token Efficiency Engine</strong></a> ·
+  <a href="docs/plugin-architecture.md"><strong>🧩 Plugin System</strong></a> ·
   <a href="docs/architecture.md">Architecture</a> ·
   <a href="docs/audit-and-compliance.md">Audit &amp; Compliance</a> ·
   <a href="docs/agent-communication.md">A2A Network</a> ·
@@ -125,6 +125,9 @@ The agent generates sandboxed, bwrap-isolated tools on demand and calls them imm
 
 ### [SkillForge — runtime skill creation](docs/skills.md)
 New workflows and domain knowledge distilled into reusable skills at runtime. Skills are graded, promoted, and auto-injected into future sessions — the assistant learns your patterns without any manual configuration.
+
+### [Plugin System — extend the runtime, keep the core stable](docs/plugin-architecture.md)
+One lifecycle contract (`on_load` / `on_unload` / `health_check`) across **eleven** extension points: worker engines, compute engines, bridge channels, STT, data connectors, audit and user backends, notification, recall, summary and routing providers. Declare a plugin in `tenant.corvin.yaml` or install it from the Console; settings forms are generated from the plugin's own JSON Schema, so no plugin ships UI code. **Extension is additive only** — core writes its hash-chained audit trail first and hands a plugin a copy, a `user_backend` failure means deny, and seven boot tripwires abort startup if a mandatory mechanism is missing. Every plugin gets a circuit breaker; optional health polling exports Prometheus metrics, and optional self-healing performs reversible actions (contain, soft-restart, degrade) under an audited, per-hour budget. [Read the architecture](docs/plugin-architecture.md) for the load paths, the compliance boundary and the healing ladder.
 
 ### [Tiered Delegation Engine (TDE)](docs/TDE_COMPREHENSIVE.md)
 Adaptive engine routing reduces token consumption by 40-70% through intelligent task classification. Routes to Claude Code (simple, interactive), TDE (iterative, context-preserving), or ACS (parallel, big-data) based on 5-signal ensemble detection. **Modeled by a deterministic simulation** (11 synthetic tasks; projected savings, no measured token usage or significance claim — see the honesty notes in `operator/benchmarking/`). [Read the comprehensive guide](docs/TDE_COMPREHENSIVE.md) for architecture, mechanisms, and reproducible proofs. Or [run the benchmarks yourself](operator/benchmarking/run_benchmarks.py) in 5 minutes.
