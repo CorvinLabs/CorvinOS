@@ -410,29 +410,36 @@ try:
         def _local_stats_page() -> _HTMLResponse:
             return _HTMLResponse(content=_ls_html)
 
-    # Operator dashboards — bare /op.html, /analytics.html, /telemetry.html (outside SPA).
-    # Dev-machine convenience only: the sibling Corvin-Website checkout does not
-    # exist on real installs, so these routes are never registered there.
-    _website_root = _Path2(__file__).resolve().parents[4] / "Corvin-Website"
-    if _website_root.exists():
-        _op_html_path = _website_root / "op.html"
-        _analytics_html_path = _website_root / "analytics.html"
-        _telemetry_html_path = _website_root / "telemetry.html"
+        # Operator dashboards — bare /op.html, /analytics.html, /telemetry.html
+        # (outside SPA). Dev-machine convenience only: the sibling Corvin-Website
+        # checkout does not exist on real installs, so these routes are never
+        # registered there.
+        #
+        # INSIDE the headless guard, deliberately: these are three full HTML pages,
+        # so "the checkout exists" is not a sufficient gate for them. Registered at
+        # the same indentation as /local-stats but outside its `if`, they survived
+        # headless mode entirely — and, because _HTMLResponse was imported inside
+        # that `if`, answered 500 (NameError) rather than 404 on a dev machine.
+        _website_root = _Path2(__file__).resolve().parents[4] / "Corvin-Website"
+        if _website_root.exists():
+            _op_html_path = _website_root / "op.html"
+            _analytics_html_path = _website_root / "analytics.html"
+            _telemetry_html_path = _website_root / "telemetry.html"
 
-        if _op_html_path.exists():
-            @app.get("/op.html", include_in_schema=False)
-            def _op_dashboard() -> _HTMLResponse:
-                return _HTMLResponse(content=_op_html_path.read_text(encoding="utf-8"))
+            if _op_html_path.exists():
+                @app.get("/op.html", include_in_schema=False)
+                def _op_dashboard() -> _HTMLResponse:
+                    return _HTMLResponse(content=_op_html_path.read_text(encoding="utf-8"))
 
-        if _analytics_html_path.exists():
-            @app.get("/analytics.html", include_in_schema=False)
-            def _analytics_dashboard() -> _HTMLResponse:
-                return _HTMLResponse(content=_analytics_html_path.read_text(encoding="utf-8"))
+            if _analytics_html_path.exists():
+                @app.get("/analytics.html", include_in_schema=False)
+                def _analytics_dashboard() -> _HTMLResponse:
+                    return _HTMLResponse(content=_analytics_html_path.read_text(encoding="utf-8"))
 
-        if _telemetry_html_path.exists():
-            @app.get("/telemetry.html", include_in_schema=False)
-            def _telemetry_dashboard() -> _HTMLResponse:
-                return _HTMLResponse(content=_telemetry_html_path.read_text(encoding="utf-8"))
+            if _telemetry_html_path.exists():
+                @app.get("/telemetry.html", include_in_schema=False)
+                def _telemetry_dashboard() -> _HTMLResponse:
+                    return _HTMLResponse(content=_telemetry_html_path.read_text(encoding="utf-8"))
 
 except ImportError:
     pass
@@ -612,9 +619,46 @@ async def a2a_ping(request: Request) -> JSONResponse:
 # ── Endpoints ────────────────────────────────────────────────────────
 
 
+def _headless_ui() -> bool:
+    """True when this process must serve no browser surface (ADR-0241/0243).
+
+    Read per request rather than captured at import time: the operator flips
+    ``headless_api_mode`` from Settings → Features without a restart, and a
+    cached answer would keep the redirect targets pointing at a SPA that is no
+    longer mounted.
+
+    Defensive by contract — every failure path returns False, i.e. "serve the UI
+    exactly as before the flag existed".
+    """
+    try:
+        import sys as _s
+        from pathlib import Path as _P
+
+        _cp = _P(__file__).resolve().parents[2] / "console"
+        if str(_cp) not in _s.path:
+            _s.path.insert(0, str(_cp))
+        from corvin_console.app import headless_enabled  # type: ignore[import-not-found]
+
+        return bool(headless_enabled())
+    except Exception:  # noqa: BLE001 — no console package means "serve as usual"
+        return False
+
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
+    """Hand a browser the SPA's icon — unless there is no SPA.
+
+    Same class as ``GET /``: in headless mode ``/console/`` is not mounted, so
+    this 302 pointed into a 404. A browser surface that answers "look over
+    there" at something that does not exist is still a browser surface.
+    """
     from starlette.responses import RedirectResponse
+
+    if _headless_ui():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"reason": "headless-no-browser-surface"},
+        )
     return RedirectResponse(url="/console/favicon.svg", status_code=302)
 
 
@@ -629,19 +673,8 @@ async def root_redirect():
     """
     from starlette.responses import RedirectResponse
 
-    try:
-        import sys as _s
-        from pathlib import Path as _P
-
-        _cp = _P(__file__).resolve().parents[2] / "console"
-        if str(_cp) not in _s.path:
-            _s.path.insert(0, str(_cp))
-        from corvin_console.app import headless_enabled  # type: ignore[import-not-found]
-
-        if headless_enabled():
-            return {"status": "ok", "version": __version__, "ui": "headless"}
-    except Exception:  # noqa: BLE001 — no console package means "redirect as usual"
-        pass
+    if _headless_ui():
+        return {"status": "ok", "version": __version__, "ui": "headless"}
     return RedirectResponse(url="/console/", status_code=302)
 
 

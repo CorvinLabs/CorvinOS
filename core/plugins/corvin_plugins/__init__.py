@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from .extension_points import (
     KNOWN_EXTENSION_POINTS,
+    CrossTenantHookRefused,
     ExtensionPointDenied,
     ExtensionPointError,
     ExtensionPointSpec,
@@ -80,6 +81,7 @@ __all__ = [
     "get_registry",
     # extension_points — named hooks into boot_layer=core defaults (ADR-0237)
     "KNOWN_EXTENSION_POINTS",
+    "CrossTenantHookRefused",
     "ExtensionPointDenied",
     "ExtensionPointError",
     "ExtensionPointSpec",

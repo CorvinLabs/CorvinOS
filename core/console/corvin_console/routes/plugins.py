@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi import status as http_status
 from pydantic import BaseModel, Field
 
+from .. import audit as console_audit
 from .. import feature_flags as _feature_flags
 from ..deps import require_csrf, require_session
 
@@ -51,6 +52,15 @@ try:
         SettingsValidator,
         UnknownPluginType,
         ValidationError,
+    )
+
+    # PluginDisableRefused inherits from PermissionError, NOT from PluginError —
+    # so without importing it here every compliance-layer refusal fell through
+    # _mutation_error()'s final clause and answered 500 "plugin operation failed"
+    # with no audit event, while the admin plane answered 403 for the same
+    # request. One mechanism, two doors, two different answers.
+    from corvin_plugins.protocol import (  # type: ignore[import-not-found]
+        PluginDisableRefused,
     )
     from corvin_plugins.state import (  # type: ignore[import-not-found]
         ConsentRequired,
@@ -274,8 +284,40 @@ def _load(tenant_id: str) -> Any:
         ) from exc
 
 
+#: Verbatim from routes/admin.py — the same refusal must read the same on both
+#: doors, or an operator who hits one and then the other learns two different
+#: things about one mechanism.
+_COMPLIANCE_REFUSAL = (
+    "{plugin_id} is on the compliance layer and cannot be disabled "
+    "(GDPR Art. 30/32, EU AI Act Art. 50)"
+)
+
+
+def _audit_denied(rec: Any, action: str, plugin_id: str, reason: str) -> None:
+    """Mirror of routes/admin.py::_audit_denied — same event, same detail shape.
+
+    Only the plugin id goes into the chain, never ``str(exc)``: a plugin error
+    message routinely carries a path or a host and the chain is append-only.
+    """
+    console_audit.action_denied(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action=action,
+        target_kind="plugin",
+        target_id=plugin_id,
+        reason=reason,
+    )
+
+
 def _mutation_error(exc: Exception) -> HTTPException:
     """Map a lifecycle exception to a status code without leaking internals."""
+    # FIRST, and by class rather than by route: PluginDisableRefused derives from
+    # PermissionError, so it matches none of the PluginError branches below and
+    # used to reach the 500 fallback.
+    if isinstance(exc, PluginDisableRefused):
+        return HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN, detail=str(exc)
+        )
     if isinstance(exc, LifecycleDisabled):
         return HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
@@ -447,8 +489,24 @@ async def disable_plugin(
     plugin_id: str,
     rec: Annotated[Any, Depends(require_surface_csrf)],
 ) -> PluginOut:
+    """Disable a record.  Refuses the compliance layer with 403 + an audit event.
+
+    This is the OLDER of the two doors onto the same mechanism (the other is
+    ``POST /api/admin/plugins/{id}/disable``, ADR-0239).  It does not pre-check
+    the boot layer — the refusal comes from ``PluginLifecycle.disable()``, which
+    routes the hot-unload through ``registry.disable()`` with
+    ``operator_initiated=True``.  What this route owes the operator is the same
+    ANSWER the admin plane gives: 403, not 500, and a ``console.action_denied``
+    event carrying the same ``reason``.
+    """
     try:
         return _to_out(_lifecycle(rec.tenant_id).disable(plugin_id))
+    except PluginDisableRefused as exc:
+        _audit_denied(rec, "plugin.disable", plugin_id, "compliance-layer")
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail=_COMPLIANCE_REFUSAL.format(plugin_id=plugin_id),
+        ) from exc
     except Exception as exc:  # noqa: BLE001
         raise _mutation_error(exc) from exc
 
