@@ -477,10 +477,17 @@ def test_concurrent_forge_and_call(client: MCPClient, root: Path) -> None:
     client.expect_notification("notifications/tools/list_changed")
 
     def call_once(_):
+        # 30 s, not the 5 s default: this fires EIGHT concurrent tool calls, each
+        # executing in its own bwrap sandbox. On an idle machine that is well under a
+        # second; inside run-all-tests.sh, with other suites competing for CPU, it
+        # regularly exceeded 5 s and the whole "forge plugin" suite reported FAIL with
+        # no traceback (the runner discards stdout). The subject here is CONCURRENCY
+        # CORRECTNESS — that eight parallel ids all get their own correct response —
+        # not sandbox startup latency.
         return client.request("tools/call", {
             "name": "echo",
             "arguments": {"msg": "c"},
-        })
+        }, timeout=30.0)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
         results = list(ex.map(call_once, range(8)))
