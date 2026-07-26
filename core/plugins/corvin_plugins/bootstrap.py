@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .manifest import PluginError, PluginRecord
+from .manifest import PluginError, PluginLayer, PluginRecord
 from .protocol import PluginContext
 from .providers import (
     audit_backend,
@@ -222,6 +222,176 @@ def load_tenant_spec(tenant_id: str, corvin_home: Path) -> dict:
         return {}
 
 
+# ── Global plugins (ADR-0240 / ADR-0243) ──────────────────────────────────────
+#
+# Two scopes, and the boundary between them is a trust boundary, not a
+# convenience:
+#
+# * GLOBAL — ships in the wheel, applies to every tenant, carries the privileged
+#   layers ``compliance`` and ``core``.  Registered from CODE (below), never from
+#   a tenant's YAML.
+# * TENANT — declared in ``tenant.corvin.yaml`` or installed through the Console.
+#   Carries ``bundled`` and ``installed`` only.
+#
+# The asymmetry is the point.  If a tenant config could declare ``layer:
+# compliance``, any operator-writable file would be able to mint an undisableable
+# plugin that loads before everything else.  ``_TENANT_DECLARABLE_LAYERS`` is what
+# stops that, and :func:`bootstrap_declared` enforces it.
+
+#: ``(class_path, layer)`` pairs contributed by bundled code.  Populated by
+#: :func:`register_global_plugin` at import time of the bundling module.
+_GLOBAL_SPECS: list[tuple[str, PluginLayer]] = []
+
+#: Entry-point group a bundled distribution may use instead of calling
+#: :func:`register_global_plugin` directly.
+GLOBAL_ENTRY_POINT_GROUP = "corvin.global_plugins"
+
+#: The only layers a tenant-scoped declaration may claim.
+_TENANT_DECLARABLE_LAYERS: frozenset[PluginLayer] = frozenset(
+    {PluginLayer.BUNDLED, PluginLayer.INSTALLED}
+)
+
+
+def register_global_plugin(class_path: str, *, layer: PluginLayer | str) -> None:
+    """Declare a bundled global plugin and the layer it boots on.
+
+    Called from bundled code (import side effect), never from tenant config.
+    Registering the same ``class_path`` twice is a no-op so a module that is
+    imported from two places does not double-load its plugin.
+    """
+    resolved = PluginLayer(layer)
+    if resolved not in (PluginLayer.COMPLIANCE, PluginLayer.CORE):
+        raise ValueError(
+            f"global plugins live on the compliance or core layer, "
+            f"not {resolved.value} — tenant-scoped layers are declared in "
+            f"tenant.corvin.yaml"
+        )
+    if any(cp == class_path for cp, _ in _GLOBAL_SPECS):
+        return
+    _GLOBAL_SPECS.append((class_path, resolved))
+
+
+def _global_specs() -> list[tuple[str, PluginLayer]]:
+    """Code-registered specs plus any contributed via the entry-point group.
+
+    Ordered compliance-first, then core, then alphabetically inside each layer so
+    two installs with the same packages boot in the same order.
+    """
+    specs = list(_GLOBAL_SPECS)
+    try:
+        from importlib.metadata import entry_points
+
+        for ep in entry_points(group=GLOBAL_ENTRY_POINT_GROUP):
+            # Name encodes the layer: "compliance:my-gate" / "core:my-acs".
+            layer_name, _, _ = ep.name.partition(":")
+            try:
+                layer = PluginLayer(layer_name)
+            except ValueError:
+                log.error(
+                    "global entry point %r does not name a layer "
+                    "(expected 'compliance:<id>' or 'core:<id>') — skipping",
+                    ep.name,
+                )
+                continue
+            if layer not in (PluginLayer.COMPLIANCE, PluginLayer.CORE):
+                log.error(
+                    "global entry point %r claims layer %s, which is tenant-scoped "
+                    "— skipping",
+                    ep.name, layer.value,
+                )
+                continue
+            if not any(cp == ep.value for cp, _ in specs):
+                specs.append((ep.value, layer))
+    except Exception as exc:  # noqa: BLE001 — discovery must not break the boot
+        log.error("global entry-point discovery failed (%s)", type(exc).__name__)
+
+    order = {PluginLayer.COMPLIANCE: 0, PluginLayer.CORE: 1}
+    return sorted(specs, key=lambda s: (order[s[1]], s[0]))
+
+
+class GlobalComplianceLoadFailed(RuntimeError):
+    """A ``layer=compliance`` global plugin failed to load.
+
+    Deliberately fatal.  Every other load failure in this module degrades and
+    logs, because one broken bridge must not cost the platform its boot.  The
+    compliance layer is the exception: booting without a compliance mechanism
+    that the install declares it has is the "compliance-off mode" the baseline
+    forbids, and a degraded boot would hide it behind a log line.
+    """
+
+
+def bootstrap_global(
+    *,
+    tenant_id: str,
+    corvin_home: Path,
+    **registries: Any,
+) -> list[str]:
+    """Load the bundled global plugins, compliance layer first.
+
+    NOT behind a feature flag, and that is deliberate rather than an oversight:
+    the layer it exists to load is the compliance layer, and CLAUDE.md forbids
+    putting a compliance mechanism behind a switch. With no bundled global
+    plugins registered this is a no-op returning ``[]``, so the flagless path
+    changes nothing on an install that has none.
+
+    Failure semantics differ by layer (ADR-0240 § Boot sequence):
+
+    * ``compliance`` — raises :class:`GlobalComplianceLoadFailed`; the boot aborts.
+    * ``core`` — logged, audited, skipped; the platform boots degraded.
+    """
+    specs = _global_specs()
+    if not specs:
+        return []
+
+    from .loader import load_from_class_path
+
+    loaded: list[str] = []
+    for class_path, layer in specs:
+        try:
+            cls = load_from_class_path(class_path)
+            instance = cls()
+            plugin_id = getattr(instance, "plugin_id", "")
+            if not plugin_id:
+                raise PluginError(f"{class_path} has no plugin_id")
+        except Exception as exc:  # noqa: BLE001
+            details = {
+                "class_path": class_path,
+                "layer": layer.value,
+                "tenant_id": tenant_id,
+                "reason": "instantiate_failed",
+                "error_type": type(exc).__name__,
+            }
+            _audit_degradation(tenant_id, "plugin.global_load_failed", details)
+            if layer is PluginLayer.COMPLIANCE:
+                raise GlobalComplianceLoadFailed(
+                    f"compliance plugin {class_path} failed to load "
+                    f"({type(exc).__name__})"
+                ) from exc
+            log.error(
+                "global core plugin %s failed to load (%s) — booting degraded",
+                class_path, type(exc).__name__,
+            )
+            continue
+
+        ok = _register_instance(
+            instance,
+            plugin_id=plugin_id,
+            tenant_id=tenant_id,
+            corvin_home=corvin_home,
+            layer=layer,
+            **registries,
+        )
+        if ok:
+            loaded.append(plugin_id)
+        elif layer is PluginLayer.COMPLIANCE:
+            raise GlobalComplianceLoadFailed(
+                f"compliance plugin {plugin_id!r} failed to register"
+            )
+    if loaded:
+        log.info("loaded %d global plugin(s): %s", len(loaded), loaded)
+    return loaded
+
+
 def bootstrap_declared(
     *,
     tenant_id: str,
@@ -294,15 +464,16 @@ def bootstrap_declared(
             continue
         # Per-plugin config from the declaration, so a declared plugin gets its
         # settings without a registry entry.
-        entry_config = next(
-            (e.get("config") or {} for e in declared if e.get("id") == plugin_id), {}
-        )
+        entry = next((e for e in declared if e.get("id") == plugin_id), {})
+        entry_config = entry.get("config") or {}
+        layer = _declared_layer(entry, plugin_id=plugin_id, tenant_id=tenant_id)
         if _register_instance(
             instance,
             plugin_id=plugin_id,
             tenant_id=tenant_id,
             corvin_home=corvin_home,
             config=entry_config,
+            layer=layer,
             **registries,
         ):
             loaded.append(plugin_id)
@@ -379,6 +550,46 @@ def bootstrap_tenant(
     return loaded
 
 
+def _declared_layer(
+    entry: dict, *, plugin_id: str, tenant_id: str
+) -> PluginLayer:
+    """Resolve the layer of a tenant-declared plugin, refusing privileged claims.
+
+    A tenant config is operator-writable, so it may say "this is a bundled
+    bridge" but not "this is a compliance mechanism".  A privileged claim is
+    downgraded to ``installed`` and audited rather than honoured — and rather
+    than aborting the boot, because a single mis-declared entry should cost that
+    entry its privilege, not the platform its start.
+    """
+    raw = entry.get("layer")
+    if raw is None:
+        return PluginLayer.INSTALLED
+    try:
+        layer = PluginLayer(raw)
+    except ValueError:
+        log.error(
+            "tenant declaration for %r names unknown layer %r — using installed",
+            plugin_id, raw,
+        )
+        _audit_degradation(tenant_id, "plugin.layer_rejected", {
+            "plugin_id": plugin_id, "tenant_id": tenant_id,
+            "declared_layer": str(raw)[:32], "reason": "unknown_layer",
+        })
+        return PluginLayer.INSTALLED
+    if layer not in _TENANT_DECLARABLE_LAYERS:
+        log.error(
+            "tenant declaration for %r claims privileged layer %s — "
+            "downgrading to installed (global layers come from the wheel)",
+            plugin_id, layer.value,
+        )
+        _audit_degradation(tenant_id, "plugin.layer_rejected", {
+            "plugin_id": plugin_id, "tenant_id": tenant_id,
+            "declared_layer": layer.value, "reason": "privileged_layer_from_tenant",
+        })
+        return PluginLayer.INSTALLED
+    return layer
+
+
 def _register_instance(
     instance: Any,
     *,
@@ -386,6 +597,7 @@ def _register_instance(
     tenant_id: str,
     corvin_home: Path,
     config: dict | None = None,
+    layer: PluginLayer | str | None = None,
     **registries: Any,
 ) -> bool:
     """Build a context and register one already-instantiated plugin.
@@ -407,7 +619,7 @@ def _register_instance(
         **registries,
     )
     try:
-        register(instance, ctx)
+        register(instance, ctx, layer=layer)
     except Exception as exc:  # noqa: BLE001
         log.error(
             "plugin %r failed to register (%s) — skipping",
@@ -430,15 +642,31 @@ def bootstrap_all(
     tenant_config: dict | None = None,
     **registries: Any,
 ) -> list[str]:
-    """Run BOTH load paths in the order their precedence demands.
+    """Run ALL THREE load paths in the order their precedence demands.
 
-    Precedence: the **declarative** config wins over the runtime registry. A plugin
-    written into a version-controlled ``tenant.corvin.yaml`` is the operator's
-    stronger, reviewable statement of intent; a registry entry is a Console click.
-    Because ``_register_instance`` treats an already-registered id as loaded, a
-    plugin present in both is loaded once — from the declaration — and the registry
-    pass logs it as already-registered rather than colliding.
+    Order (ADR-0240 § Boot sequence): global before tenant, and inside the tenant
+    scope declarative before runtime.
+
+    1. **Global** — bundled ``compliance`` then ``core`` plugins.  A compliance
+       failure here aborts the boot; a core failure degrades.
+    2. **Declarative** — ``spec.plugins.installed`` from ``tenant.corvin.yaml``.
+    3. **Runtime registry** — Console-installed plugins, gated on the
+       ``plugin_runtime_lifecycle`` flag.
+
+    Precedence inside the tenant scope: the **declarative** config wins over the
+    runtime registry. A plugin written into a version-controlled
+    ``tenant.corvin.yaml`` is the operator's stronger, reviewable statement of
+    intent; a registry entry is a Console click. Because ``_register_instance``
+    treats an already-registered id as loaded, a plugin present in both is loaded
+    once — from the declaration — and the registry pass logs it as
+    already-registered rather than colliding.  The same mechanism makes the
+    global pass win over both: a tenant cannot shadow a global plugin's id.
     """
+    global_ids = bootstrap_global(
+        tenant_id=tenant_id,
+        corvin_home=corvin_home,
+        **registries,
+    )
     declared = bootstrap_declared(
         tenant_id=tenant_id,
         corvin_home=corvin_home,
@@ -457,8 +685,14 @@ def bootstrap_all(
             "plugin(s) %s are both declared and in the registry — the declaration won",
             overlap,
         )
-    # Preserve order: declarations first, then registry-only ids.
-    return declared + [pid for pid in runtime if pid not in set(declared)]
+    # Preserve order: globals, then declarations, then registry-only ids.
+    seen = set(global_ids)
+    ordered = list(global_ids)
+    for pid in declared + runtime:
+        if pid not in seen:
+            seen.add(pid)
+            ordered.append(pid)
+    return ordered
 
 
 def _load_one(
@@ -504,12 +738,23 @@ def _load_one(
         })
         return False
 
+    # Same trust boundary as the declarative path: registry.yaml is per-tenant
+    # state, so a record there cannot mint a compliance- or core-layer plugin
+    # either. The manifest gate already refuses a community-origin privileged
+    # claim; this refuses a privileged claim from tenant scope regardless of
+    # origin.
+    layer = _declared_layer(
+        {"layer": record.layer.value},
+        plugin_id=record.plugin_id,
+        tenant_id=tenant_id,
+    )
     return _register_instance(
         instance,
         plugin_id=record.plugin_id,
         tenant_id=tenant_id,
         corvin_home=corvin_home,
         config=record.settings,
+        layer=layer,
         **registries,
     )
 
@@ -528,11 +773,15 @@ def shutdown(plugin_ids: Iterable[str]) -> None:
 
 
 __all__ = [
+    "GLOBAL_ENTRY_POINT_GROUP",
+    "GlobalComplianceLoadFailed",
     "assert_compliance",
     "bootstrap_all",
     "bootstrap_declared",
+    "bootstrap_global",
     "bootstrap_tenant",
     "build_context",
     "load_tenant_spec",
+    "register_global_plugin",
     "shutdown",
 ]

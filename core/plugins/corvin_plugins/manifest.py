@@ -51,6 +51,39 @@ class PluginOrigin(str, Enum):
     COMMUNITY = "community"  # third-party, unreviewed
 
 
+class PluginLayer(str, Enum):
+    """Which boot layer a plugin belongs to — load order and disableability.
+
+    ADR-0243 (formerly the second ADR-0234).  This is a THIRD axis, orthogonal to
+    the two that already exist, and the naming is deliberate:
+
+    * ``layer``  — this one.  When is it loaded, and may it be switched off?
+    * ``tier``   — ADR-0156's capability boundary plus license gate.  The words
+      "Tier A/B/C" mean that repo-wide and are NOT reused here (CLAUDE.md).
+    * ``origin`` — provenance (builtin | vetted | community), see
+      :class:`PluginOrigin`.  ADR-0233 D7.
+
+    The draft ADRs spelled this axis "tier_0 / tier_1_core / tier_2_bundled",
+    which collided head-on with both of the above.  Same concept, third meaning
+    of the same word — so the word changed, not the concept.
+    """
+
+    COMPLIANCE = "compliance"  # GDPR / EU AI Act.  Never disableable, never replaceable.
+    CORE = "core"              # bundled reference implementation.  Replaceable.
+    BUNDLED = "bundled"        # ships with CorvinOS, opt-out per tenant (bridges, UI).
+    INSTALLED = "installed"    # operator-installed third party.
+
+
+#: Layers a plugin may NOT claim for itself unless it ships with CorvinOS or was
+#: reviewed by the maintainer.  Without this, a community manifest could declare
+#: ``layer: compliance`` and thereby become (a) undisableable, (b) loaded before
+#: everything else, and (c) exempt from the consent prompt path — a privilege
+#: escalation via a single YAML line.
+_PRIVILEGED_LAYERS: frozenset[PluginLayer] = frozenset(
+    {PluginLayer.COMPLIANCE, PluginLayer.CORE}
+)
+
+
 class PIIRisk(str, Enum):
     """Declared personal-data exposure of a plugin.  Gates the consent prompt."""
 
@@ -328,6 +361,14 @@ class PluginRecord:
     display_name: str
     plugin_type: str
 
+    # Boot layer (ADR-0243).  Defaults to the LEAST privileged value: a record
+    # that does not say what it is gets loaded last and stays disableable.
+    layer: PluginLayer = PluginLayer.INSTALLED
+    #: plugin_id of the ``layer=core`` reference implementation this plugin takes
+    #: over from (ADR-0237 "full replacement").  ``None`` for the normal case.
+    #: A compliance plugin can never be named here — see ``__post_init__``.
+    replaces: Optional[str] = None
+
     # Provenance / compliance declarations
     origin: PluginOrigin = PluginOrigin.COMMUNITY
     pii_risk: PIIRisk = PIIRisk.LOW
@@ -382,6 +423,44 @@ class PluginRecord:
                 f"{self.plugin_id}: locality={self.locality.value} contradicts "
                 f"network_egress=none — a cloud plugin cannot be air-gapped"
             )
+        # ADR-0243: a privileged layer is a claim about trust, so it may only be
+        # claimed by something that shipped with CorvinOS or was reviewed. A
+        # community manifest asserting `layer: compliance` would otherwise buy
+        # itself boot priority and permanent undisableability for free.
+        if (
+            self.layer in _PRIVILEGED_LAYERS
+            and self.origin is PluginOrigin.COMMUNITY
+        ):
+            raise PluginError(
+                f"{self.plugin_id}: origin=community may not claim "
+                f"layer={self.layer.value} — privileged layers require "
+                f"origin=builtin or origin=vetted"
+            )
+        if self.replaces is not None:
+            validate_plugin_id(self.replaces)
+            if self.replaces == self.plugin_id:
+                raise PluginError(f"{self.plugin_id}: cannot replace itself")
+            # Compliance is the one layer with no replacement path at all — the
+            # audit chain, the consent gate and the house-rules gate are not
+            # pluggable (CLAUDE.md § Compliance Baseline). A plugin declaring
+            # itself the replacement FOR compliance is refused here; that the
+            # named target actually is a core plugin is re-checked by the
+            # registry, which is the only place that knows the target's layer.
+            if self.layer is PluginLayer.COMPLIANCE:
+                raise PluginError(
+                    f"{self.plugin_id}: layer=compliance may not declare "
+                    f"replaces — compliance mechanisms are not replaceable"
+                )
+
+    def can_disable(self) -> bool:
+        """False for the compliance layer, True for every other layer.
+
+        The compliance layer carries the mechanisms CLAUDE.md marks as
+        non-disableable (audit hash-chain, consent gate, path gate, house rules,
+        flow guard). "Disable" for them is the same violation as an env kill-flag,
+        so the answer is structural rather than configurable.
+        """
+        return self.layer is not PluginLayer.COMPLIANCE
 
     @property
     def full_id(self) -> str:
@@ -410,6 +489,8 @@ class PluginRecord:
             "version": self.version,
             "display_name": self.display_name,
             "plugin_type": self.plugin_type,
+            "layer": self.layer.value,
+            "replaces": self.replaces,
             "origin": self.origin.value,
             "pii_risk": self.pii_risk.value,
             "requires_consent": self.requires_consent,
@@ -453,6 +534,10 @@ class PluginRecord:
                 version=data["version"],
                 display_name=data.get("display_name") or data["plugin_id"],
                 plugin_type=data["plugin_type"],
+                # Absent layer means "written before ADR-0243" — read as the
+                # least privileged value, never as core.
+                layer=PluginLayer(data.get("layer") or "installed"),
+                replaces=data.get("replaces") or None,
                 origin=PluginOrigin(data.get("origin", "community")),
                 pii_risk=PIIRisk(data.get("pii_risk", "low")),
                 requires_consent=bool(data.get("requires_consent", False)),
@@ -615,6 +700,7 @@ __all__ = [
     "PluginAlreadyRegistered",
     "PluginDependency",
     "PluginError",
+    "PluginLayer",
     "PluginManifest",
     "PluginNotFound",
     "PluginOrigin",

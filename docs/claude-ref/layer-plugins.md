@@ -760,19 +760,77 @@ prototype (unwired, `api.py` not importable, three 0-byte modules, 22
 | `protocol.py` | `CorvinPlugin` (on_load / on_unload / health_check), `PluginContext`, `HealthStatus`, the ADR-0033 provider protocols, plus `AuditBackend` + `UserBackend` (ADR-0233). `KNOWN_PLUGIN_TYPES` is the single taxonomy. |
 | `registry.py` | Runtime registration + `health_check_all()` (now breaker-aware) |
 | `loader.py` | Discovery helpers: `corvin.plugins` entry points or explicit `class_path`. **`discover_and_load()` has no caller** — the ADR-0030 `spec.plugins.installed` config path is declared but unwired; loading goes through `bootstrap_tenant()` |
-| `manifest.py` | `PluginRecord`, `PluginDependency`, `DependencyResolver`, `SettingsValidator`, `plan_settings_migration` |
+| `manifest.py` | `PluginRecord`, `PluginLayer` (ADR-0243), `PluginDependency`, `DependencyResolver`, `SettingsValidator`, `plan_settings_migration` |
 | `state.py` | Per-tenant `registry.yaml` + `PluginLifecycle` (install/enable/settings/disable/uninstall) |
 | `circuit_breaker.py` | Per-`plugin_id` breaker: closed → open → half-open |
 | `providers/` | One active provider per type: notification, recall, summary, router, **audit**, **user**, **stt**, **data_connector** |
-| `bootstrap.py` | Boot wiring: `assert_compliance()` (fail-closed tripwires) + `bootstrap_tenant()` (load enabled plugins in dependency order) + `build_context()` |
+| `bootstrap.py` | Boot wiring: `assert_compliance()` (fail-closed tripwires) + `bootstrap_global()` (bundled compliance/core plugins, ADR-0243) + `bootstrap_declared()` + `bootstrap_tenant()` + `bootstrap_all()` (all three in precedence order) + `build_context()` |
 | `health.py` | `HealthCollector` (interval polling, flag-gated) + `render_prometheus()` |
 | `healing.py` | `HealingOrchestrator` — Stage 3, **ships dark** behind `plugin_self_healing` |
 
-### Vocabulary — `tier` vs `origin` (ADR-0233 D7)
+### Vocabulary — `layer` vs `tier` vs `origin` (ADR-0233 D7, ADR-0243)
+
+Three orthogonal axes. They answer three different questions and none of them is
+a synonym for another:
+
+| Axis | Question it answers | Values | Defined in |
+|---|---|---|---|
+| `layer` | When is it loaded, and may it be switched off? | `compliance` · `core` · `bundled` · `installed` | ADR-0243, `manifest.py::PluginLayer` |
+| `tier` | What is it allowed to do, and what does the license gate? | Tier A/B/C | ADR-0156 |
+| `origin` | Where did it come from? | `builtin` · `vetted` · `community` | ADR-0233 D7, `manifest.py::PluginOrigin` |
 
 "Tier A/B/C" means **ADR-0156's capability boundary + license gate**, repo-wide.
-Provenance is a separate field: `origin ∈ {builtin, vetted, community}`. Three
-different Tier A/B/C meanings existed before this rule; do not reintroduce one.
+Three different Tier A/B/C meanings existed before that rule; do not reintroduce
+one. The boot-layer axis added in ADR-0243 is deliberately **not** called `tier`
+for exactly this reason — the draft ADRs spelled it `tier_0 / tier_1_core /
+tier_2_bundled`, which would have been the fourth meaning of the same word.
+
+### Layers — load order and the two trust boundaries (ADR-0240, ADR-0243)
+
+```
+boot
+ ├─ global scope   (from the wheel, every tenant)
+ │   ├─ layer=compliance  → load failure ABORTS the boot
+ │   └─ layer=core        → load failure degrades + audits
+ └─ tenant scope   (operator-writable, per tenant)
+     ├─ declarative: spec.plugins.installed in tenant.corvin.yaml
+     └─ runtime:     registry.yaml, gated on `plugin_runtime_lifecycle`
+```
+
+Two properties carry the compliance weight:
+
+1. **A tenant may not claim a privileged layer.** `bootstrap.py::_declared_layer`
+   accepts only `bundled` and `installed` from tenant scope; a config or
+   registry record claiming `compliance`/`core` is **downgraded to `installed`
+   and audited** (`plugin.layer_rejected`), never honoured. Without that,
+   any operator-writable YAML could mint a plugin that is undisableable and
+   loads before everything else. `PluginRecord.__post_init__` adds a second,
+   independent gate: `origin=community` may not claim a privileged layer at all.
+2. **The compliance layer has no off switch.** `registry.disable()` and
+   `registry.unregister(..., operator_initiated=True)` raise
+   `PluginDisableRefused` for it. The `operator_initiated` distinction exists so
+   shutdown and hot-reload can still unload everything, while an admin route
+   cannot reach past `disable()` to the primitive.
+
+Global plugins are contributed from code — `bootstrap.register_global_plugin(
+class_path, layer=...)` or the `corvin.global_plugins` entry-point group whose
+name encodes the layer (`compliance:my-gate`). `bootstrap_global()` is **not**
+behind a feature flag, deliberately: the layer it loads is the compliance layer,
+and CLAUDE.md forbids a switch on those. With no global plugins registered it is
+a no-op, so a flagless path changes nothing on installs that have none.
+
+### Replacement — only the `core` layer (ADR-0237)
+
+`registry.replace(plugin, ctx, replaces="<plugin_id>")` swaps a bundled
+reference implementation for an alternative. It refuses anything that is not
+`layer=core`: compliance is not pluggable, and bundled/installed plugins are
+disabled and uninstalled rather than replaced. A record declares its intent with
+`PluginRecord.replaces`.
+
+The swap is **not atomic and does not roll back**: the old plugin's
+`on_unload()` has already run when the new one's `on_load()` fails, so restoring
+it would hand callers a torn-down object. The documented outcome is an empty
+slot plus an audit record — the operator re-enables the default explicitly.
 
 ### Additive backends — extension never replaces core (ADR-0233 D4)
 
