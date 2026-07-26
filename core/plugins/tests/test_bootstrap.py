@@ -646,3 +646,112 @@ class TestDegradationIsAudited(unittest.TestCase):
             ]}}},
         )
         self.assertEqual(loaded, [])
+
+
+class TestShutdownFlushesTheFanout(unittest.TestCase):
+    """Review finding: the shutdown never flushed the audit fan-out.
+
+    Fan-out is a hand-off, so copies can be queued for a backend that is about to
+    be unloaded — and on_unload() discards the queue on purpose (delivering to a
+    detached backend is worse than losing a copy). Nothing flushed it first, so
+    every clean shutdown silently lost whatever was pending. The gateway lifespan
+    now drains before unloading; this pins the ordering the fix depends on.
+    """
+
+    def setUp(self):
+        from corvin_plugins.providers import audit_backend
+
+        self.provider = audit_backend
+        self.provider.clear()
+
+    def tearDown(self):
+        self.provider.clear()
+        get_registry()._plugins.clear()
+        get_registry()._contexts.clear()
+
+    def test_a_flush_before_unload_delivers_what_a_later_unload_would_discard(self):
+        received = []
+
+        class _Sink:
+            plugin_id = "test.shutdown-sink"
+            plugin_type = "audit_backend"
+            version = "1.0.0"
+            display_name = "Shutdown Sink"
+
+            def on_load(self, ctx):
+                pass
+
+            def on_unload(self):
+                # What the real audit plugin does: detach, discarding the queue.
+                audit_backend_mod.clear()
+
+            def health_check(self):
+                return HealthStatus(ok=True)
+
+            def fanout(self, event_type, details, *, severity="INFO", tenant_id="_default"):
+                received.append(event_type)
+
+            def verify_chain(self):
+                return HealthStatus(ok=True)
+
+            def enforce_retention(self, max_age_days, *, tenant_id="_default"):
+                return {"deleted": 0}
+
+        from corvin_plugins.providers import audit_backend as audit_backend_mod
+
+        sink = _Sink()
+        self.provider.set_active(sink)
+        for i in range(5):
+            self.provider.fanout("bridge.login", {"i": i})
+
+        # The order the lifespan implements: flush, THEN unload.
+        self.provider.drain_now(timeout=5.0)
+        self.assertEqual(len(received), 5, "the flush must happen before the unload")
+
+    def test_unloading_without_a_flush_is_what_loses_them(self):
+        """The counterfactual, so the ordering is not silently reversible."""
+        received = []
+
+        class _Sink:
+            plugin_id = "test.noflush-sink"
+            plugin_type = "audit_backend"
+            version = "1.0.0"
+            display_name = "No Flush"
+
+            def fanout(self, event_type, details, *, severity="INFO", tenant_id="_default"):
+                received.append(event_type)
+
+            def verify_chain(self):
+                return HealthStatus(ok=True)
+
+            def enforce_retention(self, max_age_days, *, tenant_id="_default"):
+                return {"deleted": 0}
+
+        # A sink that is never given the chance to receive: clear() immediately.
+        self.provider.set_active(_Sink())
+        self.provider.fanout("bridge.login", {"i": 0})
+        self.provider.clear()
+        self.provider.drain_now(timeout=1.0)
+        self.assertEqual(
+            received, [], "clear() is supposed to discard — that is why order matters"
+        )
+
+    def test_the_lifespan_flushes_before_it_unloads(self):
+        """Source-level ordering check: a future edit must not swap the two."""
+        from pathlib import Path as _P
+
+        app_path = (
+            _P(__file__).resolve().parents[2] / "gateway" / "corvin_gateway" / "app.py"
+        )
+        if not app_path.exists():
+            self.skipTest("gateway not present in this layout")
+        app_src = app_path.read_text(encoding="utf-8")
+        flush_at = app_src.find("flushed %d queued audit copy(ies)")
+        unload_at = app_src.find("_plugin_shutdown(_plugins_loaded)")
+        self.assertGreater(flush_at, 0, "the shutdown flush is gone")
+        self.assertGreater(unload_at, 0)
+        self.assertLess(
+            flush_at, unload_at,
+            "the fan-out flush must come BEFORE the plugin unload, or on_unload() "
+            "discards the queue it was meant to deliver",
+        )

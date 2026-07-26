@@ -49,20 +49,16 @@ def _reset_breakers() -> None:
 
 
 def _await_delivery(timeout: float = 3.0) -> None:
-    """Block until the fan-out queue is empty.
+    """Block until every queued copy has actually been DELIVERED.
 
     Delivery happens on the provider's drain thread, so a test that wants to see the
-    effect (or the log line) must wait for it INSIDE its assertion block. Calling
-    drain_now() alone races the worker: whichever gets the item first delivers it,
-    and the log then lands outside the assertLogs context.
+    effect (or the log line) must wait for it INSIDE its assertion block. This used
+    to poll queue_depth(), which is the wrong signal: an empty queue only means the
+    worker has PICKED UP the last item, not that the backend has seen it — the exact
+    confusion that made drain_now() drop the copy in flight. drain_now() now waits on
+    the unfinished-task count, so it is the whole helper.
     """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        audit_provider.drain_now(timeout=0.1)
-        if audit_provider.queue_depth() == 0:
-            time.sleep(0.05)  # let an in-flight delivery finish
-            return
-        time.sleep(0.02)
+    audit_provider.drain_now(timeout=timeout)
 
 # ── Test doubles ──────────────────────────────────────────────────────────────
 
@@ -1098,3 +1094,98 @@ class TestHistoricalVsCurrentChainBreakage(unittest.TestCase):
             self._chain(tmp, 5)
             self.assertTrue(self.tripwire.audit_chain_intact().ok)
             self.assertTrue(self.tripwire.audit_chain_history_clean().ok)
+
+
+class TestShutdownDrainIsComplete(unittest.TestCase):
+    """Review finding: an empty queue is not an empty pipeline.
+
+    drain_now() is what the gateway shutdown calls to flush the fan-out. It stopped
+    at the first empty get_nowait() — but the worker thread races it, and whichever
+    wins the get() performs the delivery. Measured 9 of 10 copies delivered: the one
+    the worker was holding when drain_now() returned was lost at process exit.
+    """
+
+    def setUp(self):
+        _reset_breakers()
+        audit_provider.clear()
+
+    def tearDown(self):
+        audit_provider.clear()
+        _reset_breakers()
+
+    def test_the_copy_in_flight_is_not_lost(self):
+        class _Slow:
+            plugin_id = "test.drain-sink"
+            plugin_type = "audit_backend"
+            version = "1.0.0"
+            display_name = "Drain"
+
+            def __init__(self):
+                self.received = []
+
+            def fanout(self, event_type, details, *, severity="INFO", tenant_id="_default"):
+                time.sleep(0.05)
+                self.received.append(event_type)
+
+            def verify_chain(self):
+                return HealthStatus(ok=True)
+
+            def enforce_retention(self, max_age_days, *, tenant_id="_default"):
+                return {"deleted": 0}
+
+        sink = _Slow()
+        audit_provider.set_active(sink)
+        for i in range(10):
+            audit_provider.fanout("bridge.login", {"i": i})
+        audit_provider.drain_now(timeout=10.0)
+        self.assertEqual(
+            len(sink.received), 10,
+            f"{len(sink.received)}/10 delivered — a copy was in flight at return",
+        )
+        self.assertEqual(audit_provider.queue_depth(), 0)
+
+    def test_the_drain_gives_up_rather_than_hanging_shutdown(self):
+        release = threading.Event()
+
+        class _Wedged:
+            plugin_id = "test.wedged-sink"
+            plugin_type = "audit_backend"
+            version = "1.0.0"
+            display_name = "Wedged"
+
+            def fanout(self, *a, **k):
+                release.wait(timeout=30.0)
+
+            def verify_chain(self):
+                return HealthStatus(ok=True)
+
+            def enforce_retention(self, max_age_days, *, tenant_id="_default"):
+                return {"deleted": 0}
+
+        audit_provider.set_active(_Wedged())
+        try:
+            audit_provider.fanout("x.y", {})
+            audit_provider.fanout("x.y", {})
+            started = time.monotonic()
+            with self.assertLogs("corvin.audit.fanout", level="WARNING"):
+                audit_provider.drain_now(timeout=0.5)
+            elapsed = time.monotonic() - started
+            self.assertLess(
+                elapsed, 5.0,
+                "a wedged sink must not hold the shutdown open (the outbox-poller "
+                "lesson: a hanging sendFn stalled delivery for 38 minutes)",
+            )
+        finally:
+            release.set()
+
+    def test_clear_leaves_no_phantom_in_flight_work(self):
+        """clear() discards copies; a missed task_done() would hang the next drain."""
+        backend = RecordingAuditBackend()
+        audit_provider.set_active(backend)
+        for _ in range(5):
+            audit_provider.fanout("x.y", {})
+        audit_provider.clear()
+        audit_provider.set_active(RecordingAuditBackend())
+        started = time.monotonic()
+        audit_provider.drain_now(timeout=2.0)
+        self.assertLess(time.monotonic() - started, 1.5, "drain hung on phantom work")

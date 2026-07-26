@@ -250,6 +250,16 @@ class TestGatewayBootWiresHealing(unittest.TestCase):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        # Put back exactly the module objects that were loaded before this test
+        # purged them. Purging without restoring left the interpreter with a SECOND
+        # copy of corvin_gateway.runs, so an unrelated gateway test's monkeypatch
+        # landed on a different object than the app held — a false RED in a suite
+        # this file does not touch, which trains people to ignore failures just as
+        # effectively as a false green.
+        for key in list(sys.modules):
+            if key.startswith(("corvin_gateway", "corvin_console")):
+                del sys.modules[key]
+        sys.modules.update(getattr(self, "_purged_modules", {}))
         self._tmp.cleanup()
 
     def test_lifespan_starts_a_collector_with_a_healer_attached(self):
@@ -259,9 +269,12 @@ class TestGatewayBootWiresHealing(unittest.TestCase):
         # PluginOrigin.COMMUNITY` then fails in whatever test runs next — which is
         # exactly what happened (test_state_lifecycle's egress cases went red only
         # in a full-suite run).
-        for key in list(sys.modules):
-            if key.startswith(("corvin_gateway", "corvin_console")):
-                del sys.modules[key]
+        self._purged_modules = {
+            k: v for k, v in sys.modules.items()
+            if k.startswith(("corvin_gateway", "corvin_console"))
+        }
+        for key in self._purged_modules:
+            del sys.modules[key]
         try:
             from corvin_gateway.app import app
             from fastapi.testclient import TestClient

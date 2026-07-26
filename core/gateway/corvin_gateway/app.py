@@ -307,7 +307,25 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 _pr.set_collector(None)
             except Exception:
                 pass
-        # Unload plugins first: on_unload() detaches their provider slots, so a
+        # Flush the audit fan-out BEFORE unloading: fan-out is a hand-off, so copies
+        # can be queued for a backend that is about to detach — and on_unload()
+        # discards the queue on purpose (delivering to a detached backend is worse).
+        # Without this flush every clean shutdown silently lost the pending copies.
+        # Bounded: a wedged sink must not hold the shutdown open, and drain_now()
+        # never delivers on this thread, so the bound is real.
+        if _plugins_loaded:
+            try:
+                from corvin_plugins.providers import audit_backend as _ab
+
+                _pending = _ab.drain_now(timeout=5.0)
+                if _pending:
+                    import logging as _dr_log
+                    _dr_log.getLogger("corvin.plugins.bootstrap").info(
+                        "flushed %d queued audit copy(ies) before unload", _pending
+                    )
+            except Exception:
+                pass  # best-effort — shutdown must not raise
+        # Unload plugins next: on_unload() detaches their provider slots, so a
         # draining request can no longer be routed into a half-torn-down plugin.
         if _plugins_loaded:
             try:
