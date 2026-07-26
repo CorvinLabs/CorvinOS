@@ -127,6 +127,45 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         _lic_load()
     except Exception:
         pass
+
+    # ── ADR-0232/0233 — compliance tripwires (FAIL-CLOSED) ───────────────────
+    # Deliberately NOT wrapped in `except: pass` like the best-effort blocks
+    # around it: if the mandatory core audit writer is unreachable or its hash
+    # chain does not verify, the platform must refuse to serve rather than run
+    # without a GDPR Art. 30/32 trail. There is no override switch by design.
+    # An absent plugin package (stripped install) is not a failure — only a
+    # broken mechanism is; assert_compliance() distinguishes the two.
+    _plugins_loaded: list[str] = []
+    try:
+        from corvin_plugins.bootstrap import assert_compliance as _assert_compliance
+    except ImportError:
+        _assert_compliance = None  # type: ignore[assignment]
+        import logging as _tw_log
+        _tw_log.getLogger("corvin.compliance.tripwire").debug(
+            "corvin_plugins absent — compliance tripwires not available"
+        )
+    if _assert_compliance is not None:
+        _assert_compliance()  # raises TripwireError -> boot aborts
+
+        # Load the tenant's enabled plugins. Gated on the shipped-dark flag, so a
+        # fresh install loads nothing; failures here are per-plugin and logged.
+        try:
+            from corvin_console import feature_flags as _flags
+            from corvin_plugins.bootstrap import bootstrap_tenant as _bootstrap
+            from forge.paths import corvin_home as _corvin_home
+            from forge.tenants import current_tenant as _current_tenant
+
+            _tid = _current_tenant()
+            _plugins_loaded = _bootstrap(
+                tenant_id=_tid,
+                corvin_home=_corvin_home(),
+                lifecycle_enabled=_flags.is_enabled("plugin_runtime_lifecycle", _tid),
+            )
+        except Exception:
+            import logging as _bs_log
+            _bs_log.getLogger("corvin.plugins.bootstrap").warning(
+                "plugin bootstrap skipped", exc_info=True
+            )
     if not hasattr(app.state, "dispatcher") or app.state.dispatcher is None:
         app.state.dispatcher = RunDispatcher()
     if not hasattr(app.state, "rate_limiter") or app.state.rate_limiter is None:
@@ -215,6 +254,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        # Unload plugins first: on_unload() detaches their provider slots, so a
+        # draining request can no longer be routed into a half-torn-down plugin.
+        if _plugins_loaded:
+            try:
+                from corvin_plugins.bootstrap import shutdown as _plugin_shutdown
+
+                _plugin_shutdown(_plugins_loaded)
+            except Exception:
+                pass  # best-effort — shutdown must not raise
         if _healer_task is not None:
             _healer_task.cancel()
         dispatcher: RunDispatcher | None = getattr(
