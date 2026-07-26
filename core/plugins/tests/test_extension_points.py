@@ -1187,6 +1187,7 @@ class TestDefensiveEdges(_Base):
                 "corvin_plugins/extension_points.py",
                 "corvin_plugins/__init__.py",
                 "tests/test_extension_points.py",
+                "tests/test_structural_guards.py",
                 ".md",
                 # LIFECYCLE, not usage. registry.py calls verify_owner() when a
                 # plugin finishes loading, to revoke hooks it claimed for a

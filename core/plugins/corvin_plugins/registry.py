@@ -138,6 +138,23 @@ def _detach_provider_slot(plugin: CorvinPlugin) -> None:
             )
 
 
+def _revoke_hooks(plugin_id: str) -> None:
+    """Remove every extension hook registered by ``plugin_id``.
+
+    Guarded and lazy for the same reason as the ownership check: the bus is
+    optional in a stripped layout, and tidying hooks must never turn an unload
+    into an exception.
+    """
+    try:
+        from .extension_points import unregister_all
+
+        removed = unregister_all(plugin_id)
+        if removed:
+            log.debug("removed %d extension hook(s) of %r", removed, plugin_id)
+    except Exception as exc:  # noqa: BLE001
+        log.error("hook removal for %r failed (%s)", plugin_id, type(exc).__name__)
+
+
 def _verify_hook_ownership(plugin_id: str, tenant_id: str) -> None:
     """Revoke extension hooks this plugin claimed for a foreign tenant.
 
@@ -324,6 +341,12 @@ class PluginRegistry:
         # superseded by another one of the same type does not evict the
         # survivor.
         _detach_provider_slot(plugin)
+
+        # Drop its extension hooks too. The bus documented "call unregister_all
+        # from on_unload", which puts the teardown obligation on the plugin —
+        # i.e. on the actor least likely to honour it, and the one whose hook on
+        # a fail-closed gate would otherwise keep firing after it is gone.
+        _revoke_hooks(plugin_id)
 
         # Drop the breaker with the plugin: a re-registered plugin must start
         # from a clean slate, not inherit the failure count that unloaded it.
