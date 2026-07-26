@@ -16,11 +16,19 @@
 | 3 Runtime lifecycle | ✅ done | `state.py` per-tenant registry (atomic, 0600, fail-closed) + real chained audit events, `plugin_runtime_lifecycle` flag, 45 tests |
 | 4 Console surface | ✅ done | `routes/plugins.py`, `/app/plugins` page, `JsonSchemaForm`, `plugin_console_surface` flag, 17 route tests + 9 E2E specs (specs need a live console to run) |
 | 5 Distribution | ⛔ not started | blocked on the D7 tier-vocabulary rename and its own ADR, by design |
+| **Refutation round** | ✅ done | found two DEAD mechanisms in the phases above — the tripwire was never called and `PluginContext` was never built — plus a PII leak in `health_check_all` and a breaker-as-auth-DoS. All fixed; `bootstrap.py` + 18 tests added. See ADR-0233 § Findings from the adversarial pass. |
 
-**Test totals after implementation:** 176 in `core/plugins/tests` + 17 console route
-tests; 106 forge audit/chain tests still green; `tsc --noEmit` clean; `npm run build`
-succeeds. The Playwright specs were type-checked but not executed (they need a
-running console with auth state).
+**Test totals after implementation:** 319 green across `core/plugins/tests`, the
+console plugin-route and feature-flag suites, and `core/orchestration`; 106 forge
+audit/chain tests still green; 223 gateway tests green (the 3 failures there are
+pre-existing — verified against a clean `git worktree` at HEAD, not caused by the
+lifespan wiring); `tsc --noEmit` clean; `npm run build` succeeds.
+
+**Not executed:** the 9 Playwright specs in `tests/e2e/plugins.spec.ts` are
+type-checked only — they need a running console with auth state. The full
+`operator/bridges/run-all-tests.sh` also did not complete inside a 15-minute
+budget; instead the three adapter tests plus 106 forge audit/chain tests were run
+directly to cover the `audit.py` fan-out change.
 
 ---
 

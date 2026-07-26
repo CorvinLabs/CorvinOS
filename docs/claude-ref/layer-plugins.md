@@ -764,6 +764,7 @@ prototype (unwired, `api.py` not importable, three 0-byte modules, 22
 | `state.py` | Per-tenant `registry.yaml` + `PluginLifecycle` (install/enable/settings/disable/uninstall) |
 | `circuit_breaker.py` | Per-`plugin_id` breaker: closed → open → half-open |
 | `providers/` | One active provider per type: notification, recall, summary, router, **audit**, **user** |
+| `bootstrap.py` | Boot wiring: `assert_compliance()` (fail-closed tripwires) + `bootstrap_tenant()` (load enabled plugins in dependency order) + `build_context()` |
 
 ### Vocabulary — `tier` vs `origin` (ADR-0233 D7)
 
@@ -834,9 +835,36 @@ validates the request body only after dependencies resolve, so an in-function
 check would answer 422 on a malformed POST while the flag is off — telling the
 caller the route exists.
 
+### Boot wiring — where it is actually called
+
+`core/gateway/corvin_gateway/app.py::_lifespan` is the boot path:
+
+1. `bootstrap.assert_compliance()` — **not** wrapped in `except: pass`, unlike the
+   best-effort startup steps around it. A failed tripwire aborts the boot.
+   If the compliance package itself is unimportable it extends `sys.path` (like
+   `audit.py`) and, failing that, runs the same core assertion inline — "the
+   checker is missing" must never read as "the check passed".
+2. `bootstrap.bootstrap_tenant(...)` — gated on `plugin_runtime_lifecycle`, so a
+   fresh install loads nothing. Reads the tenant registry, orders by dependency,
+   instantiates each `class_path`, and registers with a context built by
+   `build_context()` — which populates EVERY provider handle. A single bad plugin
+   is logged and skipped; it never blocks the boot.
+3. `bootstrap.shutdown(loaded)` on lifespan exit, before the dispatcher drain, so
+   provider slots are detached before in-flight requests finish.
+
+Both call sites were missing in the first implementation pass (the tripwire and the
+context builder existed but nothing invoked them) — unit tests proved the
+mechanisms worked, not that they were reached. `tests/test_bootstrap.py` now pins
+both.
+
 ### Must NOT do
 
 - Don't add a second `PluginRegistry`, lifecycle, or plugin taxonomy.
+- Don't wrap `assert_compliance()` in `except: pass`, and don't move it after the
+  first request is served.
+- Don't build a `PluginContext` by hand at a new call site — use
+  `bootstrap.build_context()`, or the next added provider handle will be `None`
+  in exactly one place and nobody will notice.
 - Don't let an `audit_backend` reach the core chain: no `set_writer`,
   no `replace_writer`, no writing to `audit.jsonl`. The tripwire enforces this.
 - Don't translate a `user_backend` failure into a guest/anonymous session.
