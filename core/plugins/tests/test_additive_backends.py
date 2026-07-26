@@ -986,3 +986,115 @@ class TestFanoutIsAHandOff(unittest.TestCase):
         audit_provider.fanout("x.y", {})
         audit_provider.clear()
         self.assertEqual(audit_provider.queue_depth(), 0)
+
+
+class TestHistoricalVsCurrentChainBreakage(unittest.TestCase):
+    """Review finding: the boot gate bricked the maintainer's own install.
+
+    audit_chain_intact was a full-file verify wired fail-closed into the gateway
+    lifespan. On the live machine the chain carried a KNOWN historical key-mismatch
+    window (380 records, ~77 000 records before the tail), so the platform refused to
+    boot outright — a compliance hardening that STOPS the audit trail it exists to
+    protect. The chain is append-only, so that state never repairs itself, and the
+    only way out for an operator under pressure is deleting or truncating the audit
+    log: destroying evidence, which is strictly worse under GDPR Art. 30 than a
+    documented seam.
+
+    The split: "is the writer sound NOW" blocks boot; "has this file ever been
+    broken" is recorded into the chain on every boot and reported, but never fatal.
+    Neither has an override switch.
+    """
+
+    def setUp(self):
+        from corvin_compliance_reports import tripwire
+
+        self.tripwire = tripwire
+        self.tripwire._verify_cache.clear()
+
+    def tearDown(self):
+        import os
+
+        os.environ.pop("VOICE_AUDIT_PATH", None)
+        self.tripwire._verify_cache.clear()
+
+    def _chain(self, tmp, count):
+        import os
+
+        path = Path(tmp) / "audit.jsonl"
+        os.environ["VOICE_AUDIT_PATH"] = str(path)
+        import audit as _audit  # type: ignore[import-not-found]
+
+        if _audit._se is None:
+            self.skipTest("forge.security_events not importable in this layout")
+        for i in range(count):
+            _audit.audit_event("bridge.login", channel="test", user=f"u{i}")
+        return path, _audit
+
+    def _tamper(self, path, index):
+        import json
+
+        lines = path.read_text().splitlines()
+        record = json.loads(lines[index])
+        self.assertIn("hash", record, "core writes must be chained")
+        record["details"]["user"] = "tampered-by-attacker"
+        lines[index] = json.dumps(record)
+        path.write_text("\n".join(lines) + "\n")
+        self.tripwire._verify_cache.clear()
+
+    def test_an_old_break_does_not_stop_the_platform_but_is_recorded(self):
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path, _audit = self._chain(tmp, self.tripwire.TAIL_RECORDS + 60)
+            self._tamper(path, 2)  # far outside the tail
+
+            self.assertTrue(
+                self.tripwire.audit_chain_intact().ok,
+                "a break 200+ records back must not block boot",
+            )
+            history = self.tripwire.audit_chain_history_clean()
+            self.assertFalse(history.ok, "the break must still be reported")
+            self.assertIn("permanent", history.detail)
+
+            before = len(path.read_text().splitlines())
+            self.tripwire.assert_all()  # must NOT raise
+            lines = path.read_text().splitlines()
+            self.assertGreater(len(lines), before, "the finding must be appended")
+            recorded = json.loads(lines[-1])
+            self.assertEqual(recorded["event_type"], "compliance.chain_discontinuity")
+
+    def test_a_break_in_the_tail_still_refuses_to_boot(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path, _audit = self._chain(tmp, 20)
+            self._tamper(path, 5)  # inside the tail: the writer is not sound
+
+            result = self.tripwire.audit_chain_intact()
+            self.assertFalse(result.ok, "current breakage must block the boot")
+            self.assertIn("not sound", result.detail)
+            with self.assertRaises(self.tripwire.TripwireError):
+                self.tripwire.assert_all()
+
+    def test_the_reporting_tripwire_cannot_be_the_only_signal(self):
+        """It must appear in check_all(), or the Console never shows it."""
+        names = {r.name for r in self.tripwire.check_all()}
+        self.assertIn("audit_chain_history_clean", names)
+        self.assertIn("audit_chain_history_clean", self.tripwire.REPORTING_ONLY)
+
+    def test_reporting_only_never_grows_to_cover_a_blocking_mechanism(self):
+        """A future edit must not quietly move a real gate onto the soft list."""
+        self.assertEqual(
+            self.tripwire.REPORTING_ONLY, frozenset({"audit_chain_history_clean"}),
+            "moving a mandatory mechanism to reporting-only is a compliance change "
+            "that needs an ADR, not a set edit",
+        )
+
+    def test_a_clean_chain_passes_both(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._chain(tmp, 5)
+            self.assertTrue(self.tripwire.audit_chain_intact().ok)
+            self.assertTrue(self.tripwire.audit_chain_history_clean().ok)

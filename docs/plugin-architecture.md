@@ -201,24 +201,44 @@ from the principal. There is no guest fallback anywhere.
 
 ### Boot tripwires
 
-`assert_compliance()` runs seven checks and **aborts the boot** on any failure.
-There is no override — no env var, no config key, no flag.
+`assert_compliance()` runs eight checks. Seven **abort the boot** on failure; one
+records and reports. There is no override on either — no env var, no config key, no
+flag.
 
-| Layer | Tripwire | Fails when |
-|---|---|---|
-| L16 | `audit_writer_reachable` | the audit directory is not writable |
-| L16 | `audit_chain_intact` | an existing chain does not verify |
-| L16 | `core_audit_owns_the_trail` | the audit provider grew a trail-owning API |
-| L18 | `consent_gate_denies_by_default` | `is_granted` admits an unknown uid, or the TTL cap is gone |
-| L34 | `flow_guard_present` | `DataFlowGuard` / `DataFlowDenied` is missing |
-| L44 | `house_rules_gate_intact` | the policy integrity hash fails |
-| L36 | `erasure_orchestrator_present` | the subject-id validator accepts an empty id |
+| Layer | Tripwire | Fails when | On failure |
+|---|---|---|---|
+| L16 | `audit_writer_reachable` | the audit directory is not writable | aborts boot |
+| L16 | `audit_chain_intact` | the **last 200** records do not chain | aborts boot |
+| L16 | `audit_chain_history_clean` | any record in the file does not verify | **records + reports** |
+| L16 | `core_audit_owns_the_trail` | the audit provider grew a trail-owning API | aborts boot |
+| L18 | `consent_gate_denies_by_default` | `is_granted` admits an unknown uid, or the TTL cap is gone | aborts boot |
+| L34 | `flow_guard_present` | `DataFlowGuard` / `DataFlowDenied` is missing | aborts boot |
+| L44 | `house_rules_gate_intact` | the policy integrity hash fails | aborts boot |
+| L36 | `erasure_orchestrator_present` | the subject-id validator accepts an empty id | aborts boot |
 
 They are deliberately cheap: no model call, no network. One of them was written
 with inverted logic first — it treated `is_granted`'s `(granted, reason)` tuple as a
 boolean, which is always truthy, and being fail-closed it would have blocked *every*
 boot. **A fail-closed check with inverted logic is a denial of service, not a safety
 net.**
+
+**Why the chain check is split** ([ADR-0234](../../Corvin-ADR/decisions/0234-audit-chain-boot-gate-semantics.md)).
+`audit_chain_intact` started as a full-file verify, and on the maintainer's own
+machine it made CorvinOS unbootable: the live chain carries a historical HMAC
+key-mismatch window (380 records, ~77 000 records before the tail), so the gate fired
+on every boot. The log is append-only, so that break is permanent — the "safety
+state" was permanent too, the trail stopped entirely, and the only escape was
+deleting the audit log. A gate whose only escape is destroying evidence incentivises
+destroying evidence.
+
+So the boot gate asks "**is the writer sound right now**" (the tail chains), and a
+second, reporting-only check asks "**has this file ever been broken**". A failure of
+the second is not silenced: `assert_all()` appends a `compliance.chain_discontinuity`
+event *into the chain* on every boot — before any blocking check raises, so the
+finding is itself tamper-evident — it surfaces in the Console, and `voice-audit
+verify` still exits 1. What changed is only whether it takes the platform down.
+Tampering with an old record is still detected and recorded; it is no longer a
+denial-of-service primitive.
 
 ### Flow declarations
 

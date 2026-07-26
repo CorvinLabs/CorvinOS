@@ -540,3 +540,109 @@ class TestDeclaredPlugins(unittest.TestCase):
             tenant_id="_default", corvin_home=self.home, lifecycle_enabled=True
         )
         self.assertIn("test.registry-only", loaded)
+
+
+class TestDegradationIsAudited(unittest.TestCase):
+    """Review finding: every boot failure path logged and continued — silently.
+
+    Continuing is correct: one bad plugin must not take the platform down. But a
+    log line was the ONLY trace. There is a plugin.loaded event on success and no
+    counterpart on failure, so an operator who declared an audit_backend shipping
+    copies to a SIEM would get a booting platform, a working core chain, a dead
+    SIEM stream, and an audit trail where "never configured" and "died at boot"
+    are indistinguishable.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.home = Path(self.tmp)
+        self.events: list[tuple[str, dict]] = []
+        self._orig = bootstrap._default_audit_emit
+        bootstrap._default_audit_emit = lambda tid: (
+            lambda et, d: self.events.append((et, d))
+        )
+        get_registry()._plugins.clear()
+        get_registry()._contexts.clear()
+
+    def tearDown(self):
+        bootstrap._default_audit_emit = self._orig
+        get_registry()._plugins.clear()
+        get_registry()._contexts.clear()
+
+    def _types(self):
+        return [e for e, _ in self.events]
+
+    def test_an_unimportable_declared_plugin_is_audited(self):
+        config = {"spec": {"plugins": {"installed": [
+            {"id": "a.missing", "class_path": "no_such_module_at_all:Nope"},
+        ]}}}
+        loaded = bootstrap.bootstrap_declared(
+            tenant_id="_default", corvin_home=self.home, tenant_config=config
+        )
+        self.assertEqual(loaded, [], "a broken declaration must not count as loaded")
+        self.assertIn("plugin.load_failed", self._types(), str(self.events))
+
+    def test_a_plugin_whose_on_load_raises_is_audited(self):
+        class _Hostile:
+            plugin_id = "test.hostile-load"
+            plugin_type = "audit_backend"
+            version = "1.0.0"
+            display_name = "Hostile"
+
+            def on_load(self, ctx):
+                raise RuntimeError("secret at postgres://u:pw@host/db")
+
+            def on_unload(self):
+                pass
+
+            def health_check(self):
+                return HealthStatus(ok=True)
+
+        ok = bootstrap._register_instance(
+            _Hostile(), plugin_id="test.hostile-load",
+            tenant_id="_default", corvin_home=self.home,
+        )
+        self.assertFalse(ok)
+        failed = [d for e, d in self.events if e == "plugin.load_failed"]
+        self.assertTrue(failed, str(self.events))
+        self.assertEqual(failed[0]["error_type"], "RuntimeError")
+        self.assertNotIn(
+            "postgres://", str(failed), "the exception MESSAGE must never be audited"
+        )
+
+    def test_a_corrupt_registry_is_audited_as_a_subsystem_degradation(self):
+        path = self.home / "tenants" / "_default" / "plugins" / "registry.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{{{ not yaml :::")
+        loaded = bootstrap.bootstrap_tenant(
+            tenant_id="_default", corvin_home=self.home, lifecycle_enabled=True
+        )
+        self.assertEqual(loaded, [], "a corrupt registry must load nothing")
+        self.assertIn("plugin.registry_unusable", self._types(), str(self.events))
+
+    def test_the_platform_still_boots_when_every_path_fails(self):
+        """Core stability: the whole subsystem failing is a degrade, not an abort."""
+        path = self.home / "tenants" / "_default" / "plugins" / "registry.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("- not\n- a\n- mapping\n")
+        config = {"spec": {"plugins": {"installed": [
+            {"id": "x.bad", "class_path": "garbage-without-a-colon"},
+        ]}}}
+        loaded = bootstrap.bootstrap_all(
+            tenant_id="_default", corvin_home=self.home,
+            lifecycle_enabled=True, tenant_config=config,
+        )
+        self.assertEqual(loaded, [])
+        self.assertTrue(self.events, "a total plugin failure must leave a trail")
+
+    def test_a_raising_audit_sink_cannot_turn_visibility_into_a_boot_failure(self):
+        bootstrap._default_audit_emit = lambda tid: (
+            lambda et, d: (_ for _ in ()).throw(RuntimeError("audit down"))
+        )
+        loaded = bootstrap.bootstrap_declared(
+            tenant_id="_default", corvin_home=self.home,
+            tenant_config={"spec": {"plugins": {"installed": [
+                {"id": "a.missing", "class_path": "no_such_module_at_all:Nope"},
+            ]}}},
+        )
+        self.assertEqual(loaded, [])

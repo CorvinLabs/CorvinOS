@@ -6,7 +6,7 @@ import importlib.metadata
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .protocol import CorvinPlugin
 
@@ -83,6 +83,7 @@ def discover_and_load(
     tenant_config: dict,
     *,
     corvin_home: Path,
+    on_error: Callable[[str, str, str], None] | None = None,
 ) -> list[CorvinPlugin]:
     """Discover and instantiate plugins declared in tenant_config.
 
@@ -96,8 +97,22 @@ def discover_and_load(
     True.
 
     Returns a list of plugin *instances* (no-arg constructor).  Failed loads
-    are logged and skipped.
+    are skipped — one bad declaration must not cost the operator the good ones.
+
+    ``on_error(plugin_id, reason, error_type)`` is called for each skipped entry.
+    This is the only trace a failed declaration leaves: the caller turns it into a
+    hash-chained audit event, because a log line means "never configured" and
+    "silently died at boot" look identical to whoever reads the trail later. The
+    callback must not raise; a caller that lets it raise loses the good plugins too.
     """
+    def _fail(pid: str, reason: str, error_type: str = "") -> None:
+        if on_error is None:
+            return
+        try:
+            on_error(pid, reason, error_type)
+        except Exception:  # noqa: BLE001 - visibility must not break the load
+            log.debug("on_error callback failed for %r", pid)
+
     plugins_cfg: dict[str, Any] = (
         tenant_config.get("spec", {}).get("plugins", {})
     )
@@ -129,12 +144,19 @@ def discover_and_load(
                     "plugin %r: no class_path and no matching entry_point — skipping",
                     pid,
                 )
+                _fail(pid, "no_class_path_or_entry_point")
                 continue
             instance: CorvinPlugin = cls()  # type: ignore[call-arg]
             instances.append(instance)
             log.debug("instantiated plugin %r from %r", pid, cls)
-        except Exception:  # noqa: BLE001
-            log.exception("failed to instantiate plugin %r — skipping", pid)
+        except Exception as exc:  # noqa: BLE001
+            # Class name, not log.exception(): the traceback carries str(exc), and a
+            # plugin's __init__ error can quote a DSN or a path.
+            log.error(
+                "failed to instantiate plugin %r (%s) — skipping",
+                pid, type(exc).__name__,
+            )
+            _fail(pid, "instantiate_failed", type(exc).__name__)
 
     if auto_ep:
         loaded_ids = {p.plugin_id for p in instances}
@@ -146,7 +168,11 @@ def discover_and_load(
                     instances.append(instance)
                     loaded_ids.add(pid)
                     log.debug("auto-discovered plugin %r from entry_points", pid)
-                except Exception:  # noqa: BLE001
-                    log.exception("failed to auto-instantiate plugin %r — skipping", pid)
+                except Exception as exc:  # noqa: BLE001
+                    log.error(
+                        "failed to auto-instantiate plugin %r (%s) — skipping",
+                        pid, type(exc).__name__,
+                    )
+                    _fail(pid, "auto_instantiate_failed", type(exc).__name__)
 
     return instances
