@@ -37,6 +37,18 @@ class STTProviderRegistry:
         with self._lock:
             self._active = None
 
+    def clear_if_active(self, provider: object) -> bool:
+        """Detach only if ``provider`` is the one currently installed.
+
+        Instance-checked: a plugin unloading must not evict a provider that a
+        DIFFERENT plugin installed after it.
+        """
+        with self._lock:
+            if self._active is not provider:
+                return False
+            self._active = None
+            return True
+
     def get_active(self) -> Any | None:
         with self._lock:
             return self._active
@@ -62,3 +74,7 @@ def clear() -> None:
 
 def is_installed() -> bool:
     return _registry.is_installed()
+
+
+def clear_if_active(provider: object) -> bool:
+    return _registry.clear_if_active(provider)

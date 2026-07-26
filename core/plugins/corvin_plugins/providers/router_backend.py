@@ -94,6 +94,25 @@ class RouterBackendRegistry:
         with self._lock:
             return self._active
 
+    def clear(self) -> None:
+        """Restore the bundled default provider."""
+        with self._lock:
+            self._active = ChainRouterBackend()  # type: ignore[assignment]
+
+    def clear_if_active(self, provider: object) -> bool:
+        """Restore the default only if ``provider`` is the one installed.
+
+        Instance-checked on purpose.  A plugin unloading must not evict a
+        provider that a DIFFERENT plugin installed after it — clearing by type
+        alone would hand the slot back to the default while the other plugin
+        still believes it is active.
+        """
+        with self._lock:
+            if self._active is not provider:
+                return False
+            self._active = ChainRouterBackend()  # type: ignore[assignment]
+            return True
+
 
 _registry: RouterBackendRegistry = RouterBackendRegistry()
 
@@ -104,3 +123,11 @@ def get_active() -> _RBProto:
 
 def set_active(provider: _RBProto) -> None:
     _registry.set_active(provider)
+
+
+def clear() -> None:
+    _registry.clear()
+
+
+def clear_if_active(provider: object) -> bool:
+    return _registry.clear_if_active(provider)
