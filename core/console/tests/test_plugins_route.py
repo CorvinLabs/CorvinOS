@@ -29,11 +29,38 @@ for _p in [str(_OPERATOR), str(_OPERATOR / "license"), str(_OPERATOR / "forge"),
         sys.path.insert(0, _p)
 
 
-def _reset_modules():
+#: corvin_plugins is deliberately NOT purged. It resolves CORVIN_HOME per call, so
+#: reloading it buys nothing — and it costs a lot: operator/bridges/shared/audit.py
+#: binds `_audit_sink` to the audit_backend MODULE at import time and never
+#: re-resolves it, so a copy created inside the purge window becomes the sink that
+#: every later audit_event() fans out into, while the plugin tests hold the original.
+#: Measured: two fan-out tests failed with 0 deliveries whenever this file ran first.
+#: Purging it also forks every enum, breaking `origin is PluginOrigin.COMMUNITY`.
+_PURGED_PREFIXES = ("corvin_console", "corvin_gateway", "forge")
+
+
+def _snapshot_modules() -> dict:
+    return {
+        k: v for k, v in sys.modules.items() if k.startswith(_PURGED_PREFIXES)
+    }
+
+
+def _reset_modules(restore: dict | None = None) -> None:
+    """Purge the app modules so the next import re-reads this test's CORVIN_HOME.
+
+    ``restore`` puts back exactly the objects that were loaded before. Purging
+    WITHOUT restoring poisons the rest of the run: every test module bound its
+    names at collection time, so a later re-import hands out a SECOND copy of
+    corvin_plugins, and `record.origin is PluginOrigin.COMMUNITY` compares two
+    different enum classes. Measured: 9 plugin tests failed when this file ran
+    first, and passed when it ran last — a suite whose green depends on collection
+    order is not a passing suite.
+    """
     for key in list(sys.modules):
-        if any(key.startswith(p) for p in
-               ("corvin_console", "corvin_gateway", "forge", "corvin_plugins")):
+        if key.startswith(_PURGED_PREFIXES):
             del sys.modules[key]
+    if restore:
+        sys.modules.update(restore)
 
 
 @contextmanager
@@ -50,6 +77,7 @@ def _sandbox(tmp_path: Path):
     os.environ["CORVIN_TENANT_ID"] = tenant_id
     # Keep the real GDPR chain out of the test run (tests/conftest.py convention).
     os.environ["VOICE_AUDIT_PATH"] = str(home / "audit.jsonl")
+    preloaded = _snapshot_modules()
     try:
         _reset_modules()
         from corvin_console import auth as _auth
@@ -69,7 +97,7 @@ def _sandbox(tmp_path: Path):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-        _reset_modules()
+        _reset_modules(restore=preloaded)
 
 
 _RECORD = {
@@ -665,3 +693,67 @@ class TestContainmentReasonIsDerived(_Base):
                 self.assertEqual(body["contained_by"], "healing_unloaded")
             finally:
                 route_mod.set_collector(None)
+
+
+class TestTheSandboxDoesNotPoisonTheRun(unittest.TestCase):
+    """Review finding: this file's module purge made other suites fail.
+
+    _sandbox() purges the app modules so the lifespan re-reads its CORVIN_HOME. It
+    used to purge corvin_plugins too, and never restored anything. Measured: 9 plugin
+    tests failed when this file ran first and passed when it ran last — a suite whose
+    green depends on collection order is not a passing suite, and every "all green"
+    report before this was order-luck.
+
+    Two distinct mechanisms, both worth pinning:
+      * a second copy of corvin_plugins forks every enum, so
+        `record.origin is PluginOrigin.COMMUNITY` compares two different classes;
+      * operator/bridges/shared/audit.py binds `_audit_sink` to the audit_backend
+        MODULE at import time and never re-resolves it, so a copy created inside the
+        purge window silently becomes the sink every later audit_event() fans into.
+    """
+
+    def test_corvin_plugins_is_never_purged(self):
+        self.assertNotIn(
+            "corvin_plugins", _PURGED_PREFIXES,
+            "purging corvin_plugins forks its enums and steals audit.py's fan-out sink",
+        )
+
+    def test_what_is_purged_is_restored(self):
+        import corvin_plugins.manifest as manifest_before
+        from corvin_plugins.manifest import PluginOrigin as origin_before
+
+        before = {k: v for k, v in sys.modules.items() if k.startswith(_PURGED_PREFIXES)}
+        with tempfile.TemporaryDirectory() as tmp:
+            with _sandbox(Path(tmp)):
+                pass
+        after = {k: v for k, v in sys.modules.items() if k.startswith(_PURGED_PREFIXES)}
+
+        swapped = [k for k, v in before.items() if after.get(k) is not v]
+        self.assertEqual(swapped, [], f"module identity changed for {swapped}")
+
+        import corvin_plugins.manifest as manifest_after
+        from corvin_plugins.manifest import PluginOrigin as origin_after
+
+        self.assertIs(manifest_before, manifest_after)
+        self.assertIs(
+            origin_before, origin_after,
+            "a forked enum breaks `is` comparisons in every later test",
+        )
+
+    def test_the_fanout_sink_still_points_at_the_live_registry(self):
+        """audit.py binds the sink module once; the sandbox must not swap it out."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with _sandbox(Path(tmp)):
+                pass
+        try:
+            import audit as bridge_audit  # type: ignore[import-not-found]
+        except ImportError:
+            self.skipTest("bridge audit module not importable in this layout")
+        if bridge_audit._audit_sink is None:
+            self.skipTest("plugin package absent in this layout")
+        from corvin_plugins.providers import audit_backend as live
+
+        self.assertIs(
+            bridge_audit._audit_sink, live,
+            "audit_event() would fan out into a registry nobody reads",
+        )
