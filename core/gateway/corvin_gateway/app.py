@@ -136,6 +136,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # An absent plugin package (stripped install) is not a failure — only a
     # broken mechanism is; assert_compliance() distinguishes the two.
     _plugins_loaded: list[str] = []
+    _health_collector = None
     try:
         from corvin_plugins.bootstrap import assert_compliance as _assert_compliance
     except ImportError:
@@ -165,6 +166,34 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             import logging as _bs_log
             _bs_log.getLogger("corvin.plugins.bootstrap").warning(
                 "plugin bootstrap skipped", exc_info=True
+            )
+
+        # ADR-0231 Stage 2 — health polling, behind plugin_health_monitoring.
+        # Flag off (the default) means NO timer is created at all: the /plugins
+        # health route still answers from the breaker state, which costs nothing.
+        try:
+            from corvin_console import feature_flags as _hflags
+            from corvin_console.routes import plugins as _plugins_route
+            from corvin_plugins.bootstrap import build_context as _build_ctx
+            from corvin_plugins.health import HealthCollector as _HealthCollector
+            from forge.paths import corvin_home as _hc_home
+            from forge.tenants import current_tenant as _hc_tenant
+
+            _htid = _hc_tenant()
+            if _hflags.is_enabled("plugin_health_monitoring", _htid):
+                _health_collector = _HealthCollector(
+                    audit_emit=_build_ctx(
+                        plugin_id="health-collector",
+                        tenant_id=_htid,
+                        corvin_home=_hc_home(),
+                    ).audit_emit,
+                )
+                _health_collector.start()
+                _plugins_route.set_collector(_health_collector)
+        except Exception:
+            import logging as _hc_log
+            _hc_log.getLogger("corvin.plugins.health").warning(
+                "health collector not started", exc_info=True
             )
     if not hasattr(app.state, "dispatcher") or app.state.dispatcher is None:
         app.state.dispatcher = RunDispatcher()
@@ -254,6 +283,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        # Stop polling before unloading, or a poll can land on a plugin that is
+        # halfway through on_unload().
+        if _health_collector is not None:
+            try:
+                await _health_collector.stop()
+                from corvin_console.routes import plugins as _pr
+
+                _pr.set_collector(None)
+            except Exception:
+                pass
         # Unload plugins first: on_unload() detaches their provider slots, so a
         # draining request can no longer be routed into a half-torn-down plugin.
         if _plugins_loaded:

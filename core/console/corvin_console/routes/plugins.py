@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi import status as http_status
 from pydantic import BaseModel, Field
 
@@ -158,6 +158,21 @@ async def require_surface_csrf(rec: Annotated[Any, Depends(require_csrf)]) -> An
     return rec
 
 
+#: The gateway lifespan owns the collector instance (it owns the event loop); the
+#: route only reads its latest snapshot. Set via set_collector() at boot.
+_COLLECTOR: Any | None = None
+
+
+def set_collector(collector: Any | None) -> None:
+    """Register the process-wide health collector (called from the boot path)."""
+    global _COLLECTOR
+    _COLLECTOR = collector
+
+
+def _collector() -> Any | None:
+    return _COLLECTOR
+
+
 def _lifecycle(tenant_id: str) -> Any:
     return PluginLifecycle(
         tenant_id=tenant_id,
@@ -261,6 +276,18 @@ async def plugin_health(
     from corvin_plugins import registry as runtime_registry
 
     monitoring = _feature_flags.is_enabled("plugin_health_monitoring", rec.tenant_id)
+    collector = _collector()
+    if monitoring and collector is not None and collector.running:
+        # A collector is polling: serve its snapshot instead of calling every
+        # plugin again on each request.
+        return {
+            "monitoring_enabled": True,
+            "collector_running": True,
+            **collector.snapshot().to_dict(),
+            "breakers": __import__(
+                "corvin_plugins.circuit_breaker", fromlist=["snapshot"]
+            ).snapshot(),
+        }
     if not monitoring:
         # Flag off: report breaker state (already maintained, free to read) but do
         # not call into plugins.
@@ -275,6 +302,23 @@ async def plugin_health(
         },
         "breakers": circuit_breaker.snapshot(),
     }
+
+
+@router.get("/plugins/metrics")
+async def plugin_metrics(
+    rec: Annotated[Any, Depends(require_surface)],
+) -> Response:
+    """Plugin health + breaker state in Prometheus 0.0.4 text format.
+
+    Breaker numbers are always real (breakers run regardless of the monitoring
+    flag); the health gauges are zero until a collector has polled at least once.
+    """
+    from corvin_plugins import health as _health
+
+    collector = _collector()
+    snapshot = collector.snapshot() if collector is not None else None
+    body = _health.render_prometheus(snapshot)
+    return Response(content=body, media_type="text/plain; version=0.0.4")
 
 
 @router.get("/plugins/{plugin_id}")

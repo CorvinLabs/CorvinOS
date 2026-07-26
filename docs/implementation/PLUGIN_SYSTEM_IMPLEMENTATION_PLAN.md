@@ -15,7 +15,9 @@
 | 2 Fault isolation | ✅ done | `circuit_breaker.py`, breaker state in `health_check_all()`, `plugin_health_monitoring` flag, 31 tests |
 | 3 Runtime lifecycle | ✅ done | `state.py` per-tenant registry (atomic, 0600, fail-closed) + real chained audit events, `plugin_runtime_lifecycle` flag, 45 tests |
 | 4 Console surface | ✅ done | `routes/plugins.py`, `/app/plugins` page, `JsonSchemaForm`, `plugin_console_surface` flag, 17 route tests + **9/9 Playwright specs green** |
-| 5 Distribution | ⛔ not started | blocked on the D7 tier-vocabulary rename and its own ADR, by design |
+| 5 Distribution | ⛔ not started | needs its own ADR; the `locality`/`egress` prerequisite is now in place |
+| ADR gap-closure | ✅ done | hot-reload (0124 Inv. 6), four missing tripwires (0232), locality/egress + two missing handles (0124 Inv. 3), structured logging + correlation ids (0231 Stage 1), health collector + Prometheus metrics (0231 Stage 2) |
+| 0231 Stages 3–4 | ⛔ deferred | self-healing / intelligent healing, per ADR-0231's own gate: re-propose after Stage 2 has been stable for one release |
 | **Refutation round** | ✅ done | found two DEAD mechanisms in the phases above — the tripwire was never called and `PluginContext` was never built — plus a PII leak in `health_check_all` and a breaker-as-auth-DoS. All fixed; `bootstrap.py` + 18 tests added. See ADR-0233 § Findings from the adversarial pass. |
 
 **Test totals after implementation:** 319 green across `core/plugins/tests`, the

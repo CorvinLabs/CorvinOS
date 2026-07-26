@@ -765,6 +765,7 @@ prototype (unwired, `api.py` not importable, three 0-byte modules, 22
 | `circuit_breaker.py` | Per-`plugin_id` breaker: closed → open → half-open |
 | `providers/` | One active provider per type: notification, recall, summary, router, **audit**, **user**, **stt**, **data_connector** |
 | `bootstrap.py` | Boot wiring: `assert_compliance()` (fail-closed tripwires) + `bootstrap_tenant()` (load enabled plugins in dependency order) + `build_context()` |
+| `health.py` | `HealthCollector` (interval polling, flag-gated) + `render_prometheus()` |
 
 ### Vocabulary — `tier` vs `origin` (ADR-0233 D7)
 
@@ -874,6 +875,47 @@ Audit events: `plugin.installed`, `plugin.enabled`, `plugin.enable_denied`,
 `plugin.config_changed`, `plugin.disabled`, `plugin.disable_denied`,
 `plugin.uninstalled` — all real, hash-chained, and `config_changed` records
 **key names only** (setting values can contain a webhook URL or an account id).
+
+### Stage 2 — health collection + metrics (ADR-0231)
+
+`health.HealthCollector` polls `health_check_all()` on an interval and keeps the
+latest snapshot; the gateway lifespan starts it **only** when
+`plugin_health_monitoring` is on, and stops it before unloading plugins so a poll
+cannot land on a plugin midway through `on_unload()`. With the flag off no timer is
+created at all — the health route still answers from breaker state, which costs
+nothing.
+
+- **Alerting writes an audit event, not a notification.** `plugin.health_alert`
+  after N consecutive failures (default 3), once per streak, plus
+  `plugin.health_recovered` when it clears. Routing to email/Slack would be a
+  second delivery path next to the ADR-0033 notification provider; that provider
+  can fan the event out if the operator installed one.
+- **`GET /plugins/metrics`** serves Prometheus 0.0.4 text: `corvin_plugin_health_ok`,
+  `..._consecutive_failures`, `..._check_duration_ms`, `corvin_plugin_breaker_open`,
+  `..._failures_total`, `..._refused_total`. Same conventions as
+  `gateway/audit_metrics.py`: no SDK dependency, label allowlist, no PII, read-only.
+  Breaker numbers are real even with polling off. `plugin_id` is a label (operator-
+  supplied and charset-validated, so no PII) but capped at 64 distinct values —
+  past that it collapses to `other`, because unbounded cardinality is its own outage.
+
+### Structured logging (ADR-0231 Stage 1)
+
+`core/observability/corvin_logging/` — `CorvinLogger` emits one JSON record per
+event with the ADR-0231 schema (timestamp, level, component, plugin_id, tenant_id,
+correlation_id, operation, duration_ms, error_code, recovered, message, context).
+The plugin registry logs `on_load` / `on_unload` / failed `health_check` through it.
+
+Three deliberate deviations from `docs/design/STRUCTURED_LOGGING_SYSTEM.md`:
+
+| Sketch | Here | Why |
+|---|---|---|
+| `core/logging/` | `core/observability/corvin_logging/` | a package named `logging` shadows the stdlib once its parent is on `sys.path` — the failure that once killed `corvin-webui.service` via an `operator` package |
+| `threading.local()` | `contextvars.ContextVar` | the gateway/console/adapter are asyncio: many tasks share one thread, so a thread-local correlation id leaks between concurrent requests |
+| scrubber raises `ValueError` | scrubber **redacts** and marks `pii_redacted: true` | a logger that raises fails the work it was describing; the personal data still never reaches the log |
+
+`error_code` carries the exception CLASS, never `str(exc)`. The scrubber is a
+backstop for a mistake, not a licence to log payloads — the rule stays "log
+metadata, not content".
 
 ### Console surface
 
