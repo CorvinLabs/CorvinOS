@@ -1,6 +1,17 @@
 """corvin_plugins — unified plugin system for Corvin (ADR-0030)."""
 from __future__ import annotations
 
+from .extension_points import (
+    KNOWN_EXTENSION_POINTS,
+    ExtensionPointDenied,
+    ExtensionPointError,
+    ExtensionPointSpec,
+    ImmutableExtensionPoint,
+    UnknownExtensionPoint,
+    invoke,
+    register_hook,
+    unregister_all,
+)
 from .manifest import (
     BreakingChange,
     CircularDependencyError,
@@ -67,6 +78,16 @@ __all__ = [
     "health_check_all",
     "discover",
     "get_registry",
+    # extension_points — named hooks into layer=core defaults (ADR-0237)
+    "KNOWN_EXTENSION_POINTS",
+    "ExtensionPointDenied",
+    "ExtensionPointError",
+    "ExtensionPointSpec",
+    "ImmutableExtensionPoint",
+    "UnknownExtensionPoint",
+    "invoke",
+    "register_hook",
+    "unregister_all",
     # manifest — registry records, dependency order, settings (ADR-0233)
     "BreakingChange",
     "CircularDependencyError",
