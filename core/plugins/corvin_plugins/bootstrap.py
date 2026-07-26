@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .manifest import PluginError, BootLayer, PluginRecord
+from .manifest import BootLayer, PluginError, PluginRecord
 from .protocol import PluginContext
 from .providers import (
     audit_backend,
@@ -228,17 +228,17 @@ def load_tenant_spec(tenant_id: str, corvin_home: Path) -> dict:
 # convenience:
 #
 # * GLOBAL — ships in the wheel, applies to every tenant, carries the privileged
-#   layers ``compliance`` and ``core``.  Registered from CODE (below), never from
-#   a tenant's YAML.
+#   boot layers ``compliance`` and ``core``.  Registered from CODE (below), not
+#   from a tenant's YAML.
 # * TENANT — declared in ``tenant.corvin.yaml`` or installed through the Console.
 #   Carries ``bundled`` and ``installed`` only.
 #
-# The asymmetry is the point.  If a tenant config could declare ``layer:
+# The asymmetry is the point.  If a tenant config could declare ``boot_layer:
 # compliance``, any operator-writable file would be able to mint an undisableable
-# plugin that loads before everything else.  ``_TENANT_DECLARABLE_BOOT_LAYERS`` is what
-# stops that, and :func:`bootstrap_declared` enforces it.
+# plugin that loads before everything else.  ``_TENANT_DECLARABLE_BOOT_LAYERS``
+# is what stops that, and :func:`bootstrap_declared` enforces it.
 
-#: ``(class_path, layer)`` pairs contributed by bundled code.  Populated by
+#: ``(class_path, boot_layer)`` pairs contributed by bundled code.  Populated by
 #: :func:`register_global_plugin` at import time of the bundling module.
 _GLOBAL_SPECS: list[tuple[str, BootLayer]] = []
 
@@ -247,7 +247,7 @@ _GLOBAL_SPECS: list[tuple[str, BootLayer]] = []
 #: showed what it actually was: any third-party wheel on the machine could
 #: publish ``compliance:whatever`` and be loaded (a) before everything else,
 #: (b) as undisableable, (c) with no PluginRecord, therefore past the
-#: ``_PRIVILEGED_BOOT_LAYERS`` gate, the consent prompt and the L34/L35 declarations,
+#: ``_PRIVILEGED_BOOT_LAYERS`` gate, the consent prompt and the L34/L35 fields,
 #: and (d) able to abort the platform's boot permanently by raising in
 #: ``__init__``, since a compliance load failure is fatal by design.
 #:
@@ -258,24 +258,24 @@ _GLOBAL_SPECS: list[tuple[str, BootLayer]] = []
 #: verification and an allowlist, not an entry-point name.
 GLOBAL_ENTRY_POINT_GROUP = None
 
-#: The only layers a tenant-scoped declaration may claim.
+#: The only boot layers a tenant-scoped declaration may claim.
 _TENANT_DECLARABLE_BOOT_LAYERS: frozenset[BootLayer] = frozenset(
     {BootLayer.BUNDLED, BootLayer.INSTALLED}
 )
 
 
-def register_global_plugin(class_path: str, *, layer: BootLayer | str) -> None:
-    """Declare a bundled global plugin and the layer it boots on.
+def register_global_plugin(class_path: str, *, boot_layer: BootLayer | str) -> None:
+    """Declare a bundled global plugin and the boot layer it boots on.
 
     Called from bundled code (import side effect), never from tenant config.
     Registering the same ``class_path`` twice is a no-op so a module that is
     imported from two places does not double-load its plugin.
     """
-    resolved = BootLayer(layer)
+    resolved = BootLayer(boot_layer)
     if resolved not in (BootLayer.COMPLIANCE, BootLayer.CORE):
         raise ValueError(
-            f"global plugins live on the compliance or core layer, "
-            f"not {resolved.value} — tenant-scoped layers are declared in "
+            f"global plugins live on the compliance or core boot layer, "
+            f"not {resolved.value} — tenant-scoped boot layers are declared in "
             f"tenant.corvin.yaml"
         )
     if any(cp == class_path for cp, _ in _GLOBAL_SPECS):
@@ -286,7 +286,7 @@ def register_global_plugin(class_path: str, *, layer: BootLayer | str) -> None:
 def _global_specs() -> list[tuple[str, BootLayer]]:
     """The code-registered global plugins, in a deterministic boot order.
 
-    Compliance first, then core, alphabetically inside each layer so two
+    Compliance first, then core, alphabetically inside each boot layer so two
     installs with the same wheel boot in the same order.
 
     There is deliberately NO discovery step here — see
@@ -299,11 +299,11 @@ def _global_specs() -> list[tuple[str, BootLayer]]:
 
 
 class GlobalComplianceLoadFailed(RuntimeError):
-    """A ``layer=compliance`` global plugin failed to load.
+    """A ``boot_layer=compliance`` global plugin failed to load.
 
     Deliberately fatal.  Every other load failure in this module degrades and
     logs, because one broken bridge must not cost the platform its boot.  The
-    compliance layer is the exception: booting without a compliance mechanism
+    compliance boot layer is the exception: booting without a mechanism
     that the install declares it has is the "compliance-off mode" the baseline
     forbids, and a degraded boot would hide it behind a log line.
     """
@@ -315,15 +315,15 @@ def bootstrap_global(
     corvin_home: Path,
     **registries: Any,
 ) -> list[str]:
-    """Load the bundled global plugins, compliance layer first.
+    """Load the bundled global plugins, compliance boot layer first.
 
     NOT behind a feature flag, and that is deliberate rather than an oversight:
-    the layer it exists to load is the compliance layer, and CLAUDE.md forbids
+    the boot layer it exists to load is the compliance one, and CLAUDE.md forbids
     putting a compliance mechanism behind a switch. With no bundled global
     plugins registered this is a no-op returning ``[]``, so the flagless path
     changes nothing on an install that has none.
 
-    Failure semantics differ by layer (ADR-0240 § Boot sequence):
+    Failure semantics differ by boot layer (ADR-0240 § Boot sequence):
 
     * ``compliance`` — raises :class:`GlobalComplianceLoadFailed`; the boot aborts.
     * ``core`` — logged, audited, skipped; the platform boots degraded.
@@ -335,7 +335,7 @@ def bootstrap_global(
     from .loader import load_from_class_path
 
     loaded: list[str] = []
-    for class_path, layer in specs:
+    for class_path, boot_layer in specs:
         try:
             cls = load_from_class_path(class_path)
             instance = cls()
@@ -345,13 +345,13 @@ def bootstrap_global(
         except Exception as exc:  # noqa: BLE001
             details = {
                 "class_path": class_path,
-                "layer": layer.value,
+                "boot_layer": boot_layer.value,
                 "tenant_id": tenant_id,
                 "reason": "instantiate_failed",
                 "error_type": type(exc).__name__,
             }
             _audit_degradation(tenant_id, "plugin.global_load_failed", details)
-            if layer is BootLayer.COMPLIANCE:
+            if boot_layer is BootLayer.COMPLIANCE:
                 raise GlobalComplianceLoadFailed(
                     f"compliance plugin {class_path} failed to load "
                     f"({type(exc).__name__})"
@@ -367,12 +367,12 @@ def bootstrap_global(
             plugin_id=plugin_id,
             tenant_id=tenant_id,
             corvin_home=corvin_home,
-            layer=layer,
+            boot_layer=boot_layer,
             **registries,
         )
         if ok:
             loaded.append(plugin_id)
-        elif layer is BootLayer.COMPLIANCE:
+        elif boot_layer is BootLayer.COMPLIANCE:
             raise GlobalComplianceLoadFailed(
                 f"compliance plugin {plugin_id!r} failed to register"
             )
@@ -455,14 +455,16 @@ def bootstrap_declared(
         # settings without a registry entry.
         entry = next((e for e in declared if e.get("id") == plugin_id), {})
         entry_config = entry.get("config") or {}
-        layer = _declared_boot_layer(entry, plugin_id=plugin_id, tenant_id=tenant_id)
+        boot_layer = _declared_boot_layer(
+            entry, plugin_id=plugin_id, tenant_id=tenant_id
+        )
         if _register_instance(
             instance,
             plugin_id=plugin_id,
             tenant_id=tenant_id,
             corvin_home=corvin_home,
             config=entry_config,
-            layer=layer,
+            boot_layer=boot_layer,
             **registries,
         ):
             loaded.append(plugin_id)
@@ -542,7 +544,7 @@ def bootstrap_tenant(
 def _declared_boot_layer(
     entry: dict, *, plugin_id: str, tenant_id: str
 ) -> BootLayer:
-    """Resolve the layer of a tenant-declared plugin, refusing privileged claims.
+    """Resolve the boot layer of a tenant-declared plugin, refusing privileged claims.
 
     A tenant config is operator-writable, so it may say "this is a bundled
     bridge" but not "this is a compliance mechanism".  A privileged claim is
@@ -550,33 +552,34 @@ def _declared_boot_layer(
     than aborting the boot, because a single mis-declared entry should cost that
     entry its privilege, not the platform its start.
     """
-    raw = entry.get("layer")
+    raw = entry.get("boot_layer")
     if raw is None:
         return BootLayer.INSTALLED
     try:
-        layer = BootLayer(raw)
+        boot_layer = BootLayer(raw)
     except ValueError:
         log.error(
-            "tenant declaration for %r names unknown layer %r — using installed",
+            "tenant declaration for %r names unknown boot_layer %r — using installed",
             plugin_id, raw,
         )
-        _audit_degradation(tenant_id, "plugin.layer_rejected", {
+        _audit_degradation(tenant_id, "plugin.boot_layer_rejected", {
             "plugin_id": plugin_id, "tenant_id": tenant_id,
-            "declared_layer": str(raw)[:32], "reason": "unknown_layer",
+            "declared_boot_layer": str(raw)[:32], "reason": "unknown_boot_layer",
         })
         return BootLayer.INSTALLED
-    if layer not in _TENANT_DECLARABLE_BOOT_LAYERS:
+    if boot_layer not in _TENANT_DECLARABLE_BOOT_LAYERS:
         log.error(
-            "tenant declaration for %r claims privileged layer %s — "
-            "downgrading to installed (global layers come from the wheel)",
-            plugin_id, layer.value,
+            "tenant declaration for %r claims privileged boot_layer %s — "
+            "downgrading to installed (global boot layers come from the wheel)",
+            plugin_id, boot_layer.value,
         )
-        _audit_degradation(tenant_id, "plugin.layer_rejected", {
+        _audit_degradation(tenant_id, "plugin.boot_layer_rejected", {
             "plugin_id": plugin_id, "tenant_id": tenant_id,
-            "declared_layer": layer.value, "reason": "privileged_layer_from_tenant",
+            "declared_boot_layer": boot_layer.value,
+            "reason": "privileged_boot_layer_from_tenant",
         })
         return BootLayer.INSTALLED
-    return layer
+    return boot_layer
 
 
 def _register_instance(
@@ -586,7 +589,7 @@ def _register_instance(
     tenant_id: str,
     corvin_home: Path,
     config: dict | None = None,
-    layer: BootLayer | str | None = None,
+    boot_layer: BootLayer | str | None = None,
     **registries: Any,
 ) -> bool:
     """Build a context and register one already-instantiated plugin.
@@ -608,7 +611,7 @@ def _register_instance(
         **registries,
     )
     try:
-        register(instance, ctx, layer=layer)
+        register(instance, ctx, boot_layer=boot_layer)
     except Exception as exc:  # noqa: BLE001
         log.error(
             "plugin %r failed to register (%s) — skipping",
@@ -728,12 +731,12 @@ def _load_one(
         return False
 
     # Same trust boundary as the declarative path: registry.yaml is per-tenant
-    # state, so a record there cannot mint a compliance- or core-layer plugin
-    # either. The manifest gate already refuses a community-origin privileged
-    # claim; this refuses a privileged claim from tenant scope regardless of
-    # origin.
-    layer = _declared_boot_layer(
-        {"layer": record.layer.value},
+    # state, so a record there cannot mint a compliance- or core-boot-layer
+    # plugin either. The manifest gate already refuses a community-origin
+    # privileged claim; this refuses a privileged claim from tenant scope
+    # regardless of origin.
+    boot_layer = _declared_boot_layer(
+        {"boot_layer": record.boot_layer.value},
         plugin_id=record.plugin_id,
         tenant_id=tenant_id,
     )
@@ -743,7 +746,7 @@ def _load_one(
         tenant_id=tenant_id,
         corvin_home=corvin_home,
         config=record.settings,
-        layer=layer,
+        boot_layer=boot_layer,
         **registries,
     )
 

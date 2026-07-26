@@ -16,9 +16,15 @@ call site actually relies on:
 * one tenant's hook is not another tenant's hook.
 
 The flag is toggled through the REAL resolution path (``CORVIN_HOME`` plus a
-``features.json`` overlay), not by patching ``_flag_enabled``.  Patching the
+``features.json`` overlay), not by patching ``_flag_state``.  Patching the
 gate would prove the bus honours a mock and nothing about whether the flag it
 actually reads is the one the Console writes.
+
+``tenant_id`` is spelled out at every ``register_hook`` call here rather than
+inherited from a default, because the function has no default any more: a hook
+that silently landed in ``_default`` — or in a tenant the caller merely named —
+could take over a point (including the fail-closed workflow gate) in somebody
+else's turn, since last-registration-wins makes that a takeover, not a clash.
 """
 from __future__ import annotations
 
@@ -108,21 +114,27 @@ class TestFlagOff(_Base):
             called.append(n)
             return "from-hook"
 
-        ep.register_hook("engine.model_selection", hook, plugin_id="p1")
+        ep.register_hook(
+            "engine.model_selection", hook, plugin_id="p1", tenant_id="_default"
+        )
         got = ep.invoke("engine.model_selection", 7, default="bundled-default")
 
         self.assertEqual(got, "bundled-default")
         self.assertEqual(called, [], "flag off must not reach the hook at all")
 
     def test_a_callable_default_is_executed_with_the_call_args(self):
-        ep.register_hook("engine.model_selection", lambda n: "hook", plugin_id="p1")
+        ep.register_hook(
+            "engine.model_selection", lambda n: "hook", plugin_id="p1", tenant_id="_default"
+        )
         got = ep.invoke(
             "engine.model_selection", 3, default=lambda n: f"default:{n}"
         )
         self.assertEqual(got, "default:3")
 
     def test_flag_off_emits_nothing_per_call(self):
-        ep.register_hook("engine.model_selection", lambda n: 1, plugin_id="p1")
+        ep.register_hook(
+            "engine.model_selection", lambda n: 1, plugin_id="p1", tenant_id="_default"
+        )
         self.audited.clear()
         for _ in range(50):
             ep.invoke("engine.model_selection", 1, default=None)
@@ -139,12 +151,16 @@ class TestFlagOff(_Base):
         def boom(wf):
             raise RuntimeError("nope")
 
-        ep.register_hook("workflow.workflow_gate", boom, plugin_id="gate")
+        ep.register_hook(
+            "workflow.workflow_gate", boom, plugin_id="gate", tenant_id="_default"
+        )
         self.assertTrue(ep.invoke("workflow.workflow_gate", {}, default=True))
 
     def test_registration_still_works_and_is_visible_while_off(self):
         # A plugin's on_load may run before the operator flips the flag.
-        ep.register_hook("engine.engine_selection", lambda r: "x", plugin_id="p1")
+        ep.register_hook(
+            "engine.engine_selection", lambda r: "x", plugin_id="p1", tenant_id="_default"
+        )
         self.assertEqual(ep.describe(), {"engine.engine_selection": "p1"})
 
 
@@ -160,7 +176,9 @@ class TestFlagOn(_Base):
             seen.append(request)
             return "claude-haiku"
 
-        ep.register_hook("engine.model_selection", hook, plugin_id="p1")
+        ep.register_hook(
+            "engine.model_selection", hook, plugin_id="p1", tenant_id="_default"
+        )
         got = ep.invoke(
             "engine.model_selection", {"task": "x"}, default="claude-sonnet"
         )
@@ -173,6 +191,7 @@ class TestFlagOn(_Base):
             "delegation.route_selection_policy",
             lambda turn, *, hint=None: f"{turn}/{hint}",
             plugin_id="p1",
+            tenant_id="_default",
         )
         got = ep.invoke(
             "delegation.route_selection_policy", "t", hint="big", default="native"
@@ -188,7 +207,9 @@ class TestFlagOn(_Base):
         # "No opinion" is the point's own contract (see the spec), not something
         # the bus reinterprets — a bus that silently substituted the default
         # would make a hook unable to express a deliberate None.
-        ep.register_hook("engine.model_selection", lambda r: None, plugin_id="p1")
+        ep.register_hook(
+            "engine.model_selection", lambda r: None, plugin_id="p1", tenant_id="_default"
+        )
         self.assertIsNone(ep.invoke("engine.model_selection", {}, default="x"))
 
 
@@ -202,7 +223,9 @@ class TestRaisingHook(_Base):
         def boom(request):
             raise ValueError("secret: /home/alice/db.sqlite user=alice@corp.com")
 
-        ep.register_hook("engine.model_selection", boom, plugin_id="bad")
+        ep.register_hook(
+            "engine.model_selection", boom, plugin_id="bad", tenant_id="_default"
+        )
         got = ep.invoke("engine.model_selection", {}, default="bundled")
         self.assertEqual(got, "bundled")
 
@@ -210,7 +233,9 @@ class TestRaisingHook(_Base):
         def boom(request):
             raise ValueError("secret: /home/alice/db.sqlite user=alice@corp.com")
 
-        ep.register_hook("engine.model_selection", boom, plugin_id="bad")
+        ep.register_hook(
+            "engine.model_selection", boom, plugin_id="bad", tenant_id="_default"
+        )
         ep.invoke("engine.model_selection", {}, default="bundled")
 
         failures = self.events("plugin.extension_hook_failed")
@@ -225,7 +250,9 @@ class TestRaisingHook(_Base):
         def boom(request):
             raise ValueError("secret: /home/alice/db.sqlite user=alice@corp.com")
 
-        ep.register_hook("engine.model_selection", boom, plugin_id="bad")
+        ep.register_hook(
+            "engine.model_selection", boom, plugin_id="bad", tenant_id="_default"
+        )
         ep.invoke("engine.model_selection", {}, default="bundled")
 
         blob = json.dumps(self.audited)
@@ -247,6 +274,7 @@ class TestRaisingHook(_Base):
             "engine.model_selection",
             lambda r: (_ for _ in ()).throw(Weird()),
             plugin_id="bad",
+            tenant_id="_default",
         )
         self.assertEqual(ep.invoke("engine.model_selection", {}, default="d"), "d")
 
@@ -255,14 +283,21 @@ class TestFailClosedPoint(_Base):
     FLAG = True
 
     def test_a_working_gate_hook_answers_normally(self):
-        ep.register_hook("workflow.workflow_gate", lambda wf: False, plugin_id="gate")
+        ep.register_hook(
+            "workflow.workflow_gate",
+            lambda wf: False,
+            plugin_id="gate",
+            tenant_id="_default",
+        )
         self.assertFalse(ep.invoke("workflow.workflow_gate", {}, default=True))
 
     def test_a_raising_gate_denies_instead_of_taking_the_default(self):
         def boom(wf):
             raise RuntimeError("gate backend unreachable")
 
-        ep.register_hook("workflow.workflow_gate", boom, plugin_id="gate")
+        ep.register_hook(
+            "workflow.workflow_gate", boom, plugin_id="gate", tenant_id="_default"
+        )
         with self.assertRaises(ep.ExtensionPointDenied) as caught:
             # default=True is the permissive pre-feature answer; the point of
             # fail-closed is that a broken gate must NOT be able to reach it.
@@ -275,6 +310,7 @@ class TestFailClosedPoint(_Base):
             "workflow.workflow_gate",
             lambda wf: (_ for _ in ()).throw(RuntimeError("x")),
             plugin_id="gate",
+            tenant_id="_default",
         )
         with self.assertRaises(ep.ExtensionPointDenied):
             ep.invoke("workflow.workflow_gate", {}, default=True)
@@ -287,6 +323,7 @@ class TestFailClosedPoint(_Base):
             "workflow.workflow_gate",
             lambda wf: (_ for _ in ()).throw(RuntimeError("token=abc /home/bob")),
             plugin_id="gate",
+            tenant_id="_default",
         )
         with self.assertRaises(ep.ExtensionPointDenied) as caught:
             ep.invoke("workflow.workflow_gate", {}, default=True)
@@ -301,6 +338,7 @@ class TestFailClosedPoint(_Base):
             "workflow.workflow_gate",
             lambda wf: (_ for _ in ()).throw(RuntimeError("user=carol@x.de")),
             plugin_id="gate",
+            tenant_id="_default",
         )
         with self.assertRaises(ep.ExtensionPointDenied) as caught:
             ep.invoke("workflow.workflow_gate", {}, default=True)
@@ -320,19 +358,21 @@ class TestRefusedNames(_Base):
 
     def test_an_unknown_point_is_refused_not_ignored(self):
         with self.assertRaises(ep.UnknownExtensionPoint):
-            ep.register_hook("engine.modle_selection", lambda: 1, plugin_id="typo")
+            ep.register_hook(
+                "engine.modle_selection", lambda: 1, plugin_id="typo", tenant_id="_default"
+            )
         self.assertEqual(ep.describe(), {})
 
     def test_the_refusal_is_audited(self):
         with self.assertRaises(ep.UnknownExtensionPoint):
-            ep.register_hook("nope.nope", lambda: 1, plugin_id="p1")
+            ep.register_hook("nope.nope", lambda: 1, plugin_id="p1", tenant_id="_default")
         rejected = self.events("plugin.extension_hook_rejected")
         self.assertEqual(len(rejected), 1)
         self.assertEqual(rejected[0]["reason"], "unknown_point")
 
     def test_an_absurdly_long_name_is_clipped_before_it_is_audited(self):
         with self.assertRaises(ep.UnknownExtensionPoint):
-            ep.register_hook("x" * 5000, lambda: 1, plugin_id="p1")
+            ep.register_hook("x" * 5000, lambda: 1, plugin_id="p1", tenant_id="_default")
         rejected = self.events("plugin.extension_hook_rejected")
         self.assertLessEqual(
             len(rejected[0]["point"]), ep.MAX_AUDITED_NAME_CHARS,
@@ -343,7 +383,9 @@ class TestRefusedNames(_Base):
         for name in ep._NEVER_EXTENSIBLE:
             with self.subTest(point=name):
                 with self.assertRaises(ep.ImmutableExtensionPoint):
-                    ep.register_hook(name, lambda: 1, plugin_id="attacker")
+                    ep.register_hook(
+                        name, lambda: 1, plugin_id="attacker", tenant_id="_default"
+                    )
         self.assertEqual(ep.describe(), {})
 
     def test_the_compliance_mechanisms_named_in_claude_md_are_all_covered(self):
@@ -364,18 +406,27 @@ class TestRefusedNames(_Base):
 
     def test_the_immutable_refusal_is_audited_with_its_own_reason(self):
         with self.assertRaises(ep.ImmutableExtensionPoint):
-            ep.register_hook("audit.hash_chain", lambda: 1, plugin_id="p1")
+            ep.register_hook(
+                "audit.hash_chain", lambda: 1, plugin_id="p1", tenant_id="_default"
+            )
         rejected = self.events("plugin.extension_hook_rejected")
         self.assertEqual(rejected[0]["reason"], "never_extensible")
 
     def test_a_provider_registry_name_points_the_author_at_the_registry(self):
         with self.assertRaises(ep.UnknownExtensionPoint) as caught:
-            ep.register_hook("audit_backend", lambda: 1, plugin_id="p1")
+            ep.register_hook(
+                "audit_backend", lambda: 1, plugin_id="p1", tenant_id="_default"
+            )
         self.assertIn("audit_registry", str(caught.exception))
 
     def test_a_non_callable_hook_is_refused(self):
         with self.assertRaises(ep.ExtensionPointError):
-            ep.register_hook("engine.model_selection", "not-a-function", plugin_id="p1")
+            ep.register_hook(
+                "engine.model_selection",
+                "not-a-function",
+                plugin_id="p1",
+                tenant_id="_default",
+            )
         self.assertEqual(ep.describe(), {})
 
     def test_a_mistyped_call_site_raises_rather_than_silently_defaulting(self):
@@ -401,14 +452,28 @@ class TestDuplicateRegistration(_Base):
     FLAG = True
 
     def test_the_last_registration_wins(self):
-        ep.register_hook("engine.model_selection", lambda r: "first", plugin_id="p1")
-        ep.register_hook("engine.model_selection", lambda r: "second", plugin_id="p2")
+        ep.register_hook(
+            "engine.model_selection",
+            lambda r: "first",
+            plugin_id="p1",
+            tenant_id="_default",
+        )
+        ep.register_hook(
+            "engine.model_selection",
+            lambda r: "second",
+            plugin_id="p2",
+            tenant_id="_default",
+        )
         self.assertEqual(ep.invoke("engine.model_selection", {}, default="d"), "second")
         self.assertEqual(ep.describe(), {"engine.model_selection": "p2"})
 
     def test_the_takeover_is_audited_with_both_plugin_ids(self):
-        ep.register_hook("engine.model_selection", lambda r: 1, plugin_id="p1")
-        ep.register_hook("engine.model_selection", lambda r: 2, plugin_id="p2")
+        ep.register_hook(
+            "engine.model_selection", lambda r: 1, plugin_id="p1", tenant_id="_default"
+        )
+        ep.register_hook(
+            "engine.model_selection", lambda r: 2, plugin_id="p2", tenant_id="_default"
+        )
         replaced = self.events("plugin.extension_hook_replaced")
         self.assertEqual(len(replaced), 1)
         self.assertEqual(replaced[0]["plugin_id"], "p2")
@@ -418,15 +483,25 @@ class TestDuplicateRegistration(_Base):
     def test_a_plugin_re_registering_its_own_hook_is_not_a_takeover(self):
         # A hot reload re-runs on_load.  Auditing that as a takeover would bury
         # the real ones under noise.
-        ep.register_hook("engine.model_selection", lambda r: "a", plugin_id="p1")
-        ep.register_hook("engine.model_selection", lambda r: "b", plugin_id="p1")
+        ep.register_hook(
+            "engine.model_selection", lambda r: "a", plugin_id="p1", tenant_id="_default"
+        )
+        ep.register_hook(
+            "engine.model_selection", lambda r: "b", plugin_id="p1", tenant_id="_default"
+        )
         self.assertEqual(self.events("plugin.extension_hook_replaced"), [])
         self.assertEqual(ep.invoke("engine.model_selection", {}, default="d"), "b")
 
     def test_a_takeover_on_one_point_leaves_the_others_alone(self):
-        ep.register_hook("engine.model_selection", lambda r: "m1", plugin_id="p1")
-        ep.register_hook("engine.engine_selection", lambda r: "e1", plugin_id="p1")
-        ep.register_hook("engine.model_selection", lambda r: "m2", plugin_id="p2")
+        ep.register_hook(
+            "engine.model_selection", lambda r: "m1", plugin_id="p1", tenant_id="_default"
+        )
+        ep.register_hook(
+            "engine.engine_selection", lambda r: "e1", plugin_id="p1", tenant_id="_default"
+        )
+        ep.register_hook(
+            "engine.model_selection", lambda r: "m2", plugin_id="p2", tenant_id="_default"
+        )
         self.assertEqual(
             ep.describe(),
             {"engine.model_selection": "p2", "engine.engine_selection": "p1"},
@@ -440,12 +515,18 @@ class TestUnregisterAll(_Base):
     FLAG = True
 
     def test_every_hook_of_the_plugin_is_removed_across_points_and_tenants(self):
-        ep.register_hook("engine.model_selection", lambda r: 1, plugin_id="p1")
-        ep.register_hook("engine.engine_selection", lambda r: 1, plugin_id="p1")
+        ep.register_hook(
+            "engine.model_selection", lambda r: 1, plugin_id="p1", tenant_id="_default"
+        )
+        ep.register_hook(
+            "engine.engine_selection", lambda r: 1, plugin_id="p1", tenant_id="_default"
+        )
         ep.register_hook(
             "engine.model_selection", lambda r: 1, plugin_id="p1", tenant_id="tenant-a"
         )
-        ep.register_hook("workflow.workflow_gate", lambda w: True, plugin_id="p2")
+        ep.register_hook(
+            "workflow.workflow_gate", lambda w: True, plugin_id="p2", tenant_id="_default"
+        )
 
         removed = ep.unregister_all("p1")
 
@@ -454,7 +535,9 @@ class TestUnregisterAll(_Base):
         self.assertEqual(ep.describe("tenant-a"), {})
 
     def test_the_call_site_falls_back_to_the_default_afterwards(self):
-        ep.register_hook("engine.model_selection", lambda r: "hook", plugin_id="p1")
+        ep.register_hook(
+            "engine.model_selection", lambda r: "hook", plugin_id="p1", tenant_id="_default"
+        )
         ep.unregister_all("p1")
         self.assertEqual(ep.invoke("engine.model_selection", {}, default="d"), "d")
 
@@ -462,8 +545,12 @@ class TestUnregisterAll(_Base):
         self.assertEqual(ep.unregister_all("never-registered"), 0)
 
     def test_it_does_not_remove_another_plugins_hook_on_the_same_point(self):
-        ep.register_hook("engine.model_selection", lambda r: "p1", plugin_id="p1")
-        ep.register_hook("engine.model_selection", lambda r: "p2", plugin_id="p2")
+        ep.register_hook(
+            "engine.model_selection", lambda r: "p1", plugin_id="p1", tenant_id="_default"
+        )
+        ep.register_hook(
+            "engine.model_selection", lambda r: "p2", plugin_id="p2", tenant_id="_default"
+        )
         self.assertEqual(
             ep.unregister_all("p1"), 0,
             "p1 lost the point to p2's takeover; it has nothing left to remove",
@@ -501,7 +588,12 @@ class TestTenantIsolation(_Base):
         self.assertEqual(calls, ["a"], "tenant-b must not reach tenant-a's hook")
 
     def test_the_default_tenant_is_not_a_wildcard(self):
-        ep.register_hook("engine.model_selection", lambda r: "shared", plugin_id="p1")
+        ep.register_hook(
+            "engine.model_selection",
+            lambda r: "shared",
+            plugin_id="p1",
+            tenant_id="_default",
+        )
         self.assertEqual(
             ep.invoke("engine.model_selection", {}, default="own",
                       tenant_id="tenant-a"),
@@ -605,21 +697,97 @@ class TestDefensiveEdges(_Base):
             del sys.modules[key]
         sys.modules["corvin_console"] = None  # type: ignore[assignment]
         try:
-            self.assertFalse(ep._flag_enabled("_default"))
-            ep.register_hook("engine.model_selection", lambda r: "h", plugin_id="p1")
+            # (enabled, lookup_broken): off, and NOT broken — a layout that has
+            # no flag registry is a complete answer, not a degradation, so it
+            # must not produce a degradation record on every fail-closed point.
+            self.assertEqual(ep._flag_state("_default"), (False, False))
+            ep.register_hook(
+                "engine.model_selection",
+                lambda r: "h",
+                plugin_id="p1",
+                tenant_id="_default",
+            )
             self.assertEqual(ep.invoke("engine.model_selection", {}, default="d"), "d")
         finally:
             del sys.modules["corvin_console"]
             sys.modules.update(saved)
 
+    def test_a_raising_flag_lookup_is_reported_as_broken_not_as_off(self):
+        # The two look identical from the call site and are not the same thing.
+        # Collapsing them is how a fail-closed gate gets bypassed without a
+        # trace: an operator switched enforcement ON, a corrupt features.json
+        # made the lookup raise, and "off" was indistinguishable from "the
+        # operator never wanted it".
+        from corvin_console import feature_flags as ff
+
+        real = ff.is_enabled
+
+        def boom(flag_id, tenant_id=None):
+            raise RuntimeError("features.json lost a brace")
+
+        ff.is_enabled = boom  # type: ignore[assignment]
+        try:
+            self.assertEqual(ep._flag_state("_default"), (False, True))
+
+            ep._degraded_reported.clear()
+            ep.register_hook(
+                "workflow.workflow_gate",
+                lambda wf: False,
+                plugin_id="gate",
+                tenant_id="_default",
+            )
+            self.audited.clear()
+            # Still permissive for the DECISION — a broken config must not deny
+            # every gated workflow — but it is now on the record.
+            self.assertTrue(ep.invoke("workflow.workflow_gate", {}, default=True))
+            degraded = self.events("plugin.extension_flag_degraded")
+            self.assertEqual(len(degraded), 1)
+            self.assertEqual(degraded[0]["point"], "workflow.workflow_gate")
+            self.assertEqual(degraded[0]["outcome"], "default")
+
+            # Once per (tenant, point): the append-only chain must not be spammed
+            # from a hot path.
+            for _ in range(20):
+                ep.invoke("workflow.workflow_gate", {}, default=True)
+            self.assertEqual(len(self.events("plugin.extension_flag_degraded")), 1)
+        finally:
+            ff.is_enabled = real  # type: ignore[assignment]
+            ep._degraded_reported.clear()
+
+    def test_a_broken_lookup_on_a_normal_point_stays_quiet(self):
+        # The degradation record exists for fail-closed points, where silence
+        # would hide weakened enforcement.  A model-selection preference is not
+        # that, and a per-turn record there would be chain spam.
+        from corvin_console import feature_flags as ff
+
+        real = ff.is_enabled
+
+        def boom(flag_id, tenant_id=None):
+            raise RuntimeError("features.json lost a brace")
+
+        ff.is_enabled = boom  # type: ignore[assignment]
+        try:
+            ep._degraded_reported.clear()
+            self.audited.clear()
+            self.assertEqual(
+                ep.invoke("engine.model_selection", {}, default="d"), "d"
+            )
+            self.assertEqual(self.events("plugin.extension_flag_degraded"), [])
+        finally:
+            ff.is_enabled = real  # type: ignore[assignment]
+            ep._degraded_reported.clear()
+
     def test_a_hook_may_invoke_another_point_without_deadlocking(self):
         # The bus lock is re-entrant; a hook that consults a second point must
         # not hang the turn it was called from.
-        ep.register_hook("engine.engine_selection", lambda r: "acs", plugin_id="p2")
+        ep.register_hook(
+            "engine.engine_selection", lambda r: "acs", plugin_id="p2", tenant_id="_default"
+        )
         ep.register_hook(
             "engine.model_selection",
             lambda r: ep.invoke("engine.engine_selection", r, default="native"),
             plugin_id="p1",
+            tenant_id="_default",
         )
         self.assertEqual(ep.invoke("engine.model_selection", {}, default="d"), "acs")
 

@@ -77,8 +77,8 @@ def validate_record_dict(data: dict) -> ValidationReport:
     """Validate a ``plugin.yaml``-shaped mapping via the real PluginRecord.
 
     Delegates wholesale to ``PluginRecord.from_dict`` → ``__post_init__``, which
-    is where the locality/egress contradiction, the privileged-layer-vs-origin
-    refusal, and the ``replaces`` rules live.
+    is where the locality/egress contradiction, the
+    privileged-boot-layer-vs-origin refusal, and the ``replaces`` rules live.
     """
     report = ValidationReport()
     try:

@@ -46,9 +46,9 @@ class PluginContext:
 class CorvinPlugin(Protocol):
     """Lifecycle protocol for all Corvin extension points (ADR-0030).
 
-    A plugin implements BOTH CorvinPlugin (lifecycle) AND the layer-specific
-    protocol (capability).  on_load() self-registers with the layer registry
-    via ctx handles.
+    A plugin implements BOTH CorvinPlugin (lifecycle) AND the capability-specific
+    protocol for its ``plugin_type``.  on_load() self-registers with that
+    capability registry via ctx handles.
     """
 
     plugin_id: str      # globally unique; matches tenant config key
@@ -57,7 +57,8 @@ class CorvinPlugin(Protocol):
     display_name: str   # shown in health dashboard and logs
 
     def on_load(self, ctx: PluginContext) -> None:
-        """Called once after discovery.  Self-register with layer registry here."""
+        """Called once after discovery.  Self-register with the capability
+        registry here."""
         ...
 
     def on_unload(self) -> None:
@@ -259,7 +260,7 @@ class PluginNotFound(KeyError):
 class PluginDisableRefused(PermissionError):
     """Raised when an operator-initiated disable targets a non-disableable plugin.
 
-    ADR-0243: the compliance layer is not switchable.  This is deliberately an
+    ADR-0243: the compliance boot layer is not switchable.  This is deliberately an
     exception and not a ``False`` return — a caller that ignores a boolean would
     report "disabled" in the Console while the plugin kept running, which is the
     worse of the two failure modes for a compliance mechanism.
@@ -269,7 +270,7 @@ class PluginDisableRefused(PermissionError):
 class PluginReplacementRefused(PermissionError):
     """Raised when a replacement targets something that may not be replaced.
 
-    Only ``layer=core`` reference implementations are replaceable.  Naming a
+    Only ``boot_layer=core`` reference implementations are replaceable.  Naming a
     compliance plugin, a bundled plugin or an unknown id in ``replaces`` is a
     refusal, never a silent no-op that leaves both plugins loaded.
     """

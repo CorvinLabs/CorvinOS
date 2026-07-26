@@ -6,7 +6,7 @@ a template that drifted from the protocol would hand every new plugin the same
 defect — and the failure would surface on the author's machine at boot, where they
 cannot tell whether they broke it or inherited it.
 
-The protocol is not frozen: ``PluginRecord`` gained ``layer`` and ``replaces`` in
+The protocol is not frozen: ``PluginRecord`` gained ``boot_layer`` + ``replaces`` in
 ADR-0243, and ``PluginContext`` gained ``stt_registry`` / ``data_connector_registry``
 after ADR-0033 shipped types that had nowhere to register. Each of those changes
 could have invalidated a template silently. This file makes that failure loud, in

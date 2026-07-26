@@ -308,11 +308,11 @@ class HealingOrchestrator:
         try:
             plugin = registry.get(plugin_id)
             ctx = registry._contexts.get(plugin_id)  # same context, by design
-            # ADR-0243: the layer lives in the registry, not on the plugin
-            # object, and unregister() drops it. Re-registering without it
-            # would silently demote a compliance plugin to `installed` — after
-            # which an operator disable of the audit writer would succeed.
-            layer = registry.boot_layer_of(plugin_id)
+            # ADR-0243: the boot layer lives in the registry, not on the
+            # plugin object, and unregister() drops it. Re-registering without
+            # it would silently demote a compliance plugin to `installed` —
+            # after which an operator disable of the audit writer would succeed.
+            boot_layer = registry.boot_layer_of(plugin_id)
         except Exception:  # noqa: BLE001
             return self._record(
                 plugin_id, HealingAction.NOOP, "not_registered", succeeded=False
@@ -323,7 +323,7 @@ class HealingOrchestrator:
         # unregistered is not something an automatic policy may open.
         if not registry.can_disable(plugin_id):
             return self._record(
-                plugin_id, HealingAction.NOOP, "compliance_layer", succeeded=False
+                plugin_id, HealingAction.NOOP, "compliance_boot_layer", succeeded=False
             )
 
         try:
@@ -340,7 +340,7 @@ class HealingOrchestrator:
             )
 
         try:
-            registry.register(plugin, ctx, layer=layer)
+            registry.register(plugin, ctx, boot_layer=boot_layer)
         except Exception as exc:  # noqa: BLE001
             log.error("soft-restart load of %r failed (%s)", plugin_id, type(exc).__name__)
             _breakers.get_breaker(plugin_id).record_failure(exc)
@@ -372,14 +372,14 @@ class HealingOrchestrator:
                 plugin_id, HealingAction.NOOP, "not_registered", succeeded=False
             )
 
-        # ADR-0243: the compliance layer has no off switch, and "an automatic
+        # ADR-0243: the compliance boot layer has no off switch, and "an automatic
         # policy turned it off" is not an exception to that — it is the worst
         # version of it, because no human decided. `unregister()` without
         # `operator_initiated` is the machinery path and does NOT enforce the
         # guard, so healing has to ask before it acts.
         if not registry.can_disable(plugin_id):
             return self._record(
-                plugin_id, HealingAction.NOOP, "compliance_layer", succeeded=False
+                plugin_id, HealingAction.NOOP, "compliance_boot_layer", succeeded=False
             )
 
         try:
