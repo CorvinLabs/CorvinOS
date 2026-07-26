@@ -249,11 +249,11 @@ class TestReadSurface(_Base):
             body = client.get(f"{_ADMIN}/plugins").json()
             self.assertEqual(body["total"], 1)
             entry = body["plugins"][0]
-            for key in ("plugin_id", "version", "layer", "origin", "enabled",
+            for key in ("plugin_id", "version", "boot_layer", "origin", "enabled",
                         "can_disable", "health"):
                 self.assertIn(key, entry)
             self.assertEqual(entry["plugin_id"], "acme-notify")
-            self.assertEqual(entry["layer"], "installed")
+            self.assertEqual(entry["boot_layer"], "installed")
             self.assertEqual(entry["origin"], "vetted")
             self.assertFalse(entry["enabled"], "install must not enable")
             self.assertTrue(entry["can_disable"])
@@ -272,7 +272,7 @@ class TestReadSurface(_Base):
             body = resp.json()
             self.assertTrue(body["ok"])
             self.assertEqual(body["total"], 1)
-            self.assertEqual(body["by_layer"], {"installed": 1})
+            self.assertEqual(body["by_boot_layer"], {"installed": 1})
             # Nothing is loadable (no class_path), so health was never measured —
             # and must not be reported as healthy.
             self.assertFalse(body["plugins"]["acme-notify"]["checked"])
@@ -386,15 +386,22 @@ class TestComplianceLayerIsRefused(_Base):
     """
 
     def _write_compliance_record(self, home: Path) -> None:
-        """A compliance record, written the way the boot path would.
+        """Write a record CLAIMING the compliance boot layer into registry.yaml.
 
-        There is no install route for this on purpose: ``layer`` is not part of
-        the install payload, so nothing an operator can POST creates one.
+        This does not produce a compliance plugin, and that is the point. A
+        per-tenant ``registry.yaml`` is operator-writable state on the tenant
+        side of the trust boundary, so ``TenantRegistry.load()`` downgrades a
+        privileged claim to ``installed`` and audits it. Before that guard
+        existed, this file was enough to mint an entry the admin API refused to
+        disable forever — an un-removable plugin from one line of YAML.
+
+        Kept as a helper because the downgrade is worth asserting from the API's
+        point of view, not only from the registry's.
         """
         from corvin_plugins.manifest import (
+            BootLayer,
             Locality,
             NetworkEgress,
-            PluginLayer,
             PluginOrigin,
             PluginRecord,
         )
@@ -406,7 +413,7 @@ class TestComplianceLayerIsRefused(_Base):
             version="1.0.0",
             display_name="Audit Writer",
             plugin_type="audit_backend",
-            layer=PluginLayer.COMPLIANCE,
+            boot_layer=BootLayer.COMPLIANCE,
             origin=PluginOrigin.BUILTIN,
             locality=Locality.LOCAL,
             network_egress=NetworkEgress.NONE,
@@ -443,7 +450,7 @@ class TestComplianceLayerIsRefused(_Base):
             build_context(
                 plugin_id="audit-writer", tenant_id="_default", corvin_home=Path("/tmp")
             ),
-            layer="compliance",
+            boot_layer="compliance",
         )
         try:
             yield
@@ -453,14 +460,37 @@ class TestComplianceLayerIsRefused(_Base):
             except Exception:  # noqa: BLE001
                 pass
 
-    def test_a_compliance_record_cannot_be_disabled(self):
+    def test_a_tenant_written_compliance_claim_is_downgraded(self):
+        """The other half of the guarantee: YAML cannot mint a protected plugin.
+
+        The three tests below prove the compliance layer is un-disableable. That
+        protection is only safe if a tenant cannot ASSIGN itself that layer —
+        otherwise "un-disableable" becomes a self-service feature and the admin
+        API refuses to remove an entry the tenant wrote by hand.
+        """
         with self._live() as (client, csrf, home, _all):
             self._write_compliance_record(home)
 
             listed = {p["plugin_id"]: p for p in
                       client.get(f"{_ADMIN}/plugins").json()["plugins"]}
             self.assertIn("audit-writer", listed)
-            self.assertEqual(listed["audit-writer"]["layer"], "compliance")
+            self.assertEqual(
+                listed["audit-writer"]["boot_layer"], "installed",
+                "a compliance claim from registry.yaml must be downgraded",
+            )
+            self.assertTrue(
+                listed["audit-writer"]["can_disable"],
+                "the downgraded entry must be removable — otherwise the tenant "
+                "just minted an un-deletable plugin",
+            )
+
+    def test_a_compliance_record_cannot_be_disabled(self):
+        with self._live() as (client, csrf, home, _all), \
+                self._runtime_compliance_plugin():
+            listed = {p["plugin_id"]: p for p in
+                      client.get(f"{_ADMIN}/plugins").json()["plugins"]}
+            self.assertIn("audit-writer", listed)
+            self.assertEqual(listed["audit-writer"]["boot_layer"], "compliance")
             self.assertFalse(listed["audit-writer"]["can_disable"])
 
             resp = client.post(
@@ -468,9 +498,9 @@ class TestComplianceLayerIsRefused(_Base):
             )
             self.assertEqual(resp.status_code, 403, resp.text)
 
-            # Still enabled — 403 must mean "refused", not "quietly did it anyway".
-            after = client.get(f"{_ADMIN}/plugins/audit-writer").json()
-            self.assertTrue(after["enabled"])
+            # 403 must mean "refused", not "quietly did it anyway".
+            from corvin_plugins.registry import get_registry
+            self.assertIn("audit-writer", get_registry().discover())
 
             denials = [
                 e for e in _audit_events(home)
@@ -489,8 +519,8 @@ class TestComplianceLayerIsRefused(_Base):
         that refuses to switch the mechanism off while letting it be
         reconfigured has not protected anything.
         """
-        with self._live() as (client, csrf, home, _all):
-            self._write_compliance_record(home)
+        with self._live() as (client, csrf, home, _all), \
+                self._runtime_compliance_plugin():
             resp = client.put(
                 f"{_ADMIN}/plugins/audit-writer/config",
                 json={"settings": {"audit_path": "/tmp/elsewhere.jsonl"}},
@@ -515,9 +545,9 @@ class TestComplianceLayerIsRefused(_Base):
         The second answer is technically true about the request and exactly the
         wrong thing to imply about the audit writer.
         """
-        with _sandbox(Path(self._tmp)) as (client, csrf, home, _all):
+        with _sandbox(Path(self._tmp)) as (client, csrf, home, _all), \
+                self._runtime_compliance_plugin():
             self._flag(client, csrf, "admin_control_plane", True)
-            self._write_compliance_record(home)
             # plugin_runtime_lifecycle stays OFF.
             for method, path, payload in (
                 ("post", f"{_ADMIN}/plugins/audit-writer/disable", {}),
@@ -593,6 +623,14 @@ class TestComplianceLayerIsRefused(_Base):
                 pass
 
         with self._live() as (client, csrf, _home, _all):
+            # A bundled plugin belongs to the tenant that enabled it, so it is
+            # listed only when THIS tenant also has a record for it. Treating
+            # `bundled` as process-global let tenant B see (and stop) tenant A's
+            # bridge, so the record is now part of what makes it visible.
+            self._install(client, csrf, {**_RECORD, "plugin_id": "bundled-thing",
+                                         "plugin_type": "notification_backend",
+                                         "version": "2.0.0",
+                                         "display_name": "Bundled Thing"})
             get_registry().register(
                 _Bundled(),
                 build_context(
@@ -600,7 +638,7 @@ class TestComplianceLayerIsRefused(_Base):
                     tenant_id="_default",
                     corvin_home=Path("/tmp"),
                 ),
-                layer="bundled",
+                boot_layer="bundled",
             )
             try:
                 listed = {p["plugin_id"]: p for p in

@@ -11,7 +11,7 @@ the getters:
 * shutdown is bounded: SIGTERM first, SIGKILL only after the grace period, and a
   child that refuses to die is abandoned instead of blocking the shutdown path,
 * a dead daemon is visible in health_check() rather than silently gone,
-* registration lands on layer=bundled and stays disableable,
+* registration lands on boot_layer=bundled and stays disableable,
 * no bot token from settings.json ever reaches a log line or an audit detail.
 
 NOTHING here starts a real Node process: subprocess.Popen is mocked throughout.
@@ -227,7 +227,7 @@ class TestIdentity(unittest.TestCase):
                 self.assertEqual(p.channel, channel)
                 self.assertEqual(p.plugin_id, f"{channel}-bridge")
                 self.assertEqual(p.plugin_type, "bridge_channel")
-                self.assertEqual(p.layer, "bundled")
+                self.assertEqual(p.boot_layer, "bundled")
                 self.assertTrue(p.display_name)
                 self.assertTrue(p.version)
 
@@ -249,7 +249,7 @@ class TestIdentity(unittest.TestCase):
 
         entry = declaration_entry("discord")
         self.assertEqual(entry["id"], "discord-bridge")
-        self.assertEqual(entry["layer"], "bundled")
+        self.assertEqual(entry["boot_layer"], "bundled")
         cls = load_from_class_path(entry["class_path"])
         self.assertIs(cls, DiscordBridgePlugin)
 
@@ -259,7 +259,7 @@ class TestIdentity(unittest.TestCase):
         self.assertEqual(
             {e["id"] for e in entries}, {f"{c}-bridge" for c in BRIDGE_CHANNELS}
         )
-        self.assertTrue(all(e["layer"] == "bundled" for e in entries))
+        self.assertTrue(all(e["boot_layer"] == "bundled" for e in entries))
 
     def test_disabled_declaration_carries_the_off_switch(self):
         entry = declaration_entry("slack", enabled=False)
@@ -669,13 +669,13 @@ class TestHealth(_SupervisorTestCase):
 
 
 class TestRegistryIntegration(_SupervisorTestCase):
-    def test_registration_lands_on_the_bundled_layer(self):
+    def test_registration_lands_on_the_bundled_boot_layer(self):
         reg = PluginRegistry()
         p = self._plugin()
-        reg.register(p, _ctx(), layer=BootLayer.BUNDLED)
+        reg.register(p, _ctx(), boot_layer=BootLayer.BUNDLED)
         self.assertIs(reg.boot_layer_of("discord-bridge"), BootLayer.BUNDLED)
 
-    def test_self_declared_layer_is_bundled_without_an_explicit_argument(self):
+    def test_self_declared_boot_layer_is_bundled_without_an_explicit_argument(self):
         reg = PluginRegistry()
         reg.register(self._plugin(), _ctx())
         self.assertIs(reg.boot_layer_of("discord-bridge"), BootLayer.BUNDLED)
@@ -683,14 +683,14 @@ class TestRegistryIntegration(_SupervisorTestCase):
     def test_a_bridge_is_disableable(self):
         reg = PluginRegistry()
         p = self._plugin()
-        reg.register(p, _ctx(), layer=BootLayer.BUNDLED)
+        reg.register(p, _ctx(), boot_layer=BootLayer.BUNDLED)
         self.assertTrue(reg.can_disable("discord-bridge"))
         reg.disable("discord-bridge")
         self.assertEqual(self.killpg.call_count, 1)
 
     def test_registry_health_check_reports_the_bridge(self):
         reg = PluginRegistry()
-        reg.register(self._plugin(), _ctx(), layer=BootLayer.BUNDLED)
+        reg.register(self._plugin(), _ctx(), boot_layer=BootLayer.BUNDLED)
         report = reg.health_check_all()
         self.assertIn("discord-bridge", report)
 
@@ -699,7 +699,7 @@ class TestRegistryIntegration(_SupervisorTestCase):
         for channel, cls in BRIDGE_PLUGIN_CLASSES.items():
             bm = FakeBridgeManager(self._root(), provisioned=False)
             reg.register(cls(bridge_manager=bm), _ctx(f"{channel}-bridge"),
-                         layer=BootLayer.BUNDLED)
+                         boot_layer=BootLayer.BUNDLED)
         self.assertEqual(
             len(reg.plugins_by_boot_layer(BootLayer.BUNDLED)), len(BRIDGE_CHANNELS)
         )
@@ -759,14 +759,14 @@ class TestDeclarativeBoot(_SupervisorTestCase):
             tenant_config={"spec": {"plugins": {"installed": entries}}},
         )
 
-    def test_a_declared_bridge_loads_on_the_bundled_layer(self):
+    def test_a_declared_bridge_loads_on_the_bundled_boot_layer(self):
         self._flag = False  # no daemon; we are testing the wiring, not the spawn
         loaded = self._boot([declaration_entry("discord")])
         self.assertIn("discord-bridge", loaded)
         self.assertIs(self.reg.boot_layer_of("discord-bridge"), BootLayer.BUNDLED)
         self.assertTrue(self.reg.can_disable("discord-bridge"))
         loaded_events = [d for e, d in self.audit if e == "plugin.loaded"]
-        self.assertEqual(loaded_events[0]["layer"], "bundled")
+        self.assertEqual(loaded_events[0]["boot_layer"], "bundled")
 
     def test_the_boot_path_never_reaches_the_real_audit_writer(self):
         # Guard for the isolation itself: if a refactor reinstates the real
@@ -786,12 +786,12 @@ class TestDeclarativeBoot(_SupervisorTestCase):
         loaded = self._boot(declaration_entries())
         self.assertEqual(set(loaded), {f"{c}-bridge" for c in BRIDGE_CHANNELS})
 
-    def test_a_declaration_claiming_a_privileged_layer_is_downgraded(self):
+    def test_a_declaration_claiming_a_privileged_boot_layer_is_downgraded(self):
         # A tenant config is operator-writable: it may say "bundled", never
         # "compliance" — that would make the bridge undisableable.
         self._flag = False
         entry = declaration_entry("discord")
-        entry["layer"] = "compliance"
+        entry["boot_layer"] = "compliance"
         self._boot([entry])
         self.assertIs(self.reg.boot_layer_of("discord-bridge"), BootLayer.INSTALLED)
 

@@ -76,7 +76,7 @@ def test_unknown_plugin_type_is_an_error_and_lists_the_known_ones():
     assert "router_backend" in msg
 
 
-def test_community_origin_may_not_claim_a_privileged_layer():
+def test_community_origin_may_not_claim_a_privileged_boot_layer():
     """The refusal comes from PluginRecord.__post_init__, not from a copy here.
 
     This is the anti-drift property: if that invariant were relaxed in the
@@ -84,7 +84,7 @@ def test_community_origin_may_not_claim_a_privileged_layer():
     validator followed the registry rather than contradicting it.
     """
     report = validate_record_dict(
-        _record_dict(layer="compliance", origin="community")
+        _record_dict(boot_layer="compliance", origin="community")
     )
     assert not report.ok
     assert any(f.code == "record.invalid" for f in report.errors)

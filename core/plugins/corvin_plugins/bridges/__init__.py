@@ -1,4 +1,4 @@
-"""Bundled bridge supervisors — the Node daemons as bundled-layer plugins.
+"""Bundled bridge supervisors — the Node daemons as boot_layer=bundled plugins.
 
 The seven messenger bridges are Node.js daemons (``operator/bridges/<channel>/
 daemon.js``), not Python modules. This package does not reimplement them; it

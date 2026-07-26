@@ -13,6 +13,7 @@ from .extension_points import (
     unregister_all,
 )
 from .manifest import (
+    BootLayer,
     BreakingChange,
     CircularDependencyError,
     DependencyConflictError,
@@ -20,7 +21,6 @@ from .manifest import (
     PIIRisk,
     PluginDependency,
     PluginError,
-    BootLayer,
     PluginManifest,
     PluginOrigin,
     PluginRecord,
@@ -42,13 +42,13 @@ from .protocol import (
 )
 from .registry import (
     PluginRegistry,
+    boot_layer_of,
     can_disable,
     disable,
     discover,
     get,
     get_registry,
     health_check_all,
-    boot_layer_of,
     plugins_by_boot_layer,
     register,
     replace,
@@ -78,7 +78,7 @@ __all__ = [
     "health_check_all",
     "discover",
     "get_registry",
-    # extension_points — named hooks into layer=core defaults (ADR-0237)
+    # extension_points — named hooks into boot_layer=core defaults (ADR-0237)
     "KNOWN_EXTENSION_POINTS",
     "ExtensionPointDenied",
     "ExtensionPointError",

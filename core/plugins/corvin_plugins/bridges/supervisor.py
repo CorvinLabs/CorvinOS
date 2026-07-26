@@ -226,10 +226,10 @@ class BridgeSupervisorPlugin:
     Parameterised by channel name; the seven concrete classes below are thin
     subclasses so a tenant config can name a stable ``class_path`` per bridge.
 
-    ``plugin_type`` is ``bridge_channel`` and ``layer`` is ``bundled``. Bundled
-    is disableable by design (``can_disable()`` is true for every layer except
-    ``compliance``) — a messenger transport is not a compliance mechanism and an
-    operator must be able to switch it off.
+    ``plugin_type`` is ``bridge_channel`` and ``boot_layer`` is ``bundled``.
+    Bundled is disableable by design (``can_disable()`` is true for every boot
+    layer except ``compliance``) — a messenger transport is not a compliance
+    mechanism and an operator must be able to switch it off.
 
     Note what this plugin does *not* do: it never registers itself with
     ``ctx.channel_registry``. That registry expects an object that can send and
@@ -239,7 +239,7 @@ class BridgeSupervisorPlugin:
 
     plugin_type = "bridge_channel"
     version = "1.0.0"
-    layer = "bundled"
+    boot_layer = "bundled"
     #: Overridden by the concrete subclasses.
     channel = ""
 

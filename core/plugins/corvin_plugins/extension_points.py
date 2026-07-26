@@ -1,10 +1,10 @@
-"""The extension-point bus — named hooks into `layer=core` reference code (ADR-0237).
+"""The extension-point bus — hooks into `boot_layer=core` reference code (ADR-0237).
 
 ADR-0237 describes two ways to customise a bundled reference implementation:
 
 * **Full replacement** — a plugin declares ``replaces: <plugin_id>`` in its
   manifest and the registry swaps the whole component
-  (:meth:`corvin_plugins.registry.PluginRegistry.replace`, ``layer=core`` only).
+  (:meth:`corvin_plugins.registry.PluginRegistry.replace`, core boot layer only).
 * **Hook-based customisation** — the default plugin keeps running and a plugin
   overrides ONE named step of it.  That second mechanism is this module.
 

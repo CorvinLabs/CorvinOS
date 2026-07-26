@@ -267,9 +267,9 @@ class PluginRegistry:
                 raise PluginNotFound(plugin_id)
             return self._boot_layers.get(plugin_id, BootLayer.INSTALLED)
 
-    def plugins_by_boot_layer(self, layer: BootLayer | str) -> list[CorvinPlugin]:
-        """Return all registered plugins on the given layer."""
-        wanted = BootLayer(layer)
+    def plugins_by_boot_layer(self, boot_layer: BootLayer | str) -> list[CorvinPlugin]:
+        """Return all registered plugins on the given boot layer."""
+        wanted = BootLayer(boot_layer)
         with self._lock:
             return [
                 p for pid, p in self._plugins.items()
@@ -277,7 +277,7 @@ class PluginRegistry:
             ]
 
     def can_disable(self, plugin_id: str) -> bool:
-        """False for the compliance layer, True otherwise.
+        """False for the compliance boot layer, True otherwise.
 
         An unregistered id answers True: "nothing here to protect".  Callers that
         need the difference between "absent" and "present but protected" ask
@@ -289,7 +289,7 @@ class PluginRegistry:
             return self._boot_layers.get(plugin_id, BootLayer.INSTALLED) is not BootLayer.COMPLIANCE
 
     def disable(self, plugin_id: str) -> None:
-        """Operator-facing unload.  Refuses the compliance layer.
+        """Operator-facing unload.  Refuses the compliance boot layer.
 
         This is the ONLY entry point an admin route, a Console action or a CLI
         command may use.  It is :meth:`unregister` with ``operator_initiated``
@@ -303,11 +303,11 @@ class PluginRegistry:
         ctx: PluginContext,
         *,
         replaces: str,
-        layer: BootLayer | str | None = None,
+        boot_layer: BootLayer | str | None = None,
     ) -> None:
-        """Swap a ``layer=core`` reference implementation for an alternative.
+        """Swap a ``boot_layer=core`` reference implementation for an alternative.
 
-        ADR-0237 "full plugin replacement".  Only the ``core`` layer is
+        ADR-0237 "full plugin replacement".  Only the ``core`` boot layer is
         replaceable: compliance is not pluggable at all, and bundled/installed
         plugins are simply disabled and uninstalled rather than replaced.
 
@@ -325,12 +325,12 @@ class PluginRegistry:
                     f"{plugin.plugin_id!r} declares replaces={replaces!r}, "
                     f"which is not registered"
                 )
-            target_layer = self._boot_layers.get(replaces, BootLayer.INSTALLED)
+            target_boot_layer = self._boot_layers.get(replaces, BootLayer.INSTALLED)
             already = plugin.plugin_id in self._plugins
-        if target_layer is not BootLayer.CORE:
+        if target_boot_layer is not BootLayer.CORE:
             raise PluginReplacementRefused(
-                f"{replaces!r} is on layer {target_layer.value}; only "
-                f"layer=core reference implementations are replaceable"
+                f"{replaces!r} is on boot_layer {target_boot_layer.value}; only "
+                f"boot_layer=core reference implementations are replaceable"
             )
         if already:
             raise PluginAlreadyRegistered(
@@ -345,7 +345,10 @@ class PluginRegistry:
             "replaces": replaces,
             "tenant_id": ctx.tenant_id,
         })
-        self.register(plugin, ctx, layer=layer if layer is not None else BootLayer.CORE)
+        self.register(
+            plugin, ctx,
+            boot_layer=boot_layer if boot_layer is not None else BootLayer.CORE,
+        )
 
     # ── Lookup ────────────────────────────────────────────────────────────────
 
@@ -466,9 +469,9 @@ def register(
     plugin: CorvinPlugin,
     ctx: PluginContext,
     *,
-    layer: BootLayer | str | None = None,
+    boot_layer: BootLayer | str | None = None,
 ) -> None:
-    _registry.register(plugin, ctx, layer=layer)
+    _registry.register(plugin, ctx, boot_layer=boot_layer)
 
 
 def unregister(plugin_id: str, *, operator_initiated: bool = False) -> None:
@@ -487,8 +490,8 @@ def boot_layer_of(plugin_id: str) -> BootLayer:
     return _registry.boot_layer_of(plugin_id)
 
 
-def plugins_by_boot_layer(layer: BootLayer | str) -> list[CorvinPlugin]:
-    return _registry.plugins_by_boot_layer(layer)
+def plugins_by_boot_layer(boot_layer: BootLayer | str) -> list[CorvinPlugin]:
+    return _registry.plugins_by_boot_layer(boot_layer)
 
 
 def replace(
@@ -496,9 +499,9 @@ def replace(
     ctx: PluginContext,
     *,
     replaces: str,
-    layer: BootLayer | str | None = None,
+    boot_layer: BootLayer | str | None = None,
 ) -> None:
-    _registry.replace(plugin, ctx, replaces=replaces, layer=layer)
+    _registry.replace(plugin, ctx, replaces=replaces, boot_layer=boot_layer)
 
 
 def get(plugin_id: str) -> CorvinPlugin:

@@ -39,9 +39,9 @@ from typing import Callable, Dict, Iterator, Optional
 import yaml
 
 from .manifest import (
+    BootLayer,
     DependencyResolver,
     Locality,
-    BootLayer,
     NetworkEgress,
     PIIRisk,
     PluginError,
@@ -221,19 +221,21 @@ def instance_dir(
 # ── Persistence ───────────────────────────────────────────────────────────────
 
 
-#: Layers a per-tenant ``registry.yaml`` may express.  Mirrors
+#: Boot layers a per-tenant ``registry.yaml`` may express.  Mirrors
 #: ``bootstrap._TENANT_DECLARABLE_BOOT_LAYERS`` — same trust boundary, other file.
 _TENANT_RECORD_BOOT_LAYERS = frozenset({BootLayer.BUNDLED, BootLayer.INSTALLED})
 
 
-def _downgrade_privileged_boot_layer(record: PluginRecord, *, path: Path) -> PluginRecord:
+def _downgrade_privileged_boot_layer(
+    record: PluginRecord, *, path: Path
+) -> PluginRecord:
     """Force a tenant-written record down to ``installed`` if it claims more.
 
     ``registry.yaml`` is per-tenant, operator-writable state, so it sits on the
     same side of the trust boundary as ``tenant.corvin.yaml``. ``bootstrap``
     already downgrades a privileged claim from there — but it does so when
-    REGISTERING, which only fixes the runtime layer. The record itself kept
-    ``layer: compliance``, and ``PluginRecord.can_disable()`` reads the record:
+    REGISTERING, which only fixes the runtime boot layer. The record itself kept
+    ``boot_layer: compliance``, and ``PluginRecord.can_disable()`` reads it:
     the admin API then answered 403 forever for a plugin that was running as
     ``installed``. A tenant could mint an un-disableable entry with one line of
     YAML, which is the exact escalation the boot guard exists to prevent.
@@ -242,23 +244,23 @@ def _downgrade_privileged_boot_layer(record: PluginRecord, *, path: Path) -> Plu
     line should cost that entry its privilege, not make the whole registry
     unreadable (which would take every other plugin down with it).
     """
-    if record.layer in _TENANT_RECORD_BOOT_LAYERS:
+    if record.boot_layer in _TENANT_RECORD_BOOT_LAYERS:
         return record
     log.error(
-        "registry record %r in %s claims privileged layer %s — "
-        "downgrading to installed (privileged layers come from the wheel)",
-        record.plugin_id, path.name, record.layer.value,
+        "registry record %r in %s claims privileged boot_layer %s — "
+        "downgrading to installed (privileged boot layers come from the wheel)",
+        record.plugin_id, path.name, record.boot_layer.value,
     )
     _audit(
-        "plugin.layer_rejected",
+        "plugin.boot_layer_rejected",
         {
             "plugin_id": record.plugin_id,
-            "declared_layer": record.layer.value,
-            "reason": "privileged_layer_from_tenant_registry",
+            "declared_boot_layer": record.boot_layer.value,
+            "reason": "privileged_boot_layer_from_tenant_registry",
         },
         tenant_id="_default",
     )
-    return replace(record, layer=BootLayer.INSTALLED)
+    return replace(record, boot_layer=BootLayer.INSTALLED)
 
 
 class TenantRegistry:
@@ -624,13 +626,13 @@ class PluginLifecycle:
         """Unregister the plugin for this record, right now.
 
         Raises :class:`PluginDisableRefused` when the id currently occupies the
-        compliance layer in the process registry; every other failure is logged
+        compliance boot layer in the process registry; every other failure is logged
         and swallowed as before.
 
         The refusal has to live here rather than only in the caller. This is
         reached from ``PluginLifecycle.disable()``, which the older Console
         route ``POST /plugins/{id}/disable`` calls directly — that route checks
-        no layer at all. Without this guard a tenant record sharing an id with a
+        no boot layer at all. Without this guard a tenant record sharing an id with a
         global compliance plugin would unregister it from the process, taking
         its provider slot with it, while the ADR-0239 admin API correctly
         answers 403 for the same request. One mechanism, two doors, and the

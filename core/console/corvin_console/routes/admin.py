@@ -20,7 +20,7 @@ Load-bearing properties:
   § Multi-tenant axis).  The request models are ``extra="forbid"``, so a body
   that smuggles a ``tenant_id`` is rejected rather than silently ignored.
 * **The compliance layer is not disableable.**  ``POST .../disable`` on a
-  ``layer=compliance`` plugin answers 403 and writes an audit event; it never
+  ``boot_layer=compliance`` plugin answers 403 and writes an audit event; it never
   answers 200 with a silent no-op.  The unload goes through
   ``registry.disable()`` — the operator-initiated entry point that raises
   ``PluginDisableRefused`` — and never through ``registry.unregister()``, which
@@ -81,7 +81,7 @@ LIFECYCLE_FLAG_ID = "plugin_runtime_lifecycle"
 #: A ``bundled`` or ``installed`` runtime object therefore belongs to whichever
 #: tenant enabled it, and is shown only when THIS tenant also has a record for
 #: it — otherwise the admin plane leaks another tenant's plugin ids.
-_GLOBAL_LAYERS = frozenset({"compliance", "core"})
+_GLOBAL_BOOT_LAYERS = frozenset({"compliance", "core"})
 
 
 # The plugin package lives outside the console package; import it the same way
@@ -97,9 +97,9 @@ try:
         # the operator/ stdlib-shadow trap.  Appending means existing paths win.
         sys.path.append(str(_core_plugins))
     from corvin_plugins.manifest import (  # type: ignore[import-not-found]
+        BootLayer,
         InvalidPluginID,
         PluginError,
-        PluginLayer,
         PluginNotFound,
         SettingsValidator,
         UnknownPluginType,
@@ -141,7 +141,7 @@ class AdminPluginOut(BaseModel):
     plugin_type: str
     #: compliance | core | bundled | installed (ADR-0243).  NOT "tier" — that word
     #: means ADR-0156's capability boundary repo-wide (CLAUDE.md).
-    layer: str
+    boot_layer: str
     #: builtin | vetted | community.  ``None`` for a plugin that is loaded in this
     #: process but has no registry record: provenance is genuinely unknown then,
     #: and guessing "builtin" would be a claim the surface cannot support.
@@ -260,7 +260,7 @@ class _Entry:
     * ``registry.yaml`` for this tenant — the operator's declared state.  Bundled
       and compliance plugins are loaded by the boot path and need no record here.
     * the in-process ``PluginRegistry`` — what is actually running, with the
-      authoritative ``layer`` of the loaded object.
+      authoritative ``boot_layer`` of the loaded object.
 
     Reading only the file would answer 404 for exactly the plugin whose disable
     must be refused with 403, which would make the compliance guard unreachable.
@@ -287,7 +287,7 @@ class _Entry:
         return "registry" if self.record is not None else "runtime"
 
     @property
-    def layer(self) -> str:
+    def boot_layer(self) -> str:
         """The layer that governs this plugin right now.
 
         The loaded object wins when both are known: it is the thing the process
@@ -296,10 +296,10 @@ class _Entry:
         permissions.
         """
         if self.runtime is not None:
-            return str(self.runtime.get("layer") or PluginLayer.INSTALLED.value)
+            return str(self.runtime.get("boot_layer") or BootLayer.INSTALLED.value)
         if self.record is not None:
-            return self.record.layer.value
-        return PluginLayer.INSTALLED.value
+            return self.record.boot_layer.value
+        return BootLayer.INSTALLED.value
 
     @property
     def can_disable(self) -> bool:
@@ -311,7 +311,7 @@ class _Entry:
         that should have been allowed is a support ticket; allowing one that
         should have been refused is a compliance incident.
         """
-        if self.layer == PluginLayer.COMPLIANCE.value:
+        if self.boot_layer == BootLayer.COMPLIANCE.value:
             return False
         if self.record is not None and not self.record.can_disable():
             return False
@@ -330,9 +330,9 @@ def _runtime_entries() -> dict[str, dict[str, Any]]:
         for plugin_id in registry.discover():
             try:
                 plugin = registry.get(plugin_id)
-                layer = registry.layer_of(plugin_id)
+                boot_layer = registry.boot_layer_of(plugin_id)
                 out[plugin_id] = {
-                    "layer": layer.value,
+                    "boot_layer": boot_layer.value,
                     "can_disable": registry.can_disable(plugin_id),
                     "version": getattr(plugin, "version", ""),
                     "display_name": getattr(plugin, "display_name", plugin_id),
@@ -372,7 +372,7 @@ def _entries(tenant_id: str) -> dict[str, _Entry]:
     for plugin_id, runtime in _runtime_entries().items():
         if plugin_id in merged:
             merged[plugin_id].runtime = runtime
-        elif runtime.get("layer") in _GLOBAL_LAYERS:
+        elif runtime.get("boot_layer") in _GLOBAL_BOOT_LAYERS:
             merged[plugin_id] = _Entry(plugin_id=plugin_id, runtime=runtime)
         # else: an installed-layer runtime object with no record in THIS tenant
         # belongs to another tenant — not ours to show.
@@ -420,7 +420,7 @@ def _to_out(entry: _Entry, health: dict[str, HealthOut]) -> AdminPluginOut:
         plugin_type=(
             record.plugin_type if record is not None else (runtime or {}).get("plugin_type", "")
         ),
-        layer=entry.layer,
+        boot_layer=entry.boot_layer,
         origin=record.origin.value if record is not None else None,
         enabled=record.enabled if record is not None else entry.loaded,
         runtime_loaded=entry.loaded,
@@ -644,7 +644,7 @@ async def aggregated_health(
 
     plugins: dict[str, Any] = {}
     healthy = unhealthy = unchecked = 0
-    by_layer: dict[str, int] = {}
+    by_boot_layer: dict[str, int] = {}
     for plugin_id in sorted(entries):
         entry = entries[plugin_id]
         status = health.get(plugin_id)
@@ -654,12 +654,12 @@ async def aggregated_health(
             healthy += 1
         else:
             unhealthy += 1
-        by_layer[entry.layer] = by_layer.get(entry.layer, 0) + 1
+        by_boot_layer[entry.boot_layer] = by_boot_layer.get(entry.boot_layer, 0) + 1
         plugins[plugin_id] = {
             "checked": status is not None,
             "ok": status.ok if status is not None else None,
             "message": status.message if status is not None else "",
-            "layer": entry.layer,
+            "boot_layer": entry.boot_layer,
             "runtime_loaded": entry.runtime is not None,
             "can_disable": entry.can_disable,
         }
@@ -671,7 +671,7 @@ async def aggregated_health(
         "healthy": healthy,
         "unhealthy": unhealthy,
         "unchecked": unchecked,
-        "by_layer": by_layer,
+        "by_boot_layer": by_boot_layer,
         "plugins": plugins,
     }
 

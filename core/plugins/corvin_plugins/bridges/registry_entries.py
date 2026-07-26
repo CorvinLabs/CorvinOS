@@ -6,9 +6,10 @@ generates those entries so the shape lives in ONE place — the docs, the Consol
 Settings panel and the tests all read it from here instead of each carrying their
 own copy of a dotted class path that goes stale on the first rename.
 
-``layer: bundled`` is honoured by ``bootstrap._declared_boot_layer``: a tenant config
-is operator-writable, so it may declare ``bundled`` or ``installed`` but never
-``core`` or ``compliance`` — a privileged claim is downgraded and audited.
+``boot_layer: bundled`` is honoured by ``bootstrap._declared_boot_layer``: a
+tenant config is operator-writable, so it may declare ``bundled`` or
+``installed`` but never ``core`` or ``compliance`` — a privileged claim is
+downgraded and audited.
 ``bundled`` keeps the plugin disableable (``can_disable()``), which is the point:
 a messenger transport is not a compliance mechanism.
 
@@ -32,7 +33,7 @@ def declaration_entry(channel: str, *, enabled: bool = True) -> dict:
     cls = BRIDGE_PLUGIN_CLASSES[channel]
     entry: dict = {
         "id": f"{channel}-bridge",
-        "layer": "bundled",
+        "boot_layer": "bundled",
         "class_path": f"{_MODULE}:{cls.__name__}",
     }
     if not enabled:
