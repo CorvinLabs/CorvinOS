@@ -79,6 +79,21 @@ DEFAULT_THRESHOLD = 3
 DEFAULT_MAX_HEALS_PER_HOUR = 3
 #: A restart followed by a failure within this window counts as "did not help".
 RESTART_GRACE_S = 60.0
+#: How long a record stays in the per-plugin history.
+HISTORY_WINDOW_S = 3600.0
+#: Actions that consume the hourly budget. ESCALATE is deliberately NOT one: it is
+#: the orchestrator saying "I am no longer acting", so counting it would let the
+#: budget inflate itself, and it must not be mistaken for a healing attempt.
+BUDGETED_ACTIONS = frozenset(
+    {HealingAction.CIRCUIT_BREAK, HealingAction.SOFT_RESTART, HealingAction.DISABLE}
+)
+
+#: Hard cap per plugin regardless of age. The history is a diagnostic buffer in a
+#: process that runs for months: with the flag OFF every poll on an unhealthy plugin
+#: appends a "healing_disabled" NOOP, and pruning only on budget_left() — which
+#: NOOPs never reach — grew it without bound (measured: 5000 entries from 5000
+#: considerations). Keep the recent tail, drop the rest.
+MAX_HISTORY_PER_PLUGIN = 64
 
 
 @dataclass
@@ -121,7 +136,17 @@ class HealingOrchestrator:
         self.max_heals_per_hour = max_heals_per_hour
         self._audit_emit = audit_emit
         self._history: Dict[str, List[HealingRecord]] = {}
+        #: Timestamps of REAL actions, kept separately from the diagnostic history.
+        #: The budget must not be derivable from a buffer that gets pruned for size:
+        #: enough NOOPs would push the counted actions out of the window and hand
+        #: back a fresh budget — two correct mechanisms combining into a hole.
+        #: Actions are inherently bounded (max_heals_per_hour), so this cannot grow.
+        self._actions: Dict[str, List[float]] = {}
         self._last_restart: Dict[str, float] = {}
+        #: Plugins already escalated. An escalation repeats on every poll otherwise,
+        #: which floods the audit chain with the same "I gave up" record — the same
+        #: mistake the health alert avoids by firing once per streak.
+        self._escalated: set[str] = set()
 
     # ── policy ───────────────────────────────────────────────────────────────
 
@@ -139,15 +164,25 @@ class HealingOrchestrator:
 
     # ── budget ───────────────────────────────────────────────────────────────
 
-    def _recent(self, plugin_id: str, window_s: float = 3600.0) -> List[HealingRecord]:
+    def _recent(
+        self, plugin_id: str, window_s: float = HISTORY_WINDOW_S
+    ) -> List[HealingRecord]:
         cutoff = time.time() - window_s
         recent = [r for r in self._history.get(plugin_id, []) if r.at >= cutoff]
+        if len(recent) > MAX_HISTORY_PER_PLUGIN:
+            recent = recent[-MAX_HISTORY_PER_PLUGIN:]
         self._history[plugin_id] = recent
         return recent
 
     def budget_left(self, plugin_id: str) -> int:
-        acted = [r for r in self._recent(plugin_id) if r.action is not HealingAction.NOOP]
-        return max(0, self.max_heals_per_hour - len(acted))
+        """Actions still allowed this hour.  Counted from :attr:`_actions`.
+
+        Deliberately NOT derived from the pruned history — see the note there.
+        """
+        cutoff = time.time() - HISTORY_WINDOW_S
+        recent = [t for t in self._actions.get(plugin_id, []) if t >= cutoff]
+        self._actions[plugin_id] = recent
+        return max(0, self.max_heals_per_hour - len(recent))
 
     def history(self, plugin_id: str) -> List[HealingRecord]:
         return list(self._recent(plugin_id))
@@ -179,22 +214,29 @@ class HealingOrchestrator:
         if self.budget_left(plugin_id) <= 0:
             # A plugin that keeps failing is a logic error, not a transient one.
             # Escalate once and stop acting.
-            return self._record(
-                plugin_id, HealingAction.ESCALATE, "heal_budget_exhausted"
-            )
+            return self._escalate(plugin_id, "heal_budget_exhausted")
 
         # A failure right after a restart means the restart did not help.
         last = self._last_restart.get(plugin_id)
         if last is not None and (time.time() - last) < RESTART_GRACE_S:
-            return self._record(
-                plugin_id, HealingAction.ESCALATE, "restart_did_not_help"
-            )
+            return self._escalate(plugin_id, "restart_did_not_help")
 
         if policy is HealingPolicy.CIRCUIT_BREAK_ONLY:
             return self._circuit_break(plugin_id, error_code)
         if policy is HealingPolicy.SOFT_RESTART:
             return self._soft_restart(plugin_id, error_code)
         return self._disable_and_degrade(plugin_id, error_code)
+
+    def _escalate(self, plugin_id: str, reason: str) -> HealingRecord:
+        """Escalate at most once per plugin until it acts or recovers again."""
+        if plugin_id in self._escalated:
+            return self._record(plugin_id, HealingAction.NOOP, f"already_escalated:{reason}")
+        self._escalated.add(plugin_id)
+        return self._record(plugin_id, HealingAction.ESCALATE, reason)
+
+    def note_recovered(self, plugin_id: str) -> None:
+        """Clear the escalation latch — called when the plugin reports healthy."""
+        self._escalated.discard(plugin_id)
 
     # ── the three reversible actions ─────────────────────────────────────────
 
@@ -300,7 +342,21 @@ class HealingOrchestrator:
         rec = HealingRecord(
             plugin_id=plugin_id, action=action, reason=reason, succeeded=succeeded
         )
-        self._history.setdefault(plugin_id, []).append(rec)
+        history = self._history.setdefault(plugin_id, [])
+        history.append(rec)
+        # Prune HERE, not only in budget_left(): the NOOP paths never reach that
+        # method, and they are the ones that fire on every poll.
+        if len(history) > MAX_HISTORY_PER_PLUGIN:
+            self._recent(plugin_id)
+        if action in BUDGETED_ACTIONS:
+            # Count it against the hourly budget in its own, unpruned ledger.
+            self._actions.setdefault(plugin_id, []).append(rec.at)
+            self._escalated.discard(plugin_id)  # a real action re-arms escalation
+        # Audit EVERY non-NOOP, including ESCALATE. The budget question and the
+        # visibility question are separate: an escalation consumes no budget, but
+        # "I gave up on this plugin" is the single most important thing for an
+        # operator to see. Folding the two conditions together (as an earlier edit
+        # here did) silently dropped that record.
         if action is not HealingAction.NOOP:
             log.warning(
                 "healing action %s for %r (reason=%s, ok=%s)",
@@ -319,7 +375,10 @@ class HealingOrchestrator:
 
 
 __all__ = [
+    "BUDGETED_ACTIONS",
     "DEFAULT_MAX_HEALS_PER_HOUR",
+    "HISTORY_WINDOW_S",
+    "MAX_HISTORY_PER_PLUGIN",
     "DEFAULT_POLICY_BY_TYPE",
     "DEFAULT_THRESHOLD",
     "HealingAction",

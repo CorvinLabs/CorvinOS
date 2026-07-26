@@ -279,3 +279,88 @@ class TestPrometheusRender(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExpositionValidity(_Base):
+    """Review finding: the cardinality cap emitted duplicate labelsets.
+
+    Several samples sharing one labelset is invalid Prometheus exposition — a
+    scraper discards the WHOLE response, so a cap meant to protect the metrics
+    endpoint silently destroyed it instead. Overflow ids are aggregated now.
+    """
+
+    def _samples(self, body: str, family: str) -> list[str]:
+        return [line for line in body.splitlines() if line.startswith(family + "{")]
+
+    def test_no_family_has_a_duplicate_labelset(self):
+        import collections
+
+        for i in range(hm.MAX_LABELLED_PLUGINS + 7):
+            cb.get_breaker(f"p{i:03d}")
+        body = hm.render_prometheus()
+        for name, _mtype, _help in hm._FAMILIES:
+            labels = [line.split("}")[0] for line in self._samples(body, name)]
+            dupes = {k: v for k, v in collections.Counter(labels).items() if v > 1}
+            self.assertEqual(dupes, {}, f"{name} has duplicate labelsets: {dupes}")
+
+    def test_overflow_is_a_single_aggregated_sample(self):
+        for i in range(hm.MAX_LABELLED_PLUGINS + 4):
+            cb.get_breaker(f"p{i:03d}")
+        body = hm.render_prometheus()
+        others = [
+            line for line in self._samples(body, "corvin_plugin_breaker_open")
+            if 'plugin_id="other"' in line
+        ]
+        self.assertEqual(len(others), 1)
+
+    def test_counters_sum_across_the_overflow_bucket(self):
+        for i in range(hm.MAX_LABELLED_PLUGINS + 3):
+            breaker = cb.get_breaker(f"p{i:03d}", failure_threshold=99)
+            if i >= hm.MAX_LABELLED_PLUGINS:
+                breaker.record_failure(RuntimeError())
+                breaker.record_failure(RuntimeError())
+        body = hm.render_prometheus()
+        line = next(
+            line for line in self._samples(body, "corvin_plugin_breaker_failures_total")
+            if 'plugin_id="other"' in line
+        )
+        self.assertEqual(line.split()[-1], "6", "3 overflow plugins x 2 failures")
+
+    def test_an_unhealthy_overflow_plugin_does_not_read_as_healthy(self):
+        """min() for health_ok: a hidden sick plugin must not be masked by peers."""
+        class _Bad:
+            plugin_id = "zzz.sick"
+            plugin_type = "notification_backend"
+            version = "1.0.0"
+            display_name = "Sick"
+
+            def on_load(self, ctx):
+                pass
+
+            def on_unload(self):
+                pass
+
+            def health_check(self):
+                return HealthStatus(ok=False, message="degraded")
+
+            def notify(self, *a, **k):
+                pass
+
+        # Fill the labelled window with healthy ids so the sick one overflows.
+        for i in range(hm.MAX_LABELLED_PLUGINS):
+            cb.get_breaker(f"aaa{i:03d}")
+        self.registry.register(_Bad(), _ctx("zzz.sick"))
+        snap = self.collector.poll_once()
+        body = hm.render_prometheus(snap)
+        other = [
+            line for line in self._samples(body, "corvin_plugin_health_ok")
+            if 'plugin_id="other"' in line
+        ]
+        self.assertTrue(other)
+        self.assertEqual(other[0].split()[-1], "0", "the sick plugin must dominate")
+
+    def test_no_family_is_missing_its_header(self):
+        cb.get_breaker("solo")
+        body = hm.render_prometheus()
+        for name, mtype, _help in hm._FAMILIES:
+            self.assertIn(f"# TYPE {name} {mtype}", body)

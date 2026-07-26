@@ -175,7 +175,18 @@ class HealthCollector:
         The orchestrator decides everything (policy, budget, whether healing is
         enabled at all); the collector only reports. Never raises into the poll.
         """
-        if self._healer is None or run == 0:
+        if self._healer is None:
+            return
+        if run == 0:
+            # Recovery clears the healer's escalation latch, so a plugin that goes
+            # bad again later can be acted on instead of staying permanently
+            # "already escalated".
+            try:
+                note = getattr(self._healer, "note_recovered", None)
+                if callable(note):
+                    note(plugin_id)
+            except Exception as exc:  # noqa: BLE001
+                log.error("healer recovery note failed (%s)", type(exc).__name__)
             return
         try:
             plugin_type = ""
@@ -262,21 +273,50 @@ def _escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
 
 
-def _label_for(plugin_id: str, allowed: set[str]) -> str:
-    return plugin_id if plugin_id in allowed else "other"
-
-
 def render_prometheus(snapshot: Optional[HealthSnapshot] = None) -> str:
     """Render plugin health + breaker state as Prometheus 0.0.4 text.
 
     Breaker numbers come straight from the breaker registry, so they are present
     even when polling is off — the breakers run regardless of the flag.
+
+    Cardinality is capped at ``MAX_LABELLED_PLUGINS``. Ids past the cap are
+    AGGREGATED into a single ``plugin_id="other"`` sample per family, not emitted
+    one-per-id under the same label: several samples sharing a labelset is invalid
+    exposition, and a scraper discards the whole response rather than the extra
+    lines. Gauges take the worst value in the bucket (a hidden unhealthy plugin
+    must not read as healthy); counters take the sum.
     """
     snap = snapshot or HealthSnapshot(taken_at=0.0)
     breakers = _breakers.snapshot()
 
     ids = sorted(set(snap.samples) | set(breakers))
-    allowed = set(ids[:MAX_LABELLED_PLUGINS])
+    labelled = ids[:MAX_LABELLED_PLUGINS]
+    overflow = ids[MAX_LABELLED_PLUGINS:]
+
+    def value_for(name: str, pid: str) -> float:
+        sample = snap.samples.get(pid)
+        bstats = breakers.get(pid, {})
+        if name == "corvin_plugin_health_ok":
+            return 1 if (sample and sample.ok) else 0
+        if name == "corvin_plugin_health_consecutive_failures":
+            return sample.consecutive_failures if sample else 0
+        if name == "corvin_plugin_health_check_duration_ms":
+            return round(sample.duration_ms, 3) if sample else 0
+        if name == "corvin_plugin_breaker_open":
+            return 0 if bstats.get("state", "closed") == "closed" else 1
+        if name == "corvin_plugin_breaker_failures_total":
+            return int(bstats.get("total_failures", 0))
+        return int(bstats.get("total_refused", 0))
+
+    def aggregate(name: str, mtype: str, pids: list[str]) -> float:
+        values = [value_for(name, pid) for pid in pids]
+        if not values:
+            return 0
+        if mtype == "counter":
+            return sum(values)
+        if name == "corvin_plugin_health_ok":
+            return min(values)          # any unhealthy plugin shows as unhealthy
+        return max(values)              # worst failure count / duration / breaker
 
     lines: list[str] = []
     for name, mtype, helptext in _FAMILIES:
@@ -286,23 +326,12 @@ def render_prometheus(snapshot: Optional[HealthSnapshot] = None) -> str:
             # Zero-sample so dashboards show "0", not "no data".
             lines.append(f'{name}{{plugin_id="none"}} 0')
             continue
-        for pid in ids:
-            label = f'{{plugin_id="{_escape(_label_for(pid, allowed))}"}}'
-            sample = snap.samples.get(pid)
-            bstats = breakers.get(pid, {})
-            if name == "corvin_plugin_health_ok":
-                value = 1 if (sample and sample.ok) else 0
-            elif name == "corvin_plugin_health_consecutive_failures":
-                value = sample.consecutive_failures if sample else 0
-            elif name == "corvin_plugin_health_check_duration_ms":
-                value = round(sample.duration_ms, 3) if sample else 0
-            elif name == "corvin_plugin_breaker_open":
-                value = 0 if bstats.get("state", "closed") == "closed" else 1
-            elif name == "corvin_plugin_breaker_failures_total":
-                value = int(bstats.get("total_failures", 0))
-            else:
-                value = int(bstats.get("total_refused", 0))
-            lines.append(f"{name}{label} {value}")
+        for pid in labelled:
+            lines.append(f'{name}{{plugin_id="{_escape(pid)}"}} {value_for(name, pid)}')
+        if overflow:
+            lines.append(
+                f'{name}{{plugin_id="other"}} {aggregate(name, mtype, overflow)}'
+            )
     return "\n".join(lines) + "\n"
 
 
