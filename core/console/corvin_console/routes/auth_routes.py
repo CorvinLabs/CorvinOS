@@ -177,7 +177,19 @@ def local_login(
     )
 
     is_https = request.url.scheme == "https"
-    redirect = RedirectResponse("/console/", status_code=302)
+    # In headless mode (ADR-0241/0243) there is no /console/ to land on, so this
+    # 302 would hand a freshly-authenticated caller a 404. The session is still
+    # created and the cookie still set — only the destination changes, because
+    # an API-only deployment logging in is a legitimate thing to do.
+    _target = "/console/"
+    try:
+        from ..app import headless_enabled
+
+        if headless_enabled(tenant_id):
+            _target = "/"
+    except Exception:  # noqa: BLE001 — unreadable flag means "console as usual"
+        pass
+    redirect = RedirectResponse(_target, status_code=302)
     redirect.set_cookie(
         key=session_auth.COOKIE_NAME,
         value=rec.sid,
