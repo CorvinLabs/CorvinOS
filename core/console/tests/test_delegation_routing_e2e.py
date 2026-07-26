@@ -175,7 +175,12 @@ class _StreamTurnE2EBase(unittest.TestCase):
         self._inject_license_ok()
         self._inject_fake_acs()
         spawn_called = self._no_spawn_guard()
-        with patch.object(self.cr, "_delegation_enabled", return_value=True):
+        # These rules describe WHICH prompts are delegation-worthy, so they run
+        # with the ACS worker engine selected. The stock install is `native`
+        # (see test_native_default_keeps_turn_in_process below).
+        with patch.object(self.cr, "_delegation_enabled", return_value=True), \
+             patch.object(self.cr._feature_flags, "worker_engine_mode",
+                          return_value="acs"):
             events = _drain(self.cr.stream_turn(self.sess, prompt))
         spf = self.sess.workdir / ".corvin-system-prompt.txt"
         sys_text = spf.read_text(encoding="utf-8") if spf.exists() else ""
@@ -281,6 +286,59 @@ class DelegationRoutingE2ETest(_StreamTurnE2EBase):
         self.assertEqual(events[-1].get("type"), "done")
 
 
+class NativeWorkerEngineE2ETest(_StreamTurnE2EBase):
+    """The stock install (worker_engine = native) runs turns in-process.
+
+    Drives the REAL ``stream_turn`` with delegation ENABLED but the worker
+    engine left at its default, i.e. exactly what a fresh install does. The
+    only shape that may still fan out is big data.
+    """
+
+    SUBSTANTIVE_PROMPT = (
+        "Erstelle einen ausführlichen Reiseplan für zwei Wochen Japan "
+        "und dann eine Packliste mit Empfehlungen für jede Jahreszeit "
+        "sowie einen Überblick über die wichtigsten Etikette-Regeln")
+    BIG_DATA_PROMPT = (
+        "Analysiere 500 GB Serverlogs aus dem Data Lake auf Anomalie-Muster "
+        "und vergleiche die Regionen")
+
+    def _run_native(self, prompt: str):
+        """Same driver as the base class, but with the DEFAULT worker engine."""
+        self._pin_house_rules_allowed()
+        self._inject_license_ok()
+        self._inject_fake_acs()
+        spawn_called = self._no_spawn_guard()
+        with patch.object(self.cr, "_delegation_enabled", return_value=True), \
+             patch.object(self.cr._feature_flags, "worker_engine_mode",
+                          return_value="native"):
+            events = _drain(self.cr.stream_turn(self.sess, prompt))
+        return events, spawn_called
+
+    def test_native_default_keeps_substantive_turn_in_process(self) -> None:
+        events, spawn = self._run_native(self.SUBSTANTIVE_PROMPT)
+        self.assertFalse(
+            self._took_acs(events),
+            "a native install must not fan out a substantive task")
+        self.assertTrue(spawn["hit"], "the turn must run on the OS engine instead")
+        self.assertEqual(events[-1].get("type"), "done")
+
+    def test_native_default_still_fans_out_big_data(self) -> None:
+        events, _spawn = self._run_native(self.BIG_DATA_PROMPT)
+        self.assertTrue(
+            self._took_acs(events),
+            "big-data shape is the one auto-delegation a native install keeps")
+        self.assertEqual(events[-1].get("type"), "done")
+
+    def test_native_default_never_reaches_tde(self) -> None:
+        """TDE is off unless selected — its entry point must not be called."""
+        def _boom(*a, **k):  # pragma: no cover — must never run
+            raise AssertionError("TDE ran while the worker engine was native")
+
+        with patch.object(self.cr, "_stream_tde_turn", _boom):
+            events, _spawn = self._run_native(self.SUBSTANTIVE_PROMPT)
+        self.assertEqual(events[-1].get("type"), "done")
+
+
 class FallbackReGateE2ETest(_StreamTurnE2EBase):
     """D2 (adversarial review 2026-07-20) — EVERY "ACS → direct turn" fallback
     branch must re-run the L34/L35 pre-spawn gate against the engine that will
@@ -323,7 +381,12 @@ class FallbackReGateE2ETest(_StreamTurnE2EBase):
             # OSError → the "acs dir uncreatable" fallback branch.
             (self.sess.workdir / "acs").write_text("not a dir", encoding="utf-8")
         spawn_called = self._no_spawn_guard()
-        with patch.object(self.cr, "_delegation_enabled", return_value=True):
+        # These rules describe WHICH prompts are delegation-worthy, so they run
+        # with the ACS worker engine selected. The stock install is `native`
+        # (see test_native_default_keeps_turn_in_process below).
+        with patch.object(self.cr, "_delegation_enabled", return_value=True), \
+             patch.object(self.cr._feature_flags, "worker_engine_mode",
+                          return_value="acs"):
             events = _drain(self.cr.stream_turn(self.sess, self.FANOUT_PROMPT))
         return events, spawn_called
 

@@ -2630,6 +2630,60 @@ export function setAutoUpdate(enabled: boolean, csrf: string): Promise<{ enabled
   });
 }
 
+// ── Feature flags + worker engine (ship-dark registry) ───────────────
+
+export interface FeatureFlagState {
+  id: string;
+  label: string;
+  description: string;
+  owner: string;
+  target_release: string;
+  tags: string[];
+  default: boolean;
+  enabled: boolean;
+  /** Where the resolved value came from: console overlay, tenant YAML, or the registry default. */
+  source: "console" | "tenant_yaml" | "default";
+}
+
+export function getFeatureFlags(signal?: AbortSignal): Promise<{ features: FeatureFlagState[] }> {
+  return api("/settings/features", { signal });
+}
+
+export function setFeatureFlag(
+  id: string,
+  enabled: boolean,
+  csrf: string,
+): Promise<{ id: string; enabled: boolean; ok: boolean }> {
+  return api(`/settings/features/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    csrf,
+    body: { enabled },
+  });
+}
+
+export type WorkerEngineMode = "native" | "acs" | "tde";
+
+export interface WorkerEngineStatus {
+  mode: WorkerEngineMode;
+  modes: WorkerEngineMode[];
+  default: WorkerEngineMode;
+}
+
+export function getWorkerEngine(signal?: AbortSignal): Promise<WorkerEngineStatus> {
+  return api("/settings/worker-engine", { signal });
+}
+
+export function setWorkerEngine(
+  mode: WorkerEngineMode,
+  csrf: string,
+): Promise<{ mode: WorkerEngineMode; ok: boolean }> {
+  return api("/settings/worker-engine", {
+    method: "PUT",
+    csrf,
+    body: { mode },
+  });
+}
+
 // ── Always-on service tier (ADR-0184 Stufe 2) ────────────────────────
 
 export interface ServiceTierStatus {

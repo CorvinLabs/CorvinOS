@@ -1,9 +1,11 @@
 """Tests for ADR-0188 M5 (checkpoint/resume) and M6 (ask_human/answer).
 
 Uses a temp CORVIN_HOME so checkpoint files never touch the real repo's
-.corvin/ directory. The bridge outbox write (shared across all chat-facing
-node types) is real filesystem I/O by design (it's the same directory the
-messenger daemons poll) — tests clean up what they write.
+.corvin/ directory, and a temp ADAPTER_OUTBOX so the bridge outbox write
+(shared across all chat-facing node types) stays out of the directory the
+live messenger daemons poll. Cleaning up afterwards is not enough there:
+the Discord daemon polls every 500 ms and grabs an envelope long before
+tearDown runs.
 
 Run directly:  python3 core/workflows/tests/test_pause_resume.py
 """
@@ -24,7 +26,44 @@ sys.path.insert(0, str(_PKG_ROOT))
 from corvin_workflows import DAGRunner, StubEngine, WorkflowDoc, validate  # noqa: E402
 from corvin_workflows.runner import resume_workflow  # noqa: E402
 
-_OUTBOX_DIR = _PKG_ROOT.parent.parent / "operator" / "bridges" / "shared" / "outbox"
+
+def _outbox_dir() -> Path:
+    """Where the workflow nodes write their envelopes RIGHT NOW.
+
+    Must be read per call, not pinned at import: each test redirects
+    ADAPTER_OUTBOX to its own tmpdir in setUp. Before that, this pointed at
+    the live `operator/bridges/shared/outbox/`, and the running Discord daemon
+    polls that directory every 500 ms — it picked the test envelopes up and
+    tried to deliver them to a real chat long before tearDown got round to
+    unlinking them. 724 of them, all addressed to the placeholder chat_id
+    "owner-chat", had piled up in the dead-letter dir by 2026-07-26.
+    """
+    override = os.environ.get("ADAPTER_OUTBOX")
+    if override:
+        return Path(override)
+    return _PKG_ROOT.parent.parent / "operator" / "bridges" / "shared" / "outbox"
+
+
+def _redirect_outbox(case: unittest.TestCase) -> None:
+    """Point ADAPTER_OUTBOX at a per-test tmpdir and restore it afterwards.
+
+    Done in setUp rather than relying on the repo-root conftest fixture so the
+    isolation also holds when this file is run directly
+    (`python3 core/workflows/tests/test_pause_resume.py`), where no pytest
+    fixture is in play at all.
+    """
+    tmpdir = tempfile.mkdtemp(prefix="corvin_outbox_test_")
+    prev = os.environ.get("ADAPTER_OUTBOX")
+    os.environ["ADAPTER_OUTBOX"] = tmpdir
+
+    def _restore() -> None:
+        if prev is None:
+            os.environ.pop("ADAPTER_OUTBOX", None)
+        else:
+            os.environ["ADAPTER_OUTBOX"] = prev
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    case.addCleanup(_restore)
 
 
 def _doc(graph: list[dict], **kw) -> WorkflowDoc:
@@ -44,7 +83,8 @@ class PauseResumeTests(unittest.TestCase):
         self._tmp_home = tempfile.mkdtemp(prefix="corvin_home_test_")
         self._prev_home = os.environ.get("CORVIN_HOME")
         os.environ["CORVIN_HOME"] = self._tmp_home
-        self._outbox_before = set(glob.glob(str(_OUTBOX_DIR / "wf_msg_*.json")))
+        _redirect_outbox(self)
+        self._outbox_before = set(glob.glob(str(_outbox_dir() / "wf_msg_*.json")))
 
     def tearDown(self) -> None:
         if self._prev_home is None:
@@ -53,7 +93,7 @@ class PauseResumeTests(unittest.TestCase):
             os.environ["CORVIN_HOME"] = self._prev_home
         shutil.rmtree(self._tmp_home, ignore_errors=True)
         # Clean up any outbox files this test wrote.
-        after = set(glob.glob(str(_OUTBOX_DIR / "wf_msg_*.json")))
+        after = set(glob.glob(str(_outbox_dir() / "wf_msg_*.json")))
         for f in after - self._outbox_before:
             Path(f).unlink(missing_ok=True)
 
@@ -117,7 +157,7 @@ class PauseResumeTests(unittest.TestCase):
         result = runner.run()
         self.assertEqual(result.state, "paused")
 
-        written = set(glob.glob(str(_OUTBOX_DIR / "wf_msg_*.json"))) - self._outbox_before
+        written = set(glob.glob(str(_outbox_dir() / "wf_msg_*.json"))) - self._outbox_before
         self.assertEqual(len(written), 1, "ask_human must write exactly one outbox message")
         import json
         envelope = json.loads(Path(next(iter(written))).read_text())
@@ -285,10 +325,11 @@ class PauseResumeTests(unittest.TestCase):
 
 class AnswerNodeTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._outbox_before = set(glob.glob(str(_OUTBOX_DIR / "wf_msg_*.json")))
+        _redirect_outbox(self)
+        self._outbox_before = set(glob.glob(str(_outbox_dir() / "wf_msg_*.json")))
 
     def tearDown(self) -> None:
-        after = set(glob.glob(str(_OUTBOX_DIR / "wf_msg_*.json")))
+        after = set(glob.glob(str(_outbox_dir() / "wf_msg_*.json")))
         for f in after - self._outbox_before:
             Path(f).unlink(missing_ok=True)
 
@@ -306,7 +347,7 @@ class AnswerNodeTests(unittest.TestCase):
         self.assertEqual(result.state, "complete", result.error)
         self.assertTrue(result.nodes["reply"].output["sent"])
 
-        written = set(glob.glob(str(_OUTBOX_DIR / "wf_msg_*.json"))) - self._outbox_before
+        written = set(glob.glob(str(_outbox_dir() / "wf_msg_*.json"))) - self._outbox_before
         self.assertEqual(len(written), 1)
 
 

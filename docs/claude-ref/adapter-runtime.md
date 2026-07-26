@@ -54,9 +54,28 @@ which is exactly a verbatim readout. It now hard-caps that to `max_chars` via
 single overrunning sentence). This is still a degraded result — it cannot
 translate — but it is short and bounded.
 
-**Keeping the backend warm.** The bounded degraded path realistically only fires
-for an active user on a COLD local model at the first voice note after boot
-(a cold qwen3:8b load overruns the 60 s summary timeout). Two things prevent
+**Budgets must fit the backend, not just the parent cap (VOICE-F8, 2026-07-25).**
+The degraded path is only rare if the CLI backend actually gets a usable budget.
+VOICE-F7 fixed a cap overflow by *shrinking* the child budgets (CLI 90 s → 45 s)
+so CLI + Hermes fit inside a 120 s parent cap. Measured `claude -p` latency for a
+real summary call (10.5 KB system prompt, haiku) is 23 s / 27 s / 75 s / >180 s
+across five runs — median ≈ 50 s. The 45 s budget therefore lost most of the
+time, and **23 of 23 field summaries in ~27 h degraded to near-verbatim** — the
+exact behaviour this section says was removed. The fit-the-cap guard test stayed
+green throughout, because summing under the cap is necessary but not sufficient.
+
+Current budgets are derived bottom-up from that measurement, and the parent caps
+were raised to fit them: main ladder CLI 90 s + Hermes 45 s = 135 s inside a
+150 s cap (`adapter.py::build_voice_summary`, `routes/voice.py::
+_TTS_SUMMARIZE_TIMEOUT_S`); annex ladder CLI 40 s + Hermes 35 s = 75 s inside
+90 s. `summarize.py::_MEASURED_CLI_P50_S` records the measurement and
+`test_summarize.py::test_cli_budget_covers_measured_latency` fails if a budget
+drops to or below it. When touching these numbers, **re-measure first** — a
+budget under the median silently disables a backend without failing anything.
+
+**Keeping the backend warm.** Beyond the budgets, the bounded degraded path
+should only fire for an active user on a COLD local model at the first voice
+note after boot (a cold qwen3:8b load overruns the summary timeout). Two things prevent
 that: (1) the L44 house-rules classifier runs on *every* task with `keep_alive`
 30m and uses the *same* model the summary resolves to (`_resolve_default_model`),
 so steady-state it is always resident; (2) the adapter fires a fire-and-forget
@@ -528,8 +547,66 @@ recording reason, error, attempt count and timestamp.
 `dead/` lives inside `outbox/` but is invisible to the poller and to
 `pending_outbox`, both of which only match `*.json` files.
 
+Discord additionally rejects a non-snowflake `chat_id` **locally** in
+`sendDiscord`, before `channels.fetch()`, throwing a synthetic error carrying
+code 50035 so the same permanent-error path retires it. The API verdict is
+identical; skipping the round-trip keeps that traffic off Discord's
+invalid-request budget, which is what gets a bot rate-limited at the edge.
+
+### Stall detection: a live process is not a delivering process
+
+Retry, dead-letter and the return-means-delivered contract all assume the send
+eventually *settles*. One that never does defeats every one of them: on
+2026-07-26 a `sendFn` call hung, `running` stayed `true`, and each following
+interval returned at `if (running) return`. The Discord daemon delivered
+nothing for 38 minutes — no ack, no `⏳ Noch dabei …` heartbeat, no final reply
+— while the process stayed alive, the gateway socket stayed open, `/status`
+answered `paired: true`, and **not one line was logged**. Neither the watchdog
+(which checks service liveness) nor the operator could see it; the adapter kept
+writing envelopes into an outbox nobody drained.
+
+Three parameters, all with safe defaults:
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `sendTimeoutMs` | 120 000 | Hard deadline per `sendFn` call. On expiry the poller throws `OUTBOX_SEND_TIMEOUT` and the envelope re-enters the normal retry path. `0` disables. |
+| `stallWarnMs` | 300 000 | A tick running longer than this logs `outbox: tick stalled for Ns` (once per 60 s), instead of staying silent. |
+| `stallResetMs` | 900 000 | Backstop: force-releases the `running` flag so a hang *outside* `sendFn` can no longer wedge the poller shut. `0` disables. |
+
+The timeout is deliberately generous: the underlying send is not cancellable,
+so a call that succeeds *after* the deadline can produce a duplicate when the
+envelope is retried. 120 s is far beyond any healthy send, so only a genuine
+hang trips it — and a rare duplicate beats a poller that silently drops every
+subsequent reply. `OUTBOX_SEND_TIMEOUT` is a string code precisely so numeric
+`isPermanent` classifiers can't mistake a hang for a permanent failure; a hang
+is transient and rides the attempt budget.
+
+The handle returned by `startOutboxPoller` exposes `stats()` →
+`{running, stalled_s, idle_s}`. Discord publishes it as `poller_stalled_s` in
+`/status` so an external watchdog has something actionable to poll —
+`paired: true` plus an open socket is **not** evidence that anything is being
+delivered.
+
+### Tests must never write to the live outbox
+
+`operator/bridges/shared/outbox/` is polled by the *running* daemons every
+500 ms. The workflow `deliver`/`ask_human`/`answer` node types write there via
+`_write_outbox` (`core/workflows/corvin_workflows/node_types.py`), and that path
+was hardcoded to the repo directory — so every test run of those nodes handed
+the live bridge a real send job. Cleaning up in `tearDown` does not help: the
+daemon grabs the file first. 724 such envelopes, all addressed to the test
+placeholder `chat_id: "owner-chat"`, were sitting in Discord's dead-letter dir
+by 2026-07-26, each having cost a REST round-trip.
+
+`_write_outbox` now honours **`ADAPTER_OUTBOX`**, the same override
+`adapter.py` uses. The repo-root `conftest.py` points it at a tmpdir for every
+test (autouse), and the affected suites also set it in `setUp` so the isolation
+holds when a file is run directly, outside pytest.
+
 Unit tests: `shared/js/test_net_probe.js`, `shared/js/test_outbox_poller.js`
-(the latter pins the return-means-delivered contract and both dead-letter modes).
+(the latter pins the return-means-delivered contract, both dead-letter modes,
+the send timeout and the stall detector), `discord/test_outbox_hardening.js`
+(stall visibility in `/status` + the local snowflake guard).
 
 **Must NOT do:**
 - Don't take the fast login path on error signature alone — the probe must
@@ -543,3 +620,11 @@ Unit tests: `shared/js/test_net_probe.js`, `shared/js/test_outbox_poller.js`
   network errors — the IDENTIFY-budget protection depends on the split.
 - Don't remove the outbox `preCheck` — pre-login REST sends always throw and
   spam the journal at tick frequency.
+- Don't `await` anything unbounded inside a `sendFn` — a call that never
+  settles is the one failure the retry/dead-letter machinery cannot survive.
+  Keep `sendTimeoutMs` on; setting it to `0` restores the wedge.
+- Don't treat a healthy `/status` as proof of delivery — check
+  `poller_stalled_s` and `pending_outbox` together. Both looked fine for the
+  entire 38-minute outage.
+- Don't let a test write to the live `outbox/` — set `ADAPTER_OUTBOX`. Post-hoc
+  cleanup loses the race against a 500 ms poll tick.

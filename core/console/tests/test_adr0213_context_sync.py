@@ -125,15 +125,31 @@ class ADR0213ContextSyncTest(unittest.TestCase):
         acs_mod.ACSResult = _FakeACSResult   # type: ignore[attr-defined]
         sys.modules["acs_runtime"] = acs_mod
 
-    def _run_delegated_turn(self):
+    def _run_delegated_turn(self, context_sync: bool = True):
+        """Drive one delegated turn.
+
+        ``context_sync`` selects the state of the `acs_context_sync` feature
+        flag — the ADR-0213 replay ships dark, so these tests must say which
+        state they exercise (CLAUDE.md § Feature Flags: both states get tests).
+        """
         self._pin_house_rules_allowed()
         self._inject_license_ok()
         self._inject_fake_acs()
         prompt = ("review and refactor the entire authentication module, "
                   "fix all bugs, and add comprehensive tests")
+
+        def _flag(flag_id, tenant_id="_default"):
+            return context_sync if flag_id == "acs_context_sync" else False
+
         with (
             patch.object(self.cr, "_delegation_enabled", return_value=True),
             patch.object(self.cr, "_should_delegate", return_value=True),
+            # ACS worker engine selected: this file is about the ACS branch's
+            # transcript sync, not about which engine a stock install picks
+            # (the default is `native`, which never enters this branch).
+            patch.object(self.cr._feature_flags, "worker_engine_mode",
+                         return_value="acs"),
+            patch.object(self.cr._feature_flags, "is_enabled", side_effect=_flag),
         ):
             return _drain(self.cr.stream_turn(self.sess, prompt))
 
@@ -260,6 +276,40 @@ class ADR0213ContextSyncTest(unittest.TestCase):
         args = self.cr._build_args(self.sess, resume=False, model=None,
                                    task_text="dummy task", purpose="context_sync")
         self.assertNotIn("--continue", args)
+
+
+class ADR0213ContextSyncFlagOffTest(ADR0213ContextSyncTest):
+    """The OFF half of the flag pair: with `acs_context_sync` dark, the turn
+    must complete normally, spawn NO extra `claude -p` replay, and leave
+    turn_count where it was (the pre-ADR-0213 C1 behavior) — never error."""
+
+    def test_flag_off_completes_the_turn_without_the_replay(self) -> None:
+        called = {"n": 0}
+        real = self.cr._sync_acs_result_to_transcript
+
+        def _counting(*a, **kw):
+            called["n"] += 1
+            return real(*a, **kw)
+
+        with patch.object(self.cr, "_sync_acs_result_to_transcript",
+                          side_effect=_counting):
+            events = self._run_delegated_turn(context_sync=False)
+
+        self.assertEqual(events[-1].get("type"), "done",
+                         "a dark flag must be a QUIET path, not an error")
+        self.assertEqual(called["n"], 0,
+                         "no extra claude -p replay may run while the flag is off")
+        self.assertEqual(self.sess.turn_count, 0,
+                         "without a transcript write, turn_count must not advance "
+                         "(C1 fallback) — otherwise the next --continue resumes "
+                         "a transcript that never recorded this delegation")
+
+    # The inherited ON-state tests would run a second time under this subclass
+    # with the same (default) flag state; drop them so each state is asserted
+    # exactly once and a failure names the right half of the pair.
+    test_sync_success_advances_turn_count_and_audits = None  # type: ignore[assignment]
+    test_sync_failure_applies_c1_fallback = None  # type: ignore[assignment]
+    test_sync_exception_is_swallowed_and_falls_back = None  # type: ignore[assignment]
 
 
 if __name__ == "__main__":

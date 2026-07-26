@@ -830,6 +830,20 @@ async function sendDiscord(payload, _fpath) {
   const chId = payload.chat_id;
   if (!chId) { log(`no chat_id, skipping`); return; }
 
+  // Reject a structurally impossible chat_id before it costs a REST call.
+  // Discord channel ids are snowflakes: 17-20 digits, nothing else. The 724
+  // dead-lettered envelopes found on 2026-07-26 were all `chat_id:
+  // "owner-chat"` — a test placeholder that leaked into the live outbox — and
+  // each one burned a round-trip just to come back as 50035. Failing locally
+  // keeps that traffic off Discord's invalid-request budget, which is what
+  // gets a bot rate-limited at the edge. Same error code as the API returns,
+  // so PERMANENT_DISCORD_CODES retires it on attempt #1 exactly as before.
+  if (!/^\d{17,20}$/.test(String(chId))) {
+    const err = new Error(`chat_id ${JSON.stringify(chId)} is not a snowflake`);
+    err.code = 50035;
+    throw err;
+  }
+
   // Stale-finalize gate. The outbox dir is processed in alphabetical order,
   // and `{msg_id}_00.json` (real reply) sorts BEFORE `{msg_id}_hb.json`
   // (heartbeat) and `{msg_id}_sNN.json` (progress). So when several files
@@ -979,7 +993,7 @@ const PERMANENT_DISCORD_CODES = new Set([
   40005, // Request entity too large
 ]);
 
-startOutboxPoller({
+const outboxPoller = startOutboxPoller({
   outboxDir: OUTBOX, channel: CHANNEL, sendFn: sendDiscord, logger: log,
   // Wait for READY, not just for the token. The token is set on the REST
   // manager ~300 ms before the gateway hands us the channel cache, and sends
@@ -1005,6 +1019,11 @@ startHealthServer({
     bot_tag: client.user?.tag || null,
     whitelist_size: (currentSettings().whitelist || []).length,
     pending_outbox: fs.readdirSync(OUTBOX).filter(f => f.endsWith('.json')).length,
+    // Delivery liveness. `paired` and an open gateway socket say nothing about
+    // whether the outbox is draining — on 2026-07-26 both looked healthy for
+    // 38 minutes while a wedged poller delivered nothing. poller_stalled_s > 0
+    // is the signal a watchdog needs to restart this daemon.
+    poller_stalled_s: outboxPoller.stats().stalled_s,
   }),
 });
 

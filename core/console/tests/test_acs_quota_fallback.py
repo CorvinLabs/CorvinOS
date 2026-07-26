@@ -174,6 +174,10 @@ class ACSQuotaFallbackTest(unittest.TestCase):
         with (
             patch.object(self.cr, "_delegation_enabled", return_value=True),
             patch.object(self.cr, "_should_delegate", return_value=True),
+            # ACS worker engine selected — this file is about the ACS branch's
+            # quota/degrade ladder, not about which engine a stock install picks.
+            patch.object(self.cr._feature_flags, "worker_engine_mode",
+                         return_value="acs"),
         ):
             events = _drain(self.cr.stream_turn(self.sess, prompt))
 
@@ -187,7 +191,9 @@ class ACSQuotaFallbackTest(unittest.TestCase):
             f"Expected 'notice/quota_fallback' event but got: {types_seen}"
         )
         notice_msg = notice_events[0].get("message", "")
-        self.assertIn("ACS-Kontingent", notice_msg,
+        # ADR-0216/0217 renamed the pool: it is the shared agentic-compute
+        # budget (TDE + ACS + compute runs), not an ACS-only allowance.
+        self.assertIn("Agentic-Compute-Kontingent", notice_msg,
                       "Notice message should explain the quota limit")
         self.assertIn("Claude Code", notice_msg,
                       "Notice message should name the fallback engine")
@@ -226,6 +232,10 @@ class ACSQuotaFallbackTest(unittest.TestCase):
         with (
             patch.object(self.cr, "_delegation_enabled", return_value=True),
             patch.object(self.cr, "_should_delegate", return_value=True),
+            # ACS worker engine selected — this file is about the ACS branch's
+            # quota/degrade ladder, not about which engine a stock install picks.
+            patch.object(self.cr._feature_flags, "worker_engine_mode",
+                         return_value="acs"),
         ):
             events = _drain(self.cr.stream_turn(self.sess, prompt))
 
@@ -289,6 +299,8 @@ class ACSQuotaFallbackTest(unittest.TestCase):
             with (
                 patch.object(self.cr, "_delegation_enabled", return_value=True),
                 patch.object(self.cr, "_should_delegate", return_value=True),
+                patch.object(self.cr._feature_flags, "worker_engine_mode",
+                             return_value="acs"),
             ):
                 events = _drain(self.cr.stream_turn(self.sess, prompt))
         finally:

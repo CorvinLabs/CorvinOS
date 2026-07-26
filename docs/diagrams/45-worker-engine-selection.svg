@@ -1,0 +1,102 @@
+<svg viewBox="0 0 1040 720" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .title { font-size: 26px; font-weight: bold; fill: #000; }
+      .subtitle { font-size: 14px; fill: #555; }
+      .box-label { font-size: 15px; font-weight: bold; fill: #000; }
+      .box-text { font-size: 12px; fill: #222; }
+      .small { font-size: 11px; fill: #555; }
+      .arrow { stroke: #333; stroke-width: 2; marker-end: url(#arrowhead); fill: none; }
+      .arrow-label { font-size: 11px; fill: #444; }
+      .box { rx: 8; stroke-width: 2; }
+      .input-box { fill: #5cb85c; stroke: #3d8b3d; }
+      .gate-box { fill: #fff8e1; stroke: #f0ad4e; }
+      .setting-box { fill: #ede7f6; stroke: #6a3ab2; }
+      .engine-box-native { fill: #e8f4f8; stroke: #2c5aa0; }
+      .engine-box-acs { fill: #f4e8e8; stroke: #a02c2c; }
+      .engine-box-tde { fill: #e8f8e8; stroke: #3d8b3d; }
+      .off-box { fill: #f5f5f5; stroke: #bbb; stroke-dasharray: 5 3; }
+      .default-tag { font-size: 11px; font-weight: bold; fill: #2c5aa0; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#333"/>
+    </marker>
+  </defs>
+
+  <text x="520" y="34" class="title" text-anchor="middle">Worker Engine Selection — which engine runs a turn</text>
+  <text x="520" y="56" class="subtitle" text-anchor="middle">
+    delegation_policy.worker_engine_target() — one rule, every surface (console · bridges · remote triggers)
+  </text>
+
+  <!-- User task -->
+  <rect x="390" y="76" width="260" height="44" class="input-box box"/>
+  <text x="520" y="104" class="box-label" text-anchor="middle" fill="white">User task</text>
+  <path d="M 520 120 L 520 152" class="arrow"/>
+
+  <!-- Triage -->
+  <rect x="330" y="152" width="380" height="58" class="gate-box box"/>
+  <text x="520" y="176" class="box-label" text-anchor="middle">Triage — _should_delegate()</text>
+  <text x="520" y="196" class="box-text" text-anchor="middle">Is this task delegation-worthy at all?</text>
+  <path d="M 520 210 L 520 240" class="arrow"/>
+
+  <!-- Always-ACS rungs -->
+  <rect x="300" y="240" width="440" height="72" class="gate-box box"/>
+  <text x="520" y="263" class="box-label" text-anchor="middle">Rungs that win in EVERY mode</text>
+  <text x="520" y="282" class="box-text" text-anchor="middle">1. explicit /delegate  →  ACS</text>
+  <text x="520" y="300" class="box-text" text-anchor="middle">2. big-data shape (_is_big_data_task) → ACS</text>
+
+  <!-- to ACS (early) -->
+  <path d="M 740 276 L 880 276 L 880 470" class="arrow"/>
+  <text x="812" y="268" class="arrow-label" text-anchor="middle">match</text>
+
+  <path d="M 520 312 L 520 344" class="arrow"/>
+  <text x="560" y="332" class="arrow-label">no match</text>
+
+  <!-- Setting -->
+  <rect x="290" y="344" width="460" height="70" class="setting-box box"/>
+  <text x="520" y="368" class="box-label" text-anchor="middle">Settings → Worker Engine</text>
+  <text x="520" y="387" class="box-text" text-anchor="middle">spec.web_chat.worker_engine  (features.json overlay wins)</text>
+  <text x="520" y="405" class="small" text-anchor="middle">native (default) · acs · tde — unknown value degrades to native</text>
+
+  <!-- fan-out to three modes -->
+  <path d="M 400 414 L 400 442 L 175 442 L 175 470" class="arrow"/>
+  <text x="290" y="436" class="arrow-label" text-anchor="middle">native</text>
+  <path d="M 520 414 L 520 442 L 520 470" class="arrow"/>
+  <text x="560" y="460" class="arrow-label" text-anchor="middle">acs</text>
+  <path d="M 640 414 L 640 442 L 865 442 L 865 470" class="arrow" stroke-dasharray="6 3"/>
+  <text x="756" y="436" class="arrow-label" text-anchor="middle">tde</text>
+
+  <!-- Native engine -->
+  <rect x="45" y="470" width="260" height="96" class="engine-box-native box"/>
+  <text x="175" y="494" class="box-label" text-anchor="middle">Native — Claude Code</text>
+  <text x="175" y="513" class="box-text" text-anchor="middle">runs the turn in-process</text>
+  <text x="175" y="531" class="box-text" text-anchor="middle">no compute units charged</text>
+  <text x="175" y="553" class="default-tag" text-anchor="middle">DEFAULT on every fresh install</text>
+
+  <!-- ACS engine -->
+  <rect x="390" y="470" width="260" height="96" class="engine-box-acs box"/>
+  <text x="520" y="494" class="box-label" text-anchor="middle">ACS delegation_loop</text>
+  <text x="520" y="513" class="box-text" text-anchor="middle">manager + worker fan-out</text>
+  <text x="520" y="531" class="box-text" text-anchor="middle">charges the shared compute pool</text>
+  <text x="520" y="553" class="small" text-anchor="middle">also the target of the two rungs above</text>
+
+  <!-- TDE engine -->
+  <rect x="735" y="470" width="260" height="96" class="engine-box-tde box"/>
+  <text x="865" y="494" class="box-label" text-anchor="middle">TDE</text>
+  <text x="865" y="513" class="box-text" text-anchor="middle">tiered per-step delegation</text>
+  <text x="865" y="531" class="box-text" text-anchor="middle">charges the shared compute pool</text>
+  <text x="865" y="553" class="small" text-anchor="middle">only reachable in tde mode</text>
+
+  <!-- Degrade -->
+  <rect x="735" y="596" width="260" height="66" class="off-box box"/>
+  <text x="865" y="618" class="box-label" text-anchor="middle">TDE unavailable / pool empty</text>
+  <text x="865" y="638" class="box-text" text-anchor="middle">→ degrade to NATIVE</text>
+  <text x="865" y="655" class="small" text-anchor="middle">never silently swapped for another engine</text>
+  <path d="M 865 566 L 865 596" class="arrow"/>
+  <path d="M 735 629 L 305 629 L 305 566" class="arrow" stroke-dasharray="6 3"/>
+
+  <!-- Footnote -->
+  <text x="45" y="694" class="small">
+    A stock install therefore auto-delegates nothing but big-data-shaped work. /use-engine tiered_delegation outside tde mode answers with a "TDE is switched off" hint instead of routing.
+  </text>
+</svg>

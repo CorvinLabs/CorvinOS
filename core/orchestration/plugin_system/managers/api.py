@@ -141,3 +141,63 @@ def create_plugin_routes(
             raise HTTPException(status_code=400, detail=str(e))
     
     return router
+
+
+# ── Install Endpoint (NEW for Phase 2a) ───────────────────────────────────
+
+class InstallRequest(BaseModel):
+    """Request to install plugin from marketplace."""
+    marketplace_id: str                      # corvinlabs/ai-review/2.0.1
+    download_url: str
+    checksum: str
+
+
+@router.post("/{plugin_id}/install", response_model=PluginResponse)
+async def install_plugin(
+    plugin_id: str,
+    request: InstallRequest
+):
+    """Install plugin from marketplace.
+    
+    Downloads, verifies checksum, extracts, and adds to registry.
+    """
+    try:
+        from core.orchestration.plugin_system.managers.marketplace import (
+            MarketplaceDownloadManager
+        )
+        
+        user_id = "anonymous"
+        manager = MarketplaceDownloadManager()
+        
+        # Download + verify + extract
+        plugin_dir = await manager.install_plugin(
+            url=request.download_url,
+            expected_checksum=request.checksum,
+            install_dir=Path(".corvin/tenants/_default/plugins"),
+            plugin_id=plugin_id
+        )
+        
+        # Create Plugin object from extracted manifest
+        # (in real impl, would parse manifest.json from plugin_dir)
+        plugin = Plugin(
+            id=plugin_id,
+            version="1.0.0",  # TODO: read from manifest
+            name=plugin_id.replace("-", " ").title(),
+            installed_at=datetime.utcnow(),
+            installed_by=user_id,
+            marketplace=MarketplaceMetadata(
+                source="marketplace",
+                artifact_url=request.download_url,
+                checksum=request.checksum,
+                size_bytes=0,
+                cached_locally=True
+            )
+        )
+        
+        # Add to registry
+        lifecycle_manager.install(plugin, user_id=user_id)
+        
+        return PluginResponse.from_plugin(plugin)
+    
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

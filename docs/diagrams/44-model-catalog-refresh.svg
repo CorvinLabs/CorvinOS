@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 960 560" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">
+  <title>Live model catalogue — how a newly released Claude model reaches the AI-Engines pickers</title>
+  <style>
+    .box  { fill:#f6f8fa; stroke:#57606a; rx:8; }
+    .gate { fill:#fff8c5; stroke:#9a6700; rx:8; }
+    .ok   { fill:#dafbe1; stroke:#1a7f37; rx:8; }
+    .fall { fill:#ffebe9; stroke:#cf222e; rx:8; }
+    .cold { fill:#eaeef2; stroke:#57606a; rx:8; }
+    .lbl  { fill:#24292f; }
+    .sub  { fill:#57606a; font-size:11px; }
+    .arr  { stroke:#57606a; stroke-width:1.5; fill:none; marker-end:url(#a); }
+    .arrd { stroke:#cf222e; stroke-width:1.5; fill:none; stroke-dasharray:4 3; marker-end:url(#b); }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#57606a"/>
+    </marker>
+    <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#cf222e"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="28" font-size="16" font-weight="bold" class="lbl">Live model catalogue — the AI-Engines model pickers keep themselves current</text>
+  <text x="20" y="46" class="sub">Curated YAML list = the floor (works with no API key). Live catalogue only ADDS ids. Fetching happens in the console, never on the engine spawn path.</text>
+
+  <!-- Refresh path (console side) -->
+  <rect x="20" y="70" width="300" height="56" class="box"/>
+  <text x="35" y="92" class="lbl">GET /settings/engine/registry</text>
+  <text x="35" y="110" class="sub">console route · session-authenticated · returns immediately</text>
+
+  <path class="arr" d="M320 98 H370"/>
+
+  <rect x="370" y="70" width="300" height="56" class="gate"/>
+  <text x="385" y="92" class="lbl" font-weight="bold">_maybe_refresh_model_catalog()</text>
+  <text x="385" y="110" class="sub">stale (&gt;12 h) ∧ not in-flight ∧ ≥30 min since last try ∧ L35 allows</text>
+
+  <path class="arr" d="M670 98 H720"/>
+
+  <rect x="720" y="70" width="220" height="56" class="box"/>
+  <text x="735" y="92" class="lbl">background thread</text>
+  <text x="735" y="110" class="sub">never blocks the page load</text>
+
+  <path class="arr" d="M830 126 V158"/>
+
+  <rect x="620" y="158" width="320" height="72" class="box"/>
+  <text x="635" y="180" class="lbl" font-weight="bold">engine_providers.fetch_models("anthropic")</text>
+  <text x="635" y="198" class="sub">GET api.anthropic.com/v1/models · x-api-key + anthropic-version</text>
+  <text x="635" y="215" class="sub">follows has_more / last_id · key via provider_keys (env → service.env)</text>
+
+  <path class="arr" d="M780 230 V262"/>
+  <text x="792" y="252" class="sub">on success only</text>
+
+  <rect x="620" y="262" width="320" height="72" class="ok"/>
+  <text x="635" y="284" class="lbl" font-weight="bold">model_catalog.store_models()</text>
+  <text x="635" y="302" class="sub">~/.corvin/global/model_catalog.json · 0600 · atomic replace</text>
+  <text x="635" y="319" class="sub">rejects an EMPTY list — last-good is never wiped</text>
+
+  <!-- Failure path -->
+  <rect x="620" y="360" width="320" height="60" class="fall"/>
+  <text x="635" y="382" class="lbl" font-weight="bold">no API key / HTTP error / unreachable</text>
+  <text x="635" y="400" class="sub">nothing written · picker keeps the curated list · retry floor 30 min</text>
+  <path class="arrd" d="M700 230 V360"/>
+
+  <!-- Read path (every reader, incl. spawn) -->
+  <rect x="20" y="262" width="330" height="72" class="box"/>
+  <text x="35" y="284" class="lbl" font-weight="bold">engine_models.load_registry()</text>
+  <text x="35" y="302" class="sub">every reader — console, personas, engine SPAWN path</text>
+  <text x="35" y="319" class="sub">reads the cache FILE only · re-merges when its mtime changes</text>
+
+  <path class="arr" d="M620 298 H350"/>
+  <text x="400" y="291" class="sub">cached ids — no network on this side</text>
+
+  <path class="arr" d="M185 334 V366"/>
+
+  <rect x="20" y="366" width="560" height="106" class="ok"/>
+  <text x="35" y="388" class="lbl" font-weight="bold">_merge_live_models() — curated first, live appended</text>
+  <text x="35" y="406" class="sub">curated order and `default: true` preserved · already-curated ids not duplicated</text>
+  <text x="35" y="423" class="sub">per-engine prefix: claude_code "" · opencode "anthropic/" (its "&lt;provider&gt;/&lt;model&gt;" form)</text>
+  <text x="35" y="440" class="sub">a role with an EMPTY curated list stays empty (codex_cli — no model choice exists)</text>
+  <text x="35" y="457" class="sub">no catalogue / corrupt cache → no-op, i.e. exactly the pre-existing curated list</text>
+
+  <path class="arr" d="M300 472 V504"/>
+
+  <rect x="20" y="504" width="560" height="46" class="cold"/>
+  <text x="35" y="526" class="lbl" font-weight="bold">Console → AI Engines → Per-Engine Model Configuration</text>
+  <text x="35" y="542" class="sub">dropdown shows curated + newly released models · "Refresh models" forces a fetch now</text>
+</svg>

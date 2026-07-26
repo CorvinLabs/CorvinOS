@@ -211,16 +211,19 @@ this is a rendering branch inside the existing `!isUser && m.engine` block, not 
 
 Two things this trigger must respect, both discovered in this investigation:
 
-- **TDE is the DEFAULT delegation engine since ADR-0217 (2026-07-24).** It fires both behind the
-  explicit `/use-engine tiered_delegation` slash command (`_tde_force`) AND — now the common
-  case — automatically from the ADR-0114 delegated branch: `_delegation_engine_target` routes
-  every non-big-data, non-`/delegate` delegated turn to TDE (`chat_runtime.py`, search
-  `_delegation_engine_target`). ACS runs only for big-data shapes (`_is_big_data_task()`), the
-  explicit `/delegate` override, and the unavailable/pool-exhausted degrade. So this badge now
-  appears both on turns the user asked for by name AND on turns silently auto-routed to TDE —
-  it IS the mechanism by which a user sees "this turn was routed to TDE for me." (The pre-ADR-0217
-  "opt-in only / auto-routing needs a canary" state described in ADR-0214's Status Transitions is
-  superseded by ADR-0217 for the console web-chat surface.)
+- **TDE only runs when the operator selected it.** The worker engine is a Settings choice
+  (`spec.web_chat.worker_engine`: `native` | `acs` | `tde`) and the default is `native`, so on a
+  stock install this badge never appears. With `worker_engine: tde` selected, TDE fires both
+  behind the explicit `/use-engine tiered_delegation` slash command (`_tde_force`) AND
+  automatically from the ADR-0114 delegated branch: `_worker_engine_target` routes every
+  non-big-data, non-`/delegate` delegated turn to TDE (`chat_runtime.py`, search
+  `_worker_engine_target`). ACS still takes big-data shapes (`_is_big_data_task()`) and the
+  explicit `/delegate` override in every mode; an unavailable TDE or an exhausted pool degrades
+  to the direct OS-turn, not to ACS. Outside `tde` mode the slash command answers with a
+  "TDE is switched off" hint instead of routing. So the badge marks turns that ran on an engine
+  the operator deliberately switched on. (ADR-0217's "TDE is the default delegation engine"
+  state is superseded by the operator-selectable worker engine; ADR-0214's "opt-in only"
+  framing is again accurate.)
 - **`tdeProgress` can legitimately be absent even when `m.engine === "tiered_delegation"`.**
   `chat_runtime.py:3491` guards the `engine_progress` yield with `if step_count > 0:` — a TDE
   turn whose plan resolved to zero steps never emits the event, so `m.tdeProgress` stays
