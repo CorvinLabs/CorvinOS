@@ -1712,6 +1712,49 @@ the direct path until they add it) the web OS turn triages each task
 (deterministic heuristic; `/delegate <task>` forces) and dispatches
 fan-out-shaped work to `ACSRuntime(bridge="web", chat=<sid>)`.
 
+**Worker-engine selection.** `delegation_enabled` only says "fan-out is
+permitted at all"; **where** a delegation-worthy turn runs is the operator's
+choice, `spec.web_chat.worker_engine` (Console → Settings → Worker Engine,
+which writes the `features.json` overlay that takes precedence over the YAML):
+
+| mode | behavior |
+|---|---|
+| `native` (**default**) | Claude Code runs the turn in-process; only big-data-shaped work fans out to ACS |
+| `acs` | delegation-worthy turns go to the ACS manager/worker fan-out |
+| `tde` | delegation-worthy turns go to TDE; degrades to the direct OS-turn when TDE is unavailable or the shared pool is exhausted |
+
+The rule itself is `delegation_policy.worker_engine_target()` — pure, shared by
+every surface, unit-tested as a matrix
+([delegation-routing.md](delegation-routing.md) § 2). An explicit `/delegate`
+and a big-data shape route to ACS in every mode; every degrade ends at the
+direct OS-turn rather than swapping in another delegation engine.
+
+**Feature flags.** New features ship dark: each one is registered in
+`corvin_console/feature_flags.py`, defaults to `false`, and is toggled per
+tenant in Console → Settings → Features (`GET/PUT /settings/features`). An
+absent key always means off. Security/compliance mechanisms are refused by the
+registry — they stay always-on and non-disableable.
+
+Currently registered (all default **off**):
+
+| flag | gates | cost when on |
+|---|---|---|
+| `ccc_command_routing` | CCC entity extraction + chat-command dispatch (ADR-0168), at the top of **every** turn | one extra extraction pass per turn |
+| `acs_context_sync` | the ADR-0213 transcript replay after a delegated run | one extra `claude -p` per delegated turn |
+| `bridge_big_data_delegation` | big-data messages on Discord/WhatsApp/Telegram → ACS fan-out (`adapter.py::_maybe_delegate_big_data`) | compute units; off = one direct turn as before |
+| `browser_automation` | `POST /browser/session` — the chokepoint every other `/browser/*` route needs | launches a real Chrome/Chromium |
+| `execution_context_badge` | per-turn execution metadata in the chat UI | bookkeeping only |
+
+Off is a *quiet* path in each case: CCC-off sends the turn straight to the
+engine; context-sync-off is the pre-ADR-0213 C1 behavior (no replay, and
+`turn_count` deliberately does not advance, so no later turn resumes an
+unrecorded transcript); browser-off answers 403 with the setting to flip.
+
+Two related defaults moved with them: `spec.ulo.enabled` ships `false` in the
+config template (the code side was always deny-by-default), and the legacy
+`CORVIN_CCC_M1_ENABLED=0` env switch can still force CCC off but can no longer
+turn it on — the flag is the single source of truth.
+
 **ACS-suitability triage (reworked 2026-07-20, ADR-0202/0203).** The full
 routing concept — every mechanism, the two-tier model, the priority ladder,
 surface capabilities and the metering map — lives in

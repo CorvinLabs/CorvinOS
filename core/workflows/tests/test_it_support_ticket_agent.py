@@ -51,7 +51,15 @@ class TicketAgentTests(unittest.TestCase):
         os.environ["CORVIN_HOME"] = self._tmp_home
         self.doc = load_workflow(WORKFLOW_PATH)
         validate(self.doc)
-        self._outbox_dir = _PKG_ROOT.parent.parent / "operator" / "bridges" / "shared" / "outbox"
+        # Redirect the bridge outbox to a tmpdir. Pointing it at the live
+        # `operator/bridges/shared/outbox/` handed every run of this test a
+        # real send job to the running Discord daemon, which polls that
+        # directory every 500 ms and grabbed the envelope well before tearDown
+        # could unlink it (incident 2026-07-26: 724 such envelopes, all with
+        # the placeholder chat_id "owner-chat", in the dead-letter dir).
+        self._outbox_dir = Path(tempfile.mkdtemp(prefix="corvin_outbox_ticket_test_"))
+        self._prev_outbox = os.environ.get("ADAPTER_OUTBOX")
+        os.environ["ADAPTER_OUTBOX"] = str(self._outbox_dir)
         self._outbox_before = set(self._outbox_dir.glob("wf_msg_*.json"))
 
     def tearDown(self) -> None:
@@ -60,8 +68,11 @@ class TicketAgentTests(unittest.TestCase):
         else:
             os.environ["CORVIN_HOME"] = self._prev_home
         shutil.rmtree(self._tmp_home, ignore_errors=True)
-        for f in set(self._outbox_dir.glob("wf_msg_*.json")) - self._outbox_before:
-            f.unlink(missing_ok=True)
+        if self._prev_outbox is None:
+            os.environ.pop("ADAPTER_OUTBOX", None)
+        else:
+            os.environ["ADAPTER_OUTBOX"] = self._prev_outbox
+        shutil.rmtree(self._outbox_dir, ignore_errors=True)
 
     def test_workflow_loads_and_validates(self) -> None:
         self.assertEqual(self.doc.name, "it_support_ticket_agent")

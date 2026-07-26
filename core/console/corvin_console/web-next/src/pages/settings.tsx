@@ -5,7 +5,7 @@
  */
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Edit2, FileText, HeartPulse, Loader2, RefreshCw, Save, Server, Upload, Users, Wrench, X } from "lucide-react";
+import { Check, Cpu, Edit2, FileText, FlaskConical, HeartPulse, Loader2, RefreshCw, Save, Server, Upload, Users, Wrench, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ReauthDialog } from "@/components/reauth-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/lib/auth";
-import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, getInstanceStats, type DelegationBudgetResponse, type HealingConfigResponse } from "@/lib/api";
+import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, getInstanceStats, getFeatureFlags, setFeatureFlag, getWorkerEngine, setWorkerEngine, type DelegationBudgetResponse, type HealingConfigResponse, type WorkerEngineMode } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 
@@ -747,6 +747,182 @@ function DelegationBudgetCard({ csrf }: { csrf: string }) {
   );
 }
 
+/**
+ * Worker engine — which engine performs a turn.
+ *
+ * `native` is the default: Claude Code does the work in-process and the only
+ * auto-delegation left is big-data-shaped work, which still goes to ACS.
+ * TDE only ever runs when it is selected here.
+ */
+const WORKER_ENGINE_COPY: Record<WorkerEngineMode, { label: string; desc: string }> = {
+  native: {
+    label: "Native (Claude Code)",
+    desc: "Default. Claude Code does the work in-process. Only big-data-shaped " +
+          "tasks are handed to ACS workers — everything else stays native.",
+  },
+  acs: {
+    label: "ACS (manager + workers)",
+    desc: "Substantial tasks fan out to ACS worker agents. Costs agentic-compute " +
+          "units from the shared daily pool.",
+  },
+  tde: {
+    label: "TDE (Tiered Delegation Engine)",
+    desc: "Substantial tasks run as tiered, per-step routed delegation. Off " +
+          "unless selected — falls back to native when TDE is unavailable or the " +
+          "compute pool is exhausted.",
+  },
+};
+
+function WorkerEngineCard({ csrf }: { csrf: string }) {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["worker-engine"],
+    queryFn: ({ signal }) => getWorkerEngine(signal),
+  });
+  const [saving, setSaving] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const select = async (mode: WorkerEngineMode) => {
+    if (mode === q.data?.mode) return;
+    setError(null);
+    setSaving(mode);
+    try {
+      await setWorkerEngine(mode, csrf);
+      qc.invalidateQueries({ queryKey: ["worker-engine"] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const current = q.data?.mode ?? "native";
+  const modes = q.data?.modes ?? (["native", "acs", "tde"] as WorkerEngineMode[]);
+
+  return (
+    <Card>
+      <CardContent className="pt-4 pb-3 space-y-3">
+        <div className="flex items-center gap-2">
+          <Cpu className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="text-sm font-medium">Worker engine</span>
+          {q.isLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+        </div>
+        <div className="space-y-2">
+          {modes.map((mode) => {
+            const copy = WORKER_ENGINE_COPY[mode];
+            const active = current === mode;
+            return (
+              <button
+                key={mode}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                disabled={saving !== null || q.isLoading}
+                onClick={() => void select(mode)}
+                className={cn(
+                  "w-full rounded-md border px-3 py-2 text-left transition-colors",
+                  active
+                    ? "border-primary bg-primary/5"
+                    : "border-border hover:bg-muted/50",
+                  saving !== null && "opacity-60",
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">{copy?.label ?? mode}</span>
+                  {mode === (q.data?.default ?? "native") && (
+                    <Badge variant="secondary" className="text-[10px]">default</Badge>
+                  )}
+                  {active && <Check className="ml-auto h-4 w-4 text-primary" />}
+                  {saving === mode && <Loader2 className="ml-auto h-4 w-4 animate-spin" />}
+                </div>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">{copy?.desc}</p>
+              </button>
+            );
+          })}
+        </div>
+        {error && (
+          <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Feature flags — new features ship dark; this is where they get switched on. */
+function FeatureFlagsCard({ csrf }: { csrf: string }) {
+  const qc = useQueryClient();
+  const q = useQuery({
+    queryKey: ["feature-flags"],
+    queryFn: ({ signal }) => getFeatureFlags(signal),
+  });
+  const [saving, setSaving] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const toggle = async (id: string, enabled: boolean) => {
+    setError(null);
+    setSaving(id);
+    try {
+      await setFeatureFlag(id, enabled, csrf);
+      qc.invalidateQueries({ queryKey: ["feature-flags"] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const features = q.data?.features ?? [];
+
+  return (
+    <Card>
+      <CardContent className="pt-4 pb-3 space-y-3">
+        <div className="flex items-center gap-2">
+          <FlaskConical className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="text-sm font-medium">Optional features</span>
+          {q.isLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          New features ship switched off, so an update never changes how your install
+          behaves. Turn one on here when you want it; off restores the previous behavior.
+        </p>
+        {!q.isLoading && features.length === 0 && (
+          <p className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1.5">
+            No optional features on this version.
+          </p>
+        )}
+        <div className="space-y-2">
+          {features.map((f) => (
+            <div key={f.id} className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-medium">{f.label}</span>
+                  <Badge variant="outline" className="font-mono text-[10px]">{f.id}</Badge>
+                  {f.source === "tenant_yaml" && (
+                    <Badge variant="secondary" className="text-[10px]">from tenant.corvin.yaml</Badge>
+                  )}
+                </div>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">{f.description}</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {saving === f.id && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                <Switch
+                  checked={f.enabled}
+                  onCheckedChange={(next) => void toggle(f.id, next)}
+                  disabled={saving !== null}
+                  aria-label={f.label}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+        {error && (
+          <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function SettingsPage() {
   const { session } = useAuth();
   const qc = useQueryClient();
@@ -816,6 +992,16 @@ export function SettingsPage() {
         <HealingCard csrf={session!.csrf_token} />
         <TelemetryCard csrf={session!.csrf_token} />
         <InstanceStatsCard />
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-sm font-semibold text-foreground">Worker Engine</h2>
+        <WorkerEngineCard csrf={session!.csrf_token} />
+      </div>
+
+      <div className="space-y-2">
+        <h2 className="text-sm font-semibold text-foreground">Features</h2>
+        <FeatureFlagsCard csrf={session!.csrf_token} />
       </div>
 
       <div className="space-y-2">

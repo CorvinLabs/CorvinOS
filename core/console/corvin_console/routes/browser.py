@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from .. import audit as console_audit
 from .. import auth as session_auth
+from .. import feature_flags as _feature_flags
 from ..browser.internal_auth import require_csrf_or_token, require_session_or_token
 from .. import _bootstrap
 
@@ -284,6 +285,15 @@ async def create_session(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf_or_token)],
     body: CreateSessionReq | None = None,
 ) -> dict[str, Any]:
+    # Behind the `browser_automation` feature flag (ships dark). Gated at the
+    # session-creation chokepoint: every other /browser/* route needs a live
+    # session id, so no browser process can start while the flag is off.
+    if not _feature_flags.is_enabled("browser_automation", rec.tenant_id):
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail=("browser automation is switched off — enable it in "
+                    "Settings → Features (browser_automation)"),
+        )
     headless = body.headless if (body and body.headless is not None) else _default_headless()
     task_scoped_hosts = (body.task_scoped_hosts or None) if body else None
     cdp_endpoint = (body.cdp_endpoint or None) if body else None

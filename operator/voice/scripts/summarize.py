@@ -43,7 +43,7 @@ except Exception:  # noqa: BLE001
     _i18n = None
 
 
-# ── Voice-summary timeout budgets (VOICE-F7) ─────────────────────────────────
+# ── Voice-summary timeout budgets (VOICE-F7 / VOICE-F8) ──────────────────────
 # adapter.py spawns THIS script under a HARD subprocess cap. Inside that cap the
 # CLI backend and the Hermes fallback run SEQUENTIALLY, so their waits must SUM
 # to comfortably LESS than the parent cap (with margin for process spawn +
@@ -51,16 +51,33 @@ except Exception:  # noqa: BLE001
 # fallback added in 41c174e is unreachable in exactly the hang case it exists
 # for. Contract (parent caps mirrored in adapter.py build_voice_summary /
 # _append_lern_zugabe / _append_metapher):
-#   main summary : parent cap 120s  →  CLI 45s + Hermes 60s = 105s  (15s margin)
-#   annex (each) : parent cap  60s  →  CLI 20s + Hermes 30s =  50s  (10s margin)
-# Guard: test_summarize.py::test_voice_summary_timeout_budgets_fit_parent_caps.
-_SUMMARY_CLI_TIMEOUT_S = 45      # was 90 — 90+60 overflowed the 120s parent cap
-_SUMMARY_HERMES_TIMEOUT_S = 60
-_ANNEX_CLI_TIMEOUT_S = 20        # was 45 — 45+45 overflowed the 60s parent cap
-_ANNEX_HERMES_TIMEOUT_S = 30     # was 45 (the _ollama_generate default)
+#   main summary : parent cap 150s  →  CLI 90s + Hermes 45s = 135s  (15s margin)
+#   annex (each) : parent cap  90s  →  CLI 40s + Hermes 35s =  75s  (15s margin)
+#
+# VOICE-F8 (2026-07-25) — why these numbers and not "cap / number of backends".
+# VOICE-F7 fixed the overflow by SHRINKING the child budgets (CLI 90→45). That
+# made the CLI backend unreachable instead: measured `claude -p` latency for a
+# real summary call (10.5 KB system prompt, haiku) is 23s / 27s / 75s / >180s
+# across five runs — median ≈ 50s, i.e. the 45s budget lost MOST of the time.
+# Field evidence: 23 of 23 summaries in ~27h fell through to the degraded
+# near-verbatim path, which is exactly what the voice summary must never do.
+# The budgets below are derived BOTTOM-UP from that measurement (CLI needs a
+# budget above its median, Hermes/Ollama answers warm in ~30s) and the parent
+# cap was raised to fit them — not the other way round. When touching these,
+# re-measure first; a budget under the measured median silently disables the
+# backend without failing any test.
+# Guard: test_summarize.py::test_voice_summary_timeout_budgets_fit_parent_caps
+#        + ::test_cli_budget_covers_measured_latency.
+_SUMMARY_CLI_TIMEOUT_S = 90      # ≥ measured p50 (~50s) with headroom
+_SUMMARY_HERMES_TIMEOUT_S = 45   # warm Ollama answers in ~30s
+_ANNEX_CLI_TIMEOUT_S = 40        # annex prompts are shorter than the main one
+_ANNEX_HERMES_TIMEOUT_S = 35
 # The adapter-side parent caps this ladder must fit inside (SSOT for the test).
-_PARENT_CAP_MAIN_S = 120
-_PARENT_CAP_ANNEX_S = 60
+_PARENT_CAP_MAIN_S = 150
+_PARENT_CAP_ANNEX_S = 90
+# Measured `claude -p` latency for one real summary call, seconds (VOICE-F8).
+# The CLI budget must stay above this or the backend is dead on arrival.
+_MEASURED_CLI_P50_S = 50
 
 
 SYSTEM = {
@@ -1653,8 +1670,11 @@ _SESSION_RECAP_FENCE_EN = (
     "=== TRANSCRIPT END ==="
 )
 
-_SESSION_RECAP_CLI_TIMEOUT_S = 45     # same budget class as _SUMMARY_CLI_TIMEOUT_S
-_SESSION_RECAP_HERMES_TIMEOUT_S = 60  # same budget class as _SUMMARY_HERMES_TIMEOUT_S
+# Same budget class as the main ladder — a recap is one CLI call over a longer
+# transcript, so it cannot be cheaper than a summary (VOICE-F8: both were 45/60,
+# i.e. under the measured CLI median, and degraded for the same reason).
+_SESSION_RECAP_CLI_TIMEOUT_S = 90
+_SESSION_RECAP_HERMES_TIMEOUT_S = 45
 
 
 def _fence_transcript(transcript: str, lang: str) -> str:

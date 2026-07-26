@@ -156,6 +156,66 @@ Canonical runtime root: `~/.corvin/`; voice/secret config: `~/.config/corvin-voi
 
 ---
 
+## Feature Flags — Ship Dark by Default (load-bearing)
+
+**Goal: a stable CorvinOS core.** New functionality must never change the behavior of an
+existing install until the operator turns it on deliberately.
+
+**Every new feature MUST:**
+1. sit behind a named flag in `spec.features.<flag_id>` of `tenant.corvin.yaml`;
+2. default to **`false`** — off on a fresh install and off after an upgrade
+   (absent key = off; never "on because unset");
+3. be toggleable from the Console **Settings → Features** panel, no file editing, no restart;
+4. degrade to the pre-feature code path when off — off must be a *quiet* path, never an error;
+5. carry tests for BOTH states (flag-off = old behavior preserved, flag-on = new behavior).
+   A flag that is only ever tested in one state rots.
+
+**Flag lifecycle:** every flag gets an owner and a target release in which it either
+flips to default-on or the feature is removed. Flags are not permanent architecture.
+
+**Exceptions — these MUST NOT get a flag (they stay always-on and non-disableable):**
+security and compliance mechanisms of the Compliance Baseline above — bot disclosure,
+audit hash-chain, consent gate, L10 path-gate, L44 house-rules, L34 flow guard, licensing
+gates. "New feature" is never an excuse to ship a compliance mechanism default-off, and a
+default-off switch on any of them is the same violation as an env kill-flag.
+Telemetry keeps its documented default-ON / opt-out shape (maintainer decision) — do not
+convert those three channels to default-off flags.
+
+### Worker Engine Selection (Settings → Engine)
+
+The engine that performs a turn is operator-selectable — one setting,
+`spec.web_chat.worker_engine`, resolved through the shared `delegation_policy`
+module. No surface may carry its own routing rule.
+
+**Reach today (verified 2026-07-26): the Console web-chat only.** The messenger
+bridges (`adapter.py`) have no Tier-1 delegation path at all — they never call
+`worker_engine_target`, never read the setting, and ACS fan-out is documented as
+absent there (delegation-routing.md §4). A bridge turn therefore always runs the
+direct OS-turn, which *matches* the `native` default by accident, not by wiring:
+big-data work does NOT reach ACS on a bridge, and there is no `/delegate` there.
+Remote triggers are in the same position. Do not describe the setting as
+cross-surface until the bridge path actually calls the shared rule.
+
+| Value | Meaning |
+|---|---|
+| `native` (**DEFAULT**) | Claude Code does the work in-process. The ONLY auto-delegation left is big-data-shaped work → ACS. |
+| `acs` | Delegate qualifying turns to the ACS manager/worker fan-out. |
+| `tde` | Delegate qualifying turns to the Tiered Delegation Engine. **Off by default** — TDE only ever runs on an explicit operator opt-in. |
+
+Invariants:
+- Default install = `native`. TDE is **never** entered without an explicit setting change.
+- Big-data-shaped work routes to ACS even in `native` mode (per-worker context isolation
+  genuinely wins there); everything else stays native.
+- An explicit `/delegate` from the user still beats the classifier (delegation-routing.md §6).
+- Every degrade ladder ends at **`native`**, not at another delegation engine: ACS quota
+  exhausted / TDE unavailable → run the turn natively, never silently swap engines.
+
+**Must NOT do:** ship a feature without a flag · default a new flag to `true` ·
+flag a compliance/security mechanism · read the engine choice from an env var or from a
+second config key · let a degrade path route into an engine the operator did not select.
+
+---
+
 ## Testing + Docs Sync (load-bearing)
 
 **Before committing** changes to `adapter.py`, `daemon.js`, or `shared/js/`:

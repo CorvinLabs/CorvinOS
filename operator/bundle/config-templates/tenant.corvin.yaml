@@ -130,22 +130,47 @@ spec:
     signer_fingerprint: "72C1D704E30D83E5F547020E83A025CE5EBB2493"
 
   # ── Web chat (ADR-0037 + ADR-0114) ──────────────────────────────────────────
-  # Controls the Console "Chat" tab — delegation, budget, and history.
+  # Controls the Console "Chat" tab — worker engine, delegation, budget, history.
   # delegation_enabled must be true for the WDAT Worker Graph (Audit tab)
   # to show runs.  Deny-by-default per ADR-0114; set true here so a
   # fresh install can see the graph immediately.
   web_chat:
-    delegation_enabled: true     # fan out long/complex tasks to ACS workers
+    delegation_enabled: true     # allow fan-out at all (see worker_engine below)
+    # Which engine performs a turn — Console → Settings → Worker Engine writes
+    # this too (via features.json, which overrides this file).
+    #   native (DEFAULT) — Claude Code does the work in-process. The only
+    #                      auto-delegation left is big-data-shaped work → ACS.
+    #   acs              — delegate qualifying turns to the ACS manager/worker
+    #                      fan-out.
+    #   tde              — delegate qualifying turns to the Tiered Delegation
+    #                      Engine. Off unless selected; degrades to native when
+    #                      TDE is unavailable or the compute pool is exhausted.
+    # An explicit /delegate and big-data-shaped work go to ACS in every mode.
+    worker_engine: native
     # budget overrides (defaults shown):
     # max_workers: 4
     # max_iterations: 6
 
+  # ── Feature flags — ship dark by default ────────────────────────────────────
+  # Every new feature is off until switched on, so an update never changes how
+  # an existing install behaves. Console → Settings → Features toggles these
+  # (writes features.json, which overrides this file). An absent key means OFF.
+  # Security/compliance mechanisms are NOT listed here — they stay always-on.
+  features: {}
+    # ccc_command_routing: true       # entity extraction on every turn
+    # acs_context_sync: true          # ADR-0213 transcript replay after delegation
+    # bridge_big_data_delegation: true  # big-data messenger tasks → ACS
+    # browser_automation: true        # /browser — launches a real Chrome
+    # execution_context_badge: true   # per-turn engine/model/token badge
+
   # ── User-Defined Learning Objectives (ADR-0163) ────────────────────────────────
   # Deny-by-default: ULO is inactive unless a tenant explicitly opts in.
   # Set enabled: true to let users personalise assistant behaviour via
-  # /objective add|pause|resume|delete.
+  # /objective add|pause|resume|delete. The shipped template leaves it OFF so a
+  # fresh install starts with a stable core (CLAUDE.md § Feature Flags); the
+  # code side has always been deny-by-default.
   ulo:
-    enabled: true
+    enabled: false
 
   # ── ACS default worker model (ADR-0112 / ADR-0119) ───────────────────────────
   # When delegation_enabled=true the orchestrator spawns worker agents.

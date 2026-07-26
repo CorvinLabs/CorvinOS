@@ -17,7 +17,7 @@ hints) — and they could disagree.
 | 6 | **L25 Compute** (deterministic data processing, DSI datasources) | statistics, charts, CSV/dataset transforms, ML | COMPUTE directive → `compute_run`; console compute routes | **yes** — compute units |
 | 7 | **Normal delegation** (`corvin_delegate` MCP: `delegate_claude_code/codex/opencode/hermes/copilot`) | one bounded call to a *named* engine | model-chosen tool; DELEGATE directive | no (deliberate, LIC-DELEGATE-MCP-COMPUTE-01) |
 | 8 | **Background tasks** (`/task`·`/bg` bridges; console TaskManager) | long-running detached jobs with completion notify | explicit user command / CCC `/create task` | task-count quotas |
-| 9 | **TDE — Tiered Delegation Engine** (ADR-0214, `operator/orchestration/tde/`): one InitialAnalysis LM call → parallel step batches → per-step three-gate delegation (L34 fail-closed → budget → learned loss) to subprocess one-shot workers | **the DEFAULT delegation engine since ADR-0217** — every auto-delegated console turn that is not big-data-shaped and not an explicit `/delegate` | ADR-0114 delegated branch (auto, `_delegation_engine_target`); console `/use-engine tiered_delegation <task>`; `SendIntegration` for embedders | **yes** — shared agentic-compute pool (ADR-0216), charged at the `TieredDelegationEngine.execute` chokepoint |
+| 9 | **TDE — Tiered Delegation Engine** (ADR-0214, `operator/orchestration/tde/`): one InitialAnalysis LM call → parallel step batches → per-step three-gate delegation (L34 fail-closed → budget → learned loss) to subprocess one-shot workers | **off unless selected** — runs only while the operator has picked `worker_engine: tde` in Settings → Worker Engine | ADR-0114 delegated branch (auto, `_worker_engine_target`, `tde` mode only); console `/use-engine tiered_delegation <task>` (also `tde` mode only); `SendIntegration` for embedders | **yes** — shared agentic-compute pool (ADR-0216), charged at the `TieredDelegationEngine.execute` chokepoint |
 
 **Remote instances (A2A, L38)** are not a ladder mechanism: like mechanism 7
 they are a model-chosen tool (`a2a_send` MCP, persona flag
@@ -36,15 +36,41 @@ The load-bearing structural insight: there are TWO kinds of routing decision,
 and they must not be conflated.
 
 **Tier 1 — authoritative runtime routing.** The runtime *forces* an execution
-path before any model sees the task. Today exactly one Tier-1 decision
-exists: the console web-chat triage (`chat_runtime._should_delegate`) that
-either enters the delegated branch or the direct OS-turn. **Within the
-delegated branch, ADR-0217 (maintainer decision 2026-07-24) makes TDE the
-default engine**: `_delegation_engine_target` routes to ACS only for the
-explicit `/delegate` override, a big-data shape (`_is_big_data_task()` — explicit
-GB/TB volumes, million-row corpora, big-data/data-lake vocabulary), or when
-TDE is unavailable / the shared pool is exhausted (non-charging peek) — in
-those degrade cases the ACS branch's hardened ADR-0201 ladder takes over.
+path before any model sees the task. Two things decide it, in this order:
+
+1. the console web-chat triage (`chat_runtime._should_delegate`) — is this task
+   delegation-worthy at all?
+2. the **operator's worker-engine selection** (`spec.web_chat.worker_engine`,
+   Console → Settings → Worker Engine) — where a delegation-worthy task
+   actually runs. The rule is
+   `delegation_policy.worker_engine_target(mode, force_delegate, is_big_data,
+   tde_available, quota_ok)`:
+
+> **Reach (2026-07-26).** The **Console web-chat** calls the full rule. The
+> **messenger bridges** got the big-data half only, behind the dark
+> `bridge_big_data_delegation` flag (`adapter.py::_maybe_delegate_big_data`):
+> with the flag on, a big-data-shaped message fans out to ACS; everything else
+> — and every failure — runs the normal direct turn. Bridges still have no
+> `/delegate`, no TDE and no general fan-out. The **remote-trigger** path has
+> no Tier-1 delegation at all.
+>
+> Both surfaces classify with the SAME `delegation_policy.is_big_data_task`
+> (moved out of `chat_runtime.py` on 2026-07-26 — while it lived there the
+> bridges could not have routed big data even in principle).
+
+| mode | delegation-worthy task lands on |
+|---|---|
+| `native` (**DEFAULT**) | the direct OS-turn — except a big-data shape, which still fans out to ACS |
+| `acs` | ACS delegation_loop |
+| `tde` | TDE, while it is available and the pool has headroom; otherwise the direct OS-turn |
+
+An explicit `/delegate` and a big-data shape (`_is_big_data_task()` — explicit
+GB/TB volumes, million-row corpora, big-data/data-lake vocabulary) route to ACS
+in **every** mode; a stock (`native`) install performs no other auto-delegation.
+Every degrade ends at the direct OS-turn, never at a different delegation
+engine: an unavailable TDE or an exhausted pool must not silently swap the
+operator's selection. (The ACS branch keeps its own hardened ADR-0201 ladder
+for the cases that do reach it.)
 (ADR-0214's RobustEngineDetector — TDE vs ACS vs claude_code — remains the
 embedder-facing selector in `SendIntegration`; the console's Tier-1 choice is
 the deterministic function above, not the softmax detector. TDE turns stay
@@ -99,8 +125,9 @@ First match wins:
     "mit Hermes" the parcel carrier must not steer off the fan-out)
 3.  FAN-OUT shape                → delegated branch (console) / Workflow tool
     (multi-source/multi-perspective/per-item with substantive shape).
-    WITHIN the delegated branch (ADR-0217): big-data shape → ACS
-    delegation_loop; everything else → TDE (default delegation engine)
+    WITHIN the delegated branch the worker-engine setting decides: big-data
+    shape → ACS delegation_loop in every mode; everything else → the selected
+    engine (`native` = direct OS-turn, the default)
 4.  CODING shape                 → direct OS-turn + built-in Task tool — NEVER ACS
     (sequential, context-heavy, workspace-bound; incl. crash/freeze; ADR-0202)
 5.  REMAINING SUBSTANTIVE         → ACS (console legacy: strong verbs, long/multi-step)
@@ -147,7 +174,7 @@ a capability the surface lacks.
 | Mechanism | Console web-chat | Messenger bridges | Voice | MCP (model-chosen) |
 |---|---|---|---|---|
 | Direct OS-turn | ✓ | ✓ | ✓ (via bridge) | — |
-| ACS fan-out | ✓ (triage/`/delegate`) | ✗ (no fan-out path) | ✗ | ✓ `acs_delegate` |
+| ACS fan-out | ✓ (triage/`/delegate`) | big-data only, behind `bridge_big_data_delegation` (dark) | ✗ | ✓ `acs_delegate` |
 | DAG workflows | ✓ (routes) | via MCP tools in-turn | via MCP | ✓ `workflow_run` |
 | Scheduler | via MCP/in-turn | ✓ (native, 30 s tick) | ✓ | — |
 | Goal | in-turn advisory | ✓ `/goal` | ✓ | — |
@@ -163,7 +190,7 @@ a capability the surface lacks.
 | Direct OS-turn (incl. its Task-tool subagents) | **no** |
 | `delegate_*` single calls | **no** (maintainer decision) |
 | ACS fan-out (any entry) | **yes** — web-chat charges at `chat_runtime` (direct-`ACSRuntime` path), everything else at the `run_acs_workflow` chokepoint; quota exhausted → single-turn fallback (ADR-0201) |
-| TDE run (auto-routed default since ADR-0217, or `/use-engine tiered_delegation`) | **yes** — charged at the `TieredDelegationEngine.execute` chokepoint. **The L34-forced-`claude_code` fallback is metered too** (`ClaudeCodeLocalEngine.execute` charges the same pool when it runs the real local executor — closes the 2026-07-24 review bypass where a CONFIDENTIAL token in the prompt forced claude_code and ran unmetered). Only real-compute configs are metered (real IPC or the default claude-CLI local executor), stub/mock test configs are not; invalid plans refund the unit. The auto-route additionally peeks the pool WITHOUT charging (`_tde_quota_peek_ok`) and steers an exhausted pool into the ACS branch's ADR-0201 degrade ladder |
+| TDE run (only in `worker_engine: tde`, auto-routed or `/use-engine tiered_delegation`) | **yes** — charged at the `TieredDelegationEngine.execute` chokepoint. **The L34-forced-`claude_code` fallback is metered too** (`ClaudeCodeLocalEngine.execute` charges the same pool when it runs the real local executor — closes the 2026-07-24 review bypass where a CONFIDENTIAL token in the prompt forced claude_code and ran unmetered). Only real-compute configs are metered (real IPC or the default claude-CLI local executor), stub/mock test configs are not; invalid plans refund the unit. The auto-route additionally peeks the pool WITHOUT charging (`_tde_quota_peek_ok`) and steers an exhausted pool into the ACS branch's ADR-0201 degrade ladder |
 | ACS quota fallback (single direct turn) | **no** (un-metered `run_delegate`) — but bounded by `_FALLBACK_MAX_PER_DAY`=50/tenant/day (race-safe LIC-1 lock, review D3), an elevated-but-fixed `BUDGET_FALLBACK_MAX_S` wall-clock ceiling (review F6/F7; caller `budget_override` threads through route AND chokepoint, F8/D1), and max `_ACS_FB_MAX_CONCURRENT`=2 concurrent fallback turns per tenant on the console route (typed 429 beyond, review D4) |
 | `workflow_run` / compute routes | **yes** |
 | Scheduler fires / background tasks | normal-turn cost / task-count quotas |
@@ -188,14 +215,21 @@ only via `run_delegate(budget_ceiling_s=…)`, never from the MCP tool surface
   mis-routed fan-out burns quota).
 - The triage path never spawns a subprocess (heuristic stage only — the
   Haiku fallback is reserved for the bridge adapter's Tier-2 injection).
-- TDE is the default delegation engine (ADR-0217); the auto-route may pick
-  ACS ONLY on a big-data shape or as the degrade target (TDE unavailable /
-  pool-peek exhausted). `/delegate` remains the explicit ACS override;
-  `/use-engine claude_code` is the explicit sequential override (`_force_direct`)
-  and hard-suppresses delegation — kept in lockstep with the pre-spawn gate's
-  `_will_delegate` so the L34/L35 compliance row always matches the engine that
-  actually spawns. The engine choice (`_delegation_engine_target`) stays pure +
-  deterministic — no subprocess, no LM call, unit-tested as a matrix.
+- The worker engine is the operator's choice, and `native` is the default: a
+  stock install auto-delegates NOTHING except a big-data shape. TDE is never
+  entered — not by the auto-route and not by `/use-engine tiered_delegation`,
+  which answers with a "TDE is switched off" hint instead — unless
+  `worker_engine: tde` is selected. `/delegate` remains the explicit ACS
+  override; `/use-engine claude_code` is the explicit sequential override
+  (`_force_direct`) and hard-suppresses delegation — kept in lockstep with the
+  pre-spawn gate's `_will_delegate` so the L34/L35 compliance row always
+  matches the engine that actually spawns. The engine choice
+  (`_worker_engine_target` → `delegation_policy.worker_engine_target`) stays
+  pure + deterministic — no subprocess, no LM call, unit-tested as a matrix,
+  and the TDE availability probes never run outside `tde` mode.
+- Every degrade ends at the direct OS-turn. An unavailable engine or an
+  exhausted pool must never re-route into a *different* delegation engine than
+  the one the operator selected.
 - `_tde_available()` requires BOTH the TDE module set (source tree or the
   wheel-vendored `_vendor/operator/orchestration`, wired via
   `_operator_bootstrap._OPERATOR_SUBTREES`) AND a resolvable `claude` CLI — a

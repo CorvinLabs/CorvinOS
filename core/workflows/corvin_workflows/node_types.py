@@ -348,6 +348,7 @@ def _write_outbox(channel: str, chat_id: str, text: str, *, extra: dict[str, Any
     by `deliver`, `ask_human`, and `answer` so all three chat-facing node
     types speak the exact same wire envelope."""
     import json as _json
+    import os as _os
     import secrets as _secrets
     import sys as _sys
     import time as _time
@@ -356,7 +357,13 @@ def _write_outbox(channel: str, chat_id: str, text: str, *, extra: dict[str, Any
     _here = _Path(__file__).resolve()
     _repo = _here.parents[3]  # workflows/corvin_workflows/ → core/ → repo root
     _bridges_shared = _repo / "operator" / "bridges" / "shared"
-    outbox_dir = _bridges_shared / "outbox"
+    # Honour the same ADAPTER_OUTBOX override adapter.py uses. Without it this
+    # path was hardcoded to the live repo outbox, so every test run of a
+    # deliver/ask_human/answer node queued a real envelope for the real
+    # bridges: 724 of them, all addressed to the test placeholder chat_id
+    # "owner-chat", had accumulated in the Discord dead-letter dir by
+    # 2026-07-26. Tests must set ADAPTER_OUTBOX to a tmpdir.
+    outbox_dir = _Path(_os.environ.get("ADAPTER_OUTBOX") or (_bridges_shared / "outbox"))
     outbox_dir.mkdir(parents=True, exist_ok=True)
 
     envelope = {

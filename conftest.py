@@ -53,6 +53,25 @@ def _protected_state() -> "dict[str, object] | None":
 
 
 @pytest.fixture(autouse=True)
+def _isolated_bridge_outbox(monkeypatch, tmp_path):
+    """Never let a test queue a real message for a real messenger.
+
+    Fourth incarnation of the class this file guards: the workflow
+    `deliver`/`ask_human`/`answer` node types write their envelope straight
+    into `operator/bridges/shared/outbox/`, which the LIVE Discord/WhatsApp
+    daemons poll. Every test run of those nodes therefore handed the running
+    bridge a real send job — 724 of them, addressed to the test placeholder
+    chat_id "owner-chat", were sitting in the Discord dead-letter dir on
+    2026-07-26, each one costing a REST round-trip against Discord's
+    invalid-request budget.
+
+    Redirect the outbox to tmp for every test. A test that needs a specific
+    path still wins: its own monkeypatch.setenv runs after this fixture.
+    """
+    monkeypatch.setenv("ADAPTER_OUTBOX", str(tmp_path / "outbox"))
+
+
+@pytest.fixture(autouse=True)
 def _live_state_tripwire(request: pytest.FixtureRequest):
     before = _protected_state()
     yield

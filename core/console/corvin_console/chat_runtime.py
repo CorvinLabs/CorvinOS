@@ -35,7 +35,10 @@ What IS in v1
 Beyond v1 (ADR-0114)
 --------------------
 * Delegation path: behind ``spec.web_chat.delegation_enabled`` (tenant
-  opt-in, deny-by-default) substantive turns are triaged and dispatched
+  opt-in, deny-by-default) substantive turns are triaged; WHERE they then
+  run is the operator's ``spec.web_chat.worker_engine`` choice
+  (``native`` default | ``acs`` | ``tde``, Console → Settings → Worker
+  Engine). In ``acs`` mode they are dispatched
   to ``ACSRuntime(bridge="web", chat=<sid>)`` — the OS side manages,
   workers inherit the user/tenant model (ADR-0112). Worker progress is
   streamed into the chat WebSocket; the run lands in the session
@@ -119,6 +122,10 @@ if str(_FORGE_PATH) not in sys.path:
 from forge import paths as _forge_paths  # noqa: E402
 from . import task_manager as _task_manager  # noqa: E402
 from . import _spawn_gates  # noqa: E402  — shared fail-closed pre-spawn chokepoint
+from . import feature_flags as _feature_flags  # noqa: E402  — ship-dark registry + worker engine
+from .execution_context import (  # noqa: E402
+    ExecutionContextBuilder, EngineId, DelegationMode, detect_model_source,
+)
 
 # Canonical bridge audit chain (L16) — os_turn.* traceability for web turns
 # (EU AI Act Art. 12/13). Best-effort import mirroring the `_cowork is not
@@ -1354,7 +1361,23 @@ def will_delegate(sess: "WebChatSession", prompt: str) -> bool:
             return False
     except Exception:  # noqa: BLE001 — repair module unavailable → no throttle
         pass
-    return _should_delegate(prompt)
+    # `/delegate` is resolved the same way stream_turn resolves it (~L4277):
+    # an explicit delegate command routes to ACS in every mode, so the guard
+    # must not refuse such a turn because the direct engine is undrivable.
+    _pl = prompt.strip().lower()
+    force_delegate = (_pl == _DELEGATE_PREFIX
+                      or _pl.startswith(_DELEGATE_PREFIX + " "))
+    if not (force_delegate or _should_delegate(prompt)):
+        return False
+    # The operator's worker-engine selection has the last word: on a `native`
+    # install a delegation-worthy prompt still runs in-process unless it is
+    # big-data-shaped, and then the engine guard the caller wants to skip DOES
+    # apply. Mirror the runtime decision exactly (stream_turn ~L4540).
+    return _worker_engine_target(
+        prompt,
+        mode=_feature_flags.worker_engine_mode(sess.tenant_id),
+        force_delegate=force_delegate,
+    ) != "native"
 
 
 _LANGUAGE_RULE_AUTODETECT = (
@@ -2812,9 +2835,10 @@ def _should_delegate(prompt: str) -> bool:
     if _EXPLICIT_WORKER_RE.search(p):
         return True
     # Rule 1c (ADR-0217) — big-data shapes are delegation-AFFIRMATIVE: they
-    # route into the delegated branch, where _delegation_engine_target sends
-    # them to the ACS manager/worker fan-out ("ACS only for big data",
-    # maintainer decision 2026-07-24). Without this, the COMPUTE blueprint at
+    # route into the delegated branch, where _worker_engine_target sends
+    # them to the ACS manager/worker fan-out in EVERY worker-engine mode —
+    # it is the one auto-delegation a `native` install still performs
+    # ("ACS only for big data"). Without this, the COMPUTE blueprint at
     # rule 2 swallowed e.g. "Analysiere 500 GB Serverlogs … vergleiche die
     # Regionen" into a DIRECT turn and the big-data→ACS mapping never fired
     # (found by the ADR-0217 real-E2E run). Two carve-outs keep their
@@ -2855,157 +2879,16 @@ def _should_delegate(prompt: str) -> bool:
     has_verb = bool(_TRIAGE_VERB_RE.search(p))
     has_multi = bool(_TRIAGE_MULTI_RE.search(p))
     return has_verb and (has_multi or len(p) >= 160)
-
-
-# ── ADR-0217 — TDE-first delegation: big-data discriminator ───────────────────
-# Maintainer decision 2026-07-24: within the delegated branch, TDE (ADR-0214)
-# is the DEFAULT engine; the ACS manager/worker fan-out remains ONLY for
-# (a) the explicit `/delegate` override and (b) big-data-shaped tasks, where
-# the manager/worker pattern's per-worker context isolation genuinely beats
-# TDE's full-context steps. Deterministic, 0 ms, no API — same contract as the
-# rest of the triage (§6 invariant: the triage path never spawns a subprocess).
-# Big-data detection (ADR-0217). REBUILT 2026-07-24 (round-2 refutation): the
-# earlier single mega-regex (bounded volume/count token + "[^.!?]{0,30}" window
-# + data noun) had catastrophic O(n²) backtracking — a pasted digit blob froze
-# the whole console event loop for tens of seconds. This version instead uses
-# small, individually non-backtracking token regexes and does the "is a data
-# noun nearby?" proximity test in Python against the CLAUSE the token sits in
-# (bounded by . ! ? ; , : and newlines). No regex ever combines a variable-
-# length run with a trailing window, so there is no backtracking blowup, and
-# clause-scoping stops "3 GB RAM, welche Dateien?" from binding "Dateien"
-# across the comma (the round-2 false-positive class).
-
-# A data noun — the thing a big-data volume/count is ABOUT. Two tiers:
-#  (a) an anchored regex (\b…\b) for the short / English / ambiguous nouns
-#      where a compound-suffix match would be a false positive
-#      (blogs→"logs", arrows→"rows", profiles→"files");
-#  (b) plain substring checks for the German data HEADS that legitimately form
-#      compounds (Kundentransaktionen, Verkaufsdaten, Messwerte) — done with
-#      `in` on the lowercased clause, which is linear and cannot backtrack
-#      (a "\b\w*(head)\b" regex would reintroduce the O(n²) blowup).
-_DATA_NOUN_RE = re.compile(
-    r"\b(?:logs?|logfiles?|logdatei\w*|serverlogs?|clickstreams?|"
-    r"records?|rows?|zeilen|eintr[äa]ge?n?|entries|events?|"
-    r"dokumente?n?|documents?|dateien|files?|exporte?\w*|dumps?|"
-    r"datasets?|corpus|korpus|transactions|measurements|"
-    r"backups?|buckets?|s3)\b",
-    re.IGNORECASE,
-)
-_DATA_SUBSTR = (
-    # Compound-prone data HEADS. "messung" is deliberately EXCLUDED — it is a
-    # substring of the unrelated "Vermessung" (surveying), a false-positive
-    # that would burn a quota unit; the more data-specific "messwert" is kept.
-    "daten", "transaktion", "messwert",
-    "datensatz", "datensätz", "datenbank", "datenmeng",
-)
-# Common words that END in "…daten" but are NOT data (Kandidaten, Mandaten,
-# Soldaten, Sedaten). Stripped before the "daten" substring test so
-# "5 Millionen Kandidaten" is not mis-read as a big-data task (2026-07-24
-# round-3 refutation, "daten" false-friend class).
-_DATA_FALSE_FRIENDS_RE = re.compile(
-    r"kandidaten|mandaten|soldaten|sedaten|pedanten", re.IGNORECASE)
-
-
-def _clause_has_data_noun(clause: str) -> bool:
-    if _DATA_NOUN_RE.search(clause):
-        return True
-    low = _DATA_FALSE_FRIENDS_RE.sub("", clause.lower())
-    return any(s in low for s in _DATA_SUBSTR)
-# Hardware nouns that make a volume NOT about data ("2 TB SSD", "3 GB RAM").
-_HW_NOUN_RE = re.compile(
-    r"\b(?:ram|arbeitsspeicher|vram|ssds?|hdds?|festplatten?|disks?|drives?|"
-    r"speicher)\b",
-    re.IGNORECASE,
-)
-_BIGDATA_VOCAB_RE = re.compile(
-    r"\bbig[\s\-]?data\b|\bdata[\s\-]*lakes?\b|\bdata[\s\-]*warehouses?\b|"
-    r"\b(?:riesige[nrms]?|gewaltige[nrms]?|huge|massive|large[\s\-]*scale)\s+"
-    r"(?:datenmengen?|datens[äa]tze?n?|datasets?|logfiles?|corpus|korpus)\b",
-    re.IGNORECASE,
-)
-# TB/PB volume token — bounded digits, no trailing window (no backtracking).
-_TBPB_RE = re.compile(
-    r"\b\d{1,6}(?:[.,]\d{1,3})?\s?(?:tb|tib|pb|pib|terabytes?|petabytes?)\b",
-    re.IGNORECASE,
-)
-_GB_RE = re.compile(
-    r"\b\d{1,7}(?:[.,]\d{1,3})?\s?(?:gb|gib|gigabytes?)\b",
-    re.IGNORECASE,
-)
-# A "big count" token: magnitude words, grouped ≥1e6, bare ≥7-digit run, or a
-# k/m magnitude suffix (NOT followed by a letter, so "km"/"3m fertig" that is
-# a unit/word is excluded). All bounded → each is linear-time.
-_BIG_COUNT_RE = re.compile(
-    r"\b(?:million(?:en)?|mio\.?|mrd\.?|milliarden?|billions?|millions?)\b"
-    r"|\b\d{1,3}(?:[.,]\d{3}){2,6}\b"
-    r"|\b\d{7,15}\b"
-    r"|\b\d{1,6}(?:[.,]\d{1,3})?[km](?![a-z])",
-    re.IGNORECASE,
-)
-_CLAUSE_DELIMS = ".!?;,:\n\r"
-
-
-def _clause_bounds(text: str, start: int, end: int) -> tuple[int, int]:
-    """[lo, hi) of the clause containing [start, end): extend to the nearest
-    clause delimiter on each side."""
-    lo = start
-    while lo > 0 and text[lo - 1] not in _CLAUSE_DELIMS:
-        lo -= 1
-    hi = end
-    n = len(text)
-    while hi < n and text[hi] not in _CLAUSE_DELIMS:
-        hi += 1
-    return lo, hi
-
-
-def _clause_around(text: str, start: int, end: int) -> str:
-    lo, hi = _clause_bounds(text, start, end)
-    return text[lo:hi]
-
-
-_ABBREV_DOT_RE = re.compile(r"\b(mio|mrd)\.", re.IGNORECASE)
-# The big-data signal (a volume/count + a nearby data noun) is a property of the
-# TASK DESCRIPTION, which comes first; anything past this is pasted data, which
-# needn't be scanned to know the task is big-data-shaped. Capping the scanned
-# length bounds the routine to O(cap): without it, a delimiter-free numeric blob
-# with many count tokens made the per-match clause scans O(n²) overall — ~2 min
-# CPU on a 128 KB paste, on the async event loop (2026-07-24 round-3 refutation).
-_BIG_DATA_MAX_SCAN = 2000
-
-
 def _is_big_data_task(prompt: str) -> bool:
-    """Deterministic big-data signal for the TDE-vs-ACS split (ADR-0217).
+    """Deterministic big-data signal — the ONE auto-delegation a `native`
+    install still performs. The implementation now lives in the shared
+    ``delegation_policy`` module so the bridge adapter classifies identically
+    (moved 2026-07-26); this wrapper keeps the console-local name that the
+    routing tests and call sites already use.
+    """
+    from delegation_policy import is_big_data_task as _shared  # noqa: PLC0415
+    return _shared(prompt)
 
-    Bounded: only the first _BIG_DATA_MAX_SCAN chars are scanned, so the whole
-    routine (including the per-match clause scans) is O(_BIG_DATA_MAX_SCAN²)
-    worst case (~a few hundred K ops), constant in the real prompt length — no
-    O(n²) blowup on a pasted numeric blob (2026-07-24 round-3 refutation)."""
-    prompt = prompt[:_BIG_DATA_MAX_SCAN]
-    # Drop the period in "Mio."/"Mrd." so it isn't read as a clause boundary
-    # that would split the magnitude word off its data noun.
-    prompt = _ABBREV_DOT_RE.sub(r"\1", prompt)
-    if _BIGDATA_VOCAB_RE.search(prompt):
-        return True
-    # TB/PB: big data unless the clause names hardware (SSD/HDD/…).
-    for m in _TBPB_RE.finditer(prompt):
-        lo, hi = _clause_bounds(prompt, m.start(), m.end())
-        if not _HW_NOUN_RE.search(prompt[lo:hi]):
-            return True
-    # GB and big counts: require a data noun in the SAME clause. Dedup by
-    # clause: once a clause has been checked and lacked a data noun, skip the
-    # other volume/count tokens inside it — this makes a delimiter-free numeric
-    # blob (all tokens in one clause) O(n) instead of O(n²) even before the
-    # length cap (round-3 refutation).
-    for rx in (_GB_RE, _BIG_COUNT_RE):
-        _checked_hi = -1
-        for m in rx.finditer(prompt):
-            if m.start() < _checked_hi:
-                continue  # same clause as a previous no-data-noun match
-            lo, hi = _clause_bounds(prompt, m.start(), m.end())
-            if _clause_has_data_noun(prompt[lo:hi]):
-                return True
-            _checked_hi = hi
-    return False
 
 
 def _tde_available() -> bool:
@@ -3092,32 +2975,34 @@ def _tde_quota_peek_ok() -> bool:
         return False
 
 
-def _delegation_engine_target(
+def _worker_engine_target(
     prompt: str,
     *,
+    mode: str,
     force_delegate: bool,
-    tde_available: bool,
-    quota_ok: bool,
 ) -> str:
-    """ADR-0217 engine choice WITHIN the delegated branch: "tde" | "acs".
+    """Which engine runs this turn: "native" | "acs" | "tde".
 
-    Pure + deterministic so the routing matrix is unit-testable:
-      1. `/delegate` (force_delegate) → ACS — explicit user commands beat
-         every classifier (§6 invariant, unchanged).
-      2. Big-data shape → ACS — the ONLY auto-routed ACS trigger left.
-      3. TDE unavailable or pool exhausted (peek) → ACS — its branch owns the
-         hardened ADR-0201 degrade ladder.
-      4. Everything else → TDE (the default delegation engine).
+    ``mode`` is the operator's Settings → Engine selection. The decision itself
+    lives in the shared ``delegation_policy`` module so every surface (console,
+    bridges, remote triggers) routes identically from one source of truth; this
+    wrapper only computes the surface-specific signals it feeds:
 
-    ADR-0221 P1: the decision itself now lives in the shared
-    ``delegation_policy`` module so the bridge adapter routes identically from
-    one source of truth. This wrapper computes the surface-specific big-data
-    signal and delegates the rule.
+      * the big-data shape of the prompt, and
+      * the TDE availability / pool-headroom probes — evaluated ONLY when the
+        operator selected ``tde`` and no earlier rung of the ladder already
+        decided, so a ``native`` install never pays for a TDE import probe.
     """
-    from delegation_policy import delegation_engine_target as _shared_target  # noqa: PLC0415
+    from delegation_policy import worker_engine_target as _shared_target  # noqa: PLC0415
+    is_big_data = _is_big_data_task(prompt)
+    if mode == "tde" and not (force_delegate or is_big_data):
+        tde_available, quota_ok = _tde_available(), _tde_quota_peek_ok()
+    else:
+        tde_available = quota_ok = False
     return _shared_target(
+        mode=mode,
         force_delegate=force_delegate,
-        is_big_data=_is_big_data_task(prompt),
+        is_big_data=is_big_data,
         tde_available=tde_available,
         quota_ok=quota_ok,
     )
@@ -3153,7 +3038,8 @@ def _turns_path(tenant_id: str, sid: str) -> Path:
 
 
 def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
-                 voice_key_hint: str | None = None, tde_progress: dict[str, Any] | None = None) -> None:
+                 voice_key_hint: str | None = None, tde_progress: dict[str, Any] | None = None,
+                 execution_context: dict[str, Any] | None = None) -> None:
     """Append one turn (user or assistant) to the session's turns log.
 
     ``voice_key_hint`` (ADR-0194 Phase 1) pins the voice_key of the text this
@@ -3165,6 +3051,10 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
     Attached by _stream_tde_turn() before persisting, so audit graph survives reload.
     Omitted for non-TDE turns (backward-compatible; optional field in turns.jsonl).
 
+    ``execution_context`` (Phase 2a): Engine, model, delegation, and performance metadata
+    for the turn. Attached by stream_turn() for audit and frontend rendering.
+    Omitted for non-OS turns (user messages, delegation fan-out).
+
     Best-effort: a failed write does not break the stream — the user
     message is still in the WebSocket history client-side, and the
     assistant's reply was already streamed back."""
@@ -3174,6 +3064,8 @@ def _append_turn(sess: "WebChatSession", role: str, parts: list[dict[str, Any]],
         payload["voice_key"] = voice_key_hint
     if tde_progress:
         payload["tde_progress"] = tde_progress
+    if execution_context:
+        payload["execution_context"] = execution_context
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
@@ -3727,11 +3619,13 @@ async def _stream_tde_turn(
     loss) via SubprocessWorkerIPC. Yields the same event shapes as the other
     turn paths, plus the `engine` event that feeds the per-turn badge.
 
-    Reached two ways since ADR-0217 (maintainer decision 2026-07-24): the
-    explicit `/use-engine tiered_delegation` opt-in (the original ADR-0214
-    canary path), and the ADR-0114 auto-delegation branch, where TDE is now
-    the DEFAULT delegation engine (`_delegation_engine_target`; ACS keeps
-    only /delegate, big-data shapes, and the unavailable/exhausted degrade).
+    Reached two ways, BOTH only while the operator selected `worker_engine:
+    tde` in Settings → Worker Engine: the explicit `/use-engine
+    tiered_delegation` opt-in (the original ADR-0214 canary path), and the
+    ADR-0114 auto-delegation branch (`_worker_engine_target`; /delegate and
+    big-data shapes still go to ACS, and an unavailable engine or exhausted
+    pool degrades to the direct OS-turn). The default mode is `native`, which
+    never reaches this function.
 
     Attribution note: the ADR-0171 engine span emitted via os_audit
     ("os_turn.started") is attributed to the configured OS engine — which is
@@ -4132,8 +4026,13 @@ async def _stream_tde_turn(
     # EXPENSIVE user OS model (Opus/Sonnet) that is NOT metered against the
     # compute pool — spending it on a dead turn is pure waste (2026-07-24
     # review, Area #2; mirrors the import-failure path that already skips it).
+    # Behind the `acs_context_sync` feature flag (ships dark). Off = the
+    # pre-ADR-0213 behavior: no extra `claude -p` replay, `_sync_ok` stays
+    # False, and the C1 fallback below deliberately does NOT advance
+    # turn_count — so the next `--continue` never resumes a transcript that
+    # never recorded this delegation. Quiet degrade, not an error.
     _sync_ok = False
-    if rc == 0:
+    if rc == 0 and _feature_flags.is_enabled("acs_context_sync", sess.tenant_id):
         _shim = _types.SimpleNamespace(
             summary=final[:_CONTEXT_SYNC_RESULT_CAP],
             final_output=None, error=None, status="completed",
@@ -4209,6 +4108,13 @@ async def stream_turn(
         chat_key=sess.chat_key,
         instruction=prompt,
         persona="assistant",
+        turn_number=sess.turn_count,
+    )
+
+    # Phase 2a: Instantiate ExecutionContext builder — tracks engine, model,
+    # delegation, tokens, duration for the entire turn lifecycle.
+    _exec_ctx_builder = ExecutionContextBuilder(
+        tenant_id=sess.tenant_id,
         turn_number=sess.turn_count,
     )
 
@@ -4345,6 +4251,12 @@ async def stream_turn(
     # Resolve engine early so turn.start debug event can record it.
     # The full pre-spawn gate check (line ~1958) also uses this value.
     _os_engine = _effective_os_engine(sess.tenant_id)
+
+    # Phase 2a: Start execution context tracking with resolved engine and model.
+    _exec_ctx_builder.start(
+        engine_id=_os_engine or "",
+        model_name=_os_model or "",
+    )
 
     # ── DEBUG: turn.start ────────────────────────────────────────────────────
     _dbg_t0 = time.monotonic()
@@ -4509,16 +4421,31 @@ async def stream_turn(
     # would let a mid-turn tenant.corvin.yaml mtime flip diverge the gate's
     # compliance row from the engine that actually spawns (round-4 review).
     _del_enabled = _delegation_enabled(sess.tenant_id)
-    _will_delegate = (_del_enabled
-                      and not _del_throttled
-                      and not _force_direct
-                      and (_force_delegate or _should_delegate(prompt)))
+    # Worker-engine selection (Settings → Engine). Read ONCE here for the same
+    # reason `_del_enabled` is: the gate's compliance row and the engine that
+    # actually spawns must not diverge across the `await _ccc_dispatch` below.
+    _worker_mode = _feature_flags.worker_engine_mode(sess.tenant_id)
+    _pre_delegate = (_del_enabled
+                     and not _del_throttled
+                     and not _force_direct
+                     and (_force_delegate or _should_delegate(prompt)))
+    # The pre-filter only says "delegation-worthy"; the operator's mode decides
+    # WHERE it runs, and `native` means the turn stays in-process. Resolve it
+    # here so the pre-spawn gate below is classified against the engine that
+    # will really spawn.
+    _worker_target = (
+        _worker_engine_target(prompt, mode=_worker_mode,
+                              force_delegate=_force_delegate)
+        if _pre_delegate else "native"
+    )
+    _will_delegate = _pre_delegate and _worker_target != "native"
     # _os_engine already resolved above (before turn.start debug event)
     _gate_refusal = _spawn_gates.check_console_spawn_or_refusal(
         _task_text, tenant_id=sess.tenant_id, persona="assistant",
         channel=CHANNEL, chat_key=sess.chat_key,
         engine_id=(_spawn_gates.DELEGATION_ENGINE_ID
-                   if (_will_delegate or _tde_force) else _os_engine),
+                   if (_will_delegate or (_tde_force and _worker_mode == "tde"))
+                   else _os_engine),
     )
     if _gate_refusal is not None:
         _os_audit("os_turn.started", {"model": _os_model_used})
@@ -4538,13 +4465,18 @@ async def stream_turn(
         return
 
     # ── ADR-0168 M1/M2 — CCC entity extraction + command routing ─────────
-    # Enabled by default (opt-out: set CORVIN_CCC_M1_ENABLED=0 to disable).
+    # Behind the `ccc_command_routing` feature flag (ships dark; Console →
+    # Settings → Features). The legacy `CORVIN_CCC_M1_ENABLED=0` env kill
+    # switch still forces it OFF so an existing opt-out keeps working, but it
+    # can no longer turn the feature ON — the flag is the single source of
+    # truth (CLAUDE.md § Feature Flags).
     # Runs AFTER all pre-spawn gates pass, BEFORE engine spawn, so every
     # gate (L44, L34, L35) has already cleared this turn.
     # Yields a "ccc_action" event to the WebSocket; the LLM turn continues
     # normally — CCC is additive, not a bypass.
     import os as _os_ccc  # noqa: PLC0415 — local import to keep module-level clean
-    if _os_ccc.environ.get("CORVIN_CCC_M1_ENABLED", "1") != "0":
+    if (_feature_flags.is_enabled("ccc_command_routing", sess.tenant_id)
+            and _os_ccc.environ.get("CORVIN_CCC_M1_ENABLED", "1") != "0"):
         try:
             from entity_extract import extract as _ccc_extract  # type: ignore  # noqa: PLC0415
             from corvin_console.chat_router import dispatch as _ccc_dispatch  # noqa: PLC0415
@@ -4714,8 +4646,34 @@ async def stream_turn(
         return
 
     # ── ADR-0214 — TDE explicit opt-in path ──────────────────────────────
-    # Fires on the slash command. Since ADR-0217 the ADR-0114 delegation
-    # branch below ALSO routes to TDE by default (`_delegation_engine_target`).
+    # Fires on the slash command, and ONLY while the operator has selected the
+    # TDE worker engine in Settings → Engine. "TDE off" means off on every
+    # path — a slash command that silently starts the engine the operator
+    # switched off would make the setting a lie. Say so instead of routing.
+    if _tde_force and _worker_mode != "tde":
+        _tde_off = (
+            "TDE (Tiered Delegation Engine) ist auf dieser Installation "
+            f"abgeschaltet — aktive Worker-Engine: `{_worker_mode}`.\n\n"
+            "Einschalten in der Console unter **Settings → Worker Engine** "
+            "(Auswahl `tde`). Der Task läuft jetzt regulär über die aktive "
+            "Engine weiter — schick ihn einfach ohne `/use-engine` nochmal.\n"
+        )
+        _os_audit("os_turn.started", {"model": _os_model_used})
+        tm.record_event(task_id, {
+            "event": "task.failed", "exit_code": 1,
+            "error": "tde requested but worker engine is not tde",
+        })
+        _audit_emit(sess, "web.turn.completed", rc=1,
+                    result_chars=len(_tde_off), usage=None,
+                    reason="tde_disabled")
+        _os_emit_completed(1)
+        yield {"type": "delta", "text": _tde_off}
+        yield {"type": "result", "text": _tde_off, "usage": None}
+        touch(sess, increment_turn=False)
+        _append_turn(sess, "assistant", [{"kind": "text", "text": _tde_off}])
+        yield {"type": "done"}
+        return
+
     if _tde_force:
         if not _task_text:
             _tde_hint = "Bitte Task angeben: /use-engine tiered_delegation <task>"
@@ -4769,7 +4727,15 @@ async def stream_turn(
         yield {"type": "delta", "text": _cc_hint}
         yield {"type": "result", "text": _cc_hint, "usage": None}
         touch(sess, increment_turn=False)
-        _append_turn(sess, "assistant", [{"kind": "text", "text": _cc_hint}])
+        # Phase 2a: Complete context with error code for this error path
+        _exec_ctx = None
+        try:
+            _exec_ctx_builder.set_exit_code(1)
+            _exec_ctx = _exec_ctx_builder.complete()
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+        _append_turn(sess, "assistant", [{"kind": "text", "text": _cc_hint}],
+                     execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
         yield {"type": "done"}
         return
 
@@ -4787,32 +4753,43 @@ async def stream_turn(
     # `_force_direct` (explicit `/use-engine claude_code`) hard-suppresses
     # delegation — it is mutually exclusive with `_force_delegate`
     # (`/use-engine acs`), so the two flags never conflict (HIGH-1).
-    _del_will_delegate = (_del_enabled and not _del_throttled and not _force_direct
-                          and (_force_delegate or _del_heuristic))
+    _del_pre_delegate = (_del_enabled and not _del_throttled and not _force_direct
+                         and (_force_delegate or _del_heuristic))
+    # Reuse `_worker_target` resolved at the pre-spawn gate above — NOT a fresh
+    # read — for the same reason `_del_enabled` is reused: a mid-turn settings
+    # flip during the CCC await must not send the turn to an engine the gate
+    # never evaluated. `native` here means the delegated branch is skipped and
+    # the normal Claude Code OS-turn below runs the task.
+    _tde_target = _worker_target
+    _del_will_delegate = _del_pre_delegate and _tde_target != "native"
     _dbg(sess.workdir, "delegation.decision",
          delegation_enabled=_del_enabled,
+         worker_engine=_worker_mode,
          force_delegate=_force_delegate,
          heuristic_match=_del_heuristic,
          repair_throttled=_del_throttled,
          will_delegate=_del_will_delegate,
          prompt_len=len(prompt),
     )
+
+    # Phase 2a: Record delegation decision in execution context.
+    # acs_run_id and tde_router_decision will be captured later when available.
     if _del_will_delegate:
-        # ── ADR-0217 — TDE-first delegation (maintainer decision 2026-07-24) ──
-        # Within the delegated branch TDE is now the DEFAULT engine; ACS runs
-        # only for the explicit /delegate override, big-data-shaped tasks, or
-        # when TDE is unavailable / the shared pool is exhausted (peek) — the
-        # ACS branch below then owns the hardened ADR-0201 degrade ladder.
-        # The pre-spawn gate above already classified this turn as delegation
-        # (DELEGATION_ENGINE_ID covers both engines' spawn class).
-        _tde_target = _delegation_engine_target(
-            prompt,
-            force_delegate=_force_delegate,
-            tde_available=_tde_available(),
-            quota_ok=_tde_quota_peek_ok(),
+        _exec_ctx_builder.set_delegation(
+            mode=(DelegationMode.TDE if _tde_target == "tde" else DelegationMode.ACS),
         )
+
+    if _del_will_delegate:
+        # ── Worker-engine routing (CLAUDE.md § Worker Engine Selection) ──────
+        # `_tde_target` is the shared `delegation_policy.worker_engine_target`
+        # verdict: ACS for an explicit /delegate and for big-data-shaped work
+        # in every mode, TDE only when the operator selected it and the engine
+        # is actually available. The pre-spawn gate above already classified
+        # this turn as delegation (DELEGATION_ENGINE_ID covers both engines'
+        # spawn class).
         _dbg(sess.workdir, "delegation.engine_choice",
              target=_tde_target,
+             worker_engine=_worker_mode,
              force_delegate=_force_delegate,
              big_data=_is_big_data_task(prompt))
         if _tde_target == "tde":
@@ -4886,7 +4863,15 @@ async def stream_turn(
                 yield {"type": "error", "code": 402, "message": _cq_msg}
                 yield {"type": "result", "text": _cq_msg, "usage": None}
                 touch(sess, increment_turn=True)
-                _append_turn(sess, "assistant", [{"kind": "text", "text": _cq_msg}])
+                # Phase 2a: Complete context with error code for this error path
+                _exec_ctx = None
+                try:
+                    _exec_ctx_builder.set_exit_code(1)
+                    _exec_ctx = _exec_ctx_builder.complete()
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
+                _append_turn(sess, "assistant", [{"kind": "text", "text": _cq_msg}],
+                             execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
                 yield {"type": "done"}
                 return
             # Use the CANONICAL resolver (CORVIN_HOME → service.env pin → repo marker
@@ -4952,7 +4937,15 @@ async def stream_turn(
                 yield {"type": "delta", "text": _fb_gate}
                 yield {"type": "result", "text": _fb_gate, "usage": None}
                 touch(sess, increment_turn=True)
-                _append_turn(sess, "assistant", [{"kind": "text", "text": _fb_gate}])
+                # Phase 2a: Complete context with error code for this error path
+                _exec_ctx = None
+                try:
+                    _exec_ctx_builder.set_exit_code(1)
+                    _exec_ctx = _exec_ctx_builder.complete()
+                except Exception:  # noqa: BLE001 — best-effort
+                    pass
+                _append_turn(sess, "assistant", [{"kind": "text", "text": _fb_gate}],
+                             execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
                 yield {"type": "done"}
                 return
             if _fb_quota_exceeded:
@@ -5415,22 +5408,28 @@ async def stream_turn(
             # manager/worker subprocesses), so without this the next
             # `--continue` turn would resume a transcript that never saw
             # this delegation — see ADR-0213 for the full root cause.
-            _sync_holder = _ContextSyncProcHolder()
-            try:
-                _sync_ok = await asyncio.to_thread(
-                    _sync_acs_result_to_transcript, sess, res, run_id,
-                    task_text, model=_os_model, resume=resume,
-                    proc_holder=_sync_holder,
-                )
-            except (asyncio.CancelledError, GeneratorExit):
-                # Client gone mid-sync — kill the subprocess synchronously
-                # (asyncio.to_thread cannot interrupt the blocking thread
-                # itself) before propagating, same bug class the ACS
-                # worker/manager calls already fixed via _WorkerProcessHolder.
-                _sync_holder.kill()
-                raise
-            except Exception:  # noqa: BLE001 — best-effort; C1 fallback below covers it
-                _sync_ok = False
+            # Behind the `acs_context_sync` feature flag (ships dark). Off =
+            # the pre-ADR-0213 behavior — no extra `claude -p`, `_sync_ok`
+            # stays False and the C1 fallback below keeps turn_count where it
+            # is, so no later turn resumes an unrecorded transcript.
+            _sync_ok = False
+            if _feature_flags.is_enabled("acs_context_sync", sess.tenant_id):
+                _sync_holder = _ContextSyncProcHolder()
+                try:
+                    _sync_ok = await asyncio.to_thread(
+                        _sync_acs_result_to_transcript, sess, res, run_id,
+                        task_text, model=_os_model, resume=resume,
+                        proc_holder=_sync_holder,
+                    )
+                except (asyncio.CancelledError, GeneratorExit):
+                    # Client gone mid-sync — kill the subprocess synchronously
+                    # (asyncio.to_thread cannot interrupt the blocking thread
+                    # itself) before propagating, same bug class the ACS
+                    # worker/manager calls already fixed via _WorkerProcessHolder.
+                    _sync_holder.kill()
+                    raise
+                except Exception:  # noqa: BLE001 — best-effort; C1 fallback below covers it
+                    _sync_ok = False
             _os_audit("os_turn.context_sync", {
                 "delegated_run_id": run_id, "synced": _sync_ok,
             })
@@ -5442,7 +5441,15 @@ async def stream_turn(
             # original bug (turn-count increment with no transcript write)
             # in the failure path.
             touch(sess, increment_turn=_sync_ok)
-            _append_turn(sess, "assistant", _turn_parts)
+            # Phase 2a: Complete context for delegation path (TDE/ACS)
+            _exec_ctx = None
+            try:
+                _exec_ctx_builder.set_exit_code(0 if (ok or bounded_stop) else 1)
+                _exec_ctx = _exec_ctx_builder.complete()
+            except Exception:  # noqa: BLE001 — best-effort
+                pass
+            _append_turn(sess, "assistant", _turn_parts,
+                        execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
             yield {"type": "done"}
             return
 
@@ -5468,7 +5475,15 @@ async def stream_turn(
         yield {"type": "delta", "text": _engine_msg}
         yield {"type": "result", "text": _engine_msg, "usage": None}
         touch(sess, increment_turn=True)
-        _append_turn(sess, "assistant", [{"kind": "text", "text": _engine_msg}])
+        # Phase 2a: Complete context with error code for this error path
+        _exec_ctx = None
+        try:
+            _exec_ctx_builder.set_exit_code(1)
+            _exec_ctx = _exec_ctx_builder.complete()
+        except Exception:  # noqa: BLE001 — best-effort
+            pass
+        _append_turn(sess, "assistant", [{"kind": "text", "text": _engine_msg}],
+                     execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
         yield {"type": "done"}
         return
 
@@ -5631,6 +5646,8 @@ async def stream_turn(
                             })
                             _os_tools_called += 1
                             _os_tool_seq += 1
+                            # Phase 2a: Track tool call in execution context
+                            _exec_ctx_builder.add_tool_call()
                             # Chain: tool name + seq only, never inputs (GDPR Art. 5)
                             _os_audit("os_turn.tool_called", {
                                 "tool_name": tname, "seq": _os_tool_seq,
@@ -5643,6 +5660,8 @@ async def stream_turn(
             elif etype == "result":
                 result_text = evt.get("result") or "".join(final_text_parts)
                 last_usage = evt.get("usage") or {}
+                # Phase 2a: Extract token usage from stream-json result event
+                _exec_ctx_builder.set_usage(last_usage)
                 # annotation_pending tells the client "a second, final result
                 # event is coming — render this text but do NOT speak it yet".
                 # Without it the client spoke both events and paid for two full
@@ -5809,7 +5828,17 @@ async def stream_turn(
     # to lose context on revisit (tool-only or image-only responses).
     if not parts_persisted:
         parts_persisted = [{"kind": "text", "text": ""}]
+
+    # Phase 2a: Complete execution context with final exit code
+    _exec_ctx = None
+    try:
+        _exec_ctx_builder.set_exit_code(rc)
+        _exec_ctx = _exec_ctx_builder.complete()
+    except Exception:  # noqa: BLE001 — best-effort context capture
+        pass
+
     _append_turn(sess, "assistant", parts_persisted,
-                 voice_key_hint=voice_key(_spoken_text) if _spoken_text.strip() else None)
+                 voice_key_hint=voice_key(_spoken_text) if _spoken_text.strip() else None,
+                 execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
 
     yield {"type": "done"}

@@ -579,13 +579,15 @@ def _resolve_tts_voice(lang: str) -> str | None:
 _MAX_VOICE_SEGMENTS = 24
 _TTS_PROVIDER_CHAR_LIMIT = 4000  # OpenAI TTS-1 hard cap is 4096; stay under it
 _TTS_SUMMARIZE_MAX_CHARS = 400   # same default build_voice_summary() uses for bridges
-# summarize.py's OWN internal budget is CLI (45s) + Hermes (60s) = up to 105s
+# summarize.py's OWN internal budget is CLI (90s) + Hermes (45s) = up to 135s
 # worst case (see summarize.py's _SUMMARY_CLI_TIMEOUT_S/_SUMMARY_HERMES_TIMEOUT_S).
 # A shorter wrapper timeout here would routinely cut off a legitimate
 # in-progress CLI attempt before summarize.py's own fallback chain even runs —
-# matches adapter.py::build_voice_summary's identical 120s parent-cap
-# convention for the exact same subprocess (bridge/console parity).
-_TTS_SUMMARIZE_TIMEOUT_S = float(os.environ.get("CORVIN_TTS_SUMMARIZE_TIMEOUT_S", "120"))
+# matches adapter.py::build_voice_summary's identical 150s parent-cap
+# convention for the exact same subprocess (bridge/console parity). Raised
+# from 120s with VOICE-F8 — at 120s the child CLI budget had to be 45s, below
+# its measured ~50s median, so every summary degraded to near-verbatim.
+_TTS_SUMMARIZE_TIMEOUT_S = float(os.environ.get("CORVIN_TTS_SUMMARIZE_TIMEOUT_S", "150"))
 
 
 def _resolve_voice_output_language(candidate_text: str) -> str:

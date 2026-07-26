@@ -177,6 +177,65 @@ async function main() {
   assert(fs.existsSync(path.join(tmpRoot, 'd.json')),
          'throwing send keeps the envelope — reply is never silently lost');
 
+  // 9. Regression (incident 2026-07-26): a sendFn that NEVER settles wedged
+  //    the poller permanently — `running` stayed true, every later tick hit
+  //    `if (running) return`, and 38 minutes of replies/heartbeats piled up
+  //    in the outbox without a single log line. The send timeout must break
+  //    the hang and let the envelope re-enter the normal retry path.
+  fs.rmSync(path.join(tmpRoot, 'd.json'), { force: true });
+  writeEnvelope('e.json', { channel: 'testchan', text: 'hangs-forever' });
+  writeEnvelope('f.json', { channel: 'testchan', text: 'queued-behind-the-hang' });
+  let hangs = 0;
+  let delivered9 = 0;
+  const logs9 = [];
+  const poller9 = startOutboxPoller({
+    outboxDir: tmpRoot,
+    channel: 'testchan',
+    sendFn: async (payload) => {
+      if (payload.text === 'hangs-forever') { hangs++; return new Promise(() => {}); }
+      delivered9++;
+    },
+    isPermanent: () => false,
+    logger: (m) => logs9.push(m),
+    intervalMs: 20,
+    sendTimeoutMs: 100,
+    stallWarnMs: 60_000,
+  });
+  await sleep(400);
+  poller9.stop();
+  assert(hangs >= 2, `hanging send timed out and was retried (attempts=${hangs})`);
+  assert(delivered9 >= 1,
+         'envelope queued behind the hang still gets delivered');
+  assert(!fs.existsSync(path.join(tmpRoot, 'f.json')),
+         'the poller is not wedged — the queue keeps draining');
+  assert(logs9.some((m) => m.includes('send timed out')),
+         'the timeout is visible in the log, not silent');
+
+  // 10. A tick that stalls past stallWarnMs must SAY so — the absence of any
+  //     log line is what made the outage undiagnosable for 38 minutes.
+  fs.rmSync(path.join(tmpRoot, 'e.json'), { force: true });
+  writeEnvelope('g.json', { channel: 'testchan', text: 'stalls' });
+  const logs10 = [];
+  const poller10 = startOutboxPoller({
+    outboxDir: tmpRoot,
+    channel: 'testchan',
+    sendFn: async () => new Promise(() => {}),
+    logger: (m) => logs10.push(m),
+    intervalMs: 20,
+    sendTimeoutMs: 0,        // timeout disabled → only the stall detector can see it
+    stallWarnMs: 80,
+    stallResetMs: 200,
+  });
+  await sleep(500);
+  poller10.stop();
+  assert(logs10.some((m) => m.includes('tick stalled')),
+         'a wedged tick is logged instead of failing silently');
+  assert(logs10.some((m) => m.includes('force-releasing')),
+         'stallResetMs releases the wedged flag so delivery resumes');
+  const st10 = poller10.stats();
+  assert(typeof st10.stalled_s === 'number',
+         'stats() exposes stall duration for /status + watchdog');
+
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 
   if (failures > 0) {

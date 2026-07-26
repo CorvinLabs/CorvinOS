@@ -34,13 +34,37 @@ const path = require('path');
  * @param {number}   [cfg.maxAttempts=10] — Fallback für unklassifizierte Fehler:
  *                                        nach so vielen Fehlversuchen dead-lettern.
  *                                        Nur wirksam wenn deadLetterDir gesetzt ist.
- * @returns {{stop: function}}          — handle mit stop() zum Cleanup
+ * @param {number} [cfg.sendTimeoutMs=120000] — Hard-Deadline um EINEN sendFn-Call.
+ *                                        Läuft sie ab, wirft der Poller statt weiter
+ *                                        zu warten; der Envelope bleibt liegen und
+ *                                        durchläuft die normale Retry-/Dead-Letter-
+ *                                        Logik. 0 deaktiviert den Timeout (altes
+ *                                        Verhalten). Siehe Deadlock-Kommentar unten.
+ * @param {number} [cfg.stallWarnMs=300000] — Ab dieser Tick-Laufzeit loggt der Poller
+ *                                        "tick stalled" (einmal pro LOG_DEDUP_MS)
+ *                                        statt stumm zu bleiben.
+ * @param {number} [cfg.stallResetMs=900000] — Backstop: dauert ein Tick SO lange,
+ *                                        wird das running-Flag zwangsweise gelöst,
+ *                                        damit der Poller weiterläuft. 0 = nie.
+ * @returns {{stop: function, stats: function}} — handle mit stop() zum Cleanup und
+ *                                        stats() für Health-Endpoints
  */
 function startOutboxPoller({
   outboxDir, channel, sendFn, preCheck, logger, intervalMs = 500,
   deadLetterDir = null, isPermanent = null, maxAttempts = 10,
+  sendTimeoutMs = 120_000, stallWarnMs = 300_000, stallResetMs = 900_000,
 }) {
   let running = false;
+  // Wall-clock start of the currently running tick (0 = idle). Load-bearing
+  // for the stall detector below: without it a tick that never settles left
+  // `running === true` forever and every subsequent interval fired straight
+  // into `if (running) return` — the poller was permanently dead while the
+  // process stayed alive, the gateway stayed connected and /status still
+  // answered. Nothing was logged, so no watchdog could see it and replies
+  // piled up in the outbox unnoticed (incident 2026-07-26).
+  let runningSince = 0;
+  let lastStallLog = 0;
+  let lastTickEnd = Date.now();
   // Sent-once guard: track files that were successfully sent but whose
   // unlink() failed. On the next tick we delete them instead of re-sending,
   // which would duplicate voice notes / messages.
@@ -66,6 +90,37 @@ function startOutboxPoller({
   // files accumulated in the Discord outbox and made a full poll pass take ~65 s,
   // delaying every real reply behind the poison backlog (incident 2026-07-25).
   const _attempts = new Map(); // fpath → failure count
+
+  // Hard deadline around a single sendFn call. A send that never settles is
+  // the one failure mode the retry/dead-letter machinery cannot survive: the
+  // envelope is neither delivered nor failed, so no attempt is ever counted
+  // and the whole for-loop below stops mid-flight.
+  //
+  // Trade-off, deliberate: the underlying send is NOT cancellable, so a call
+  // that eventually succeeds *after* the timeout can produce a duplicate
+  // message when the envelope is retried. That is why the default is a
+  // generous 120 s — well beyond any healthy Discord/Telegram send, so only a
+  // genuine hang trips it. A rare duplicate beats a silently dead poller that
+  // drops every subsequent reply.
+  function sendWithTimeout(payload, fpath) {
+    if (!sendTimeoutMs || sendTimeoutMs <= 0) return sendFn(payload, fpath);
+    let timer = null;
+    const deadline = new Promise((_resolve, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(
+          `send timed out after ${Math.round(sendTimeoutMs / 1000)}s`);
+        // Distinct marker so channel-specific isPermanent() classifiers
+        // (which match numeric API error codes) never mistake a timeout for
+        // a permanent error — a hang is transient by nature and should ride
+        // the normal attempts budget.
+        err.code = 'OUTBOX_SEND_TIMEOUT';
+        reject(err);
+      }, sendTimeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+    });
+    return Promise.race([sendFn(payload, fpath), deadline])
+      .finally(() => { if (timer) clearTimeout(timer); });
+  }
 
   function deadLetter(fpath, f, reason, errMsg, attempts) {
     try {
@@ -136,7 +191,7 @@ function startOutboxPoller({
       }
       if (payload.channel !== channel) continue;
       try {
-        await sendFn(payload, fpath);
+        await sendWithTimeout(payload, fpath);
         _sentOnce.add(fpath);         // mark before unlink so a failed unlink is detected next tick
         let unlinked = false;
         try { fs.unlinkSync(fpath); unlinked = true; } catch {}
@@ -175,14 +230,55 @@ function startOutboxPoller({
   }
 
   const handle = setInterval(() => {
-    if (running) return;
+    if (running) {
+      // A tick that outlives stallWarnMs is a bug, not a slow send — say so.
+      // This is the log line whose absence made the 2026-07-26 outage
+      // invisible: the poller was dead for 38 minutes without a single
+      // journal entry while replies queued up behind it.
+      const stalledMs = Date.now() - runningSince;
+      if (stallWarnMs > 0 && stalledMs > stallWarnMs) {
+        const now = Date.now();
+        if (logger && now - lastStallLog >= LOG_DEDUP_MS) {
+          lastStallLog = now;
+          logger(`outbox: tick stalled for ${Math.round(stalledMs / 1000)}s ` +
+                 `— nothing is being delivered`);
+        }
+        // Backstop for a hang that escapes sendWithTimeout (anything awaited
+        // outside sendFn). Releasing the flag lets the next tick proceed; the
+        // orphaned tick keeps running but can no longer wedge the poller shut.
+        // The _sentOnce guard still prevents a re-send of anything the
+        // orphaned tick already delivered.
+        if (stallResetMs > 0 && stalledMs > stallResetMs) {
+          if (logger) {
+            logger(`outbox: force-releasing stalled tick after ` +
+                   `${Math.round(stalledMs / 1000)}s — resuming delivery`);
+          }
+          running = false;
+          runningSince = 0;
+        }
+      }
+      return;
+    }
     running = true;
+    runningSince = Date.now();
     Promise.resolve().then(tick)
       .catch((e) => { if (logger) logger(`outbox tick error: ${e.message}`); })
-      .finally(() => { running = false; });
+      .finally(() => { running = false; runningSince = 0; lastTickEnd = Date.now(); });
   }, intervalMs);
 
-  return { stop: () => clearInterval(handle) };
+  return {
+    stop: () => clearInterval(handle),
+    // Health surface: lets a daemon's /status expose "the poller is wedged"
+    // so an external watchdog can act on it. A live process with an open
+    // gateway socket is NOT proof that anything is being delivered.
+    stats: () => ({
+      running,
+      stalled_s: running && runningSince
+        ? Math.round((Date.now() - runningSince) / 1000)
+        : 0,
+      idle_s: Math.round((Date.now() - lastTickEnd) / 1000),
+    }),
+  };
 }
 
 module.exports = { startOutboxPoller };

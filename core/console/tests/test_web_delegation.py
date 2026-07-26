@@ -544,23 +544,34 @@ def test_non_big_data_delegation_prompts_stay_tde(prompt: str) -> None:
     assert cr._is_big_data_task(prompt) is False
 
 
-def test_engine_target_matrix() -> None:
-    f = cr._delegation_engine_target
-    # default: TDE
+def test_engine_target_matrix(monkeypatch) -> None:
+    f = cr._worker_engine_target
+    # default (native): a substantive prompt stays in-process
     assert f("Recherchiere aus drei Quellen und vergleiche",
-             force_delegate=False, tde_available=True, quota_ok=True) == "tde"
-    # explicit /delegate → ACS always
+             mode="native", force_delegate=False) == "native"
+    # explicit /delegate → ACS always, in every mode
     assert f("Recherchiere aus drei Quellen",
-             force_delegate=True, tde_available=True, quota_ok=True) == "acs"
-    # big data → ACS
+             mode="native", force_delegate=True) == "acs"
+    # big data → ACS even on a native install (the ONLY auto-delegation left)
     assert f("Analysiere 500 GB Logs aus drei Quellen",
-             force_delegate=False, tde_available=True, quota_ok=True) == "acs"
-    # TDE unavailable → ACS (its branch owns the degrade ladder)
+             mode="native", force_delegate=False) == "acs"
+    # explicit acs selection → ACS
     assert f("Recherchiere aus drei Quellen",
-             force_delegate=False, tde_available=False, quota_ok=True) == "acs"
-    # pool exhausted (peek) → ACS → ADR-0201 fallback ladder
+             mode="acs", force_delegate=False) == "acs"
+    # explicit tde selection → TDE while the engine is available …
+    monkeypatch.setattr(cr, "_tde_available", lambda: True)
+    monkeypatch.setattr(cr, "_tde_quota_peek_ok", lambda: True)
     assert f("Recherchiere aus drei Quellen",
-             force_delegate=False, tde_available=True, quota_ok=False) == "acs"
+             mode="tde", force_delegate=False) == "tde"
+    # … TDE unavailable → native (degrades never swap in another engine)
+    monkeypatch.setattr(cr, "_tde_available", lambda: False)
+    assert f("Recherchiere aus drei Quellen",
+             mode="tde", force_delegate=False) == "native"
+    # pool exhausted (peek) → native for the same reason
+    monkeypatch.setattr(cr, "_tde_available", lambda: True)
+    monkeypatch.setattr(cr, "_tde_quota_peek_ok", lambda: False)
+    assert f("Recherchiere aus drei Quellen",
+             mode="tde", force_delegate=False) == "native"
 
 
 def test_engine_target_is_pure_no_spawn(monkeypatch) -> None:
@@ -572,9 +583,9 @@ def test_engine_target_is_pure_no_spawn(monkeypatch) -> None:
 
     monkeypatch.setattr(_sp, "Popen", _boom)
     monkeypatch.setattr(_sp, "run", _boom)
-    assert cr._delegation_engine_target(
+    assert cr._worker_engine_target(
         "Vergleiche 3 Millionen Zeilen aus mehreren Quellen",
-        force_delegate=False, tde_available=True, quota_ok=True,
+        mode="native", force_delegate=False,
     ) == "acs"
 
 
@@ -604,8 +615,9 @@ def test_tde_quota_peek_fail_closed(monkeypatch) -> None:
 ])
 def test_big_data_delegates_even_when_compute_shaped(prompt: str) -> None:
     assert cr._should_delegate(prompt) is True
-    assert cr._delegation_engine_target(
-        prompt, force_delegate=False, tde_available=True, quota_ok=True,
+    # Big data is the one shape a default (native) install still fans out.
+    assert cr._worker_engine_target(
+        prompt, mode="native", force_delegate=False,
     ) == "acs"
 
 
@@ -712,3 +724,58 @@ def test_big_data_bounded_on_numeric_blob() -> None:
 ])
 def test_big_data_daten_false_friends(prompt: str, expected: bool) -> None:
     assert cr._is_big_data_task(prompt) is expected
+
+
+# ── will_delegate() must mirror the runtime decision exactly ─────────────────
+
+class _FakeSess:
+    """Minimal stand-in for WebChatSession — will_delegate only reads these."""
+
+    def __init__(self, workdir):
+        self.tenant_id = "_default"
+        self.workdir = workdir
+
+
+def _sess(tmp_path):
+    return _FakeSess(tmp_path)
+
+
+def test_will_delegate_false_on_native_for_substantive_prompt(tmp_path, monkeypatch) -> None:
+    """The WebSocket guard must not claim delegation for a turn that will
+    actually run on the direct engine — otherwise it skips the
+    engine-unavailable check for a turn that needs it."""
+    monkeypatch.setattr(cr, "_delegation_enabled", lambda tid: True)
+    monkeypatch.setattr(cr._feature_flags, "worker_engine_mode", lambda tid: "native")
+    assert cr.will_delegate(
+        _sess(tmp_path),
+        "Recherchiere aus mehreren Quellen die Marktlage und vergleiche danach die Anbieter",
+    ) is False
+
+
+def test_will_delegate_true_on_native_for_big_data(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cr, "_delegation_enabled", lambda tid: True)
+    monkeypatch.setattr(cr._feature_flags, "worker_engine_mode", lambda tid: "native")
+    assert cr.will_delegate(
+        _sess(tmp_path),
+        "Analysiere 500 GB Serverlogs aus dem Data Lake auf Anomalie-Muster "
+        "und vergleiche die Regionen",
+    ) is True
+
+
+def test_will_delegate_true_for_explicit_delegate_even_on_native(tmp_path, monkeypatch) -> None:
+    """`/delegate` routes to ACS in every mode, so the guard must let it through
+    even when the direct engine is undrivable."""
+    monkeypatch.setattr(cr, "_delegation_enabled", lambda tid: True)
+    monkeypatch.setattr(cr._feature_flags, "worker_engine_mode", lambda tid: "native")
+    assert cr.will_delegate(_sess(tmp_path), "/delegate schreib mir ein Haiku") is True
+    # word-boundary guard: "/delegatex …" is a plain prompt, not the command
+    assert cr.will_delegate(_sess(tmp_path), "/delegatex schreib mir ein Haiku") is False
+
+
+def test_will_delegate_true_on_acs_mode(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cr, "_delegation_enabled", lambda tid: True)
+    monkeypatch.setattr(cr._feature_flags, "worker_engine_mode", lambda tid: "acs")
+    assert cr.will_delegate(
+        _sess(tmp_path),
+        "Recherchiere aus mehreren Quellen die Marktlage und vergleiche danach die Anbieter",
+    ) is True

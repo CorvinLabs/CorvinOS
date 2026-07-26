@@ -862,8 +862,60 @@ def test_voice_summary_timeout_budgets_fit_parent_caps() -> None:
     assert summarize._ANNEX_CLI_TIMEOUT_S + summarize._ANNEX_HERMES_TIMEOUT_S <= summarize._PARENT_CAP_ANNEX_S
 
 
+def test_cli_budget_covers_measured_latency() -> None:
+    """VOICE-F8 — the budget must fit the BACKEND, not just the parent cap.
+
+    The fit-the-cap test above stayed green while the CLI backend was dead on
+    arrival: VOICE-F7 shrank the CLI budget to 45s to fit a 120s cap, but a
+    real summary call measures ~50s median (23s/27s/75s/>180s over five runs),
+    so 23 of 23 field summaries degraded to the near-verbatim fallback — the
+    one thing a voice summary must never do. Summing to less than the cap is
+    necessary, not sufficient; a budget under the measured median silently
+    disables a backend without failing anything.
+
+    If this test fails, RE-MEASURE and update `_MEASURED_CLI_P50_S` — do not
+    lower the budget to make it pass.
+    """
+    assert summarize._SUMMARY_CLI_TIMEOUT_S > summarize._MEASURED_CLI_P50_S, (
+        f"CLI budget {summarize._SUMMARY_CLI_TIMEOUT_S}s is at or below the "
+        f"measured median {summarize._MEASURED_CLI_P50_S}s — the backend would "
+        "lose more often than it wins and every summary degrades"
+    )
+    # The session recap is one CLI call over a LONGER transcript, so it can
+    # never be cheaper than a per-turn summary.
+    assert summarize._SESSION_RECAP_CLI_TIMEOUT_S >= summarize._SUMMARY_CLI_TIMEOUT_S, (
+        "session-recap CLI budget must not be tighter than the summary budget"
+    )
+    # Hermes is the OUTAGE fallback: it only needs to cover a warm local
+    # generate (~30s measured), but must not be so tight it never completes.
+    assert summarize._SUMMARY_HERMES_TIMEOUT_S >= 40, (
+        "Hermes budget below 40s cannot complete a warm local generate"
+    )
+
+
+def test_console_route_parent_cap_matches_the_ladder() -> None:
+    """routes/voice.py wraps the SAME child ladder in its own cap constant.
+    It drifted once (adapter 150s / console 120s would kill the child mid-CLI),
+    so pin them together — bridge/console parity."""
+    import re
+
+    voice_route = (
+        Path(summarize.__file__).resolve().parents[3]
+        / "core" / "console" / "corvin_console" / "routes" / "voice.py"
+    )
+    if not voice_route.is_file():  # console package not in this checkout
+        return
+    src = voice_route.read_text(encoding="utf-8")
+    m = re.search(r'_TTS_SUMMARIZE_TIMEOUT_S = float\(os\.environ\.get\(\s*"[^"]+",\s*"(\d+)"\s*\)\)', src)
+    assert m, "could not read _TTS_SUMMARIZE_TIMEOUT_S default from routes/voice.py"
+    assert int(m.group(1)) >= summarize._PARENT_CAP_MAIN_S, (
+        f"console cap {m.group(1)}s is below the {summarize._PARENT_CAP_MAIN_S}s "
+        "ladder — the console would kill the child before Hermes gets a turn"
+    )
+
+
 def test_session_recap_timeout_budgets_fit_the_console_route_parent_cap() -> None:
-    """routes/voice.py's session-summary endpoint wraps this ladder in a 120s
+    """routes/voice.py's session-summary endpoint wraps this ladder in a 150s
     subprocess.run timeout (_TTS_SUMMARIZE_TIMEOUT_S, same constant the
     per-turn summarizer already fits inside) — same reasoning as
     test_voice_summary_timeout_budgets_fit_parent_caps above: CLI + Hermes

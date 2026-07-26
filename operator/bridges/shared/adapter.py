@@ -7319,11 +7319,11 @@ def _append_lern_zugabe(text: str, *, lang: str = "de") -> str:
              "--lang", lang, "--appendix-mode"],
             input=text, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
-            # Parent cap for the annex ladder (VOICE-F7): summarize.py runs its
-            # annex CLI (20s) then Hermes (30s) = 50s inside this 60s cap, so the
-            # Hermes fallback always gets a full turn. Do NOT lower below the
+            # Parent cap for the annex ladder (VOICE-F7/F8): summarize.py runs
+            # its annex CLI (40s) then Hermes (35s) = 75s inside this 90s cap, so
+            # the Hermes fallback always gets a full turn. Do NOT lower below the
             # child sum — see summarize.py::_ANNEX_* budgets.
-            env=env, timeout=60, check=True,
+            env=env, timeout=90, check=True,
         )
         result = out.stdout.strip()
         return result or text
@@ -7355,9 +7355,9 @@ def _append_metapher(text: str, *, lang: str = "de") -> str:
              "--lang", lang, "--metapher-mode"],
             input=text, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
-            # Parent cap for the annex ladder (VOICE-F7): annex CLI 20s + Hermes
-            # 30s = 50s inside this 60s cap. See summarize.py::_ANNEX_* budgets.
-            env=env, timeout=60, check=True,
+            # Parent cap for the annex ladder (VOICE-F7/F8): annex CLI 40s +
+            # Hermes 35s = 75s inside this 90s cap. See summarize.py::_ANNEX_*.
+            env=env, timeout=90, check=True,
         )
         result = out.stdout.strip()
         return result or text
@@ -7397,6 +7397,160 @@ def _truncate_at_boundary(text: str, max_chars: int) -> str:
     if space_idx >= max_chars * 0.4:
         return window[:space_idx].rstrip() + "…"
     return window.rstrip() + "…"
+
+
+def _maybe_delegate_big_data(
+    prompt: str,
+    *,
+    channel: str,
+    chat_key: str,
+    persona: str | None,
+    tenant_id: str | None = None,
+) -> str | None:
+    """Big-data carve-out for the messenger bridges — the ONE auto-delegation
+    a ``native`` install performs (CLAUDE.md § Worker Engine Selection).
+
+    Returns the delegated answer, or ``None`` to mean "not applicable — run the
+    normal direct turn". EVERY failure path returns ``None``: an unavailable
+    runtime, a denied gate, an exhausted pool or a broken run must degrade to
+    the native turn, never fail the message and never silently swap engines.
+
+    Deliberately narrow: no ``/delegate`` override, no TDE, no fan-out for
+    ordinary long tasks. Only the big-data shape, only behind the
+    ``bridge_big_data_delegation`` flag (ships dark).
+
+    The direct turn that runs when this returns ``None`` carries its OWN
+    L34/L35/L44 gates (call_claude_streaming) — the gates here are the ones for
+    the ACS spawn class, which is a different compliance row.
+    """
+    tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+
+    # 1. Flag — ships dark; absent/unreadable config means off.
+    try:
+        from corvin_console import feature_flags as _ff  # type: ignore  # noqa: PLC0415
+        if not _ff.is_enabled("bridge_big_data_delegation", tid):
+            return None
+    except Exception:  # noqa: BLE001 — console package absent → feature is off
+        return None
+
+    # 2. The shared classifier — same function the console routes on.
+    try:
+        from delegation_policy import is_big_data_task  # noqa: PLC0415
+        if not is_big_data_task(prompt):
+            return None
+    except Exception as e:  # noqa: BLE001
+        log(f"big-data delegation: classifier unavailable ({e!r}) — direct turn")
+        return None
+
+    # 3. Compliance gates for the ACS spawn class. `name="acs"` is the engine id
+    #    both the L34 matrix and egress_gate already know for the fan-out.
+    #    The two wrappers take DIFFERENT keyword sets — L34 classifies the
+    #    prompt, L35 only needs the route — so they are called separately
+    #    rather than in a loop (a shared **kwargs call raised TypeError and,
+    #    caught below, would have disabled the feature silently).
+    class _AcsEngine:
+        name = "acs"
+
+    _acs_engine = _AcsEngine()
+    try:
+        refusal = _check_compliance_or_fail(
+            _acs_engine, prompt=prompt, persona=persona,
+            channel=channel, chat_key=str(chat_key), tenant_id=tid)
+        if refusal is None:
+            refusal = _check_egress_or_fail(
+                _acs_engine, channel=channel, chat_key=str(chat_key),
+                tenant_id=tid)
+    except Exception as e:  # noqa: BLE001 — a broken gate must not fan out
+        log(f"big-data delegation: gate raised ({e!r}) — direct turn")
+        return None
+    if refusal is not None:
+        # The gate denied ACS for this content. The direct turn is a DIFFERENT
+        # compliance row and runs its own gates, so degrade rather than
+        # refusing the message outright.
+        log("big-data delegation: gate denied the ACS spawn class — direct turn")
+        return None
+
+    # 4. Compute quota — fail CLOSED toward the direct turn.
+    try:
+        from license.compute_quota import increment_and_check as _cq  # type: ignore  # noqa: PLC0415
+        _home = Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
+        _cq(_home, channel=f"{channel}-bigdata", chat_key=str(chat_key))
+    except Exception as e:  # noqa: BLE001 — over quota, or no license module
+        log(f"big-data delegation: compute quota unavailable/exhausted ({type(e).__name__})"
+            " — direct turn")
+        return None
+
+    # 5. Run the fan-out.
+    try:
+        import acs_runtime as _acs  # type: ignore  # noqa: PLC0415
+        run_id = f"acs-{channel}-{int(time.time())}-{secrets.token_hex(3)}"
+        spec = {
+            "awp": "1.0.0",
+            "workflow": {"name": f"{channel}-bigdata-delegation",
+                         "description": prompt[:500], "version": "1.0.0"},
+            "orchestration": {"engine": "delegation_loop",
+                              "delegation_loop": {"budget": {}}},
+            "state": {"initial": {"task": prompt}},
+        }
+        runtime = _acs.ACSRuntime(tenant_id=tid, bridge=channel, chat=str(chat_key))
+        res = asyncio.run(runtime.run(spec, run_id=run_id))
+    except RuntimeError as e:
+        # asyncio.run inside an existing loop, or a runtime-level abort.
+        log(f"big-data delegation: run aborted ({e!r}) — direct turn")
+        return None
+    except Exception as e:  # noqa: BLE001 — ANY failure degrades to native
+        log(f"big-data delegation: run failed ({type(e).__name__}) — direct turn")
+        return None
+
+    answer = ""
+    for attr in ("final_output", "summary"):
+        val = getattr(res, attr, None)
+        if isinstance(val, str) and val.strip():
+            answer = val.strip()
+            break
+        if isinstance(val, dict):
+            inner = val.get("text") or val.get("result") or ""
+            if isinstance(inner, str) and inner.strip():
+                answer = inner.strip()
+                break
+    if not answer:
+        log("big-data delegation: run produced no text — direct turn")
+        return None
+    log(f"big-data delegation: run {run_id} produced {len(answer)} chars")
+    return answer
+
+
+# Flags a summarizer CLI may legitimately name back at us in an error. Anything
+# else on the line is treated as echoed argv — i.e. potentially the user's own
+# text — and is dropped (PII floor, VOICE-F9).
+_CLI_FLAG_RE = re.compile(r"--[a-z][a-z0-9-]*")
+
+
+def _scrub_cli_stderr(stderr: str, max_len: int = 200) -> str:
+    """Keep a summarizer's stderr useful for diagnosis but free of user text.
+
+    argparse errors read ``prog: error: unrecognized arguments: --task <the
+    user's entire question>`` — logging that verbatim leaks the prompt. Keep the
+    program name and the error phrasing, replace every argv value with the flag
+    name it belongs to, and drop any line that is not recognisably a diagnostic.
+    """
+    out: list[str] = []
+    for raw in stderr.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # Program name + error class, e.g. "summarize_smart.py: error: ..."
+        head = line.split(":", 2)
+        prog = head[0] if head[0].endswith(".py") else ""
+        flags = " ".join(dict.fromkeys(_CLI_FLAG_RE.findall(line)))
+        if "error" in line.lower() or "usage" in line.lower() or prog:
+            kind = "usage" if line.lower().startswith("usage") else "error"
+            out.append(f"{prog or 'summarizer'}: {kind}{f' [{flags}]' if flags else ''}")
+        elif flags:
+            out.append(f"[{flags}]")
+        # Everything else is unstructured output that may quote the input — drop.
+    # De-duplicate (argparse prints usage + error for the same fault).
+    return " | ".join(dict.fromkeys(out))[:max_len]
 
 
 def build_voice_summary(text: str, max_chars: int = 400,
@@ -7467,20 +7621,27 @@ def build_voice_summary(text: str, max_chars: int = 400,
         return ""
     # 2026-07-24 — the "already short → speak it markdown-stripped, no summary"
     # short-circuit is GONE. It was the bridge-side half of the confirmed
-    # Use summarize_smart.py (direct generation with tone respect) instead of
-    # the LLM-based summarize.py which can timeout and fall back to truncation.
-    # summarize_smart.py generates natural, varied voice summaries without LLM latency.
-    # Falls back to summarize.py if summarize_smart.py is unavailable (for compatibility).
-    summarizer = SCRIPTS_DIR / "summarize_smart.py"
-    summarizer_fallback = SCRIPTS_DIR / "summarize.py"
+    # VOICE-F9 (2026-07-26) — the LLM summarizer is the PRIMARY path again.
+    # summarize_smart.py bypasses the LLM and generates from templates. That
+    # made it fast, but it breaks the contract this file documents and the
+    # maintainer decided on 2026-07-24 ("the spoken voice note is ALWAYS an LLM
+    # summary rendered in the profile language", adapter-runtime.md): with
+    # --lang de it still emits English scaffolding ("Finished a meaningful
+    # feature… This makes things better: code quality improvement") wrapped
+    # around a truncated fragment of the original answer — i.e. neither a
+    # summary nor the profile language. It stays as the LAST-RESORT generator
+    # for an install that has no summarize.py at all; the LLM path has its own
+    # bounded degrade ladder (CLI → Hermes → capped structural fallback) for
+    # the timeout case this preference was originally meant to avoid.
+    summarizer = SCRIPTS_DIR / "summarize.py"
+    summarizer_fallback = SCRIPTS_DIR / "summarize_smart.py"
     stripper = SCRIPTS_DIR / "strip_for_tts.py"
 
-    # Prefer summarize_smart.py (direct generation), fall back to summarize.py (LLM)
-    if summarizer.exists() and summarizer.name == "summarize_smart.py":
-        use_smart = True
+    if summarizer.exists():
+        use_smart = False
     elif summarizer_fallback.exists():
         summarizer = summarizer_fallback
-        use_smart = False
+        use_smart = True
     else:
         # Neither script available — use fallback
         spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
@@ -7579,22 +7740,30 @@ def build_voice_summary(text: str, max_chars: int = 400,
                     cmd += ["--audience", aud]
             # Always pass the resolved output language — de/en included (2026-07-24).
             cmd += ["--output-language", output_language or base_lang]
-        # Pass the user's original question so summarize.py can open the
-        # voice note with a task anchor ("Du hast gefragt …") that makes the
-        # spoken output self-contained even without the chat context.
-        task_text = task.strip()
-        if task_text:
-            cmd += ["--task", task_text]
+            # Pass the user's original question so summarize.py can open the
+            # voice note with a task anchor ("Du hast gefragt …") that makes the
+            # spoken output self-contained even without the chat context.
+            # MUST stay inside this branch: summarize_smart.py has no --task
+            # argument, so appending it unconditionally made argparse exit 2 on
+            # EVERY turn that carried a question — i.e. effectively always. The
+            # CalledProcessError then degraded the voice note to "head of
+            # answer", the verbatim readout this whole path exists to prevent
+            # (observed live 2026-07-26 00:04, VOICE-F9).
+            task_text = task.strip()
+            if task_text:
+                cmd += ["--task", task_text]
         proc = subprocess.run(
             cmd,
             input=pre, capture_output=True, text=True,
             encoding="utf-8", errors="replace",
-            # Parent cap for the main summary ladder (VOICE-F7): summarize.py
-            # runs its CLI backend (45s) then the Hermes fallback (60s) = 105s
-            # inside this 120s cap, so a hung/slow CLI can't starve Hermes of a
+            # Parent cap for the main summary ladder (VOICE-F7/F8): summarize.py
+            # runs its CLI backend (90s) then the Hermes fallback (45s) = 135s
+            # inside this 150s cap, so a hung/slow CLI can't starve Hermes of a
             # turn. Do NOT lower below the child sum — see summarize.py::
-            # _SUMMARY_* budgets.
-            env=env, timeout=120, check=True,
+            # _SUMMARY_* budgets. VOICE-F8 raised this from 120s: at 120s the
+            # child CLI budget had to be 45s, below its measured ~50s median,
+            # so every summary degraded to near-verbatim (23/23 in the field).
+            env=env, timeout=150, check=True,
         )
         out = proc.stdout.strip()
         # summarize.py always exits 0 and prints SOMETHING even when both LLM
@@ -7650,9 +7819,17 @@ def build_voice_summary(text: str, max_chars: int = 400,
         # not — the subprocess never started) — surface it instead of just the
         # exception type, so "CLI exited non-zero" is distinguishable from "CLI
         # timed out because Ollama was cold" from the logs alone.
-        stderr_tail = str(getattr(e, "stderr", "") or "").strip()[-400:]
-        log(f"build_voice_summary: summarize failed ({type(e).__name__}) — using head of answer"
-            + (f" — stderr tail: {stderr_tail}" if stderr_tail else ""))
+        # PII floor: argparse and most CLI errors echo the OFFENDING ARGV back
+        # on stderr — and argv carries `--task <the user's question>`. Logging
+        # the raw tail therefore wrote the user's prompt in clear text into
+        # corvin.log (observed 2026-07-26 00:04). Keep the diagnostic value
+        # (which script, which error class, exit code) and drop anything that
+        # can quote the input: scrub argv echoes to their flag names.
+        stderr_tail = _scrub_cli_stderr(str(getattr(e, "stderr", "") or ""))
+        log(f"build_voice_summary: summarize failed ({type(e).__name__}"
+            + (f", rc={e.returncode}" if hasattr(e, "returncode") else "")
+            + ") — using head of answer"
+            + (f" — stderr: {stderr_tail}" if stderr_tail else ""))
         spoken = _strip_for_speech(_truncate_at_boundary(text, max_chars))
         if want_appendix and not _has_lern_zugabe_suffix(spoken):
             spoken = _strip_for_speech(_append_lern_zugabe(spoken, lang=appendix_lang))
@@ -9872,7 +10049,17 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         # only as a *protocol / declarative standard*. Engines (Claude
         # Code / Codex CLI / Gemini CLI / ...) do all execution. See
         # docs/decisions/0005-awp-standards-only.md.
-        if progress_on:
+        # Big-data carve-out (ships dark behind `bridge_big_data_delegation`).
+        # Returns None for everything else — including any failure — so the
+        # normal gated dispatcher below stays the default path.
+        answer = _maybe_delegate_big_data(
+            prompt, channel=channel, chat_key=chat_key,
+            persona=str((profile or {}).get("persona")
+                        or (profile or {}).get("name") or ""),
+        )
+        if answer is not None:
+            pass
+        elif progress_on:
             answer = call_claude_streaming(
                 prompt, channel=channel, chat_key=chat_key,
                 on_status=_emit_status, status_mode=status_mode,

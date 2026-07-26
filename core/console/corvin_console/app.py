@@ -66,6 +66,7 @@ from .routes import (
     tasks as tasks_route,
     tools, skills, memory, streams, promote,
     workspaces, members, compute, settings as settings_route,
+    features as features_route,
     profile as profile_route, chat_settings as chat_settings_route,
     landing as landing_route,
     bridges as bridges_route,
@@ -167,6 +168,9 @@ router.include_router(compute.router,       tags=["console-compute"])
 # "Field required + 5x Extra inputs are not permitted".
 router.include_router(engine_route.router, tags=["console-engine"])
 router.include_router(engine_pref_route.router, tags=["console-engine-pref"])
+# MUST precede settings_route: its `PUT /settings/{label}` (config-file writer)
+# would otherwise swallow `PUT /settings/worker-engine` as a file label.
+router.include_router(features_route.router, tags=["console-settings"])
 router.include_router(settings_route.router, tags=["console-settings"])
 # Phase G — user-profile + chat-settings tab
 router.include_router(profile_route.router,      tags=["console-profile"])

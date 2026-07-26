@@ -559,7 +559,7 @@ const SLASH_COMMANDS = [
   { cmd: "/clear",            args: "",                desc: "Clear conversation history" },
   { cmd: "/reset",            args: "",                desc: "Reset session and history" },
   // ── Agentic compute (ADR-0214) ──
-  { cmd: "/use-engine tiered_delegation", args: "<task>", desc: "TDE: parallel three-gate delegation (ADR-0214)" },
+  { cmd: "/use-engine tiered_delegation", args: "<task>", desc: "TDE: parallel three-gate delegation — needs Settings → Worker Engine = tde" },
   { cmd: "/use-engine acs",   args: "<task>",          desc: "Force ACS manager/worker fan-out" },
   { cmd: "/use-engine claude_code", args: "<task>",    desc: "Force the sequential OS engine" },
   // ── CCC — entity creation (ADR-0168 M6) ──
