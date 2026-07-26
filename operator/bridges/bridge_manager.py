@@ -825,6 +825,125 @@ def _adapter_running_pid(adapter_py: Path) -> int:
     return 0
 
 
+def adapter_running_pid() -> int:
+    """Public wrapper: PID of an adapter polling our shared inbox, or 0.
+
+    Additive (ADR-0238). The plugin supervisors need to tell "bridge daemon up"
+    apart from "bridge daemon up but nothing polls the queue" — the half-bridge
+    state in which a bot receives every message and answers none. The logic is
+    _adapter_running_pid()'s; this only spares external callers from reaching
+    into a private name.
+    """
+    return _adapter_running_pid(_BRIDGE_DIR / "shared" / "adapter.py")
+
+
+def _cmdline_names_daemon(cmdline: str, channel: str) -> bool:
+    """True when a process command line runs THIS channel's daemon.js.
+
+    Path-separator- and case-normalised so the same marker matches a POSIX
+    runtime dir, a Windows runtime dir and a source-tree checkout. Matching on
+    the '<channel>/daemon.js' tail (not on the bare channel name) keeps
+    'telegram' from matching a process that merely mentions telegram somewhere.
+    """
+    if not cmdline:
+        return False
+    norm = cmdline.replace("\\", "/").lower()
+    return f"/{channel.lower()}/daemon.js" in norm
+
+
+def _scan_channel_daemon_pid(channel: str) -> tuple[int, bool]:
+    """(pid, confident) for a live process running <channel>/daemon.js.
+
+    ``confident`` is False when NO enumeration method was available on this
+    platform — "I found nothing" and "I could not look" are different answers,
+    and a caller that conflates them starts a second daemon.
+    """
+    proc_dir = Path("/proc")
+    if proc_dir.is_dir():
+        try:
+            entries = list(proc_dir.iterdir())
+        except OSError:
+            return 0, False
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid == os.getpid():
+                continue
+            if _cmdline_names_daemon(_pid_cmdline(pid), channel):
+                return pid, True
+        return 0, True
+
+    if os.name == "nt":
+        try:
+            out = subprocess.run(
+                ["wmic", "process", "get", "ProcessId,CommandLine", "/FORMAT:LIST"],
+                capture_output=True, text=True, check=False, timeout=15,
+            ).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return 0, False
+        if not out.strip():
+            return 0, False
+        matched = False
+        for line in out.splitlines():
+            line = line.strip()
+            if line.lower().startswith("commandline="):
+                matched = _cmdline_names_daemon(line, channel)
+            elif line.lower().startswith("processid=") and matched:
+                value = line.split("=", 1)[1].strip()
+                if value.isdigit() and int(value) != os.getpid():
+                    return int(value), True
+                matched = False
+        return 0, True
+
+    # macOS / BSD — no procfs, no wmic.
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", f"{channel}/daemon.js"],
+            capture_output=True, text=True, check=False, timeout=10,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return 0, False
+    for token in out.split():
+        if token.strip().isdigit() and int(token) != os.getpid():
+            return int(token), True
+    return 0, True
+
+
+def channel_daemon_running(channel: str) -> dict:
+    """Is a daemon for `channel` already running? Additive probe (ADR-0238).
+
+    Returns ``{"running": bool, "via": str, "pid": int, "confident": bool}``.
+
+    Existing start paths are untouched: start_channel_detached() keeps its own
+    port + systemd guards. This is the GENERIC probe the plugin supervisors need,
+    because a channel started by bridge.sh, by systemd or by hand writes no
+    pidfile we own — and two daemons on one outbox answer every message twice
+    while `systemctl stop` only ever sees one of them (the ADR-0215 orphan
+    class).
+
+    Layered cheapest-first, and each layer is authoritative on its own:
+      1. systemd unit active OR activating (closes the started-but-not-bound race)
+      2. the channel's well-known local port is bound (WhatsApp's pairing port)
+      3. a live process whose cmdline runs <channel>/daemon.js
+
+    ``confident=False`` means the process scan could not run at all on this
+    platform. Callers MUST treat that as "do not start" rather than as "nothing
+    is running".
+    """
+    if _systemd_unit_active(channel):
+        return {"running": True, "via": "systemd", "pid": 0, "confident": True}
+
+    port = _CHANNEL_HTTP_PORT.get(channel)
+    if port and _port_open(port):
+        return {"running": True, "via": "port", "pid": 0, "confident": True}
+
+    pid, confident = _scan_channel_daemon_pid(channel)
+    if pid:
+        return {"running": True, "via": "process", "pid": pid, "confident": True}
+    return {"running": False, "via": "", "pid": 0, "confident": confident}
+
+
 def ensure_adapter_detached() -> dict:
     """Start adapter.py detached iff it is not already running.
 

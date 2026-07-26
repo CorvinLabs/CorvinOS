@@ -20,6 +20,10 @@ const { newMsgId }   = require('../shared/js/msg-id');
 const inChatCmds     = require('../shared/js/in_chat_commands');
 const chatToggle     = require('../shared/js/chat_toggle');
 const { makeStickyProgress } = require('../shared/js/sticky_progress');
+const {
+  normalizeExecutionContext, shouldRenderContext,
+  formatEngineId, formatDelegationMode, formatDuration, formatTokens,
+} = require('../shared/js/execution_context_renderer');
 
 const READ_ONLY_ACK =
   '🔒 You are read-only in this chat — you can follow along, but you ' +
@@ -30,6 +34,37 @@ function normPhone(num) {
   if (!num) return '';
   const s = String(num).replace(/[\s\-().]/g, '');
   return s.startsWith('+') ? s : `+${s}`;
+}
+
+/**
+ * Render execution context as Signal text (plain text only).
+ * @param {object} context - Normalized execution context
+ * @returns {string} - Text footer to append
+ */
+function renderExecutionContextSignal(context) {
+  if (!context) return '';
+
+  const ctx = normalizeExecutionContext(context);
+  const lines = [
+    '',  // blank line
+    '━━━━━━━━━━━━━━━━',
+    `⚙️ ${formatEngineId(ctx.engine_id)} • ${ctx.model_name}`,
+    `⚡ ${formatDelegationMode(ctx.delegation_mode)} • ${formatDuration(ctx.duration_ms)}`,
+  ];
+
+  // Add tokens if available
+  if (ctx.tokens_input !== null || ctx.tokens_output !== null) {
+    lines.push(`🪙 in: ${formatTokens(ctx.tokens_input)} | out: ${formatTokens(ctx.tokens_output)}`);
+  }
+
+  // Add tools if > 0
+  if (ctx.tool_calls_count > 0) {
+    lines.push(`🔨 ${ctx.tool_calls_count} tool${ctx.tool_calls_count === 1 ? '' : 's'}`);
+  }
+
+  lines.push('━━━━━━━━━━━━━━━━');
+
+  return lines.join('\n');
 }
 
 /**
@@ -319,6 +354,20 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, se
         await sendSignal(recipient, `📎 Image: ${path.basename(payload.image_path)}`);
       if (payload.document_path && fs.existsSync(payload.document_path))
         await sendSignal(recipient, `📎 File: ${payload.document_name || path.basename(payload.document_path)}`);
+
+      // Phase 4 K=2: Render execution context footer if available and enabled
+      if (shouldRenderContext(payload, cfg.currentSettings())) {
+        try {
+          const footer = renderExecutionContextSignal(payload.execution_context);
+          if (footer) {
+            await sendSignal(recipient, footer);
+            log(`execution context footer sent for ${msgId}`);
+          }
+        } catch (e) {
+          log(`execution context footer failed: ${e && e.message || e}`);
+        }
+      }
+
       return true;
     } catch (e) {
       log(`outbox send failed for ${recipient}: ${e.message}`);

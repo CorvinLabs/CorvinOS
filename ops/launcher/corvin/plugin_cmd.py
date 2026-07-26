@@ -20,6 +20,7 @@ source for that question.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
@@ -131,10 +132,18 @@ def cmd_check(args: argparse.Namespace) -> int:
     # Discovery: a plugin nobody can find is the failure with no signal at all.
     pkg_root = manifest.parent
     has_ep = _declares_entry_point(pkg_root / "pyproject.toml")
-    report = merge(
-        report,
-        _discovery_report(has_entry_point=has_ep, pkg_root=pkg_root),
-    )
+    report = merge(report, _discovery_report(has_entry_point=has_ep))
+
+    # Code-level checks. These were implemented, tested, and never called by this
+    # command — the same dead-mechanism shape this tooling exists to surface.
+    # They need an import, so they are skippable; see _code_report.
+    if not getattr(args, "no_import", False):
+        report = merge(report, _code_report(pkg_root, manifest))
+    else:
+        print(
+            "  note   [check.no_import] --no-import given: the manifest was "
+            "checked, the code was not"
+        )
 
     for finding in report.findings:
         print(f"  {finding}")
@@ -161,7 +170,7 @@ def _declares_entry_point(pyproject: Path) -> bool:
     return "corvin.plugins" in text
 
 
-def _discovery_report(*, has_entry_point: bool, pkg_root: Path) -> Any:
+def _discovery_report(*, has_entry_point: bool) -> Any:
     from corvin_plugins.validation import validate_discovery
 
     # A class_path lives in the operator's tenant.corvin.yaml, not in the plugin,
@@ -173,6 +182,105 @@ def _discovery_report(*, has_entry_point: bool, pkg_root: Path) -> Any:
         has_class_path=False,
         auto_discover=False,
     )
+
+
+def _code_report(pkg_root: Path, manifest: Path) -> Any:
+    """Import the plugin module and check the class against the live protocol.
+
+    **This executes the plugin's module-level code.** That is unavoidable — the
+    protocol checks and the throwaway-registry registration both need a real
+    class object, and no static analysis substitutes for `registry.register()`
+    accepting it. It is also the reason `--no-import` exists: reviewing someone
+    else's plugin before you trust it is exactly when you do not want to import
+    it. ADR-0249 is blunt about this — a manifest is a declaration, not a sandbox.
+
+    Everything here is best-effort. A plugin whose module cannot be imported gets
+    a warning, not an error: the import may fail for reasons that have nothing to
+    do with plugin correctness (a missing third-party dependency, most often), and
+    an error must mean "the registry WILL reject this".
+    """
+    import importlib.util
+
+    from corvin_plugins.validation import (
+        ValidationReport,
+        merge,
+        validate_class,
+        validate_registration,
+    )
+
+    report = ValidationReport()
+    module_path = pkg_root / "plugin.py"
+    if not module_path.is_file():
+        report.add(
+            "warning",
+            "code.no_module",
+            f"no plugin.py beside {manifest.name} — only the manifest was checked",
+        )
+        return report
+
+    mod_name = f"_corvin_check_{pkg_root.name}"
+    try:
+        spec = importlib.util.spec_from_file_location(mod_name, module_path)
+        if spec is None or spec.loader is None:
+            raise ImportError("no loader")
+        module = importlib.util.module_from_spec(spec)
+        # Registered before exec: a dataclass resolves its annotations through
+        # sys.modules[cls.__module__], so an unregistered module raises a
+        # confusing AttributeError instead of loading.
+        sys.modules[mod_name] = module
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.modules.pop(mod_name, None)
+    except Exception as exc:
+        report.add(
+            "warning",
+            "code.import_failed",
+            f"could not import plugin.py ({type(exc).__name__}: {exc}) — the "
+            f"class was not checked",
+        )
+        return report
+
+    declared_type = _manifest_type(manifest)
+    classes = [
+        obj
+        for name in dir(module)
+        if isinstance(obj := getattr(module, name, None), type)
+        and getattr(obj, "plugin_type", None)
+        and obj.__module__ == mod_name
+    ]
+    if not classes:
+        report.add(
+            "warning",
+            "code.no_plugin_class",
+            "plugin.py defines no class with a plugin_type attribute",
+        )
+        return report
+
+    for cls in classes:
+        report = merge(report, validate_class(cls, expected_type=declared_type))
+        try:
+            instance = cls()
+        except TypeError:
+            report.add(
+                "warning",
+                "code.needs_ctor_args",
+                f"{cls.__name__} could not be instantiated with no arguments — "
+                f"registration was not exercised",
+            )
+            continue
+        report = merge(report, validate_registration(instance))
+    return report
+
+
+def _manifest_type(manifest: Path) -> str | None:
+    try:
+        import yaml
+
+        data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+        return data.get("plugin_type") if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 
 # ── corvin plugin new ────────────────────────────────────────────────────────
@@ -218,7 +326,7 @@ def cmd_new(args: argparse.Namespace) -> int:
 
     pkg = _dirname(args.plugin_id)
     template_src = template.read_text(encoding="utf-8")
-    cls_name = _first_class_name(template_src)
+    cls_name = _plugin_class_name(template_src)
     dest.mkdir(parents=True)
     (dest / "plugin.py").write_text(template_src, encoding="utf-8")
     (dest / "plugin.yaml").write_text(
@@ -248,15 +356,40 @@ def cmd_new(args: argparse.Namespace) -> int:
     return 0
 
 
-def _first_class_name(src: str) -> str:
-    """Name of the first class defined in a template.
+def _plugin_class_name(src: str) -> str:
+    """Name of the class in a template that is actually the plugin.
 
-    The entry point must point at the class the template actually defines —
-    MySummaryPlugin, MyRouterPlugin, and so on differ per type. Hard-coding one
-    name produced a pyproject that named a class the file did not contain.
+    The entry point must name the class that implements the plugin, and that is
+    NOT reliably the first class in the file. Taking the first one — the previous
+    implementation — produced a wrong entry point for four of the nine shipped
+    templates, pointing at a private state dataclass (`_JobState`), an exception
+    (`QuotaExceeded`) or a config holder (`BridgeChannelConfig`). The generated
+    package would install and then fail to load, which is the exact silent-failure
+    class this tooling exists to remove.
+
+    The reliable marker is the ``plugin_type`` attribute: the registry requires it,
+    so the plugin class always has it and helper classes never do. Parsed from the
+    AST rather than matched with a regex, because a regex over class bodies cannot
+    tell nesting from sequence.
     """
-    m = re.search(r"^class\s+(\w+)", src, re.MULTILINE)
-    return m.group(1) if m else "MyPlugin"
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return "MyPlugin"
+    for node in tree.body:  # top-level classes only
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for stmt in node.body:
+            targets = (
+                stmt.targets if isinstance(stmt, ast.Assign)
+                else [stmt.target] if isinstance(stmt, ast.AnnAssign)
+                else []
+            )
+            if any(
+                isinstance(t, ast.Name) and t.id == "plugin_type" for t in targets
+            ):
+                return node.name
+    return "MyPlugin"
 
 
 def _dirname(plugin_id: str) -> str:
@@ -398,6 +531,10 @@ def add_parser(sub: Any) -> None:
 
     c = ps.add_parser("check", help="Validate a plugin against the real registry rules")
     c.add_argument("path", metavar="PATH", help="Plugin directory or plugin.yaml")
+    c.add_argument(
+        "--no-import", action="store_true",
+        help="Check the manifest only; do not import and execute plugin.py",
+    )
 
     n = ps.add_parser("new", help="Scaffold a plugin from the shipped template")
     n.add_argument("plugin_type", metavar="TYPE", help="e.g. router_backend")

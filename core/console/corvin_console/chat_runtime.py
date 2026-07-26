@@ -121,6 +121,7 @@ if str(_FORGE_PATH) not in sys.path:
 
 from forge import paths as _forge_paths  # noqa: E402
 from . import task_manager as _task_manager  # noqa: E402
+from . import audit as _console_audit  # noqa: E402  — L16 audit chain for execution_context
 from . import _spawn_gates  # noqa: E402  — shared fail-closed pre-spawn chokepoint
 from . import feature_flags as _feature_flags  # noqa: E402  — ship-dark registry + worker engine
 from .execution_context import (  # noqa: E402
@@ -4070,6 +4071,51 @@ async def _stream_tde_turn(
     yield {"type": "done"}
 
 
+def _emit_execution_context_event(
+    exec_ctx: Any,  # ExecutionContext | None
+    turn_id: str,
+    sess: WebChatSession,
+) -> None:
+    """Emit execution context audit event — L16 compliance (ADR-0248, Phase 2b).
+
+    This is a best-effort helper: if execution context is unavailable or emit
+    fails, no exception propagates to the caller (fail-closed). The audit chain
+    uses flock-protected write_event, so concurrent sessions are safe.
+
+    Args:
+        exec_ctx: ExecutionContext object (can be None for graceful degradation)
+        turn_id: Unique turn identifier (e.g., "ot_<random>")
+        sess: WebChatSession with tenant_id, chat_key, turn_count
+    """
+    if not exec_ctx:
+        return  # No context available; fail gracefully
+    try:
+        ctx_dict = exec_ctx.to_dict() if hasattr(exec_ctx, 'to_dict') else {}
+        if not ctx_dict:
+            return  # Empty context; nothing to emit
+        _console_audit.execution_context(
+            turn_id=turn_id,
+            session_id=sess.chat_key,
+            tenant_id=sess.tenant_id,
+            engine_id=ctx_dict.get("engine_id", "unknown"),
+            model_source=ctx_dict.get("model_source", "unknown"),
+            model_name=ctx_dict.get("model_name", ""),
+            delegation_mode=ctx_dict.get("delegation_mode", "native"),
+            duration_ms=ctx_dict.get("duration_ms", 0),
+            exit_code=ctx_dict.get("exit_code", 0),
+            acs_run_id=ctx_dict.get("acs_run_id"),
+            tde_router_decision=ctx_dict.get("tde_router_decision"),
+            tokens_input=ctx_dict.get("tokens_input"),
+            tokens_output=ctx_dict.get("tokens_output"),
+            tool_calls_count=ctx_dict.get("tool_calls_count", 0),
+            started_at=ctx_dict.get("started_at"),
+            completed_at=ctx_dict.get("completed_at"),
+            turn_number=sess.turn_count,
+        )
+    except Exception:  # noqa: BLE001 — fail-closed: audit failure doesn't break the turn
+        pass
+
+
 async def stream_turn(
     sess: WebChatSession,
     prompt: str,
@@ -4736,6 +4782,7 @@ async def stream_turn(
             pass
         _append_turn(sess, "assistant", [{"kind": "text", "text": _cc_hint}],
                      execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
+        _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)
         yield {"type": "done"}
         return
 
@@ -4872,6 +4919,7 @@ async def stream_turn(
                     pass
                 _append_turn(sess, "assistant", [{"kind": "text", "text": _cq_msg}],
                              execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
+                _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)
                 yield {"type": "done"}
                 return
             # Use the CANONICAL resolver (CORVIN_HOME → service.env pin → repo marker
@@ -4946,6 +4994,7 @@ async def stream_turn(
                     pass
                 _append_turn(sess, "assistant", [{"kind": "text", "text": _fb_gate}],
                              execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
+                _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)
                 yield {"type": "done"}
                 return
             if _fb_quota_exceeded:
@@ -5450,6 +5499,7 @@ async def stream_turn(
                 pass
             _append_turn(sess, "assistant", _turn_parts,
                         execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
+            _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)
             yield {"type": "done"}
             return
 
@@ -5484,6 +5534,7 @@ async def stream_turn(
             pass
         _append_turn(sess, "assistant", [{"kind": "text", "text": _engine_msg}],
                      execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
+        _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)
         yield {"type": "done"}
         return
 
@@ -5840,5 +5891,8 @@ async def stream_turn(
     _append_turn(sess, "assistant", parts_persisted,
                  voice_key_hint=voice_key(_spoken_text) if _spoken_text.strip() else None,
                  execution_context=_exec_ctx.to_dict() if _exec_ctx else None)
+
+    # Phase 2b: Emit execution context to L16 audit chain
+    _emit_execution_context_event(_exec_ctx, _os_turn_id, sess)
 
     yield {"type": "done"}

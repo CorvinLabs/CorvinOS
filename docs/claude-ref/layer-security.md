@@ -323,6 +323,79 @@ Tests in `operator/skill-forge/tests/test_plugin_slot.py` cover the
 promote-path AND the negative cases (task / session creates leave the
 slot empty).
 
+### Phase 2b — L16 Audit Chain Integration (Execution Context Events, ADR-0248)
+
+Every OS turn emits an audit event with ExecutionContext metadata captured
+throughout the turn's lifecycle. This data enables compliance traceability
+(who used which engine/model), performance analytics, cost estimation, and
+debugging. The event type is `console.execution_context`.
+
+**Event structure** — all fields captured at turn completion:
+
+```json
+{
+  "type": "console.execution_context",
+  "timestamp": 1721899935.123,
+  "turn_id": "ot_abc123xyz",
+  "session_id": "web:sid_xyz",
+  "tenant_id": "_default",
+  "details": {
+    "engine_id": "claude_code",
+    "model_source": "claude",
+    "model_name": "claude-opus-5",
+    "delegation_mode": "native",
+    "duration_ms": 1234,
+    "exit_code": 0,
+    "tokens_input": 150,
+    "tokens_output": 50,
+    "tool_calls_count": 0,
+    "started_at": "2026-07-26T14:32:15Z",
+    "completed_at": "2026-07-26T14:32:16.234Z",
+    "turn_number": 5,
+    "acs_run_id": null,
+    "tde_router_decision": null
+  }
+}
+```
+
+**Metadata only** — no PII, no prompt text, no user content. Per GDPR Art. 5
+data minimisation, the audit chain captures only:
+- `engine_id`: Which engine executed the turn (claude_code | acs | tde | hermes)
+- `model_source`: Model provider (claude | ollama | openrouter | hermes)
+- `model_name`: Normalized model name (stripped of timestamps)
+- `delegation_mode`: How the turn was routed (native | acs | tde | fallback)
+- `acs_run_id`, `tde_router_decision`: Delegation correlation IDs (optional)
+- Performance: `duration_ms`, `tokens_input`, `tokens_output`, `tool_calls_count`
+- Result: `exit_code` (0 = success, non-zero = error)
+- Traceability: `turn_id`, `session_id`, `tenant_id`, `turn_number`
+- Timestamps: RFC 3339 UTC `started_at`, `completed_at`
+
+**Compliance use cases:**
+
+1. **Audit trail**: Correlate who used which engine/model (EU AI Act Art. 12/13).
+2. **Performance analytics**: Average duration per engine, model choice patterns.
+3. **Cost estimation**: Aggregate tokens × model pricing.
+4. **Debugging**: Link failures to engine/exit_code; correlate with workflow runs
+   via `acs_run_id` or `tde_router_decision`.
+
+**Fail-closed design:**
+- Emission is best-effort; audit failures never break the turn.
+- `_emit_execution_context_event()` is wrapped in try/except (no re-raise).
+- If the audit chain is unreachable, the turn completes normally.
+
+**Queryable via REST API** (Phase 2b amendment, future):
+- `GET /v1/console/audit?type=console.execution_context` — all execution events
+- `GET /v1/console/audit?type=console.execution_context&engine_id=acs` — filter by engine
+- `GET /v1/console/audit?type=console.execution_context&model_source=claude` — filter by model source
+- `GET /v1/console/audit?type=console.execution_context&delegation_mode=tde` — filter by mode
+- `GET /v1/console/audit?type=console.execution_context&turn_id=ot_...` — single turn
+
+**Implementation notes:**
+- `ExecutionContextBuilder` tracks the turn lifecycle (start → complete).
+- Emit call placed at EACH turn completion path (6 paths in `stream_turn`).
+- Event details extracted from `ExecutionContext.to_dict()` for JSON serialization.
+- Audit event allowlist (`_ALLOWED_FIELDS["console.execution_context"]`) prevents PII leakage.
+
 ### Phase 3D — Loopback-deny (sitecustomize shim wired into bwrap)
 
 Personas with `network: allow` (research) share the host

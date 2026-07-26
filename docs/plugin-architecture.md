@@ -408,15 +408,22 @@ that drifts fails here rather than on an author's machine.
 corvin plugin types              # what can I build — and will anything call it?
 corvin plugin new <type> <id>    # scaffold from the shipped template
 corvin plugin check <path>       # would the registry accept this?
+corvin plugin check <path> --no-import   # manifest only, do not execute plugin.py
 ```
 
 `corvin plugin new` writes `plugin.py`, `plugin.yaml` (least-privileged defaults:
 `layer: installed`, `origin: community`), a `pyproject.toml` carrying the
 `corvin.plugins` entry point, and a README. `corvin plugin check` runs the **real**
-`PluginRecord` invariants and registers into a throwaway registry — it holds no
-copy of any rule, is advisory only, and never writes to the audit chain. Errors
-mean the registry would reject the plugin; warnings do not affect the exit code,
-and there is no `--strict` or `--force` (ADR-0247).
+`PluginRecord` invariants, the protocol checks, and a registration into a
+throwaway registry — it holds no copy of any rule, is advisory only, and never
+writes to the audit chain. Errors mean the registry would reject the plugin;
+warnings do not affect the exit code, and there is no `--strict` or `--force`
+(ADR-0247).
+
+The code-level checks **import and execute `plugin.py`**, which is unavoidable:
+no static analysis substitutes for `registry.register()` accepting the class.
+Use `--no-import` when reviewing a plugin you do not yet trust — it checks the
+manifest only and says so rather than reporting a bare "OK".
 
 There is no `corvin plugin list`: live plugin state belongs to the running gateway,
 and answering from the CLI process would show an empty registry and read as

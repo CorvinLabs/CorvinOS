@@ -30,6 +30,10 @@ const inChatCmds                = require('../shared/js/in_chat_commands');
 const chatToggle                = require('../shared/js/chat_toggle');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
 const { makeStickyProgress }    = require('../shared/js/sticky_progress');
+const {
+  normalizeExecutionContext, shouldRenderContext,
+  formatEngineId, formatDelegationMode, formatDuration, formatTokens,
+} = require('../shared/js/execution_context_renderer');
 
 const ROOT = __dirname;
 const PLUGIN_ROOT = path.resolve(ROOT, '..', '..');
@@ -366,6 +370,37 @@ setInterval(async () => {
   }
 }, 4000);
 
+/**
+ * Render execution context as Telegram-formatted text (markdown).
+ * @param {object} context - Normalized execution context
+ * @returns {string} - Text to send
+ */
+function renderExecutionContextMarkdown(context) {
+  if (!context) return '';
+
+  const ctx = normalizeExecutionContext(context);
+  const lines = [
+    '',  // blank line
+    `*⚙️ Execution Context*`,
+    `🔧 ${formatEngineId(ctx.engine_id)}`,
+    `📊 ${ctx.model_name}`,
+    `⚡ ${formatDelegationMode(ctx.delegation_mode)}`,
+    `⏱️ ${formatDuration(ctx.duration_ms)}`,
+  ];
+
+  // Add tokens if available
+  if (ctx.tokens_input !== null || ctx.tokens_output !== null) {
+    lines.push(`🪙 in: ${formatTokens(ctx.tokens_input)} | out: ${formatTokens(ctx.tokens_output)}`);
+  }
+
+  // Add tools if > 0
+  if (ctx.tool_calls_count > 0) {
+    lines.push(`🔨 ${ctx.tool_calls_count} tool${ctx.tool_calls_count === 1 ? '' : 's'}`);
+  }
+
+  return lines.join('\n');
+}
+
 // ─── Outbox processing ──────────────────────────────────────────────────────
 async function sendTelegram(payload, _fpath) {
   const chatId = payload.chat_id;
@@ -461,6 +496,20 @@ async function sendTelegram(payload, _fpath) {
   if (payload.video_path && fs.existsSync(payload.video_path)) {
     await bot.sendVideo(chatId, payload.video_path, { caption: payload.video_caption || '' });
   }
+
+  // Phase 4 K=2: Render execution context as markdown if available and enabled
+  if (shouldRenderContext(payload, currentSettings())) {
+    try {
+      const contextText = renderExecutionContextMarkdown(payload.execution_context);
+      if (contextText) {
+        await bot.sendMessage(chatId, contextText, { parse_mode: 'Markdown' });
+        log(`execution context message sent for ${payload.msg_id}`);
+      }
+    } catch (e) {
+      log(`execution context message failed: ${e && e.message || e}`);
+    }
+  }
+
   activeChats.delete(chatId);
 }
 

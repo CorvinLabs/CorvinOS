@@ -316,6 +316,13 @@ path = "hatch_build.py"
 # Scripts directory containing corvin-serve.exe to the Windows user PATH (registry)
 # on first run.  No-op on Linux/macOS.  (fixes "corvin-serve not found" on Store Python)
 "corvinOS_path_fix.pth" = "corvinOS_path_fix.pth"
+# Plugin templates (ADR-0246). They live beside corvin_plugins rather than inside
+# it, so the package mapping above does NOT pick them up — without this line
+# `corvin plugin new` works in the source tree and fails on every pip install with
+# "template not found in this install". Same shape as the AWPKG/tripwire breakage
+# described above: nothing wrong in the repo, nothing red in CI, dead in the wheel.
+# `plugin_cmd._template_path` looks here second, after the source-tree location.
+"core/plugins/templates" = "corvin_plugins/templates"
 # Ship the pre-built React SPA so `pip install corvinOS` works
 # without requiring npm on the target machine. The wheel builder must run
 # `npm run build` in core/console/corvin_console/web-next/ before packaging.

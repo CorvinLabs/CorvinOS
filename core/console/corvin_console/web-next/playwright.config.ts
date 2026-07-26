@@ -7,10 +7,22 @@ const _dirname = path.dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: '**/*.spec.ts',
+  // MEASURED, do not "fix" this to false without re-measuring. These are integration
+  // tests against one live console, and adr-0124-extensibility does pass 1/1 standalone
+  // while contributing 12 failures to a parallel run — so contention is real. But
+  // serialising made it far WORSE, not better: fullyParallel:false with 2 workers gave
+  // 109 passed / 189 failed, against 299 passed / 75 failed at fullyParallel:true with
+  // 4 workers (both runs measured alone on an otherwise idle machine, 2026-07-26).
+  // Plausible reason: with file-level scheduling the specs that make real LLM calls
+  // (nordtech-command-center) monopolise a worker and everything queued behind them
+  // times out against the same busy backend. Whatever the mechanism, the data says
+  // test-level parallelism wins here.
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // Cap it: `undefined` means one worker per CPU core, which on this machine meant 8
+  // browsers hammering a single backend. 4 is what the 299-passed measurement used.
+  workers: process.env.CI ? 1 : 4,
   reporter: 'html',
 
   // Log in ONCE and share the session with every spec.

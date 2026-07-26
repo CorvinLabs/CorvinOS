@@ -1,462 +1,374 @@
-# Bundled Bridges: All Distribution Channels Included
+# Bundled Bridges: Supervised Node Daemons
 
-**Date:** 2026-07-26  
-**Principle:** Bridges are pre-built plugins, all in repo, enabled/disabled per tenant config.
-
----
-
-## Bridges Included in CorvinOS (Tier-2 Bundled)
-
-```
-core/core_plugins/tier_2_bundled/
-
-discord_bridge/          ← Discord server/user DMs
-slack_bridge/            ← Slack workspace
-telegram_bridge/         ← Telegram chat
-whatsapp_bridge/         ← WhatsApp via Twilio
-web_ui/                  ← React web app
-cli_bridge/              ← Terminal/SSH
-```
+**Status:** shipped dark behind `bridge_supervisor_plugins` (default **off**)
+**ADRs:** ADR-0238 (bridges as supervised plugins), ADR-0243 (plugin layers)
+**Code:** `core/plugins/corvin_plugins/bridges/`, `operator/bridges/bridge_manager.py`
+**Tests:** `core/plugins/tests/test_bridge_supervisor.py`
 
 ---
 
-## Each Bridge: Same Interface, Different Transport
+## Correction: bridges are Node, not Python
 
-### Structure Per Bridge
+ADR-0238 and ADR-0242 originally described the bridges as Python modules under
+`adapters/<name>_adapter` that would be refactored into `CorvinPlugin` classes,
+and an earlier revision of *this* document described a
+`core/core_plugins/tier_2_bundled/discord_bridge/` tree with a `discord.py`
+client. **None of that exists.** The verified state of the repository is:
+
 ```
-discord_bridge/
-├─ __init__.py
-├─ plugin.py                  ← class DiscordBridgePlugin(CorvinPlugin)
-│
-├─ bridge.py                  ← Discord client (discord.py library)
-│  ├─ connect()              ← Connect to Discord
-│  ├─ send_message()         ← Send to user/channel
-│  ├─ receive_message()      ← Listen for messages
-│  └─ on_message_received()  ← Handler
-│
-├─ adapter.py                 ← Bridge ↔ Corvin Core
-│  ├─ message_to_request()   ← Discord msg → Corvin request
-│  ├─ response_to_message()  ← Corvin response → Discord msg
-│  └─ handle_error()         ← Fallback messages
-│
-├─ config.yaml               ← Bridge config schema
-│  ├─ token (env var)
-│  ├─ rate_limit
-│  ├─ cache_ttl
-│  └─ prefix (e.g., "!")
-│
-├─ test/
-│  ├─ test_bridge.py
-│  ├─ test_adapter.py
-│  └─ fixtures/
-│
-└─ README.md                 ← Setup guide
+operator/bridges/
+├─ bridge.sh                 ← the operator entry point in daily use
+├─ bridge_manager.py         ← cross-platform Python launcher (Windows + wheel)
+├─ shared/
+│  ├─ adapter.py             ← the Python half: polls inbox, runs the turn, writes outbox
+│  └─ js/                    ← shared JS the daemons require()
+├─ discord/daemon.js
+├─ telegram/daemon.js
+├─ whatsapp/daemon.js
+├─ slack/daemon.js
+├─ email/daemon.js
+├─ signal/daemon.js
+└─ teams/daemon.js
 ```
+
+Seven **Node.js daemons** plus one Python adapter, talking over a file queue
+(`<corvin_home>/bridges/shared/{inbox,outbox,processed}`). `adapters/discord_adapter`
+never existed. The ADRs have been corrected; this document describes what was
+actually built.
+
+## Why there is no Node rewrite
+
+Rewriting seven working transports in Python to satisfy a plugin protocol would
+trade a shipped, battle-tested message layer — Baileys pairing, Discord gateway
+reconnects, Slack socket mode, IMAP IDLE — for a green field, and every one of
+those has already cost incidents to get right. The plugin protocol wants
+`on_load` / `on_unload` / `health_check`; a **process supervisor** satisfies that
+contract exactly as well as a rewrite would, and it keeps the daemons the thing
+they already are.
+
+So Phase 5 ships a Python **supervisor plugin per bridge**. It starts, stops and
+health-checks the existing `daemon.js` as a subprocess. Not one line of
+`daemon.js` changed.
 
 ---
 
-## Implementation Pattern
+## The supervisor plugin
 
-### Discord Bridge Example
-```python
-# core/core_plugins/tier_2_bundled/discord_bridge/plugin.py
+`corvin_plugins.bridges.supervisor.BridgeSupervisorPlugin` is generic and
+parameterised by channel name. Seven thin subclasses bind the name so a tenant
+config can reference a stable class path:
 
-class DiscordBridgePlugin(CorvinPlugin):
-    plugin_id = "discord-bridge/1.0.0"
-    plugin_type = "tier-2-bundled"
-    
-    def on_load(self, ctx):
-        """Boot the Discord bridge."""
-        self.ctx = ctx
-        self.config = self.get_config()
-        
-        # Initialize Discord client
-        self.bridge = DiscordBridge(
-            token=self.config["token"],
-            intents=discord.Intents.default()
-        )
-        
-        # Start connection
-        asyncio.create_task(self.bridge.start())
-        
-        # Register message handler
-        self.bridge.on("message", self.on_message)
-        
-        ctx.logger.info("Discord bridge loaded")
-    
-    def on_unload(self):
-        """Shutdown gracefully."""
-        asyncio.create_task(self.bridge.close())
-    
-    async def on_message(self, message):
-        """Handle incoming Discord message."""
-        if message.author.bot:
-            return  # Ignore bots
-        
-        # Convert Discord → Corvin request
-        request = MessageToRequest(
-            user_id=str(message.author.id),
-            user_name=message.author.name,
-            channel_id=str(message.channel.id),
-            content=message.content,
-            platform="discord",
-            metadata={
-                "guild_id": str(message.guild.id) if message.guild else None,
-                "is_dm": isinstance(message.channel, discord.DMChannel),
-            }
-        )
-        
-        # Send to Corvin Core API
-        try:
-            response = await self.ctx.api_client.execute(request)
-        except Exception as e:
-            response = f"Error: {type(e).__name__}"
-        
-        # Convert Corvin → Discord message
-        discord_msg = ResponseToMessage(
-            content=response,
-            channel=message.channel,
-            reply_to=message
-        )
-        
-        await self.bridge.send(discord_msg)
-    
-    def health_check(self) -> HealthStatus:
-        """Is Discord connection alive?"""
-        return HealthStatus(
-            ok=self.bridge.is_connected,
-            message="Discord connected" if self.bridge.is_connected else "Disconnected"
-        )
-```
+| Channel  | Class                   | `plugin_id`        |
+|----------|-------------------------|--------------------|
+| discord  | `DiscordBridgePlugin`   | `discord-bridge`   |
+| telegram | `TelegramBridgePlugin`  | `telegram-bridge`  |
+| whatsapp | `WhatsAppBridgePlugin`  | `whatsapp-bridge`  |
+| slack    | `SlackBridgePlugin`     | `slack-bridge`     |
+| email    | `EmailBridgePlugin`     | `email-bridge`     |
+| signal   | `SignalBridgePlugin`    | `signal-bridge`    |
+| teams    | `TeamsBridgePlugin`     | `teams-bridge`     |
 
-### Slack Bridge (Same Pattern)
-```python
-class SlackBridgePlugin(CorvinPlugin):
-    plugin_id = "slack-bridge/1.0.0"
-    plugin_type = "tier-2-bundled"
-    
-    def on_load(self, ctx):
-        """Boot Slack bridge."""
-        self.ctx = ctx
-        self.config = self.get_config()
-        
-        self.bridge = SlackBridge(token=self.config["token"])
-        asyncio.create_task(self.bridge.start())
-        self.bridge.on("message", self.on_message)
-    
-    async def on_message(self, event):
-        """Handle Slack message."""
-        request = MessageToRequest(
-            user_id=event["user"],
-            channel_id=event["channel"],
-            content=event["text"],
-            platform="slack",
-            metadata={"thread_ts": event.get("thread_ts")}
-        )
-        
-        response = await self.ctx.api_client.execute(request)
-        
-        await self.bridge.send(
-            channel=event["channel"],
-            text=response,
-            thread_ts=event.get("thread_ts")
-        )
-```
+All of them are `plugin_type = "bridge_channel"` and `layer = "bundled"`.
+Bundled is **disableable** (`can_disable()` is true for every layer except
+`compliance`) — a messenger transport is not a compliance mechanism and an
+operator must be able to switch it off.
+
+The supervisor deliberately does **not** register with `ctx.channel_registry`:
+that registry expects an object that can send and receive messages. A process
+supervisor cannot, and handing it one would give callers a channel that silently
+drops everything.
+
+All process knowledge — home resolution, runtime-vs-source dir, `service.env`
+merge, Node discovery, the systemd probe — is **borrowed from**
+`bridge_manager.py` instead of reimplemented. A second copy of "where does this
+daemon live" is exactly the reader≠writer split that has already cost this repo
+two incidents.
 
 ---
 
-## Web UI: Special Case (Requires Server)
+## Enabling a bridge supervisor
 
-```python
-# core/core_plugins/tier_2_bundled/web_ui/plugin.py
+Two independent switches, both required.
 
-class WebUIPlugin(CorvinPlugin):
-    plugin_id = "web-ui/1.0.0"
-    plugin_type = "tier-2-bundled"
-    
-    def on_load(self, ctx):
-        """Boot web UI server."""
-        self.ctx = ctx
-        self.config = self.get_config()
-        
-        # Spin up FastAPI server for static files
-        self.app = FastAPI(title="CorvinOS Web UI")
-        
-        # Serve React build
-        self.app.mount(
-            "/",
-            StaticFiles(directory="core/core_plugins/tier_2_bundled/web_ui/public"),
-            name="web_ui"
-        )
-        
-        # WebSocket for real-time chat
-        @self.app.websocket("/ws/chat")
-        async def websocket_endpoint(websocket: WebSocket):
-            await websocket.accept()
-            while True:
-                data = await websocket.receive_json()
-                request = MessageToRequest(
-                    user_id=data["user_id"],
-                    content=data["message"],
-                    platform="web"
-                )
-                response = await self.ctx.api_client.execute(request)
-                await websocket.send_json({"response": response})
-        
-        # Start server
-        config = uvicorn.Config(
-            app=self.app,
-            host=self.config["host"],
-            port=self.config["port"]
-        )
-        self.server = uvicorn.Server(config)
-        asyncio.create_task(self.server.serve())
-```
+### 1. The feature flag (ships off)
 
----
+`spec.features.bridge_supervisor_plugins` in `tenant.corvin.yaml`, or the
+Console **Settings → Features** panel. Default **false**: on a fresh install and
+after an upgrade, bridges are managed exactly as they are today. Off is a *quiet*
+path — nothing starts, nothing raises, and `health_check()` returns `ok=True`
+with `supervisor off (feature flag)`.
 
-## Configuration: Enable/Disable Bridges
+The flag is read defensively. If `corvin_console` is not importable at all
+(headless core, a wheel shipped without the Console), the flag reads **false**
+and the supervisors do nothing. `core/plugins` stays importable without the
+Console.
 
-### Per-Tenant Config
+### 2. The declaration
+
+An entry in `spec.plugins.installed`. Writing a plugin into a version-controlled
+tenant config *is* the explicit opt-in that `bootstrap_declared` asks for:
+
 ```yaml
-# ~/.corvin/tenants/_default/config.yaml
+spec:
+  features:
+    bridge_supervisor_plugins: true   # ships false — turn on deliberately
 
-plugins:
-  tier_2_bundled:
-    enabled:
-      - discord_bridge
-      - slack_bridge
-      - web_ui
-      - structured_logging
-      - forge
-      - skillforge
-    
-    disabled:
-      - telegram_bridge
-      - whatsapp_bridge
-      - cli_bridge
-    
-    config:
-      discord_bridge:
-        token: "${DISCORD_TOKEN}"
-        rate_limit: 10
-        prefix: "!"
-        cache_ttl: 60
-      
-      slack_bridge:
-        token: "${SLACK_TOKEN}"
-        rate_limit: 5
-      
-      web_ui:
-        host: "0.0.0.0"
-        port: 3000
-        cors_origins: ["https://app.example.com"]
-      
-      structured_logging:
-        level: "INFO"
-        output: "loki"  # stdout, loki, splunk
-        loki_url: "http://localhost:3100"
-      
-      forge:
-        sandbox_memory_mb: 512
-        sandbox_timeout_s: 30
+  plugins:
+    installed:
+      - id: discord-bridge
+        layer: bundled
+        class_path: "corvin_plugins.bridges.supervisor:DiscordBridgePlugin"
+
+      - id: slack-bridge
+        layer: bundled
+        class_path: "corvin_plugins.bridges.supervisor:SlackBridgePlugin"
+
+      # Park a bridge without deleting its block:
+      - id: telegram-bridge
+        layer: bundled
+        class_path: "corvin_plugins.bridges.supervisor:TelegramBridgePlugin"
+        config:
+          enabled: false
 ```
+
+`layer: bundled` is honoured; `layer: core` or `layer: compliance` from a tenant
+config is downgraded to `installed` and audited (`plugin.layer_rejected`) —
+a tenant config is operator-writable and may not promote itself into a
+privileged layer.
+
+`corvin_plugins.bridges.declaration_entries()` generates these entries so the
+docs, the Console and the tests read one source rather than three copies of a
+dotted path that goes stale on the first rename.
 
 ---
 
-## Boot: Enable Selected Bridges
+## The start gate
 
-```python
-# core/bootstrap.py
+`on_load()` starts a daemon only when **every** condition holds. Each failure is
+a quiet no-op with a reason kept for `health_check()`; `on_load()` never raises,
+because a bridge that cannot start must cost the operator that bridge, not the
+platform boot.
 
-def load_bundled_plugins():
-    """Load tier_2_bundled based on tenant config."""
-    enabled_bridges = config.plugins.tier_2_bundled.enabled
-    
-    bundled_path = Path(__file__).parent / "core_plugins" / "tier_2_bundled"
-    
-    for bridge_name in enabled_bridges:
-        bridge_path = bundled_path / bridge_name
-        
-        if not bridge_path.exists():
-            logger.warning(f"Bridge {bridge_name} not found (disabled in config)")
-            continue
-        
-        try:
-            # Dynamic import
-            module = importlib.import_module(
-                f"corvin.core.core_plugins.tier_2_bundled.{bridge_name}.plugin"
-            )
-            
-            plugin_class = getattr(module, f"{camel_case(bridge_name)}Plugin")
-            plugin = plugin_class()
-            
-            # Load into registry
-            plugin.on_load(PluginContext(...))
-            registry.register(plugin)
-            
-            logger.info(f"✅ Bridge loaded: {bridge_name}")
-        
-        except Exception as e:
-            logger.error(f"❌ Bridge failed: {bridge_name}: {e}")
-            # Continue (bridge-specific failure doesn't break system)
-```
+| # | Condition | If not |
+|---|---|---|
+| 1 | `bridge_supervisor_plugins` is on | quiet, `flag_off` |
+| 2 | declaration not switched off (`config.enabled: false`) | quiet, `disabled_in_config` |
+| 3 | channel has credentials (`channel_configured()`) | quiet, `not_configured` |
+| 4 | no daemon for this channel already running | quiet, `already_running` (adopted) |
+| 5 | runtime dir provisioned (`daemon.js` present) | quiet, `not_provisioned` |
+| 6 | a usable Node ≥ 20 already on the box (`find_node()`) | quiet, `node_missing` |
+
+Two of those deserve their reasoning spelled out:
+
+**No `npm install` at boot (5).** `on_load()` runs inside the platform boot
+sequence. `_materialise_channel()` can spend a minute on `npm install`, and a
+supervisor that did that would stall the whole start. Provisioning stays with the
+existing `bridge.sh` / Console path.
+
+**`find_node()`, never `ensure_node()` (6).** `ensure_node()` downloads ~25 MB
+from nodejs.org. Booting must not trigger a network download.
+
+WhatsApp pairing also stays on the Console path: `channel_configured("whatsapp")`
+is false until `auth/creds.json` exists, so an unpaired WhatsApp is a no-op here.
+The QR flow is an interactive operator action, not a boot action.
 
 ---
 
-## Deployment Scenarios
+## Duplicate start — the load-bearing invariant
 
-### Scenario 1: All Bridges (Small Instance)
-```yaml
-plugins:
-  tier_2_bundled:
-    enabled:
-      - discord_bridge
-      - slack_bridge
-      - telegram_bridge
-      - whatsapp_bridge
-      - web_ui
-      - forge
-      - skillforge
+Two Discord daemons polling the same outbox answer every message **twice**, and
+the second one is invisible to `systemctl stop` — the orphan class found in the
+ADR-0215 review. So "already running" is probed before every spawn.
 
-# Result: Single container with all bridges
-# Pros: Simple, everything together
-# Cons: Resources high, one bridge failure affects others (if in-process)
-```
+The probe is `bridge_manager.channel_daemon_running(channel)` — added additively
+in this phase, next to the existing `_adapter_running_pid()` whose two-stage
+design it mirrors. It returns
+`{"running": bool, "via": str, "pid": int, "confident": bool}` and layers four
+independent signals, each authoritative on its own:
 
-### Scenario 2: Web + Chat Only (Most Common)
-```yaml
-plugins:
-  tier_2_bundled:
-    enabled:
-      - web_ui
-      - discord_bridge
-      - slack_bridge
-      - forge
-      - skillforge
-    
-    disabled:
-      - telegram_bridge
-      - whatsapp_bridge
-      - cli_bridge
+1. **our own handle** from a previous `on_load()` in this process (`via=supervisor`);
+2. **`systemctl --user is-active corvin-voice-bridge-<channel>.service`** —
+   true for `active`, `activating` *and* `reloading`, which closes the race
+   window where a systemd-started daemon has not bound its port yet (`via=systemd`);
+3. **a TCP probe** of the channel's well-known local port — WhatsApp's pairing
+   port 7891 today (`via=port`);
+4. **a system-wide process scan** for a live process whose command line runs
+   `<channel>/daemon.js` (`via=process`).
 
-# Result: Web app + Discord + Slack only
-# Pros: Lean, focused
-# Cons: User can't access via Telegram
-```
+Signal 4 is the generic one and the reason the probe exists at all: a daemon
+started by `bridge.sh`, by systemd or by hand writes no pidfile we own. Matching
+is on the `/<channel>/daemon.js` tail, separator- and case-normalised, so it
+works for a POSIX runtime dir, a Windows runtime dir and a source-tree checkout —
+and `tail -f /var/log/discord.log` does not read as a running Discord daemon.
 
-### Scenario 3: API Only (Enterprise)
-```yaml
-plugins:
-  tier_2_bundled:
-    enabled:
-      - structured_logging
-      - monitoring
-    
-    disabled:
-      - discord_bridge
-      - slack_bridge
-      - telegram_bridge
-      - whatsapp_bridge
-      - web_ui
-      - forge          # Company provides own agent builders
-      - skillforge     # Company provides own skill registry
+### `confident=False` means refuse, not proceed
 
-# Result: Pure API server, no bridges
-# Pros: Minimal, secure, API-driven
-# Cons: No web UI, no chat integrations
-```
+"I found nothing" and "I could not look" are different answers. If no enumeration
+method is available (no `/proc`, no `pgrep`, no `wmic`), the probe reports
+`confident=False` and the supervisor **refuses to start**, saying so in
+`health_check()` (`ok=False`, "cannot verify whether a daemon is already
+running"). Refusing costs an operator a bridge they can still launch the old way;
+guessing wrong costs every user a duplicated conversation.
+
+The same refusal applies when the probe raises, and when a vendored
+`bridge_manager.py` predates the probe entirely.
 
 ---
 
-## Load Modes for Bridges
+## Restart policy: deliberately none
 
-### Option A: In-Process (Simple, Default)
-```
-CorvinOS Core (process A)
-├─ Tier-0/1 (hardcoded)
-├─ Discord Bridge (in-process thread)
-├─ Slack Bridge (in-process thread)
-└─ Web UI (in-process FastAPI server)
-```
+**A crashed daemon is not restarted automatically.** A bounded restart ladder was
+considered and rejected:
 
-**Pros:** Simple, low latency, shared memory  
-**Cons:** One bridge crash can affect all, resource-heavy
+* an auto-restart against a revoked token becomes a login loop against Discord's
+  or Slack's API and gets the bot rate-limited or banned — the failure the
+  operator then sees is worse than the one they had;
+* systemd already supervises restarts on the path the maintainer actually uses,
+  and a second supervisor with its own opinion means two restart loops fighting
+  over one daemon;
+* every restart would emit an audit event, so a crash-looping bridge would spam
+  the hash-chained trail;
+* this repo's incident history is specifically about *automatic* lifecycle
+  machinery failing silently — a wedged outbox poller delivered nothing for 38
+  minutes without a single log line.
 
-### Option B: Subprocess (Isolated, Recommended)
-```
-CorvinOS Core (process A, gRPC server on :8000)
-├─ Tier-0/1
-
-Discord Bridge (subprocess B)
-  └─ gRPC client to Core
-
-Slack Bridge (subprocess C)
-  └─ gRPC client to Core
-
-Web UI (subprocess D)
-  └─ gRPC client to Core
-```
-
-**Pros:** Isolated, can restart independently  
-**Cons:** gRPC overhead, more complex deployment
-
-### Option C: Hybrid
-```
-CorvinOS Core (in-process)
-├─ Tier-0/1 (hardcoded)
-└─ Web UI (in-process, stable)
-
-Discord Bridge (subprocess)
-Slack Bridge (subprocess)
-```
-
-**Pros:** Best of both (stable web UI, isolated chat bridges)
+Instead a dead daemon is **loud**: `health_check()` returns `ok=False` with the
+exit code, which reaches the Console health surface and the audit trail via
+`plugin.health_alert`. Recovery is an explicit operator action — disable and
+re-enable the plugin, or use `bridge.sh` / systemd.
 
 ---
 
-## Config Path Resolution
+## Shutdown ladder
 
-### 1. Installation-Wide
-```
-~/.corvin/global/config.yaml
-└─ server.mode, plugins.load_mode, engine defaults
-```
+`on_unload()` is bounded and never raises:
 
-### 2. Tenant-Specific
 ```
-~/.corvin/tenants/_default/config.yaml
-└─ Which bridges enabled, API settings
+SIGTERM (to the process GROUP where the OS has one)
+   ↓ wait STOP_GRACE_S = 5 s
+SIGKILL
+   ↓ wait KILL_REAP_S = 2 s
+abandon — audited as how="abandoned", return
 ```
 
-### 3. Bridge-Specific
-```
-~/.corvin/tenants/_default/plugins/discord_bridge/config.yaml
-└─ Token, rate limit, prefix
-```
+Total worst case ≈ 7 s. Bounded on purpose: a SIGTERM hang once took down every
+live session in this repo, and a supervisor that waits forever on an
+unresponsive child reproduces exactly that. The daemon is spawned into its own
+process group (`start_new_session=True`) so the signal reaches forked helpers —
+a WhatsApp/Baileys daemon forks, and signalling only the parent leaves orphans.
 
-### Env Var Override (Secrets)
-```bash
-export DISCORD_TOKEN=xoxb-...
-export SLACK_TOKEN=xoxb-...
-
-# Plugin reads from env (takes precedence over config.yaml)
-```
+**A daemon adopted from systemd or `bridge.sh` is NOT stopped here.** We did not
+start it, its owner is still running, and killing another supervisor's process on
+a plugin reload turns a hot-reload into an outage.
 
 ---
 
-## Summary: Bundled Bridges Model
+## Health semantics
 
-| Aspect | Model |
-|--------|-------|
-| **Location** | All in `/repo/core/core_plugins/tier_2_bundled/` |
-| **Shipped** | In every wheel (no download needed) |
-| **Enabled** | Per-tenant config (not per-installation) |
-| **Config** | hierarchy: global → tenant → bridge-specific |
-| **Load** | In-process (simple) or subprocess (isolated) |
-| **Failure** | Bridge fails → other bridges + API unaffected (if subprocess) |
-| **Customization** | User can extend via hooks or replace entire bridge |
-| **Examples** | Discord, Slack, Telegram, WhatsApp, Web UI, CLI |
+`ok=False` is reserved for "this should be running and is not". Expected
+not-started configurations stay green — painting them red trains the operator to
+ignore the health surface.
 
-**Result:** Deploy once, enable what you need per tenant, zero external dependencies for basic bridges.
+| State | `ok` | Message |
+|---|---|---|
+| `flag_off` | yes | supervisor off (feature flag) |
+| `disabled_in_config`, `not_configured`, `not_provisioned`, `node_missing` | yes | no daemon expected (*state*) |
+| `already_running`, external daemon alive | yes | daemon running (managed externally) |
+| running, uptime < 5 s | yes | daemon starting |
+| running, adapter polling the queue | yes | daemon running |
+| running, **no adapter** | no | daemon running but no adapter is polling the queue |
+| exited | no | daemon exited (code *N*) |
+| external daemon vanished | no | externally managed daemon is no longer running |
+| `unverifiable` | no | cannot verify whether a daemon is already running — refused to start |
+| `manager_missing`, `probe_failed`, `spawn_failed` | no | (reason code) |
 
+Two of these are worth calling out.
+
+**The half bridge.** A daemon with no adapter polling the queue receives every
+message and answers none — silent in every log. `bridge_manager.adapter_running_pid()`
+(the second additive helper added in this phase) makes it a red health tile
+instead. Unknown counts as alive, so an older vendored `bridge_manager` does not
+paint every healthy bridge red.
+
+**Zombie reaping.** `health_check()` calls `proc.poll()`, which reaps. Without it
+an exited daemon would linger as a zombie and keep reporting healthy.
+
+---
+
+## Secrets
+
+`settings.json` holds bot tokens, IMAP passwords and phone numbers. The
+supervisor never reads a credential **value**: `channel_configured()` answers a
+boolean, and every log line and audit detail carries only the channel name, a
+closed-set reason code and a pid.
+
+Audit events are `bridge.supervisor.{started,stopped,skipped,start_failed}` with
+details drawn from a closed key set (`channel`, `plugin_id`, `pid`, `reason`,
+`via`, `how`, `error_type`) — asserted by the test suite. Exception **class**
+names only, never `str(exc)`: a loader or spawn error routinely quotes a path,
+and a path carries the OS username.
+
+Daemon stdout goes to `daemon-start.log` in the daemon's own runtime dir and is
+never read back into an audit record or an API response — that output routinely
+contains chat text and sender JIDs.
+
+---
+
+## The existing path is unchanged
+
+**`bridge.sh` remains the operator entry point in daily use, and nothing about it
+changed.** So do `bridge_manager.py fg`, the systemd units, and the Console
+"Start bridge" button. The additions to `bridge_manager.py` are purely additive:
+two new public functions (`channel_daemon_running`, `adapter_running_pid`) and
+two private helpers. No existing function changed behaviour.
+
+With the flag off — the shipped default — the supervisors are inert and the
+system behaves byte-for-byte as it did before Phase 5.
+
+With the flag on, the two paths coexist safely because the supervisor **adopts**
+rather than duplicates: if `bridge.sh` or systemd already started a daemon, the
+supervisor detects it, does not spawn a second one, reports it as healthy, and
+does not kill it on unload.
+
+---
+
+## Current limits
+
+* **No auto-provisioning.** The supervisor will not `npm install` or download
+  Node; an unprovisioned bridge is a quiet no-op. Use `bridge.sh` or the Console
+  once, then the supervisor can manage it.
+* **No auto-restart.** By design, see above.
+* **No adapter lifecycle.** The supervisor manages the Node daemon only. The
+  Python adapter is a separate process with a separate owner
+  (`ensure_adapter_detached()`); the supervisor reports on it but does not start
+  it.
+* **No channel_registry participation.** A supervisor is not a transport, so
+  in-process message routing does not go through it.
+* **The shipped `tenant.corvin.yaml` template carries no bridge declarations.**
+  The config form above has to be added by the operator (or by a later Console
+  Settings action); `spec.plugins.installed` ships empty.
+
+---
+
+## Test coverage
+
+`core/plugins/tests/test_bridge_supervisor.py` — 73 tests, no real Node process
+is ever started (`subprocess.Popen` is mocked throughout). Both flag states are
+covered, as the feature-flag rule requires.
+
+| Group | What it pins |
+|---|---|
+| Identity + declaration | all seven channels, `bridge_channel` type, bundled layer, class paths resolve |
+| Flag off | nothing starts, nothing raises, no probe runs, health is green and says "off", an unreadable flag is an off flag |
+| Start | argv + cwd, own process group, `service.env` merge, audit event, every skip reason |
+| Duplicate start | already-running is adopted for all four `via` values, second `on_load` is a no-op, unverifiable/raising/absent probe all refuse |
+| Unload | SIGTERM first, SIGKILL only after the grace period, every wait bounded, unkillable child abandoned, external daemon not killed |
+| Health | dead daemon not ok, reaping, starting window, half bridge, vanished external daemon, no path in any message |
+| Registry | lands on bundled, `can_disable()` true, all seven register side by side |
+| Secrets | a fake token in settings appears in no log line and no audit detail on any path |
+| `bridge_manager` probe | separator/case normalisation, no cross-channel confusion, layer precedence, `confident` semantics |
+
+Each of the load-bearing behaviours was mutation-checked: dropping the
+duplicate-start guard, sending SIGKILL first, failing the flag open, starting on
+an unverifiable probe, hiding a dead daemon, and removing the wait timeout each
+turn the suite red.
