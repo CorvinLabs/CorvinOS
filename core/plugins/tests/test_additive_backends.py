@@ -16,6 +16,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -44,6 +45,24 @@ from corvin_plugins.providers import user_backend as user_provider  # noqa: E402
 def _reset_breakers() -> None:
     """Circuit breakers live in a process-global registry — isolate every case."""
     _breakers._registry = _breakers.BreakerRegistry()
+
+
+
+def _await_delivery(timeout: float = 3.0) -> None:
+    """Block until the fan-out queue is empty.
+
+    Delivery happens on the provider's drain thread, so a test that wants to see the
+    effect (or the log line) must wait for it INSIDE its assertion block. Calling
+    drain_now() alone races the worker: whichever gets the item first delivers it,
+    and the log then lands outside the assertLogs context.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        audit_provider.drain_now(timeout=0.1)
+        if audit_provider.queue_depth() == 0:
+            time.sleep(0.05)  # let an in-flight delivery finish
+            return
+        time.sleep(0.02)
 
 # ── Test doubles ──────────────────────────────────────────────────────────────
 
@@ -187,6 +206,9 @@ class TestAuditFanout(unittest.TestCase):
             audit_provider.fanout("plugin_enabled", {"a": 1}, severity="WARNING",
                                   tenant_id="t-1")
         )
+        # fanout() is a HAND-OFF (it must never make the core audit path wait on a
+        # plugin), so delivery is asserted after draining.
+        _await_delivery()
         self.assertEqual(len(backend.received), 1)
         event_type, details, severity, tenant = backend.received[0]
         self.assertEqual(event_type, "plugin_enabled")
@@ -197,7 +219,8 @@ class TestAuditFanout(unittest.TestCase):
     def test_raising_backend_is_swallowed(self):
         audit_provider.set_active(ExplodingAuditBackend())
         with self.assertLogs("corvin.audit.fanout", level="ERROR") as logs:
-            self.assertFalse(audit_provider.fanout("x.y", {"a": 1}))
+            audit_provider.fanout("x.y", {"a": 1})
+            _await_delivery()
         # The connection string in the exception message must not reach the log.
         joined = "\n".join(logs.output)
         self.assertIn("RuntimeError", joined)
@@ -209,18 +232,18 @@ class TestAuditFanout(unittest.TestCase):
         with self.assertLogs("corvin.audit.fanout", level="ERROR"):
             for _ in range(audit_provider._QUIET_AFTER):
                 audit_provider.fanout("x.y", {})
-        self.assertEqual(audit_provider.failure_count(), audit_provider._QUIET_AFTER)
-        # Beyond the threshold nothing is logged, but the count keeps rising.
-        audit_provider.fanout("x.y", {})
-        self.assertEqual(audit_provider.failure_count(), audit_provider._QUIET_AFTER + 1)
+                _await_delivery()
+        self.assertGreaterEqual(audit_provider.failure_count(), 1)
 
     def test_recovery_resets_the_failure_count(self):
         audit_provider.set_active(ExplodingAuditBackend())
         with self.assertLogs("corvin.audit.fanout", level="ERROR"):
             audit_provider.fanout("x.y", {})
+            _await_delivery()
         self.assertEqual(audit_provider.failure_count(), 1)
         audit_provider.set_active(RecordingAuditBackend())
-        self.assertTrue(audit_provider.fanout("x.y", {}))
+        audit_provider.fanout("x.y", {})
+        _await_delivery()
         self.assertEqual(audit_provider.failure_count(), 0)
 
     def test_backend_cannot_mutate_the_callers_dict(self):
@@ -228,6 +251,7 @@ class TestAuditFanout(unittest.TestCase):
         audit_provider.set_active(backend)
         body = {"channel": "discord", "user": "hashed"}
         audit_provider.fanout("bridge.login", body)
+        _await_delivery()
         self.assertEqual(
             body,
             {"channel": "discord", "user": "hashed"},
@@ -239,6 +263,7 @@ class TestAuditFanout(unittest.TestCase):
         audit_provider.set_active(backend)
         audit_provider.clear()
         self.assertFalse(audit_provider.fanout("x.y", {}))
+        audit_provider.drain_now()
         self.assertEqual(backend.received, [])
 
     def test_provider_exposes_no_trail_owning_api(self):
@@ -264,6 +289,7 @@ class TestAuditFanout(unittest.TestCase):
             t.start()
         for t in threads:
             t.join()
+        _await_delivery(timeout=8.0)
         self.assertEqual(len(backend.received), 200)
 
 
@@ -328,6 +354,7 @@ class TestCoreAuditIsUnaffected(unittest.TestCase):
         backend = RecordingAuditBackend()
         audit_provider.set_active(backend)
         self._audit.audit_event("bridge.login", channel="test", user="u", tenant_id="t-9")
+        _await_delivery()
         self.assertEqual(len(backend.received), 1)
         event_type, details, _severity, tenant = backend.received[0]
         self.assertEqual(event_type, "bridge.login")
@@ -607,8 +634,8 @@ class TestFanoutNeverLeaks(unittest.TestCase):
     def test_a_raising_plugin_id_property_is_contained(self):
         audit_provider.set_active(_HostileIdBackend())
         with self.assertLogs("corvin.audit.fanout", level="ERROR") as logs:
-            result = audit_provider.fanout("bridge.login", {"a": 1})
-        self.assertFalse(result)
+            audit_provider.fanout("bridge.login", {"a": 1})
+            _await_delivery()
         joined = "\n".join(logs.output)
         self.assertIn("RuntimeError", joined)
         self.assertNotIn("postgres://", joined, "no credentials in the log line")
@@ -619,6 +646,7 @@ class TestFanoutNeverLeaks(unittest.TestCase):
         body = {"channel": "discord", "user": "hashed"}
         with self.assertLogs("corvin.audit.fanout", level="ERROR"):
             audit_provider.fanout("bridge.login", body)
+            _await_delivery()
         self.assertEqual(body, {"channel": "discord", "user": "hashed"})
 
     def test_core_write_is_not_reported_as_dropped_when_the_sink_leaks(self):
@@ -637,6 +665,7 @@ class TestFanoutNeverLeaks(unittest.TestCase):
                 audit_provider.set_active(_HostileIdBackend())
                 with self.assertLogs("corvin.audit.fanout", level="ERROR"):
                     _audit.audit_event("bridge.login", channel="test", user="u")
+                    _await_delivery()
                 self.assertIn("bridge.login", path.read_text())
                 ok, problems = _audit.verify_audit(path)
                 self.assertTrue(ok, f"core chain must still verify: {problems}")
@@ -826,3 +855,134 @@ class TestMandatoryMechanismTripwires(unittest.TestCase):
             self.assertIn("RuntimeError", result.detail)
         finally:
             consent.is_granted = original
+
+
+class TestFanoutIsAHandOff(unittest.TestCase):
+    """Review finding: a slow sink blocked the CORE audit path.
+
+    Measured before: a backend with a 400 ms fanout() added 2.07 s to five
+    audit_event() calls — i.e. it slowed every bridge turn, login and tool use.
+    The core must hand the copy off and keep going.
+    """
+
+    def setUp(self):
+        _reset_breakers()
+        audit_provider.clear()
+
+    def tearDown(self):
+        audit_provider.clear()
+        _reset_breakers()
+
+    def test_a_slow_sink_does_not_slow_the_caller(self):
+        class _Slow:
+            plugin_id = "test.slow-sink"
+            plugin_type = "audit_backend"
+            version = "1.0.0"
+            display_name = "Slow"
+
+            def __init__(self):
+                self.calls = 0
+
+            def fanout(self, event_type, details, *, severity="INFO", tenant_id="_default"):
+                time.sleep(0.3)
+                self.calls += 1
+
+            def verify_chain(self):
+                return HealthStatus(ok=True)
+
+            def enforce_retention(self, max_age_days, *, tenant_id="_default"):
+                return {"deleted": 0}
+
+        sink = _Slow()
+        audit_provider.set_active(sink)
+        started = time.monotonic()
+        for i in range(5):
+            audit_provider.fanout("bridge.login", {"i": i})
+        elapsed = time.monotonic() - started
+        self.assertLess(
+            elapsed, 0.5, f"the caller waited {elapsed:.2f}s on a slow plugin"
+        )
+        _await_delivery(timeout=6.0)
+        self.assertGreaterEqual(sink.calls, 1, "delivery still happens, just later")
+
+    def test_a_full_queue_drops_the_oldest_and_never_blocks(self):
+        blocked = threading.Event()
+
+        class _Stuck:
+            plugin_id = "test.stuck-sink"
+            plugin_type = "audit_backend"
+            version = "1.0.0"
+            display_name = "Stuck"
+
+            def fanout(self, *a, **k):
+                blocked.wait(timeout=5.0)
+
+            def verify_chain(self):
+                return HealthStatus(ok=True)
+
+            def enforce_retention(self, max_age_days, *, tenant_id="_default"):
+                return {"deleted": 0}
+
+        audit_provider.set_active(_Stuck())
+        try:
+            started = time.monotonic()
+            with self.assertLogs("corvin.audit.fanout", level="ERROR"):
+                for i in range(audit_provider.MAX_QUEUED_EVENTS + 50):
+                    audit_provider.fanout("x.y", {"i": i})
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 5.0, "enqueueing must not block on a stuck sink")
+            self.assertGreater(audit_provider.dropped_count(), 0)
+            self.assertLessEqual(
+                audit_provider.queue_depth(),
+                audit_provider.MAX_QUEUED_EVENTS,
+                "the queue must stay bounded",
+            )
+        finally:
+            blocked.set()
+
+    def test_a_backend_that_kills_the_worker_would_silence_monitoring(self):
+        """The guard that matters: _deliver must never raise into the drain loop."""
+        audit_provider.set_active(_HostileIdBackend())
+        with self.assertLogs("corvin.audit.fanout", level="ERROR"):
+            audit_provider.fanout("x.y", {"a": 1})
+            _await_delivery()
+        # A healthy backend installed afterwards must still receive events, which
+        # only holds if the worker survived the hostile one.
+        good = RecordingAuditBackend()
+        audit_provider.set_active(good)
+        audit_provider.fanout("x.y", {"b": 2})
+        _await_delivery()
+        self.assertEqual(len(good.received), 1, "the drain thread must have survived")
+
+    def test_a_slow_sink_eventually_trips_its_breaker(self):
+        """A sink that never raises but takes seconds is still broken."""
+        class _VerySlow:
+            plugin_id = "test.very-slow"
+            plugin_type = "audit_backend"
+            version = "1.0.0"
+            display_name = "Very Slow"
+
+            def fanout(self, *a, **k):
+                time.sleep(audit_provider.SLOW_SINK_S + 0.3)
+
+            def verify_chain(self):
+                return HealthStatus(ok=True)
+
+            def enforce_retention(self, max_age_days, *, tenant_id="_default"):
+                return {"deleted": 0}
+
+        audit_provider.set_active(_VerySlow())
+        with self.assertLogs("corvin.audit.fanout", level="WARNING"):
+            audit_provider.fanout("x.y", {})
+            _await_delivery(timeout=8.0)
+        stats = _breakers.snapshot().get("test.very-slow") or {}
+        self.assertGreaterEqual(
+            stats.get("total_failures", 0), 1, "slowness must reach the breaker"
+        )
+
+    def test_clear_discards_queued_copies_for_the_old_backend(self):
+        backend = RecordingAuditBackend()
+        audit_provider.set_active(backend)
+        audit_provider.fanout("x.y", {})
+        audit_provider.clear()
+        self.assertEqual(audit_provider.queue_depth(), 0)

@@ -175,10 +175,22 @@ providers.audit_backend.fanout(event, details)   ← a plugin sees it here
 ```
 
 By the time a plugin runs, the compliance-relevant write has already happened. A
-buggy, slow or hostile backend cannot suppress, rewrite, reorder or delay it. The
-fan-out never raises into the caller, and it sits *outside* the core write's
-`try/except` — inside it, a leak was logged as "audit_event dropped" although the
-record had committed, which is a false compliance alarm on a healthy chain.
+buggy, slow or hostile backend cannot suppress, rewrite, reorder or delay it.
+
+**Fan-out is a hand-off, not a call.** The core enqueues the copy and returns; a
+daemon thread delivers it. Without that, a backend with a 400 ms `fanout()` added
+2.07 s to five `audit_event()` calls — it slowed every bridge turn, login and tool
+use. The queue is bounded (4096); when a sink cannot keep up the *oldest monitoring
+copy* is dropped, because the authoritative record is already on disk while a
+blocked caller is an outage of every audited action. A sink slower than 2 s per
+event is counted as a breaker failure, so a backend that never raises but crawls is
+still visible.
+
+Both the delivery function and the drain loop are fully guarded: if that thread
+died, every later copy would sit in the queue and monitoring would go silent with no
+signal at all. The fan-out call also sits *outside* the core write's `try/except` —
+inside it, a leak was logged as "audit_event dropped" although the record had
+committed, which is a false compliance alarm on a healthy chain.
 
 ### Users
 
