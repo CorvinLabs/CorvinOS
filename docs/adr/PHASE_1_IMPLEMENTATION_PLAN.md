@@ -1,11 +1,23 @@
-# Phase 1 Implementation Plan: Audit + Auth Pluginification
-## Week 1-16 Execution Plan (Ready to Start)
+# Phase 1 Implementation Plan: Audit + Auth Pluginification — SUPERSEDED
 
-**Date:** 2026-07-26  
-**Phase:** 1 (Critical Path: Audit + User Management)  
-**Duration:** 3-4 months (12-16 weeks)  
-**Team Size:** 3-4 engineers  
-**Status:** Ready to execute
+**Status:** **Superseded** by [`../implementation/PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md`](../implementation/PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md)
+and [ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md) —
+same objections as the sprint variant: a 3–4 engineer staffing model, and a Phase-1
+objective ("Extract Audit logging from L16", "Extract User Management from L18-21") that
+conflicts with ADR-0232's mandatory core. Backends are **additive**: core keeps writing
+its own hash-chained `audit.jsonl`, a backend receives a copy, and a boot tripwire fails
+closed if the core writer is unreachable. A `user_backend` returning `None` or raising
+means deny, never guest.
+
+**Retained for:** the `AuditBackend` / `UserBackend` protocol sketches, which carried
+over (minus the LDAP/OIDC scaffolds) into Phase 1 of the replacement plan.
+
+## Original content (historical)
+
+**Date:** 2026-07-26
+**Phase:** 1 (Critical Path: Audit + User Management)
+**Duration:** 3-4 months (12-16 weeks)
+**Team Size:** 3-4 engineers
 
 ---
 

@@ -1,10 +1,29 @@
-# Phase 1 Sprint Execution Plan: Audit + Auth Plugins
-## 8 Sprints × 2 Weeks, Adversarial Review Gates (No Exceptions)
+# Phase 1 Sprint Execution Plan: Audit + Auth Plugins — SUPERSEDED
 
-**Status:** Ready to Execute (This Week)  
-**Duration:** 16 weeks (Sprint 0-7)  
-**Team:** 3-4 engineers (A, B, C, D)  
-**Budget:** 50 engineer-weeks, K_MAX = 5 iterations per sprint  
+**Status:** **Superseded** by [`PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md`](PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md)
+and [ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md).
+
+Two reasons:
+
+1. **Staffing model.** It assigns four named engineers (A/B/C/D) with a merge monopoly,
+   k8s/Grafana ops handoff and sprint ceremonies. This is a solo-maintainer repo; the
+   replacement plan is sequenced in sessions with K_MAX = 5.
+2. **Phase-1 framing.** "Extract Audit logging from L16 into pluggable
+   `AuditBackendPlugin`" conflicts with the compliance baseline (ADR-0232): the audit
+   chain, house-rules gate and consent gate are mandatory core and cannot move behind
+   a plugin. The replacement makes backends **additive** — core keeps writing its own
+   chain, a backend receives a copy, and `core/compliance/tripwire.py` fails the boot
+   closed if the core writer is unreachable.
+
+**Retained for:** the adversarial review checklist (§ Adversarial Code Review Process)
+and the veto conditions, which carry over unchanged as the per-phase review gate.
+LDAP/OIDC backend scaffolds are dropped — speculative work with no requester.
+
+## Original content (historical)
+
+**Duration:** 16 weeks (Sprint 0-7)
+**Team:** 3-4 engineers (A, B, C, D)
+**Budget:** 50 engineer-weeks, K_MAX = 5 iterations per sprint
 **Gate:** Adversarial code review is MANDATORY before any merge  
 
 ---

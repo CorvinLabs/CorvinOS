@@ -1,11 +1,38 @@
-# ADR-0XXX: Extensible Plugin System for CorvinOS — v2 (Synthesis)
+# Plugin Marketplace — Design Study (NOT an ADR)
 
-**Status:** Ready for Implementation  
-**Date:** 2026-07-26  
-**Author:** Claude Code (Dialectical Review)  
-**Audience:** Architecture Council → Implementation → Launch v0.11  
+**Status:** **Design study.** Superseded in part by
+[ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md);
+NOT promoted to an ADR and NOT an implementation plan.
+**Date:** 2026-07-26
+**Author:** Claude Code
+**Implementation plan:** [`docs/implementation/PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md`](../implementation/PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md)
 
-**Key Change from v1:** This revision addresses 10 critical gaps discovered in adversarial review (dependency hell, breaking changes, deadlock, quota, offline mode, signing authority). The result is production-ready.
+> **Read this first.** The document below was written as "Ready for Implementation"
+> and claimed to be production-ready. An audit on 2026-07-26 measured the
+> accompanying prototype (`core/orchestration/plugin_system/`, since retired) and
+> found: `api.py` not importable, three of six manager modules 0 bytes, nothing
+> wired into backend or frontend, `test_models.py` consisting of 22 `pytest.skip`
+> calls, and **none** of the compliance mechanisms below implemented — no hash-chain
+> write, no checksum or signature verification, no consent gate, no sandbox, no
+> cgroup quota.
+>
+> What ADR-0233 keeps: the product goal (runtime install/enable/configure with a
+> Console surface), the JSON-Schema-driven settings UI, the manifest/dependency/
+> settings-validation model (salvaged into `corvin_plugins/manifest.py`), and the
+> lifecycle-hook shape.
+>
+> What ADR-0233 supersedes:
+> - **Tier A/B/C as trust levels** → "tier" means ADR-0156's capability boundary
+>   repo-wide; provenance is a separate `origin` field (builtin/vetted/community).
+> - **A new marketplace downloader** → distribution reuses ADR-0096 (`mcp_manager`,
+>   per-spawn SHA256/digest verification, L34/L35 gates) and ADR-0142/0156.
+> - **Quota via cgroups, signing authority, community tier, ratings, monetization**
+>   → out of scope until a separate ADR with a real signing authority exists.
+> - **A second `PluginRegistry`/lifecycle** → the ADR-0030 contract in
+>   `core/plugins/corvin_plugins/` is the only one.
+>
+> Sections below that describe those superseded parts are retained for the design
+> rationale only. Do not implement from this document.
 
 ---
 

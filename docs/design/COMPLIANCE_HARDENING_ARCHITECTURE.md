@@ -1,10 +1,16 @@
 # ADR-0XXX: Compliance Hardening — Non-Negotiable Security Architecture
 ## EU AI Act 2026 + GDPR Structural Guarantees (Cannot Be Disabled)
 
-**Date:** 2026-07-26  
-**Status:** Critical Architecture Constraint  
-**Related to:** ADR-0XXX (Compartmentalization), COMPLIANCE_BASELINE.md  
+**Date:** 2026-07-26
+**Status:** Critical architecture constraint. Long-form study; **canonical decision:
+ADR-0232** (`Corvin-ADR` repo), inherited by **ADR-0233** for the plugin surface.
+**Related to:** ADR-0231 (Compartmentalization), `docs/claude-ref/compliance-baseline.md`
 **Stakeholders:** Legal, Security, Ops, Engineering
+
+> This document is adopted as written. ADR-0233 applies its mandatory-vs-extensible
+> split to plugins: an installed backend may only *add* a sink or a rule, and
+> `core/compliance/tripwire.py` fails the boot closed if the mandatory core audit
+> writer is unreachable or its chain does not verify.
 
 ---
 

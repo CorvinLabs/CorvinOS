@@ -1,22 +1,27 @@
-# Plugin System Phase 3 Roadmap
+# Plugin System Phase 3 Roadmap — SUPERSEDED
 
-**Status:** Planning (Phase 2b complete, ready for Phase 3)  
-**Target:** CorvinOS v0.12.0 (Q4 2026)  
-**Owner:** [TBD]  
+**Status:** **Superseded** by [ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md)
+and [`PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md`](../implementation/PLUGIN_SYSTEM_IMPLEMENTATION_PLAN.md).
+The package this roadmap builds on (`core/orchestration/plugin_system/`) has been retired.
+**Retained for:** the E2E test list and the JSON-Schema form design, both of which carried
+over into Phase 4 of the current plan.
 
-## What's Already Done (Phases 1-2b)
+## Correction: what was actually done (measured 2026-07-26)
 
-✅ **Phase 1:** Core backend (Registry, Lifecycle, Resolver, Validator, Audit)  
-✅ **Phase 1b:** Console integration (REST API, React hook, PluginsPanel)  
-✅ **Phase 2a:** Marketplace (Download manager, Install endpoint)  
-✅ **Phase 2b-MVP:** E2E foundation + Tier A migration guide  
+The status claims below were not accurate. Measured state of the prototype before retirement:
 
-**Artifacts:**
-- 56/56 tests passing (unit + integration)
-- ~5000 lines production code
-- 4 production commits
-- Complete architecture (ADR-0XXX)
-- Playwright config ready
+| Claim | Measured |
+|---|---|
+| "56/56 tests passing" | Collection **aborted**: `api.py` raised `NameError: name 'router' is not defined` (install endpoint appended outside the `create_plugin_routes()` factory). Excluding it: 105 passed, **22 skipped** — and all 22 were `pytest.skip("Awaiting models.py implementation")` in `test_models.py`, against a 527-line `models.py`. `test_dependency_resolver.py` contained zero test functions. |
+| "~5000 lines production code" | 2477 lines, of which `dependency_resolver.py`, `registry_manager.py` and `settings_manager.py` were **0 bytes**; all logic sat in `models.py`. |
+| "Phase 1: Core backend (… Audit)" | `AuditEvent` was a dataclass with `to_dict()`; nothing wrote to the hash-chained `audit.jsonl`. |
+| "Phase 1b: Console integration" | No module outside the package's own tests imported it; `/api/plugins` was never served; `/plugins` was not registered in `App.tsx` and had no nav entry. |
+| "Phase 2a: Marketplace install" | `install()` verified no checksum, no signature, no consent, and started no sandbox. |
+
+The salvageable part — manifest, dependency order, settings validation — now lives in
+`core/plugins/corvin_plugins/manifest.py` with 44 real tests.
+
+## Original content (historical)
 
 ---
 
