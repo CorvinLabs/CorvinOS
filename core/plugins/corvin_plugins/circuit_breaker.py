@@ -71,10 +71,14 @@ class BreakerStats:
     #: Exception CLASS name of the most recent failure, never its message.
     last_failure_type: str | None = None
     opened_at: float | None = field(default=None, repr=False)
-    #: True while the single half-open probe is running. Without it, every caller
-    #: queued behind an open breaker was admitted the moment the cooldown elapsed
-    #: — a thundering herd onto the plugin that is still presumed sick.
-    probe_in_flight: bool = field(default=False, repr=False)
+    #: When the single half-open probe was claimed. Without a claim slot, every
+    #: caller queued behind an open breaker was admitted the moment the cooldown
+    #: elapsed — a thundering herd onto a plugin still presumed sick. The slot
+    #: carries a TIMESTAMP rather than a bool so an ABANDONED probe (a caller
+    #: killed by BaseException, or a future call site that forgets to report)
+    #: expires instead of wedging the breaker shut forever — which would be worse
+    #: than the herd it prevents.
+    probe_claimed_at: float | None = field(default=None, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -98,6 +102,7 @@ class CircuitBreaker:
         failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
         cooldown_s: float = DEFAULT_COOLDOWN_S,
         slow_call_s: float = DEFAULT_SLOW_CALL_S,
+        probe_ttl_s: float | None = None,
     ):
         if failure_threshold < 1:
             raise ValueError("failure_threshold must be >= 1")
@@ -105,6 +110,12 @@ class CircuitBreaker:
         self.failure_threshold = failure_threshold
         self.cooldown_s = cooldown_s
         self.slow_call_s = slow_call_s
+        #: How long a claimed half-open probe stays claimed before it is treated
+        #: as abandoned. Defaults to the wider of cooldown/slow-call so a genuinely
+        #: slow probe is never stolen, while an abandoned one always expires.
+        self.probe_ttl_s = (
+            probe_ttl_s if probe_ttl_s is not None else max(cooldown_s, slow_call_s)
+        )
         self._lock = threading.Lock()
         self._stats = BreakerStats(plugin_id=plugin_id)
 
@@ -115,6 +126,25 @@ class CircuitBreaker:
         """Current state, accounting for an elapsed cooldown."""
         with self._lock:
             return self._state_locked()
+
+    def _probe_held_locked(self) -> bool:
+        """True when a half-open probe is claimed AND has not expired.
+
+        An expired claim is released here, so an abandoned probe costs at most
+        ``probe_ttl_s`` of extra refusal instead of jamming the breaker for good.
+        """
+        claimed = self._stats.probe_claimed_at
+        if claimed is None:
+            return False
+        if time.monotonic() - claimed >= self.probe_ttl_s:
+            log.warning(
+                "circuit %r: half-open probe abandoned after %.1fs — releasing slot",
+                self.plugin_id,
+                self.probe_ttl_s,
+            )
+            self._stats.probe_claimed_at = None
+            return False
+        return True
 
     def _state_locked(self) -> BreakerState:
         st = self._stats
@@ -135,7 +165,7 @@ class CircuitBreaker:
             self._stats.state = BreakerState.CLOSED
             self._stats.consecutive_failures = 0
             self._stats.opened_at = None
-            self._stats.probe_in_flight = False
+            self._stats.probe_claimed_at = None
 
     # ── Recording ────────────────────────────────────────────────────────────
 
@@ -147,7 +177,7 @@ class CircuitBreaker:
                 log.info("circuit closed for %r after a successful probe", self.plugin_id)
             st.state = BreakerState.CLOSED
             st.opened_at = None
-            st.probe_in_flight = False
+            st.probe_claimed_at = None
 
     def record_failure(self, exc: BaseException | None = None) -> None:
         with self._lock:
@@ -165,7 +195,7 @@ class CircuitBreaker:
             ):
                 st.state = BreakerState.OPEN
                 st.opened_at = time.monotonic()
-                st.probe_in_flight = False
+                st.probe_claimed_at = None
                 if was is not BreakerState.OPEN:
                     log.error(
                         "circuit OPEN for %r after %d consecutive failures (last: %s)",
@@ -185,8 +215,9 @@ class CircuitBreaker:
         """
         with self._lock:
             state = self._state_locked()
+            probe_held = self._probe_held_locked()
             if state is BreakerState.OPEN or (
-                state is BreakerState.HALF_OPEN and self._stats.probe_in_flight
+                state is BreakerState.HALF_OPEN and probe_held
             ):
                 self._stats.total_refused += 1
                 retry_in = self.cooldown_s
@@ -196,7 +227,7 @@ class CircuitBreaker:
                     )
                 raise CircuitOpen(self.plugin_id, retry_in)
             if state is BreakerState.HALF_OPEN:
-                self._stats.probe_in_flight = True
+                self._stats.probe_claimed_at = time.monotonic()
             self._stats.total_calls += 1
 
     def call(self, fn: Callable[..., Any], *args: Any, fallback: Any = None, **kwargs: Any) -> Any:

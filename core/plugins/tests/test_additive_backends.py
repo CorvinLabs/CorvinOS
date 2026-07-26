@@ -654,3 +654,48 @@ class TestFanoutNeverLeaks(unittest.TestCase):
         # And it must be gated on the flag, so a failed core write skips the sink.
         gate = source.index("if core_write_committed and _audit_sink is not None:")
         self.assertLess(gate, sink_pos)
+
+
+class TestTripwireHasNoSecondCopyOfTheList(unittest.TestCase):
+    """Second-round finding: the F5 fix left an inline fallback copy of the list.
+
+    A `getattr(..., default=(...))` fallback is a second source of truth — the very
+    drift F5 removed. A missing constant now fails the tripwire instead.
+    """
+
+    def setUp(self):
+        from corvin_compliance_reports import tripwire
+
+        self.tripwire = tripwire
+
+    def test_source_holds_no_duplicate_name_list(self):
+        source = Path(self.tripwire.__file__).read_text()
+        # The names may appear at most once each — inside the failure message or a
+        # comment, never as a second executable tuple.
+        for name in ("set_writer", "replace_writer", "disable_core"):
+            self.assertLessEqual(
+                source.count(f'"{name}"'), 1, f"{name} appears twice — duplicate list?"
+            )
+
+    def test_missing_constant_fails_the_tripwire(self):
+        from corvin_plugins.providers import audit_backend as provider
+
+        original = provider.TRAIL_OWNING_ATTRS
+        try:
+            provider.TRAIL_OWNING_ATTRS = ()
+            result = self.tripwire.core_audit_owns_the_trail()
+            self.assertFalse(result.ok)
+            self.assertIn("TRAIL_OWNING_ATTRS", result.detail)
+        finally:
+            provider.TRAIL_OWNING_ATTRS = original
+
+    def test_a_trail_owning_attribute_fails_the_tripwire(self):
+        from corvin_plugins.providers import audit_backend as provider
+
+        provider.write_event = lambda *a, **k: None  # type: ignore[attr-defined]
+        try:
+            result = self.tripwire.core_audit_owns_the_trail()
+            self.assertFalse(result.ok, "write_event must be caught by the BOOT gate")
+            self.assertIn("write_event", result.detail)
+        finally:
+            del provider.write_event  # type: ignore[attr-defined]

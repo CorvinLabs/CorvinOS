@@ -162,12 +162,15 @@ def core_audit_owns_the_trail() -> TripwireResult:
     except ImportError:
         return TripwireResult(name, True, "plugin package not installed")
 
-    # Single source of truth, shared with the provider's own test suite.
-    names = getattr(
-        audit_backend,
-        "TRAIL_OWNING_ATTRS",
-        ("set_writer", "replace_writer", "set_audit_path", "disable_core", "write_event"),
-    )
+    # Single source of truth, shared with the provider's own test suite. NO inline
+    # fallback list: a second copy here is exactly the drift this consolidation
+    # removed. If the constant is missing, the module is not the one this tripwire
+    # knows how to check — fail, don't guess.
+    names = getattr(audit_backend, "TRAIL_OWNING_ATTRS", None)
+    if not names:
+        return TripwireResult(
+            name, False, "audit provider exposes no TRAIL_OWNING_ATTRS to check against"
+        )
     forbidden = [attr for attr in names if hasattr(audit_backend, attr)]
     if forbidden:
         return TripwireResult(
