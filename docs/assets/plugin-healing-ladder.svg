@@ -1,0 +1,101 @@
+<svg width="940" height="640" viewBox="0 0 940 640" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgPHL" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <pattern id="gridPHL" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#ffffff" stroke-width="0.25" opacity="0.05"/>
+    </pattern>
+    <marker id="arrPHL" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L7,3 z" fill="#8b949e"/>
+    </marker>
+  </defs>
+
+  <rect width="940" height="640" fill="url(#bgPHL)"/>
+  <rect width="940" height="640" fill="url(#gridPHL)"/>
+
+  <text x="470" y="32" font-family="system-ui,sans-serif" font-size="19" font-weight="700"
+        fill="#e6edf3" text-anchor="middle">Circuit breaker + self-healing — what happens to a sick plugin</text>
+  <text x="470" y="52" font-family="system-ui,sans-serif" font-size="11.5" fill="#8b949e" text-anchor="middle">
+    ADR-0231 Stage 2 contains, Stage 3 acts — reversible actions only
+  </text>
+
+  <!-- breaker state machine -->
+  <rect x="40" y="72" width="440" height="230" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1.4"/>
+  <text x="60" y="96" font-family="system-ui,sans-serif" font-size="13" font-weight="700" fill="#e6edf3">Circuit breaker — per plugin_id</text>
+
+  <ellipse cx="120" cy="150" rx="54" ry="26" fill="#0d1117" stroke="#3fb950" stroke-width="1.8"/>
+  <text x="120" y="148" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#3fb950" text-anchor="middle">closed</text>
+  <text x="120" y="162" font-family="system-ui,sans-serif" font-size="8.5" fill="#8b949e" text-anchor="middle">calls pass</text>
+
+  <ellipse cx="330" cy="150" rx="54" ry="26" fill="#0d1117" stroke="#f85149" stroke-width="1.8"/>
+  <text x="330" y="148" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#f85149" text-anchor="middle">open</text>
+  <text x="330" y="162" font-family="system-ui,sans-serif" font-size="8.5" fill="#8b949e" text-anchor="middle">refused</text>
+
+  <ellipse cx="225" cy="252" rx="60" ry="26" fill="#0d1117" stroke="#f0b429" stroke-width="1.8"/>
+  <text x="225" y="250" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#f0b429" text-anchor="middle">half-open</text>
+  <text x="225" y="264" font-family="system-ui,sans-serif" font-size="8.5" fill="#8b949e" text-anchor="middle">ONE probe</text>
+
+  <path d="M174,143 L276,143" stroke="#f85149" stroke-width="1.4" marker-end="url(#arrPHL)"/>
+  <text x="225" y="136" font-family="system-ui,sans-serif" font-size="8.5" fill="#8b949e" text-anchor="middle">N consecutive failures</text>
+  <path d="M318,176 L250,228" stroke="#f0b429" stroke-width="1.4" marker-end="url(#arrPHL)"/>
+  <text x="300" y="212" font-family="system-ui,sans-serif" font-size="8.5" fill="#8b949e">cooldown elapsed</text>
+  <path d="M186,236 L140,176" stroke="#3fb950" stroke-width="1.4" marker-end="url(#arrPHL)"/>
+  <text x="96" y="212" font-family="system-ui,sans-serif" font-size="8.5" fill="#8b949e">probe ok</text>
+
+  <text x="60" y="292" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">A slow success counts as a failure. Monotonic clock.</text>
+
+  <!-- guards -->
+  <rect x="500" y="72" width="400" height="230" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1.2"/>
+  <text x="520" y="96" font-family="system-ui,sans-serif" font-size="12.5" font-weight="700" fill="#a78bfa">Two guards learned the hard way</text>
+  <text x="520" y="120" font-family="system-ui,sans-serif" font-size="10" fill="#e6edf3">Half-open admits exactly ONE probe.</text>
+  <text x="520" y="135" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">The first version admitted everyone the moment the</text>
+  <text x="520" y="149" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">cooldown elapsed — a thundering herd onto a plugin</text>
+  <text x="520" y="163" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">still presumed sick.</text>
+  <text x="520" y="188" font-family="system-ui,sans-serif" font-size="10" fill="#e6edf3">The probe claim EXPIRES.</text>
+  <text x="520" y="203" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">A caller that claims the slot and never reports back</text>
+  <text x="520" y="217" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">would otherwise wedge the breaker shut forever —</text>
+  <text x="520" y="231" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">strictly worse than the herd it prevents.</text>
+  <text x="520" y="256" font-family="system-ui,sans-serif" font-size="10" fill="#f0b429">Auth denials never open a breaker.</text>
+  <text x="520" y="271" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">Counting wrong passwords as failures would make</text>
+  <text x="520" y="285" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">three bad logins a 30-second outage for everyone.</text>
+
+  <!-- healing ladder -->
+  <text x="470" y="336" font-family="system-ui,sans-serif" font-size="13.5" font-weight="700" fill="#e6edf3" text-anchor="middle">
+    Stage 3 healing ladder — flag plugin_self_healing, default OFF
+  </text>
+
+  <rect x="40" y="352" width="270" height="118" rx="8" fill="#161b22" stroke="#3fb950" stroke-width="1.6"/>
+  <text x="58" y="376" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#3fb950">Level 1 — circuit_break_only</text>
+  <text x="58" y="395" font-family="system-ui,sans-serif" font-size="9.5" fill="#e6edf3">Refuse calls for the cooldown. Nothing destroyed.</text>
+  <text x="58" y="414" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">audit_backend · user_backend · compute_engine</text>
+  <text x="58" y="428" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">recall_backend · bridge_channel · data_connector</text>
+  <text x="58" y="448" font-family="system-ui,sans-serif" font-size="9" fill="#f0b429">and every UNKNOWN type — safest default</text>
+  <text x="58" y="462" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">audit is never restarted autonomously</text>
+
+  <rect x="335" y="352" width="270" height="118" rx="8" fill="#161b22" stroke="#f0b429" stroke-width="1.6"/>
+  <text x="353" y="376" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#f0b429">Level 2 — soft_restart</text>
+  <text x="353" y="395" font-family="system-ui,sans-serif" font-size="9.5" fill="#e6edf3">on_unload() → on_load(), same context.</text>
+  <text x="353" y="414" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">stt_provider · summary_provider</text>
+  <text x="353" y="428" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">notification_backend</text>
+  <text x="353" y="448" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">A failed restart leaves the plugin unregistered</text>
+  <text x="353" y="462" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">and the breaker open — never half-alive.</text>
+
+  <rect x="630" y="352" width="270" height="118" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1.6"/>
+  <text x="648" y="376" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#3b82f6">Level 3 — disable_and_degrade</text>
+  <text x="648" y="395" font-family="system-ui,sans-serif" font-size="9.5" fill="#e6edf3">Unregister + detach the provider slot.</text>
+  <text x="648" y="414" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">router_backend · worker_engine</text>
+  <text x="648" y="428" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">the platform runs fine without them</text>
+  <text x="648" y="448" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">registry.yaml is NOT rewritten — an autonomous</text>
+  <text x="648" y="462" font-family="system-ui,sans-serif" font-size="9" fill="#8b949e">action must not edit operator configuration.</text>
+
+  <!-- bounds -->
+  <rect x="40" y="490" width="860" height="122" rx="8" fill="#0d1117" stroke="#f85149" stroke-width="1.4"/>
+  <text x="60" y="514" font-family="system-ui,sans-serif" font-size="12.5" font-weight="700" fill="#f85149">Bounds — what keeps healing from becoming the incident</text>
+  <text x="60" y="536" font-family="system-ui,sans-serif" font-size="10" fill="#e6edf3">· at most 3 actions per plugin per hour, then it escalates instead of acting</text>
+  <text x="60" y="554" font-family="system-ui,sans-serif" font-size="10" fill="#e6edf3">· a failure within 60 s of a restart escalates — a restart that did not help means the fault is systematic,</text>
+  <text x="74" y="568" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e">and healing a logic error only hides it</text>
+  <text x="60" y="586" font-family="system-ui,sans-serif" font-size="10" fill="#e6edf3">· every action audited as plugin.healing_action; NOOPs keep their reason so "why nothing happened" is answerable</text>
+  <text x="60" y="604" font-family="system-ui,sans-serif" font-size="10" fill="#f85149">· NEVER: hard kill · force delete · data mutation · rewriting the operator's registry</text>
+</svg>

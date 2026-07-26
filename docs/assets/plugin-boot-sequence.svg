@@ -1,0 +1,98 @@
+<svg width="940" height="600" viewBox="0 0 940 600" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgPBS" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#161b22"/>
+    </linearGradient>
+    <pattern id="gridPBS" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#ffffff" stroke-width="0.25" opacity="0.05"/>
+    </pattern>
+    <marker id="arrPBS" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L7,3 z" fill="#8b949e"/>
+    </marker>
+    <marker id="arrRedPBS" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L7,3 z" fill="#f85149"/>
+    </marker>
+  </defs>
+
+  <rect width="940" height="600" fill="url(#bgPBS)"/>
+  <rect width="940" height="600" fill="url(#gridPBS)"/>
+
+  <text x="470" y="32" font-family="system-ui,sans-serif" font-size="19" font-weight="700"
+        fill="#e6edf3" text-anchor="middle">Boot sequence — gateway lifespan</text>
+  <text x="470" y="52" font-family="system-ui,sans-serif" font-size="11.5" fill="#8b949e" text-anchor="middle">
+    core/gateway/corvin_gateway/app.py::_lifespan — the order is the safety property
+  </text>
+
+  <!-- step 1 tripwires -->
+  <rect x="60" y="74" width="360" height="86" rx="8" fill="#161b22" stroke="#f85149" stroke-width="1.8"/>
+  <text x="78" y="98" font-family="system-ui,sans-serif" font-size="12.5" font-weight="700" fill="#f85149">1 · assert_compliance()</text>
+  <text x="78" y="117" font-family="system-ui,sans-serif" font-size="10" fill="#e6edf3">7 tripwires — audit writer, chain, trail-ownership,</text>
+  <text x="78" y="131" font-family="system-ui,sans-serif" font-size="10" fill="#e6edf3">consent, flow guard, house rules, erasure</text>
+  <text x="78" y="150" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">NOT wrapped in except: pass — unlike its neighbours</text>
+
+  <path d="M420,117 L500,117" stroke="#f85149" stroke-width="1.6" marker-end="url(#arrRedPBS)"/>
+  <rect x="506" y="92" width="180" height="50" rx="6" fill="#0d1117" stroke="#f85149"/>
+  <text x="596" y="112" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#f85149" text-anchor="middle">any failure</text>
+  <text x="596" y="130" font-family="system-ui,sans-serif" font-size="10" fill="#e6edf3" text-anchor="middle">boot ABORTS</text>
+
+  <text x="706" y="112" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">no env var,</text>
+  <text x="706" y="126" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">no flag, no override</text>
+
+  <path d="M240,160 L240,186" stroke="#8b949e" stroke-width="1.4" marker-end="url(#arrPBS)"/>
+
+  <!-- step 2 declared -->
+  <rect x="60" y="188" width="360" height="96" rx="8" fill="#161b22" stroke="#3fb950" stroke-width="1.6"/>
+  <text x="78" y="212" font-family="system-ui,sans-serif" font-size="12.5" font-weight="700" fill="#3fb950">2 · bootstrap_declared()</text>
+  <text x="78" y="231" font-family="ui-monospace,monospace" font-size="9.5" fill="#e6edf3">spec.plugins.installed → tenant.corvin.yaml</text>
+  <text x="78" y="249" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e">no flag: a version-controlled config IS the opt-in</text>
+  <text x="78" y="267" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">auto_discover_entry_points stays default-false</text>
+
+  <path d="M240,284 L240,310" stroke="#8b949e" stroke-width="1.4" marker-end="url(#arrPBS)"/>
+
+  <!-- step 3 registry -->
+  <rect x="60" y="312" width="360" height="96" rx="8" fill="#161b22" stroke="#f0b429" stroke-width="1.6"/>
+  <text x="78" y="336" font-family="system-ui,sans-serif" font-size="12.5" font-weight="700" fill="#f0b429">3 · bootstrap_tenant()</text>
+  <text x="78" y="355" font-family="ui-monospace,monospace" font-size="9.5" fill="#e6edf3">&lt;tenant&gt;/plugins/registry.yaml, dependency order</text>
+  <text x="78" y="373" font-family="ui-monospace,monospace" font-size="9.5" fill="#f0b429">flag: plugin_runtime_lifecycle</text>
+  <text x="78" y="391" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">one bad plugin is skipped, never fatal</text>
+
+  <!-- precedence callout -->
+  <rect x="452" y="188" width="428" height="220" rx="8" fill="#0d1117" stroke="#30363d" stroke-width="1.2"/>
+  <text x="472" y="212" font-family="system-ui,sans-serif" font-size="12" font-weight="700" fill="#e6edf3">Precedence: the declaration wins</text>
+  <text x="472" y="234" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e">A plugin in a reviewed, version-controlled config is a</text>
+  <text x="472" y="249" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e">stronger statement of intent than a Console click.</text>
+  <text x="472" y="272" font-family="system-ui,sans-serif" font-size="10" fill="#e6edf3">Present in both → loaded once, from the declaration.</text>
+  <text x="472" y="287" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e">The registry pass logs it as already-registered.</text>
+
+  <text x="472" y="316" font-family="system-ui,sans-serif" font-size="11" font-weight="600" fill="#a78bfa">Every load builds a full PluginContext</text>
+  <text x="472" y="334" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">build_context() populates ALL provider handles in one</text>
+  <text x="472" y="348" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">place — a missing handle means a plugin of that type</text>
+  <text x="472" y="362" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">can never register. That was once the case for all of</text>
+  <text x="472" y="376" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">them: nothing built a context at all.</text>
+  <text x="472" y="396" font-family="system-ui,sans-serif" font-size="9.5" fill="#3fb950">audit_emit reaches the real hash-chained writer.</text>
+
+  <path d="M240,408 L240,434" stroke="#8b949e" stroke-width="1.4" marker-end="url(#arrPBS)"/>
+
+  <!-- step 4 health -->
+  <rect x="60" y="436" width="360" height="86" rx="8" fill="#161b22" stroke="#3b82f6" stroke-width="1.6"/>
+  <text x="78" y="460" font-family="system-ui,sans-serif" font-size="12.5" font-weight="700" fill="#3b82f6">4 · HealthCollector + HealingOrchestrator</text>
+  <text x="78" y="479" font-family="ui-monospace,monospace" font-size="9.5" fill="#f0b429">flags: plugin_health_monitoring · plugin_self_healing</text>
+  <text x="78" y="497" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">off → no timer is created at all</text>
+  <text x="78" y="513" font-family="system-ui,sans-serif" font-size="9.5" fill="#8b949e">one poller in the system; healing hangs off it</text>
+
+  <!-- shutdown -->
+  <rect x="452" y="436" width="428" height="86" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1.4"/>
+  <text x="472" y="460" font-family="system-ui,sans-serif" font-size="12.5" font-weight="600" fill="#e6edf3">Shutdown — reverse order</text>
+  <text x="472" y="479" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e">1. stop polling (a poll must not land on a plugin</text>
+  <text x="472" y="493" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e">    that is halfway through on_unload)</text>
+  <text x="472" y="509" font-family="system-ui,sans-serif" font-size="10" fill="#8b949e">2. unload plugins  3. drain the dispatcher</text>
+
+  <rect x="60" y="540" width="820" height="42" rx="6" fill="#0d1117" stroke="#30363d"/>
+  <text x="470" y="558" font-family="system-ui,sans-serif" font-size="10.5" fill="#8b949e" text-anchor="middle">
+    A fresh install runs step 1 only: no declared plugins, all three flags off, no registry, no timer.
+  </text>
+  <text x="470" y="574" font-family="system-ui,sans-serif" font-size="10.5" fill="#3fb950" text-anchor="middle">
+    Nothing about an existing install changes until an operator turns a flag on.
+  </text>
+</svg>
