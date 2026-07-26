@@ -398,12 +398,63 @@ community}`. Three different meanings of "Tier A/B/C" existed before that rule.
 Nine templates live in `core/plugins/templates/` — worker engine, compute engine,
 bridge channel, notification, recall, summary, router, audit backend, user backend.
 Each carries the invariants for its type in comments (an audit backend must not
-block, a user backend must deny on error, and so on).
+block, a user backend must deny on error, and so on). `test_template_conformance.py`
+imports every one of them and checks it against the live protocol, so a template
+that drifts fails here rather than on an author's machine.
+
+### `corvin plugin` (ADR-0244)
 
 ```bash
-# 1. copy a template, implement your class
+corvin plugin types              # what can I build — and will anything call it?
+corvin plugin new <type> <id>    # scaffold from the shipped template
+corvin plugin check <path>       # would the registry accept this?
+```
+
+`corvin plugin new` writes `plugin.py`, `plugin.yaml` (least-privileged defaults:
+`layer: installed`, `origin: community`), a `pyproject.toml` carrying the
+`corvin.plugins` entry point, and a README. `corvin plugin check` runs the **real**
+`PluginRecord` invariants and registers into a throwaway registry — it holds no
+copy of any rule, is advisory only, and never writes to the audit chain. Errors
+mean the registry would reject the plugin; warnings do not affect the exit code,
+and there is no `--strict` or `--force` (ADR-0247).
+
+There is no `corvin plugin list`: live plugin state belongs to the running gateway,
+and answering from the CLI process would show an empty registry and read as
+"nothing installed". Use the health route below.
+
+### Start by checking whether your type is called
+
+**Six of the eleven plugin types register successfully and are never invoked.**
+A plugin of one of those types loads, registers, reports healthy, appears in the
+Console — and nothing ever calls it. There is no error and no log line.
+
+**Consumed (5).** `router_backend`, `summary_provider`, `notification_backend` and
+`recall_backend` are all called from `operator/bridges/shared/adapter.py`;
+`audit_backend` from the gateway.
+
+**Never invoked (6),** for two different reasons:
+
+- `user_backend`, `stt_provider`, `data_connector` — the registry and the ctx
+  handle exist, but nothing outside `corvin_plugins` calls `get_active()`.
+  `providers/user_backend.py` even implements `authenticate()` with a circuit
+  breaker and deny-on-error, and no auth path reaches it.
+- `compute_engine`, `worker_engine`, `bridge_channel` — `bootstrap_all(**registries)`
+  forwards these correctly, but the gateway passes none of them, so the ctx handle
+  is always `None` and each template's `if ctx.<handle> is not None:` guard skips
+  registration.
+
+`corvin plugin types` prints this, `corvin plugin check` warns on it, and
+`corvin plugin new` warns before you write a line. The map lives in
+`corvin_plugins/surface_map.py` and `test_surface_map.py` verifies every column
+against the tree — including a test that fails when a dead type becomes live, so
+the map cannot quietly keep calling a working mechanism dead.
+
+```bash
+# 1. corvin plugin new <type> <id>   (or copy a template by hand)
 # 2. declare it (no flag needed):
 #    spec.plugins.installed: [{id: ..., class_path: ...}]
+#    — an entry point ALONE is not enough: spec.plugins.auto_discover_entry_points
+#      defaults to false, and an unresolvable plugin is skipped at debug level
 # 3. or install it at runtime with plugin_runtime_lifecycle on:
 #    Settings → Plugins → Install
 # 4. watch it:

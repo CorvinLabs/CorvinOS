@@ -631,6 +631,11 @@ def _build_parser() -> argparse.ArgumentParser:
     # status
     sub.add_parser("status", help="Show gateway and Ollama status")
 
+    # plugin (ADR-0244) — build-time tooling; imported here rather than at module
+    # top so `corvin status` still works on an install without corvin_plugins.
+    from . import plugin_cmd as _plugin_cmd
+    _plugin_cmd.add_parser(sub)
+
     return p
 
 
@@ -673,6 +678,12 @@ def main() -> None:
 
     elif args.command == "status":
         sys.exit(cmd_status(args))
+
+    elif args.command == "plugin":
+        if not getattr(args, "plugin_cmd", None):
+            parser.parse_args(["plugin", "--help"])
+        from . import plugin_cmd as _plugin_cmd
+        sys.exit(_plugin_cmd.dispatch(args))
 
     else:
         # No subcommand: behave like `corvin start` (the most useful default)
