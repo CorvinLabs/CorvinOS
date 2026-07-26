@@ -332,6 +332,76 @@ class TestDisableGuard(unittest.TestCase):
         self.assertEqual(unloaded[0]["boot_layer"], "bundled")
 
 
+class TestTheBreakerIsNotAnOffSwitchForCompliance(unittest.TestCase):
+    """An open circuit breaker is functionally a disable.
+
+    `health_check_all()` records a breaker failure on every `ok=False`, and the
+    admin plane calls it on every read. Five ordinary page loads against a
+    compliance plugin whose backend was briefly unreachable were therefore
+    enough to contain it — no healing flag, no operator action, no audit entry
+    saying the mechanism stopped running. That is the automatic off switch
+    CLAUDE.md rules out for this layer.
+    """
+
+    def setUp(self):
+        self.reg = PluginRegistry()
+
+    def tearDown(self):
+        import corvin_plugins.circuit_breaker as breakers
+
+        for pid in list(self.reg.discover()):
+            breakers.forget(pid)
+            try:
+                self.reg.unregister(pid)
+            except Exception:  # noqa: BLE001
+                pass
+
+    @staticmethod
+    def _unhealthy(plugin_id: str):
+        p = _StubPlugin(plugin_id)
+        p.health_check = lambda: HealthStatus(ok=False, message="backend unreachable")  # type: ignore[assignment]
+        return p
+
+    def test_repeated_unhealthy_reads_do_not_contain_a_compliance_plugin(self):
+        import corvin_plugins.circuit_breaker as breakers
+
+        self.reg.register(
+            self._unhealthy("audit"), _ctx("audit"), boot_layer=BootLayer.COMPLIANCE
+        )
+        for _ in range(10):
+            self.reg.health_check_all()
+
+        stats = breakers.get_breaker("audit").stats().to_dict()
+        self.assertNotEqual(
+            stats.get("state"), "open",
+            "ten health reads contained a compliance plugin — an open breaker "
+            "stops it being called at all",
+        )
+
+    def test_an_ordinary_plugin_is_still_contained(self):
+        # Counter-test: a fix that simply stopped opening breakers would pass
+        # the test above and remove the containment the breaker exists for.
+        import corvin_plugins.circuit_breaker as breakers
+
+        self.reg.register(self._unhealthy("ordinary"), _ctx("ordinary"))
+        for _ in range(10):
+            self.reg.health_check_all()
+
+        self.assertEqual(
+            breakers.get_breaker("ordinary").stats().to_dict().get("state"), "open",
+            "an unhealthy installed-layer plugin must still be contained",
+        )
+
+    def test_the_compliance_plugin_is_still_reported_unhealthy(self):
+        # Not containing it must not mean hiding it: health stays visible.
+        self.reg.register(
+            self._unhealthy("audit"), _ctx("audit"), boot_layer=BootLayer.COMPLIANCE
+        )
+        result = self.reg.health_check_all()["audit"]
+        self.assertFalse(result.ok)
+        self.assertIn("unreachable", result.message)
+
+
 class TestReplacement(unittest.TestCase):
     def setUp(self):
         self.reg = PluginRegistry()

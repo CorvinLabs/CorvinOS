@@ -337,6 +337,11 @@ def _runtime_entries() -> dict[str, dict[str, Any]]:
                     "version": getattr(plugin, "version", ""),
                     "display_name": getattr(plugin, "display_name", plugin_id),
                     "plugin_type": getattr(plugin, "plugin_type", ""),
+                    # Which tenant this INSTANCE belongs to. The process registry
+                    # is keyed by plugin_id alone, so two tenants installing the
+                    # same marketplace plugin share one object — without this the
+                    # admin plane cannot tell them apart.
+                    "owner_tenant": registry.tenant_of(plugin_id),
                 }
             except Exception:  # noqa: BLE001 - one odd plugin must not blank the list
                 continue
@@ -370,12 +375,25 @@ def _entries(tenant_id: str) -> dict[str, _Entry]:
         merged[plugin_id] = _Entry(plugin_id=plugin_id, record=record)
 
     for plugin_id, runtime in _runtime_entries().items():
+        is_global = runtime.get("boot_layer") in _GLOBAL_BOOT_LAYERS
+        owner = runtime.get("owner_tenant")
+        # A runtime object belongs to the tenant it was loaded for. Attaching it
+        # to a same-named record from ANOTHER tenant was a cross-tenant control
+        # path, not a display quirk: the process registry is keyed by plugin_id
+        # alone, so two tenants installing the same marketplace plugin share one
+        # instance, and the second tenant could disable the first one's with an
+        # ordinary 200. Owning the record is not owning the object.
+        ours = is_global or owner is None or owner == tenant_id
         if plugin_id in merged:
-            merged[plugin_id].runtime = runtime
-        elif runtime.get("boot_layer") in _GLOBAL_BOOT_LAYERS:
+            if ours:
+                merged[plugin_id].runtime = runtime
+            # else: our record exists but the loaded instance is another
+            # tenant's. The record shows as installed-but-not-loaded, which is
+            # the truth for this tenant.
+        elif is_global:
             merged[plugin_id] = _Entry(plugin_id=plugin_id, runtime=runtime)
-        # else: an installed-layer runtime object with no record in THIS tenant
-        # belongs to another tenant — not ours to show.
+        # else: a runtime object with no record in THIS tenant belongs to
+        # another tenant — not ours to show.
     return merged
 
 

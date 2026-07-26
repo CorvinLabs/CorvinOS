@@ -173,6 +173,34 @@ class TestDetachIsInstanceChecked(unittest.TestCase):
                 )
                 self.reg.unregister(second.plugin_id)
 
+    def test_disabling_a_sibling_does_not_evict_a_compliance_provider(self):
+        """The 403 is worthless if a 200 next door has the same effect.
+
+        A compliance-boot-layer plugin holds the audit_backend slot; its own
+        disable correctly answers 403. Disabling an ORDINARY audit_backend
+        plugin used to call `_detach_providers(plugin_type)`, which clears by
+        type and therefore evicted the compliance plugin's slot — same outcome
+        as the refused request, one route over, with no audit record naming it.
+        """
+        mod = _module("audit_backend")
+        protected = _Provider("core-audit-forwarder", "audit_backend", "audit_registry")
+        self.reg.register(protected, _ctx(protected.plugin_id), boot_layer="compliance")
+        self.assertIs(mod.get_active(), protected)
+
+        # An ordinary plugin of the SAME type, loaded and then unloaded again.
+        # It never took the slot over (it does not call set_active), which is
+        # the realistic shape: most plugins of a type are not the active one.
+        sibling = _Provider("my-audit-copy", "audit_backend", "audit_registry")
+        sibling.on_load = lambda ctx: None  # type: ignore[assignment]
+        self.reg.register(sibling, _ctx(sibling.plugin_id))
+        self.reg.unregister(sibling.plugin_id)
+
+        self.assertIs(
+            mod.get_active(), protected,
+            "unloading a sibling plugin evicted the compliance plugin's "
+            "provider slot — the 403 on its own disable is then decorative",
+        )
+
     def test_clear_if_active_reports_whether_it_acted(self):
         mod = _module("recall_backend")
         plugin = _Provider("solo", "recall_backend", "recall_registry")

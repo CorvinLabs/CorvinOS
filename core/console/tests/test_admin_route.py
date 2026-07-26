@@ -707,6 +707,85 @@ class TestTenantComesFromTheSession(_Base):
                 "tenant-b must not see a plugin installed for _default",
             )
 
+    def test_a_shared_plugin_id_does_not_hand_over_another_tenants_instance(self):
+        """Owning the RECORD is not owning the OBJECT.
+
+        The process registry is keyed by plugin_id alone, so two tenants who
+        install the same marketplace plugin share one loaded instance — it runs
+        with whichever tenant's context loaded it first. Attaching that object
+        to the second tenant's record let them disable it with an ordinary 200,
+        which stops the FIRST tenant's plugin and writes nothing into that
+        tenant's audit chain. Hiding foreign IDs never covered this case,
+        because the id is not foreign — it is the same.
+        """
+        from corvin_plugins.bootstrap import build_context
+        from corvin_plugins.protocol import HealthStatus
+        from corvin_plugins.registry import get_registry
+
+        class _Shared:
+            plugin_id = "acme-notify"
+            plugin_type = "notification_backend"
+            version = "1.0.0"
+            display_name = "Acme Notify"
+
+            def on_load(self, ctx):
+                pass
+
+            def on_unload(self):
+                pass
+
+            def health_check(self):
+                return HealthStatus(ok=True)
+
+            def notify(self, *a, **k):
+                pass
+
+        with self._live(tenants=("_default", "tenant-b")) as (client, csrf, _home, all_):
+            self._install(client, csrf)
+            other, other_csrf = all_["tenant-b"]
+            self._flag(other, other_csrf, "plugin_runtime_lifecycle", True)
+            self._flag(other, other_csrf, "admin_control_plane", True)
+            self._install(other, other_csrf)  # same plugin_id, tenant-b's record
+
+            # The instance is loaded for _default.
+            get_registry().register(
+                _Shared(),
+                build_context(
+                    plugin_id="acme-notify",
+                    tenant_id="_default",
+                    corvin_home=Path("/tmp"),
+                ),
+                boot_layer="installed",
+            )
+            try:
+                mine = client.get(f"{_ADMIN}/plugins/acme-notify").json()
+                self.assertTrue(
+                    mine["runtime_loaded"], "the owner must see it as loaded"
+                )
+
+                theirs = other.get(f"{_ADMIN}/plugins/acme-notify").json()
+                self.assertFalse(
+                    theirs["runtime_loaded"],
+                    "tenant-b owns a record, not the running object",
+                )
+
+                resp = other.post(
+                    f"{_ADMIN}/plugins/acme-notify/disable",
+                    json={},
+                    headers=self._hdr(other_csrf),
+                )
+                # Whatever the status, the other tenant's instance must survive.
+                self.assertIn(
+                    "acme-notify", get_registry().discover(),
+                    f"tenant-b unloaded _default's running plugin "
+                    f"(status {resp.status_code})",
+                )
+            finally:
+                try:
+                    get_registry().unregister("acme-notify")
+                except Exception:  # noqa: BLE001
+                    pass
+
     def test_the_env_var_does_not_win_over_the_session(self):
         with self._live(tenants=("_default", "tenant-b")) as (client, csrf, _home, all_):
             self._install(client, csrf)
