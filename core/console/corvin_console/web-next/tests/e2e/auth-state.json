@@ -2,10 +2,10 @@
   "cookies": [
     {
       "name": "corvin_console_sid",
-      "value": "Es8RzuiznZj_pq-oiewma3OQeyKD358FMkSLYZg9o_I",
+      "value": "CaHv6rrTC4hlEZ4znmtucyuDUH1-77qdm_6cceBW734",
       "domain": "localhost",
       "path": "/",
-      "expires": 1783983676.694716,
+      "expires": 1785119562.791627,
       "httpOnly": true,
       "secure": false,
       "sameSite": "Strict"
@@ -22,10 +22,6 @@
         {
           "name": "corvin-theme",
           "value": "dark"
-        },
-        {
-          "name": "corvin.chat.lastSid",
-          "value": "KHTumhqldObwSqHBhfREyQ"
         }
       ]
     }
