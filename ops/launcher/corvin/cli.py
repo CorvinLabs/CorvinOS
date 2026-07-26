@@ -113,27 +113,49 @@ def cmd_detect(args: argparse.Namespace) -> int:
     json_out = getattr(args, "json", False)
 
     if json_out:
+        # EngineProbeResult is a plain dataclass — it has no to_dict(). Calling one
+        # raised AttributeError, so `corvin detect --json` was as broken as the text
+        # path below (see the comment there).
+        import dataclasses as _dc  # noqa: PLC0415
+
         print(_json.dumps(
-            {"engines": [p.to_dict() for p in probes],
+            {"engines": [_dc.asdict(p) for p in probes],
              "onboarding_complete": _onboarding_complete()},
             indent=2,
         ))
         return 0
 
+    # EngineProbeResult exposes `installed` and `authenticated` — there is no
+    # `found` attribute, so every line here raised
+    # AttributeError: 'EngineProbeResult' object has no attribute 'found'
+    # and `corvin detect` — a documented command, printed in `corvin --help` as
+    # "Probe installed engine binaries (ADR-0120)" — crashed on a fresh install.
+    #
+    # The two fields are also not interchangeable: an engine whose binary is present
+    # but not logged in is DETECTED yet not USABLE, and collapsing them would have
+    # told a user "1 engine ready" for something that cannot run a turn.
     print(f"\n{_bold('Engine detection results')}\n")
     for p in probes:
-        icon = _green("✔") if p.found else _yellow("✘")
+        icon = _green("✔") if p.installed else _yellow("✘")
         label = f"{p.engine_id:12s}"
-        status = p.detail if p.found else _yellow(p.detail)
+        status = p.detail if p.installed else _yellow(p.detail or "not installed")
         print(f"  {icon}  {label} {status}")
     print()
-    found = sum(1 for p in probes if p.found)
-    if found == 0:
+    installed = sum(1 for p in probes if p.installed)
+    ready = sum(1 for p in probes if p.installed and p.authenticated)
+    if installed == 0:
         print(_yellow("  No engines detected. Install at least one to use CorvinOS."))
-    elif found == 1:
-        print(_green(f"  {found} engine ready."))
+    elif ready == 0:
+        print(_yellow(
+            f"  {installed} engine(s) installed, none authenticated — "
+            "log in to one to use CorvinOS."
+        ))
     else:
-        print(_green(f"  {found} engines ready."))
+        print(_green(f"  {ready} engine(s) ready."))
+        if ready < installed:
+            print(_yellow(
+                f"  {installed - ready} more installed but not authenticated."
+            ))
     print()
     return 0
 
@@ -429,8 +451,17 @@ def _set_telemetry_config(key: str, value: str) -> int:
         return 1
     try:
         import yaml  # type: ignore[import]
-        from forge.paths import corvin_home  # noqa: PLC0415
+
+        # corvin_console FIRST: importing it runs _operator_bootstrap, which puts the
+        # vendored operator/ subtrees on sys.path. `forge` is a bare import that only
+        # resolves afterwards. With the two lines the other way round this whole
+        # function died on a fresh wheel install with "telemetry config requires the
+        # console extras: No module named 'forge'" — i.e. the exact command the boot
+        # banner prints as "how to opt out" of default-ON telemetry did not work, so a
+        # user who wanted out could not get out (GDPR Art. 21). Second time this
+        # opt-out has been broken; the docstring above records the first.
         from corvin_console.aco.htrace_consent import _tenant_cfg_path  # noqa: PLC0415
+        from forge.paths import corvin_home  # noqa: PLC0415
     except ImportError as exc:
         print(f"  telemetry config requires the console extras: {exc}")
         return 1
