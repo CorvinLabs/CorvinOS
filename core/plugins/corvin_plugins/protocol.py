@@ -256,6 +256,25 @@ class PluginNotFound(KeyError):
     """Raised when a plugin_id lookup finds no registered plugin."""
 
 
+class PluginDisableRefused(PermissionError):
+    """Raised when an operator-initiated disable targets a non-disableable plugin.
+
+    ADR-0243: the compliance layer is not switchable.  This is deliberately an
+    exception and not a ``False`` return — a caller that ignores a boolean would
+    report "disabled" in the Console while the plugin kept running, which is the
+    worse of the two failure modes for a compliance mechanism.
+    """
+
+
+class PluginReplacementRefused(PermissionError):
+    """Raised when a replacement targets something that may not be replaced.
+
+    Only ``layer=core`` reference implementations are replaceable.  Naming a
+    compliance plugin, a bundled plugin or an unknown id in ``replaces`` is a
+    refusal, never a silent no-op that leaves both plugins loaded.
+    """
+
+
 # ── Known plugin types ────────────────────────────────────────────────────────
 
 KNOWN_PLUGIN_TYPES: frozenset[str] = frozenset({

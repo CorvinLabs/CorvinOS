@@ -217,6 +217,61 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("plugins", "console"),
     ),
     FeatureFlag(
+        id="plugin_extension_points",
+        label="Plugin extension points",
+        description=(
+            "Let a plugin override a named step of a bundled reference "
+            "implementation (routing, model selection, workflow gating) through "
+            "the extension-point bus, and let a replacement plugin take over a "
+            "core component entirely. Off means the bundled defaults run and "
+            "registered hooks are ignored. ADR-0237/0243."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("plugins",),
+    ),
+    FeatureFlag(
+        id="admin_control_plane",
+        label="Admin control plane API",
+        description=(
+            "Serve /api/admin/* — the UI-independent plugin administration API "
+            "(list, enable, disable, configure, health). Off means those routes "
+            "404 and plugin administration stays inside the Console's own "
+            "surface. The compliance layer is never disableable through it. "
+            "ADR-0239/0243."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("plugins", "console"),
+    ),
+    FeatureFlag(
+        id="bridge_supervisor_plugins",
+        label="Bridges as supervised plugins",
+        description=(
+            "Manage the Node bridge daemons (Discord, Slack, Telegram, "
+            "WhatsApp, Signal, Teams, Email) as bundled-layer plugins with "
+            "start/stop/health through the plugin registry, instead of only "
+            "through bridge_manager.sh. Off means bridges are managed exactly as "
+            "they are today. ADR-0238/0243."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("plugins", "bridges"),
+    ),
+    FeatureFlag(
+        id="headless_api_mode",
+        label="Headless API-only boot",
+        description=(
+            "Allow the platform to boot with no bridges and no web UI — core "
+            "plus the HTTP API only, for API-first and container deployments. "
+            "Off means the boot path is unchanged and the Console is always "
+            "started. ADR-0241/0243."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("plugins", "console"),
+    ),
+    FeatureFlag(
         id="browser_automation",
         label="Browser automation",
         description=(

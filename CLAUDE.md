@@ -134,10 +134,20 @@ Canonical runtime root: `~/.corvin/`; voice/secret config: `~/.config/corvin-voi
 36 security + compliance layers. **Mandatory reading:**
 
 - **L4** Cowork (multi-persona hub) — [layer-plugins.md](docs/claude-ref/layer-plugins.md)
-- **Plugin registry** (ADR-0030/0033/0233) — ONE lifecycle contract in
-  `core/plugins/corvin_plugins/`. "Tier A/B/C" always means ADR-0156's capability
-  boundary; provenance is the separate `origin` field. Don't add a second registry,
-  lifecycle, taxonomy, or marketplace downloader — [layer-plugins.md](docs/claude-ref/layer-plugins.md)
+- **Plugin registry** (ADR-0030/0033/0233/0243) — ONE lifecycle contract in
+  `core/plugins/corvin_plugins/`. **Three orthogonal axes, never conflated:**
+  `layer` (compliance·core·bundled·installed — load order + disableability, ADR-0243) ·
+  `tier` (ADR-0156 capability boundary + license gate — the ONLY meaning of "Tier A/B/C") ·
+  `origin` (builtin·vetted·community — provenance). Don't add a second registry,
+  lifecycle, taxonomy, or marketplace downloader, and don't rename the boot-layer
+  axis to "tier" — that collision is what ADR-0243 exists to prevent.
+  **Layer invariants (load-bearing):** tenant scope may declare only
+  `bundled`/`installed` — a privileged claim from `tenant.corvin.yaml` or
+  `registry.yaml` is downgraded to `installed` and audited, never honoured ·
+  `origin=community` may never claim a privileged layer · the `compliance` layer
+  has no off switch (`registry.disable()` raises `PluginDisableRefused`) ·
+  `bootstrap_global()` carries no feature flag *because* it loads the compliance
+  layer · only `layer=core` is replaceable — [layer-plugins.md](docs/claude-ref/layer-plugins.md)
 - **L5** Auto-routing (keyword-based persona selection)
 - **L6** Forge (runtime tool generation, MCP server)
 - **L7** SkillForge (runtime skill generation)

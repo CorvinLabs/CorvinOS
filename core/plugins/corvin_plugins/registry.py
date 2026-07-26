@@ -5,12 +5,15 @@ import logging
 import threading
 
 from . import circuit_breaker as _breakers
+from .manifest import PluginLayer
 from .protocol import (
     CorvinPlugin,
     HealthStatus,
     PluginAlreadyRegistered,
     PluginContext,
+    PluginDisableRefused,
     PluginNotFound,
+    PluginReplacementRefused,
 )
 
 log = logging.getLogger(__name__)
@@ -102,15 +105,54 @@ class PluginRegistry:
     def __init__(self) -> None:
         self._plugins: dict[str, CorvinPlugin] = {}
         self._contexts: dict[str, PluginContext] = {}
+        self._layers: dict[str, PluginLayer] = {}
         self._lock = threading.Lock()
 
     # ── Registration ──────────────────────────────────────────────────────────
 
-    def register(self, plugin: CorvinPlugin, ctx: PluginContext) -> None:
+    @staticmethod
+    def _resolve_layer(plugin: CorvinPlugin, layer: PluginLayer | str | None) -> PluginLayer:
+        """Decide which layer a runtime plugin object belongs to.
+
+        Order: explicit argument (the loader passes the registry record's value)
+        → the plugin object's own ``layer`` attribute → ``installed``.  The
+        fallback is the least privileged value on purpose: an object that does
+        not declare a layer must not land in ``compliance`` by accident, because
+        that would make it undisableable.
+
+        The plugin's self-declaration is trusted only as far as the manifest
+        gate allows — :class:`~.manifest.PluginRecord` already refuses a
+        community-origin record that claims a privileged layer, and the loader
+        passes the vetted record value explicitly.
+        """
+        if layer is not None:
+            return PluginLayer(layer)
+        declared = getattr(plugin, "layer", None)
+        if declared is None:
+            return PluginLayer.INSTALLED
+        try:
+            return PluginLayer(declared)
+        except ValueError:
+            log.warning(
+                "plugin %r declares unknown layer %r — treating as installed",
+                getattr(plugin, "plugin_id", "?"), declared,
+            )
+            return PluginLayer.INSTALLED
+
+    def register(
+        self,
+        plugin: CorvinPlugin,
+        ctx: PluginContext,
+        *,
+        layer: PluginLayer | str | None = None,
+    ) -> None:
         """Call plugin.on_load(ctx) and store the plugin.
 
         Raises PluginAlreadyRegistered if plugin.plugin_id is already registered.
+        ``layer`` (ADR-0243) records which boot layer the plugin belongs to; it is
+        keyword-only and defaults to the least privileged value.
         """
+        resolved = self._resolve_layer(plugin, layer)
         with self._lock:
             if plugin.plugin_id in self._plugins:
                 raise PluginAlreadyRegistered(
@@ -120,6 +162,7 @@ class PluginRegistry:
             # call from on_load() (e.g. in tests) also gets the collision guard.
             self._plugins[plugin.plugin_id] = plugin
             self._contexts[plugin.plugin_id] = ctx
+            self._layers[plugin.plugin_id] = resolved
 
         try:
             plugin.on_load(ctx)
@@ -128,6 +171,7 @@ class PluginRegistry:
             with self._lock:
                 self._plugins.pop(plugin.plugin_id, None)
                 self._contexts.pop(plugin.plugin_id, None)
+                self._layers.pop(plugin.plugin_id, None)
             raise
 
         log.info(
@@ -143,15 +187,28 @@ class PluginRegistry:
         ctx.audit_emit("plugin.loaded", {
             "plugin_id": plugin.plugin_id,
             "plugin_type": plugin.plugin_type,
+            "layer": resolved.value,
             "version": plugin.version,
             "tenant_id": ctx.tenant_id,
         })
 
-    def unregister(self, plugin_id: str) -> None:
+    def unregister(self, plugin_id: str, *, operator_initiated: bool = False) -> None:
         """Call plugin.on_unload() and remove it from the registry.
 
         Raises PluginNotFound if plugin_id is not registered.
+
+        ``operator_initiated`` separates the two callers that both end up here.
+        Shutdown, hot-reload and replacement are machinery and may unload
+        anything.  An operator action routed through the Console or the admin API
+        may not switch off a compliance-layer plugin, so it passes True and gets
+        :class:`PluginDisableRefused`.  Without the distinction the admin surface
+        could reach past :meth:`disable` and unload the audit writer by calling
+        the primitive directly.
         """
+        if operator_initiated and not self.can_disable(plugin_id):
+            raise PluginDisableRefused(
+                f"{plugin_id!r} is on the compliance layer and cannot be disabled"
+            )
         with self._lock:
             plugin = self._plugins.get(plugin_id)
             ctx = self._contexts.get(plugin_id)
@@ -162,6 +219,7 @@ class PluginRegistry:
             # already gone from _plugins and on_unload() never called.
             self._plugins.pop(plugin_id, None)
             self._contexts.pop(plugin_id, None)
+            layer = self._layers.pop(plugin_id, PluginLayer.INSTALLED)
 
         try:
             plugin.on_unload()
@@ -178,8 +236,102 @@ class PluginRegistry:
         if ctx is not None:
             ctx.audit_emit("plugin.unloaded", {
                 "plugin_id": plugin_id,
+                "layer": layer.value,
+                "operator_initiated": operator_initiated,
                 "tenant_id": ctx.tenant_id,
             })
+
+    # ── Layers (ADR-0243) ─────────────────────────────────────────────────────
+
+    def layer_of(self, plugin_id: str) -> PluginLayer:
+        """Return the boot layer of a registered plugin.
+
+        Raises PluginNotFound if plugin_id is not registered.
+        """
+        with self._lock:
+            if plugin_id not in self._plugins:
+                raise PluginNotFound(plugin_id)
+            return self._layers.get(plugin_id, PluginLayer.INSTALLED)
+
+    def plugins_by_layer(self, layer: PluginLayer | str) -> list[CorvinPlugin]:
+        """Return all registered plugins on the given layer."""
+        wanted = PluginLayer(layer)
+        with self._lock:
+            return [
+                p for pid, p in self._plugins.items()
+                if self._layers.get(pid, PluginLayer.INSTALLED) is wanted
+            ]
+
+    def can_disable(self, plugin_id: str) -> bool:
+        """False for the compliance layer, True otherwise.
+
+        An unregistered id answers True: "nothing here to protect".  Callers that
+        need the difference between "absent" and "present but protected" ask
+        :meth:`layer_of`, which raises.
+        """
+        with self._lock:
+            if plugin_id not in self._plugins:
+                return True
+            return self._layers.get(plugin_id, PluginLayer.INSTALLED) is not PluginLayer.COMPLIANCE
+
+    def disable(self, plugin_id: str) -> None:
+        """Operator-facing unload.  Refuses the compliance layer.
+
+        This is the ONLY entry point an admin route, a Console action or a CLI
+        command may use.  It is :meth:`unregister` with ``operator_initiated``
+        set, named separately so the call sites read as what they are.
+        """
+        self.unregister(plugin_id, operator_initiated=True)
+
+    def replace(
+        self,
+        plugin: CorvinPlugin,
+        ctx: PluginContext,
+        *,
+        replaces: str,
+        layer: PluginLayer | str | None = None,
+    ) -> None:
+        """Swap a ``layer=core`` reference implementation for an alternative.
+
+        ADR-0237 "full plugin replacement".  Only the ``core`` layer is
+        replaceable: compliance is not pluggable at all, and bundled/installed
+        plugins are simply disabled and uninstalled rather than replaced.
+
+        The old plugin is unloaded first and the new one registered second, in
+        that order and not atomically — a replacement that fails on ``on_load``
+        leaves the slot EMPTY rather than restoring the old object.  That is the
+        honest outcome: the old plugin's ``on_unload`` has already run (sockets
+        closed, handlers deregistered), so "restoring" it would hand callers an
+        object whose teardown had completed.  The registry audits the gap; the
+        operator re-enables the default explicitly.
+        """
+        with self._lock:
+            if replaces not in self._plugins:
+                raise PluginReplacementRefused(
+                    f"{plugin.plugin_id!r} declares replaces={replaces!r}, "
+                    f"which is not registered"
+                )
+            target_layer = self._layers.get(replaces, PluginLayer.INSTALLED)
+            already = plugin.plugin_id in self._plugins
+        if target_layer is not PluginLayer.CORE:
+            raise PluginReplacementRefused(
+                f"{replaces!r} is on layer {target_layer.value}; only "
+                f"layer=core reference implementations are replaceable"
+            )
+        if already:
+            raise PluginAlreadyRegistered(
+                f"plugin_id {plugin.plugin_id!r} is already registered"
+            )
+
+        # Machinery, not an operator disable: the compliance guard in unregister
+        # does not apply here because the target was just proven to be core.
+        self.unregister(replaces)
+        ctx.audit_emit("plugin.replaced", {
+            "plugin_id": plugin.plugin_id,
+            "replaces": replaces,
+            "tenant_id": ctx.tenant_id,
+        })
+        self.register(plugin, ctx, layer=layer if layer is not None else PluginLayer.CORE)
 
     # ── Lookup ────────────────────────────────────────────────────────────────
 
@@ -296,12 +448,43 @@ class PluginRegistry:
 _registry: PluginRegistry = PluginRegistry()
 
 
-def register(plugin: CorvinPlugin, ctx: PluginContext) -> None:
-    _registry.register(plugin, ctx)
+def register(
+    plugin: CorvinPlugin,
+    ctx: PluginContext,
+    *,
+    layer: PluginLayer | str | None = None,
+) -> None:
+    _registry.register(plugin, ctx, layer=layer)
 
 
-def unregister(plugin_id: str) -> None:
-    _registry.unregister(plugin_id)
+def unregister(plugin_id: str, *, operator_initiated: bool = False) -> None:
+    _registry.unregister(plugin_id, operator_initiated=operator_initiated)
+
+
+def disable(plugin_id: str) -> None:
+    _registry.disable(plugin_id)
+
+
+def can_disable(plugin_id: str) -> bool:
+    return _registry.can_disable(plugin_id)
+
+
+def layer_of(plugin_id: str) -> PluginLayer:
+    return _registry.layer_of(plugin_id)
+
+
+def plugins_by_layer(layer: PluginLayer | str) -> list[CorvinPlugin]:
+    return _registry.plugins_by_layer(layer)
+
+
+def replace(
+    plugin: CorvinPlugin,
+    ctx: PluginContext,
+    *,
+    replaces: str,
+    layer: PluginLayer | str | None = None,
+) -> None:
+    _registry.replace(plugin, ctx, replaces=replaces, layer=layer)
 
 
 def get(plugin_id: str) -> CorvinPlugin:
