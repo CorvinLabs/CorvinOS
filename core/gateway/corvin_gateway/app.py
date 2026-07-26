@@ -343,7 +343,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             # Bounded drain so a hung engine doesn't wedge shutdown
             # forever. The asyncio.wait_for in dispatcher._run_one
             # already caps individual runs; this is the global guard.
-            await dispatcher.drain(timeout=30.0)
+            #
+            # 15s, not 30s: the systemd unit allows 45s total and uvicorn spends up
+            # to 10s waiting for connections plus 5s flushing the audit fan-out
+            # before this runs. At 30s the sum was 45s with zero headroom, and with
+            # the OLD TimeoutStopSec=15 the whole cleanup was unreachable — every
+            # restart was a SIGKILL. Whenever this number changes, check
+            # TimeoutStopSec in core/gateway/systemd/corvin-webui.service.
+            await dispatcher.drain(timeout=15.0)
 
 
 app = FastAPI(

@@ -285,6 +285,30 @@ path = "hatch_build.py"
 # core/license/corvin_license/ (which would break `from corvin_license.verifier import …`).
 "core/license" = ""
 
+# ── Every other core/<area>/<pkg> that is imported as a TOP-LEVEL module ──────
+# Without these the package files ship (they are under `packages = [... "core" ...]`)
+# but land at `core/<area>/<pkg>/` in site-packages, which is not on sys.path — so
+# `import corvin_plugins` fails on every fresh install while working fine in a git
+# checkout. Verified 2026-07-26 against a wheel built from this tree: EIGHT packages
+# were unimportable, and the console logged "corvin_plugins not importable —
+# /plugins routes will report 503". The plugin system, the compute worker, workflows,
+# AWPKG bundles and the ADR-0232 compliance tripwires were all dead in the shipped
+# product. Nothing was broken in the repo, so no test caught it.
+#
+# Mapped per PACKAGE, not per parent directory: `"core/compute" = ""` would also lift
+# that directory's README.md / LICENSE / requirements.txt / bootstrap.sh to the wheel
+# root, where they collide with the identically-named files from the other core areas
+# ("second file added at the same path"), and would drop core/awpkg/awpkg.py next to
+# the awpkg/ package.
+"core/plugins/corvin_plugins" = "corvin_plugins"
+"core/observability/corvin_logging" = "corvin_logging"
+"core/compliance/corvin_compliance_reports" = "corvin_compliance_reports"
+"core/compute/corvin_compute" = "corvin_compute"
+"core/workflows/corvin_workflows" = "corvin_workflows"
+"core/delegate/corvin_delegate" = "corvin_delegate"
+"core/orchestration/corvin_orchestration" = "corvin_orchestration"
+"core/awpkg/awpkg" = "awpkg"
+
 [tool.hatch.build.targets.wheel.force-include]
 # Windows PATH auto-fix: placed at wheel root → lands in site-packages as
 # corvinOS_path_fix.pth.  Python processes it on startup via the .pth mechanism,

@@ -176,8 +176,20 @@ function startOutboxPoller({
       try {
         payload = JSON.parse(fs.readFileSync(fpath, 'utf8'));
       } catch (e) {
-        if (logger) logger(`outbox: bad JSON in ${f}: ${e.message}`);
-        try { fs.unlinkSync(fpath); } catch {}
+        // Dead-letter, do NOT unlink: this file is a FINISHED ANSWER the engine
+        // already produced and paid for. Unparseable JSON is usually a truncated
+        // write (crash mid-write, disk full), and the text is often still in there
+        // — recoverable by hand from the dead-letter dir, unrecoverable once
+        // deleted. Falls back to unlink only when there is no dead-letter dir,
+        // because leaving it in place would retry the same parse every tick.
+        if (deadLetterDir) {
+          if (!deadLetter(fpath, f, 'unparseable envelope', e.message, 1)) {
+            try { fs.unlinkSync(fpath); } catch {}
+          }
+        } else {
+          if (logger) logger(`outbox: bad JSON in ${f}, dropping: ${e.message}`);
+          try { fs.unlinkSync(fpath); } catch {}
+        }
         continue;
       }
       // Strict: missing `channel` is a writer bug — drop instead of
@@ -185,13 +197,34 @@ function startOutboxPoller({
       // fallback could deliver Telegram-bound messages to a WhatsApp
       // account if channel was forgotten somewhere).
       if (!payload.channel) {
-        if (logger) logger(`outbox: missing 'channel' field in ${f}, dropping`);
-        try { fs.unlinkSync(fpath); } catch {}
+        // Same reasoning as bad JSON: a writer bug must not cost the user their
+        // answer. Dead-letter it so the envelope can be re-queued once the missing
+        // field is added, instead of deleting the only copy.
+        if (deadLetterDir) {
+          if (!deadLetter(fpath, f, "missing 'channel' field", 'writer bug', 1)) {
+            try { fs.unlinkSync(fpath); } catch {}
+          }
+        } else {
+          if (logger) logger(`outbox: missing 'channel' field in ${f}, dropping`);
+          try { fs.unlinkSync(fpath); } catch {}
+        }
         continue;
       }
       if (payload.channel !== channel) continue;
       try {
+        const _t0 = Date.now();
         await sendWithTimeout(payload, fpath);
+        // Log the SUCCESS, not only the failures. Without this line a delivered
+        // message and a silently dropped one look exactly the same in the journal:
+        // verifying a single Discord round-trip on 2026-07-26 meant querying the
+        // Discord REST API afterwards, because the daemon had gone quiet for two
+        // hours and there was no way to tell delivery from a silent drop. This repo
+        // has been burned twice by that ambiguity (the 2026-07-25 silent drop and
+        // the 2026-07-26 wedged poller). One line per delivered message is cheap —
+        // the channels are rate-limited to tens of messages an hour.
+        if (logger) {
+          logger(`outbox: sent ${f} to ${channel} in ${Date.now() - _t0}ms`);
+        }
         _sentOnce.add(fpath);         // mark before unlink so a failed unlink is detected next tick
         let unlinked = false;
         try { fs.unlinkSync(fpath); unlinked = true; } catch {}

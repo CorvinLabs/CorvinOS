@@ -43,14 +43,24 @@ ExecStartPre=/bin/bash -c 'test -x __REPO_ROOT__/core/console/.venv/bin/python |
 # try to bind port 8765 again after only 5s -- if the previous process (or
 # the kernel releasing its socket) took longer than that, every retry hit
 # [Errno 98] address already in use until the burst limit tripped. Actively
-# wait for the port to be free (bounded to 15s, matching TimeoutStopSec)
+# wait for the port to be free (bounded to 15s; TimeoutStopSec is 45s now, but
+# the port is released as soon as the process exits, which the graceful path
+# reaches well inside 15s)
 # instead of hoping the fixed RestartSec gap happens to be long enough.
 # /dev/tcp is a bash builtin (no ss/lsof/fuser/nc dependency): a successful
 # connect means something is still listening: on failure (connection
 # refused) the port is free and we proceed immediately, so the common case
 # (previous instance already gone) adds no startup delay at all.
 ExecStartPre=/bin/bash -c 'for i in $(seq 1 15); do if ! timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/8765" 2>/dev/null; then exit 0; fi; sleep 1; done; exit 0'
-ExecStart=__REPO_ROOT__/core/console/.venv/bin/python -m uvicorn corvin_gateway.app:app --host 127.0.0.1 --port 8765 --log-level info
+# --timeout-graceful-shutdown is LOAD-BEARING, not tuning. Without it uvicorn
+# waits UNBOUNDED for open connections to close, and the console holds long-lived
+# SSE/WebSocket streams that never close on their own. Measured 2026-07-26: every
+# restart logged "Waiting for connections to close", sat there until systemd's
+# TimeoutStopSec, and got SIGKILLed -- so the ASGI lifespan shutdown never ran at
+# all. That silently skipped the audit fan-out flush, every plugin's on_unload(),
+# and the dispatcher drain that exists to stop half-runs being left in `running`
+# state. A streaming client reconnects; holding shutdown open for it does not.
+ExecStart=__REPO_ROOT__/core/console/.venv/bin/python -m uvicorn corvin_gateway.app:app --host 127.0.0.1 --port 8765 --log-level info --timeout-graceful-shutdown 10
 Restart=always
 # Exponential backoff (systemd >=254): 5s, 10s, 20s, ... capped at 60s.
 # Ignored gracefully (unit still loads, just without backoff) on older
@@ -60,7 +70,12 @@ RestartSec=5
 RestartSteps=4
 RestartMaxDelaySec=60
 TimeoutStartSec=300
-TimeoutStopSec=15
+# Must exceed the SUM of the shutdown budget, or the graceful path can never
+# finish and systemd SIGKILLs mid-cleanup: uvicorn's graceful wait (10s) + the
+# lifespan's own bounded steps (fan-out flush 5s + dispatcher drain 15s) = 30s.
+# It was 15s while the lifespan alone asked for 35s, so the cleanup was
+# unreachable by construction. Keep this >= that sum whenever either changes.
+TimeoutStopSec=45
 StandardOutput=journal
 StandardError=journal
 EnvironmentFile=-%h/.config/corvin-voice/service.env

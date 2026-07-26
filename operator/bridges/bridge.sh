@@ -777,15 +777,23 @@ case "${1:-up}" in
   down)    require_systemd; cmd_down ;;
   status)  if has_systemd; then cmd_status; else fail "kein systemd — nutz \`bridge.sh fg\`"; exit 2; fi ;;
   restart) maybe_autoupdate; require_systemd; cmd_restart ;;
+  # Re-render the unit TEMPLATES into ~/.config/systemd/user and daemon-reload,
+  # without the rest of `up` (npm installs, autoupdate, linger, service start).
+  # corvin-webui.service's own header has pointed at this subcommand since it was
+  # written, but it did not exist: a unit-file change could only be applied by
+  # running the full bring-up, so in practice edits to the templates sat unapplied
+  # while the running units kept the old values. Editing the installed copy by hand
+  # is worse — the next `up` silently reverts it.
+  install-units) require_systemd; install_units ;;
   logs)    shift; cmd_logs "${1:-50}" ;;
   tail)    cmd_tail ;;
   fg)      maybe_autoupdate; cmd_fg ;;
   console) cmd_console ;;
   doctor)  shift; cmd_doctor "$@" ;;
   *)
-    echo "Usage: $0 {up|down|status|restart|logs [n]|tail|fg|console|doctor}"
+    echo "Usage: $0 {up|down|status|restart|install-units|logs [n]|tail|fg|console|doctor}"
     echo
-    echo "  systemd hosts (Linux, WSL2):  up | down | restart | status"
+    echo "  systemd hosts (Linux, WSL2):  up | down | restart | status | install-units"
     echo "  any host (incl. macOS):       fg | console | logs | tail | doctor"
     echo
     echo "  console — start only the web UI (http://127.0.0.1:8765)"

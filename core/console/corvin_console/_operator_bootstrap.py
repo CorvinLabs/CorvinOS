@@ -48,6 +48,21 @@ from pathlib import Path
 #
 #   ""                    -> ``import license.validator``, ``import agent.keypair``
 #   "forge"               -> ``from forge import paths``
+#   "forge/forge"         -> the INNER package dir, so a BARE ``import clag`` /
+#                            ``import paths`` resolves. 12 call sites across
+#                            consent.py, disclosure.py, license/validator.py,
+#                            audit_sealer.py and voice_audit.py import clag
+#                            bare, mirroring the source-tree walk-up that
+#                            inserts operator/forge/forge. Without this entry
+#                            every one of them failed on a WHEEL install, and
+#                            consent.py's gate is FAIL-CLOSED: is_granted()
+#                            returned (False, 'chain-integrity-failed') for
+#                            every user, so on a fresh install nobody could be
+#                            admitted in any messenger. Worse, the boot tripwire
+#                            reported "deny-by-default holds" — a permanently
+#                            broken gate is indistinguishable from a working one
+#                            that denies (2026-07-26 fresh-install roundtrip).
+#                            Same class as the "orchestration" entry below.
 #   "bridges/shared"      -> ``import engine_switch``, ``import audit``,
 #                            ``agents`` package, data_classification, ...
 #   "bridges"             -> a few modules insert the bridges parent dir
@@ -70,6 +85,7 @@ from pathlib import Path
 _OPERATOR_SUBTREES: tuple[str, ...] = (
     "",
     "forge",
+    "forge/forge",
     "bridges/shared",
     "bridges",
     "voice/scripts",
