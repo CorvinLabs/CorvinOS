@@ -41,7 +41,6 @@ if str(_REPO / "plugins" / "core" / "plugins") not in sys.path:
 if str(_REPO / "plugins" / "core" / "compute") not in sys.path:
     sys.path.insert(0, str(_REPO / "plugins" / "core" / "compute"))
 
-from corvin_plugins.protocol import CorvinPlugin, HealthStatus, PluginContext  # noqa: E402
 from corvin_compute.engine_protocol import (  # noqa: E402
     ComputeEngine,
     ComputeResult,
@@ -51,6 +50,7 @@ from corvin_compute.engine_protocol import (  # noqa: E402
     GateAction,
     UnknownJobId,
 )
+from corvin_plugins.protocol import CorvinPlugin, HealthStatus, PluginContext  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +112,7 @@ class ComputeEnginePluginTemplate:
         self._audit_emit = ctx.audit_emit
 
         # Read engine config from ctx.config (tenant's spec.plugins.installed[*].config)
-        cfg = ctx.config
+        cfg = ctx.config  # noqa: F841 - used by the example line below
         # ── IMPLEMENT ME ── read your engine-specific config here, e.g.:
         # self._max_iter = int(cfg.get("max_iterations", 100))
 

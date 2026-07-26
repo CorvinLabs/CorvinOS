@@ -323,6 +323,18 @@ Correlation state uses `contextvars`, not a thread-local: the gateway, console a
 adapter are asyncio, so many tasks share one thread and a thread-local id leaks
 between concurrent requests.
 
+**The same gate covers `health_check()`'s own return value.** Reducing the exception
+path to a class name is only half the surface: a plugin returning
+`HealthStatus(ok=False, message="auth failed for alice@corp.com")` is the *normal*
+path, and that text reaches the hash-chained audit log (`plugin.health_alert`,
+`plugin.healing_action`), the Console and the log stream. The audit chain is
+append-only — rewriting `audit.jsonl` breaks the chain — so a leak there is
+permanent. `health_check_all()` therefore scrubs the plugin's `message` and its
+free-form `details` dict at the single call site, caps the message at 240
+characters, and merges the trusted breaker stats on top afterwards. If the scrubber
+is unavailable the text is **dropped**, not forwarded: losing a diagnostic string is
+recoverable, an un-redactable audit record is not.
+
 The package is deliberately **not** called `logging` — a package with that name
 shadows the standard library the moment its parent lands on `sys.path`.
 

@@ -37,6 +37,60 @@ def _structured(plugin_id: str | None = None):
         return None
 
 
+#: Cap on plugin-supplied health text. The audit chain is append-only and
+#: hash-chained: a record cannot be edited afterwards (rewriting audit.jsonl breaks
+#: the chain), so an oversized or leaky message is permanent.
+MAX_STATUS_MESSAGE_CHARS = 240
+
+
+def _scrub_plugin_text(value: str) -> str:
+    """Redact PII shapes in plugin-supplied health text.  Fails CLOSED.
+
+    ``health_check()`` returning ``ok=False`` with a helpful diagnostic is the
+    NORMAL path, and its message flows into (a) the hash-chained audit log via
+    plugin.health_alert, (b) the healing record's reason via plugin.healing_action,
+    (c) the Console, (d) the log stream. The exception path is already reduced to a
+    class name; the cooperative path was passed through verbatim, so a plugin author
+    writing "auth failed for alice@corp.com" or "cannot reach
+    postgres://u:pw@host/db" wrote personal data into a record nobody can redact
+    later.
+
+    When the scrubber is unavailable the free text is DROPPED, not forwarded: losing
+    a diagnostic string is recoverable, an un-redactable audit record is not.
+    """
+    if not isinstance(value, str) or not value:
+        return ""
+    clipped = value[:MAX_STATUS_MESSAGE_CHARS]
+    try:
+        from corvin_logging.scrubber import scrub_text  # type: ignore[import-not-found]
+    except Exception:  # noqa: BLE001
+        _structured()  # side effect: puts core/observability on sys.path
+        try:
+            from corvin_logging.scrubber import scrub_text  # type: ignore[import-not-found]
+        except Exception:  # noqa: BLE001
+            return "[health message withheld — scrubber unavailable]"
+    scrubbed, _ = scrub_text(clipped)
+    if len(value) > MAX_STATUS_MESSAGE_CHARS:
+        scrubbed += f"…[+{len(value) - MAX_STATUS_MESSAGE_CHARS} chars]"
+    return scrubbed
+
+
+def _scrub_plugin_details(details: object) -> dict:
+    """Same gate for the plugin's free-form details dict (shown in the Console)."""
+    if not isinstance(details, dict):
+        return {}
+    try:
+        from corvin_logging.scrubber import scrub  # type: ignore[import-not-found]
+    except Exception:  # noqa: BLE001
+        _structured()
+        try:
+            from corvin_logging.scrubber import scrub  # type: ignore[import-not-found]
+        except Exception:  # noqa: BLE001
+            return {"withheld": "scrubber unavailable"}
+    cleaned, _ = scrub(details)
+    return cleaned if isinstance(cleaned, dict) else {}
+
+
 class PluginRegistry:
     """Thread-safe registry for CorvinPlugin instances.
 
@@ -103,8 +157,11 @@ class PluginRegistry:
             ctx = self._contexts.get(plugin_id)
             if plugin is None:
                 raise PluginNotFound(plugin_id)
-            del self._plugins[plugin_id]
-            del self._contexts[plugin_id]
+            # pop, not del: the two maps are written together by register(), but a
+            # KeyError here would abort the unload half-way — with the plugin
+            # already gone from _plugins and on_unload() never called.
+            self._plugins.pop(plugin_id, None)
+            self._contexts.pop(plugin_id, None)
 
         try:
             plugin.on_unload()
@@ -203,10 +260,15 @@ class PluginRegistry:
                 breaker.record_success()
             else:
                 breaker.record_failure()
-            merged = dict(status.details or {})
+            # Scrub the PLUGIN's contribution, then merge our own trusted breaker
+            # stats on top — scrubbing after the merge would run the PII patterns
+            # over our own numbers for nothing.
+            merged = _scrub_plugin_details(status.details)
             merged["breaker"] = breaker.stats().to_dict()
             results[pid] = HealthStatus(
-                ok=status.ok, message=status.message, details=merged
+                ok=status.ok,
+                message=_scrub_plugin_text(status.message),
+                details=merged,
             )
         return results
 

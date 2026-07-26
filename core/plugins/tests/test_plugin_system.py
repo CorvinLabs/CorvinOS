@@ -613,3 +613,90 @@ if __name__ == "__main__":
         sys.modules[__name__]
     ))
     sys.exit(0 if result.wasSuccessful() else 1)
+
+
+class TestHealthTextIsScrubbed(unittest.TestCase):
+    """Review finding: only the EXCEPTION path was PII-safe.
+
+    A plugin returning HealthStatus(ok=False, message=<free text>) is the NORMAL
+    path, and that text flows into the hash-chained audit log (plugin.health_alert,
+    plugin.healing_action), the Console and the log stream. The audit chain is
+    append-only: rewriting audit.jsonl breaks the chain, so a leak there is
+    permanent. The gate sits at the single production call site of health_check().
+    """
+
+    def setUp(self):
+        self.registry = PluginRegistry()
+
+    def test_a_leaky_health_message_is_redacted(self):
+        class _Leaky:
+            plugin_id = "test.leaky-health"
+            plugin_type = "audit_backend"
+            version = "1.0.0"
+            display_name = "Leaky"
+
+            def on_load(self, ctx):
+                pass
+
+            def on_unload(self):
+                pass
+
+            def health_check(self):
+                return HealthStatus(
+                    ok=False,
+                    message="auth failed for alice@corp.com at postgres://u:pw@db/x",
+                    details={"dsn": "postgres://u:pw@db:5432/x", "peer": "203.0.113.9"},
+                )
+
+        self.registry.register(_Leaky(), _make_ctx("test.leaky-health"))
+        status = self.registry.health_check_all()["test.leaky-health"]
+        blob = status.message + str(status.details)
+        for secret in ("alice@corp.com", "postgres://u:pw", "203.0.113.9"):
+            self.assertNotIn(secret, blob, f"{secret!r} reached a persisted surface")
+        self.assertIn("REDACTED", blob, "the redaction must be visible, not silent")
+
+    def test_an_oversized_health_message_cannot_bloat_the_audit_chain(self):
+        class _Huge:
+            plugin_id = "test.huge-health"
+            plugin_type = "audit_backend"
+            version = "1.0.0"
+            display_name = "Huge"
+
+            def on_load(self, ctx):
+                pass
+
+            def on_unload(self):
+                pass
+
+            def health_check(self):
+                return HealthStatus(ok=False, message="x" * 200_000)
+
+        self.registry.register(_Huge(), _make_ctx("test.huge-health"))
+        message = self.registry.health_check_all()["test.huge-health"].message
+        self.assertLess(len(message), 400)
+        self.assertIn("chars", message, "the truncation must be visible")
+
+    def test_a_healthy_plugins_message_survives_unharmed(self):
+        """The gate must not mangle ordinary diagnostics — that is the common case."""
+        class _Fine:
+            plugin_id = "test.fine-health"
+            plugin_type = "audit_backend"
+            version = "1.0.0"
+            display_name = "Fine"
+
+            def on_load(self, ctx):
+                pass
+
+            def on_unload(self):
+                pass
+
+            def health_check(self):
+                return HealthStatus(
+                    ok=True, message="queue depth 3, last flush 12ms ago",
+                    details={"depth": 3, "flush_ms": 12},
+                )
+
+        self.registry.register(_Fine(), _make_ctx("test.fine-health"))
+        status = self.registry.health_check_all()["test.fine-health"]
+        self.assertEqual(status.message, "queue depth 3, last flush 12ms ago")
+        self.assertEqual(status.details["depth"], 3)
