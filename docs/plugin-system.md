@@ -207,8 +207,11 @@ and after an upgrade:
 | `plugin_runtime_lifecycle` | installing / enabling / reconfiguring at runtime |
 | `plugin_health_monitoring` | health polling + metrics export |
 
-With all three off, plugins load exactly as before: from `spec.plugins.installed`
-in the tenant config at boot.
+With all three off — the state of a fresh install — **no plugins are loaded at all**,
+and nothing about an existing install changes. Note that `spec.plugins.installed`
+from ADR-0030 is *declared but not wired*: `loader.discover_and_load()` has no
+caller, so putting entries there has no effect today. Loading happens only through
+the registry, which requires `plugin_runtime_lifecycle`.
 
 **Per-tenant, not global:**
 

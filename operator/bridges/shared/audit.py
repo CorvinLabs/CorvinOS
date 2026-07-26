@@ -265,6 +265,7 @@ def audit_event(
     if tenant_id:
         body["tenant_id"] = tenant_id
     effective_severity = (severity.upper() if severity else None) or _VOICE_EVENT_SEVERITY.get(event_type) or "INFO"
+    core_write_committed = False
     try:
         _se.write_event(
             path, event_type,
@@ -272,15 +273,7 @@ def audit_event(
             tool=tool, run_id="",
             details=body, hash_chain=True,
         )
-        # Core record has COMMITTED. Only now may a secondary sink see a copy
-        # (ADR-0233 D4). fanout() never raises and never blocks on failure; a
-        # broken backend cannot make this call site behave differently.
-        if _audit_sink is not None:
-            _audit_sink.fanout(
-                event_type, body,
-                severity=effective_severity,
-                tenant_id=tenant_id or "_default",
-            )
+        core_write_committed = True
     except OSError:
         # I/O resilience contract: a write-protected / full fs must never
         # crash the bridge. Prefer silence + missing entry over a crash-loop.
@@ -298,6 +291,21 @@ def audit_event(
                 event_type, sys.exc_info()[0].__name__,
             )
         except Exception:  # noqa: BLE001
+            pass
+
+    # Secondary sink, OUTSIDE the core write's try/except (ADR-0233 D4).
+    # Keeping it inside meant a leak from fanout() was reported as
+    # "audit_event(...): dropped on non-IO error" even though the core record had
+    # already committed — a false compliance alarm on a healthy chain. The sink
+    # only ever sees an event whose core write actually succeeded.
+    if core_write_committed and _audit_sink is not None:
+        try:
+            _audit_sink.fanout(
+                event_type, body,
+                severity=effective_severity,
+                tenant_id=tenant_id or "_default",
+            )
+        except Exception:  # noqa: BLE001 - a sink can never affect this call site
             pass
 
 

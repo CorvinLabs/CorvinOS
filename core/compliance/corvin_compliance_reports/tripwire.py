@@ -162,11 +162,13 @@ def core_audit_owns_the_trail() -> TripwireResult:
     except ImportError:
         return TripwireResult(name, True, "plugin package not installed")
 
-    forbidden = [
-        attr
-        for attr in ("set_writer", "replace_writer", "set_audit_path", "disable_core")
-        if hasattr(audit_backend, attr)
-    ]
+    # Single source of truth, shared with the provider's own test suite.
+    names = getattr(
+        audit_backend,
+        "TRAIL_OWNING_ATTRS",
+        ("set_writer", "replace_writer", "set_audit_path", "disable_core", "write_event"),
+    )
+    forbidden = [attr for attr in names if hasattr(audit_backend, attr)]
     if forbidden:
         return TripwireResult(
             name, False, f"audit provider exposes trail-owning API: {forbidden}"

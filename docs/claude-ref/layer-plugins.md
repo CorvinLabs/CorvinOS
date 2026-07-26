@@ -759,7 +759,7 @@ prototype (unwired, `api.py` not importable, three 0-byte modules, 22
 |---|---|
 | `protocol.py` | `CorvinPlugin` (on_load / on_unload / health_check), `PluginContext`, `HealthStatus`, the ADR-0033 provider protocols, plus `AuditBackend` + `UserBackend` (ADR-0233). `KNOWN_PLUGIN_TYPES` is the single taxonomy. |
 | `registry.py` | Runtime registration + `health_check_all()` (now breaker-aware) |
-| `loader.py` | Discovery: `corvin.plugins` entry points or explicit `class_path` |
+| `loader.py` | Discovery helpers: `corvin.plugins` entry points or explicit `class_path`. **`discover_and_load()` has no caller** — the ADR-0030 `spec.plugins.installed` config path is declared but unwired; loading goes through `bootstrap_tenant()` |
 | `manifest.py` | `PluginRecord`, `PluginDependency`, `DependencyResolver`, `SettingsValidator`, `plan_settings_migration` |
 | `state.py` | Per-tenant `registry.yaml` + `PluginLifecycle` (install/enable/settings/disable/uninstall) |
 | `circuit_breaker.py` | Per-`plugin_id` breaker: closed → open → half-open |

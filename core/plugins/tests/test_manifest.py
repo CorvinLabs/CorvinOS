@@ -25,6 +25,7 @@ from corvin_plugins.manifest import (  # noqa: E402
     CircularDependencyError,
     DependencyConflictError,
     DependencyResolver,
+    InvalidPluginID,
     PIIRisk,
     PluginDependency,
     PluginError,
@@ -36,6 +37,7 @@ from corvin_plugins.manifest import (  # noqa: E402
     UpdatePolicy,
     ValidationError,
     plan_settings_migration,
+    validate_plugin_id,
 )
 
 
@@ -391,3 +393,59 @@ class TestSettingsMigration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── Adversarial-review regressions (ADR-0233 review round) ────────────────────
+
+
+class TestPluginIDValidation(unittest.TestCase):
+    """F1: plugin_id is a directory name, so it needs an allowlist.
+
+    The first implementation only rejected "/", which let ``..\\..\\etc`` through.
+    On Windows (a supported platform, ADR-0159) that is a real traversal, and
+    ``uninstall(purge_state=True)`` hands the resulting path to shutil.rmtree.
+    """
+
+    def test_accepts_reverse_domain_and_simple_ids(self):
+        for pid in ("acme-notify", "com.example.my-notifier", "a", "x9._-"):
+            self.assertEqual(validate_plugin_id(pid), pid)
+
+    def test_rejects_forward_slash_traversal(self):
+        for pid in ("../escape", "a/../b", "a/b"):
+            with self.assertRaises(InvalidPluginID, msg=pid):
+                validate_plugin_id(pid)
+
+    def test_rejects_backslash_traversal(self):
+        """The defect this review found: backslashes are separators on Windows."""
+        for pid in ("..\\..\\windows", "x\\..\\..\\etc", "a\\b"):
+            with self.assertRaises(InvalidPluginID, msg=pid):
+                validate_plugin_id(pid)
+
+    def test_rejects_dot_segments(self):
+        for pid in ("..", ".", "a..b", "..a"):
+            with self.assertRaises(InvalidPluginID, msg=pid):
+                validate_plugin_id(pid)
+
+    def test_rejects_control_characters_and_whitespace(self):
+        for pid in ("a\nb", "a\tb", "with space", "a\x00b", "a\r"):
+            with self.assertRaises(InvalidPluginID, msg=repr(pid)):
+                validate_plugin_id(pid)
+
+    def test_rejects_uppercase_and_unicode(self):
+        for pid in ("UPPER", "MiXed", "café", "плагин"):
+            with self.assertRaises(InvalidPluginID, msg=pid):
+                validate_plugin_id(pid)
+
+    def test_rejects_non_string_and_empty(self):
+        for pid in (None, 42, b"bytes", "", " "):
+            with self.assertRaises(InvalidPluginID, msg=repr(pid)):
+                validate_plugin_id(pid)
+
+    def test_rejects_over_length(self):
+        with self.assertRaises(InvalidPluginID):
+            validate_plugin_id("a" * 65)
+        self.assertTrue(validate_plugin_id("a" * 64))
+
+    def test_record_construction_enforces_it(self):
+        with self.assertRaises(InvalidPluginID):
+            _record("..\\..\\etc")

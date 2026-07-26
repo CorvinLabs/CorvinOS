@@ -425,3 +425,76 @@ class TestUserProviderBreaker(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── Adversarial-review regression (ADR-0233 review round) ─────────────────────
+
+
+class TestHalfOpenAdmitsExactlyOneProbe(unittest.TestCase):
+    """F2: guard() only checked for OPEN, so HALF_OPEN admitted everyone.
+
+    Consequence: the moment the cooldown elapsed, every caller queued behind the
+    breaker hit the still-sick plugin at once — the thundering herd a breaker
+    exists to prevent.
+    """
+
+    def setUp(self):
+        self.b = cb.CircuitBreaker("x", failure_threshold=1, cooldown_s=0.05)
+        self.b.record_failure(RuntimeError())
+        time.sleep(0.06)
+
+    def test_only_one_of_many_callers_is_admitted(self):
+        self.assertIs(self.b.state, cb.BreakerState.HALF_OPEN)
+        admitted, refused = 0, 0
+        for _ in range(5):
+            try:
+                self.b.guard()
+                admitted += 1
+            except cb.CircuitOpen:
+                refused += 1
+        self.assertEqual(admitted, 1, "exactly one probe may run")
+        self.assertEqual(refused, 4)
+
+    def test_successful_probe_reopens_the_gate_for_everyone(self):
+        self.b.guard()
+        self.b.record_success()
+        self.assertIs(self.b.state, cb.BreakerState.CLOSED)
+        for _ in range(3):
+            self.b.guard()  # closed again: no refusal
+
+    def test_failed_probe_re_arms_the_cooldown(self):
+        self.b.guard()
+        self.b.record_failure(RuntimeError())
+        self.assertIs(self.b.state, cb.BreakerState.OPEN)
+        with self.assertRaises(cb.CircuitOpen):
+            self.b.guard()
+
+    def test_concurrent_callers_admit_exactly_one(self):
+        admitted = []
+        lock = threading.Lock()
+
+        def probe():
+            try:
+                self.b.guard()
+                with lock:
+                    admitted.append(1)
+            except cb.CircuitOpen:
+                pass
+
+        threads = [threading.Thread(target=probe) for _ in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(sum(admitted), 1, "the probe slot must be race-free")
+
+    def test_call_uses_the_single_probe_and_reports_fallback(self):
+        calls = []
+
+        def flaky():
+            calls.append(1)
+            raise RuntimeError()
+
+        results = [self.b.call(flaky, fallback="fb") for _ in range(4)]
+        self.assertEqual(results, ["fb"] * 4)
+        self.assertEqual(len(calls), 1, "only the probe reaches the plugin")

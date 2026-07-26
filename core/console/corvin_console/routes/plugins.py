@@ -40,6 +40,7 @@ try:
         # the operator/ stdlib-shadow trap. Appending means existing paths win.
         sys.path.append(str(_core_plugins))
     from corvin_plugins.manifest import (  # type: ignore[import-not-found]
+        InvalidPluginID,
         PIIRisk,
         PluginError,
         PluginNotFound,
@@ -202,7 +203,10 @@ def _mutation_error(exc: Exception) -> HTTPException:
         return HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND, detail="plugin not installed"
         )
-    if isinstance(exc, (ValidationError, UnknownPluginType)):
+    # A malformed plugin_id / plugin_type / settings payload is unprocessable
+    # INPUT (422), not a state conflict (409) — InvalidPluginID inherits from
+    # PluginError, so without this line it would have fallen through to 409.
+    if isinstance(exc, (ValidationError, UnknownPluginType, InvalidPluginID)):
         return HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         )
@@ -292,7 +296,7 @@ async def install_plugin(
             dependencies=body.dependencies,
             class_path=body.class_path,
         )
-    except (UnknownPluginType, PluginError) as exc:
+    except (UnknownPluginType, InvalidPluginID, PluginError) as exc:
         raise _mutation_error(exc) from exc
     except ValueError as exc:  # bad origin / pii_risk enum value
         raise HTTPException(

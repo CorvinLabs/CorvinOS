@@ -32,6 +32,19 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("corvin.audit.fanout")
 
+#: Attribute names that would make this module capable of OWNING the audit trail
+#: instead of being a secondary sink. Declared here so the boot tripwire and its
+#: test read the SAME list — they drifted apart once already (the test forbade
+#: five names, the tripwire checked four, so adding `write_event` would have
+#: failed the test while passing the boot gate).
+TRAIL_OWNING_ATTRS: tuple[str, ...] = (
+    "set_writer",
+    "replace_writer",
+    "set_audit_path",
+    "disable_core",
+    "write_event",
+)
+
 #: How many consecutive fan-out failures are logged per backend before the module
 #: goes quiet about them.  A permanently broken sink must not turn every audited
 #: action into a log line (that would be its own availability problem), but the
@@ -81,6 +94,31 @@ class AuditBackendRegistry:
         MUST NOT branch its own audit behaviour on it, because the authoritative
         write has already happened.
         """
+        try:
+            return self._fanout_inner(
+                event_type, details, severity=severity, tenant_id=tenant_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Outermost belt: NOTHING may leave this method. The contract that
+            # audit.py relies on is "fanout never raises into the caller", and a
+            # leak there gets logged as "audit_event dropped" even though the core
+            # record already committed — a false compliance alarm. Reaching this
+            # handler means a code path outside _fanout_inner's own guards threw
+            # (e.g. a backend whose plugin_id property raises).
+            _log.error(
+                "audit fan-out leaked %s outside the guarded path — dropped",
+                type(exc).__name__,
+            )
+            return False
+
+    def _fanout_inner(
+        self,
+        event_type: str,
+        details: dict,
+        *,
+        severity: str,
+        tenant_id: str,
+    ) -> bool:
         with self._lock:
             backend = self._active
         if backend is None:

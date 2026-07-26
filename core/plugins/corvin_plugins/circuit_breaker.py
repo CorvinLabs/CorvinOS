@@ -71,6 +71,10 @@ class BreakerStats:
     #: Exception CLASS name of the most recent failure, never its message.
     last_failure_type: str | None = None
     opened_at: float | None = field(default=None, repr=False)
+    #: True while the single half-open probe is running. Without it, every caller
+    #: queued behind an open breaker was admitted the moment the cooldown elapsed
+    #: — a thundering herd onto the plugin that is still presumed sick.
+    probe_in_flight: bool = field(default=False, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -131,6 +135,7 @@ class CircuitBreaker:
             self._stats.state = BreakerState.CLOSED
             self._stats.consecutive_failures = 0
             self._stats.opened_at = None
+            self._stats.probe_in_flight = False
 
     # ── Recording ────────────────────────────────────────────────────────────
 
@@ -142,6 +147,7 @@ class CircuitBreaker:
                 log.info("circuit closed for %r after a successful probe", self.plugin_id)
             st.state = BreakerState.CLOSED
             st.opened_at = None
+            st.probe_in_flight = False
 
     def record_failure(self, exc: BaseException | None = None) -> None:
         with self._lock:
@@ -159,6 +165,7 @@ class CircuitBreaker:
             ):
                 st.state = BreakerState.OPEN
                 st.opened_at = time.monotonic()
+                st.probe_in_flight = False
                 if was is not BreakerState.OPEN:
                     log.error(
                         "circuit OPEN for %r after %d consecutive failures (last: %s)",
@@ -170,10 +177,17 @@ class CircuitBreaker:
     # ── Invocation ───────────────────────────────────────────────────────────
 
     def guard(self) -> None:
-        """Raise :class:`CircuitOpen` when the breaker is refusing calls."""
+        """Raise :class:`CircuitOpen` when the breaker is refusing calls.
+
+        In HALF_OPEN exactly ONE probe is admitted; concurrent callers are
+        refused until that probe reports back through ``record_success`` /
+        ``record_failure``.
+        """
         with self._lock:
             state = self._state_locked()
-            if state is BreakerState.OPEN:
+            if state is BreakerState.OPEN or (
+                state is BreakerState.HALF_OPEN and self._stats.probe_in_flight
+            ):
                 self._stats.total_refused += 1
                 retry_in = self.cooldown_s
                 if self._stats.opened_at is not None:
@@ -181,6 +195,8 @@ class CircuitBreaker:
                         0.0, self.cooldown_s - (time.monotonic() - self._stats.opened_at)
                     )
                 raise CircuitOpen(self.plugin_id, retry_in)
+            if state is BreakerState.HALF_OPEN:
+                self._stats.probe_in_flight = True
             self._stats.total_calls += 1
 
     def call(self, fn: Callable[..., Any], *args: Any, fallback: Any = None, **kwargs: Any) -> Any:
