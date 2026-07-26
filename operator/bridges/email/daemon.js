@@ -36,6 +36,10 @@ const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
 const inChatCmds                = require('../shared/js/in_chat_commands');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
+const {
+  normalizeExecutionContext, shouldRenderContext,
+  formatEngineId, formatDelegationMode, formatDuration, formatTokens,
+} = require('../shared/js/execution_context_renderer');
 
 const ROOT = __dirname;
 const PLUGIN_ROOT = path.resolve(ROOT, '..', '..');
@@ -425,6 +429,40 @@ async function sendReply(toAddr, replySubject, body, attachments) {
   log(`smtp: replied to ${toAddr} (${attachments?.length || 0} attachment(s))`);
 }
 
+/**
+ * Render execution context as plain text for email.
+ * @param {object} context - Normalized execution context
+ * @returns {string} - Text footer to append to email body
+ */
+function renderExecutionContextEmail(context) {
+  if (!context) return '';
+
+  const ctx = normalizeExecutionContext(context);
+  const lines = [
+    '',  // blank line
+    '────────────────────',
+    `Execution Context:`,
+    `Engine: ${formatEngineId(ctx.engine_id)}`,
+    `Model: ${ctx.model_name}`,
+    `Delegation: ${formatDelegationMode(ctx.delegation_mode)}`,
+    `Duration: ${formatDuration(ctx.duration_ms)}`,
+  ];
+
+  // Add tokens if available
+  if (ctx.tokens_input !== null || ctx.tokens_output !== null) {
+    lines.push(`Tokens: in=${formatTokens(ctx.tokens_input)}, out=${formatTokens(ctx.tokens_output)}`);
+  }
+
+  // Add tools if > 0
+  if (ctx.tool_calls_count > 0) {
+    lines.push(`Tools: ${ctx.tool_calls_count}`);
+  }
+
+  lines.push('────────────────────');
+
+  return lines.join('\n');
+}
+
 // ─── Outbox processing (shared poller wires this in) ────────────────────────
 
 async function processOutboxItem(payload, fpath) {
@@ -436,7 +474,21 @@ async function processOutboxItem(payload, fpath) {
   for (const k of ['voice_path', 'image_path', 'document_path', 'video_path']) {
     if (payload[k] && fs.existsSync(payload[k])) attachments.push(payload[k]);
   }
-  const body = payload.text || (attachments.length > 0 ? '(see attachment)' : '');
+  let body = payload.text || (attachments.length > 0 ? '(see attachment)' : '');
+
+  // Phase 4 K=2: Append execution context to email body if available and enabled
+  if (shouldRenderContext(payload, currentSettings())) {
+    try {
+      const footer = renderExecutionContextEmail(payload.execution_context);
+      if (footer) {
+        body = body + footer;
+        log(`execution context appended to email for ${to}`);
+      }
+    } catch (e) {
+      log(`execution context footer failed: ${e && e.message || e}`);
+    }
+  }
+
   await sendReply(to, payload.reply_subject || '', body, attachments);
 }
 

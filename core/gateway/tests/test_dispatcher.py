@@ -166,6 +166,30 @@ class _SlowEngine(_StubBase):
         yield StreamEvent(type="turn_completed", text="too late")
 
 
+class _EchoEngine(_StubBase):
+    """Completes immediately and echoes the prompt back as the final text.
+
+    Why this exists: two tests were named "…via_fake_engine" and asserted a run
+    reaches `completed` within a 5 s poll window, but called `gateway_client()`
+    with NO engine_factory — which means the dispatcher's default,
+    ClaudeCodeEngine, i.e. the REAL Claude CLI. They only ever passed on a machine
+    where `claude` is ABSENT, because the engine then falls back to a fake stream
+    that returns instantly. On a machine with the CLI installed the run is still
+    `running` after 5 s and both tests fail. The dependency on a missing binary was
+    accidental; the subject of these tests is the DISPATCHER, so the engine is now
+    injected explicitly.
+    """
+    name = "test-echo"
+    capabilities = {"stream_json": True}
+
+    def spawn(self, prompt: str, *, env=None) -> Iterator[StreamEvent]:
+        yield StreamEvent(
+            type="turn_completed",
+            text=f"[test-echo] :: {prompt}",
+            usage={"input_tokens": 4, "output_tokens": 4},
+        )
+
+
 class _EnvRecordingEngine(_StubBase):
     """Records the env dict it received; yields a benign completion."""
     name = "test-env"
@@ -188,7 +212,7 @@ class _EnvRecordingEngine(_StubBase):
 class HappyPathTests(unittest.TestCase):
     def test_post_dispatch_completes_via_fake_engine(self):
         with sandbox(("acme",)) as home:
-            with gateway_client() as client:
+            with gateway_client(engine_factory=_EchoEngine) as client:
                 r = client.post(
                     "/v1/tenants/acme/runs",
                     json=_good_run_body(persona="docs", input_text="ping"),
@@ -198,6 +222,7 @@ class HappyPathTests(unittest.TestCase):
                 run_id = r.json()["run_id"]
                 got = _poll_until_terminal(
                     client, f"/v1/tenants/acme/runs/{run_id}", _hdr(),
+                    timeout_s=30.0,   # L44 adjudicates every input with an LLM
                 )
                 self.assertIsNotNone(got)
                 self.assertEqual(got.status_code, 200, got.text)
@@ -205,7 +230,7 @@ class HappyPathTests(unittest.TestCase):
                 self.assertEqual(body["status"], "completed", body)
                 self.assertIsNotNone(body["result"])
                 self.assertIn("final_text", body["result"])
-                # fake-stream emits "[fake-stream] gateway:run_…  :: ping"
+                # _EchoEngine emits "[test-echo] :: ping"
                 self.assertIn("ping", body["result"]["final_text"])
                 self.assertIsNone(body["error"])
 
@@ -343,26 +368,66 @@ class CrossTenantIsolationTests(unittest.TestCase):
 class GatewayComputeQuotaTests(unittest.TestCase):
     """ADR-0149 LIC-GW-CQ-01: gateway run-dispatch charges compute_units_per_day."""
 
-    def test_free_tier_second_run_blocked(self):
+    def test_free_tier_run_past_the_daily_limit_is_blocked(self):
+        """The (limit+1)-th run must fail on compute_units_per_day.
+
+        The limit is READ from license.limits.FREE_TIER, not hardcoded. This test
+        used to assume 1 and assert that the SECOND run is blocked; the maintainer
+        raised the free tier to 10 agentic turns/day on 2026-07-24, so the second run
+        legitimately completes and the test had been failing against correct product
+        behaviour ever since. Binding it to the constant means the next change to the
+        limit does not silently invalidate it again.
+        """
         import sys as _s
         _s.path.insert(0, str(Path(__file__).resolve().parents[2] / "operator"))
         import license.validator as _v
+        from license.limits import FREE_TIER as _FREE
+
+        limit = _FREE["compute_units_per_day"]
+        if limit is None:
+            self.skipTest("free tier has no compute limit — nothing to enforce")
         _orig, _orig_can = _v._ACTIVE_LICENSE, _v._ACTIVE_LICENSE_CANARY
-        _v._set_active_license(None)  # free tier: compute_units_per_day = 1
+        _v._set_active_license(None)  # no key → free tier
         self.addCleanup(lambda: setattr(_v, "_ACTIVE_LICENSE_CANARY", _orig_can))
         self.addCleanup(lambda: setattr(_v, "_ACTIVE_LICENSE", _orig))
         with sandbox(("acme",)) as home:
-            with gateway_client() as client:
-                r1 = client.post("/v1/tenants/acme/runs",
-                                 json=_good_run_body(input_text="one"), headers=_hdr())
-                g1 = _poll_until_terminal(client, f"/v1/tenants/acme/runs/{r1.json()['run_id']}", _hdr())
-                self.assertEqual(g1.json()["status"], "completed")
-                r2 = client.post("/v1/tenants/acme/runs",
-                                 json=_good_run_body(input_text="two"), headers=_hdr())
-                g2 = _poll_until_terminal(client, f"/v1/tenants/acme/runs/{r2.json()['run_id']}", _hdr())
-                self.assertEqual(g2.json()["status"], "failed",
-                                 "2nd free-tier gateway run must be blocked by compute_units_per_day")
-                self.assertIn("compute_units_per_day", g2.json().get("error", ""))
+            with gateway_client(engine_factory=_EchoEngine) as client:
+                # Spend the whole daily pool.
+                # 30 s per run, not the 5 s default: every dispatch runs the L44
+                # house-rules gate, which ADJUDICATES THE INPUT WITH AN LLM
+                # (house_rules_adjudicator → qwen3:8b via Ollama, or Haiku). Measured
+                # ~7-11 s per trivial run with an instant echo engine. That is the
+                # cost of a fail-closed compliance gate, not a slow dispatcher — so
+                # the poll window has to accommodate it instead of the test blaming
+                # the product. It makes this case slow by construction; correctness
+                # wins over runtime for a licence-enforcement test.
+                for i in range(limit):
+                    r = client.post(
+                        "/v1/tenants/acme/runs",
+                        json=_good_run_body(input_text=f"run-{i}"), headers=_hdr(),
+                    )
+                    got = _poll_until_terminal(
+                        client, f"/v1/tenants/acme/runs/{r.json()['run_id']}", _hdr(),
+                        timeout_s=30.0,
+                    )
+                    self.assertEqual(
+                        got.json()["status"], "completed",
+                        f"run {i + 1} of {limit} should still be inside the pool",
+                    )
+                # One more must be refused.
+                over = client.post(
+                    "/v1/tenants/acme/runs",
+                    json=_good_run_body(input_text="over-limit"), headers=_hdr(),
+                )
+                got = _poll_until_terminal(
+                    client, f"/v1/tenants/acme/runs/{over.json()['run_id']}", _hdr(),
+                    timeout_s=30.0,
+                )
+                self.assertEqual(
+                    got.json()["status"], "failed",
+                    f"run {limit + 1} must be blocked by compute_units_per_day={limit}",
+                )
+                self.assertIn("compute_units_per_day", got.json().get("error", ""))
 
 
 class DrainTests(unittest.TestCase):

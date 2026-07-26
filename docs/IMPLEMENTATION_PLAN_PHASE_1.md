@@ -1,792 +1,564 @@
-# CorvinOS Plugin System — Detailed Implementation Plan (Phase 1)
-## With License Model & Admin Control
+# CorvinOS Plugin System — Detailed Implementation Plan
+## Layer-aware registry, extension points, admin control plane
 
-**Date:** 2026-07-26  
-**Status:** Implementation Framework (Ready for K_MAX=5 Iteration)  
+**Date:** 2026-07-26
+**Status:** Phases 0–2 implemented (commit c455516) · Phases 3–7 open
 **Audience:** Engineering + Product
 
 ---
 
-## Critical Refinement: What ADRs Missed
+## Critical Refinement: What the first draft got wrong
 
-### The ADR-0234/0235 Gap
+### 1. The axis is `layer`, not `tier`
 
-**ADR-0234/0235 said:** "Core is 2.4 KB (compliance only), everything else is plugin."
+The first draft introduced a four-value classification, called it "tier", and numbered the
+values 0–3. That word was **already taken twice** in this repository:
 
-**What we actually need:** 
-- Compliance core (2.4 KB) ✅
-- **License-protected infrastructure** (A2A, TDE, Audit Backends, Auth) — not plugins, not free
-- Standard Edition (pre-installed, free)
-- Premium plugins (charged)
-- Community plugins (free, community-maintained)
+- **"Tier A/B/C" means ADR-0156's capability boundary**, repo-wide — what a plugin may
+  do, plus the licensing gate on it. Nothing redefines that.
+- **ADR-0233 D7 deliberately replaced the prototype's `tier` field with `origin`**
+  (`builtin` | `vetted` | `community`) for provenance.
 
-**The Problem:** A2A is strategic IP. If we make it a plugin, anyone forks it → we can't charge. Same with TDE, advanced routing, managed auth.
+A third meaning of the same word inside the same registry is exactly the second taxonomy
+`CLAUDE.md` forbids. The concept therefore ships under a free name: **`layer`**.
 
-### Revised Architecture (4-Tier, Not 3-Tier)
+| Draft value | Current | Meaning |
+|---|---|---|
+| 0 (compliance) | `layer: compliance` | Immutable regulatory mechanisms; boot fails on error |
+| 1 (core infrastructure) | `layer: core` | Bundled reference implementations; degrade + audit on error |
+| 2 (bundled) | `layer: bundled` | Shipped in the wheel, enable/disable per tenant |
+| 3 (premium) | `layer: installed` | User-installed; licensing is the separate ADR-0156 `tier` gate |
+| 4 ("community marketplace") | `layer: installed`, `origin: community`, `support_class: community` | Three separate facts, three separate fields |
 
-```
-Tier 0: Mandatory Core (2.4 KB, hardcoded)
-  ├─ HTTP Router
-  ├─ Audit Writer (L16)
-  ├─ Consent Gate (L18)
-  ├─ Flow Guard (L34)
-  ├─ House Rules (L44)
-  ├─ Erasure (L36)
-  └─ Plugin Registry
+Directory paths and config keys follow the same rename: the numbered plugin directories
+become `core/core_plugins/{compliance,core,bundled}/`, and the numbered config key becomes
+`plugins.bundled`.
 
-Tier 1: License Core (Free in Open Source, $$$ in Managed)
-  ├─ A2A Instance Coordination (L38)  ← Strategic IP
-  ├─ TDE Routing Engine (L22)         ← Differentiator
-  ├─ Conversation Recall (L28)        ← Data, user trust
-  ├─ Admin Dashboard                  ← Control plane
-  └─ Multi-Tenant System (L19-21)     ← Enterprise requirement
-  
-  **Why "License Core"?** These are open-source but NOT replaceable.
-  Forks get them. Managed SaaS charges per-user. Enterprise licenses gate access to API.
-  Admin can't rip these out.
+**Reference:** ADR-0243 § "Naming: why `layer`, not `tier`".
 
-Tier 2: Standard Edition (Pre-installed, Free)
-  ├─ Forge (L6)           ← Differentiator
-  ├─ SkillForge (L7)      ← Differentiator
-  ├─ Bridges (Discord, Slack, etc.)
-  ├─ Logging (Structured, L23 STT metadata)
-  └─ Health Monitoring    ← NerveFiber basics
+### 2. "License core = not replaceable" did not survive
 
-Tier 3: Premium Plugins (Charged)
-  ├─ Advanced STT (Cloud providers)
-  ├─ Advanced Data Classification (ML)
-  ├─ Custom Audit Backends (Postgres, Splunk, etc.)
-  ├─ Custom Auth Backends (OKTA, LDAP, SAML)
-  └─ Advanced Monitoring (Predictive alerts)
+The first draft argued that A2A, TDE and Recall must be non-replaceable because they are
+strategic IP. That is not what shipped, and not what the ADRs decided:
 
-Tier 4: Community Marketplace (Free, community-maintained)
-  ├─ Custom bridges (Telegram, Matrix, etc.)
-  ├─ Domain tools
-  └─ Compliance templates
-```
+- `layer=core` components are **reference implementations and explicitly replaceable**
+  via the manifest field `replaces: <plugin_id>` (ADR-0237). In the implemented registry,
+  `replace()` accepts a `layer=core` target and **only** a `layer=core` target.
+- The only non-replaceable, non-disableable layer is `compliance`.
+- Licensing is enforced on the **separate ADR-0156 `tier` axis**, not by making the load
+  layer immutable. Keeping a component undisableable is a compliance argument, not a
+  commercial one, and the two must not be conflated.
 
----
+### 3. Additive before structural
 
-## Phase 1 Implementation: Layers 0 + 1
+The first draft opened with a directory refactor and called it "no functional changes,
+pure refactoring". A move that relocates the audit writer touches the **live GDPR hash
+chain**, its path resolution, and the boot tripwire. That is the single highest-risk
+change in the plan. It is therefore the **last** phase, and it lands with import shims
+rather than as a big-bang cutover.
 
-**Goal:** Extract compliance core + license infrastructure. Make it *extensible* but *not replaceable*.
+### 4. Numbers are targets, not commitments
 
-### Timeline
-- **Weeks 1-2:** Core extraction + plugin registry (ADR-0236 → code)
-- **Weeks 3-4:** License infrastructure (A2A, TDE, Recall)
-- **Weeks 5-6:** Admin control plane + extension points
-- **Weeks 7-8:** Testing + hardening
-
-### Detailed Work Streams
+All test counts below are planning targets. Duration is **~8 weeks for the additive
+work**. The ADR-0236 core extraction — moving house rules, consent and erasure out of the
+181k-LOC `operator/bridges/shared/` tree — is **explicitly not included** in those eight
+weeks. It is a separate project with its own plan and its own migration gate.
 
 ---
 
-## Stream 1: Core Extraction (Weeks 1-2)
+## The four layers
 
-### 1.1 Plugin Registry + Loader
+```
+layer: compliance   (immutable, boot-fail on error)
+  ├─ Audit writer + hash chain (L16)
+  ├─ Consent gate (L18)
+  ├─ Flow guard (L34)
+  ├─ House rules (L44)
+  └─ Erasure orchestrator (L36)
 
-**Current state:** Plugins in `core/plugins/` scattered.  
-**Target:** Unified registry with lifecycle contract.
+layer: core         (bundled reference implementations, degrade + audit on error)
+  ├─ A2A instance coordination (L38)
+  ├─ TDE routing (L22)
+  ├─ Conversation recall (L28)
+  ├─ ACS manager · Compute worker · Delegation router · Workflow engine
+  ├─ Engine control (L22 / ADR-0181)
+  ├─ Voice summary
+  └─ Admin control plane
+  → extensible via extension points, replaceable via `replaces:`
+
+layer: bundled      (shipped in the wheel, enable/disable per tenant)
+  ├─ Bridges: discord, slack, telegram, whatsapp, signal, teams, email
+  ├─ Web UI
+  └─ CLI
+  → disabled is a quiet no-op, never an error
+
+layer: installed    (user-installed into ~/.corvin/tenants/<id>/plugins/)
+  ├─ Replacements for layer=core components
+  ├─ Licensed add-ons (STT, ML classification, OKTA, Postgres) — gated by ADR-0156 tier
+  └─ Community plugins (origin=community, support_class=community)
+  → failure stays tenant-local
+```
+
+Orthogonal to `layer`: `tier` (A/B/C, ADR-0156, capability + licensing),
+`origin` (builtin/vetted/community, ADR-0233 D7, provenance), and `support_class`
+(product/infrastructure/community, ADR-0235, maintenance contract).
+
+### Current state (measured 2026-07-26)
+
+Filter: **`*.py` only, excluding `node_modules/`, `.venv/`, `site-packages/`.** The
+filter is part of the number — without it the figure is not reproducible six months from
+now.
+
+| Path | LOC |
+|---|---|
+| `operator/bridges/shared` | 181,127 |
+| `core/console/corvin_console` | 63,734 |
+| `core/plugins` | 12,660 |
+| `core/compliance` | 2,911 |
+
+Where the compliance building blocks actually live today: house rules, consent gate and
+erasure orchestrator in `operator/bridges/shared/`; audit writer, hash chain and the boot
+tripwire in `core/compliance/corvin_compliance_reports/`. **None of**
+`core/compliance/audit_writer.py`, `core/session/middleware.py` or
+`core/routing/http_router.py` exists — earlier drafts of ADR-0236 cited them as if they
+did. They are target paths.
+
+---
+
+## Phase Plan
+
+| Phase | Objective | Status | Tests (target) |
+|---|---|---|---|
+| 0 | ADR consolidation | ✅ done | — |
+| 1 | Layer-aware registry (additive, no file moves) | ✅ done (c455516) | ~25 |
+| 2 | Boot order + scoping | ✅ done (c455516) | ~30 |
+| 3 | Extension points | ⬜ open | ~35 |
+| 4 | Admin control plane (REST) | ⬜ open | ~30 |
+| 5 | Bridge supervisor plugins | ⬜ open | ~25 |
+| 6 | Headless API-only boot | ⬜ open | ~15 |
+| 7 | Directory move + shims, docs, v0.11.0 | ⬜ open | both-state coverage |
+
+---
+
+## Phase 1 — Layer-aware registry ✅ implemented
+
+**Scope:** `core/plugins/corvin_plugins/` only. No file moves.
+
+### 1.1 Manifest (`manifest.py`)
 
 ```python
-# core/plugins/registry.py — THE SOURCE OF TRUTH
+class PluginLayer(str, Enum):
+    COMPLIANCE = "compliance"
+    CORE = "core"
+    BUNDLED = "bundled"
+    INSTALLED = "installed"
 
-class PluginRegistry:
-    """Central registry. Admin can't disable compliance plugins."""
-    
-    def __init__(self, corvin_home: Path, tenant_id: str):
-        self.registry: dict[str, Plugin] = {}
-        self.license_core: set[str] = {
-            "audit-compliance/1.0.0",
-            "a2a-orchestration/1.0.0",
-            "tde-routing/1.0.0",
-            "conversation-recall/1.0.0",
-            "admin-control-plane/1.0.0",
-        }
-    
-    def load_all(self) -> None:
-        """Boot: load core + license plugins (required), then optional."""
-        # Phase 1: Load Tier 0 (hardcoded, mandatory)
-        self._load_core_compliance()
-        
-        # Phase 2: Load Tier 1 (license infrastructure, required if open-source)
-        self._load_license_core()
-        
-        # Phase 3: Load Tier 2 (standard, optional but pre-installed)
-        self._load_standard_edition()
-        
-        # Phase 4: Load Tier 3 (premium, gated by license)
-        self._load_premium_plugins()
-    
-    def _load_core_compliance(self):
-        """NEVER fails silently. Tripwire on any error."""
-        plugins = [
-            AuditWriterPlugin(),
-            ConsentGatePlugin(),
-            FlowGuardPlugin(),
-            HouseRulesPlugin(),
-            ErasurePlugin(),
-        ]
-        for p in plugins:
-            try:
-                p.on_load(PluginContext(self))
-                self.registry[p.plugin_id] = p
-            except Exception as e:
-                raise BootError(f"Core compliance plugin {p.plugin_id} failed: {e}")
-    
-    def _load_license_core(self):
-        """License infrastructure. Required in open-source, gated in managed."""
-        license_required = [
-            ("a2a-orchestration", A2APlugin()),
-            ("tde-routing", TDEPlugin()),
-            ("conversation-recall", ConversationRecallPlugin()),
-            ("admin-control-plane", AdminPlugin()),
-        ]
-        for name, plugin in license_required:
-            if self._is_license_feature_available(name):
-                try:
-                    plugin.on_load(PluginContext(self))
-                    self.registry[plugin.plugin_id] = plugin
-                except Exception as e:
-                    # Log, but don't crash — degrade gracefully
-                    logger.error(f"License plugin {name} failed: {e}")
-            else:
-                logger.info(f"License feature {name} not available (license)")
-    
-    def _is_license_feature_available(self, feature_name: str) -> bool:
-        """Check license tier. Stub for now."""
-        # In Managed: read from license.json
-        # In Open-Source: always True
-        return os.getenv("CORVIN_MANAGED") != "1"
-    
-    def health_check_all(self) -> dict[str, HealthStatus]:
-        """Health of all plugins. License-core failures → degradation, not crash."""
-        results = {}
-        for pid, plugin in self.registry.items():
-            try:
-                status = plugin.health_check()
-                results[pid] = status
-                
-                # If Tier 0 fails: CRASH
-                if pid.startswith("audit-") or pid.startswith("consent-"):
-                    if not status.ok:
-                        raise BootError(f"Core compliance {pid} unhealthy")
-                
-                # If Tier 1 fails: DEGRADE (log, continue)
-                if pid in self.license_core:
-                    if not status.ok:
-                        logger.warning(f"License feature {pid} degraded: {status.message}")
-            except Exception as e:
-                results[pid] = HealthStatus(ok=False, message=str(e))
-        return results
-    
-    def can_disable_plugin(self, plugin_id: str) -> bool:
-        """Admin asks: can I turn this off?"""
-        # Tier 0: NO
-        if plugin_id.startswith(("audit-", "consent-", "flow-", "house-", "erasure-")):
-            return False
-        
-        # Tier 1: NO (license core)
-        if plugin_id in self.license_core:
-            return False
-        
-        # Tier 2+: YES
-        return True
-```
-
-**Tests:**
-- ✅ Mandatory plugins fail to load → boot crashes
-- ✅ License plugins fail → degrade, don't crash
-- ✅ Standard plugins optional → system continues
-- ✅ `can_disable_plugin()` returns correct tier
-
-**Outcome:** Admin can see which plugins are mandatory, which are optional.
-
----
-
-### 1.2 Plugin Lifecycle Contract
-
-```python
-# core/plugins/base.py — INTERFACE FOR ALL PLUGINS
-
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
 
 @dataclass
-class PluginContext:
-    """What every plugin gets on load."""
-    registry: "PluginRegistry"
-    audit_writer: "AuditWriter"
-    consent_gate: "ConsentGate"
-    logger: "CorvinLogger"
-    tenant_id: str
-    corvin_home: Path
+class PluginRecord:
+    ...
+    # Defaults to the LEAST privileged value: a record that does not say what it
+    # is must not land somewhere privileged.
+    layer: PluginLayer = PluginLayer.INSTALLED
+    # plugin_id of the layer=core reference implementation this plugin takes over
+    replaces: Optional[str] = None
 
-class CorvinPlugin(ABC):
-    """Base class for all plugins (compliance + standard + premium)."""
-    
-    plugin_id: str  # e.g., "audit-compliance/1.0.0"
-    plugin_type: str  # "tier-0", "tier-1", "tier-2", "tier-3"
-    version: str
-    display_name: str
-    description: str
-    dependencies: list[str] = []  # e.g., ["audit-compliance/1.0.0"]
-    
-    @abstractmethod
-    def on_load(self, ctx: PluginContext) -> None:
-        """Boot hook. Initialize resources. Raise if critical failure."""
-        pass
-    
-    @abstractmethod
-    def on_unload(self) -> None:
-        """Shutdown hook. Clean up resources."""
-        pass
-    
-    @abstractmethod
-    def on_config_change(self, config: dict) -> None:
-        """Config changed. Reload if needed."""
-        pass
-    
-    @abstractmethod
-    def health_check(self) -> HealthStatus:
-        """Is this plugin healthy? Called every N seconds."""
-        pass
-    
-    @property
-    def is_replaceable(self) -> bool:
-        """Can this plugin be disabled/replaced?"""
-        return self.plugin_type not in ("tier-0", "tier-1")
+    def can_disable(self) -> bool:
+        """False for the compliance layer, True for every other layer."""
+        return self.layer is not PluginLayer.COMPLIANCE
 ```
 
-**Why separate `tier-0` and `tier-1`?**
-- **Tier-0:** Compliance (hardcoded, immutable, fail-closed)
-- **Tier-1:** License infrastructure (strategic IP, required in open-source, gated in managed)
+Two gates ship with it:
 
-Admin sees both as "mandatory" but they're enforced differently.
+- **`origin=community` may not claim a privileged layer** (`compliance` or `core`).
+  Without that gate a community manifest could buy itself boot priority and permanent
+  undisableability with one YAML line.
+- **`layer=compliance` may not declare `replaces`** at all — compliance mechanisms are
+  not replaceable.
+
+A manifest written before ADR-0243 keeps working: an absent `layer` reads as `installed`.
+
+### 1.2 Registry (`registry.py`)
+
+Implemented API — `layer_of()`, `plugins_by_layer()`, `can_disable()`, `disable()`,
+`replace()`, and `unregister(operator_initiated=)`:
+
+```python
+def unregister(self, plugin_id: str, *, operator_initiated: bool = False) -> None:
+    """Shutdown, hot-reload and replacement are machinery and may unload anything.
+    An operator action routed through the Console or the admin API may not switch
+    off a compliance-layer plugin — without the distinction the admin surface could
+    reach past disable() and unload the audit writer by calling the primitive."""
+    if operator_initiated and not self.can_disable(plugin_id):
+        raise PluginDisableRefused(...)
+```
+
+`replace()` accepts a `layer=core` target only, and it does **not** roll back: the old
+plugin's `on_unload` has already run, so "restoring" it would hand callers a torn-down
+object. An empty slot plus an audit record is the honest outcome.
+
+Every registration and every unregistration writes an audit event carrying the layer.
+
+**Tests:** manifest round-trip with and without `layer`; `replaces` parsing; `can_disable()`
+per layer; the community/privileged-layer refusal; audit events emitted.
 
 ---
 
-### 1.3 Admin Control Interface
+## Phase 2 — Boot order + scoping ✅ implemented
+
+### 2.1 Global bootstrap (`bootstrap.py`)
 
 ```python
-# core/admin/control_plane.py
+def bootstrap_global(*, tenant_id: str, corvin_home: Path, **registries) -> list[str]:
+    """Load the bundled global plugins, compliance layer first.
 
-class AdminControlPlane:
-    """What admin can see and do."""
-    
-    def __init__(self, registry: PluginRegistry):
-        self.registry = registry
-    
-    def list_plugins(self) -> list[PluginInfo]:
-        """Admin dashboard: show all plugins with tier + disableability."""
-        return [
-            PluginInfo(
-                plugin_id=plugin.plugin_id,
-                tier=plugin.plugin_type,
-                is_disableable=self.registry.can_disable_plugin(plugin.plugin_id),
-                status=self.registry.registry[plugin.plugin_id].health_check(),
-                reason_if_not_disableable="Compliance requirement" | "License core" | None,
-            )
-            for plugin in self.registry.registry.values()
-        ]
-    
-    def disable_plugin(self, plugin_id: str) -> Result:
-        """Admin tries to disable a plugin."""
-        if not self.registry.can_disable_plugin(plugin_id):
-            return Result(
-                ok=False,
-                message=f"{plugin_id} cannot be disabled (tier {plugin.plugin_type})"
-            )
-        
-        try:
-            plugin = self.registry.registry[plugin_id]
-            plugin.on_unload()
-            del self.registry.registry[plugin_id]
-            
-            # Audit event
-            self.registry.audit_writer.log_event({
-                "event_type": "admin.plugin_disabled",
-                "plugin_id": plugin_id,
-                "admin_user": ctx.user_id,
-            })
-            
-            return Result(ok=True, message=f"{plugin_id} disabled")
-        except Exception as e:
-            return Result(ok=False, message=str(e))
-    
-    def install_premium_plugin(self, plugin_id: str, license_key: str) -> Result:
-        """Admin installs a premium plugin."""
-        # Validate license
-        if not self._validate_license(plugin_id, license_key):
-            return Result(ok=False, message="Invalid license for this feature")
-        
-        # Load plugin
-        try:
-            plugin = self._load_plugin_by_id(plugin_id)
-            plugin.on_load(PluginContext(...))
-            self.registry.registry[plugin_id] = plugin
-            
-            # Audit event
-            self.registry.audit_writer.log_event({
-                "event_type": "admin.premium_plugin_installed",
-                "plugin_id": plugin_id,
-                "admin_user": ctx.user_id,
-            })
-            
-            return Result(ok=True, message=f"{plugin_id} installed")
-        except Exception as e:
-            return Result(ok=False, message=str(e))
-    
-    def get_plugin_config(self, plugin_id: str) -> dict:
-        """Admin retrieves plugin settings."""
-        plugin = self.registry.registry.get(plugin_id)
-        if not plugin:
-            return {}
-        
-        # Each plugin defines its own config schema
-        return plugin.get_config()
-    
-    def set_plugin_config(self, plugin_id: str, config: dict) -> Result:
-        """Admin changes plugin settings (e.g., audit backend URL)."""
-        plugin = self.registry.registry.get(plugin_id)
-        if not plugin:
-            return Result(ok=False, message=f"Plugin {plugin_id} not found")
-        
-        try:
-            plugin.on_config_change(config)
-            self.registry.audit_writer.log_event({
-                "event_type": "admin.plugin_config_changed",
-                "plugin_id": plugin_id,
-                "admin_user": ctx.user_id,
-            })
-            return Result(ok=True, message="Config updated")
-        except Exception as e:
-            return Result(ok=False, message=str(e))
-```
+    NOT behind a feature flag, and that is deliberate rather than an oversight:
+    the layer it exists to load is the compliance layer, and CLAUDE.md forbids
+    putting a compliance mechanism behind a switch. With no bundled global
+    plugins registered this is a no-op returning [], so the flagless path
+    changes nothing on an install that has none.
 
-**Admin's power:**
-- ✅ Can see all plugins + their tier
-- ✅ Can disable Tier 2/3 plugins
-- ❌ Cannot disable Tier 0/1 plugins
-- ✅ Can configure any plugin
-- ✅ Can install premium plugins (with license key)
-
----
-
-## Stream 2: License Infrastructure (Weeks 3-4)
-
-### 2.1 A2A as Tier-1 (Not Plugin)
-
-**Current state:** A2A is in `core/orchestration/`.  
-**Target:** Move to tier-1 infrastructure, but keep it *extensible*.
-
-```python
-# core/license/a2a_core.py
-
-class A2AOrchestrationPlugin(CorvinPlugin):
+    * compliance failure — raises GlobalComplianceLoadFailed; the boot aborts.
+    * core failure       — logged, audited, skipped; the platform boots degraded.
     """
-    A2A is strategic IP. It's in core (not replaceable).
-    But it has extension points for custom routing/attestation.
-    """
-    
-    plugin_id = "a2a-orchestration/1.0.0"
-    plugin_type = "tier-1"  # License infrastructure
-    
-    def on_load(self, ctx: PluginContext):
-        self.ctx = ctx
-        self.hook_manager = HookManager()
-        
-        # Register default hooks (e.g., standard attestation)
-        self._register_default_hooks()
-    
-    def _register_default_hooks(self):
-        """Built-in hooks that can't be overridden (compliance)."""
-        self.hook_manager.register(
-            "attestation.verify",
-            self._verify_instance_attestation_default  # REQUIRED
-        )
-        self.hook_manager.register(
-            "routing.select_target",
-            self._select_target_default  # Can be overridden
-        )
-    
-    def send_task(self, envelope: TaskEnvelope) -> Result:
-        """Send a task to a peer instance."""
-        # Before send: compliance check (immutable)
-        if not self._verify_instance_attestation_default(envelope.target_instance):
-            return Result(ok=False, message="Instance attestation failed")
-        
-        # Before send: custom routing (extensible via hook)
-        selected = self.hook_manager.call("routing.select_target", envelope)
-        if not selected:
-            selected = envelope.target_instance  # Fallback to default
-        
-        # Send
-        try:
-            response = self._send_http_request(selected, envelope)
-            self.ctx.audit_writer.log_event({
-                "event_type": "a2a.task_sent",
-                "source": os.getenv("CORVIN_INSTANCE_ID"),
-                "target": selected,
-                "envelope_id": envelope.envelope_id,
-            })
-            return Result(ok=True, data=response)
-        except Exception as e:
-            self.ctx.audit_writer.log_event({
-                "event_type": "a2a.task_failed",
-                "source": os.getenv("CORVIN_INSTANCE_ID"),
-                "target": selected,
-                "error": type(e).__name__,
-            })
-            return Result(ok=False, message=str(e))
-    
-    def register_hook(self, hook_name: str, handler: Callable) -> Result:
-        """Plugin can register a custom hook (e.g., custom routing)."""
-        ALLOWED_HOOKS = {
-            "routing.select_target",      # Choose target instance dynamically
-            "attestation.custom_verify",  # ADD to attestation checks (not replace)
-            "envelope.pre_send",          # Inspect before send
-        }
-        
-        if hook_name not in ALLOWED_HOOKS:
-            return Result(ok=False, message=f"Hook {hook_name} not allowed")
-        
-        self.hook_manager.register(hook_name, handler)
-        return Result(ok=True, message=f"Hook {hook_name} registered")
-    
-    def health_check(self) -> HealthStatus:
-        """Is A2A connected?"""
-        if self._peer_instances_reachable():
-            return HealthStatus(ok=True)
-        else:
-            return HealthStatus(ok=False, message="No peer instances reachable")
 ```
 
-**Why Tier-1 (not replaceable)?**
-- A2A is how instances coordinate → if someone forks, they get this for free
-- We can't charge if it's pluggable
-- But we CAN charge for "managed A2A" (hosted, monitored, global network)
+`register_global_plugin(class_path, *, layer)` declares a bundled global plugin; it
+refuses anything other than `compliance` or `core`, because global plugins ship in the
+wheel and tenant-scoped layers are declared in tenant config. Global entry points
+(`corvin.global_plugins`) encode the layer in the name — `"compliance:my-gate"`.
 
-**What's extensible?**
-- Custom routing logic
-- Additional attestation checks
-- Hook points (pre_send, post_receive)
+### 2.2 The tenant/global trust boundary
 
-**What's NOT extensible?**
-- Core attestation (Ed25519 signature check)
-- Audit logging of all A2A events
-- Denial of send if attestation fails
+`_declared_layer()` resolves the layer of a tenant-declared plugin. A tenant scope may
+declare **`bundled` or `installed` only**. A privileged claim coming from
+`tenant.corvin.yaml` or `registry.yaml` is **downgraded to `installed` and audited**
+(`plugin.layer_rejected`) rather than honoured — on both the declarative and the runtime
+path. The asymmetry is the point: if tenant config could declare `layer: compliance`,
+undisableability would be self-service.
+
+### 2.3 Boot order
+
+`bootstrap_all()` runs **global → declarative → runtime**, deduplicated, and is called
+from `core/gateway/corvin_gateway/app.py`. A compliance abort survives all three passes;
+it is not swallowed by the wrapper.
+
+**Tests:** `core/plugins/tests/test_layered_boot.py` covers ordering, the compliance
+boot-fail, the core degrade path, the privileged-claim downgrade, **and the call site** —
+`bootstrap_global()` being correct is worth nothing if nothing invokes it.
 
 ---
 
-### 2.2 TDE as Tier-1 (Strategic Differentiator)
+## Phase 3 — Extension points ⬜ open
 
-Same pattern as A2A: Tier-1, required, but has extension points.
+**Flag:** `plugin_extension_points` (default `false`)
 
-```python
-class TDERoutingPlugin(CorvinPlugin):
-    """TDE is strategic. But we allow custom cost models via hooks."""
-    
-    plugin_id = "tde-routing/1.0.0"
-    plugin_type = "tier-1"
-    
-    def register_cost_model(self, model_name: str, cost_fn: Callable) -> Result:
-        """
-        Plugin can register a custom cost model.
-        E.g., "my-org-cost" = use our internal pricing.
-        But core TDE logic (routing algorithm) is immutable.
-        """
-        if not callable(cost_fn):
-            return Result(ok=False, message="cost_fn must be callable")
-        
-        self.custom_cost_models[model_name] = cost_fn
-        return Result(ok=True, message=f"Cost model {model_name} registered")
-```
+**Step 1 — document what already exists.** Eight provider registries are already
+implemented under `core/plugins/corvin_plugins/providers/`: `router_backend`,
+`recall_backend`, `summary_provider`, `audit_backend`, `user_backend`, `stt_provider`,
+`data_connector`, `notification_backend` (ADR-0033). Documenting them is the deliverable
+— no code change.
 
----
+**Step 2 — add 3–5 new ones**, not the fifty the first draft promised:
 
-### 2.3 Conversation Recall as Tier-1 (User Data Protection)
+- `engine_selection` and `model_selection` (ADR-0181)
+- `route_selection_policy`
+- `workflow_gate`
 
-```python
-class ConversationRecallPlugin(CorvinPlugin):
-    """
-    User data is load-bearing. Recall is Tier-1.
-    
-    Extensibility: custom storage backends (but core data model is immutable).
-    """
-    
-    plugin_id = "conversation-recall/1.0.0"
-    plugin_type = "tier-1"
-    
-    def register_storage_backend(self, backend_name: str, backend: RecallBackend) -> Result:
-        """
-        Plugin can add a custom storage backend.
-        E.g., "postgres-local" = store locally, "s3-archive" = archive to S3.
-        But core schema is immutable.
-        """
-        self.backends[backend_name] = backend
-        return Result(ok=True, message=f"Backend {backend_name} registered")
-```
+**Step 3 — replacement** via the manifest field `replaces:` from Phase 1.
+
+**Immutable — no extension point, ever:** hash-chain audit write, Ed25519 verification
+(A2A), token accounting (TDE), and every compliance gate. `audit_backend` stays
+additive-only: it receives a COPY after the core write commits and can never suppress or
+rewrite it (ADR-0233). An extension point on an immutable mechanism is not a feature
+request, it is a compliance regression.
+
+**Tests (target ~35):** each new point fires; replacement swaps the active
+implementation; hooking an immutable mechanism fails; flag-off = no hooks.
 
 ---
 
-## Stream 3: Admin Control Plane (Weeks 5-6)
+## Phase 4 — Admin control plane ⬜ open
 
-### 3.1 Control Plane REST API
+**Flag:** `admin_control_plane` (default `false`)
 
-```python
-# core/admin/api.py
+**REST only. gRPC is deferred — not in Phase 1, not in this plan** (ADR-0239). It is a
+pure additional dependency with no consumer asking for it, and REST over the existing
+session auth covers every known caller. Revisit only when a concrete consumer exists that
+REST cannot serve.
 
-@app.get("/api/admin/plugins")
-async def list_plugins(current_user: User = Depends(require_admin)):
-    """Admin dashboard: list all plugins with tier + status."""
-    return control_plane.list_plugins()
+| Route | Purpose |
+|---|---|
+| `GET /api/admin/plugins` | list, with `layer`, `origin`, `tier`, health |
+| `POST /api/admin/plugins/{id}/enable` | enable |
+| `POST /api/admin/plugins/{id}/disable` | disable — **refused for `layer=compliance`** |
+| `POST /api/admin/plugins/{id}/config` | set config |
+| `GET /api/admin/plugins/{id}/health` | health check |
 
-@app.post("/api/admin/plugins/{plugin_id}/disable")
-async def disable_plugin(plugin_id: str, current_user: User = Depends(require_admin)):
-    """Try to disable a plugin."""
-    return control_plane.disable_plugin(plugin_id)
+- Auth via the **existing `SessionRecord`** — no new auth surface.
+- Tenant from `rec.tenant_id`, **never** an env var (ADR-0007).
+- Every mutating call writes an audit event.
+- Disable routes through `registry.disable()` / `unregister(operator_initiated=True)`, so
+  the compliance refusal cannot be bypassed by calling the primitive.
 
-@app.post("/api/admin/plugins/{plugin_id}/config")
-async def set_plugin_config(
-    plugin_id: str,
-    config: dict,
-    current_user: User = Depends(require_admin)
-):
-    """Update plugin config."""
-    return control_plane.set_plugin_config(plugin_id, config)
-
-@app.post("/api/admin/plugins/install-premium")
-async def install_premium(
-    plugin_id: str,
-    license_key: str,
-    current_user: User = Depends(require_admin)
-):
-    """Install a premium plugin."""
-    return control_plane.install_premium_plugin(plugin_id, license_key)
-```
-
-### 3.2 Admin Dashboard (React)
+### Admin dashboard (planned)
 
 ```
 Plugins Tab:
 
-┌─────────────────────────────────────────────────────────┐
-│ Plugin                    Tier    Status    Actions     │
-├─────────────────────────────────────────────────────────┤
-│ audit-compliance          Tier 0  ✅        [info]      │
-│ consent-gate              Tier 0  ✅        [info]      │
-│ a2a-orchestration         Tier 1  ✅        [config]    │
-│ tde-routing               Tier 1  ✅        [config]    │
-│ forge                     Tier 2  ✅        [disable]   │
-│ discord-bridge            Tier 2  ✅        [disable]   │
-│ advanced-stт              Tier 3  ⚠️        [install]   │
-│ okta-auth                 Tier 3  ❌        [install]   │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ Plugin                    Layer        Status    Actions         │
+├──────────────────────────────────────────────────────────────────┤
+│ audit-compliance          compliance   ✅        [info]          │
+│ consent-gate              compliance   ✅        [info]          │
+│ a2a-orchestration         core         ✅        [config]        │
+│ tde-routing               core         ✅        [config]        │
+│ forge                     bundled      ✅        [disable]       │
+│ discord-bridge            bundled      ✅        [disable]       │
+│ advanced-stt              installed    ⚠️        [install]       │
+│ okta-auth                 installed    ❌        [install]       │
+└──────────────────────────────────────────────────────────────────┘
 
 Legend:
-- Tier 0: Mandatory compliance (cannot disable)
-- Tier 1: License core (cannot disable, built-in)
-- Tier 2: Standard edition (can disable, but probably shouldn't)
-- Tier 3: Premium (install with license key)
+- compliance: mandatory, never disableable, never flag-gated
+- core:       bundled default; configurable, extensible, replaceable via `replaces:`
+- bundled:    shipped in the wheel; enable/disable per tenant
+- installed:  user-installed; licensed add-ons gated by the ADR-0156 tier
 ```
+
+**Tests (target ~30):** each route; disable refused for `compliance`; cross-tenant access
+denied; audit event per mutation; flag-off = routes absent (404), not error.
 
 ---
 
-## Stream 4: Testing & Hardening (Weeks 7-8)
+## Phase 5 — Bridge supervisor plugins ⬜ open
 
-### 4.1 Test Matrix
+**Flag:** `bridge_supervisor_plugins` (default `false`)
 
+### The bridges are Node daemons, not Python modules
+
+An earlier draft assumed bridges were Python modules under `adapters/discord_adapter`
+that could be refactored into `CorvinPlugin` subclasses. That is wrong on both counts:
+`adapters/` does not exist, and all seven bridges — **discord, slack, telegram, whatsapp,
+signal, teams, email** — are **Node.js daemons** at `operator/bridges/<name>/daemon.js`.
+A Python supervisor already exists at `operator/bridges/bridge_manager.py`.
+
+**No rewrite.** Each bridge gets a thin Python **supervisor plugin** (`layer=bundled`)
+that starts, stops and health-checks the **existing** daemon as a subprocess, delegating
+process management to `bridge_manager.py` rather than reimplementing it:
+
+```python
+class DiscordBridgeSupervisor(CorvinPlugin):
+    plugin_id = "discord-bridge-supervisor/1.0.0"
+    layer = "bundled"
+
+    def on_load(self, ctx):
+        self.handle = bridge_manager.start("discord")
+
+    def on_unload(self):
+        bridge_manager.stop("discord")
+
+    def health_check(self) -> HealthStatus:
+        return bridge_manager.health("discord")
 ```
-Test Suite: core_plugin_system_test.py
 
-✅ PluginRegistry
-  - Load Tier 0 → crash if any fail
-  - Load Tier 1 → degrade if fail
-  - Load Tier 2 → skip if fail
-  - Load Tier 3 → skip if license invalid
-  
-✅ AdminControl
-  - can_disable_plugin(tier-0) → False
-  - can_disable_plugin(tier-1) → False
-  - can_disable_plugin(tier-2) → True
-  - disable_plugin(tier-2) → OK, audit logged
-  - disable_plugin(tier-0) → Error, not disableable
-  
-✅ A2A Extensibility
-  - register_hook("routing.select_target") → OK
-  - register_hook("attestation.verify") → Error (immutable)
-  - custom routing called for each send
-  
-✅ Multi-Tenant Isolation
-  - Plugins in tenant-A can't see tenant-B's config
-  - Audit events isolated per tenant
-  
-✅ Graceful Degradation
-  - If Tier-1 plugin fails → log warning, continue
-  - If Tier-0 plugin fails → crash
-  - If Tier-2 plugin fails → skip, continue
-  
-✅ License Gate
-  - Premium plugin without license → install fails
-  - Premium plugin with license → install OK
-  - License expired → plugin disables on next check
-```
+The supervisor is the plugin; the daemon is the payload. The daemons' wire protocol and
+their inbox/outbox contract are untouched.
+
+**Tests (target ~25):** start/stop/health per supervisor; a daemon crash surfaces as
+unhealthy without taking down the core; flag-off = bridges start exactly as today.
 
 ---
 
-## Revised ADR Strategy
+## Phase 6 — Headless API-only boot ⬜ open
 
-The ADRs need these updates:
+**Flag:** `headless_api_mode` (default `false`)
 
-### ADR-0234 (Core vs. Plugins) — Revised
-- Add "Tier-1: License Infrastructure" tier
-- Clarify: A2A, TDE, Recall are Tier-1 (not replaceable, but have extension points)
-- Extension points are HOW we let admins customize without replacing
+Boot order: `compliance` → `core` → HTTP server → `bundled` (async, optional). The API is
+ready before any bridge is; a bridge that never comes up cannot block readiness.
+Deployment presets A–D per ADR-0241.
 
-### ADR-0237 (Admin Control & Extensibility) — NEW
-- Define which features are extensible (hooks, backends, models)
-- Define which features are immutable (compliance, attestation)
-- Admin control plane REST API
-- Extension point registry
+**Tests (target ~15):** boots with zero bridges; API answers before bridges are up;
+flag-off = today's boot.
 
-### ADR-0238 (License Enforcement) — NEW
-- How premium plugins are gated
-- How open-source vs. managed mode differs
-- How license expiry is handled
+---
+
+## Phase 7 — Directory move, docs, release ⬜ open
+
+**No new flag** — this phase realizes the target layout once everything above is green.
+
+- Move to `core/core_plugins/{compliance,core,bundled}/` **with import shims** at the old
+  paths, kept for at least one release.
+- Audit-writer path resolution and the boot tripwire verified **before and after**:
+  `voice-audit verify` must exit 0 on the same chain.
+- Tests for **both** states of every flag. A flag tested in only one state rots.
+- Docs + diagrams updated in the same commits as the code.
+- CHANGELOG, then release **v0.11.0**, with every new flag still default-`false`.
+
+---
+
+## Feature flags
+
+| Phase | Flag ID | Default | Off-path behavior |
+|---|---|---|---|
+| 3 | `plugin_extension_points` | `false` | Bundled defaults run; registered hooks ignored |
+| 4 | `admin_control_plane` | `false` | `/api/admin/*` routes absent (404) |
+| 5 | `bridge_supervisor_plugins` | `false` | Bridges managed exactly as today by `bridge_manager.py` |
+| 6 | `headless_api_mode` | `false` | Today's boot path; the Console is always started |
+
+All four are registered in `core/console/corvin_console/feature_flags.py`, each with an
+owner and a target release in which it either flips to default-on or the feature is
+removed. Flags are not permanent architecture.
+
+### Explicitly NOT flagged
+
+**`bootstrap_global()` carries no flag, in either direction — deliberately.** The layer
+it exists to load is the compliance layer, and `CLAUDE.md` forbids a switch on a
+compliance mechanism; a default-off flag there is the same violation as an env kill-flag.
+The path is safe unflagged because it is a **no-op until a global plugin is registered**:
+`_GLOBAL_SPECS` is empty today and no production call site invokes
+`register_global_plugin()`.
+
+The same holds for the Phase 1 registry work: the `layer` field is additive and defaults
+to the least privileged value, so flag-off and flag-on behavior would be identical.
+
+Untouched by every phase above, and never flag-gated: the audit hash chain, the boot
+tripwire ("no override — no env var, no flag", ADR-0232/0233), the consent gate, the L10
+path gate, the L44 house-rules gate, the L34 flow guard, and the licensing gates.
 
 ---
 
 ## Key Principles for Admin & Extensibility
 
-### 1. **Hierarchy of Control**
-```
-Admin can't touch:
-  Tier 0 (compliance) — hardcoded, tripwired
-  Tier 1 (license) — required, strategic IP
+### 1. Hierarchy of control
 
-Admin can configure:
-  Tier 1 hooks (A2A routing, TDE cost model, Recall storage)
-  Tier 2 (standard) plugins
-  Tier 3 (premium) plugins (if licensed)
 ```
+Admin cannot disable:
+  layer=compliance — hardcoded, tripwired, no flag in either direction
 
-### 2. **Extensibility without Replacement**
-```
-A2A is NOT replaceable (Tier-1).
-But admin can register custom routing hooks.
-⟹ Keeps IP protected, allows customization.
+Admin can configure and extend:
+  layer=core       — extension points; full replacement via `replaces:`
+  layer=bundled    — enable/disable per tenant
+  layer=installed  — install/remove; licensed add-ons gated by the ADR-0156 tier
 ```
 
-### 3. **License Model**
+### 2. Extensibility without forking
+
 ```
-Open-source:  All tiers unlocked, no license check
-Managed:      Tier 1 bundled in subscription
-              Tier 2 bundled in subscription
-              Tier 3 gated by license key
+A2A keeps its reference implementation and its immutable parts
+(Ed25519 verification, audit of every event, denial on failed attestation).
+Everything around them is a hook — and a full replacement is a manifest field,
+not a fork.
 ```
+
+### 3. Licensing lives on a different axis
+
+```
+layer  = when it loads and whether it can be switched off   (ADR-0243)
+tier   = what it may do, and the licensing gate on that     (ADR-0156)
+```
+
+Never use undisableability as a commercial lever. `compliance` is undisableable because
+regulation says so, not because it is valuable.
 
 ---
 
 ## Implementation Checklist
 
-- [ ] **Week 1-2:** Core extraction + Plugin Registry
-  - [ ] PluginRegistry with tier system
-  - [ ] Plugin lifecycle contract (on_load, on_unload, health_check)
-  - [ ] AdminControlPlane basic class
-  - [ ] 20+ unit tests (load, disable, health)
+- [x] **Phase 1:** Layer-aware registry
+  - [x] `PluginLayer`, `PluginRecord.layer`, `.replaces`, `.can_disable()`
+  - [x] `origin=community` refused a privileged layer
+  - [x] `layer_of`, `plugins_by_layer`, `can_disable`, `disable`, `replace`
+  - [x] `unregister(operator_initiated=)`
+  - [x] Audit event per registration / unregistration
 
-- [ ] **Week 3-4:** License infrastructure
-  - [ ] A2APlugin refactored (Tier-1, extensible)
-  - [ ] TDEPlugin refactored (Tier-1, extensible)
-  - [ ] ConversationRecallPlugin refactored (Tier-1)
-  - [ ] Hook registration mechanism
-  - [ ] License gate for Tier 3
+- [x] **Phase 2:** Boot order + scoping
+  - [x] `bootstrap_global()` — compliance first, abort on failure; core degrades + audits
+  - [x] `register_global_plugin()` + `corvin.global_plugins` entry points
+  - [x] `_declared_layer()` — tenant scope limited to `bundled` / `installed`
+  - [x] `bootstrap_all()` global → declarative → runtime, wired into the gateway
+  - [x] Call-site test, not only unit tests
 
-- [ ] **Week 5-6:** Admin control plane
-  - [ ] REST API (/api/admin/plugins/*)
-  - [ ] AdminDashboard React component
-  - [ ] Config panel per plugin
-  - [ ] License key installation UI
+- [ ] **Phase 3:** Extension points
+  - [ ] Document the 8 existing provider registries
+  - [ ] Add `engine_selection`, `model_selection`, `route_selection_policy`, `workflow_gate`
+  - [ ] Replacement path exercised end-to-end
+  - [ ] Immutable-mechanism hook attempts fail
 
-- [ ] **Week 7-8:** Testing & hardening
-  - [ ] Full test matrix
-  - [ ] E2E: disable Tier-2, verify system works
-  - [ ] E2E: install premium plugin, verify license check
-  - [ ] E2E: custom hook registration, verify it's called
-  - [ ] Docs: Admin guide + Extension point reference
+- [ ] **Phase 4:** Admin control plane
+  - [ ] REST routes under `/api/admin/plugins`
+  - [ ] Auth via existing `SessionRecord`, tenant from `rec.tenant_id`
+  - [ ] Console panel + per-plugin config forms
+  - [ ] Audit event per mutation
+
+- [ ] **Phase 5:** Bridge supervisor plugins (7 bridges, daemons untouched)
+- [ ] **Phase 6:** Headless API-only boot + presets A–D
+- [ ] **Phase 7:** Directory move behind import shims, both-state flag tests, docs, v0.11.0
 
 ---
 
 ## Success Criteria
 
-✅ **Architecture:**
-- Core is 2.4 KB, untouchable
-- Tier-1 is 2 KB, required but has hooks
-- Tier-2/3 are optional
-- Admin can see tier + disableability for every plugin
+**Architecture**
+- [x] The registry expresses `layer`, and `compliance` is undisableable through it
+- [x] A tenant declaration cannot claim a privileged layer
+- [ ] Admin can see `layer`, `origin`, `tier` and disableability for every plugin
+- [ ] `core/core_plugins/{compliance,core,bundled}/` layout reached (Phase 7)
 
-✅ **Control:**
-- Admin can disable Tier-2/3 plugins from dashboard
-- Admin can't disable Tier-0/1 (system prevents it)
-- Admin can configure any plugin
-- All actions audited
+**Control**
+- [ ] Admin can disable `bundled` / `installed` plugins from the dashboard
+- [x] Admin cannot disable `compliance` — refused at the registry, not only in the UI
+- [ ] Admin can configure any plugin
+- [x] Registry mutations are audited
 
-✅ **Extensibility:**
-- A2A accepts custom routing hooks
-- TDE accepts custom cost models
-- Recall accepts custom storage backends
-- Each extension point is documented
+**Extensibility**
+- [ ] The 8 existing provider registries are documented
+- [ ] 3–5 new extension points exist and fire
+- [x] Replacement targets `layer=core` only
 
-✅ **License:**
-- Premium plugins require license key
-- Open-source mode unlocks everything
-- Managed mode checks license on boot
-- License expiry disables Tier-3 plugins
+**Honest non-goals**
+- ADR-0236's core extraction is not in this plan, and no task above references it
+- gRPC is deferred, not planned
+- Test counts are targets; no number is a commitment
 
 ---
 
-## Example: How Admin Customizes A2A
+## Example: replacing a `layer=core` component
 
 ```python
-# Admin's custom plugin (optional)
+# A user-installed plugin that takes over routing entirely.
+# manifest: layer: installed, replaces: "delegation-router/1.0.0"
+
 from corvin_plugins import CorvinPlugin
 
-class CustomRoutingPlugin(CorvinPlugin):
-    plugin_id = "custom-routing/1.0.0"
-    plugin_type = "tier-2"
-    
+class KubernetesDelegationRouter(CorvinPlugin):
+    plugin_id = "k8s-delegation-router/1.0.0"
+
     def on_load(self, ctx):
-        # Register custom routing logic
-        a2a = ctx.registry.registry.get("a2a-orchestration/1.0.0")
-        
-        def my_routing_logic(envelope):
-            # Route based on org, region, cost, etc.
-            if envelope.target_instance.region == "eu":
-                return self.eu_peer
-            return envelope.target_instance
-        
-        a2a.register_hook("routing.select_target", my_routing_logic)
-        ctx.logger.info("Custom A2A routing registered")
+        self.ctx = ctx
+        ctx.logger.info("k8s delegation router active")
 ```
 
-Admin installs this custom plugin → A2A uses it for routing.
-But A2A's core (attestation, audit, send) is immutable.
+The registry's `replace()` refuses this if the named target is not on `layer=core`, and
+refuses it outright for anything on `layer=compliance`. What stays immutable regardless of
+who replaces what: the hash-chained audit write, Ed25519 verification, token accounting,
+and every compliance gate.
 
 ---
 
 ## Conclusion
 
-**What changed from ADR-0234:**
-1. Added Tier-1: License infrastructure (A2A, TDE, Recall)
-2. Made Tier-1 required but extensible (not replaceable)
-3. Admin control plane with clear permissions
-4. Extension points (hooks) instead of replacement
+**What changed from the first draft:**
+1. The numbered "tier" values 0–3 → `layer: compliance | core | bundled | installed`
+2. `layer=core` is replaceable; only `compliance` is immutable, and for regulatory reasons
+3. Licensing moved off the load axis onto ADR-0156's `tier`
+4. Bridges are supervised Node daemons, not rewritten Python plugins
+5. gRPC deferred; REST only
+6. The directory move is last, not first
+7. ~8 weeks for the additive work, excluding the ADR-0236 extraction; test counts are targets
 
 **Why this works:**
-- Compliance is immutable (Tier-0) ✅
-- Strategic IP is protected (Tier-1) ✅
-- Admin has clear control (dashboard) ✅
-- System is extensible (hooks) ✅
-- License model is defensible ✅
-
+- Compliance is immutable and unflagged (`layer=compliance`)
+- Defaults are ours, but nothing above `compliance` is a lock-in
+- Admin control is explicit and audited
+- Every new surface ships dark behind a default-`false` flag

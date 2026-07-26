@@ -16,6 +16,10 @@ const inChatCmds     = require('../shared/js/in_chat_commands');
 const chatToggle      = require('../shared/js/chat_toggle');
 const cards          = require('./cards');
 const { makeStickyProgress } = require('../shared/js/sticky_progress');
+const {
+  normalizeExecutionContext, shouldRenderContext,
+  formatEngineId, formatDelegationMode, formatDuration, formatTokens,
+} = require('../shared/js/execution_context_renderer');
 
 const READ_ONLY_ACK =
   '🔒 You are read-only in this chat — you can follow along, but you ' +
@@ -25,6 +29,36 @@ const AUTH_DENY_TPL = (email) =>
   `You are not authorized. Your identity: \`${email}\`\n` +
   `Add it to settings.json → whitelist (or send "/auth <pin>").\n` +
   `The owner can also open this chat with /all on.`;
+
+/**
+ * Render execution context as Teams plain text card.
+ * @param {object} context - Normalized execution context
+ * @returns {object} - Adaptive Card object (can use cards.plainCard wrapper)
+ */
+function renderExecutionContextTeams(context) {
+  if (!context) return null;
+
+  const ctx = normalizeExecutionContext(context);
+  const lines = [
+    `⚙️ *${formatEngineId(ctx.engine_id)}* • ${ctx.model_name}`,
+    `⚡ ${formatDelegationMode(ctx.delegation_mode)} • ${formatDuration(ctx.duration_ms)}`,
+  ];
+
+  // Add tokens if available
+  if (ctx.tokens_input !== null || ctx.tokens_output !== null) {
+    lines.push(`🪙 in: ${formatTokens(ctx.tokens_input)} | out: ${formatTokens(ctx.tokens_output)}`);
+  }
+
+  // Add tools if > 0
+  if (ctx.tool_calls_count > 0) {
+    lines.push(`🔨 ${ctx.tool_calls_count} tool${ctx.tool_calls_count === 1 ? '' : 's'}`);
+  }
+
+  return {
+    type: 'message',
+    text: lines.join('\n'),
+  };
+}
 
 /**
  * makeHandler — factory that wires collaborators into the handler functions.
@@ -321,6 +355,19 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, co
         }
         if (payload.document_path && fs.existsSync(payload.document_path)) {
           await ctx.sendActivity(cards.plainCard(`📎 File: ${payload.document_name || path.basename(payload.document_path)}`));
+        }
+
+        // Phase 4 K=2: Render execution context if available and enabled
+        if (shouldRenderContext(payload, cfg.currentSettings())) {
+          try {
+            const contextCard = renderExecutionContextTeams(payload.execution_context);
+            if (contextCard) {
+              await ctx.sendActivity(contextCard);
+              log(`execution context sent for ${msgId}`);
+            }
+          } catch (e) {
+            log(`execution context failed: ${e && e.message || e}`);
+          }
         }
       });
       return true;

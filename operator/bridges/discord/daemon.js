@@ -47,6 +47,11 @@ const chatToggle                = require('../shared/js/chat_toggle');
 const slashCommands             = require('./slash_commands');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
 const { messageContentAvailable } = require('./intent_preflight');
+const {
+  normalizeExecutionContext, shouldRenderContext,
+  getColorForMode, getEmojiForEngine, formatEngineId,
+  formatDelegationMode, formatDuration, formatTokens,
+} = require('../shared/js/execution_context_renderer');
 
 const ROOT = __dirname;
 const PLUGIN_ROOT = path.resolve(ROOT, '..', '..');
@@ -826,6 +831,70 @@ setInterval(async () => {
 }, 8000);
 
 // ─── Outbox processing ──────────────────────────────────────────────────────
+/**
+ * Render execution context as a Discord embed.
+ * @param {object} context - Normalized execution context
+ * @returns {object} - Discord embed object
+ */
+function renderExecutionContextEmbed(context) {
+  if (!context) return null;
+
+  const ctx = normalizeExecutionContext(context);
+  const embed = {
+    title: '⚙️ Execution Context',
+    color: getColorForMode(ctx.delegation_mode),
+    fields: [
+      {
+        name: '🔧 Engine',
+        value: formatEngineId(ctx.engine_id),
+        inline: true,
+      },
+      {
+        name: '📊 Model',
+        value: ctx.model_name,
+        inline: true,
+      },
+      {
+        name: '⚡ Delegation',
+        value: formatDelegationMode(ctx.delegation_mode),
+        inline: true,
+      },
+      {
+        name: '⏱️ Duration',
+        value: formatDuration(ctx.duration_ms),
+        inline: true,
+      },
+    ],
+  };
+
+  // Add token information if available
+  if (ctx.tokens_input !== null || ctx.tokens_output !== null) {
+    embed.fields.push({
+      name: '🪙 Tokens',
+      value: `in: ${formatTokens(ctx.tokens_input)} | out: ${formatTokens(ctx.tokens_output)}`,
+      inline: true,
+    });
+  }
+
+  // Add tool count if > 0
+  if (ctx.tool_calls_count > 0) {
+    embed.fields.push({
+      name: '🔨 Tools',
+      value: String(ctx.tool_calls_count),
+      inline: true,
+    });
+  }
+
+  // Add timestamp if available
+  if (ctx.completed_at) {
+    try {
+      embed.timestamp = new Date(ctx.completed_at).toISOString();
+    } catch {}
+  }
+
+  return embed;
+}
+
 async function sendDiscord(payload, _fpath) {
   const chId = payload.chat_id;
   if (!chId) { log(`no chat_id, skipping`); return; }
@@ -961,6 +1030,20 @@ async function sendDiscord(payload, _fpath) {
     const att = new AttachmentBuilder(payload.video_path, { name: 'video.mp4' });
     await ch.send({ content: payload.video_caption || undefined, files: [att] });
   }
+
+  // Phase 4 K=2: Render execution context embed if available and enabled
+  if (shouldRenderContext(payload, currentSettings())) {
+    try {
+      const embed = renderExecutionContextEmbed(payload.execution_context);
+      if (embed) {
+        await ch.send({ embeds: [embed] });
+        log(`execution context embed sent for ${msgId}`);
+      }
+    } catch (e) {
+      log(`execution context embed failed: ${e && e.message || e}`);
+    }
+  }
+
   activeChannels.delete(chId);
 
   // Real reply (not a heartbeat) is on its way — drop our ⏳ reaction

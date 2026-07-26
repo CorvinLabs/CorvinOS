@@ -97,6 +97,7 @@ from .routes import (
     custom_provider as custom_provider_route,
     mcp_plugins as mcp_plugins_route,
     plugins as plugins_route,
+    admin as admin_route,
     data_sources as data_sources_route,
     chain_dual_track as chain_dual_track_route,
     flows as flows_route,
@@ -127,6 +128,8 @@ from .routes import (
     local_stats as local_stats_route,
     # ADR-0212 — Ecosystem Feature Telemetry
     stats_features as stats_features_route,
+    # ADR-0245 — Live Model Discovery
+    models as models_route,
 )
 
 
@@ -224,6 +227,10 @@ router.include_router(mcp_plugins_route.router, tags=["console-mcp-plugins"])
 # 404s while the `plugin_console_surface` flag is off (ships dark), so the gate
 # lives in one place instead of in the mount condition.
 router.include_router(plugins_route.router, tags=["console-plugins"])
+# ADR-0239/0243 — admin control plane. UI-independent /api/admin/* routes, always
+# mounted and each one 404s while the `admin_control_plane` flag is off (ships
+# dark), so the gate lives in the route rather than in the mount condition.
+router.include_router(admin_route.router, tags=["console-admin"])
 # ADR-0106 — DSI v1 Data Source management.
 router.include_router(data_sources_route.router, tags=["console-data-sources"])
 # ADR-0121 — CorvinFlow FlowRun timeline viewer + checkpoint approve.
@@ -252,6 +259,8 @@ router.include_router(aco_route.router, tags=["console-aco"])
 router.include_router(healing_config_route.router, tags=["console-healing-config"])
 router.include_router(browser_route.router, tags=["console-browser"])
 router.include_router(local_stats_route.router, tags=["console-local-stats"])
+# ADR-0245 — Live Model Discovery (model registry + live fetch)
+router.include_router(models_route.router, tags=["console-models"])
 router.include_router(stats_features_route.router, tags=["console-stats"])
 
 

@@ -270,6 +270,18 @@ class HealthCheckOverHttpTests(unittest.TestCase):
 
 class FullPipelineTests(unittest.TestCase):
     def test_post_sse_webhook_audit(self):
+        # ADAPTER_FAKE_CLAUDE=1 is the engine's own documented test fixture: it
+        # short-circuits the binary spawn and emits "[fake-stream] … :: <prompt>",
+        # which is what the final_text assertion below actually checks. Without it
+        # this test spawned the REAL Claude CLI, so it only ever passed on a machine
+        # where `claude` is absent — an accidental dependency on a MISSING binary.
+        # uvicorn runs in-process here, so setting the env is enough.
+        _prev_fake = os.environ.get("ADAPTER_FAKE_CLAUDE")
+        os.environ["ADAPTER_FAKE_CLAUDE"] = "1"
+        if _prev_fake is None:
+            self.addCleanup(lambda: os.environ.pop("ADAPTER_FAKE_CLAUDE", None))
+        else:
+            self.addCleanup(lambda: os.environ.__setitem__("ADAPTER_FAKE_CLAUDE", _prev_fake))
         with sandbox(("acme",)) as home:
             # 1) Webhook secret
             WebhookSecretStore().set_secret("acme", "wh-smoke", "topsecret-smoke")
@@ -297,8 +309,13 @@ class FullPipelineTests(unittest.TestCase):
                     run_id = post.json()["run_id"]
                     self.assertTrue(run_id.startswith("run_"))
 
-                    # 3) Poll GET until completed (real HTTP)
-                    deadline = time.time() + 5.0
+                    # 3) Poll GET until completed (real HTTP).
+                    # 60 s, not 5 s: the engine is faked but the L44 house-rules gate
+                    # still ADJUDICATES THE INPUT WITH AN LLM on every dispatch
+                    # (measured ~7-11 s per trivial run). The gate is fail-closed
+                    # compliance machinery, so the budget accommodates it rather than
+                    # the test reporting the product as broken.
+                    deadline = time.time() + 60.0
                     final = None
                     while time.time() < deadline:
                         g = httpx.get(
@@ -388,6 +405,82 @@ class FullPipelineTests(unittest.TestCase):
 # CrossTenantOverHttpTests removed — cross-tenant 403 enforcement relied
 # on token-based auth which has been removed. Loopback binding is now the
 # security boundary; cloud OIDC enforcement will cover cross-tenant gate.
+
+
+class EventLoopResponsivenessTests(unittest.TestCase):
+    """A run in flight must not freeze the process.
+
+    The gateway shares its uvicorn process with the console, and _run_one is an
+    `async def` that called four SYNCHRONOUS gates directly — one of which (L44
+    house-rules) adjudicates the prompt with an LLM. That blocked the event loop for
+    the whole adjudication. Measured 2026-07-26 before the fix: /healthz went from
+    ~17 ms idle to 13 350 ms during a single dispatch, and this file's own 2 s status
+    poll timed out against a server that was up and healthy. After moving the gates
+    to asyncio.to_thread: 22 ms.
+
+    This test exists because the failure mode is invisible from any single-threaded
+    test — every assertion still passes, just slowly, so it reads as "the engine is
+    slow" rather than "the server is deaf".
+    """
+
+    #: Generous: CI is slower than a workstation, and the point is orders of
+    #: magnitude (tens of ms vs. >10 s), not a tight latency SLO.
+    MAX_LATENCY_S = 3.0
+
+    def test_healthz_stays_responsive_while_a_run_is_dispatched(self):
+        _prev = os.environ.get("ADAPTER_FAKE_CLAUDE")
+        os.environ["ADAPTER_FAKE_CLAUDE"] = "1"
+        if _prev is None:
+            self.addCleanup(lambda: os.environ.pop("ADAPTER_FAKE_CLAUDE", None))
+        else:
+            self.addCleanup(lambda: os.environ.__setitem__("ADAPTER_FAKE_CLAUDE", _prev))
+
+        latencies: list[float] = []
+        errors: list[str] = []
+        stop = threading.Event()
+
+        def _probe(base: str) -> None:
+            while not stop.is_set():
+                t0 = time.monotonic()
+                try:
+                    httpx.get(f"{base}/healthz", timeout=30.0)
+                    latencies.append(time.monotonic() - t0)
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(type(exc).__name__)
+                time.sleep(0.1)
+
+        with sandbox(("acme",)):
+            with uvicorn_server() as base_url:
+                prober = threading.Thread(target=_probe, args=(base_url,), daemon=True)
+                prober.start()
+                try:
+                    time.sleep(1.0)          # settle + establish an idle baseline
+                    latencies.clear()
+                    post = httpx.post(
+                        f"{base_url}/v1/tenants/acme/runs",
+                        json={
+                            "apiVersion": "corvin/v1",
+                            "kind": "Run",
+                            "spec": {"persona": "docs", "input": "loop-probe"},
+                        },
+                        timeout=10.0,
+                    )
+                    self.assertEqual(post.status_code, 202, post.text)
+                    # Long enough to cover the whole gate chain incl. the LLM call.
+                    time.sleep(20.0)
+                finally:
+                    stop.set()
+                    prober.join(timeout=5)
+
+        self.assertEqual(errors, [], f"health probes failed outright: {errors}")
+        self.assertTrue(latencies, "no health probes completed at all")
+        worst = max(latencies)
+        self.assertLess(
+            worst, self.MAX_LATENCY_S,
+            f"/healthz took {worst:.2f}s while a run was dispatching — something in "
+            f"_run_one is blocking the event loop again (it was 13.35s before the "
+            f"gates moved to asyncio.to_thread)",
+        )
 
 
 if __name__ == "__main__":

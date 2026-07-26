@@ -38,6 +38,10 @@ const inChatCmds                = require('../shared/js/in_chat_commands');
 const chatToggle                = require('../shared/js/chat_toggle');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
 const { makeStickyProgress }    = require('../shared/js/sticky_progress');
+const {
+  normalizeExecutionContext, shouldRenderContext,
+  formatEngineId, formatDelegationMode, formatDuration, formatTokens,
+} = require('../shared/js/execution_context_renderer');
 
 const ROOT = __dirname;
 const PLUGIN_ROOT = path.resolve(ROOT, '..', '..');
@@ -368,6 +372,43 @@ app.event('message', async ({ event, client }) => {
   }
 });
 
+/**
+ * Render execution context as a Slack context block (compact footer).
+ * @param {object} context - Normalized execution context
+ * @returns {object} - Slack context block object
+ */
+function renderExecutionContextBlock(context) {
+  if (!context) return null;
+
+  const ctx = normalizeExecutionContext(context);
+  const parts = [
+    `🔧 ${formatEngineId(ctx.engine_id)}`,
+    `📊 ${ctx.model_name}`,
+    `⚡ ${formatDelegationMode(ctx.delegation_mode)}`,
+    `⏱️ ${formatDuration(ctx.duration_ms)}`,
+  ];
+
+  // Add tokens if available
+  if (ctx.tokens_input !== null || ctx.tokens_output !== null) {
+    parts.push(`🪙 in: ${formatTokens(ctx.tokens_input)} | out: ${formatTokens(ctx.tokens_output)}`);
+  }
+
+  // Add tools if > 0
+  if (ctx.tool_calls_count > 0) {
+    parts.push(`🔨 ${ctx.tool_calls_count} tool${ctx.tool_calls_count === 1 ? '' : 's'}`);
+  }
+
+  return {
+    type: 'context',
+    elements: [
+      {
+        type: 'mrkdwn',
+        text: parts.join(' • '),
+      },
+    ],
+  };
+}
+
 // ─── Outbox processing ──────────────────────────────────────────────────────
 async function sendSlack(payload, _fpath) {
   const chId = payload.chat_id;
@@ -484,6 +525,23 @@ async function sendSlack(payload, _fpath) {
       initial_comment: payload.video_caption || undefined,
     });
   }
+
+  // Phase 4 K=2: Render execution context block if available and enabled
+  if (shouldRenderContext(payload, currentSettings())) {
+    try {
+      const contextBlock = renderExecutionContextBlock(payload.execution_context);
+      if (contextBlock) {
+        await app.client.chat.postMessage({
+          channel: chId,
+          blocks: [contextBlock],
+        });
+        log(`execution context block sent for ${payload.msg_id}`);
+      }
+    } catch (e) {
+      log(`execution context block failed: ${e && e.message || e}`);
+    }
+  }
+
   activeChannels.delete(chId);
 
   if (!payload._heartbeat && pendingReactions.has(chId)) {

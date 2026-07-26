@@ -491,9 +491,22 @@ class RunDispatcher:
         # data_flow.{approved,blocked} / egress L16 audit event before returning.
         # Run BEFORE the compute meter so a blocked request is never charged.
         _gw_engine_id = engine_name or getattr(engine, "name", "claude_code")
+        # ── Why every gate below is awaited via asyncio.to_thread ──────────────
+        # These gates are SYNCHRONOUS and one of them is expensive: L44 adjudicates
+        # the prompt with an LLM (house_rules_adjudicator → qwen3:8b / Haiku).
+        # Called directly inside this `async def`, that blocks the event loop, and
+        # the gateway shares its uvicorn process with the console — so a single
+        # in-flight run made the WHOLE process unresponsive. Measured 2026-07-26:
+        # /healthz went from a few ms idle to 13 350 ms during one dispatch, and a
+        # smoke test's 2 s status poll timed out against a server that was up.
+        # to_thread changes nothing about semantics: the call is still awaited, still
+        # ordered before the compute meter, still fail-closed on any exception — it
+        # only stops one run from freezing every other request. The engine spawn
+        # below was already off-loop this way; the gates had been missed.
         if _check_l34 is not None:
             try:
-                _l34_refusal = _check_l34(
+                _l34_refusal = await asyncio.to_thread(
+                    _check_l34,
                     _gw_engine_id, tenant_id,
                     prompt=prompt, persona=persona,
                     channel="gateway", chat_key=f"gateway:{run_id}",
@@ -512,7 +525,8 @@ class RunDispatcher:
                 return
         if _check_l35 is not None:
             try:
-                _l35_refusal = _check_l35(
+                _l35_refusal = await asyncio.to_thread(
+                    _check_l35,
                     _gw_engine_id, tenant_id,
                     persona=persona,
                     channel="gateway", chat_key=f"gateway:{run_id}",
@@ -540,7 +554,10 @@ class RunDispatcher:
         # refusal). Runs BEFORE the compute meter so a blocked request is never
         # charged or spawned.
         try:
-            _l44_refusal = _check_l44(
+            # The expensive one: an LLM classification per dispatch. See the
+            # to_thread note above the L34 gate.
+            _l44_refusal = await asyncio.to_thread(
+                _check_l44,
                 prompt,
                 tenant_id=tenant_id,
                 persona=persona,
@@ -586,8 +603,12 @@ class RunDispatcher:
             _GwCQErr = None  # type: ignore[assignment]
         if _gw_cq is not None:
             try:
-                _gw_cq(_gw_paths.corvin_home(), channel="gateway",
-                       chat_key=f"gateway:{tenant_id}:{run_id}")
+                # File-locked counter write — short, but off-loop for the same
+                # reason as the gates above.
+                await asyncio.to_thread(
+                    _gw_cq, _gw_paths.corvin_home(), channel="gateway",
+                    chat_key=f"gateway:{tenant_id}:{run_id}",
+                )
             except _GwCQErr as _gw_exc:  # type: ignore[misc]
                 self._set_terminal(
                     tenant_id, run_id, "failed",

@@ -49,6 +49,10 @@ const SAY_HELPER = path.resolve(ROOT, '..', '..', 'voice', 'scripts', 'say.py');
 const inChatCmds = require('../shared/js/in_chat_commands');
 const chatState = require('./chat_state');
 const { makeStickyProgress } = require('../shared/js/sticky_progress');
+const {
+  normalizeExecutionContext, shouldRenderContext,
+  formatEngineId, formatDelegationMode, formatDuration, formatTokens,
+} = require('../shared/js/execution_context_renderer');
 
 // ── say.py TTS helper ─────────────────────────────────────────────────────
 // Spawns operator/voice/scripts/say.py to produce an OGG-Opus voice-note.
@@ -479,6 +483,37 @@ function writeInbox(payload) {
   return id;
 }
 
+/**
+ * Render execution context as a WhatsApp text footer.
+ * @param {object} context - Normalized execution context
+ * @returns {string} - Text footer to append
+ */
+function renderExecutionContextFooter(context) {
+  if (!context) return '';
+
+  const ctx = normalizeExecutionContext(context);
+  const lines = [
+    '',  // blank line
+    '━━━━━━━━━━━━━━━━━━',
+    `⚙️ ${formatEngineId(ctx.engine_id)} • ${ctx.model_name}`,
+    `⚡ ${formatDelegationMode(ctx.delegation_mode)} • ${formatDuration(ctx.duration_ms)}`,
+  ];
+
+  // Add tokens if available
+  if (ctx.tokens_input !== null || ctx.tokens_output !== null) {
+    lines.push(`🪙 in: ${formatTokens(ctx.tokens_input)} | out: ${formatTokens(ctx.tokens_output)}`);
+  }
+
+  // Add tools if > 0
+  if (ctx.tool_calls_count > 0) {
+    lines.push(`🔨 ${ctx.tool_calls_count} tool${ctx.tool_calls_count === 1 ? '' : 's'}`);
+  }
+
+  lines.push('━━━━━━━━━━━━━━━━━━');
+
+  return lines.join('\n');
+}
+
 // Outbox watcher. Picks up files written by adapter.py, sends them via WA
 // (or in mock mode, just logs and removes them). Each file has the shape:
 //   { to: "phone@s.whatsapp.net", text: "...", voice_path?: "..." }
@@ -652,6 +687,20 @@ async function processOutbox() {
             caption: payload.video_caption || undefined,
           });
         }
+
+        // Phase 4 K=2: Render execution context footer if available and enabled
+        if (shouldRenderContext(payload, currentSettings())) {
+          try {
+            const footer = renderExecutionContextFooter(payload.execution_context);
+            if (footer) {
+              await safeSend(waSocket, payload.to, { text: footer });
+              log(`execution context footer sent for ${payload.msg_id}`);
+            }
+          } catch (e) {
+            log(`execution context footer failed: ${e && e.message || e}`);
+          }
+        }
+
         // Clear typing indicator once the reply is on its way.
         try { await waSocket.sendPresenceUpdate('paused', payload.to); } catch {}
         activeSenders.delete(payload.to);
