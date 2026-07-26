@@ -9,7 +9,11 @@ Copy this file, rename the class, fill in the TODOs, then install via:
 """
 from __future__ import annotations
 
-from corvin_plugins.protocol import CorvinPlugin, HealthStatus, PluginContext
+from corvin_plugins.protocol import (  # noqa: F401 - CorvinPlugin is the
+    CorvinPlugin,  # structural protocol this class satisfies; kept for reference.
+    HealthStatus,
+    PluginContext,
+)
 
 
 class MyNotificationPlugin:

@@ -25,6 +25,7 @@ The ADR's constraints are the design, not suggestions:
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -78,7 +79,10 @@ DEFAULT_THRESHOLD = 3
 #: Ceiling on autonomous actions per plugin per hour.
 DEFAULT_MAX_HEALS_PER_HOUR = 3
 #: A restart followed by a failure within this window counts as "did not help".
-RESTART_GRACE_S = 60.0
+RESTART_GRACE_S = 60
+
+#: Cap on per-plugin action locks so an unknown id cannot grow the map.
+MAX_PLUGIN_LOCKS = 1024.0
 #: How long a record stays in the per-plugin history.
 HISTORY_WINDOW_S = 3600.0
 #: Actions that consume the hourly budget. ESCALATE is deliberately NOT one: it is
@@ -147,6 +151,26 @@ class HealingOrchestrator:
         #: which floods the audit chain with the same "I gave up" record — the same
         #: mistake the health alert avoids by firing once per streak.
         self._escalated: set[str] = set()
+        #: Guards the ledgers. Held only for dict/set access, NEVER across a call
+        #: into a plugin — otherwise a slow on_unload() would block the Console's
+        #: history() read and the plugins page would appear to hang.
+        self._state_lock = threading.RLock()
+        #: One lock per plugin, held for the whole decide-and-act path.
+        #:
+        #: HONEST STATUS: this is defence in depth, NOT a fix for a reproduced bug.
+        #: Concurrent consider() calls for one plugin were measured against the
+        #: pre-lock code and did NOT overrun the budget or double-restart — because
+        #: PluginRegistry.unregister() removes the entry under its OWN lock before
+        #: calling on_unload(), so every later thread hits PluginNotFound. That is
+        #: real protection, but it is INCIDENTAL: it lives in another module, applies
+        #: only to the paths that go through unregister(), and would disappear with a
+        #: refactor there that nobody would connect to healing. The ledger mutations
+        #: are the part that was genuinely unsynchronised — _recent() and
+        #: budget_left() are read-modify-write sequences on shared dicts, and the
+        #: collector thread is not the only caller (Console sync routes run in a
+        #: threadpool). This makes the invariant explicit and local.
+        self._plugin_locks: Dict[str, threading.RLock] = {}
+        self._shared_action_lock = threading.RLock()
 
     # ── policy ───────────────────────────────────────────────────────────────
 
@@ -164,25 +188,38 @@ class HealingOrchestrator:
 
     # ── budget ───────────────────────────────────────────────────────────────
 
+    def _action_lock(self, plugin_id: str) -> threading.RLock:
+        """Per-plugin action lock, with a cap so unknown ids cannot grow the map."""
+        with self._state_lock:
+            lock = self._plugin_locks.get(plugin_id)
+            if lock is None:
+                if len(self._plugin_locks) >= MAX_PLUGIN_LOCKS:
+                    return self._shared_action_lock
+                lock = threading.RLock()
+                self._plugin_locks[plugin_id] = lock
+            return lock
+
     def _recent(
         self, plugin_id: str, window_s: float = HISTORY_WINDOW_S
     ) -> List[HealingRecord]:
-        cutoff = time.time() - window_s
-        recent = [r for r in self._history.get(plugin_id, []) if r.at >= cutoff]
-        if len(recent) > MAX_HISTORY_PER_PLUGIN:
-            recent = recent[-MAX_HISTORY_PER_PLUGIN:]
-        self._history[plugin_id] = recent
-        return recent
+        with self._state_lock:
+            cutoff = time.time() - window_s
+            recent = [r for r in self._history.get(plugin_id, []) if r.at >= cutoff]
+            if len(recent) > MAX_HISTORY_PER_PLUGIN:
+                recent = recent[-MAX_HISTORY_PER_PLUGIN:]
+            self._history[plugin_id] = recent
+            return recent
 
     def budget_left(self, plugin_id: str) -> int:
         """Actions still allowed this hour.  Counted from :attr:`_actions`.
 
         Deliberately NOT derived from the pruned history — see the note there.
         """
-        cutoff = time.time() - HISTORY_WINDOW_S
-        recent = [t for t in self._actions.get(plugin_id, []) if t >= cutoff]
-        self._actions[plugin_id] = recent
-        return max(0, self.max_heals_per_hour - len(recent))
+        with self._state_lock:
+            cutoff = time.time() - HISTORY_WINDOW_S
+            recent = [t for t in self._actions.get(plugin_id, []) if t >= cutoff]
+            self._actions[plugin_id] = recent
+            return max(0, self.max_heals_per_hour - len(recent))
 
     def history(self, plugin_id: str) -> List[HealingRecord]:
         return list(self._recent(plugin_id))
@@ -202,11 +239,17 @@ class HealingOrchestrator:
         Every early return is itself recorded as a NOOP with a reason, so "why did
         nothing happen" is answerable from the history rather than from the source.
         """
+        # The cheap rejections need no lock and are the common case on every poll.
         if not self.is_enabled():
             return self._record(plugin_id, HealingAction.NOOP, "healing_disabled")
         if consecutive_failures < self.threshold:
             return self._record(plugin_id, HealingAction.NOOP, "below_threshold")
+        with self._action_lock(plugin_id):
+            return self._consider_locked(plugin_id, plugin_type, error_code)
 
+    def _consider_locked(
+        self, plugin_id: str, plugin_type: str, error_code: str
+    ) -> HealingRecord:
         policy = self.policy_for(plugin_id, plugin_type)
         if policy is HealingPolicy.NONE:
             return self._record(plugin_id, HealingAction.NOOP, "policy_none")
@@ -229,14 +272,18 @@ class HealingOrchestrator:
 
     def _escalate(self, plugin_id: str, reason: str) -> HealingRecord:
         """Escalate at most once per plugin until it acts or recovers again."""
-        if plugin_id in self._escalated:
-            return self._record(plugin_id, HealingAction.NOOP, f"already_escalated:{reason}")
-        self._escalated.add(plugin_id)
+        with self._state_lock:
+            if plugin_id in self._escalated:
+                return self._record(
+                    plugin_id, HealingAction.NOOP, f"already_escalated:{reason}"
+                )
+            self._escalated.add(plugin_id)
         return self._record(plugin_id, HealingAction.ESCALATE, reason)
 
     def note_recovered(self, plugin_id: str) -> None:
         """Clear the escalation latch — called when the plugin reports healthy."""
-        self._escalated.discard(plugin_id)
+        with self._state_lock:
+            self._escalated.discard(plugin_id)
 
     # ── the three reversible actions ─────────────────────────────────────────
 
@@ -342,6 +389,20 @@ class HealingOrchestrator:
         rec = HealingRecord(
             plugin_id=plugin_id, action=action, reason=reason, succeeded=succeeded
         )
+        with self._state_lock:
+            self._record_locked(plugin_id, action, rec)
+        # Log and audit OUTSIDE the lock: the audit sink is I/O.
+        if action is not HealingAction.NOOP:
+            log.warning(
+                "healing action %s for %r (reason=%s, ok=%s)",
+                action.value, plugin_id, reason, succeeded,
+            )
+            self._emit_audit("plugin.healing_action", rec.to_dict())
+        return rec
+
+    def _record_locked(
+        self, plugin_id: str, action: HealingAction, rec: "HealingRecord"
+    ) -> None:
         history = self._history.setdefault(plugin_id, [])
         history.append(rec)
         # Prune HERE, not only in budget_left(): the NOOP paths never reach that
@@ -352,18 +413,11 @@ class HealingOrchestrator:
             # Count it against the hourly budget in its own, unpruned ledger.
             self._actions.setdefault(plugin_id, []).append(rec.at)
             self._escalated.discard(plugin_id)  # a real action re-arms escalation
-        # Audit EVERY non-NOOP, including ESCALATE. The budget question and the
-        # visibility question are separate: an escalation consumes no budget, but
-        # "I gave up on this plugin" is the single most important thing for an
-        # operator to see. Folding the two conditions together (as an earlier edit
-        # here did) silently dropped that record.
-        if action is not HealingAction.NOOP:
-            log.warning(
-                "healing action %s for %r (reason=%s, ok=%s)",
-                action.value, plugin_id, reason, succeeded,
-            )
-            self._emit_audit("plugin.healing_action", rec.to_dict())
-        return rec
+        # Audit EVERY non-NOOP, including ESCALATE (see _record): the budget question
+        # and the visibility question are separate — an escalation consumes no
+        # budget, but "I gave up on this plugin" is the single most important thing
+        # for an operator to see. Folding the two conditions together (as an earlier
+        # edit here did) silently dropped that record.
 
     def _emit_audit(self, event_type: str, details: dict) -> None:
         if self._audit_emit is None:

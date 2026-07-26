@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import time
+import threading
 import unittest
 from pathlib import Path
 
@@ -544,3 +545,121 @@ class TestHistoryIsBounded(_Base):
         for rec in healer._history["p.audit"]:
             rec.at = time.time() - (hl.HISTORY_WINDOW_S + 10)
         self.assertEqual(healer.history("p.audit"), [])
+
+
+class TestConcurrentHealing(unittest.TestCase):
+    """consider() had no lock at all; these tests pin the properties either way.
+
+    Measured against the pre-lock code, neither the budget nor the restart path
+    actually broke: PluginRegistry.unregister() deletes the entry under its own lock
+    before calling on_unload(), so concurrent healers hit PluginNotFound instead of
+    stacking. These tests therefore pin a property that used to hold INCIDENTALLY,
+    from another module's internal ordering — which is exactly the kind of guarantee
+    that vanishes in a refactor nobody connects to healing.
+    """
+
+    def test_concurrent_consider_respects_the_budget(self):
+        orch = hl.HealingOrchestrator(enabled=True, max_heals_per_hour=3)
+        barrier = threading.Barrier(8)
+
+        def hit():
+            barrier.wait()
+            orch.consider(
+                "p.race", plugin_type="audit_backend",
+                consecutive_failures=5, error_code="down",
+            )
+
+        threads = [threading.Thread(target=hit) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        acted = [r for r in orch.history("p.race") if r.action is not hl.HealingAction.NOOP]
+        real = [r for r in acted if r.action is not hl.HealingAction.ESCALATE]
+        self.assertLessEqual(
+            len(real), 3, f"{len(real)} budgeted actions past a budget of 3"
+        )
+
+    def test_the_same_plugin_is_never_restarted_twice_at_once(self):
+        inside = []
+        peak = [0]
+        guard = threading.Lock()
+
+        class _Slow:
+            plugin_id = "p.slow-restart"
+            plugin_type = "worker_engine"
+            version = "1.0.0"
+            display_name = "Slow"
+
+            def on_load(self, ctx=None):
+                with guard:
+                    inside.append(1)
+                    peak[0] = max(peak[0], len(inside))
+                time.sleep(0.15)
+                with guard:
+                    inside.pop()
+
+            def on_unload(self):
+                with guard:
+                    inside.append(1)
+                    peak[0] = max(peak[0], len(inside))
+                time.sleep(0.15)
+                with guard:
+                    inside.pop()
+
+            def health_check(self):
+                return HealthStatus(ok=False, message="down")
+
+        plugin = _Slow()
+        reg = get_registry()
+        reg._plugins[plugin.plugin_id] = plugin
+        reg._contexts[plugin.plugin_id] = _ctx(plugin.plugin_id)
+        try:
+            orch = hl.HealingOrchestrator(
+                enabled=True, max_heals_per_hour=8,
+                policies={plugin.plugin_id: hl.HealingPolicy.SOFT_RESTART},
+            )
+            barrier = threading.Barrier(6)
+
+            def hit():
+                barrier.wait()
+                orch.consider(
+                    plugin.plugin_id, plugin_type="worker_engine",
+                    consecutive_failures=5, error_code="down",
+                )
+
+            threads = [threading.Thread(target=hit) for _ in range(6)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            self.assertEqual(
+                peak[0], 1,
+                f"{peak[0]} lifecycle calls ran on the same plugin simultaneously",
+            )
+        finally:
+            reg._plugins.pop(plugin.plugin_id, None)
+            reg._contexts.pop(plugin.plugin_id, None)
+
+    def test_different_plugins_still_heal_in_parallel(self):
+        """The lock is per plugin: one slow plugin must not stall healing globally."""
+        orch = hl.HealingOrchestrator(enabled=True, max_heals_per_hour=8)
+        done = []
+        barrier = threading.Barrier(4)
+
+        def hit(pid):
+            barrier.wait()
+            orch.consider(
+                pid, plugin_type="audit_backend",
+                consecutive_failures=5, error_code="down",
+            )
+            done.append(pid)
+
+        started = time.monotonic()
+        threads = [threading.Thread(target=hit, args=(f"p.par{i}",)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(len(done), 4)
+        self.assertLess(time.monotonic() - started, 2.0)
