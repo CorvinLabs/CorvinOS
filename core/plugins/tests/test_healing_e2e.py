@@ -253,8 +253,14 @@ class TestGatewayBootWiresHealing(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_lifespan_starts_a_collector_with_a_healer_attached(self):
+        # Purge ONLY the app-level modules, so the lifespan re-reads this test's
+        # CORVIN_HOME. corvin_plugins and forge must NOT be purged: reloading them
+        # creates a SECOND copy of every enum, and `record.origin is
+        # PluginOrigin.COMMUNITY` then fails in whatever test runs next — which is
+        # exactly what happened (test_state_lifecycle's egress cases went red only
+        # in a full-suite run).
         for key in list(sys.modules):
-            if key.startswith(("corvin_gateway", "corvin_console", "corvin_plugins", "forge")):
+            if key.startswith(("corvin_gateway", "corvin_console")):
                 del sys.modules[key]
         try:
             from corvin_gateway.app import app
