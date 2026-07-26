@@ -293,9 +293,26 @@ class TestBootstrapAllWiring(_BootTestCase):
     def test_gateway_boot_path_still_reaches_bootstrap_all(self):
         # The gateway is the real caller; if the import name ever drifts, the
         # whole layered boot becomes dead code with green unit tests.
-        app_py = _REPO / "core" / "gateway" / "corvin_gateway" / "app.py"
-        source = app_py.read_text(encoding="utf-8")
+        source = self._gateway_source()
         self.assertIn("from corvin_plugins.bootstrap import bootstrap_all", source)
+
+    def test_gateway_does_not_swallow_the_compliance_abort(self):
+        # The gateway wraps bootstrap_all in a broad `except Exception` so one
+        # bad tenant plugin cannot cost the platform its boot. That is correct
+        # for every failure EXCEPT the compliance abort — which the unit test
+        # above proves bootstrap_all raises, and which this call site would
+        # otherwise reduce to a warning. Green unit test, dead guarantee.
+        source = self._gateway_source()
+        self.assertIn("GlobalComplianceLoadFailed", source)
+        # and it must re-raise, not merely mention the name
+        idx = source.index("GlobalComplianceLoadFailed")
+        self.assertIn("raise", source[idx:idx + 200])
+
+    @staticmethod
+    def _gateway_source() -> str:
+        return (
+            _REPO / "core" / "gateway" / "corvin_gateway" / "app.py"
+        ).read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":

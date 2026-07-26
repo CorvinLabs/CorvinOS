@@ -165,7 +165,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 corvin_home=_corvin_home(),
                 lifecycle_enabled=_flags.is_enabled("plugin_runtime_lifecycle", _tid),
             )
-        except Exception:
+        except Exception as _bs_exc:
+            # One narrow exception to the best-effort rule: a bundled
+            # layer=compliance plugin that failed to load (ADR-0243). Everything
+            # else here is a per-tenant convenience that must not cost the
+            # platform its boot — but swallowing THAT one would recreate the
+            # "compliance-off mode" the baseline forbids, one log line deep.
+            # The exception class is matched by name rather than imported at the
+            # top, so a stripped install without corvin_plugins still boots.
+            if type(_bs_exc).__name__ == "GlobalComplianceLoadFailed":
+                raise
             import logging as _bs_log
             _bs_log.getLogger("corvin.plugins.bootstrap").warning(
                 "plugin bootstrap skipped", exc_info=True
