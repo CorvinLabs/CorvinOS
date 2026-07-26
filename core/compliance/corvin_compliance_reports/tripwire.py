@@ -69,7 +69,11 @@ def _audit_module():
     repo_root = Path(__file__).resolve().parents[3]
     shared = repo_root / "operator" / "bridges" / "shared"
     if shared.is_dir() and str(shared) not in sys.path:
-        sys.path.insert(0, str(shared))
+        # append, NOT insert(0): this directory also contains generic top-level
+        # names (tests/, templates/) with no __init__.py, so putting it FIRST on
+        # sys.path lets them shadow another package's `tests` — the same class as
+        # the operator/ stdlib-shadow trap. Appending means existing paths win.
+        sys.path.append(str(shared))
     try:
         import audit as _audit  # type: ignore[import-not-found]
 

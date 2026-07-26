@@ -106,7 +106,11 @@ def _tripwire_module():
 
     compliance_root = Path(__file__).resolve().parents[2] / "compliance"
     if compliance_root.is_dir() and str(compliance_root) not in sys.path:
-        sys.path.insert(0, str(compliance_root))
+        # append, NOT insert(0): this directory also contains generic top-level
+        # names (tests/, templates/) with no __init__.py, so putting it FIRST on
+        # sys.path lets them shadow another package's `tests` — the same class as
+        # the operator/ stdlib-shadow trap. Appending means existing paths win.
+        sys.path.append(str(compliance_root))
     from corvin_compliance_reports import tripwire
 
     return tripwire

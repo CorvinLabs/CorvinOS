@@ -34,7 +34,11 @@ try:
     # routes → corvin_console → console → core, so parents[3] is `core/`.
     _core_plugins = Path(__file__).resolve().parents[3] / "plugins"
     if (_core_plugins / "corvin_plugins").is_dir() and str(_core_plugins) not in sys.path:
-        sys.path.insert(0, str(_core_plugins))
+        # append, NOT insert(0): this directory also contains generic top-level
+        # names (tests/, templates/) with no __init__.py, so putting it FIRST on
+        # sys.path lets them shadow another package's `tests` — the same class as
+        # the operator/ stdlib-shadow trap. Appending means existing paths win.
+        sys.path.append(str(_core_plugins))
     from corvin_plugins.manifest import (  # type: ignore[import-not-found]
         PIIRisk,
         PluginError,
