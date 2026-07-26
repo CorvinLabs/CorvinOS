@@ -915,9 +915,12 @@ def _system_for(lang: str, target_chars: int, has_task: bool,
     away from the target locale; putting it last makes it the closing
     instruction the model honours.
 
-    `output_language` is an optional BCP-47 code. When empty (legacy
-    callers) or equal to `de`/`en` the prompt is byte-identical to the
-    pre-i18n version.
+    `output_language` is an optional BCP-47 code. When empty (legacy callers) the
+    base prompt's own language is pinned instead — the pin is UNCONDITIONAL, so the
+    prompt is NOT byte-identical to the pre-i18n version for any locale. (That
+    sentence survived here for two days after the 2026-07-24 change made it false,
+    next to the paragraph explaining the change; a docstring that states the opposite
+    of the code is worse than none.)
     """
     table = SYSTEM_WITH_TASK if has_task else SYSTEM
     base = table[lang].format(max_chars=target_chars)
@@ -931,10 +934,9 @@ def _system_for(lang: str, target_chars: int, has_task: bool,
     # for personas that need second-model verification; this inline
     # check is the always-active first line of defence.
     base = base + "\n\n" + SELF_CHECK_BLOCK[lang]
-    # Output-language pin (i18n). Only emitted for non-de/non-en codes —
-    # the de/en prompts already steer their own output language via
-    # native examples, so an extra directive is just token cost. We
-    # SANDWICH the directive: once at the very front, once at the very
+    # Output-language pin (i18n), emitted for EVERY code — see the 2026-07-24 note
+    # at the end of this comment block for why the original "non-de/en only"
+    # optimisation was dropped. We SANDWICH the directive: once at the very front, once at the very
     # end. The empirical motivation (test_i18n_live.py 2026-05): a
     # user-global "always reply in <X>" rule loaded from the host's
     # CLAUDE.md is a system-level peer to our prompt, and a single

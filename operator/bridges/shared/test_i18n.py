@@ -286,13 +286,27 @@ class SummarizePromptShapeTests(unittest.TestCase):
         import summarize as s
         self.s = s
 
-    def test_legacy_de_no_directive(self):
-        p = self.s._system_for("de", 400, has_task=False)
-        self.assertNotIn("OUTPUT LANGUAGE", p)
+    # ── The pin is UNCONDITIONAL since 2026-07-24 ────────────────────────────
+    # These four cases used to assert the opposite ("no directive when the base
+    # prompt language already matches", a token-cost optimisation). That contract was
+    # deliberately dropped: relying on the German base prompt's native prose to hold
+    # German was the confirmed source of "spoken in English for a German user" — when
+    # the source answer was English, or a host-level CLAUDE.md rule said "always reply
+    # in English", the de prompt had nothing explicit to counter it and the voice
+    # drifted. The directive is the absolute last-pin, so it has to fire every time.
+    # The tests kept failing against the intended behaviour, which is as useless as
+    # having no test: they now assert the pin, and the ABSENCE of a pin is only
+    # asserted where it is still correct (an unparseable locale).
 
-    def test_legacy_en_no_directive(self):
+    def test_legacy_de_pins_german_anyway(self):
+        p = self.s._system_for("de", 400, has_task=False)
+        self.assertIn("OUTPUT LANGUAGE OVERRIDE", p)
+        self.assertIn("German", p)
+
+    def test_legacy_en_pins_english_anyway(self):
         p = self.s._system_for("en", 400, has_task=False)
-        self.assertNotIn("OUTPUT LANGUAGE", p)
+        self.assertIn("OUTPUT LANGUAGE OVERRIDE", p)
+        self.assertIn("English", p)
 
     def test_zh_hans_directive_sandwiched(self):
         p = self.s._system_for("en", 400, has_task=False, output_language="zh-Hans")
@@ -319,10 +333,15 @@ class SummarizePromptShapeTests(unittest.TestCase):
         p = self.s._system_for("en", 400, has_task=False, output_language="ar")
         self.assertIn("Arabic", p)
 
-    def test_de_passthrough_when_output_de(self):
-        # Explicit `de` matches base prompt → no extra directive (token-cost optimisation).
+    def test_explicit_de_is_pinned_not_passed_through(self):
+        """A matching base language is NOT a reason to skip the pin.
+
+        A German base prompt does not stop a host-level "always reply in English"
+        rule from winning — countering that is the whole point of the override.
+        """
         p = self.s._system_for("de", 400, has_task=False, output_language="de")
-        self.assertNotIn("OUTPUT LANGUAGE", p)
+        self.assertIn("OUTPUT LANGUAGE OVERRIDE", p)
+        self.assertIn("German", p)
 
     def test_cross_lang_de_base_zh_output(self):
         # Base prompt is German but user wants Chinese output — directive
@@ -331,9 +350,16 @@ class SummarizePromptShapeTests(unittest.TestCase):
         self.assertIn("OUTPUT LANGUAGE", p)
         self.assertIn("Simplified Chinese", p)
 
-    def test_unknown_locale_silent_no_op(self):
+    def test_unknown_locale_falls_back_to_a_pin_not_to_nothing(self):
+        """An unparseable code must not silently drop the pin.
+
+        Dropping it is the drift path this whole mechanism exists to close: the
+        summary would then follow the SOURCE text's language. normalise() rejects
+        "xyzzy", so the code falls back to the base prompt's language and still pins.
+        """
         p = self.s._system_for("en", 400, has_task=False, output_language="xyzzy")
-        self.assertNotIn("OUTPUT LANGUAGE", p)
+        self.assertIn("OUTPUT LANGUAGE OVERRIDE", p)
+        self.assertIn("English", p)
 
     def test_persona_audience_directive_layer_order(self):
         # Order with directive sandwich:
