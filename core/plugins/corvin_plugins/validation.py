@@ -122,7 +122,12 @@ def _check_type_is_known(record: PluginRecord, report: ValidationReport) -> None
         )
 
 
-def validate_class(cls: Any, *, expected_type: Optional[str] = None) -> ValidationReport:
+def validate_class(
+    cls: Any,
+    *,
+    expected_type: Optional[str] = None,
+    expected_id: Optional[str] = None,
+) -> ValidationReport:
     """Check a plugin class against the CorvinPlugin protocol.
 
     ``runtime_checkable`` protocols only verify method PRESENCE, not signatures,
@@ -151,6 +156,23 @@ def validate_class(cls: Any, *, expected_type: Optional[str] = None) -> Validati
             "class.type_mismatch",
             f"class declares plugin_type={declared!r} but the manifest says "
             f"{expected_type!r}",
+        )
+
+    declared_id = getattr(cls, "plugin_id", None)
+    if expected_id and declared_id and declared_id != expected_id:
+        # The id is the key for registration, for `spec.plugins.installed`, for
+        # the consent record and for every audit event. When the manifest and the
+        # class disagree, the class wins at runtime — so the manifest's compliance
+        # declarations (pii_risk, requires_consent) end up filed under an id that
+        # is never registered, and an operator declaring the manifest's id in
+        # tenant.corvin.yaml configures a plugin that does not exist.
+        report.add(
+            ERROR,
+            "class.id_mismatch",
+            f"class declares plugin_id={declared_id!r} but the manifest says "
+            f"{expected_id!r} — the class wins at registration, so the manifest "
+            f"(and its pii_risk/requires_consent declarations) would describe an "
+            f"id that never loads",
         )
 
     if declared:
