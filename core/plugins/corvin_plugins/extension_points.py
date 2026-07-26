@@ -281,23 +281,43 @@ def _clip(value: object) -> str:
 # ── Flag ──────────────────────────────────────────────────────────────────────
 
 
-def _flag_enabled(tenant_id: str) -> bool:
-    """True only when the operator turned ``plugin_extension_points`` on.
+#: (tenant, point) pairs already reported as flag-degraded, so a broken config
+#: costs one audit record per pair rather than one per turn.  The audit chain is
+#: append-only; a per-invocation event on a hot path would be chain spam.
+_degraded_reported: set[tuple[str, str]] = set()
 
-    Imported defensively: ``core/plugins`` must stay importable in a layout that
-    ships without the Console (headless core, ADR-0241), exactly as the registry
-    treats ``core/observability``.  An absent Console reads as "flag off", which
-    is the pre-feature path — never as "assume on".
+
+def _flag_state(tenant_id: str) -> tuple[bool, bool]:
+    """``(enabled, lookup_broken)`` for ``plugin_extension_points``.
+
+    The two failure modes look identical from the outside and are not the same
+    thing:
+
+    * **Console absent** — a headless-core layout (ADR-0241) that ships without
+      the flag registry. The feature does not exist here, the pre-feature path
+      is the correct and complete answer, and there is nothing to report.
+      ``(False, False)``.
+    * **Console present, lookup raised** — a corrupt ``features.json``, an
+      unreadable tenant dir. The operator may well have switched the feature
+      ON, and we are about to silently run without it. That is worth a record,
+      especially on a fail-closed point where the whole purpose is that
+      enforcement does not quietly weaken. ``(False, True)``.
+
+    Both still resolve to "off" for the actual decision: a broken config must
+    not break a turn, and refusing every gated workflow because a JSON file lost
+    a brace would be a self-inflicted denial of service.
     """
     try:
         from corvin_console import feature_flags  # type: ignore[import-not-found]
     except Exception:  # noqa: BLE001
-        return False
+        return False, False
     try:
-        return bool(feature_flags.is_enabled(FLAG_ID, tenant_id))
+        return bool(feature_flags.is_enabled(FLAG_ID, tenant_id)), False
     except Exception:  # noqa: BLE001 — a broken config must not break a turn
-        log.debug("feature-flag lookup failed for %s — treating as off", FLAG_ID)
-        return False
+        log.warning(
+            "feature-flag lookup for %s failed — running the default path", FLAG_ID
+        )
+        return False, True
 
 
 # ── The bus ───────────────────────────────────────────────────────────────────
@@ -445,9 +465,20 @@ def register_hook(
     fn: Callable[..., Any],
     *,
     plugin_id: str,
-    tenant_id: str = "_default",
+    tenant_id: str,
 ) -> None:
     """Register ``fn`` as the hook for ``point`` in ``tenant_id``.
+
+    ``tenant_id`` is keyword-REQUIRED and has no default. It used to default to
+    ``"_default"``, which is a trap in both directions: a call site that forgets
+    it registers into the default tenant (and, at :func:`invoke` time, runs the
+    default tenant's hooks inside somebody else's turn), and a plugin loaded for
+    tenant A can pass tenant B's id and take over a point there — including the
+    fail-closed ``workflow.workflow_gate``, since last-registration-wins makes
+    that a takeover rather than a collision. Requiring the argument does not by
+    itself authorise it; it removes the silent path. The value a plugin should
+    pass is ``ctx.tenant_id`` from its own :class:`PluginContext`, which the
+    bootstrap sets to the tenant it was loaded for.
 
     Refused — with a raised exception, never a silent no-op — when the point is
     unknown (:class:`UnknownExtensionPoint`), names an immutable mechanism
@@ -525,10 +556,26 @@ def invoke(
         # silently taking the default forever.
         _check_name(point, plugin_id="<call-site>", tenant_id=tenant_id)
 
-    if not _flag_enabled(tenant_id):
+    enabled, lookup_broken = _flag_state(tenant_id)
+    if not enabled:
         # Quiet: no log line, no audit event, no hook lookup.  This runs on
         # every default install for every call site, so anything here would be
         # a per-turn cost and a log flood (CLAUDE.md: off must be a quiet path).
+        #
+        # The one exception is a BROKEN lookup on a fail-closed point: there the
+        # operator may have switched enforcement on and we are about to run
+        # without it. Silence would make a corrupt config indistinguishable from
+        # a deliberate "off" — recorded once per (tenant, point) so a hot path
+        # cannot spam an append-only chain.
+        if lookup_broken and point in _FAIL_CLOSED_POINTS:
+            key = (tenant_id, point)
+            if key not in _degraded_reported:
+                _degraded_reported.add(key)
+                _audit("plugin.extension_flag_degraded", {
+                    "point": point,
+                    "tenant_id": tenant_id,
+                    "outcome": "default",
+                }, tenant_id=tenant_id)
         return _resolve_default(default, args, kwargs)
 
     hook = _bus.get(point, tenant_id)

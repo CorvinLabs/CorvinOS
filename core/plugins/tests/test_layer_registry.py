@@ -23,7 +23,7 @@ for _p in (str(_PKG), str(_REPO)):
 
 from corvin_plugins.manifest import (  # noqa: E402
     PluginError,
-    PluginLayer,
+    BootLayer,
     PluginOrigin,
     PluginRecord,
 )
@@ -92,34 +92,34 @@ def _record(**over) -> PluginRecord:
 class TestRecordLayer(unittest.TestCase):
     def test_default_layer_is_the_least_privileged(self):
         # A record that says nothing must not land anywhere privileged.
-        self.assertIs(_record().layer, PluginLayer.INSTALLED)
+        self.assertIs(_record().layer, BootLayer.INSTALLED)
 
     def test_community_origin_cannot_claim_compliance(self):
         with self.assertRaises(PluginError) as ctx:
-            _record(layer=PluginLayer.COMPLIANCE, origin=PluginOrigin.COMMUNITY)
+            _record(layer=BootLayer.COMPLIANCE, origin=PluginOrigin.COMMUNITY)
         self.assertIn("privileged", str(ctx.exception))
 
     def test_community_origin_cannot_claim_core(self):
         with self.assertRaises(PluginError):
-            _record(layer=PluginLayer.CORE, origin=PluginOrigin.COMMUNITY)
+            _record(layer=BootLayer.CORE, origin=PluginOrigin.COMMUNITY)
 
     def test_community_origin_may_claim_bundled_and_installed(self):
-        for layer in (PluginLayer.BUNDLED, PluginLayer.INSTALLED):
+        for layer in (BootLayer.BUNDLED, BootLayer.INSTALLED):
             with self.subTest(layer=layer):
                 rec = _record(layer=layer, origin=PluginOrigin.COMMUNITY)
                 self.assertIs(rec.layer, layer)
 
     def test_builtin_and_vetted_may_claim_privileged_layers(self):
         for origin in (PluginOrigin.BUILTIN, PluginOrigin.VETTED):
-            for layer in (PluginLayer.COMPLIANCE, PluginLayer.CORE):
+            for layer in (BootLayer.COMPLIANCE, BootLayer.CORE):
                 with self.subTest(origin=origin, layer=layer):
                     self.assertIs(_record(layer=layer, origin=origin).layer, layer)
 
     def test_can_disable_is_false_only_for_compliance(self):
         self.assertFalse(
-            _record(layer=PluginLayer.COMPLIANCE, origin=PluginOrigin.BUILTIN).can_disable()
+            _record(layer=BootLayer.COMPLIANCE, origin=PluginOrigin.BUILTIN).can_disable()
         )
-        for layer in (PluginLayer.CORE, PluginLayer.BUNDLED, PluginLayer.INSTALLED):
+        for layer in (BootLayer.CORE, BootLayer.BUNDLED, BootLayer.INSTALLED):
             with self.subTest(layer=layer):
                 self.assertTrue(
                     _record(layer=layer, origin=PluginOrigin.BUILTIN).can_disable()
@@ -137,7 +137,7 @@ class TestReplacesField(unittest.TestCase):
     def test_compliance_layer_may_not_declare_replaces(self):
         with self.assertRaises(PluginError) as ctx:
             _record(
-                layer=PluginLayer.COMPLIANCE,
+                layer=BootLayer.COMPLIANCE,
                 origin=PluginOrigin.BUILTIN,
                 replaces="audit-writer",
             )
@@ -152,10 +152,10 @@ class TestReplacesField(unittest.TestCase):
 class TestRecordRoundTrip(unittest.TestCase):
     def test_layer_and_replaces_survive_to_dict_from_dict(self):
         rec = _record(
-            layer=PluginLayer.CORE, origin=PluginOrigin.BUILTIN, replaces="old-acs"
+            layer=BootLayer.CORE, origin=PluginOrigin.BUILTIN, replaces="old-acs"
         )
         back = PluginRecord.from_dict(rec.to_dict())
-        self.assertIs(back.layer, PluginLayer.CORE)
+        self.assertIs(back.layer, BootLayer.CORE)
         self.assertEqual(back.replaces, "old-acs")
 
     def test_missing_layer_reads_as_installed(self):
@@ -163,12 +163,12 @@ class TestRecordRoundTrip(unittest.TestCase):
         data = _record().to_dict()
         del data["layer"]
         del data["replaces"]
-        self.assertIs(PluginRecord.from_dict(data).layer, PluginLayer.INSTALLED)
+        self.assertIs(PluginRecord.from_dict(data).layer, BootLayer.INSTALLED)
 
     def test_empty_layer_string_reads_as_installed_not_crash(self):
         data = _record().to_dict()
         data["layer"] = ""
-        self.assertIs(PluginRecord.from_dict(data).layer, PluginLayer.INSTALLED)
+        self.assertIs(PluginRecord.from_dict(data).layer, BootLayer.INSTALLED)
 
 
 # ── 2. Registry-level behaviour ───────────────────────────────────────────────
@@ -180,51 +180,51 @@ class TestRegistryLayerTracking(unittest.TestCase):
 
     def test_explicit_layer_argument_wins(self):
         p = _StubPlugin("a", layer="installed")
-        self.reg.register(p, _ctx("a"), layer=PluginLayer.CORE)
-        self.assertIs(self.reg.layer_of("a"), PluginLayer.CORE)
+        self.reg.register(p, _ctx("a"), layer=BootLayer.CORE)
+        self.assertIs(self.reg.boot_layer_of("a"), BootLayer.CORE)
 
     def test_plugin_self_declaration_is_used_when_no_argument(self):
         self.reg.register(_StubPlugin("a", layer="bundled"), _ctx("a"))
-        self.assertIs(self.reg.layer_of("a"), PluginLayer.BUNDLED)
+        self.assertIs(self.reg.boot_layer_of("a"), BootLayer.BUNDLED)
 
     def test_undeclared_plugin_is_installed(self):
         self.reg.register(_StubPlugin("a"), _ctx("a"))
-        self.assertIs(self.reg.layer_of("a"), PluginLayer.INSTALLED)
+        self.assertIs(self.reg.boot_layer_of("a"), BootLayer.INSTALLED)
 
     def test_unknown_layer_string_degrades_to_installed(self):
         self.reg.register(_StubPlugin("a", layer="superuser"), _ctx("a"))
-        self.assertIs(self.reg.layer_of("a"), PluginLayer.INSTALLED)
+        self.assertIs(self.reg.boot_layer_of("a"), BootLayer.INSTALLED)
 
     def test_layer_of_unregistered_raises(self):
         with self.assertRaises(PluginNotFound):
-            self.reg.layer_of("nope")
+            self.reg.boot_layer_of("nope")
 
     def test_plugins_by_layer_filters(self):
-        self.reg.register(_StubPlugin("a"), _ctx("a"), layer=PluginLayer.CORE)
-        self.reg.register(_StubPlugin("b"), _ctx("b"), layer=PluginLayer.CORE)
-        self.reg.register(_StubPlugin("c"), _ctx("c"), layer=PluginLayer.BUNDLED)
+        self.reg.register(_StubPlugin("a"), _ctx("a"), layer=BootLayer.CORE)
+        self.reg.register(_StubPlugin("b"), _ctx("b"), layer=BootLayer.CORE)
+        self.reg.register(_StubPlugin("c"), _ctx("c"), layer=BootLayer.BUNDLED)
         self.assertEqual(
-            {p.plugin_id for p in self.reg.plugins_by_layer(PluginLayer.CORE)}, {"a", "b"}
+            {p.plugin_id for p in self.reg.plugins_by_boot_layer(BootLayer.CORE)}, {"a", "b"}
         )
         self.assertEqual(
-            {p.plugin_id for p in self.reg.plugins_by_layer("bundled")}, {"c"}
+            {p.plugin_id for p in self.reg.plugins_by_boot_layer("bundled")}, {"c"}
         )
 
     def test_failed_on_load_leaves_no_layer_entry(self):
         p = _StubPlugin("a")
         p.on_load_raises = True
         with self.assertRaises(RuntimeError):
-            self.reg.register(p, _ctx("a"), layer=PluginLayer.CORE)
+            self.reg.register(p, _ctx("a"), layer=BootLayer.CORE)
         # The rollback must clear the layer slot too, or a later re-register of
         # the same id would inherit a stale privileged classification.
         with self.assertRaises(PluginNotFound):
-            self.reg.layer_of("a")
+            self.reg.boot_layer_of("a")
         self.reg.register(_StubPlugin("a"), _ctx("a"))
-        self.assertIs(self.reg.layer_of("a"), PluginLayer.INSTALLED)
+        self.assertIs(self.reg.boot_layer_of("a"), BootLayer.INSTALLED)
 
     def test_load_audit_event_carries_the_layer(self):
         sink: list = []
-        self.reg.register(_StubPlugin("a"), _ctx("a", sink=sink), layer=PluginLayer.CORE)
+        self.reg.register(_StubPlugin("a"), _ctx("a", sink=sink), layer=BootLayer.CORE)
         loaded = [d for e, d in sink if e == "plugin.loaded"]
         self.assertEqual(loaded[0]["layer"], "core")
 
@@ -234,27 +234,27 @@ class TestDisableGuard(unittest.TestCase):
         self.reg = PluginRegistry()
 
     def test_operator_cannot_disable_compliance(self):
-        self.reg.register(_StubPlugin("audit"), _ctx("audit"), layer=PluginLayer.COMPLIANCE)
+        self.reg.register(_StubPlugin("audit"), _ctx("audit"), layer=BootLayer.COMPLIANCE)
         with self.assertRaises(PluginDisableRefused):
             self.reg.disable("audit")
         # still registered and never unloaded
-        self.assertIs(self.reg.layer_of("audit"), PluginLayer.COMPLIANCE)
+        self.assertIs(self.reg.boot_layer_of("audit"), BootLayer.COMPLIANCE)
 
     def test_operator_cannot_reach_past_disable_via_unregister(self):
         # The admin surface must not be able to bypass disable() by calling the
         # primitive with the operator flag set.
-        self.reg.register(_StubPlugin("audit"), _ctx("audit"), layer=PluginLayer.COMPLIANCE)
+        self.reg.register(_StubPlugin("audit"), _ctx("audit"), layer=BootLayer.COMPLIANCE)
         with self.assertRaises(PluginDisableRefused):
             self.reg.unregister("audit", operator_initiated=True)
 
     def test_shutdown_path_may_unload_compliance(self):
         p = _StubPlugin("audit")
-        self.reg.register(p, _ctx("audit"), layer=PluginLayer.COMPLIANCE)
+        self.reg.register(p, _ctx("audit"), layer=BootLayer.COMPLIANCE)
         self.reg.unregister("audit")  # machinery, not an operator action
         self.assertTrue(p.unloaded)
 
     def test_other_layers_are_disableable(self):
-        for layer in (PluginLayer.CORE, PluginLayer.BUNDLED, PluginLayer.INSTALLED):
+        for layer in (BootLayer.CORE, BootLayer.BUNDLED, BootLayer.INSTALLED):
             with self.subTest(layer=layer):
                 reg = PluginRegistry()
                 p = _StubPlugin("x")
@@ -268,7 +268,7 @@ class TestDisableGuard(unittest.TestCase):
 
     def test_unload_audit_event_records_who_asked(self):
         sink: list = []
-        self.reg.register(_StubPlugin("x"), _ctx("x", sink=sink), layer=PluginLayer.BUNDLED)
+        self.reg.register(_StubPlugin("x"), _ctx("x", sink=sink), layer=BootLayer.BUNDLED)
         self.reg.disable("x")
         unloaded = [d for e, d in sink if e == "plugin.unloaded"]
         self.assertTrue(unloaded[0]["operator_initiated"])
@@ -281,7 +281,7 @@ class TestReplacement(unittest.TestCase):
 
     def _install_core(self, pid: str = "acs-default"):
         p = _StubPlugin(pid)
-        self.reg.register(p, _ctx(pid), layer=PluginLayer.CORE)
+        self.reg.register(p, _ctx(pid), layer=BootLayer.CORE)
         return p
 
     def test_replacing_a_core_plugin_swaps_it(self):
@@ -290,13 +290,13 @@ class TestReplacement(unittest.TestCase):
         self.reg.replace(new, _ctx("acs-k8s"), replaces="acs-default")
         self.assertTrue(old.unloaded)
         self.assertIs(self.reg.get("acs-k8s"), new)
-        self.assertIs(self.reg.layer_of("acs-k8s"), PluginLayer.CORE)
+        self.assertIs(self.reg.boot_layer_of("acs-k8s"), BootLayer.CORE)
         with self.assertRaises(PluginNotFound):
             self.reg.get("acs-default")
 
     def test_replacing_compliance_is_refused(self):
         p = _StubPlugin("audit")
-        self.reg.register(p, _ctx("audit"), layer=PluginLayer.COMPLIANCE)
+        self.reg.register(p, _ctx("audit"), layer=BootLayer.COMPLIANCE)
         with self.assertRaises(PluginReplacementRefused):
             self.reg.replace(_StubPlugin("my-audit"), _ctx("my-audit"), replaces="audit")
         # The target must survive the refusal untouched.
@@ -305,7 +305,7 @@ class TestReplacement(unittest.TestCase):
 
     def test_replacing_bundled_is_refused(self):
         p = _StubPlugin("discord")
-        self.reg.register(p, _ctx("discord"), layer=PluginLayer.BUNDLED)
+        self.reg.register(p, _ctx("discord"), layer=BootLayer.BUNDLED)
         with self.assertRaises(PluginReplacementRefused):
             self.reg.replace(_StubPlugin("d2"), _ctx("d2"), replaces="discord")
         self.assertFalse(p.unloaded)
@@ -318,7 +318,7 @@ class TestReplacement(unittest.TestCase):
         old = self._install_core()
         # A replacement whose own id is already taken must be refused BEFORE the
         # target is unloaded, or the collision would cost us both plugins.
-        self.reg.register(_StubPlugin("taken"), _ctx("taken"), layer=PluginLayer.INSTALLED)
+        self.reg.register(_StubPlugin("taken"), _ctx("taken"), layer=BootLayer.INSTALLED)
         with self.assertRaises(PluginAlreadyRegistered):
             self.reg.replace(_StubPlugin("taken"), _ctx("taken"), replaces="acs-default")
         self.assertFalse(old.unloaded)

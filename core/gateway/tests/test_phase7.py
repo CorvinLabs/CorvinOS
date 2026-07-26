@@ -252,7 +252,7 @@ class DispatcherDurableTests(unittest.TestCase):
                 )
                 run_id = r.json()["run_id"]
                 # Poll until terminal
-                deadline = time.time() + 5
+                deadline = time.time() + 30   # L44 adjudicates with an LLM
                 while time.time() < deadline:
                     g = client.get(
                         f"/v1/tenants/acme/runs/{run_id}", headers=_hdr(),

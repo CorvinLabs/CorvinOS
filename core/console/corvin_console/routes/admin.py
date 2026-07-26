@@ -68,11 +68,20 @@ FLAG_ID = "admin_control_plane"
 LIFECYCLE_FLAG_ID = "plugin_runtime_lifecycle"
 
 #: Layers that are process-global by construction (ADR-0240): they are loaded
-#: once for the whole installation, so showing them to every tenant is correct.
-#: An ``installed``-layer runtime object belongs to whichever tenant enabled it,
-#: and is therefore only shown when THIS tenant also has a record for it —
-#: otherwise the admin plane would leak another tenant's plugin ids.
-_GLOBAL_LAYERS = frozenset({"compliance", "core", "bundled"})
+#: once for the whole installation from the wheel, so showing them to every
+#: tenant is correct.
+#:
+#: ``bundled`` is deliberately NOT in this set, though it reads like it belongs.
+#: It is the one privileged-sounding layer a TENANT may declare for itself
+#: (``bootstrap._TENANT_DECLARABLE_LAYERS``), and unlike compliance/core it is
+#: disableable. Treating it as global meant tenant B saw tenant A's bridge with
+#: ``can_disable: true`` and could stop it with an ordinary 200 — cross-tenant
+#: control, reachable with admin rights in one's own tenant only.
+#:
+#: A ``bundled`` or ``installed`` runtime object therefore belongs to whichever
+#: tenant enabled it, and is shown only when THIS tenant also has a record for
+#: it — otherwise the admin plane leaks another tenant's plugin ids.
+_GLOBAL_LAYERS = frozenset({"compliance", "core"})
 
 
 # The plugin package lives outside the console package; import it the same way

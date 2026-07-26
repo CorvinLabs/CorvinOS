@@ -356,7 +356,12 @@ function makeHandler({ inboxDir, settingsFile, currentSettings, auth, logger, se
         await sendSignal(recipient, `📎 File: ${payload.document_name || path.basename(payload.document_path)}`);
 
       // Phase 4 K=2: Render execution context footer if available and enabled
-      if (shouldRenderContext(payload, cfg.currentSettings())) {
+      // NOT cfg.currentSettings(): makeHandler destructures its argument, so no
+      // `cfg` binding exists in this scope. It threw ReferenceError on EVERY
+      // outbox payload — AFTER the reply text had already been sent — so the
+      // envelope was reported as failed and retried. Same bug in the Signal
+      // and Teams handlers; both Node E2E suites caught it.
+      if (shouldRenderContext(payload, currentSettings && currentSettings())) {
         try {
           const footer = renderExecutionContextSignal(payload.execution_context);
           if (footer) {

@@ -40,7 +40,7 @@ from corvin_plugins.bridges import (  # noqa: E402
     declaration_entry,
 )
 from corvin_plugins.bridges import supervisor as sup  # noqa: E402
-from corvin_plugins.manifest import PluginLayer  # noqa: E402
+from corvin_plugins.manifest import BootLayer  # noqa: E402
 from corvin_plugins.protocol import PluginContext  # noqa: E402
 from corvin_plugins.registry import PluginRegistry  # noqa: E402
 
@@ -672,25 +672,25 @@ class TestRegistryIntegration(_SupervisorTestCase):
     def test_registration_lands_on_the_bundled_layer(self):
         reg = PluginRegistry()
         p = self._plugin()
-        reg.register(p, _ctx(), layer=PluginLayer.BUNDLED)
-        self.assertIs(reg.layer_of("discord-bridge"), PluginLayer.BUNDLED)
+        reg.register(p, _ctx(), layer=BootLayer.BUNDLED)
+        self.assertIs(reg.boot_layer_of("discord-bridge"), BootLayer.BUNDLED)
 
     def test_self_declared_layer_is_bundled_without_an_explicit_argument(self):
         reg = PluginRegistry()
         reg.register(self._plugin(), _ctx())
-        self.assertIs(reg.layer_of("discord-bridge"), PluginLayer.BUNDLED)
+        self.assertIs(reg.boot_layer_of("discord-bridge"), BootLayer.BUNDLED)
 
     def test_a_bridge_is_disableable(self):
         reg = PluginRegistry()
         p = self._plugin()
-        reg.register(p, _ctx(), layer=PluginLayer.BUNDLED)
+        reg.register(p, _ctx(), layer=BootLayer.BUNDLED)
         self.assertTrue(reg.can_disable("discord-bridge"))
         reg.disable("discord-bridge")
         self.assertEqual(self.killpg.call_count, 1)
 
     def test_registry_health_check_reports_the_bridge(self):
         reg = PluginRegistry()
-        reg.register(self._plugin(), _ctx(), layer=PluginLayer.BUNDLED)
+        reg.register(self._plugin(), _ctx(), layer=BootLayer.BUNDLED)
         report = reg.health_check_all()
         self.assertIn("discord-bridge", report)
 
@@ -699,9 +699,9 @@ class TestRegistryIntegration(_SupervisorTestCase):
         for channel, cls in BRIDGE_PLUGIN_CLASSES.items():
             bm = FakeBridgeManager(self._root(), provisioned=False)
             reg.register(cls(bridge_manager=bm), _ctx(f"{channel}-bridge"),
-                         layer=PluginLayer.BUNDLED)
+                         layer=BootLayer.BUNDLED)
         self.assertEqual(
-            len(reg.plugins_by_layer(PluginLayer.BUNDLED)), len(BRIDGE_CHANNELS)
+            len(reg.plugins_by_boot_layer(BootLayer.BUNDLED)), len(BRIDGE_CHANNELS)
         )
 
 
@@ -763,7 +763,7 @@ class TestDeclarativeBoot(_SupervisorTestCase):
         self._flag = False  # no daemon; we are testing the wiring, not the spawn
         loaded = self._boot([declaration_entry("discord")])
         self.assertIn("discord-bridge", loaded)
-        self.assertIs(self.reg.layer_of("discord-bridge"), PluginLayer.BUNDLED)
+        self.assertIs(self.reg.boot_layer_of("discord-bridge"), BootLayer.BUNDLED)
         self.assertTrue(self.reg.can_disable("discord-bridge"))
         loaded_events = [d for e, d in self.audit if e == "plugin.loaded"]
         self.assertEqual(loaded_events[0]["layer"], "bundled")
@@ -793,7 +793,7 @@ class TestDeclarativeBoot(_SupervisorTestCase):
         entry = declaration_entry("discord")
         entry["layer"] = "compliance"
         self._boot([entry])
-        self.assertIs(self.reg.layer_of("discord-bridge"), PluginLayer.INSTALLED)
+        self.assertIs(self.reg.boot_layer_of("discord-bridge"), BootLayer.INSTALLED)
 
     def test_declared_bridge_starts_nothing_while_the_flag_is_off(self):
         self._flag = False
