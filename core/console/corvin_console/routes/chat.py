@@ -91,6 +91,51 @@ def _project(sess: chat_runtime.WebChatSession) -> dict[str, Any]:
         "has_workdir":     sess.workdir is not None,
     }
 
+
+def _filter_turns_by_execution_context(
+    turns: list[dict[str, Any]],
+    *,
+    engine_id: str | None = None,
+    delegation_mode: str | None = None,
+    model_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """Filter turns by execution context metadata (Phase 2c).
+
+    Only applies to turns that have execution_context (assistant/delegated turns).
+    Turns without execution_context are excluded when any filter is active.
+
+    Args:
+        turns: List of turn dicts (from read_turns).
+        engine_id: Filter by engine_id (e.g., "claude_code", "acs", "tde").
+        delegation_mode: Filter by delegation_mode (e.g., "native", "acs", "tde").
+        model_name: Filter by model_name (exact match, e.g., "claude-opus-5").
+
+    Returns:
+        Filtered list of turns that match all provided filters.
+    """
+    if not any([engine_id, delegation_mode, model_name]):
+        return turns
+
+    filtered = []
+    for turn in turns:
+        ctx = turn.get("execution_context")
+        if not ctx:
+            # Skip turns without execution context when filtering is active
+            continue
+
+        # All provided filters must match (AND logic)
+        if engine_id and ctx.get("engine_id") != engine_id:
+            continue
+        if delegation_mode and ctx.get("delegation_mode") != delegation_mode:
+            continue
+        if model_name and ctx.get("model_name") != model_name:
+            continue
+
+        filtered.append(turn)
+
+    return filtered
+
+
 @router.get("/chat/sessions")
 def list_chat_sessions(
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
@@ -161,11 +206,61 @@ def get_chat_turns(
     sid: str,
     rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
     limit: int = Query(default=200, ge=1, le=2000),
+    engine_id: str | None = Query(default=None),
+    delegation_mode: str | None = Query(default=None),
+    model_name: str | None = Query(default=None),
 ) -> dict[str, Any]:
     """Return the persisted message history for a chat session.
 
     Used by the SPA on session-open to re-hydrate the chat view, so a
     tab refresh / page reload does not lose the conversation.
+
+    **Response schema (Phase 2c — ExecutionContext Integration):**
+    Each turn may include optional execution_context metadata (assistant turns):
+
+    ```json
+    {
+      "sid": "...",
+      "count": 2,
+      "turns": [
+        {
+          "role": "user",
+          "ts": 1234567890.123,
+          "parts": [...]
+        },
+        {
+          "role": "assistant",
+          "ts": 1234567890.456,
+          "parts": [...],
+          "execution_context": {
+            "engine_id": "claude_code",
+            "model_source": "claude",
+            "model_name": "claude-3-5-sonnet",
+            "delegation_mode": "native",
+            "duration_ms": 1234,
+            "tokens_input": 150,
+            "tokens_output": 50,
+            "tool_calls_count": 0,
+            "started_at": "2026-07-26T14:32:15Z",
+            "completed_at": "2026-07-26T14:32:16.234Z",
+            "exit_code": 0
+          }
+        }
+      ]
+    }
+    ```
+
+    **Query parameters (Phase 2c — ExecutionContext Filtering):**
+    - `engine_id` (str, optional): Filter by engine (claude_code, acs, tde, hermes)
+    - `delegation_mode` (str, optional): Filter by delegation (native, acs, tde, fallback)
+    - `model_name` (str, optional): Filter by model name (exact match)
+
+    Example: `GET /chat/sessions/{sid}/turns?engine_id=acs&delegation_mode=acs`
+    returns only assistant turns that were delegated to ACS.
+
+    **Backward compatibility:**
+    Turns without execution_context (legacy/user turns) pass through
+    without the field. The schema remains optional at the client level.
     """
     # Make sure the caller owns the session (cheap, also gives 404).
     sess = chat_runtime.get_session(rec.tenant_id, sid)
@@ -176,6 +271,17 @@ def get_chat_turns(
     # the rehydrated bubble re-renders its <audio> player. Resolved at read time —
     # the audio is written after the turn is persisted, by design.
     turns = chat_runtime.attach_voice_artifacts(rec.tenant_id, sid, turns)
+
+    # Phase 2c: Filter by execution_context if query parameters provided.
+    # Only applies to turns with execution_context (assistant/delegated turns).
+    if engine_id or delegation_mode or model_name:
+        turns = _filter_turns_by_execution_context(
+            turns,
+            engine_id=engine_id,
+            delegation_mode=delegation_mode,
+            model_name=model_name,
+        )
+
     return {"sid": sid, "count": len(turns), "turns": turns}
 
 _SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
