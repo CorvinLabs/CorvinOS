@@ -16,6 +16,27 @@ from .protocol import (
 log = logging.getLogger(__name__)
 
 
+def _structured(plugin_id: str | None = None):
+    """A CorvinLogger when the observability package is present, else None.
+
+    Optional exactly like cowork/forge: the plugin registry must keep working in a
+    layout that ships without core/observability.
+    """
+    try:
+        import sys as _sys
+        from pathlib import Path as _Path
+
+        obs = _Path(__file__).resolve().parents[2] / "observability"
+        if obs.is_dir() and str(obs) not in _sys.path:
+            # append, not insert(0) — same shadowing reasoning as elsewhere.
+            _sys.path.append(str(obs))
+        from corvin_logging import get_logger  # type: ignore[import-not-found]
+
+        return get_logger("plugins", plugin_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class PluginRegistry:
     """Thread-safe registry for CorvinPlugin instances.
 
@@ -59,6 +80,12 @@ class PluginRegistry:
             "plugin loaded: id=%r type=%r version=%r tenant=%r",
             plugin.plugin_id, plugin.plugin_type, plugin.version, ctx.tenant_id,
         )
+        if (slog := _structured(plugin.plugin_id)) is not None:
+            slog.info(
+                "plugin loaded",
+                operation="on_load",
+                context={"plugin_type": plugin.plugin_type, "version": plugin.version},
+            )
         ctx.audit_emit("plugin.loaded", {
             "plugin_id": plugin.plugin_id,
             "plugin_type": plugin.plugin_type,
@@ -89,6 +116,8 @@ class PluginRegistry:
         _breakers.forget(plugin_id)
 
         log.info("plugin unloaded: id=%r", plugin_id)
+        if (slog := _structured(plugin_id)) is not None:
+            slog.info("plugin unloaded", operation="on_unload")
         if ctx is not None:
             ctx.audit_emit("plugin.unloaded", {
                 "plugin_id": plugin_id,
@@ -146,6 +175,14 @@ class PluginRegistry:
             except Exception as exc:  # noqa: BLE001
                 breaker.record_failure(exc)
                 log.warning("health_check failed for plugin %r: %s", pid, type(exc).__name__)
+                if (slog := _structured(pid)) is not None:
+                    slog.error(
+                        "health_check failed",
+                        operation="health_check",
+                        error=exc,
+                        recovered=False,
+                        context={"breaker": breaker.stats().to_dict()},
+                    )
                 ctx = self._contexts.get(pid)
                 if ctx is not None:
                     ctx.audit_emit("plugin.health_check_failed", {

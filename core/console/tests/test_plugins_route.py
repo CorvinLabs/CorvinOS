@@ -441,3 +441,67 @@ class TestFlowDeclarationsOverTheApi(_Base):
             )
             self.assertEqual(resp.status_code, 409, resp.text)
             self.assertIn("contradicts", resp.json()["detail"])
+
+
+class TestHealthAndMetrics(_Base):
+    """ADR-0231 Stage 2 surfaces, in both flag states."""
+
+    @contextmanager
+    def _live(self, monitoring: bool = False):
+        with _sandbox(Path(self._tmp)) as (client, csrf, home):
+            self._flag(client, csrf, "plugin_console_surface", True)
+            if monitoring:
+                self._flag(client, csrf, "plugin_health_monitoring", True)
+            yield client, csrf, home
+
+    def test_metrics_endpoint_serves_prometheus_text(self):
+        with self._live() as (client, _csrf, _home):
+            resp = client.get("/v1/console/plugins/metrics")
+            self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertIn("text/plain", resp.headers["content-type"])
+            self.assertIn("# TYPE corvin_plugin_health_ok gauge", resp.text)
+
+    def test_metrics_404s_while_the_surface_flag_is_off(self):
+        with _sandbox(Path(self._tmp)) as (client, _csrf, _home):
+            self.assertEqual(
+                client.get("/v1/console/plugins/metrics").status_code, 404
+            )
+
+    def test_health_reports_no_collector_when_monitoring_is_off(self):
+        with self._live(monitoring=False) as (client, _csrf, _home):
+            body = client.get("/v1/console/plugins/health").json()
+            self.assertFalse(body["monitoring_enabled"])
+            self.assertIn("breakers", body)
+
+    def test_health_with_monitoring_on_but_no_collector_falls_back(self):
+        """The flag alone must not make the route claim a collector it lacks."""
+        with self._live(monitoring=True) as (client, _csrf, _home):
+            body = client.get("/v1/console/plugins/health").json()
+            self.assertTrue(body["monitoring_enabled"])
+            self.assertNotIn("collector_running", body)
+
+    def test_health_serves_the_collector_snapshot_when_one_is_running(self):
+        import sys as _sys
+
+        with self._live(monitoring=True) as (client, _csrf, _home):
+            from corvin_console.routes import plugins as route_mod
+
+            class _FakeCollector:
+                running = True
+
+                def snapshot(self):
+                    class _Snap:
+                        @staticmethod
+                        def to_dict():
+                            return {"taken_at": 1.0, "plugins": {"p.ok": {"ok": True}}}
+
+                    return _Snap()
+
+            route_mod.set_collector(_FakeCollector())
+            try:
+                body = client.get("/v1/console/plugins/health").json()
+                self.assertTrue(body["collector_running"])
+                self.assertIn("p.ok", body["plugins"])
+            finally:
+                route_mod.set_collector(None)
+            del _sys
