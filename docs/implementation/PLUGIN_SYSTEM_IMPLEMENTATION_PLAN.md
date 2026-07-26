@@ -14,7 +14,7 @@
 | 1 Additive backends | ✅ done | `AuditBackend`/`UserBackend` protocols, passthrough providers, 2 templates, boot tripwire, 33 tests incl. hostile-backend chain verification |
 | 2 Fault isolation | ✅ done | `circuit_breaker.py`, breaker state in `health_check_all()`, `plugin_health_monitoring` flag, 31 tests |
 | 3 Runtime lifecycle | ✅ done | `state.py` per-tenant registry (atomic, 0600, fail-closed) + real chained audit events, `plugin_runtime_lifecycle` flag, 45 tests |
-| 4 Console surface | ✅ done | `routes/plugins.py`, `/app/plugins` page, `JsonSchemaForm`, `plugin_console_surface` flag, 17 route tests + 9 E2E specs (specs need a live console to run) |
+| 4 Console surface | ✅ done | `routes/plugins.py`, `/app/plugins` page, `JsonSchemaForm`, `plugin_console_surface` flag, 17 route tests + **9/9 Playwright specs green** |
 | 5 Distribution | ⛔ not started | blocked on the D7 tier-vocabulary rename and its own ADR, by design |
 | **Refutation round** | ✅ done | found two DEAD mechanisms in the phases above — the tripwire was never called and `PluginContext` was never built — plus a PII leak in `health_check_all` and a breaker-as-auth-DoS. All fixed; `bootstrap.py` + 18 tests added. See ADR-0233 § Findings from the adversarial pass. |
 
@@ -24,11 +24,20 @@ audit/chain tests still green; 223 gateway tests green (the 3 failures there are
 pre-existing — verified against a clean `git worktree` at HEAD, not caused by the
 lifespan wiring); `tsc --noEmit` clean; `npm run build` succeeds.
 
-**Not executed:** the 9 Playwright specs in `tests/e2e/plugins.spec.ts` are
-type-checked only — they need a running console with auth state. The full
-`operator/bridges/run-all-tests.sh` also did not complete inside a 15-minute
-budget; instead the three adapter tests plus 106 forge audit/chain tests were run
-directly to cover the `audit.py` fan-out change.
+**Playwright:** 9/9 green. Getting there required fixing `playwright.config.ts`,
+which could not start its managed dev server at all: `webServer.url` probed
+`http://localhost:3000` while `vite.config.ts` serves on **5173** under the
+`/console/` base path, so every run without an externally started server died on
+"Timed out waiting 60000ms from config.webServer". Both are now derived from
+`CONSOLE_BASE_URL` with the correct default. The spec mocks auth and
+`/setup/status` (SetupGate renders a `fixed inset-0 z-50` overlay that swallows
+every click while setup is incomplete), so it runs against the dev server alone —
+no gateway, no session, no fixture data.
+
+**Still not executed:** `operator/bridges/run-all-tests.sh` — it exceeded a
+15-minute budget twice and buffers all output until exit. The `audit.py` fan-out
+change is covered instead by three adapter tests plus 106 forge audit/chain tests
+run directly.
 
 ---
 
