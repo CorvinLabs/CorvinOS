@@ -119,11 +119,53 @@ def audit_writer_reachable() -> TripwireResult:
     return TripwireResult(name, True, str(path.parent))
 
 
+#: How much of the tail must verify for the WRITER to count as sound right now.
+#: The chain is append-only, so a historical break never repairs itself: gating boot
+#: on the whole file means a platform that is permanently unbootable, and the only
+#: way an operator gets it back is deleting or truncating the audit log — destroying
+#: evidence, which is strictly worse for GDPR Art. 30 than a documented seam.
+TAIL_RECORDS = 200
+
+#: Cache: verifying 108k records costs ~0.9 s, and two tripwires read the result.
+_verify_cache: dict = {}
+
+
+def _verify_chain(path: Path):
+    """``(ok, problems, total_records)`` for the core chain, verified once per file
+    state.  Uses the canonical ``verify_audit`` — a tail-only re-implementation
+    would duplicate the MAC primitive, and a second copy of a compliance primitive
+    is a second thing that can drift."""
+    audit = _audit_module()
+    stat = path.stat()
+    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    if key in _verify_cache:
+        return _verify_cache[key]
+    ok, problems = audit.verify_audit(path)
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        total = sum(1 for _ in fh)
+    result = (ok, problems, total)
+    _verify_cache.clear()
+    _verify_cache[key] = result
+    return result
+
+
 def audit_chain_intact() -> TripwireResult:
-    """The existing core chain must verify.
+    """BLOCKING: the audit writer must be sound RIGHT NOW.
 
     An absent or empty chain passes — a fresh install has nothing to verify yet.
-    A chain with broken or tampered links fails the boot.
+
+    This deliberately asks "does the mechanism work now", not "has it ever been
+    broken", and the distinction is load-bearing. It was written as a full-file
+    verify, which on the maintainer's own machine turned a KNOWN, historical
+    key-mismatch window (380 records, ~77 000 records ago) into a platform that
+    refuses to boot at all — i.e. a compliance hardening that STOPS the audit trail
+    it exists to protect. A break in an append-only file cannot be repaired, so
+    that state is permanent.
+
+    Historical breakage is not silenced: :func:`audit_chain_history_clean` reports
+    it, ``assert_all`` writes it into the chain on every boot, and
+    ``voice-audit verify`` still exits 1. What changes is only whether it takes the
+    platform down. There is no env var or flag on either check.
     """
     name = "audit_chain_intact"
     audit = _audit_module()
@@ -139,13 +181,59 @@ def audit_chain_intact() -> TripwireResult:
         return TripwireResult(name, True, "no chain yet (fresh install)")
 
     try:
-        ok, problems = audit.verify_audit(path)
+        ok, problems, total = _verify_chain(path)
     except Exception as exc:  # noqa: BLE001
         return TripwireResult(name, False, f"verify raised {type(exc).__name__}")
 
-    if not ok:
-        return TripwireResult(name, False, f"{len(problems)} broken record(s)")
-    return TripwireResult(name, True, "chain verifies")
+    if ok:
+        return TripwireResult(name, True, "chain verifies")
+
+    tail_start = max(1, total - TAIL_RECORDS + 1)
+    recent = [pr for pr in problems if int(pr.get("line", 0)) >= tail_start]
+    if recent:
+        # The writer is producing records that do not chain. Every event from here
+        # on is worthless as evidence — refuse to serve.
+        return TripwireResult(
+            name, False,
+            f"{len(recent)} broken record(s) in the last {TAIL_RECORDS} — "
+            "the audit writer is not sound",
+        )
+    return TripwireResult(
+        name, True,
+        f"last {TAIL_RECORDS} records verify (chain has "
+        f"{len(problems)} historical break(s) — see audit_chain_history_clean)",
+    )
+
+
+def audit_chain_history_clean() -> TripwireResult:
+    """REPORTING (never blocks boot): the whole chain must verify.
+
+    A failure here is a permanent, unrepairable fact about the file. It is recorded
+    into the chain by :func:`assert_all` on every boot, surfaced in the compliance
+    report, and left as a non-zero exit in ``voice-audit verify``. It does not abort
+    the boot, because refusing to boot neither repairs the past nor records the
+    present — it only ends the trail.
+    """
+    name = "audit_chain_history_clean"
+    audit = _audit_module()
+    if audit is None:
+        return TripwireResult(name, False, "audit module not importable")
+    try:
+        path = Path(audit.audit_path())
+        if not path.exists() or path.stat().st_size == 0:
+            return TripwireResult(name, True, "no chain yet (fresh install)")
+        ok, problems, total = _verify_chain(path)
+    except Exception as exc:  # noqa: BLE001
+        return TripwireResult(name, False, f"verify raised {type(exc).__name__}")
+
+    if ok:
+        return TripwireResult(name, True, f"all {total} records verify")
+    lines = sorted(int(pr.get("line", 0)) for pr in problems)
+    return TripwireResult(
+        name, False,
+        f"{len(problems)} broken record(s) at lines {lines[0]}..{lines[-1]} "
+        f"of {total} — permanent, append-only",
+    )
 
 
 def core_audit_owns_the_trail() -> TripwireResult:
@@ -312,10 +400,15 @@ def erasure_orchestrator_present() -> TripwireResult:
 
 #: Every tripwire the boot sequence runs, in order.  One per mandatory mechanism
 #: of ADR-0232 § Mandatory, plus the two audit-specific ones.
+#: Reporting-only tripwires: a failure is recorded and surfaced, never fatal.
+#: These describe a permanent historical fact that refusing to boot cannot change.
+REPORTING_ONLY: frozenset = frozenset({"audit_chain_history_clean"})
+
 TRIPWIRES: tuple[Callable[[], TripwireResult], ...] = (
     # L16 Audit trail
     audit_writer_reachable,
     audit_chain_intact,
+    audit_chain_history_clean,
     core_audit_owns_the_trail,
     # L18 Consent gate
     consent_gate_denies_by_default,
@@ -349,11 +442,40 @@ def assert_all() -> List[TripwireResult]:
     """
     results = check_all()
     failed = [r for r in results if not r.ok]
-    if not failed:
+
+    # Reporting-only failures are recorded, loudly, and do not abort. Recording
+    # happens BEFORE the blocking check raises, so a boot that is about to be
+    # refused still leaves the discontinuity on the record.
+    reported = [r for r in failed if r.name in REPORTING_ONLY]
+    for r in reported:
+        _log.critical("COMPLIANCE FINDING (non-fatal, permanent): %s: %s", r.name, r.detail)
+        _record_finding(r)
+
+    fatal = [r for r in failed if r.name not in REPORTING_ONLY]
+    if not fatal:
         return results
 
-    summary = "; ".join(f"{r.name}: {r.detail}" for r in failed)
+    summary = "; ".join(f"{r.name}: {r.detail}" for r in fatal)
     _log.critical("COMPLIANCE TRIPWIRE FAILED — refusing to boot: %s", summary)
     raise TripwireError(
         f"mandatory compliance mechanism unavailable — refusing to boot ({summary})"
     )
+
+
+def _record_finding(result: TripwireResult) -> None:
+    """Write a non-fatal compliance finding INTO the chain.
+
+    Every boot re-records it, so the finding cannot be forgotten by ignoring a log
+    file. Detail text is generated here (counts and line numbers only), never from
+    user data.
+    """
+    audit = _audit_module()
+    if audit is None:
+        return
+    try:
+        audit.audit_event(
+            "compliance.chain_discontinuity",
+            details={"tripwire": result.name, "detail": result.detail},
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log.error("could not record compliance finding (%s)", type(exc).__name__)

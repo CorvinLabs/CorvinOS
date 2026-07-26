@@ -93,6 +93,26 @@ def build_context(
     )
 
 
+def _audit_degradation(
+    tenant_id: str, event_type: str, details: dict
+) -> None:
+    """Record a plugin subsystem degradation in the hash-chained core trail.
+
+    Every failure path here logs and continues — correct for core stability, but
+    for one commit a log line was the ONLY trace. There is a ``plugin.loaded``
+    event on success and, before this, no counterpart on failure: an operator who
+    declared an audit_backend that ships copies to a SIEM got a booting platform, a
+    working core chain, a dead SIEM stream, and an audit trail in which "never
+    configured" and "silently died at boot" look exactly the same.
+
+    Exception CLASS only, never str(exc) — a loader error routinely carries a path.
+    """
+    try:
+        _default_audit_emit(tenant_id)(event_type, details)
+    except Exception:  # noqa: BLE001 - visibility must not become a boot failure
+        log.debug("degradation audit for %s could not be written", event_type)
+
+
 def _tripwire_module():
     """Import the tripwire module, extending sys.path like audit.py does.
 
@@ -195,6 +215,10 @@ def load_tenant_spec(tenant_id: str, corvin_home: Path) -> dict:
             tenant_id,
             type(exc).__name__,
         )
+        _audit_degradation(tenant_id, "plugin.config_unreadable", {
+            "tenant_id": tenant_id,
+            "error_type": type(exc).__name__,
+        })
         return {}
 
 
@@ -229,13 +253,33 @@ def bootstrap_declared(
     from .loader import discover_and_load
 
     try:
-        instances = discover_and_load(config, corvin_home=corvin_home)
+        instances = discover_and_load(
+            config,
+            corvin_home=corvin_home,
+            # The loader skips a bad entry per plugin, which is where a typo'd
+            # class_path actually dies. Without this hook that failure left no
+            # trace in the audit chain at all.
+            on_error=lambda pid, reason, error_type: _audit_degradation(
+                tenant_id,
+                "plugin.load_failed",
+                {
+                    "plugin_id": pid,
+                    "tenant_id": tenant_id,
+                    "reason": reason,
+                    "error_type": error_type,
+                },
+            ),
+        )
     except Exception as exc:  # noqa: BLE001 — a bad config must not stop the boot
         log.error(
             "declared-plugin discovery failed for %r (%s)",
             tenant_id,
             type(exc).__name__,
         )
+        _audit_degradation(tenant_id, "plugin.discovery_failed", {
+            "tenant_id": tenant_id,
+            "error_type": type(exc).__name__,
+        })
         return []
 
     loaded: list[str] = []
@@ -243,6 +287,10 @@ def bootstrap_declared(
         plugin_id = getattr(instance, "plugin_id", "")
         if not plugin_id:
             log.error("declared plugin %r has no plugin_id — skipping", type(instance).__name__)
+            _audit_degradation(tenant_id, "plugin.load_failed", {
+                "plugin_id": "", "tenant_id": tenant_id,
+                "reason": "no_plugin_id", "class_name": type(instance).__name__,
+            })
             continue
         # Per-plugin config from the declaration, so a declared plugin gets its
         # settings without a registry entry.
@@ -306,6 +354,12 @@ def bootstrap_tenant(
             tenant_id,
             type(exc).__name__,
         )
+        # The single most consequential degradation: EVERY runtime plugin is now
+        # absent, including any audit or notification backend the operator relies on.
+        _audit_degradation(tenant_id, "plugin.registry_unusable", {
+            "tenant_id": tenant_id,
+            "error_type": type(exc).__name__,
+        })
         return []
 
     loaded: list[str] = []
@@ -360,6 +414,10 @@ def _register_instance(
             plugin_id,
             type(exc).__name__,
         )
+        _audit_degradation(tenant_id, "plugin.load_failed", {
+            "plugin_id": plugin_id, "tenant_id": tenant_id,
+            "reason": "register_failed", "error_type": type(exc).__name__,
+        })
         return False
     return True
 
@@ -415,6 +473,10 @@ def _load_one(
 
     if not record.class_path:
         log.error("plugin %r has no class_path — skipping", record.plugin_id)
+        _audit_degradation(tenant_id, "plugin.load_failed", {
+            "plugin_id": record.plugin_id, "tenant_id": tenant_id,
+            "reason": "no_class_path",
+        })
         return False
 
     # Idempotence: enable() now hot-loads (ADR-0124 Inv. 6), so by the time a boot
@@ -436,6 +498,10 @@ def _load_one(
             record.plugin_id,
             type(exc).__name__,
         )
+        _audit_degradation(tenant_id, "plugin.load_failed", {
+            "plugin_id": record.plugin_id, "tenant_id": tenant_id,
+            "reason": "instantiate_failed", "error_type": type(exc).__name__,
+        })
         return False
 
     return _register_instance(
