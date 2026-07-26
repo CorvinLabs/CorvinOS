@@ -100,6 +100,15 @@ _ALLOWED_FIELDS: dict[str, frozenset[str]] = {
     "agent.session_start_blocked": frozenset({
         "agent_id", "reason", "tenant_id", "sid_fingerprint",
     }),
+    # Phase 2b — L16 Audit Chain Integration (ADR-0248)
+    "console.execution_context": frozenset({
+        "turn_id", "session_id", "tenant_id",
+        "engine_id", "model_source", "model_name",
+        "delegation_mode", "acs_run_id", "tde_router_decision",
+        "duration_ms", "tokens_input", "tokens_output",
+        "tool_calls_count", "started_at", "completed_at", "exit_code",
+        "turn_number",  # optional: turn index in session
+    }),
 }
 
 
@@ -301,4 +310,87 @@ def session_denied(
         tenant_id=tenant_id,
         details=details,
         severity="WARNING",
+    )
+
+
+def execution_context(
+    *,
+    turn_id: str,
+    session_id: str,
+    tenant_id: str,
+    engine_id: str,
+    model_source: str,
+    model_name: str,
+    delegation_mode: str,
+    duration_ms: int,
+    exit_code: int,
+    acs_run_id: str | None = None,
+    tde_router_decision: str | None = None,
+    tokens_input: int | None = None,
+    tokens_output: int | None = None,
+    tool_calls_count: int = 0,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+    turn_number: int = -1,
+) -> None:
+    """Emit execution context for every turn — L16 compliance (ADR-0248).
+
+    Captures engine, model, delegation, and performance metadata for every OS
+    turn across all engines (Claude Code, ACS, TDE, Hermes). Used for:
+      - Performance analytics (avg duration per engine/model)
+      - Audit trail (who used which engine/model)
+      - Cost estimation (tokens × model pricing)
+      - Debugging (failures tagged with engine/exit_code)
+
+    Args:
+        turn_id: Unique turn identifier (uuid or turn_key)
+        session_id: Chat session identifier (sid or chat_key)
+        tenant_id: Tenant ID for audit correlation
+        engine_id: Engine used (claude_code | acs | tde | hermes)
+        model_source: Model source (claude | ollama | openrouter | hermes)
+        model_name: Normalized model name (e.g. "claude-3-5-sonnet")
+        delegation_mode: How turn was delegated (native | acs | tde | fallback)
+        duration_ms: Wall-clock milliseconds from start to completion
+        exit_code: 0 (success) or non-zero (error)
+        acs_run_id: ACS run UUID if delegated to ACS
+        tde_router_decision: TDE router decision log if TDE used
+        tokens_input: Input tokens consumed (if available)
+        tokens_output: Output tokens produced (if available)
+        tool_calls_count: Number of tool invocations
+        started_at: RFC 3339 timestamp when turn started
+        completed_at: RFC 3339 timestamp when turn completed
+        turn_number: 0-indexed turn number in session
+    """
+    details: dict[str, Any] = {
+        "turn_id":           turn_id,
+        "session_id":        session_id,
+        "tenant_id":         tenant_id,
+        "engine_id":         engine_id,
+        "model_source":      model_source,
+        "model_name":        model_name,
+        "delegation_mode":   delegation_mode,
+        "duration_ms":       duration_ms,
+        "exit_code":         exit_code,
+        "tool_calls_count":  tool_calls_count,
+    }
+    if acs_run_id is not None:
+        details["acs_run_id"] = acs_run_id
+    if tde_router_decision is not None:
+        details["tde_router_decision"] = tde_router_decision
+    if tokens_input is not None:
+        details["tokens_input"] = tokens_input
+    if tokens_output is not None:
+        details["tokens_output"] = tokens_output
+    if started_at is not None:
+        details["started_at"] = started_at
+    if completed_at is not None:
+        details["completed_at"] = completed_at
+    if turn_number >= 0:
+        details["turn_number"] = turn_number
+
+    _emit(
+        "console.execution_context",
+        tenant_id=tenant_id,
+        details=details,
+        severity="INFO",
     )
