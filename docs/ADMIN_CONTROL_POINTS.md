@@ -2,14 +2,23 @@
 
 **What an admin can and cannot do, and the API that does it.**
 
-**Date:** 2026-07-26
+**Date:** 2026-07-27
 **Audience:** Operators, enterprise admins, anyone driving CorvinOS without the SPA
 **ADRs** (sibling repo `Corvin-ADR/decisions/`):
 `0239-admin-api-vs-web-ui.md` (admin API vs. web UI),
-`0243-core-vs-plugins-architecture.md` (the `layer` axis),
+`0243-core-vs-plugins-architecture.md` (the `boot_layer` axis),
 `0233-plugin-system-consolidation.md` (plugin lifecycle)
 **Code:** `core/console/corvin_console/routes/admin.py` ·
-**Tests:** `core/console/tests/test_admin_route.py`
+**Tests:** `core/console/tests/test_admin_route.py` — **24 passing**, measured 2026-07-27
+
+> **Every plugin id in the examples below is hypothetical.** `audit-writer`,
+> `acme-notify` and `discord-bridge` do **not** exist as loaded plugins on any install
+> today. In particular **no plugin anywhere is on `boot_layer: compliance` or
+> `boot_layer: core`** — `_GLOBAL_SPECS` is empty and `register_global_plugin()` has no
+> production caller, so `bootstrap_global()` returns `[]` everywhere. The compliance
+> refusals documented here are implemented and tested; they have never fired, because
+> there is nothing on that boot layer to refuse. Guard tests in
+> `core/plugins/tests/test_layered_boot.py` fail the day that changes.
 
 ---
 
@@ -30,18 +39,28 @@ in `tenant.corvin.yaml`.
 
 ---
 
-## Vocabulary: `layer`, not "tier"
+## Vocabulary: `boot_layer` — not "tier", and not "layer"
 
-This document talks about **layers** (ADR-0243). The word "tier" is reserved
+This document talks about **boot layers** (ADR-0243). The word "tier" is reserved
 repo-wide for ADR-0156's capability/licensing boundary (Tier A/B/C) and is *not*
 reused here; provenance is a third, separate field (`origin`).
 
-| `layer` | What it is | Disableable? |
-|---|---|---|
-| `compliance` | GDPR / EU AI Act mechanisms — audit writer, consent gate, path gate, house rules, flow guard | **Never.** Structural, not configurable |
-| `core` | Bundled reference implementation of an extension point | Yes; also *replaceable* by a plugin declaring `replaces:` |
-| `bundled` | Ships with CorvinOS, opt-out per tenant (bridges, UI) | Yes |
-| `installed` | Operator-installed third party | Yes |
+The axis was briefly called `layer`, which collided just as badly: "layer" already meant
+the L1–L44 stack, ADR-0124 audit layers (`routes/audit_layers.py`), the ADR-0142
+layer-extension API (403 `core_layer_immutable`, `routes/extensions.py`) and quality
+layers (`routes/quality_layers.py`). Hence `boot_layer`, enum `BootLayer`, and the API
+names `boot_layer_of()` / `plugins_by_boot_layer()` / `by_boot_layer`.
+
+| `boot_layer` | What it is | Disableable? | Instances today |
+|---|---|---|---|
+| `compliance` | GDPR / EU AI Act mechanisms — audit writer, consent gate, path gate, house rules, flow guard | **Never.** Structural, not configurable | **0** |
+| `core` | Bundled reference implementation of an extension point | Yes; also *replaceable* by a plugin declaring `replaces:` | **0** — which makes `replace()` unreachable |
+| `bundled` | Ships with CorvinOS, opt-out per tenant (bridges, UI) | Yes | **0 declared** — the bridge supervisor classes exist but nothing declares them |
+| `installed` | Operator-installed third party | Yes | whatever the operator installed |
+
+The "instances today" column is why the compliance rows below describe a *mechanism*
+rather than an *observed behaviour*: they are implemented, tested and correct, and no
+request has ever hit them on a real install.
 
 | `origin` | Meaning |
 |---|---|
@@ -78,8 +97,8 @@ If an admin could switch the audit writer off, the compliance guarantees collaps
 (GDPR Art. 30/32, EU AI Act Art. 50). The refusal therefore lives in the registry,
 not in a policy file:
 
-* `PluginRecord.can_disable()` is `False` for `layer=compliance`;
-* `PluginRegistry.can_disable()` is `False` for a plugin registered on that layer;
+* `PluginRecord.can_disable()` is `False` for `boot_layer=compliance`;
+* `PluginRegistry.can_disable()` is `False` for a plugin registered on that boot layer;
 * `PluginRegistry.disable()` — the operator-initiated entry point — raises
   `PluginDisableRefused`, and the admin route maps that to 403;
 * the admin route **never calls `PluginRegistry.unregister()`**, which is the
@@ -88,8 +107,8 @@ not in a policy file:
 * the boot tripwire (ADR-0232/0233) re-asserts at every start that the core audit
   writer is reachable and its chain verifies. **No override — no env var, no flag.**
 
-The admin plane checks the layer **twice**, and the two checks are a fail-closed
-conjunction: if the on-disk record and the loaded object disagree about the layer,
+The admin plane checks the boot layer **twice**, and the two checks are a fail-closed
+conjunction: if the on-disk record and the loaded object disagree about it,
 the stricter answer wins. A disagreement can never widen permissions.
 
 ---
@@ -126,7 +145,7 @@ Two sources are merged, because neither is complete on its own:
 1. **`<corvin_home>/tenants/<tid>/plugins/registry.yaml`** — the operator's
    declared state for this tenant (install / enable / settings).
 2. **The in-process plugin registry** — what is actually running, with the
-   authoritative `layer` of the loaded object.
+   authoritative `boot_layer` of the loaded object.
 
 `compliance`, `core` and `bundled` plugins are loaded by the boot path and
 typically have **no** registry record. A registry-only view would answer 404 for
@@ -134,7 +153,7 @@ exactly the plugin whose disable must be refused with 403, which would leave the
 compliance guard unreachable. Each entry therefore reports `source`:
 `registry` | `runtime` | `both`.
 
-An `installed`-layer plugin that is loaded in the process but has no record in
+An `installed`-boot-layer plugin that is loaded in the process but has no record in
 *this* tenant belongs to another tenant and is **not** listed — the in-process
 registry is global, the admin plane is not.
 
@@ -148,6 +167,12 @@ router at `/v1/console`, so in a default install the effective path is
 `corvin_console.app.router` at the root serves `/api/admin/*` verbatim. The
 examples below use the default install.
 
+**The six routes are exactly:** `GET .../plugins`, `GET .../plugins/{id}`,
+`POST .../plugins/{id}/enable`, `POST .../plugins/{id}/disable`, **`PUT`**
+`.../plugins/{id}/config` and `GET .../health`. Note the two shapes that are easy to
+guess wrong: config is a **PUT**, and health is a **single aggregated route** — there is
+no `GET /api/admin/plugins/{id}/health`.
+
 ### `GET /api/admin/plugins`
 
 List every plugin this tenant administers.
@@ -157,6 +182,10 @@ GET /v1/console/api/admin/plugins
 Cookie: corvin_console_sid=…
 ```
 
+**Hypothetical response** — `audit-writer` and `acme-notify` are illustrations, not
+plugins that exist. On a real install today this list is empty unless the operator
+installed something, and it can never contain a `compliance` or `core` entry.
+
 ```json
 {
   "plugins": [
@@ -165,7 +194,7 @@ Cookie: corvin_console_sid=…
       "version": "1.0.0",
       "display_name": "Audit Writer",
       "plugin_type": "audit_backend",
-      "layer": "compliance",
+      "boot_layer": "compliance",
       "origin": null,
       "enabled": true,
       "runtime_loaded": true,
@@ -178,7 +207,7 @@ Cookie: corvin_console_sid=…
       "version": "1.0.0",
       "display_name": "Acme Notify",
       "plugin_type": "notification_backend",
-      "layer": "installed",
+      "boot_layer": "installed",
       "origin": "vetted",
       "enabled": false,
       "runtime_loaded": false,
@@ -195,6 +224,10 @@ Cookie: corvin_console_sid=…
 
 Field notes:
 
+* **There is no `tier` field, deliberately.** `tier` is ADR-0156's capability/licensing
+  boundary, not a lifecycle property; carrying it in a lifecycle response is exactly the
+  conflation the `boot_layer` naming exists to prevent. Earlier drafts of this document
+  and of the phase plan listed `tier` in this payload. It is not there.
 * `origin` is `null` for a runtime-only plugin — provenance is genuinely unknown
   then, and reporting `builtin` would be a claim the surface cannot support.
 * `enabled` is the record's flag, or "it is running" when there is no record.
@@ -242,7 +275,7 @@ POST /v1/console/api/admin/plugins/acme-notify/disable
 X-CSRF-Token: …
 ```
 
-On a `compliance` plugin:
+On a `compliance` plugin — **hypothetically**, since none exists yet:
 
 ```json
 HTTP/1.1 403 Forbidden
@@ -254,6 +287,11 @@ HTTP/1.1 403 Forbidden
 The plugin stays loaded and stays enabled, and a `console.action_denied` event
 with `reason: "compliance-layer"` is written to the audit chain. **403 means
 refused — never 200 with a silent no-op.**
+
+(The wording of both the detail string and the `reason` slug is quoted verbatim from
+`routes/admin.py`; the slug stayed `compliance-layer` through the `boot_layer` rename,
+because an audit chain is append-only and the vocabulary of already-written events cannot
+be revised.)
 
 Other outcomes: still-enabled dependents → **409**; unknown plugin → **404**;
 `plugin_runtime_lifecycle` off → **409**.
@@ -291,11 +329,18 @@ it quotes the value and omits the key — so the route reads `json_path` and
 `validator` off the chained error instead. The constraint that *is* quoted comes
 from the plugin's schema, not from the request.)
 
-Other outcomes: `layer=compliance` → **403** + `console.action_denied` (its
+Other outcomes: `boot_layer=compliance` → **403** + `console.action_denied` (its
 configuration is immutable); plugin has no registry record → **409**; unknown
 plugin → **404**; `plugin_runtime_lifecycle` off → **409**.
 
 ### `GET /api/admin/health`
+
+**One aggregated route for the whole tenant.** There is no per-plugin health endpoint —
+earlier drafts listed `GET /api/admin/plugins/{id}/health`; it does not exist. Per-plugin
+health is the `plugins` map in this response, and the `health` field of the list/detail
+views.
+
+**Hypothetical response** (same two illustrative plugins as above):
 
 ```json
 {
@@ -305,15 +350,15 @@ plugin → **404**; `plugin_runtime_lifecycle` off → **409**.
   "healthy": 1,
   "unhealthy": 0,
   "unchecked": 1,
-  "by_layer": {"compliance": 1, "installed": 1},
+  "by_boot_layer": {"compliance": 1, "installed": 1},
   "plugins": {
     "audit-writer": {
       "checked": true, "ok": true, "message": "",
-      "layer": "compliance", "runtime_loaded": true, "can_disable": false
+      "boot_layer": "compliance", "runtime_loaded": true, "can_disable": false
     },
     "acme-notify": {
       "checked": false, "ok": null, "message": "",
-      "layer": "installed", "runtime_loaded": false, "can_disable": true
+      "boot_layer": "installed", "runtime_loaded": false, "can_disable": true
     }
   }
 }
@@ -335,7 +380,7 @@ affordable because the whole surface sits behind an operator-enabled flag.
 | Status | Means | Examples |
 |---|---|---|
 | **401 / 403** | Not authenticated / no valid CSRF token | missing session cookie, missing `X-CSRF-Token` |
-| **403** | Refused by the compliance layer | disable or config on `layer=compliance` |
+| **403** | Refused by the compliance layer | disable or config on `boot_layer=compliance` |
 | **404** | The route does not exist for you, or the plugin does not | `admin_control_plane` off; unknown `plugin_id` |
 | **409** | Authorised, but the installation is not in a state that accepts this | `plugin_runtime_lifecycle` off; consent missing; undeclared egress; enabled dependents; no registry record |
 | **422** | Unprocessable input | settings violate the schema; unknown body field (including a smuggled `tenant_id`) |
@@ -399,7 +444,19 @@ Plugins extend a `core` reference implementation through the extension-point bus
 mechanisms — a plugin declares them; there is no HTTP endpoint that registers a
 hook, and the admin plane does not expose one.
 
-What extension can never reach, in any layer:
+**Neither mechanism has any reach today**, and the admin plane inherits that:
+
+* the bus defines four points and **no call site calls `invoke()`** — a registered hook is
+  inert no matter how the flag is set, which
+  `test_extension_points.py::test_no_call_site_is_wired_yet` keeps pinned;
+* `replaces:` / `PluginRegistry.replace()` requires a target on the `core` boot layer, and
+  **no plugin is on it**, so the call is structurally unreachable.
+
+`EXTENSIBLE_CORE_PLUGINS.md` §4 carries the same statement; this section previously
+described the bus as working and omitted it. The eight **provider registries** (§3 there)
+are the part that genuinely is live — they predate the bus and are not reached through it.
+
+What extension can never reach, on any boot layer:
 
 * the audit hash-chain and what gets written to it,
 * the consent gate's deny-by-default answer,
@@ -407,13 +464,18 @@ What extension can never reach, in any layer:
 * the L34 flow guard and the L35 egress allowlist,
 * the licensing gate.
 
-`layer=compliance` is not replaceable at all: `PluginRecord.__post_init__`
-refuses a record that declares both `layer: compliance` and `replaces:`, and
-`PluginRegistry.replace()` refuses any target that is not on the `core` layer.
+`boot_layer=compliance` is not replaceable at all: `PluginRecord.__post_init__`
+refuses a record that declares both `boot_layer: compliance` and `replaces:`, and
+`PluginRegistry.replace()` refuses any target that is not on the `core` boot layer.
 
 ---
 
 ## Scenario: emergency maintenance
+
+**Hypothetical.** A `discord-bridge` plugin would only be listed here if the operator had
+written its declaration into `spec.plugins.installed` — nothing ships one, so on a stock
+install this call answers **404**. The scenario shows the shape once a bridge supervisor
+is actually declared.
 
 The Discord bridge is failing and must be stopped now.
 
@@ -425,8 +487,10 @@ curl -s -X POST "$BASE/api/admin/plugins/discord-bridge/disable" \
 ```
 
 What is still true afterwards: the audit writer still writes, consent is still
-enforced, the house-rules gate still runs. Those are on the `compliance` layer
-and the same call against them would have answered 403.
+enforced, the house-rules gate still runs. Those mechanisms are enforced by the boot
+tripwire and their own call sites — **not** by plugins on the `compliance` boot layer,
+which has no instances. Had they been plugins there, the same call against them would
+have answered 403.
 
 Re-enable when the maintenance is done:
 
@@ -439,14 +503,22 @@ curl -s -X POST "$BASE/api/admin/plugins/discord-bridge/enable" \
 
 ## Summary
 
-**An admin is empowered to** see every plugin and its layer, understand *why*
+**An admin is empowered to** see every plugin and its `boot_layer`, understand *why*
 something is mandatory, configure and enable/disable everything outside the
-compliance layer, and do all of it without the SPA.
+compliance boot layer, and do all of it without the SPA.
 
 **An admin is prevented from** disabling *or reconfiguring* a compliance
-mechanism, reaching past the layer guard through the machinery unload path,
+mechanism, reaching past the boot-layer guard through the machinery unload path,
 moving the target tenant with a parameter, or getting a settings value into the
 audit chain.
 
 That split is the whole design: operators stay in control of their installation,
 and the compliance guarantees stay structural rather than discretionary.
+
+**Honest scope:** the six routes are implemented and covered by 24 passing tests
+(2026-07-27). The compliance half of that split is a *mechanism with no instances* — no
+plugin is on the `compliance` or `core` boot layer, so no admin request has ever been
+refused by it. The guarantees named above are today enforced where they always were: the
+boot tripwire and the mechanisms' own call sites. The refusals here are what will hold the
+line once compliance plugins exist, and `test_layered_boot.py` fails the day the first one
+does, forcing this paragraph to be rewritten in the same commit.

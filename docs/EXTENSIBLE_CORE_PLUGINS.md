@@ -1,23 +1,35 @@
 # Extensible Core Plugins
 
+**Date:** 2026-07-27
 **Status:** Phase 3 of ADR-0242 — the extension-point bus exists, is tested, and
 is **not yet wired into any call site**. Read the "Reach today" boxes before
 planning against it.
-**ADRs:** ADR-0237 (extensible core plugins) · ADR-0243 (the `layer` axis) ·
+
+**ADRs:** ADR-0237 (extensible core plugins) · ADR-0243 (the `boot_layer` axis) ·
 ADR-0233 / ADR-0033 (the provider registries) · ADR-0181 (provider + model
 selection).
 **Code:** `core/plugins/corvin_plugins/` — `extension_points.py`, `registry.py`,
 `manifest.py`, `providers/`.
 
+The same qualifier applies to the *other* mechanism in this document:
+**`registry.replace()` is structurally unreachable.** It accepts only a target on the
+`core` boot layer, and no plugin anywhere is on it — `_GLOBAL_SPECS` is empty and
+`register_global_plugin()` has no production caller, so `bootstrap_global()` returns `[]`
+on every install. §2a therefore describes a tested mechanism with no legal input, pinned
+by `core/plugins/tests/test_layered_boot.py::TestTheTopOfTheAxisHasNoProductionInstance`.
+
+What *is* live in this document: **the eight provider registries of §3.** They predate the
+bus, are not reached through it, and carry real traffic.
+
 ---
 
 ## 1. The principle
 
-A `layer=core` plugin is a **reference implementation**, not a locked component.
+A `boot_layer=core` plugin is a **reference implementation**, not a locked component.
 CorvinOS ships a default, and an operator may either override one named step of
 it or replace it wholesale — without forking.
 
-What is *not* negotiable is the compliance layer. Section 5 lists the mechanisms
+What is *not* negotiable is the compliance boot layer. Section 5 lists the mechanisms
 that have no extension path at all, by construction rather than by policy.
 
 Three axes, deliberately distinct, and mixing them is the most common mistake in
@@ -25,14 +37,22 @@ this area:
 
 | Axis | Question it answers | Values | Defined in |
 |---|---|---|---|
-| `layer` | When is it loaded, may it be switched off, may it be replaced? | `compliance` · `core` · `bundled` · `installed` | `manifest.py::PluginLayer` (ADR-0243) |
+| `boot_layer` | When is it loaded, may it be switched off, may it be replaced? | `compliance` · `core` · `bundled` · `installed` | `manifest.py::BootLayer` (ADR-0243) |
 | `tier` | Capability boundary + license gate | A / B / C | ADR-0156 |
 | `origin` | Provenance | `builtin` · `vetted` · `community` | `manifest.py::PluginOrigin` (ADR-0233) |
 
-"Tier A/B/C" means ADR-0156 repo-wide. It is **not** a synonym for `layer`; the
+"Tier A/B/C" means ADR-0156 repo-wide. It is **not** a synonym for `boot_layer`; the
 older drafts of this document used `tier_0` / `tier_1_core` / `tier_2_bundled`
 for the load-order axis, which collided with both other meanings. That
 vocabulary is retired — see §8.
+
+The axis also spent a short while named plain `layer`, which collided four ways: the
+L1–L44 stack, ADR-0124 audit layers (`routes/audit_layers.py`), the ADR-0142
+layer-extension API (403 `core_layer_immutable`, `routes/extensions.py`) and quality
+layers (`routes/quality_layers.py`). Hence `boot_layer` / `BootLayer`, and the API names
+`boot_layer_of()`, `plugins_by_boot_layer()`, `_declared_boot_layer()`,
+`register_global_plugin(..., boot_layer=)`, the audit event `plugin.boot_layer_rejected`
+and the admin aggregate `by_boot_layer`.
 
 ---
 
@@ -40,19 +60,25 @@ vocabulary is retired — see §8.
 
 ### 2a. Full replacement — `replaces` + `registry.replace()`
 
+**Reach today: none.** No plugin is on the `core` boot layer, so there is no legal
+`replaces` target anywhere: the example below would raise `PluginReplacementRefused`
+before touching anything, because `acs-manager` is not a registered `core` plugin (it is
+not a plugin at all). The rules are implemented and tested; they have never been exercised
+against a real target. The example shows the shape the mechanism expects.
+
 A plugin declares the reference implementation it takes over from, and the
 registry performs the swap.
 
 ```python
-from corvin_plugins import PluginRecord, PluginLayer, PluginOrigin, replace
+from corvin_plugins import PluginRecord, BootLayer, PluginOrigin, replace
 
 record = PluginRecord(
     plugin_id="k8s-acs",
     version="1.0.0",
     display_name="Kubernetes ACS",
     plugin_type="compute_engine",      # from KNOWN_PLUGIN_TYPES
-    layer=PluginLayer.CORE,
-    origin=PluginOrigin.VETTED,        # community may not claim a privileged layer
+    boot_layer=BootLayer.CORE,
+    origin=PluginOrigin.VETTED,        # community may not claim a privileged boot layer
     replaces="acs-manager",
 )
 
@@ -63,11 +89,11 @@ Rules the registry enforces (`registry.py::replace`, `manifest.py::__post_init__
 
 | Rule | Consequence of breaking it |
 |---|---|
-| Only a `layer=core` target is replaceable | `PluginReplacementRefused` |
-| A `layer=compliance` plugin may not declare `replaces` | `PluginError` at record construction |
-| A `layer=compliance` plugin may not itself be replaced | `PluginReplacementRefused` |
-| `origin=community` may not claim `layer` `compliance` or `core` | `PluginError` at record construction |
-| A tenant config may declare only `bundled` / `installed` | downgraded to `installed` + `plugin.layer_rejected` audit |
+| Only a `boot_layer=core` target is replaceable | `PluginReplacementRefused` |
+| A `boot_layer=compliance` plugin may not declare `replaces` | `PluginError` at record construction |
+| A `boot_layer=compliance` plugin may not itself be replaced | `PluginReplacementRefused` |
+| `origin=community` may not claim `boot_layer` `compliance` or `core` | `PluginError` at record construction |
+| A tenant config may declare only `bundled` / `installed` | downgraded to `installed` + `plugin.boot_layer_rejected` audit |
 | The replacing id must not already be registered | `PluginAlreadyRegistered` |
 
 The swap is **not atomic**, and that is deliberate. The old plugin's
@@ -294,7 +320,7 @@ known set.
 
 An extension point on one of these is not a feature request. It is a compliance
 regression (ADR-0237 § Immutable vs. Extensible; CLAUDE.md § Compliance
-Baseline). The same applies to the `layer=compliance` plugins themselves:
+Baseline). The same applies to the `boot_layer=compliance` plugins themselves:
 `PluginRecord.can_disable()` returns `False` for them, `registry.disable()` raises
 `PluginDisableRefused`, and they may be neither replaced nor named as a
 replacement target.
@@ -330,7 +356,7 @@ Related flags: `plugin_runtime_lifecycle` (registry bootstrap),
 `plugin_console_surface` (the Plugins page), `admin_control_plane`
 (`/api/admin/*`), `plugin_health_monitoring`, `plugin_self_healing`. The
 **global** plugin bootstrap (`bootstrap_global`) is deliberately flagless: the
-layer it loads is the compliance layer, and a switch on that would be the same
+boot layer it loads is the compliance boot layer, and a switch on that would be the same
 violation as an env kill-flag.
 
 ---
@@ -340,9 +366,10 @@ violation as an env kill-flag.
 ```
 core/plugins/corvin_plugins/
 ├─ protocol.py          CorvinPlugin lifecycle, provider protocols, KNOWN_PLUGIN_TYPES
-├─ manifest.py          PluginRecord, PluginLayer, PluginOrigin, `replaces`, can_disable()
-├─ registry.py          register / unregister / disable / replace / layer_of
+├─ manifest.py          PluginRecord, BootLayer, PluginOrigin, `replaces`, can_disable()
+├─ registry.py          register / unregister / disable / replace / boot_layer_of
 ├─ bootstrap.py         bootstrap_global → bootstrap_declared → bootstrap_tenant
+│                       (the global pass returns [] on every install)
 ├─ extension_points.py  the hook bus (this document, §4)
 ├─ loader.py            class-path + entry-point loading
 ├─ state.py             per-tenant registry.yaml
@@ -351,15 +378,16 @@ core/plugins/corvin_plugins/
 └─ providers/           the eight registries of §3
 
 core/plugins/tests/
-└─ test_extension_points.py    52 tests: both flag states, fail-closed, PII,
-                               refusals, conflict rule, tenant isolation
+└─ test_extension_points.py    54 tests (measured 2026-07-27): both flag states,
+                               fail-closed, PII, refusals, conflict rule, tenant
+                               isolation, and the no-call-site guard
 ```
 
 Plugin scope (ADR-0240): **global** plugins ship in the wheel, apply to every
 tenant and are the only ones allowed to carry `compliance` / `core`; **tenant**
 plugins come from `tenant.corvin.yaml` or the Console and carry `bundled` /
 `installed` only. That asymmetry is a trust boundary — if a tenant config could
-declare `layer: compliance`, any operator-writable file could mint an
+declare `boot_layer: compliance`, any operator-writable file could mint an
 undisableable plugin that loads before everything else.
 
 ---
@@ -372,17 +400,19 @@ elsewhere still cite them.
 
 | Earlier draft said | Reality |
 |---|---|
-| `core/core_plugins/tier_0/`, `tier_1_core/`, `tier_2_bundled/`, `base/hooks.py` | none of these paths exist. The code is `core/plugins/corvin_plugins/`, and the load-order axis is `PluginLayer`, not a directory tree |
-| `plugin_type = "tier-1-core"` / `"tier-1-alternative"` | not in `KNOWN_PLUGIN_TYPES`; constructing such a record raises `UnknownPluginType`. `plugin_type` is the capability (`compute_engine`, `router_backend`, …); the load layer is the separate `layer` field |
-| `ctx.registry.registry["voice-summary/1.0.0"].on_unload(); del ...` | `PluginContext` has no `registry` attribute. Replacement is `registry.replace(plugin, ctx, replaces=...)`, which enforces the `layer=core` rule and audits the swap |
+| `core/core_plugins/tier_0/`, `tier_1_core/`, `tier_2_bundled/`, `base/hooks.py` | none of these paths exist. The code is `core/plugins/corvin_plugins/`, and the load-order axis is `BootLayer`, not a directory tree |
+| `plugin_type = "tier-1-core"` / `"tier-1-alternative"` | not in `KNOWN_PLUGIN_TYPES`; constructing such a record raises `UnknownPluginType`. `plugin_type` is the capability (`compute_engine`, `router_backend`, …); the load layer is the separate `boot_layer` field |
+| `ctx.registry.registry["voice-summary/1.0.0"].on_unload(); del ...` | `PluginContext` has no `registry` attribute. Replacement is `registry.replace(plugin, ctx, replaces=...)`, which enforces the `boot_layer=core` rule and audits the swap |
 | `plugins: tier_2_bundled: enabled: [...]` in `config.yaml` | the real key is `spec.plugins.installed` in `tenant.corvin.yaml`, plus `spec.plugins.auto_discover_entry_points` |
 | `corvinctl plugin install X --tier-1-replace Y` | no such CLI. Replacement goes through the registry API; the Console surface is behind `plugin_console_surface` / `admin_control_plane` |
 | A `HookManager` per plugin, `priority=` on registration | one process-wide bus keyed by `(tenant, point)`, one hook per point, no priorities. Priorities need a merge rule for conflicting answers that nothing specifies |
 | `voice_summary.register_hook("summary_algorithm", …)` | that is the existing `summary_provider` registry (§3), not a bus point. ADR-0237 itself offers the alternative |
 | Hooks are "called before/after" the default | override semantics; see §2b |
+| The axis is called `layer`, field `layer`, enum `PluginLayer`, API `layer_of()` / `plugins_by_layer()`, audit `plugin.layer_rejected` | renamed to **`boot_layer`** / `BootLayer` / `boot_layer_of()` / `plugins_by_boot_layer()` / `plugin.boot_layer_rejected`. "Layer" was already four-way overloaded (§1) — the same collision class the move off "tier" was meant to end |
+| `corvin.global_plugins` entry points contribute global plugins | the group was implemented and **removed before it had a user**: any third-party wheel could publish `compliance:whatever` and load first, undisableable, past every gate. `bootstrap.GLOBAL_ENTRY_POINT_GROUP` is `None`; global plugins come from code only |
 
 `tier_1_alternatives` in the old config sketch and the "Tier System Redefined"
-table are both retired: they used "tier" for the `layer` axis, which CLAUDE.md
+table are both retired: they used "tier" for the `boot_layer` axis, which CLAUDE.md
 reserves for ADR-0156's capability boundary.
 
 ---
