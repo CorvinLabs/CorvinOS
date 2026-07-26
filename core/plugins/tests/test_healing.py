@@ -301,9 +301,11 @@ class TestBounds(_Base):
         self._register(_Plugin("p.audit", "audit_backend"))
         for _ in range(3):
             self.healer.consider("p.audit", plugin_type="audit_backend", consecutive_failures=5)
-        # Backdate the history beyond the hour.
-        for rec in self.healer._history["p.audit"]:
-            rec.at = time.time() - 4000
+        # Backdate the ACTION LEDGER beyond the hour (the budget reads that, not
+        # the pruned diagnostic history).
+        self.healer._actions["p.audit"] = [
+            time.time() - 4000 for _ in self.healer._actions["p.audit"]
+        ]
         self.assertEqual(self.healer.budget_left("p.audit"), 3)
 
 
@@ -442,3 +444,103 @@ class TestBootWiring(unittest.TestCase):
             source.count("audit_emit=_hc_audit"), 2,
             "collector and healer must both audit through the real chain",
         )
+
+
+class TestHistoryIsBounded(_Base):
+    """Review finding: the history grew without bound on the NOOP path.
+
+    Pruning only happened in budget_left(), which the NOOP returns never reach —
+    and `healing_disabled` is the DEFAULT path, appended on every poll of every
+    unhealthy plugin. In a process that runs for months that is a slow leak.
+    """
+
+    def test_noop_floods_are_capped(self):
+        healer = hl.HealingOrchestrator(enabled=False)
+        for _ in range(5000):
+            healer.consider("p", plugin_type="stt_provider", consecutive_failures=9)
+        self.assertLessEqual(
+            len(healer._history["p"]),
+            hl.MAX_HISTORY_PER_PLUGIN,
+            "the diagnostic buffer must not grow without bound",
+        )
+
+    def test_the_recent_tail_is_what_survives(self):
+        healer = hl.HealingOrchestrator(enabled=True, threshold=99)
+        for _ in range(200):
+            # Always below the threshold, so every record is the same NOOP kind and
+            # the tail is predictable.
+            healer.consider("p", plugin_type="stt_provider", consecutive_failures=1)
+        history = healer.history("p")
+        self.assertLessEqual(len(history), hl.MAX_HISTORY_PER_PLUGIN)
+        self.assertEqual(history[-1].reason, "below_threshold")
+
+    def test_pruning_cannot_hand_back_a_fresh_budget(self):
+        """The interaction bug: enough NOOPs pushed counted actions out of the
+        pruned history, so the hourly cap silently reset. The budget is now kept
+        in its own unpruned ledger."""
+        healer = hl.HealingOrchestrator(enabled=True, threshold=1, max_heals_per_hour=2)
+        self._register(_Plugin("p.audit", "audit_backend"))
+        for _ in range(300):
+            healer.consider("p.audit", plugin_type="audit_backend", consecutive_failures=1)
+        self.assertEqual(
+            healer.budget_left("p.audit"), 0, "the cap must still be exhausted"
+        )
+        self.assertLessEqual(
+            len(healer._actions["p.audit"]),
+            2,
+            "at most max_heals_per_hour actions may ever have run",
+        )
+
+    def test_escalation_is_not_repeated_on_every_poll(self):
+        """An escalation per poll floods the audit chain with the same record."""
+        healer = hl.HealingOrchestrator(
+            enabled=True, threshold=1, max_heals_per_hour=1,
+            audit_emit=lambda et, d: self.audit.append((et, d)),
+        )
+        self._register(_Plugin("p.audit", "audit_backend"))
+        for _ in range(50):
+            healer.consider("p.audit", plugin_type="audit_backend", consecutive_failures=1)
+        escalations = [
+            r for r in healer.history("p.audit") if r.action is hl.HealingAction.ESCALATE
+        ]
+        self.assertEqual(len(escalations), 1, "escalate once, then stay quiet")
+        audited = [e for e in self.audit if e[1].get("healing_action") == "escalate"]
+        self.assertEqual(len(audited), 1, "and audit it once")
+
+    def test_recovery_re_arms_escalation(self):
+        healer = hl.HealingOrchestrator(enabled=True, threshold=1, max_heals_per_hour=1)
+        self._register(_Plugin("p.audit", "audit_backend"))
+        for _ in range(5):
+            healer.consider("p.audit", plugin_type="audit_backend", consecutive_failures=1)
+        self.assertIn("p.audit", healer._escalated)
+        healer.note_recovered("p.audit")
+        self.assertNotIn("p.audit", healer._escalated)
+
+    def test_escalation_does_not_consume_the_budget(self):
+        healer = hl.HealingOrchestrator(enabled=True, threshold=1, max_heals_per_hour=2)
+        self._register(_Plugin("p.audit", "audit_backend"))
+        healer.consider("p.audit", plugin_type="audit_backend", consecutive_failures=1)
+        before = healer.budget_left("p.audit")
+        healer._escalate("p.audit", "test")
+        self.assertEqual(
+            healer.budget_left("p.audit"), before,
+            "giving up must not count as a healing attempt",
+        )
+
+    def test_the_action_ledger_expires_by_time(self):
+        healer = hl.HealingOrchestrator(enabled=True, threshold=1, max_heals_per_hour=2)
+        self._register(_Plugin("p.audit", "audit_backend"))
+        healer.consider("p.audit", plugin_type="audit_backend", consecutive_failures=1)
+        self.assertEqual(healer.budget_left("p.audit"), 1)
+        healer._actions["p.audit"] = [time.time() - (hl.HISTORY_WINDOW_S + 10)]
+        self.assertEqual(
+            healer.budget_left("p.audit"), 2, "an hour later the budget is back"
+        )
+
+    def test_old_entries_still_fall_out_by_time(self):
+        healer = hl.HealingOrchestrator(enabled=True, threshold=1)
+        self._register(_Plugin("p.audit", "audit_backend"))
+        healer.consider("p.audit", plugin_type="audit_backend", consecutive_failures=1)
+        for rec in healer._history["p.audit"]:
+            rec.at = time.time() - (hl.HISTORY_WINDOW_S + 10)
+        self.assertEqual(healer.history("p.audit"), [])
