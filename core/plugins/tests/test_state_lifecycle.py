@@ -19,6 +19,8 @@ for _p in (str(_PKG), str(_FORGE), str(_SHARED), str(_REPO)):
         sys.path.insert(0, _p)
 
 from corvin_plugins.manifest import (  # noqa: E402
+    Locality,
+    NetworkEgress,
     PIIRisk,
     PluginError,
     PluginNotFound,
@@ -230,7 +232,13 @@ class TestConsentGate(_Base):
             self.lc.enable("acme-notify")
 
     def test_consent_grant_allows_enable_and_is_audited(self):
-        self.lc.install(_record(origin=PluginOrigin.COMMUNITY), installed_by="operator")
+        # A community plugin must ALSO declare its egress (L35) before it can be
+        # enabled — this one talks to nothing, which is the honest declaration for
+        # a notification backend that only writes to the log.
+        self.lc.install(
+            _record(origin=PluginOrigin.COMMUNITY, network_egress=NetworkEgress.NONE),
+            installed_by="operator",
+        )
         enabled = self.lc.enable("acme-notify", consent_granted_by="operator")
         self.assertTrue(enabled.enabled)
         text = self._audit_text()
@@ -500,3 +508,236 @@ class TestLoadOrder(_Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── Hot-reload (ADR-0124 Inv. 6) ──────────────────────────────────────────────
+
+
+class _HotPlugin:
+    """Registers itself and records what happened, so tests can see the effect."""
+
+    plugin_id = "hot-notify"
+    plugin_type = "notification_backend"
+    version = "1.0.0"
+    display_name = "Hot Notify"
+
+    events: list = []
+
+    def on_load(self, ctx):
+        type(self).events.append("load")
+        if ctx.notification_registry is not None:
+            ctx.notification_registry.set_active(self)
+
+    def on_unload(self):
+        type(self).events.append("unload")
+
+    def health_check(self):
+        from corvin_plugins.protocol import HealthStatus
+
+        return HealthStatus(ok=True)
+
+    def notify(self, event, payload, *, tenant_id="_default", severity="info"):
+        pass
+
+
+class _RefusingPlugin(_HotPlugin):
+    plugin_id = "refusing-notify"
+
+    def on_load(self, ctx):
+        raise RuntimeError("this plugin refuses to load")
+
+
+class TestHotReload(_Base):
+    """enable() used to write a flag only: the toggle showed on, the plugin was
+    inert until the next boot. That is a silent lie in the UI, and ADR-0124 Inv. 6
+    requires the change to take effect immediately."""
+
+    def setUp(self):
+        super().setUp()
+        _HotPlugin.events = []
+        from corvin_plugins.registry import get_registry
+
+        self._registry = get_registry()
+        for pid in list(self._registry.discover()):
+            self._registry.unregister(pid)
+
+    def tearDown(self):
+        for pid in list(self._registry.discover()):
+            try:
+                self._registry.unregister(pid)
+            except Exception:
+                pass
+        super().tearDown()
+
+    def _install_hot(self, cls=_HotPlugin) -> None:
+        self.lc.install(
+            PluginRecord(
+                plugin_id=cls.plugin_id,
+                version="1.0.0",
+                display_name=cls.display_name,
+                plugin_type="notification_backend",
+                origin=PluginOrigin.VETTED,
+                pii_risk=PIIRisk.NONE,
+                class_path=f"test_state_lifecycle:{cls.__name__}",
+            ),
+            installed_by="test",
+        )
+
+    def test_enable_registers_the_plugin_immediately(self):
+        self._install_hot()
+        self.assertNotIn(_HotPlugin.plugin_id, self._registry.discover())
+        self.lc.enable(_HotPlugin.plugin_id)
+        self.assertIn(
+            _HotPlugin.plugin_id,
+            self._registry.discover(),
+            "enable() must load the plugin, not just flip a flag",
+        )
+        self.assertIn("load", _HotPlugin.events)
+
+    def test_enable_wires_the_provider_slot(self):
+        from corvin_plugins.providers import notification_backend
+
+        self._install_hot()
+        self.lc.enable(_HotPlugin.plugin_id)
+        self.assertIsInstance(notification_backend.get_active(), _HotPlugin)
+
+    def test_disable_unloads_immediately(self):
+        self._install_hot()
+        self.lc.enable(_HotPlugin.plugin_id)
+        self.lc.disable(_HotPlugin.plugin_id)
+        self.assertNotIn(_HotPlugin.plugin_id, self._registry.discover())
+        self.assertIn("unload", _HotPlugin.events)
+
+    def test_a_refusing_plugin_stays_disabled_and_is_not_persisted(self):
+        """Fail-closed: the registry must never claim an active plugin that isn't."""
+        self._install_hot(_RefusingPlugin)
+        with self.assertRaises(PluginError):
+            self.lc.enable(_RefusingPlugin.plugin_id)
+        self.assertFalse(
+            self._reg().get(_RefusingPlugin.plugin_id).enabled,
+            "a failed load must roll the enable back on disk",
+        )
+        self.assertNotIn(_RefusingPlugin.plugin_id, self._registry.discover())
+
+    def test_failed_enable_is_audited(self):
+        self._install_hot(_RefusingPlugin)
+        with self.assertRaises(PluginError):
+            self.lc.enable(_RefusingPlugin.plugin_id)
+        text = self._audit_text()
+        if text:
+            self.assertIn("plugin.enable_failed", text)
+
+    def test_record_without_class_path_enables_without_loading(self):
+        """A record-only entry is legitimate; it must not be treated as a failure."""
+        self.lc.install(_record("no-class-path"), installed_by="test")
+        enabled = self.lc.enable("no-class-path")
+        self.assertTrue(enabled.enabled)
+        self.assertNotIn("no-class-path", self._registry.discover())
+
+    def test_uninstall_unloads_a_stale_registration(self):
+        self._install_hot()
+        self.lc.enable(_HotPlugin.plugin_id)
+        self.lc.disable(_HotPlugin.plugin_id)
+        # Simulate a runtime registration that outlived its disable.
+        from corvin_plugins.bootstrap import build_context
+        from corvin_plugins.registry import register
+
+        register(_HotPlugin(), build_context(
+            plugin_id=_HotPlugin.plugin_id, tenant_id="_default", corvin_home=self.home
+        ))
+        self.lc.uninstall(_HotPlugin.plugin_id)
+        self.assertNotIn(_HotPlugin.plugin_id, self._registry.discover())
+
+
+# ── L34/L35 declarations (ADR-0124 Inv. 3) ────────────────────────────────────
+
+
+class TestFlowDeclarations(_Base):
+    """A plugin must say where it runs and what it talks to before it may run."""
+
+    def test_defaults_are_the_least_trusted_combination(self):
+        rec = _record()
+        self.assertIs(rec.locality, Locality.UNKNOWN)
+        self.assertIs(rec.network_egress, NetworkEgress.EXTERNAL)
+
+    def test_community_plugin_needs_declared_egress_hosts(self):
+        from corvin_plugins.state import EgressNotDeclared
+
+        self.lc.install(_record(origin=PluginOrigin.COMMUNITY), installed_by="operator")
+        with self.assertRaises(EgressNotDeclared):
+            self.lc.enable("acme-notify", consent_granted_by="operator")
+        self.assertFalse(self._reg().get("acme-notify").enabled)
+
+    def test_declaring_hosts_unblocks_a_community_plugin(self):
+        self.lc.install(
+            _record(origin=PluginOrigin.COMMUNITY, egress_hosts=["hooks.example.com"]),
+            installed_by="operator",
+        )
+        self.assertTrue(
+            self.lc.enable("acme-notify", consent_granted_by="operator").enabled
+        )
+
+    def test_egress_none_also_unblocks_it(self):
+        self.lc.install(
+            _record(origin=PluginOrigin.COMMUNITY, network_egress=NetworkEgress.NONE),
+            installed_by="operator",
+        )
+        self.assertTrue(
+            self.lc.enable("acme-notify", consent_granted_by="operator").enabled
+        )
+
+    def test_vetted_plugin_may_leave_hosts_empty(self):
+        """The maintainer reviewed it — that asymmetry is what `origin` is for."""
+        self.lc.install(_record(origin=PluginOrigin.VETTED), installed_by="operator")
+        self.assertTrue(self.lc.enable("acme-notify").enabled)
+
+    def test_high_pii_with_unknown_locality_is_refused(self):
+        self.lc.install(
+            _record(
+                origin=PluginOrigin.VETTED,
+                pii_risk=PIIRisk.HIGH,
+                locality=Locality.UNKNOWN,
+            ),
+            installed_by="operator",
+        )
+        with self.assertRaises(PluginError) as ctx:
+            self.lc.enable("acme-notify", consent_granted_by="operator")
+        self.assertIn("locality", str(ctx.exception))
+
+    def test_high_pii_with_local_locality_is_allowed(self):
+        self.lc.install(
+            _record(
+                origin=PluginOrigin.VETTED,
+                pii_risk=PIIRisk.HIGH,
+                locality=Locality.LOCAL,
+                network_egress=NetworkEgress.NONE,
+            ),
+            installed_by="operator",
+        )
+        self.assertTrue(
+            self.lc.enable("acme-notify", consent_granted_by="operator").enabled
+        )
+
+    def test_refusals_are_audited(self):
+        from corvin_plugins.state import EgressNotDeclared
+
+        self.lc.install(_record(origin=PluginOrigin.COMMUNITY), installed_by="operator")
+        with self.assertRaises(EgressNotDeclared):
+            self.lc.enable("acme-notify", consent_granted_by="operator")
+        text = self._audit_text()
+        if text:
+            self.assertIn("egress_not_declared", text)
+
+    def test_cloud_locality_with_no_egress_is_rejected_at_construction(self):
+        with self.assertRaises(PluginError):
+            _record(locality=Locality.EU_CLOUD, network_egress=NetworkEgress.NONE)
+
+    def test_declarations_survive_the_round_trip(self):
+        rec = _record(
+            locality=Locality.EU_CLOUD,
+            network_egress=NetworkEgress.EXTERNAL,
+            egress_hosts=["a.example", "b.example"],
+        )
+        restored = PluginRecord.from_dict(rec.to_dict())
+        self.assertIs(restored.locality, Locality.EU_CLOUD)
+        self.assertEqual(restored.egress_hosts, ["a.example", "b.example"])

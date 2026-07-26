@@ -37,8 +37,12 @@ import yaml
 
 from .manifest import (
     DependencyResolver,
+    Locality,
+    NetworkEgress,
+    PIIRisk,
     PluginError,
     PluginNotFound,
+    PluginOrigin,
     PluginRecord,
     SettingsValidator,
     validate_plugin_id,
@@ -61,6 +65,10 @@ class ConsentRequired(PluginError):
 
 class LifecycleDisabled(PluginError):
     """Runtime mutation is off (feature flag plugin_runtime_lifecycle)."""
+
+
+class EgressNotDeclared(PluginError):
+    """The record wants unrestricted internet without declaring hosts (L35)."""
 
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -225,6 +233,13 @@ class TenantRegistry:
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 
+def _default_corvin_home() -> Path:
+    """The corvin_home the tenant resolver would use when none was injected."""
+    from forge.paths import corvin_home  # type: ignore[import-not-found]
+
+    return corvin_home()
+
+
 def _audit(event_type: str, details: dict, *, tenant_id: str) -> None:
     """Emit a real hash-chained audit event; never raise into the caller."""
     try:
@@ -353,6 +368,8 @@ class PluginLifecycle:
                 f"(origin={record.origin.value}, pii_risk={record.pii_risk.value})"
             )
 
+        self._assert_flow_declarations(record)
+
         enabled = record.with_enabled(True)
         reg.records[plugin_id] = enabled
         # Dependency check AFTER staging the change: enabling must not produce a
@@ -362,6 +379,28 @@ class PluginLifecycle:
         except PluginError:
             reg.records[plugin_id] = record  # roll back the staged change
             raise
+
+        # ── Hot-reload (ADR-0124 Inv. 6) ─────────────────────────────────────
+        # Load the plugin NOW, before persisting. Without this, enable() only
+        # wrote a flag: the Console showed the toggle on while the plugin stayed
+        # inert until the next process boot — a silent lie in the UI.
+        #
+        # Order matters. A failed on_load() must leave BOTH the runtime and the
+        # file in the pre-enable state, so the registry never claims an active
+        # plugin that isn't running.
+        loaded = self._activate(enabled)
+        if loaded is False:
+            reg.records[plugin_id] = record
+            _audit(
+                "plugin.enable_failed",
+                {"plugin_id": enabled.full_id, "reason": "load_failed"},
+                tenant_id=self.tenant_id,
+            )
+            raise PluginError(
+                f"{plugin_id} could not be loaded; it stays disabled "
+                f"(see the log for the failing class_path)"
+            )
+
         reg.save()
 
         _audit(
@@ -369,10 +408,99 @@ class PluginLifecycle:
             {
                 "plugin_id": enabled.full_id,
                 "consent_granted_by": consent_granted_by or "",
+                # None means "no class_path, nothing to load" — a record-only
+                # entry, which is legitimate for a plugin registered by other
+                # means (entry point already loaded at boot).
+                "activated": loaded is not None,
             },
             tenant_id=self.tenant_id,
         )
         return enabled
+
+    def _assert_flow_declarations(self, record: PluginRecord) -> None:
+        """L34/L35 gate on enable (ADR-0124 Inv. 3).
+
+        Two refusals, both aimed at the case the operator cannot see:
+
+        * a COMMUNITY plugin that wants the open internet without naming a single
+          host — "external egress, hosts unknown" is exactly the shape an
+          exfiltration path takes, and ADR-0124 requires the declaration;
+        * an unclassified locality combined with a high PII risk — the plugin would
+          be handling personal data with no answer to "in which jurisdiction".
+
+        A vetted/builtin plugin may leave egress_hosts empty: the maintainer
+        reviewed it. That asymmetry is the point of the origin field.
+        """
+        if (
+            record.network_egress is NetworkEgress.EXTERNAL
+            and not record.egress_hosts
+            and record.origin is PluginOrigin.COMMUNITY
+        ):
+            _audit(
+                "plugin.enable_denied",
+                {
+                    "plugin_id": record.full_id,
+                    "reason": "egress_not_declared",
+                    "network_egress": record.network_egress.value,
+                    "origin": record.origin.value,
+                },
+                tenant_id=self.tenant_id,
+            )
+            raise EgressNotDeclared(
+                f"{record.plugin_id} declares external egress with no egress_hosts; "
+                f"a community plugin must name the hosts it needs (L35)"
+            )
+
+        if record.locality is Locality.UNKNOWN and record.pii_risk is PIIRisk.HIGH:
+            _audit(
+                "plugin.enable_denied",
+                {
+                    "plugin_id": record.full_id,
+                    "reason": "locality_unknown_with_high_pii",
+                    "pii_risk": record.pii_risk.value,
+                },
+                tenant_id=self.tenant_id,
+            )
+            raise PluginError(
+                f"{record.plugin_id} handles high-PII data but declares "
+                f"locality=unknown; classify it before enabling (L34)"
+            )
+
+    def _activate(self, record: PluginRecord) -> bool | None:
+        """Instantiate + register the plugin for this record, right now.
+
+        Returns True on success, False on failure, and None when there is nothing
+        to load (no ``class_path``).  Never raises — the caller decides what a
+        failure means.
+        """
+        if not record.class_path:
+            return None
+        try:
+            from .bootstrap import _load_one
+
+            ok = _load_one(
+                record,
+                tenant_id=self.tenant_id,
+                corvin_home=self.corvin_home_path or _default_corvin_home(),
+            )
+            return bool(ok)
+        except Exception as exc:  # noqa: BLE001 - report, never propagate
+            log.error(
+                "hot-load of %r failed (%s)", record.plugin_id, type(exc).__name__
+            )
+            return False
+
+    def _deactivate(self, record: PluginRecord) -> None:
+        """Unregister the plugin for this record, right now.  Never raises."""
+        try:
+            from .registry import get_registry, unregister
+
+            if record.plugin_id in get_registry().discover():
+                unregister(record.plugin_id)
+        except Exception as exc:  # noqa: BLE001
+            log.error(
+                "hot-unload of %r failed (%s)", record.plugin_id, type(exc).__name__
+            )
 
     def set_settings(self, plugin_id: str, settings: dict) -> PluginRecord:
         """Validate and persist new settings.
@@ -435,8 +563,11 @@ class PluginLifecycle:
         reg.records[plugin_id] = disabled
         reg.save()
 
-        # Detach any provider slot this plugin may hold, so a disabled plugin
-        # stops receiving traffic even if its object is still referenced.
+        # Hot-unload (ADR-0124 Inv. 6): stop the plugin NOW rather than at the
+        # next boot. unregister() runs its on_unload() hook; the provider slot is
+        # cleared afterwards so a plugin that ignores on_unload still stops
+        # receiving traffic.
+        self._deactivate(record)
         _detach_providers(record.plugin_type)
 
         _audit(
@@ -456,6 +587,10 @@ class PluginLifecycle:
         if record.enabled:
             raise PluginError(f"{plugin_id} is enabled; disable it before uninstalling")
 
+        # A record can only be uninstalled while disabled, but a stale runtime
+        # registration (enabled at boot, disabled in a previous process) would
+        # otherwise outlive the record.
+        self._deactivate(record)
         del reg.records[plugin_id]
         reg.save()
 
@@ -494,6 +629,14 @@ def _detach_providers(plugin_type: str) -> None:
             from .providers import user_backend
 
             user_backend.clear()
+        elif plugin_type == "stt_provider":
+            from .providers import stt_provider
+
+            stt_provider.clear()
+        elif plugin_type == "data_connector":
+            from .providers import data_connector
+
+            data_connector.clear()
     except Exception as exc:  # noqa: BLE001
         log.error("failed to detach %s provider (%s)", plugin_type, type(exc).__name__)
 

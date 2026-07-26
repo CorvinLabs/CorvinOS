@@ -60,6 +60,27 @@ class PIIRisk(str, Enum):
     HIGH = "high"
 
 
+class Locality(str, Enum):
+    """Where the plugin's work physically happens (ADR-0124 Inv. 3, L34 vocabulary).
+
+    Values match ``data_classification.Locality`` exactly — a second vocabulary for
+    the same question would be a second answer to "may CONFIDENTIAL data reach this".
+    """
+
+    LOCAL = "local"        # runs on this machine / LAN
+    EU_CLOUD = "eu_cloud"  # EU-jurisdiction infrastructure
+    US_CLOUD = "us_cloud"  # US-jurisdiction infrastructure
+    UNKNOWN = "unknown"    # not classified yet — treated as the least trusted
+
+
+class NetworkEgress(str, Enum):
+    """What the plugin talks to over the network (L34/L35 vocabulary)."""
+
+    NONE = "none"          # no outbound calls at all
+    LOCAL = "local"        # local sockets only
+    EXTERNAL = "external"  # public internet
+
+
 class UpdatePolicy(str, Enum):
     """How far an automatic update may move the version."""
 
@@ -312,6 +333,15 @@ class PluginRecord:
     pii_risk: PIIRisk = PIIRisk.LOW
     requires_consent: bool = False
     audit_required: bool = True
+    #: ADR-0124 Inv. 3 — every extensible resource declares these, so L34/L35 can
+    #: decide what data may reach it and whether it may talk to the network. The
+    #: defaults are the LEAST trusted combination: an undeclared plugin is treated
+    #: as unclassified with internet access, never as safe.
+    locality: Locality = Locality.UNKNOWN
+    network_egress: NetworkEgress = NetworkEgress.EXTERNAL
+    #: Hosts the plugin declares it needs (L35). Empty with egress=external means
+    #: "unrestricted", which the enable path refuses for community origin.
+    egress_hosts: List[str] = field(default_factory=list)
 
     # Install / enable state
     installed_at: Optional[datetime] = None
@@ -341,6 +371,17 @@ class PluginRecord:
                 f"expected one of {sorted(KNOWN_PLUGIN_TYPES)}"
             )
         validate_plugin_id(self.plugin_id)
+        # ADR-0124: "Accept a manifest with locality: cloud and network_egress:
+        # none" is listed as a MUST NOT — the combination is self-contradictory,
+        # and accepting it would let a cloud plugin claim air-gapped status.
+        if (
+            self.locality in (Locality.EU_CLOUD, Locality.US_CLOUD)
+            and self.network_egress is NetworkEgress.NONE
+        ):
+            raise PluginError(
+                f"{self.plugin_id}: locality={self.locality.value} contradicts "
+                f"network_egress=none — a cloud plugin cannot be air-gapped"
+            )
 
     @property
     def full_id(self) -> str:
@@ -373,6 +414,9 @@ class PluginRecord:
             "pii_risk": self.pii_risk.value,
             "requires_consent": self.requires_consent,
             "audit_required": self.audit_required,
+            "locality": self.locality.value,
+            "network_egress": self.network_egress.value,
+            "egress_hosts": list(self.egress_hosts),
             "installed_at": _iso(self.installed_at),
             "installed_by": self.installed_by,
             "enabled": self.enabled,
@@ -413,6 +457,9 @@ class PluginRecord:
                 pii_risk=PIIRisk(data.get("pii_risk", "low")),
                 requires_consent=bool(data.get("requires_consent", False)),
                 audit_required=bool(data.get("audit_required", True)),
+                locality=Locality(data.get("locality", "unknown")),
+                network_egress=NetworkEgress(data.get("network_egress", "external")),
+                egress_hosts=list(data.get("egress_hosts") or []),
                 installed_at=_parse_dt(data.get("installed_at")),
                 installed_by=data.get("installed_by"),
                 enabled=bool(data.get("enabled", False)),
@@ -558,6 +605,8 @@ class SettingsValidator:
 
 __all__ = [
     "BreakingChange",
+    "Locality",
+    "NetworkEgress",
     "InvalidPluginID",
     "CircularDependencyError",
     "DependencyConflictError",

@@ -233,7 +233,10 @@ class TestFullLifecycle(_Base):
 
     def test_community_plugin_needs_the_consent_flag(self):
         with self._live() as (client, csrf, _home):
-            payload = {**_RECORD, "origin": "community"}
+            # A community plugin needs BOTH gates satisfied: an egress declaration
+            # (L35) and explicit consent. This one talks to nothing, isolating the
+            # consent gate for this test.
+            payload = {**_RECORD, "origin": "community", "network_egress": "none"}
             client.post("/v1/console/plugins", json=payload, headers=self._hdr(csrf))
 
             resp = client.post(
@@ -380,3 +383,61 @@ class TestMalformedPluginId(_Base):
                 headers=self._hdr(csrf),
             )
             self.assertEqual(resp.status_code, 422, resp.text)
+
+
+class TestFlowDeclarationsOverTheApi(_Base):
+    """The Console must see and be able to set the L34/L35 declarations."""
+
+    @contextmanager
+    def _live(self):
+        with _sandbox(Path(self._tmp)) as (client, csrf, home):
+            self._flag(client, csrf, "plugin_console_surface", True)
+            self._flag(client, csrf, "plugin_runtime_lifecycle", True)
+            yield client, csrf, home
+
+    def test_install_defaults_are_least_trusted(self):
+        with self._live() as (client, csrf, _home):
+            resp = client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            self.assertEqual(resp.status_code, 200, resp.text)
+            body = resp.json()
+            self.assertEqual(body["locality"], "unknown")
+            self.assertEqual(body["network_egress"], "external")
+            self.assertEqual(body["egress_hosts"], [])
+
+    def test_declarations_round_trip(self):
+        with self._live() as (client, csrf, _home):
+            payload = {
+                **_RECORD,
+                "locality": "eu_cloud",
+                "network_egress": "external",
+                "egress_hosts": ["hooks.example.com"],
+            }
+            client.post("/v1/console/plugins", json=payload, headers=self._hdr(csrf))
+            body = client.get("/v1/console/plugins/acme-notify").json()
+            self.assertEqual(body["locality"], "eu_cloud")
+            self.assertEqual(body["egress_hosts"], ["hooks.example.com"])
+
+    def test_undeclared_community_egress_is_409(self):
+        with self._live() as (client, csrf, _home):
+            client.post(
+                "/v1/console/plugins",
+                json={**_RECORD, "origin": "community"},
+                headers=self._hdr(csrf),
+            )
+            resp = client.post(
+                "/v1/console/plugins/acme-notify/enable",
+                json={"consent_granted": True},
+                headers=self._hdr(csrf),
+            )
+            self.assertEqual(resp.status_code, 409, resp.text)
+            self.assertIn("egress_hosts", resp.json()["detail"])
+
+    def test_contradictory_declaration_is_422(self):
+        with self._live() as (client, csrf, _home):
+            resp = client.post(
+                "/v1/console/plugins",
+                json={**_RECORD, "locality": "us_cloud", "network_egress": "none"},
+                headers=self._hdr(csrf),
+            )
+            self.assertEqual(resp.status_code, 409, resp.text)
+            self.assertIn("contradicts", resp.json()["detail"])

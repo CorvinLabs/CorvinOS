@@ -33,6 +33,11 @@ class PluginContext:
     # ADR-0233 additive-backend registries
     audit_registry: Any | None = None          # providers.audit_backend._registry
     user_registry: Any | None = None           # providers.user_backend._registry
+    # Handles for the two types that were in KNOWN_PLUGIN_TYPES with nowhere to
+    # register: an stt_provider / data_connector plugin could implement on_load()
+    # and had no registry to hand itself to.
+    stt_registry: Any | None = None            # providers.stt_provider._registry
+    data_connector_registry: Any | None = None  # providers.data_connector._registry
     extra: dict = field(default_factory=dict)
 
 

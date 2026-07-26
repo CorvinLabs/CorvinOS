@@ -12,7 +12,9 @@ The load-bearing claim under test is ADR-0233 D4: an installed plugin may only
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -451,13 +453,16 @@ class TestTripwire(unittest.TestCase):
     def test_check_all_returns_one_result_per_tripwire(self):
         results = self.tripwire.check_all()
         self.assertEqual(len(results), len(self.tripwire.TRIPWIRES))
-        self.assertEqual(
-            {r.name for r in results},
+        # The audit-specific three; the set grew when ADR-0232's other four
+        # mandatory mechanisms got their own gates (see
+        # TestMandatoryMechanismTripwires for the completeness assertion).
+        self.assertLessEqual(
             {
                 "audit_writer_reachable",
                 "audit_chain_intact",
                 "core_audit_owns_the_trail",
             },
+            {r.name for r in results},
         )
 
     def test_core_owns_the_trail_passes_today(self):
@@ -699,3 +704,125 @@ class TestTripwireHasNoSecondCopyOfTheList(unittest.TestCase):
             self.assertIn("write_event", result.detail)
         finally:
             del provider.write_event  # type: ignore[attr-defined]
+
+
+# ── ADR-0232: one tripwire per mandatory mechanism ────────────────────────────
+
+
+class TestMandatoryMechanismTripwires(unittest.TestCase):
+    """ADR-0232 lists five mandatory mechanisms, each "hardcoded, tripwired".
+
+    Only L16 was covered; L18/L34/L44/L36 had no boot gate at all. Each case here
+    proves the tripwire FIRES when its mechanism is broken — a tripwire that only
+    ever returns ok proves nothing.
+    """
+
+    def setUp(self):
+        from corvin_compliance_reports import tripwire
+
+        self.tripwire = tripwire
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ["VOICE_AUDIT_PATH"] = str(Path(self._tmp.name) / "audit.jsonl")
+
+    def tearDown(self):
+        os.environ.pop("VOICE_AUDIT_PATH", None)
+        self._tmp.cleanup()
+
+    def test_all_five_mechanisms_have_a_tripwire(self):
+        names = {t.__name__ for t in self.tripwire.TRIPWIRES}
+        for expected in (
+            "audit_writer_reachable",          # L16
+            "consent_gate_denies_by_default",  # L18
+            "flow_guard_present",              # L34
+            "house_rules_gate_intact",         # L44
+            "erasure_orchestrator_present",    # L36
+        ):
+            self.assertIn(expected, names, f"{expected} is not in the boot set")
+
+    def test_everything_passes_on_a_healthy_install(self):
+        results = self.tripwire.check_all()
+        failed = [f"{r.name}: {r.detail}" for r in results if not r.ok]
+        self.assertEqual(failed, [], "a healthy install must boot")
+
+    # ── each tripwire must actually fire ─────────────────────────────────────
+
+    def test_consent_tripwire_fires_when_the_gate_admits(self):
+        consent = self.tripwire._shared_module("consent")
+        original = consent.is_granted
+        try:
+            consent.is_granted = lambda *a, **k: (True, "auto-admit")
+            result = self.tripwire.consent_gate_denies_by_default()
+            self.assertFalse(result.ok)
+            self.assertIn("ADMITS", result.detail)
+        finally:
+            consent.is_granted = original
+
+    def test_consent_tripwire_fires_on_a_wrong_return_shape(self):
+        """A bare bool would make the tuple check silently pass the wrong branch."""
+        consent = self.tripwire._shared_module("consent")
+        original = consent.is_granted
+        try:
+            consent.is_granted = lambda *a, **k: False  # not a 2-tuple
+            result = self.tripwire.consent_gate_denies_by_default()
+            self.assertFalse(result.ok)
+            self.assertIn("2-tuple", result.detail)
+        finally:
+            consent.is_granted = original
+
+    def test_flow_guard_tripwire_fires_when_the_deny_path_is_gone(self):
+        dc = self.tripwire._shared_module("data_classification")
+        original = dc.DataFlowDenied
+        try:
+            del dc.DataFlowDenied
+            result = self.tripwire.flow_guard_present()
+            self.assertFalse(result.ok)
+            self.assertIn("DataFlowDenied", result.detail)
+        finally:
+            dc.DataFlowDenied = original
+
+    def test_house_rules_tripwire_fires_on_a_tampered_policy(self):
+        hr = self.tripwire._shared_module("house_rules")
+        original = hr.verify_policy_integrity
+        try:
+            hr.verify_policy_integrity = lambda *a, **k: (False, "hash mismatch")
+            result = self.tripwire.house_rules_gate_intact()
+            self.assertFalse(result.ok)
+            self.assertIn("integrity", result.detail)
+        finally:
+            hr.verify_policy_integrity = original
+
+    def test_erasure_tripwire_fires_when_the_validator_accepts_anything(self):
+        eo = self.tripwire._shared_module("erasure_orchestrator")
+        original = eo.validate_subject_id
+        try:
+            eo.validate_subject_id = lambda subject_id: subject_id
+            result = self.tripwire.erasure_orchestrator_present()
+            self.assertFalse(result.ok)
+            self.assertIn("empty subject", result.detail)
+        finally:
+            eo.validate_subject_id = original
+
+    def test_assert_all_aborts_the_boot_on_any_failure(self):
+        hr = self.tripwire._shared_module("house_rules")
+        original = hr.verify_policy_integrity
+        try:
+            hr.verify_policy_integrity = lambda *a, **k: (False, "tampered")
+            with self.assertRaises(self.tripwire.TripwireError) as ctx:
+                self.tripwire.assert_all()
+            self.assertIn("house_rules", str(ctx.exception))
+        finally:
+            hr.verify_policy_integrity = original
+
+    def test_a_raising_probe_counts_as_a_failure_not_a_pass(self):
+        consent = self.tripwire._shared_module("consent")
+        original = consent.is_granted
+        try:
+            def boom(*a, **k):
+                raise RuntimeError("gate exploded")
+
+            consent.is_granted = boom
+            result = self.tripwire.consent_gate_denies_by_default()
+            self.assertFalse(result.ok)
+            self.assertIn("RuntimeError", result.detail)
+        finally:
+            consent.is_granted = original
