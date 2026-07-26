@@ -158,7 +158,9 @@ function PluginCard({ plugin, csrf, mutable }: CardProps) {
           {plugin.enabled && !plugin.runtime_loaded && (
             <span className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-500">
               <AlertTriangle className="h-3 w-3" /> enabled but not running
-              {plugin.contained_by === "healing_unloaded" && " — contained by self-healing"}
+              {plugin.contained_by === "healing_unloaded" && " — disabled by self-healing"}
+              {plugin.contained_by === "healing_escalated" && " — self-healing gave up, needs a look"}
+              {plugin.contained_by === "not_loaded" && " — nothing loaded it (no class_path, or boot has not reached it)"}
             </span>
           )}
           {plugin.enabled && plugin.runtime_loaded && plugin.contained_by?.startsWith("breaker_") && (

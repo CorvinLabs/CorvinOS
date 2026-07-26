@@ -598,3 +598,70 @@ class TestRuntimeStateIsVisible(_Base):
                 except Exception:
                     pass
                 cb.forget("acme-notify")
+
+
+class TestContainmentReasonIsDerived(_Base):
+    """Review finding: "not loaded" was reported as "healing_unloaded".
+
+    That is a false statement in an operator-facing surface — a record with no
+    class_path was never loadable, and a boot that has not reached the plugin has
+    not healed anything. The reason must come from the healer's history.
+    """
+
+    @contextmanager
+    def _live(self):
+        with _sandbox(Path(self._tmp)) as (client, csrf, home):
+            self._flag(client, csrf, "plugin_console_surface", True)
+            self._flag(client, csrf, "plugin_runtime_lifecycle", True)
+            yield client, csrf, home
+
+    def test_a_never_loaded_plugin_is_not_blamed_on_healing(self):
+        with self._live() as (client, csrf, _home):
+            client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            client.post(
+                "/v1/console/plugins/acme-notify/enable", json={}, headers=self._hdr(csrf)
+            )
+            body = client.get("/v1/console/plugins/acme-notify").json()
+            self.assertFalse(body["runtime_loaded"])
+            self.assertEqual(
+                body["contained_by"], "not_loaded",
+                "no class_path means nothing loaded it — not that healing removed it",
+            )
+
+    def test_healing_disable_is_reported_as_such(self):
+        with self._live() as (client, csrf, _home):
+            from corvin_console.routes import plugins as route_mod
+            from corvin_plugins.healing import HealingAction, HealingRecord
+
+            class _FakeHealer:
+                def history(self, plugin_id):
+                    return [
+                        HealingRecord(
+                            plugin_id=plugin_id,
+                            action=HealingAction.DISABLE,
+                            reason="unhealthy",
+                        )
+                    ]
+
+            class _FakeCollector:
+                running = True
+                _healer = _FakeHealer()
+
+                def snapshot(self):
+                    class _S:
+                        @staticmethod
+                        def to_dict():
+                            return {"taken_at": 0.0, "plugins": {}}
+
+                    return _S()
+
+            client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            client.post(
+                "/v1/console/plugins/acme-notify/enable", json={}, headers=self._hdr(csrf)
+            )
+            route_mod.set_collector(_FakeCollector())
+            try:
+                body = client.get("/v1/console/plugins/acme-notify").json()
+                self.assertEqual(body["contained_by"], "healing_unloaded")
+            finally:
+                route_mod.set_collector(None)

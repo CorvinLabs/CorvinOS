@@ -262,3 +262,149 @@ class TestCorvinLogger(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRecordSizeIsBounded(unittest.TestCase):
+    """Review finding: a record grew to 340 KB from one large context value.
+
+    A record is one line in a log stream, and aggregators drop over-long lines —
+    so an oversized field does not bloat the log, it makes the event disappear.
+    """
+
+    def setUp(self):
+        self.log = get_logger("plugins")
+
+    def test_a_huge_field_is_truncated_not_dropped(self):
+        from corvin_logging.structured_logger import MAX_FIELD_CHARS
+
+        rec = self.log.info("big", context={"blob": "x" * (MAX_FIELD_CHARS * 10)})
+        self.assertTrue(rec["truncated"])
+        self.assertLess(len(rec["context"]["blob"]), MAX_FIELD_CHARS + 64)
+        self.assertIn("chars]", rec["context"]["blob"], "the elision must be visible")
+
+    def test_the_record_stays_under_the_cap(self):
+        import json
+
+        from corvin_logging.structured_logger import MAX_RECORD_CHARS
+
+        rec = self.log.info("big", context={f"k{i}": "y" * 4000 for i in range(50)})
+        self.assertLessEqual(len(json.dumps(rec, default=str)), MAX_RECORD_CHARS + 512)
+        self.assertTrue(rec["truncated"])
+
+    def test_message_and_schema_fields_survive_truncation(self):
+        rec = self.log.error(
+            "the thing failed",
+            error=RuntimeError("x"),
+            context={"blob": "z" * 500_000},
+        )
+        self.assertEqual(rec["message"], "the thing failed")
+        self.assertEqual(rec["error_code"], "RuntimeError")
+        self.assertIn("timestamp", rec)
+        self.assertIn("level", rec)
+
+    def test_a_normal_record_is_not_marked_truncated(self):
+        rec = self.log.info("fine", context={"count": 3, "name": "ops"})
+        self.assertNotIn("truncated", rec)
+        self.assertEqual(rec["context"], {"count": 3, "name": "ops"})
+
+    def test_a_self_referencing_structure_does_not_recurse_forever(self):
+        loop: dict = {}
+        loop["self"] = loop
+        rec = self.log.info("cyclic", context=loop)
+        self.assertIsInstance(rec, dict)
+        self.assertIn("message", rec)
+
+    def test_the_emitted_line_is_still_one_line(self):
+        import json
+        import logging as _logging
+
+        rec = self.log.info("big", context={"blob": "q" * 100_000})
+        record = _logging.LogRecord("corvin.plugins", _logging.INFO, __file__, 1, "big", None, None)
+        record.corvin_event = rec
+        line = JsonFormatter().format(record)
+        self.assertNotIn("\n", line)
+        json.loads(line)
+
+
+class TestScrubberIsNotADenialOfService(unittest.TestCase):
+    """Review finding: logging a large payload hung the process.
+
+    The email pattern's unbounded `[\\w.+-]+` took 3.2 s on 50 000 non-matching
+    characters — it consumed the run, then backtracked from every position. On a
+    large context value that is a DoS through the logging path, the same ReDoS class
+    as the big-data classifier fix in 0.10.62.
+    """
+
+    def setUp(self):
+        self.log = get_logger("plugins")
+
+    def test_large_payloads_log_in_milliseconds(self):
+        import time
+
+        for size in (50_000, 500_000, 2_000_000):
+            start = time.monotonic()
+            rec = self.log.info("big", context={"blob": "x" * size})
+            elapsed_ms = (time.monotonic() - start) * 1000
+            self.assertLess(
+                elapsed_ms, 250, f"{size} chars took {elapsed_ms:.0f} ms — ReDoS is back"
+            )
+            self.assertTrue(rec["truncated"])
+
+    def test_every_pattern_is_bounded(self):
+        """An unbounded quantifier next to a class that can match anything is the
+        shape that backtracks. Keep them all bounded."""
+        from corvin_logging.scrubber import _PATTERNS
+
+        for kind, pattern in _PATTERNS:
+            self.assertNotIn(
+                "]+", pattern.pattern,
+                f"{kind} has an unbounded character-class quantifier: {pattern.pattern}",
+            )
+
+    def test_patterns_are_fast_on_non_matching_input(self):
+        import time
+
+        from corvin_logging.scrubber import _PATTERNS
+
+        haystack = "x" * 50_000
+        for kind, pattern in _PATTERNS:
+            start = time.monotonic()
+            pattern.subn("_", haystack)
+            elapsed_ms = (time.monotonic() - start) * 1000
+            self.assertLess(elapsed_ms, 100, f"{kind} took {elapsed_ms:.0f} ms")
+
+    def test_digit_runs_do_not_blow_up(self):
+        import time
+
+        for payload in ("1 " * 30_000, "1234-" * 10_000, "9" * 60_000):
+            start = time.monotonic()
+            self.log.info("digits", context={"blob": payload})
+            elapsed_ms = (time.monotonic() - start) * 1000
+            self.assertLess(elapsed_ms, 250, f"digit run took {elapsed_ms:.0f} ms")
+
+    def test_truncation_runs_before_scrubbing(self):
+        """Order is a guard in its own right: the regexes must see a small value."""
+        import inspect
+
+        from corvin_logging import structured_logger as sl
+
+        source = inspect.getsource(sl.CorvinLogger._emit)
+        self.assertLess(
+            source.index("_truncate("), source.index("scrub("),
+            "truncate must run first, or a huge value reaches the regex path",
+        )
+
+    def test_redaction_still_works_after_the_bounds(self):
+        rec = self.log.error(
+            "leaky",
+            context={
+                "mail": "jdoe@corp.example",
+                "card": "4111 1111 1111 1111",
+                "dsn": "postgres://u:pw@db/x",
+                "ip": "203.0.113.9",
+            },
+        )
+        self.assertTrue(rec["pii_redacted"])
+        blob = repr(rec)
+        for secret in ("jdoe", "4111 1111 1111 1111", "pw@db", "203.0.113.9"):
+            self.assertNotIn(secret, blob)
