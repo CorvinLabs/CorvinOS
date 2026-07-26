@@ -330,8 +330,10 @@ class TestAuditProviderBreaker(unittest.TestCase):
         with self.assertLogs("corvin.audit.fanout", level="ERROR"):
             for _ in range(3):
                 audit_provider.fanout("x.y", {})
+                audit_provider.drain_now()
         self.assertEqual(sink.calls, 3)
         audit_provider.fanout("x.y", {})
+        audit_provider.drain_now()
         self.assertEqual(sink.calls, 3, "an open breaker must skip the sink entirely")
 
     def test_healthy_sink_keeps_the_breaker_closed(self):
@@ -339,6 +341,7 @@ class TestAuditProviderBreaker(unittest.TestCase):
         audit_provider.set_active(sink)
         for _ in range(10):
             self.assertTrue(audit_provider.fanout("x.y", {}))
+        audit_provider.drain_now(timeout=5.0)
         self.assertEqual(sink.calls, 10)
         self.assertEqual(cb.snapshot()["test.sink"]["state"], "closed")
 
