@@ -609,6 +609,24 @@ class PluginLifecycle:
             return None
         try:
             from .bootstrap import _load_one
+            from .registry import get_registry
+
+            # The process registry holds ONE instance per plugin_id. If another
+            # tenant already loaded this plugin, `_load_one` treats
+            # "already registered" as loaded and reports success — so this
+            # tenant would be told `activated: true`, and would write that into
+            # its own hash-chained audit trail, for an object running with the
+            # OTHER tenant's context, corvin_home and settings. Reporting "not
+            # loaded" is the honest answer: the record is enabled, the instance
+            # is not ours.
+            owner = get_registry().tenant_of(record.plugin_id)
+            if owner is not None and owner != self.tenant_id:
+                log.info(
+                    "not hot-loading %r: an instance is already loaded for "
+                    "another tenant; this tenant's record is enabled only",
+                    record.plugin_id,
+                )
+                return False
 
             ok = _load_one(
                 record,
