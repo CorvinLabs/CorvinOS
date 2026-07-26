@@ -393,6 +393,37 @@ class TestReplacement(unittest.TestCase):
         self.assertEqual(replaced[0]["replaces"], "acs-default")
         self.assertEqual(replaced[0]["plugin_id"], "acs-k8s")
 
+    def test_a_failed_replacement_is_not_audited_as_a_replacement(self):
+        # The chain is append-only: "X replaced Y" written before the swap
+        # succeeded is a permanent claim about a state the process never
+        # reached, and nothing can correct it afterwards.
+        self._install_core()
+        broken = _StubPlugin("acs-k8s")
+        broken.on_load_raises = True
+        sink: list = []
+        with self.assertRaises(RuntimeError):
+            self.reg.replace(
+                broken, _ctx("acs-k8s", sink=sink), replaces="acs-default"
+            )
+        events = [e for e, _ in sink]
+        self.assertNotIn("plugin.replaced", events)
+        failed = [d for e, d in sink if e == "plugin.replace_failed"]
+        self.assertTrue(failed, "the gap must be recorded, just not as success")
+        self.assertEqual(failed[0]["error_type"], "RuntimeError")
+        self.assertNotIn("boom", str(failed[0]), "no exception message in audit")
+
+    def test_a_replacement_may_not_claim_a_different_boot_layer(self):
+        # Otherwise this path mints privilege: the target is proven core, but
+        # the replacement could ask for compliance and become undisableable.
+        target = self._install_core()
+        with self.assertRaises(PluginReplacementRefused):
+            self.reg.replace(
+                _StubPlugin("acs-k8s"), _ctx("acs-k8s"),
+                replaces="acs-default", boot_layer=BootLayer.COMPLIANCE,
+            )
+        # Refused BEFORE the target was touched.
+        self.assertIs(self.reg.get("acs-default"), target)
+
     def test_failed_replacement_leaves_the_slot_empty_not_half_loaded(self):
         self._install_core()
         broken = _StubPlugin("acs-k8s")

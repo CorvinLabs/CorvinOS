@@ -776,25 +776,45 @@ class PluginLifecycle:
         )
 
 
-def _detach_providers(plugin_type: str) -> None:
-    """Clear the provider slot for a plugin type, if that type has one."""
+#: Every plugin_type that owns a provider slot, mapped to its module name.
+#: All EIGHT of them — an earlier version listed four, so unloading a
+#: recall/router/summary/notification plugin left the registry pointing at the
+#: torn-down object and the next call went into a closed handle.
+_PROVIDER_MODULES: Dict[str, str] = {
+    "audit_backend": "audit_backend",
+    "user_backend": "user_backend",
+    "stt_provider": "stt_provider",
+    "data_connector": "data_connector",
+    "recall_backend": "recall_backend",
+    "router_backend": "router_backend",
+    "summary_provider": "summary_provider",
+    "notification_backend": "notification_backend",
+}
+
+
+def _detach_providers(plugin_type: str, instance: object = None) -> None:
+    """Release the provider slot a plugin of this type may hold.
+
+    With ``instance`` given the detach is **instance-checked**: the slot is only
+    released when it still points at that very object. Clearing by type alone
+    evicts whatever is installed, which is wrong as soon as a second plugin of
+    the same type took the slot over — the survivor would keep believing it is
+    active while calls went to the bundled default.
+
+    Without ``instance`` (the operator-disable path, which knows the type but not
+    the object) the slot is cleared unconditionally, as before.
+    """
+    module_name = _PROVIDER_MODULES.get(plugin_type)
+    if module_name is None:
+        return
     try:
-        if plugin_type == "audit_backend":
-            from .providers import audit_backend
+        from importlib import import_module
 
-            audit_backend.clear()
-        elif plugin_type == "user_backend":
-            from .providers import user_backend
-
-            user_backend.clear()
-        elif plugin_type == "stt_provider":
-            from .providers import stt_provider
-
-            stt_provider.clear()
-        elif plugin_type == "data_connector":
-            from .providers import data_connector
-
-            data_connector.clear()
+        module = import_module(f".providers.{module_name}", package=__package__)
+        if instance is not None:
+            module.clear_if_active(instance)
+        else:
+            module.clear()
     except Exception as exc:  # noqa: BLE001
         log.error("failed to detach %s provider (%s)", plugin_type, type(exc).__name__)
 

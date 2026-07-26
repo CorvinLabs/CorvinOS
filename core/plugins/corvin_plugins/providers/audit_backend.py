@@ -186,6 +186,20 @@ class AuditBackendRegistry:
             else:
                 self._queue.task_done()
 
+    def clear_if_active(self, provider: object) -> bool:
+        """Detach only if ``provider`` is the one currently installed.
+
+        Instance-checked on purpose. A plugin unloading must not evict a backend
+        that a DIFFERENT plugin installed after it — clearing by type alone would
+        drop the slot while the other plugin still believes it is the sink, and
+        for audit that means a fan-out stream that silently stops.
+        """
+        with self._lock:
+            if self._active is not provider:
+                return False
+        self.clear()
+        return True
+
     def get_active(self) -> _ABProto | None:
         with self._lock:
             return self._active
@@ -382,3 +396,7 @@ def fanout(
 
 def failure_count() -> int:
     return _registry.failure_count()
+
+
+def clear_if_active(provider: object) -> bool:
+    return _registry.clear_if_active(provider)

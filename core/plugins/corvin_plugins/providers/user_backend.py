@@ -66,6 +66,18 @@ class UserBackendRegistry:
         with self._lock:
             self._active = None
 
+    def clear_if_active(self, provider: object) -> bool:
+        """Detach only if ``provider`` is the one currently installed.
+
+        Instance-checked: a plugin unloading must not evict a provider that a
+        DIFFERENT plugin installed after it.
+        """
+        with self._lock:
+            if self._active is not provider:
+                return False
+            self._active = None
+            return True
+
     def get_active(self) -> _UBProto | None:
         with self._lock:
             return self._active
@@ -199,3 +211,7 @@ class QuotaUndeterminedError(RuntimeError):
     def __init__(self, resource: str):
         super().__init__(f"quota for {resource!r} could not be determined")
         self.resource = resource
+
+
+def clear_if_active(provider: object) -> bool:
+    return _registry.clear_if_active(provider)

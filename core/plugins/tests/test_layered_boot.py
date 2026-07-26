@@ -320,7 +320,7 @@ class TestBootstrapAllWiring(_BootTestCase):
 # ── 5. Nothing above `bundled` exists yet, and that must stay visible ─────────
 
 
-def _git_grep(pattern: str) -> list[str]:
+def _git_grep(pattern: str, *, skip_mechanism: bool = False) -> list[str]:
     """``git grep -nE`` over ``core/`` and ``operator/``, test files removed.
 
     Same shape as ``test_extension_points.test_no_call_site_is_wired_yet``: a
@@ -340,8 +340,31 @@ def _git_grep(pattern: str) -> list[str]:
             continue
         if not path.endswith(".py"):
             continue
+        if skip_mechanism and path in _MECHANISM_FILES:
+            # The axis's own implementation necessarily names its own values —
+            # `replace()` pins a replacement to the target's core boot layer,
+            # `register_global_plugin` validates against compliance/core. Those
+            # are the boundary, not a population, and a guard that counted them
+            # would be red from the moment it was written and therefore useless.
+            #
+            # Opt-in per call, never global: applying it to the
+            # register_global_plugin search too would hide a real registration
+            # made from inside bootstrap.py, which is precisely where someone
+            # adding the first global plugin would be tempted to put it.
+            continue
         keep.append(line)
     return keep
+
+
+#: Files that IMPLEMENT the boot-layer axis, as opposed to claiming a place on
+#: it.  Kept explicit and small: every addition here is a hole in the guard, so
+#: it should be obvious in review when one is made.
+_MECHANISM_FILES: frozenset[str] = frozenset({
+    "core/plugins/corvin_plugins/manifest.py",
+    "core/plugins/corvin_plugins/registry.py",
+    "core/plugins/corvin_plugins/bootstrap.py",
+    "core/plugins/corvin_plugins/state.py",
+})
 
 
 class TestTheTopOfTheAxisHasNoProductionInstance(_BootTestCase):
@@ -377,7 +400,8 @@ class TestTheTopOfTheAxisHasNoProductionInstance(_BootTestCase):
     def test_no_production_code_claims_the_core_or_compliance_boot_layer(self):
         claims = _git_grep(
             r"boot_layer[\"']?\s*[=:]\s*(BootLayer\.(CORE|COMPLIANCE)"
-            r"|[\"'](core|compliance)[\"'])"
+            r"|[\"'](core|compliance)[\"'])",
+            skip_mechanism=True,
         )
         self.assertEqual(
             claims, [],

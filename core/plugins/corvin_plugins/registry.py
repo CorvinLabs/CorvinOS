@@ -94,6 +94,24 @@ def _scrub_plugin_details(details: object) -> dict:
     return cleaned if isinstance(cleaned, dict) else {}
 
 
+def _detach_provider_slot(plugin: CorvinPlugin) -> None:
+    """Release the provider registry slot held by ``plugin``, if it holds one.
+
+    Imported lazily and guarded: ``state`` imports ``manifest`` which imports
+    ``protocol``, and a failure to tidy a provider slot must never turn an
+    unload into an exception for the caller.
+    """
+    try:
+        from .state import _detach_providers
+
+        _detach_providers(getattr(plugin, "plugin_type", ""), instance=plugin)
+    except Exception as exc:  # noqa: BLE001
+        log.error(
+            "provider detach for %r failed (%s)",
+            getattr(plugin, "plugin_id", "?"), type(exc).__name__,
+        )
+
+
 class PluginRegistry:
     """Thread-safe registry for CorvinPlugin instances.
 
@@ -240,6 +258,14 @@ class PluginRegistry:
         except Exception:
             log.exception("plugin %r raised during on_unload", plugin_id)
 
+        # Release the provider slot this plugin may hold. Without this the
+        # registry keeps a pointer to an object whose on_unload() has already
+        # run: for a recall backend that means every later turn writes into a
+        # closed database handle. Instance-checked, so a plugin that was already
+        # superseded by another one of the same type does not evict the
+        # survivor.
+        _detach_provider_slot(plugin)
+
         # Drop the breaker with the plugin: a re-registered plugin must start
         # from a clean slate, not inherit the failure count that unloaded it.
         _breakers.forget(plugin_id)
@@ -337,18 +363,39 @@ class PluginRegistry:
                 f"plugin_id {plugin.plugin_id!r} is already registered"
             )
 
+        # A replacement plugin may not use this path to mint itself a privileged
+        # boot layer it was never granted: the TARGET is proven to be core, the
+        # replacement inherits exactly that, and nothing else is accepted.
+        if boot_layer is not None and BootLayer(boot_layer) is not BootLayer.CORE:
+            raise PluginReplacementRefused(
+                f"a replacement inherits the target's boot layer (core); "
+                f"{BootLayer(boot_layer).value!r} was requested"
+            )
+
         # Machinery, not an operator disable: the compliance guard in unregister
         # does not apply here because the target was just proven to be core.
         self.unregister(replaces)
+        try:
+            self.register(plugin, ctx, boot_layer=BootLayer.CORE)
+        except Exception as exc:  # noqa: BLE001
+            # The audit event is written AFTER the swap succeeds, never before.
+            # Emitting it up front put "X replaced Y" into an append-only,
+            # hash-chained record for a replacement that then raised — a record
+            # nobody can correct afterwards, asserting a state the process is
+            # not in. What actually happened here is a gap: the old plugin is
+            # torn down and the new one did not load.
+            ctx.audit_emit("plugin.replace_failed", {
+                "plugin_id": plugin.plugin_id,
+                "replaces": replaces,
+                "tenant_id": ctx.tenant_id,
+                "error_type": type(exc).__name__,  # class only — no PII
+            })
+            raise
         ctx.audit_emit("plugin.replaced", {
             "plugin_id": plugin.plugin_id,
             "replaces": replaces,
             "tenant_id": ctx.tenant_id,
         })
-        self.register(
-            plugin, ctx,
-            boot_layer=boot_layer if boot_layer is not None else BootLayer.CORE,
-        )
 
     # ── Lookup ────────────────────────────────────────────────────────────────
 
