@@ -210,6 +210,17 @@ class TestBootstrapTenant(unittest.TestCase):
             tenant_id="_default", corvin_home_path=self.home, lifecycle_enabled=True
         )
 
+    def _clear_runtime(self) -> None:
+        """Undo what enable()'s hot-load did, so the next assertion sees only
+        what bootstrap_tenant() itself does."""
+        registry = get_registry()
+        for pid in list(registry.discover()):
+            try:
+                registry.unregister(pid)
+            except Exception:
+                pass
+        _Recorder.loaded_with = {}
+
     def tearDown(self):
         os.environ.pop("VOICE_AUDIT_PATH", None)
         registry = get_registry()
@@ -221,6 +232,12 @@ class TestBootstrapTenant(unittest.TestCase):
         self._tmp.cleanup()
 
     def _install(self, *, enabled: bool) -> None:
+        """Install (and optionally enable) the recorder plugin.
+
+        NOTE: enable() hot-loads since ADR-0124 Inv. 6, so callers that want to
+        observe what *bootstrap_tenant* does must reset _Recorder.loaded_with and
+        unregister afterwards — otherwise they see the enable's effect.
+        """
         record = PluginRecord(
             plugin_id=_Recorder.plugin_id,
             version="1.0.0",
@@ -237,6 +254,7 @@ class TestBootstrapTenant(unittest.TestCase):
 
     def test_flag_off_is_a_no_op(self):
         self._install(enabled=True)
+        self._clear_runtime()
         loaded = bootstrap.bootstrap_tenant(
             tenant_id="_default", corvin_home=self.home, lifecycle_enabled=False
         )
@@ -245,6 +263,7 @@ class TestBootstrapTenant(unittest.TestCase):
 
     def test_enabled_plugin_loads_with_working_handles(self):
         self._install(enabled=True)
+        self._clear_runtime()
         loaded = bootstrap.bootstrap_tenant(
             tenant_id="_default", corvin_home=self.home, lifecycle_enabled=True
         )
@@ -261,17 +280,29 @@ class TestBootstrapTenant(unittest.TestCase):
         self.assertEqual(loaded, [])
 
     def test_a_broken_plugin_is_skipped_not_fatal(self):
-        record = PluginRecord(
+        """The real case: a record that was enabled while its class WAS loadable,
+        and whose module disappeared later (package removed, upgrade dropped it).
+
+        Since enable() hot-loads, it now refuses a broken class_path outright — so
+        this state can only be reached by writing the record directly, which is
+        exactly what an old registry on disk looks like.
+        """
+        from corvin_plugins.state import TenantRegistry
+
+        broken = PluginRecord(
             plugin_id="test.does-not-exist",
             version="1.0.0",
             display_name="Missing",
             plugin_type="notification_backend",
             class_path="no_such_module:Nope",
             origin=PluginOrigin.VETTED,
+            enabled=True,
         )
-        self.lc.install(record, installed_by="test")
-        self.lc.enable("test.does-not-exist", consent_granted_by="test")
         self._install(enabled=True)
+        self._clear_runtime()
+        reg = TenantRegistry.load(tenant_id="_default", corvin_home_path=self.home)
+        reg.records[broken.plugin_id] = broken
+        reg.save()
         with self.assertLogs("corvin.plugins.bootstrap", level="ERROR"):
             loaded = bootstrap.bootstrap_tenant(
                 tenant_id="_default", corvin_home=self.home, lifecycle_enabled=True
@@ -288,6 +319,7 @@ class TestBootstrapTenant(unittest.TestCase):
         )
         self.lc.install(record, installed_by="test")
         self.lc.enable("test.no-class-path", consent_granted_by="test")
+        self._clear_runtime()
         with self.assertLogs("corvin.plugins.bootstrap", level="ERROR"):
             self.assertEqual(
                 bootstrap.bootstrap_tenant(
@@ -312,6 +344,7 @@ class TestBootstrapTenant(unittest.TestCase):
 
     def test_shutdown_unregisters(self):
         self._install(enabled=True)
+        self._clear_runtime()
         loaded = bootstrap.bootstrap_tenant(
             tenant_id="_default", corvin_home=self.home, lifecycle_enabled=True
         )

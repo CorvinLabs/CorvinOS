@@ -25,9 +25,11 @@ from .manifest import PluginError, PluginRecord
 from .protocol import PluginContext
 from .providers import (
     audit_backend,
+    data_connector,
     notification_backend,
     recall_backend,
     router_backend,
+    stt_provider,
     summary_provider,
     user_backend,
 )
@@ -86,6 +88,8 @@ def build_context(
         router_registry=router_backend._registry,
         audit_registry=audit_backend._registry,
         user_registry=user_backend._registry,
+        stt_registry=stt_provider._registry,
+        data_connector_registry=data_connector._registry,
     )
 
 
@@ -240,6 +244,16 @@ def _load_one(
     if not record.class_path:
         log.error("plugin %r has no class_path — skipping", record.plugin_id)
         return False
+
+    # Idempotence: enable() now hot-loads (ADR-0124 Inv. 6), so by the time a boot
+    # or a re-bootstrap runs, the plugin may already be registered in this process.
+    # Registering twice raises PluginAlreadyRegistered, which would turn a healthy
+    # plugin into a "failed to register" line. Already-loaded counts as loaded.
+    from .registry import get_registry
+
+    if record.plugin_id in get_registry().discover():
+        log.debug("plugin %r already registered — skipping load", record.plugin_id)
+        return True
 
     try:
         cls = load_from_class_path(record.class_path)

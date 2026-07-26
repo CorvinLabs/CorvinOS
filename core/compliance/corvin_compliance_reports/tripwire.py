@@ -179,11 +179,152 @@ def core_audit_owns_the_trail() -> TripwireResult:
     return TripwireResult(name, True, "fan-out only")
 
 
-#: Every tripwire the boot sequence runs, in order.
+def _shared_module(name: str):
+    """Import a module from ``operator/bridges/shared`` (the gates live there)."""
+    try:
+        return __import__(name)
+    except ImportError:
+        pass
+    repo_root = Path(__file__).resolve().parents[3]
+    shared = repo_root / "operator" / "bridges" / "shared"
+    if shared.is_dir() and str(shared) not in sys.path:
+        sys.path.append(str(shared))
+    return __import__(name)
+
+
+def consent_gate_denies_by_default() -> TripwireResult:
+    """L18: the consent gate must exist AND deny an unknown user (GDPR Art. 6, 7).
+
+    Checked by asking about a uid that cannot have consented.  A gate that answers
+    "granted" for an unknown principal is an auto-admit, which the compliance
+    baseline forbids outright ("no auto-admit, no trusted-observer allowlist").
+    """
+    name = "consent_gate_denies_by_default"
+    try:
+        consent = _shared_module("consent")
+    except ImportError:
+        return TripwireResult(name, False, "consent module not importable")
+
+    if not hasattr(consent, "is_granted"):
+        return TripwireResult(name, False, "consent.is_granted is missing")
+    if not getattr(consent, "DEFAULT_TTL_S", 0):
+        return TripwireResult(name, False, "consent has no TTL cap")
+
+    try:
+        answer = consent.is_granted(
+            "tripwire-probe", "tripwire-probe", "uid-that-never-consented"
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A gate that cannot answer is not a gate that admits — but it IS broken.
+        return TripwireResult(name, False, f"is_granted raised {type(exc).__name__}")
+
+    # is_granted returns (granted, reason). Unpacking is load-bearing: a truthiness
+    # test on the tuple is ALWAYS true, which would make this tripwire fail every
+    # boot — a fail-closed check with inverted logic is a denial of service, not a
+    # safety net. Any other shape is treated as a broken gate rather than guessed at.
+    if not (isinstance(answer, tuple) and len(answer) == 2):
+        return TripwireResult(
+            name, False, f"is_granted returned {type(answer).__name__}, expected a 2-tuple"
+        )
+    granted, reason = answer
+    if not isinstance(granted, bool):
+        return TripwireResult(
+            name, False, f"is_granted's first element is {type(granted).__name__}"
+        )
+    if granted:
+        return TripwireResult(name, False, f"consent gate ADMITS an unknown uid ({reason})")
+    return TripwireResult(name, True, f"deny-by-default holds ({reason})")
+
+
+def flow_guard_present() -> TripwireResult:
+    """L34: the data-flow guard and its deny exception must exist (GDPR Art. 32).
+
+    The classification matrix itself is covered by the L34 test suite; the tripwire
+    asserts the mechanism is present and still raises rather than returning a
+    permissive default, because a missing ``DataFlowDenied`` means every caller's
+    ``except DataFlowDenied`` silently stops catching anything.
+    """
+    name = "flow_guard_present"
+    try:
+        dc = _shared_module("data_classification")
+    except ImportError:
+        return TripwireResult(name, False, "data_classification not importable")
+
+    for attr in ("DataFlowGuard", "DataFlowDenied", "DataClassification"):
+        if not hasattr(dc, attr):
+            return TripwireResult(name, False, f"data_classification.{attr} is missing")
+    if not issubclass(dc.DataFlowDenied, Exception):
+        return TripwireResult(name, False, "DataFlowDenied is not raisable")
+    return TripwireResult(name, True, "guard + deny path present")
+
+
+def house_rules_gate_intact() -> TripwireResult:
+    """L44: the house-rules policy must load and its integrity must verify.
+
+    Uses the module's own ``verify_policy_integrity`` (a file hash) rather than
+    running the classifier — a tripwire must not need a model or the network.
+    A tampered policy file is the failure this catches.
+    """
+    name = "house_rules_gate_intact"
+    try:
+        hr = _shared_module("house_rules")
+    except ImportError:
+        return TripwireResult(name, False, "house_rules not importable")
+
+    if not hasattr(hr, "load_repo_policy"):
+        return TripwireResult(name, False, "house_rules.load_repo_policy is missing")
+
+    try:
+        ok, detail = hr.verify_policy_integrity()
+    except Exception as exc:  # noqa: BLE001
+        return TripwireResult(
+            name, False, f"verify_policy_integrity raised {type(exc).__name__}"
+        )
+    if not ok:
+        return TripwireResult(name, False, f"policy integrity failed: {detail}")
+    return TripwireResult(name, True, "policy verifies")
+
+
+def erasure_orchestrator_present() -> TripwireResult:
+    """L36: the GDPR Art. 17 erasure path must exist and validate its subject id.
+
+    An erasure orchestrator that accepts any subject id would delete against an
+    unvalidated identifier, so the tripwire probes the validator too.
+    """
+    name = "erasure_orchestrator_present"
+    try:
+        eo = _shared_module("erasure_orchestrator")
+    except ImportError:
+        return TripwireResult(name, False, "erasure_orchestrator not importable")
+
+    for attr in ("ErasureRequest", "ErasureResult", "validate_subject_id"):
+        if not hasattr(eo, attr):
+            return TripwireResult(
+                name, False, f"erasure_orchestrator.{attr} is missing"
+            )
+
+    try:
+        eo.validate_subject_id("")
+    except Exception:
+        return TripwireResult(name, True, "orchestrator present, validator rejects empty")
+    return TripwireResult(name, False, "validate_subject_id ACCEPTS an empty subject")
+
+
+#: Every tripwire the boot sequence runs, in order.  One per mandatory mechanism
+#: of ADR-0232 § Mandatory, plus the two audit-specific ones.
 TRIPWIRES: tuple[Callable[[], TripwireResult], ...] = (
+    # L16 Audit trail
     audit_writer_reachable,
     audit_chain_intact,
     core_audit_owns_the_trail,
+    # L18 Consent gate
+    consent_gate_denies_by_default,
+    # L34 Flow guard
+    flow_guard_present,
+    # L44 House rules
+    house_rules_gate_intact,
+    # L36 Erasure orchestrator
+    erasure_orchestrator_present,
 )
 
 

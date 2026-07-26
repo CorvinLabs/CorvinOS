@@ -763,7 +763,7 @@ prototype (unwired, `api.py` not importable, three 0-byte modules, 22
 | `manifest.py` | `PluginRecord`, `PluginDependency`, `DependencyResolver`, `SettingsValidator`, `plan_settings_migration` |
 | `state.py` | Per-tenant `registry.yaml` + `PluginLifecycle` (install/enable/settings/disable/uninstall) |
 | `circuit_breaker.py` | Per-`plugin_id` breaker: closed → open → half-open |
-| `providers/` | One active provider per type: notification, recall, summary, router, **audit**, **user** |
+| `providers/` | One active provider per type: notification, recall, summary, router, **audit**, **user**, **stt**, **data_connector** |
 | `bootstrap.py` | Boot wiring: `assert_compliance()` (fail-closed tripwires) + `bootstrap_tenant()` (load enabled plugins in dependency order) + `build_context()` |
 
 ### Vocabulary — `tier` vs `origin` (ADR-0233 D7)
@@ -795,10 +795,67 @@ mechanisms, and they are deliberately **additive only**:
 ### Boot tripwire (ADR-0233 D5)
 
 `core/compliance/corvin_compliance_reports/tripwire.py::assert_all()` fails the
-boot closed when a mandatory mechanism is unavailable: audit path not writable,
-existing chain does not verify, or the audit provider grew a trail-owning API.
+boot closed when a mandatory mechanism is unavailable. **One tripwire per mandatory
+mechanism of ADR-0232**, seven in total:
+
+| Layer | Tripwire | Fails when |
+|---|---|---|
+| L16 | `audit_writer_reachable` | audit dir not writable |
+| L16 | `audit_chain_intact` | existing chain does not verify |
+| L16 | `core_audit_owns_the_trail` | audit provider grew a trail-owning API |
+| L18 | `consent_gate_denies_by_default` | `is_granted` admits an unknown uid, or has no TTL cap |
+| L34 | `flow_guard_present` | `DataFlowGuard` / `DataFlowDenied` missing |
+| L44 | `house_rules_gate_intact` | policy integrity hash fails |
+| L36 | `erasure_orchestrator_present` | subject-id validator accepts empty |
+
+They are deliberately cheap — no model call, no network. `consent_gate_denies_by_default`
+unpacks `is_granted`'s `(granted, reason)` tuple: a truthiness test on the tuple is
+always true, which would fail every boot. **A fail-closed check with inverted logic
+is a denial of service, not a safety net** — that mistake was made and caught here.
 There is **no override** — no env var, no config key, no flag. A test or dev box
 redirects `VOICE_AUDIT_PATH` instead, which leaves the tripwire fully armed.
+
+### Hot-reload — enable/disable take effect immediately (ADR-0124 Inv. 6)
+
+`enable()` loads and registers the plugin in the same call; `disable()` unregisters
+it and clears its provider slot. Previously both only wrote a flag, so the Console
+showed a plugin as on while it stayed inert until the next process boot — a silent
+false display. Consequences worth knowing:
+
+- A failed `on_load()` **rolls the enable back on disk** and raises. The registry
+  never claims an active plugin that isn't running (audit: `plugin.enable_failed`).
+- A record without `class_path` enables without loading — legitimate for an entry
+  point already loaded at boot. The audit event carries `activated: false`.
+- `bootstrap_tenant()` is idempotent: a plugin already registered in this process
+  counts as loaded rather than raising `PluginAlreadyRegistered`.
+- A broken `class_path` in an existing registry (package removed by an upgrade) is
+  skipped at boot with an error log; other plugins still load.
+
+### Flow declarations — locality + egress (ADR-0124 Inv. 3)
+
+Every record declares where it runs and what it talks to, using **L34's exact
+vocabulary** (`data_classification.Locality` / `NetworkEgress`) rather than a second
+one:
+
+| Field | Values | Default |
+|---|---|---|
+| `locality` | `local` · `eu_cloud` · `us_cloud` · `unknown` | `unknown` |
+| `network_egress` | `none` · `local` · `external` | `external` |
+| `egress_hosts` | declared hosts (L35) | `[]` |
+
+The defaults are the **least trusted** combination: a plugin that declares nothing
+is treated as unclassified with internet access, never as safe. Two refusals at
+`enable()`:
+
+- **community + external egress + no declared hosts** → `EgressNotDeclared`.
+  "Talks to the internet, hosts unknown" is the shape an exfiltration path takes.
+  A vetted/builtin plugin may leave the list empty — the maintainer reviewed it,
+  and that asymmetry is what `origin` is for.
+- **`pii_risk: high` + `locality: unknown`** → refused. Personal data with no
+  answer to "in which jurisdiction".
+
+A cloud locality combined with `network_egress: none` is rejected at construction —
+ADR-0124 lists that contradiction as a MUST NOT.
 
 ### Per-tenant registry
 

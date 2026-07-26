@@ -41,6 +41,8 @@ try:
         sys.path.append(str(_core_plugins))
     from corvin_plugins.manifest import (  # type: ignore[import-not-found]
         InvalidPluginID,
+        Locality,
+        NetworkEgress,
         PIIRisk,
         PluginError,
         PluginNotFound,
@@ -52,6 +54,7 @@ try:
     )
     from corvin_plugins.state import (  # type: ignore[import-not-found]
         ConsentRequired,
+        EgressNotDeclared,
         LifecycleDisabled,
         PluginLifecycle,
         RegistryCorrupt,
@@ -75,6 +78,11 @@ class PluginOut(BaseModel):
     plugin_type: str
     origin: str
     pii_risk: str
+    #: ADR-0124 Inv. 3 declarations, so the Console can show WHERE a plugin runs
+    #: and WHAT it talks to before an operator enables it.
+    locality: str
+    network_egress: str
+    egress_hosts: list[str]
     enabled: bool
     requires_consent: bool
     settings: dict[str, Any]
@@ -108,6 +116,11 @@ class InstallIn(BaseModel):
     class_path: str | None = None
     origin: str = "community"
     pii_risk: str = "low"
+    # Least-trusted defaults, matching PluginRecord: an installer that says nothing
+    # gets "unclassified, talks to the internet", never "safe".
+    locality: str = "unknown"
+    network_egress: str = "external"
+    egress_hosts: list[str] = Field(default_factory=list)
     settings_schema: dict[str, Any] = Field(default_factory=dict)
     settings: dict[str, Any] = Field(default_factory=dict)
     dependencies: list[str] = Field(default_factory=list)
@@ -162,6 +175,9 @@ def _to_out(record: Any) -> PluginOut:
         plugin_type=record.plugin_type,
         origin=record.origin.value,
         pii_risk=record.pii_risk.value,
+        locality=record.locality.value,
+        network_egress=record.network_egress.value,
+        egress_hosts=list(record.egress_hosts),
         enabled=record.enabled,
         requires_consent=record.consent_required(),
         settings=record.settings,
@@ -197,7 +213,7 @@ def _mutation_error(exc: Exception) -> HTTPException:
             detail=("runtime plugin changes are switched off — enable "
                     "plugin_runtime_lifecycle in Settings → Features"),
         )
-    if isinstance(exc, ConsentRequired):
+    if isinstance(exc, (ConsentRequired, EgressNotDeclared)):
         return HTTPException(status_code=http_status.HTTP_409_CONFLICT, detail=str(exc))
     if isinstance(exc, PluginNotFound):
         return HTTPException(
@@ -291,6 +307,9 @@ async def install_plugin(
             plugin_type=body.plugin_type,
             origin=PluginOrigin(body.origin),
             pii_risk=PIIRisk(body.pii_risk),
+            locality=Locality(body.locality),
+            network_egress=NetworkEgress(body.network_egress),
+            egress_hosts=body.egress_hosts,
             settings_schema=body.settings_schema,
             settings=body.settings,
             dependencies=body.dependencies,
