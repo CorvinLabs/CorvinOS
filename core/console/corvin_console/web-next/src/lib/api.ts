@@ -5901,6 +5901,11 @@ export interface PluginSummary {
   origin: string;
   pii_risk: string;
   enabled: boolean;
+  /** Registered in the server process right now — can differ from `enabled` when
+   *  self-healing contained or unloaded the plugin without rewriting the config. */
+  runtime_loaded: boolean;
+  /** Why the runtime state differs: "healing_unloaded" | "breaker_open" | … */
+  contained_by: string | null;
   requires_consent: boolean;
   settings: Record<string, unknown>;
   settings_schema: Record<string, unknown>;

@@ -26,12 +26,14 @@ Properties that are load-bearing:
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Iterator, Optional
 
 import yaml
 
@@ -49,6 +51,73 @@ from .manifest import (
 )
 
 log = logging.getLogger("corvin.plugins.state")
+
+#: In-process guard. Two threads in ONE process (two Console requests) would
+#: otherwise interleave load → modify → save and lose one of the two writes.
+_MUTATION_LOCK = threading.RLock()
+
+
+def _fcntl_shim():
+    """The repo's portable flock shim: real on POSIX, no-op on Windows.
+
+    Windows has no POSIX advisory locks and a bare ``import fcntl`` crashed
+    mandatory layers at import time once (security audit 2026-06-25); the shared
+    shim is the established answer, so this reuses it rather than inventing a
+    second story.
+    """
+    import sys
+
+    try:
+        from _compat_fcntl import fcntl  # type: ignore[import-not-found]
+
+        return fcntl
+    except ImportError:
+        pass
+    shared = Path(__file__).resolve().parents[3] / "operator" / "bridges" / "shared"
+    if shared.is_dir() and str(shared) not in sys.path:
+        sys.path.append(str(shared))
+    try:
+        from _compat_fcntl import fcntl  # type: ignore[import-not-found]
+
+        return fcntl
+    except ImportError:
+        return None
+
+
+@contextlib.contextmanager
+def registry_mutation(
+    *, tenant_id: Optional[str] = None, corvin_home_path: Optional[Path] = None
+) -> Iterator["TenantRegistry"]:
+    """Hold the registry lock across a load → modify → save cycle.
+
+    Without this, concurrent mutations silently LOSE writes: each caller read the
+    file, changed its own copy and wrote the whole thing back, so the last writer
+    won. Measured before the fix: 12 concurrent installs left 2 records on disk.
+
+    Locking is two-layer because both kinds of concurrency are real here — several
+    threads inside the gateway process, and separate processes (gateway, adapter,
+    CLI) against the same tenant directory.
+    """
+    path = registry_path(tenant_id=tenant_id, corvin_home_path=corvin_home_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(".registry.lock")
+    fcntl = _fcntl_shim()
+    with _MUTATION_LOCK:
+        lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            if fcntl is not None:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            registry = TenantRegistry.load(
+                tenant_id=tenant_id, corvin_home_path=corvin_home_path
+            )
+            yield registry
+            registry.save()
+        finally:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            finally:
+                os.close(lock_fd)
 
 #: Schema version of registry.yaml itself.  Bumped only for a breaking layout
 #: change; from_dict() already fails closed on unknown record fields.
@@ -288,7 +357,14 @@ class PluginLifecycle:
             )
 
     def _registry(self) -> TenantRegistry:
+        """Read-only snapshot.  Mutations MUST go through :meth:`_mutation`."""
         return TenantRegistry.load(
+            tenant_id=self.tenant_id, corvin_home_path=self.corvin_home_path
+        )
+
+    def _mutation(self):
+        """Locked load → modify → save cycle (see :func:`registry_mutation`)."""
+        return registry_mutation(
             tenant_id=self.tenant_id, corvin_home_path=self.corvin_home_path
         )
 
@@ -301,7 +377,12 @@ class PluginLifecycle:
         operator turns it on (and passes the consent gate if it applies).
         """
         self._require_enabled("install")
-        reg = self._registry()
+        with self._mutation() as reg:
+            return self._install_locked(reg, record, installed_by=installed_by)
+
+    def _install_locked(
+        self, reg: TenantRegistry, record: PluginRecord, *, installed_by: str
+    ) -> PluginRecord:
         if reg.has(record.plugin_id):
             raise PluginError(f"{record.plugin_id} is already installed")
 
@@ -322,7 +403,6 @@ class PluginLifecycle:
             }
         )
         reg.records[stored.plugin_id] = stored
-        reg.save()
         instance_dir(
             stored.plugin_id,
             tenant_id=self.tenant_id,
@@ -349,7 +429,14 @@ class PluginLifecycle:
     ) -> PluginRecord:
         """Enable a record, enforcing the consent gate and dependency health."""
         self._require_enabled("enable")
-        reg = self._registry()
+        with self._mutation() as reg:
+            return self._enable_locked(
+                reg, plugin_id, consent_granted_by=consent_granted_by
+            )
+
+    def _enable_locked(
+        self, reg: TenantRegistry, plugin_id: str, *, consent_granted_by: str | None
+    ) -> PluginRecord:
         record = reg.get(plugin_id)
 
         if record.consent_required() and not consent_granted_by:
@@ -400,8 +487,6 @@ class PluginLifecycle:
                 f"{plugin_id} could not be loaded; it stays disabled "
                 f"(see the log for the failing class_path)"
             )
-
-        reg.save()
 
         _audit(
             "plugin.enabled",
@@ -509,7 +594,12 @@ class PluginLifecycle:
         before any mutation reaches disk.
         """
         self._require_enabled("configuration")
-        reg = self._registry()
+        with self._mutation() as reg:
+            return self._set_settings_locked(reg, plugin_id, settings)
+
+    def _set_settings_locked(
+        self, reg: TenantRegistry, plugin_id: str, settings: dict
+    ) -> PluginRecord:
         record = reg.get(plugin_id)
 
         SettingsValidator(record.settings_schema).validate(settings)
@@ -517,7 +607,6 @@ class PluginLifecycle:
         old_keys = sorted(record.settings)
         updated = PluginRecord.from_dict({**record.to_dict(), "settings": settings})
         reg.records[plugin_id] = updated
-        reg.save()
 
         # KEY NAMES ONLY. Setting VALUES are operator config that can contain a
         # webhook URL, a project path or an account id — never put them in the
@@ -536,7 +625,10 @@ class PluginLifecycle:
     def disable(self, plugin_id: str) -> PluginRecord:
         """Disable a record.  Dependents that are still enabled block the change."""
         self._require_enabled("disable")
-        reg = self._registry()
+        with self._mutation() as reg:
+            return self._disable_locked(reg, plugin_id)
+
+    def _disable_locked(self, reg: TenantRegistry, plugin_id: str) -> PluginRecord:
         record = reg.get(plugin_id)
 
         dependents = [
@@ -561,7 +653,6 @@ class PluginLifecycle:
 
         disabled = record.with_enabled(False)
         reg.records[plugin_id] = disabled
-        reg.save()
 
         # Hot-unload (ADR-0124 Inv. 6): stop the plugin NOW rather than at the
         # next boot. unregister() runs its on_unload() hook; the provider slot is
@@ -582,7 +673,12 @@ class PluginLifecycle:
         outlives the plugin (Marketplace-ADR open question #4, answered: no).
         """
         self._require_enabled("uninstall")
-        reg = self._registry()
+        with self._mutation() as reg:
+            self._uninstall_locked(reg, plugin_id, purge_state=purge_state)
+
+    def _uninstall_locked(
+        self, reg: TenantRegistry, plugin_id: str, *, purge_state: bool
+    ) -> None:
         record = reg.get(plugin_id)
         if record.enabled:
             raise PluginError(f"{plugin_id} is enabled; disable it before uninstalling")
@@ -592,7 +688,6 @@ class PluginLifecycle:
         # otherwise outlive the record.
         self._deactivate(record)
         del reg.records[plugin_id]
-        reg.save()
 
         purged = False
         if purge_state:

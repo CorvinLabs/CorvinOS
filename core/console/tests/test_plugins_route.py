@@ -505,3 +505,96 @@ class TestHealthAndMetrics(_Base):
             finally:
                 route_mod.set_collector(None)
             del _sys
+
+
+class TestRuntimeStateIsVisible(_Base):
+    """Review finding: after healing, `enabled` and reality diverge.
+
+    Healing must not rewrite the operator's registry, so a contained plugin stays
+    `enabled: true` on disk while being unloaded in the process. Reporting only
+    `enabled` would be the same silent false display that hot-reload removed.
+    """
+
+    @contextmanager
+    def _live(self):
+        with _sandbox(Path(self._tmp)) as (client, csrf, home):
+            self._flag(client, csrf, "plugin_console_surface", True)
+            self._flag(client, csrf, "plugin_runtime_lifecycle", True)
+            yield client, csrf, home
+
+    def test_a_record_without_a_class_path_reports_not_running(self):
+        with self._live() as (client, csrf, _home):
+            client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            client.post(
+                "/v1/console/plugins/acme-notify/enable", json={}, headers=self._hdr(csrf)
+            )
+            body = client.get("/v1/console/plugins/acme-notify").json()
+            self.assertTrue(body["enabled"])
+            self.assertFalse(
+                body["runtime_loaded"],
+                "nothing was loadable, so the UI must not claim it is running",
+            )
+
+    def test_a_disabled_plugin_reports_no_containment_reason(self):
+        with self._live() as (client, csrf, _home):
+            client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            body = client.get("/v1/console/plugins/acme-notify").json()
+            self.assertFalse(body["enabled"])
+            self.assertIsNone(
+                body["contained_by"], "a plugin nobody enabled is not 'contained'"
+            )
+
+    def test_breaker_state_surfaces_as_containment(self):
+        with self._live() as (client, csrf, _home):
+            client.post("/v1/console/plugins", json=_RECORD, headers=self._hdr(csrf))
+            # Open a breaker for this id and register the plugin so it counts as
+            # loaded — that is the "running but contained" case.
+            from corvin_plugins import circuit_breaker as cb
+            from corvin_plugins.bootstrap import build_context
+            from corvin_plugins.protocol import HealthStatus
+            from corvin_plugins.registry import get_registry
+
+            class _Live:
+                plugin_id = "acme-notify"
+                plugin_type = "notification_backend"
+                version = "1.0.0"
+                display_name = "Acme"
+
+                def on_load(self, ctx):
+                    pass
+
+                def on_unload(self):
+                    pass
+
+                def health_check(self):
+                    return HealthStatus(ok=True)
+
+                def notify(self, *a, **k):
+                    pass
+
+            get_registry().register(
+                _Live(),
+                build_context(
+                    plugin_id="acme-notify", tenant_id="_default", corvin_home=Path("/tmp")
+                ),
+            )
+            try:
+                breaker = cb.get_breaker("acme-notify", failure_threshold=1)
+                breaker.record_failure(RuntimeError())
+                client.post(
+                    "/v1/console/plugins/acme-notify/enable",
+                    json={},
+                    headers=self._hdr(csrf),
+                )
+                body = client.get("/v1/console/plugins/acme-notify").json()
+                self.assertTrue(body["runtime_loaded"])
+                self.assertTrue(
+                    (body["contained_by"] or "").startswith("breaker_"),
+                    f"expected a breaker reason, got {body['contained_by']!r}",
+                )
+            finally:
+                try:
+                    get_registry().unregister("acme-notify")
+                except Exception:
+                    pass
+                cb.forget("acme-notify")

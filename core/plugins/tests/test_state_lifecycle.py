@@ -741,3 +741,108 @@ class TestFlowDeclarations(_Base):
         restored = PluginRecord.from_dict(rec.to_dict())
         self.assertIs(restored.locality, Locality.EU_CLOUD)
         self.assertEqual(restored.egress_hosts, ["a.example", "b.example"])
+
+
+# ── Concurrency (adversarial review, iteration 1) ─────────────────────────────
+
+
+class TestConcurrentMutations(_Base):
+    """Registry writes must not lose each other.
+
+    Found by review: every mutation did load → modify → save with no lock, so two
+    Console requests raced and the last writer won. Measured before the fix: 12
+    concurrent installs left 2 records on disk, with no error anywhere.
+    """
+
+    def _install(self, i: int) -> None:
+        try:
+            self.lc.install(
+                _record(
+                    f"p{i:02d}",
+                    origin=PluginOrigin.VETTED,
+                    network_egress=NetworkEgress.NONE,
+                ),
+                installed_by="race",
+            )
+        except PluginError:
+            pass
+
+    def test_concurrent_installs_all_survive(self):
+        import threading
+
+        threads = [threading.Thread(target=self._install, args=(i,)) for i in range(12)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        records = self._reg().records
+        self.assertEqual(
+            len(records), 12, f"writes were lost: only {sorted(records)} survived"
+        )
+
+    def test_concurrent_enable_and_settings_do_not_clobber(self):
+        import threading
+
+        for i in range(6):
+            self._install(i)
+
+        errors: list[str] = []
+
+        def enable(i: int) -> None:
+            try:
+                self.lc.enable(f"p{i:02d}")
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{type(exc).__name__}")
+
+        def configure(i: int) -> None:
+            try:
+                self.lc.set_settings(f"p{i:02d}", {"channel": f"c{i}"})
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{type(exc).__name__}")
+
+        threads = []
+        for i in range(6):
+            threads.append(threading.Thread(target=enable, args=(i,)))
+            threads.append(threading.Thread(target=configure, args=(i,)))
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [], "no mutation may fail under contention")
+        records = self._reg().records
+        self.assertEqual(len(records), 6)
+        self.assertTrue(all(r.enabled for r in records.values()), "every enable stuck")
+        for i in range(6):
+            self.assertEqual(records[f"p{i:02d}"].settings["channel"], f"c{i}")
+
+    def test_a_failed_mutation_leaves_the_file_consistent(self):
+        self._install(0)
+        with self.assertRaises(PluginError):
+            self.lc.install(
+                _record("p00", origin=PluginOrigin.VETTED, network_egress=NetworkEgress.NONE),
+                installed_by="race",
+            )
+        # The lock context re-raises without saving a partial state.
+        self.assertEqual(len(self._reg().records), 1)
+
+    def test_the_lock_file_is_not_world_readable(self):
+        import stat
+
+        self._install(0)
+        lock = registry_path(
+            tenant_id="_default", corvin_home_path=self.home
+        ).with_name(".registry.lock")
+        self.assertTrue(lock.exists())
+        self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
+
+    def test_mutation_helper_is_the_only_writer(self):
+        """No method may call reg.save() directly — that is how the race returned."""
+        import inspect
+
+        from corvin_plugins import state as state_mod
+
+        source = inspect.getsource(state_mod.PluginLifecycle)
+        self.assertNotIn(
+            "reg.save()", source, "mutations must go through registry_mutation()"
+        )
