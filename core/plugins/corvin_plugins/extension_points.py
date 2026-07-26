@@ -328,14 +328,31 @@ def _loaded_tenant(plugin_id: str) -> Tuple[Optional[str], str]:
     :class:`PluginContext`, so no error path and no missing plugin can be
     mistaken for "the tenants match".
 
-    This is deliberately the ONLY place that touches the registry's private
-    context map.  ``PluginRegistry`` publishes no accessor for a plugin's
-    context (it has ``get`` for the plugin object and ``boot_layer_of`` for the
-    layer, neither of which carries the tenant), and one guarded, documented
-    reach is better than the same reach sprinkled through the bus.  If the
-    registry ever grows a public ``tenant_of()``, this function is the single
-    edit.
+    Two sources, in this order:
+
+    1. **The load context** (``loading.current()``). Set by the registry around
+       ``on_load``, and it is the only source that also answers *outside* the
+       window in which the plugin appears in ``_contexts``.
+    2. **The registry**, for a plugin that is loaded but not currently loading.
+
+    Order matters. Consulting only the registry left two natural registration
+    windows unguarded — from ``__init__`` (the object is constructed BEFORE
+    ``register()`` runs, which is where plugin authors usually put setup) and
+    after ``unregister`` — and both took the "unregistered, therefore allowed"
+    exception. A plugin could claim another tenant's fail-closed workflow gate
+    from its own constructor.
+
+    Fail-closed in the sense that matters here: it never *invents* agreement. A
+    tenant id comes back only when it was actually read off a live load context
+    or :class:`PluginContext`, so no error path and no missing plugin can be
+    mistaken for "the tenants match".
     """
+    from . import loading as _loading
+
+    who = _loading.current()
+    if who is not None and who.plugin_id == plugin_id:
+        return who.tenant_id, _TENANT_VERIFIED
+
     try:
         from .registry import get_registry
 
@@ -559,6 +576,45 @@ class _ExtensionPointBus:
         with self._lock:
             return self._hooks.get((tenant_id, point))
 
+    def verify_owner(self, plugin_id: str, tenant_id: str) -> int:
+        """Drop hooks this plugin registered for a tenant that is not its own.
+
+        Closes the window the up-front check structurally cannot: a plugin's
+        ``__init__`` runs BEFORE ``register()``, so a hook registered there has
+        no load context and no registry entry to check against, and takes the
+        "unregistered, therefore allowed" path. That is where a plugin author
+        naturally puts setup — and where a hostile one would put a claim on
+        another tenant's fail-closed workflow gate.
+
+        The claim cannot survive the plugin actually being loaded: at that
+        moment its real tenant becomes known, and every hook it holds for a
+        different tenant is removed and audited. Registration is no longer the
+        last word; loading is.
+
+        Returns the number of hooks revoked.
+        """
+        with self._lock:
+            doomed = [
+                key for key, hook in self._hooks.items()
+                if hook.plugin_id == plugin_id and key[0] != tenant_id
+            ]
+            for key in doomed:
+                del self._hooks[key]
+        for foreign_tenant, point in doomed:
+            log.error(
+                "extension point %s: revoked a hook %r had registered for tenant "
+                "%r before it was loaded for tenant %r",
+                point, plugin_id, foreign_tenant, tenant_id,
+            )
+            _audit("plugin.extension_hook_revoked", {
+                "point": _clip(point),
+                "plugin_id": _clip(plugin_id),
+                "tenant_id": _clip(tenant_id),
+                "revoked_tenant_id": _clip(foreign_tenant),
+                "reason": "claimed_before_load",
+            }, tenant_id=tenant_id)
+        return len(doomed)
+
     def unregister_all(self, plugin_id: str) -> int:
         with self._lock:
             doomed = [k for k, h in self._hooks.items() if h.plugin_id == plugin_id]
@@ -714,6 +770,16 @@ def register_hook(
     )
 
 
+def verify_owner(plugin_id: str, tenant_id: str) -> int:
+    """Revoke hooks ``plugin_id`` claimed for a tenant other than ``tenant_id``.
+
+    Called by the registry once a plugin is actually loaded, so a claim staked
+    from ``__init__`` — before any check could resolve the plugin — cannot
+    outlive the load.
+    """
+    return _bus.verify_owner(plugin_id, tenant_id)
+
+
 def unregister_all(plugin_id: str) -> int:
     """Drop every hook registered by ``plugin_id``, across all tenants.
 
@@ -851,4 +917,5 @@ __all__ = [
     "register_hook",
     "spec",
     "unregister_all",
+    "verify_owner",
 ]

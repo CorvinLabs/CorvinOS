@@ -5,6 +5,7 @@ import logging
 import threading
 
 from . import circuit_breaker as _breakers
+from . import loading as _loading
 from .manifest import _PRIVILEGED_BOOT_LAYERS, BootLayer
 from .protocol import (
     CorvinPlugin,
@@ -94,21 +95,67 @@ def _scrub_plugin_details(details: object) -> dict:
     return cleaned if isinstance(cleaned, dict) else {}
 
 
-def _detach_provider_slot(plugin: CorvinPlugin) -> None:
-    """Release the provider registry slot held by ``plugin``, if it holds one.
+#: Every provider registry, by module name.  Release walks ALL of them by owner
+#: id rather than picking one from ``plugin_type`` — a plugin can take a slot
+#: that its type does not name, because ``build_context`` hands every registry
+#: to every plugin.
+_PROVIDER_MODULE_NAMES: tuple[str, ...] = (
+    "audit_backend", "user_backend", "stt_provider", "data_connector",
+    "recall_backend", "router_backend", "summary_provider", "notification_backend",
+)
 
-    Imported lazily and guarded: ``state`` imports ``manifest`` which imports
-    ``protocol``, and a failure to tidy a provider slot must never turn an
-    unload into an exception for the caller.
+
+def _detach_provider_slot(plugin: CorvinPlugin) -> None:
+    """Release every provider slot ``plugin`` took, by plugin identity.
+
+    Two earlier versions of this got the identity wrong, in opposite ways:
+
+    * matching the slot's CONTENTS against the plugin object missed a plugin
+      that installed a helper (``set_active(self._sink)``), which then kept
+      receiving events after the operator disabled it;
+    * picking one module from ``plugin_type`` missed a plugin whose type has no
+      provider module at all, and nothing else could ever release that slot.
+
+    Ownership is recorded when the slot is taken (``providers.*.set_active``
+    reads ``loading.current()``), so the question "is this slot yours" has one
+    correct answer instead of two heuristics. Guarded: tidying a slot must never
+    turn an unload into an exception for the caller.
+    """
+    plugin_id = getattr(plugin, "plugin_id", "")
+    if not plugin_id:
+        return
+    from importlib import import_module
+
+    for name in _PROVIDER_MODULE_NAMES:
+        try:
+            module = import_module(f".providers.{name}", package=__package__)
+            if module.release_owned_by(plugin_id):
+                log.debug("released %s slot held by %r", name, plugin_id)
+        except Exception as exc:  # noqa: BLE001
+            log.error(
+                "provider release for %r on %s failed (%s)",
+                plugin_id, name, type(exc).__name__,
+            )
+
+
+def _verify_hook_ownership(plugin_id: str, tenant_id: str) -> None:
+    """Revoke extension hooks this plugin claimed for a foreign tenant.
+
+    Guarded and lazy: the bus is optional in a stripped layout, and tidying
+    hooks must never turn a successful load into an exception.
     """
     try:
-        from .state import _detach_providers
+        from .extension_points import verify_owner
 
-        _detach_providers(getattr(plugin, "plugin_type", ""), instance=plugin)
+        revoked = verify_owner(plugin_id, tenant_id)
+        if revoked:
+            log.warning(
+                "revoked %d extension hook(s) %r had claimed for other tenants",
+                revoked, plugin_id,
+            )
     except Exception as exc:  # noqa: BLE001
         log.error(
-            "provider detach for %r failed (%s)",
-            getattr(plugin, "plugin_id", "?"), type(exc).__name__,
+            "hook ownership check for %r failed (%s)", plugin_id, type(exc).__name__
         )
 
 
@@ -197,14 +244,26 @@ class PluginRegistry:
             self._boot_layers[plugin.plugin_id] = resolved
 
         try:
-            plugin.on_load(ctx)
+            # Mark who is loading, for the whole duration of on_load(). Provider
+            # registries and the extension bus read this instead of trying to
+            # work out the caller from an object or a plugin_type — see
+            # `loading.py` for the three defects that came from guessing.
+            with _loading.loading(plugin.plugin_id, ctx.tenant_id):
+                plugin.on_load(ctx)
         except Exception:
-            # on_load failed — roll back the slot reservation.
+            # on_load failed — roll back the slot reservation, including any
+            # provider slot the half-loaded plugin managed to take.
+            _detach_provider_slot(plugin)
             with self._lock:
                 self._plugins.pop(plugin.plugin_id, None)
                 self._contexts.pop(plugin.plugin_id, None)
                 self._boot_layers.pop(plugin.plugin_id, None)
             raise
+
+        # A hook this plugin claimed BEFORE it was loaded — from __init__, where
+        # no check could resolve it — is revoked now that its real tenant is
+        # known. Registration is not the last word; loading is.
+        _verify_hook_ownership(plugin.plugin_id, ctx.tenant_id)
 
         log.info(
             "plugin loaded: id=%r type=%r version=%r tenant=%r",

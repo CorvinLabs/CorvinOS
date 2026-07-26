@@ -107,6 +107,12 @@ class CircuitBreaker:
         if failure_threshold < 1:
             raise ValueError("failure_threshold must be >= 1")
         self.plugin_id = plugin_id
+        #: May this plugin be contained (stopped from being called) when it
+        #: keeps failing?  ``get_breaker()`` sets it to False for the compliance
+        #: boot layer; failures are still counted and reported, the breaker just
+        #: never opens.  Default True so a breaker built directly — tests, other
+        #: subsystems — behaves exactly as it always did.
+        self.containable = True
         self.failure_threshold = failure_threshold
         self.cooldown_s = cooldown_s
         self.slow_call_s = slow_call_s
@@ -189,6 +195,14 @@ class CircuitBreaker:
                 # bind DNs or record fragments.
                 st.last_failure_type = type(exc).__name__
             was = st.state
+            if not getattr(self, "containable", True):
+                # Compliance boot layer: the failure is counted and visible in
+                # stats(), but the breaker never opens. Opening it would stop
+                # the mechanism being called at all, which is the automatic off
+                # switch that layer may not have. Set centrally by get_breaker()
+                # so every call site inherits it — the previous approach gated
+                # one call site at a time and missed two.
+                return
             if (
                 st.state is BreakerState.HALF_OPEN
                 or st.consecutive_failures >= self.failure_threshold
@@ -301,8 +315,42 @@ class BreakerRegistry:
 _registry = BreakerRegistry()
 
 
+def _is_containable(plugin_id: str) -> bool:
+    """False for the compliance boot layer, True for everything else.
+
+    An open breaker means "stop calling it", which for a compliance mechanism is
+    an automatic off switch — the thing CLAUDE.md rules out for that layer.
+    The decision lives HERE, at the one place every caller goes through, rather
+    than at each call site: gating them one at a time is what let the same
+    invariant be violated twice from ``audit_backend._deliver_inner`` and
+    ``healing._circuit_break`` after ``health_check_all`` had been fixed.
+
+    Imported lazily and failing OPEN-to-containment: if the registry cannot be
+    consulted, the plugin is treated as ordinary. That is the safe direction
+    here — a compliance plugin the registry does not know about is not a
+    compliance plugin.
+    """
+    try:
+        from .manifest import BootLayer
+        from .registry import get_registry
+
+        return get_registry().boot_layer_of(plugin_id) is not BootLayer.COMPLIANCE
+    except Exception:  # noqa: BLE001 — unknown plugin, no registry, import cycle
+        return True
+
+
 def get_breaker(plugin_id: str, **kwargs: Any) -> CircuitBreaker:
-    return _registry.get(plugin_id, **kwargs)
+    """The breaker for ``plugin_id``.
+
+    A compliance-boot-layer plugin gets a breaker that counts but never opens,
+    so every existing call site — ``guard()``, ``record_failure()``, the health
+    aggregate, the audit fan-out, the healing orchestrator — keeps working
+    unchanged while containment stops being reachable for that layer.
+    """
+    breaker = _registry.get(plugin_id, **kwargs)
+    if not _is_containable(plugin_id):
+        breaker.containable = False
+    return breaker
 
 
 def forget(plugin_id: str) -> None:
