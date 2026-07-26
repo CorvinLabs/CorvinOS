@@ -241,7 +241,7 @@ def _code_report(pkg_root: Path, manifest: Path) -> Any:
         )
         return report
 
-    declared_type = _manifest_type(manifest)
+    declared_type, declared_id = _manifest_fields(manifest)
     classes = [
         obj
         for name in dir(module)
@@ -258,7 +258,12 @@ def _code_report(pkg_root: Path, manifest: Path) -> Any:
         return report
 
     for cls in classes:
-        report = merge(report, validate_class(cls, expected_type=declared_type))
+        report = merge(
+            report,
+            validate_class(
+                cls, expected_type=declared_type, expected_id=declared_id
+            ),
+        )
         try:
             instance = cls()
         except TypeError:
@@ -273,14 +278,17 @@ def _code_report(pkg_root: Path, manifest: Path) -> Any:
     return report
 
 
-def _manifest_type(manifest: Path) -> str | None:
+def _manifest_fields(manifest: Path) -> tuple[str | None, str | None]:
+    """(plugin_type, plugin_id) from the manifest, for cross-checking the class."""
     try:
         import yaml
 
         data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
-        return data.get("plugin_type") if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            return None, None
+        return data.get("plugin_type"), data.get("plugin_id")
     except Exception:
-        return None
+        return None, None
 
 
 # ── corvin plugin new ────────────────────────────────────────────────────────
@@ -325,12 +333,19 @@ def cmd_new(args: argparse.Namespace) -> int:
         return 2
 
     pkg = _dirname(args.plugin_id)
-    template_src = template.read_text(encoding="utf-8")
+    template_src = _apply_plugin_id(
+        template.read_text(encoding="utf-8"), args.plugin_id
+    )
     cls_name = _plugin_class_name(template_src)
     dest.mkdir(parents=True)
     (dest / "plugin.py").write_text(template_src, encoding="utf-8")
     (dest / "plugin.yaml").write_text(
-        _manifest_yaml(args.plugin_id, args.plugin_type), encoding="utf-8"
+        _manifest_yaml(
+            args.plugin_id,
+            args.plugin_type,
+            _class_attr_value(template_src, "version") or "0.1.0",
+        ),
+        encoding="utf-8",
     )
     (dest / "pyproject.toml").write_text(
         _pyproject_toml(args.plugin_id, pkg, cls_name), encoding="utf-8"
@@ -354,6 +369,72 @@ def cmd_new(args: argparse.Namespace) -> int:
         )
     print("  Next:  corvin plugin check " + str(dest) + "\n")
     return 0
+
+
+def _class_attr_span(src: str, attr: str) -> tuple[int, int] | None:
+    """(lineno, col) of `attr = ...` inside the class that declares plugin_type.
+
+    Needed because three shipped templates assign `plugin_id` more than once
+    (compute_engine does it three times, in helper and example classes). A
+    regex with count=1 rewrites whichever comes first in the file, which is not
+    necessarily the plugin class — so the scaffold could end up renaming an
+    example while leaving the real class on the placeholder id.
+    """
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return None
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        declares_type = any(
+            isinstance(s, ast.Assign)
+            and any(isinstance(t_, ast.Name) and t_.id == "plugin_type" for t_ in s.targets)
+            for s in node.body
+        )
+        if not declares_type:
+            continue
+        for stmt in node.body:
+            if isinstance(stmt, ast.Assign) and any(
+                isinstance(t_, ast.Name) and t_.id == attr for t_ in stmt.targets
+            ):
+                return stmt.lineno, stmt.col_offset
+    return None
+
+
+def _class_attr_value(src: str, attr: str) -> str | None:
+    """Literal value of `attr` on the plugin class, or None."""
+    span = _class_attr_span(src, attr)
+    if span is None:
+        return None
+    line = src.splitlines()[span[0] - 1]
+    m = re.search(r'=\s*["\']([^"\']*)["\']', line)
+    return m.group(1) if m else None
+
+
+def _apply_plugin_id(src: str, plugin_id: str) -> str:
+    """Rewrite the plugin class's placeholder id to the one being scaffolded.
+
+    Templates ship a placeholder ("com.example.my-router"). Left in place, a
+    scaffold disagrees with its own manifest from the first second — and the class
+    wins at registration, so the manifest's pii_risk/requires_consent declarations
+    describe an id that never loads, while an operator declaring the manifest id in
+    tenant.corvin.yaml configures nothing.
+
+    Found by the adversarial pass: `check` accepted a class/manifest id mismatch,
+    and fixing THAT immediately exposed that `new` was manufacturing one.
+    """
+    span = _class_attr_span(src, "plugin_id")
+    if span is None:
+        return src
+    lineno, _ = span
+    lines = src.splitlines(keepends=True)
+    lines[lineno - 1] = re.sub(
+        r'^(\s*plugin_id\s*=\s*)["\'][^"\']*["\']',
+        lambda m: f'{m.group(1)}"{plugin_id}"',
+        lines[lineno - 1],
+    )
+    return "".join(lines)
 
 
 def _plugin_class_name(src: str) -> str:
@@ -418,7 +499,7 @@ def _template_path(name: str) -> Path | None:
     return None
 
 
-def _manifest_yaml(plugin_id: str, plugin_type: str) -> str:
+def _manifest_yaml(plugin_id: str, plugin_type: str, version: str) -> str:
     """Generate a manifest at the least-privileged values, all written out.
 
     Nothing is omitted and left to a default: an author changing one of these
@@ -432,7 +513,7 @@ def _manifest_yaml(plugin_id: str, plugin_type: str) -> str:
         f"# Every value below is the least-privileged one the registry accepts.\n"
         f"plugin_id: {plugin_id}\n"
         f"plugin_type: {plugin_type}\n"
-        f"version: 0.1.0\n"
+        f"version: {version}\n"
         f'display_name: "{plugin_id}"\n'
         f"\n"
         f"# Boot layer. `installed` is the only value a third-party plugin may\n"

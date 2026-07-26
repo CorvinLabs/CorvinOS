@@ -344,6 +344,44 @@ def healthz() -> dict[str, Any]:
 _PKG_DIR = Path(__file__).resolve().parent
 _NEXT_DIST_DIR = _PKG_DIR / "web-next" / "dist"
 
+HEADLESS_FLAG_ID = "headless_api_mode"
+
+
+def headless_enabled(tenant_id: str | None = None) -> bool:
+    """True when this process should serve the API without a browser UI.
+
+    ADR-0241/0243 "API-only" deployment. Reading a *deployment* mode out of a
+    per-tenant flag is a deliberate compromise and worth naming: the SPA mount
+    is a property of the PROCESS, not of a tenant, so this is resolved once for
+    the boot tenant and then applies process-wide. A second tenant on the same
+    process does not get its own UI back.
+
+    The alternative — an env var — was rejected because CLAUDE.md requires new
+    features to be toggleable from Console → Settings → Features, and an env
+    kill-flag is exactly the shape this repo has ruled out elsewhere. If
+    per-process configuration ever becomes a real requirement it needs its own
+    mechanism, not a second meaning for this flag.
+
+    Every failure mode resolves to False (= today's behaviour, UI mounted).
+    """
+    try:
+        from .feature_flags import is_enabled
+    except Exception:  # noqa: BLE001 — no flag registry means no headless mode
+        return False
+    try:
+        if tenant_id is None:
+            from forge.tenants import current_tenant  # type: ignore[import-not-found]
+
+            tenant_id = current_tenant()
+        return bool(is_enabled(HEADLESS_FLAG_ID, tenant_id))
+    except Exception:  # noqa: BLE001 — an unreadable flag is an off flag
+        import logging
+
+        logging.getLogger(__name__).debug(
+            "%s could not be read — serving the UI as usual", HEADLESS_FLAG_ID
+        )
+        return False
+
 
 def mount_static(app: FastAPI, *, url_prefix: str = "/console") -> None:
     """Mount the web-next console SPA at ``url_prefix``.
@@ -351,7 +389,19 @@ def mount_static(app: FastAPI, *, url_prefix: str = "/console") -> None:
     Requires ``npm run build`` in ``web-next/`` to have produced
     ``dist/``; when that artifact is missing the mount is skipped and a
     clear warning is printed so operators know why the UI is unavailable.
+
+    In headless mode (``headless_api_mode``) the SPA is not mounted at all and
+    no fallback route is registered — ``/console`` 404s. That is the point of
+    the mode: an API-only deployment should not serve a browser surface, and a
+    "not built" placeholder would be a browser surface.
     """
+    if headless_enabled():
+        import logging
+
+        logging.getLogger(__name__).info(
+            "%s is on — serving the API without the console SPA", HEADLESS_FLAG_ID
+        )
+        return
     if not _NEXT_DIST_DIR.exists() or not (_NEXT_DIST_DIR / "index.html").exists():
         import logging
         logging.getLogger(__name__).warning(

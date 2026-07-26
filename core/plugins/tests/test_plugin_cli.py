@@ -6,6 +6,7 @@ person actually using it.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -144,6 +145,136 @@ def test_no_import_skips_the_code_checks(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "no_import" in out and "the code was not" in out
+
+
+def test_scaffold_class_id_matches_its_own_manifest(tmp_path):
+    """`new` must rewrite the template's placeholder id, not leave it.
+
+    Templates ship `plugin_id = "com.example.my-router"`. Left in place, every
+    scaffold disagrees with its own manifest — and the class wins at registration,
+    so the manifest's pii_risk/requires_consent declarations describe an id that
+    never loads while the operator configures one that does not exist.
+    """
+    import yaml
+
+    pkg = _scaffold(tmp_path)
+    manifest_id = yaml.safe_load(
+        (pkg / "plugin.yaml").read_text(encoding="utf-8")
+    )["plugin_id"]
+    src = (pkg / "plugin.py").read_text(encoding="utf-8")
+    m = re.search(r'^\s*plugin_id\s*=\s*["\']([^"\']+)["\']', src, re.MULTILINE)
+    assert m, "scaffolded plugin.py declares no plugin_id"
+    assert m.group(1) == manifest_id == "com.example.t"
+
+
+def test_check_rejects_a_class_id_that_contradicts_the_manifest(tmp_path, capsys):
+    """The id is the registration key, the config key and the audit key.
+
+    A mismatch is an error, not a warning: the class wins, so everything the
+    manifest declares would be attached to an id that never registers.
+    """
+    import argparse
+
+    from corvin.plugin_cmd import cmd_check
+
+    pkg = _scaffold(tmp_path)
+    src = (pkg / "plugin.py").read_text(encoding="utf-8")
+    (pkg / "plugin.py").write_text(
+        re.sub(
+            r'^(\s*plugin_id\s*=\s*)["\'][^"\']*["\']',
+            lambda m: f'{m.group(1)}"totally.different.id"',
+            src,
+            count=1,
+            flags=re.MULTILINE,
+        ),
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    rc = cmd_check(argparse.Namespace(path=str(pkg), no_import=False))
+    out = capsys.readouterr().out
+    assert rc == 1, "an id mismatch must fail the check"
+    assert "id_mismatch" in out
+
+
+def _buildable() -> list[str]:
+    from corvin_plugins.surface_map import buildable_types
+
+    return list(buildable_types())
+
+
+@pytest.mark.parametrize("plugin_type", _buildable())
+def test_every_type_scaffolds_into_something_that_passes_its_own_check(
+    plugin_type, tmp_path, capsys
+):
+    """new → check must hold for ALL nine types, not just router_backend.
+
+    The single-type version of this test passed while three templates were still
+    broken: they assign `plugin_id` more than once (compute_engine three times, in
+    helper and example classes), so a regex rewrite with count=1 could rename an
+    example and leave the real class on the placeholder. Parametrising over every
+    buildable type is what turns "it works" into "it works for the nine things a
+    user can actually ask for".
+    """
+    import argparse
+
+    from corvin.plugin_cmd import cmd_check, cmd_new
+
+    pid = "com.example.each"
+    assert cmd_new(
+        argparse.Namespace(
+            plugin_type=plugin_type, plugin_id=pid, output=str(tmp_path)
+        )
+    ) == 0
+    pkg = tmp_path / "com_example_each"
+    capsys.readouterr()
+
+    rc = cmd_check(argparse.Namespace(path=str(pkg), no_import=False))
+    assert rc == 0, (
+        f"{plugin_type}: freshly scaffolded plugin fails its own check\n"
+        + capsys.readouterr().out
+    )
+
+
+@pytest.mark.parametrize("plugin_type", _buildable())
+def test_scaffold_manifest_and_class_agree_on_id_and_version(
+    plugin_type, tmp_path, capsys
+):
+    """Manifest and class must not disagree on the two fields that reach the registry.
+
+    The class wins at registration. A manifest carrying a different id files its
+    pii_risk/requires_consent declarations under something that never loads; a
+    manifest carrying a different version puts a wrong number into every audit
+    event. Both were true of every scaffold before this: the manifest hard-coded
+    version 0.1.0 while the templates declare 1.0.0.
+    """
+    import argparse
+
+    import yaml
+    from corvin.plugin_cmd import _class_attr_value, cmd_new
+
+    pid = "com.example.agree"
+    assert cmd_new(
+        argparse.Namespace(
+            plugin_type=plugin_type, plugin_id=pid, output=str(tmp_path)
+        )
+    ) == 0
+    capsys.readouterr()
+    pkg = tmp_path / "com_example_agree"
+
+    manifest = yaml.safe_load((pkg / "plugin.yaml").read_text(encoding="utf-8"))
+    src = (pkg / "plugin.py").read_text(encoding="utf-8")
+
+    assert manifest["plugin_id"] == pid
+    assert _class_attr_value(src, "plugin_id") == pid, (
+        f"{plugin_type}: class plugin_id was not rewritten to {pid}"
+    )
+    class_version = _class_attr_value(src, "version")
+    if class_version:
+        assert manifest["version"] == class_version, (
+            f"{plugin_type}: manifest says version {manifest['version']}, class "
+            f"says {class_version} — the class wins at registration"
+        )
 
 
 def test_templates_are_shipped_in_the_wheel():
