@@ -498,3 +498,53 @@ class TestHalfOpenAdmitsExactlyOneProbe(unittest.TestCase):
         results = [self.b.call(flaky, fallback="fb") for _ in range(4)]
         self.assertEqual(results, ["fb"] * 4)
         self.assertEqual(len(calls), 1, "only the probe reaches the plugin")
+
+
+class TestAbandonedProbeExpires(unittest.TestCase):
+    """Second-round finding: the F2 fix could wedge the breaker shut forever.
+
+    A caller that claims the half-open slot and never reports back — killed by a
+    BaseException, or a future call site that forgets record_success/failure —
+    left probe_in_flight set, so the breaker refused every caller from then on.
+    That is strictly worse than the thundering herd the slot prevents, so the
+    claim carries a TTL.
+    """
+
+    def test_abandoned_probe_releases_after_ttl(self):
+        b = cb.CircuitBreaker("x", failure_threshold=1, cooldown_s=0.05, probe_ttl_s=0.1)
+        b.record_failure(RuntimeError())
+        time.sleep(0.06)
+        b.guard()  # claimed, then the caller vanishes
+
+        with self.assertRaises(cb.CircuitOpen):
+            b.guard()  # concurrent caller is still refused
+
+        time.sleep(0.12)
+        with self.assertLogs("corvin.plugins.breaker", level="WARNING"):
+            b.guard()  # expired: a fresh probe may run
+
+    def test_a_reporting_probe_releases_immediately(self):
+        b = cb.CircuitBreaker("x", failure_threshold=1, cooldown_s=0.05, probe_ttl_s=30)
+        b.record_failure(RuntimeError())
+        time.sleep(0.06)
+        b.guard()
+        b.record_success()
+        b.guard()  # closed again — no need to wait for the TTL
+
+    def test_ttl_defaults_to_the_wider_of_cooldown_and_slow_call(self):
+        self.assertEqual(
+            cb.CircuitBreaker("x", cooldown_s=30, slow_call_s=5).probe_ttl_s, 30
+        )
+        self.assertEqual(
+            cb.CircuitBreaker("x", cooldown_s=2, slow_call_s=9).probe_ttl_s, 9
+        )
+
+    def test_slow_but_legitimate_probe_is_not_stolen(self):
+        """The TTL must not be shorter than a call the breaker still considers OK."""
+        b = cb.CircuitBreaker("x", failure_threshold=1, cooldown_s=0.05, slow_call_s=0.5)
+        b.record_failure(RuntimeError())
+        time.sleep(0.06)
+        b.guard()
+        time.sleep(0.2)  # still inside slow_call_s, so still a valid probe
+        with self.assertRaises(cb.CircuitOpen):
+            b.guard()
