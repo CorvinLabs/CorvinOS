@@ -126,7 +126,12 @@ try:
     _core_plugins = Path(__file__).resolve().parents[3] / "core" / "plugins"
     if (_core_plugins / "corvin_plugins").is_dir():
         if str(_core_plugins) not in sys.path:
-            sys.path.insert(0, str(_core_plugins))
+            # append, NOT insert(0): core/plugins also holds tests/ and
+            # templates/ without __init__.py. audit.py is imported by every
+            # adapter process, so putting that directory first on sys.path would
+            # let `import tests` resolve there instead of the caller's own —
+            # the operator/ stdlib-shadow trap, one level over.
+            sys.path.append(str(_core_plugins))
         from corvin_plugins.providers import audit_backend as _audit_sink  # type: ignore
 except Exception:  # noqa: BLE001 - absent plugin package must never break audit
     _audit_sink = None

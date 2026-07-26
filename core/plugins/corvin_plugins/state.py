@@ -84,7 +84,11 @@ def _tenants_module():
 
     forge_root = Path(__file__).resolve().parents[3] / "operator" / "forge"
     if forge_root.is_dir() and str(forge_root) not in sys.path:
-        sys.path.insert(0, str(forge_root))
+        # append, NOT insert(0): this directory also contains generic top-level
+        # names (tests/, templates/) with no __init__.py, so putting it FIRST on
+        # sys.path lets them shadow another package's `tests` — the same class as
+        # the operator/ stdlib-shadow trap. Appending means existing paths win.
+        sys.path.append(str(forge_root))
     from forge import tenants  # type: ignore[import-not-found]
 
     return tenants
