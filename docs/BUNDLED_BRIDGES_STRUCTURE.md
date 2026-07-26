@@ -1,9 +1,17 @@
 # Bundled Bridges: Supervised Node Daemons
 
-**Status:** shipped dark behind `bridge_supervisor_plugins` (default **off**)
-**ADRs:** ADR-0238 (bridges as supervised plugins), ADR-0243 (plugin layers)
+**Date:** 2026-07-27
+**Status:** the seven supervisor classes exist and are tested; **nothing declares them, so
+none is ever loaded.** Two independent switches are required (§ Enabling a bridge
+supervisor) and only one of them — the feature flag `bridge_supervisor_plugins`, default
+**off** — is even present in a shipped config. The declaration in
+`spec.plugins.installed` is not: the shipped `tenant.corvin.yaml` template has no bridge
+block and no code writes one. So "shipped dark" understates it — this is **shipped, dark,
+and undeclared**.
+**ADRs:** ADR-0238 (bridges as supervised plugins), ADR-0243 (the `boot_layer` axis)
 **Code:** `core/plugins/corvin_plugins/bridges/`, `operator/bridges/bridge_manager.py`
-**Tests:** `core/plugins/tests/test_bridge_supervisor.py`
+**Tests:** `core/plugins/tests/test_bridge_supervisor.py` — **78 passing**, measured
+2026-07-27
 
 ---
 
@@ -68,8 +76,8 @@ config can reference a stable class path:
 | signal   | `SignalBridgePlugin`    | `signal-bridge`    |
 | teams    | `TeamsBridgePlugin`     | `teams-bridge`     |
 
-All of them are `plugin_type = "bridge_channel"` and `layer = "bundled"`.
-Bundled is **disableable** (`can_disable()` is true for every layer except
+All of them are `plugin_type = "bridge_channel"` and `boot_layer = "bundled"`.
+Bundled is **disableable** (`can_disable()` is true for every boot layer except
 `compliance`) — a messenger transport is not a compliance mechanism and an
 operator must be able to switch it off.
 
@@ -103,10 +111,16 @@ The flag is read defensively. If `corvin_console` is not importable at all
 and the supervisors do nothing. `core/plugins` stays importable without the
 Console.
 
-### 2. The declaration
+### 2. The declaration — **this is the one nobody has written**
 
 An entry in `spec.plugins.installed`. Writing a plugin into a version-controlled
-tenant config *is* the explicit opt-in that `bootstrap_declared` asks for:
+tenant config *is* the explicit opt-in that `bootstrap_declared` asks for.
+
+**No shipped file contains such an entry.** The template `tenant.corvin.yaml` has no
+bridge block, no installer writes one, and there is no Console action that adds one. The
+YAML below is what an operator must type by hand today; until they do, every behaviour
+described in the rest of this document is unreachable on their install no matter how the
+feature flag is set.
 
 ```yaml
 spec:
@@ -116,29 +130,30 @@ spec:
   plugins:
     installed:
       - id: discord-bridge
-        layer: bundled
+        boot_layer: bundled
         class_path: "corvin_plugins.bridges.supervisor:DiscordBridgePlugin"
 
       - id: slack-bridge
-        layer: bundled
+        boot_layer: bundled
         class_path: "corvin_plugins.bridges.supervisor:SlackBridgePlugin"
 
       # Park a bridge without deleting its block:
       - id: telegram-bridge
-        layer: bundled
+        boot_layer: bundled
         class_path: "corvin_plugins.bridges.supervisor:TelegramBridgePlugin"
         config:
           enabled: false
 ```
 
-`layer: bundled` is honoured; `layer: core` or `layer: compliance` from a tenant
-config is downgraded to `installed` and audited (`plugin.layer_rejected`) —
+`boot_layer: bundled` is honoured; `boot_layer: core` or `boot_layer: compliance` from a tenant
+config is downgraded to `installed` and audited (`plugin.boot_layer_rejected`) —
 a tenant config is operator-writable and may not promote itself into a
-privileged layer.
+privileged boot layer.
 
-`corvin_plugins.bridges.declaration_entries()` generates these entries so the
-docs, the Console and the tests read one source rather than three copies of a
-dotted path that goes stale on the first rename.
+`corvin_plugins.bridges.declaration_entry(channel)` / `declaration_entries()` generate
+these entries so the docs, the Console and the tests read one source rather than three
+copies of a dotted path that goes stale on the first rename. Generating an entry is not
+the same as shipping one — today only the tests call these.
 
 ---
 
@@ -344,21 +359,25 @@ does not kill it on unload.
   it.
 * **No channel_registry participation.** A supervisor is not a transport, so
   in-process message routing does not go through it.
-* **The shipped `tenant.corvin.yaml` template carries no bridge declarations.**
-  The config form above has to be added by the operator (or by a later Console
-  Settings action); `spec.plugins.installed` ships empty.
+* **The shipped `tenant.corvin.yaml` template carries no bridge declarations, and
+  nothing else writes one.** The config form above has to be added by the operator (or by
+  a later Console Settings action); `spec.plugins.installed` ships empty. This is the
+  limit that subsumes all the others: **no supervisor loads on any install today**,
+  regardless of the feature flag, so none of the behaviour documented above has ever run
+  outside the test suite. `bridges/registry_entries.declaration_entry()` generates the
+  block, but generating it is not shipping it.
 
 ---
 
 ## Test coverage
 
-`core/plugins/tests/test_bridge_supervisor.py` — 73 tests, no real Node process
-is ever started (`subprocess.Popen` is mocked throughout). Both flag states are
+`core/plugins/tests/test_bridge_supervisor.py` — **78 tests, all passing** (measured
+2026-07-27), no real Node process is ever started (`subprocess.Popen` is mocked throughout). Both flag states are
 covered, as the feature-flag rule requires.
 
 | Group | What it pins |
 |---|---|
-| Identity + declaration | all seven channels, `bridge_channel` type, bundled layer, class paths resolve |
+| Identity + declaration | all seven channels, `bridge_channel` type, `boot_layer=bundled`, class paths resolve |
 | Flag off | nothing starts, nothing raises, no probe runs, health is green and says "off", an unreadable flag is an off flag |
 | Start | argv + cwd, own process group, `service.env` merge, audit event, every skip reason |
 | Duplicate start | already-running is adopted for all four `via` values, second `on_load` is a no-op, unverifiable/raising/absent probe all refuse |
@@ -366,7 +385,7 @@ covered, as the feature-flag rule requires.
 | Health | dead daemon not ok, reaping, starting window, half bridge, vanished external daemon, no path in any message |
 | Registry | lands on bundled, `can_disable()` true, all seven register side by side |
 | Secrets | a fake token in settings appears in no log line and no audit detail on any path |
-| `bridge_manager` probe | separator/case normalisation, no cross-channel confusion, layer precedence, `confident` semantics |
+| `bridge_manager` probe | separator/case normalisation, no cross-channel confusion, signal precedence, `confident` semantics |
 
 Each of the load-bearing behaviours was mutation-checked: dropping the
 duplicate-start guard, sending SIGKILL first, failing the flag open, starting on

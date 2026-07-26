@@ -34,7 +34,7 @@ multi-persona hub: a different role per chat (research, inbox, coder, ...).
 
 The owner console (`core/console`) is the GUI for persona CRUD at
 `/app/personas` (route file `corvin_console/routes/personas.py`,
-page `web-next/src/pages/personas.tsx`):
+page `core/console/corvin_console/web-next/src/pages/personas.tsx`):
 
 - **List / detail** — `GET /personas`, `GET /personas/{name}` enumerate bundle
   + per-tenant user personas. The bundle dir is resolved via
@@ -759,8 +759,8 @@ prototype (unwired, `api.py` not importable, three 0-byte modules, 22
 |---|---|
 | `protocol.py` | `CorvinPlugin` (on_load / on_unload / health_check), `PluginContext`, `HealthStatus`, the ADR-0033 provider protocols, plus `AuditBackend` + `UserBackend` (ADR-0233). `KNOWN_PLUGIN_TYPES` is the single taxonomy. |
 | `registry.py` | Runtime registration + `health_check_all()` (now breaker-aware) |
-| `loader.py` | Discovery helpers: `corvin.plugins` entry points or explicit `class_path`. **`discover_and_load()` has no caller** — the ADR-0030 `spec.plugins.installed` config path is declared but unwired; loading goes through `bootstrap_tenant()` |
-| `manifest.py` | `PluginRecord`, `PluginLayer` (ADR-0243), `PluginDependency`, `DependencyResolver`, `SettingsValidator`, `plan_settings_migration` |
+| `loader.py` | Discovery helpers: `corvin.plugins` entry points or explicit `class_path`. `discover_and_load()` **is** called — by `bootstrap.py::bootstrap_declared` for the ADR-0030 `spec.plugins.installed` path. (It had no caller until that landed; an earlier revision of this file still said so, and contradicted its own § "Two load paths" further down.) |
+| `manifest.py` | `PluginRecord`, `BootLayer` (ADR-0243), `PluginDependency`, `DependencyResolver`, `SettingsValidator`, `plan_settings_migration` |
 | `state.py` | Per-tenant `registry.yaml` + `PluginLifecycle` (install/enable/settings/disable/uninstall) |
 | `circuit_breaker.py` | Per-`plugin_id` breaker: closed → open → half-open |
 | `providers/` | One active provider per type: notification, recall, summary, router, **audit**, **user**, **stt**, **data_connector** |
@@ -768,14 +768,14 @@ prototype (unwired, `api.py` not importable, three 0-byte modules, 22
 | `health.py` | `HealthCollector` (interval polling, flag-gated) + `render_prometheus()` |
 | `healing.py` | `HealingOrchestrator` — Stage 3, **ships dark** behind `plugin_self_healing` |
 
-### Vocabulary — `layer` vs `tier` vs `origin` (ADR-0233 D7, ADR-0243)
+### Vocabulary — `boot_layer` vs `tier` vs `origin` (ADR-0233 D7, ADR-0243)
 
 Three orthogonal axes. They answer three different questions and none of them is
 a synonym for another:
 
 | Axis | Question it answers | Values | Defined in |
 |---|---|---|---|
-| `layer` | When is it loaded, and may it be switched off? | `compliance` · `core` · `bundled` · `installed` | ADR-0243, `manifest.py::PluginLayer` |
+| `boot_layer` | When is it loaded, and may it be switched off? | `compliance` · `core` · `bundled` · `installed` | ADR-0243, `manifest.py::BootLayer` |
 | `tier` | What is it allowed to do, and what does the license gate? | Tier A/B/C | ADR-0156 |
 | `origin` | Where did it come from? | `builtin` · `vetted` · `community` | ADR-0233 D7, `manifest.py::PluginOrigin` |
 
@@ -785,52 +785,138 @@ one. The boot-layer axis added in ADR-0243 is deliberately **not** called `tier`
 for exactly this reason — the draft ADRs spelled it `tier_0 / tier_1_core /
 tier_2_bundled`, which would have been the fourth meaning of the same word.
 
-### Layers — load order and the two trust boundaries (ADR-0240, ADR-0243)
+#### Why `boot_layer` and not plain `layer` (rename, 2026-07-27)
+
+The axis shipped briefly as `layer` / `PluginLayer`, and that was the **same collision
+class** the move off "tier" existed to prevent — only worse, because "layer" was already
+carrying **four** meanings in this repo:
+
+| Existing meaning | Where |
+|---|---|
+| the L1–L44 security/compliance layer stack | CLAUDE.md § Layer Stack Overview, `docs/claude-ref/layer-*.md` |
+| ADR-0124 **audit layers** | `core/console/corvin_console/routes/audit_layers.py` |
+| the ADR-0142 **layer-extension API**, which answers 403 `reason="core_layer_immutable"` | `core/console/corvin_console/routes/extensions.py` |
+| **quality layers** | `routes/quality_layers.py`, `operator/bridges/shared/quality_layers.py` |
+
+So the axis is **`boot_layer`**, enum **`BootLayer`**. Values unchanged:
+`compliance` | `core` | `bundled` | `installed`. Renamed surface — all of it live in code:
+
+- registry: `boot_layer_of()`, `plugins_by_boot_layer()`, `register(..., boot_layer=)`,
+  `replace(..., boot_layer=)`
+- bootstrap: `_declared_boot_layer()`, `register_global_plugin(class_path, boot_layer=)`
+- manifest / config: `PluginRecord.boot_layer`, JSON+YAML key `boot_layer`
+- audit: `plugin.boot_layer_rejected` (was `plugin.layer_rejected`), detail keys
+  `boot_layer` / `declared_boot_layer`
+- admin API: response field `boot_layer`, health aggregate `by_boot_layer`
+
+One thing deliberately **not** renamed: the audit `reason` slug `compliance-layer` in
+`routes/admin.py`. The chain is append-only, and revising the vocabulary of events already
+written to it is not possible.
+
+Three orthogonal axes remain: **`boot_layer`** (load order + disableability) ·
+**`tier`** (ADR-0156 capability boundary) · **`origin`** (provenance).
+
+### Boot layers — load order and the two trust boundaries (ADR-0240, ADR-0243)
 
 ```
 boot
- ├─ global scope   (from the wheel, every tenant)
- │   ├─ layer=compliance  → load failure ABORTS the boot
- │   └─ layer=core        → load failure degrades + audits
+ ├─ global scope   (from the wheel, every tenant)          ← EMPTY on every install
+ │   ├─ boot_layer=compliance  → load failure ABORTS the boot   (0 instances)
+ │   └─ boot_layer=core        → load failure degrades + audits (0 instances)
  └─ tenant scope   (operator-writable, per tenant)
      ├─ declarative: spec.plugins.installed in tenant.corvin.yaml
      └─ runtime:     registry.yaml, gated on `plugin_runtime_lifecycle`
 ```
 
+**Status: mechanism present, zero instances above `bundled`.** `_GLOBAL_SPECS` is empty,
+`register_global_plugin()` has no production caller, `bootstrap_global()` returns `[]`,
+and no plugin anywhere claims `boot_layer=compliance` or `boot_layer=core`. Everything in
+this section is implemented and tested; only property 1 below has ever run on a real
+install. Guard tests in
+`core/plugins/tests/test_layered_boot.py::TestTheTopOfTheAxisHasNoProductionInstance`
+pin that statement so it fails loudly instead of aging into a false claim.
+
 Two properties carry the compliance weight:
 
-1. **A tenant may not claim a privileged layer.** `bootstrap.py::_declared_layer`
+1. **A tenant may not claim a privileged boot layer.** `bootstrap.py::_declared_boot_layer`
    accepts only `bundled` and `installed` from tenant scope; a config or
    registry record claiming `compliance`/`core` is **downgraded to `installed`
-   and audited** (`plugin.layer_rejected`), never honoured. Without that,
-   any operator-writable YAML could mint a plugin that is undisableable and
-   loads before everything else. `PluginRecord.__post_init__` adds a second,
-   independent gate: `origin=community` may not claim a privileged layer at all.
-2. **The compliance layer has no off switch.** `registry.disable()` and
+   and audited** (`plugin.boot_layer_rejected`), never honoured — `state.py` applies the
+   same downgrade on the `registry.yaml` path. Without that, any operator-writable YAML
+   could mint a plugin that is undisableable and loads before everything else.
+   `PluginRecord.__post_init__` adds a second, independent gate: `origin=community` may
+   not claim a privileged boot layer at all. **This one is live** — it is the guard that
+   lets the two privileged boot layers stay empty without being unsafe.
+2. **The compliance boot layer has no off switch.** `registry.disable()` and
    `registry.unregister(..., operator_initiated=True)` raise
    `PluginDisableRefused` for it. The `operator_initiated` distinction exists so
    shutdown and hot-reload can still unload everything, while an admin route
-   cannot reach past `disable()` to the primitive.
+   cannot reach past `disable()` to the primitive. **Mechanism only** — there is nothing
+   on that boot layer to refuse, so this has never fired.
 
-Global plugins are contributed from code — `bootstrap.register_global_plugin(
-class_path, layer=...)` or the `corvin.global_plugins` entry-point group whose
-name encodes the layer (`compliance:my-gate`). `bootstrap_global()` is **not**
-behind a feature flag, deliberately: the layer it loads is the compliance layer,
-and CLAUDE.md forbids a switch on those. With no global plugins registered it is
-a no-op, so a flagless path changes nothing on installs that have none.
+Global plugins are contributed **from code only** —
+`bootstrap.register_global_plugin(class_path, boot_layer=...)`, called by a module that
+ships in this wheel. There is **no entry-point discovery**: a `corvin.global_plugins`
+group was implemented and removed before it had a single user, because any third-party
+wheel on the machine could publish `compliance:whatever` and be loaded first,
+undisableable, with no `PluginRecord` (and therefore past the privileged-boot-layer gate,
+the consent prompt and the L34/L35 fields), and could abort the boot permanently by
+raising in `__init__`. `bootstrap.GLOBAL_ENTRY_POINT_GROUP` is `None`; re-adding discovery
+needs signature verification plus an allowlist, not an entry-point name.
 
-### Replacement — only the `core` layer (ADR-0237)
+`bootstrap_global()` is **not** behind a feature flag, deliberately: the boot layer it
+loads is the compliance boot layer, and CLAUDE.md forbids a switch on those. With no
+global plugins registered it is a no-op, so the flagless path currently changes nothing
+anywhere.
+
+### Replacement — only the `core` boot layer (ADR-0237)
 
 `registry.replace(plugin, ctx, replaces="<plugin_id>")` swaps a bundled
 reference implementation for an alternative. It refuses anything that is not
-`layer=core`: compliance is not pluggable, and bundled/installed plugins are
+`boot_layer=core`: compliance is not pluggable, and bundled/installed plugins are
 disabled and uninstalled rather than replaced. A record declares its intent with
 `PluginRecord.replaces`.
+
+**Structurally unreachable today.** No plugin is on the `core` boot layer, so there is no
+legal target and every call raises `PluginReplacementRefused` before doing anything. The
+rule is tested; it has never run against a real target. This is pinned by the same guard
+test class as above.
 
 The swap is **not atomic and does not roll back**: the old plugin's
 `on_unload()` has already run when the new one's `on_load()` fails, so restoring
 it would hand callers a torn-down object. The documented outcome is an empty
 slot plus an audit record — the operator re-enables the default explicitly.
+
+### Extension points — the bus is defined, no call site uses it (ADR-0237 Phase 3)
+
+`extension_points.py` defines four named points — `engine.model_selection`,
+`engine.engine_selection`, `delegation.route_selection_policy`,
+`workflow.workflow_gate` (the only fail-closed one) — behind
+`plugin_extension_points` (default off). **No production call site calls `invoke()`**, so
+a registered hook is inert regardless of the flag;
+`test_extension_points.py::test_no_call_site_is_wired_yet` fails the day one appears.
+
+Names that may never get a point are in `_NEVER_EXTENSIBLE` and are refused with
+`ImmutableExtensionPoint` — a distinct error from "unknown point", so the attempt reads as
+"this may never have one" rather than "you misspelled it": the audit hash chain and write,
+Ed25519 / A2A attestation verification, TDE token accounting, the consent gate, the L44
+house-rules gate, the L10 path gate, the L34 flow guard, the bot-disclosure card, and the
+L36 erasure orchestrator.
+
+The **eight provider registries** in `providers/` are a separate, older mechanism and are
+NOT reached through the bus — those are live. See `docs/EXTENSIBLE_CORE_PLUGINS.md` §3.
+
+### Bridge supervisors — seven classes, nothing declares them (ADR-0238 Phase 5)
+
+`bridges/supervisor.py` ships `BridgeSupervisorPlugin` plus seven subclasses
+(`DiscordBridgePlugin` … `TeamsBridgePlugin`), each with
+`plugin_id = f"{channel}-bridge"` and `plugin_type = "bridge_channel"`, landing on
+`boot_layer=bundled`. Starting a daemon needs **two** switches: the
+`bridge_supervisor_plugins` flag (ships off) **and** an entry in
+`spec.plugins.installed`. Nothing in the shipped tree writes the second one, so no
+supervisor loads on any install. Process management is delegated to
+`operator/bridges/bridge_manager.py` — `channel_daemon_running()`,
+`adapter_running_pid()`, `start_channel_detached()` — never reimplemented.
 
 ### Additive backends — extension never replaces core (ADR-0233 D4)
 
@@ -891,12 +977,13 @@ false display. Consequences worth knowing:
 - A broken `class_path` in an existing registry (package removed by an upgrade) is
   skipped at boot with an error log; other plugins still load.
 
-### Two load paths, one precedence rule (ADR-0030 Phase 7)
+### Three load paths, one precedence rule (ADR-0030 Phase 7, ADR-0240)
 
-Plugins reach the runtime from **two** places, and `bootstrap_all()` runs both:
+`bootstrap_all()` runs all three, in this order:
 
 | Path | Source | Gate |
 |---|---|---|
+| global | `_GLOBAL_SPECS`, from code (`register_global_plugin`) | none — it loads the compliance boot layer. **Empty on every install**, so this pass returns `[]` |
 | declarative | `spec.plugins.installed` in `tenant.corvin.yaml` | none — writing it into a version-controlled config IS the ADR-0030 opt-in |
 | runtime | `<tenant>/plugins/registry.yaml` | `plugin_runtime_lifecycle` |
 
@@ -908,9 +995,11 @@ once, from the declaration, and the registry pass logs it as already-registered.
 `corvin.plugins` entry point. It stays default-false — on a machine with
 third-party packages around, flipping it means loading code nobody listed.
 
-Until this landed, `loader.discover_and_load()` had no caller at all: the config
-format was documented in ADR-0030, the loader implemented it, and an operator who
-wrote the documented YAML got no plugins and no error.
+Until the declarative path landed, `loader.discover_and_load()` had no caller at all: the
+config format was documented in ADR-0030, the loader implemented it, and an operator who
+wrote the documented YAML got no plugins and no error. It **does** have a caller now —
+`bootstrap_declared()`. The module map above used to still say "no caller", contradicting
+this paragraph; that has been corrected.
 
 ### Self-healing (ADR-0231 Stage 3) — ships dark
 

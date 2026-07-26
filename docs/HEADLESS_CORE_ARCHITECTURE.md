@@ -1,30 +1,72 @@
 # CorvinOS Headless Core Architecture
 ## Stable OS Engine with Engine/Worker, Plugin Scoping, Tenant Isolation
 
-**Date:** 2026-07-26
-**Status:** ADR-0241 (proposed) · boot-order groundwork implemented (Phases 1–2, commit c455516) · headless boot path itself still open (Phase 6)
+**Date:** 2026-07-27
+**Status:** ADR-0241 (proposed). Phases 0–5 shipped, Phase 6 **partial**, Phase 7 open —
+see [Status per phase](#status-per-phase) for what "shipped" does and does not mean here.
 **Audience:** Architecture, DevOps, Platform Team
 
 ---
 
-## Terminology: the axis is `layer`, not `tier`
+## Read this first: the axis has a mechanism, not a population
+
+Everything below describes the **`boot_layer`** axis. Two of its four values —
+`compliance` and `core` — have **zero production instances today**:
+
+* `_GLOBAL_SPECS` is empty and `register_global_plugin()` has **no production caller**,
+  so `bootstrap_global()` is a no-op returning `[]` on every install;
+* **no plugin anywhere loads with `boot_layer=compliance` or `boot_layer=core`**;
+* consequently `registry.replace()` is **structurally unreachable** — it refuses any
+  target that is not on the `core` boot layer, and no such target exists.
+
+The mechanism is implemented, tested and enforced. It just has nothing on it yet. That
+distinction is deliberate everywhere in this document: **"mechanism present, zero
+instances"** is not the same claim as "load-bearing today", and conflating the two is how
+this document went stale the first time.
+
+The statement is **pinned by guard tests** in `core/plugins/tests/test_layered_boot.py`
+(`TestTheTopOfTheAxisHasNoProductionInstance`): the day someone registers the first global
+plugin or claims a privileged boot layer in production code, those tests fail with a
+message that names this file. The claim cannot silently rot.
+
+---
+
+## Terminology: the axis is `boot_layer`, not `layer`, not `tier`
 
 This document originally classified components with a numbered "tier" axis, values 0–3.
 That name is taken: **"Tier A/B/C" means ADR-0156's capability boundary**, repo-wide, and
 ADR-0233 D7 replaced the prototype's `tier` field with `origin` for provenance. The load
-axis is therefore called **`layer`**, with four values — `compliance`, `core`, `bundled`,
-`installed` (ADR-0243).
+axis was therefore renamed to `layer` — and then renamed again, because **`layer` was
+already taken four times** in this repository:
+
+* the **L1–L44 layer stack** (CLAUDE.md § Layer Stack Overview);
+* **ADR-0124 audit layers** (`core/console/corvin_console/routes/audit_layers.py`);
+* the **ADR-0142 layer-extension API**, which answers 403 with
+  `reason="core_layer_immutable"` (`routes/extensions.py`);
+* **quality layers** (`routes/quality_layers.py`, `operator/bridges/shared/quality_layers.py`).
+
+That is the same collision class the move away from "tier" was supposed to end. The axis is
+therefore **`boot_layer`**, enum **`BootLayer`**, with four unchanged values —
+`compliance`, `core`, `bundled`, `installed` (ADR-0243).
 
 | Draft value | Current | Failure policy |
 |---|---|---|
-| 0 (compliance) | `layer: compliance` | Boot fails (existing tripwire) |
-| 1 (core infrastructure) | `layer: core` | Degrade + audit event |
-| 2 (bundled) | `layer: bundled` | Disabled = quiet no-op |
-| 3 (premium) | `layer: installed` | Tenant-local failure only |
+| 0 (compliance) | `boot_layer: compliance` | Boot fails (existing tripwire) |
+| 1 (core infrastructure) | `boot_layer: core` | Degrade + audit event |
+| 2 (bundled) | `boot_layer: bundled` | Disabled = quiet no-op |
+| 3 (premium) | `boot_layer: installed` | Tenant-local failure only |
 
-`layer` answers *when is it loaded and may it be switched off*; `tier` (ADR-0156) answers
-*what may it do, and what does it cost*; `origin` (ADR-0233 D7) answers *where did it come
-from*. Three orthogonal axes, three separate fields.
+`boot_layer` answers *when is it loaded and may it be switched off*; `tier` (ADR-0156)
+answers *what may it do, and what does it cost*; `origin` (ADR-0233 D7) answers *where did
+it come from*. Three orthogonal axes, three separate fields.
+
+**Renamed API surface** (all of it already carries the new name in code):
+`registry.boot_layer_of()` · `registry.plugins_by_boot_layer()` ·
+`registry.register(..., boot_layer=)` · `registry.replace(..., boot_layer=)` ·
+`bootstrap._declared_boot_layer()` · `bootstrap.register_global_plugin(class_path,
+boot_layer=)` · `PluginRecord.boot_layer` · the JSON/YAML key `boot_layer` · the audit
+event `plugin.boot_layer_rejected` with detail keys `boot_layer` / `declared_boot_layer` ·
+the admin-API response field `boot_layer` and the health aggregate `by_boot_layer`.
 
 ---
 
@@ -42,32 +84,36 @@ CorvinOS = Compliance Core + Discord Bridge + Slack Bridge + Web UI + ...
 - Hard to deploy as a pure headless server
 - Scaling: bridges block orchestration threads
 
-### New: Headless Core Engine (proposed)
+### Target: Headless Core Engine (proposed)
 ```
 CorvinOS Core Engine (Server Only, No UI)
-├─ Compliance (layer=compliance, hardcoded)
-├─ Agentic Compute (layer=core, in-process or remote)
-├─ Engine Control (layer=core, local)
-├─ A2A + TDE + Recall (layer=core, in-process)
+├─ Compliance (boot_layer=compliance — no instances yet)
+├─ Agentic Compute (boot_layer=core — no instances yet)
+├─ Engine Control (boot_layer=core — no instances yet)
+├─ A2A + TDE + Recall (boot_layer=core — no instances yet)
 └─ HTTP API Gateway (REST — gRPC deferred, see below)
 
-Bridges + front-ends (layer=bundled / installed)
+Bridges + front-ends (boot_layer=bundled / installed)
 ├─ Discord Bridge (Node daemon, supervised subprocess)
 ├─ Slack Bridge (Node daemon, supervised subprocess)
 ├─ Web UI (separate app, talks to the Core API)
 └─ Voice (separate plugin)
 ```
 
-**Benefits:**
-- ✅ Core is pure backend (no UI entanglement)
-- ✅ Bridges can fail without crashing the core
-- ✅ Easier to scale (headless farm of worker nodes)
-- ✅ Simpler to deploy (server + minimal plugins)
-- ✅ Tenant isolation clearer (plugins are tenant-scoped)
+The "no instances yet" annotations are the honest state, not a formatting quirk: the
+compliance and core mechanisms listed above are today ordinary in-process modules, not
+plugins registered on a boot layer. The boxes describe where they would land.
+
+**Intended benefits** (of the target, not of today's tree):
+- Core is pure backend (no UI entanglement)
+- Bridges can fail without crashing the core
+- Easier to scale (headless farm of worker nodes)
+- Simpler to deploy (server + minimal plugins)
+- Tenant isolation clearer (plugins are tenant-scoped)
 
 ---
 
-## Current state (measured 2026-07-26)
+## Current state (measured 2026-07-27)
 
 Filter: **`*.py` only, excluding `node_modules/`, `.venv/`, `site-packages/`.** Quote the
 filter with the number or it is not reproducible.
@@ -75,8 +121,10 @@ filter with the number or it is not reproducible.
 | Path | LOC |
 |---|---|
 | `operator/bridges/shared` | 181,127 |
-| `core/console/corvin_console` | 63,734 |
-| `core/plugins` | 12,660 |
+| `core/console/corvin_console` | 65,305 |
+| `core/plugins` | 19,151 |
+| `core/plugins/corvin_plugins` (the contract itself) | 7,781 |
+| `core/gateway` | 15,285 |
 | `core/compliance` | 2,911 |
 
 The compliance mechanisms are **not** where the target layout puts them: house rules
@@ -91,29 +139,37 @@ long-term target and explicitly **not** part of the current plan.
 
 ## Architecture: Headless Core + Plugin Scoping
 
-### `layer: compliance` — Core Compliance
+### `boot_layer: compliance` — Core Compliance
 
-Immutable regulatory mechanisms: audit writer + hash chain (L16), consent gate (L18),
-flow guard (L34), house rules (L44), erasure orchestrator (L36).
+Intended population: immutable regulatory mechanisms — audit writer + hash chain (L16),
+consent gate (L18), flow guard (L34), house rules (L44), erasure orchestrator (L36).
 
-**Deployment:** always present, loaded first, tripwired at boot. Never disableable, never
-replaceable, and never behind a feature flag in either direction.
+**Actual population today: none.** No plugin loads on this boot layer. The regulatory
+mechanisms listed above are enforced exactly as they always were — by the boot tripwire
+(`core/compliance/corvin_compliance_reports/tripwire.py::assert_all`, no override, no env
+var, no flag) and by their own in-process call sites, not by a plugin registration.
 
-**Today:** see "Current state" — these live across `operator/bridges/shared/` and
-`core/compliance/corvin_compliance_reports/`, not yet under a single compliance package.
+**Rules that apply the moment the first instance exists:** loaded first, tripwired at boot,
+never disableable, never replaceable, never behind a feature flag in either direction.
 
 ---
 
-### `layer: core` — Core Infrastructure (bundled, required, replaceable)
+### `boot_layer: core` — Core Infrastructure (bundled, required, replaceable)
+
+**Actual population today: none.** Same status as `compliance`, with one extra
+consequence worth naming: because `registry.replace()` only accepts a target that is on
+the `core` boot layer, and no plugin is, **ADR-0237 full replacement is currently a
+mechanism with no reachable input.** The rules below are tested; they have never run
+against a real target.
 
 #### Global plugin scope (target layout, ships in the wheel)
 ```
-<repo>/core/core_plugins/
+<repo>/core/core_plugins/          (TARGET — does not exist yet, Phase 7)
 
 Global plugins (bundled with the wheel, loaded before any tenant plugin):
 ├─ compliance/
-│  └─ audit_compliance/, consent_gate/, ...   (layer=compliance)
-└─ core/                                       (layer=core)
+│  └─ audit_compliance/, consent_gate/, ...   (boot_layer=compliance)
+└─ core/                                       (boot_layer=core)
    ├─ a2a_orchestration/
    ├─ tde_routing/
    ├─ conversation_recall/
@@ -125,41 +181,58 @@ Global plugins (bundled with the wheel, loaded before any tenant plugin):
    └─ admin_control_plane/
 ```
 
-**Deployment:** bundled in the Python wheel, registered from code via
-`register_global_plugin(class_path, layer=...)` or the `corvin.global_plugins` entry-point
-group, and loaded by `bootstrap_global()` before any tenant plugin.
+**Deployment (as designed):** bundled in the Python wheel, registered from code via
+`register_global_plugin(class_path, boot_layer=...)`, and loaded by `bootstrap_global()`
+before any tenant plugin.
 
-**Status:** the loader exists (Phase 2). The directory layout above does **not** exist
-yet — the move is Phase 7 of ADR-0242 and lands with import shims, deliberately last,
-because relocating the audit writer touches the live GDPR hash chain.
+**There is deliberately no discovery step.** A `corvin.global_plugins` entry-point group
+was implemented and then **removed before it had a single user**: any third-party wheel on
+the machine could have published `compliance:whatever` and been loaded first, undisableable,
+with no `PluginRecord` and therefore past the privileged-boot-layer gate, the consent prompt
+and the L34/L35 fields. `bootstrap.GLOBAL_ENTRY_POINT_GROUP` is `None` and stays `None`;
+re-adding discovery needs signature verification and an allowlist, not an entry-point name.
+Earlier revisions of this document described the entry-point group as if it shipped. It
+does not.
+
+**Status:** the loader exists (Phase 2) and is exercised only by tests. The directory
+layout above does **not** exist — the move is Phase 7 of ADR-0242 and lands with import
+shims, deliberately last, because relocating the audit writer touches the live GDPR hash
+chain.
 
 ---
 
-### `layer: bundled` / `layer: installed` — Tenant Plugins (scoped, optional)
+### `boot_layer: bundled` / `boot_layer: installed` — Tenant Plugins (scoped, optional)
+
+These two are the only boot layers with any reachable path today, and even here the
+population is thin: the seven bridge supervisor classes exist and are tested, but **no
+shipped config declares them** (see [Bridge Deployment Model](#bridge-deployment-model)).
+
+**Real on-disk layout** (verified — note the **lowercase** `global`, which matters on a
+case-sensitive filesystem):
 
 ```
 ~/.corvin/tenants/_default/
-
-Tenant plugins (per tenant):
+├─ global/
+│  └─ tenant.corvin.yaml          declarative source: spec.plugins.installed
 ├─ plugins/
-│  ├─ discord_bridge/            (layer=bundled, supervises a Node daemon)
-│  ├─ slack_bridge/              (layer=bundled, supervises a Node daemon)
-│  ├─ telegram_bridge/           (layer=bundled, supervises a Node daemon)
-│  ├─ structured_logging/        (layer=bundled, in-process)
-│  ├─ postgres_audit_backend/    (layer=installed, licensed, in-process)
-│  ├─ okta_auth/                 (layer=installed, licensed, in-process)
-│  ├─ custom_routing/            (layer=installed, replaces a layer=core component)
-│  └─ (user-installed plugins)
-│
-└─ plugin_config.yaml            (tenant plugin settings)
+│  ├─ registry.yaml               the runtime registry (PluginRecord.to_dict(), 0600)
+│  └─ instances/<plugin_id>/      per-plugin state, removed on uninstall
+├─ audit.jsonl                    hash-chained audit trail
+├─ sessions/ · voice/ · cowork/ · compute/ · datasource_connections/
 ```
+
+There is **no `plugin_config.yaml`** anywhere in the repo — earlier revisions of this
+document invented it. Tenant plugin state lives in `plugins/registry.yaml`; tenant plugin
+*declarations* live in `spec.plugins.installed` of `global/tenant.corvin.yaml`.
 
 **Deployment:** the operator can install, enable and disable these per tenant.
 
 **Trust boundary:** a tenant-scoped declaration may claim `bundled` or `installed`
 **only**. A privileged claim (`compliance` / `core`) from `tenant.corvin.yaml` or
-`registry.yaml` is downgraded to `installed` and audited (`plugin.layer_rejected`), never
-honoured. Otherwise undisableability would be self-service via one YAML line.
+`registry.yaml` is downgraded to `installed` and audited (`plugin.boot_layer_rejected`),
+never honoured. Otherwise undisableability would be self-service via one YAML line. This
+guard *is* exercised — by tests, and it is the reason the two privileged boot layers can
+stay empty without being unsafe.
 
 ---
 
@@ -168,51 +241,65 @@ honoured. Otherwise undisableability would be self-service via one YAML line.
 ### Implemented boot API (`core/plugins/corvin_plugins/bootstrap.py`)
 
 ```python
-def register_global_plugin(class_path: str, *, layer: PluginLayer | str) -> None:
-    """Declare a bundled global plugin and the layer it boots on.
-    Refuses anything but compliance/core — tenant-scoped layers are declared
-    in tenant config, not in the wheel."""
+def register_global_plugin(class_path: str, *, boot_layer: BootLayer | str) -> None:
+    """Declare a bundled global plugin and the boot layer it boots on.
+    Refuses anything but compliance/core — tenant-scoped boot layers are declared
+    in tenant config, not in the wheel.
+
+    NO PRODUCTION CALLER TODAY.  Pinned by
+    test_layered_boot.py::test_register_global_plugin_still_has_no_production_caller.
+    """
 
 
 def bootstrap_global(*, tenant_id: str, corvin_home: Path, **registries) -> list[str]:
-    """Load the bundled global plugins, compliance layer first.
+    """Load the bundled global plugins, compliance boot layer first.
 
-    NOT behind a feature flag, deliberately: the layer it exists to load is the
-    compliance layer, and CLAUDE.md forbids putting a compliance mechanism behind
-    a switch. With no bundled global plugins registered this is a no-op returning
-    [], so the flagless path changes nothing on an install that has none.
+    NOT behind a feature flag, deliberately: the boot layer it exists to load is
+    the compliance boot layer, and CLAUDE.md forbids putting a compliance
+    mechanism behind a switch.  With no bundled global plugins registered this is
+    a no-op returning [] — which is what it does on EVERY install today, so the
+    flagless path currently changes nothing anywhere.
 
     * compliance failure — raises GlobalComplianceLoadFailed; the boot aborts.
     * core failure       — logged, audited, skipped; the platform boots degraded.
+
+    Both branches are unreachable in production until a global plugin exists.
     """
 
 
 def bootstrap_all(...):
     """global → declarative → runtime, deduplicated.
-    A compliance abort survives all three passes."""
+    A compliance abort survives all three passes.
+    Wired into core/gateway/corvin_gateway/app.py::_lifespan."""
 ```
 
 Tenant identity comes from the resolver chain `current_tenant()` →
 `validate_tenant_id()` → `tenant_home()` (ADR-0007). No plugin path is ever assembled from
 a raw env var.
 
-### Boot sequence
+### Boot sequence (as implemented)
+
+`bootstrap_all()` runs three passes in this order, and this is the whole of it:
 
 ```
-1. layer=compliance   — boot FAILS on error (existing tripwire at
-                        core/compliance/corvin_compliance_reports/tripwire.py::assert_all)
-2. layer=core         — degrade + audit event on error; the platform stays up
-3. per tenant:
-   layer=bundled, then layer=installed, with tenant enable/disable applied
-4. start the HTTP API server
+1. global      — bootstrap_global():   compliance first, then core.
+                 Returns [] on every install today.
+2. declarative — bootstrap_declared(): spec.plugins.installed from tenant.corvin.yaml
+3. runtime     — bootstrap_tenant():   plugins/registry.yaml, gated on
+                 plugin_runtime_lifecycle
 ```
 
-No second fail-closed mechanism is introduced; the compliance abort reuses the tripwire
-that already exists and that has no override — no env var, no flag.
+The compliance abort reuses the tripwire that already exists and that has no override — no
+env var, no flag. No second fail-closed mechanism is introduced.
+
+**What is NOT implemented:** the reordered "start the HTTP server between `core` and
+`bundled`" sequence that earlier revisions of this document showed as the headless boot
+path. `bootstrap_all()` runs to completion before the gateway serves, exactly as it did
+before Phase 6. See [Phase 6](#phase-6--partial) for what headless mode actually changes.
 
 ---
 
-## Directory Structure (target)
+## Directory Structure
 
 ```
 <repo>/
@@ -227,26 +314,28 @@ that already exists and that has no override — no env var, no flag.
 │  │
 │  ├─ plugins/                    (the plugin contract — EXISTS today)
 │  │  └─ corvin_plugins/
-│  │     ├─ manifest.py           (PluginLayer, PluginRecord.layer/.replaces)
-│  │     ├─ registry.py           (layer_of, plugins_by_layer, can_disable, replace)
-│  │     ├─ bootstrap.py          (bootstrap_global / _declared_layer / bootstrap_all)
+│  │     ├─ manifest.py           (BootLayer, PluginRecord.boot_layer/.replaces)
+│  │     ├─ registry.py           (boot_layer_of, plugins_by_boot_layer,
+│  │     │                         can_disable, replace)
+│  │     ├─ bootstrap.py          (bootstrap_global / _declared_boot_layer /
+│  │     │                         bootstrap_all)
+│  │     ├─ extension_points.py   (the hook bus — no call sites wired)
+│  │     ├─ bridges/              (7 supervisor classes — nowhere declared)
 │  │     ├─ loader.py
 │  │     └─ providers/            (8 provider registries, ADR-0033)
 │  │
+│  ├─ console/corvin_console/     (Console app + /api/admin/* routes)
 │  └─ gateway/                    (HTTP surface; calls bootstrap_all())
 │
 ~/.corvin/
 ├─ tenants/
 │  └─ _default/
-│     ├─ plugins/                 (layer=bundled + layer=installed)
-│     │  ├─ discord_bridge/       (supervisor plugin; payload is the Node daemon)
-│     │  ├─ slack_bridge/
-│     │  ├─ postgres_backend/
-│     │  └─ custom_routing/
-│     │
-│     ├─ plugin_config.yaml       (tenant plugin settings)
-│     ├─ audit.jsonl              (hash-chained audit trail)
-│     └─ hooks/                   (tenant extension hooks)
+│     ├─ global/
+│     │  └─ tenant.corvin.yaml    (spec.features.*, spec.plugins.installed)
+│     ├─ plugins/
+│     │  ├─ registry.yaml         (boot_layer=bundled + boot_layer=installed)
+│     │  └─ instances/<plugin_id>/
+│     └─ audit.jsonl              (hash-chained audit trail)
 
 operator/bridges/                 (UNCHANGED — the Node daemons)
 ├─ discord/daemon.js
@@ -265,35 +354,51 @@ operator/bridges/                 (UNCHANGED — the Node daemons)
 
 ### REST API (no UI dependency)
 
-```python
-@app.get("/health")
-async def health_check():
-    """Is the core alive? Minimal response."""
-    return {"status": "healthy"}
+The routes that actually exist on the gateway and the Console router:
 
-@app.post("/api/chat")
-async def execute_request(request: Request):
-    """Execute a request. Request → engine control → delegate/execute → response.
-    No UI knowledge, pure API."""
-    return {"response": "...", "cost": 100, "model": "sonnet"}
+| Route | What it is |
+|---|---|
+| `GET /healthz` | gateway liveness probe, unauthenticated by design |
+| `GET /v1/console/api/admin/plugins` | list plugins — behind `admin_control_plane` |
+| `GET /v1/console/api/admin/plugins/{id}` | plugin detail |
+| `POST /v1/console/api/admin/plugins/{id}/enable` | enable |
+| `POST /v1/console/api/admin/plugins/{id}/disable` | disable — 403 on `compliance` |
+| `PUT /v1/console/api/admin/plugins/{id}/config` | replace stored settings (**PUT**, not POST) |
+| `GET /v1/console/api/admin/health` | **aggregated** health — there is no per-plugin health endpoint |
 
-@app.get("/api/admin/plugins")
-async def list_plugins(current_user: User = Depends(require_admin)):
-    """List plugins (global + tenant) with layer, origin, tier and health."""
-    return control_plane.list_plugins()
-```
+The admin router declares `/api/admin/*`; the gateway mounts the Console router at
+`/v1/console`, so the effective path in a default install is `/v1/console/api/admin/*`.
+
+There is **no `/health` route** (it is `/healthz`) and **no `POST /api/chat`** — earlier
+revisions of this document showed both as code samples. Neither exists. The chat surface is
+the existing Console chat routes, not a route invented for this document.
+
+The list response carries `plugin_id`, `version`, `display_name`, `plugin_type`,
+`boot_layer`, `origin`, `enabled`, `runtime_loaded`, `can_disable`, `source` and `health`.
+It deliberately carries **no `tier` field**: `tier` is ADR-0156's capability boundary, not
+a lifecycle property, and putting it in a lifecycle response is exactly the conflation the
+rename exists to prevent.
 
 Admin routes sit behind the `admin_control_plane` flag (default `false`); off means the
 routes are absent (404), not an error. Auth uses the existing `SessionRecord`; the tenant
 comes from `rec.tenant_id`, never an env var (ADR-0007).
 
-### Headless mode — implemented (Phase 6)
+Full reference: [ADMIN_CONTROL_POINTS.md](ADMIN_CONTROL_POINTS.md).
+
+### Headless mode — partial (Phase 6)
 
 `headless_api_mode` (default `false`, Console → Settings → Features) decides whether
-this process serves a **browser surface**. With the flag on, `mount_static()` returns
-without mounting the SPA and registers no fallback route: `/console` 404s. The friendly
-"SPA not built" placeholder is deliberately also suppressed — a placeholder is still a
-browser surface, and an API-only deployment should not have one.
+this process serves a **browser surface**. Exactly three things change when it is on:
+
+1. `mount_static()` returns without mounting the SPA and registers no fallback route —
+   `/console` 404s. The friendly "SPA not built" placeholder is deliberately also
+   suppressed: a placeholder is still a browser surface.
+2. The gateway does not register the `/local-stats` HTML dashboard.
+3. `GET /` returns `{"status": "ok", "version": …, "ui": "headless"}` instead of
+   redirecting to `/console/`.
+
+That is the entire behavioural surface of the flag. It does **not** reorder the boot
+sequence and it does **not** introduce deployment presets — see below.
 
 Two properties are worth stating because they are easy to assume wrongly:
 
@@ -307,13 +412,15 @@ than a second meaning for this flag.
 
 **It does NOT switch off bridges.** That is `bridge_supervisor_plugins`, and the two are
 independent on purpose. Coupling them would make "core + CLI + bridges, no browser UI"
-unreachable. A test (`test_headless_mode.py::TestNoHiddenCoupling`) fails if the bridge
-supervisor ever starts reading `headless_api_mode`.
+unreachable. A guard test (`test_headless_mode.py::TestNoHiddenCoupling`) fails if the
+bridge supervisor ever starts reading `headless_api_mode`.
 
-### Deployment models = flag combinations
+### Deployment models = flag combinations, not a preset mechanism
 
-There is no "deployment mode" setting. The four models in this document are combinations
-of independent flags, which is why none of them needs new code:
+There is **no "deployment mode" setting and no preset mechanism** — `grep -rn preset`
+over `core/plugins`, `core/gateway` and the flag registry returns nothing. The four models
+below are simply combinations of two independent flags, which is why none of them needed
+new code, and why none of them is selectable by name:
 
 | Model | `headless_api_mode` | `bridge_supervisor_plugins` | Result |
 |---|---|---|---|
@@ -322,7 +429,9 @@ of independent flags, which is why none of them needs new code:
 | **C — API only** | `true` | `false` | REST API only; no UI, no supervised bridges |
 | **D — Custom UI / CLI** | `true` | `true` | No built-in UI, bridges still supervised; an external UI talks to the API |
 
-Model B is what a fresh install gets, because both flags ship dark.
+Model B is what a fresh install gets, because both flags ship dark. Models A and D
+additionally require the operator to write bridge declarations into
+`spec.plugins.installed` by hand — nothing ships them.
 
 ### gRPC: deferred — not in Phase 1
 
@@ -349,31 +458,43 @@ table — it would discard working, tested code for no functional gain (ADR-0238
 
 ### The model: one Python supervisor plugin per bridge
 
+The generic `BridgeSupervisorPlugin` plus seven thin subclasses. The real shape:
+
 ```python
-class DiscordBridgeSupervisor(CorvinPlugin):
-    plugin_id = "discord-bridge-supervisor/1.0.0"
-    layer = "bundled"
+# corvin_plugins.bridges.supervisor
+class BridgeSupervisorPlugin:
+    plugin_type = "bridge_channel"
 
-    def on_load(self, ctx):
-        self.handle = bridge_manager.start("discord")
+    def __init__(self, channel: str, *, bridge_manager=None, ...):
+        self.plugin_id = f"{channel}-bridge"      # e.g. "discord-bridge"
 
-    def on_unload(self):
-        bridge_manager.stop("discord")
+    def on_load(self, ctx): ...      # six-condition start gate, never raises
+    def on_unload(self): ...         # SIGTERM → 5 s → SIGKILL → 2 s → abandon
+    def health_check(self): ...      # reaps, reports, never guesses
 
-    def health_check(self) -> HealthStatus:
-        return bridge_manager.health("discord")
+
+class DiscordBridgePlugin(BridgeSupervisorPlugin): ...   # + 6 siblings
 ```
 
-The supervisor is an in-process Python object; the daemon stays a subprocess. Process
-management is delegated to the existing `bridge_manager.py` rather than reimplemented,
-and the daemons' wire protocol and inbox/outbox contract are untouched.
+Process knowledge is **borrowed from** `bridge_manager.py`, through the functions that
+actually exist there: `channel_daemon_running()`, `adapter_running_pid()` and
+`start_channel_detached()`. There is no `bridge_manager.start()` / `.stop()` / `.health()`
+triple — earlier revisions of this document showed a `DiscordBridgeSupervisor` class with
+`plugin_id = "discord-bridge-supervisor/1.0.0"` calling those three functions. **None of
+those four names exists.**
+
+**Reach today: none.** The seven classes are implemented and covered by 78 tests, but
+`corvin_plugins.bridges.registry_entries.declaration_entry()` only *generates* the
+`spec.plugins.installed` entry — **nothing in the shipped tree declares one**, and the
+shipped `tenant.corvin.yaml` template carries no bridge block. So no supervisor is loaded
+on any install, independent of the feature flag.
 
 **Load modes:**
 
 | Component | Mode |
 |---|---|
-| `layer=compliance`, `layer=core` | in-process |
-| Bridge supervisor plugins | in-process Python objects |
+| `boot_layer=compliance`, `boot_layer=core` | in-process (no instances yet) |
+| Bridge supervisor plugins | in-process Python objects (declared nowhere yet) |
 | Bridge daemons | **subprocess** — that is what they already are, and it is what gives the isolation this document wants |
 | Web UI | separate app, talks to the Core API |
 
@@ -381,15 +502,19 @@ There is no in-process load mode for a Node daemon, so the earlier "Option A / B
 choice does not exist: the hybrid *is* the architecture.
 
 Bridge supervision ships behind `bridge_supervisor_plugins` (default `false`); off means
-bridges are managed exactly as they are today.
+bridges are managed exactly as they are today. Full reference:
+[BUNDLED_BRIDGES_STRUCTURE.md](BUNDLED_BRIDGES_STRUCTURE.md).
 
 ---
 
 ## Stability Improvements with a Headless Core
 
+These are the properties the target architecture is meant to buy. None of them is
+measured today, because the boot layers they rest on are empty.
+
 ### 1. Engine/Worker isolation
 ```
-Engine selection + worker management (layer=core, in-process)
+Engine selection + worker management (boot_layer=core, in-process)
 ├─ Request arrives via the API
 ├─ Engine control selects the engine
 ├─ Delegation router picks ACS / TDE / native
@@ -399,8 +524,8 @@ Worker fails → core continues (degrade to native)
 Bridge fails → core continues (API still answers)
 ```
 
-Note the operator-facing rule that already applies today: every degrade ladder ends at
-**`native`**, never at another delegation engine.
+Note the operator-facing rule that already applies today, independent of all of this:
+every degrade ladder ends at **`native`**, never at another delegation engine.
 
 ### 2. No UI restart = no service disruption
 ```
@@ -415,7 +540,7 @@ CorvinOS Core (fixed, stable)   →   N worker pools (stateless, scale independe
 
 ### 4. Easier testing
 ```
-pytest core/ -v                  # core without any bridge
+pytest core/ -v                          # core without any bridge
 bash operator/bridges/run-all-tests.sh   # bridges on their own (mandatory before
                                          # committing adapter.py / daemon.js / shared/js)
 ```
@@ -427,23 +552,28 @@ bash operator/bridges/run-all-tests.sh   # bridges on their own (mandatory befor
 **Guarantee:** a tenant installs a broken plugin → only that tenant is affected.
 
 - Global plugin failure: `compliance` = boot fail, `core` = degrade + audit, all tenants.
-- Tenant plugin failure: logged, audited, tenant-local; the platform stays up.
-- A tenant declaration cannot claim a privileged layer (`_declared_layer()` downgrades it
-  to `installed` and audits `plugin.layer_rejected`).
+  **Neither branch is reachable today** — there are no global plugins.
+- Tenant plugin failure: logged, audited, tenant-local; the platform stays up. This one
+  *is* live: it is the path every declarative and registry plugin takes.
+- A tenant declaration cannot claim a privileged boot layer (`_declared_boot_layer()`
+  downgrades it to `installed` and audits `plugin.boot_layer_rejected`), and `state.py`
+  applies the same downgrade to a `registry.yaml` record.
 - Every install/enable/disable writes an audit event carrying `tenant_id`, `plugin_id`
-  and `layer`.
+  and `boot_layer`.
 
-The registry keeps the layer per plugin (`layer_of`, `plugins_by_layer`) and refuses an
-operator-initiated unload of a compliance plugin (`unregister(operator_initiated=True)` →
-`PluginDisableRefused`), so an admin route cannot reach past `disable()` and unload the
-audit writer by calling the primitive.
+The registry keeps the boot layer per plugin (`boot_layer_of`, `plugins_by_boot_layer`) and
+refuses an operator-initiated unload of a compliance plugin
+(`unregister(operator_initiated=True)` → `PluginDisableRefused`), so an admin route cannot
+reach past `disable()` and unload the audit writer by calling the primitive. That refusal
+is tested; it has never fired in production, because nothing is on the compliance boot
+layer to refuse.
 
 ---
 
-## Config: Headless Mode
+## Config: what actually exists
 
 ```yaml
-# ~/.corvin/tenants/_default/GLOBAL/tenant.corvin.yaml
+# ~/.corvin/tenants/_default/global/tenant.corvin.yaml     (lowercase `global`)
 
 spec:
   features:
@@ -452,63 +582,76 @@ spec:
     bridge_supervisor_plugins: false
     plugin_extension_points: false
 
-  server:
-    mode: "headless"                # headless or bridged
-    host: "0.0.0.0"
-    port: 8000
-    api: "rest"                     # gRPC deferred — not in Phase 1
-
   plugins:
-    bundled:
-      enabled:
-        - discord_bridge
-        - slack_bridge
-        - web_ui
-      disabled:
-        - telegram_bridge
-        - whatsapp_bridge
-        - signal_bridge
-        - teams_bridge
-        - email_bridge
+    auto_discover_entry_points: false
+    installed:
+      - id: discord-bridge
+        boot_layer: bundled
+        class_path: "corvin_plugins.bridges.supervisor:DiscordBridgePlugin"
 ```
 
-Global plugins (`layer=compliance`, `layer=core`) are **not** listed in tenant config —
-they ship in the wheel and are registered from code. Disabling a bundled bridge means its
-daemon is not started; it is a quiet path, never an error.
+`spec.plugins.installed` is read by `bootstrap_declared()`; each entry's `boot_layer` is
+resolved by `_declared_boot_layer()` and clamped to `bundled` / `installed`.
+
+**Keys that do NOT exist and were invented by earlier revisions of this document** — each
+verified to have no reader anywhere in the repo:
+
+| Fabricated key | Reality |
+|---|---|
+| `spec.server.mode` / `.host` / `.port` / `.api` | no reader. Host and port come from the gateway's own startup arguments, not from tenant config |
+| `spec.plugins.bundled.enabled` / `.disabled` | no reader. The real key is `spec.plugins.installed`, whose entries carry `boot_layer:` |
+| `plugin_config.yaml` | no such file. Tenant plugin state is `plugins/registry.yaml` |
+| `~/.corvin/tenants/_default/GLOBAL/` | the directory is lowercase `global` — the uppercase form simply does not resolve on Linux |
+
+Global plugins (`boot_layer=compliance`, `boot_layer=core`) are **not** listed in tenant
+config — they ship in the wheel and are registered from code. Disabling a bundled bridge
+means its daemon is not started; it is a quiet path, never an error.
 
 ---
 
-## Deployment Presets (ADR-0241)
+## Status per phase
 
-### Preset A: Complete
-Core + all seven bridges + Web UI — single instance.
+Measured 2026-07-27. "Shipped" below means the code exists and its tests pass — read the
+qualifier column before treating any row as reach.
 
-### Preset B: Typical
-Core + Discord + Slack + Web UI + Forge + SkillForge.
+| Phase | Objective | Status | The qualifier that matters |
+|---|---|---|---|
+| 0 | ADR consolidation | ✅ done | — |
+| 1 | Boot-layer-aware registry | ✅ done | the two privileged values have zero instances |
+| 2 | Boot order + scoping | ✅ done | `bootstrap_global()` returns `[]` on every install |
+| 3 | Extension points | ✅ **bus only** | four points defined + tested; **no call site calls `invoke()`**, guard-tested |
+| 4 | Admin control plane (REST) | ✅ done | REST only; gRPC deferred, not planned |
+| 5 | Bridge supervisor plugins | ✅ **classes only** | seven classes exist; **nothing declares them**, so none ever loads |
+| 6 | Headless API-only boot | ◑ **partial** | browser surfaces suppressed ✅; **no reordered boot sequence**, **no preset mechanism** |
+| 7 | Directory move + shims, docs, v0.11.0 | ⬜ open | `core/core_plugins/` does not exist |
 
-### Preset C: API-only (enterprise)
-Core only, no bridges — pure REST backend.
+### Phase 6 — partial
 
-### Preset D: Custom UI
-Core + a custom dashboard, or Core + CLI, with `web_ui` disabled.
+What shipped: the three browser-surface suppressions listed under
+[Headless mode](#headless-mode--partial-phase-6), plus the guard test that keeps the flag
+independent of `bridge_supervisor_plugins`.
 
-Bridges run as subprocesses in every preset; whether they share a container or get their
-own is a packaging decision, not an architectural one.
+What did **not** ship, and is what the phase originally promised:
 
----
+* the reordered boot sequence `compliance → core → HTTP server → bundled (async)`. Today
+  `bootstrap_all()` completes before the gateway serves; a bridge that never comes up
+  cannot block readiness only because no bridge supervisor is loaded at all, which is
+  luck, not design.
+* deployment presets A–D as a **mechanism**. They are documentation of two flags' four
+  combinations; there is no `preset` key, no preset resolver, and nothing to select.
 
-## API-only boot (Phase 6, open)
+### Measured test counts (2026-07-27, not targets)
 
-```
-1. Load layer=compliance   (boot fails on error — tripwire)
-2. Load layer=core         (degrade + audit on error)
-3. Start the HTTP API server
-4. Load layer=bundled      (bridges, async, optional)
-```
-
-Result: the API is ready before any bridge is, and a bridge that never comes up cannot
-block readiness. Behind `headless_api_mode` (default `false`); off means today's boot
-path and the Console is always started.
+| Suite | Passing |
+|---|---|
+| `core/plugins/tests/` (whole suite) | **783** |
+| ├─ `test_layered_boot.py` | 25 |
+| ├─ `test_layer_registry.py` | 38 |
+| ├─ `test_bootstrap.py` | 34 |
+| ├─ `test_extension_points.py` | 54 |
+| └─ `test_bridge_supervisor.py` | 78 |
+| `core/console/tests/test_admin_route.py` | **24** |
+| `core/console/tests/test_headless_mode.py` | **9** |
 
 ---
 
@@ -516,18 +659,20 @@ path and the Console is always started.
 
 | ADR | Topic | Status |
 |---|---|---|
-| ADR-0243 | Core vs. plugins, defines `layer` | Proposed; `layer` implemented in the registry |
-| ADR-0240 | Plugin scoping (global vs. tenant) | Proposed; boot order + scoping implemented (Phase 2) |
-| ADR-0241 | Headless core architecture (this doc) | Proposed; headless boot path **not** implemented |
-| ADR-0239 | Admin control plane vs. Web UI | Proposed; **gRPC deferred**; REST plane not implemented |
-| ADR-0238 | Bundled bridges — supervisor over Node daemons | Proposed; supervisors not implemented |
-| ADR-0237 | Extensible core plugins + `replaces:` | Proposed; `replaces` field + `registry.replace()` implemented, extension points open |
+| ADR-0243 | Core vs. plugins, defines `boot_layer` | Proposed; axis implemented in the registry, **zero instances above `bundled`** |
+| ADR-0240 | Plugin scoping (global vs. tenant) | Proposed; boot order + scoping implemented; the global pass is a no-op on every install |
+| ADR-0241 | Headless core architecture (this doc) | Proposed; browser-surface suppression implemented, boot-path reorder + presets **not** |
+| ADR-0239 | Admin control plane vs. Web UI | Proposed; **REST plane implemented**, gRPC deferred |
+| ADR-0238 | Bundled bridges — supervisor over Node daemons | Proposed; supervisor classes implemented, **never declared** |
+| ADR-0237 | Extensible core plugins + `replaces:` | Proposed; `replaces` + `registry.replace()` + the hook bus implemented; `replace()` structurally unreachable, hooks unwired |
 | ADR-0236 | Minimal core specification | Long-term target, **not** scheduled |
-| ADR-0242 | Implementation plan, Phases 0–7 | Phases 0–2 done, 3–7 open |
+| ADR-0242 | Implementation plan, Phases 0–7 | 0–5 shipped with the qualifiers above, 6 partial, 7 open |
 
 ---
 
 ## Summary: Headless Core Benefits
+
+Target-state comparison. Nothing in the right-hand column is measured on today's tree.
 
 | Aspect | Before (bridged) | After (headless) |
 |--------|-----------------|-----------------|
@@ -545,9 +690,15 @@ contractual SLA, and nothing in this document promises a response time.
 
 ## Next Steps
 
-1. Phase 3 — document the eight existing provider registries, add 3–5 extension points
-2. Phase 4 — admin control plane (REST) behind `admin_control_plane`
-3. Phase 5 — bridge supervisor plugins over the untouched Node daemons
-4. Phase 6 — headless API-only boot path + presets A–D
-5. Phase 7 — move to `core/core_plugins/{compliance,core,bundled}/` behind import shims,
-   with `voice-audit verify` exit-0 checked before and after
+1. **Wire the four extension points** into their call sites (engine/provider selection,
+   `delegation_policy`, the workflow gate). Until then Phase 3 is bus-only.
+2. **Declare the bridge supervisors** — either ship them in the `tenant.corvin.yaml`
+   template or add a Console Settings action that writes the block. Until then Phase 5 is
+   classes-only.
+3. **Finish Phase 6** — the reordered boot sequence, or a decision that the reorder is not
+   wanted, in which case remove it from ADR-0241 rather than leaving it as an open promise.
+4. **First real instance on a privileged boot layer.** The moment one exists, the guard
+   tests in `test_layered_boot.py` fail and this document must be updated in the same
+   commit — that is the mechanism keeping this file honest.
+5. **Phase 7** — move to `core/core_plugins/{compliance,core,bundled}/` behind import
+   shims, with `voice-audit verify` exit-0 checked before and after.

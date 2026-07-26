@@ -136,18 +136,32 @@ Canonical runtime root: `~/.corvin/`; voice/secret config: `~/.config/corvin-voi
 - **L4** Cowork (multi-persona hub) — [layer-plugins.md](docs/claude-ref/layer-plugins.md)
 - **Plugin registry** (ADR-0030/0033/0233/0243) — ONE lifecycle contract in
   `core/plugins/corvin_plugins/`. **Three orthogonal axes, never conflated:**
-  `layer` (compliance·core·bundled·installed — load order + disableability, ADR-0243) ·
+  `boot_layer` (compliance·core·bundled·installed — load order + disableability, ADR-0243) ·
   `tier` (ADR-0156 capability boundary + license gate — the ONLY meaning of "Tier A/B/C") ·
   `origin` (builtin·vetted·community — provenance). Don't add a second registry,
-  lifecycle, taxonomy, or marketplace downloader, and don't rename the boot-layer
-  axis to "tier" — that collision is what ADR-0243 exists to prevent.
-  **Layer invariants (load-bearing):** tenant scope may declare only
-  `bundled`/`installed` — a privileged claim from `tenant.corvin.yaml` or
-  `registry.yaml` is downgraded to `installed` and audited, never honoured ·
-  `origin=community` may never claim a privileged layer · the `compliance` layer
-  has no off switch (`registry.disable()` raises `PluginDisableRefused`) ·
-  `bootstrap_global()` carries no feature flag *because* it loads the compliance
-  layer · only `layer=core` is replaceable — [layer-plugins.md](docs/claude-ref/layer-plugins.md)
+  lifecycle, taxonomy, or marketplace downloader, and don't rename the axis to
+  "tier" or back to "layer" — "layer" is already four-way taken (L1–L44 stack,
+  ADR-0124 audit layers, ADR-0142 layer-extension API, quality layers), which is
+  why the field is `boot_layer` / `BootLayer` and the API is `boot_layer_of()`,
+  `plugins_by_boot_layer()`, `_declared_boot_layer()`,
+  `register_global_plugin(..., boot_layer=)`, audit `plugin.boot_layer_rejected`,
+  admin field `boot_layer` / aggregate `by_boot_layer`.
+  **Boot-layer rules — a MECHANISM, today with zero instances above `bundled`.**
+  `_GLOBAL_SPECS` is empty, `register_global_plugin()` has no production caller,
+  `bootstrap_global()` returns `[]`, and nothing loads on `compliance`/`core` —
+  so `registry.replace()` is structurally unreachable. The rules below are
+  implemented and tested and apply the moment a first instance exists; do not
+  weaken them, and do not describe them as load-bearing today:
+  tenant scope may declare only `bundled`/`installed` — a privileged claim from
+  `tenant.corvin.yaml` or `registry.yaml` is downgraded to `installed` and
+  audited, never honoured (**this one IS live**) · `origin=community` may never
+  claim a privileged boot layer · the `compliance` boot layer has no off switch
+  (`registry.disable()` raises `PluginDisableRefused`) · `bootstrap_global()`
+  carries no feature flag *because* it loads the compliance boot layer · only
+  `boot_layer=core` is replaceable. Guard tests in
+  `core/plugins/tests/test_layered_boot.py` fail on the first real instance and
+  force the docs to be updated in the same commit — keep them.
+  — [layer-plugins.md](docs/claude-ref/layer-plugins.md)
 - **L5** Auto-routing (keyword-based persona selection)
 - **L6** Forge (runtime tool generation, MCP server)
 - **L7** SkillForge (runtime skill generation)
