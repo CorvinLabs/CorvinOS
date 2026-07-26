@@ -766,6 +766,7 @@ prototype (unwired, `api.py` not importable, three 0-byte modules, 22
 | `providers/` | One active provider per type: notification, recall, summary, router, **audit**, **user**, **stt**, **data_connector** |
 | `bootstrap.py` | Boot wiring: `assert_compliance()` (fail-closed tripwires) + `bootstrap_tenant()` (load enabled plugins in dependency order) + `build_context()` |
 | `health.py` | `HealthCollector` (interval polling, flag-gated) + `render_prometheus()` |
+| `healing.py` | `HealingOrchestrator` — Stage 3, **ships dark** behind `plugin_self_healing` |
 
 ### Vocabulary — `tier` vs `origin` (ADR-0233 D7)
 
@@ -831,6 +832,63 @@ false display. Consequences worth knowing:
   counts as loaded rather than raising `PluginAlreadyRegistered`.
 - A broken `class_path` in an existing registry (package removed by an upgrade) is
   skipped at boot with an error log; other plugins still load.
+
+### Two load paths, one precedence rule (ADR-0030 Phase 7)
+
+Plugins reach the runtime from **two** places, and `bootstrap_all()` runs both:
+
+| Path | Source | Gate |
+|---|---|---|
+| declarative | `spec.plugins.installed` in `tenant.corvin.yaml` | none — writing it into a version-controlled config IS the ADR-0030 opt-in |
+| runtime | `<tenant>/plugins/registry.yaml` | `plugin_runtime_lifecycle` |
+
+**The declaration wins.** A plugin in a reviewed, version-controlled config is a
+stronger statement of intent than a Console click; a plugin present in both loads
+once, from the declaration, and the registry pass logs it as already-registered.
+
+`auto_discover_entry_points: true` additionally loads every installed
+`corvin.plugins` entry point. It stays default-false — on a machine with
+third-party packages around, flipping it means loading code nobody listed.
+
+Until this landed, `loader.discover_and_load()` had no caller at all: the config
+format was documented in ADR-0030, the loader implemented it, and an operator who
+wrote the documented YAML got no plugins and no error.
+
+### Self-healing (ADR-0231 Stage 3) — ships dark
+
+`healing.HealingOrchestrator`, behind `plugin_self_healing` (default **off**).
+ADR-0231 gates Stage 3 on Stage 2 being stable for a release; a default-off flag is
+how that gate is honoured — the mechanism is present and testable, the operator
+turns it on when they have the evidence.
+
+Three **reversible** actions, chosen per plugin:
+
+| Policy | Action | Default for |
+|---|---|---|
+| `circuit_break_only` | refuse calls for the cooldown | `audit_backend`, `user_backend`, `compute_engine`, `recall_backend`, `bridge_channel`, `data_connector` — anything that could lose state or evidence |
+| `soft_restart` | `on_unload()` → `on_load()`, same context | `stt_provider`, `summary_provider`, `notification_backend` |
+| `disable_and_degrade` | unregister + detach the provider slot | `router_backend`, `worker_engine` — the platform runs fine without them |
+| `none` | opt out entirely | — |
+
+An **unknown** plugin type defaults to containment, not to the most permissive
+option. Bounds that make it safe to leave on once enabled:
+
+- at most `max_heals_per_hour` actions per plugin (default 3);
+- a failure within 60 s of a restart escalates instead of restarting again —
+  a restart that did not help means the fault is systematic, and healing a logic
+  error only hides it;
+- the health collector drives it (one poller in the system, not two);
+- every action is audited as `plugin.healing_action`; NOOPs are kept in the
+  in-memory history so "why did nothing happen" is answerable.
+
+**Never**: hard kill, force delete, data mutation — and it never rewrites
+`registry.yaml`. An autonomous action must not edit the operator's configuration;
+re-enabling is a human act. A test greps the module for `os.kill`, `SIGKILL`,
+`rmtree`, `TenantRegistry` and friends so this cannot regress.
+
+Stage 4 (LDD-tuned healing policies) is **not** built: it needs MTTR data from
+production that does not exist yet, and inventing it would be the "fabricated
+benchmark" failure this repo has already had once.
 
 ### Flow declarations — locality + egress (ADR-0124 Inv. 3)
 

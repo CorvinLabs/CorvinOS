@@ -359,3 +359,184 @@ class TestBootstrapTenant(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── ADR-0030 Phase 7: the declarative config path ─────────────────────────────
+
+
+class _Declared:
+    """A plugin loaded from spec.plugins.installed rather than the registry."""
+
+    plugin_id = "test.declared-notify"
+    plugin_type = "notification_backend"
+    version = "1.0.0"
+    display_name = "Declared Notify"
+
+    seen_config: dict = {}
+
+    def on_load(self, ctx):
+        type(self).seen_config = dict(ctx.config)
+        if ctx.notification_registry is not None:
+            ctx.notification_registry.set_active(self)
+
+    def on_unload(self):
+        type(self).seen_config = {}
+
+    def health_check(self):
+        return HealthStatus(ok=True)
+
+    def notify(self, event, payload, *, tenant_id="_default", severity="info"):
+        pass
+
+
+class TestDeclaredPlugins(unittest.TestCase):
+    """`spec.plugins.installed` was specified by ADR-0030 and never read.
+
+    `loader.discover_and_load()` implemented it; nothing called either. An operator
+    could write the documented config and get no plugins and no error.
+    """
+
+    def setUp(self):
+        _Declared.seen_config = {}
+        self._tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self._tmp.name)
+        os.environ["VOICE_AUDIT_PATH"] = str(self.home / "audit.jsonl")
+        for pid in list(get_registry().discover()):
+            get_registry().unregister(pid)
+
+    def tearDown(self):
+        os.environ.pop("VOICE_AUDIT_PATH", None)
+        for pid in list(get_registry().discover()):
+            try:
+                get_registry().unregister(pid)
+            except Exception:
+                pass
+        self._tmp.cleanup()
+
+    def _write_config(self, body: str) -> None:
+        path = self.home / "tenants" / "_default" / "global" / "tenant.corvin.yaml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+
+    def test_no_config_loads_nothing(self):
+        self.assertEqual(
+            bootstrap.bootstrap_declared(tenant_id="_default", corvin_home=self.home), []
+        )
+
+    def test_unreadable_config_is_not_fatal(self):
+        self._write_config("{ this is not: valid: yaml: [")
+        with self.assertLogs("corvin.plugins.bootstrap", level="ERROR"):
+            self.assertEqual(
+                bootstrap.load_tenant_spec("_default", self.home), {}
+            )
+
+    def test_declared_plugin_is_loaded_without_any_flag(self):
+        self._write_config(
+            "spec:\n"
+            "  plugins:\n"
+            "    installed:\n"
+            "      - id: test.declared-notify\n"
+            "        class_path: test_bootstrap:_Declared\n"
+            "        config:\n"
+            "          channel: ops\n"
+        )
+        loaded = bootstrap.bootstrap_declared(tenant_id="_default", corvin_home=self.home)
+        self.assertEqual(loaded, ["test.declared-notify"])
+        self.assertIn("test.declared-notify", get_registry().discover())
+
+    def test_declared_config_reaches_the_plugin(self):
+        self._write_config(
+            "spec:\n"
+            "  plugins:\n"
+            "    installed:\n"
+            "      - id: test.declared-notify\n"
+            "        class_path: test_bootstrap:_Declared\n"
+            "        config:\n"
+            "          channel: alerts\n"
+            "          depth: 3\n"
+        )
+        bootstrap.bootstrap_declared(tenant_id="_default", corvin_home=self.home)
+        self.assertEqual(_Declared.seen_config, {"channel": "alerts", "depth": 3})
+
+    def test_a_broken_declaration_is_skipped_not_fatal(self):
+        self._write_config(
+            "spec:\n"
+            "  plugins:\n"
+            "    installed:\n"
+            "      - id: test.missing\n"
+            "        class_path: no_such_module:Nope\n"
+            "      - id: test.declared-notify\n"
+            "        class_path: test_bootstrap:_Declared\n"
+        )
+        loaded = bootstrap.bootstrap_declared(tenant_id="_default", corvin_home=self.home)
+        self.assertEqual(loaded, ["test.declared-notify"])
+
+    def test_entry_point_discovery_stays_opt_in(self):
+        """auto_discover_entry_points defaults to false — loading unlisted code
+        from whatever packages happen to be installed must be a choice."""
+        self._write_config("spec:\n  plugins:\n    installed: []\n")
+        self.assertEqual(
+            bootstrap.bootstrap_declared(tenant_id="_default", corvin_home=self.home), []
+        )
+
+    def test_bootstrap_all_runs_both_paths_with_declaration_precedence(self):
+        self._write_config(
+            "spec:\n"
+            "  plugins:\n"
+            "    installed:\n"
+            "      - id: test.declared-notify\n"
+            "        class_path: test_bootstrap:_Declared\n"
+        )
+        # Same plugin_id also in the runtime registry, with a different config.
+        lc = PluginLifecycle(
+            tenant_id="_default", corvin_home_path=self.home, lifecycle_enabled=True
+        )
+        lc.install(
+            PluginRecord(
+                plugin_id=_Declared.plugin_id,
+                version="1.0.0",
+                display_name="Registry Copy",
+                plugin_type="notification_backend",
+                origin=PluginOrigin.VETTED,
+                class_path="test_bootstrap:_Declared",
+                settings={"channel": "from-registry"},
+            ),
+            installed_by="test",
+        )
+        for pid in list(get_registry().discover()):
+            get_registry().unregister(pid)
+        _Declared.seen_config = {}
+
+        loaded = bootstrap.bootstrap_all(
+            tenant_id="_default", corvin_home=self.home, lifecycle_enabled=True
+        )
+        self.assertEqual(loaded.count(_Declared.plugin_id), 1, "loaded exactly once")
+        self.assertNotEqual(
+            _Declared.seen_config.get("channel"),
+            "from-registry",
+            "the declaration must win over the registry entry",
+        )
+
+    def test_bootstrap_all_still_loads_registry_only_plugins(self):
+        lc = PluginLifecycle(
+            tenant_id="_default", corvin_home_path=self.home, lifecycle_enabled=True
+        )
+        lc.install(
+            PluginRecord(
+                plugin_id="test.registry-only",
+                version="1.0.0",
+                display_name="Registry Only",
+                plugin_type="notification_backend",
+                origin=PluginOrigin.VETTED,
+                class_path="test_bootstrap:_Declared",
+            ),
+            installed_by="test",
+        )
+        lc.enable("test.registry-only")
+        for pid in list(get_registry().discover()):
+            get_registry().unregister(pid)
+
+        loaded = bootstrap.bootstrap_all(
+            tenant_id="_default", corvin_home=self.home, lifecycle_enabled=True
+        )
+        self.assertIn("test.registry-only", loaded)

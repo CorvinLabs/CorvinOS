@@ -189,6 +189,21 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("plugins",),
     ),
     FeatureFlag(
+        id="plugin_self_healing",
+        label="Plugin self-healing",
+        description=(
+            "Let the health collector act on a repeatedly failing plugin: "
+            "circuit-break it, soft-restart it, or disable it and degrade — "
+            "reversible actions only, bounded per hour, every action audited. "
+            "Off means unhealthy plugins are reported but never touched. "
+            "ADR-0231 gates Stage 3 on Stage 2 being stable for a release, so "
+            "this stays off until an operator has that evidence."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("plugins", "observability"),
+    ),
+    FeatureFlag(
         id="plugin_console_surface",
         label="Plugins page in the Console",
         description=(
