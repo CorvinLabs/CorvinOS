@@ -27,6 +27,19 @@ import pytest
 # extension `test_bootstrap.py` performs, for the same reason.
 _HERE = Path(__file__).resolve()
 _REPO = _HERE.parents[3]
+
+#: The module name a plugin ``class_path`` must use to reach the fakes below.
+#:
+#: NOT the literal "test_tenant_scope". pytest's default (prepend) import mode registers this
+#: file under its bare name, but --import-mode=importlib — which
+#: .github/workflows/coverage.yml uses — registers it under a dotted, rootdir-
+#: relative name. A hard-coded bare name then raises ModuleNotFoundError inside
+#: the loader, the plugin is correctly skipped, and every assertion about a
+#: LOADED plugin fails. That made this suite pass one way and fail the other:
+#: 1040 green locally, 15 red in CI, for a harness reason that looks exactly like
+#: a product defect. __name__ is right under both modes.
+_MOD = __name__
+
 for _p in (
     str(_HERE.parents[1]),
     str(_REPO / "operator" / "forge"),
@@ -227,7 +240,7 @@ def declared_install(tmp_path, monkeypatch):
             "  plugins:\n"
             "    installed:\n"
             "      - id: test.slot-taker\n"
-            "        class_path: test_tenant_scope:_SlotTaker\n",
+            f"        class_path: {_MOD}:_SlotTaker\n",
             encoding="utf-8",
         )
         return home
