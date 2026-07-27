@@ -336,7 +336,42 @@ under *"Add the three missing provider modules now — deferred, not rejected. E
 a real design question."* They are not activation work and should not be done under
 cover of one.
 
-**What this stage should actually do:**
+#### Attempted 2026-07-27 — and the last handle turned out to be dead too
+
+**The stage's own instruction is what killed it.** Step 1 below said to verify
+the registered engine is reachable *before* claiming `consumed_by`. That check
+fails:
+
+* **`corvin_compute.engine_registry` has no reader.** `WorkerServer` dispatches
+  only through its own `self._extra_engines`, populated at construction or by
+  `register_engine()` — which has **no production caller**. This is not a new
+  discovery; `corvin_compute/cli.py:237` says so in its own words and predates
+  the plan: *"the module-level factories are not an alternative wiring — they
+  populate engine_registry.py's standalone registry, which WorkerServer never
+  reads"*.
+* **It is in the wrong process.** `WorkerServer` is constructed only in that
+  CLI, i.e. the `corvin-compute worker` subprocess. A plugin loads in the
+  gateway; the console reaches the worker over a socket via `WorkerClient`.
+
+So passing the handle would let a plugin register into an object nothing reads,
+in a process that runs no engines — and it would *look* like progress, because
+the plugin would load, register and report healthy. Stage 4 is therefore
+**blocked**, for the same class of reason as Stage 2: not a missing call site,
+but a missing consumer.
+
+All three "handle" rows now share one cause in three variants: **the target is
+not wired to anything that dispatches** — no reader and wrong process
+(`compute_engine`), no `register()` (`worker_engine`), no class at all
+(`bridge_channel`). Closing any of them is ADR-0245's deferred design question.
+
+**This row has now been described incorrectly three times.** The original
+"handle never populated"; Track A's correction calling it "the genuine
+unpassed-handle case… one line at the call site"; and both survived review
+because the claim was plausible and nobody ran it. Only attempting the fix
+falsified it. Two guard tests in `test_surface_map.py` now fail the day the
+registry gains a reader or `register_engine()` gains a caller.
+
+**Superseded — the stage as originally written:**
 
 1. Pass `compute_registry` in `app.py`, and verify the registered engine is reachable
    through the MCP bridge before claiming `consumed_by` — a filled handle proves
@@ -368,6 +403,41 @@ today; the ADR-0242 guard test that fails if the supervisor ever reads
 
 **Before commit:** `bash operator/bridges/run-all-tests.sh` (CLAUDE.md). Budget it —
 the previous run exceeded 15 minutes and buffers output until exit.
+
+#### Shipped 2026-07-27
+
+`bootstrap_declared` injects the bundled seven from
+`registry_entries.declaration_entries()` — the generator that had existed since
+the supervisors were written and was imported by nothing outside its own
+package. G5 closed.
+
+**Why the boot injects them rather than the operator hand-writing seven dotted
+class paths.** `boot_layer=bundled` means "ships with CorvinOS, opt-out per
+tenant" (ADR-0243). Requiring a class path in `tenant.corvin.yaml` for something
+that ships in the wheel is the `installed` contract, and it is a string that goes
+stale on the first rename. Three properties are preserved deliberately:
+
+* **The operator's entry always wins.** A channel already named in
+  `spec.plugins.installed` is skipped, so `{id: discord-bridge, config:
+  {enabled: false}}` parks that bridge and an explicit class path overrides the
+  bundled one.
+* **Off is quiet and total.** With the flag off nothing is injected and nothing
+  is instantiated. The supervisor re-checks the same flag in its own start gate;
+  this second check exists so a default install does not construct seven objects
+  to have each decide to do nothing.
+* **Declaring is not starting.** ADR-0238's six-condition gate — credentials
+  present, no duplicate running, runtime provisioned, Node available, no
+  automatic restart — is untouched. There is a test named for this, because "we
+  wired the bridges up" is exactly the sentence that later gets read as "and they
+  start themselves".
+
+**A refutation round found the tests insufficient.** Deleting the config
+injection — so the entry list grew but the dict handed to the loader did not —
+left every test green: the declarations were computed and thrown away. That is
+this plan's own defect one level in. Three tests now drive `bootstrap_declared`
+itself and assert seven supervisor instances actually load. Four mutations turn
+the suite red: no flag gate, no operator precedence, no config injection, and
+mutating the caller's config dict instead of copying it.
 
 ---
 
@@ -436,13 +506,13 @@ staged rollout. Recording that is better than pretending it has a flip date.
 | 1 Tenant-scoped providers | 1.5 w | G6 | none (refusal is a compliance gate) | ✅ **part 1 only** — the refusal gate (`tenant_scope.py`, 30 tests). Keying the eight registries by tenant is ADR-0250's own migration, not done |
 | 2 `user_backend` call site | 0.5 d | G2 (as *recorded*, not closed) | — | ✅ **done** — option 3 shipped; cause corrected in `surface_map.py`, CLAUDE.md, 4 docs, ADR-0245 addendum |
 | 3 Extension-point call sites | 1.5 w | G1 | `plugin_extension_points` | ✅ **done** — bus D3+D5 plus all four call sites |
-| 4 Populate `compute_registry` | 1 w | part of G3 | none | ❌ `app.py:163` still passes no registry |
-| 5 Bridge supervisors | 1 w | G5 | `bridge_supervisor_plugins` | ❌ `registry_entries` imported only by its own `__init__` |
+| 4 Populate `compute_registry` | — | — | — | ⛔ **blocked — the registry has no reader and is in the wrong process**, see the stage |
+| 5 Bridge supervisors | 1 w | G5 | `bridge_supervisor_plugins` | ✅ **done** — the boot path injects the bundled seven |
 | 6 `install` + trust anchor | 1 w | G7, G8 | `plugin_trust_enforcement` | ❌ CLI has `types`/`check`/`new` only; no anchor deposited |
 | 7 Flag lifecycle | 0.5 d | G9 | — | ✅ **done** — 15 flags, all with `owner`+`target_release`, guard test present |
 | A Truth-in-tree corrections | 0.5 d | — | — | ✅ **done** — see § 4.1 |
 | E E2E spine | 1 w | — | — | ◑ **E1 done** (`test_lifecycle_e2e.py`); E2 rows follow their stages, E3 last |
-| **Total remaining** | **~3.5 w** | | | |
+| **Total remaining** | **~1 w** | | | |
 
 **Dropped from ADR-0242:** Phase 7 directory move (§ 2 above).
 **Deferred, unchanged:** everything in § 1's out-of-scope table.

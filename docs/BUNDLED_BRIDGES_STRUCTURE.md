@@ -1,10 +1,11 @@
 # Bundled Bridges: Supervised Node Daemons
 
 **Date:** 2026-07-27
-**Status:** the seven supervisor classes exist and are tested; **nothing declares them, so
-none is ever loaded.** Two independent switches are required (§ Enabling a bridge
-supervisor) and only one of them — the feature flag `bridge_supervisor_plugins`, default
-**off** — is even present in a shipped config. The declaration in
+**Status (2026-07-27):** the seven supervisor classes exist, are tested, and are now
+**declared by the boot path** — `bootstrap._bundled_bridge_declarations()` injects them
+from `bridges/registry_entries.py` when the feature flag `bridge_supervisor_plugins`
+(default **off**) is on. Until that date a second, independent switch was required and
+nothing in the shipped tree wrote it, so none was ever loaded. The declaration in
 `spec.plugins.installed` is not: the shipped `tenant.corvin.yaml` template has no bridge
 block and no code writes one. So "shipped dark" understates it — this is **shipped, dark,
 and undeclared**.

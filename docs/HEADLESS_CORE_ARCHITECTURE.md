@@ -621,7 +621,7 @@ qualifier column before treating any row as reach.
 | 2 | Boot order + scoping | ✅ done | `bootstrap_global()` returns `[]` on every install |
 | 3 | Extension points | ✅ **all 4 wired** | ADR-0251, 2026-07-27; guard-tested per point in both directions |
 | 4 | Admin control plane (REST) | ✅ done | REST only; gRPC deferred, not planned |
-| 5 | Bridge supervisor plugins | ✅ **classes only** | seven classes exist; **nothing declares them**, so none ever loads |
+| 5 | Bridge supervisor plugins | ✅ **wired** | the boot path declares the bundled seven when the flag is on (2026-07-27) |
 | 6 | Headless API-only boot | ◑ **partial** | browser surfaces suppressed ✅; **no reordered boot sequence**, **no preset mechanism** |
 | 7 | Directory move + shims, docs, v0.11.0 | ⬜ open | `core/core_plugins/` does not exist |
 
@@ -692,9 +692,10 @@ contractual SLA, and nothing in this document promises a response time.
 
 1. **Wire the four extension points** into their call sites (engine/provider selection,
    `delegation_policy`, the workflow gate). Until then Phase 3 is bus-only.
-2. **Declare the bridge supervisors** — either ship them in the `tenant.corvin.yaml`
-   template or add a Console Settings action that writes the block. Until then Phase 5 is
-   classes-only.
+2. ~~**Declare the bridge supervisors.**~~ Done 2026-07-27: the boot path injects
+   them from `bridges/registry_entries.py`, because `bundled` means "ships with
+   CorvinOS" and a dotted class path in `tenant.corvin.yaml` is the `installed`
+   contract. An operator entry for a channel still wins over the injected one.
 3. **Finish Phase 6** — the reordered boot sequence, or a decision that the reorder is not
    wanted, in which case remove it from ADR-0241 rather than leaving it as an open promise.
 4. **First real instance on a privileged boot layer.** The moment one exists, the guard

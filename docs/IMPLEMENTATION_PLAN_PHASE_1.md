@@ -17,7 +17,7 @@ Phases 1–5 all have working, tested code. Three of them have **no reach**:
 | the `boot_layer` axis, four values | nothing on `compliance` or `core` — `_GLOBAL_SPECS` is empty, `register_global_plugin()` has no production caller, `bootstrap_global()` returns `[]` |
 | `registry.replace()` (ADR-0237 full replacement) | **nothing can** — it accepts only a `core` target and no plugin is on that boot layer |
 | the four extension-point bus points | **all 4 wired** (ADR-0251, 2026-07-27) |
-| the seven bridge supervisor classes | **nothing declares them** in `spec.plugins.installed` |
+| the seven bridge supervisor classes | **declared by the boot path** since 2026-07-27, flag-gated |
 
 Guard tests pin all four statements — `core/plugins/tests/test_layered_boot.py::TestTheTopOfTheAxisHasNoProductionInstance`
 and `test_extension_point_call_sites.py` (per point, both directions). The day any of them stops
@@ -181,7 +181,7 @@ did. They are target paths.
 | 2 | Boot order + scoping | ✅ done (c455516) | `bootstrap_global()` → `[]` everywhere; the tenant-downgrade guard *is* live |
 | 3 | Extension points | ✅ **all 4 wired** | ADR-0251, 2026-07-27 |
 | 4 | Admin control plane (REST) | ✅ done | six routes behind `admin_control_plane` |
-| 5 | Bridge supervisor plugins | ✅ **classes only** | **nothing declares them** |
+| 5 | Bridge supervisor plugins | ✅ **wired** | boot path declares the bundled seven (2026-07-27) |
 | 6 | Headless API-only boot | ◑ **partial** | browser surfaces suppressed; **no boot reorder**, **no presets** |
 | 7 | Directory move + shims, docs, v0.11.0 | ⬜ open | `core/core_plugins/` does not exist |
 
@@ -449,7 +449,7 @@ mutation; flag-off = routes absent (404), not error.
 
 ---
 
-## Phase 5 — Bridge supervisor plugins ✅ classes shipped, nothing declares them
+## Phase 5 — Bridge supervisor plugins ✅ classes shipped and declared by the boot path
 
 **Flag:** `bridge_supervisor_plugins` (default `false`)
 
