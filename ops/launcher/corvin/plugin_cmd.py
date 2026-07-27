@@ -603,10 +603,15 @@ def _readme(plugin_id: str, surface: Any) -> str:
 # ── parser wiring ────────────────────────────────────────────────────────────
 
 def add_parser(sub: Any) -> None:
-    """Attach the `plugin` subcommand group to the top-level parser."""
-    p = sub.add_parser("plugin", help="Build, inspect and validate plugins")
+    """Attach the `plugin` subcommand group to the top-level parser.
+
+    Includes both offline scaffolding (types, check, new) and runtime lifecycle
+    (install, uninstall, list, enable, disable) per Phase 1c.
+    """
+    p = sub.add_parser("plugin", help="Build, inspect, validate and manage plugins")
     ps = p.add_subparsers(dest="plugin_cmd", metavar="subcommand")
 
+    # Offline scaffolding commands (ADR-0244)
     t = ps.add_parser("types", help="List extension surfaces and whether they are called")
     t.add_argument("--json", action="store_true", help="Machine-readable output")
 
@@ -622,13 +627,26 @@ def add_parser(sub: Any) -> None:
     n.add_argument("plugin_id", metavar="ID", help="e.g. com.example.my-router")
     n.add_argument("-o", "--output", metavar="DIR", help="Where to create it (default: .)")
 
+    # Runtime lifecycle commands (Phase 1c)
+    from . import plugin_runtime_cmd
+
+    plugin_runtime_cmd.add_runtime_parser(ps)
+
 
 def dispatch(args: argparse.Namespace) -> int:
+    # Offline scaffolding commands
     if args.plugin_cmd == "types":
         return cmd_types(args)
     if args.plugin_cmd == "check":
         return cmd_check(args)
     if args.plugin_cmd == "new":
         return cmd_new(args)
-    _err("usage: corvin plugin {types|check|new}")
+
+    # Runtime lifecycle commands (delegate to plugin_runtime_cmd)
+    if args.plugin_cmd in ("install", "uninstall", "list", "enable", "disable"):
+        from . import plugin_runtime_cmd
+
+        return plugin_runtime_cmd.dispatch_runtime(args)
+
+    _err("usage: corvin plugin {types|check|new|install|uninstall|list|enable|disable}")
     return 2
