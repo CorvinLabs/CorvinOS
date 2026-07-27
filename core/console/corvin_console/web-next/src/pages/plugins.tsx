@@ -14,6 +14,7 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  Hammer,
   Puzzle,
   RefreshCw,
   Save,
@@ -31,6 +32,8 @@ import {
   disablePlugin,
   enablePlugin,
   listPlugins,
+  listScaffoldedPlugins,
+  PluginScaffoldSummary,
   PluginSummary,
   uninstallPlugin,
   updatePluginSettings,
@@ -265,6 +268,64 @@ function PluginCard({ plugin, csrf, mutable }: CardProps) {
   );
 }
 
+// ── Scaffolded-by-Plugin-Builder section (ADR-0253, read-only) ────────────────
+//
+// A scaffold is NOT an installed plugin — no enable/disable/settings, because
+// it was never registered (the Builder emits, never loads, ADR-0244). This is
+// just "here's what you generated", so a Builder author can find it again.
+
+function ScaffoldCard({ scaffold }: { scaffold: PluginScaffoldSummary }) {
+  const created = new Date(scaffold.created_at * 1000).toLocaleString();
+  return (
+    <Card>
+      <CardContent className="space-y-1 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Hammer className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="font-medium">{scaffold.display_name}</span>
+          <Badge text={scaffold.kind} />
+          <Badge text={`Tier ${scaffold.tier}`} />
+          {scaffold.plugin_type && <Badge text={scaffold.plugin_type} />}
+          <span className="ml-auto text-xs text-muted-foreground">{created}</span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          <code className="rounded bg-muted px-1">{scaffold.path}</code>
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Not installed — this is a Plugin-Builder scaffold on disk. Finish the
+          code, then install it through the normal plugin flow.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ScaffoldedByBuilderSection() {
+  const { data, error, isLoading } = useQuery({
+    queryKey: ["plugins", "scaffolded"],
+    queryFn: ({ signal }) => listScaffoldedPlugins(signal),
+    retry: false,
+  });
+
+  // 404 means plugin_builder_enabled is off (or nothing is installed at all
+  // in this build) — say nothing rather than show an error for an optional,
+  // independently-gated section.
+  if (error instanceof ApiError && error.status === 404) return null;
+  if (error) return null;
+  if (isLoading) return <Skeleton className="h-16 w-full" />;
+  if (!data || data.total === 0) return null;
+
+  return (
+    <div className="space-y-2 pt-2">
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+        <Hammer className="h-4 w-4" /> Scaffolded by Plugin-Builder ({data.total})
+      </h2>
+      {data.scaffolds.map((s) => (
+        <ScaffoldCard key={`${s.plugin_id}-${s.created_at}`} scaffold={s} />
+      ))}
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export function PluginsPage() {
@@ -347,6 +408,8 @@ export function PluginsPage() {
           mutable={Boolean(csrf) && data.lifecycle_enabled}
         />
       ))}
+
+      <ScaffoldedByBuilderSection />
     </div>
   );
 }

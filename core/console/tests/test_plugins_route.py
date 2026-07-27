@@ -695,6 +695,67 @@ class TestContainmentReasonIsDerived(_Base):
                 route_mod.set_collector(None)
 
 
+class TestScaffoldedPlugins(_Base):
+    """`/plugins/scaffolded` (ADR-0253) — Plugin-Builder scaffolds, gated by
+    `plugin_builder_enabled` independently of `plugin_console_surface`."""
+
+    def test_404s_while_plugin_builder_flag_is_off(self):
+        with _sandbox(Path(self._tmp)) as (client, csrf, _home):
+            self._flag(client, csrf, "plugin_console_surface", True)
+            resp = client.get("/v1/console/plugins/scaffolded")
+            self.assertEqual(resp.status_code, 404, resp.text)
+
+    def test_empty_list_when_nothing_scaffolded_yet(self):
+        with _sandbox(Path(self._tmp)) as (client, csrf, _home):
+            self._flag(client, csrf, "plugin_builder_enabled", True)
+            resp = client.get("/v1/console/plugins/scaffolded")
+            self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertEqual(resp.json(), {"scaffolds": [], "total": 0})
+
+    def test_a_recorded_scaffold_is_listed(self):
+        with _sandbox(Path(self._tmp)) as (client, csrf, home):
+            self._flag(client, csrf, "plugin_builder_enabled", True)
+
+            from plugin_builder import index_store
+            from plugin_builder.generators.scaffold import ScaffoldResult
+            from plugin_builder.models import (
+                Classification,
+                Constraints,
+                DependencySpec,
+                PluginIdea,
+                PluginKind,
+                ProblemStatement,
+                Tier,
+            )
+
+            idea = PluginIdea(
+                plugin_name="Postgres Connector",
+                problem=ProblemStatement("query postgres", "analysts", "none", "mvp"),
+                dependencies=DependencySpec(),
+                constraints=Constraints(),
+            )
+            classification = Classification(
+                kind=PluginKind.PROVIDER, tier=Tier.B_COMPUTE, confidence=1.0,
+                rationale="test", plugin_type="data_connector",
+            )
+            result = ScaffoldResult(
+                dest=home / "plugin-builder" / "community_postgres_connector",
+                plugin_id="community.postgres-connector",
+                classification=classification,
+                doc_files=(), scaffold_files=(), warnings=(),
+            )
+            index_store.record("_default", idea, result)
+
+            resp = client.get("/v1/console/plugins/scaffolded")
+            self.assertEqual(resp.status_code, 200, resp.text)
+            body = resp.json()
+            self.assertEqual(body["total"], 1)
+            entry = body["scaffolds"][0]
+            self.assertEqual(entry["plugin_id"], "community.postgres-connector")
+            self.assertEqual(entry["display_name"], "Postgres Connector")
+            self.assertEqual(entry["plugin_type"], "data_connector")
+
+
 class TestTheSandboxDoesNotPoisonTheRun(unittest.TestCase):
     """Review finding: this file's module purge made other suites fail.
 

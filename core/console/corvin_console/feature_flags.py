@@ -314,6 +314,21 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         target_release="0.11.x",
         tags=("models", "console"),
     ),
+    FeatureFlag(
+        id="plugin_builder_enabled",
+        label="Plugin Builder",
+        description=(
+            "Enable the `/plugin-builder` console command: a 4-phase interview "
+            "that classifies a plugin idea (MCP-Server | Skill | Hook | Provider "
+            "| Integration | Custom) and generates an Idea Doc, Architecture "
+            "Concept, ADR and Build Plan plus a code scaffold (ADR-0253). Off "
+            "means the command returns a pointer message and no interview "
+            "session, generation or scaffold write happens."
+        ),
+        owner="maintainer",
+        target_release="0.12.x",
+        tags=("plugins",),
+    ),
 )
 
 

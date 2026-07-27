@@ -5973,3 +5973,31 @@ export async function uninstallPlugin(
 ): Promise<{ uninstalled: string; audit_retained: boolean }> {
   return api(`/plugins/${encodeURIComponent(pluginId)}`, { method: "DELETE", csrf });
 }
+
+// ── Plugin-Builder scaffolds (ADR-0253) ────────────────────────────────────
+//
+// NOT installed plugins — a scaffold the Plugin-Builder wrote to disk from a
+// `/plugin-builder` interview. Gated by `plugin_builder_enabled`, independent
+// of `plugin_console_surface` above.
+
+export interface PluginScaffoldSummary {
+  plugin_id: string;
+  display_name: string;
+  kind: string;
+  tier: string;
+  plugin_type: string | null;
+  path: string;
+  /** Unix seconds. */
+  created_at: number;
+}
+
+export interface PluginScaffoldListResponse {
+  scaffolds: PluginScaffoldSummary[];
+  total: number;
+}
+
+export async function listScaffoldedPlugins(
+  signal?: AbortSignal,
+): Promise<PluginScaffoldListResponse> {
+  return api<PluginScaffoldListResponse>("/plugins/scaffolded", { signal });
+}
