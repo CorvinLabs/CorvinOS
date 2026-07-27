@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Security Tests', () => {
   test.describe('XSS Prevention', () => {
     test('Prevent XSS in chat message input', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -28,7 +28,7 @@ test.describe('Security Tests', () => {
     });
 
     test('Prevent XSS in comment/form fields', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -46,7 +46,7 @@ test.describe('Security Tests', () => {
     });
 
     test('Escape special HTML characters in display', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -58,7 +58,7 @@ test.describe('Security Tests', () => {
     });
 
     test('Prevent event handler injection', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -77,7 +77,7 @@ test.describe('Security Tests', () => {
 
     test('Prevent DOM-based XSS via URL parameters', async ({ page }) => {
       // Attempt DOM-based XSS via query string
-      const response = await page.goto('/app/chat?redirect=<script>alert(1)</script>');
+      const response = await page.goto('/console/app/chat?redirect=<script>alert(1)</script>');
 
       expect([200, 404]).toContain(response?.status());
 
@@ -86,7 +86,7 @@ test.describe('Security Tests', () => {
     });
 
     test('Sanitize pasted content from clipboard', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -110,7 +110,7 @@ test.describe('Security Tests', () => {
 
   test.describe('CSRF Protection', () => {
     test('Include CSRF token in POST requests', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -137,17 +137,17 @@ test.describe('Security Tests', () => {
     });
 
     test('Validate CSRF token on state-changing requests', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
       // Verify same-origin requests work
-      const response = await page.goto('/app/tasks');
+      const response = await page.goto('/console/app/tasks');
       expect([true, false]).toContain(response?.ok() || true);
     });
 
     test('Reject requests with invalid CSRF token', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -163,7 +163,7 @@ test.describe('Security Tests', () => {
     });
 
     test('CSRF token rotation on login', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -356,7 +356,7 @@ test.describe('Security Tests', () => {
 
   test.describe('Input Sanitization', () => {
     test('Sanitize user input for SQL injection', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -375,7 +375,7 @@ test.describe('Security Tests', () => {
     });
 
     test('Sanitize input for path traversal', async ({ page }) => {
-      await page.goto('/app/files');
+      await page.goto('/console/app/files');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -388,7 +388,7 @@ test.describe('Security Tests', () => {
     });
 
     test('Remove null bytes from input', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -406,7 +406,7 @@ test.describe('Security Tests', () => {
     });
 
     test('Normalize Unicode input (NFKC)', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -426,7 +426,7 @@ test.describe('Security Tests', () => {
 
   test.describe('Data Protection', () => {
     test('No sensitive data in browser console', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -441,7 +441,7 @@ test.describe('Security Tests', () => {
     });
 
     test('No sensitive data in localStorage', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -459,7 +459,7 @@ test.describe('Security Tests', () => {
     });
 
     test('Password field blocks autocomplete', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -475,7 +475,7 @@ test.describe('Security Tests', () => {
     });
 
     test('Secure flag on authentication cookies', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -495,7 +495,7 @@ test.describe('Security Tests', () => {
 test.describe('Session Management Tests', () => {
   test.describe('Session Timeout', () => {
     test('Session timeout after inactivity', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -512,7 +512,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Idle detection (no activity)', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -524,7 +524,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Warn user before session timeout', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -536,7 +536,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Extend session on user activity', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -552,7 +552,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Preserve user state on re-login after timeout', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -564,7 +564,7 @@ test.describe('Session Management Tests', () => {
       });
 
       // Navigate back
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -575,7 +575,7 @@ test.describe('Session Management Tests', () => {
 
   test.describe('Token Management', () => {
     test('Store JWT token securely', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -589,7 +589,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Token refresh before expiry', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -607,7 +607,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Invalidate token on logout', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -618,14 +618,14 @@ test.describe('Session Management Tests', () => {
       });
 
       // Navigate to protected page (use 'load' — 'networkidle' times out on polling pages)
-      const response = await page.goto('/app/settings', { waitUntil: 'load' }).catch(() => null);
+      const response = await page.goto('/console/app/settings', { waitUntil: 'load' }).catch(() => null);
 
       // Should handle missing token gracefully
       expect([200, 404, 302]).toContain(response?.status());
     });
 
     test('Handle expired token gracefully', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -645,7 +645,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Prevent token from appearing in logs/URLs', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -664,8 +664,8 @@ test.describe('Session Management Tests', () => {
       const page1 = await context.newPage();
       const page2 = await context.newPage();
 
-      await page1.goto('/app/chat');
-      await page2.goto('/app/tasks');
+      await page1.goto('/console/app/chat');
+      await page2.goto('/console/app/tasks');
 
       await page1.waitForLoadState('load');
       await page2.waitForLoadState('load');
@@ -681,8 +681,8 @@ test.describe('Session Management Tests', () => {
       const page1 = await context.newPage();
       const page2 = await context.newPage();
 
-      await page1.goto('/app/settings');
-      await page2.goto('/app/settings');
+      await page1.goto('/console/app/settings');
+      await page2.goto('/console/app/settings');
 
       // Simulate "new device login" detection
       await page2.evaluate(() => {
@@ -699,7 +699,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Logout from all devices', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -722,8 +722,8 @@ test.describe('Session Management Tests', () => {
       const page1 = await context.newPage();
       const page2 = await context.newPage();
 
-      await page1.goto('/app/chat');
-      await page2.goto('/app/chat');
+      await page1.goto('/console/app/chat');
+      await page2.goto('/console/app/chat');
 
       // Logout in page1
       await page1.evaluate(() => {
@@ -748,7 +748,7 @@ test.describe('Session Management Tests', () => {
 
   test.describe('Cookies & Session Storage', () => {
     test('Use HttpOnly cookies for sensitive data', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -764,7 +764,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Use SameSite attribute on cookies', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -773,7 +773,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Clear cookies on logout', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -787,7 +787,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Protect session storage from XSS', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -804,7 +804,7 @@ test.describe('Session Management Tests', () => {
     test('Limit failed login attempts', async ({ page }) => {
       // Navigate to a sub-page instead of root to avoid triggering auth API
       // calls that time out in CI when the backend is not running.
-      await page.goto('/app/chat', { waitUntil: 'domcontentloaded' });
+      await page.goto('/console/app/chat', { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(500);
 
       // Simulate multiple failed login attempts
@@ -819,7 +819,7 @@ test.describe('Session Management Tests', () => {
 
     test('Temporary lockout after failed attempts', async ({ page }) => {
       // Navigate to a sub-page; avoid root which triggers auth redirects in CI.
-      await page.goto('/app/chat', { waitUntil: 'domcontentloaded' });
+      await page.goto('/console/app/chat', { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(500);
 
       // Should have rate limiting — verify page is reachable
@@ -871,7 +871,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('Progressive delay on API rate limit', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -889,7 +889,7 @@ test.describe('Session Management Tests', () => {
     });
 
     test('User-friendly rate limit error message', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -903,7 +903,7 @@ test.describe('Session Management Tests', () => {
 
 test.describe('Permission & Authorization Tests', () => {
   test('Enforce role-based access control', async ({ page }) => {
-    await page.goto('/app/orgs');
+    await page.goto('/console/app/orgs');
     await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -912,7 +912,7 @@ test.describe('Permission & Authorization Tests', () => {
   });
 
   test('Deny access to unauthorized features', async ({ page }) => {
-    await page.goto('/app/compliance');
+    await page.goto('/console/app/compliance');
     await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -921,7 +921,7 @@ test.describe('Permission & Authorization Tests', () => {
   });
 
   test('Check permissions on API calls', async ({ page }) => {
-    await page.goto('/app/settings');
+    await page.goto('/console/app/settings');
     await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -934,7 +934,7 @@ test.describe('Permission & Authorization Tests', () => {
   });
 
   test('Handle permission denied (403) gracefully', async ({ page }) => {
-    await page.goto('/app/chat');
+    await page.goto('/console/app/chat');
     await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 

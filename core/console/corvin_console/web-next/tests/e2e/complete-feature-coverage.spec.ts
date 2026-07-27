@@ -14,14 +14,14 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
   test.describe('Core Chat & Task Flow (Dependencies: Chat → Tasks → Settings)', () => {
     test('Complete workflow: Chat → Tasks → Settings → Compliance Export', async ({ page }) => {
       // Step 1: Chat
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       let content = await page.content();
       expect(content.length).toBeGreaterThan(100);
 
       // Step 2: Tasks (dependent on chat context)
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -32,7 +32,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await buttons.count()).toBeGreaterThanOrEqual(0);
 
       // Step 3: Settings (dependent on task setup)
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -43,7 +43,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await inputs.count()).toBeGreaterThanOrEqual(0);
 
       // Step 4: Compliance (final step in workflow)
-      await page.goto('/app/compliance');
+      await page.goto('/console/app/compliance');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -58,7 +58,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
   test.describe('API & Integration Flow (Dependencies: API Keys → Bridges → Workflows)', () => {
     test('Complete workflow: API Keys → Bridges → Workflows Integration', async ({ page }) => {
       // Step 1: API Keys
-      await page.goto('/app/api-keys');
+      await page.goto('/console/app/api-keys');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       let content = await page.content();
@@ -69,7 +69,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await buttons.count()).toBeGreaterThanOrEqual(0);
 
       // Step 2: Bridges (dependent on API key)
-      await page.goto('/app/bridges');
+      await page.goto('/console/app/bridges');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -80,7 +80,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await forms.count()).toBeGreaterThanOrEqual(0);
 
       // Step 3: Workflows (dependent on bridge setup)
-      await page.goto('/app/workflows');
+      await page.goto('/console/app/workflows');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -95,7 +95,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
   test.describe('Engine & Compute Flow (Dependencies: Engines → Compute Jobs → Monitoring)', () => {
     test('Complete workflow: Engines → Compute Jobs → Monitoring', async ({ page }) => {
       // Step 1: Engines
-      await page.goto('/app/engines');
+      await page.goto('/console/app/engines');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       let content = await page.content();
@@ -107,7 +107,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect([true, false]).toContain(isSelectorVisible);
 
       // Step 2: Compute (dependent on engine selection)
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -118,7 +118,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await submitButtons.count()).toBeGreaterThanOrEqual(0);
 
       // Step 3: Engine Control (dependent on job submission)
-      await page.goto('/app/engine-control');
+      await page.goto('/console/app/engine-control');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -133,7 +133,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
   test.describe('Skills & Development Flow (Dependencies: Forge → Skills → LDD)', () => {
     test('Complete workflow: Forge → Skills → LDD Configuration', async ({ page }) => {
       // Step 1: Forge
-      await page.goto('/app/forge');
+      await page.goto('/console/app/forge');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       let content = await page.content();
@@ -144,7 +144,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await createButtons.count()).toBeGreaterThanOrEqual(0);
 
       // Step 2: Skills (dependent on forge tool)
-      await page.goto('/app/skills');
+      await page.goto('/console/app/skills');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -155,7 +155,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await skillButtons.count()).toBeGreaterThanOrEqual(0);
 
       // Step 3: LDD (dependent on skill creation)
-      await page.goto('/app/ldd');
+      await page.goto('/console/app/ldd');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -170,7 +170,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
   test.describe('Organization & People Flow (Dependencies: Orgs → People → Roles)', () => {
     test('Complete workflow: Organizations → People → Roles Management', async ({ page }) => {
       // Step 1: Organizations
-      await page.goto('/app/orgs');
+      await page.goto('/console/app/orgs');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       let content = await page.content();
@@ -181,7 +181,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await orgList.count()).toBeGreaterThanOrEqual(0);
 
       // Step 2: People (dependent on org selection)
-      await page.goto('/app/people');
+      await page.goto('/console/app/people');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -205,7 +205,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
   test.describe('Advanced Features Flow (Dependencies: Voice → Agents → Cowork)', () => {
     test('Complete workflow: Voice → Agent Hub → Cowork Collaboration', async ({ page }) => {
       // Step 1: Voice
-      await page.goto('/app/voice');
+      await page.goto('/console/app/voice');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       let content = await page.content();
@@ -216,7 +216,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await voiceControls.count()).toBeGreaterThanOrEqual(0);
 
       // Step 2: Agent Hub (dependent on voice configuration)
-      await page.goto('/app/agent-hub');
+      await page.goto('/console/app/agent-hub');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -227,7 +227,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await agentList.count()).toBeGreaterThanOrEqual(0);
 
       // Step 3: Cowork (dependent on agent configuration)
-      await page.goto('/app/cowork');
+      await page.goto('/console/app/cowork');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -242,7 +242,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
   test.describe('Advanced Configuration Flow (Dependencies: Personas → Connectors → Files)', () => {
     test('Complete workflow: Personas → Connectors → Files Processing', async ({ page }) => {
       // Step 1: Personas
-      await page.goto('/app/personas');
+      await page.goto('/console/app/personas');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       let content = await page.content();
@@ -253,7 +253,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await personaButtons.count()).toBeGreaterThanOrEqual(0);
 
       // Step 2: Connectors (dependent on persona creation)
-      await page.goto('/app/connectors');
+      await page.goto('/console/app/connectors');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -264,7 +264,7 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
       expect(await connectorButtons.count()).toBeGreaterThanOrEqual(0);
 
       // Step 3: Files (dependent on connector setup)
-      await page.goto('/app/files');
+      await page.goto('/console/app/files');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       content = await page.content();
@@ -283,19 +283,19 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
   test.describe('Cross-Feature Integration Tests', () => {
     test('Complete workflow: Chat → Task → Export to Compliance', async ({ page }) => {
       // Step 1: Start in chat
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       expect((await page.content()).length).toBeGreaterThan(100);
 
       // Step 2: Navigate to tasks
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       expect((await page.content()).length).toBeGreaterThan(100);
 
       // Step 3: Go to compliance
-      await page.goto('/app/compliance');
+      await page.goto('/console/app/compliance');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       expect((await page.content()).length).toBeGreaterThan(100);
@@ -384,22 +384,22 @@ test.describe('CorvinOS - Complete Feature Coverage', () => {
   test.describe('Error Handling in Multi-Step Workflows', () => {
     test('Recover from navigation errors in workflow', async ({ page }) => {
       // Valid pages
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       expect((await page.content()).length).toBeGreaterThan(100);
 
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       expect((await page.content()).length).toBeGreaterThan(100);
 
       // Try invalid route (should handle gracefully)
-      const response = await page.goto('/app/invalid-workflow-step');
+      const response = await page.goto('/console/app/invalid-workflow-step');
       expect([404, 200, 301, 302]).toContain(response?.status());
 
       // Recover by navigating back to valid page
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       expect((await page.content()).length).toBeGreaterThan(100);

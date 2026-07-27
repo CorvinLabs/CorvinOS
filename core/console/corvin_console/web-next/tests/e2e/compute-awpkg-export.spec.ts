@@ -10,7 +10,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
 
   test.describe('Compute page navigation', () => {
     test('navigates to compute page', async ({ page }) => {
-      const _response = await page.goto('/app/compute').catch(() => null);
+      const _response = await page.goto('/console/app/compute').catch(() => null);
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -20,7 +20,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
     });
 
     test('compute page shows Pipelines tab', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -32,7 +32,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
     });
 
     test('Pipelines tab shows pipeline cards', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -55,7 +55,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
 
   test.describe('Export Hub — preview endpoint via fetch', () => {
     test('preview endpoint returns 200 for valid pipeline', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(500);
 
@@ -73,7 +73,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
     });
 
     test('preview endpoint returns 404 for unknown pipeline', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(500);
 
@@ -90,7 +90,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
     });
 
     test('preview response has expected shape (stage_count, dag_nodes, secrets_required)', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(500);
 
@@ -115,7 +115,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
     });
 
     test('preview shows rag_providers array', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(500);
 
@@ -137,7 +137,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
     });
 
     test('preview shows fabric_datasources array', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(500);
 
@@ -161,7 +161,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
 
   test.describe('Export Hub — download endpoint', () => {
     test('download endpoint requires CSRF token', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(500);
 
@@ -183,7 +183,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
     });
 
     test('download rejects invalid package_id format', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(500);
 
@@ -212,7 +212,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
     });
 
     test('download with valid params returns zip content-type', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(500);
 
@@ -247,7 +247,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
 
   test.describe('Export button in Export Hub UI', () => {
     test('compute page has Export Hub section or export button', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -262,7 +262,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
     });
 
     test('pipeline card has export option', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -287,7 +287,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
 
   test.describe('Champion promotion', () => {
     test('promote-champion endpoint returns 404 for unknown pipeline', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(500);
 
@@ -315,7 +315,7 @@ test.describe('Compute Pipeline → awpkg Export (ADR-0090)', () => {
     });
 
     test('promote-champion endpoint validates run_id format', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(500);
 

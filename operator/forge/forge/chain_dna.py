@@ -154,34 +154,65 @@ def _cmp_len(stored: str) -> int:
 
 # ── Chain reading helpers ──────────────────────────────────────────────────────
 
+#: Tail chunk size for the backwards read. A record is a few hundred bytes, so the
+#: newest DNA-bearing entry is virtually always in the first chunk.
+_TAIL_BLOCK = 8192
+
+
 def last_dna_in_chain(path: Path) -> tuple[str, str]:
     """Return (last_chain_dna, last_hash) from the audit file, or ("", "").
 
-    Scans the file once (forward) and keeps the last entry that has both
-    ``details.chain_dna`` and ``hash`` populated.
+    Reads BACKWARDS from the end and returns the newest entry that has BOTH
+    ``details.chain_dna`` and ``hash`` populated — identical semantics to the forward
+    scan this replaces, only travelling the other way.
+
+    It used to scan the whole file forwards, json.loads()-ing every line, and it runs
+    inside write_event()'s exclusive flock on every hash-chained write. Profiled on the
+    live chain (120 875 records) 2026-07-27: 624 ms of write_event's 627 ms total. Same
+    shape as security_events._last_hash, which was fixed in the same pass — together
+    they made every authenticated console request cost ~0.8 s and serialise, so eight
+    concurrent requests took eight times as long and Playwright specs timed out at 30 s.
+    The cost grew with chain length without bound.
     """
     if not path.exists():
         return "", ""
-    last_dna = ""
-    last_hash = ""
     try:
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                h = rec.get("hash", "")
-                dna = (rec.get("details") or {}).get("chain_dna", "")
-                if h and dna:
-                    last_dna = dna
-                    last_hash = h
+        size = path.stat().st_size
+    except OSError:
+        return "", ""
+    if size == 0:
+        return "", ""
+
+    try:
+        with path.open("rb") as fh:
+            pos = size
+            tail = b""
+            while pos > 0:
+                step = min(_TAIL_BLOCK, pos)
+                pos -= step
+                fh.seek(pos)
+                tail = fh.read(step) + tail
+                lines = tail.split(b"\n")
+                # The first element may be a fragment unless we reached the start.
+                candidates = lines if pos == 0 else lines[1:]
+                for raw in reversed(candidates):
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        rec = json.loads(raw)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
+                    if not isinstance(rec, dict):
+                        continue
+                    h = rec.get("hash", "")
+                    dna = (rec.get("details") or {}).get("chain_dna", "")
+                    if h and dna:
+                        return dna, h
+                tail = lines[0] if pos > 0 else b""
     except Exception:  # noqa: BLE001
-        pass
-    return last_dna, last_hash
+        return "", ""
+    return "", ""
 
 
 # ── Verification ───────────────────────────────────────────────────────────────

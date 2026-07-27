@@ -18,7 +18,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should navigate to chat section', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       await page.waitForTimeout(500);
@@ -29,7 +29,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should navigate to tasks section', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       await page.waitForTimeout(500);
@@ -41,7 +41,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     test('should display responsive layout on mobile', async ({ page }) => {
       // Set mobile viewport
       await page.setViewportSize({ width: 375, height: 667 });
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       await page.waitForTimeout(500);
@@ -57,7 +57,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
 
   test.describe('Chat Functionality', () => {
     test('should navigate to chat page', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -66,7 +66,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should find textarea element', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -80,7 +80,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should handle chat page interactions', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -95,7 +95,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     test('should persist data on page reload', async ({ page }) => {
       const testMessage = `Test msg ${Date.now()}`;
 
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -118,7 +118,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
 
   test.describe('Task Management', () => {
     test('should navigate to tasks page', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -127,7 +127,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should find interactive elements on tasks page', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -139,7 +139,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should handle task list interactions', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -152,7 +152,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should allow form interactions on tasks page', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -166,7 +166,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
 
   test.describe('Settings & Configuration', () => {
     test('should navigate to settings page', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -175,7 +175,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should find input elements on settings page', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -186,7 +186,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should have working form elements', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -201,7 +201,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should handle form submission if available', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -218,7 +218,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
 
   test.describe('Compliance & Audit', () => {
     test('should navigate to compliance page', async ({ page }) => {
-      await page.goto('/app/compliance');
+      await page.goto('/console/app/compliance');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -227,7 +227,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should display compliance information', async ({ page }) => {
-      await page.goto('/app/compliance');
+      await page.goto('/console/app/compliance');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -236,7 +236,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should have interactive elements on compliance page', async ({ page }) => {
-      await page.goto('/app/compliance');
+      await page.goto('/console/app/compliance');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -250,7 +250,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should handle export operations if available', async ({ page }) => {
-      await page.goto('/app/compliance');
+      await page.goto('/console/app/compliance');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -263,7 +263,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
 
   test.describe('Error Handling & Recovery', () => {
     test('should handle invalid route gracefully', async ({ page }) => {
-      const response = await page.goto('/app/invalid-route-xyz');
+      const response = await page.goto('/console/app/invalid-route-xyz');
 
       // Page should either show error or redirect
       const status = response?.status();
@@ -271,7 +271,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should maintain page functionality after reload', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -302,7 +302,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
 
   test.describe('Accessibility', () => {
     test('should have focusable interactive elements', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -313,7 +313,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should support keyboard navigation', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -325,7 +325,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should have semantic HTML structure', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -340,7 +340,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
   test.describe('Performance', () => {
     test('should load chat page efficiently', async ({ page }) => {
       const startTime = Date.now();
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       const loadTime = Date.now() - startTime;
@@ -350,7 +350,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
 
     test('should load tasks page efficiently', async ({ page }) => {
       const startTime = Date.now();
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
       const loadTime = Date.now() - startTime;
@@ -373,13 +373,13 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
 
   test.describe('Data Persistence & State Management', () => {
     test('should maintain app state during navigation', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
       const beforeNav = await page.content();
 
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -391,7 +391,7 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
     });
 
     test('should recover chat page on reload', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -412,10 +412,10 @@ test.describe('CorvinOS Console - Comprehensive UI Integration', () => {
       const page1 = await context.newPage();
       const page2 = await context.newPage();
 
-      await page1.goto('/app/chat');
+      await page1.goto('/console/app/chat');
       await page1.waitForLoadState('load');
 
-      await page2.goto('/app/tasks');
+      await page2.goto('/console/app/tasks');
       await page2.waitForLoadState('load');
 
       const content1 = await page1.content();
