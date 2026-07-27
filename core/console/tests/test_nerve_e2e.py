@@ -352,7 +352,14 @@ class TestTier2DiscoveryLive(unittest.TestCase):
 
             import importlib
             import corvin_console.aco.nerve as nerve_mod
-            original = nerve_mod.NerveRegistry._discover_local_plugins.__func__
+            # __dict__ lookup, NOT attribute access: reading the attribute and
+            # taking .__func__ unwraps the classmethod, and writing that bare
+            # function back at the end leaves the class with an unbound
+            # function. Every later test in the same process then fails with
+            # "missing 1 required positional argument: 'cls'" — the failure
+            # surfaces in a DIFFERENT file (test_nerve_detailed.py), which is
+            # what made it hard to place. Line ~409 already does it correctly.
+            original = nerve_mod.NerveRegistry.__dict__["_discover_local_plugins"]
 
             @classmethod
             def patched_local(cls):

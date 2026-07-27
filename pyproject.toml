@@ -155,7 +155,16 @@ Issues = "https://github.com/CorvinLabs/CorvinOS/issues"
 
 # ── Nervous System Entry Points (ADR-0177) ───────────────────────────────────
 # Third-party packages and extensions register additional Nerve Fibers here.
-# CorvinOS discovers them automatically at boot (Tier-1 discovery).
+#
+# CorvinOS ENUMERATES them at boot but does NOT import them unless the operator
+# opted in — importing an entry point runs the third party's module, and "it is
+# installed somewhere on this machine" is not consent. Opt in per name with
+#   spec.nerve.fibers: [my_connector]
+# or wholesale with
+#   spec.nerve.auto_discover_entry_points: true
+# in tenant.corvin.yaml. Without one of those the fiber is listed at debug level
+# and never loaded.
+#
 # Format: <name> = "<module>:<FiberClass>"
 # Example for a custom connector:
 #   [project.entry-points."corvinOS.nerve_fibers"]
