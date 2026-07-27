@@ -102,6 +102,11 @@ jobs:
           # run does not fail — it hangs until the job limit and burns the
           # runner. `timeout 20m` turns that into a fast, legible failure.
           #
+          # The bound is calibrated, not guessed: with the ignores and deselect
+          # below this step measured 11:04 locally (1877 passed, 11 failed,
+          # 10 errors — pre-existing, several of them voice). 20m leaves room for
+          # a slower runner while still catching a genuine hang.
+          #
           # The --deselect names ONE test rather than dropping its file: it calls
           # the real, unmocked ACO heal cycle (network probes plus an Ollama
           # start attempt, no timeout) and blocks indefinitely — over 50 minutes
