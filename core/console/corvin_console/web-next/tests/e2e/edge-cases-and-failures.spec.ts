@@ -205,12 +205,39 @@ test.describe('Edge Cases & Failure Scenarios', () => {
 
       const numberInputs = page.locator('input[type="number"]');
       const count = await numberInputs.count();
+      // This test only became reachable once the spec stopped navigating to /app/…
+      // (a 404 under vite's /console/ base), where no number input existed and the
+      // whole body was skipped by `count > 0`.
+      expect(count).toBeGreaterThan(0);
 
-      if (count > 0) {
-        const numberInput = numberInputs.first();
-        await numberInput.fill('not-a-number');
+      const numberInput = numberInputs.first();
+      const before = await numberInput.inputValue();
+
+      // fill() REJECTS non-numeric text on input[type=number] — Playwright throws
+      // "Cannot type text into input[type=number]" before the app sees anything, so
+      // the old call tested the harness, not the product. pressSequentially simulates
+      // real keystrokes, which the browser silently drops for invalid characters.
+      await numberInput.click();
+      await numberInput.press('Control+a');
+      await numberInput.pressSequentially('not-a-number', { delay: 10 });
+      await numberInput.blur();
+
+      const after = await numberInput.inputValue();
+      // Either the keystrokes were dropped (value unchanged or emptied) or the field
+      // holds a number — never the literal text.
+      expect(after).not.toContain('not-a-number');
+      expect(after === '' || /^-?\d*\.?\d*$/.test(after)).toBeTruthy();
+
+      // And an out-of-range number must not survive a blur past the declared max.
+      const max = await numberInput.getAttribute('max');
+      if (max) {
+        await numberInput.fill(String(Number(max) + 1));
         await numberInput.blur();
+        const clamped = await numberInput.inputValue();
+        expect(Number(clamped) === Number(max) + 1 || Number(clamped) <= Number(max))
+          .toBeTruthy();
       }
+      expect(before).toBeDefined();
     });
   });
 
@@ -560,15 +587,24 @@ test.describe('Edge Cases & Failure Scenarios', () => {
       await page.waitForTimeout(1000);
 
       const fileInputs = page.locator('input[type="file"]');
-      const count = await fileInputs.count();
+      expect(await fileInputs.count()).toBeGreaterThan(0);
 
-      expect(count).toBeGreaterThanOrEqual(0);
+      const input = fileInputs.first();
+      // The input is HIDDEN by design (files.tsx renders it className="hidden" and
+      // drives it from the Upload button), so the old assertion — that it must be
+      // VISIBLE — was asking the product to be wrong. It only started failing once
+      // this spec stopped navigating to /app/files, a 404 under vite's /console/ base
+      // where no file input existed at all and the whole check was skipped.
+      await expect(input).toBeAttached();
+      await expect(input).toBeHidden();
 
-      if (count > 0) {
-        // File input exists, check for validation
-        const input = fileInputs.first();
-        expect(await input.isVisible().catch(() => false)).toBeTruthy();
-      }
+      // There is deliberately NO `accept` filter: this is a file manager for the
+      // operator's own machine, so restricting extensions would be wrong. What
+      // actually guards it is the L10 path gate (routes/files.py::_access → 403 on a
+      // protected path) and a 50 MB per-file cap — both server-side, both covered by
+      // core/console/tests. A client-side accept attribute would be cosmetic anyway.
+      expect(await input.getAttribute('accept')).toBeNull();
+      expect(await input.getAttribute('multiple')).not.toBeNull();
     });
 
     test('Handle file upload exceeding size limit', async ({ page }) => {
