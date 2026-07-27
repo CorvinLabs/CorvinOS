@@ -10,6 +10,7 @@ Commands:
   corvin gateway setup
   corvin config set <key> <value>
   corvin config show
+  corvin secrets set|get|delete|list|migrate  Manage encrypted secrets (Phase 1b)
   corvin status
 """
 import argparse
@@ -631,10 +632,18 @@ def _build_parser() -> argparse.ArgumentParser:
     # status
     sub.add_parser("status", help="Show gateway and Ollama status")
 
+    # secrets (Phase 1b) — manage encrypted secrets
+    from . import secrets_cmd as _secrets_cmd
+    _secrets_cmd.add_parser(sub)
+
     # plugin (ADR-0244) — build-time tooling; imported here rather than at module
     # top so `corvin status` still works on an install without corvin_plugins.
     from . import plugin_cmd as _plugin_cmd
     _plugin_cmd.add_parser(sub)
+
+    # tenant — portable bundles for backup/restore/migration (Phase 2)
+    from . import tenant_cmd as _tenant_cmd
+    _tenant_cmd.add_parser(sub)
 
     return p
 
@@ -679,11 +688,26 @@ def main() -> None:
     elif args.command == "status":
         sys.exit(cmd_status(args))
 
+    elif args.command == "secrets":
+        if not getattr(args, "secrets_cmd", None):
+            parser.parse_args(["secrets", "--help"])
+        func = getattr(args, "func", None)
+        if func:
+            sys.exit(func(args))
+        else:
+            parser.parse_args(["secrets", "--help"])
+
     elif args.command == "plugin":
         if not getattr(args, "plugin_cmd", None):
             parser.parse_args(["plugin", "--help"])
         from . import plugin_cmd as _plugin_cmd
         sys.exit(_plugin_cmd.dispatch(args))
+
+    elif args.command == "tenant":
+        if not getattr(args, "tenant_cmd", None):
+            parser.parse_args(["tenant", "--help"])
+        from . import tenant_cmd as _tenant_cmd
+        sys.exit(_tenant_cmd.dispatch(args))
 
     else:
         # No subcommand: behave like `corvin start` (the most useful default)

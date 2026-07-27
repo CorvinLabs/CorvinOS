@@ -164,8 +164,8 @@ def service_env_path() -> Path:
 
 def resolve_by_env_var(env_var: str) -> str | None:
     """Resolve a value by the CANONICAL env-var name (e.g. "OPENROUTER_API_KEY")
-    instead of the logical key name, going through the same
-    env-then-service.env precedence chain as ``resolve_key``.
+    instead of the logical key name, going through the same multi-source
+    precedence chain: process env → secrets.enc → service.env.
 
     For callers that only know a provider's declared ``credential_env`` (e.g.
     ADR-0181's engine_model_registry.yaml providers) and would otherwise be
@@ -173,41 +173,76 @@ def resolve_by_env_var(env_var: str) -> str | None:
     just saved through the console while the bridge daemon is still running,
     since only ``resolve_key``/this function re-read service.env live.
 
+    Phase 1b: Encrypted secrets (secrets.enc) are now checked between process
+    env and service.env, providing at-rest encryption for stored credentials.
+
     ``env_var`` need not be one of the small set of names registered in
     ``CANONICAL_ENV_VAR`` — a provider can declare any ``credential_env`` name
     in its own config. When it isn't registered there is no logical key to
     route through ``resolve_key``, so this falls back to the same
-    env-then-service.env chain for the literal name itself (adversarial
-    review, 2026-07-14: an earlier version returned None here, silently
-    losing key resolution for any provider outside the hardcoded set even
-    though the env var was genuinely set)."""
+    env-then-secrets.enc-then-service.env chain for the literal name itself
+    (adversarial review, 2026-07-14: an earlier version returned None here,
+    silently losing key resolution for any provider outside the hardcoded set
+    even though the env var was genuinely set)."""
     key_name = _ENV_VAR_TO_KEY.get(env_var)
     if key_name is not None:
         return resolve_key(key_name)
 
+    # Standard precedence: process env → secrets.enc → service.env
     value = (os.environ.get(env_var) or "").strip()
     if value:
         return value
+
+    # Check encrypted secrets store
+    try:
+        store = SecretsStore()
+        secret = store.load_secret(env_var)
+        if secret:
+            return secret
+    except Exception as e:
+        # Secrets store not available or unreadable — continue to service.env
+        pass
+
     return _load_from_file(env_var, service_env_path())
 
 
 def resolve_key(key_name: str) -> str | None:
     """Resolve *key_name* (e.g. "openai_api_key", "stt_openai_api_key",
-    "custom_stripe") through the single canonical precedence chain: every
-    candidate (dedicated name first, then general/legacy names) is checked
-    against the process env before any is checked against service.env —
-    an explicit env-var override always beats anything in a file,
-    regardless of how specific the file's key is. Returns the plaintext
-    value, or None if not configured anywhere."""
+    "custom_stripe") through the single canonical precedence chain:
+    process env → secrets.enc → service.env.
+
+    Every candidate (dedicated name first, then general/legacy names) is checked
+    against the process env before any is checked against secrets.enc or
+    service.env — an explicit env-var override always beats anything in a file,
+    regardless of how specific the file's key is.
+
+    Phase 1b: Encrypted secrets (secrets.enc) are now checked between process
+    env and service.env, providing at-rest encryption for stored credentials.
+
+    Returns the plaintext value, or None if not configured anywhere.
+    """
     candidates = _candidates_for(key_name)
     if candidates is None:
         return None
 
+    # Check process environment first (highest priority)
     for name in candidates:
         value = (os.environ.get(name) or "").strip()
         if value:
             return value
 
+    # Check encrypted secrets store (Phase 1b)
+    try:
+        store = SecretsStore()
+        for name in candidates:
+            secret = store.load_secret(name)
+            if secret:
+                return secret
+    except Exception:
+        # Secrets store not available or unreadable — continue to service.env
+        pass
+
+    # Check service.env file (lowest priority)
     service_env = service_env_path()
     for name in candidates:
         value = _load_from_file(name, service_env)
@@ -269,3 +304,324 @@ def write_key(key_name: str, value: str, *, path_override: Path | None = None) -
         path.chmod(0o600)
     except OSError:
         pass
+
+
+# ── Phase 1b: Encrypted secrets management ────────────────────────────────────
+#
+# SecretsStore provides tenant-scoped encryption of provider keys using Fernet.
+# Secrets are stored in ~/.corvin/tenants/<tenant_id>/global/secrets.enc
+# and can be accessed via load_secret/save_secret or through resolve_by_env_var.
+#
+# Master encryption key is stored in ~/.corvin/tenants/<tenant_id>/keys/tenant_master.key
+# with 0o600 permissions.
+
+import base64
+import json
+import logging
+from datetime import datetime
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+except ImportError:
+    Fernet = None  # type: ignore
+    InvalidToken = None  # type: ignore
+
+_log = logging.getLogger(__name__)
+
+
+class SecretsStore:
+    """Manage encrypted secrets in tenant/global/secrets.enc.
+
+    Provides single-tenant storage for API keys and other sensitive data
+    using Fernet (AES-128-CBC) encryption with a per-tenant master key.
+
+    Secrets are accessed via load_secret/save_secret or integrated into
+    the provider_keys resolver chain (resolve_by_env_var precedence:
+    env var → secrets.enc → service.env).
+    """
+
+    def __init__(self, tenant_id: str | None = None):
+        """Initialize SecretsStore for a tenant.
+
+        Args:
+            tenant_id: Tenant identifier (default: "_default"). Must pass
+                       validation in forge.paths._validate_tenant_id.
+        """
+        if Fernet is None:
+            raise RuntimeError(
+                "cryptography library required for SecretsStore — "
+                "install with: uv pip install 'cryptography>=42'"
+            )
+
+        try:
+            from forge.paths import tenant_home, _resolve_tenant_id
+        except ImportError:
+            # Fallback for portable use (e.g., in standalone scripts)
+            from pathlib import Path
+            _resolve_tenant_id = lambda tid: tid or "_default"  # noqa: E731
+            def tenant_home(tid=None):
+                base = Path.home() / ".corvin"
+                return base / "tenants" / _resolve_tenant_id(tid)
+
+        self.tenant_id = _resolve_tenant_id(tenant_id)
+        self.tenant_base = tenant_home(self.tenant_id)
+        self.secrets_path = self.tenant_base / "global" / "secrets.enc"
+        self.keys_dir = self.tenant_base / "keys"
+        self.master_key_path = self.keys_dir / "tenant_master.key"
+
+    def _ensure_master_key(self) -> bytes:
+        """Get or create tenant master key.
+
+        Returns the 32-byte Fernet key. On first call, generates a new key
+        and writes it to tenant_master.key (mode 0o600, readable by owner only).
+
+        Raises RuntimeError if key creation fails.
+        """
+        self.keys_dir.mkdir(parents=True, exist_ok=True)
+
+        if self.master_key_path.exists():
+            return self.master_key_path.read_bytes()
+
+        # Generate new master key
+        key = Fernet.generate_key()
+        try:
+            self.master_key_path.write_bytes(key)
+            self.master_key_path.chmod(0o600)
+        except OSError as e:
+            raise RuntimeError(
+                f"failed to write master key to {self.master_key_path}: {e}"
+            )
+
+        _log.info(f"SecretsStore: generated new master key for tenant {self.tenant_id}")
+        return key
+
+    def encrypt_secrets(self, secrets_dict: dict) -> dict:
+        """Encrypt secrets dict and write to secrets.enc.
+
+        Args:
+            secrets_dict: Dictionary of {key: value} pairs to encrypt.
+
+        Returns:
+            Envelope dict with version, timestamp, algorithm, and encrypted payload.
+
+        Raises:
+            ValueError: If encryption fails.
+        """
+        try:
+            master_key = self._ensure_master_key()
+            cipher = Fernet(master_key)
+
+            # Serialize and encrypt
+            plaintext = json.dumps(secrets_dict).encode("utf-8")
+            ciphertext = cipher.encrypt(plaintext)
+
+            # Wrap in versioned envelope for future key rotation
+            envelope = {
+                "version": "1.0",
+                "encrypted_at": datetime.utcnow().isoformat() + "Z",
+                "algorithm": "AES-128-CBC (Fernet)",
+                "key_id": f"tenant_master_{self.tenant_id}",
+                "payload": base64.b64encode(ciphertext).decode("ascii"),
+            }
+
+            # Write with secure permissions
+            self.secrets_path.parent.mkdir(parents=True, exist_ok=True)
+            self.secrets_path.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
+            try:
+                self.secrets_path.chmod(0o600)
+            except OSError:
+                pass  # Permission change failed, but write succeeded
+
+            _log.debug(
+                f"SecretsStore: encrypted {len(secrets_dict)} secrets "
+                f"to {self.secrets_path}"
+            )
+            return envelope
+        except Exception as e:
+            if isinstance(e, ValueError):
+                raise
+            raise ValueError(f"encryption failed: {e}")
+
+    def decrypt_secrets(self) -> dict:
+        """Decrypt and load secrets from secrets.enc.
+
+        Returns an empty dict if secrets.enc does not exist.
+
+        Returns:
+            Dictionary of {key: value} pairs from the encrypted store.
+
+        Raises:
+            ValueError: If the key doesn't match or file is corrupted.
+        """
+        if not self.secrets_path.exists():
+            return {}
+
+        try:
+            master_key = self._ensure_master_key()
+            cipher = Fernet(master_key)
+
+            # Load envelope
+            envelope = json.loads(self.secrets_path.read_text(encoding="utf-8"))
+
+            # Decrypt
+            ciphertext = base64.b64decode(envelope["payload"])
+            plaintext = cipher.decrypt(ciphertext)
+            secrets = json.loads(plaintext)
+
+            _log.debug(
+                f"SecretsStore: decrypted {len(secrets)} secrets "
+                f"from {self.secrets_path}"
+            )
+            return secrets
+        except InvalidToken:
+            raise ValueError(
+                f"failed to decrypt secrets — key mismatch or corrupted file: "
+                f"{self.secrets_path}"
+            )
+        except json.JSONDecodeError as e:
+            raise ValueError(f"invalid secrets.enc format: {e}")
+        except Exception as e:
+            raise ValueError(f"failed to load secrets: {e}")
+
+    def load_secret(self, key: str, default: str | None = None) -> str | None:
+        """Load a single secret value by key.
+
+        Args:
+            key: Secret key name (e.g., "ANTHROPIC_API_KEY").
+            default: Returned if key is not found or decryption fails.
+
+        Returns:
+            The decrypted secret value, or default if not found/error.
+        """
+        try:
+            secrets = self.decrypt_secrets()
+            return secrets.get(key, default)
+        except Exception as e:
+            _log.debug(f"SecretsStore: could not load secret {key}: {e}")
+            return default
+
+    def save_secret(self, key: str, value: str) -> None:
+        """Save or update a single secret value.
+
+        Args:
+            key: Secret key name (e.g., "ANTHROPIC_API_KEY").
+            value: Plaintext value to encrypt and store.
+
+        Raises:
+            ValueError: If encryption or write fails.
+        """
+        try:
+            secrets = self.decrypt_secrets()
+            secrets[key] = value
+            self.encrypt_secrets(secrets)
+            _log.debug(f"SecretsStore: saved secret {key} to tenant {self.tenant_id}")
+        except Exception as e:
+            _log.error(f"SecretsStore: failed to save secret {key}: {e}")
+            raise
+
+    def delete_secret(self, key: str) -> bool:
+        """Delete a secret by key.
+
+        Args:
+            key: Secret key name to delete.
+
+        Returns:
+            True if the key was found and deleted, False if key did not exist.
+
+        Raises:
+            ValueError: If decryption or write fails.
+        """
+        try:
+            secrets = self.decrypt_secrets()
+            if key not in secrets:
+                return False
+            del secrets[key]
+            if secrets:
+                self.encrypt_secrets(secrets)
+            else:
+                # Delete the file if no secrets remain
+                self.secrets_path.unlink(missing_ok=True)
+            _log.debug(f"SecretsStore: deleted secret {key}")
+            return True
+        except Exception as e:
+            _log.error(f"SecretsStore: failed to delete secret {key}: {e}")
+            raise
+
+    def migrate_from_env(self, env_file: Path | None = None) -> dict:
+        """Migrate secrets from ~/.corvin/.env to tenant secrets.enc.
+
+        Reads KEY=VALUE pairs from the legacy .env file and encrypts them
+        into the tenant's secrets.enc. The original .env file is moved to
+        .env.backup.
+
+        Args:
+            env_file: Path to .env file (default: ~/.corvin/.env).
+
+        Returns:
+            Dictionary of secrets that were migrated (may be empty if file
+            doesn't exist or is empty).
+
+        Raises:
+            ValueError: If encryption or backup fails.
+        """
+        if env_file is None:
+            env_file = Path.home() / ".corvin" / ".env"
+
+        if not env_file.exists():
+            _log.debug(f"SecretsStore: no .env file found at {env_file}")
+            return {}
+
+        # Parse .env
+        secrets = {}
+        try:
+            content = env_file.read_text(encoding="utf-8", errors="replace")
+            for line in content.split("\n"):
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                # Strip quotes if present
+                if value and value[0] in ('"', "'") and value[0] == value[-1]:
+                    value = value[1:-1]
+                if key:
+                    secrets[key] = value
+        except OSError as e:
+            raise ValueError(f"failed to read .env file: {e}")
+
+        if not secrets:
+            _log.debug(f"SecretsStore: no secrets found in {env_file}")
+            return {}
+
+        # Encrypt and save
+        self.encrypt_secrets(secrets)
+
+        # Backup old file
+        backup = env_file.with_suffix(".env.backup")
+        try:
+            env_file.replace(backup)
+        except OSError as e:
+            raise ValueError(f"failed to backup .env to {backup}: {e}")
+
+        _log.info(
+            f"SecretsStore: migrated {len(secrets)} secrets from .env to "
+            f"secrets.enc (backup: {backup})"
+        )
+
+        return secrets
+
+    def list_secrets(self) -> list[str]:
+        """List all secret keys (not values) in the store.
+
+        Returns:
+            List of secret key names, or empty list if store is empty or unreadable.
+        """
+        try:
+            secrets = self.decrypt_secrets()
+            return sorted(secrets.keys())
+        except Exception as e:
+            _log.debug(f"SecretsStore: could not list secrets: {e}")
+            return []
