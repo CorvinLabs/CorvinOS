@@ -182,19 +182,27 @@ def _detach_provider_slot(plugin: CorvinPlugin) -> None:
             # thread, so the slot ends up ownerless. Without this it was never
             # released: `release_owned_by` finds no owner, and the next turn
             # writes into a backend whose `on_unload` has already run.
+            released = False
             if backend is not None and module.owner_plugin_id() is None:
                 if backend is plugin or getattr(backend, "plugin_id", None) == plugin_id:
-                    module.clear_if_active(backend)
-                    log.debug(
-                        "released ownerless %s slot holding %r's object", name, plugin_id
-                    )
+                    released = bool(module.clear_if_active(backend))
+                    if released:
+                        log.debug(
+                            "released ownerless %s slot holding %r's object",
+                            name, plugin_id,
+                        )
             if module.release_owned_by(plugin_id):
                 log.debug("released %s slot held by %r", name, plugin_id)
-                if backend is not None:
-                    _breakers.forget(
-                        getattr(backend, "plugin_id", None)
-                        or f"anonymous:{type(backend).__name__}"
-                    )
+                released = True
+            # Forget the breaker keyed on the OBJECT whenever the slot was
+            # released, by EITHER path. Keying it only to the owned path left the
+            # ownerless case — the async-connect pattern — inheriting an open
+            # breaker from its previous life on the next load.
+            if released and backend is not None:
+                _breakers.forget(
+                    getattr(backend, "plugin_id", None)
+                    or f"anonymous:{type(backend).__name__}"
+                )
         except Exception as exc:  # noqa: BLE001
             log.error(
                 "provider release for %r on %s failed (%s)",

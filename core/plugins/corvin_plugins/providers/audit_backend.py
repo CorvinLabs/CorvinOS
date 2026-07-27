@@ -257,7 +257,14 @@ class AuditBackendRegistry:
                 return False
             self._owner_plugin_id = None
             self._active = None
-            return True
+            self._failures = 0
+        # Discard queued copies, exactly as clear() and clear_if_active() do.
+        # Leaving them meant the NEXT backend installed in this slot received
+        # copies addressed to its predecessor — a sink getting events it was
+        # never configured for, which for an audit fan-out is the wrong kind of
+        # surprise.
+        self._drain_queue()
+        return True
 
     def owner_plugin_id(self) -> str | None:
         """The plugin that installed the current provider, if it is known."""

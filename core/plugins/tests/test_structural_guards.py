@@ -369,6 +369,96 @@ class TestUnloadRemovesHooks(_Base):
         )
 
 
+class TestTheOwnerRecordItself(_Base):
+    """Round 5 found these four lines deletable without any test noticing.
+
+    They are the two halves of "a plugin has ONE identity": the owner is only
+    ever written by a plugin that is loading, and the breaker is keyed on that
+    owner rather than on whatever object sits in the slot. Both were the named
+    subject of the commit that introduced them, and neither was covered.
+    """
+
+    def test_set_active_outside_a_load_does_not_erase_the_owner(self):
+        # Writing None here did not merely leave the new occupant unowned — it
+        # wiped the previous legitimate owner, after which release_owned_by
+        # matched nobody and the slot could never be released again.
+        from corvin_plugins.providers import audit_backend
+
+        class _Sink:
+            def fanout(self, *a, **k):
+                pass
+
+            def verify_chain(self):
+                return HealthStatus(ok=True)
+
+            def enforce_retention(self, *a, **k):
+                return {}
+
+        class _Owner(_Plug):
+            plugin_type = "audit_backend"
+
+            def on_load(self, ctx):
+                ctx.audit_registry.set_active(_Sink())
+
+        self.reg.register(_Owner("legit"), _ctx("legit"))
+        self.assertEqual(audit_backend.owner_plugin_id(), "legit")
+
+        # Anything at all calling set_active from outside a load.
+        audit_backend.set_active(_Sink())
+        self.assertEqual(
+            audit_backend.owner_plugin_id(), "legit",
+            "a set_active outside a load erased the recorded owner, so nothing "
+            "could release the slot afterwards",
+        )
+
+        self.reg.unregister("legit")
+        self.assertIsNone(audit_backend.get_active())
+
+    def test_the_breaker_is_keyed_on_the_owner_not_on_the_object(self):
+        # A plugin that installs a helper has no plugin_id on that helper, so
+        # keying on the object produced `anonymous:<Class>` — an id the registry
+        # has never heard of, which means get_breaker() cannot see the boot
+        # layer and the compliance exemption silently does not apply.
+        import corvin_plugins.circuit_breaker as cb
+        from corvin_plugins.providers import audit_backend
+
+        class _Sink:
+            def fanout(self, *a, **k):
+                raise RuntimeError("siem down")
+
+            def verify_chain(self):
+                return HealthStatus(ok=True)
+
+            def enforce_retention(self, *a, **k):
+                return {}
+
+        class _Compliance(_Plug):
+            plugin_type = "audit_backend"
+
+            def on_load(self, ctx):
+                ctx.audit_registry.set_active(_Sink())
+
+        self.reg.register(
+            _Compliance("core-audit"), _ctx("core-audit"),
+            boot_layer=BootLayer.COMPLIANCE,
+        )
+        audit_backend.fanout("x", {}, tenant_id="_default")
+        audit_backend.drain_now(timeout=2.0)
+
+        keys = set(cb.snapshot())
+        self.assertNotIn(
+            "anonymous:_Sink", keys,
+            "the fan-out keyed its breaker on the helper object, so the "
+            "compliance plugin had two identities and only one of them was "
+            "exempt from containment",
+        )
+        if "core-audit" in keys:
+            self.assertFalse(
+                keys and cb.get_breaker("core-audit").stats().to_dict()["containable"],
+                "the owner's breaker must carry the compliance exemption",
+            )
+
+
 class TestTheHonestAsyncPluginIsNotPunished(_Base):
     """Connecting asynchronously is the normal shape, not an attack.
 
