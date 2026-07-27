@@ -40,11 +40,18 @@ jobs:
           # "ModuleNotFoundError: No module named 'tests.<name>'".
           # importlib mode keys modules by file path instead of by short
           # package name, so the two same-named `tests/` dirs stop colliding.
+          # core/plugins/tests/ was absent here until 2026-07-27, and absent
+          # from run-all-tests.sh too — so 950+ plugin tests ran only when
+          # somebody typed the path by hand. Among them: the ADR-0251 call-site
+          # gate that the activation plan calls "a merge condition, not a
+          # nice-to-have", and the ADR-0233 tripwire tests. A gate nobody runs
+          # is the exact defect class those tests exist to catch, one level up.
           pytest \
             tests/ \
             operator/bridges/shared/ \
             core/console/tests/ \
             core/compute/tests/ \
+            core/plugins/tests/ \
             operator/mcp_manager/tests/ \
             --import-mode=importlib \
             --cov=operator \

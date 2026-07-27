@@ -19,6 +19,39 @@ This runs:
 
 → Full test reference: [tests.md](tests.md)
 
+### The plugin lifecycle E2E
+
+```bash
+uv run pytest core/plugins/tests/test_lifecycle_e2e.py -q     # ~1.2 s, 3 tests
+uv run pytest core/plugins/tests/ -q                          # the whole plugin suite
+```
+
+`test_lifecycle_e2e.py` is the only test that runs the plugin spine end to end
+with no doubles at the seams: the real `corvin` CLI scaffolds a plugin, the
+author's TODO is implemented, it is declared in a real `tenant.corvin.yaml`,
+`bootstrap_all()` boots it as the gateway does, a real audited action is written
+by the real writer, and the core chain, the plugin's copy and `verify_audit()`
+are all checked.
+
+**Read this before adding to it.** Every other plugin suite tests a segment —
+the CLI writes files, a declared class loads, a registered backend receives a
+copy from a double. Segments passing does not mean they connect, and that gap is
+the defect this ADR series has hit three times. Two rules follow:
+
+- **A stage is not done without its row here.** `_STAGE_ROWS_OWED` records the
+  four still owed (Stages 3–6) and a test asserts it, so closing a stage without
+  extending this file turns the suite red.
+- **Mutate before you believe it.** This harness passed on the first run and was
+  wrong twice: one scenario was vacuous (removing the injected raise left it
+  green) and one wait predicate was weaker than its assertion (it waited for a
+  file that boot creates, not for the event under test). Both were found by
+  deleting the thing under test and checking the suite goes red. Do the same for
+  any row you add.
+
+It skips rather than fails when no `corvin` console script sits next to the
+running interpreter — a stripped install cannot exercise the CLI step, and
+pretending otherwise would be a false green.
+
 ## Test Isolation (load-bearing)
 
 **Tests must never touch live operator state.** This class of bug has struck three
