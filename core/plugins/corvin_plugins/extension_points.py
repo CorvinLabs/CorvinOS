@@ -306,13 +306,34 @@ def _clip(value: object) -> str:
 
 
 # ── Who is asking ─────────────────────────────────────────────────────────────
+#
+# ATTRIBUTED, not verified — and the word matters because these values are
+# written into the append-only, hash-chained GDPR Art. 30 record, where a claim
+# of verification can never be corrected.
+#
+# An in-process plugin is part of the process. Every identity this module can
+# consult — the plugin object, the `plugin_id` argument, `loading.current()` —
+# is settable by the caller: `loading.loading()` is a public contextmanager,
+# ContextVars are not inherited by `threading.Thread`, are copied by
+# `asyncio.create_task`, and can be manipulated with `copy_context().run()`.
+# Five adversarial rounds each broke the previous derivation. There is no sixth.
+#
+# What this layer therefore delivers is attribution: honest plugins are held to
+# their own tenant, and every action carries a name. It is NOT a boundary
+# against a hostile plugin, and it must not be described as one.
+# See docs/claude-ref/layer-plugins.md § "The perimeter is attribution".
 
-#: The plugin is registered and its context named a tenant.
-_TENANT_VERIFIED = "verified"
+#: The claim is consistent with what the registry and the load context say.
+_TENANT_ATTRIBUTED = "attributed"
 #: The registry answered and holds no plugin under this id.
-_TENANT_UNREGISTERED = "unregistered"
+_TENANT_UNATTRIBUTED = "unattributed"
 #: The lookup could not run, or ran and produced no usable tenant.
 _TENANT_UNAVAILABLE = "unavailable"
+
+#: Retired spellings.  Kept as aliases for one release so an operator's log
+#: filters and dashboards do not break silently on the rename.
+_TENANT_VERIFIED = _TENANT_ATTRIBUTED
+_TENANT_UNREGISTERED = _TENANT_UNATTRIBUTED
 
 
 def _loaded_tenant(plugin_id: str) -> Tuple[Optional[str], str]:

@@ -918,6 +918,44 @@ supervisor loads on any install. Process management is delegated to
 `operator/bridges/bridge_manager.py` — `channel_daemon_running()`,
 `adapter_running_pid()`, `start_channel_detached()` — never reimplemented.
 
+### The perimeter is attribution, not security (load-bearing)
+
+**An in-process plugin is part of the process.** Everything the registry, the
+extension bus and the provider registries do about "which plugin is this" is an
+**attribution** layer — it makes honest plugins behave correctly and makes their
+actions traceable. It is **not** a security boundary against a hostile plugin,
+and it cannot be made into one.
+
+This was established the expensive way: five adversarial rounds, each of which
+broke the previous round's identity guard.
+
+| Round | "Who is this" was derived from | Broken by |
+|---|---|---|
+| 3 | the object in the provider slot | a plugin that installs a helper object |
+| 4 | a `plugin_id` parameter | passing someone else's id |
+| 5 | `loading.current()` (a ContextVar) | `with loading.loading("victim", …)` — one line; the setter is public. Also: `threading.Thread` does not inherit ContextVars, `asyncio.create_task` copies them and outlives the unload, and `copy_context().run()` manipulates them freely |
+
+There is no sixth answer. In CPython every property of a caller is settable by
+that caller: a stack walk can be faked with a trampoline, a module allowlist
+with `sys.modules` patching, and any in-process guard is an object the attacker
+can reach. Do not add another derivation — it will be broken the same way, and
+the effort is better spent below.
+
+**What follows from this:**
+
+* **Anything that must hold against a hostile plugin belongs in a subprocess.**
+  That is the direction the headless-core work already takes (ADR-0241, ADR-0238
+  bridge supervisors); it is the only mechanism here that is not in the
+  attacker's address space.
+* **The one place an in-process guard is worth writing is the boot tripwire**
+  (`core/compliance/corvin_compliance_reports/tripwire.py`): it is
+  non-overridable by ADR-0232/0233 and runs before any plugin code.
+* **Say "attributed", not "verified".** The audit field `tenant_check` records
+  `attributed` / `unattributed`, because the hash-chained GDPR Art. 30 record is
+  permanent and must not claim a verification that did not happen.
+* Keep the correctness guards anyway. They stop honest plugins from breaking
+  each other, which is most of the value and all of the everyday failures.
+
 ### Known limit — provider slots are process-wide, not tenant-scoped
 
 The control plane is tenant-separated: the admin API only shows and mutates

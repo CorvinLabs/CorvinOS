@@ -70,6 +70,8 @@ class BreakerStats:
     total_refused: int = 0
     #: Exception CLASS name of the most recent failure, never its message.
     last_failure_type: str | None = None
+    #: False when this plugin's boot layer forbids containment (compliance).
+    containable: bool = True
     opened_at: float | None = field(default=None, repr=False)
     #: When the single half-open probe was claimed. Without a claim slot, every
     #: caller queued behind an open breaker was admitted the moment the cooldown
@@ -89,6 +91,11 @@ class BreakerStats:
             "total_calls": self.total_calls,
             "total_refused": self.total_refused,
             "last_failure_type": self.last_failure_type,
+            # Whether containment applies at all. Without it the Console shows
+            # `state: "closed"` for a plugin whose breaker is structurally
+            # unable to open, which reads as "healthy" and is not the same
+            # thing at all.
+            "containable": self.containable,
         }
 
 
@@ -163,7 +170,9 @@ class CircuitBreaker:
         with self._lock:
             self._state_locked()
             # Copy so a caller cannot mutate breaker state through the dataclass.
-            return BreakerStats(**vars(self._stats))
+            snapshot = BreakerStats(**vars(self._stats))
+            snapshot.containable = getattr(self, "containable", True)
+            return snapshot
 
     def reset(self) -> None:
         """Force the breaker closed (operator re-enable, plugin reload)."""
@@ -226,8 +235,22 @@ class CircuitBreaker:
         In HALF_OPEN exactly ONE probe is admitted; concurrent callers are
         refused until that probe reports back through ``record_success`` /
         ``record_failure``.
+
+        A breaker marked non-containable never refuses, whatever state it is in.
+        ``record_failure`` already honoured that, and ``guard`` did not — which
+        left a real hole with no attacker in it: unload a compliance audit sink
+        and its breaker is forgotten, but the drain thread keeps running and
+        rebuilds one through ``get_breaker`` while the plugin is NOT registered.
+        ``_is_containable`` then cannot see a boot layer, defaults to
+        containable, and three failures open it. Re-registering restores
+        ``containable=False`` but not the state, so the sink stayed refused for
+        the cooldown — an automatic off switch on a compliance mechanism,
+        reached by an ordinary hot reload.
         """
         with self._lock:
+            if not getattr(self, "containable", True):
+                self._stats.total_calls += 1
+                return
             state = self._state_locked()
             probe_held = self._probe_held_locked()
             if state is BreakerState.OPEN or (

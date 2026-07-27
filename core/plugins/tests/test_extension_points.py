@@ -813,14 +813,14 @@ class TestTenantIsAuthorised(_Base):
         )
         self.assertEqual(ep.describe("tenant-a"), {"engine.model_selection": "a-plugin"})
         registered = self.events("plugin.extension_hook_registered")
-        self.assertEqual(registered[-1]["tenant_check"], "verified")
+        self.assertEqual(registered[-1]["tenant_check"], "attributed")
 
     def test_a_plugin_can_register_from_its_own_on_load(self):
         # The load-bearing precondition for the whole check: register() reserves
         # the slot and stores the context BEFORE calling on_load(), so a plugin
         # hooking from on_load is already findable and passes as VERIFIED.  If
         # that order ever flipped, every plugin would silently drop to
-        # "unregistered" and the check would protect nothing.
+        # "unattributed" and the check would protect nothing.
         plugin = _Hooky("a-plugin")
         self._load(plugin, "tenant-a")
         self.assertIsNone(plugin.on_load_error)
@@ -828,7 +828,7 @@ class TestTenantIsAuthorised(_Base):
         self.assertEqual(ep.describe("tenant-a"), {"engine.model_selection": "a-plugin"})
         self.assertEqual(
             self.events("plugin.extension_hook_registered")[-1]["tenant_check"],
-            "verified",
+            "attributed",
         )
 
     def test_a_plugin_that_lies_from_its_own_on_load_fails_the_load(self):
@@ -853,7 +853,7 @@ class TestTenantIsAuthorised(_Base):
         )
         self.assertEqual(
             self.events("plugin.extension_hook_registered")[-1]["tenant_check"],
-            "unregistered",
+            "unattributed",
         )
 
     def test_an_unreachable_registry_does_not_break_a_registration(self):
@@ -889,7 +889,7 @@ class TestTenantIsAuthorised(_Base):
         replaced = self.events("plugin.extension_hook_replaced")
         self.assertEqual(len(replaced), 1)
         self.assertEqual(replaced[0]["replaced_plugin_id"], "bundled")
-        self.assertEqual(replaced[0]["tenant_check"], "verified")
+        self.assertEqual(replaced[0]["tenant_check"], "attributed")
 
     def test_unregister_all_still_reaches_across_tenants(self):
         # A plugin legitimately serving two tenants is loaded twice under two

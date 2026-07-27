@@ -146,6 +146,16 @@ Canonical runtime root: `~/.corvin/`; voice/secret config: `~/.config/corvin-voi
   `plugins_by_boot_layer()`, `_declared_boot_layer()`,
   `register_global_plugin(..., boot_layer=)`, audit `plugin.boot_layer_rejected`,
   admin field `boot_layer` / aggregate `by_boot_layer`.
+  **The plugin perimeter is ATTRIBUTION, not security.** An in-process plugin is
+  part of the process. Five adversarial rounds each broke the previous identity
+  guard (object → `plugin_id` parameter → `loading.current()` ContextVar), and
+  the last one needed one line: the setter is public, `threading.Thread` does not
+  inherit ContextVars and `asyncio.create_task` copies them past the unload. In
+  CPython every property of a caller is settable by that caller — **do not add a
+  sixth derivation.** Anything that must hold against a hostile plugin belongs in
+  a subprocess (ADR-0241/0238); the one in-process guard worth writing is the boot
+  tripwire, which is non-overridable and runs first. Say "attributed", never
+  "verified" — the audit chain is permanent.
   **Boot-layer rules — a MECHANISM, today with zero instances above `bundled`.**
   `_GLOBAL_SPECS` is empty, `register_global_plugin()` has no production caller,
   `bootstrap_global()` returns `[]`, and nothing loads on `compliance`/`core` —
