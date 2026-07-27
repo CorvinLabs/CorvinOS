@@ -332,8 +332,8 @@ staged rollout. Recording that is better than pretending it has a flip date.
 | 6 `install` + trust anchor | 1 w | G7, G8 | `plugin_trust_enforcement` | ❌ CLI has `types`/`check`/`new` only; no anchor deposited |
 | 7 Flag lifecycle | 0.5 d | G9 | — | ✅ **done** — 15 flags, all with `owner`+`target_release`, guard test present |
 | A Truth-in-tree corrections | 0.5 d | — | — | ✅ **done** — see § 4.1 |
-| E E2E spine | 1 w | — | — | ❌ next, see § 4.2 |
-| **Total remaining** | **~5.5 w** | | | |
+| E E2E spine | 1 w | — | — | ◑ **E1 done** (`test_lifecycle_e2e.py`); E2 rows follow their stages, E3 last |
+| **Total remaining** | **~5 w** | | | |
 
 **Dropped from ADR-0242:** Phase 7 directory move (§ 2 above).
 **Deferred, unchanged:** everything in § 1's out-of-scope table.
@@ -410,6 +410,69 @@ allowed to become a green suite that boots nothing.
 
 **Gate:** E1 is a merge condition for Stages 3–6 in the same way Stage 0's gate is.
 A stage without its E2E row is not done.
+
+#### E1 shipped 2026-07-27 — and what it could not yet be
+
+`core/plugins/tests/test_lifecycle_e2e.py`. Six steps, no doubles at the seams:
+the real `corvin` CLI scaffolds an `audit_backend`; the author's one TODO is
+implemented; it is declared in a real `tenant.corvin.yaml`; `bootstrap_all()`
+boots it as the gateway does; a real audited action goes through
+`operator/bridges/shared/audit.py`; the core chain holds the record, the plugin
+holds a copy, and `verify_audit()` still passes. A second scenario injects a
+raising `fanout()` and proves the core record survives it — ADR-0233's
+additive-only invariant measured on the real writer instead of asserted about a
+double.
+
+**The plan's E1 was not buildable as written, and the reason is instructive.**
+It specified `corvin plugin install` and "the hook fires on a real turn". Neither
+exists: `install` is Stage 6 and the extension points are Stage 3. E1 was
+sequenced *before* the stages it depends on. So it runs the same spine through
+the install path that does exist (the declarative `spec.plugins.installed` entry
+the generated README already tells authors to write) against `audit_backend` —
+one of the five surfaces with a live consumer, and the compliance-critical one.
+`_STAGE_ROWS_OWED` in the module records the four rows still owed, and a test
+asserts it, so closing a stage without extending the harness turns the suite red.
+
+**Two defects the refutation round found in the harness itself**, both worth
+recording because both were green first:
+
+* The raising-backend scenario was **vacuous**. Removing the injected raise
+  entirely left it passing — "a well-behaved plugin does not suppress the core
+  record" is trivially true. It now asserts `provider.failure_count() > 0`, which
+  is only non-zero if the backend was actually called and actually raised.
+* The wait predicate was weaker than the assertion: it waited for the sink file
+  to *exist*, then asserted on its contents. Boot writes `plugin.loaded` through
+  the same fan-out, so the file appeared instantly and the loop exited before the
+  event under test drained. It passed on timing luck and failed the moment
+  another test ran first.
+
+Verified by mutation, not by reading: four mutations (TODO unimplemented, raise
+removed, `class_path` broken, `audit_event` not called) each turn the suite red.
+A green E2E for a chain nobody had connected deserves that check.
+
+#### The finding that outranks the harness: nothing ran the plugin suite
+
+Checking where to register E1 turned up the fourth occurrence of this plan's
+defect class, at the level of the gates themselves. **`core/plugins/tests/` was
+run by no automation at all** — absent from `operator/bridges/run-all-tests.sh`
+(the CLAUDE.md pre-commit gate) and absent from every `.github/workflows/` file.
+`coverage.yml` lists `tests/`, `operator/bridges/shared/`, `core/console/tests/`,
+`core/compute/tests/` and `operator/mcp_manager/tests/`, and stops there.
+
+That is 950+ tests that ran only when somebody typed the path by hand. Among
+them:
+
+* Stage 0's call-site gate — this plan calls it "the regulator for every stage
+  below" and "a merge condition, not a nice-to-have";
+* `test_layered_boot.py`'s guards, which CLAUDE.md says "fail on the first real
+  instance and force the docs to be updated in the same commit";
+* the ADR-0233 tripwire and additive-only tests.
+
+Every one of those is a mechanism whose value is that it fires unbidden. None
+could. The plan was about to add a fifth gate to a set that nothing executed.
+
+**Fixed:** `core/plugins/tests/` added to `coverage.yml`. Registering the gate is
+part of building it — a merge condition that no merge runs is a comment.
 
 ### 4.3 Execution order
 
