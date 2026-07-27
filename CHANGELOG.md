@@ -6,6 +6,62 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added — Plugin boot layers (ADR-0243, phases 0–7)
+
+- **`boot_layer` axis** on the plugin registry: `compliance` · `core` ·
+  `bundled` · `installed`. Decides load order and whether an operator may switch
+  a plugin off. Orthogonal to `tier` (ADR-0156 capability boundary) and `origin`
+  (provenance) — the three are never conflated, which is why the field is not
+  called `layer`: that word was already four-way taken in this repo.
+- **Layered boot.** `bootstrap_global()` loads bundled compliance-then-core
+  plugins before any tenant plugin. A compliance failure aborts the boot; a core
+  failure degrades and audits. No feature flag, deliberately — a switch on the
+  pass that loads compliance plugins would be the kill-flag the baseline forbids.
+- **Extension-point bus** (`plugin_extension_points`, default off) with four
+  named points and a `fail_closed` marker for gates. **Not yet wired to any call
+  site** — pinned by a guard test so the statement cannot go stale.
+- **Admin control plane** (`admin_control_plane`, default off): REST under
+  `/api/admin/plugins`. Disable is refused with 403 on the compliance layer.
+  gRPC deliberately deferred.
+- **Bridge supervisor plugins** (`bridge_supervisor_plugins`, default off):
+  Python supervisors for the seven existing Node daemons. No daemon rewrite.
+- **Headless mode** (`headless_api_mode`, default off): suppresses every browser
+  surface — SPA, `/local-stats`, the `/` and favicon redirects, the experiment
+  HTML report. Does **not** touch bridges; the two flags are independent so
+  "core + CLI + bridges, no browser UI" stays reachable.
+- **Post-boot compliance tripwire.** No plugin may sit on `boot_layer=compliance`
+  that `bootstrap_global` did not itself grant. Non-overridable, runs after the
+  plugins load.
+
+### Changed — the perimeter is attribution, not security
+
+Six adversarial review rounds established that in-process plugin identity is not
+enforceable in CPython: each round broke the previous derivation (the object in
+the provider slot, then the `plugin_id` argument, then a ContextVar), and the
+last needed one line. Recorded in CLAUDE.md and `docs/claude-ref/layer-plugins.md`
+rather than answered with a seventh guard. The audit field `tenant_check` now
+records `attributed` / `unattributed`; the old spellings remain as aliases for
+one release. Anything that must hold against a hostile plugin belongs in a
+subprocess.
+
+### Fixed — plugin lifecycle
+
+- A disabled plugin could keep the provider slot and go on receiving every
+  tenant's audit events (three distinct shapes: a helper object, a foreign
+  `plugin_type`, and a slot taken from a worker thread).
+- The circuit breaker was an automatic off switch for compliance plugins,
+  reachable from an ordinary admin page load and from a hot reload.
+- `register`/`unregister` could interleave for the same plugin, so `on_unload`
+  ran during `on_load` and the append-only chain recorded them in the wrong
+  order.
+- `health_check_all` had no deadline, so one wedged plugin held every
+  `GET /api/admin/*`.
+- Tenant B could stop tenant A's plugin when both installed the same id.
+- Entry points were imported at boot despite `auto_discover_entry_points: false`
+  — in the plugin loader and, separately, in the nervous system (ADR-0177).
+- `corvin.global_plugins` entry-point discovery removed: any third-party wheel
+  could publish `compliance:whatever` and become undisableable.
+
 ## [0.10.61] — 2026-07-24 — TDE production-readiness review + shared agentic-compute pool (ADR-0216)
 
 Four-axis adversarial review of the last 3 days (TDE core, audit chain, TDE
