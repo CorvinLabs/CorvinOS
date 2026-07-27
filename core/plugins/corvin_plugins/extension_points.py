@@ -42,11 +42,20 @@ Behavioural contract
 * **…except on a fail-closed point,** where the permissive default is the wrong
   answer.  See :data:`_FAIL_CLOSED_POINTS`.
 * **Last registration wins, and is audited.**  See :func:`register_hook`.
-* **A plugin registers for its own tenant, or not at all.**  ``tenant_id`` is
-  checked against the tenant the plugin was LOADED for, so "last wins" cannot be
-  turned into a cross-tenant takeover of somebody else's fail-closed gate.  See
-  :func:`register_hook` for the exact rule and for what happens to a caller the
-  registry does not know.
+* **A plugin is held to its own tenant where it can be attributed.**
+  ``tenant_id`` is checked against the tenant the plugin was loaded for, so an
+  HONEST plugin cannot turn "last wins" into a cross-tenant takeover by
+  accident.  A caller the registry cannot resolve is allowed and recorded as
+  ``tenant_check: unattributed`` — see :func:`register_hook`.
+
+**This is attribution, not containment.**  An in-process plugin is part of the
+process: ``loading.loading()`` is public, ContextVars are not inherited by
+``threading.Thread`` and are copied by ``asyncio.create_task``, and a
+``plugin_id`` is a string the caller writes.  Five adversarial rounds each broke
+the previous derivation, so the module holds honest plugins to their own tenant
+and makes every registration attributable — it does not withstand a hostile one,
+and nothing here should be read as claiming otherwise.  See
+``docs/claude-ref/layer-plugins.md`` § "The perimeter is attribution".
 
 Nothing in this module calls a hook by itself.  Call sites are wired in a
 follow-up phase; today the bus is defined, tested and documented, and every
@@ -339,8 +348,8 @@ _TENANT_UNREGISTERED = _TENANT_UNATTRIBUTED
 def _loaded_tenant(plugin_id: str) -> Tuple[Optional[str], str]:
     """The tenant ``plugin_id`` was LOADED for, read from the plugin registry.
 
-    ``(tenant_id, _TENANT_VERIFIED)`` for a registered plugin,
-    ``(None, _TENANT_UNREGISTERED)`` when the registry answered and holds no
+    ``(tenant_id, _TENANT_ATTRIBUTED)`` for a registered plugin,
+    ``(None, _TENANT_UNATTRIBUTED)`` when the registry answered and holds no
     such plugin, ``(None, _TENANT_UNAVAILABLE)`` when the lookup could not run
     — the registry module is not importable in every layout that imports this
     one (ADR-0241 headless core), and a lookup that raises must not turn a
@@ -372,7 +381,7 @@ def _loaded_tenant(plugin_id: str) -> Tuple[Optional[str], str]:
     """
     who = _loading.current()
     if who is not None and who.plugin_id == plugin_id:
-        return who.tenant_id, _TENANT_VERIFIED
+        return who.tenant_id, _TENANT_ATTRIBUTED
 
     try:
         from .registry import get_registry
@@ -393,12 +402,12 @@ def _loaded_tenant(plugin_id: str) -> Tuple[Optional[str], str]:
         except Exception:  # noqa: BLE001
             historic = None
         if historic:
-            return historic, _TENANT_VERIFIED
-        return None, _TENANT_UNREGISTERED
+            return historic, _TENANT_ATTRIBUTED
+        return None, _TENANT_UNATTRIBUTED
     tenant = getattr(ctx, "tenant_id", None)
     if not isinstance(tenant, str) or not tenant:
         return None, _TENANT_UNAVAILABLE
-    return tenant, _TENANT_VERIFIED
+    return tenant, _TENANT_ATTRIBUTED
 
 
 def _check_tenant(point: str, *, plugin_id: str, tenant_id: str) -> str:
@@ -437,7 +446,7 @@ def _check_tenant(point: str, *, plugin_id: str, tenant_id: str) -> str:
         raise CrossTenantHookRefused(who.plugin_id, tenant_id, who.tenant_id)
 
     actual, status = _loaded_tenant(plugin_id)
-    if status == _TENANT_VERIFIED and actual != tenant_id:
+    if status == _TENANT_ATTRIBUTED and actual != tenant_id:
         log.error(
             "extension point %s: plugin %r is loaded for tenant %r and asked to "
             "register for tenant %r — refused",

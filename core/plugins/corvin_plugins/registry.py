@@ -131,19 +131,29 @@ def _call_with_deadline(fn: "Callable[[], Any]", deadline_s: float, plugin_id: s
     """
     import concurrent.futures as _futures
 
-    with _futures.ThreadPoolExecutor(
+    # NOT a context manager: ThreadPoolExecutor.__exit__ joins its worker, which
+    # is precisely what must not happen when the worker is wedged — the deadline
+    # would then be a lie. shutdown(wait=False) abandons it instead.
+    pool = _futures.ThreadPoolExecutor(
         max_workers=1, thread_name_prefix=f"health-{plugin_id[:24]}"
-    ) as pool:
-        future = pool.submit(fn)
-        try:
-            return future.result(timeout=deadline_s)
-        except _futures.TimeoutError:
-            # Do not block __exit__ on the abandoned worker.
-            pool._threads.clear()  # type: ignore[attr-defined]
-            _futures.thread._threads_queues.clear()  # type: ignore[attr-defined]
-            raise HealthCheckTimeout(
-                f"health_check for {plugin_id!r} exceeded {deadline_s:.1f}s"
-            ) from None
+    )
+    future = pool.submit(fn)
+    try:
+        return future.result(timeout=deadline_s)
+    except _futures.TimeoutError:
+        raise HealthCheckTimeout(
+            f"health_check for {plugin_id!r} exceeded {deadline_s:.1f}s"
+        ) from None
+    finally:
+        # An earlier version cleared `concurrent.futures.thread._threads_queues`
+        # here. That map is PROCESS-WIDE, not pool-local, and `_python_exit`
+        # iterates it at interpreter shutdown to wake and join every pool in the
+        # process. Clearing it meant that after ONE wedged health check, no
+        # ThreadPoolExecutor anywhere — compute, workflows, boot healer, the
+        # bridge adapter, every `run_in_executor(None, …)` — was joined at exit,
+        # so their in-flight work was lost silently. Same class as the outbox
+        # incident: a local convenience that quietly broke a global contract.
+        pool.shutdown(wait=False)
 
 
 def _detach_provider_slot(plugin: CorvinPlugin) -> None:
@@ -184,13 +194,29 @@ def _detach_provider_slot(plugin: CorvinPlugin) -> None:
             # writes into a backend whose `on_unload` has already run.
             released = False
             if backend is not None and module.owner_plugin_id() is None:
-                if backend is plugin or getattr(backend, "plugin_id", None) == plugin_id:
-                    released = bool(module.clear_if_active(backend))
-                    if released:
-                        log.debug(
-                            "released ownerless %s slot holding %r's object",
-                            name, plugin_id,
-                        )
+                # An OWNERLESS slot is released when this plugin unloads, full
+                # stop — no object-identity test.
+                #
+                # Requiring `backend is plugin` covered each of the two known
+                # shapes alone but not their combination: a plugin that installs
+                # a HELPER object (round 3) FROM A WORKER THREAD (round 5) has
+                # neither an owner (ContextVars do not cross threads) nor object
+                # identity (the helper is not the plugin). After the operator's
+                # disable, that helper went on receiving every audit event of
+                # every tenant — the round-3 defect, restored through the
+                # round-5 axis, on a GDPR Art. 30/32 surface.
+                #
+                # Releasing an ownerless slot is safe: a slot taken during a
+                # load HAS an owner, so anything ownerless was taken outside one
+                # and has no other claimant. The cost of being wrong is a
+                # provider falling back to its bundled default; the cost of the
+                # previous rule was a disabled plugin still reading everyone's
+                # audit trail.
+                released = bool(module.clear_if_active(backend))
+                if released:
+                    log.debug(
+                        "released ownerless %s slot on unload of %r", name, plugin_id
+                    )
             if module.release_owned_by(plugin_id):
                 log.debug("released %s slot held by %r", name, plugin_id)
                 released = True
