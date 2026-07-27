@@ -14,7 +14,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Edge Cases & Failure Scenarios', () => {
   test.describe('API Error Responses', () => {
     test('Handle 400 Bad Request gracefully', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -32,7 +32,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle 401 Unauthorized (token expired)', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -46,7 +46,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle 403 Forbidden (permission denied)', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -59,7 +59,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle 500 Server Error with retry', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -78,7 +78,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle 503 Service Unavailable', async ({ page }) => {
-      await page.goto('/app/workflows');
+      await page.goto('/console/app/workflows');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -91,7 +91,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle API timeout (> 30 seconds)', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -106,7 +106,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
 
   test.describe('Data Validation Edge Cases', () => {
     test('Handle very long input (>10000 chars)', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -122,7 +122,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle special characters (emoji, Unicode, RTL)', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -138,7 +138,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle null/undefined API values', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -159,7 +159,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle malformed JSON response', async ({ page }) => {
-      await page.goto('/app/compliance');
+      await page.goto('/console/app/compliance');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -172,7 +172,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle missing required fields in response', async ({ page }) => {
-      await page.goto('/app/engines');
+      await page.goto('/console/app/engines');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -181,7 +181,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Validate email format in forms', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -199,7 +199,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Validate number field inputs', async ({ page }) => {
-      await page.goto('/app/settings');
+      await page.goto('/console/app/settings');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -216,7 +216,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
 
   test.describe('Session & Authentication Failures', () => {
     test('Handle token expiration during session', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -234,7 +234,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle multiple concurrent API failures', async ({ page }) => {
-      await page.goto('/app/dashboard');
+      await page.goto('/console/app/dashboard');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -253,7 +253,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle logout + redirect to login', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -265,15 +265,15 @@ test.describe('Edge Cases & Failure Scenarios', () => {
       });
 
       // Navigate to protected page
-      const response = await page.goto('/app/settings');
+      const response = await page.goto('/console/app/settings');
       expect([200, 301, 302, 404]).toContain(response?.status());
     });
 
     test('Handle multiple device login (device conflict)', async ({ page, context }) => {
       const page2 = await context.newPage();
 
-      await page.goto('/app/chat');
-      await page2.goto('/app/tasks');
+      await page.goto('/console/app/chat');
+      await page2.goto('/console/app/tasks');
 
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
@@ -288,7 +288,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
 
   test.describe('Performance & Stress Tests', () => {
     test('Handle rapid-fire requests (100 messages)', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -308,7 +308,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle page with 1000+ items (memory check)', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -329,7 +329,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Scroll performance with large list', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -349,7 +349,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Input lag test (text entry speed)', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -371,7 +371,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('CPU load with large data processing', async ({ page }) => {
-      await page.goto('/app/compute');
+      await page.goto('/console/app/compute');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -393,7 +393,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
 
   test.describe('Offline & Reconnection Handling', () => {
     test('Show offline indicator when disconnected', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -413,7 +413,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Queue requests while offline, sync on reconnect', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -439,7 +439,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle WebSocket reconnection', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -468,8 +468,8 @@ test.describe('Edge Cases & Failure Scenarios', () => {
       const page1 = await context.newPage();
       const page2 = await context.newPage();
 
-      await page1.goto('/app/tasks');
-      await page2.goto('/app/tasks');
+      await page1.goto('/console/app/tasks');
+      await page2.goto('/console/app/tasks');
 
       await page1.waitForLoadState('load');
       await page2.waitForLoadState('load');
@@ -502,7 +502,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Detect stale data after concurrent updates', async ({ page }) => {
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/tasks');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -524,7 +524,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle optimistic update + rollback', async ({ page }) => {
-      await page.goto('/app/chat');
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -555,7 +555,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
 
   test.describe('Edge Cases in File Operations', () => {
     test('Handle file upload of invalid type', async ({ page }) => {
-      await page.goto('/app/files');
+      await page.goto('/console/app/files');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -572,7 +572,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle file upload exceeding size limit', async ({ page }) => {
-      await page.goto('/app/files');
+      await page.goto('/console/app/files');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -584,7 +584,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Handle multiple file upload', async ({ page }) => {
-      await page.goto('/app/files');
+      await page.goto('/console/app/files');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
@@ -596,9 +596,9 @@ test.describe('Edge Cases & Failure Scenarios', () => {
   test.describe('Edge Cases in Navigation', () => {
     test('Browser back button from nested navigation', async ({ page }) => {
       // Navigate deep into app
-      await page.goto('/app/chat');
-      await page.goto('/app/tasks');
-      await page.goto('/app/settings');
+      await page.goto('/console/app/chat');
+      await page.goto('/console/app/tasks');
+      await page.goto('/console/app/settings');
 
       // Go back
       await page.goBack();
@@ -610,8 +610,8 @@ test.describe('Edge Cases & Failure Scenarios', () => {
     });
 
     test('Browser forward button after back', async ({ page }) => {
-      await page.goto('/app/chat');
-      await page.goto('/app/tasks');
+      await page.goto('/console/app/chat');
+      await page.goto('/console/app/tasks');
 
       await page.goBack();
       await page.waitForLoadState('load');
@@ -627,7 +627,7 @@ test.describe('Edge Cases & Failure Scenarios', () => {
 
     test('Deep linking with URL parameters', async ({ page }) => {
       // Test deep linking
-      const response = await page.goto('/app/chat?thread=test_123&view=details');
+      const response = await page.goto('/console/app/chat?thread=test_123&view=details');
 
       expect([200, 404]).toContain(response?.status());
 

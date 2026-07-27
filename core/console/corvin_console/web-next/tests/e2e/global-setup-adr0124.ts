@@ -56,21 +56,31 @@ export default async function globalSetup() {
   }).catch(() => null);
   // After redirect we should land on the SPA — wait for React to boot
   await page.waitForURL(/\/console\//, { timeout: 10_000 }).catch(() => null);
-  await page.waitForTimeout(1000);
 
-  // Verify we're actually logged in
-  const ok = await page.evaluate(async () => {
-    try {
-      const r = await fetch("/v1/console/auth/whoami", { credentials: "include" });
-      return r.ok;
-    } catch {
-      return false;
-    }
-  });
+  // Verify the session through the CONTEXT's request API, not page.evaluate().
+  //
+  // page.evaluate() needs a live JS execution context, and local-login redirects into
+  // the SPA which then does its own client-side routing. Whenever that landed mid-flight
+  // the evaluate died with "Execution context was destroyed, most likely because of a
+  // navigation" — and because this is globalSetup, that one race failed the ENTIRE run,
+  // not one test. The old guard was a waitForTimeout(1000) guess, so it held or did not
+  // depending on machine speed. context.request shares the context's cookie jar, so it
+  // proves the session exists without depending on the page being still or settled.
+  let ok = false;
+  for (let attempt = 1; attempt <= 3 && !ok; attempt += 1) {
+    const r = await context.request
+      .get("http://localhost:5173/v1/console/auth/whoami")
+      .catch(() => null);
+    ok = !!r && r.ok();
+    if (!ok) await page.waitForTimeout(500 * attempt);
+  }
 
   if (!ok) {
     await browser.close();
-    throw new Error("Global setup: login failed — whoami returned non-ok");
+    throw new Error(
+      "Global setup: login failed — GET /v1/console/auth/whoami never returned ok. " +
+      "Is the console running on :8765 and the vite dev server on :5173?",
+    );
   }
 
   await context.storageState({ path: AUTH_STATE_PATH });

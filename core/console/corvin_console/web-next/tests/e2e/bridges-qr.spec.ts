@@ -147,7 +147,7 @@ test.describe('Bridges QR — bundle correctness', () => {
 test.describe('Bridges page — route smoke test', () => {
 
   test('Bridges route responds (login redirect or bridges content)', async ({ page }) => {
-    await page.goto('/app/bridges');
+    await page.goto('/console/app/bridges');
     await page.waitForLoadState('load');
     await page.waitForTimeout(1000);
 

@@ -1413,24 +1413,68 @@ def filter_audit_details(details: dict | None, *, event_type: str = "",
     return cleaned, dropped
 
 
+#: How much of the tail to read per step when looking for the last chain entry.
+#: One record is a few hundred bytes, so the first block virtually always contains
+#: it; the loop exists for correctness (a long run of unhashed pre-chain records),
+#: not for the common case.
+_TAIL_BLOCK = 8192
+
+
 def _last_hash(path: Path) -> str:
-    """Walk the file and return the ``hash`` of the last chain entry, or "" """
+    """Return the ``hash`` of the last chain entry, or "".
+
+    Reads BACKWARDS from the end of the file. It used to walk the whole file
+    forwards, json.loads()-ing every line, and it is called on every hash-chained
+    write while holding the exclusive flock — so the cost of appending one audit
+    event was O(chain length), serialised across every writer, and grew forever.
+
+    Measured on the live chain (117 000 records) 2026-07-27: an authenticated console
+    request took ~0.8 s, and eight concurrent ones took 1.3/2.1/3.1/4.1/5.2/6.0/7.1/
+    7.9 s — perfectly linear, i.e. fully serialised behind this scan. /healthz, which
+    writes no audit event, answered in 3.5 ms. It also made Playwright specs time out
+    at 30 s under four workers, which read as "the UI is broken".
+
+    Semantics are unchanged and that matters, because this feeds the GDPR Art. 30/32
+    chain: return the hash of the LAST record that carries a non-empty ``hash``,
+    skipping blank lines, unparseable lines, and legitimate pre-chain records that
+    have no ``hash`` field at all. The only difference is the direction of travel.
+    """
     if not path.exists():
         return ""
-    last = ""
-    with path.open("r") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            h = rec.get("hash")
-            if isinstance(h, str) and h:
-                last = h
-    return last
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return ""
+    if size == 0:
+        return ""
+
+    with path.open("rb") as fh:
+        pos = size
+        tail = b""
+        while pos > 0:
+            step = min(_TAIL_BLOCK, pos)
+            pos -= step
+            fh.seek(pos)
+            tail = fh.read(step) + tail
+            # Every complete line in `tail` except possibly the first (which may be
+            # a fragment when pos > 0). Walk them newest-first.
+            lines = tail.split(b"\n")
+            candidates = lines if pos == 0 else lines[1:]
+            for raw in reversed(candidates):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                h = rec.get("hash") if isinstance(rec, dict) else None
+                if isinstance(h, str) and h:
+                    return h
+            # Nothing hashed in this block — keep the (possibly partial) first line
+            # so the next, earlier block can complete it.
+            tail = lines[0] if pos > 0 else b""
+    return ""
 
 
 def write_event(

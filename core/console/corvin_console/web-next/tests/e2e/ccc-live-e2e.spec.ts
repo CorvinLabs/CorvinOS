@@ -350,7 +350,7 @@ test.describe.serial("CCC Live E2E — full proof", () => {
     await shot(page, "T10-tasks-api-check");
 
     // Navigate to Workflows tab
-    await page.goto("/app/workflows", { waitUntil: "load" }).catch(() =>
+    await page.goto("/console/app/workflows", { waitUntil: "load" }).catch(() =>
       page.goto("/console/app/workflows", { waitUntil: "load" }).catch(() =>
         page.goto("/console", { waitUntil: "load" }),
       ),

@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from forge.registry import Registry
+from forge import security_events as se_mod
 from forge.security_events import write_event, verify_chain
 from test_mcp import MCPClient
 
@@ -294,6 +295,166 @@ def test_security_event_appears_in_chain():
           "policy.import_denied" in types)
 
 
+def test_last_hash_reads_backwards_and_matches_a_forward_scan():
+    """_last_hash must be O(1)-ish AND byte-identical to walking the file.
+
+    It used to walk the WHOLE chain forwards, json.loads()-ing every line, while
+    holding the exclusive flock that every writer contends on. Measured on the live
+    chain (120 846 records) 2026-07-27: 369 ms per call, so ~0.8 s per authenticated
+    console request, and eight concurrent requests took 1.3/2.1/3.1/4.1/5.2/6.0/7.1/
+    7.9 s — perfectly linear, i.e. fully serialised behind the scan. Reading backwards:
+    0.09 ms, same hash. The cost grew with chain length forever, so this was a
+    time-bomb, not a constant.
+
+    The semantics feed the GDPR Art. 30/32 chain, so equivalence is the actual
+    assertion here — not speed. A forward reference implementation is inlined and both
+    must agree on every shape the file can take.
+    """
+    print("\n[_last_hash: backwards read == forward scan]")
+
+    def forward_scan(path: Path) -> str:
+        if not path.exists():
+            return ""
+        last = ""
+        with path.open("r") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                h = rec.get("hash")
+                if isinstance(h, str) and h:
+                    last = h
+        return last
+
+    cases: list[tuple[str, str]] = [
+        ("empty file", ""),
+        ("only unhashed records",
+         json.dumps({"event_type": "a"}) + "\n" + json.dumps({"event_type": "b"}) + "\n"),
+        ("hash on the last record",
+         json.dumps({"event_type": "a"}) + "\n"
+         + json.dumps({"event_type": "b", "hash": "deadbeef"}) + "\n"),
+        ("last hash is NOT the last line (pre-chain tail)",
+         json.dumps({"event_type": "a", "hash": "aa11"}) + "\n"
+         + json.dumps({"event_type": "b"}) + "\n"),
+        ("trailing blank lines",
+         json.dumps({"event_type": "a", "hash": "bb22"}) + "\n\n\n"),
+        ("unparseable final line",
+         json.dumps({"event_type": "a", "hash": "cc33"}) + "\n{not json\n"),
+        ("empty-string hash must be skipped",
+         json.dumps({"event_type": "a", "hash": "dd44"}) + "\n"
+         + json.dumps({"event_type": "b", "hash": ""}) + "\n"),
+        ("no trailing newline", json.dumps({"event_type": "x", "hash": "ee55"})),
+        # Forces the backwards reader past its 8 KiB block boundary: the only hashed
+        # record is at the very start, behind ~40 KiB of unhashed padding.
+        ("hashed record older than one tail block",
+         json.dumps({"event_type": "first", "hash": "ff66"}) + "\n"
+         + "".join(json.dumps({"event_type": "pad", "payload": "x" * 200}) + "\n"
+                   for _ in range(200))),
+    ]
+
+    with tempfile.TemporaryDirectory() as td:
+        for label, body in cases:
+            path = Path(td) / "chain.jsonl"
+            path.write_text(body)
+            expected = forward_scan(path)
+            got = se_mod._last_hash(path)
+            t(f"{label}: {expected!r}", got == expected,
+              detail="" if got == expected else f"forward={expected!r} backwards={got!r}")
+
+        # A real chain written through write_event() still chains correctly, which is
+        # what actually proves the append path consumes the right prev_hash.
+        path = Path(td) / "real.jsonl"
+        for i in range(25):
+            write_event(path, "tool.created", tool=f"t{i}")
+        ok, problems = verify_chain(path)
+        t("25 real write_event() records still verify", ok, detail=str(problems[:2]))
+        recs = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        t("last record's hash is what _last_hash returns",
+          se_mod._last_hash(path) == recs[-1]["hash"])
+        t("each record's prev_hash is its predecessor's hash",
+          all(recs[i]["prev_hash"] == recs[i - 1]["hash"] for i in range(1, len(recs))))
+
+
+def test_last_dna_in_chain_reads_backwards_and_matches_a_forward_scan():
+    """Same fix, same file, second scanner — chain_dna.last_dna_in_chain.
+
+    write_event() calls BOTH _last_hash and last_dna_in_chain inside its exclusive
+    flock. Profiled on the live chain (120 875 records) 2026-07-27: last_dna_in_chain
+    alone was 624 ms of write_event's 627 ms. Fixing only one of the two would have
+    left the request cost unchanged, which is exactly what the first measurement after
+    the _last_hash fix showed (0.8 s -> 0.45 s, still linear under concurrency).
+    Together: write_event 348.7 ms -> 2.3 ms on the same file.
+    """
+    print("\n[last_dna_in_chain: backwards read == forward scan]")
+    from forge import chain_dna as dna_mod
+
+    def forward_scan(path: Path) -> tuple[str, str]:
+        last_dna = last_hash = ""
+        if not path.exists():
+            return "", ""
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                h = rec.get("hash", "")
+                d = (rec.get("details") or {}).get("chain_dna", "")
+                if h and d:
+                    last_dna, last_hash = d, h
+        return last_dna, last_hash
+
+    def rec(h: str = "", dna: str = "", **extra) -> str:
+        body: dict = {"event_type": "x", **extra}
+        if h:
+            body["hash"] = h
+        if dna:
+            body["details"] = {"chain_dna": dna}
+        return json.dumps(body)
+
+    cases: list[tuple[str, str]] = [
+        ("empty file", ""),
+        ("hash but no dna", rec(h="aa") + "\n"),
+        ("dna but no hash", rec(dna="d1") + "\n"),
+        ("both on the last record", rec(h="bb", dna="d2") + "\n"),
+        ("newest complete entry is not the last line",
+         rec(h="cc", dna="d3") + "\n" + rec(h="dd") + "\n"),
+        ("unparseable final line", rec(h="ee", dna="d4") + "\n{broken\n"),
+        ("no trailing newline", rec(h="ff", dna="d5")),
+        ("complete entry older than one tail block",
+         rec(h="gg", dna="d6") + "\n"
+         + "".join(rec(h="hh", pad="y" * 200) + "\n" for _ in range(200))),
+    ]
+    with tempfile.TemporaryDirectory() as td:
+        for label, body in cases:
+            path = Path(td) / "dna.jsonl"
+            path.write_text(body)
+            expected = forward_scan(path)
+            got = dna_mod.last_dna_in_chain(path)
+            t(f"{label}: {expected}", got == expected,
+              detail="" if got == expected else f"forward={expected} backwards={got}")
+
+        # Real writes: the DNA chain must still verify end to end.
+        path = Path(td) / "real.jsonl"
+        for i in range(20):
+            write_event(path, "tool.created", tool=f"t{i}")
+        ok, problems = verify_chain(path)
+        t("20 real records still verify (hash chain)", ok, detail=str(problems[:2]))
+        dna, h = dna_mod.last_dna_in_chain(path)
+        recs = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+        t("returned hash is the newest DNA-bearing record's hash",
+          h == recs[-1]["hash"])
+        t("returned dna matches that record's details.chain_dna",
+          dna == recs[-1]["details"]["chain_dna"])
+
+
 def main() -> int:
     test_writes_chain_with_prev_and_hash()
     test_verify_detects_field_tamper()
@@ -305,6 +466,8 @@ def main() -> int:
     test_mcp_audit_chain_intact_after_typical_session()
     test_mcp_audit_detects_tamper()
     test_security_event_appears_in_chain()
+    test_last_hash_reads_backwards_and_matches_a_forward_scan()
+    test_last_dna_in_chain_reads_backwards_and_matches_a_forward_scan()
     print(f"\n{PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 
