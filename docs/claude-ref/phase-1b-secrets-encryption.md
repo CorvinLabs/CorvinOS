@@ -1,8 +1,9 @@
 # Phase 1b: Encrypted Secrets Storage
 
-**Status:** Complete (2026-07-27)  
+**Status:** Complete & Production-Ready (2026-07-27)  
 **Provider:** SecretsStore in provider_keys.py (Single Source of Truth)  
-**Single Point of Integration:** operator/bridges/shared/provider_keys.py (channels: resolve_key, resolve_by_env_var)
+**Single Point of Integration:** operator/bridges/shared/provider_keys.py (channels: resolve_key, resolve_by_env_var)  
+**Phase 2 Integration:** Tenant export/import with `--with-secrets` now includes encryption keys → secrets portable across machines
 
 ## Overview
 
