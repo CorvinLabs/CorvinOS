@@ -202,6 +202,115 @@ did not select is refused **by the call site**; a raising hook on `workflow_gate
 denies the run; a raising hook on `model_selection` costs the custom model, not the
 turn; flag-off = no hook fires anywhere.
 
+#### Progress 2026-07-27 — bus complete, 1 of 4 call sites
+
+**Bus (prerequisite for all four).** D3 and D5 were specified but not built:
+`invoke()` returned whatever the hook returned and measured nothing.
+
+* **D3** — `ExtensionPointSpec` now declares `return_type`. `None` abstains
+  everywhere (including the gate); a wrong TYPE is a defect handled exactly like
+  a raising hook — default on an ordinary point, `ExtensionPointDenied` on the
+  gate. Only the type NAME is audited, never the value: a misbehaving hook's
+  return could be a credential, and the chain is append-only.
+* **D5** — `latency_budget_ms` per point, measured around the hook, audited on
+  overrun with the plugin id and elapsed time, deduplicated per
+  (tenant, point, plugin). Not enforced, and the test says so in its name:
+  asserting a slow hook is *cut off* would assert a guarantee the code does not
+  provide.
+
+**One behaviour change to an existing tested contract.** Until now the bus passed
+a hook's `None` through verbatim, on the reasoning that a hook must be able to
+express a deliberate `None`. D3 decided the opposite — and the point specs in
+`extension_points.py` had always agreed with the ADR rather than with the test:
+`engine.model_selection`'s `default_behavior` says a `None` return is "treated
+exactly like no hook at all", and the old test cited that spec while asserting
+its opposite. `None` is not a meaningful answer on any of the four points, so
+pass-through bought nothing and cost every call site its own `is None` branch.
+
+**Call site 1 of 4 — `engine.engine_selection`.**
+`delegation_policy.resolve_worker_engine`, wired into `chat_runtime`. The pure
+`worker_engine_target` stays pure — it is the shared routing matrix every surface
+unit-tests against, and a hook inside it would make those tests depend on
+process-wide bus state. D2's refusal lives at the call site: the bus knows a hook
+returned a `str`, only `delegation_policy` knows which strings are engines.
+
+`permitted_engines` admits exactly `{bundled, "native"}` — confirm or
+de-escalate, **never escalate**. Deliberately narrower than "the operator's
+`mode`": allowing `mode` would let a hook re-assert `tde` on a turn the rule
+routed to `native` because TDE was unavailable, overriding an availability
+degrade the hook cannot observe.
+
+**Two guard tests fired on the good news, as designed.**
+`test_unwired_point_is_still_unwired[engine.engine_selection]` went red and forced
+the record to move to a new `_WIRED_POINTS` set, which now carries the reverse
+assertion — a wired point that *loses* its caller fails too, since that
+regression looks identical to a point that was never wired.
+`test_extension_points.py::test_no_call_site_is_wired_yet` also went red; it had
+named its own successor in a comment ("when the call sites land, THIS test goes
+away"), so it was removed and a tombstone comment left in its place. Six
+documents claiming "no call site calls `invoke()`" were corrected in the same
+commit.
+
+Verified by mutation: deleting the D2 refusal turns four call-site tests red.
+
+#### Call sites 2–4, same day — Stage 3 complete
+
+| Point | Call site | The bound, enforced at the call site |
+|---|---|---|
+| `delegation.route_selection_policy` | `delegation_policy.resolve_delegation_route` | may **suppress** delegation, never cause it |
+| `engine.model_selection` | `model_selector.resolve_step_model` | may name any model in the engine's registry, nothing else |
+| `workflow.workflow_gate` | `routes/workflows.py::_stream_run` | may **deny** a run, never permit one the core refused |
+
+Each bound is different because each subsystem's vocabulary is different, and
+that is the argument for keeping the check at the call site rather than in the
+bus. The bus knows a hook returned a `str`; only `delegation_policy` knows which
+strings are routes, only `model_selector` knows which are installed models.
+
+**`route_selection_policy` needed a vocabulary bridge.** The bundled classifier
+answers a boolean — "is this ACS-fan-out shaped?" — while the point's declared
+type is a route string. `resolve_delegation_route` maps `True → "acs"`,
+`False → "native"`, and admits only the bundled route or `native`. So a hook can
+stop a delegation and can never start one. That direction is not symmetry for its
+own sake: a hook answering `"acs"` on a declined turn would be a plugin spending
+the operator's quota through a decision the operator's own classifier refused.
+
+**`model_selection` has no `native`-shaped floor.** There is no ordering among
+models, so "may not escalate" has no meaning; the operator's setting *is* the
+engine registry, and membership is the whole bound. It is checked with
+`engine_models.model_is_registered` — lifted out of
+`resolve_model_for_workload`'s inner scope so the call site and the bundled tier
+ladder apply one rule rather than two that agree until one is edited.
+
+**The gate sits before the `dry_run` branch.** A gate answers "may this run at
+all"; letting a denied workflow still be enumerated would make the answer depend
+on a query parameter. It is handed a *structural* summary — wid, node ids, node
+count, engine — and never `inputs` or the YAML: those carry the task text, and
+passing them would make a gate hook a content tap, which is a different
+capability from gating.
+
+**Two defects found while writing the tests, both in code that was already
+green:**
+
+* `resolve_step_model` let an exception from the admissibility check propagate.
+  The test asserting it was named `..._refuses_rather_than_admits` while pinning
+  `assertRaises`, which made the mismatch obvious. Propagation is wrong twice: a
+  broken check decides nothing, and the console call site turns an escaping
+  exception into `model = None`, silently **downgrading** the turn to the CLI
+  default. Now fail-closed locally rather than relying on every caller to wrap it.
+* The console's `engine.model_selection` call site referenced `_os_engine`, which
+  was assigned ~130 lines *later*. The surrounding `except Exception` would have
+  turned the `NameError` into `_os_model = None` on every turn — a silent
+  degradation with no log line. `_os_engine`'s resolution moved above the model
+  block, which also removes a second `shutil.which` probe per turn.
+
+Verified by mutation: ignoring the gate's deny, making the gate fail-open,
+dropping the registry bound, and dropping the suppress-only rule each turn their
+suite red.
+
+**Stage 3 gate:** `_UNWIRED_POINTS` is now empty and `_WIRED_POINTS` holds all
+four. The useful assertion from here is the reverse one — a point that *loses*
+its call site fails the suite.
+
 ---
 
 ### Stage 4 — Populate the three handles — **one of three, not three**
@@ -326,14 +435,14 @@ staged rollout. Recording that is better than pretending it has a flip date.
 | 0 Call-site gate | 0.5 d | — | none | ✅ done (`test_extension_point_call_sites.py`, 6 pass / 4 skip — the skips *are* Stage 3) |
 | 1 Tenant-scoped providers | 1.5 w | G6 | none (refusal is a compliance gate) | ✅ **part 1 only** — the refusal gate (`tenant_scope.py`, 30 tests). Keying the eight registries by tenant is ADR-0250's own migration, not done |
 | 2 `user_backend` call site | 0.5 d | G2 (as *recorded*, not closed) | — | ✅ **done** — option 3 shipped; cause corrected in `surface_map.py`, CLAUDE.md, 4 docs, ADR-0245 addendum |
-| 3 Extension-point call sites | 1.5 w | G1 | `plugin_extension_points` | ❌ zero production `invoke()` in the tree |
+| 3 Extension-point call sites | 1.5 w | G1 | `plugin_extension_points` | ✅ **done** — bus D3+D5 plus all four call sites |
 | 4 Populate `compute_registry` | 1 w | part of G3 | none | ❌ `app.py:163` still passes no registry |
 | 5 Bridge supervisors | 1 w | G5 | `bridge_supervisor_plugins` | ❌ `registry_entries` imported only by its own `__init__` |
 | 6 `install` + trust anchor | 1 w | G7, G8 | `plugin_trust_enforcement` | ❌ CLI has `types`/`check`/`new` only; no anchor deposited |
 | 7 Flag lifecycle | 0.5 d | G9 | — | ✅ **done** — 15 flags, all with `owner`+`target_release`, guard test present |
 | A Truth-in-tree corrections | 0.5 d | — | — | ✅ **done** — see § 4.1 |
 | E E2E spine | 1 w | — | — | ◑ **E1 done** (`test_lifecycle_e2e.py`); E2 rows follow their stages, E3 last |
-| **Total remaining** | **~5 w** | | | |
+| **Total remaining** | **~3.5 w** | | | |
 
 **Dropped from ADR-0242:** Phase 7 directory move (§ 2 above).
 **Deferred, unchanged:** everything in § 1's out-of-scope table.

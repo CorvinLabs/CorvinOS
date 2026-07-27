@@ -2,12 +2,13 @@
 
 **Date:** 2026-07-27
 **Status:** Phase 3 of ADR-0242 — the extension-point bus exists, is tested, and
-is **not yet wired into any call site**. Read the "Reach today" boxes before
-planning against it.
+since 2026-07-27 **all four points are wired** (ADR-0251). Read the "Reach today"
+boxes before planning against it: the *other* mechanism in this document,
+`registry.replace()`, is still structurally unreachable.
 
 **ADRs:** ADR-0237 (extensible core plugins) · ADR-0243 (the `boot_layer` axis) ·
 ADR-0233 / ADR-0033 (the provider registries) · ADR-0181 (provider + model
-selection).
+selection) · ADR-0251 (the four call sites and what a hook may not do there).
 **Code:** `core/plugins/corvin_plugins/` — `extension_points.py`, `registry.py`,
 `manifest.py`, `providers/`.
 
@@ -129,8 +130,7 @@ class MyRoutingPlugin:
         return "acs" if turn.get("bytes", 0) > 10_000_000 else None
 ```
 
-The call site — once wired — asks the bus and always states its own pre-feature
-behaviour:
+The call site asks the bus and always states its own pre-feature behaviour:
 
 ```python
 from corvin_plugins import invoke
@@ -201,11 +201,20 @@ into an outage, and the breaker state is visible in `health_check_all()`.
 
 ## 4. The four bus extension points (Phase 3)
 
-**Reach today: none.** These are defined, specified and tested **bus-side**. No
-call site calls `invoke()` yet — wiring them into the engine, delegation and
-workflow paths is a follow-up phase. Until then a registered hook is inert no
-matter how the flag is set, and `test_extension_points.py` carries a guard that
-fails the moment a call site appears, so this paragraph cannot silently go stale.
+**Reach today: all four (2026-07-27, ADR-0251).**
+
+| Point | Call site | What a hook may do |
+|---|---|---|
+| `engine.engine_selection` | `shared/delegation_policy.py::resolve_worker_engine` | confirm the bundled route or de-escalate to `native` — never escalate |
+| `delegation.route_selection_policy` | `shared/delegation_policy.py::resolve_delegation_route` | suppress delegation — never cause it |
+| `engine.model_selection` | `shared/model_selector.py::resolve_step_model` | name any model in the engine's registry — nothing else |
+| `workflow.workflow_gate` | `routes/workflows.py::_stream_run` | deny a run — never permit one the core refused |
+
+Every bound is enforced at the CALL SITE, not in the bus: the bus knows a hook
+returned a `str`, only each subsystem knows which strings are admissible there.
+Refusals are audited. `test_extension_point_call_sites.py` holds the record per
+point and fails when one gains a caller *or loses one*, so this table cannot
+silently go stale in either direction.
 
 ADR-0237 lists a longer backlog and says explicitly that Phase 3 adds 3–5 points,
 not all of them. These four were chosen because each of their subsystems already

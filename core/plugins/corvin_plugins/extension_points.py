@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -154,6 +155,19 @@ class ExtensionPointSpec:
     default_behavior: str
     #: True when a hook that fails must produce a DENIAL rather than the default.
     fail_closed: bool = False
+    #: The type a hook must return, besides ``None`` (ADR-0251 D3).
+    #:
+    #: ``None`` is ALWAYS permitted and always means abstain — including on a
+    #: fail-closed point. Anything that is neither ``None`` nor this type is a
+    #: broken hook, not an abstention, and is treated exactly like a raising one.
+    #: Without this field the call site would have to re-derive the contract from
+    #: the ``signature`` STRING, which nothing checks.
+    return_type: type = str
+    #: Soft latency budget in milliseconds (ADR-0251 D5). Measured and audited on
+    #: overrun, never enforced: a synchronous in-process hook cannot be
+    #: interrupted without a thread or subprocess, and pretending otherwise would
+    #: be the manifest-as-sandbox mistake in a different costume (ADR-0249).
+    latency_budget_ms: float = 50.0
 
 
 #: The four points Phase 3 defines.  ADR-0237 lists a longer backlog and says
@@ -206,6 +220,7 @@ _POINT_SPECS: Tuple[ExtensionPointSpec, ...] = (
             "as it does today — the bundled path is unchanged."
         ),
         fail_closed=True,
+        return_type=bool,
     ),
 )
 
@@ -500,6 +515,35 @@ def _note_degraded(tenant_id: str, point: str) -> bool:
             log.debug("degradation memo full — dropping it and starting over")
             _degraded_reported.clear()
         _degraded_reported.add(key)
+        return True
+
+
+#: (tenant, point, plugin) triples already reported as over the latency budget.
+#: Same reasoning as :data:`_degraded_reported`, one axis wider: the record names
+#: the plugin, so two slow plugins on one point stay distinguishable.
+_slow_reported: set[tuple[str, str, str]] = set()
+_slow_lock = threading.Lock()
+
+#: Cap on :data:`_slow_reported`. Same bound and same wholesale-drop policy as
+#: :data:`MAX_DEGRADED_REPORTED` — a memo that refuses new keys would silence a
+#: NEWLY slow plugin for the life of the process.
+MAX_SLOW_REPORTED = 1024
+
+
+def _note_slow(tenant_id: str, point: str, plugin_id: str) -> bool:
+    """True the first time this ``(tenant, point, plugin)`` overruns its budget.
+
+    A slow hook sits on the turn path by construction, so without this a single
+    misbehaving plugin would append one record per turn to an append-only chain.
+    """
+    key = (tenant_id, point, plugin_id)
+    with _slow_lock:
+        if key in _slow_reported:
+            return False
+        if len(_slow_reported) >= MAX_SLOW_REPORTED:
+            log.debug("slow-hook memo full — dropping it and starting over")
+            _slow_reported.clear()
+        _slow_reported.add(key)
         return True
 
 
@@ -921,8 +965,14 @@ def invoke(
     if hook is None:
         return _resolve_default(default, args, kwargs)
 
+    # The hook call and NOTHING else sits in this try. An earlier draft also had
+    # the return-value check inside it, and _validate_return raising
+    # ExtensionPointDenied on a wrong type would then have been caught here and
+    # re-reported as "hook raised" — the right outcome reached through a false
+    # audit record, on an append-only chain.
     try:
-        return hook.fn(*args, **kwargs)
+        _t0 = time.perf_counter()
+        result = hook.fn(*args, **kwargs)
     except Exception as exc:  # noqa: BLE001 — a plugin must never break its host
         fail_closed = point in _FAIL_CLOSED_POINTS
         # Exception CLASS only.  str(exc) from a plugin routinely carries a
@@ -944,6 +994,105 @@ def invoke(
                 point, f"hook raised {type(exc).__name__}"
             ) from None
         return _resolve_default(default, args, kwargs)
+
+    _note_latency(point, hook.plugin_id, tenant_id,
+                  (time.perf_counter() - _t0) * 1000.0)
+    return _validate_return(
+        point, hook.plugin_id, tenant_id, result, default, args, kwargs
+    )
+
+
+def _validate_return(
+    point: str,
+    plugin_id: str,
+    tenant_id: str,
+    result: Any,
+    default: Any,
+    args: tuple,
+    kwargs: dict,
+) -> Any:
+    """ADR-0251 D3 — abstain, answer, or defect.
+
+    ``None`` is abstention EVERYWHERE, including on a fail-closed point. Making
+    it a denial there reads defensible and is wrong in practice: a gate that
+    cares about some workflows and not others would have to return ``True`` for
+    every run it has no opinion about, thereby overriding the core gate on all of
+    them. That is a worse failure than the one the strict reading prevents.
+
+    A wrong TYPE is not an abstention — it is a broken hook. From the call site's
+    view "the gate returned a dict" and "the gate crashed" are the same event: no
+    decision was produced. So it is treated exactly like the raising hook.
+    """
+    if result is None:
+        return _resolve_default(default, args, kwargs)
+
+    spec = _BY_NAME[point]
+    # Plain isinstance is correct for the declared types and needs no
+    # bool-vs-int carve-out: no point declares `int`, `bool` is not a subclass of
+    # `str`, and `1` is not an instance of `bool` — so `True` on a str point and
+    # `1` on the gate are both defects, which is what D3 says they are. Add the
+    # carve-out only if a point ever declares `int`.
+    if isinstance(result, spec.return_type):
+        return result
+
+    fail_closed = point in _FAIL_CLOSED_POINTS
+    log.error(
+        "extension hook %s from plugin %r returned %s, expected %s or None — %s",
+        point, plugin_id, type(result).__name__, spec.return_type.__name__,
+        "denying (fail-closed point)" if fail_closed else "using the default",
+    )
+    # Type NAME only, never the value: a hook's return value on these points is
+    # a model id, an engine id or a gate answer, and on a misbehaving hook it
+    # could be anything at all — including a prompt fragment. The audit chain is
+    # append-only (CLAUDE.md: don't leak PII into audit details).
+    _audit("plugin.extension_return_invalid", {
+        "point": point,
+        "plugin_id": plugin_id,
+        "tenant_id": tenant_id,
+        "returned_type": type(result).__name__,
+        "expected_type": spec.return_type.__name__,
+        "outcome": "deny" if fail_closed else "default",
+    }, tenant_id=tenant_id)
+    if fail_closed:
+        raise ExtensionPointDenied(
+            point, f"hook returned {type(result).__name__}, expected "
+                   f"{spec.return_type.__name__}"
+        )
+    return _resolve_default(default, args, kwargs)
+
+
+def _note_latency(
+    point: str, plugin_id: str, tenant_id: str, elapsed_ms: float
+) -> None:
+    """ADR-0251 D5 — measure and audit an overrun; never interrupt.
+
+    A hook runs in-process and synchronously on the turn path. There is no
+    timeout enforceable against arbitrary synchronous Python without a thread or
+    a subprocess, and adding either for a routing decision costs more than the
+    problem. So the budget is real but advisory, and the record says which plugin
+    spent the time.
+
+    Deduplicated per (tenant, point, plugin) like the flag-degradation notice: a
+    slow hook sits on a hot path, and an append-only chain must not be spammed by
+    one misbehaving plugin.
+    """
+    budget = _BY_NAME[point].latency_budget_ms
+    if elapsed_ms <= budget:
+        return
+    if not _note_slow(tenant_id, point, plugin_id):
+        return
+    log.warning(
+        "extension hook %s from plugin %r took %.1f ms (budget %.0f ms) — "
+        "measured, not interrupted",
+        point, plugin_id, elapsed_ms, budget,
+    )
+    _audit("plugin.extension_hook_slow", {
+        "point": point,
+        "plugin_id": plugin_id,
+        "tenant_id": tenant_id,
+        "elapsed_ms": round(elapsed_ms, 1),
+        "budget_ms": budget,
+    }, tenant_id=tenant_id)
 
 
 def _resolve_default(default: Any, args: tuple, kwargs: dict) -> Any:

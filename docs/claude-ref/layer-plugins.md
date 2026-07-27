@@ -887,14 +887,46 @@ The swap is **not atomic and does not roll back**: the old plugin's
 it would hand callers a torn-down object. The documented outcome is an empty
 slot plus an audit record — the operator re-enables the default explicitly.
 
-### Extension points — the bus is defined, no call site uses it (ADR-0237 Phase 3)
+### Extension points — all four are wired (ADR-0237 Phase 3, ADR-0251)
 
-`extension_points.py` defines four named points — `engine.model_selection`,
-`engine.engine_selection`, `delegation.route_selection_policy`,
-`workflow.workflow_gate` (the only fail-closed one) — behind
-`plugin_extension_points` (default off). **No production call site calls `invoke()`**, so
-a registered hook is inert regardless of the flag;
-`test_extension_points.py::test_no_call_site_is_wired_yet` fails the day one appears.
+`extension_points.py` defines four named points behind `plugin_extension_points`
+(default off). As of 2026-07-27:
+
+| Point | Call site | What a hook may do | Fail-closed |
+|---|---|---|---|
+| `engine.engine_selection` | `shared/delegation_policy.py::resolve_worker_engine` | confirm the bundled route or de-escalate to `native` | no |
+| `delegation.route_selection_policy` | `shared/delegation_policy.py::resolve_delegation_route` | suppress delegation — never cause it | no |
+| `engine.model_selection` | `shared/model_selector.py::resolve_step_model` | name any model in the engine's registry | no |
+| `workflow.workflow_gate` | `routes/workflows.py::_stream_run` | deny a run — never permit one the core refused | **yes** |
+
+`test_extension_point_call_sites.py` holds the record in both directions:
+`_WIRED_POINTS` (all four today), `_UNWIRED_POINTS` (empty), a partition test so
+a point cannot fall out of both, and an assertion per set. The reverse one is the
+useful half now: a point that **loses** its call site fails the suite, because
+that regression looks identical to a point that was never wired.
+
+**What the wired point enforces (ADR-0251 D2).** A hook is an input to the
+bundled rule, never a replacement for it. `resolve_worker_engine` runs the pure
+`worker_engine_target` first and then admits only two answers from a hook: the
+bundled one (confirm) or `native` (de-escalate). A hook may **never escalate** —
+not to an engine the operator did not select, and not back to the operator's own
+`mode` over an availability degrade the hook cannot observe. Refusals are
+audited as `plugin.extension_engine_refused` with the operator mode and the
+rejected engine id. The refusal lives at the call site, not in the bus: the bus
+knows a hook returned a `str`, only `delegation_policy` knows which strings are
+engines.
+
+**Return values (D3), everywhere.** `None` is abstention on every point
+including the fail-closed one — the default runs. A wrong TYPE is a defect, not
+an abstention, and is handled exactly like a raising hook: the default on an
+ordinary point, `ExtensionPointDenied` on the gate. Only the type NAME is
+audited, never the value.
+
+**Latency (D5).** Each point carries a soft budget; an overrun is logged and
+audited (`plugin.extension_hook_slow`, once per tenant/point/plugin) with the
+elapsed time. It is **not** enforced — a synchronous in-process hook cannot be
+interrupted without a thread or subprocess, and claiming otherwise would be
+ADR-0249's manifest-as-sandbox mistake in a different costume.
 
 Names that may never get a point are in `_NEVER_EXTENSIBLE` and are refused with
 `ImmutableExtensionPoint` — a distinct error from "unknown point", so the attempt reads as

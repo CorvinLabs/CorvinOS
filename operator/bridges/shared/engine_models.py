@@ -440,6 +440,45 @@ def get_model_tier_mapping() -> dict[str, dict[str, str]]:
     return {engine: dict(tiers) for engine, tiers in _MODEL_TIER_MAPPING.items()}
 
 
+def model_is_registered(model_id: str | None, engine: str) -> bool:
+    """Is ``model_id`` one of ``engine``'s registered models? FAIL-CLOSED.
+
+    Lifted out of :func:`resolve_model_for_workload`'s inner scope on 2026-07-27
+    so the ADR-0251 ``engine.model_selection`` call site can apply the SAME
+    admissibility rule a plugin's answer must meet. Re-implementing it there
+    would be two registry rules that agree until one is edited.
+
+    Every failure path answers False: unknown engine, unreadable registry, empty
+    id. A permissive default here let phantom tier-map entries return
+    nonexistent models (adversarial review 2026-07-18) and would now also let a
+    plugin name a model the operator never installed.
+    """
+    if not model_id:
+        return False
+    try:
+        registry = load_registry()
+        engine_spec = registry.get(engine)
+        if not engine_spec:
+            import sys
+            print(f"[WARN] model_is_registered: engine '{engine}' not in registry "
+                  f"— refusing model", file=sys.stderr)
+            return False
+        all_models = [m.id for m in engine_spec.os_models] + [
+            m.id for m in engine_spec.worker_models
+        ]
+        is_valid = model_id in all_models
+        if not is_valid:
+            import sys
+            print(f"[WARN] model_is_registered: model '{model_id}' not in engine "
+                  f"'{engine}' registry", file=sys.stderr)
+        return is_valid
+    except Exception as e:
+        import sys
+        print(f"[WARN] model_is_registered: registry load failed ({e}) — refusing "
+              f"model '{model_id}'", file=sys.stderr)
+        return False
+
+
 def resolve_model_for_workload(
     engine_id: str,
     workload_type: "str | object | None" = None,
@@ -504,28 +543,10 @@ def resolve_model_for_workload(
     # which makes the caller fall back to the user's chosen model. The old
     # permissive behaviour let phantom tier-map entries return nonexistent
     # models (adversarial review 2026-07-18).
-    def _model_is_valid(model_id: str | None, engine: str) -> bool:
-        """Check if model_id is in this engine's available models."""
-        if not model_id:
-            return False
-        try:
-            registry = load_registry()
-            engine_spec = registry.get(engine)
-            if not engine_spec:
-                import sys
-                print(f"[WARN] resolve_model_for_workload: engine '{engine}' not in registry — refusing tier model", file=sys.stderr)
-                return False
-            # Check both os_models and worker_models
-            all_models = [m.id for m in engine_spec.os_models] + [m.id for m in engine_spec.worker_models]
-            is_valid = model_id in all_models
-            if not is_valid:
-                import sys
-                print(f"[WARN] resolve_model_for_workload: model '{model_id}' not in engine '{engine}' registry", file=sys.stderr)
-            return is_valid
-        except Exception as e:
-            import sys
-            print(f"[WARN] resolve_model_for_workload: registry load failed ({e}) — refusing model '{model_id}'", file=sys.stderr)
-            return False
+    # Module-level since 2026-07-27 so the ADR-0251 model-selection call site
+    # applies the same rule; the local name is kept so the reads below are
+    # unchanged.
+    _model_is_valid = model_is_registered
 
     # CHAT routing: use fast tier only if confidence is high and feature is enabled
     if workload == "chat":

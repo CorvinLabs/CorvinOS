@@ -45,14 +45,27 @@ _NOT_A_CALL_SITE = (
 #: to it to make a red test green.  A point JOINING this set means a call site
 #: was deleted and an extension point went dark, which is a regression wearing
 #: the same red as an improvement.
-_UNWIRED_POINTS: frozenset[str] = frozenset(
-    {
-        "engine.model_selection",
-        "engine.engine_selection",
-        "delegation.route_selection_policy",
-        "workflow.workflow_gate",
-    }
-)
+_UNWIRED_POINTS: frozenset[str] = frozenset()
+
+#: Wired, with the module that calls each one. Not decoration: it is what makes
+#: a DELETED call site distinguishable from a point that was never wired, since
+#: both look the same to the grep above.
+#:
+#: All four landed 2026-07-27 (ADR-0251 D1):
+#:
+#: * ``engine.engine_selection`` — ``shared/delegation_policy.py``
+#:   (``resolve_worker_engine``). A hook may confirm the bundled route or
+#:   de-escalate to ``native``; never escalate.
+#: * ``delegation.route_selection_policy`` — ``shared/delegation_policy.py``
+#:   (``resolve_delegation_route``). A hook may suppress delegation; never cause
+#:   it.
+#: * ``engine.model_selection`` — ``shared/model_selector.py``
+#:   (``resolve_step_model``). A hook may name any model in the engine's
+#:   registry and nothing else.
+#: * ``workflow.workflow_gate`` — ``corvin_console/routes/workflows.py``
+#:   (``_stream_run``, before the ``dry_run`` branch). Conjunction with the core
+#:   gate: a hook may only ever be more restrictive.
+_WIRED_POINTS: frozenset[str] = frozenset(KNOWN_EXTENSION_POINTS)
 
 
 def _grep_repo(pattern: str, *, exclude: tuple[str, ...]) -> list[str]:
@@ -150,4 +163,38 @@ def test_the_unwired_set_names_only_real_points():
         f"_UNWIRED_POINTS names points that do not exist: {sorted(unknown)}. "
         f"A renamed point leaves its old name here, where it protects nothing "
         f"and hides the new name's missing call site."
+    )
+
+
+def test_the_two_sets_partition_the_known_points():
+    """Every point is recorded as exactly one of wired / unwired.
+
+    Without this, removing a name from `_UNWIRED_POINTS` and forgetting to add
+    it to `_WIRED_POINTS` leaves it in neither — and the only assertion left
+    covering it is the generic "has a call site" one, which is precisely what a
+    deleted call site would fail silently in the other direction.
+    """
+    both = _WIRED_POINTS & _UNWIRED_POINTS
+    assert not both, f"points recorded as both wired and unwired: {sorted(both)}"
+    missing = KNOWN_EXTENSION_POINTS - _WIRED_POINTS - _UNWIRED_POINTS
+    assert not missing, (
+        f"points in neither record: {sorted(missing)}. Wiring one means moving "
+        f"its name from _UNWIRED_POINTS to _WIRED_POINTS in the same commit as "
+        f"the call site."
+    )
+
+
+@pytest.mark.parametrize("point", sorted(_WIRED_POINTS))
+def test_a_wired_point_still_has_its_call_site(point):
+    """Fails when a call site is DELETED and the record is not corrected.
+
+    The reverse of `test_unwired_point_is_still_unwired`, and the reason both
+    directions are needed: a point silently losing its caller is a regression
+    that looks exactly like a point that was never wired.
+    """
+    hits = _grep_repo(_call_site_pattern(point), exclude=_NOT_A_CALL_SITE)
+    assert hits, (
+        f"{point} is recorded as wired but has no production call site any "
+        f"more. A registered hook on it would never run, and nothing else "
+        f"would say so."
     )

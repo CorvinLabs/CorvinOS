@@ -319,7 +319,7 @@ before Phase 6. See [Phase 6](#phase-6--partial) for what headless mode actually
 │  │     │                         can_disable, replace)
 │  │     ├─ bootstrap.py          (bootstrap_global / _declared_boot_layer /
 │  │     │                         bootstrap_all)
-│  │     ├─ extension_points.py   (the hook bus — no call sites wired)
+│  │     ├─ extension_points.py   (the hook bus — all 4 points wired)
 │  │     ├─ bridges/              (7 supervisor classes — nowhere declared)
 │  │     ├─ loader.py
 │  │     └─ providers/            (8 provider registries, ADR-0033)
@@ -619,7 +619,7 @@ qualifier column before treating any row as reach.
 | 0 | ADR consolidation | ✅ done | — |
 | 1 | Boot-layer-aware registry | ✅ done | the two privileged values have zero instances |
 | 2 | Boot order + scoping | ✅ done | `bootstrap_global()` returns `[]` on every install |
-| 3 | Extension points | ✅ **bus only** | four points defined + tested; **no call site calls `invoke()`**, guard-tested |
+| 3 | Extension points | ✅ **all 4 wired** | ADR-0251, 2026-07-27; guard-tested per point in both directions |
 | 4 | Admin control plane (REST) | ✅ done | REST only; gRPC deferred, not planned |
 | 5 | Bridge supervisor plugins | ✅ **classes only** | seven classes exist; **nothing declares them**, so none ever loads |
 | 6 | Headless API-only boot | ◑ **partial** | browser surfaces suppressed ✅; **no reordered boot sequence**, **no preset mechanism** |

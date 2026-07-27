@@ -71,6 +71,189 @@ def worker_engine_target(
     return "native"
 
 
+def permitted_engines(*, mode: str, bundled: str) -> frozenset[str]:
+    """What an ``engine.engine_selection`` hook may answer (ADR-0251 D2).
+
+    A hook is an INPUT to this module's rule, never a replacement for it, so the
+    only admissible answers are:
+
+    * ``bundled`` — the answer the rule already produced (confirm it), and
+    * ``"native"`` — the universal degrade floor.
+
+    That is deliberately narrow, and the narrowness is the decision. A hook may
+    **de-escalate but never escalate**. Consider what the alternatives permit:
+
+    * allowing ``mode`` itself would let a hook re-assert ``tde`` on a turn the
+      rule routed to ``native`` because TDE was unavailable or out of quota —
+      the hook would be overriding an availability degrade it cannot observe;
+    * allowing any member of :data:`WORKER_ENGINE_MODES` would let a plugin
+      route into an engine the operator never selected, which CLAUDE.md
+      § Worker Engine Selection forbids outright.
+
+    ``mode`` is accepted and unused on purpose: it is what makes the refusal
+    message and the audit record intelligible ("the operator selected X"), and
+    leaving it out would invite a later caller to re-derive the permitted set
+    from the mode, which is the widening this function exists to prevent.
+    """
+    return frozenset({bundled, WORKER_ENGINE_DEFAULT})
+
+
+def resolve_worker_engine(
+    *,
+    mode: str,
+    force_delegate: bool,
+    is_big_data: bool,
+    tde_available: bool,
+    quota_ok: bool,
+    tenant_id: str = "_default",
+) -> str:
+    """:func:`worker_engine_target`, plus the ``engine.engine_selection`` hook.
+
+    The pure rule above stays pure — it is the unit-testable routing matrix and
+    every surface's source of truth. This wrapper is the ADR-0251 D1 call site:
+    it runs the rule, offers the answer to a hook, and enforces D2 by refusing
+    anything outside :func:`permitted_engines`.
+
+    The refusal is made HERE rather than in the bus on purpose. The bus knows a
+    hook returned a `str`; only this module knows which strings are engines and
+    which of them this operator selected. Pushing the check into the bus would
+    put routing policy in a generic dispatcher (ADR-0251 D2).
+
+    With ``plugin_extension_points`` off — the default — the bus returns the
+    bundled answer without consulting anything, so this is the pre-feature path
+    with one function call in front of it.
+    """
+    bundled = worker_engine_target(
+        mode=mode,
+        force_delegate=force_delegate,
+        is_big_data=is_big_data,
+        tde_available=tde_available,
+        quota_ok=quota_ok,
+    )
+    try:
+        from corvin_plugins import extension_points as _ep  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        # No plugin package in this install (stripped wheel, bridge-only
+        # deployment). The bundled answer IS the pre-feature behaviour, so this
+        # is a quiet path, not a degradation.
+        return bundled
+
+    chosen = _ep.invoke(
+        "engine.engine_selection",
+        {
+            "mode": mode,
+            "bundled": bundled,
+            "force_delegate": force_delegate,
+            "is_big_data": is_big_data,
+        },
+        default=bundled,
+        tenant_id=tenant_id,
+    )
+    if chosen == bundled:
+        return bundled
+
+    allowed = permitted_engines(mode=mode, bundled=bundled)
+    if chosen in allowed:
+        return chosen
+
+    _audit_refusal(
+        "plugin.extension_engine_refused",
+        {
+            "point": "engine.engine_selection",
+            "tenant_id": tenant_id,
+            "operator_mode": mode,
+            "bundled": bundled,
+            # An engine id is a closed enum in this module's own vocabulary, so
+            # recording the rejected value carries no user data. Recorded
+            # because "a hook tried to route to tde" is the whole content of the
+            # event; without it the record says only that something was refused.
+            "refused": chosen if chosen in WORKER_ENGINE_MODES else "<not-an-engine>",
+        },
+        tenant_id=tenant_id,
+    )
+    return bundled
+
+
+def resolve_delegation_route(
+    bundled_delegate: bool,
+    *,
+    tenant_id: str = "_default",
+    request: dict | None = None,
+) -> bool:
+    """The classifier's verdict, plus the ``delegation.route_selection_policy`` hook.
+
+    ADR-0251 D1's third call site. The bundled classifier answers a boolean —
+    "is this task shaped for the ACS fan-out?" — while the point's declared type
+    is a route string, so this function is where the two vocabularies meet:
+
+    ===================  ==========================
+    classifier says      the route it means
+    ===================  ==========================
+    ``True``             ``"acs"``
+    ``False``            ``"native"``
+    ===================  ==========================
+
+    **A hook may only ever SUPPRESS delegation.** Permitted answers are the
+    bundled route (confirm) and ``"native"`` (suppress); everything else is
+    refused and audited. So a hook can stop a turn from being delegated and can
+    never cause one to be delegated that the classifier did not select.
+
+    That is deliberately one-directional, and it follows from CLAUDE.md rather
+    than from taste: every degrade ladder must end at ``native``, and a hook that
+    could answer ``"acs"`` or ``"tde"`` on a turn the classifier declined would
+    be a plugin routing work into a delegation engine on its own authority —
+    spending the operator's quota through a decision the operator's own
+    classifier refused.
+
+    Returns a bool because that is what the classifier's callers consume; the
+    route vocabulary exists for the hook's benefit, not theirs.
+    """
+    bundled_route = "acs" if bundled_delegate else WORKER_ENGINE_DEFAULT
+    try:
+        from corvin_plugins import extension_points as _ep  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return bundled_delegate
+
+    chosen = _ep.invoke(
+        "delegation.route_selection_policy",
+        dict(request or {}, bundled=bundled_route),
+        default=bundled_route,
+        tenant_id=tenant_id,
+    )
+    if chosen == bundled_route:
+        return bundled_delegate
+    if chosen == WORKER_ENGINE_DEFAULT:
+        return False
+
+    _audit_refusal(
+        "plugin.extension_route_refused",
+        {
+            "point": "delegation.route_selection_policy",
+            "tenant_id": tenant_id,
+            "bundled": bundled_route,
+            "refused": chosen if chosen in WORKER_ENGINE_MODES else "<not-a-route>",
+        },
+        tenant_id=tenant_id,
+    )
+    return bundled_delegate
+
+
+def _audit_refusal(event_type: str, details: dict, *, tenant_id: str) -> None:
+    """Best-effort audit that must never cost the turn.
+
+    This module is imported by the bridge adapter, where a missing audit writer
+    is a normal deployment shape rather than a fault, so an ImportError here is
+    not a compliance failure — the refusal has already taken effect by the time
+    this is called, and the routing decision is unaffected either way.
+    """
+    try:
+        from audit import audit_event  # noqa: PLC0415
+
+        audit_event(event_type, details=details, tenant_id=tenant_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def delegation_engine_target(
     *,
     force_delegate: bool,

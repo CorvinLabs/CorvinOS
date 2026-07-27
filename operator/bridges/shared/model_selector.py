@@ -528,3 +528,87 @@ def _write_event(event_type: str, details: dict) -> None:
         write_event(audit_path(), event_type, details=details)
     except Exception:  # noqa: BLE001
         pass  # audit is observability; never crash the OS turn
+
+
+# ── ADR-0251 — the `engine.model_selection` call site ─────────────────────────
+
+
+def resolve_step_model(
+    bundled: str | None,
+    *,
+    engine_id: str,
+    tenant_id: str = "_default",
+    request: dict | None = None,
+) -> str | None:
+    """Offer the resolved model to an ``engine.model_selection`` hook.
+
+    Lives here rather than at each surface's own resolution block for the same
+    reason ``delegation_policy`` owns the engine rule: the console and the bridge
+    adapter each compute the bundled answer their own way, but the decision about
+    what a PLUGIN may do to that answer must be identical on both, or the first
+    divergence is silent.
+
+    **The bound a hook must meet (ADR-0251 D2).** The operator's setting bounds
+    the answer; for models that setting is the engine registry. A hook may name
+    any model the operator has actually installed for ``engine_id`` and nothing
+    else — checked with :func:`engine_models.model_is_registered`, the same
+    fail-closed rule the bundled tier resolution already applies to itself.
+
+    Note what this deliberately does NOT mirror from the engine point. There is
+    no ``native``-style floor to de-escalate to and no ordering among models, so
+    "may not escalate" has no meaning here; registry membership is the whole
+    bound. In particular a hook MAY name a model when ``bundled`` is ``None``
+    (the CLI-subscription default): the core expressed no preference, and a
+    registered model is inside the operator's own configuration either way.
+
+    Returns ``bundled`` unchanged when the flag is off, when no hook is
+    registered, when the hook abstains, or when its answer is refused.
+    """
+    try:
+        from corvin_plugins import extension_points as _ep  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        # No plugin package in this install. The bundled answer IS the
+        # pre-feature behaviour, so this is a quiet path, not a degradation.
+        return bundled
+
+    chosen = _ep.invoke(
+        "engine.model_selection",
+        dict(request or {}, bundled=bundled, engine_id=engine_id),
+        default=bundled,
+        tenant_id=tenant_id,
+    )
+    if chosen == bundled:
+        return bundled
+
+    # The admissibility check is fail-closed HERE, not only inside
+    # `model_is_registered`. That function already swallows its own errors, but
+    # relying on that would put the guarantee one import away from this decision:
+    # if it is ever refactored to raise, or the import itself fails, the choice
+    # must still be "keep the bundled answer", never "let a plugin's model
+    # through because the check broke". Both call sites also wrap this — and one
+    # of them (the console) turns an escaping exception into `model = None`,
+    # which would silently DOWNGRADE the turn rather than preserve it.
+    try:
+        try:
+            from engine_models import model_is_registered  # noqa: PLC0415
+        except ImportError:  # pragma: no cover - layout fallback
+            from .engine_models import model_is_registered  # type: ignore
+        admissible = model_is_registered(chosen, engine_id)
+    except Exception:  # noqa: BLE001
+        admissible = False
+
+    if admissible:
+        return chosen
+
+    _write_event("plugin.extension_model_refused", {
+        "point": "engine.model_selection",
+        "tenant_id": tenant_id,
+        "engine_id": engine_id,
+        # Model ids are operator-configured identifiers, not user content, and
+        # the refused one is the entire content of this event. But it came from
+        # a plugin and could be anything, so it is length-capped before it
+        # reaches an append-only chain.
+        "refused": str(chosen)[:64],
+        "reason": "not_in_engine_registry",
+    })
+    return bundled

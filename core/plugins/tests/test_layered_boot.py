@@ -323,7 +323,7 @@ class TestBootstrapAllWiring(_BootTestCase):
 def _git_grep(pattern: str, *, skip_mechanism: bool = False) -> list[str]:
     """``git grep -nE`` over ``core/`` and ``operator/``, test files removed.
 
-    Same shape as ``test_extension_points.test_no_call_site_is_wired_yet``: a
+    Same shape as ``test_extension_point_call_sites``: a
     claim about the whole repo is checked against the whole repo, not against
     the one module the author happened to remember.
     """
