@@ -32,6 +32,21 @@ import { fileURLToPath } from "url";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
+// Per-test budget for this whole file. The default 30 s is not enough: see below.
+test.describe.configure({ timeout: 120_000 });
+
+// NOTE on the 90 s request timeouts below (was 30 s).
+// GET /v1/console/aco/nerve/scan measured 6.7-6.9 s on an IDLE machine — it probes
+// every registered nerve fiber (installed packages, engines, disk, bridges), so that
+// cost is inherent to what the endpoint does, not a regression. Under Playwright's
+// four workers, with other specs driving the same console, it exceeded 30 s and both
+// scan-based tests failed with "apiRequestContext.get: Timeout 30000ms exceeded" —
+// reported as a product failure when the product was merely busy. Measured
+// 2026-07-27. Profiled per fiber: aco.integrity is 4806 ms of the 6561 ms total (73%)
+// because it CRYPTOGRAPHICALLY VERIFIES every tenant's full audit chain on every scan —
+// four tenants x ~120 000 records here. That is inherent to what an integrity fiber
+// does, not a defect, but it does mean this endpoint's cost grows with the chain, and
+// four Playwright workers calling it at once queue behind each other.
 const GATEWAY = "http://localhost:8765";
 const API_BASE = `${GATEWAY}/v1/console`;
 
@@ -62,7 +77,7 @@ async function getCsrf(page: Page): Promise<string> {
 async function nerveScan(page: Page): Promise<any> {
   // Nerve scan runs 6 fibers synchronously; under parallel test load the
   // gateway thread-pool can take up to 30 s — use an explicit timeout.
-  const resp = await page.request.get(`${API_BASE}/aco/nerve/scan`, { timeout: 30_000 });
+  const resp = await page.request.get(`${API_BASE}/aco/nerve/scan`, { timeout: 90_000 });
   expect(resp.status(), `nerve/scan failed: ${resp.status()}`).toBe(200);
   return resp.json();
 }
@@ -343,7 +358,7 @@ test.describe("ADR-0177 — Nervous System E2E", () => {
       if (m.type() === "error") errors.push(m.text());
     });
     try {
-      await page.goto(`${GATEWAY}/console/app`, { waitUntil: "load", timeout: 30_000 });
+      await page.goto(`${GATEWAY}/console/app`, { waitUntil: "load", timeout: 90_000 });
       await page.waitForTimeout(2000);
       await screenshot(page, "console-overview");
 
@@ -433,7 +448,7 @@ test.describe("ADR-0177 — Engine Detection via NerveFiber", () => {
 test.describe("ADR-0177 — Fresh-Install Scenario", () => {
   test("fresh: nerve scan works without any chat sessions", async ({ request }) => {
     // Use the global storageState set in playwright.config.ts
-    const resp = await request.get(`${API_BASE}/aco/nerve/scan`, { timeout: 30_000 });
+    const resp = await request.get(`${API_BASE}/aco/nerve/scan`, { timeout: 90_000 });
     expect(resp.status()).toBe(200);
     const body = await resp.json();
     expect(Array.isArray(body.fibers)).toBe(true);
@@ -441,7 +456,7 @@ test.describe("ADR-0177 — Fresh-Install Scenario", () => {
   });
 
   test("fresh: install.deps fiber passes on a clean install", async ({ request }) => {
-    const resp = await request.get(`${API_BASE}/aco/nerve/scan`, { timeout: 30_000 });
+    const resp = await request.get(`${API_BASE}/aco/nerve/scan`, { timeout: 90_000 });
     expect(resp.status()).toBe(200);
     const body = await resp.json();
     const installSignals = (body.signals as any[]).filter(
