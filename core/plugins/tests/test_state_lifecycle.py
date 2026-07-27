@@ -38,6 +38,19 @@ from corvin_plugins.state import (  # noqa: E402
     registry_path,
 )
 
+#: The module name a plugin ``class_path`` must use to reach the fakes below.
+#:
+#: NOT the literal "test_state_lifecycle". pytest's default (prepend) import mode
+#: registers this file under its bare name, but ``--import-mode=importlib`` —
+#: which .github/workflows/coverage.yml uses — registers it under a dotted,
+#: rootdir-relative name. A hard-coded bare name then raises ModuleNotFoundError
+#: inside the loader, the plugin is correctly skipped, and every assertion about
+#: a LOADED plugin fails. That made this suite pass one way and fail the other:
+#: 1040 green locally, 15 red under the mode CI actually runs — a harness
+#: artefact that looks exactly like a product defect. ``__name__`` is right under
+#: both modes.
+_MOD = __name__
+
 _SCHEMA = {
     "type": "object",
     "properties": {"channel": {"type": "string", "default": "ops"}},
@@ -578,7 +591,7 @@ class TestHotReload(_Base):
                 plugin_type="notification_backend",
                 origin=PluginOrigin.VETTED,
                 pii_risk=PIIRisk.NONE,
-                class_path=f"test_state_lifecycle:{cls.__name__}",
+                class_path=f"{_MOD}:{cls.__name__}",
             ),
             installed_by="test",
         )

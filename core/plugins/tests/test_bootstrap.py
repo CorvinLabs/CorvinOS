@@ -23,6 +23,19 @@ _PKG = _HERE.parents[1]
 _COMPLIANCE = _REPO / "core" / "compliance"
 _FORGE = _REPO / "operator" / "forge"
 _SHARED = _REPO / "operator" / "bridges" / "shared"
+
+#: The module name a plugin ``class_path`` must use to reach the fakes below.
+#:
+#: NOT the literal "test_bootstrap". pytest's default (prepend) import mode registers this
+#: file under its bare name, but --import-mode=importlib — which
+#: .github/workflows/coverage.yml uses — registers it under a dotted, rootdir-
+#: relative name. A hard-coded bare name then raises ModuleNotFoundError inside
+#: the loader, the plugin is correctly skipped, and every assertion about a
+#: LOADED plugin fails. That made this suite pass one way and fail the other:
+#: 1040 green locally, 15 red in CI, for a harness reason that looks exactly like
+#: a product defect. __name__ is right under both modes.
+_MOD = __name__
+
 for _p in (str(_PKG), str(_FORGE), str(_SHARED), str(_REPO)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -245,7 +258,7 @@ class TestBootstrapTenant(unittest.TestCase):
             plugin_type="notification_backend",
             origin=PluginOrigin.VETTED,
             pii_risk=PIIRisk.NONE,
-            class_path="test_bootstrap:_Recorder",
+            class_path=f"{_MOD}:_Recorder",
             settings={},
         )
         self.lc.install(record, installed_by="test")
@@ -436,7 +449,7 @@ class TestDeclaredPlugins(unittest.TestCase):
             "  plugins:\n"
             "    installed:\n"
             "      - id: test.declared-notify\n"
-            "        class_path: test_bootstrap:_Declared\n"
+            f"        class_path: {_MOD}:_Declared\n"
             "        config:\n"
             "          channel: ops\n"
         )
@@ -450,7 +463,7 @@ class TestDeclaredPlugins(unittest.TestCase):
             "  plugins:\n"
             "    installed:\n"
             "      - id: test.declared-notify\n"
-            "        class_path: test_bootstrap:_Declared\n"
+            f"        class_path: {_MOD}:_Declared\n"
             "        config:\n"
             "          channel: alerts\n"
             "          depth: 3\n"
@@ -466,7 +479,7 @@ class TestDeclaredPlugins(unittest.TestCase):
             "      - id: test.missing\n"
             "        class_path: no_such_module:Nope\n"
             "      - id: test.declared-notify\n"
-            "        class_path: test_bootstrap:_Declared\n"
+            f"        class_path: {_MOD}:_Declared\n"
         )
         loaded = bootstrap.bootstrap_declared(tenant_id="_default", corvin_home=self.home)
         self.assertEqual(loaded, ["test.declared-notify"])
@@ -485,7 +498,7 @@ class TestDeclaredPlugins(unittest.TestCase):
             "  plugins:\n"
             "    installed:\n"
             "      - id: test.declared-notify\n"
-            "        class_path: test_bootstrap:_Declared\n"
+            f"        class_path: {_MOD}:_Declared\n"
         )
         # Same plugin_id also in the runtime registry, with a different config.
         lc = PluginLifecycle(
@@ -498,7 +511,7 @@ class TestDeclaredPlugins(unittest.TestCase):
                 display_name="Registry Copy",
                 plugin_type="notification_backend",
                 origin=PluginOrigin.VETTED,
-                class_path="test_bootstrap:_Declared",
+                class_path=f"{_MOD}:_Declared",
                 settings={"channel": "from-registry"},
             ),
             installed_by="test",
@@ -528,7 +541,7 @@ class TestDeclaredPlugins(unittest.TestCase):
                 display_name="Registry Only",
                 plugin_type="notification_backend",
                 origin=PluginOrigin.VETTED,
-                class_path="test_bootstrap:_Declared",
+                class_path=f"{_MOD}:_Declared",
             ),
             installed_by="test",
         )
