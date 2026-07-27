@@ -32,7 +32,14 @@ providers:
   anthropic:
     label: "Anthropic (Claude)"
     base_url: "https://api.anthropic.com"
-    model_source: "static"
+    # LIVE, not static. `static` means "the curated list below is the whole
+    # truth", which freezes the model picker until the next CorvinOS release —
+    # the day Anthropic ships a new model, every install shows a list that does
+    # not contain it. `anthropic` makes engine_providers.fetch_models walk
+    # GET /v1/models and cache the result; engine_models merges it into the
+    # curated lists at read time. An install with no ANTHROPIC_API_KEY (a Claude
+    # Code subscription login has none) simply keeps the curated list.
+    model_source: "anthropic"
     credential_env: "ANTHROPIC_API_KEY"
     kind: "cloud"
   openai:
@@ -66,6 +73,14 @@ engines:
     supports_os_turn: true
     supports_worker_turn: true
     supports_task_type_steering: false
+    # Models fetched from this provider are ADDED to the curated lists below.
+    # `prefix` is how THIS engine addresses a model id: Claude Code takes the
+    # bare id, OpenCode wants "<provider>/<id>". A role whose curated list is
+    # empty stays empty — merging into it would invent a picker the engine
+    # cannot honour.
+    live_models:
+      provider: "anthropic"
+      prefix: ""
     supported_providers:
       - provider: "anthropic"
         native: true
@@ -87,8 +102,8 @@ engines:
         label: "Haiku 4.5 — fast, economical"
       - id: "claude-sonnet-5"
         label: "Sonnet 5 — balanced"
-      - id: "claude-opus-4-8"
-        label: "Opus 4.8 — max capability"
+      - id: "claude-opus-5"
+        label: "Opus 5 — max capability"
       - id: "claude-fable-5"
         label: "Fable 5 — creative reasoning"
     worker_models:
@@ -96,8 +111,8 @@ engines:
         label: "Haiku 4.5 — fast, economical"
       - id: "claude-sonnet-5"
         label: "Sonnet 5 — balanced"
-      - id: "claude-opus-4-8"
-        label: "Opus 4.8 — max capability (default)"
+      - id: "claude-opus-5"
+        label: "Opus 5 — max capability (default)"
         default: true
       - id: "claude-fable-5"
         label: "Fable 5 — creative reasoning"
@@ -107,6 +122,9 @@ engines:
     supports_os_turn: true
     supports_worker_turn: true
     supports_task_type_steering: false
+    live_models:
+      provider: "anthropic"
+      prefix: "anthropic/"
     supported_providers:
       - provider: "anthropic"
         native: true
@@ -129,8 +147,8 @@ engines:
         default: true
       - id: "anthropic/claude-sonnet-5"
         label: "Claude Sonnet 5 (Anthropic)"
-      - id: "anthropic/claude-opus-4-8"
-        label: "Claude Opus 4.8 (Anthropic)"
+      - id: "anthropic/claude-opus-5"
+        label: "Claude Opus 5 (Anthropic)"
       - id: "ollama/qwen3:8b"
         label: "Qwen3 8B (local Ollama)"
       - id: "ollama/qwen3:14b"

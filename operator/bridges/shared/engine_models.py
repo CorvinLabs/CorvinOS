@@ -13,9 +13,9 @@ MUST NOT import anthropic (CI AST lint enforces).
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +67,18 @@ class EngineProviderSupport:
 
 
 @dataclass
+class LiveModelSource:
+    """Where an engine's live model list comes from, and how it addresses ids.
+
+    ``prefix`` is per ENGINE, not per provider: OpenCode addresses an Anthropic
+    model as ``anthropic/claude-…`` while Claude Code takes the bare id, and both
+    read the same cached catalogue.
+    """
+    provider: str
+    prefix: str = ""
+
+
+@dataclass
 class EngineModelSpec:
     engine_id: str
     label: str
@@ -76,6 +88,10 @@ class EngineModelSpec:
     os_models: list[EngineModelEntry] = field(default_factory=list)
     worker_models: list[EngineModelEntry] = field(default_factory=list)
     supported_providers: list[EngineProviderSupport] = field(default_factory=list)
+    #: Set when this engine's picker is topped up from the live catalogue.
+    #: ``None`` = curated list only (Hermes, whose models are whatever Ollama has
+    #: pulled locally, has no cloud catalogue to merge).
+    live_models: Optional[LiveModelSource] = None
 
     def default_os_model(self) -> str | None:
         for m in self.os_models:
@@ -164,6 +180,13 @@ def _parse_raw(raw: dict[str, Any]) -> "tuple[dict[str, ProviderSpec], dict[str,
     for engine_id, entry in (raw.get("engines") or {}).items():
         if not isinstance(entry, dict):
             continue
+        live_raw = entry.get("live_models")
+        live = None
+        if isinstance(live_raw, dict) and live_raw.get("provider"):
+            live = LiveModelSource(
+                provider=str(live_raw["provider"]),
+                prefix=str(live_raw.get("prefix") or ""),
+            )
         result[engine_id] = EngineModelSpec(
             engine_id=engine_id,
             label=str(entry.get("label") or engine_id),
@@ -173,14 +196,86 @@ def _parse_raw(raw: dict[str, Any]) -> "tuple[dict[str, ProviderSpec], dict[str,
             os_models=_parse_models(entry.get("os_models")),
             worker_models=_parse_models(entry.get("worker_models")),
             supported_providers=_parse_providers(entry.get("supported_providers")),
+            live_models=live,
         )
     return providers, result
 
 
+def _merge_live_models(
+    curated: dict[str, EngineModelSpec]
+) -> dict[str, EngineModelSpec]:
+    """Top up each engine's pickers from the cached live catalogue.
+
+    ADDITIVE ONLY, and the three rules that word implies are each load-bearing:
+
+    * **The curated entry wins.** A model already in the curated list is not
+      re-added and does not lose its ``default`` flag. The curated list is the
+      only list an install without an API key ever sees, so a merge that
+      reordered it or moved the default would degrade the common case in order
+      to serve the rare one.
+    * **An empty role stays empty.** ``os_models: []`` means "this engine offers
+      no model choice for that role" (Codex CLI). Filling it from the catalogue
+      would invent a picker the engine cannot honour.
+    * **The prefix is the engine's, not the provider's.** Same cached ids, two
+      spellings: ``claude-…`` for Claude Code, ``anthropic/claude-…`` for
+      OpenCode.
+
+    Returns NEW spec objects — the curated cache is never mutated, so a catalogue
+    that later goes empty cannot leave a merged model behind.
+    """
+    try:
+        import model_catalog  # type: ignore  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — no catalogue module ⇒ curated only
+        return curated
+
+    merged: dict[str, EngineModelSpec] = {}
+    for engine_id, spec in curated.items():
+        live = spec.live_models
+        if live is None:
+            merged[engine_id] = spec
+            continue
+        try:
+            entries = model_catalog.catalog_models(live.provider) or []
+        except Exception:  # noqa: BLE001 — a broken cache must not break the picker
+            entries = []
+        if not entries:
+            merged[engine_id] = spec
+            continue
+
+        def _topped_up(curated_list: list[EngineModelEntry]) -> list[EngineModelEntry]:
+            if not curated_list:
+                return curated_list  # empty role stays empty
+            known = {m.id for m in curated_list}
+            extra = []
+            for e in entries:
+                mid = f"{live.prefix}{e.get('id', '')}"
+                if not e.get("id") or mid in known:
+                    continue
+                known.add(mid)
+                extra.append(EngineModelEntry(
+                    id=mid, label=str(e.get("label") or mid), default=False,
+                ))
+            return curated_list + extra
+
+        merged[engine_id] = replace(
+            spec,
+            os_models=_topped_up(spec.os_models),
+            worker_models=_topped_up(spec.worker_models),
+        )
+    return merged
+
+
 def load_registry(force_reload: bool = False) -> dict[str, EngineModelSpec]:
-    """Load the engine model registry from YAML. Cached after first load."""
+    """The engine model registry: curated YAML, topped up from the live catalogue.
+
+    The YAML parse is cached; the MERGE is not, and deliberately so. The console
+    refreshes the catalogue in a background thread, and a cached merge would mean
+    a newly-shipped model only appears after a restart — which is the entire
+    failure this path exists to prevent. Merging costs a dict walk over a handful
+    of entries per call.
+    """
     _load_raw(force_reload)
-    return _registry_cache or {}
+    return _merge_live_models(_registry_cache or {})
 
 
 def load_providers(force_reload: bool = False) -> dict[str, ProviderSpec]:
@@ -204,6 +299,11 @@ def registry_as_dict(force_reload: bool = False) -> dict[str, Any]:
             "supports_task_type_steering": spec.supports_task_type_steering,
             "os_models": [{"id": m.id, "label": m.label, "default": m.default} for m in spec.os_models],
             "worker_models": [{"id": m.id, "label": m.label, "default": m.default} for m in spec.worker_models],
+            "live_models": (
+                None if spec.live_models is None
+                else {"provider": spec.live_models.provider,
+                      "prefix": spec.live_models.prefix}
+            ),
             "supported_providers": [
                 {"provider": p.provider, "native": p.native, "note": p.note}
                 for p in spec.supported_providers
