@@ -135,23 +135,48 @@ software did not enforce) to a description of an enforced refusal.
 
 ---
 
-### Stage 2 — `user_backend` reaches the auth path (1 w)
+### Stage 2 — `user_backend` reaches the auth path — **BLOCKED, premise was wrong**
 
-**Closes:** G2. **Flag:** `plugin_extension_points` is wrong here; this is a provider
-registry, gated by `plugin_runtime_lifecycle` like the others.
+**Status 2026-07-27: not implementable as written, and building it as written would
+be harmful.** The stage assumed CorvinOS has an authentication path that takes
+credentials. It does not:
 
-- Call site in the console session-establishing path, after the existing local-auth
-  resolution and before guest admission.
-- The ADR-0233 invariant is enforced at the call site, not only inside the provider:
-  exception, timeout, or `None` → **deny**. Auth *denials* still must not open the
-  circuit breaker (ADR-0233 § round 1) — only infrastructure failures do.
+| Candidate | Reality |
+|---|---|
+| `GET /v1/console/auth/local-login` | The only live login. **Localhost-only and credential-less** — the TCP peer *is* the authorisation (`_is_localhost` deliberately ignores `X-Forwarded-For`). There are no credentials to hand a backend. |
+| `POST /v1/console/auth/login` (`gateway/console_api.py`) | Hard-coded `test@example.com` / `password123`, unsalted SHA-256, in-process `_SESSIONS` dict — and **imported by nothing**. Dead demo code, not a path. |
+| OIDC / OAuth | `auth_routes.py:16` and `gateway/auth.py:7`: *"wired in the cloud deployment phase"*. Not built. |
 
-**Tests:** a backend that raises admits nobody; one that times out admits nobody; one
-that returns `None` admits nobody; three wrong passwords do not open the breaker; with
-no backend installed, login behaves exactly as today.
+**Wiring it anyway would be worse than the dead state.** A `user_backend` consulted
+from `local-login` would be handed empty credentials; a correctly-written backend
+rejects those; the rejection means deny; and deny on the only login path locks the
+local operator out of their own install. The dead mechanism admits nobody wrongly —
+that version admits nobody at all.
 
-**Why this is the highest-priority stage after Stage 1:** it is the only gap in this
-plan where a compliance invariant is documented as held and is not held.
+Note also what the invariant presupposes. *"failure/timeout/rejection = deny, never
+guest"* needs a path on which a guest could be admitted. On a localhost-only login
+there is no guest, so on today's surfaces the invariant is not merely unenforced —
+it has no subject.
+
+**What is actually true**, and what ADR-0245's `dead_reason` should say: `user_backend`
+is unconsumed because **its consumer does not exist**, not because someone forgot to
+call it. That is a different finding from the other five dead types and wants a
+different fix.
+
+**Options, none of them this stage** — a maintainer decision:
+
+1. Build the credential login (OIDC or local password) that `user_backend` was
+   designed for, and wire the backend into it. This is the honest consumer and it is
+   a feature project, not an activation step.
+2. Re-target the provider at `roles.effective_role()` (L18-21), which *is* a live
+   identity-resolution point with a real deny (`"none"`). This changes what
+   `UserBackend` means — from "authenticate a credential" to "resolve a principal" —
+   and needs an ADR, because `authenticate()`/`get_user()` would no longer describe
+   what the registry does.
+3. Leave it dead and say so precisely, correcting the `dead_reason` from "nothing
+   calls `get_active()`" to "no credential auth path exists to call it".
+
+Option 3 is free and should happen regardless of which of 1 or 2 is chosen.
 
 ---
 
@@ -264,9 +289,9 @@ staged rollout. Recording that is better than pretending it has a flip date.
 
 | Stage | Est. | Closes | Flag | Blocking |
 |---|---|---|---|---|
-| 0 Call-site gate | 0.5 d | — | none | precedes everything |
-| 1 Tenant-scoped providers | 1.5 w | G6 | none (refusal is a compliance gate) | **must precede Stage 2** |
-| 2 `user_backend` call site | 1 w | G2 | `plugin_runtime_lifecycle` | after Stage 1 |
+| 0 Call-site gate | 0.5 d | — | none | ✅ done (`test_extension_point_call_sites.py`) |
+| 1 Tenant-scoped providers | 1.5 w | G6 | none (refusal is a compliance gate) | ✅ done (`tenant_scope.py`, 30 tests) |
+| 2 `user_backend` call site | — | G2 | — | ⛔ **blocked — no credential auth path exists**, see the stage |
 | 3 Extension-point call sites | 1.5 w | G1 | `plugin_extension_points` | — |
 | 4 Populate three handles | 1 w | G3, part of G4 | none | — |
 | 5 Bridge supervisors | 1 w | G5 | `bridge_supervisor_plugins` | — |
