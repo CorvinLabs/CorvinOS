@@ -191,9 +191,21 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         template="compute_engine_plugin.py",
         consumed_by=None,
         dead_reason=(
-            "bootstrap_all(**registries) forwards compute_registry, but the sole "
-            "production call site (gateway app.py) passes none — so the handle is "
-            "always None and the template's guard skips registration."
+            "The registry has no reader, and it is in the wrong process anyway. "
+            "corvin_compute.engine_registry is a standalone object: WorkerServer "
+            "dispatches only through its own self._extra_engines, which is "
+            "populated at construction or by register_engine() — and "
+            "register_engine() has no production caller at all. "
+            "corvin_compute/cli.py:237 states this in its own words. Worse, "
+            "WorkerServer is constructed only in that CLI, i.e. the "
+            "`corvin-compute worker` SUBPROCESS, while a plugin loads in the "
+            "gateway; the console reaches the worker over a socket via "
+            "WorkerClient. So passing compute_registry to bootstrap_all would "
+            "let a plugin register into an object that nothing reads, in a "
+            "process that does not run engines. Closing this needs a "
+            "cross-process registration surface — the ADR-0245 design question, "
+            "not a call-site change. Verified 2026-07-27 while attempting "
+            "PLUGIN_SYSTEM_ACTIVATION_PLAN Stage 4."
         ),
         invariant="Must honour gate dispatch and abort promptly (ADR-0029).",
     ),

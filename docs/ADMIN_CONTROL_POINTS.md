@@ -55,7 +55,7 @@ names `boot_layer_of()` / `plugins_by_boot_layer()` / `by_boot_layer`.
 |---|---|---|---|
 | `compliance` | GDPR / EU AI Act mechanisms — audit writer, consent gate, path gate, house rules, flow guard | **Never.** Structural, not configurable | **0** |
 | `core` | Bundled reference implementation of an extension point | Yes; also *replaceable* by a plugin declaring `replaces:` | **0** — which makes `replace()` unreachable |
-| `bundled` | Ships with CorvinOS, opt-out per tenant (bridges, UI) | Yes | **0 declared** — the bridge supervisor classes exist but nothing declares them |
+| `bundled` | Ships with CorvinOS, opt-out per tenant (bridges, UI) | Yes | **7 when `bridge_supervisor_plugins` is on** — the boot path declares the bundled bridge supervisors (2026-07-27); **0** on a default install, since the flag ships off |
 | `installed` | Operator-installed third party | Yes | whatever the operator installed |
 
 The "instances today" column is why the compliance rows below describe a *mechanism*

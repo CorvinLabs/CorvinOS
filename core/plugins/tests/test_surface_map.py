@@ -324,3 +324,70 @@ def test_buildable_types_are_exactly_those_with_templates():
     assert set(buildable_types()) == {
         s.plugin_type for s in SURFACES if s.template
     }
+
+
+# ── The compute_engine handle: do not "fix" it by passing it ─────────────────
+
+
+def test_compute_registry_still_has_no_reader():
+    """Fails the day `corvin_compute.engine_registry` gains a dispatcher.
+
+    Stage 4 of the activation plan was written as "pass `compute_registry` in
+    `app.py`" — a one-line change. It is not one: `WorkerServer` dispatches only
+    through its own `_extra_engines`, `register_engine()` has no production
+    caller, and `WorkerServer` is constructed only in the `corvin-compute worker`
+    subprocess while plugins load in the gateway.
+
+    Passing the handle anyway would let a plugin register into an object nothing
+    reads, in a process that runs no engines — and it would look like progress,
+    because the plugin would load, register and report healthy. This test exists
+    so that the day someone gives the registry a real reader, the `dead_reason`
+    above is corrected in the same commit instead of staying wrong in the other
+    direction.
+    """
+    # `get_by_job_id` is the discriminating name: it exists only on the compute
+    # registry. A first draft also matched `get_registry().get(`, which is a
+    # FALSE POSITIVE waiting to happen — `corvin_plugins.health` has its own
+    # `get_registry()` for the PLUGIN registry, and the pattern flagged it
+    # immediately. Two registries, one function name, and the grep cannot tell
+    # them apart; so match on the API only one of them has.
+    hits = _grep_repo(
+        r"get_by_job_id\(|from corvin_compute\.engine_registry import",
+        exclude=(
+            "core/compute/corvin_compute/engine_registry.py",
+            "core/compute/tests/",
+            "core/plugins/tests/",
+            "core/plugins/templates/",
+        ),
+    )
+    assert not hits, (
+        "something now reads the compute engine registry — correct "
+        "surface_map's compute_engine dead_reason in this commit, and re-check "
+        "whether passing the handle is finally the right move:\n  "
+        + "\n  ".join(hits[:5])
+    )
+
+
+def test_the_worker_registration_surface_is_still_unreachable_from_a_plugin():
+    """`WorkerServer.register_engine()` exists and nothing production calls it.
+
+    The second half of the same finding, pinned separately because the two can
+    be fixed independently: a reader for the standalone registry, or a
+    cross-process path to the worker's own dict. Either one changes what the
+    `compute_engine` row should say.
+    """
+    hits = _grep_repo(
+        r"\.register_engine\(",
+        exclude=(
+            "core/compute/corvin_compute/worker.py",
+            "core/compute/tests/",
+            "operator/bridges/shared/test_",
+            "operator/bridges/shared/adapter.py",  # _register_engine, different API
+            "core/plugins/tests/",
+        ),
+    )
+    assert not hits, (
+        "WorkerServer.register_engine() has a caller now — a compute_engine "
+        "plugin may finally have a route to the worker. Re-check the "
+        "compute_engine row:\n  " + "\n  ".join(hits[:5])
+    )

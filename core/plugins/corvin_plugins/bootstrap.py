@@ -443,6 +443,22 @@ def bootstrap_declared(
     plugins_cfg = (config.get("spec") or {}).get("plugins") or {}
     declared: list[dict] = list(plugins_cfg.get("installed") or [])
     auto_ep = bool(plugins_cfg.get("auto_discover_entry_points", False))
+
+    bundled = _bundled_bridge_declarations(tenant_id, declared)
+    if bundled:
+        declared = declared + bundled
+        # `discover_and_load` re-reads the config rather than taking `declared`,
+        # so the injection has to land there too. Copied, never mutated in
+        # place: `tenant_config` may be the caller's own dict, and a bootstrap
+        # that silently grew the caller's config would be a side effect nobody
+        # asked for.
+        config = dict(config)
+        spec = dict(config.get("spec") or {})
+        plugins_cfg = dict(spec.get("plugins") or {})
+        plugins_cfg["installed"] = declared
+        spec["plugins"] = plugins_cfg
+        config["spec"] = spec
+
     if not declared and not auto_ep:
         return []
 
@@ -511,6 +527,61 @@ def bootstrap_declared(
             "loaded %d declared plugin(s) for tenant %r: %s", len(loaded), tenant_id, loaded
         )
     return loaded
+
+
+def _bundled_bridge_declarations(
+    tenant_id: str, declared: list[dict]
+) -> list[dict]:
+    """The bundled bridge supervisors, as declarations (ADR-0238, Stage 5).
+
+    ``registry_entries.declaration_entries()` has existed since the supervisors
+    were written and was imported by nothing outside its own package: the
+    classes, the start gate and the entry generator were all complete, and no
+    boot path ever reached them. This is that path.
+
+    Why the boot injects them rather than the operator hand-writing seven class
+    paths: ``boot_layer=bundled`` means "ships with CorvinOS, opt-out per
+    tenant" (ADR-0243). Requiring a dotted class path in ``tenant.corvin.yaml``
+    for something that ships in the wheel is the ``installed`` contract, not the
+    ``bundled`` one — and it is a path that goes stale on the first rename.
+
+    Three properties this deliberately preserves:
+
+    * **The operator's own entry always wins.** A channel already named in
+      ``spec.plugins.installed`` is skipped here, so
+      ``{id: discord-bridge, config: {enabled: false}}`` parks that bridge and
+      an explicit class path overrides the bundled one.
+    * **Off is quiet and total.** With ``bridge_supervisor_plugins`` off — the
+      default — nothing is injected and nothing is instantiated. The supervisor
+      re-checks the same flag in its own start gate, which is the load-bearing
+      check; this one exists so a default install does not construct seven
+      objects to have each of them decide to do nothing.
+    * **Declaring is not starting.** These entries make the supervisors
+      *loadable*. Whether a daemon actually starts is the six-condition gate in
+      ``supervisor.py`` — credentials present, no duplicate already running,
+      runtime provisioned, Node available. ADR-0238's fail-closed defaults are
+      untouched by this function.
+    """
+    try:
+        from .bridges.supervisor import _flag_enabled  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        # No supervisor module in this install (stripped wheel). Bundled
+        # bridges are simply absent, which is the pre-feature behaviour.
+        return []
+    if not _flag_enabled(tenant_id):
+        return []
+    try:
+        from .bridges.registry_entries import declaration_entries  # noqa: PLC0415
+
+        already = {e.get("id") for e in declared if isinstance(e, dict)}
+        return [e for e in declaration_entries() if e.get("id") not in already]
+    except Exception as exc:  # noqa: BLE001 — a bad bundled list must not stop boot
+        log.error(
+            "bundled bridge declarations unavailable for %r (%s) — bridges keep "
+            "being managed as before",
+            tenant_id, type(exc).__name__,
+        )
+        return []
 
 
 def bootstrap_tenant(

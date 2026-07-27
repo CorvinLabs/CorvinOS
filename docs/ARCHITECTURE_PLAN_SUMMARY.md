@@ -240,7 +240,7 @@ whether anything uses it.**
 | 2 | Boot order + scoping (global before tenant, tenant may not claim privileged boot layers) | ✅ done (c455516) | `bootstrap_global()` returns `[]` on every install; the tenant-downgrade guard *is* live |
 | 3 | Extension points (document the 8 existing provider registries, add 3–5 new) | ✅ **all 4 wired** | ADR-0251, 2026-07-27 |
 | 4 | Admin control plane (REST only) | ✅ done | six routes live behind `admin_control_plane`; gRPC deferred |
-| 5 | Bridge supervisor plugins (one Python supervisor per Node daemon) | ✅ **classes only** | seven classes exist; **nothing declares them**, so none ever loads |
+| 5 | Bridge supervisor plugins (one Python supervisor per Node daemon) | ✅ **wired** | the boot path declares the bundled seven when `bridge_supervisor_plugins` is on (2026-07-27) |
 | 6 | Headless API-only boot path | ◑ **partial** | browser surfaces suppressed; **no reordered boot sequence**, **no preset mechanism** |
 | 7 | Directory move with import shims, docs, v0.11.0 release | ⬜ open | `core/core_plugins/` does not exist |
 
@@ -415,8 +415,10 @@ the mechanisms that shipped and anything using them**:
 1. ~~**Wire the four extension points** into their call sites.~~ Done
    2026-07-27 (ADR-0251). `test_extension_point_call_sites.py` now guards the
    reverse direction — a point that LOSES its caller fails the suite.
-2. **Declare the bridge supervisors** somewhere shipped, or add the Console action that
-   writes the block. Until then Phase 5 is classes-only.
+2. ~~**Declare the bridge supervisors** somewhere shipped.~~ Done 2026-07-27:
+   `bootstrap._bundled_bridge_declarations()` injects them from
+   `bridges/registry_entries.py`. Declaring is not starting — ADR-0238's
+   six-condition start gate is untouched.
 3. **Finish or retire the Phase 6 boot reorder** and the preset idea — one or the other,
    not a standing promise.
 4. **First instance on a privileged boot layer**, which is what turns Phases 1–2 from a

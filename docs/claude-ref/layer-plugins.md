@@ -938,17 +938,36 @@ L36 erasure orchestrator.
 The **eight provider registries** in `providers/` are a separate, older mechanism and are
 NOT reached through the bus — those are live. See `docs/EXTENSIBLE_CORE_PLUGINS.md` §3.
 
-### Bridge supervisors — seven classes, nothing declares them (ADR-0238 Phase 5)
+### Bridge supervisors — the boot path declares the bundled seven (ADR-0238 Phase 5)
 
 `bridges/supervisor.py` ships `BridgeSupervisorPlugin` plus seven subclasses
 (`DiscordBridgePlugin` … `TeamsBridgePlugin`), each with
 `plugin_id = f"{channel}-bridge"` and `plugin_type = "bridge_channel"`, landing on
-`boot_layer=bundled`. Starting a daemon needs **two** switches: the
-`bridge_supervisor_plugins` flag (ships off) **and** an entry in
-`spec.plugins.installed`. Nothing in the shipped tree writes the second one, so no
-supervisor loads on any install. Process management is delegated to
+`boot_layer=bundled`. Process management is delegated to
 `operator/bridges/bridge_manager.py` — `channel_daemon_running()`,
 `adapter_running_pid()`, `start_channel_detached()` — never reimplemented.
+
+**Since 2026-07-27** `bootstrap._bundled_bridge_declarations()` injects the seven
+declarations from `bridges/registry_entries.py` when `bridge_supervisor_plugins`
+is on. Before that the flag was one of two switches and nothing in the shipped
+tree wrote the other, so no supervisor loaded on any install — the generator, the
+classes and the start gate were all complete and unreached.
+
+The boot declares them rather than the operator because `bundled` means "ships
+with CorvinOS, opt-out per tenant": a dotted class path in `tenant.corvin.yaml`
+is the `installed` contract, and it goes stale on the first rename.
+
+- **The operator's entry wins.** A channel already in `spec.plugins.installed` is
+  skipped, so `{id: discord-bridge, config: {enabled: false}}` parks it and an
+  explicit `class_path` overrides the bundled one.
+- **Off is total.** Flag off ⇒ nothing injected, nothing instantiated. The
+  supervisor re-checks the same flag in its own gate; that one is load-bearing,
+  this one keeps a default install from constructing seven no-ops.
+- **Declaring is not starting.** Whether a daemon runs is still the
+  six-condition gate: flag on, not parked, credentials present
+  (`channel_configured`), no duplicate already running, runtime provisioned,
+  Node ≥20 present. No automatic restart, and `confident=False` means the
+  supervisor does **not** start.
 
 ### The perimeter is attribution, not security (load-bearing)
 
