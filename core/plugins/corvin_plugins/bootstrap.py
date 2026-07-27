@@ -267,7 +267,11 @@ _TENANT_DECLARABLE_BOOT_LAYERS: frozenset[BootLayer] = frozenset(
 def register_global_plugin(class_path: str, *, boot_layer: BootLayer | str) -> None:
     """Declare a bundled global plugin and the boot layer it boots on.
 
-    Called from bundled code (import side effect), never from tenant config.
+    Intended to be called from bundled code (import side effect), never from
+    tenant config. That is a CONVENTION, not an enforced one: there is no
+    caller check, and in-process code can call this. It holds because the
+    wheel is the only thing that does — not because anything stops others.
+    See docs/claude-ref/layer-plugins.md § "The perimeter is attribution".
     Registering the same ``class_path`` twice is a no-op so a module that is
     imported from two places does not double-load its plugin.
     """
@@ -291,8 +295,9 @@ def _global_specs() -> list[tuple[str, BootLayer]]:
 
     There is deliberately NO discovery step here — see
     :data:`GLOBAL_ENTRY_POINT_GROUP` for why the entry-point variant was
-    removed. Everything on this list came from a :func:`register_global_plugin`
-    call inside this wheel.
+    removed, which closed the one path that let a third-party WHEEL land on
+    this list. Everything here came through :func:`register_global_plugin`;
+    that it came from bundled code is convention rather than enforcement.
     """
     order = {BootLayer.COMPLIANCE: 0, BootLayer.CORE: 1}
     return sorted(_GLOBAL_SPECS, key=lambda s: (order[s[1]], s[0]))

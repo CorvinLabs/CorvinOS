@@ -508,6 +508,67 @@ class TestTheHonestAsyncPluginIsNotPunished(_Base):
         )
 
 
+class TestTheCombinationOfBothKnownShapes(_Base):
+    """Round 6: each fix covered one shape; their intersection covered neither.
+
+    A plugin that installs a HELPER object (the round-3 shape) FROM A WORKER
+    THREAD (the round-5 shape) has no owner — ContextVars do not cross threads —
+    and no object identity, because the helper is not the plugin. Both release
+    paths missed it, so after the operator's `disable()` the helper went on
+    receiving every audit event of every tenant.
+    """
+
+    def test_a_helper_installed_from_a_thread_is_released_on_disable(self):
+        import threading
+
+        from corvin_plugins.providers import audit_backend
+
+        received: list[tuple[str, str]] = []
+        installed = threading.Event()
+
+        class _Sink:
+            def fanout(self, event_type, details, *, severity="INFO",
+                       tenant_id="_default"):
+                received.append((event_type, tenant_id))
+
+            def verify_chain(self):
+                return HealthStatus(ok=True)
+
+            def enforce_retention(self, *a, **k):
+                return {}
+
+        class _AsyncHelper(_Plug):
+            plugin_type = "audit_backend"
+
+            def on_load(self, ctx):
+                def _connect():
+                    ctx.audit_registry.set_active(_Sink())
+                    installed.set()
+
+                threading.Thread(target=_connect).start()
+                installed.wait(timeout=2)
+
+        self.reg.register(_AsyncHelper("async-helper"), _ctx("async-helper"))
+        self.assertIsNotNone(audit_backend.get_active())
+
+        # The operator disables it — the path that answers 403 for compliance
+        # and 200 for everything else.
+        self.reg.disable("async-helper")
+
+        audit_backend.fanout("user.login", {}, tenant_id="tenant-b")
+        audit_backend.drain_now(timeout=1.0)
+
+        self.assertIsNone(
+            audit_backend.get_active(),
+            "a disabled plugin's helper still holds the audit slot",
+        )
+        self.assertEqual(
+            received, [],
+            f"a disabled plugin kept receiving other tenants' audit events: "
+            f"{received}",
+        )
+
+
 class TestHealthChecksCannotWedgeTheProcess(_Base):
     """`health_check_all` runs on every GET /api/admin/* — it needs a deadline.
 
@@ -583,8 +644,15 @@ class TestCleanupAfterAFailedLoad(_Base):
         )
 
     def test_a_failed_load_leaves_no_breaker_behind(self):
+        # The third line of the rollback block. Its two siblings
+        # (_detach_provider_slot, _revoke_hooks) were tested; this one was not.
+        # A plugin whose on_load records failures on its own breaker and then
+        # raises would hand the open breaker to the next attempt.
         class _Broken(_Plug):
             def on_load(self, ctx):
+                breakers.get_breaker(self.plugin_id).record_failure(
+                    RuntimeError("backend down")
+                )
                 raise RuntimeError("nope")
 
         for _ in range(3):
@@ -595,7 +663,7 @@ class TestCleanupAfterAFailedLoad(_Base):
         self.assertNotEqual(
             stats.get("state"), "open",
             "three failed registrations left an open breaker for a plugin that "
-            "never loaded",
+            "never loaded — the next attempt inherits it",
         )
 
 
@@ -667,6 +735,37 @@ class TestNoSelfPrivilegingFromInsideALoad(_Base):
             "inside its own on_load",
         )
         self.assertTrue(self.reg.can_disable("shadow"))
+
+    def test_a_class_attribute_cannot_claim_a_privileged_boot_layer(self):
+        """The OBJECT cap — the sibling branch, and the one round 6 found bare.
+
+        `_resolve_boot_layer` has two guards from the same commit: one for the
+        explicit argument (tested above) and one for the object's own attribute,
+        which its docstring calls "the load-bearing part". Only the first had a
+        test. An attribute on a plugin object has passed no gate at all — no
+        PluginRecord, so neither the origin check nor the tenant-scope downgrade
+        has run.
+        """
+        class _SelfPromoting(_Plug):
+            boot_layer = "compliance"
+
+        self.reg.register(_SelfPromoting("promoter"), _ctx("promoter"))
+
+        self.assertIs(
+            self.reg.boot_layer_of("promoter"), BootLayer.INSTALLED,
+            "a plugin promoted itself to the compliance boot layer with a class "
+            "attribute — it would be permanently undisableable",
+        )
+        self.assertTrue(self.reg.can_disable("promoter"))
+        self.reg.disable("promoter")  # must not raise PluginDisableRefused
+
+    def test_an_unprivileged_self_declaration_is_still_honoured(self):
+        # Counter-test: capping everything would make the attribute useless.
+        class _Bundled(_Plug):
+            boot_layer = "bundled"
+
+        self.reg.register(_Bundled("bundled-one"), _ctx("bundled-one"))
+        self.assertIs(self.reg.boot_layer_of("bundled-one"), BootLayer.BUNDLED)
 
     def test_the_bootstrap_path_can_still_assign_a_privileged_layer(self):
         # Counter-test: refusing the argument outright would break

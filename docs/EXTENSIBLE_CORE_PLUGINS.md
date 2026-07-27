@@ -276,7 +276,7 @@ idempotent and audited as a normal registration, not as a takeover.
 
 | Event | When |
 |---|---|
-| `plugin.extension_hook_registered` | a hook is accepted (or re-registered by its owner) — carries `tenant_check: verified \| unregistered` |
+| `plugin.extension_hook_registered` | a hook is accepted (or re-registered by its owner) — carries `tenant_check: attributed \| unattributed` |
 | `plugin.extension_hook_replaced` | a different plugin took over a point — carries `replaced_plugin_id` and `tenant_check` |
 | `plugin.extension_hook_rejected` | `reason: unknown_point`, `never_extensible` or `tenant_mismatch` |
 | `plugin.extension_hook_failed` | a hook raised — carries `error_type` and `outcome: default \| deny` |
@@ -295,9 +295,9 @@ plugin's own** tenant chain; recording it in the target's would be the same
 cross-tenant write the check denies.
 
 **Callers the registry cannot resolve are allowed**, and audited as
-`tenant_check: unregistered` rather than `verified`. `PluginRegistry.register()`
+`tenant_check: unattributed` rather than `attributed`. `PluginRegistry.register()`
 populates the plugin's context *before* calling `on_load()`, so a real plugin
-registering a hook during load is resolvable and gets verified — an unresolvable
+registering a hook during load is resolvable and gets attributed — an unresolvable
 caller is bundled reference code, an embedding host, or a test. Refusing those
 would break them and buy nothing: the same line that names a foreign tenant can
 name an unknown `plugin_id`, and in-process code reaches the bus internals
