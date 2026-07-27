@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from typing import Any, Callable
 
 from . import circuit_breaker as _breakers
 from . import loading as _loading
@@ -105,6 +106,46 @@ _PROVIDER_MODULE_NAMES: tuple[str, ...] = (
 )
 
 
+#: Wall-clock ceiling for one ``health_check()``.  The protocol already says
+#: "must not block for more than 2 s"; this is what makes the sentence true.
+HEALTH_CHECK_DEADLINE_S = 2.0
+
+
+class HealthCheckTimeout(TimeoutError):
+    """A plugin's ``health_check()`` did not answer within its deadline."""
+
+
+def _call_with_deadline(fn: "Callable[[], Any]", deadline_s: float, plugin_id: str):
+    """Run ``fn`` and give up waiting after ``deadline_s``.
+
+    The breaker counts raises and cooperative ``ok=False`` — a health check that
+    simply never returns is neither, so nothing capped it. And this runs on
+    every ``GET /api/admin/*``: one wedged plugin held the whole admin surface,
+    with no recovery path and no signal. The compliance boot layer made it worse
+    rather than better, because there containment is deliberately off.
+
+    The worker thread is a daemon and is abandoned, not killed — Python cannot
+    kill a thread. Abandoning it costs one stuck thread; waiting on it costs the
+    admin API. A plugin that wedges repeatedly therefore leaks threads, which is
+    the visible symptom of a bug it already has.
+    """
+    import concurrent.futures as _futures
+
+    with _futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix=f"health-{plugin_id[:24]}"
+    ) as pool:
+        future = pool.submit(fn)
+        try:
+            return future.result(timeout=deadline_s)
+        except _futures.TimeoutError:
+            # Do not block __exit__ on the abandoned worker.
+            pool._threads.clear()  # type: ignore[attr-defined]
+            _futures.thread._threads_queues.clear()  # type: ignore[attr-defined]
+            raise HealthCheckTimeout(
+                f"health_check for {plugin_id!r} exceeded {deadline_s:.1f}s"
+            ) from None
+
+
 def _detach_provider_slot(plugin: CorvinPlugin) -> None:
     """Release every provider slot ``plugin`` took, by plugin identity.
 
@@ -134,6 +175,19 @@ def _detach_provider_slot(plugin: CorvinPlugin) -> None:
             # key `anonymous:<Class>`, and `forget(plugin_id)` never touched it —
             # so a reload inherited an open breaker from the previous life.
             backend = module.get_active()
+            # An UNOWNED slot holding this plugin's own object is released too.
+            # A plugin that connects asynchronously — `on_load` starts a thread
+            # that calls `set_active` when the connection is up — is the normal
+            # shape, not an attack, and ContextVars do not cross into that
+            # thread, so the slot ends up ownerless. Without this it was never
+            # released: `release_owned_by` finds no owner, and the next turn
+            # writes into a backend whose `on_unload` has already run.
+            if backend is not None and module.owner_plugin_id() is None:
+                if backend is plugin or getattr(backend, "plugin_id", None) == plugin_id:
+                    module.clear_if_active(backend)
+                    log.debug(
+                        "released ownerless %s slot holding %r's object", name, plugin_id
+                    )
             if module.release_owned_by(plugin_id):
                 log.debug("released %s slot held by %r", name, plugin_id)
                 if backend is not None:
@@ -667,7 +721,9 @@ class PluginRegistry:
                     continue
 
             try:
-                status = plugin.health_check()
+                status = _call_with_deadline(
+                    plugin.health_check, HEALTH_CHECK_DEADLINE_S, pid
+                )
             except Exception as exc:  # noqa: BLE001
                 if contained:
                     breaker.record_failure(exc)

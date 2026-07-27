@@ -474,3 +474,7 @@ def clear_if_active(provider: object) -> bool:
 
 def release_owned_by(plugin_id: str) -> bool:
     return _registry.release_owned_by(plugin_id)
+
+
+def owner_plugin_id() -> str | None:
+    return _registry.owner_plugin_id()
