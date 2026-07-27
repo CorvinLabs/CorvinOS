@@ -46,13 +46,48 @@ jobs:
           # gate that the activation plan calls "a merge condition, not a
           # nice-to-have", and the ADR-0233 tripwire tests. A gate nobody runs
           # is the exact defect class those tests exist to catch, one level up.
+          # 2026-07-27 audit: this job named 6 of the repo's 22 test
+          # directories. The other 16 ran in NO workflow at all — among them
+          # core/gateway (227 tests, the app the always-on service boots),
+          # operator/license (236), core/delegate (317) and ops/launcher.
+          # The ones added below are those verified green when run on their own;
+          # four directories are deliberately still absent because they are RED
+          # and adding them would just turn the job red without fixing anything:
+          #   core/compliance/tests      2 collection errors
+          #   operator/forge/tests       11 collection errors
+          #   operator/rag-integration/  2 collection errors
+          #   operator/voice/tests       3 failures — the voice summariser drops
+          #                              CRITICAL warnings (real product defect)
+          # They are tracked as their own fixes, not hidden by omission.
+          #
+          # Directories with a tests/__init__.py but no parent __init__.py all
+          # resolve to the top-level package name `tests`, so those carrying a
+          # conftest.py collide with the repo-root tests/ package even under
+          # importlib mode ("Plugin already registered under a different name").
+          # Those run as their own pytest invocation below rather than being
+          # dropped.
+          # operator/bridges/shared/ moved OUT of this invocation — see reason 2
+          # in the next step. It poisoned the stdlib `operator` module for every
+          # directory collected after it, which is why this job used to die
+          # ~1.5 s in with "INTERNALERROR ... caught unexpected SystemExit"
+          # and run no tests at all.
+          #
+          # The --deselect names ONE test rather than dropping its file: it calls
+          # the real, unmocked ACO heal cycle (network probes and an Ollama start
+          # attempt, no timeout) and hangs the whole session indefinitely — over
+          # 50 minutes observed locally, at 3% of core/console/tests. Bounding the
+          # heal cycle is a product change and is tracked separately; deselecting
+          # it here is stated rather than silent.
           pytest \
             tests/ \
-            operator/bridges/shared/ \
             core/console/tests/ \
             core/compute/tests/ \
             core/plugins/tests/ \
-            operator/mcp_manager/tests/ \
+            core/gateway/tests/ \
+            core/observability/tests/ \
+            core/orchestration/tests/ \
+            ops/launcher/tests/ \
+            --deselect core/console/tests/test_aco.py::TestEngineHealer::test_heal_cycle_with_engine_healer_does_not_raise \
             --import-mode=importlib \
             --cov=operator \
             --cov=core \
@@ -60,6 +95,63 @@ jobs:
             --cov-report=html \
             --cov-fail-under=75 \
             -v
+
+      - name: Run the suites that need their own pytest session
+        run: |
+          # Two independent reasons a directory cannot share the session above.
+          # --cov-append keeps them all in one coverage total.
+          #
+          # 1. PACKAGE-NAME COLLISION. core/{awpkg,delegate,license,workflows}
+          #    each ship a tests/__init__.py with no parent __init__.py, so their
+          #    conftest.py imports under the SAME module name as the repo-root
+          #    tests/conftest.py and pluggy refuses the duplicate registration —
+          #    even under importlib mode. Fixing it properly (a parent
+          #    __init__.py, or dropping tests/__init__.py) is a rename with a
+          #    wide blast radius and wants its own change.
+          #
+          # 2. THE operator/ STDLIB SHADOW. Under --import-mode=importlib pytest
+          #    names a test module by its path relative to rootdir, so collecting
+          #    anything under operator/ imports `operator` as a NAMESPACE PACKAGE
+          #    and it replaces the stdlib module in sys.modules for the rest of
+          #    the session:
+          #        >>> operator.__file__ -> None
+          #        >>> hasattr(operator, "add") -> False
+          #        >>> operator.__path__ -> _NamespacePath([<repo>/operator])
+          #    Every later import that touches operator.add / itemgetter then
+          #    fails with "module 'operator' has no attribute 'add'" — including
+          #    inside third-party packages. That is what produced the collection
+          #    errors in operator/bridges/shared, operator/forge and
+          #    operator/rag-integration (diagnosed 2026-07-27; it is the fourth
+          #    appearance of the operator/ shadow trap in this repo).
+          #    One session per directory contains the damage; it does not remove
+          #    the trap, and the real fix is still owed.
+          for d in core/awpkg/tests core/delegate/tests core/license/tests \
+                   core/workflows/tests \
+                   operator/bridges/tests \
+                   operator/agent/tests operator/license/tests \
+                   operator/skill-forge/tests operator/mcp_manager/tests; do
+            pytest "$d" --import-mode=importlib \
+              --cov=operator --cov=core --cov-append -q
+          done
+
+      # KNOWINGLY NOT RUN HERE — stated rather than silently omitted, because a
+      # directory missing from a workflow is invisible and that is exactly how
+      # core/plugins/tests went 950+ tests without a CI (see the note above).
+      # Each of these is a tracked defect, not an oversight:
+      #
+      #   operator/bridges/shared/   3 modules cannot be collected (the operator/
+      #                              stdlib shadow above) AND the directory has
+      #                              tests that run past 10 minutes. It was listed
+      #                              in this job before 2026-07-27 and never
+      #                              actually ran — the job died on it at 1.5 s.
+      #                              run-all-tests.sh drives this directory one
+      #                              process per file, which is why it works there.
+      #   operator/forge/tests/      11 collection errors, same operator/ shadow.
+      #   operator/rag-integration/  2 collection errors, same cause.
+      #   core/compliance/tests/     2 collection errors.
+      #   operator/voice/tests/      3 failures — the voice summariser drops
+      #                              CRITICAL warnings from its output. A real
+      #                              product defect, reproducible in isolation.
 
       - name: Generate coverage badge
         run: |

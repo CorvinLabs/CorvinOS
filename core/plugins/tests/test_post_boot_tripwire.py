@@ -137,15 +137,40 @@ class TestPostBootTripwire(unittest.TestCase):
         )
         self.assertTrue(tripwire.compliance_layer_is_wheel_granted().ok)
 
-    def test_the_gateway_actually_calls_it(self):
-        # A tripwire nobody runs is the defect this repo has shipped repeatedly.
-        src = (
-            _REPO / "core" / "gateway" / "corvin_gateway" / "app.py"
-        ).read_text(encoding="utf-8")
-        self.assertIn("assert_post_boot", src)
+    def test_the_boot_sequence_actually_calls_it(self):
+        # A tripwire nobody runs is the defect this repo has shipped repeatedly —
+        # and this assertion was itself an instance of it. It read the GATEWAY's
+        # source, which is one of two shipped hosts; the other
+        # (corvin_console.standalone, launched by corvinos-serve and install.sh)
+        # ran no tripwire at all and this test stayed green throughout.
+        #
+        # The sequence now lives once in bootstrap.boot_platform. WHICH hosts
+        # must call it is pinned by test_boot_platform_call_site.py; this test
+        # keeps the narrower question it was written for — that the post-boot
+        # tripwire runs, and runs after the plugins are loaded.
+        import ast
+
+        path = _REPO / "core" / "plugins" / "corvin_plugins" / "bootstrap.py"
+        text = path.read_text(encoding="utf-8")
+        fn = next(
+            n for n in ast.walk(ast.parse(text))
+            if isinstance(n, ast.FunctionDef) and n.name == "boot_platform"
+        )
+        calls = sorted(
+            (
+                node.lineno,
+                (node.func.id if isinstance(node.func, ast.Name)
+                 else node.func.attr).lstrip("_"),
+            )
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, (ast.Name, ast.Attribute))
+        )
+        names = [name for _, name in calls]
+        self.assertIn("assert_post_boot", names)
         # and AFTER the bootstrap, or it would be vacuously green
         self.assertLess(
-            src.index("bootstrap_all"), src.index("assert_post_boot"),
+            names.index("bootstrap_all"), names.index("assert_post_boot"),
             "the post-boot tripwire must run after the plugins are loaded",
         )
 

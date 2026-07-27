@@ -764,7 +764,7 @@ prototype (unwired, `api.py` not importable, three 0-byte modules, 22
 | `state.py` | Per-tenant `registry.yaml` + `PluginLifecycle` (install/enable/settings/disable/uninstall) |
 | `circuit_breaker.py` | Per-`plugin_id` breaker: closed → open → half-open |
 | `providers/` | One active provider per type: notification, recall, summary, router, **audit**, **user**, **stt**, **data_connector** |
-| `bootstrap.py` | Boot wiring: `assert_compliance()` (fail-closed tripwires) + `bootstrap_global()` (bundled compliance/core plugins, ADR-0243) + `bootstrap_declared()` + `bootstrap_tenant()` + `bootstrap_all()` (all three in precedence order) + `build_context()` |
+| `bootstrap.py` | Boot wiring: `boot_platform()` (the one sequence BOTH hosts call) = `assert_compliance()` (fail-closed tripwires) → `bootstrap_all()` → `assert_post_boot()`; plus `bootstrap_global()` (bundled compliance/core plugins, ADR-0243), `bootstrap_declared()`, `bootstrap_tenant()` (the three precedence-ordered loaders) and `build_context()` |
 | `health.py` | `HealthCollector` (interval polling, flag-gated) + `render_prometheus()` |
 | `healing.py` | `HealingOrchestrator` — Stage 3, **ships dark** behind `plugin_self_healing` |
 
@@ -1295,25 +1295,49 @@ caller the route exists.
 
 ### Boot wiring — where it is actually called
 
-`core/gateway/corvin_gateway/app.py::_lifespan` is the boot path:
+**CorvinOS ships TWO FastAPI hosts, and both run the same sequence.** Getting this
+wrong is the defect described at the end of this section, so name them explicitly:
+
+| Host | Started by |
+|---|---|
+| `corvin_console.standalone:create_app` | `corvinos-serve` / `corvin-serve` / `corvin serve` — and `install.sh`'s final step |
+| `corvin_gateway.app:app` | `corvin-service` (ADR-0184 Stufe 2) and the installer's console step |
+
+The sequence itself lives once, in `bootstrap.boot_platform()`, and each host's
+`_lifespan` calls it:
 
 1. `bootstrap.assert_compliance()` — **not** wrapped in `except: pass`, unlike the
    best-effort startup steps around it. A failed tripwire aborts the boot.
    If the compliance package itself is unimportable it extends `sys.path` (like
    `audit.py`) and, failing that, runs the same core assertion inline — "the
    checker is missing" must never read as "the check passed".
-2. `bootstrap.bootstrap_tenant(...)` — gated on `plugin_runtime_lifecycle`, so a
-   fresh install loads nothing. Reads the tenant registry, orders by dependency,
-   instantiates each `class_path`, and registers with a context built by
-   `build_context()` — which populates EVERY provider handle. A single bad plugin
-   is logged and skipped; it never blocks the boot.
-3. `bootstrap.shutdown(loaded)` on lifespan exit, before the dispatcher drain, so
-   provider slots are detached before in-flight requests finish.
+2. `bootstrap.bootstrap_all(...)` — the declarative `spec.plugins.installed` path
+   plus the runtime registry, the latter gated on `plugin_runtime_lifecycle`, so a
+   fresh install loads nothing. Instantiates each `class_path` and registers with
+   a context built by `build_context()` — which populates EVERY provider handle. A
+   single bad plugin is logged and skipped; it never blocks the boot. The one
+   exception is `GlobalComplianceLoadFailed`, which is re-raised.
+3. `tripwire.assert_post_boot()` — asks whether anything claimed the compliance
+   boot layer that `bootstrap_global()` did not grant. Can only be asked after the
+   plugins are loaded, which is why it is not folded into step 1.
+4. `bootstrap.shutdown(loaded)` on lifespan exit, so provider slots are detached
+   before in-flight requests finish.
 
-Both call sites were missing in the first implementation pass (the tripwire and the
-context builder existed but nothing invoked them) — unit tests proved the
-mechanisms worked, not that they were reached. `tests/test_bootstrap.py` now pins
-both.
+**This has now been the same defect three times, each one level further out.**
+First the tripwire and the context builder existed and nothing invoked them.
+Then four extension points had no call site (ADR-0251). Then, found on
+2026-07-27 by booting an actual wheel install: the sequence was inlined in the
+GATEWAY only, and `corvin_console.standalone` — the host `install.sh` launches —
+had copied the license-load block above it and stopped short. A console with a
+deliberately corrupted audit hash chain booted and answered requests; the same
+tripwire, called by hand inside that same process, refused correctly. Every unit
+test stayed green, and so did the guard tests, because they read
+`corvin_gateway/app.py` — one of the two hosts.
+
+`core/plugins/tests/test_boot_platform_call_site.py` pins the fixed shape: every
+host in that table must import AND call `boot_platform`, the sequence must carry
+no override switch, and the three steps must stay in that order. Adding a third
+host means adding a row there — that is the point of the test.
 
 ### Must NOT do
 

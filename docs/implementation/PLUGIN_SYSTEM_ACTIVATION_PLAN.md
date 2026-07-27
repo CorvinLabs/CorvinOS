@@ -551,6 +551,45 @@ staged rollout. Recording that is better than pretending it has a flip date.
 **Dropped from ADR-0242:** Phase 7 directory move (§ 2 above).
 **Deferred, unchanged:** everything in § 1's out-of-scope table.
 
+### 4.0 Track F — the boot sequence reached one host of two (found 2026-07-27)
+
+**This plan's own thesis, one level further out than it had looked.** Stages 3–5
+wired call sites *inside* the platform. Track F is about which **process** runs
+the loader at all, and it was found the only way it could be — by installing the
+wheel on a clean system and booting it, rather than by reading the tree.
+
+| | |
+|---|---|
+| **Symptom** | A console with a deliberately corrupted audit hash chain booted and served requests. |
+| **Mechanism** | Sound. Invoked by hand in that same wheel-installed process, `assert_all()` returned `audit_chain_intact: 2 broken record(s) in the last 200 — the audit writer is not sound` and raised. |
+| **Cause** | The sequence was inlined in `corvin_gateway.app`. `corvin_console.standalone:create_app` — what `corvinos-serve` runs and what `install.sh` launches at its final step — had copied the license-load block above it and stopped before the compliance block. |
+| **Blast radius** | The primary pip/uv install path ran **no** boot tripwire and loaded **no** plugins. Every provider, every bridge supervisor from Stage 5, and the whole extension-point registration path were inert on that host. |
+
+**Why every existing guard stayed green.** `test_layered_boot.py` and
+`test_post_boot_tripwire.py` asserted the call site by reading
+`core/gateway/corvin_gateway/app.py`. That is one of two shipped hosts, and the
+tests could not tell "the sequence is reached" from "the sequence is reached
+*here*". This is the same shape as Stage 2's wrong `dead_reason` and Stage 4's
+three-times-wrong "unpassed handle" row: a claim that was well-formed, cited a
+real file, and was about the wrong thing.
+
+**Fix.** One sequence, `bootstrap.boot_platform()`, called by both hosts;
+tripwire → `bootstrap_all()` → post-boot tripwire, no flag and no override. The
+two source-reading guards now follow the sequence to its new home, and
+`test_boot_platform_call_site.py` carries the assertion they could not: **every**
+host in a named table must import *and call* it. A third host means a third row.
+
+Verified by re-running the E2E on a rebuilt wheel: corrupted chain →
+`TripwireError`, exit 3, port never opens; pristine home → boots normally.
+
+**Note for the maintainer — this is a behaviour change on upgrade.** An existing
+install whose chain has a break within the last `TAIL_RECORDS` (200) will now
+refuse to start the console, where before it started. That is the documented
+fail-closed contract and CLAUDE.md forbids an override, so there is no flag to
+soften it; but it is a real upgrade hazard and there is no operator-facing way to
+seal a historically broken chain today. A sealing/rotation path is the honest
+follow-up and is not in this plan.
+
 ### 4.1 Track A — the tree must state what the audit found (0.5 d)
 
 Three findings from 27 July live **only in this document**. `surface_map.py` is what

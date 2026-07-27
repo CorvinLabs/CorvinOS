@@ -166,6 +166,29 @@ def create_app() -> FastAPI:
             _lic_load()
         except Exception:
             pass
+
+        # ── ADR-0232/0233 — compliance tripwires + plugins (FAIL-CLOSED) ─────
+        # Deliberately NOT wrapped in `except: pass` like the best-effort blocks
+        # around it. This app is what `corvinos-serve` runs and what install.sh
+        # launches, and until this call existed it was the one shipped entry
+        # point that served requests without ever asking whether the GDPR
+        # Art. 30/32 audit chain verifies — a console with a corrupted chain
+        # booted happily while the tripwire, called by hand in the same process,
+        # refused. The sequence is shared with corvin_gateway.app so the two
+        # hosts cannot drift; see corvin_plugins.bootstrap.boot_platform.
+        #
+        # An ABSENT plugin package (stripped install) is not a failure and must
+        # not stop the boot — only a broken mechanism is. A present-but-failing
+        # tripwire propagates: there is no override, by design.
+        _plugins_loaded: list[str] = []
+        try:
+            from corvin_plugins.bootstrap import boot_platform as _boot_platform
+        except ImportError:
+            _boot_platform = None  # type: ignore[assignment]
+            log.debug("corvin_plugins absent — compliance tripwires not available")
+        if _boot_platform is not None:
+            _plugins_loaded = _boot_platform()  # raises -> boot aborts
+
         # Start presence heartbeat (best-effort — never blocks startup).
         try:
             from .aco.heartbeat import start_heartbeat_thread as _start_hb
@@ -174,6 +197,14 @@ def create_app() -> FastAPI:
         except Exception:
             pass
         yield
+        # Detach provider slots so a draining request cannot be routed into a
+        # half-torn-down plugin. Best-effort: shutdown must not raise.
+        if _plugins_loaded:
+            try:
+                from corvin_plugins.bootstrap import shutdown as _plugin_shutdown
+                _plugin_shutdown(_plugins_loaded)
+            except Exception:
+                pass
 
     app = FastAPI(
         title="CorvinOS Console",

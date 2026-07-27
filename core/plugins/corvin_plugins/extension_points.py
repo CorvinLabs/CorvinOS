@@ -57,9 +57,26 @@ and makes every registration attributable — it does not withstand a hostile on
 and nothing here should be read as claiming otherwise.  See
 ``docs/claude-ref/layer-plugins.md`` § "The perimeter is attribution".
 
-Nothing in this module calls a hook by itself.  Call sites are wired in a
-follow-up phase; today the bus is defined, tested and documented, and every
-:func:`invoke` in the platform is still the default path.
+Nothing in this module calls a hook by itself — the call sites live in the
+subsystems that own each decision, because only they know which strings are
+valid answers (ADR-0251 D2).  All four are wired:
+
+===============================  =========================================
+Point                            Call site
+===============================  =========================================
+``engine.engine_selection``      ``delegation_policy.resolve_worker_engine``
+``delegation.route_selection_``  ``delegation_policy.resolve_delegation_``
+``policy``                       ``route``
+``engine.model_selection``       ``model_selector.resolve_step_model``
+``workflow.workflow_gate``       ``console/routes/workflows.py::_stream_run``
+===============================  =========================================
+
+Each enforces its own bound: a hook may de-escalate the engine but never widen
+the operator's choice, may suppress a delegation but never start one, may name
+any model in the engine's registry and nothing else, and may deny a workflow run
+but never permit one the core refused.  With ``plugin_extension_points`` off —
+the default — every one of them returns the caller's ``default`` without
+consulting the bus, so a stock install runs the pre-feature path.
 """
 from __future__ import annotations
 

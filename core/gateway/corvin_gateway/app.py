@@ -138,65 +138,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     _plugins_loaded: list[str] = []
     _health_collector = None
     try:
-        from corvin_plugins.bootstrap import assert_compliance as _assert_compliance
+        from corvin_plugins.bootstrap import boot_platform as _boot_platform
     except ImportError:
-        _assert_compliance = None  # type: ignore[assignment]
+        _boot_platform = None  # type: ignore[assignment]
         import logging as _tw_log
         _tw_log.getLogger("corvin.compliance.tripwire").debug(
             "corvin_plugins absent — compliance tripwires not available"
         )
-    if _assert_compliance is not None:
-        _assert_compliance()  # raises TripwireError -> boot aborts
-
-        # Load the tenant's enabled plugins. Gated on the shipped-dark flag, so a
-        # fresh install loads nothing; failures here are per-plugin and logged.
-        try:
-            from corvin_console import feature_flags as _flags
-            from corvin_plugins.bootstrap import bootstrap_all as _bootstrap
-            from forge.paths import corvin_home as _corvin_home
-            from forge.tenants import current_tenant as _current_tenant
-
-            _tid = _current_tenant()
-            # BOTH load paths: the declarative spec.plugins.installed (ADR-0030
-            # Phase 7, always honoured — writing it into a version-controlled
-            # tenant config IS the opt-in) and the runtime registry (flag-gated).
-            _plugins_loaded = _bootstrap(
-                tenant_id=_tid,
-                corvin_home=_corvin_home(),
-                lifecycle_enabled=_flags.is_enabled("plugin_runtime_lifecycle", _tid),
-            )
-        except Exception as _bs_exc:
-            # One narrow exception to the best-effort rule: a bundled
-            # layer=compliance plugin that failed to load (ADR-0243). Everything
-            # else here is a per-tenant convenience that must not cost the
-            # platform its boot — but swallowing THAT one would recreate the
-            # "compliance-off mode" the baseline forbids, one log line deep.
-            # The exception class is matched by name rather than imported at the
-            # top, so a stripped install without corvin_plugins still boots.
-            if type(_bs_exc).__name__ == "GlobalComplianceLoadFailed":
-                raise
-            import logging as _bs_log
-            _bs_log.getLogger("corvin.plugins.bootstrap").warning(
-                "plugin bootstrap skipped", exc_info=True
-            )
-
-        # ── Post-boot compliance tripwire (ADR-0232/0233/0243) ───────────────
-        # Deliberately NOT inside the try above, and deliberately not wrapped:
-        # this asks whether anything put itself on the compliance boot layer
-        # that bootstrap_global did not grant, and it can only be asked once the
-        # plugins are loaded. assert_all() above runs BEFORE that, on purpose —
-        # a broken audit writer must stop the boot before anything else happens
-        # — so the question would be vacuously green there.
-        #
-        # No override, no env var, no flag, same as every other tripwire.
-        try:
-            from corvin_compliance_reports.tripwire import assert_post_boot as _apb
-        except ImportError:
-            # A stripped layout without the compliance package: assert_all()
-            # above already handled that case the same way.
-            _apb = None  # type: ignore[assignment]
-        if _apb is not None:
-            _apb()  # raises TripwireError -> boot aborts
+    if _boot_platform is not None:
+        # Tripwires -> plugin load -> post-boot tripwire, in that order and with
+        # no override. The sequence is shared with corvin_console.standalone so
+        # the two shipped hosts cannot drift; see boot_platform's docstring for
+        # why each step sits where it does.
+        _plugins_loaded = _boot_platform()  # raises TripwireError -> boot aborts
 
         # ADR-0231 Stage 2 — health polling, behind plugin_health_monitoring.
         # Flag off (the default) means NO timer is created at all: the /plugins

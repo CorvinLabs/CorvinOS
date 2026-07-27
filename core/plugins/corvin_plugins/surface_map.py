@@ -134,7 +134,15 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         ctx_handle="audit_registry",
         provider_module="audit_backend",
         template="audit_backend_plugin.py",
-        consumed_by="core/gateway/corvin_gateway/app.py",
+        # The FAN-OUT site, which is what an author needs to find: audit.py binds
+        # `_audit_sink` to this provider module and calls `fanout()` only after
+        # `core_write_committed` — the ordering the invariant below names.
+        # This row used to point at core/gateway/corvin_gateway/app.py, which
+        # touches audit_backend exactly once, in a shutdown `drain_now()` flush.
+        # The guard test admitted it because that file contains the string
+        # "audit_backend"; a reader following the map landed in a teardown path
+        # and found nothing that consumes anything (verified 2026-07-27).
+        consumed_by="operator/bridges/shared/audit.py",
         dead_reason=None,
         invariant=(
             "ADDITIVE ONLY (ADR-0233): receives a COPY after the core write has "

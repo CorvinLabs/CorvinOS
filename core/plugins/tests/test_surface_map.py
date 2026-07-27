@@ -216,14 +216,82 @@ def test_claimed_consumer_file_exists_and_invokes_the_registry(surface):
         f"{surface.plugin_type}: consumed_by names {surface.consumed_by!r}, "
         f"which does not exist"
     )
-    text = consumer.read_text(encoding="utf-8", errors="replace")
-    # The consumer either calls get_active() on the provider module, or (for
-    # audit_backend) imports the module to bind a sink. Both are real use.
-    module = surface.provider_module or surface.plugin_type
-    assert re.search(r"get_active\(\)", text) or module in text, (
-        f"{surface.plugin_type}: {surface.consumed_by} does not appear to "
-        f"invoke the registry"
+    if surface.provider_module is None:
+        # The registry belongs to another subsystem (compute / engine / bridge),
+        # so there is no providers/ module to resolve an alias against. What the
+        # consumer must show instead is that it hands that subsystem's registry
+        # in through the plugin context handle — for compute_engine,
+        # `bootstrap_declared(..., compute_registry=get_registry())` in the
+        # COMPUTE WORKER, which is the process that dispatches.
+        text = consumer.read_text(encoding="utf-8", errors="replace")
+        assert surface.ctx_handle in text, (
+            f"{surface.plugin_type}: {surface.consumed_by} never mentions the "
+            f"context handle {surface.ctx_handle!r}, so it cannot be handing the "
+            f"registry to a plugin"
+        )
+        return
+
+    module = surface.provider_module
+    called = _provider_calls(consumer, module)
+    # A CALL, not a mention. The rule used to be `module in text` — the bare
+    # string "audit_backend" appearing anywhere in the file — which accepts a
+    # file that only imports the module and never touches it. A fuzzy alias
+    # regex was tried as the replacement and was worse: `_\w*audit\w*\.\w+\(`
+    # matched `_audit_metrics.render(`, an unrelated module. So the binding is
+    # RESOLVED rather than guessed — find what this file imported the provider
+    # AS, then require a call on that exact name.
+    #
+    # KNOWN LIMIT, stated rather than hidden. This does NOT distinguish a real
+    # consumer from an incidental one. audit_backend's row pointed at
+    # core/gateway/corvin_gateway/app.py until 2026-07-27, and that file does
+    # call the provider — `drain_now()`, once, in a shutdown flush — so this
+    # guard would have passed it just as the old one did. The real fan-out is
+    # `fanout()` in operator/bridges/shared/audit.py, after the core write
+    # commits. No cheap static rule separates "calls it on the hot path" from
+    # "calls it while shutting down"; that one needed an audit, exactly like
+    # user_backend's wrong dead_reason did. What this guard now buys is the
+    # narrower, still-worthwhile pair: an import with no call at all, and a
+    # same-prefix module mistaken for the provider.
+    assert called, (
+        f"{surface.plugin_type}: {surface.consumed_by} imports {module!r} but "
+        f"never calls anything on it — a consumed_by row must name the file "
+        f"that CALLS the provider, not one that merely imports it"
     )
+
+
+def _provider_calls(path, module: str) -> list[str]:
+    """Attributes invoked on ``module`` in ``path``, resolving the local alias.
+
+    Handles the two import shapes this tree uses::
+
+        from corvin_plugins.providers import audit_backend as _audit_sink
+        from corvin_plugins.providers import summary_provider as _summary_prov
+
+    and counts ``<alias>.<attr>(...)`` calls on the resolved name only.
+    """
+    import ast
+
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").endswith(
+            "providers"
+        ):
+            for a in node.names:
+                if a.name == module:
+                    aliases.add(a.asname or a.name)
+        elif isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.endswith(f"providers.{module}"):
+                    aliases.add(a.asname or a.name.rsplit(".", 1)[-1])
+    return [
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in aliases
+    ]
 
 
 def _consumer_pattern(module: str) -> str:

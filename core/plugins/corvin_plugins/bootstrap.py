@@ -1027,6 +1027,77 @@ def _load_one(
     )
 
 
+def boot_platform() -> list[str]:
+    """The compliance-critical boot sequence, for every host that serves CorvinOS.
+
+    Three steps, in this order and for these reasons:
+
+    1. :func:`assert_compliance` — the fail-closed tripwires.  Runs FIRST so a
+       broken core audit writer stops the boot before anything else happens.
+    2. :func:`bootstrap_all` — load the tenant's plugins.  Best-effort per the
+       ADR-0030 contract, with ONE exception: ``GlobalComplianceLoadFailed`` is
+       re-raised, because swallowing a failed ``boot_layer=compliance`` plugin
+       would be the "compliance-off mode" the baseline forbids, one log line
+       deep.
+    3. ``assert_post_boot`` — asks whether anything put itself on the compliance
+       boot layer that :func:`bootstrap_global` did not grant.  Can only be asked
+       AFTER the plugins are loaded, which is why it is not folded into step 1.
+
+    **This function exists because the sequence had two homes and only one
+    caller.** It lived inline in ``corvin_gateway.app``; the standalone console
+    (``corvin_console.standalone:create_app``, which is what ``corvinos-serve``
+    runs and what ``install.sh`` launches) had copied the license-load block
+    above it and stopped before the compliance block.  A console with a
+    deliberately corrupted audit hash chain therefore booted and served
+    requests, while the very same tripwire — invoked by hand in that same
+    process — correctly refused.  The mechanism was sound; nothing called it.
+    That is the defect class ADR-0233 is named for, and the fix is one sequence
+    with two callers rather than two sequences that agree until one is edited.
+
+    There is deliberately NO flag and NO override, matching every other tripwire
+    (CLAUDE.md § Compliance Baseline).  Returns the ids of the plugins that
+    loaded, so the caller can hand them to :func:`shutdown`.
+
+    Raises whatever step 1 or step 3 raises — the caller MUST let it propagate.
+    """
+    assert_compliance()  # raises TripwireError -> boot aborts
+
+    loaded: list[str] = []
+    try:
+        from corvin_console import feature_flags as _flags  # noqa: PLC0415
+        from forge.paths import corvin_home as _corvin_home  # noqa: PLC0415
+        from forge.tenants import current_tenant as _current_tenant  # noqa: PLC0415
+
+        _tid = _current_tenant()
+        # BOTH load paths: the declarative spec.plugins.installed (ADR-0030
+        # Phase 7, always honoured — writing it into a version-controlled tenant
+        # config IS the opt-in) and the runtime registry (flag-gated).
+        loaded = bootstrap_all(
+            tenant_id=_tid,
+            corvin_home=_corvin_home(),
+            lifecycle_enabled=_flags.is_enabled("plugin_runtime_lifecycle", _tid),
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Matched by NAME rather than imported at the top so a stripped install
+        # without the compliance plugin machinery still boots.
+        if type(exc).__name__ == "GlobalComplianceLoadFailed":
+            raise
+        log.warning("plugin bootstrap skipped", exc_info=True)
+
+    try:
+        from corvin_compliance_reports.tripwire import (  # noqa: PLC0415
+            assert_post_boot as _assert_post_boot,
+        )
+    except ImportError:
+        # A stripped layout without the compliance package: assert_compliance()
+        # above already handled that case the same way.
+        _assert_post_boot = None  # type: ignore[assignment]
+    if _assert_post_boot is not None:
+        _assert_post_boot()  # raises TripwireError -> boot aborts
+
+    return loaded
+
+
 def shutdown(plugin_ids: Iterable[str]) -> None:
     """Unregister plugins on graceful shutdown, detaching their provider slots."""
     from .registry import unregister
@@ -1044,6 +1115,7 @@ __all__ = [
     "GLOBAL_ENTRY_POINT_GROUP",
     "GlobalComplianceLoadFailed",
     "assert_compliance",
+    "boot_platform",
     "bootstrap_all",
     "bootstrap_declared",
     "bootstrap_global",

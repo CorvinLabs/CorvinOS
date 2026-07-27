@@ -106,6 +106,53 @@ def _build_opencode() -> Any | None:
             return None
 
 
+def _build_hermes() -> Any | None:
+    """Lazy-import HermesEngine from bridges/shared/agents/.
+
+    Absent from the table until 2026-07-27, although ``agents/hermes_engine.py``
+    has shipped for far longer and every OTHER surface names ``hermes`` as a
+    selectable engine — ``routes/engine.py``'s ``valid_worker_engines``, the
+    Settings → Engines page, ``chat_runtime._DIRECT_OS_ENGINES``, and the Hermes
+    fallback that a fresh install lands on when Claude Code is unauthenticated.
+    The console's /settings/engine/capabilities route asks ``get_engine(eid)``
+    for each of the five it advertises, so hermes reported ``capabilities: {}``
+    and ``command_manifest: null`` while the engine object itself has ten
+    capabilities. The chat path never noticed because it constructs
+    ``HermesEngine`` directly rather than through this registry.
+    """
+    try:
+        from .agents.hermes_engine import HermesEngine  # type: ignore
+        return HermesEngine()
+    except ImportError:
+        try:
+            mod = importlib.import_module("agents.hermes_engine")
+            cls = getattr(mod, "HermesEngine", None)
+            return cls() if cls is not None else None
+        except ImportError as e:
+            logger.debug("engine_registry: hermes unavailable: %s", e)
+            return None
+
+
+def _build_copilot() -> Any | None:
+    """Lazy-import CopilotCliEngine from bridges/shared/agents/.
+
+    Same gap and same symptom as ``_build_hermes`` — advertised in
+    ``valid_worker_engines`` and in the capability matrix's structural-gap table,
+    buildable by nothing.
+    """
+    try:
+        from .agents.copilot_cli import CopilotCliEngine  # type: ignore
+        return CopilotCliEngine()
+    except ImportError:
+        try:
+            mod = importlib.import_module("agents.copilot_cli")
+            cls = getattr(mod, "CopilotCliEngine", None)
+            return cls() if cls is not None else None
+        except ImportError as e:
+            logger.debug("engine_registry: copilot unavailable: %s", e)
+            return None
+
+
 # Static table — the single source of truth. To add a new engine:
 #   1. Implement ``MyEngine`` matching ``WorkerEngine`` Protocol in
 #      ``bridges/shared/agents/<name>.py``.
@@ -116,7 +163,9 @@ _ENGINE_BUILDERS: dict[str, Callable[[], Any | None]] = {
     "claude_code": _build_claude_code,
     "codex_cli":   _build_codex_cli,
     "opencode":    _build_opencode,
-    # Future: "gemini_cli", "ollama", "vllm", "anthropic_sdk", "azure_openai"
+    "hermes":      _build_hermes,
+    "copilot":     _build_copilot,
+    # Future: "gemini_cli", "vllm", "anthropic_sdk", "azure_openai"
 }
 
 # Default engine — the conservative, battle-tested path.

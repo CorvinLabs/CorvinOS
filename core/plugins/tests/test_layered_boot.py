@@ -292,29 +292,52 @@ class TestBootstrapAllWiring(_BootTestCase):
             )
         self.assertEqual(result, ["g", "d", "r"])
 
-    def test_gateway_boot_path_still_reaches_bootstrap_all(self):
-        # The gateway is the real caller; if the import name ever drifts, the
+    def test_the_boot_path_still_reaches_bootstrap_all(self):
+        # The hosts are the real callers; if the import name ever drifts, the
         # whole layered boot becomes dead code with green unit tests.
-        source = self._gateway_source()
-        self.assertIn("from corvin_plugins.bootstrap import bootstrap_all", source)
+        #
+        # The sequence used to be inlined in the gateway, and this assertion read
+        # gateway/app.py directly. On 2026-07-27 that turned out to check only
+        # ONE of the two shipped hosts: corvin_console.standalone — what
+        # corvinos-serve runs and install.sh launches — had no such block at all,
+        # and a console with a corrupted audit chain booted. The sequence now
+        # lives once in bootstrap.boot_platform with both hosts calling it, so
+        # the assertion follows it there. Which hosts must call it is pinned by
+        # test_boot_platform_call_site.py.
+        self.assertIn("bootstrap_all(", self._sequence_source())
 
-    def test_gateway_does_not_swallow_the_compliance_abort(self):
-        # The gateway wraps bootstrap_all in a broad `except Exception` so one
+    def test_the_boot_path_does_not_swallow_the_compliance_abort(self):
+        # boot_platform wraps bootstrap_all in a broad `except Exception` so one
         # bad tenant plugin cannot cost the platform its boot. That is correct
         # for every failure EXCEPT the compliance abort — which the unit test
         # above proves bootstrap_all raises, and which this call site would
         # otherwise reduce to a warning. Green unit test, dead guarantee.
-        source = self._gateway_source()
+        source = self._sequence_source()
         self.assertIn("GlobalComplianceLoadFailed", source)
         # and it must re-raise, not merely mention the name
         idx = source.index("GlobalComplianceLoadFailed")
         self.assertIn("raise", source[idx:idx + 200])
 
     @staticmethod
-    def _gateway_source() -> str:
-        return (
-            _REPO / "core" / "gateway" / "corvin_gateway" / "app.py"
-        ).read_text(encoding="utf-8")
+    def _sequence_source() -> str:
+        """The body of the one shared boot sequence, docstring stripped.
+
+        Stripped because these assertions are about CODE: the docstring names
+        every step in prose, so a substring search that included it would stay
+        green against nothing but its own explanation.
+        """
+        import ast
+
+        path = _REPO / "core" / "plugins" / "corvin_plugins" / "bootstrap.py"
+        text = path.read_text(encoding="utf-8")
+        tree = ast.parse(text)
+        fn = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "boot_platform"
+        )
+        body = fn.body[1:] if ast.get_docstring(fn) else fn.body
+        lines = text.splitlines()
+        return "\n".join(lines[body[0].lineno - 1:fn.end_lineno])
 
 
 # ── 5. Nothing above `bundled` exists yet, and that must stay visible ─────────
