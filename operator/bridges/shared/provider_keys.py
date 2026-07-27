@@ -386,11 +386,15 @@ class SecretsStore:
         key = Fernet.generate_key()
         try:
             self.master_key_path.write_bytes(key)
-            self.master_key_path.chmod(0o600)
         except OSError as e:
             raise RuntimeError(
                 f"failed to write master key to {self.master_key_path}: {e}"
             )
+        # Restrict permissions (Unix-only; chmod on Windows is a no-op or error → ignore)
+        try:
+            self.master_key_path.chmod(0o600)
+        except OSError:
+            pass  # Windows or filesystem that doesn't support chmod; continue
 
         _log.info(f"SecretsStore: generated new master key for tenant {self.tenant_id}")
         return key
