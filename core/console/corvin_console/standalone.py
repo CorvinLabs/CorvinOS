@@ -189,6 +189,27 @@ def create_app() -> FastAPI:
         if _boot_platform is not None:
             _plugins_loaded = _boot_platform()  # raises -> boot aborts
 
+        # ── Phase 1a: Voice config migration (best-effort — never blocks startup) ─
+        # Auto-migrate voice configuration from legacy ~/.config/corvin-voice/
+        # to tenant-scoped <corvin_home>/tenants/<tenant_id>/voice/ on first access.
+        # This is idempotent and transparent.
+        try:
+            from .voice_config import get_voice_config_manager
+            mgr = get_voice_config_manager()
+            if mgr.needs_migration():
+                result = mgr.migrate_from_legacy()
+                if result.success and result.migrated_items > 0:
+                    log.info(
+                        f"Voice config migrated: {result.migrated_items} items "
+                        f"from {mgr.legacy_voice_config_dir()} to {mgr.voice_home()}"
+                    )
+                elif not result.success:
+                    log.warning(
+                        f"Voice migration had errors: {'; '.join(result.errors)}"
+                    )
+        except Exception as e:
+            log.debug(f"Voice config initialization (non-blocking): {e}")
+
         # Start presence heartbeat (best-effort — never blocks startup).
         try:
             from .aco.heartbeat import start_heartbeat_thread as _start_hb

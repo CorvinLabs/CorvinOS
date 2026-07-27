@@ -51,8 +51,16 @@ def _clean_env(**overrides: str) -> dict:
 
 def _resolve_all(key_name: str, tmp_path: Path, **env_overrides: str) -> dict[str, str | None]:
     """Resolve *key_name* through every independent implementation under the
-    same fixture: tmp_path as VOICE_CONFIG_DIR + given env overrides."""
-    env = _clean_env(VOICE_CONFIG_DIR=str(tmp_path), **env_overrides)
+    same fixture: tmp_path as VOICE_CONFIG_DIR and CORVIN_HOME + given env overrides.
+
+    Phase 1b: CORVIN_HOME must also be isolated to prevent SecretsStore from
+    reading/writing to the real ~/.corvin home. Each test gets its own encrypted
+    store isolation."""
+    env = _clean_env(
+        CORVIN_HOME=str(tmp_path / "corvin_home"),
+        VOICE_CONFIG_DIR=str(tmp_path),
+        **env_overrides
+    )
 
     with mock.patch.dict("os.environ", env, clear=True):
         results: dict[str, str | None] = {
@@ -147,6 +155,57 @@ def test_retired_dotenv_file_is_no_longer_consulted(tmp_path):
     results = _resolve_all("tts_openai_api_key", tmp_path)
     _assert_all_agree(results)
     assert results["secrets.resolve_key"] is None
+
+
+def test_secrets_store_and_resolve_key_agree(tmp_path):
+    """Phase 1b SSOT: SecretsStore.load_secret and resolve_key return
+    identical values (both checking the same encrypted secrets.enc).
+
+    This guards against divergence between the encryption layer and the
+    resolver layer — a secrets.enc file written by SecretsStore must be
+    readable by resolve_key/resolve_by_env_var.
+    """
+    from provider_keys import SecretsStore
+
+    env = _clean_env(VOICE_CONFIG_DIR=str(tmp_path))
+    with mock.patch.dict("os.environ", env, clear=True):
+        # Save a secret via SecretsStore
+        store = SecretsStore()
+        store.save_secret("OPENAI_API_KEY", "sk-from-encrypted-store")
+
+        # Load via SecretsStore
+        store_value = store.load_secret("OPENAI_API_KEY")
+
+        # Load via resolve_key
+        resolve_value = canonical.resolve_key("openai_api_key")
+
+        # Both should agree
+        assert store_value == resolve_value == "sk-from-encrypted-store"
+
+
+def test_secrets_store_precedence_with_service_env(tmp_path):
+    """Phase 1b precedence: secrets.enc wins over service.env.
+
+    Setup:
+    - service.env has OPENAI_API_KEY=sk-from-service-env
+    - secrets.enc has OPENAI_API_KEY=sk-from-secrets-enc
+
+    Expected:
+    - resolve_key returns sk-from-secrets-enc (encrypted store wins)
+    """
+    from provider_keys import SecretsStore
+
+    # Write service.env
+    (tmp_path / "service.env").write_text("OPENAI_API_KEY=sk-from-service-env\n")
+
+    # Write secrets.enc
+    env = _clean_env(VOICE_CONFIG_DIR=str(tmp_path))
+    with mock.patch.dict("os.environ", env, clear=True):
+        store = SecretsStore()
+        store.save_secret("OPENAI_API_KEY", "sk-from-secrets-enc")
+
+        result = canonical.resolve_key("openai_api_key")
+        assert result == "sk-from-secrets-enc"
 
 
 if __name__ == "__main__":
