@@ -196,6 +196,7 @@ class AuditBackendRegistry:
         copy.
         """
         with self._lock:
+            self._owner_plugin_id = None
             self._active = None
             self._failures = 0
         while True:

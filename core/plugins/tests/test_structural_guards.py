@@ -369,6 +369,90 @@ class TestUnloadRemovesHooks(_Base):
         )
 
 
+class TestCleanupAfterAFailedLoad(_Base):
+    """A half-loaded plugin must not leave anything behind.
+
+    Nothing will come back for it: it is not registered, so no unregister ever
+    runs. Releasing only the provider slot left a hook on the fail-closed gate —
+    with the callable of a half-initialised object — and a breaker carrying its
+    failures.
+    """
+
+    def test_a_failed_load_leaves_no_hook_behind(self):
+        class _Broken(_Plug):
+            def on_load(self, ctx):
+                ep.register_hook(
+                    "workflow.workflow_gate",
+                    lambda workflow: False,
+                    plugin_id=self.plugin_id,
+                    tenant_id=ctx.tenant_id,
+                )
+                raise RuntimeError("half loaded")
+
+        with self.assertRaises(RuntimeError):
+            self.reg.register(_Broken("halfhook"), _ctx("halfhook", tenant_id="t"))
+
+        self.assertEqual(
+            ep.describe("t"), {},
+            "a hook registered by a plugin that failed to load is still armed",
+        )
+
+    def test_a_failed_load_leaves_no_breaker_behind(self):
+        class _Broken(_Plug):
+            def on_load(self, ctx):
+                raise RuntimeError("nope")
+
+        for _ in range(3):
+            with self.assertRaises(RuntimeError):
+                self.reg.register(_Broken("flaky"), _ctx("flaky"))
+
+        stats = breakers.get_breaker("flaky").stats().to_dict()
+        self.assertNotEqual(
+            stats.get("state"), "open",
+            "three failed registrations left an open breaker for a plugin that "
+            "never loaded",
+        )
+
+
+class TestTheWindowAfterUnloadIsClosed(_Base):
+    """An id stays bound to its tenant even once the object is gone.
+
+    After `unregister` the plugin is in neither the load context nor the
+    registry, so the tenant check had nothing to compare against and took the
+    "unregistered, therefore allowed" path — a closure, timer or thread that
+    outlived the plugin could claim any tenant's fail-closed gate, and no
+    cleanup path would ever revoke it.
+    """
+
+    def test_a_late_registration_cannot_claim_a_foreign_tenant(self):
+        self.reg.register(_Plug("late"), _ctx("late", tenant_id="own-tenant"))
+        self.reg.unregister("late")
+
+        with self.assertRaises(ep.CrossTenantHookRefused):
+            ep.register_hook(
+                "workflow.workflow_gate",
+                lambda workflow: False,
+                plugin_id="late",
+                tenant_id="victim-tenant",
+            )
+        self.assertEqual(ep.describe("victim-tenant"), {})
+
+    def test_a_late_registration_for_its_own_tenant_is_still_allowed(self):
+        # Counter-test: binding the id must not make it unusable afterwards.
+        self.reg.register(_Plug("late2"), _ctx("late2", tenant_id="own-tenant"))
+        self.reg.unregister("late2")
+
+        ep.register_hook(
+            "engine.model_selection",
+            lambda request: "haiku",
+            plugin_id="late2",
+            tenant_id="own-tenant",
+        )
+        self.assertEqual(
+            ep.describe("own-tenant"), {"engine.model_selection": "late2"}
+        )
+
+
 class TestNoSelfPrivilegingFromInsideALoad(_Base):
     """`register(..., boot_layer=)` is importable, and on_load is arbitrary code.
 

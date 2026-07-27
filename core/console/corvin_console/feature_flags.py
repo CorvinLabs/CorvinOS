@@ -189,6 +189,24 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("plugins",),
     ),
     FeatureFlag(
+        id="plugin_trust_enforcement",
+        label="Plugin provenance enforcement",
+        description=(
+            "Refuse to load third-party plugins that have no provenance: a plugin "
+            "claiming origin=vetted without a valid Ed25519 signature from a "
+            "PINNED maintainer key is refused (never quietly downgraded), and an "
+            "origin=community plugin needs an explicit per-plugin operator "
+            "approval, recorded as an audit event. Off means the verdict is still "
+            "computed and shown, but nothing is refused — an existing install with "
+            "community plugins keeps booting exactly as before. "
+            "ADR-0249. Note this buys attribution, not containment: a loaded "
+            "plugin still runs in-process with the audit writer."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("plugins", "security"),
+    ),
+    FeatureFlag(
         id="plugin_self_healing",
         label="Plugin self-healing",
         description=(

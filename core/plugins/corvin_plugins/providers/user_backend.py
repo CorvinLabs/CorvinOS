@@ -94,6 +94,7 @@ class UserBackendRegistry:
 
     def clear(self) -> None:
         with self._lock:
+            self._owner_plugin_id = None
             self._active = None
 
     def clear_if_active(self, provider: object) -> bool:
