@@ -2550,6 +2550,51 @@ def _resolve_os_model(
     workload_hint: dict | None = None,
     chat_key: str | None = None,
 ) -> str | None:
+    """The 6-tier resolution, then the ADR-0251 ``engine.model_selection`` hook.
+
+    Split into a bundled rule and a composing wrapper for the same reason
+    ``delegation_policy`` is: the tier ladder has six exit points, and threading
+    a hook through each of them would be six places for the plugin contract to
+    drift. The ladder keeps every return path it had; this wrapper is the single
+    call site.
+
+    With ``plugin_extension_points`` off — the default — ``resolve_step_model``
+    returns its input untouched, so this is the pre-feature path with one
+    function call after it.
+    """
+    bundled = _resolve_os_model_bundled(
+        profile,
+        payload_chars=payload_chars,
+        engine_id=engine_id,
+        tenant_id=tenant_id,
+        workload_hint=workload_hint,
+        chat_key=chat_key,
+    )
+    try:
+        from model_selector import resolve_step_model as _rsm  # noqa: PLC0415
+
+        return _rsm(
+            bundled,
+            engine_id=engine_id,
+            tenant_id=tenant_id,
+            request={"payload_chars": payload_chars, "surface": "bridge"},
+        )
+    except Exception:  # noqa: BLE001
+        # The selector module is optional on a stripped install, and a model
+        # choice must never cost the turn. The bundled answer is the
+        # pre-feature behaviour.
+        return bundled
+
+
+def _resolve_os_model_bundled(
+    profile: dict | None,
+    *,
+    payload_chars: int = 0,
+    engine_id: str = "claude_code",
+    tenant_id: str = "_default",
+    workload_hint: dict | None = None,
+    chat_key: str | None = None,
+) -> str | None:
     """Layer 29.5 Phase 3 (ADR-0024) / ADR-0119 / ADR-0123 — 6-Tier adaptive OS model selection.
 
     Resolution order (top wins):

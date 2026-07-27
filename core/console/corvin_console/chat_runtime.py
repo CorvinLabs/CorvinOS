@@ -1368,7 +1368,7 @@ def will_delegate(sess: "WebChatSession", prompt: str) -> bool:
     _pl = prompt.strip().lower()
     force_delegate = (_pl == _DELEGATE_PREFIX
                       or _pl.startswith(_DELEGATE_PREFIX + " "))
-    if not (force_delegate or _should_delegate(prompt)):
+    if not (force_delegate or _should_delegate(prompt, tenant_id=sess.tenant_id)):
         return False
     # The operator's worker-engine selection has the last word: on a `native`
     # install a delegation-worthy prompt still runs in-process unless it is
@@ -1378,6 +1378,7 @@ def will_delegate(sess: "WebChatSession", prompt: str) -> bool:
         prompt,
         mode=_feature_flags.worker_engine_mode(sess.tenant_id),
         force_delegate=force_delegate,
+        tenant_id=sess.tenant_id,
     ) != "native"
 
 
@@ -2756,7 +2757,35 @@ _ACS_X_IMPORT_WARNED = False
 _NON_FANOUT_PRIMITIVES = frozenset({"LOOP", "GOAL", "COMPUTE", "DELEGATE"})
 
 
-def _should_delegate(prompt: str) -> bool:
+def _should_delegate(prompt: str, *, tenant_id: str) -> bool:
+    """The triage heuristic, then the ADR-0251 route-selection hook.
+
+    ``tenant_id`` is keyword-REQUIRED rather than defaulted. The hook bus is
+    per-tenant, and a ``"_default"`` fallback here would send every tenant's
+    lookup to one bucket — silently, and only on installs that have more than
+    one tenant, which is the worst possible place for a quiet default.
+
+    The heuristic itself stays whole in ``_should_delegate_bundled``: it is a
+    deterministic 0 ms ladder with its own extensive test suite, and threading a
+    plugin call through it would make those tests depend on process-wide bus
+    state. A hook may only ever SUPPRESS delegation here — see
+    ``delegation_policy.resolve_delegation_route`` for why that is
+    one-directional.
+    """
+    bundled = _should_delegate_bundled(prompt)
+    try:
+        from delegation_policy import resolve_delegation_route  # noqa: PLC0415
+
+        return resolve_delegation_route(
+            bundled, tenant_id=tenant_id, request={"surface": "console"}
+        )
+    except Exception:  # noqa: BLE001
+        # Triage must never cost the turn; the bundled verdict is the
+        # pre-feature behaviour.
+        return bundled
+
+
+def _should_delegate_bundled(prompt: str) -> bool:
     """Heuristic triage: does THIS task fit the ACS fan-out? (ADR-0202/0203)
 
     True → ACS manager/worker fan-out. False → the normal direct Claude Code
@@ -2981,6 +3010,7 @@ def _worker_engine_target(
     *,
     mode: str,
     force_delegate: bool,
+    tenant_id: str = "_default",
 ) -> str:
     """Which engine runs this turn: "native" | "acs" | "tde".
 
@@ -2993,8 +3023,15 @@ def _worker_engine_target(
       * the TDE availability / pool-headroom probes — evaluated ONLY when the
         operator selected ``tde`` and no earlier rung of the ladder already
         decided, so a ``native`` install never pays for a TDE import probe.
+
+    Since ADR-0251 the shared entry is ``resolve_worker_engine``, which runs the
+    same pure rule and then offers its answer to an ``engine.engine_selection``
+    hook. ``tenant_id`` is threaded through for that: the hook bus is per-tenant,
+    and a default here would silently route every tenant's hook lookup to
+    ``_default``. With ``plugin_extension_points`` off — the default — the two
+    entries are behaviourally identical.
     """
-    from delegation_policy import worker_engine_target as _shared_target  # noqa: PLC0415
+    from delegation_policy import resolve_worker_engine as _shared_target  # noqa: PLC0415
     is_big_data = _is_big_data_task(prompt)
     if mode == "tde" and not (force_delegate or is_big_data):
         tde_available, quota_ok = _tde_available(), _tde_quota_peek_ok()
@@ -3006,6 +3043,7 @@ def _worker_engine_target(
         is_big_data=is_big_data,
         tde_available=tde_available,
         quota_ok=quota_ok,
+        tenant_id=tenant_id,
     )
 
 
@@ -4171,6 +4209,11 @@ async def stream_turn(
     # autoselect gate → payload-sized autoselect (prompt + web system
     # prompt + session history, not bare len(prompt)). Falls back to the
     # CLI default when the selector module is unavailable.
+    # Resolve engine early so the turn.start debug event can record it, and so
+    # the model-selection call site below can bound a plugin's answer to THIS
+    # engine's registry. The full pre-spawn gate check also uses this value.
+    _os_engine = _effective_os_engine(sess.tenant_id)
+
     _os_model: str | None = None
     if _model_selector is not None:
         try:
@@ -4180,6 +4223,16 @@ async def stream_turn(
                     prompt, _WEB_CHAT_SYSTEM_PROMPT, session_dir=sess.workdir,
                 )
                 _os_model = _model_selector.autoselect_os_model(payload)
+            # ADR-0251 — the `engine.model_selection` call site, shared with the
+            # bridge adapter so both surfaces apply one plugin contract. A hook
+            # may name any model registered for this engine and nothing else;
+            # with the flag off this returns its input untouched.
+            _os_model = _model_selector.resolve_step_model(
+                _os_model,
+                engine_id=_os_engine,
+                tenant_id=sess.tenant_id,
+                request={"surface": "console"},
+            )
         except Exception:  # noqa: BLE001
             _os_model = None
     # ADR-0193 — mint a short-lived internal bearer token so the native
@@ -4294,9 +4347,11 @@ async def stream_turn(
             _task_text = _ue_task
             prompt = _ue_task
 
-    # Resolve engine early so turn.start debug event can record it.
-    # The full pre-spawn gate check (line ~1958) also uses this value.
-    _os_engine = _effective_os_engine(sess.tenant_id)
+    # `_os_engine` is resolved further up now — it moved above the model block
+    # in 2026-07-27's ADR-0251 work, because the `engine.model_selection` hook
+    # needs the engine id to check a plugin's answer against THAT engine's
+    # registry, and `_os_model` is consumed by `_build_args` before this point.
+    # Resolving it twice would mean two `shutil.which` probes per turn.
 
     # Phase 2a: Start execution context tracking with resolved engine and model.
     _exec_ctx_builder.start(
@@ -4474,14 +4529,16 @@ async def stream_turn(
     _pre_delegate = (_del_enabled
                      and not _del_throttled
                      and not _force_direct
-                     and (_force_delegate or _should_delegate(prompt)))
+                     and (_force_delegate or _should_delegate(
+                         prompt, tenant_id=sess.tenant_id)))
     # The pre-filter only says "delegation-worthy"; the operator's mode decides
     # WHERE it runs, and `native` means the turn stays in-process. Resolve it
     # here so the pre-spawn gate below is classified against the engine that
     # will really spawn.
     _worker_target = (
         _worker_engine_target(prompt, mode=_worker_mode,
-                              force_delegate=_force_delegate)
+                              force_delegate=_force_delegate,
+                              tenant_id=sess.tenant_id)
         if _pre_delegate else "native"
     )
     _will_delegate = _pre_delegate and _worker_target != "native"
@@ -4792,7 +4849,7 @@ async def stream_turn(
     # Reuse `_del_enabled` computed at the pre-spawn gate above — NOT a fresh
     # read — so a tenant.corvin.yaml mtime flip during the CCC await cannot
     # diverge the gate's compliance row from this decision (round-4 review).
-    _del_heuristic = _should_delegate(prompt)
+    _del_heuristic = _should_delegate(prompt, tenant_id=sess.tenant_id)
     # Layer 5 repair throttle (acs_error_rate anomaly) was already resolved into
     # `_del_throttled` above, where it also fed the pre-spawn gate's engine
     # classification (ACS-3). Reuse that single value so the gate and the real

@@ -16,11 +16,11 @@ Phases 1–5 all have working, tested code. Three of them have **no reach**:
 |---|---|
 | the `boot_layer` axis, four values | nothing on `compliance` or `core` — `_GLOBAL_SPECS` is empty, `register_global_plugin()` has no production caller, `bootstrap_global()` returns `[]` |
 | `registry.replace()` (ADR-0237 full replacement) | **nothing can** — it accepts only a `core` target and no plugin is on that boot layer |
-| the four extension-point bus points | **no call site calls `invoke()`** |
+| the four extension-point bus points | **all 4 wired** (ADR-0251, 2026-07-27) |
 | the seven bridge supervisor classes | **nothing declares them** in `spec.plugins.installed` |
 
 Guard tests pin all four statements — `core/plugins/tests/test_layered_boot.py::TestTheTopOfTheAxisHasNoProductionInstance`
-and `test_extension_points.py::test_no_call_site_is_wired_yet`. The day any of them stops
+and `test_extension_point_call_sites.py` (per point, both directions). The day any of them stops
 being true the suite goes red with a message naming this file, so these lines cannot
 silently rot into a lie.
 
@@ -179,7 +179,7 @@ did. They are target paths.
 | 0 | ADR consolidation | ✅ done | — |
 | 1 | Boot-layer-aware registry (additive, no file moves) | ✅ done (c455516) | privileged values have **0 instances** |
 | 2 | Boot order + scoping | ✅ done (c455516) | `bootstrap_global()` → `[]` everywhere; the tenant-downgrade guard *is* live |
-| 3 | Extension points | ✅ **bus only** | **no call site calls `invoke()`** |
+| 3 | Extension points | ✅ **all 4 wired** | ADR-0251, 2026-07-27 |
 | 4 | Admin control plane (REST) | ✅ done | six routes behind `admin_control_plane` |
 | 5 | Bridge supervisor plugins | ✅ **classes only** | **nothing declares them** |
 | 6 | Headless API-only boot | ◑ **partial** | browser surfaces suppressed; **no boot reorder**, **no presets** |
@@ -331,7 +331,7 @@ this document so it fails loudly instead of aging into a false statement.
 
 ---
 
-## Phase 3 — Extension points ✅ bus shipped, no call sites wired
+## Phase 3 — Extension points ✅ bus shipped, all 4 call sites wired
 
 **Flag:** `plugin_extension_points` (default `false`)
 
@@ -349,11 +349,14 @@ the bus has one flat key space:
 - `delegation.route_selection_policy`
 - `workflow.workflow_gate` (the only fail-closed one)
 
-**Reach today: none.** No production call site calls `invoke()`. A registered hook is inert
-regardless of the flag, and `test_extension_points.py::test_no_call_site_is_wired_yet`
-fails the moment a call site appears, naming the docs that must be updated with it.
-Wiring the four points into `delegation_policy`, the engine/provider selection path and
-the workflow gate is the remaining work.
+**Reach today: 1 of 4 (2026-07-27).** `engine.engine_selection` is wired into
+`delegation_policy.resolve_worker_engine` (ADR-0251 D1/D2): a hook may confirm the bundled
+routing answer or de-escalate to `native`, never escalate, and a refusal is audited.
+A hook on the other three is inert regardless of the flag.
+`test_extension_point_call_sites.py` fails when a point gains a caller **or loses one**,
+naming the docs that must be updated with it. Wiring `engine.model_selection` (the
+provider/model selection path), `delegation.route_selection_policy` (the classifier) and
+`workflow.workflow_gate` is the remaining work.
 
 **Step 3 — replacement** via the manifest field `replaces:` from Phase 1. Implemented and
 **structurally unreachable**: `replace()` requires a `core` target and none exists.
@@ -649,7 +652,11 @@ that is stated on the line rather than hidden behind the tick.
   - [x] Document the 8 existing provider registries
   - [x] Add `engine.model_selection`, `engine.engine_selection`,
         `delegation.route_selection_policy`, `workflow.workflow_gate`
-  - [ ] **Wire them into call sites** — no call site calls `invoke()`; guard-tested
+  - [x] `engine.engine_selection` → `delegation_policy.resolve_worker_engine`
+  - [x] `delegation.route_selection_policy` → `delegation_policy.resolve_delegation_route`
+  - [x] `engine.model_selection` → `model_selector.resolve_step_model`
+  - [x] `workflow.workflow_gate` → `routes/workflows.py::_stream_run`
+    (all four ADR-0251, 2026-07-27; guard-tested per point in both directions)
   - [ ] Replacement path exercised end-to-end — impossible while no `core` target exists
   - [x] Immutable-mechanism hook attempts fail (`_NEVER_EXTENSIBLE`)
 

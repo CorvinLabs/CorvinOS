@@ -446,9 +446,11 @@ hook, and the admin plane does not expose one.
 
 **Neither mechanism has any reach today**, and the admin plane inherits that:
 
-* the bus defines four points and **no call site calls `invoke()`** — a registered hook is
-  inert no matter how the flag is set, which
-  `test_extension_points.py::test_no_call_site_is_wired_yet` keeps pinned;
+* the bus defines four points and **all four are wired** since 2026-07-27
+  (ADR-0251). What a hook may DO at each is bounded at the call site: it may
+  de-escalate a route, suppress a delegation, name a registered model, or deny a
+  workflow — never the reverse of any of those.
+  `test_extension_point_call_sites.py` keeps each pinned in both directions;
 * `replaces:` / `PluginRegistry.replace()` requires a target on the `core` boot layer, and
   **no plugin is on it**, so the call is structurally unreachable.
 

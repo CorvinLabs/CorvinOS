@@ -2836,6 +2836,63 @@ async def _stream_run(
     if not isinstance(graph, list):
         graph = []
 
+    # ── ADR-0251 — `workflow.workflow_gate`, the only fail-closed point ───────
+    #
+    # Placed here because this is the last point before ANY node is touched,
+    # including the dry-run enumeration below. A gate answers "may this run at
+    # all"; letting a denied workflow still be pretend-run would make the answer
+    # depend on a query parameter.
+    #
+    # Composition is CONJUNCTION, not override (D2): everything the core already
+    # decided — auth, tenant scope, YAML validation — has happened by now and is
+    # not re-litigated here. A hook can only ever be MORE restrictive. There is
+    # deliberately no path by which a hook causes a workflow to run that the
+    # core refused.
+    _gate_denied = None
+    try:
+        from corvin_plugins import extension_points as _ep  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        _ep = None  # no plugin package: the pre-feature path
+    if _ep is not None:
+        try:
+            # A STRUCTURAL summary, never the inputs or the YAML. `inputs` is
+            # user-supplied and routinely carries the actual task text; handing
+            # it to every installed plugin on every run would make a gate hook a
+            # content tap. Node ids and shape are what "may this run" needs.
+            _allowed = _ep.invoke(
+                "workflow.workflow_gate",
+                {
+                    "wid": wid,
+                    "rid": rid,
+                    "tenant_id": tenant_id,
+                    "dry_run": dry_run,
+                    "node_count": len(graph),
+                    "node_ids": [str(n.get("id", "?")) for n in graph
+                                 if isinstance(n, dict)],
+                    "engine": (parsed.get("orchestration", {}) or {}).get("engine"),
+                },
+                default=True,
+                tenant_id=tenant_id,
+            )
+            if _allowed is False:
+                _gate_denied = "denied by a workflow_gate hook"
+        except _ep.ExtensionPointDenied:
+            # The fail-closed contract: a hook that raised or returned a wrong
+            # type produced no decision, and a gate that cannot answer has not
+            # said yes. The bus has already audited it with the plugin id.
+            _gate_denied = "workflow_gate hook failed to produce a decision"
+        except Exception:  # noqa: BLE001
+            # A defect in the bus itself must not become a denial — that would
+            # let an unrelated bug take workflows down platform-wide. The bus's
+            # own guarantees cover the plugin; this covers the bus.
+            _gate_denied = None
+    if _gate_denied is not None:
+        yield _emit({"type": "error", "ts": time.time(), "message": _gate_denied})
+        run_meta.update({"status": "failed", "ok": False, "error": _gate_denied,
+                         "finished_at": time.time()})
+        _write_atomic(_run_meta_path(tenant_id, wid, rid), run_meta)
+        return
+
     if dry_run:
         # Schema-only: enumerate nodes without executing
         for node in graph:

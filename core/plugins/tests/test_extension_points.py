@@ -33,6 +33,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -204,14 +205,42 @@ class TestFlagOn(_Base):
             ep.invoke("engine.engine_selection", default="native"), "native"
         )
 
-    def test_a_hook_returning_none_is_passed_through_verbatim(self):
-        # "No opinion" is the point's own contract (see the spec), not something
-        # the bus reinterprets — a bus that silently substituted the default
-        # would make a hook unable to express a deliberate None.
+    def test_a_hook_returning_none_abstains_and_the_default_runs(self):
+        """ADR-0251 D3. This REPLACES the previous contract, deliberately.
+
+        Until 2026-07-27 the bus passed `None` through verbatim and left the
+        call site to interpret it, on the reasoning that a hook must be able to
+        express a deliberate `None`. ADR-0251 D3 decided the opposite, and the
+        point specs in `extension_points.py` had always agreed with the ADR
+        rather than with the old test: `engine.model_selection`'s
+        `default_behavior` says a `None` return is "treated exactly like no hook
+        at all". The old test cited that spec and asserted its opposite.
+
+        The decision is right on the merits too: `None` is not a meaningful
+        answer on ANY of the four points — three return an id and the fourth
+        returns a gate verdict — so pass-through bought no expressiveness and
+        cost every call site its own `if result is None` branch, which is four
+        places for the interpretation to drift.
+        """
         ep.register_hook(
             "engine.model_selection", lambda r: None, plugin_id="p1", tenant_id="_default"
         )
-        self.assertIsNone(ep.invoke("engine.model_selection", {}, default="x"))
+        self.assertEqual(ep.invoke("engine.model_selection", {}, default="x"), "x")
+
+    def test_none_abstains_on_a_fail_closed_point_too(self):
+        """Abstention is not denial, even on the gate (ADR-0251 D3).
+
+        The strict reading — `None` on a fail-closed point means deny — is
+        defensible in isolation and wrong in practice: a gate that cares about
+        some workflows and not others would have to return True for every run it
+        has no opinion about, thereby overriding the core gate on all of them.
+        """
+        ep.register_hook(
+            "workflow.workflow_gate", lambda w: None, plugin_id="p1", tenant_id="_default"
+        )
+        self.assertIs(
+            ep.invoke("workflow.workflow_gate", {}, default=True), True
+        )
 
 
 # ── 2. A hook may never take down its call site ───────────────────────────────
@@ -1166,75 +1195,205 @@ class TestDefensiveEdges(_Base):
             del sys.modules["corvin_console"]
             sys.modules.update(saved)
 
-    def test_no_call_site_is_wired_yet(self):
-        # Phase 3 defines the bus; the call sites land in a follow-up.  This
-        # test is the honest record of that, and it will fail the day someone
-        # wires one — at which point the doc's "not wired yet" line must change
-        # in the same commit.
-        import subprocess
+    # `test_no_call_site_is_wired_yet` stood here until 2026-07-27. It asserted
+    # that NOTHING used the bus, and it named its own successor: "When the call
+    # sites land, THIS test goes away and that one carries the guarantee at
+    # finer grain." ADR-0251's first call site landed, so it did.
+    #
+    # `test_extension_point_call_sites.py` now carries it per point and in BOTH
+    # directions: a point gaining a caller must move from `_UNWIRED_POINTS` to
+    # `_WIRED_POINTS`, and a wired point LOSING its caller fails too. The
+    # repo-wide version could only ever have said "none yet", which stops being
+    # a useful claim the moment the answer is "some".
 
-        # Match USES of the module (an import of it, or an attribute access on
-        # it) — not the string "plugin_extension_points", which is the feature
-        # flag's id and lives in the flag registry by design.
-        out = subprocess.run(
-            ["git", "grep", "-lE", r"(from|import) [.a-z_]*extension_points|"
-                                   r"\bextension_points\.[a-z]"],
-            cwd=str(_REPO), capture_output=True, text=True,
-        ).stdout.split()
-        unexpected = [
-            p for p in out
-            if not p.endswith((
-                "corvin_plugins/extension_points.py",
-                "corvin_plugins/__init__.py",
-                "tests/test_extension_points.py",
-                "tests/test_structural_guards.py",
-                # The per-point successor to this test (ADR-0251). It reads
-                # KNOWN_EXTENSION_POINTS to check each point individually, which
-                # is using the bus's inventory, not the bus. When the call sites
-                # land, THIS test goes away and that one carries the guarantee
-                # at finer grain.
-                "tests/test_extension_point_call_sites.py",
-                ".md",
-                # LIFECYCLE, not usage. registry.py calls verify_owner() when a
-                # plugin finishes loading, to revoke hooks it claimed for a
-                # foreign tenant before it was resolvable. That is the bus being
-                # administered, not consulted — no `invoke()` runs, so the
-                # "call sites land in a follow-up" statement is unaffected. The
-                # narrower assertion below is what actually guards it.
-                "corvin_plugins/registry.py",
-            ))
-        ]
+
+# ── 7. Return-value semantics (ADR-0251 D3) ───────────────────────────────────
+
+
+class TestReturnTypeIsChecked(_Base):
+    """A wrong TYPE is a broken hook, not an abstention.
+
+    From the call site's view "the gate returned a dict" and "the gate crashed"
+    are the same event: no decision was produced. So the two are handled
+    identically — the default on an ordinary point, a denial on a fail-closed
+    one.
+    """
+
+    FLAG = True
+
+    def test_wrong_type_on_an_ordinary_point_takes_the_default(self):
+        ep.register_hook(
+            "engine.engine_selection", lambda r: {"engine": "acs"},
+            plugin_id="p1", tenant_id="_default",
+        )
         self.assertEqual(
-            unexpected, [],
-            "a call site now uses the bus — update docs/EXTENSIBLE_CORE_PLUGINS.md "
-            "in the same commit (CLAUDE.md § Testing + Docs Sync)",
+            ep.invoke("engine.engine_selection", {}, default="native"), "native"
         )
 
-        # The claim that matters: nothing INVOKES a hook yet. Administering the
-        # bus (verify_owner / unregister_all) does not make a hook run.
-        invokers = subprocess.run(
-            ["git", "grep", "-lE", r"extension_points\.invoke|\binvoke\(\s*[\"']"],
-            cwd=str(_REPO), capture_output=True, text=True,
-        ).stdout.split()
-        unexpected_invokers = [
-            p for p in invokers
-            if not p.endswith((
-                "corvin_plugins/extension_points.py",
-                "tests/test_extension_points.py",
-                # Matches on a DOCSTRING example showing what a call site looks
-                # like, not on a call. The grep cannot tell code from prose, and
-                # the honest fix is to list the file rather than to write worse
-                # documentation so a regex stays quiet.
-                "tests/test_extension_point_call_sites.py",
-                ".md",
-            ))
-        ]
-        self.assertEqual(
-            unexpected_invokers, [],
-            "something now invokes an extension point — the bus is live, and "
-            "docs/EXTENSIBLE_CORE_PLUGINS.md still says the call sites are "
-            "wired in a follow-up",
+    def test_wrong_type_on_the_gate_denies(self):
+        ep.register_hook(
+            "workflow.workflow_gate", lambda w: "yes",
+            plugin_id="p1", tenant_id="_default",
         )
+        with self.assertRaises(ep.ExtensionPointDenied):
+            ep.invoke("workflow.workflow_gate", {}, default=True)
+
+    def test_an_int_is_not_a_bool_on_the_gate(self):
+        # Guards the one place a plain isinstance check could go wrong if a
+        # point ever declared `int`: bool IS a subclass of int, but 1 is not an
+        # instance of bool, so `1` must not sneak past the gate's contract.
+        ep.register_hook(
+            "workflow.workflow_gate", lambda w: 1,
+            plugin_id="p1", tenant_id="_default",
+        )
+        with self.assertRaises(ep.ExtensionPointDenied):
+            ep.invoke("workflow.workflow_gate", {}, default=True)
+
+    def test_a_bool_is_not_a_str_on_a_routing_point(self):
+        ep.register_hook(
+            "engine.model_selection", lambda r: True,
+            plugin_id="p1", tenant_id="_default",
+        )
+        self.assertEqual(
+            ep.invoke("engine.model_selection", {}, default="haiku"), "haiku"
+        )
+
+    def test_the_refusal_is_audited_without_the_value(self):
+        ep.register_hook(
+            "engine.model_selection", lambda r: {"secret": "sk-live-abc"},
+            plugin_id="p1", tenant_id="_default",
+        )
+        ep.invoke("engine.model_selection", {}, default="haiku")
+        events = [e for e in self.audited if e[0] == "plugin.extension_return_invalid"]
+        self.assertEqual(len(events), 1, self.audited)
+        details = events[0][1]
+        self.assertEqual(details["returned_type"], "dict")
+        self.assertEqual(details["expected_type"], "str")
+        self.assertEqual(details["plugin_id"], "p1")
+        # The VALUE never reaches the chain. A misbehaving hook's return could
+        # be anything at all, including a credential or a prompt fragment, and
+        # an audit record cannot be taken back.
+        self.assertNotIn("sk-live-abc", json.dumps(details))
+
+    def test_a_correct_type_is_returned_unchanged(self):
+        ep.register_hook(
+            "engine.model_selection", lambda r: "sonnet",
+            plugin_id="p1", tenant_id="_default",
+        )
+        self.assertEqual(
+            ep.invoke("engine.model_selection", {}, default="haiku"), "sonnet"
+        )
+
+    def test_the_gate_accepts_a_real_bool(self):
+        ep.register_hook(
+            "workflow.workflow_gate", lambda w: False,
+            plugin_id="p1", tenant_id="_default",
+        )
+        self.assertIs(
+            ep.invoke("workflow.workflow_gate", {}, default=True), False
+        )
+
+
+# ── 8. Latency is measured and audited, never enforced (ADR-0251 D5) ──────────
+
+
+class TestLatencyIsMeasuredNotEnforced(_Base):
+    FLAG = True
+
+    def setUp(self):
+        super().setUp()
+        ep._slow_reported.clear()
+
+    def tearDown(self):
+        ep._slow_reported.clear()
+        super().tearDown()
+
+    def test_a_slow_hook_still_returns_its_answer(self):
+        """The budget is advisory. This is the honest half of D5.
+
+        There is no timeout enforceable against arbitrary synchronous Python
+        without a thread or a subprocess. A test asserting that a slow hook is
+        CUT OFF would be asserting a guarantee the code does not provide —
+        ADR-0249's attribution-not-containment posture, one layer down.
+        """
+        budget = ep._BY_NAME["engine.model_selection"].latency_budget_ms
+
+        def _slow(_req):
+            time.sleep(budget / 1000.0 * 3)
+            return "sonnet"
+
+        ep.register_hook(
+            "engine.model_selection", _slow, plugin_id="slowpoke",
+            tenant_id="_default",
+        )
+        self.assertEqual(
+            ep.invoke("engine.model_selection", {}, default="haiku"), "sonnet"
+        )
+
+    def test_an_overrun_is_audited_with_the_plugin_and_the_elapsed_time(self):
+        budget = ep._BY_NAME["engine.model_selection"].latency_budget_ms
+
+        def _slow(_req):
+            time.sleep(budget / 1000.0 * 3)
+            return "sonnet"
+
+        ep.register_hook(
+            "engine.model_selection", _slow, plugin_id="slowpoke",
+            tenant_id="_default",
+        )
+        ep.invoke("engine.model_selection", {}, default="haiku")
+        events = [e for e in self.audited if e[0] == "plugin.extension_hook_slow"]
+        self.assertEqual(len(events), 1, self.audited)
+        self.assertEqual(events[0][1]["plugin_id"], "slowpoke")
+        self.assertGreater(events[0][1]["elapsed_ms"], budget)
+
+    def test_a_fast_hook_is_not_audited(self):
+        ep.register_hook(
+            "engine.model_selection", lambda r: "sonnet", plugin_id="quick",
+            tenant_id="_default",
+        )
+        ep.invoke("engine.model_selection", {}, default="haiku")
+        self.assertEqual(
+            [e for e in self.audited if e[0] == "plugin.extension_hook_slow"], []
+        )
+
+    def test_a_slow_hook_on_a_hot_path_is_recorded_once(self):
+        """The chain is append-only and a slow hook sits on the turn path.
+
+        Without the memo, one misbehaving plugin appends one unremovable record
+        per turn — the same chain-spam failure the flag-degradation notice
+        already guards against.
+        """
+        budget = ep._BY_NAME["engine.model_selection"].latency_budget_ms
+
+        def _slow(_req):
+            time.sleep(budget / 1000.0 * 3)
+            return "sonnet"
+
+        ep.register_hook(
+            "engine.model_selection", _slow, plugin_id="slowpoke",
+            tenant_id="_default",
+        )
+        for _ in range(3):
+            ep.invoke("engine.model_selection", {}, default="haiku")
+        self.assertEqual(
+            len([e for e in self.audited if e[0] == "plugin.extension_hook_slow"]), 1
+        )
+
+    def test_two_slow_plugins_on_one_point_stay_distinguishable(self):
+        # The memo is keyed by (tenant, point, plugin), not (tenant, point):
+        # otherwise the second plugin's overrun would be suppressed by the
+        # first's record and the operator would see only one culprit.
+        self.assertTrue(ep._note_slow("t", "engine.model_selection", "a"))
+        self.assertTrue(ep._note_slow("t", "engine.model_selection", "b"))
+        self.assertFalse(ep._note_slow("t", "engine.model_selection", "a"))
+
+    def test_the_slow_memo_does_not_grow_without_bound(self):
+        for i in range(ep.MAX_SLOW_REPORTED):
+            ep._note_slow(f"tenant-{i}", "engine.model_selection", "p")
+        self.assertEqual(len(ep._slow_reported), ep.MAX_SLOW_REPORTED)
+        self.assertTrue(ep._note_slow("one-too-many", "engine.model_selection", "p"))
+        self.assertEqual(len(ep._slow_reported), 1)
 
 
 if __name__ == "__main__":  # pragma: no cover

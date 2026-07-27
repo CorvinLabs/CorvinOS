@@ -1,6 +1,13 @@
 """ADR-0114 — web-chat delegation path: triage, flag, budget, spec builder.
 
 Pure-function tests; no subprocess, no network, no ACS spawn.
+
+These target ``_should_delegate_bundled`` — the deterministic heuristic — and
+not ``_should_delegate``, which since ADR-0251 also offers the verdict to a
+``delegation.route_selection_policy`` hook. That split is deliberate: a triage
+suite this large must not depend on process-wide extension-bus state, and the
+hook's own contract (a plugin may suppress delegation, never cause it) is tested
+where it lives, in ``core/plugins/tests/test_route_selection_call_site.py``.
 """
 from __future__ import annotations
 
@@ -31,7 +38,7 @@ from acs_classify import heuristic_classify as _hc  # noqa: E402
     "x" * 400,  # long prompts are substantive by definition
 ])
 def test_triage_delegates_substantive(prompt: str) -> None:
-    assert cr._should_delegate(prompt) is True
+    assert cr._should_delegate_bundled(prompt) is True
 
 
 @pytest.mark.parametrize("prompt", [
@@ -42,7 +49,7 @@ def test_triage_delegates_substantive(prompt: str) -> None:
     "erkläre kurz",  # verb-less smalltalk stays direct
 ])
 def test_triage_keeps_trivial_direct(prompt: str) -> None:
-    assert cr._should_delegate(prompt) is False
+    assert cr._should_delegate_bundled(prompt) is False
 
 
 # ── ACS-suitability rework (2026-07-20): coding → direct, fan-out → ACS ──────
@@ -65,7 +72,7 @@ def test_triage_keeps_trivial_direct(prompt: str) -> None:
 def test_triage_routes_coding_to_direct_claude_code(prompt: str) -> None:
     """Coding-shaped work takes the direct OS-turn (Claude Code's own
     Task-tool sub-delegation), NOT the ACS manager/worker fan-out."""
-    assert cr._should_delegate(prompt) is False
+    assert cr._should_delegate_bundled(prompt) is False
 
 
 @pytest.mark.parametrize("prompt", [
@@ -79,7 +86,7 @@ def test_triage_routes_coding_to_direct_claude_code(prompt: str) -> None:
     "/delegate fix the bug in server.py",
 ])
 def test_triage_routes_fanout_to_acs(prompt: str) -> None:
-    assert cr._should_delegate(prompt) is True
+    assert cr._should_delegate_bundled(prompt) is True
 
 
 @pytest.mark.parametrize("prompt", [
@@ -87,7 +94,7 @@ def test_triage_routes_fanout_to_acs(prompt: str) -> None:
     "Vergleiche kurz A und B",              # short compare without multi-step
 ])
 def test_triage_fanout_words_alone_do_not_delegate(prompt: str) -> None:
-    assert cr._should_delegate(prompt) is False
+    assert cr._should_delegate_bundled(prompt) is False
 
 
 # ── ADR-0203 priority ladder: LOOP/GOAL/COMPUTE/DELEGATE shapes never fan out ─
@@ -114,17 +121,17 @@ def test_triage_fanout_words_alone_do_not_delegate(prompt: str) -> None:
 def test_triage_ladder_non_fanout_primitives_stay_direct(prompt: str) -> None:
     """ACS-X shapes LOOP/GOAL/COMPUTE/DELEGATE are checked BEFORE the fan-out
     shape — their correct mechanism is never the quota-burning ACS fan-out."""
-    assert cr._should_delegate(prompt) is False
+    assert cr._should_delegate_bundled(prompt) is False
 
 
 def test_triage_ladder_fails_open_without_acs_classify(monkeypatch) -> None:
     """When the shared classifier is unavailable, the triage must fall back to
     its own regex rules — never crash, never change the fan-out contract."""
     monkeypatch.setattr(cr, "_acs_x_blueprint", lambda p: None)
-    assert cr._should_delegate(
+    assert cr._should_delegate_bundled(
         "Recherchiere aus mehreren Quellen die Marktlage und vergleiche "
         "danach die Anbieter") is True
-    assert cr._should_delegate("hallo") is False
+    assert cr._should_delegate_bundled("hallo") is False
 
 
 # ── ADR-0203 bridge parity: console OS-turn carries the <acs_directive> ──────
@@ -151,7 +158,7 @@ def test_console_directive_suppresses_workflow_on_direct_turn() -> None:
     # routed DIRECT (coding tokens repo/code) — the exact F9 contradiction.
     bp = _hc(wf_prompt)
     assert bp.primitive == "WORKFLOW", bp.primitive
-    assert cr._should_delegate(wf_prompt) is False
+    assert cr._should_delegate_bundled(wf_prompt) is False
     assert cr._acs_directive_block(wf_prompt) == ""
 
 
@@ -169,7 +176,7 @@ def test_console_directive_suppresses_workflow_on_direct_turn() -> None:
     "Die Anwendung hängt sich beim Speichern auf, bitte beheben",
 ])
 def test_triage_precision_stays_direct(prompt: str) -> None:
-    assert cr._should_delegate(prompt) is False
+    assert cr._should_delegate_bundled(prompt) is False
 
 
 @pytest.mark.parametrize("prompt", [
@@ -186,16 +193,16 @@ def test_triage_precision_stays_direct(prompt: str) -> None:
     "Recherchiere für jeden der fünf Anbieter die Lieferzeit in Minuten und vergleiche sie danach",
 ])
 def test_triage_explicit_parallel_and_fanout_take_acs(prompt: str) -> None:
-    assert cr._should_delegate(prompt) is True
+    assert cr._should_delegate_bundled(prompt) is True
 
 
 def test_triage_bare_delegate_without_engine_is_not_forced_direct() -> None:
     """F2: a bare "delegiere" with no named engine is ambiguous — it must NOT
     be routed direct by rule 2 (only a NAMED engine is unambiguous intent)."""
     # A named engine → direct (rule 2 DELEGATE branch fires).
-    assert cr._should_delegate("Frag Hermes nach einer kurzen Zusammenfassung") is False
+    assert cr._should_delegate_bundled("Frag Hermes nach einer kurzen Zusammenfassung") is False
     # Bare "delegiere" + explicit workers → explicit-parallel wins → ACS.
-    assert cr._should_delegate(
+    assert cr._should_delegate_bundled(
         "Delegiere die Aufgabe an mehrere parallele Worker") is True
 
 
@@ -208,7 +215,7 @@ def test_triage_loosening_gate_low_confidence_does_not_steal_fanout(monkeypatch)
         cr, "_acs_x_blueprint",
         lambda p: ACSBlueprint(primitive="COMPUTE", confidence=0.30, path="heuristic"))
     # A clearly fan-out task must still reach ACS despite the weak COMPUTE guess.
-    assert cr._should_delegate(
+    assert cr._should_delegate_bundled(
         "Recherchiere aus mehreren Quellen die Marktlage und vergleiche "
         "danach die drei größten Anbieter") is True
 
@@ -227,14 +234,14 @@ def test_triage_loosening_gate_low_confidence_does_not_steal_fanout(monkeypatch)
 def test_triage_parallel_words_never_hijack_coding(prompt: str) -> None:
     """§6 invariant: coding never routes into the ACS fan-out (ADR-0202) —
     not even when the prompt happens to contain parallel vocabulary."""
-    assert cr._should_delegate(prompt) is False
+    assert cr._should_delegate_bundled(prompt) is False
 
 
 def test_triage_parallel_words_never_hijack_loop_recurrence() -> None:
     """§6 invariant: LOOP shapes never route into the ACS fan-out. The German
     recurrence form "alle 10 Minuten" must beat the "parallel" wording (D6);
     the task belongs to the scheduler, not a quota-burning one-shot fan-out."""
-    assert cr._should_delegate(
+    assert cr._should_delegate_bundled(
         "Prüfe alle 10 Minuten parallel die drei Server auf Erreichbarkeit "
         "und melde Ausfälle") is False
 
@@ -255,7 +262,7 @@ def test_console_directive_block_for_alle_n_minuten_recurrence() -> None:
     "Vergleiche parallel mit mehreren Workern die Angebote von drei Cloud-Anbietern",
 ])
 def test_triage_genuine_parallel_fanout_still_takes_acs(prompt: str) -> None:
-    assert cr._should_delegate(prompt) is True
+    assert cr._should_delegate_bundled(prompt) is True
 
 
 @pytest.mark.parametrize("prompt", [
@@ -280,14 +287,14 @@ def test_triage_bare_parallel_adverb_never_forces_fanout(prompt: str) -> None:
     """A bare 'parallel'/'gleichzeitig' adverb must defer to the LOOP/GOAL/
     COMPUTE blueprint (rule 2) and the fan-out-shape gate (rule 3) — it is not,
     on its own, an explicit worker demand and must never burn a quota unit."""
-    assert cr._should_delegate(prompt) is False
+    assert cr._should_delegate_bundled(prompt) is False
 
 
 def test_triage_explicit_worker_overrides_incidental_coding_token() -> None:
     """D6(a) refutation: the reorder wrongly let an incidental coding token
     ('API') suppress an EXPLICIT worker request. A named worker/fan-out demand
     outranks a coding-noun collision (F2/F3/F4 explicit-worker guarantee)."""
-    assert cr._should_delegate(
+    assert cr._should_delegate_bundled(
         "sammle unabhängig voneinander aus mehreren Quellen die API-Preise "
         "mit mehreren Workern") is True
 
@@ -296,7 +303,7 @@ def test_triage_german_dative_mehreren_quellen_takes_acs() -> None:
     """D7: the inflected dative "aus mehreren Quellen" matched neither
     `mehrere\\s+quellen` nor `\\bmehrere\\b` — the regexes must cover the
     German flexion forms (mehrere[nrm]?)."""
-    assert cr._should_delegate(
+    assert cr._should_delegate_bundled(
         "Recherchiere aus mehreren Quellen die besten E-Bikes und "
         "vergleiche sie") is True
 
@@ -614,7 +621,7 @@ def test_tde_quota_peek_fail_closed(monkeypatch) -> None:
     "Process 40 million records from the database dump and compare error rates",
 ])
 def test_big_data_delegates_even_when_compute_shaped(prompt: str) -> None:
-    assert cr._should_delegate(prompt) is True
+    assert cr._should_delegate_bundled(prompt) is True
     # Big data is the one shape a default (native) install still fans out.
     assert cr._worker_engine_target(
         prompt, mode="native", force_delegate=False,
@@ -623,14 +630,14 @@ def test_big_data_delegates_even_when_compute_shaped(prompt: str) -> None:
 
 def test_big_data_recurring_stays_scheduler() -> None:
     # Recurrence carve-out: a daily big-data scan is a scheduler task, not ACS.
-    assert cr._should_delegate(
+    assert cr._should_delegate_bundled(
         "Überwache täglich die 500 GB Serverlogs auf neue Anomalien"
     ) is False
 
 
 def test_big_data_named_engine_stays_direct() -> None:
     # Named-engine carve-out: the user chose the direct delegate_* path.
-    assert cr._should_delegate(
+    assert cr._should_delegate_bundled(
         "Delegiere an Codex: analysiere die 500 GB Logs aus dem Data Lake"
     ) is False
 
@@ -701,9 +708,9 @@ def test_big_data_refutation_false_positives_now_rejected(prompt: str) -> None:
 
 def test_delegate_word_boundary_lockstep() -> None:
     # "/delegatex …" must NOT delegate (parser lockstep with stream_turn).
-    assert cr._should_delegate("/delegatex mach was") is False
-    assert cr._should_delegate("/delegate mach was") is True
-    assert cr._should_delegate("/delegate") is True
+    assert cr._should_delegate_bundled("/delegatex mach was") is False
+    assert cr._should_delegate_bundled("/delegate mach was") is True
+    assert cr._should_delegate_bundled("/delegate") is True
 
 
 # ── ADR-0217 round-3 refutation: O(n²) bound + daten false-friends ────────────

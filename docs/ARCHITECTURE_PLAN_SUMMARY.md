@@ -238,7 +238,7 @@ whether anything uses it.**
 | 0 | ADR consolidation (renumber to 0243, `tier` → `boot_layer`, `support_class`, maintainer/SLA, bridge + gRPC corrections) | ✅ done | — |
 | 1 | Boot-layer-aware registry, purely additive, no file moves | ✅ done (c455516) | the two privileged values have **zero instances** |
 | 2 | Boot order + scoping (global before tenant, tenant may not claim privileged boot layers) | ✅ done (c455516) | `bootstrap_global()` returns `[]` on every install; the tenant-downgrade guard *is* live |
-| 3 | Extension points (document the 8 existing provider registries, add 3–5 new) | ✅ **bus only** | four points defined + tested; **no call site calls `invoke()`** |
+| 3 | Extension points (document the 8 existing provider registries, add 3–5 new) | ✅ **all 4 wired** | ADR-0251, 2026-07-27 |
 | 4 | Admin control plane (REST only) | ✅ done | six routes live behind `admin_control_plane`; gRPC deferred |
 | 5 | Bridge supervisor plugins (one Python supervisor per Node daemon) | ✅ **classes only** | seven classes exist; **nothing declares them**, so none ever loads |
 | 6 | Headless API-only boot path | ◑ **partial** | browser surfaces suppressed; **no reordered boot sequence**, **no preset mechanism** |
@@ -412,8 +412,9 @@ response commitments anywhere in this plan, because a solo maintainer cannot hon
 The remaining work is no longer "build the next phase" — it is **closing the gap between
 the mechanisms that shipped and anything using them**:
 
-1. **Wire the four extension points** into their call sites. Until then Phase 3 is bus-only
-   and `test_extension_points.py::test_no_call_site_is_wired_yet` keeps saying so.
+1. ~~**Wire the four extension points** into their call sites.~~ Done
+   2026-07-27 (ADR-0251). `test_extension_point_call_sites.py` now guards the
+   reverse direction — a point that LOSES its caller fails the suite.
 2. **Declare the bridge supervisors** somewhere shipped, or add the Console action that
    writes the block. Until then Phase 5 is classes-only.
 3. **Finish or retire the Phase 6 boot reorder** and the preset idea — one or the other,
