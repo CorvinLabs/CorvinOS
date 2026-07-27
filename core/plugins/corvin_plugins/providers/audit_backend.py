@@ -205,12 +205,30 @@ class AuditBackendRegistry:
         that a DIFFERENT plugin installed after it — clearing by type alone would
         drop the slot while the other plugin still believes it is the sink, and
         for audit that means a fan-out stream that silently stops.
+
+        The check and the clear are one critical section. Releasing the lock
+        between them left a window in which another plugin could take the slot
+        via ``set_active`` and then have it cleared out from under it — along
+        with its queued copies.
         """
         with self._lock:
             if self._active is not provider:
                 return False
-        self.clear()
+            self._active = None
+            self._failures = 0
+            self._owner_plugin_id = None
+        self._drain_queue()
         return True
+
+    def _drain_queue(self) -> None:
+        """Discard queued copies for a backend that is no longer installed."""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                self._queue.task_done()
 
     def get_active(self) -> _ABProto | None:
         with self._lock:

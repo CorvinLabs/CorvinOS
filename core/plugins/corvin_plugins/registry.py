@@ -189,6 +189,37 @@ class PluginRegistry:
         self._contexts: dict[str, PluginContext] = {}
         self._boot_layers: dict[str, BootLayer] = {}
         self._lock = threading.Lock()
+        #: One lock per plugin_id, held across a WHOLE register or unregister.
+        #: `self._lock` only guards the maps and is released before any call
+        #: into plugin code, which is right — a slow on_load must not freeze the
+        #: registry for everyone — but it left register and unregister able to
+        #: interleave for the SAME plugin: on_unload ran while on_load was still
+        #: in progress, both reported success, the plugin was gone, its resource
+        #: stayed open, and the append-only audit chain recorded `unloaded`
+        #: before `loaded`.
+        self._op_locks: dict[str, threading.RLock] = {}
+
+    #: Cap on per-plugin operation locks, so an unbounded stream of unknown ids
+    #: cannot grow the map. Same shape as healing.MAX_PLUGIN_LOCKS.
+    MAX_OP_LOCKS = 1024
+
+    def _op_lock(self, plugin_id: str) -> threading.RLock:
+        """The lock serialising lifecycle operations for one plugin.
+
+        Re-entrant on purpose: ``on_load`` is allowed to call back into the
+        registry for its OWN id (the collision guard is part of the contract),
+        and a plain lock would deadlock exactly there.
+        """
+        with self._lock:
+            lock = self._op_locks.get(plugin_id)
+            if lock is None:
+                if len(self._op_locks) >= self.MAX_OP_LOCKS:
+                    # Bounded rather than unbounded. Dropping the map can only
+                    # cost serialisation for ids currently mid-operation, which
+                    # needs >1024 distinct plugins in flight to reach.
+                    self._op_locks.clear()
+                lock = self._op_locks[plugin_id] = threading.RLock()
+            return lock
 
     # ── Registration ──────────────────────────────────────────────────────────
 
@@ -249,6 +280,13 @@ class PluginRegistry:
         it is keyword-only and defaults to the least privileged value.
         """
         resolved = self._resolve_boot_layer(plugin, boot_layer)
+        with self._op_lock(plugin.plugin_id):
+            self._register_locked(plugin, ctx, resolved)
+
+    def _register_locked(
+        self, plugin: CorvinPlugin, ctx: PluginContext, resolved: BootLayer
+    ) -> None:
+        """The body of :meth:`register`, under this plugin's operation lock."""
         with self._lock:
             if plugin.plugin_id in self._plugins:
                 raise PluginAlreadyRegistered(
@@ -317,6 +355,11 @@ class PluginRegistry:
             raise PluginDisableRefused(
                 f"{plugin_id!r} is on the compliance boot layer and cannot be disabled"
             )
+        with self._op_lock(plugin_id):
+            self._unregister_locked(plugin_id, operator_initiated)
+
+    def _unregister_locked(self, plugin_id: str, operator_initiated: bool) -> None:
+        """The body of :meth:`unregister`, under this plugin's operation lock."""
         with self._lock:
             plugin = self._plugins.get(plugin_id)
             ctx = self._contexts.get(plugin_id)
@@ -523,6 +566,11 @@ class PluginRegistry:
         with self._lock:
             snapshot = list(self._plugins.items())
             layers = dict(self._boot_layers)
+            # Snapshot the contexts too. Reading self._contexts later, from
+            # outside the lock, meant a plugin unregistered mid-iteration
+            # lost its audit context — and the health_check_failed event for
+            # it silently went nowhere.
+            contexts = dict(self._contexts)
 
         results: dict[str, HealthStatus] = {}
         for pid, plugin in snapshot:
@@ -565,7 +613,7 @@ class PluginRegistry:
                         recovered=False,
                         context={"breaker": breaker.stats().to_dict()},
                     )
-                ctx = self._contexts.get(pid)
+                ctx = contexts.get(pid)
                 if ctx is not None:
                     ctx.audit_emit("plugin.health_check_failed", {
                         "plugin_id": pid,

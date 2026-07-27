@@ -288,5 +288,102 @@ class TestHookOwnershipIsVerifiedOnLoad(_Base):
         self.assertEqual(ep.describe("somebody-else"), {})
 
 
+# ── 4. Lifecycle operations for one plugin do not interleave ─────────────────
+
+
+class TestLifecycleIsSerialisedPerPlugin(_Base):
+    """`on_unload` used to be able to run while `on_load` was still going.
+
+    The registry lock guards the maps and is released before any call into
+    plugin code — right, because a slow on_load must not freeze the registry
+    for everyone. But it left register and unregister interleaving for the SAME
+    plugin: both reported success, the plugin ended up gone, whatever it opened
+    stayed open (shutdown could no longer reach it, the id was not in
+    discover()), and the append-only audit chain recorded `unloaded` before
+    `loaded`.
+    """
+
+    def test_unregister_waits_for_a_slow_load_instead_of_cutting_into_it(self):
+        import threading
+        import time
+
+        order: list[str] = []
+        started = threading.Event()
+
+        class _Slow(_Plug):
+            def on_load(self, ctx):
+                order.append("on_load:start")
+                started.set()
+                time.sleep(0.15)
+                order.append("on_load:end")
+
+            def on_unload(self):
+                order.append("on_unload")
+
+        plugin = _Slow("slow")
+        errors: list[BaseException] = []
+
+        def _load():
+            try:
+                self.reg.register(plugin, _ctx("slow"))
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        def _unload():
+            started.wait(timeout=2)
+            try:
+                self.reg.unregister("slow")
+            except Exception:  # noqa: BLE001 — losing the race is a valid outcome
+                pass
+
+        t1, t2 = threading.Thread(target=_load), threading.Thread(target=_unload)
+        t1.start()
+        t2.start()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        self.assertEqual(errors, [])
+        self.assertNotIn(
+            "on_unload", order[:order.index("on_load:end")],
+            f"on_unload ran before on_load finished: {order}",
+        )
+
+    def test_the_audit_chain_cannot_record_unloaded_before_loaded(self):
+        import threading
+        import time
+
+        events: list[str] = []
+        started = threading.Event()
+
+        def _emit(event_type: str, details: dict) -> None:
+            if event_type in ("plugin.loaded", "plugin.unloaded"):
+                events.append(event_type)
+
+        ctx = PluginContext(
+            plugin_id="slow2", tenant_id="_default", corvin_home=Path("/tmp"),
+            config={}, audit_emit=_emit,
+        )
+
+        class _Slow(_Plug):
+            def on_load(self, c):
+                started.set()
+                time.sleep(0.15)
+
+        t1 = threading.Thread(target=lambda: self.reg.register(_Slow("slow2"), ctx))
+        t1.start()
+        started.wait(timeout=2)
+        try:
+            self.reg.unregister("slow2")
+        except Exception:  # noqa: BLE001
+            pass
+        t1.join(timeout=5)
+
+        if "plugin.unloaded" in events:
+            self.assertLess(
+                events.index("plugin.loaded"), events.index("plugin.unloaded"),
+                f"the append-only chain claims unloaded before loaded: {events}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
