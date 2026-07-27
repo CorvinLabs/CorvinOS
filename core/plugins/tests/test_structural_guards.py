@@ -369,6 +369,101 @@ class TestUnloadRemovesHooks(_Base):
         )
 
 
+class TestTheHonestAsyncPluginIsNotPunished(_Base):
+    """Connecting asynchronously is the normal shape, not an attack.
+
+    `on_load` starts a thread that installs the backend once the connection is
+    up. ContextVars do not cross into that thread, so the slot ends up with no
+    recorded owner — and `release_owned_by` then found nothing to release. The
+    slot kept the object of a plugin whose `on_unload` had already run, which
+    for a recall backend means every later turn writes into a closed handle.
+    """
+
+    def test_a_slot_taken_from_a_worker_thread_is_still_released(self):
+        import threading
+
+        from corvin_plugins.providers import audit_backend
+
+        installed = threading.Event()
+
+        class _AsyncConnect(_Plug):
+            plugin_type = "audit_backend"
+
+            def on_load(self, ctx):
+                def _connect():
+                    ctx.audit_registry.set_active(self)
+                    installed.set()
+
+                threading.Thread(target=_connect).start()
+                installed.wait(timeout=2)
+
+            def fanout(self, *a, **k):
+                pass
+
+            def verify_chain(self):
+                return HealthStatus(ok=True)
+
+            def enforce_retention(self, *a, **k):
+                return {}
+
+        plugin = _AsyncConnect("async-sink")
+        self.reg.register(plugin, _ctx("async-sink"))
+        self.assertIs(audit_backend.get_active(), plugin)
+
+        self.reg.unregister("async-sink")
+        self.assertIsNone(
+            audit_backend.get_active(),
+            "the slot still holds the object of an unloaded plugin — the honest "
+            "async-connect pattern loses its slot forever",
+        )
+
+
+class TestHealthChecksCannotWedgeTheProcess(_Base):
+    """`health_check_all` runs on every GET /api/admin/* — it needs a deadline.
+
+    The breaker counts raises and cooperative ok=False. A check that simply
+    never returns is neither, so nothing capped it: one wedged plugin held the
+    whole admin surface, with no recovery path and no signal. On the compliance
+    boot layer it was worse, because containment is deliberately off there.
+    """
+
+    def test_a_wedged_health_check_does_not_hold_the_aggregate(self):
+        import time
+
+        class _Wedged(_Plug):
+            def health_check(self):
+                time.sleep(30)
+                return HealthStatus(ok=True)
+
+        self.reg.register(_Wedged("wedged"), _ctx("wedged"))
+
+        started = time.monotonic()
+        results = self.reg.health_check_all()
+        elapsed = time.monotonic() - started
+
+        self.assertLess(
+            elapsed, 10,
+            f"the aggregate waited {elapsed:.1f}s on one plugin — a wedged "
+            f"health_check holds every admin request",
+        )
+        self.assertFalse(results["wedged"].ok)
+
+    def test_the_deadline_also_applies_on_the_compliance_layer(self):
+        import time
+
+        class _Wedged(_Plug):
+            def health_check(self):
+                time.sleep(30)
+                return HealthStatus(ok=True)
+
+        self.reg.register(
+            _Wedged("audit"), _ctx("audit"), boot_layer=BootLayer.COMPLIANCE
+        )
+        started = time.monotonic()
+        self.reg.health_check_all()
+        self.assertLess(time.monotonic() - started, 10)
+
+
 class TestCleanupAfterAFailedLoad(_Base):
     """A half-loaded plugin must not leave anything behind.
 
