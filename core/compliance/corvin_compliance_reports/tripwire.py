@@ -404,6 +404,91 @@ def erasure_orchestrator_present() -> TripwireResult:
 #: These describe a permanent historical fact that refusing to boot cannot change.
 REPORTING_ONLY: frozenset = frozenset({"audit_chain_history_clean"})
 
+#: plugin_ids that ``bootstrap_global()`` itself put on the compliance boot
+#: layer.  Written by the wheel's own boot code, read only here.
+#:
+#: The direction matters: the recorder is the code that HAS the authority to
+#: grant, the checker is this module, and they are separate.  Nothing else may
+#: add to this set.
+_GRANTED_COMPLIANCE_IDS: set[str] = set()
+
+
+def record_granted_compliance_plugin(plugin_id: str) -> None:
+    """Record that ``bootstrap_global`` granted ``plugin_id`` the compliance layer.
+
+    Called from ``corvin_plugins.bootstrap`` immediately after a successful
+    registration on that layer.  Deliberately a plain function rather than a
+    callback the registry could be handed: the tripwire must not be configurable
+    by whatever it is checking.
+    """
+    _GRANTED_COMPLIANCE_IDS.add(plugin_id)
+
+
+def compliance_layer_is_wheel_granted() -> TripwireResult:
+    """No plugin sits on the compliance boot layer that the wheel did not grant.
+
+    **Why this is worth writing when five review rounds concluded that in-process
+    identity is not enforceable.** Every other guard in the plugin package asks a
+    plugin something and can be lied to. This one asks nothing: it compares the
+    registry's own state against a list the wheel's boot code wrote, at a moment
+    when no plugin code has run since. It is the one check on this surface that
+    is not in the attacker's conversational reach — and per ADR-0232/0233 it has
+    no override, no env var and no flag.
+
+    **What it catches.** A plugin that put itself on the compliance layer —
+    through a class attribute, a re-registration, a thread that escaped the load
+    context — appears in the registry and not in the granted set. Boot refuses.
+    That is a check on the RESULT rather than on the intent, which is why it
+    survives derivations that the intent-side guards do not.
+
+    **What it does not catch.** Anything that writes
+    ``_registry._boot_layers`` or this module's set directly. Same address space,
+    same limits; see docs/claude-ref/layer-plugins.md § "The perimeter is
+    attribution". The gain is real but bounded, and stating the bound is part of
+    the check.
+
+    **Vacuously true today.** ``_GLOBAL_SPECS`` is empty, so nothing is granted
+    and nothing should be on the layer. It becomes load-bearing with the first
+    real compliance plugin — the same shape as the guard tests in
+    ``test_layered_boot.py``.
+    """
+    name = "compliance_layer_is_wheel_granted"
+    try:
+        from corvin_plugins.manifest import BootLayer
+        from corvin_plugins.registry import get_registry
+    except ImportError:
+        return TripwireResult(name, True, "plugin package not installed")
+
+    try:
+        live = {
+            getattr(p, "plugin_id", "")
+            for p in get_registry().plugins_by_boot_layer(BootLayer.COMPLIANCE)
+        }
+    except Exception as exc:  # noqa: BLE001
+        # Fail CLOSED: not being able to answer "who is on the compliance layer"
+        # is itself a reason to refuse the boot.
+        return TripwireResult(name, False, f"registry unreadable ({type(exc).__name__})")
+
+    unexpected = sorted(live - _GRANTED_COMPLIANCE_IDS)
+    if unexpected:
+        # plugin_ids only — they are charset-validated identifiers, never free
+        # text, and this string reaches the hash-chained record.
+        return TripwireResult(
+            name, False,
+            f"{len(unexpected)} plugin(s) on the compliance boot layer that "
+            f"bootstrap_global did not grant: {unexpected}",
+        )
+    return TripwireResult(name, True, f"{len(live)} granted compliance plugin(s)")
+
+
+#: Tripwires that only make sense AFTER plugins have loaded.  ``assert_all()``
+#: runs before that by design (a broken audit writer must stop the boot before
+#: anything else happens), so running this there would be vacuously green.
+POST_BOOT_TRIPWIRES: tuple[Callable[[], TripwireResult], ...] = (
+    compliance_layer_is_wheel_granted,
+)
+
+
 TRIPWIRES: tuple[Callable[[], TripwireResult], ...] = (
     # L16 Audit trail
     audit_writer_reachable,
@@ -459,6 +544,37 @@ def assert_all() -> List[TripwireResult]:
     _log.critical("COMPLIANCE TRIPWIRE FAILED — refusing to boot: %s", summary)
     raise TripwireError(
         f"mandatory compliance mechanism unavailable — refusing to boot ({summary})"
+    )
+
+
+def assert_post_boot() -> List[TripwireResult]:
+    """Run the tripwires that need the plugins to be loaded.  Raises on failure.
+
+    Called from the gateway lifespan AFTER ``bootstrap_all()``. Same fail-closed
+    semantics as :func:`assert_all` and the same absence of an override — the
+    caller must let a failure propagate.
+
+    Separate from ``assert_all`` because of WHEN, not because of severity:
+    ``assert_all`` deliberately runs first, before any plugin exists, so a broken
+    audit writer stops the boot before anything else happens. A check about
+    loaded plugins asked at that moment would always pass.
+    """
+    results: List[TripwireResult] = []
+    for probe in POST_BOOT_TRIPWIRES:
+        try:
+            results.append(probe())
+        except Exception as exc:  # noqa: BLE001
+            results.append(
+                TripwireResult(getattr(probe, "__name__", "unknown"), False,
+                               f"probe raised {type(exc).__name__}")
+            )
+    failed = [r for r in results if not r.ok]
+    if not failed:
+        return results
+    summary = "; ".join(f"{r.name}: {r.detail}" for r in failed)
+    _log.critical("POST-BOOT COMPLIANCE TRIPWIRE FAILED — refusing to serve: %s", summary)
+    raise TripwireError(
+        f"post-boot compliance check failed — refusing to serve ({summary})"
     )
 
 
