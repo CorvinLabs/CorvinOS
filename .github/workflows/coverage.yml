@@ -103,9 +103,18 @@ jobs:
           # runner. `timeout 20m` turns that into a fast, legible failure.
           #
           # The bound is calibrated, not guessed: with the ignores and deselect
-          # below this step measured 11:04 locally (1877 passed, 11 failed,
-          # 10 errors — pre-existing, several of them voice). 20m leaves room for
-          # a slower runner while still catching a genuine hang.
+          # below this step measured 10–12 minutes locally across three runs.
+          # 20m leaves room for a slower runner while still catching a hang.
+          #
+          # ⚠️ THIS SUITE IS ORDER-DEPENDENT AND CANNOT YET GATE A MERGE.
+          # Three consecutive local runs of the identical command produced 11,
+          # 14, and 13 failures with DIFFERENT failure sets. Verified cause:
+          # state leaks between modules, not flaky assertions —
+          # test_compute_license_gate.py fails 4 tests in the full run and passes
+          # 14/14 in isolation. Around 1875 tests pass every time; the ~13 that
+          # do not are a moving target. Treat a change in the count as noise
+          # until the isolation defects are fixed, and diagnose any individual
+          # failure by running its file alone.
           #
           # The --deselect names ONE test rather than dropping its file: it calls
           # the real, unmocked ACO heal cycle (network probes plus an Ollama
