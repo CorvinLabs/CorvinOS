@@ -5,6 +5,9 @@
 **Author:** Claude Code (dialectical review of the 2026-07-26 design docs)
 **Audience:** maintainer (solo) + Claude Code sessions
 **Decision of record:** [ADR-0233](../../../Corvin-ADR/decisions/0233-plugin-system-consolidation.md)
+**Continued by:** [`PLUGIN_SYSTEM_ACTIVATION_PLAN.md`](PLUGIN_SYSTEM_ACTIVATION_PLAN.md)
+— this document's phases are complete; the work since then built mechanisms that
+have no call site, and the activation plan sequences closing that.
 
 ## Delivery status
 
