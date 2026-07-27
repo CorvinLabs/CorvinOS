@@ -106,6 +106,7 @@ class UserBackendRegistry:
         with self._lock:
             if self._active is not provider:
                 return False
+            self._owner_plugin_id = None
             self._active = None
             return True
 
