@@ -198,21 +198,42 @@ turn; flag-off = no hook fires anywhere.
 
 ---
 
-### Stage 4 — Populate the three handles (1 w)
+### Stage 4 — Populate the three handles — **one of three, not three**
 
-**Closes:** G3, and G4 in part. **Flag:** none — passing a registry that was already
-being forwarded changes nothing until a plugin of that type is installed.
+**Closes:** G3 in part. **Flag:** none — passing a registry that was already being
+forwarded changes nothing until a plugin of that type is installed.
 
-- `core/gateway/corvin_gateway/app.py` passes `compute_registry`, `engine_factory` and
-  `channel_registry` into `bootstrap_all()`.
-- `surface_map.py` rows for `compute_engine`, `worker_engine`, `bridge_channel` gain a
-  `consumed_by`; the conformance test forces this in the same commit.
-- `stt_provider` and `data_connector` (G4) are a **different** problem — the handle is
-  populated, nothing calls `get_active()`. Decide per type: wire the consumer (STT is
-  reachable via L23) or leave `dead_reason` accurate. Do not pretend the row is live.
+The stage was sized as "pass three objects into `bootstrap_all()`". Verified
+2026-07-27: only one of the three targets is an object that can be passed. ADR-0245
+says all three types "have handles", and that is true of the `PluginContext` *field*;
+it is not true of the thing the field would point at.
 
-**Tests:** a template plugin of each of the three types registers and is invoked once
-through its subsystem; with none installed, boot is unchanged.
+| Handle | Target | State |
+|---|---|---|
+| `compute_registry` | `corvin_compute.engine_registry.get_registry()` | **Exists**, has `register(engine)`, and the shipped template calls exactly that. Passing it is the one-line change the stage assumed. |
+| `engine_factory` | `operator/bridges/shared/engine_registry.py` | Engines come from a hard-coded `_ENGINE_BUILDERS` dict with three entries and there is **no `register()`**. A plugin cannot enter itself. Wiring this means designing a registration API for L22 first. |
+| `channel_registry` | — | **Does not exist.** The only references in the tree are in `templates/bridge_channel_plugin.py`, which calls `ctx.channel_registry.register(self)` against a class nobody wrote. |
+
+So `bridge_channel` is not a populated-handle problem at all: its template targets an
+API that was never built. `worker_engine` needs a new registration surface on a
+subsystem that predates ADR-0033. Both are the design question ADR-0245 deferred
+under *"Add the three missing provider modules now — deferred, not rejected. Each is
+a real design question."* They are not activation work and should not be done under
+cover of one.
+
+**What this stage should actually do:**
+
+1. Pass `compute_registry` in `app.py`, and verify the registered engine is reachable
+   through the MCP bridge before claiming `consumed_by` — a filled handle proves
+   registration, not invocation, which is the distinction this whole plan exists for.
+2. Correct the two templates so they state that their target does not exist, instead
+   of guarding with `if ctx.<handle> is not None:` and skipping in silence. That guard
+   is what turns a missing API into no signal at all.
+3. Leave `worker_engine` and `bridge_channel` in `unconsumed_types()` with a
+   `dead_reason` naming the real cause.
+
+`stt_provider` and `data_connector` (G4) remain a third case: handle populated,
+registry live, nothing calls `get_active()`.
 
 ---
 
