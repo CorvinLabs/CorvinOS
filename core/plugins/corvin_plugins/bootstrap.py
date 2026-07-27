@@ -423,6 +423,7 @@ def bootstrap_declared(
     tenant_id: str,
     corvin_home: Path,
     tenant_config: dict | None = None,
+    only_types: frozenset[str] | set[str] | None = None,
     **registries: Any,
 ) -> list[str]:
     """Load the plugins DECLARED in ``spec.plugins.installed`` (ADR-0030 Phase 7).
@@ -436,6 +437,19 @@ def bootstrap_declared(
     ``auto_discover_entry_points: true`` additionally loads every installed
     ``corvin.plugins`` entry point. It stays default-false: on a machine with
     third-party packages installed, flipping it means loading code nobody listed.
+
+    ``only_types`` restricts loading to the named ``plugin_type`` values. It
+    exists because a plugin's consumer is not always in the gateway process: the
+    compute worker is a separate process that owns engine dispatch, and it calls
+    this with ``{"compute_engine"}``. Without the filter the worker would also
+    load the tenant's bridge supervisors, i.e. start messenger daemons from the
+    compute process — a second set of daemons racing the real ones, which is the
+    duplicate-start failure ADR-0238 calls out by name.
+
+    The filter is applied AFTER instantiation and BEFORE ``on_load``, so a
+    filtered-out plugin never runs any of its own code beyond ``__init__``.
+    Filtering earlier would mean reading ``plugin_type`` off the declaration
+    instead of the class, and a declaration can claim any type it likes.
     """
     config = tenant_config if tenant_config is not None else load_tenant_spec(
         tenant_id, corvin_home
@@ -444,7 +458,16 @@ def bootstrap_declared(
     declared: list[dict] = list(plugins_cfg.get("installed") or [])
     auto_ep = bool(plugins_cfg.get("auto_discover_entry_points", False))
 
-    bundled = _bundled_bridge_declarations(tenant_id, declared)
+    # Skipped entirely when bridge_channel is filtered out, rather than
+    # injected-then-discarded: the compute worker calls this with
+    # only_types={"compute_engine"}, and instantiating seven bridge supervisors
+    # in a process that will never register them is pointless work on a path
+    # that runs at every worker start.
+    bundled = (
+        _bundled_bridge_declarations(tenant_id, declared)
+        if only_types is None or "bridge_channel" in only_types
+        else []
+    )
     if bundled:
         declared = declared + bundled
         # `discover_and_load` re-reads the config rather than taking `declared`,
@@ -496,6 +519,17 @@ def bootstrap_declared(
 
     loaded: list[str] = []
     for instance in instances:
+        if only_types is not None:
+            # Read off the CLASS, never off the declaration: the declaration is
+            # operator-written YAML and a wrong `plugin_type` there would let a
+            # bridge supervisor into the compute worker.
+            itype = getattr(instance, "plugin_type", "") or ""
+            if itype not in only_types:
+                log.debug(
+                    "skipping %r (type %r) — this process loads only %s",
+                    getattr(instance, "plugin_id", "?"), itype, sorted(only_types),
+                )
+                continue
         plugin_id = getattr(instance, "plugin_id", "")
         if not plugin_id:
             log.error("declared plugin %r has no plugin_id — skipping", type(instance).__name__)

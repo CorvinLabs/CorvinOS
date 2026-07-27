@@ -476,13 +476,16 @@ since a check after the import asks "may we run this?" about running code.
 A plugin of one of those types loads, registers, reports healthy, appears in the
 Console — and nothing ever calls it. There is no error and no log line.
 
-**Consumed (5).** `router_backend`, `summary_provider`, `notification_backend` and
+**Consumed (6).** `router_backend`, `summary_provider`, `notification_backend` and
 `recall_backend` are all called from `operator/bridges/shared/adapter.py`;
-`audit_backend` from the gateway.
+`audit_backend` from the gateway; `compute_engine` from the compute worker
+(`corvin_compute/cli.py`), which is a different PROCESS — the one that
+dispatches engines.
 
-**Never invoked (6),** for **four** different reasons — re-verified 2026-07-27, when
-a re-audit found that the "two reasons" below had been over-generalised and were
-false for three of the six rows:
+**Never invoked (5),** for **three** different reasons — re-verified 2026-07-27,
+when a re-audit found the earlier "two reasons" over-generalised and false for
+three of the six rows. `compute_engine` has since left this list; its entry is
+kept below because how it left is the useful part:
 
 - `stt_provider`, `data_connector` — registry and ctx handle exist and are
   populated; nothing outside `corvin_plugins` calls `get_active()`. L23 and L24
@@ -497,10 +500,15 @@ false for three of the six rows:
   path locks the operator out of their own install. See
   [`PLUGIN_SYSTEM_ACTIVATION_PLAN.md`](implementation/PLUGIN_SYSTEM_ACTIVATION_PLAN.md)
   Stage 2.
-- `compute_engine` — the genuine unpassed-handle case.
-  `bootstrap_all(**registries)` forwards `compute_registry` correctly, the target
-  (`corvin_compute.engine_registry`) exists and has `register()`, and the gateway
-  simply passes nothing. One line at the call site.
+- `compute_engine` — **live since 2026-07-27**, and it moved out of this list
+  the hard way. The line above used to say "the genuine unpassed-handle case…
+  one line at the call site", and that was wrong: `corvin_compute.engine_registry`
+  had no reader (`WorkerServer` dispatches through its own `_extra_engines`, and
+  `register_engine()` had no production caller), and it was in the wrong process
+  — `WorkerServer` is constructed only in the `corvin-compute worker`
+  subprocess. The fix loads `compute_engine` plugins **in the worker**, filtered
+  to that one type so the compute process does not also start the tenant's
+  bridge daemons. See `corvin_compute/cli.py::_load_compute_engine_plugins`.
 - `worker_engine`, `bridge_channel` — **the target does not exist.** L22's
   `engine_registry.py` builds engines from a hard-coded `_ENGINE_BUILDERS` dict
   and has no `register()`; there is no `channel_registry` class anywhere in the
