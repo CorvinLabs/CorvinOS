@@ -208,6 +208,12 @@ means "core auth is responsible". `authenticate()` collapses exception, timeout,
 non-dict and missing `user_id` into `None` = **deny**, and strips secret-shaped keys
 from the principal. There is no guest fallback anywhere.
 
+**All of which is unreached (verified 2026-07-27).** No caller exists because no
+credential auth path exists — see the "Never invoked" section below. The deny
+semantics are implemented and unit-tested; they bind the first credential login
+that is built. On today's surfaces the "never guest" invariant has no subject,
+because a localhost-only login admits no guest to fall back to.
+
 ### Boot tripwires
 
 `assert_compliance()` runs eight checks. Seven **abort the boot** on failure; one
@@ -474,16 +480,35 @@ Console — and nothing ever calls it. There is no error and no log line.
 `recall_backend` are all called from `operator/bridges/shared/adapter.py`;
 `audit_backend` from the gateway.
 
-**Never invoked (6),** for two different reasons:
+**Never invoked (6),** for **four** different reasons — re-verified 2026-07-27, when
+a re-audit found that the "two reasons" below had been over-generalised and were
+false for three of the six rows:
 
-- `user_backend`, `stt_provider`, `data_connector` — the registry and the ctx
-  handle exist, but nothing outside `corvin_plugins` calls `get_active()`.
-  `providers/user_backend.py` even implements `authenticate()` with a circuit
-  breaker and deny-on-error, and no auth path reaches it.
-- `compute_engine`, `worker_engine`, `bridge_channel` — `bootstrap_all(**registries)`
-  forwards these correctly, but the gateway passes none of them, so the ctx handle
-  is always `None` and each template's `if ctx.<handle> is not None:` guard skips
-  registration.
+- `stt_provider`, `data_connector` — registry and ctx handle exist and are
+  populated; nothing outside `corvin_plugins` calls `get_active()`. L23 and L24
+  each resolve their own chain and never ask the registry. **This is the only
+  group where wiring the call site is the whole fix.**
+- `user_backend` — **its consumer does not exist.** Not "someone forgot to call
+  it": CorvinOS has no credential auth path. The only live login is
+  localhost-only and credential-less (the TCP peer *is* the authorisation), the
+  `/auth/login` in `gateway/console_api.py` is dead demo code imported by
+  nothing, and OIDC is unbuilt. Handing empty credentials to a correctly-written
+  backend yields a rejection, rejection means deny, and deny on the only login
+  path locks the operator out of their own install. See
+  [`PLUGIN_SYSTEM_ACTIVATION_PLAN.md`](implementation/PLUGIN_SYSTEM_ACTIVATION_PLAN.md)
+  Stage 2.
+- `compute_engine` — the genuine unpassed-handle case.
+  `bootstrap_all(**registries)` forwards `compute_registry` correctly, the target
+  (`corvin_compute.engine_registry`) exists and has `register()`, and the gateway
+  simply passes nothing. One line at the call site.
+- `worker_engine`, `bridge_channel` — **the target does not exist.** L22's
+  `engine_registry.py` builds engines from a hard-coded `_ENGINE_BUILDERS` dict
+  and has no `register()`; there is no `channel_registry` class anywhere in the
+  tree. Passing the handle would change nothing. Both are the design question
+  ADR-0245 deferred, not activation work.
+
+The distinction is load-bearing for anyone reading `surface_map.py`: for three of
+these rows, "pass the handle" is an instruction that does nothing.
 
 `corvin plugin types` prints this, `corvin plugin check` warns on it, and
 `corvin plugin new` warns before you write a line. The map lives in

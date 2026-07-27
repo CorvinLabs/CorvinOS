@@ -238,6 +238,14 @@ compliance record, and a boot tripwire refuses to start Corvin if the core audit
 writer is unreachable or its chain does not verify. A `user_backend` that fails,
 times out, or rejects a credential always means **deny** — never a guest session.
 
+That last sentence describes a mechanism that is **implemented but unreached**
+(verified 2026-07-27): CorvinOS has no credential auth path for it to sit on. The
+only live login is localhost-only and credential-less, so there is no guest to fall
+back to and nothing calls `authenticate()`. The rule binds the first credential login
+that gets built; it is not a guarantee any surface currently exercises. See
+[`PLUGIN_SYSTEM_ACTIVATION_PLAN.md`](implementation/PLUGIN_SYSTEM_ACTIVATION_PLAN.md)
+Stage 2 for why wiring it into the localhost login would lock the operator out.
+
 **Failure containment.** Each plugin has its own circuit breaker: after repeated
 failures it stops being called for a cooldown instead of slowing every request that
 touches it. Health and breaker state are visible on the Plugins page.

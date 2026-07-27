@@ -128,12 +128,27 @@ class BridgeChannelPluginTemplate:
         )
         self._poll_thread.start()
 
+        # ── NOTE 2026-07-27: there is no channel_registry to register with ────
+        # `ctx.channel_registry` is a real PluginContext field, but no class
+        # implementing it exists anywhere in CorvinOS — the only references in
+        # the tree are in this file. So the handle is not "not passed yet"; the
+        # thing it would point at was never built (see surface_map.py's
+        # bridge_channel row, and ADR-0245's deferred design question).
+        #
+        # This branch therefore states the fact instead of logging a warning
+        # that reads like a configuration mistake. A quiet `if ... is not None:`
+        # here is what turned a missing API into no signal at all: the plugin
+        # loaded, reported healthy, and never received a message.
         if ctx.channel_registry is not None:
             ctx.channel_registry.register(self)
             log.info("plugin %r registered channel %r", self.plugin_id, self.channel_name)
         else:
-            log.warning(
-                "plugin %r: ctx.channel_registry is None — channel %r not reachable",
+            log.error(
+                "plugin %r: channel %r is NOT reachable and cannot be made "
+                "reachable by configuration — CorvinOS has no channel_registry "
+                "implementation. This template targets an API that does not "
+                "exist yet; see ADR-0245. Inbound and outbound messages will "
+                "not flow.",
                 self.plugin_id, self.channel_name,
             )
 

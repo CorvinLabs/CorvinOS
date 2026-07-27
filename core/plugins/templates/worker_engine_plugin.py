@@ -93,13 +93,29 @@ class WorkerEnginePluginTemplate:
         """Store context and self-register with engine_factory."""
         self._ctx = ctx
 
+        # ── NOTE 2026-07-27: engine_factory has no register() to call ─────────
+        # `operator/bridges/shared/engine_registry.py` builds engines from a
+        # hard-coded `_ENGINE_BUILDERS` dict with three entries. There is no
+        # registration API, so a plugin cannot enter itself — populating this
+        # handle would not help (see surface_map.py's worker_engine row, and
+        # ADR-0245's deferred design question about an L22 registration
+        # surface).
+        #
+        # The `is not None` guard is kept so the template still runs, but the
+        # else-branch says what is actually true. A warning that reads "handle
+        # is None" invites the reader to go and pass the handle, which is the
+        # one action that changes nothing.
         if ctx.engine_factory is not None:
             ctx.engine_factory.register(self)
             log.info("plugin %r registered engine %r with engine_factory", self.plugin_id, self.name)
         else:
-            log.warning(
-                "plugin %r: ctx.engine_factory is None — engine %r not reachable",
-                self.plugin_id, self.name,
+            log.error(
+                "plugin %r: engine %r is NOT reachable and cannot be made "
+                "reachable by configuration — L22's engine_registry has no "
+                "register(); engines come from a hard-coded builder dict. This "
+                "template targets an API that does not exist yet; see ADR-0245. "
+                "A chat profile naming engine=%r will not find it.",
+                self.plugin_id, self.name, self.name,
             )
 
     def on_unload(self) -> None:

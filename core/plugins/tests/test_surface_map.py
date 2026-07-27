@@ -102,6 +102,63 @@ def test_dead_reason_present_iff_unconsumed(surface):
         )
 
 
+#: Phrasings that make one row's cause depend on another row's.
+#:
+#: This is not a style rule. Three rows — worker_engine, bridge_channel and
+#: (in effect) user_backend — carried a cause that was only ever true of
+#: compute_engine, because "Same as compute_engine: the handle is never passed"
+#: was cheaper to write than checking. It was wrong for both: engine_factory has
+#: no ``register()`` at all, and channel_registry does not exist. A reader
+#: following that cause would pass the handle, watch nothing change, and have no
+#: idea why.
+_DEFERRING_PHRASES = (
+    "same as",
+    "see above",
+    "as above",
+    "ditto",
+    "likewise",
+    "same reason",
+)
+
+
+@pytest.mark.parametrize("surface", SURFACES, ids=lambda s: s.plugin_type)
+def test_dead_reason_stands_on_its_own(surface):
+    """A cause may not be delegated to another row.
+
+    ``surface_map`` is what ``corvin plugin types`` prints, so a wrong cause is
+    not an internal note — it is the instruction a plugin author acts on. A
+    deferring cause is additionally the one shape that goes stale invisibly: fix
+    the row it points at and this row still reads as explained.
+    """
+    if surface.consumed:
+        return
+    lowered = surface.dead_reason.lower()
+    hit = next((p for p in _DEFERRING_PHRASES if p in lowered), None)
+    assert hit is None, (
+        f"{surface.plugin_type}: dead_reason defers to another row via {hit!r}. "
+        f"State this surface's own cause — the three rows that did this named a "
+        f"cause that was false for them.\n  {surface.dead_reason}"
+    )
+
+
+@pytest.mark.parametrize("surface", SURFACES, ids=lambda s: s.plugin_type)
+def test_dead_reason_names_something_in_the_tree(surface):
+    """The cause must point at an identifier a reader can go and look at.
+
+    Weaker than it sounds, and deliberately so: the assertion is only that the
+    reason cites *something* — a module, a function, a config key — rather than
+    describing a feeling about the code. A cause with no referent cannot be
+    checked, and an unfalsifiable cause is how the three wrong ones survived
+    review.
+    """
+    if surface.consumed:
+        return
+    assert re.search(r"[\w/]+\.py\b|\w+\(\)|\bspec\.[\w.]+", surface.dead_reason), (
+        f"{surface.plugin_type}: dead_reason cites no file, call or config key, "
+        f"so a reader cannot verify it:\n  {surface.dead_reason}"
+    )
+
+
 def test_every_template_on_disk_is_claimed_by_the_map():
     """A template nobody references is one an author will never be pointed at."""
     on_disk = {p.name for p in _TEMPLATES.glob("*_plugin.py")}

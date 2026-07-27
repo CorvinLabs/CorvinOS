@@ -1031,6 +1031,15 @@ mechanisms, and they are deliberately **additive only**:
   A rejected credential counts as a *working* backend — only infrastructure
   failures may open its breaker, otherwise three wrong passwords would lock out
   every user.
+  **None of this is reached (verified 2026-07-27).** `get_active()` is never
+  called for `user_backend`, because CorvinOS has no credential auth path: the
+  only live login is localhost-only and credential-less (the TCP peer is the
+  authorisation), `console_api.py`'s `/auth/login` is dead demo code imported by
+  nothing, and OIDC is unbuilt. Do not "fix" this by consulting the backend from
+  local-login — it would be handed empty credentials, a correct backend rejects
+  those, and deny on the only login path locks the operator out. The semantics
+  above bind the first credential login that gets built. See
+  `docs/implementation/PLUGIN_SYSTEM_ACTIVATION_PLAN.md` Stage 2.
 
 ### Boot tripwire (ADR-0233 D5)
 
@@ -1266,6 +1275,8 @@ both.
 - Don't let an `audit_backend` reach the core chain: no `set_writer`,
   no `replace_writer`, no writing to `audit.jsonl`. The tripwire enforces this.
 - Don't translate a `user_backend` failure into a guest/anonymous session.
+- Don't wire `user_backend` into `local-login` to "activate" it — that path has no
+  credentials to pass, and deny on the only login locks the operator out.
 - Don't count auth *denials* as circuit-breaker failures (self-inflicted DoS).
 - Don't put setting VALUES, principals, or `str(exc)` into audit details or
   `HealthStatus.message` — exception class names only.
