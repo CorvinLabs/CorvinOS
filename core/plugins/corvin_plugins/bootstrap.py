@@ -392,6 +392,11 @@ def bootstrap_global(
             tenant_id=tenant_id,
             corvin_home=corvin_home,
             boot_layer=boot_layer,
+            # These ARE the wheel: a global spec can only be contributed from
+            # code, by `register_global_plugin`, which no config can reach. So
+            # this is the one place `builtin` is a fact rather than a claim, and
+            # the one exemption the ADR-0250 slot gate grants.
+            origin="builtin",
             **registries,
         )
         if ok:
@@ -909,6 +914,10 @@ def _load_one(
         corvin_home=corvin_home,
         config=record.settings,
         boot_layer=boot_layer,
+        # The runtime path is the one with a manifest, so it is the one that can
+        # answer the ADR-0250 provider-slot question honestly. The declarative
+        # path cannot and deliberately does not (see _register_instance).
+        origin=record.origin.value,
         **registries,
     )
 

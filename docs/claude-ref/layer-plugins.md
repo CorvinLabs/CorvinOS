@@ -979,8 +979,38 @@ the moment a second tenant exists with a different operator, and it is not
 something a per-call-site patch can fix: it needs the registries to be keyed by
 tenant, which changes the ADR-0033 provider contract.
 
-Until that is decided: **do not install a third-party provider plugin on a
-multi-tenant install.** The plugin sees every tenant's data by construction.
+#### Enforced since 2026-07-27 (ADR-0250 D1)
+
+The line above used to end with an instruction — *"do not install a third-party
+provider plugin on a multi-tenant install"* — which nothing enforced while the
+admin API accepted the operation. It is now a refusal.
+
+`corvin_plugins/tenant_scope.py` refuses a provider-type plugin that is not
+`origin=builtin` when the install has more than one tenant. It runs in
+`bootstrap._register_instance()`, the one point BOTH load paths pass through, and
+it runs **before** `on_load()` — so the slot is never taken, not taken-and-freed.
+
+| Case | Outcome |
+|---|---|
+| Single tenant (the default install) | allowed — unchanged behaviour |
+| Plugin type that takes no provider slot | allowed |
+| `origin=builtin` (shipped in the wheel) | allowed |
+| `origin=vetted` on a multi-tenant install | **refused** — a signature attests who wrote it, not that it is tenant-aware |
+| `origin=community` or unknown, multi-tenant | **refused** |
+| Tenant set cannot be enumerated | **refused** — "could not check" is not "one tenant" |
+
+The refusal is audited as `plugin.provider_slot_refused` with the tenant *count*
+and never the other tenants' ids. It carries **no feature flag**: a `false` would
+be an operator switch re-enabling a cross-tenant data path.
+
+The declarative `spec.plugins.installed` path supplies no `origin`, so it is
+treated as not-builtin. That is deliberate — writing a class path into a tenant
+config is an explicit opt-in for *that* tenant and says nothing about the others
+whose data the slot would reach.
+
+Keying the registries by tenant (ADR-0250 D2) is still the real fix and is still
+a separate change. When it lands, this refusal stops firing on its own and stays
+as the backstop for the next registry added without keying.
 
 ### Additive backends — extension never replaces core (ADR-0233 D4)
 
