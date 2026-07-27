@@ -58,21 +58,38 @@ test.describe('Security Tests', () => {
     });
 
     test('Prevent event handler injection', async ({ page }) => {
-      await page.goto('/console/app/settings');
+      // The chat composer, not settings: settings has exactly one input and it is
+      // type=number, so there was no text field to attack there at all. The composer
+      // is also the security-relevant one — it is where user content actually enters
+      // the system and gets rendered back.
+      await page.goto('/console/app/chat');
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
-      const inputs = page.locator('input, textarea');
-      const count = await inputs.count();
+      // Target a TEXT field explicitly. `inputs.first()` on the settings page is the
+      // session-TTL number input, so fill() threw "Cannot type text into
+      // input[type=number]" — which only surfaced once this spec stopped navigating to
+      // /app/settings (a 404 where no input existed and `count > 0` skipped the body).
+      // The old assertion was `expect(true).toBe(true)`, so it proved nothing either way.
+      const textFields = page.locator('textarea, input[type="text"], input:not([type])');
+      expect(await textFields.count()).toBeGreaterThan(0);
 
-      if (count > 0) {
-        const input = inputs.first();
-        const payload = 'javascript:alert("XSS")';
-        await input.fill(payload);
+      const field = textFields.first();
+      const payload = 'javascript:alert("XSS")';
 
-        // Should treat as text, not execute
-        expect(true).toBe(true);
-      }
+      // A dialog would mean the payload executed; fail loudly instead of hanging.
+      const dialogs: string[] = [];
+      page.on('dialog', async d => { dialogs.push(d.message()); await d.dismiss(); });
+
+      await field.fill(payload);
+      await field.blur();
+      await page.waitForTimeout(300);
+
+      // Treated as TEXT: the value round-trips literally, nothing executed, and the
+      // payload never becomes a live href/handler in the DOM.
+      expect(await field.inputValue()).toBe(payload);
+      expect(dialogs, 'the payload executed as script').toEqual([]);
+      expect(await page.locator('[href^="javascript:"]').count()).toBe(0);
     });
 
     test('Prevent DOM-based XSS via URL parameters', async ({ page }) => {
@@ -579,13 +596,31 @@ test.describe('Session Management Tests', () => {
       await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
-      const hasSecureStorage = await page.evaluate(() => {
-        // Check for secure token storage
-        return localStorage.getItem('auth_token') !== null ||
-               sessionStorage.getItem('auth_token') !== null;
-      });
+      // The console authenticates with an HttpOnly session COOKIE, so the security
+      // guarantee is the opposite of what this test's name suggests: no credential may
+      // sit in web storage, where any XSS can read it. The old body computed
+      // `hasSecureStorage` and then asserted a tautology, so it passed either way.
+      // Assert the precise guarantee: the SESSION COOKIE'S VALUE must never appear in
+      // web storage. A key-name heuristic is not enough — my first attempt matched
+      // /sid/ and flagged corvin.chat.lastSid, which is a UI preference (the last chat
+      // conversation, sitting next to corvin.theme and corvin.chat.voiceLang), not a
+      // credential. Comparing against the actual cookie value has no such ambiguity.
+      const cookies = await page.context().cookies();
+      const sid = cookies.find(c => c.name === 'corvin_console_sid');
+      expect(sid, 'no corvin_console_sid cookie — is the session set up?').toBeTruthy();
 
-      expect([true, false]).toContain(hasSecureStorage || true);
+      const leaked = await page.evaluate((secret: string) => {
+        const hits: string[] = [];
+        for (const store of [localStorage, sessionStorage]) {
+          for (let i = 0; i < store.length; i += 1) {
+            const key = store.key(i);
+            if (!key) continue;
+            if ((store.getItem(key) ?? '').includes(secret)) hits.push(key);
+          }
+        }
+        return hits;
+      }, sid!.value);
+      expect(leaked, 'the session token was copied into web storage').toEqual([]);
     });
 
     test('Token refresh before expiry', async ({ page }) => {
@@ -753,14 +788,17 @@ test.describe('Session Management Tests', () => {
       await page.waitForTimeout(1000);
 
       const cookies = await page.context().cookies();
-      const sessionCookies = cookies.filter(c =>
-        c.name.includes('session') || c.name.includes('auth')
-      );
-
-      // Should use HttpOnly flag
-      sessionCookies.forEach(cookie => {
-        expect([true, false]).toContain(cookie.httpOnly || true);
-      });
+      // The console's session cookie is corvin_console_sid — the old filter looked for
+      // names containing "session"/"auth", matched NOTHING, and then asserted
+      // `[true,false]).toContain(x || true)`, which is true for every input. So a test
+      // named "Use HttpOnly cookies for sensitive data" could not fail even if the
+      // flag were dropped. auth_routes.py sets httponly=True; this now checks it.
+      const sid = cookies.find(c => c.name === 'corvin_console_sid');
+      expect(sid, 'no corvin_console_sid cookie — is the session set up?').toBeTruthy();
+      expect(sid!.httpOnly, 'session cookie must be HttpOnly (XSS cannot read it)')
+        .toBe(true);
+      expect(sid!.sameSite, 'session cookie must carry a SameSite policy')
+        .not.toBe('None');
     });
 
     test('Use SameSite attribute on cookies', async ({ page }) => {
@@ -925,12 +963,27 @@ test.describe('Permission & Authorization Tests', () => {
     await page.waitForLoadState('load');
       await page.waitForTimeout(1000);
 
-    await page.route('**/api/**', route => {
-      // Verify request has auth header
-      const headers = route.request().allHeaders();
-      expect([true, false]).toContain(headers['authorization'] !== undefined || true);
-      route.continue();
+    // The old body registered a route matcher for '**/api/**' — the console API lives
+    // under /v1/console/, so it never fired — and its assertion was a tautology, so the
+    // test passed while checking nothing. Assert the real guarantee instead: a protected
+    // endpoint refuses a request that carries no session at all.
+    const anon = await page.context().browser()!.newContext({
+      // Explicitly anonymous: the project-level `use.storageState` must not leak in,
+      // or this asserts nothing.
+      storageState: { cookies: [], origins: [] },
     });
+    try {
+      const resp = await anon.request.get(
+        'http://localhost:5173/v1/console/plugins',
+        { failOnStatusCode: false },
+      );
+      expect(
+        [401, 403],
+        `a protected endpoint answered ${resp.status()} without a session`,
+      ).toContain(resp.status());
+    } finally {
+      await anon.close();
+    }
   });
 
   test('Handle permission denied (403) gracefully', async ({ page }) => {

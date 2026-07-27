@@ -165,8 +165,15 @@ async function setupBaseMocks(page: Page, claudeLocal = MOCK_CLAUDE_LOCAL_DISABL
 }
 
 async function gotoEngineControl(page: Page) {
-  await page.goto("/console/app/engine-control", { waitUntil: "load" });
-  // Wait for the engine selector to render
+  // The standalone "Engine Control" page no longer exists: App.tsx redirects
+  // /app/engine-control to /app/engines, where its content lives in the "Control" tab
+  // ("merged from the former separate Engine Control page", engines.tsx). The redirect
+  // kept the old URL working, so navigating still succeeded — it just landed on the
+  // Setup tab, and every assertion about the Local Backend section then failed with
+  // "element(s) not found". Eight tests in this file, one stale helper.
+  await page.goto("/console/app/engines", { waitUntil: "load" });
+  await page.getByRole("tab", { name: "Control" }).click();
+  // Wait for the engine selector inside the tab to render.
   await page.waitForSelector("text=Claude Code", { timeout: 10_000 });
 }
 
