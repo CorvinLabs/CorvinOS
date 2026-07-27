@@ -20,9 +20,16 @@ tenant-wide, not per-web-chat): /engine <name>, /persona, /dialectic-*, /skills,
 /memory. Honest "not in the console" for bridge-only runtime commands
 (/go, /propose, /btw, /share, /forget). Client-side actions (/stop, /new, /clear,
 /reset) are performed by the frontend; if one still reaches the server we return
-a short pointer rather than the model.
+a short pointer rather than the model. /plugin-builder (ADR-0253, behind the
+plugin_builder_enabled flag) is the one STATEFUL command: it runs a multi-turn
+interview via plugin_builder.session_store, so plain-text turns are checked
+against an active session before the non-slash fallthrough below.
 """
 from __future__ import annotations
+
+import logging
+
+log = logging.getLogger("corvin.console.slash_commands")
 
 # CCC commands are handled downstream (entity_extract) — never intercept them.
 _CCC_CMDS = frozenset({"/create", "/erase", "/audit"})
@@ -74,8 +81,149 @@ _HELP = (
     "- `/persona`, `/skills`, `/memory` — open the matching tab to manage these\n"
     "- `/dialectic-on`, `/dialectic-off` — toggle in the Engines/Settings tab\n"
     "- `/create workflow|task|tool|skill`, `/erase`, `/audit` — CCC entity actions\n"
+    "- `/plugin-builder` — interview-driven plugin design (Idea/Architecture/ADR"
+    "/Plan + scaffold), `/plugin-builder status|cancel` — check or stop it\n"
     "- `/stop` (Stop button), `/new`, `/clear`, `/reset` — session controls\n"
 )
+
+
+# ── /plugin-builder (ADR-0253) ───────────────────────────────────────────────
+#
+# The one stateful command in this dispatcher. Everything else here is a pure
+# function of its arguments; a multi-turn interview genuinely needs session
+# state, so it gets its own small store (plugin_builder.session_store) keyed
+# by (tenant_id, fingerprint) — the same identity slash_commands already uses.
+# Ships behind `plugin_builder_enabled` (default off): with the flag off this
+# behaves exactly like an unknown command would, and no session is ever
+# created or consulted.
+
+def _plugin_builder_enabled(tenant_id: str) -> bool:
+    try:
+        from . import feature_flags
+        return feature_flags.is_enabled("plugin_builder_enabled", tenant_id)
+    except Exception:  # noqa: BLE001 — a broken flag lookup must not break a turn
+        return False
+
+
+def _plugin_builder_output_dir(tenant_id: str):
+    from forge import paths as _forge_paths  # noqa: PLC0415
+    return _forge_paths.tenant_home(tenant_id) / "plugin-builder"
+
+
+def _write_plugin_builder_artifacts(session, *, tenant_id: str) -> str:
+    from plugin_builder.generators import write_artifacts  # noqa: PLC0415
+
+    result = session.result()
+    if result is None:  # pragma: no cover — defensive; only reached on a state bug
+        return "Something went wrong — the interview did not reach a final result."
+    idea, classification = result
+    try:
+        scaffold = write_artifacts(idea, classification, _plugin_builder_output_dir(tenant_id))
+    except FileExistsError:
+        return (
+            f"A plugin named **{idea.plugin_name}** was already scaffolded "
+            "earlier — rename the idea and run `/plugin-builder` again."
+        )
+    except Exception as exc:  # noqa: BLE001 — never break the turn on a write failure
+        log.error("plugin-builder artifact write failed: %s", type(exc).__name__)
+        return (
+            "The interview finished but writing the artifacts failed "
+            f"({type(exc).__name__}). Nothing was left half-written; try "
+            "`/plugin-builder` again."
+        )
+
+    try:
+        from plugin_builder import index_store  # noqa: PLC0415
+        index_store.record(tenant_id, idea, scaffold)
+    except Exception as exc:  # noqa: BLE001 — the scaffold is already on disk;
+        # a listing-index failure must never look like the write itself failed.
+        log.error("plugin-builder index record failed: %s", type(exc).__name__)
+
+    lines = [
+        f"Done — classified as **{classification.kind.value}** "
+        f"(Tier {classification.tier.value}, "
+        f"confidence {classification.confidence:.0%}).",
+        f"Written to `{scaffold.dest}`:",
+        *(f"- `{p.name}`" for p in scaffold.scaffold_files),
+        *(f"- `docs/{p.name}`" for p in scaffold.doc_files),
+        "",
+        "See it listed under Settings → Plugins → Scaffolded by Plugin-Builder.",
+    ]
+    lines.extend(f"⚠ {w}" for w in scaffold.warnings)
+    return "\n".join(lines)
+
+
+def _drive_plugin_builder(session, text: str, *, tenant_id: str, fingerprint: str) -> str:
+    from plugin_builder import session_store  # noqa: PLC0415
+
+    reply = session.answer(text)
+    if session.is_finished():
+        if session.phase.value == "done":
+            reply = f"{reply}\n\n{_write_plugin_builder_artifacts(session, tenant_id=tenant_id)}"
+        session_store.clear(tenant_id, fingerprint)
+    return reply
+
+
+def _plugin_builder_continue(text: str, *, tenant_id: str, fingerprint: str) -> "str | None":
+    """Route a non-slash turn to an active interview, if one exists.
+
+    Returns ``None`` for every other case (flag off, module absent, no active
+    session) so the caller falls through to its normal prompt handling —
+    exactly the same contract as ``handle()`` itself.
+
+    Checks for an active session BEFORE the flag — a cheap in-memory dict
+    lookup — rather than the other way round. `feature_flags.is_enabled()`
+    reads `features.json` from disk on every call (uncached, unlike
+    `_tenant_spec`); checking it first would put a disk read on EVERY plain-
+    text turn on EVERY install, flag on or off, when the overwhelming common
+    case (no active interview) never needs one.
+    """
+    try:
+        from plugin_builder import session_store  # noqa: PLC0415
+    except ImportError:
+        return None
+    session = session_store.get(tenant_id, fingerprint)
+    if session is None:
+        return None
+    if not _plugin_builder_enabled(tenant_id):
+        # Flag was toggled off mid-interview — drop the orphaned session
+        # rather than let a now-disabled feature keep consuming turns.
+        session_store.clear(tenant_id, fingerprint)
+        return None
+    return _drive_plugin_builder(session, text, tenant_id=tenant_id, fingerprint=fingerprint)
+
+
+def _plugin_builder_command(arg: str, *, tenant_id: str, fingerprint: str) -> str:
+    if not _plugin_builder_enabled(tenant_id):
+        return (
+            "Plugin Builder is off. An operator can enable it in "
+            "**Settings → Features** (`plugin_builder_enabled`)."
+        )
+    try:
+        from plugin_builder import session_store  # noqa: PLC0415
+    except ImportError:
+        return "Plugin Builder is enabled but not installed in this build."
+
+    sub = arg.strip().lower()
+    if sub in ("cancel", "stop"):
+        existing = session_store.get(tenant_id, fingerprint)
+        if existing is None:
+            return "No Plugin-Builder interview is active."
+        session_store.clear(tenant_id, fingerprint)
+        return "Plugin-Builder interview cancelled. Nothing was written."
+    if sub == "status":
+        existing = session_store.get(tenant_id, fingerprint)
+        if existing is None:
+            return "No Plugin-Builder interview is active. Type `/plugin-builder` to start one."
+        return f"Interview in progress (phase: {existing.phase.value}).\n\n{existing.ask()}"
+
+    session = session_store.start(tenant_id, fingerprint)
+    return (
+        "**Plugin-Builder** (ADR-0253) — a few questions, then I'll classify "
+        "your idea and generate an Idea Doc, Architecture Concept, ADR and "
+        "Build Plan plus a code scaffold. Reply `/plugin-builder cancel` any "
+        "time to stop.\n\n" + session.ask()
+    )
 
 
 def handle(text: str, *, tier: str | None, tenant_id: str,
@@ -84,6 +232,14 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
     (CCC command or non-slash prompt). Pure function of its inputs — testable."""
     text = (text or "").strip()
     if not text.startswith("/"):
+        # An active /plugin-builder interview captures plain-text turns (its
+        # questions, and the confirm/restart/cancel review answers) — checked
+        # before the normal-prompt fallthrough so mid-interview turns never
+        # reach the engine. Returns None immediately when the flag is off or
+        # no interview is active, so this costs nothing on a stock install.
+        pb_reply = _plugin_builder_continue(text, tenant_id=tenant_id, fingerprint=fingerprint)
+        if pb_reply is not None:
+            return pb_reply
         return None  # normal prompt
 
     head, _, arg = text.partition(" ")
@@ -93,6 +249,9 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
     # CCC → downstream entity-extract pipeline.
     if cmd in _CCC_CMDS:
         return None
+
+    if cmd == "/plugin-builder":
+        return _plugin_builder_command(arg, tenant_id=tenant_id, fingerprint=fingerprint)
 
     # Force-delegation → downstream stream_turn._force_delegate branch.
     if cmd in _PASSTHROUGH_CMDS:

@@ -1339,6 +1339,89 @@ host in that table must import AND call `boot_platform`, the sequence must carry
 no override switch, and the three steps must stay in that order. Adding a third
 host means adding a row there — that is the point of the test.
 
+### Plugin-Builder — assisted authoring (ADR-0253)
+
+`core/plugins/plugin_builder/` is a build-time-only companion to `corvin_plugins`
+— an interview-driven tool that helps an author design a plugin BEFORE they
+write code, entered via the `/plugin-builder` console command (behind the
+`plugin_builder_enabled` feature flag, default off). It restates ADR-0244's
+"emits artifacts, never loads them" constraint for a second tool: a plugin it
+scaffolds depends only on `corvin_plugins`, never on `plugin_builder`, and
+deleting the package leaves every previously generated plugin working.
+
+Four phases (`interview.py`, a transport-agnostic state machine — the same
+`InterviewSession.ask()`/`.answer()` pair drives it from a pytest, a CLI loop,
+or the console command):
+
+1. **Problem Understanding** — five free-text questions.
+2. **Auto-Classification** (`classifier.py`) — keyword-scored, not ML, into six
+   kinds: `mcp_server` (Tier C) | `skill` (Tier A) | `hook` (Tier B) | `provider`
+   (Tier B, resolves to a REAL `KNOWN_PLUGIN_TYPES` entry — never an invented
+   one) | `integration` | `custom`. Every classification carries a rationale
+   string and `risk_flags` — including surfacing, at classification time, that a
+   guessed `plugin_type` is one of the six unconsumed ones (ADR-0245) or has no
+   shipped template.
+3. **Dependencies & Constraints** — six more questions.
+4. **Review & Confirmation** — the one phase that waits for `confirm` /
+   `restart` / `cancel` rather than free text, because writing to disk is the
+   only side-effecting step.
+
+`generators/` produces four Markdown documents (Idea, Architecture, ADR, Build
+Plan) plus a code scaffold (`generators/scaffold.py`), which picks one of two
+strategies:
+
+* **A `PluginKind.PROVIDER` whose type ships an official template** — reuses
+  `ops.launcher.corvin.plugin_cmd.cmd_new` in-process (the SAME AST-based
+  rewriting path `corvin plugin new` uses), so this tool never carries a second
+  copy of that logic.
+* **Everything else** (MCP-Server, Skill, Hook, a Provider type with no
+  official template yet — today `data_connector`/`stt_provider` — Integration,
+  Custom) — fills in one of `plugin_builder/templates/` via plain placeholder
+  substitution. These are Builder-owned scaffolds, not ADR-0246 official
+  templates: no conformance-test coverage from `test_template_conformance.py`,
+  and no claim that a capability protocol is fully specified for a type that
+  doesn't have one yet (`data_connector`/`stt_provider`).
+
+`/plugin-builder` is the one STATEFUL command in
+`corvin_console/slash_commands.py` — a multi-turn interview needs session
+state, held in `plugin_builder.session_store` (in-memory, TTL-evicted, keyed by
+`(tenant_id, fingerprint)`). Every other command in that dispatcher is a pure
+function of its arguments; this is the deliberate, documented exception.
+`_plugin_builder_continue` checks the (cheap, in-memory) session store BEFORE
+the feature flag — `feature_flags.is_enabled()` reads `features.json` from
+disk uncached on every call, and the common case on every plain-text turn,
+flag on or off, is "no interview is active"; checking the session first means
+that common case costs one dict lookup, not a disk read, on every chat turn
+in the console.
+
+`InterviewSession.answer()` holds a per-instance lock for its whole body — two
+overlapping calls on the SAME session (a client retry, a double-submit) are
+serialized rather than racing on `_answer_index`/`_answers`. Adversarial review
+(2026-07-27) found this corrupting answers under concurrency before the lock
+was added; see `test_concurrent_answers_do_not_interleave_state`.
+
+A written scaffold's free-text `plugin_name` is sanitized (`_display_name()` in
+`generators/scaffold.py` — strips `"`, `\`, newlines) before it is spliced into
+a template's `display_name = "..."` string literal or docstring header. Plain
+placeholder substitution has no contextual escaping, so an un-sanitized name
+containing a quote could break out of the literal and inject Python that runs
+the moment the scaffold is imported (which the tool's OWN generated Build-Plan
+doc tells the author to do next, via `corvin plugin check`). Also found by the
+2026-07-27 adversarial review; see
+`test_scaffold_display_name_cannot_break_out_of_python_string_literal`.
+
+**Scaffold visibility (ADR-0253, 2026-07-27):** every successful
+`write_artifacts()` call from the console command is also recorded — best
+effort, never raised back into the interview turn — by
+`plugin_builder.index_store` into a tenant-scoped `plugin_builder_index.json`
+(same read-fail-open / atomic-write-then-rename shape as `feature_flags.py`'s
+`features.json` overlay, bounded at `index_store.MAX_ENTRIES`). The Console's
+Plugins page (`GET /plugins/scaffolded`, gated by `plugin_builder_enabled`
+independently of `plugin_console_surface`) reads it back and renders a
+"Scaffolded by Plugin-Builder" section — read-only, no enable/disable/settings,
+because a scaffold was never registered (ADR-0244 still holds: recording it in
+the index is bookkeeping, not loading).
+
 ### Must NOT do
 
 - Don't add a second `PluginRegistry`, lifecycle, or plugin taxonomy.
@@ -1358,3 +1441,9 @@ host means adding a row there — that is the point of the test.
 - Don't add an override switch to the tripwire in any form.
 - Don't build a new marketplace downloader: distribution goes through ADR-0096
   (`mcp_manager`, per-spawn SHA256/digest verification) or ADR-0142/0156.
+- Don't let `plugin_builder` import the registry/loader/bootstrap to LOAD what
+  it scaffolds — ADR-0244's constraint applies to this tool too: it emits
+  artifacts, it never loads them.
+- Don't add a `plugin_type` to the classifier's keyword table that isn't in the
+  live `KNOWN_PLUGIN_TYPES` — that would be exactly the second taxonomy this
+  file already forbids, one layer up.

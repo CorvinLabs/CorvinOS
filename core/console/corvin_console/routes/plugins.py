@@ -116,6 +116,26 @@ class PluginListOut(BaseModel):
     lifecycle_enabled: bool
 
 
+class ScaffoldOut(BaseModel):
+    """One Plugin-Builder scaffold record (ADR-0253) — NOT an installed
+    plugin. Deliberately a much smaller shape than ``PluginOut``: a scaffold
+    has no ``enabled``/``runtime_loaded``/``settings`` because it was never
+    registered (ADR-0244's "the Builder emits, never loads" invariant)."""
+
+    plugin_id: str
+    display_name: str
+    kind: str
+    tier: str
+    plugin_type: str | None
+    path: str
+    created_at: float
+
+
+class ScaffoldListOut(BaseModel):
+    scaffolds: list[ScaffoldOut]
+    total: int
+
+
 class SettingsIn(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
 
@@ -173,6 +193,16 @@ async def require_surface(rec: Annotated[Any, Depends(require_session)]) -> Any:
 async def require_surface_csrf(rec: Annotated[Any, Depends(require_csrf)]) -> Any:
     """Same gate for mutations: CSRF first (401/403), then the surface (404)."""
     _require_surface(rec.tenant_id)
+    return rec
+
+
+async def require_builder_surface(rec: Annotated[Any, Depends(require_session)]) -> Any:
+    """Gate for the Plugin-Builder scaffold listing — independent of
+    ``plugin_console_surface``: a scaffold is not an installed plugin, so
+    whether the operator can browse the registry has no bearing on whether
+    they can see what the Builder has generated for them (ADR-0253)."""
+    if not _feature_flags.is_enabled("plugin_builder_enabled", rec.tenant_id):
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND)
     return rec
 
 
@@ -415,6 +445,28 @@ async def plugin_metrics(
     snapshot = collector.snapshot() if collector is not None else None
     body = _health.render_prometheus(snapshot)
     return Response(content=body, media_type="text/plain; version=0.0.4")
+
+
+@router.get("/plugins/scaffolded")
+async def list_scaffolded_plugins(
+    rec: Annotated[Any, Depends(require_builder_surface)],
+) -> ScaffoldListOut:
+    """Plugin-Builder scaffolds recorded for this tenant (ADR-0253).
+
+    Registered BEFORE ``/plugins/{plugin_id}`` — a path-parameter route
+    declared first would swallow this one, treating "scaffolded" as a
+    ``plugin_id`` (same reason ``/plugins/health`` and ``/plugins/metrics``
+    precede it above).
+    """
+    try:
+        from plugin_builder import index_store  # noqa: PLC0415
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="plugin-builder subsystem unavailable in this installation",
+        ) from exc
+    records = [ScaffoldOut(**r) for r in index_store.list_scaffolds(rec.tenant_id)]
+    return ScaffoldListOut(scaffolds=records, total=len(records))
 
 
 @router.get("/plugins/{plugin_id}")
