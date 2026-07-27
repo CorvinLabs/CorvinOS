@@ -129,8 +129,18 @@ def _detach_provider_slot(plugin: CorvinPlugin) -> None:
     for name in _PROVIDER_MODULE_NAMES:
         try:
             module = import_module(f".providers.{name}", package=__package__)
+            # Forget the breaker keyed on the OBJECT too, not just the one keyed
+            # on the plugin. A provider whose object carried no plugin_id got the
+            # key `anonymous:<Class>`, and `forget(plugin_id)` never touched it —
+            # so a reload inherited an open breaker from the previous life.
+            backend = module.get_active()
             if module.release_owned_by(plugin_id):
                 log.debug("released %s slot held by %r", name, plugin_id)
+                if backend is not None:
+                    _breakers.forget(
+                        getattr(backend, "plugin_id", None)
+                        or f"anonymous:{type(backend).__name__}"
+                    )
         except Exception as exc:  # noqa: BLE001
             log.error(
                 "provider release for %r on %s failed (%s)",
@@ -198,6 +208,20 @@ class PluginRegistry:
         #: stayed open, and the append-only audit chain recorded `unloaded`
         #: before `loaded`.
         self._op_locks: dict[str, threading.RLock] = {}
+        #: plugin_id -> the tenant it was last loaded for, kept AFTER unload.
+        #:
+        #: The tenant check can only refuse what it can resolve, and after
+        #: `unregister` the plugin is in neither the load context nor the
+        #: registry — so a closure, timer or thread that outlived it could
+        #: register an extension hook for any tenant it liked, on a fail-closed
+        #: gate, and nothing would revoke it. Remembering the association closes
+        #: that window: the id stays bound to its tenant even when the object is
+        #: gone.
+        self._tenant_history: dict[str, str] = {}
+
+    #: Cap on the tenant-history map, same reasoning as the op locks: an
+    #: unbounded stream of ids must not grow it without limit.
+    MAX_TENANT_HISTORY = 4096
 
     #: Cap on per-plugin operation locks, so an unbounded stream of unknown ids
     #: cannot grow the map. Same shape as healing.MAX_PLUGIN_LOCKS.
@@ -319,6 +343,9 @@ class PluginRegistry:
             self._plugins[plugin.plugin_id] = plugin
             self._contexts[plugin.plugin_id] = ctx
             self._boot_layers[plugin.plugin_id] = resolved
+            if len(self._tenant_history) >= self.MAX_TENANT_HISTORY:
+                self._tenant_history.clear()
+            self._tenant_history[plugin.plugin_id] = ctx.tenant_id
 
         try:
             # Mark who is loading, for the whole duration of on_load(). Provider
@@ -328,9 +355,16 @@ class PluginRegistry:
             with _loading.loading(plugin.plugin_id, ctx.tenant_id):
                 plugin.on_load(ctx)
         except Exception:
-            # on_load failed — roll back the slot reservation, including any
-            # provider slot the half-loaded plugin managed to take.
+            # on_load failed — roll back EVERYTHING it managed to take, not just
+            # the registry maps. A half-loaded plugin can already hold a provider
+            # slot, an extension hook (on the fail-closed workflow gate, with the
+            # callable of a half-initialised object) and a breaker with failures
+            # on it. Releasing only the slot left the other two behind, and
+            # nothing would ever come back for them: the plugin is not
+            # registered, so no unregister will run.
             _detach_provider_slot(plugin)
+            _revoke_hooks(plugin.plugin_id)
+            _breakers.forget(plugin.plugin_id)
             with self._lock:
                 self._plugins.pop(plugin.plugin_id, None)
                 self._contexts.pop(plugin.plugin_id, None)
@@ -439,6 +473,17 @@ class PluginRegistry:
             if plugin_id not in self._plugins:
                 raise PluginNotFound(plugin_id)
             return self._boot_layers.get(plugin_id, BootLayer.INSTALLED)
+
+    def tenant_ever_loaded_for(self, plugin_id: str) -> str | None:
+        """The tenant this id was last loaded for, even after it was unloaded.
+
+        Used by the extension bus so a hook cannot be registered for a foreign
+        tenant in the window after `unregister`, where the plugin is in neither
+        the load context nor the registry and the check would otherwise have
+        nothing to compare against.
+        """
+        with self._lock:
+            return self._tenant_history.get(plugin_id)
 
     def tenant_of(self, plugin_id: str) -> str | None:
         """The tenant this plugin instance was loaded for, or None if unknown.

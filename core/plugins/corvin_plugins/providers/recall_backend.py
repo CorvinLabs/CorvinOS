@@ -204,6 +204,7 @@ class RecallBackendRegistry:
     def clear(self) -> None:
         """Restore the bundled default provider."""
         with self._lock:
+            self._owner_plugin_id = None
             self._active = SqliteRecallBackend()  # type: ignore[assignment]
 
     def clear_if_active(self, provider: object) -> bool:

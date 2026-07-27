@@ -356,11 +356,23 @@ def _loaded_tenant(plugin_id: str) -> Tuple[Optional[str], str]:
     try:
         from .registry import get_registry
 
-        ctx = get_registry()._contexts.get(plugin_id)
+        registry = get_registry()
+        ctx = registry._contexts.get(plugin_id)
     except Exception:  # noqa: BLE001 — a missing registry must not break a load
         log.debug("plugin registry lookup for %r is unavailable", plugin_id)
         return None, _TENANT_UNAVAILABLE
     if ctx is None:
+        # Not loaded NOW — but if this id was ever loaded, it stays bound to the
+        # tenant it was loaded for. Without this, the window after `unregister`
+        # was wide open: a closure, timer or thread that outlived the plugin
+        # could claim any tenant's fail-closed gate, and no cleanup path would
+        # ever come back for it.
+        try:
+            historic = registry.tenant_ever_loaded_for(plugin_id)
+        except Exception:  # noqa: BLE001
+            historic = None
+        if historic:
+            return historic, _TENANT_VERIFIED
         return None, _TENANT_UNREGISTERED
     tenant = getattr(ctx, "tenant_id", None)
     if not isinstance(tenant, str) or not tenant:

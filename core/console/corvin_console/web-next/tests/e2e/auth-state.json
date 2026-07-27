@@ -2,10 +2,10 @@
   "cookies": [
     {
       "name": "corvin_console_sid",
-      "value": "NAKs9e1j7AJTCcttZ_cP02Q-lxJ5D6FAPssocN9SL-0",
+      "value": "W8F8ABg8bOOuSKY8FH38_poUVtXzTEc_pDIQiN4o1sU",
       "domain": "localhost",
       "path": "/",
-      "expires": 1785123712.300419,
+      "expires": 1785168314.165069,
       "httpOnly": true,
       "secure": false,
       "sameSite": "Strict"

@@ -429,6 +429,41 @@ There is no `corvin plugin list`: live plugin state belongs to the running gatew
 and answering from the CLI process would show an empty registry and read as
 "nothing installed". Use the health route below.
 
+### Provenance and operator consent (ADR-0249)
+
+A plugin is in-process Python. Once loaded it runs with the privileges of the
+process holding the audit writer, the consent gate and the tenant keys.
+
+> **A manifest is a declaration, not a sandbox.** `network_egress: none` records
+> what the author *says*. It is not enforced by the interpreter. This model buys
+> **attribution, not containment** — real containment needs the subprocess
+> isolation of ADR-0241.
+
+| `origin` | Meaning | Requirement |
+|---|---|---|
+| `builtin` | Ships in the wheel | In-tree, maintainer-reviewed |
+| `vetted` | Reviewed and signed | Ed25519 over the manifest digest from a **pinned** trust anchor |
+| `community` | Unreviewed | Explicit per-plugin operator approval, audited |
+
+The signing construction is `awpkg`'s (Ed25519 over the SHA-256 digest of the
+canonical JSON with `signature` removed, fail-closed) — **not** ADR-0141's LIP,
+which is RS256 against a different anchor. With one addition: `awpkg` verifies
+against the key *inside* the manifest, which proves tamper-freedom but not
+provenance. For `vetted`, the key must also be pinned via
+`~/.corvin/global/plugin_trust_anchors.txt` or `CORVIN_PLUGIN_TRUST_ANCHORS`.
+**No anchor ships**, so nothing reaches `vetted` until the maintainer deposits
+one — a key committed to a public repo is not a trust anchor.
+
+Enforcement sits behind `spec.features.plugin_trust_enforcement`, **default off**.
+Off means the verdict is still computed and shown, but nothing is refused, so an
+existing install with community plugins boots unchanged. On means a `vetted`
+claim without a valid pinned signature is **refused, never downgraded** (a
+stripped signature must not become a quiet demotion), and a `community` plugin
+needs a per-plugin approval — not a blanket "allow community" switch, because the
+operator who flips that in month one is not the one who inherits the tenth plugin
+in month nine. The gate runs in `_load_one` **before** `load_from_class_path`,
+since a check after the import asks "may we run this?" about running code.
+
 ### Start by checking whether your type is called
 
 **Six of the eleven plugin types register successfully and are never invoked.**

@@ -687,6 +687,59 @@ def bootstrap_all(
     return ordered
 
 
+def _trust_permits(
+    record: PluginRecord, *, tenant_id: str, corvin_home: Path
+) -> bool:
+    """Provenance gate (ADR-0249). True = this plugin may be imported.
+
+    Never raises: a broken trust config must degrade to the pre-feature path, not
+    abort a boot. The refusal itself is audited, because "an operator installed a
+    plugin and it silently never loaded" is the failure mode this whole area keeps
+    producing.
+    """
+    try:
+        from . import trust
+    except ImportError:  # stripped install
+        return True
+
+    try:
+        enforcement = trust.enforcement_enabled(tenant_id)
+        decision = trust.evaluate(
+            record.to_dict(),
+            corvin_home=corvin_home,
+            tenant_id=tenant_id,
+            enforcement=enforcement,
+        )
+    except Exception:  # noqa: BLE001 - trust must not break the boot
+        log.exception("plugin %r: trust evaluation failed — allowing", record.plugin_id)
+        return True
+
+    if decision.allowed:
+        if decision.verdict is trust.Verdict.FORGED:
+            # Flag off: it loads, but this must not pass in silence.
+            log.warning(
+                "plugin %r claims origin=vetted without a valid pinned signature "
+                "— loading anyway because %s is off",
+                record.plugin_id,
+                trust.TRUST_ENFORCEMENT_FLAG,
+            )
+        return True
+
+    log.error(
+        "plugin %r refused: %s (verdict=%s)",
+        record.plugin_id,
+        decision.reason,
+        decision.verdict.value,
+    )
+    _audit_degradation(tenant_id, "plugin.load_refused", {
+        "plugin_id": record.plugin_id,
+        "tenant_id": tenant_id,
+        "verdict": decision.verdict.value,
+        "reason": decision.reason,
+    })
+    return False
+
+
 def _load_one(
     record: PluginRecord,
     *,
@@ -714,6 +767,14 @@ def _load_one(
     if record.plugin_id in get_registry().discover():
         log.debug("plugin %r already registered — skipping load", record.plugin_id)
         return True
+
+    # ADR-0249 provenance gate. Deliberately BEFORE load_from_class_path: that
+    # call imports the plugin module and runs its top-level code, so a check
+    # placed after it would be asking "may we run this?" about something already
+    # running. Ships dark — with plugin_trust_enforcement off, evaluate() still
+    # returns a verdict but allows everything, so an existing install is unchanged.
+    if not _trust_permits(record, tenant_id=tenant_id, corvin_home=corvin_home):
+        return False
 
     try:
         cls = load_from_class_path(record.class_path)
