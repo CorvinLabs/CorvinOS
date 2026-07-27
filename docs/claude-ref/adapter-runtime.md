@@ -54,6 +54,41 @@ which is exactly a verbatim readout. It now hard-caps that to `max_chars` via
 single overrunning sentence). This is still a degraded result — it cannot
 translate — but it is short and bounded.
 
+**The last-resort generator no longer deletes warnings (2026-07-27).**
+`summarize_smart.py` / `voice_summary_smart.py` is the template generator used
+only when an install has no `summarize.py` at all. It works by CLASSIFYING the
+response — work type, scope, risk, first sentence — and narrating from those
+labels, and a label cannot carry an instruction. So an operational warning in the
+middle of a response was simply not represented anywhere and vanished:
+
+> in  `"Fixed memory leak in worker pool. CRITICAL: Workers must be restarted
+>      after deployment. … it will cause a hang."`
+> out `"Alright, deployment is no longer in our way. Spotted an issue and patched
+>      it. Fixed memory leak in worker pool …"`
+
+Voice is the surface where that is unrecoverable — there is nothing to scroll
+back to. `ResponseAnalysis.critical_warnings` now carries such sentences
+**verbatim** (post secret-stripping, max 3, max 220 chars each), and they are
+spoken **second, right after the opening**: both truncations in this pipeline cut
+from the end, so position is the guarantee. A response carrying a warning also
+suppresses the celebratory opening — "Great news!" ahead of a DANGER notice works
+against the warning — and is never classified `risk_level: trivial`.
+
+Three related defects in the same module, fixed with it: the work-type classifier
+matched substrings, so `"handlers"` matched `"handle"` and a refactor was reported
+as a fix (now whole-word, and the EARLIEST mention wins rather than whichever
+branch is written first); `polish_for_audio` defaulted to `lang="de"` while every
+template in the module is English, emitting *"the REST Programmierschnittstelle
+issue in the Kommandozeile"* (now defaults to `en`; the one production caller
+always passed `lang` explicitly and is unaffected); and fragments lifted out of
+the response lost their terminator to `re.split(r'[.!?]+')`, so TTS read them as
+one unbroken clause.
+
+**Unchanged, and still true:** this generator's scaffolding is English-only. With
+`--lang de` a German warning is now carried verbatim, but the sentences around it
+are English. That is the documented reason it was demoted to last-resort on
+2026-07-24 and is not fixed here — the LLM path is primary.
+
 **Budgets must fit the backend, not just the parent cap (VOICE-F8, 2026-07-25).**
 The degraded path is only rare if the CLI backend actually gets a usable budget.
 VOICE-F7 fixed a cap overflow by *shrinking* the child budgets (CLI 90 s → 45 s)
