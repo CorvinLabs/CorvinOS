@@ -635,14 +635,114 @@ def bootstrap_tenant(
     install that predates the operator turning the flag on must not start
     loading plugins behind their back.
 
-    NOTE: this is the RUNTIME registry path. The declarative
-    ``spec.plugins.installed`` path is :func:`bootstrap_declared`, and it runs
-    FIRST at boot — see :func:`bootstrap_all` for the precedence rule.
+    NOTE: this is the RUNTIME registry path. Loads from BOTH:
+    * state.TenantRegistry (existing PluginLifecycle path)
+    * tenant_plugins.TenantPluginRegistry (Phase 1d path)
+
+    The declarative ``spec.plugins.installed`` path is :func:`bootstrap_declared`,
+    and it runs FIRST at boot — see :func:`bootstrap_all` for the precedence rule.
     """
     if not lifecycle_enabled:
         log.debug("plugin_runtime_lifecycle off — skipping registry bootstrap")
         return []
 
+    loaded: list[str] = []
+
+    # Phase 1d (NEW): Load from TenantPluginRegistry (tenant/plugins/installed/)
+    loaded.extend(_bootstrap_tenant_plugin_registry(
+        tenant_id=tenant_id,
+        corvin_home=corvin_home,
+        compute_registry=compute_registry,
+        engine_factory=engine_factory,
+        channel_registry=channel_registry,
+    ))
+
+    # Existing path: Load from state.TenantRegistry (for backwards compat)
+    loaded.extend(_bootstrap_state_registry(
+        tenant_id=tenant_id,
+        corvin_home=corvin_home,
+        compute_registry=compute_registry,
+        engine_factory=engine_factory,
+        channel_registry=channel_registry,
+    ))
+
+    if loaded:
+        log.info("loaded %d plugin(s) for tenant %r: %s", len(loaded), tenant_id, loaded)
+    return loaded
+
+
+def _bootstrap_tenant_plugin_registry(
+    *,
+    tenant_id: str,
+    corvin_home: Path,
+    compute_registry: Any | None = None,
+    engine_factory: Any | None = None,
+    channel_registry: Any | None = None,
+) -> list[str]:
+    """Phase 1d: Load from TenantPluginRegistry (tenant/plugins/installed/)."""
+    from .tenant_plugins import TenantPluginRegistry
+
+    try:
+        registry = TenantPluginRegistry(tenant_id=tenant_id)
+        registry.load_registry()
+        plugins = registry.list_plugins()
+    except Exception as exc:  # noqa: BLE001
+        # A corrupt or unreadable registry must not take the process down
+        log.debug(
+            "plugin registry (TenantPluginRegistry) unreadable for tenant %r (%s) — "
+            "no plugins loaded from tenant/plugins/installed/",
+            tenant_id,
+            type(exc).__name__,
+        )
+        # Don't audit here — this registry is optional; state.py's is the primary one
+        return []
+
+    loaded: list[str] = []
+    for plugin_entry in plugins:
+        if not plugin_entry.enabled:
+            log.debug("plugin %r is disabled — skipping", plugin_entry.plugin_id)
+            continue
+
+        plugin_id = plugin_entry.plugin_id
+        plugin_path = registry.get_plugin_path(plugin_id)
+
+        if not plugin_path:
+            log.warning("plugin %r path not found on disk", plugin_id)
+            _audit_degradation(tenant_id, "plugin.load_failed", {
+                "plugin_id": plugin_id,
+                "tenant_id": tenant_id,
+                "reason": "plugin_path_not_found",
+            })
+            continue
+
+        if _load_tenant_plugin(
+            plugin_id,
+            plugin_path,
+            tenant_id=tenant_id,
+            corvin_home=corvin_home,
+            compute_registry=compute_registry,
+            engine_factory=engine_factory,
+            channel_registry=channel_registry,
+        ):
+            loaded.append(plugin_id)
+
+    if loaded:
+        log.info(
+            "loaded %d plugin(s) from TenantPluginRegistry for tenant %r: %s",
+            len(loaded), tenant_id, loaded
+        )
+    return loaded
+
+
+def _bootstrap_state_registry(
+    *,
+    tenant_id: str,
+    corvin_home: Path,
+    compute_registry: Any | None = None,
+    engine_factory: Any | None = None,
+    channel_registry: Any | None = None,
+) -> list[str]:
+    """Load from state.TenantRegistry (existing PluginLifecycle path, for backwards compat)."""
     from .state import TenantRegistry
 
     try:
@@ -654,7 +754,8 @@ def bootstrap_tenant(
         # A corrupt or unsatisfiable registry must not take the process down: no
         # plugin loads (fail-closed for the FEATURE), the platform still boots.
         log.error(
-            "plugin registry unusable for tenant %r (%s) — no plugins loaded",
+            "plugin registry (state.TenantRegistry) unusable for tenant %r (%s) — "
+            "no plugins loaded",
             tenant_id,
             type(exc).__name__,
         )
@@ -664,6 +765,19 @@ def bootstrap_tenant(
             "tenant_id": tenant_id,
             "error_type": type(exc).__name__,
         })
+        return []
+    except AttributeError as exc:
+        # AttributeError likely means the registry.yaml was saved by a different
+        # tool (e.g., TenantPluginRegistry uses a different schema). This is not
+        # a corruption of state.TenantRegistry's own format, just a schema mismatch.
+        # Log at DEBUG since this is expected when using TenantPluginRegistry.
+        log.debug(
+            "plugin registry (state.TenantRegistry) schema mismatch for tenant %r "
+            "(%s) — this is normal when using TenantPluginRegistry; "
+            "continuing without state registry plugins",
+            tenant_id,
+            type(exc).__name__,
+        )
         return []
 
     loaded: list[str] = []
@@ -678,9 +792,135 @@ def bootstrap_tenant(
             channel_registry=channel_registry,
         ):
             loaded.append(plugin_id)
+
     if loaded:
-        log.info("loaded %d plugin(s) for tenant %r: %s", len(loaded), tenant_id, loaded)
+        log.info(
+            "loaded %d plugin(s) from state.TenantRegistry for tenant %r: %s",
+            len(loaded), tenant_id, loaded
+        )
     return loaded
+
+
+def _load_tenant_plugin(
+    plugin_id: str,
+    plugin_path: Path,
+    *,
+    tenant_id: str,
+    corvin_home: Path,
+    compute_registry: Any | None = None,
+    engine_factory: Any | None = None,
+    channel_registry: Any | None = None,
+) -> bool:
+    """Load a tenant plugin from a directory and register it.
+
+    Looks for plugin.py in the plugin directory, loads it as a module, and
+    registers the plugin in the global registry.
+
+    Returns True if successfully loaded, False otherwise (logged and audited).
+    """
+    import importlib.util
+    import sys
+
+    plugin_file = plugin_path / "plugin.py"
+    if not plugin_file.exists():
+        log.error(
+            "plugin %r: plugin.py not found in %s — skipping",
+            plugin_id, plugin_path
+        )
+        _audit_degradation(tenant_id, "plugin.load_failed", {
+            "plugin_id": plugin_id,
+            "tenant_id": tenant_id,
+            "reason": "plugin_py_not_found",
+        })
+        return False
+
+    try:
+        # Load the plugin module from disk
+        spec = importlib.util.spec_from_file_location(
+            f"tenant_plugin_{plugin_id}", plugin_file
+        )
+        if not spec or not spec.loader:
+            raise RuntimeError(f"Cannot load spec for plugin {plugin_id}")
+
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[f"tenant_plugin_{plugin_id}"] = module
+        spec.loader.exec_module(module)
+
+        # Plugin loaded: now instantiate and register it.
+        # The plugin module should export a Plugin class or have setup() function.
+        plugin_class = getattr(module, "Plugin", None)
+        if not plugin_class:
+            # No explicit Plugin class — try a setup() hook pattern
+            setup = getattr(module, "setup", None)
+            if setup and callable(setup):
+                # setup(context) pattern: build context and call setup
+                ctx = build_context(
+                    plugin_id=plugin_id,
+                    tenant_id=tenant_id,
+                    corvin_home=corvin_home,
+                    compute_registry=compute_registry,
+                    engine_factory=engine_factory,
+                    channel_registry=channel_registry,
+                )
+                setup(ctx)
+                log.info("loaded tenant plugin %r (setup hook)", plugin_id)
+                return True
+            else:
+                log.error(
+                    "plugin %r: no Plugin class or setup() function — skipping",
+                    plugin_id
+                )
+                _audit_degradation(tenant_id, "plugin.load_failed", {
+                    "plugin_id": plugin_id,
+                    "tenant_id": tenant_id,
+                    "reason": "no_plugin_class_or_setup",
+                })
+                return False
+
+        # Plugin class found: instantiate and register
+        try:
+            instance = plugin_class()
+        except Exception as exc:  # noqa: BLE001
+            log.error(
+                "plugin %r failed to instantiate (%s) — skipping",
+                plugin_id, type(exc).__name__,
+            )
+            _audit_degradation(tenant_id, "plugin.load_failed", {
+                "plugin_id": plugin_id,
+                "tenant_id": tenant_id,
+                "reason": "instantiate_failed",
+                "error_type": type(exc).__name__,
+            })
+            return False
+
+        # Register the plugin instance
+        success = _register_instance(
+            instance,
+            plugin_id=plugin_id,
+            tenant_id=tenant_id,
+            corvin_home=corvin_home,
+            boot_layer=BootLayer.INSTALLED,
+            origin="tenant",
+            compute_registry=compute_registry,
+            engine_factory=engine_factory,
+            channel_registry=channel_registry,
+        )
+        if success:
+            log.info("loaded tenant plugin %r from %s", plugin_id, plugin_path)
+        return success
+
+    except Exception as exc:  # noqa: BLE001
+        log.error(
+            "plugin %r failed to load (%s) — skipping",
+            plugin_id, type(exc).__name__,
+        )
+        _audit_degradation(tenant_id, "plugin.load_failed", {
+            "plugin_id": plugin_id,
+            "tenant_id": tenant_id,
+            "reason": "load_failed",
+            "error_type": type(exc).__name__,
+        })
+        return False
 
 
 def _declared_boot_layer(
