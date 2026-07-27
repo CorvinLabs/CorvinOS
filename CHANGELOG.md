@@ -4,6 +4,58 @@ All notable changes to this project are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.63]
+
+### Fixed — the boot tripwire ran on one of two shipped hosts (ADR-0252)
+
+- **`corvin_console.standalone` now runs the compliance boot sequence.** It is
+  the host `corvinos-serve` starts and the one `install.sh` launches, and it ran
+  no tripwire and loaded no plugins. Found by booting a wheel install with one
+  corrupted `hash` in the audit chain: the console served requests, while
+  `assert_all()` inside that same process correctly refused. The sequence now
+  lives once in `bootstrap.boot_platform()` — tripwires → plugin load →
+  post-boot tripwire, no flag and no override — and both hosts call it.
+  `test_boot_platform_call_site.py` pins which hosts must.
+  - **Upgrade hazard:** an install whose audit chain has a break within the last
+    200 records will now refuse to start the console. That is the documented
+    fail-closed contract and there is deliberately no flag to soften it; a
+    pristine install is unaffected. No operator-facing way to seal a historically
+    broken chain exists yet — that is owed.
+- **`engine_registry` can build `hermes` and `copilot`.** Both engine classes
+  ship and both are offered in Settings → Engines, but the registry had no
+  builder for either, so `/settings/engine/capabilities` reported them with zero
+  capabilities and no command manifest while the objects themselves have ten.
+- **The voice summariser no longer deletes the sentence that mattered.**
+  `CRITICAL:` / `WARNING:` / `DANGER:` sentences were dropped entirely — the
+  generator narrated from classification labels, and a label cannot carry
+  "restart the workers or it hangs". They are now carried verbatim and spoken
+  second, ahead of both truncation points. Three related defects fixed with it:
+  the work-type classifier matched substrings (`"handlers"` matched `"handle"`,
+  so a refactor was reported as a fix), `polish_for_audio` defaulted to German
+  while every template in the module is English, and lifted sentence fragments
+  lost their terminator to the regex split.
+- **Live Anthropic model catalogue.** `providers.anthropic.model_source` was
+  `static`, which froze the model picker until the next CorvinOS release. It now
+  walks `GET /v1/models`, caches the result, and `engine_models.load_registry()`
+  merges it into the curated lists at read time — additively, so the curated
+  entries and their defaults are untouched and an install with no
+  `ANTHROPIC_API_KEY` (a Claude Code subscription login has none) keeps exactly
+  what it has today. Curated Opus entries moved to `claude-opus-5`.
+
+### Fixed — CI ran a fraction of the suite
+
+- `coverage.yml` named 6 of the repo's 22 test directories; the other 16 ran in
+  no workflow at all, among them `core/gateway` (227 tests), `core/delegate`
+  (317) and `operator/license` (236). The job also died ~1.5 s in with an
+  `INTERNALERROR` — two test modules called `sys.exit(0)` at import time as a
+  skip, which pytest sees as a `SystemExit` during collection — so it ran
+  essentially nothing. 1122 previously-unrun tests are added, in per-directory
+  sessions, and `core/console/tests` gets its own wall-clock-bounded step.
+- **The plugin suite no longer depends on the import mode.** It passed 1040
+  under pytest's default mode and failed 15 under `--import-mode=importlib`, the
+  mode CI actually uses: the fakes declared a bare `class_path` module name that
+  only resolves under prepend mode. `class_path` now comes from `__name__`.
+
 ## [Unreleased]
 
 ### Added — Plugin boot layers (ADR-0243, phases 0–7)
@@ -18,8 +70,11 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   failure degrades and audits. No feature flag, deliberately — a switch on the
   pass that loads compliance plugins would be the kill-flag the baseline forbids.
 - **Extension-point bus** (`plugin_extension_points`, default off) with four
-  named points and a `fail_closed` marker for gates. **Not yet wired to any call
-  site** — pinned by a guard test so the statement cannot go stale.
+  named points and a `fail_closed` marker for gates. All four now have call
+  sites (ADR-0251), each enforcing its own bound: a hook may de-escalate the
+  engine but never widen the operator's choice, suppress a delegation but never
+  start one, name any model in the engine's registry and nothing else, and deny
+  a workflow run but never permit one the core refused.
 - **Admin control plane** (`admin_control_plane`, default off): REST under
   `/api/admin/plugins`. Disable is refused with 403 on the compliance layer.
   gRPC deliberately deferred.

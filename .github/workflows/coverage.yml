@@ -158,11 +158,24 @@ jobs:
           #    One session per directory contains the damage; it does not remove
           #    the trap, and the real fix is still owed.
           for d in core/awpkg/tests core/delegate/tests core/license/tests \
-                   core/workflows/tests \
-                   operator/bridges/tests \
-                   operator/agent/tests operator/license/tests \
-                   operator/skill-forge/tests operator/mcp_manager/tests; do
+                   core/workflows/tests; do
             pytest "$d" --import-mode=importlib \
+              --cov=operator --cov=core --cov-append -q
+          done
+
+          # --import-mode=PREPEND for everything under operator/, and that word
+          # is the whole fix for reason 2 above. Verified by probe: under
+          # importlib the stdlib `operator` is replaced by the repo's namespace
+          # package (`operator.__file__` is None, `hasattr(operator, "add")` is
+          # False); under prepend it stays intact. `consider_namespace_packages`
+          # makes no difference either way — the import mode is the lever.
+          # operator/forge/tests went from 11 collection errors to 547 passing
+          # on this one flag.
+          for d in operator/bridges/tests \
+                   operator/agent/tests operator/license/tests \
+                   operator/skill-forge/tests operator/mcp_manager/tests \
+                   operator/forge/tests operator/voice/tests; do
+            pytest "$d" --import-mode=prepend \
               --cov=operator --cov=core --cov-append -q
           done
 
@@ -171,19 +184,21 @@ jobs:
       # core/plugins/tests went 950+ tests without a CI (see the note above).
       # Each of these is a tracked defect, not an oversight:
       #
-      #   operator/bridges/shared/   3 modules cannot be collected (the operator/
-      #                              stdlib shadow above) AND the directory has
-      #                              tests that run past 10 minutes. It was listed
-      #                              in this job before 2026-07-27 and never
-      #                              actually ran — the job died on it at 1.5 s.
-      #                              run-all-tests.sh drives this directory one
-      #                              process per file, which is why it works there.
-      #   operator/forge/tests/      11 collection errors, same operator/ shadow.
-      #   operator/rag-integration/  2 collection errors, same cause.
-      #   core/compliance/tests/     2 collection errors.
-      #   operator/voice/tests/      3 failures — the voice summariser drops
-      #                              CRITICAL warnings from its output. A real
-      #                              product defect, reproducible in isolation.
+      #   operator/bridges/shared/   Runs past 15 minutes even in its own session,
+      #                              which is why it is bounded out rather than
+      #                              added. It was listed in this job before
+      #                              2026-07-27 and never actually ran — the job
+      #                              died on it at 1.5 s. run-all-tests.sh drives
+      #                              this directory one process per file, which is
+      #                              why it works there.
+      #   operator/rag-integration/  2 test modules use relative imports with no
+      #                              parent package (the other 55 collect fine).
+      #                              A defect in those two files, not the mode.
+      #   core/compliance/tests/     2 collection errors, cause not yet diagnosed.
+      #
+      # Fixed and now included: operator/forge/tests (11 collection errors -> 547
+      # passing) and operator/voice/tests (the summariser dropped CRITICAL
+      # warnings) — both were listed here and are no longer excluded.
 
       - name: Generate coverage badge
         run: |
