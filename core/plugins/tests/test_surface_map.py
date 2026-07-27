@@ -292,12 +292,11 @@ def test_the_unconsumed_set_is_recorded_not_incidental():
     consumer was deleted and a plugin type went dark.
     """
     assert set(unconsumed_types()) == {
-        "user_backend",
-        "stt_provider",
-        "data_connector",
-        "compute_engine",
-        "worker_engine",
-        "bridge_channel",
+        "user_backend",     # no credential auth path exists to call it
+        "stt_provider",     # L23 resolves its own chain
+        "data_connector",   # L24 resolves its own DSI adapters
+        "worker_engine",    # L22 engine_registry has no register()
+        "bridge_channel",   # no channel_registry class exists
     }
     assert set(consumed_types()) == {
         "router_backend",
@@ -305,6 +304,11 @@ def test_the_unconsumed_set_is_recorded_not_incidental():
         "notification_backend",
         "recall_backend",
         "audit_backend",
+        # Moved out of the dead set 2026-07-27 (Stage 4). NOT by passing the
+        # handle in the gateway, which is what the plan asked for and could
+        # never have worked — by loading compute_engine plugins in the COMPUTE
+        # WORKER, the process where WorkerServer actually dispatches.
+        "compute_engine",
     }
 
 
@@ -329,42 +333,48 @@ def test_buildable_types_are_exactly_those_with_templates():
 # ── The compute_engine handle: do not "fix" it by passing it ─────────────────
 
 
-def test_compute_registry_still_has_no_reader():
-    """Fails the day `corvin_compute.engine_registry` gains a dispatcher.
+def test_the_compute_worker_still_loads_compute_engine_plugins():
+    """The reverse guard: fails when Stage 4's call site is DELETED.
 
-    Stage 4 of the activation plan was written as "pass `compute_registry` in
-    `app.py`" — a one-line change. It is not one: `WorkerServer` dispatches only
-    through its own `_extra_engines`, `register_engine()` has no production
-    caller, and `WorkerServer` is constructed only in the `corvin-compute worker`
-    subprocess while plugins load in the gateway.
+    An earlier version of this asserted the opposite — that the compute registry
+    had no reader — and it was correct when written. Stage 4 gave it one:
+    `corvin_compute/cli.py::_load_compute_engine_plugins` loads the tenant's
+    `compute_engine` plugins IN THE WORKER PROCESS and hands what landed in the
+    registry to `WorkerServer(extra_engines=...)`.
 
-    Passing the handle anyway would let a plugin register into an object nothing
-    reads, in a process that runs no engines — and it would look like progress,
-    because the plugin would load, register and report healthy. This test exists
-    so that the day someone gives the registry a real reader, the `dead_reason`
-    above is corrected in the same commit instead of staying wrong in the other
-    direction.
+    Note what the old guard would NOT have caught, which is why it is replaced
+    rather than kept: it matched `get_by_job_id(` and an absolute import, and the
+    reader that arrived uses `discover()` / `get()` behind a relative import. A
+    guard whose pattern is narrower than the thing it guards reports health it
+    never checked — the same vacuous-green shape this suite exists to prevent.
+    So this one anchors on the function name, which is the call site itself.
     """
-    # `get_by_job_id` is the discriminating name: it exists only on the compute
-    # registry. A first draft also matched `get_registry().get(`, which is a
-    # FALSE POSITIVE waiting to happen — `corvin_plugins.health` has its own
-    # `get_registry()` for the PLUGIN registry, and the pattern flagged it
-    # immediately. Two registries, one function name, and the grep cannot tell
-    # them apart; so match on the API only one of them has.
     hits = _grep_repo(
-        r"get_by_job_id\(|from corvin_compute\.engine_registry import",
-        exclude=(
-            "core/compute/corvin_compute/engine_registry.py",
-            "core/compute/tests/",
-            "core/plugins/tests/",
-            "core/plugins/templates/",
-        ),
+        r"_load_compute_engine_plugins",
+        exclude=("core/plugins/tests/",),
     )
-    assert not hits, (
-        "something now reads the compute engine registry — correct "
-        "surface_map's compute_engine dead_reason in this commit, and re-check "
-        "whether passing the handle is finally the right move:\n  "
+    assert any("corvin_compute/cli.py" in h for h in hits), (
+        "the compute worker no longer loads compute_engine plugins — a plugin "
+        "would register into a registry nothing reads again. Correct "
+        "surface_map's compute_engine row in the same commit.\n  "
         + "\n  ".join(hits[:5])
+    )
+
+
+def test_the_worker_only_loads_compute_engines(): 
+    """The type filter is a safety property, not a tidiness one.
+
+    Without `only_types` the compute worker would load the tenant's bridge
+    supervisors too and start messenger daemons from the compute process — a
+    second set racing the real ones, which ADR-0238 names as its load-bearing
+    duplicate-start invariant. Pinned here as well as in
+    `test_compute_engine_call_site.py` because deleting it is a one-word edit in
+    a file that has nothing to do with bridges.
+    """
+    hits = _grep_repo(r'only_types=frozenset\(\{"compute_engine"\}\)', exclude=())
+    assert any("corvin_compute/cli.py" in h for h in hits), (
+        "the compute worker's plugin load is no longer type-filtered — it will "
+        "start bridge daemons from the compute process"
     )
 
 

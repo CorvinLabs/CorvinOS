@@ -23,18 +23,32 @@ reads the registry it registered with. There is no error and no log line; from t
 operator's side an Okta ``user_backend`` that is never consulted looks exactly like
 one that is working.
 
-That failure mode is not hypothetical here. Two distinct causes are live:
+That failure mode is not hypothetical here. Three distinct causes are live, and
+the fourth — "the handle is never passed" — turned out not to exist at all:
 
-* **No consumer.** ``stt_provider``, ``data_connector`` and ``user_backend`` have a
-  registry, a ``PluginContext`` handle, and (for ``user_backend``) a fully
-  implemented ``authenticate()`` with circuit breaker and deny-on-error — and
-  nothing outside ``corvin_plugins`` calls ``get_active()``.
-* **Handle never populated.** ``bootstrap_all(**registries)`` forwards
-  ``compute_registry`` / ``engine_factory`` / ``channel_registry`` correctly, but
-  the sole production call site (``core/gateway/corvin_gateway/app.py``) passes
-  none of them. The handles are therefore always ``None``, and every shipped
-  template guards with ``if ctx.<handle> is not None:`` — so those plugins
-  silently skip their own registration.
+* **No consumer.** ``stt_provider`` and ``data_connector`` have a registry, a
+  ``PluginContext`` handle, and nothing outside ``corvin_plugins`` that calls
+  ``get_active()``. Wiring a call site is the whole fix.
+* **The consumer does not exist.** ``user_backend`` has a fully implemented
+  ``authenticate()`` with circuit breaker and deny-on-error, and CorvinOS has no
+  credential auth path to call it from. That is a feature project, not a call
+  site.
+* **The target is not wired to anything that dispatches.** ``worker_engine``
+  (L22 builds engines from a hard-coded dict and has no ``register()``) and
+  ``bridge_channel`` (no ``channel_registry`` class exists anywhere).
+
+**On the cause that was never real.** This docstring used to describe a "handle
+never populated" class covering ``compute_engine`` / ``worker_engine`` /
+``bridge_channel``, and to say the gateway "simply passes none of them". Every
+part of that was misleading. Passing the handle would have changed nothing for
+any of the three: two have no target, and ``compute_engine``'s target had no
+reader and lived in another process. ``compute_engine`` was fixed by loading
+those plugins in the **compute worker**, which is where ``WorkerServer``
+dispatches — not by populating anything in the gateway.
+
+The lesson is worth keeping in the file it cost the most: the question to ask of
+a dead surface is not "which handle is unpassed" but **"which process consumes
+this, and does a plugin load there"**.
 
 ``consumed_by`` records this per type so an author learns it before writing code
 rather than after shipping. The compliance weight is real: CLAUDE.md and ADR-0233
@@ -189,25 +203,15 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         ctx_handle="compute_registry",
         provider_module=None,
         template="compute_engine_plugin.py",
-        consumed_by=None,
-        dead_reason=(
-            "The registry has no reader, and it is in the wrong process anyway. "
-            "corvin_compute.engine_registry is a standalone object: WorkerServer "
-            "dispatches only through its own self._extra_engines, which is "
-            "populated at construction or by register_engine() — and "
-            "register_engine() has no production caller at all. "
-            "corvin_compute/cli.py:237 states this in its own words. Worse, "
-            "WorkerServer is constructed only in that CLI, i.e. the "
-            "`corvin-compute worker` SUBPROCESS, while a plugin loads in the "
-            "gateway; the console reaches the worker over a socket via "
-            "WorkerClient. So passing compute_registry to bootstrap_all would "
-            "let a plugin register into an object that nothing reads, in a "
-            "process that does not run engines. Closing this needs a "
-            "cross-process registration surface — the ADR-0245 design question, "
-            "not a call-site change. Verified 2026-07-27 while attempting "
-            "PLUGIN_SYSTEM_ACTIVATION_PLAN Stage 4."
+        consumed_by="core/compute/corvin_compute/cli.py",
+        dead_reason=None,
+        invariant=(
+            "Must honour gate dispatch and abort promptly (ADR-0029). Loaded in "
+            "the COMPUTE WORKER process, not the gateway: that is where "
+            "WorkerServer dispatches. The worker loads only plugin_type="
+            "compute_engine — without that filter it would also start the "
+            "tenant's bridge daemons (ADR-0238 duplicate-start)."
         ),
-        invariant="Must honour gate dispatch and abort promptly (ADR-0029).",
     ),
     ExtensionSurface(
         plugin_type="worker_engine",
@@ -220,10 +224,11 @@ SURFACES: tuple[ExtensionSurface, ...] = (
             "hard-coded _ENGINE_BUILDERS dict in "
             "operator/bridges/shared/engine_registry.py with three entries and "
             "no register(), so a plugin cannot enter itself even with the "
-            "handle populated. This is NOT the unpassed-handle problem the "
-            "compute_engine row describes — passing engine_factory would change "
-            "nothing. Needs an L22 registration surface first (ADR-0245 "
-            "deferral). Verified 2026-07-27."
+            "handle populated — passing engine_factory would change nothing. "
+            "The compute_engine row was fixed by loading plugins in the "
+            "process that consumes them; the same question here has no answer "
+            "yet, because no process offers L22 a registration surface at all. "
+            "ADR-0245 deferral. Verified 2026-07-27."
         ),
         invariant=(
             "Must not import `anthropic` directly — CI AST lint enforces this."
@@ -240,9 +245,9 @@ SURFACES: tuple[ExtensionSurface, ...] = (
             "anywhere in the tree; the only references are in "
             "templates/bridge_channel_plugin.py, which calls register() against "
             "an API nobody wrote. Populating the handle is impossible, not "
-            "merely undone — so this is NOT the unpassed-handle problem the "
-            "compute_engine row describes. Needs the bridge_channel design "
-            "question ADR-0245 deferred. Verified 2026-07-27."
+            "merely undone: there is nothing to populate it WITH. Needs the "
+            "bridge_channel design question ADR-0245 deferred. "
+            "Verified 2026-07-27."
         ),
         invariant=(
             "A send path that returns instead of raising on failure silently "

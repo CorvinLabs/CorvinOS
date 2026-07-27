@@ -199,6 +199,49 @@ def _build_runner_fn(tenant_id: str = "_default", corvin_home_path: Path | None 
     return adapter
 
 
+def _load_compute_engine_plugins(*, tenant_id: str, corvin_home: Path) -> list:
+    """Load this tenant's ``compute_engine`` plugins into the worker's registry.
+
+    Returns the registered engines, newest registry state, ready to hand to
+    ``WorkerServer(extra_engines=...)``. Returns ``[]`` for every failure mode —
+    no plugin package, no declarations, a broken plugin — because a compute
+    worker that refuses to start over an optional extension would be a worse
+    outcome than one that starts without it. Declared-but-broken is already
+    audited per plugin by ``bootstrap_declared``'s ``on_error`` hook.
+
+    The registry snapshot is taken AFTER the load rather than trusting the
+    plugins' return value: what matters is what actually landed in the object
+    the server will dispatch through, not what claimed to register. That is the
+    same registration-is-not-invocation distinction the whole activation plan
+    turns on, applied to its own fix.
+    """
+    try:
+        from corvin_plugins.bootstrap import bootstrap_declared
+    except ImportError:
+        return []  # stripped install without the plugin package — quiet path
+
+    from . import engine_registry as _reg
+
+    registry = _reg.get_registry()
+    before = set(registry.discover())
+    try:
+        bootstrap_declared(
+            tenant_id=tenant_id,
+            corvin_home=corvin_home,
+            only_types=frozenset({"compute_engine"}),
+            compute_registry=registry,
+        )
+    except Exception as exc:  # noqa: BLE001 — an extension must not stop the worker
+        print(
+            f"[corvin-compute] compute_engine plugin load failed "
+            f"({type(exc).__name__}) — serving without plugin engines",
+            file=sys.stderr,
+        )
+        return []
+    added = [eid for eid in registry.discover() if eid not in before]
+    return [registry.get(eid) for eid in added]
+
+
 async def _cmd_serve(args: argparse.Namespace) -> int:
     home = Path(args.corvin_home)
     # Pin CORVIN_HOME to the resolved --corvin-home so every home-derived
@@ -247,6 +290,34 @@ async def _cmd_serve(args: argparse.Namespace) -> int:
         corvin_home=home, runner_fn=runner_fn, audit_emit=_audit_emit,
     )
 
+    # ADR-0029/0245 — compute_engine PLUGINS, loaded in the process that
+    # actually dispatches engines.
+    #
+    # Until 2026-07-27 this was the last dead extension surface, and the
+    # activation plan's fix ("pass compute_registry into the gateway's
+    # bootstrap") could not work: engine_registry is read by nobody, and
+    # WorkerServer — the only thing that dispatches — lives HERE, in a separate
+    # process from the gateway where plugins were being loaded. A plugin
+    # registering into a gateway-side registry would have loaded, registered,
+    # reported healthy, and never run a job.
+    #
+    # So the load happens in the worker instead, and `engine_registry` gets a
+    # real reader: the template's `ctx.compute_registry.register(self)` lands in
+    # this process's registry and the engines go straight into the server.
+    #
+    # only_types is load-bearing, not tidiness. Without it this would also load
+    # the tenant's bridge supervisors and start messenger daemons from the
+    # compute worker — a second set racing the real ones, which is the
+    # duplicate-start failure ADR-0238 names.
+    _plugin_engines = _load_compute_engine_plugins(
+        tenant_id=args.tenant, corvin_home=home,
+    )
+    if _plugin_engines:
+        print(
+            f"[corvin-compute] {len(_plugin_engines)} plugin engine(s): "
+            + ", ".join(sorted(e.engine_id for e in _plugin_engines))
+        )
+
     server = WorkerServer(
         tenant_id=args.tenant,
         corvin_home=home,
@@ -254,7 +325,7 @@ async def _cmd_serve(args: argparse.Namespace) -> int:
         max_concurrent_runs=args.max_concurrent_runs,
         runner_fn=runner_fn,
         audit_emit=_audit_emit,
-        extra_engines=[pipeline_engine, hac_engine],
+        extra_engines=[pipeline_engine, hac_engine, *_plugin_engines],
     )
     print(f"[corvin-compute] serving tenant={args.tenant!r} at {socket_path}")
     try:

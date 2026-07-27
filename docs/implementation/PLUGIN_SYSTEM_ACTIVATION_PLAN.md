@@ -355,9 +355,43 @@ fails:
 
 So passing the handle would let a plugin register into an object nothing reads,
 in a process that runs no engines — and it would *look* like progress, because
-the plugin would load, register and report healthy. Stage 4 is therefore
-**blocked**, for the same class of reason as Stage 2: not a missing call site,
-but a missing consumer.
+the plugin would load, register and report healthy.
+
+#### Resolved the same day — by moving the load, not by passing the handle
+
+The diagnosis above says where the consumer *is*: the compute worker. So the
+plugins are loaded there. `corvin_compute/cli.py::_load_compute_engine_plugins`
+calls `bootstrap_declared(only_types={"compute_engine"},
+compute_registry=get_registry())` inside `_cmd_serve`, then hands what actually
+landed in the registry to `WorkerServer(extra_engines=...)`. `engine_registry`
+now has a real reader, in the process that dispatches.
+
+**`only_types` is a safety property, not tidiness.** Without it the worker would
+load the tenant's *bridge supervisors* as well and start messenger daemons from
+the compute process — a second set racing the real ones, which is the
+duplicate-start failure ADR-0238 names as its load-bearing invariant. The filter
+reads `plugin_type` off the **class**, never off the declaration: a declaration
+is operator-written YAML and could otherwise let a bridge supervisor into the
+worker by claiming one word. It also runs after instantiation and **before**
+`on_load`, so a filtered-out plugin never executes any of its own code.
+
+The helper reports what it added by diffing `registry.discover()` before and
+after, rather than trusting the plugin's word that it registered — the
+registration-is-not-invocation distinction this plan turns on, applied to its own
+fix.
+
+**Two test-harness defects found on the way, both silent:**
+
+* The fake plugin's `class_path` was written out as
+  `core.plugins.tests.test_…`, which imports the test module a **second** time.
+  `on_load` then set its flag on a different class object than the assertions
+  read, so every observation was `None` while the load itself succeeded. The
+  class path now comes from `__name__`.
+* `corvin_compute.engine_registry` is a module-level singleton, so an engine
+  registered by one test survived into the next; the before/after diff then came
+  back empty and read as "the call site is broken". Cleaned per test.
+
+Neither was a product defect, and both would have been read as one.
 
 All three "handle" rows now share one cause in three variants: **the target is
 not wired to anything that dispatches** — no reader and wrong process
@@ -506,13 +540,13 @@ staged rollout. Recording that is better than pretending it has a flip date.
 | 1 Tenant-scoped providers | 1.5 w | G6 | none (refusal is a compliance gate) | ✅ **part 1 only** — the refusal gate (`tenant_scope.py`, 30 tests). Keying the eight registries by tenant is ADR-0250's own migration, not done |
 | 2 `user_backend` call site | 0.5 d | G2 (as *recorded*, not closed) | — | ✅ **done** — option 3 shipped; cause corrected in `surface_map.py`, CLAUDE.md, 4 docs, ADR-0245 addendum |
 | 3 Extension-point call sites | 1.5 w | G1 | `plugin_extension_points` | ✅ **done** — bus D3+D5 plus all four call sites |
-| 4 Populate `compute_registry` | — | — | — | ⛔ **blocked — the registry has no reader and is in the wrong process**, see the stage |
+| 4 `compute_engine` reaches its consumer | 1 w | part of G3 | none | ✅ **done** — not by passing the handle; by loading in the compute WORKER |
 | 5 Bridge supervisors | 1 w | G5 | `bridge_supervisor_plugins` | ✅ **done** — the boot path injects the bundled seven |
 | 6 `install` + trust anchor | 1 w | G7, G8 | `plugin_trust_enforcement` | ❌ CLI has `types`/`check`/`new` only; no anchor deposited |
 | 7 Flag lifecycle | 0.5 d | G9 | — | ✅ **done** — 15 flags, all with `owner`+`target_release`, guard test present |
 | A Truth-in-tree corrections | 0.5 d | — | — | ✅ **done** — see § 4.1 |
 | E E2E spine | 1 w | — | — | ◑ **E1 done** (`test_lifecycle_e2e.py`); E2 rows follow their stages, E3 last |
-| **Total remaining** | **~1 w** | | | |
+| **Total remaining** | **~1 w** (Stage 6 only, blocked on key custody) | | | |
 
 **Dropped from ADR-0242:** Phase 7 directory move (§ 2 above).
 **Deferred, unchanged:** everything in § 1's out-of-scope table.
