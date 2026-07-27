@@ -218,6 +218,15 @@ def cmd_export(args: argparse.Namespace) -> int:
                     global_src, bundle_dir / "global", with_secrets
                 )
 
+            # 1b. Copy keys/ (master encryption keys) if secrets included
+            if with_secrets:
+                print("   ✓ Copying encryption keys...")
+                keys_src = tenant_dir / "keys"
+                if keys_src.exists():
+                    _copy_tree_filtered(
+                        keys_src, bundle_dir / "keys", with_secrets=True
+                    )
+
             # 2. Copy voice/ (profiles, settings)
             print("   ✓ Copying voice configuration...")
             voice_src = tenant_dir / "voice"
