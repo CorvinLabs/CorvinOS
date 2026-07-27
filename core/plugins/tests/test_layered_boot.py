@@ -292,6 +292,22 @@ class TestBootstrapAllWiring(_BootTestCase):
             )
         self.assertEqual(result, ["g", "d", "r"])
 
+    def test_tenant_plugins_load_after_declared(self):
+        """Phase 1d: tenant plugins (runtime registry) load after declared."""
+        order: list[str] = []
+        with mock.patch.object(
+            boot, "bootstrap_global", side_effect=lambda **kw: order.append("global") or []
+        ), mock.patch.object(
+            boot, "bootstrap_declared",
+            side_effect=lambda **kw: order.append("declared") or [],
+        ), mock.patch.object(
+            boot, "bootstrap_tenant",
+            side_effect=lambda **kw: order.append("tenant") or [],
+        ):
+            boot.bootstrap_all(tenant_id="t", corvin_home=Path("/tmp"), tenant_config={})
+        # Phase 1d: tenant plugins load LAST, after global and declared
+        self.assertEqual(order, ["global", "declared", "tenant"])
+
     def test_the_boot_path_still_reaches_bootstrap_all(self):
         # The hosts are the real callers; if the import name ever drifts, the
         # whole layered boot becomes dead code with green unit tests.
