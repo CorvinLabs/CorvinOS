@@ -3762,21 +3762,47 @@ def _build_spawn_env(*, bridge: str, chat_key: str,
         except Exception:
             # workload_hint handling is best-effort; never break the spawn
             pass
-    # ADR-0112 M1 / ADR-0119 — per-chat ACS worker model override.
+    # ADR-0112 M1 / ADR-0119 — ACS worker model resolution at bridge spawn time.
+    # Single Source of Truth: Console writes → spec.engine_models[engine_id].worker_model
+    # → Bridge reads and injects as CORVIN_ACS_WORKER_MODEL → ACS spawn uses it.
     # Resolution (highest priority first):
-    #   1. profile.engine_models.<engine_id>.worker_model  (per-engine persona pin, ADR-0119)
-    #   2. profile.acs_worker_model                        (per-profile any-engine pin, ADR-0112)
-    # The resolved value is injected as CORVIN_ACS_WORKER_MODEL so
-    # ACSRuntime._resolve_worker_model() picks it up at step 2.
-    # When absent, the env var is popped so ACSRuntime falls through to tenant
-    # config (steps 4-5) without leaking a stale value from a previous chat.
+    #   1. profile.engine_models.<engine_id>.worker_model    (per-chat persona pin, ADR-0119)
+    #   2. spec.engine_models.<engine_id>.worker_model       (tenant YAML per-engine, Console-set)
+    #   3. profile.acs_worker_model                          (per-profile fallback, ADR-0112)
+    #   4. spec.default_worker_model                         (tenant YAML global default)
+    # Empty result pops CORVIN_ACS_WORKER_MODEL so ACS runtime falls through to its own
+    # six-step chain (env vars, legacy tenant keys, hardcoded defaults per ADR-0112).
     acs_wm = ""
     if profile:
         engine_models_prof = profile.get("engine_models") or {}
         per_engine_prof = (engine_models_prof.get(engine_id) or {}).get("worker_model", "")
         if isinstance(per_engine_prof, str):
             per_engine_prof = per_engine_prof.strip()
-        acs_wm = per_engine_prof or profile.get("acs_worker_model", "").strip()
+        acs_wm = per_engine_prof
+    # Fallback: tenant YAML (read once, check per-engine then global)
+    tenant_yaml_wm = ""
+    if not acs_wm and tenant_id:
+        try:
+            import yaml as _yaml  # noqa: PLC0415
+            _ch = Path(os.environ.get("CORVIN_HOME") or Path.home() / ".corvin")
+            _cfg_path = _ch / "tenants" / tenant_id / "global" / "tenant.corvin.yaml"
+            if _cfg_path.is_file():
+                _raw = _yaml.safe_load(_cfg_path.read_text("utf-8")) or {}
+                _spec = _raw.get("spec") or {}
+                # Per-engine config (Console-set, Single Source of Truth)
+                _em = _spec.get("engine_models") or {}
+                _per_engine = (_em.get(engine_id) or {}).get("worker_model", "")
+                tenant_yaml_wm = (_per_engine if isinstance(_per_engine, str) else "").strip()
+                # Fallback to global default if per-engine not set
+                if not tenant_yaml_wm:
+                    _global = _spec.get("default_worker_model", "")
+                    tenant_yaml_wm = (_global if isinstance(_global, str) else "").strip()
+        except Exception:  # noqa: BLE001 — best-effort; never fatal
+            pass
+        acs_wm = tenant_yaml_wm
+    # Legacy persona fallback
+    if not acs_wm and profile:
+        acs_wm = profile.get("acs_worker_model", "").strip()
     if acs_wm:
         env["CORVIN_ACS_WORKER_MODEL"] = acs_wm
     else:
