@@ -180,6 +180,24 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "plugin bootstrap skipped", exc_info=True
             )
 
+        # ── Post-boot compliance tripwire (ADR-0232/0233/0243) ───────────────
+        # Deliberately NOT inside the try above, and deliberately not wrapped:
+        # this asks whether anything put itself on the compliance boot layer
+        # that bootstrap_global did not grant, and it can only be asked once the
+        # plugins are loaded. assert_all() above runs BEFORE that, on purpose —
+        # a broken audit writer must stop the boot before anything else happens
+        # — so the question would be vacuously green there.
+        #
+        # No override, no env var, no flag, same as every other tripwire.
+        try:
+            from corvin_compliance_reports.tripwire import assert_post_boot as _apb
+        except ImportError:
+            # A stripped layout without the compliance package: assert_all()
+            # above already handled that case the same way.
+            _apb = None  # type: ignore[assignment]
+        if _apb is not None:
+            _apb()  # raises TripwireError -> boot aborts
+
         # ADR-0231 Stage 2 — health polling, behind plugin_health_monitoring.
         # Flag off (the default) means NO timer is created at all: the /plugins
         # health route still answers from the breaker state, which costs nothing.

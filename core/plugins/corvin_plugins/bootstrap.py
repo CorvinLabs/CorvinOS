@@ -303,6 +303,25 @@ def _global_specs() -> list[tuple[str, BootLayer]]:
     return sorted(_GLOBAL_SPECS, key=lambda s: (order[s[1]], s[0]))
 
 
+def _record_granted_compliance(plugin_id: str) -> None:
+    """Tell the tripwire that the wheel granted ``plugin_id`` the compliance layer.
+
+    Guarded: the tripwire module is not importable in every packaging layout,
+    and a bookkeeping call must never fail a load that already succeeded. A
+    missing record is safe in the right direction — the post-boot check then
+    sees an ungranted plugin and refuses the boot, which is louder than the
+    alternative and never quieter.
+    """
+    try:
+        _tripwire_module().record_granted_compliance_plugin(plugin_id)
+    except Exception as exc:  # noqa: BLE001
+        log.error(
+            "could not record compliance grant for %r (%s) — the post-boot "
+            "tripwire will treat it as ungranted",
+            plugin_id, type(exc).__name__,
+        )
+
+
 class GlobalComplianceLoadFailed(RuntimeError):
     """A ``boot_layer=compliance`` global plugin failed to load.
 
@@ -377,6 +396,14 @@ def bootstrap_global(
         )
         if ok:
             loaded.append(plugin_id)
+            if boot_layer is BootLayer.COMPLIANCE:
+                # Tell the tripwire that THIS id was granted the compliance
+                # layer by the wheel's own boot code. The post-boot check
+                # compares the registry against this list, so anything that put
+                # itself on the layer some other way stops the boot. Recorded
+                # only on the success path: a plugin that failed to register was
+                # never granted anything.
+                _record_granted_compliance(plugin_id)
         elif boot_layer is BootLayer.COMPLIANCE:
             raise GlobalComplianceLoadFailed(
                 f"compliance plugin {plugin_id!r} failed to register"
@@ -587,6 +614,61 @@ def _declared_boot_layer(
     return boot_layer
 
 
+def _tenant_scope_permits(
+    instance: Any,
+    *,
+    plugin_id: str,
+    tenant_id: str,
+    corvin_home: Path,
+    origin: str | None,
+) -> bool:
+    """Provider-slot gate (ADR-0250 D1).  True = this plugin may take a slot.
+
+    Sits in ``_register_instance`` rather than in ``PluginLifecycle.enable`` or in
+    the providers themselves, because that is the one point BOTH load paths pass
+    through.  The lifecycle path has a ``PluginRecord``; the declarative
+    ``spec.plugins.installed`` path has only a config entry with no ``origin`` —
+    putting the check on either side alone would leave the other open, which is
+    how ADR-0249's trust gate ended up covering the runtime path only.
+
+    Never raises.  A refusal costs one plugin its slot; an exception here would
+    cost the boot, and the check exists to protect data, not to stop the platform.
+    """
+    plugin_type = getattr(instance, "plugin_type", "") or ""
+    try:
+        from . import tenant_scope
+
+        decision = tenant_scope.evaluate(
+            plugin_type=plugin_type, origin=origin, corvin_home=corvin_home
+        )
+    except Exception:  # noqa: BLE001 - a broken check must not brick the boot
+        log.exception(
+            "plugin %r: tenant-scope evaluation failed — allowing", plugin_id
+        )
+        return True
+
+    if decision.allowed:
+        return True
+
+    log.error(
+        "plugin %r (type=%s, origin=%s) refused a provider slot: %s. Provider "
+        "slots are process-wide (ADR-0250), so this plugin would see every "
+        "tenant's data.",
+        plugin_id, plugin_type, origin or "unknown", decision.reason,
+    )
+    _audit_degradation(tenant_id, "plugin.provider_slot_refused", {
+        "plugin_id": plugin_id,
+        "tenant_id": tenant_id,
+        "plugin_type": plugin_type,
+        "origin": origin or "unknown",
+        "reason": decision.reason,
+        # The COUNT, never the ids. Recording which other tenants exist to close
+        # a tenant-isolation gap would be a net loss.
+        "tenant_count": decision.tenant_count if decision.tenant_count else -1,
+    })
+    return False
+
+
 def _register_instance(
     instance: Any,
     *,
@@ -595,18 +677,32 @@ def _register_instance(
     corvin_home: Path,
     config: dict | None = None,
     boot_layer: BootLayer | str | None = None,
+    origin: str | None = None,
     **registries: Any,
 ) -> bool:
     """Build a context and register one already-instantiated plugin.
 
     Shared by the declarative and the registry path so both get every provider
     handle and identical failure behaviour.
+
+    ``origin`` is the manifest provenance, used only by the ADR-0250 provider-slot
+    gate.  It defaults to ``None`` — meaning "not builtin" — so a caller that
+    forgets it gets the restrictive answer rather than the permissive one.
     """
     from .registry import get_registry, register
 
     if plugin_id in get_registry().discover():
         log.debug("plugin %r already registered — skipping", plugin_id)
         return True
+
+    if not _tenant_scope_permits(
+        instance,
+        plugin_id=plugin_id,
+        tenant_id=tenant_id,
+        corvin_home=corvin_home,
+        origin=origin,
+    ):
+        return False
 
     ctx = build_context(
         plugin_id=plugin_id,
