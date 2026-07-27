@@ -1188,6 +1188,12 @@ class TestDefensiveEdges(_Base):
                 "corvin_plugins/__init__.py",
                 "tests/test_extension_points.py",
                 "tests/test_structural_guards.py",
+                # The per-point successor to this test (ADR-0251). It reads
+                # KNOWN_EXTENSION_POINTS to check each point individually, which
+                # is using the bus's inventory, not the bus. When the call sites
+                # land, THIS test goes away and that one carries the guarantee
+                # at finer grain.
+                "tests/test_extension_point_call_sites.py",
                 ".md",
                 # LIFECYCLE, not usage. registry.py calls verify_owner() when a
                 # plugin finishes loading, to revoke hooks it claimed for a
@@ -1215,6 +1221,11 @@ class TestDefensiveEdges(_Base):
             if not p.endswith((
                 "corvin_plugins/extension_points.py",
                 "tests/test_extension_points.py",
+                # Matches on a DOCSTRING example showing what a call site looks
+                # like, not on a call. The grep cannot tell code from prose, and
+                # the honest fix is to list the file rather than to write worse
+                # documentation so a regex stays quiet.
+                "tests/test_extension_point_call_sites.py",
                 ".md",
             ))
         ]
