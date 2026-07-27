@@ -183,6 +183,16 @@ third state for `audit_backend` and `user_backend` in particular — a default t
 denied everything would lock out every install, and a default that admitted
 anything would be an auth bypass.
 
+**`user_backend`'s column is aspirational, not operational (verified 2026-07-27).**
+`get_active()` is never called for it, because CorvinOS has no credential auth path:
+the only live login is localhost-only and credential-less. The deny semantics above
+are real code with real tests — they simply have no caller, and no guest to deny.
+They bind the first credential login that gets built. The parenthetical in the
+paragraph above is exactly why: a default that denied everything would lock out every
+install, and consulting a backend from a credential-less login has the same effect.
+See [`PLUGIN_SYSTEM_ACTIVATION_PLAN.md`](implementation/PLUGIN_SYSTEM_ACTIVATION_PLAN.md)
+Stage 2.
+
 A backend also runs behind a per-plugin circuit breaker
 (`circuit_breaker.py`): repeated failures contain the plugin instead of retrying
 into an outage, and the breaker state is visible in `health_check_all()`.

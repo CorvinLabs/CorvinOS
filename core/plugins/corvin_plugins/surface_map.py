@@ -135,13 +135,23 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         template="user_backend_plugin.py",
         consumed_by=None,
         dead_reason=(
-            "providers/user_backend.py implements authenticate()/get_user() with "
-            "a circuit breaker and deny-on-error, but no caller exists outside "
-            "corvin_plugins — the auth path never consults an installed backend."
+            "No credential auth path exists to call it. The only live login is "
+            "console_api local-login, which is localhost-only and "
+            "credential-less — the TCP peer IS the authorisation, so there is "
+            "nothing to hand authenticate(). gateway/console_api.py's "
+            "/auth/login is dead demo code imported by nothing, and OIDC is "
+            "unbuilt (auth_routes.py). Wiring the backend into local-login "
+            "would hand it empty credentials, a correct backend rejects those, "
+            "and deny on the only login locks the operator out of their own "
+            "install. Verified 2026-07-27; see PLUGIN_SYSTEM_ACTIVATION_PLAN "
+            "Stage 2 for the three options and why option 3 was chosen."
         ),
         invariant=(
             "Failure, timeout or rejection means DENY — never fall back to "
-            "guest (ADR-0233)."
+            "guest (ADR-0233). NOTE: on today's surfaces this invariant has no "
+            "subject — a localhost-only login admits no guest to fall back to. "
+            "It binds the first credential path that is built, not any path "
+            "that exists now."
         ),
     ),
     ExtensionSurface(
@@ -194,8 +204,14 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         template="worker_engine_plugin.py",
         consumed_by=None,
         dead_reason=(
-            "Same as compute_engine: engine_factory is never passed to "
-            "bootstrap_all by the gateway, so the handle is always None."
+            "The target has no registration API. Engines come from a "
+            "hard-coded _ENGINE_BUILDERS dict in "
+            "operator/bridges/shared/engine_registry.py with three entries and "
+            "no register(), so a plugin cannot enter itself even with the "
+            "handle populated. This is NOT the unpassed-handle problem the "
+            "compute_engine row describes — passing engine_factory would change "
+            "nothing. Needs an L22 registration surface first (ADR-0245 "
+            "deferral). Verified 2026-07-27."
         ),
         invariant=(
             "Must not import `anthropic` directly — CI AST lint enforces this."
@@ -208,8 +224,13 @@ SURFACES: tuple[ExtensionSurface, ...] = (
         template="bridge_channel_plugin.py",
         consumed_by=None,
         dead_reason=(
-            "Same as compute_engine: channel_registry is never passed to "
-            "bootstrap_all by the gateway, so the handle is always None."
+            "The target does not exist. There is no channel_registry class "
+            "anywhere in the tree; the only references are in "
+            "templates/bridge_channel_plugin.py, which calls register() against "
+            "an API nobody wrote. Populating the handle is impossible, not "
+            "merely undone — so this is NOT the unpassed-handle problem the "
+            "compute_engine row describes. Needs the bridge_channel design "
+            "question ADR-0245 deferred. Verified 2026-07-27."
         ),
         invariant=(
             "A send path that returns instead of raising on failure silently "

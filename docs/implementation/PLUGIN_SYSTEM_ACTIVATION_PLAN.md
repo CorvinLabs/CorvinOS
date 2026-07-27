@@ -163,6 +163,12 @@ is unconsumed because **its consumer does not exist**, not because someone forgo
 call it. That is a different finding from the other five dead types and wants a
 different fix.
 
+**Decided 2026-07-27 (maintainer): option 3.** `user_backend` stays dead and the tree
+says so precisely. The correction is not a doc-only change — `surface_map.py:137` still
+carries the *wrong* cause ("no caller exists outside `corvin_plugins`"), which reads as
+"someone forgot to call it" and invites exactly the harmful wiring this stage rejects.
+Options 1 and 2 remain open as separate projects, neither is in this plan.
+
 **Options, none of them this stage** — a maintainer decision:
 
 1. Build the credential login (OIDC or local password) that `user_backend` was
@@ -281,14 +287,21 @@ already records.
 
 ---
 
-### Stage 7 — Flag lifecycle (0.5 d)
+### Stage 7 — Flag lifecycle — **DONE, verified 2026-07-27**
 
 **Closes:** G9. CLAUDE.md: *"every flag gets an owner and a target release in which it
 either flips to default-on or the feature is removed. Flags are not permanent
-architecture."* Eight flags currently have neither.
+architecture."*
 
-Add `owner` and `target_release` to each registry entry, and a test that a new flag
-cannot be registered without them. Proposed dispositions:
+Shipped ahead of its place in the sequence: all **15** entries in
+`core/console/corvin_console/feature_flags.py` carry `owner` and `target_release`
+(both mandatory fields on `FeatureFlag`), and
+`core/console/tests/test_feature_flags.py::test_every_flag_has_owner_and_target_release`
+is the guard that a new flag cannot be registered without them. The count moved from
+the eight this plan was written against to fifteen; the dispositions below are the
+proposals of record for the plugin-related subset, not a description of what shipped.
+
+Original proposed dispositions:
 
 | Flag | Proposed |
 |---|---|
@@ -306,22 +319,117 @@ staged rollout. Recording that is better than pretending it has a flip date.
 
 ---
 
-## 4. Summary
+## 4. Summary — re-verified against the tree 2026-07-27
 
-| Stage | Est. | Closes | Flag | Blocking |
+| Stage | Est. | Closes | Flag | State |
 |---|---|---|---|---|
-| 0 Call-site gate | 0.5 d | — | none | ✅ done (`test_extension_point_call_sites.py`) |
-| 1 Tenant-scoped providers | 1.5 w | G6 | none (refusal is a compliance gate) | ✅ done (`tenant_scope.py`, 30 tests) |
-| 2 `user_backend` call site | — | G2 | — | ⛔ **blocked — no credential auth path exists**, see the stage |
-| 3 Extension-point call sites | 1.5 w | G1 | `plugin_extension_points` | — |
-| 4 Populate three handles | 1 w | G3, part of G4 | none | — |
-| 5 Bridge supervisors | 1 w | G5 | `bridge_supervisor_plugins` | — |
-| 6 `install` + trust anchor | 1 w | G7, G8 | `plugin_trust_enforcement` | — |
-| 7 Flag lifecycle | 0.5 d | G9 | — | last |
-| **Total** | **~7 w** | | | |
+| 0 Call-site gate | 0.5 d | — | none | ✅ done (`test_extension_point_call_sites.py`, 6 pass / 4 skip — the skips *are* Stage 3) |
+| 1 Tenant-scoped providers | 1.5 w | G6 | none (refusal is a compliance gate) | ✅ **part 1 only** — the refusal gate (`tenant_scope.py`, 30 tests). Keying the eight registries by tenant is ADR-0250's own migration, not done |
+| 2 `user_backend` call site | 0.5 d | G2 (as *recorded*, not closed) | — | ✅ **done** — option 3 shipped; cause corrected in `surface_map.py`, CLAUDE.md, 4 docs, ADR-0245 addendum |
+| 3 Extension-point call sites | 1.5 w | G1 | `plugin_extension_points` | ❌ zero production `invoke()` in the tree |
+| 4 Populate `compute_registry` | 1 w | part of G3 | none | ❌ `app.py:163` still passes no registry |
+| 5 Bridge supervisors | 1 w | G5 | `bridge_supervisor_plugins` | ❌ `registry_entries` imported only by its own `__init__` |
+| 6 `install` + trust anchor | 1 w | G7, G8 | `plugin_trust_enforcement` | ❌ CLI has `types`/`check`/`new` only; no anchor deposited |
+| 7 Flag lifecycle | 0.5 d | G9 | — | ✅ **done** — 15 flags, all with `owner`+`target_release`, guard test present |
+| A Truth-in-tree corrections | 0.5 d | — | — | ✅ **done** — see § 4.1 |
+| E E2E spine | 1 w | — | — | ❌ next, see § 4.2 |
+| **Total remaining** | **~5.5 w** | | | |
 
 **Dropped from ADR-0242:** Phase 7 directory move (§ 2 above).
 **Deferred, unchanged:** everything in § 1's out-of-scope table.
+
+### 4.1 Track A — the tree must state what the audit found (0.5 d)
+
+Three findings from 27 July live **only in this document**. `surface_map.py` is what
+`corvin plugin types` prints and what a plugin author reads, and it still states causes
+the audit disproved. A wrong `dead_reason` is worse than none: it names a fix that would
+be harmful (Stage 2) or that does not exist (Stage 4).
+
+| Correction | Today | Must say |
+|---|---|---|
+| `user_backend` (`surface_map.py:137`) | "no caller exists outside `corvin_plugins`" | "no credential auth path exists to call it — the only live login is localhost-only and credential-less" |
+| `worker_engine` (`:196`) | "Same as compute_engine: `engine_factory` is never passed" | "`engine_registry.py` has no `register()`; a plugin cannot enter itself. Needs an L22 registration API first (ADR-0245 deferral)" |
+| `bridge_channel` (`:210`) | "Same as compute_engine: `channel_registry` is never passed" | "`channel_registry` does not exist; the template targets a class nobody wrote" |
+| `templates/bridge_channel_plugin.py`, `worker_engine_plugin.py` | `if ctx.<handle> is not None:` → silent skip | state that the target does not exist; a scaffold must not manufacture silence |
+
+**Test:** extend `test_surface_map.py` so a `dead_reason` that merely defers to another
+type ("Same as …") fails — that phrasing is how the three wrong causes propagated.
+
+**Why first:** it is half a day, it is the only track with no dependency, and every other
+track is measured against a map that is currently wrong.
+
+#### Shipped 2026-07-27
+
+Two guards added to `test_surface_map.py`, red on arrival on exactly the two rows
+that deferred:
+
+* `test_dead_reason_stands_on_its_own` — refuses `"same as"`, `"see above"`,
+  `"ditto"`, … A deferring cause is the one shape that goes stale invisibly: fix
+  the row it points at and this row still reads as explained.
+* `test_dead_reason_names_something_in_the_tree` — the cause must cite a file, a
+  call or a config key. Deliberately weak; an unfalsifiable cause is how the
+  wrong ones survived review.
+
+**Known limit, stated rather than hidden:** the guards caught `worker_engine` and
+`bridge_channel`. They do **not** catch `user_backend`, whose old cause was
+self-contained, cited a real file, and was simply wrong. No cheap test
+distinguishes "wrong but well-formed" from "right" — that one needed the audit.
+Track E is the structural answer, not a third string check.
+
+Also corrected: both templates' `else` branches now say the target does not
+exist instead of logging a `None` handle, and the ADR-0245 addendum records the
+four real causes. Verified through `corvin plugin types`, which is the surface an
+author actually reads. 982 tests green.
+
+### 4.2 Track E — the E2E spine (1 w, runs alongside Stages 3–6)
+
+**Decided 2026-07-27 (maintainer): real lifecycle E2E *plus* un-mocked Playwright runs.**
+
+The only plugin E2E today is `web-next/tests/e2e/plugins.spec.ts`, and it intercepts its
+own routes. It proves the panel renders — it cannot prove a plugin ever ran. That is the
+same "unit tests prove a mechanism, not its reach" defect this whole plan exists for,
+one level up.
+
+**E1 — lifecycle E2E (pytest).** One scenario, end to end, no mocks:
+`corvin plugin new` → `corvin plugin install <path>` → gateway boots → the plugin's hook
+fires **on a real turn** → the audit event lands in the chain and `voice-audit verify`
+still passes. Runs against a tmp `CORVIN_HOME` (per `tests/conftest.py`'s
+`VOICE_AUDIT_PATH` isolation — a plugin E2E writing into the live GDPR chain is not
+acceptable).
+
+**E2 — per-stage E2E rows.** Each activated stage adds one scenario to E1's harness:
+Stage 3 a hook that changes a model selection and one that raises; Stage 4 a compute
+engine reachable through the MCP bridge (registration is *not* invocation); Stage 5 a
+supervisor whose daemon is dead; Stage 6 a `community` plugin without confirmation.
+
+**E3 — un-mock the Playwright specs.** Run `plugins.spec.ts` against a real gateway
+using the isolated-console harness rather than route interception. Budget it: the
+isolated E2E console has a history of hanging in boot, and this is the expensive half
+of Track E. If E3 cannot be made reliable it is dropped and said so here — it is not
+allowed to become a green suite that boots nothing.
+
+**Gate:** E1 is a merge condition for Stages 3–6 in the same way Stage 0's gate is.
+A stage without its E2E row is not done.
+
+### 4.3 Execution order
+
+```
+A  (0.5d, no deps)  ─┐
+2  (0.5d, no deps)  ─┼─→  E1 harness (needs A's map to be true)
+E1 (3d)             ─┘        │
+                              ├─→ 3 (+E2 row) ─→ 4 (+E2 row)
+                              ├─→ 5 (+E2 row)
+                              └─→ 6 (+E2 row) ─→ E3 (last, droppable)
+```
+
+Stage 4 follows Stage 3 rather than running parallel: its remaining substance is
+"prove the registered compute engine is *reached*", which is the same assertion shape
+Stage 3 builds first.
+
+**Not closed by this plan, by decision:** ADR-0250's registry-keying migration,
+Stage 2 options 1/2, and everything in § 1's out-of-scope table. Completion means every
+mechanism has a reachable call site **or** an honest recorded cause — not that every gap
+is gone.
 
 ---
 
@@ -345,10 +453,27 @@ Per CLAUDE.md, docs and diagrams update in the same commit as the code. Targets:
 
 | Stage | Docs | Diagrams |
 |---|---|---|
+| A | `surface_map.py` docstrings (they *are* the doc — `corvin plugin types` prints them), `docs/PLUGIN_EXTENSION_POINTS.md` | — |
+| E | `docs/claude-ref/testing-and-docs.md` § how to run the plugin E2E | — |
 | 1 | `docs/claude-ref/layer-plugins.md` § Known limit; CLAUDE.md plugin block | plugin boot/scoping SVG |
-| 2 | `docs/plugin-system.md`, `docs/claude-ref/layer-16-security.md` | auth flow SVG |
+| 2 | `docs/plugin-system.md`, `docs/claude-ref/layer-16-security.md`; CLAUDE.md's `user_backend` invariant needs the qualifier that it has no subject on today's surfaces | auth flow SVG |
 | 3 | `docs/plugin-architecture.md`, delegation-routing.md | delegation flow SVG |
 | 4 | `docs/extending.md`, generated `corvin plugin types` output | — |
 | 5 | `docs/claude-ref/layer-plugins.md`, bridge docs | bridge supervision SVG |
 | 6 | `docs/extending.md`, `Corvin-Marketplace/plugins/README.md` | — |
 | 7 | CLAUDE.md § Feature Flags | — |
+
+---
+
+## 7. What only the maintainer can do
+
+Two items block completion and cannot be finished by a coding session:
+
+1. **Trust-anchor key custody (Stage 6).** Generating the maintainer Ed25519 key and
+   deciding where the private half lives is an operator act. Until it exists,
+   `origin=vetted` is a value nothing can legitimately carry, and Stage 6 ships with
+   `vetted` claims **refused, not downgraded** — which is the correct fail-closed
+   behaviour, but it means the origin axis stays two-valued in practice.
+2. **ADR status transitions.** ADR-0250 and ADR-0251 are both `Proposed`. Stage 3 is
+   the implementation of 0251; it should not merge while the decision it implements is
+   still a proposal.
