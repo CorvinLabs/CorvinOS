@@ -97,7 +97,15 @@ class SummaryProviderRegistry:
 
         _who = _loading.current()
         with self._lock:
-            self._owner_plugin_id = _who.plugin_id if _who else None
+            # Only a plugin that is LOADING may claim ownership. A set_active()
+            # from anywhere else (a request handler, a thread a plugin spawned,
+            # a timer) used to write None here — which not only left the new
+            # occupant unowned, it ERASED the previous legitimate owner, so the
+            # slot could never be released by anyone again. Keeping the old
+            # owner is the lesser wrong: the slot still belongs to whoever took
+            # it during a load, and unloading them releases it.
+            if _who is not None:
+                self._owner_plugin_id = _who.plugin_id
             self._active = provider
 
     def get_active(self) -> _SPProto:
@@ -119,6 +127,11 @@ class SummaryProviderRegistry:
             self._owner_plugin_id = None
             self._active = ClaudeCliSummaryProvider()  # type: ignore[assignment]
             return True
+
+    def owner_plugin_id(self) -> str | None:
+        """The plugin that installed the current provider, if it is known."""
+        with self._lock:
+            return self._owner_plugin_id
 
     def clear(self) -> None:
         """Restore the bundled default provider."""
