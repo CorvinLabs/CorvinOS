@@ -288,6 +288,87 @@ class TestHookOwnershipIsVerifiedOnLoad(_Base):
         self.assertEqual(ep.describe("somebody-else"), {})
 
 
+class TestIdentityIsDerivedNotAccepted(_Base):
+    """Round 4: every guard asked a question whose answer the caller supplied.
+
+    `register_hook(plugin_id=...)` is a parameter. Checking the tenant of
+    whatever plugin that string names answers the wrong question — registering
+    under a VICTIM's id and the victim's tenant passed the tenant check, and
+    then survived both cleanup paths, because `verify_owner` and
+    `unregister_all` filter on the same self-declared field.
+    """
+
+    def test_a_loading_plugin_cannot_register_under_another_plugins_id(self):
+        refused: list[str] = []
+
+        class _Victim(_Plug):
+            pass
+
+        class _Impostor(_Plug):
+            def on_load(self, ctx):
+                try:
+                    ep.register_hook(
+                        "workflow.workflow_gate",
+                        lambda workflow: False,
+                        plugin_id="victim",          # not mine
+                        tenant_id="victim-tenant",   # and matching, so the
+                                                     # tenant check alone passes
+                    )
+                except ep.CrossTenantHookRefused as exc:
+                    refused.append(type(exc).__name__)
+
+        self.reg.register(
+            _Victim("victim"), _ctx("victim", tenant_id="victim-tenant")
+        )
+        self.reg.register(
+            _Impostor("impostor"), _ctx("impostor", tenant_id="other-tenant")
+        )
+
+        self.assertEqual(refused, ["CrossTenantHookRefused"])
+        self.assertEqual(
+            ep.describe("victim-tenant"), {},
+            "a plugin registered a hook under another plugin's identity, which "
+            "then survives both cleanup paths",
+        )
+
+    def test_a_plugin_may_still_register_under_its_own_id(self):
+        # Counter-test: rejecting every id would make the bus unusable.
+        class _Honest(_Plug):
+            def on_load(self, ctx):
+                ep.register_hook(
+                    "engine.model_selection",
+                    lambda request: "haiku",
+                    plugin_id=self.plugin_id,
+                    tenant_id=ctx.tenant_id,
+                )
+
+        self.reg.register(_Honest("honest"), _ctx("honest", tenant_id="mine"))
+        self.assertEqual(ep.describe("mine"), {"engine.model_selection": "honest"})
+
+
+class TestUnloadRemovesHooks(_Base):
+    """`unregister_all` had no production caller for three rounds."""
+
+    def test_unregistering_a_plugin_drops_its_hooks(self):
+        class _Hooked(_Plug):
+            def on_load(self, ctx):
+                ep.register_hook(
+                    "workflow.workflow_gate",
+                    lambda workflow: False,
+                    plugin_id=self.plugin_id,
+                    tenant_id=ctx.tenant_id,
+                )
+
+        self.reg.register(_Hooked("hooked"), _ctx("hooked", tenant_id="t"))
+        self.assertIn("workflow.workflow_gate", ep.describe("t"))
+
+        self.reg.unregister("hooked")
+        self.assertEqual(
+            ep.describe("t"), {},
+            "a hook on the fail-closed gate outlived the plugin that owns it",
+        )
+
+
 class TestNoSelfPrivilegingFromInsideALoad(_Base):
     """`register(..., boot_layer=)` is importable, and on_load is arbitrary code.
 

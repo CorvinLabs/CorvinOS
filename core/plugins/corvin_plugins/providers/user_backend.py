@@ -37,14 +37,24 @@ if TYPE_CHECKING:
 _log = logging.getLogger("corvin.auth.backend")
 
 
-def _plugin_id(backend: object) -> str:
+def _plugin_id(backend: object, owner: str | None = None) -> str:
     """Breaker key for a backend instance.
 
-    Falls back to the class name when a backend omits ``plugin_id`` — a breaker
-    keyed on the class is still per-backend, and refusing to guard an unlabelled
+    ``owner`` — the plugin that installed the slot — wins when known. Keying on
+    the OBJECT gave a plugin two identities: a plugin that installs a helper
+    (``set_active(self._sink)``) produced the key ``anonymous:Sink``, which the
+    registry has never heard of, so ``get_breaker()`` could not see its boot
+    layer and the compliance exemption silently did not apply.
+
+    Falls back to the object's own id, then to the class name: a breaker keyed
+    on the class is still per-backend, and refusing to guard an unlabelled
     backend would be worse than an imperfect key.
     """
-    return getattr(backend, "plugin_id", None) or f"anonymous:{type(backend).__name__}"
+    return (
+        owner
+        or getattr(backend, "plugin_id", None)
+        or f"anonymous:{type(backend).__name__}"
+    )
 
 #: Hard ceiling for a backend call.  A directory that hangs must not hold an auth
 #: request open — a timeout is a deny, not a wait.
@@ -71,7 +81,15 @@ class UserBackendRegistry:
 
         _who = _loading.current()
         with self._lock:
-            self._owner_plugin_id = _who.plugin_id if _who else None
+            # Only a plugin that is LOADING may claim ownership. A set_active()
+            # from anywhere else (a request handler, a thread a plugin spawned,
+            # a timer) used to write None here — which not only left the new
+            # occupant unowned, it ERASED the previous legitimate owner, so the
+            # slot could never be released by anyone again. Keeping the old
+            # owner is the lesser wrong: the slot still belongs to whoever took
+            # it during a load, and unloading them releases it.
+            if _who is not None:
+                self._owner_plugin_id = _who.plugin_id
             self._active = provider
 
     def clear(self) -> None:
@@ -109,6 +127,11 @@ class UserBackendRegistry:
             self._owner_plugin_id = None
             self._active = None
             return True
+
+    def owner_plugin_id(self) -> str | None:
+        """The plugin that installed the current provider, if it is known."""
+        with self._lock:
+            return self._owner_plugin_id
 
     def is_installed(self) -> bool:
         return self.get_active() is not None
@@ -154,7 +177,7 @@ async def authenticate(
 
     # The breaker contains an unreachable directory. It is driven by INFRASTRUCTURE
     # outcomes only — see _plugin_id() note below.
-    breaker = _breakers.get_breaker(_plugin_id(backend))
+    breaker = _breakers.get_breaker(_plugin_id(backend, _registry.owner_plugin_id()))
     try:
         breaker.guard()
     except _breakers.CircuitOpen:

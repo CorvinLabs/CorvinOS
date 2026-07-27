@@ -99,7 +99,15 @@ class AuditBackendRegistry:
 
         _who = _loading.current()
         with self._lock:
-            self._owner_plugin_id = _who.plugin_id if _who else None
+            # Only a plugin that is LOADING may claim ownership. A set_active()
+            # from anywhere else (a request handler, a thread a plugin spawned,
+            # a timer) used to write None here — which not only left the new
+            # occupant unowned, it ERASED the previous legitimate owner, so the
+            # slot could never be released by anyone again. Keeping the old
+            # owner is the lesser wrong: the slot still belongs to whoever took
+            # it during a load, and unloading them releases it.
+            if _who is not None:
+                self._owner_plugin_id = _who.plugin_id
             self._active = provider
             self._failures = 0
         self._ensure_worker()
@@ -250,6 +258,11 @@ class AuditBackendRegistry:
             self._active = None
             return True
 
+    def owner_plugin_id(self) -> str | None:
+        """The plugin that installed the current provider, if it is known."""
+        with self._lock:
+            return self._owner_plugin_id
+
     def fanout(
         self,
         event_type: str,
@@ -339,11 +352,21 @@ class AuditBackendRegistry:
     ) -> bool:
         with self._lock:
             backend = self._active
+            owner = self._owner_plugin_id
         if backend is None:
             return False
 
+        # Key the breaker on the OWNING PLUGIN, not on the object in the slot.
+        # `get_breaker()` decides containment from the owner's boot layer, and a
+        # plugin that installed a helper object (`set_active(self._sink)`) has no
+        # plugin_id on that helper — the key became "anonymous:Sink", which the
+        # registry has never heard of, so the compliance exemption silently did
+        # not apply and the sink could be contained after all. Two identities for
+        # one plugin is the whole defect.
         breaker = _breakers.get_breaker(
-            getattr(backend, "plugin_id", None) or f"anonymous:{type(backend).__name__}"
+            owner
+            or getattr(backend, "plugin_id", None)
+            or f"anonymous:{type(backend).__name__}"
         )
         try:
             breaker.guard()

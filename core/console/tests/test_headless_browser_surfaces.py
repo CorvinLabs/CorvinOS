@@ -19,6 +19,13 @@ green version of it:
 * the gateway's ``/favicon.ico`` redirected into ``/console/favicon.svg``, which
   does not exist in headless mode — a 302 into a 404.
 
+A fourth hole sits one level deeper and is why this file grew an authenticated
+section: ``GET /v1/console/compute/experiments/{id}/report`` renders a full
+``<!DOCTYPE html>`` page with its own stylesheet.  Sweeping *bare* paths could
+never see it — it is behind ``require_session``, and headless mode keeps login
+working on purpose.  "Every browser path answers correctly" is therefore not the
+same question as "no HTML page is served"; both have to be asked.
+
 Both flag states are covered (CLAUDE.md: a flag only ever tested in one state
 rots).  The flag-OFF direction is not decoration: a guard that deletes the
 surface unconditionally would satisfy every headless assertion here while
@@ -145,6 +152,75 @@ def _gateway_client():
     import corvin_gateway.app as gateway_app
 
     return _client(gateway_app.app)
+
+
+#: An experiment id the report route can actually render, seeded on disk.
+_EXPERIMENT_ID = "exp_headless_probe"
+_REPORT_PATH = f"/v1/console/compute/experiments/{_EXPERIMENT_ID}/report"
+
+
+def _seed_experiment(home: Path) -> None:
+    """Write the one artifact ``/report`` needs to produce a page.
+
+    Without it the route 404s and would "pass" the headless assertion for the
+    wrong reason — the test has to reach the HTML-rendering path.
+    """
+    exp_dir = home / "tenants" / "_default" / "compute" / "experiments" / _EXPERIMENT_ID
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    (exp_dir / "experiment.json").write_text(
+        json.dumps(
+            {
+                "experiment_id": _EXPERIMENT_ID,
+                "name": "Headless probe",
+                "hypothesis": "an API-only process hands out no styled page",
+                "session_label": "probe",
+                "run_ids": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _session_record():
+    """A minimal owner session, built from the dataclass so field drift shows up."""
+    import dataclasses
+    import time
+
+    from corvin_console import auth as session_auth
+
+    now = time.time()
+    values = {}
+    for f in dataclasses.fields(session_auth.SessionRecord):
+        if f.default is not dataclasses.MISSING:
+            continue
+        ann = str(f.type)
+        if "float" in ann:
+            values[f.name] = now + (3600 if f.name == "expires_at" else 0)
+        elif "bool" in ann:
+            values[f.name] = False
+        elif f.name == "tier":
+            tier = getattr(session_auth, "Tier", None)
+            values[f.name] = next(iter(tier)) if tier else "owner"
+        elif f.name == "tenant_id":
+            values[f.name] = "_default"
+        else:
+            values[f.name] = f"test-{f.name}"
+    return session_auth.SessionRecord(**values)
+
+
+def _authed_standalone_client():
+    """``corvin serve``'s app with the session dependency already satisfied.
+
+    Overriding ``require_session`` rather than minting a real cookie keeps the
+    subject of the test the *response*, not the login flow — and headless mode
+    deliberately leaves login working, so a real session would answer here too.
+    """
+    from corvin_console.deps import require_session
+    from corvin_console.standalone import create_app
+
+    app = create_app()
+    app.dependency_overrides[require_session] = _session_record
+    return _client(app)
 
 
 def _chase(client, path: str, *, hops: int = 5):
@@ -298,6 +374,67 @@ class TestFlagOffKeepsTheUI(_SurfaceAssertions):
             for path in available:
                 with self.subTest(path=path):
                     self.assert_surface_present(client, path, "gateway")
+
+
+# ── Authenticated HTML: the page a bare sweep cannot see ─────────────────────
+
+
+class TestAuthenticatedReportIsNotAPage(_SurfaceAssertions):
+    """``/compute/experiments/{id}/report`` is a full HTML document.
+
+    ``Depends(require_session)`` is not a headless guard — headless mode keeps
+    the API, and the API includes logging in.
+    """
+
+    def test_report_serves_no_html_when_headless(self):
+        with _sandbox(self.tmp, headless=True) as home:
+            _seed_experiment(home)
+            client = _authed_standalone_client()
+            resp = client.get(_REPORT_PATH)
+            self.assertLess(resp.status_code, 500, resp.text)
+            self.assertFalse(
+                resp.headers.get("content-type", "").startswith("text/html"),
+                "the experiment report served an HTML page with "
+                "headless_api_mode on",
+            )
+            self.assertNotIn("<!DOCTYPE html>", resp.text)
+
+    def test_report_keeps_its_content_as_json_when_headless(self):
+        """Headless removes the presentation, not the report.
+
+        Without this the guard could 404 the route and still pass the test
+        above — an API-only install would silently lose a product feature.
+        """
+        with _sandbox(self.tmp, headless=True) as home:
+            _seed_experiment(home)
+            resp = _authed_standalone_client().get(_REPORT_PATH)
+            self.assertEqual(resp.status_code, 200, resp.text)
+            body = resp.json()
+            self.assertEqual(body["experiment_id"], _EXPERIMENT_ID)
+            self.assertEqual(body["experiment"]["name"], "Headless probe")
+            self.assertIn("runs", body)
+            self.assertIn("improvement_pct", body)
+
+    def test_report_is_still_a_page_with_the_flag_off(self):
+        with _sandbox(self.tmp, headless=False) as home:
+            _seed_experiment(home)
+            resp = _authed_standalone_client().get(_REPORT_PATH)
+            self.assertEqual(resp.status_code, 200, resp.text)
+            self.assertTrue(
+                resp.headers.get("content-type", "").startswith("text/html"),
+                "the report is an HTML page on a normal install",
+            )
+            self.assertIn("<!DOCTYPE html>", resp.text)
+            self.assertIn("Headless probe", resp.text)
+
+    def test_a_missing_experiment_still_404s_in_both_states(self):
+        """The headless branch must not swallow the not-found path."""
+        for headless in (True, False):
+            with self.subTest(headless=headless), _sandbox(self.tmp, headless=headless):
+                resp = _authed_standalone_client().get(
+                    "/v1/console/compute/experiments/nope_not_here/report"
+                )
+                self.assertEqual(resp.status_code, 404, resp.text)
 
 
 # ── Ships dark ────────────────────────────────────────────────────────────────

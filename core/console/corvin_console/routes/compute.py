@@ -1880,16 +1880,30 @@ def export_mlflow(
         headers={"Content-Disposition": f'attachment; filename="{experiment_id.replace(chr(34),"").replace(chr(13),"").replace(chr(10),"")}_mlruns.zip"'},
     )
 
-@router.get("/compute/experiments/{experiment_id}/report")
-def experiment_report(
-    experiment_id: str,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
-):
-    """Generate a self-contained HTML experiment report."""
-    from fastapi.responses import HTMLResponse
-    if "/" in experiment_id or experiment_id.startswith(".."):
-        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid experiment_id")
-    tid = rec.tenant_id
+def _headless_api_mode() -> bool:
+    """True when this process is an API-only deployment (ADR-0241/0243).
+
+    Defensive on every path: a flag that cannot be read means "serve exactly
+    as before", never "hide the surface". Imported lazily because ``..app``
+    imports the router package back.
+    """
+    try:
+        from ..app import headless_enabled
+    except Exception:  # noqa: BLE001 — no flag module means no headless mode
+        return False
+    try:
+        return bool(headless_enabled())
+    except Exception:  # noqa: BLE001 — an unreadable flag is an off flag
+        return False
+
+
+def _gather_experiment_report(tid: str, experiment_id: str) -> dict[str, Any]:
+    """Collect everything the experiment report shows, before any rendering.
+
+    Split out of :func:`experiment_report` so the same numbers can leave the
+    process as JSON in headless mode. The HTML page and the JSON body are then
+    the same data by construction, not two code paths kept in sync by hand.
+    """
     exp_dir = _experiments_dir(tid) / experiment_id
     exp = _read_experiment(exp_dir)
     if not exp:
@@ -1920,6 +1934,48 @@ def experiment_report(
     champ_loss = champ.get("best_loss")
     base_loss  = base.get("best_loss")
     improvement = round((1 - champ_loss / base_loss) * 100, 1) if champ_loss is not None and base_loss and base_loss > 0 else 0
+
+    return {
+        "experiment_id": experiment_id,
+        "experiment": exp,
+        "corpus": corpus,
+        "runs": runs_detail,
+        "champion": champ,
+        "baseline": base,
+        "improvement_pct": improvement,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+@router.get("/compute/experiments/{experiment_id}/report")
+def experiment_report(
+    experiment_id: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+):
+    """Generate a self-contained HTML experiment report.
+
+    In headless mode (``headless_api_mode``, ADR-0241/0243) the same report is
+    returned as JSON instead. This is the one full HTML page left outside the
+    SPA mount, and a process that declares it serves no browser surface must
+    not hand out a styled document — but a report is a *product* feature, not
+    decoration, so an API-only install keeps the content and loses only the
+    presentation. The Console links this URL in a new tab; that link only
+    exists where the SPA is mounted, i.e. never in headless mode.
+    """
+    from fastapi.responses import HTMLResponse
+    if "/" in experiment_id or experiment_id.startswith(".."):
+        raise HTTPException(http_status.HTTP_400_BAD_REQUEST, "invalid experiment_id")
+    tid = rec.tenant_id
+    report = _gather_experiment_report(tid, experiment_id)
+
+    if _headless_api_mode():
+        return report
+
+    exp = report["experiment"]
+    corpus = report["corpus"]
+    runs_detail = report["runs"]
+    champ = report["champion"]
+    improvement = report["improvement_pct"]
 
     # All user-controlled values HTML-escaped to prevent stored XSS.
     def _h(v: Any) -> str:

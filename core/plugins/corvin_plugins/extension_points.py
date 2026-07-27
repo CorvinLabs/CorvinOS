@@ -59,6 +59,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from . import loading as _loading
+
 log = logging.getLogger("corvin.plugins.extension_points")
 
 #: The Console feature flag that gates the whole bus.  Ships dark (CLAUDE.md
@@ -347,8 +349,6 @@ def _loaded_tenant(plugin_id: str) -> Tuple[Optional[str], str]:
     or :class:`PluginContext`, so no error path and no missing plugin can be
     mistaken for "the tenants match".
     """
-    from . import loading as _loading
-
     who = _loading.current()
     if who is not None and who.plugin_id == plugin_id:
         return who.tenant_id, _TENANT_VERIFIED
@@ -380,6 +380,29 @@ def _check_tenant(point: str, *, plugin_id: str, tenant_id: str) -> str:
     input A controls — the very cross-tenant write being refused.  Both ids are
     in the details, so the record is complete either way.
     """
+    # IDENTITY FIRST. `plugin_id` is a parameter the caller writes, so checking
+    # the tenant of whatever plugin that string names answers the wrong
+    # question: an attacker registering under a VICTIM's id and the victim's
+    # tenant passes the tenant check, and then survives both cleanup paths —
+    # `verify_owner` and `unregister_all` filter on the same self-declared
+    # field. When a load context exists it is the one identity the caller did
+    # not choose, so it wins.
+    who = _loading.current()
+    if who is not None and who.plugin_id != plugin_id:
+        log.error(
+            "extension point %s: %r is loading and tried to register a hook as "
+            "%r — refused",
+            point, who.plugin_id, plugin_id,
+        )
+        _audit("plugin.extension_hook_rejected", {
+            "point": _clip(point),
+            "plugin_id": _clip(who.plugin_id),
+            "claimed_plugin_id": _clip(plugin_id),
+            "tenant_id": _clip(who.tenant_id),
+            "reason": "identity_mismatch",
+        }, tenant_id=who.tenant_id)
+        raise CrossTenantHookRefused(who.plugin_id, tenant_id, who.tenant_id)
+
     actual, status = _loaded_tenant(plugin_id)
     if status == _TENANT_VERIFIED and actual != tenant_id:
         log.error(
