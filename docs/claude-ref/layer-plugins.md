@@ -918,6 +918,32 @@ supervisor loads on any install. Process management is delegated to
 `operator/bridges/bridge_manager.py` — `channel_daemon_running()`,
 `adapter_running_pid()`, `start_channel_detached()` — never reimplemented.
 
+### Known limit — provider slots are process-wide, not tenant-scoped
+
+The control plane is tenant-separated: the admin API only shows and mutates
+plugins belonging to the caller's tenant, `_deactivate()` refuses to unload an
+instance another tenant owns, and `_activate()` refuses to claim one.
+
+**The data plane is not.** Each of the eight provider registries holds ONE
+active provider per process (module-level `_registry`). Consequences, all
+current behaviour rather than bugs to be fixed casually:
+
+- an `audit_backend` installed by tenant A receives a copy of **every** tenant's
+  audit events — `audit_event()` calls one process-wide sink with whatever
+  `tenant_id` the event carries;
+- the same holds for `user_backend` (authenticates for all tenants),
+  `recall_backend` (all tenants' turns land in the path A configured) and
+  `router_backend`.
+
+On a single-operator install — the default, and what `_default` means — this is
+invisible, because there is one tenant. It becomes a data-protection question
+the moment a second tenant exists with a different operator, and it is not
+something a per-call-site patch can fix: it needs the registries to be keyed by
+tenant, which changes the ADR-0033 provider contract.
+
+Until that is decided: **do not install a third-party provider plugin on a
+multi-tenant install.** The plugin sees every tenant's data by construction.
+
 ### Additive backends — extension never replaces core (ADR-0233 D4)
 
 `audit_backend` and `user_backend` are the first two backends for *mandatory* core

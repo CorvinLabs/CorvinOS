@@ -244,7 +244,29 @@ class PluginRegistry:
         object being registered.
         """
         if boot_layer is not None:
-            return BootLayer(boot_layer)
+            requested = BootLayer(boot_layer)
+            if requested in _PRIVILEGED_BOOT_LAYERS:
+                # The argument is trusted because the CALLER holds the
+                # provenance chain — bootstrap_global, which only ever runs from
+                # code shipped in the wheel. A plugin's on_load is not that
+                # caller, and `register` is an importable module-level function,
+                # so an installed plugin could register a second object as
+                # `compliance` from inside its own load: no PluginRecord, no
+                # consent gate, no L34/L35 declarations, and not disableable.
+                #
+                # Being inside ANY on_load is the disqualifier. bootstrap_global
+                # registers before any plugin is loading, so this costs the
+                # legitimate path nothing.
+                who = _loading.current()
+                if who is not None:
+                    log.error(
+                        "plugin %r tried to register %r on boot layer %s from "
+                        "inside its own on_load — downgraded to installed",
+                        who.plugin_id, getattr(plugin, "plugin_id", "?"),
+                        requested.value,
+                    )
+                    return BootLayer.INSTALLED
+            return requested
         declared = getattr(plugin, "boot_layer", None)
         if declared is None:
             return BootLayer.INSTALLED

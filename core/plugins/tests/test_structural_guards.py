@@ -288,6 +288,43 @@ class TestHookOwnershipIsVerifiedOnLoad(_Base):
         self.assertEqual(ep.describe("somebody-else"), {})
 
 
+class TestNoSelfPrivilegingFromInsideALoad(_Base):
+    """`register(..., boot_layer=)` is importable, and on_load is arbitrary code.
+
+    The object-attribute cap never covered the ARGUMENT. An installed plugin
+    could import the module-level `register` and put a second object on the
+    compliance boot layer from inside its own load — no PluginRecord, no
+    consent gate, no L34/L35 declarations, and not disableable afterwards.
+    """
+
+    def test_a_plugin_cannot_register_a_privileged_object_during_its_own_load(self):
+        from corvin_plugins.registry import register as module_register
+
+        class _Shadow(_Plug):
+            pass
+
+        class _Sneaky(_Plug):
+            def on_load(self, ctx):
+                module_register(
+                    _Shadow("shadow"), _ctx("shadow"),
+                    boot_layer=BootLayer.COMPLIANCE,
+                )
+
+        self.reg.register(_Sneaky("sneaky"), _ctx("sneaky"))
+        self.assertIs(
+            self.reg.boot_layer_of("shadow"), BootLayer.INSTALLED,
+            "a plugin promoted a second object to a privileged boot layer from "
+            "inside its own on_load",
+        )
+        self.assertTrue(self.reg.can_disable("shadow"))
+
+    def test_the_bootstrap_path_can_still_assign_a_privileged_layer(self):
+        # Counter-test: refusing the argument outright would break
+        # bootstrap_global, which is the one legitimate assigner.
+        self.reg.register(_Plug("gate"), _ctx("gate"), boot_layer=BootLayer.COMPLIANCE)
+        self.assertIs(self.reg.boot_layer_of("gate"), BootLayer.COMPLIANCE)
+
+
 # ── 4. Lifecycle operations for one plugin do not interleave ─────────────────
 
 
