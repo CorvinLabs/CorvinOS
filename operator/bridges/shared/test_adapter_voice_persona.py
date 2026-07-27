@@ -32,10 +32,24 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 # Skip when openai is missing — patch("openai.OpenAI", ...) requires openai.
+#
+# The skip must be spelled differently for the two ways this file runs. As a
+# SCRIPT (the `run-all-tests.sh` convention, see the Run: line above) exiting 0
+# is right. Under PYTEST it is catastrophic: `sys.exit` raises SystemExit during
+# collection, which the collector does not catch, so pytest aborts the whole
+# session with "INTERNALERROR ... caught unexpected SystemExit". Since
+# operator/bridges/shared/ is one of the paths the coverage workflow passes,
+# that killed the entire job ~1.5 s in — no tests, no coverage, and an error
+# that names this file rather than the missing dependency (found 2026-07-27).
 try:
     import openai  # noqa: F401
 except ImportError:
-    print("[adapter persona voice] SKIP — openai package not installed", flush=True)
+    _msg = "openai package not installed"
+    if "pytest" in sys.modules:
+        import pytest
+
+        pytest.skip(_msg, allow_module_level=True)
+    print(f"[adapter persona voice] SKIP — {_msg}", flush=True)
     sys.exit(0)
 
 import adapter  # type: ignore  # noqa: E402

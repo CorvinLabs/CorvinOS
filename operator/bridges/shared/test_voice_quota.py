@@ -30,11 +30,22 @@ sys.path.insert(0, str(REPO / "operator" / "bridges" / "shared"))
 # as an environmental skip (exit 0) rather than a hard failure so the
 # bridge test runner stays green on python interpreters without the
 # optional dependency installed.
+# Spelled two ways on purpose: as a script, exit 0 is the skip. Under pytest,
+# `sys.exit` at import time raises SystemExit during collection and aborts the
+# WHOLE session with an INTERNALERROR — see the same guard in
+# test_adapter_voice_persona.py for the coverage-job outage that caused.
 try:
     import openai  # noqa: F401
 except ImportError:
-    print("[quota-aware voice synthesis] SKIP — openai package not installed", flush=True)
-    import sys as _sys; _sys.exit(0)
+    import sys as _sys
+
+    _msg = "openai package not installed"
+    if "pytest" in _sys.modules:
+        import pytest
+
+        pytest.skip(_msg, allow_module_level=True)
+    print(f"[quota-aware voice synthesis] SKIP — {_msg}", flush=True)
+    _sys.exit(0)
 
 import adapter  # noqa: E402
 
