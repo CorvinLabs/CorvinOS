@@ -2643,6 +2643,16 @@ export interface FeatureFlagState {
   enabled: boolean;
   /** Where the resolved value came from: console overlay, tenant YAML, or the registry default. */
   source: "console" | "tenant_yaml" | "default";
+  /**
+   * True when switching this flag ON removes the surface that could switch it
+   * back OFF — `headless_api_mode` unmounts /console/, so this very panel goes
+   * away. The UI must confirm before enabling one of these and must show
+   * `recovery_command`. Never hard-code the flag id here: the backend registry
+   * decides which flags are self-locking.
+   */
+  self_locking: boolean;
+  /** Console-independent off-ramp, e.g. `corvin config set features.x false`. Null unless self_locking. */
+  recovery_command: string | null;
 }
 
 export function getFeatureFlags(signal?: AbortSignal): Promise<{ features: FeatureFlagState[] }> {

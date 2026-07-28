@@ -43,6 +43,7 @@ __all__ = [
     "flag",
     "is_enabled",
     "describe_all",
+    "recovery_command",
     "set_enabled",
     "worker_engine_mode",
     "set_worker_engine_mode",
@@ -96,6 +97,15 @@ class FeatureFlag:
     default: bool = False
     # Feature areas the flag gates, for the Settings UI grouping only.
     tags: tuple[str, ...] = field(default_factory=tuple)
+    # A SELF-LOCKING flag removes the surface that can switch it back off.
+    # `headless_api_mode` is the archetype: on, it unmounts /console/, so the
+    # Settings panel that flipped it no longer exists. Such a flag is not a
+    # rollout switch, it is a deployment mode, and it needs two things a normal
+    # flag does not: an explicit confirmation before it is turned ON, and an
+    # off-ramp that does not go through the Console. Both hang off this field
+    # so the UI never hard-codes a flag id — see `recovery_command()` and
+    # `corvin config set features.<id> false`.
+    self_locking: bool = False
 
 
 # ── The registry ──────────────────────────────────────────────────────────
@@ -314,11 +324,15 @@ REGISTRY: tuple[FeatureFlag, ...] = (
             "Allow the platform to boot with no bridges and no web UI — core "
             "plus the HTTP API only, for API-first and container deployments. "
             "Off means the boot path is unchanged and the Console is always "
-            "started. ADR-0241/0243."
+            "started. ADR-0241/0243. SELF-LOCKING: while this is on there is no "
+            "/console/ to switch it back off from. The off-ramp is the CLI — "
+            "`corvin config set features.headless_api_mode false`, then restart "
+            "the service."
         ),
         owner="maintainer",
         target_release="0.12.x",
         tags=("plugins", "console"),
+        self_locking=True,
     ),
     FeatureFlag(
         id="browser_automation",
@@ -497,6 +511,18 @@ def _source_of(flag_id: str, tenant_id: str) -> str:
     return "default"
 
 
+def recovery_command(flag_id: str) -> str:
+    """The Console-independent way to switch ``flag_id`` back off.
+
+    Single source of truth for the string: the Settings UI prints it verbatim
+    in the confirmation dialog, ``corvin config set`` prints it back after a
+    self-locking flag is turned on, and the tests assert on it. If the CLI
+    surface is ever renamed, this is the one place that changes.
+    """
+    flag(flag_id)  # unregistered id → UnknownFlagError, never a bogus command
+    return f"corvin config set features.{flag_id} false"
+
+
 def describe_all(tenant_id: str = "_default") -> list[dict[str, Any]]:
     """Registry + resolved state, for the Settings UI."""
     return [
@@ -510,6 +536,12 @@ def describe_all(tenant_id: str = "_default") -> list[dict[str, Any]]:
             "default": f.default,
             "enabled": is_enabled(f.id, tenant_id),
             "source": _source_of(f.id, tenant_id),
+            "self_locking": f.self_locking,
+            # Only meaningful for a self-locking flag; None keeps the UI from
+            # offering a "recovery" command for a flag that never traps anyone.
+            "recovery_command": (
+                f"corvin config set features.{f.id} false" if f.self_locking else None
+            ),
         }
         for f in REGISTRY
     ]
