@@ -387,50 +387,97 @@ def mount_static(app: FastAPI, *, url_prefix: str = "/console") -> None:
     """Mount the web-next console SPA at ``url_prefix``.
 
     Requires ``npm run build`` in ``web-next/`` to have produced
-    ``dist/``; when that artifact is missing the mount is skipped and a
-    clear warning is printed so operators know why the UI is unavailable.
+    ``dist/``; when that artifact is missing, attempts auto-build.
+    If auto-build fails or headless mode is on, serves a helpful error.
 
     In headless mode (``headless_api_mode``) the SPA is not mounted at all and
     no fallback route is registered — ``/console`` 404s. That is the point of
-    the mode: an API-only deployment should not serve a browser surface, and a
-    "not built" placeholder would be a browser surface.
+    the mode: an API-only deployment should not serve a browser surface.
     """
-    if headless_enabled():
-        import logging
+    import logging
+    logger = logging.getLogger(__name__)
 
-        logging.getLogger(__name__).info(
+    if headless_enabled():
+        logger.info(
             "%s is on — serving the API without the console SPA", HEADLESS_FLAG_ID
         )
         return
-    if not _NEXT_DIST_DIR.exists() or not (_NEXT_DIST_DIR / "index.html").exists():
-        import logging
-        logging.getLogger(__name__).warning(
-            "Console SPA not built at %s — browser UI will return 404. "
-            "Fix: cd %s && npm install && npm run build, then restart the gateway.",
-            _NEXT_DIST_DIR,
+
+    # Check if SPA is already built
+    if (_NEXT_DIST_DIR / "index.html").exists():
+        app.mount(
+            url_prefix,
+            _SPAStaticFiles(directory=str(_NEXT_DIST_DIR), html=True),
+            name="corvin_console_static",
+        )
+        logger.info("Console SPA mounted at %s", url_prefix)
+        return
+
+    # SPA not built — attempt auto-build on startup (production hardening)
+    logger.warning(
+        "Console SPA not found at %s. Attempting auto-build...",
+        _NEXT_DIST_DIR,
+    )
+
+    import subprocess
+    try:
+        web_next_dir = _NEXT_DIST_DIR.parent
+        subprocess.run(
+            ["npm", "install"],
+            cwd=web_next_dir,
+            check=True,
+            capture_output=True,
+            timeout=300,  # 5-min timeout for npm install
+        )
+        subprocess.run(
+            ["npm", "run", "build"],
+            cwd=web_next_dir,
+            check=True,
+            capture_output=True,
+            timeout=300,  # 5-min timeout for npm run build
+        )
+        logger.info("Auto-build succeeded. Console SPA is now available.")
+
+        # Try to mount again
+        if (_NEXT_DIST_DIR / "index.html").exists():
+            app.mount(
+                url_prefix,
+                _SPAStaticFiles(directory=str(_NEXT_DIST_DIR), html=True),
+                name="corvin_console_static",
+            )
+            return
+    except subprocess.CalledProcessError as e:
+        logger.error(
+            "Auto-build failed: %s. Manual rebuild needed: cd %s && npm install && npm run build",
+            e,
             _NEXT_DIST_DIR.parent,
         )
-        # Register a fallback route so the user sees a helpful message instead
-        # of a bare FastAPI 404 when the SPA hasn't been built yet.
-        from fastapi.responses import HTMLResponse as _HTMLResponse
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        logger.error(
+            "Auto-build error (%s): npm may not be installed or build timed out. "
+            "Manual rebuild: cd %s && npm install && npm run build",
+            type(e).__name__,
+            _NEXT_DIST_DIR.parent,
+        )
 
-        @app.get(f"{url_prefix}", include_in_schema=False)
-        @app.get(f"{url_prefix}/{{path:path}}", include_in_schema=False)
-        async def _spa_not_built(path: str = "") -> _HTMLResponse:
-            return _HTMLResponse(
-                content=(
-                    "<html><body style='font-family:sans-serif;padding:2em'>"
-                    "<h2>CorvinOS Console — frontend not built</h2>"
-                    "<p>The React SPA hasn't been compiled yet. Run:</p>"
-                    f"<pre>cd {_NEXT_DIST_DIR.parent}\nnpm install\nnpm run build</pre>"
-                    "<p>Then restart the gateway (<code>corvin-install</code> does this automatically).</p>"
-                    "</body></html>"
-                ),
-                status_code=503,
-            )
-        return
-    app.mount(
-        url_prefix,
-        _SPAStaticFiles(directory=str(_NEXT_DIST_DIR), html=True),
-        name="corvin_console_static",
+    # Fallback: register helpful error route if build fails
+    from fastapi.responses import HTMLResponse as _HTMLResponse
+
+    @app.get(f"{url_prefix}", include_in_schema=False)
+    @app.get(f"{url_prefix}/{{path:path}}", include_in_schema=False)
+    async def _spa_build_failed(path: str = "") -> _HTMLResponse:
+        return _HTMLResponse(
+            content=(
+                "<html><body style='font-family:sans-serif;padding:2em'>"
+                "<h2>CorvinOS Console — build failed</h2>"
+                "<p>The React SPA couldn't be built automatically.</p>"
+                "<p>Manual fix:</p>"
+                f"<pre>cd {_NEXT_DIST_DIR.parent}\n"
+                "npm install\n"
+                "npm run build\n"
+                "corvin-install</pre>"
+                "</body></html>"
+            ),
+            status_code=503,
+        )
     )
