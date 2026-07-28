@@ -7,6 +7,54 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.70] — 2026-07-29
+
+### Fixed — Console SyntaxError shipped in 0.10.69 (CRITICAL)
+
+- **Root cause:** 0.10.69's Console Auto-Build feature (`mount_static()` in
+  `core/console/corvin_console/app.py`) shipped with a stray trailing `)`,
+  a bare `SyntaxError` that broke the ENTIRE console app import. CI never
+  caught it: no branch protection on `main` (commits land before CI can
+  run), the last 13 consecutive Coverage Check runs were already red for
+  unrelated reasons, and even a healthy run's first pytest invocation
+  failed before reaching the later step that actually imports the file.
+- **Fix:** Removed the stray paren. Console boots correctly again.
+- **CI hardening:** Added `python -m compileall -q core operator corvinOS ops`
+  as the first, dependency-free step in both `test.yml` and `coverage.yml` —
+  catches a bare syntax error in ~1-2s regardless of what else is broken
+  downstream, before it can ship in a tagged release again.
+- **If you installed 0.10.69:** upgrade to 0.10.70 — the console will not
+  start on that version.
+
+### Fixed — Voice TTS silently stopped summarizing (regression from 0.10.68)
+
+- **Root cause:** 0.10.68 added a `system_generated` trust flag to skip
+  summarization for the first-boot welcome greeting, but gated it on
+  `system_generated OR sid is absent` — and no frontend caller ever
+  actually set `system_generated=True`, so in practice EVERY TTS request
+  without a session id (not just the welcome screen) silently skipped
+  summarization and read the raw, un-localized answer back verbatim —
+  reintroducing the exact bug the 2026-07-24 release fixed.
+- **Fix:** Gate on the explicit `system_generated` flag only. Wired it
+  properly end-to-end: the welcome screen now sets it explicitly instead
+  of relying on session-id absence as a side-channel signal.
+- **Also fixed:** a German/English region-locale bug (`de-DE`, `en-US`)
+  where the voice summarizer emitted an unnecessary extra translation
+  directive instead of treating the region variant identically to the
+  bare language code.
+
+## [0.10.69] — 2026-07-28
+
+### Added — Console Auto-Build, Model-Routing Consistency, Production Robustness
+
+- Console SPA auto-builds on startup if missing (`npm install && npm run
+  build`), with a graceful 503 fallback page if the build fails, instead
+  of a bare 404.
+- E2E tests for OS-model routing consistency across console and bridges.
+- **Known issue, fixed in 0.10.70:** this release shipped with a
+  `SyntaxError` in the auto-build code that broke console startup — see
+  the 0.10.70 entry above. Upgrade immediately if you installed 0.10.69.
+
 ## [0.10.67] — 2026-07-28
 
 ### Fixed — Audit chain corruption blocks platform boot
