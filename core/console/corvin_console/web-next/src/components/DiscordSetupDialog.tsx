@@ -9,7 +9,7 @@
  */
 
 import { useState } from 'react'
-import { CheckCircle, AlertCircle, Copy, ExternalLink, Loader } from 'lucide-react'
+import { CheckCircle, AlertCircle, Copy, ExternalLink, Loader, X } from 'lucide-react'
 
 interface ValidateTokenResponse {
   valid: boolean
@@ -31,9 +31,15 @@ interface DiscordSetupDialogProps {
   /** CSRF token of the active console session (session.csrf_token) —
    * the validate/save endpoints are mutations and require x-csrf-token. */
   csrf: string
+  /** Close the dialog without saving (backdrop click, X button, Cancel).
+   * The caller unmounts the dialog; state is not preserved across reopen. */
+  onClose: () => void
+  /** Optional: called after a successful save, before the reload fallback,
+   * so the caller can refresh the bridge list in-place. */
+  onSuccess?: () => void
 }
 
-export function DiscordSetupDialog({ csrf }: DiscordSetupDialogProps) {
+export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDialogProps) {
   const [step, setStep] = useState<DialogStep>('input')
   const [token, setToken] = useState('')
   const [validationResult, setValidationResult] = useState<ValidateTokenResponse | null>(null)
@@ -104,6 +110,7 @@ export function DiscordSetupDialog({ csrf }: DiscordSetupDialogProps) {
       }
 
       setStep('success')
+      onSuccess?.()
     } catch (err) {
       setError(`Fehler: ${err instanceof Error ? err.message : 'Unbekannt'}`)
       setStep('error')
@@ -116,13 +123,33 @@ export function DiscordSetupDialog({ csrf }: DiscordSetupDialogProps) {
     setTimeout(() => setCopied(false), 2000)
   }
 
+  // Backdrop / X / Cancel are disabled mid-mutation so a click can't abandon a
+  // save that already hit the server; success reloads via its own button.
+  const busy = step === 'validating' || step === 'saving'
+
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      onClick={() => { if (!busy) onClose() }}
+    >
+      <div
+        className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
-        <div className="sticky top-0 bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-4">
-          <h2 className="text-xl font-bold">🤖 Discord Bot Aktivierung</h2>
-          <p className="text-sm text-indigo-100 mt-1">Nur 2 Schritte bis der Bot einsatzbereit ist</p>
+        <div className="sticky top-0 bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-4 flex items-start justify-between">
+          <div>
+            <h2 className="text-xl font-bold">🤖 Discord Bot Aktivierung</h2>
+            <p className="text-sm text-indigo-100 mt-1">Nur 2 Schritte bis der Bot einsatzbereit ist</p>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            aria-label="Schließen"
+            className="text-white/80 hover:text-white transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
         {/* Content */}
@@ -146,12 +173,20 @@ export function DiscordSetupDialog({ csrf }: DiscordSetupDialogProps) {
                 </p>
               </div>
 
-              <button
-                onClick={handleValidate}
-                className="w-full bg-indigo-600 text-white py-2 rounded-md font-medium hover:bg-indigo-700 transition"
-              >
-                Validieren &amp; Weiter
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={onClose}
+                  className="px-4 py-2 rounded-md font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 transition"
+                >
+                  Abbrechen
+                </button>
+                <button
+                  onClick={handleValidate}
+                  className="flex-1 bg-indigo-600 text-white py-2 rounded-md font-medium hover:bg-indigo-700 transition"
+                >
+                  Validieren &amp; Weiter
+                </button>
+              </div>
             </>
           )}
 
