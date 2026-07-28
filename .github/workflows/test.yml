@@ -11,6 +11,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Python (syntax gate)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python syntax gate (compileall)
+        # Fast, dependency-free, always-runs-first check. Catches a bare
+        # SyntaxError (e.g. a stray trailing paren) in ~1-2s, before any
+        # slow/flaky downstream step can mask it by failing first for an
+        # unrelated reason. 2026-07-28 incident: commit f151048 introduced a
+        # SyntaxError in core/console/corvin_console/app.py that broke the
+        # ENTIRE console app import; it shipped in a tagged release because
+        # the "Run tests" step below was already failing for other reasons
+        # and never reached the step that would have imported the broken file.
+        run: python -m compileall -q core operator corvinOS ops
       - name: Install ffmpeg
         # run-all-tests.sh's "corvin-voice doctor (ADR-0185 M5)" suite runs a
         # real, non-mocked TTS round-trip via edge-tts, which shells out to
@@ -21,10 +35,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - name: Install Python deps
         # CI-10: install the package with its real base deps + dev extra instead
         # of a hand-maintained pip list that drifted (it hardcoded matplotlib/

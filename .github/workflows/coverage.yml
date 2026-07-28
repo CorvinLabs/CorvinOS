@@ -17,6 +17,15 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Python syntax gate (compileall)
+        # See test.yml for the incident this closes: a bare SyntaxError in
+        # core/console/corvin_console/app.py (commit f151048) shipped in a
+        # tagged release because the slower steps below were already failing
+        # for unrelated reasons and never reached the step that would have
+        # imported the broken file. This runs first, needs no deps, and fails
+        # fast on any syntax error anywhere in the checked-in Python tree.
+        run: python -m compileall -q core operator corvinOS ops
+
       - name: Install dependencies
         # CI-10 (see test.yml): install the package with its real base deps +
         # dev extra instead of a hand-maintained pip list — that list had
