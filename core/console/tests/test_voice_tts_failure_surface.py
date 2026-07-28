@@ -47,6 +47,10 @@ def _run_tts_with_say_timeout(monkeypatch, paths: dict):
     after having created the Piper .wav sibling next to its .opus target."""
     def _fake_run(cmd, **kwargs):
         name = Path(cmd[1]).name
+        if name == "strip_for_tts.py":
+            # Code pre-strip (_summarize_for_speech runs it before summarize.py) —
+            # pass the text through unchanged.
+            return _completed(0, stdout=kwargs.get("input", "") or "")
         if name == "summarize.py":
             return _completed(0, stdout="Short spoken summary.")
         if name == "say.py":

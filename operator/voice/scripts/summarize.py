@@ -960,6 +960,17 @@ def _system_for(lang: str, target_chars: int, has_task: bool,
     if _i18n is not None:
         code = _i18n.normalise(output_language) or (lang if lang in ("de", "en") else "de")
         if code:
+            # Region variants of de/en (de-DE, en-US, en-GB, ...) are
+            # linguistically identical to the bare tag for this directive —
+            # normalise() preserves the region (by design, for other
+            # callers), so without this reduction "de-DE" produced a
+            # DIFFERENT directive text (an extra "(variant de-DE)" clause)
+            # than bare "de", even though both prompts should be byte-
+            # identical (adversarial round, 2026-07-17). A genuinely
+            # foreign locale (fr-FR, zh-Hans, ...) is untouched.
+            primary = code.split("-")[0].lower()
+            if primary in ("de", "en"):
+                code = primary
             directive = _i18n.language_directive(code, audience="voice")
             base = directive + "\n\n" + base + "\n\n" + directive
     return base

@@ -108,6 +108,10 @@ def test_local_only_pipeline_falls_through_to_say_py(monkeypatch, fake_openai):
     say_seen = {}
 
     def _fake_run(cmd, **kwargs):
+        if Path(cmd[1]).name == "strip_for_tts.py":
+            # Code pre-strip (_summarize_for_speech runs it before summarize.py) —
+            # pass the text through unchanged.
+            return _completed(0, stdout=kwargs.get("input", "") or "")
         if Path(cmd[1]).name == "summarize.py":
             return _completed(0, stdout="Kurze Zusammenfassung.")
         if Path(cmd[1]).name == "say.py":
@@ -138,6 +142,10 @@ def test_openai_receives_summary_and_resolved_voice_not_raw_text(monkeypatch, fa
     condensed summary (and profile voice) the say.py chain would — never the
     raw 4000-char answer with a hardcoded nova."""
     def _fake_run(cmd, **kwargs):
+        if Path(cmd[1]).name == "strip_for_tts.py":
+            # Code pre-strip (_summarize_for_speech runs it before summarize.py) —
+            # pass the text through unchanged.
+            return _completed(0, stdout=kwargs.get("input", "") or "")
         if Path(cmd[1]).name == "summarize.py":
             return _completed(0, stdout="Kurze gesprochene Zusammenfassung.")
         raise AssertionError(f"say.py must not run when OpenAI succeeds: {cmd}")
@@ -182,6 +190,10 @@ def test_pinned_piper_provider_never_reaches_openai(monkeypatch, fake_openai):
     say_seen = {}
 
     def _fake_run(cmd, **kwargs):
+        if Path(cmd[1]).name == "strip_for_tts.py":
+            # Code pre-strip (_summarize_for_speech runs it before summarize.py) —
+            # pass the text through unchanged.
+            return _completed(0, stdout=kwargs.get("input", "") or "")
         if Path(cmd[1]).name == "summarize.py":
             return _completed(0, stdout="Kurze Zusammenfassung.")
         if Path(cmd[1]).name == "say.py":
@@ -218,6 +230,10 @@ def test_operator_env_pin_piper_never_reaches_openai(monkeypatch, fake_openai):
     say_seen = {}
 
     def _fake_run(cmd, **kwargs):
+        if Path(cmd[1]).name == "strip_for_tts.py":
+            # Code pre-strip (_summarize_for_speech runs it before summarize.py) —
+            # pass the text through unchanged.
+            return _completed(0, stdout=kwargs.get("input", "") or "")
         if Path(cmd[1]).name == "summarize.py":
             return _completed(0, stdout="Kurze Zusammenfassung.")
         if Path(cmd[1]).name == "say.py":

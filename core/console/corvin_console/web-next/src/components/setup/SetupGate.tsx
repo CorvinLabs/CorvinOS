@@ -166,7 +166,11 @@ function WelcomeStep({ onNext, csrf }: { onNext: () => void; csrf: string }) {
         // to respect, not a bug. useVoicePlayback surfaces it as
         // voiceState === "blocked" and the banner below lets the user tap
         // to hear it; the written greeting above is visible either way.
-        playTts(result.greeting, result.lang ?? "en").catch(() => {});
+        // system_generated: this greeting is trusted, pre-composed, localized
+        // server text — skip summarization server-side (it adds no value and
+        // an LLM misclassification pass has no reason to touch it at all).
+        playTts(result.greeting, result.lang ?? "en", undefined, { systemGenerated: true })
+          .catch(() => {});
       })
       .catch(() => setCheckState("error"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
