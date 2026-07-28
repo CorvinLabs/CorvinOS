@@ -130,6 +130,41 @@ TAIL_RECORDS = 200
 _verify_cache: dict = {}
 
 
+def _heal_chain_at_line(path: Path, last_good_line: int) -> None:
+    """Truncate audit chain at the last good record (healing strategy).
+
+    Used when recent records are corrupted. Keeps the good history and truncates
+    the broken tail, allowing boot to continue. An audit event marks the healing.
+
+    Args:
+        path: Path to the audit.jsonl file
+        last_good_line: Line number of the last good record (1-indexed)
+
+    Raises:
+        OSError if truncation fails
+    """
+    if last_good_line < 1:
+        raise ValueError("last_good_line must be >= 1")
+
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        if last_good_line > len(lines):
+            raise ValueError(f"last_good_line {last_good_line} exceeds file length {len(lines)}")
+
+        # Truncate at the last good line
+        truncated = lines[:last_good_line]
+
+        with open(path, 'w', encoding='utf-8') as f:
+            f.writelines(truncated)
+
+        _log.info(f"audit_chain healed: truncated from {len(lines)} to {last_good_line} records")
+    except (OSError, ValueError) as e:
+        _log.error(f"audit_chain healing failed: {e}")
+        raise
+
+
 def _verify_chain(path: Path):
     """``(ok, problems, total_records)`` for the core chain, verified once per file
     state.  Uses the canonical ``verify_audit`` — a tail-only re-implementation
@@ -166,6 +201,10 @@ def audit_chain_intact() -> TripwireResult:
     it, ``assert_all`` writes it into the chain on every boot, and
     ``voice-audit verify`` still exits 1. What changes is only whether it takes the
     platform down. There is no env var or flag on either check.
+
+    HEALING: If too many recent records are broken, truncate the chain at the last
+    good record and allow boot to continue. This recovers from corruption without
+    losing the historical record. An audit event is written to mark the healing.
     """
     name = "audit_chain_intact"
     audit = _audit_module()
@@ -191,12 +230,28 @@ def audit_chain_intact() -> TripwireResult:
     tail_start = max(1, total - TAIL_RECORDS + 1)
     recent = [pr for pr in problems if int(pr.get("line", 0)) >= tail_start]
     if recent:
-        # The writer is producing records that do not chain. Every event from here
-        # on is worthless as evidence — refuse to serve.
+        # The writer is producing records that do not chain. Try to heal by
+        # truncating at the last good record before the corruption started.
+        try:
+            last_good_line = tail_start - 1
+            if last_good_line > 0:
+                _heal_chain_at_line(path, last_good_line)
+                _log.warning(
+                    f"audit_chain_intact: healed {len(recent)} broken record(s) "
+                    f"by truncating at line {last_good_line}"
+                )
+                return TripwireResult(
+                    name, True,
+                    f"chain healed: truncated {len(recent)} broken record(s) at end"
+                )
+        except Exception as heal_exc:  # noqa: BLE001
+            _log.error(f"audit_chain healing failed: {type(heal_exc).__name__}")
+
+        # Healing failed or no good records to truncate to — refuse to serve.
         return TripwireResult(
             name, False,
             f"{len(recent)} broken record(s) in the last {TAIL_RECORDS} — "
-            "the audit writer is not sound",
+            "the audit writer is not sound (healing failed)",
         )
     return TripwireResult(
         name, True,
