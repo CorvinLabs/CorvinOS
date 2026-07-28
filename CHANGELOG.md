@@ -7,6 +7,18 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.66] — 2026-07-28
+
+### Fixed — Console SPA not served (Windows / all platforms)
+
+- **Root cause:** The React SPA (`web-next/dist/`) was not built before PyPI release,
+  so the wheel contained no compiled HTML/JavaScript. On fresh install, `/console/`
+  returned 404 because the SPA files did not exist.
+- **Fix:** Build the SPA before packaging the wheel. The built `dist/` folder is
+  now included in every PyPI wheel, so fresh installs work out of the box.
+- **CI process:** Added SPA build as part of release checklist to prevent recurrence.
+
+
 ## [0.10.65] — 2026-07-28
 
 ### Fixed — Fresh-install startup robustness
