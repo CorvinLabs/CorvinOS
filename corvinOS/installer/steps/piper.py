@@ -330,8 +330,22 @@ def _download_model(lang: str, rel_path: str, model_dir: Path, config_file: Path
         print(f"  ✓ Model already present: {onnx_path.name}")
     else:
         print(f"  Downloading {onnx_path.name} (this may take a minute)...")
-        if not _fetch(f"{_HF_BASE}/{rel_path}.onnx", onnx_path):
-            print("  ⚠ Download failed — try again later")
+        # ROBUST (2026-07-28): On Windows, CDN connections reset for large files
+        # (WinError 10054) even after successful transfer. Retry ONNX up to 3x.
+        onnx_url = f"{_HF_BASE}/{rel_path}.onnx"
+        ok = False
+        for attempt in range(3):
+            if attempt > 0:
+                import time as _t
+                _t.sleep(2)
+                print(f"  (retry {attempt}/2 ONNX download...)")
+            ok = _fetch(onnx_url, onnx_path, silent=False)
+            if ok:
+                break
+        if not ok:
+            print("  ⚠ Download failed after 3 attempts — try again later or download manually:")
+            print(f"    URL : {onnx_url}")
+            print(f"    Save: {onnx_path}")
             return
         print(f"  ✓ Downloaded {onnx_path.name}")
 
@@ -446,9 +460,12 @@ def _fetch(url: str, dest: Path, *, silent: bool = False) -> bool:
         if not silent:
             print()
         return dest.exists() and dest.stat().st_size > 0
-    except Exception:
+    except Exception as e:
         if not silent:
             print()
+            # Log the error for debugging (especially WinError 10054 on Windows)
+            if sys.platform == "win32":
+                print(f"  (urllib error: {type(e).__name__} — common on Windows, retrying next fetch)")
         # WinError 10054: connection reset AFTER full transfer — file is valid.
         if dest.exists() and dest.stat().st_size > 0:
             return True
