@@ -23,6 +23,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { bridgeSettingsPath } = require('../shared/js/bridge_paths');
+const { countPending } = require('../shared/js/outbox');
 
 require('../shared/js/bridge_state').exitIfDisabled('whatsapp');
 
@@ -796,7 +797,7 @@ const httpServer = http.createServer(async (req, res) => {
       paired: !!waSocket,
       whitelist_size: (currentSettings().whitelist || []).length,
       enabled_chats: (currentSettings().enabled_chats || []).length,
-      pending_outbox: fs.readdirSync(OUTBOX).filter(f => f.endsWith('.json')).length,
+      pending_outbox: countPending(OUTBOX, CHANNEL),
     }));
     return;
   }

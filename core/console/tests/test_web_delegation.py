@@ -786,3 +786,99 @@ def test_will_delegate_true_on_acs_mode(tmp_path, monkeypatch) -> None:
         _sess(tmp_path),
         "Recherchiere aus mehreren Quellen die Marktlage und vergleiche danach die Anbieter",
     ) is True
+
+
+# ── Structured-data narrowing (maintainer decision 2026-07-28) ────────────────
+#
+# The auto-ACS route must fire ONLY on the three shapes the maintainer named —
+# CSV/spreadsheet files, database work, and genuine tabular mass data — plus the
+# self-describing big-data vocabulary. Every ACS run burns one
+# compute_units_per_day, so a wrong positive is expensive; a wrong negative only
+# means the turn runs natively, which is the documented degrade floor.
+
+def cr_dp():
+    """The shared policy module — the tests reach the row floor by name rather
+    than hard-coding it, so raising the floor cannot silently pass."""
+    import delegation_policy
+    return delegation_policy
+
+
+def _md_table(rows: int) -> str:
+    body = "".join(f"| M{i} | {i * 100} | EU |\n" for i in range(rows))
+    return "| Monat | Umsatz | Region |\n|---|---|---|\n" + body
+
+
+@pytest.mark.parametrize("prompt", [
+    # CSV / spreadsheet-class FILES paired with real bulk work
+    "Analysiere die sales_2025.csv und gib mir die Top-10 Regionen",
+    "Bereinige die Kundenliste in kunden.xlsx und dedupliziere die Zeilen",
+    "Werte das orders.parquet aus und aggregiere nach Monat",
+    "Parse die events.jsonl und gruppiere nach Event-Typ",
+    # DATABASE / SQL operations
+    "Analysiere die Postgres-Datenbank und gruppiere die Bestellungen nach Region",
+    "SELECT region, sum(total) FROM orders GROUP BY region — bitte auswerten",
+    "Importiere die CSV-Datei in die Datenbank und pruefe die Duplikate",
+    "Werte den BigQuery-Export aus und aggregiere die Conversions",
+])
+def test_structured_source_with_bulk_work_is_big_data(prompt: str) -> None:
+    assert cr._is_big_data_task(prompt) is True
+
+
+def test_large_pasted_table_is_big_data() -> None:
+    """Tabular mass data: the pasted table IS the data (maintainer: 'immer wenn
+    Tabellen verwendet werden')."""
+    assert cr._is_big_data_task(_md_table(cr_dp()._TABLE_MIN_ROWS) + "\nWerte das aus") is True
+
+
+def test_small_table_is_not_big_data() -> None:
+    """A three-row table inside an ordinary question is NOT mass data — the row
+    floor is what keeps 'erstelle eine Tabelle' out of the quota-burning path."""
+    assert cr._is_big_data_task(_md_table(3) + "\npasst das?") is False
+
+
+@pytest.mark.parametrize("prompt", [
+    # A structured SOURCE named, but no bulk work asked for → prose, stays native
+    "Wie verbinde ich mich mit MySQL?",
+    "Erklaere mir bitte den Unterschied zwischen SQL und NoSQL",
+    "Schreib mir eine Doku ueber unsere Datenbank-Architektur",
+    "Fasse die Datenbank-Migration zusammen und liste die Risiken auf",
+    # Ordinary conversation / prose
+    "Wie geht es dir heute?",
+    "mach das alles mal was du vorgeschlagen hast",
+    # The real prompt from web:ISGd-xIvqn that started this change
+    "aehm bei den ganzen Slash commands solltest du mal vielleicht alle "
+    "moeglichen Slash commands noch mal updaten z.B der Plugin Builder ist bei "
+    "den Slash commands nicht mit dabei und auch nicht bei discord mach den "
+    "Slash command hier auch im Chat moeglich und kontrolliere noch mal alle "
+    "Slash commands ob die alle verfuegbar sind die es gibt",
+])
+def test_generic_requests_never_reach_acs(prompt: str) -> None:
+    assert cr._is_big_data_task(prompt) is False
+
+
+@pytest.mark.parametrize("prompt", [
+    "Refaktoriere 2 Millionen Zeilen Code in unserem Repository",
+    "Wir haben 1.500.000 Zeilen Quellcode — wie sollen wir modularisieren?",
+    "Unser Monorepo hat 3 TB an Codebase-History, wie shrinken wir das?",
+    "Fix den Bug in der CSV-Export-Funktion",
+])
+def test_coding_requests_never_reach_acs(prompt: str) -> None:
+    """delegation-routing.md §6: 'Coding never routes into the ACS fan-out'.
+    A volume/count whose clause is about CODE is a coding task — 'Zeilen' is a
+    data noun, which is exactly how these used to slip through rule 1c."""
+    assert cr._is_big_data_task(prompt) is False
+
+
+def test_table_row_count_ignores_separator_and_header() -> None:
+    dp = cr_dp()
+    # 12 data rows + 1 header + 1 separator
+    assert dp._table_row_count(_md_table(12)) == 13  # header counts as a row
+    assert dp._table_row_count("no table here") == 0
+
+
+def test_big_data_still_bounded_on_pipe_blob() -> None:
+    """The table scan must not reintroduce a ReDoS surface."""
+    import time
+    t = time.time()
+    cr._is_big_data_task("|" * 200_000)
+    assert time.time() - t < 0.5

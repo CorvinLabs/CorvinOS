@@ -4,6 +4,28 @@ Sends tasks to external Google-A2A-compatible agents from Corvin.
 Complements :mod:`a2a_google_adapter` (inbound) and mirrors the audit
 pattern of :mod:`remote_trigger_sender` (native A2A outbound).
 
+REACH: nothing calls this (verified 2026-07-28)
+-----------------------------------------------
+Built, audited, test-covered — and unreachable. There is no CLI entry point
+(no ``__main__``, no argparse), no route, and no importer outside
+``test_a2a_google_e2e.py`` / ``test_a2a_google_adapter.py``. The ``/a2a`` slash
+command and the orchestration MCP server both go to
+:mod:`remote_trigger_sender` (NATIVE A2A), never here.
+
+The inbound half is one step better off: :class:`~a2a_google_adapter.
+GoogleA2AAdapter` is mounted by :mod:`a2a_http_server`, which an operator can
+start by hand (``python -m a2a_http_server --port 8001 …``) — but the FastAPI
+gateway, the only A2A surface a normal install runs, exposes ``/v1/a2a/ping``
+and ``/v1/a2a/receive`` and no Google routes at all. So Google-A2A interop is
+opt-in-by-manual-process inbound and absent outbound.
+
+Recorded rather than quietly wired, for the reason
+``corvin_plugins/surface_map.py`` states about the plugin surfaces: a component
+that registers/loads/passes its tests but is never invoked looks identical to a
+working one from the outside. Giving this a call site is a design decision (from
+which command? what happens to the reply? which compliance row does the spawn
+class sit in?) and belongs in an ADR, not in a review pass.
+
 Endpoint config
 --------------
 Place a JSON file under

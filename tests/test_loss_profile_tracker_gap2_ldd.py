@@ -166,36 +166,41 @@ def test_estimate_cost_ratio_averaging():
         assert 0.6 < ratio < 0.7, f"Expected average ~0.63, got {ratio}"
 
 
-def test_cost_ratio_persistence_across_reloads():
-    """Test that cost ratios survive tracker reload from disk."""
-    import os
-    import tempfile
+def test_cost_ratio_persistence_across_reloads(monkeypatch, tmp_path):
+    """Test that cost ratios survive tracker reload from disk.
 
+    Landed red on 2026-07-25 and stayed red: it passed `schema_valid=` /
+    `downstream_ok=`, which `record_delegation_result` has never accepted (the
+    required argument is `loss_pct`), so every run raised TypeError. Every other
+    test in this file uses the real signature — which is what made the failure
+    easy to miss in a 3300-test run.
+
+    It also set `os.environ["CORVIN_HOME"]` and never restored it, leaking a tmp
+    home into every test that ran after it in the same process. monkeypatch now
+    owns that.
+    """
     from orchestration.tde.loss_profile_tracker import get_session_tracker
 
-    # Create a temporary directory for the tracker
-    with tempfile.TemporaryDirectory() as tmpdir:
-        os.environ["CORVIN_HOME"] = tmpdir
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
 
-        # Record a measurement
-        tracker1 = get_session_tracker(session_key="test_persist")
-        tracker1.record_delegation_result(
-            task_type="refactor",
-            engine="tiered_delegation",
-            schema_valid=True,
-            downstream_ok=True,
-            tokens_delegated=600,
-            tokens_local=1000,
-        )
+    # Record a measurement
+    tracker1 = get_session_tracker(session_key="test_persist")
+    tracker1.record_delegation_result(
+        task_type="refactor",
+        engine="tiered_delegation",
+        loss_pct=10.0,
+        tokens_delegated=600,
+        tokens_local=1000,
+    )
 
-        ratio1 = tracker1.estimate_cost_ratio(task_type="refactor", model_id="opus")
+    ratio1 = tracker1.estimate_cost_ratio(task_type="refactor", model_id="opus")
 
-        # Reload tracker (simulates process restart)
-        tracker2 = get_session_tracker(session_key="test_persist")
-        ratio2 = tracker2.estimate_cost_ratio(task_type="refactor", model_id="opus")
+    # Reload tracker (simulates process restart)
+    tracker2 = get_session_tracker(session_key="test_persist")
+    ratio2 = tracker2.estimate_cost_ratio(task_type="refactor", model_id="opus")
 
-        if ratio1 is not None:
-            assert ratio2 == ratio1, "Cost ratio should persist across reloads"
+    if ratio1 is not None:
+        assert ratio2 == ratio1, "Cost ratio should persist across reloads"
 
 
 def test_gate_4_decision_expensive():

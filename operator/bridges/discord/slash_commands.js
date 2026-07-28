@@ -134,6 +134,10 @@ const COMMANDS = [
     options: [{ name: 'args', description: '<tool-id>', type: 3, required: true }] },
   { name: 'mcp-remove', description: 'Remove an installed MCP tool.',
     options: [{ name: 'args', description: '<tool-id>', type: 3, required: true }] },
+
+  // ── ADR-0253 — Plugin Builder ───────────────────────────────────────
+  { name: 'plugin-builder', description: 'Interview-driven plugin design (Idea/Architecture/ADR/Plan + scaffold).',
+    options: [{ name: 'args', description: 'status | cancel (omit to start/continue)', type: 3, required: false }] },
 ];
 
 /**

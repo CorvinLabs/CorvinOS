@@ -23,8 +23,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from forge import paths as _forge_paths
-
 from .generators.scaffold import ScaffoldResult
 from .models import PluginIdea
 
@@ -50,6 +48,15 @@ class ScaffoldRecord:
 
 
 def _index_path(tenant_id: str) -> Path:
+    # `forge` lives under operator/ and only reaches sys.path through the host's
+    # bootstrap (corvin_console._operator_bootstrap in a wheel, a path insert in
+    # a checkout). Importing it at MODULE level made `import plugin_builder.turn`
+    # — the shared, transport-agnostic entry point both the Console and the
+    # bridges drive — fail with ModuleNotFoundError anywhere that bootstrap had
+    # not run yet, and made this package's own 7 test modules uncollectable,
+    # which is why they had never been added to a CI job. Deferred to call time,
+    # exactly like `turn.output_dir` already did.
+    from forge import paths as _forge_paths  # noqa: PLC0415
     return _forge_paths.tenant_global_dir(tenant_id) / _INDEX_NAME
 
 

@@ -6,6 +6,243 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.10.63]
 
+### Fixed — `/new` and every other shell-out command, on the bridges that had them broken
+
+Seven rounds of adversarial review over the 2026-07-25…28 changes. Grouped by
+what an operator would actually have noticed.
+
+- **`/new` and `/reset` were dead on Signal and Teams.**
+  `session_reset.VALID_CHANNELS` listed five of the seven shipped channels, so
+  `--channel signal` was an argparse error: the user got "session reset failed"
+  and the session was never reset. Two sibling copies had drifted the same way —
+  `settings_view` hid Signal/Teams from `/settings`, and `bridges_migrate` never
+  migrated their legacy state. The list now lives once, in
+  `operator/bridges/shared/channels.py`, and
+  `shared/test_channel_list_ssot.py` pins every consumer (including
+  `bridge_manager`, the `corvin_plugins` supervisor copy and the installer)
+  against it. Four `paths.py` files also held a private `_BRIDGE_CHANNELS`
+  frozenset that was assigned, never read, and stale — removed, since a reader
+  reasonably took it for the canonical list.
+
+- **Every in-chat command that shells out to Python was broken on a pip
+  install.** A daemon spawned by `bridge_manager` runs from
+  `<corvin_home>/bridges/<channel>/`, and only `shared/js/*.js` is mirrored
+  beside it — so `path.resolve(__dirname, '..', 'x.py')` pointed at a directory
+  containing no Python at all. `/new`, `/reset`, `/engine`, `/role`, `/grant`,
+  `/quota`, `/audit`, `/consent`, `/join`, `/pass`, `/goal`, `/objective`,
+  `/propose`, `/dialectic*`, `/ps`, `/kill`, `/lang`, `/profile`, `/settings`
+  and `/a2a` all failed with ENOENT — and all worked in a git checkout, where
+  `__dirname/..` happens to be the source tree. That asymmetry is why nothing
+  caught it. Resolution now goes through `bridge_paths.operatorRoot()`, seeded
+  by `CORVIN_BRIDGE_OPERATOR_ROOT` from all three spawn sites, with the
+  self-locating fallback preserved. `shared/js/test_operator_root_resolution.js`
+  reproduces the runtime layout and fails if any CLI constant regresses.
+
+- **`corvin plugin install|uninstall|list|enable|disable` never ran.** Every one
+  imported `core.plugins.tenant_plugins`, a module that does not exist; the real
+  path is `corvin_plugins.tenant_plugins`. All five exited 2 with "plugin system
+  not available". Fixed and exercised end to end (`new` → `check` → `install` →
+  `list` → `disable` → `enable` → `uninstall`), which surfaced two more: the
+  scaffold emitted the legacy `layer:` key so `corvin plugin check` warned about
+  its own freshly generated manifest, and `installed_at` was written as
+  `…+00:00Z` — two timezone designators, invalid RFC 3339.
+
+- **The Plugin-Builder crashed on a skill idea on every pip install.**
+  `templates/skill_plugin.md` was eaten by the wheel's `**/*.md` exclude, so
+  `PluginKind.SKILL` hit `FileNotFoundError`. Verified against a built wheel
+  before and after. The same build also shipped `core/plugins/templates/` twice,
+  once at a path that is not on `sys.path` — now excluded.
+
+- **A bare `/delegate` on a bridge spawned an empty ACS run** and charged a
+  `compute_units_per_day` for it. The console has always guarded this; the
+  ADR-0255 bridge path inherited the directive without the guard.
+
+- **`/new`'s model summary reported the wrong OS model.** It consulted only the
+  env override and otherwise printed `high_model()`, so an operator who had
+  pinned `spec.engine_models.<engine>.os_model` was told "Sonnet" while every
+  turn ran their pin. It now calls the same `resolve_os_model()` cascade the turn
+  does — the surface-specific re-derivation this release removed from
+  `chat_runtime`, left behind on one ack.
+
+- **`poller_stalled_s` / `precheck_stalled_s` were exposed by Discord only.**
+  Signal, Slack, Teams and Telegram drive the same shared poller and can wedge
+  identically; the two counters a watchdog needs existed but were unreadable on
+  four of five bridges.
+
+- **The installer offered five of seven bridges**, so a fresh install could
+  never select Signal or Teams — and its Windows uninstall sweep listed five
+  too, leaving their Scheduled Tasks auto-launching a bridge after uninstall.
+
+### Fixed — three "announced, never silent" degrades that were silent
+
+- **No `notice` event was ever rendered.** The backend has emitted
+  `{"type": "notice"}` since ADR-0201 (`quota_fallback`, `acs_fallback`, and the
+  new `artifacts_truncated`) and nothing in the frontend handled the event at
+  all — every one was dropped on the floor, so each "announced" degrade was
+  announced only in the server log. `chat-registry` now carries a `notice`
+  message part and `chat.tsx` renders it distinctly from the model's answer.
+- **The ACS artifact branch truncated at 20 chips with no notice**, `break`-ing
+  instead of counting — the one place where a dropped artifact genuinely read as
+  "the run produced nothing". Both branches now emit the one shared
+  `_artifacts_truncated_notice()`, in English (the first draft was a hard-coded
+  German literal, and a runtime notice has no model answer whose language it
+  could follow).
+
+### Fixed — two test suites whose verdict depended on the developer's own config
+
+- **`core/plugins/tests/` read the operator's live feature-flag overlay.**
+  Measured: 1073 passed with a clean `CORVIN_HOME`, **17 failed** with the
+  maintainer's (15 flags on, `bridge_supervisor_plugins` among them, which made
+  `bootstrap_declared()` inject seven bundled bridge supervisors into assertions
+  expecting one plugin). The split pointed the wrong way — a clean CI runner is
+  green, so the gate this suite became on 2026-07-27 reported success while the
+  person running it locally saw red. Both plugin conftests now pin
+  `CORVIN_HOME` to tmp.
+- **`test_adapter_big_data_delegation.FlagOffTest` pinned nothing** and read the
+  same overlay, so the dark-flag half of the MANDATORY bridge gate went red on
+  any box where the flag was on, while its two weaker siblings passed by
+  accident. It now has a `_FlagOff` to match `_FlagOn`.
+
+### Fixed — the live-state tripwire cried wolf about a destroyed audit log
+
+- **`conftest.py::_live_state_tripwire` reported "LIVE OPERATOR STATE DESTROYED"
+  on a clean run.** It re-resolved `Path.home()` for its "after" snapshot, and
+  two tests in `tests/` patch the home directory — one with
+  `monkeypatch.setenv("HOME", …)`, one with `monkeypatch.setattr(Path, "home",
+  …)`, which rebinds the shared `pathlib.Path` class the tripwire itself uses.
+  Their monkeypatch teardown runs after the tripwire's, so the comparison looked
+  into an empty tmp home and announced that `~/.config/corvin-voice` and every
+  `corvin-*` systemd unit had been deleted. Both were fully intact — verified
+  immediately after: 30 units present, every service running.
+  This guard exists because of the 2026-07-08 run that really did delete the
+  running bridge's session state, budgets and hash-chained audit log, so a false
+  alarm in exactly that wording is the failure that gets it muted. The four
+  protected roots are now frozen at import, before any test can patch a home —
+  which also makes the guard *stricter*, since a patched lookup could previously
+  have hidden a real deletion. `tests/test_live_state_tripwire.py` pins both
+  directions, including the 2026-07-08 shape (tree survives, audit chain does
+  not).
+
+### Fixed — a test that was committed red and stayed red
+
+- **`test_cost_ratio_persistence_across_reloads`** (landed 2026-07-25 with
+  "LDD k=2 COMPLETE") called `record_delegation_result(schema_valid=…,
+  downstream_ok=…)`. Neither argument has ever existed on that method — the
+  required one is `loss_pct` — so it raised `TypeError` on every run since it
+  landed, while the other twelve tests in the file used the real signature. It
+  also set `os.environ["CORVIN_HOME"]` without restoring it, leaking a tmp home
+  into every test that ran after it in the same process; monkeypatch now owns it.
+
+### Fixed — a third suite whose verdict depended on the developer's own state
+
+- **`test_build_spawn_env_refreshes_openai_key_for_non_claude_code_engines`**
+  asserted the key it had just written to a tmp `service.env` and got the
+  operator's real one. The Phase-1b encrypted SecretsStore (2026-07-25) resolves
+  from `CORVIN_HOME` and now takes precedence over `service.env`, so the test's
+  `VOICE_CONFIG_DIR` isolation no longer covered the path it exercises. Green on
+  a clean runner, red on a machine with a real store — the third instance of that
+  split found in this pass.
+
+### Fixed — 73 tests and two new bridge suites that ran in no CI
+
+- `core/plugins/plugin_builder/tests/` (7 modules) could not even be collected:
+  `index_store` imported `forge` at module level, which also meant
+  `import plugin_builder.turn` — the shared entry point both the Console and the
+  bridges drive — raised `ModuleNotFoundError` anywhere the host bootstrap had
+  not run. Deferred to call time, like `turn.output_dir` already did.
+- `core/plugins/plugin_builder/tests/` and `ops/launcher/corvin/tests/` added to
+  `coverage.yml`; `test_bridge_worker_engine_parity.py` and
+  `test_os_model_single_source_of_truth.py` added to `run-all-tests.sh`. All
+  four had shipped without a runner — the defect class `coverage.yml`'s own
+  comment documents.
+
+### Fixed — documentation that contradicted the code in the same tree
+
+- **CLAUDE.md still said bridges "never call `worker_engine_target`, never read
+  the setting … and there is no `/delegate` there".** Both halves of that were
+  false with `bridge_big_data_delegation` shipped and ADR-0255 landing, and it
+  contradicted `delegation-routing.md` §4 in the same commit. Replaced with a
+  per-flag reach table. It is the always-loaded orientation file, so it was the
+  most-read wrong statement in the repo.
+- **The bridge `/help` advertised `/engine acs` and `/engine tiered_delegation`**
+  — `engine_switch` rejects both (`VALID_ENGINES` has no such members) and the
+  text conflated the worker-CLI axis with the native/acs/tde delegation mode,
+  which has no chat command at all.
+- **The Plugin-Builder reply lost its pointer** to Settings → Plugins →
+  Scaffolded by Plugin-Builder when the logic moved into the shared
+  transport-agnostic module; `index_store.record` is what puts it there, and
+  without the line nothing told the author the scaffold has a home in the UI.
+- `bridge_worker_engine_parity` added to the `tenant.corvin.yaml` flag block.
+
+### Open — reported, not fixed
+
+- **The audit chain gained two new MAC-mismatch windows on 2026-07-27** (19:12
+  and 19:28, 156 records) in `.corvin/global/forge/audit.jsonl`. Full picture:
+  154 469 records, 536 broken across **six** windows — four historical
+  (2026-07-11…13, 380 records: exactly the "known window" the boot tripwire's
+  docstring describes) and two new. Zero in the tail, so the boot tripwire
+  correctly does not block and the writer is sound now; an append-only break is
+  permanent and must not be rewritten.
+  **Nobody was told.** `corvin-audit-verify.service` detected it and exited 1 as
+  designed, but its only alerting path logged `chain-break notification: relay
+  not configured or no targets — skip`: `~/.config/corvin-voice/relay.json` does
+  not exist on this install. The mechanism works when configured; configuring it
+  needs a channel and a target chat, which is an operator decision.
+  The likely cause of the new windows is a test run appending to the live chain
+  before `core/plugins/tests/conftest.py` gained its `VOICE_AUDIT_PATH` redirect
+  — which landed the same day.
+
+### Documented — two surfaces that are built, tested and unreachable
+
+Recorded rather than quietly wired: giving either a call site is a design
+decision, not a review fix.
+
+- **`execution_context_badge` gates nothing.** Zero readers — grep it. The
+  per-turn metadata IS captured, persisted and read by the audit view and the
+  turn filter, but no console component renders a badge, and on the bridges
+  `execution_context_renderer.js` plus its six daemon call sites never fire
+  because `adapter.py` never puts an `execution_context` key on an outbox
+  payload. Its `show_execution_context` setting is a second truth for the same
+  thing and is dead for the same reason. Flag left registered (the capture half
+  is real) with a description that now says so, so Settings → Features stops
+  offering a toggle that does nothing.
+- **Google-A2A interop is absent outbound and manual-only inbound.**
+  `GoogleA2ASender` has no CLI, no route and no importer outside its two test
+  files; `/a2a` and the orchestration MCP server both use native
+  `remote_trigger_sender`. The inbound adapter is mounted only by
+  `a2a_http_server`, which an operator must start by hand — the FastAPI gateway
+  every normal install runs exposes no Google routes.
+
+### Fixed — a chat turn could emit 144 artifact chips of the same two files
+
+- **Runtime bookkeeping is no longer a chat artifact.** Every model-chosen
+  `delegate_*` MCP call writes a WDAT run record under
+  `<session>/acs/runs/<run_id>/{manifest,result}.json`, and the direct OS-turn's
+  artifact scan diffed the entire session workdir with no exclusion. In the
+  console chat `web:ISGd-xIvqn` one turn made 72 such calls, so the chat showed
+  144 chips — 72× `manifest.json`, 72× `result.json`. The ACS delegation branch
+  already filtered these, but only relative to its own `run_dir`, so the direct
+  turn — the path that actually ran that chat, in `native` mode with
+  `will_delegate: false` — had no filter at all. The scan now lives in
+  `chat_runtime._scan_turn_artifacts()`, skips `acs/`, `tasks/`, `tde/` and
+  `voice/`, and caps a turn at 20 chips with an announced
+  `artifacts_truncated` notice rather than a silent drop.
+
+### Changed — the auto-ACS route is now a narrow structured-data rule
+
+- **`_is_big_data_task()` fires only on CSV/spreadsheet files, database work, or
+  genuine tabular mass data.** It is the one auto-delegation a `native` install
+  performs and each run charges one `compute_units_per_day`, so the rule is
+  affirmative and narrow: big-data vocabulary · a pipe/markdown table of ≥10
+  rows · a CSV/Parquet/XLSX/JSONL file or a database/SQL operation **paired**
+  with a bulk data verb or a volume · the legacy volume-plus-data-noun clause.
+  Naming a source is no longer enough — "Wie verbinde ich mich mit MySQL?" and
+  "Erkläre mir SQL" stay in-process. A code clause is now carved out like the
+  hardware one, so "2 Millionen Zeilen Code refaktorieren" no longer fans out,
+  which finally makes "coding never routes into the ACS fan-out" true for
+  big-count coding prompts. The ReDoS bounds are preserved; the table scan gets
+  its own larger cap because rows are payload, not description.
+
 ### Fixed — the boot tripwire ran on one of two shipped hosts (ADR-0252)
 
 - **`corvin_console.standalone` now runs the compliance boot sequence.** It is
@@ -116,6 +353,35 @@ subprocess.
   — in the plugin loader and, separately, in the nervous system (ADR-0177).
 - `corvin.global_plugins` entry-point discovery removed: any third-party wheel
   could publish `compliance:whatever` and become undisableable.
+
+### Fixed — the console ignored its own OS-model setting (ADR-0119/0123)
+
+- **`chat_runtime.py` never read `spec.engine_models.<engine_id>.os_model`.**
+  The console web-chat hand-rolled only Tier 1 (env override) and Tier 3
+  (adaptive autoselect) of the OS-model cascade — the per-engine tenant
+  default configured under Settings → AI Engines had an effect on the bridge
+  adapter only, never on the console's own chat. The full 6-Tier cascade
+  (`operator/bridges/shared/adapter.py::_resolve_os_model_bundled`) is now
+  extracted into `model_selector.resolve_os_model()`, and both surfaces call
+  that one function — a genuine single source of truth instead of two
+  implementations that happened to overlap.
+
+### Added — bridge worker-engine parity (ADR-0255, default off)
+
+- **`bridge_worker_engine_parity`** flag: a Discord/Telegram/Slack/WhatsApp
+  turn can now reach the operator's Settings → AI Engines `worker_engine`
+  mode (native/acs/tde), an explicit `/delegate` override, and the console's
+  own ADR-0202/0203 triage heuristic (imported directly from
+  `corvin_console.chat_runtime.should_delegate_bundled` — one implementation,
+  not a second copy) — not only the narrow big-data shape
+  `bridge_big_data_delegation` already covered. Makes
+  `spec.engine_models.<engine_id>.worker_model` reachable on bridges for
+  ordinary conversation, closing the gap where a bridge turn had no
+  reachable worker-turn call site at all outside the big-data special case.
+  Off (default): byte-identical to the existing `bridge_big_data_delegation`
+  path. TDE stays unreachable from bridges either way — ADR-0221 P3/P4 stay
+  frozen pending ADR-0222's measured gate; `mode=tde` always degrades to the
+  direct turn on a bridge, by construction, not by a runtime probe.
 
 ## [0.10.61] — 2026-07-24 — TDE production-readiness review + shared agentic-compute pool (ADR-0216)
 

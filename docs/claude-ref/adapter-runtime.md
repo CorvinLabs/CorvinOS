@@ -422,6 +422,38 @@ degrades to `—` on exception — never fail-loud.
 
 ---
 
+## Where the in-chat commands' Python lives (load-bearing, 2026-07-28)
+
+`in_chat_commands.js` shells out to ~23 Python CLIs — `session_reset.py`,
+`roles.py`, `consent.py`, `disclosure.py`, `quota.py`, `audit_view.py`,
+`proposal.py`, `goal.py`, `ulo.py`, `phase3_cli.py`, `dialectic.py`,
+`engine_switch.py`, `ldd.py`, `spg.py`, `decision_registry.py`,
+`personal_tools.py`, `settings_view.py`, plus `voice/scripts/{lang,profile,
+memory,vault,schedule}_cli.py` and `corvin_a2a.py`.
+
+**Resolve them through `bridge_paths.operatorRoot()`, never `__dirname/..`.**
+
+A daemon started by `bridge_manager` (`start_channel_detached`, `_spawn`) or by
+the ADR-0238 supervisor runs with `cwd=<corvin_home>/bridges/<channel>/`, and
+`_materialise_shared_js()` mirrors ONLY `shared/js/*.{js,mjs,cjs,json}` next to
+it. From that mirrored copy `__dirname/..` is `<corvin_home>/bridges/shared/` —
+a directory holding `inbox/`, `outbox/` and `js/`, and not one Python file. So
+every command above failed with ENOENT on **every wheel install**, and worked in
+**every git checkout**, where `__dirname/..` happens to be the source tree.
+That asymmetry is why neither CI nor a dev session ever saw it.
+
+The three spawn sites export `CORVIN_BRIDGE_OPERATOR_ROOT`; `operatorRoot()`
+validates it (a bogus value falls back rather than breaking a good layout) and
+otherwise self-locates from `__dirname`, so a hand-started source-tree daemon
+is unchanged. `shared/js/test_operator_root_resolution.js` builds the runtime
+layout and fails if any constant goes back to walking up from `__dirname`.
+
+Same reader≠writer split as `_adapter_queue_env`'s queue pinning, one layer up.
+`settings.json` is the one path that *is* correct against the runtime dir — it
+is user-managed state and genuinely lives there.
+
+---
+
 ## Boot: stale-task reaper (ADR-0080)
 
 On adapter boot, before the main loop starts, the adapter finalizes any task
@@ -617,10 +649,51 @@ subsequent reply. `OUTBOX_SEND_TIMEOUT` is a string code precisely so numeric
 is transient and rides the attempt budget.
 
 The handle returned by `startOutboxPoller` exposes `stats()` →
-`{running, stalled_s, idle_s}`. Discord publishes it as `poller_stalled_s` in
-`/status` so an external watchdog has something actionable to poll —
-`paired: true` plus an open socket is **not** evidence that anything is being
-delivered.
+`{running, stalled_s, idle_s, precheck_stalled_s}`. Discord publishes
+`stalled_s` as `poller_stalled_s` in `/status` so an external watchdog has
+something actionable to poll — `paired: true` plus an open socket is **not**
+evidence that anything is being delivered.
+
+### `preCheck` can fail forever without ever tripping `stalled_s`
+
+`stalled_s` only catches a tick that hangs *mid-await* — `running` stays
+`true` across the whole tick. A `preCheck` (e.g. Discord's
+`client.isReady()`) that returns `false` makes the tick return **before**
+any `await`, so it settles in well under a millisecond every single time:
+`running`/`runningSince` never look stalled, no matter how many hours the
+gate stays shut. On 2026-07-27 this was exactly the blind spot: Discord's
+gateway looked `paired: true` with `poller_stalled_s: 0` throughout while
+`client.isReady()` stayed `false` for ~90 minutes and 5 finished replies sat
+undelivered — zero log lines, because `if (preCheck && !preCheck()) return;`
+had no logging path at all.
+
+Fix: the poller tracks how long `preCheck` has been *continuously* refusing
+(reset the moment it passes again) and, once that exceeds `stallWarnMs`
+(same knob the tick-stall detector uses, deduped the same way — once per
+60 s per unchanged condition), logs `outbox: preCheck has been blocking
+delivery for Ns — N file(s) queued but nothing is being sent`. Exposed as
+`precheck_stalled_s` in `stats()`; Discord's `/status` publishes it
+alongside `poller_stalled_s`. `> 0` means the gate, not a hung send, is the
+reason nothing is moving — don't restart-and-hope before checking which of
+the two fields is nonzero.
+
+### `pending_outbox` must count only the caller's own channel
+
+`operator/bridges/shared/outbox/` is one directory shared by every bridge
+daemon. Before 2026-07-27 every daemon's `/status` computed `pending_outbox`
+as `readdirSync(OUTBOX).filter(f => f.endsWith('.json')).length` — the
+**total** file count, not filtered by channel. Since the directory is
+shared, whatsapp, discord and email all reported the identical number
+whenever a backlog existed anywhere, regardless of which channel actually
+owned it: on 2026-07-27 all three reported `pending_outbox: 5` while 100% of
+the 5 files were `channel: "discord"`, sending incident triage down two dead
+ends. Use the exported `countPending(outboxDir, channel)` from
+`shared/js/outbox.js` instead — it parses each envelope's `channel` field
+and counts only matches for the caller's own `CHANNEL` constant. Every
+bridge daemon (`whatsapp`, `discord`, `telegram`, `slack`, `teams`, `email`,
+`signal`) calls it the same way; `whatsapp`/`email` don't otherwise import
+`shared/js/outbox.js` (they run their own legacy `processOutbox()` loop) but
+still call `countPending` for the health field.
 
 ### Tests must never write to the live outbox
 
@@ -640,10 +713,17 @@ holds when a file is run directly, outside pytest.
 
 Unit tests: `shared/js/test_net_probe.js`, `shared/js/test_outbox_poller.js`
 (the latter pins the return-means-delivered contract, both dead-letter modes,
-the send timeout and the stall detector), `discord/test_outbox_hardening.js`
+the send timeout, the tick-stall detector, the preCheck-stall detector, and
+`countPending`'s per-channel filtering), `discord/test_outbox_hardening.js`
 (stall visibility in `/status` + the local snowflake guard).
 
 **Must NOT do:**
+- Don't compute `pending_outbox` with a raw `readdirSync(OUTBOX).length` —
+  the directory is shared across every channel; use `countPending(OUTBOX,
+  CHANNEL)` so the count reflects only envelopes this daemon actually owns.
+- Don't treat `poller_stalled_s: 0` alone as "delivery is working" — a
+  `preCheck` stuck `false` never sets `stalled_s` either. Check
+  `precheck_stalled_s` too.
 - Don't take the fast login path on error signature alone — the probe must
   CONFIRM the uplink is down, or a Discord-side `ECONNRESET` bypasses the
   IDENTIFY-budget ladder with an unbounded 15 s retry loop.
@@ -659,7 +739,45 @@ the send timeout and the stall detector), `discord/test_outbox_hardening.js`
   settles is the one failure the retry/dead-letter machinery cannot survive.
   Keep `sendTimeoutMs` on; setting it to `0` restores the wedge.
 - Don't treat a healthy `/status` as proof of delivery — check
-  `poller_stalled_s` and `pending_outbox` together. Both looked fine for the
-  entire 38-minute outage.
+  `poller_stalled_s`, `precheck_stalled_s` and `pending_outbox` together.
+  `poller_stalled_s`/`pending_outbox` both looked fine for the entire
+  38-minute 2026-07-26 outage; `poller_stalled_s` alone also looked fine for
+  the entire 90-minute 2026-07-27 outage, where `precheck_stalled_s` was the
+  only field that would have shown a problem.
 - Don't let a test write to the live `outbox/` — set `ADAPTER_OUTBOX`. Post-hoc
   cleanup loses the race against a 500 ms poll tick.
+
+---
+
+## The channel list is one list (2026-07-28)
+
+`operator/bridges/shared/channels.py::BRIDGE_CHANNELS` is the canonical set of
+shipped messenger channels — currently seven: whatsapp, telegram, discord, slack,
+email, signal, teams. `CHANNEL_LABELS` holds their short display names.
+
+It exists because the list was copy-pasted into six places and three had gone
+stale the same way, all omitting `signal` and `teams`:
+
+| Copy | Consequence of the omission |
+|---|---|
+| `session_reset.VALID_CHANNELS` | `/new` + `/reset` died with `argparse: invalid choice: 'signal'`; the user saw "session reset failed" and the session was never reset |
+| `settings_view._BRIDGE_CHANNELS` | `/settings` omitted the only row about a Signal/Teams operator's own bridge (its comment claimed "four-channel set", stale twice over) |
+| `bridges_migrate._CHANNELS` | legacy pre-ADR-0008 state for both channels was never migrated |
+| `CorvinInstaller.BRIDGES` | a fresh install could never select either bridge |
+| installer's Windows uninstall sweep | their Scheduled Tasks kept auto-launching a bridge after uninstall |
+
+`bridge_manager._CHANNELS` already held the correct seven, next to a comment
+recording an *earlier* incarnation of the identical bug ("the console saved their
+settings and then NOTHING could ever start the daemons"). Two independent
+occurrences of one omission is what made this a test rather than a fix.
+
+`corvin_plugins.bridges.supervisor.BRIDGE_CHANNELS` deliberately keeps a separate
+copy — it lives in a different distribution package that must import without
+`operator/` on `sys.path` — and `shared/test_channel_list_ssot.py` pins the two
+together, plus every consumer above, plus both directions against
+`operator/bridges/*/daemon.js` on disk.
+
+**Must NOT do:** don't hand-write a channel list. Don't re-add a private
+`_BRIDGE_CHANNELS` frozenset to any `paths.py` — channel identity there is a
+CHARSET rule (`_BRIDGE_CHANNEL_RE`), and the four frozensets that used to sit
+there were assigned, never read, and stale, so readers took them for canonical.

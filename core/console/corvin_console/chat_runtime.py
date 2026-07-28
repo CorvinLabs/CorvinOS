@@ -2410,6 +2410,116 @@ _ACS_SKIP_DIRS = frozenset({
 })
 _ACS_SKIP_ROOT_FILES = frozenset({"manifest.json", "result.json"})
 
+# ── Internal session bookkeeping — never a user-facing chat artifact ──────────
+# Session-workdir top-level trees the runtime writes for ITSELF. The direct
+# OS-turn's artifact scan diffs the whole workdir (`after_files - _before_files`)
+# and used to surface every one of these as an artifact chip.
+#
+# Reproduced from a real console chat (web:ISGd-xIvqn, 2026-07-27): each
+# model-chosen `delegate_*` MCP call writes a WDAT bookkeeping run under
+# `acs/runs/<run_id>/{manifest,result}.json` (`corvin_delegate.delegation.
+# _write_wdat_run`). That turn made 72 of them, so the scan emitted 144 artifact
+# chips named `manifest.json` / `result.json` over and over — the "hundertmal
+# dasselbe" the operator reported. The ACS delegation branch already filtered
+# these via _ACS_SKIP_DIRS/_ACS_SKIP_ROOT_FILES, but only relative to its OWN
+# run_dir, so the direct turn had no filter at all.
+_SESSION_INTERNAL_DIRS = frozenset({
+    "acs",      # ACS + delegate_* run records (manifest/result/traces/workers)
+    "tasks",    # TaskManager job state
+    "tde",      # TDE run records
+    "voice",    # STT/TTS scratch
+    ".corvin",  # nested runtime state
+})
+# How many artifact chips one turn may emit. A backstop independent of the
+# skip-list above: a future subsystem that writes hundreds of renderable files
+# into the workdir must not be able to flood the chat again. Truncation is
+# ANNOUNCED (a notice event), never silent — a silently dropped artifact reads
+# as "the turn produced nothing".
+_MAX_TURN_ARTIFACTS = 20
+
+
+def _artifacts_truncated_notice(*, emitted: int, suppressed: int) -> dict[str, Any]:
+    """The one `artifacts_truncated` event, shared by both artifact branches.
+
+    English: repository rule — user-facing runtime text defaults to English and
+    the model answers in the user's language at runtime. This string is emitted
+    by the runtime itself, not by a model, so it has no language to follow; it
+    shipped as a German literal in the first draft of the cap.
+    """
+    return {
+        "type": "notice",
+        "subtype": "artifacts_truncated",
+        "emitted": emitted,
+        "suppressed": suppressed,
+        "message": (
+            f"… and {suppressed} more file(s) — only the first "
+            f"{_MAX_TURN_ARTIFACTS} are shown here."
+        ),
+    }
+
+
+def _is_session_internal(rel: Path) -> bool:
+    """True when ``rel`` (relative to the session workdir) is runtime bookkeeping.
+
+    Kept deliberately coarse — a whole-tree exclusion by top-level directory —
+    because the failure mode is asymmetric: a missed exclusion floods the chat
+    with meaningless chips, while an over-broad one only hides a file the user
+    can still reach through the Agentic-Compute / Tasks panels that own it.
+    """
+    parts = rel.parts
+    return bool(parts) and parts[0] in _SESSION_INTERNAL_DIRS
+
+
+def _scan_turn_artifacts(
+    workdir: Path, before_files: set[Path],
+) -> tuple[list[dict[str, Any]], int]:
+    """Files this turn created that belong in the chat, plus a suppressed count.
+
+    The direct OS-turn's artifact scan, extracted so it is testable without a
+    subprocess — the flood it guards against (see _SESSION_INTERNAL_DIRS) was
+    only observable end-to-end before.
+
+    Returns ``(parts, suppressed)`` where ``parts`` are ``kind="artifact"``
+    dicts capped at :data:`_MAX_TURN_ARTIFACTS` and ``suppressed`` is how many
+    qualifying files the cap dropped (0 when nothing was truncated). Internal
+    bookkeeping is filtered BEFORE the cap, so runtime state can never consume
+    the budget a real output file needs.
+    """
+    after_files = set(workdir.rglob("*"))
+    new_files = sorted(
+        f for f in (after_files - before_files)
+        if f.is_file() and not f.name.startswith(".")
+    )
+    parts: list[dict[str, Any]] = []
+    suppressed = 0
+    for fpath in new_files:
+        mime = _artifact_mime(fpath)
+        if mime is None:
+            continue
+        rel = fpath.relative_to(workdir)
+        if _is_session_internal(rel):
+            continue
+        if len(parts) >= _MAX_TURN_ARTIFACTS:
+            suppressed += 1
+            continue
+        try:
+            size = fpath.stat().st_size
+        except OSError:
+            continue
+        # .as_posix(), not str() — the artifact-generating tool most commonly
+        # nests one level deep (e.g. imagegen's outputs/), and str(Path) renders
+        # with the OS-NATIVE separator. On a Windows-hosted console that embeds
+        # a literal backslash in this JSON "path", which the frontend (chat.tsx
+        # splits on "/") and the serving route's _SAFE_SUBPATH regex
+        # (forward-slash only) both then reject — the artifact card renders but
+        # its <img>/download URL 404s, with no user-visible error beyond a
+        # broken-image icon.
+        parts.append({
+            "kind": "artifact", "name": fpath.name,
+            "path": rel.as_posix(), "mime": mime, "size": size,
+        })
+    return parts, suppressed
+
 
 def _acs_artifact_label(fpath: Path, scan_root: Path) -> str | None:
     """Return a short M5 provenance label for an ACS artifact, or None.
@@ -2783,6 +2893,18 @@ def _should_delegate(prompt: str, *, tenant_id: str) -> bool:
         # Triage must never cost the turn; the bundled verdict is the
         # pre-feature behaviour.
         return bundled
+
+
+def should_delegate_bundled(prompt: str) -> bool:
+    """Public re-export of the ADR-0202/0203 triage heuristic (ADR-0255).
+
+    The bridge adapter (``operator/bridges/shared/adapter.py``) imports this
+    directly — precedent for a cross-package `corvin_console` import already
+    exists there (``feature_flags``, ``task_manager``, ``aco.htrace_uploader``)
+    — so a bridge turn and a console turn classify with the SAME function
+    instead of a second, divergence-prone copy of a ~140-line heuristic.
+    """
+    return _should_delegate_bundled(prompt)
 
 
 def _should_delegate_bundled(prompt: str) -> bool:
@@ -4217,12 +4339,21 @@ async def stream_turn(
     _os_model: str | None = None
     if _model_selector is not None:
         try:
-            _os_model = _model_selector.os_model_override()
-            if not _os_model and _model_selector.autoselect_enabled():
-                payload = _model_selector.estimate_os_turn_chars(
-                    prompt, _WEB_CHAT_SYSTEM_PROMPT, session_dir=sess.workdir,
-                )
-                _os_model = _model_selector.autoselect_os_model(payload)
+            payload = _model_selector.estimate_os_turn_chars(
+                prompt, _WEB_CHAT_SYSTEM_PROMPT, session_dir=sess.workdir,
+            )
+            # The SAME 6-Tier resolver the bridge adapter calls (ADR-0024 /
+            # ADR-0119 / ADR-0123) — single source of truth for OS-model
+            # resolution across both surfaces. profile=None: the console has
+            # no per-persona pin concept, so Tiers 2/1.5 simply no-op and
+            # fall through to Tier 2.5 (spec.engine_models.<engine>.os_model),
+            # which is exactly the tenant setting under Settings → AI Engines.
+            _os_model = _model_selector.resolve_os_model(
+                None,
+                payload_chars=payload,
+                engine_id=_os_engine,
+                tenant_id=sess.tenant_id,
+            )
             # ADR-0251 — the `engine.model_selection` call site, shared with the
             # bridge adapter so both surfaces apply one plugin contract. A hook
             # may name any model registered for this engine and nothing else;
@@ -5423,6 +5554,7 @@ async def stream_turn(
             # by the M2 live poll (_live_emitted deduplication).
             # _ACS_SKIP_DIRS / _ACS_SKIP_ROOT_FILES are module-level constants.
             _acs_artifact_parts: list[dict[str, Any]] = []
+            _acs_suppressed_artifacts = 0
             _scan_root = Path(res.run_dir) if res.run_dir else run_dir
             # bounded_stop included: "the partial results above remain valid"
             # (the budget-stop message) was a lie while this gate was ok-only —
@@ -5468,6 +5600,16 @@ async def stream_turn(
                     }
                     if _label:
                         _part["label"] = _label
+                    if len(_acs_artifact_parts) >= _MAX_TURN_ARTIFACTS:
+                        # Same per-turn chip cap as the direct-turn scan — one
+                        # bound, both branches, so a run that writes hundreds of
+                        # renderable files cannot flood the chat here either.
+                        # COUNT the rest instead of `break`-ing: the cap is
+                        # announced, never silent (see _MAX_TURN_ARTIFACTS), and
+                        # a bare break made this branch the one place where a
+                        # dropped artifact read as "the run produced nothing".
+                        _acs_suppressed_artifacts += 1
+                        continue
                     _acs_artifact_parts.append(_part)
 
             yield {"type": "result", "text": final, "usage": None}
@@ -5480,6 +5622,12 @@ async def stream_turn(
                 if "label" in _ap:
                     _ae["label"] = _ap["label"]
                 yield _ae
+
+            if _acs_suppressed_artifacts:
+                yield _artifacts_truncated_notice(
+                    emitted=len(_acs_artifact_parts),
+                    suppressed=_acs_suppressed_artifacts,
+                )
 
             _turn_parts: list[dict[str, Any]] = [{"kind": "text", "text": final}]
             # M2 live-delivered artifacts must be persisted so they survive reload.
@@ -5895,39 +6043,19 @@ async def stream_turn(
 
     # Emit artifact events for files Claude created during this turn.
     if sess.workdir.exists():
-        after_files = set(sess.workdir.rglob("*"))
-        new_files = sorted(
-            f for f in (after_files - _before_files)
-            if f.is_file() and not f.name.startswith(".")
-        )
-        for fpath in new_files:
-            mime = _artifact_mime(fpath)
-            if mime:
-                # .as_posix(), not str() — the artifact-generating tool most
-                # commonly nests one level deep (e.g. imagegen's outputs/,
-                # ACS's acs/runs/<id>/output/), and str(Path) renders with the
-                # OS-NATIVE separator. On a Windows-hosted console that embeds
-                # a literal backslash in this JSON "path", which the frontend
-                # (chat.tsx splits on "/") and the serving route's
-                # _SAFE_SUBPATH regex (forward-slash only) both then reject —
-                # the artifact card renders but its <img>/download URL 404s,
-                # with no user-visible error beyond a broken-image icon.
-                rel = fpath.relative_to(sess.workdir)
-                artifact_event = {
-                    "type": "artifact",
-                    "name": fpath.name,
-                    "path": rel.as_posix(),
-                    "mime": mime,
-                    "size": fpath.stat().st_size,
-                }
-                _artifact_parts_buf.append({
-                    "kind": "artifact",
-                    "name": fpath.name,
-                    "path": rel.as_posix(),
-                    "mime": mime,
-                    "size": fpath.stat().st_size,
-                })
-                yield artifact_event
+        _new_parts, _suppressed_artifacts = _scan_turn_artifacts(
+            sess.workdir, _before_files)
+        for _part in _new_parts:
+            _artifact_parts_buf.append(_part)
+            yield {"type": "artifact", "name": _part["name"],
+                   "path": _part["path"], "mime": _part["mime"],
+                   "size": _part["size"]}
+        if _suppressed_artifacts:
+            # Announced, never silent (see _MAX_TURN_ARTIFACTS).
+            _dbg(sess.workdir, "artifacts.truncated",
+                 emitted=len(_new_parts), suppressed=_suppressed_artifacts)
+            yield _artifacts_truncated_notice(
+                emitted=len(_new_parts), suppressed=_suppressed_artifacts)
 
     # Persist turn including artifact parts.
     parts_persisted.extend(_artifact_parts_buf)

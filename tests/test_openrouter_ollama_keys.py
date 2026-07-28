@@ -74,6 +74,15 @@ def test_ollama_key_has_no_shape_restriction():
 
 def _isolated_service_env(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("VOICE_CONFIG_DIR", str(tmp_path))
+    # CORVIN_HOME too, since 2026-07-28. The Phase-1b encrypted SecretsStore
+    # (added 2026-07-25) resolves from CORVIN_HOME and now takes PRECEDENCE over
+    # service.env, so on a machine with a real store these tests read the
+    # operator's own keys: `test_build_spawn_env_refreshes_openai_key_for_
+    # non_claude_code_engines` asserted "sk-live-from-file" and got the live
+    # value. Green on a clean CI runner, red on the maintainer's box — the same
+    # ambient-state split that hid two other suites' verdicts.
+    monkeypatch.setenv("CORVIN_HOME", str(tmp_path / "corvin_home"))
+    (tmp_path / "corvin_home").mkdir(parents=True, exist_ok=True)
     for var in ("OPENROUTER_API_KEY", "OLLAMA_API_KEY", "XDG_CONFIG_HOME"):
         monkeypatch.delenv(var, raising=False)
 

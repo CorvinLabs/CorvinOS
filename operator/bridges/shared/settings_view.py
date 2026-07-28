@@ -130,9 +130,12 @@ _L = {
     },
 }
 
-# Channels the dispatcher checks for bridge-readiness (matches the
-# four-channel set the run-all-tests / bridge.sh manage).
-_BRIDGE_CHANNELS = ("whatsapp", "telegram", "discord", "slack", "email")
+# Channels the dispatcher checks for bridge-readiness. Read from channels.py so
+# this stays every shipped channel — the hand-written copy that used to sit here
+# listed five, so a Signal or Teams operator's `/settings` silently omitted the
+# only row about their own bridge (and its comment claimed "four-channel set").
+from channels import BRIDGE_CHANNELS as _BRIDGE_CHANNELS  # noqa: E402,I001
+from channels import CHANNEL_LABELS as _CHANNEL_LABELS  # noqa: E402,I001
 
 
 # ── safe import shims ──────────────────────────────────────────────────────
@@ -523,10 +526,7 @@ def _tenant_config_summary(tenant_id: str | None, lang: str) -> str:
 def _bridges_summary(lang: str) -> str:
     """Compact bridge-state line: WA ✓ TG ✗ Discord ✓ Slack ✗ Mail ✓."""
     L = _L[lang]
-    label_map = {
-        "whatsapp": "WA", "telegram": "TG", "discord": "Discord",
-        "slack": "Slack", "email": "Mail",
-    }
+    label_map = _CHANNEL_LABELS
     bits = []
     for ch in _BRIDGE_CHANNELS:
         # Heuristic: settings.json present at EITHER the canonical

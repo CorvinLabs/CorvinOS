@@ -65,6 +65,16 @@ function startOutboxPoller({
   let runningSince = 0;
   let lastStallLog = 0;
   let lastTickEnd = Date.now();
+  // preCheck stall tracking. A tick whose preCheck() returns false settles
+  // immediately — `running`/`runningSince` above never see it as stalled,
+  // because the tick was never mid-flight, it just declined to do anything.
+  // That is exactly the gap that let a Discord daemon report `paired: true,
+  // poller_stalled_s: 0` for 90 minutes while `client.isReady()` stayed false
+  // and every tick returned instantly on the first file without a single log
+  // line (incident 2026-07-27). Tracked separately from runningSince/stall
+  // detection above, which only covers a tick that hangs mid-await.
+  let precheckFailSince = 0;
+  let lastPrecheckLog = 0;
   // Sent-once guard: track files that were successfully sent but whose
   // unlink() failed. On the next tick we delete them instead of re-sending,
   // which would duplicate voice notes / messages.
@@ -161,7 +171,21 @@ function startOutboxPoller({
       return;
     }
     for (const f of files) {
-      if (preCheck && !preCheck()) return;
+      if (preCheck && !preCheck()) {
+        if (!precheckFailSince) precheckFailSince = Date.now();
+        const stalledMs = Date.now() - precheckFailSince;
+        if (stallWarnMs > 0 && stalledMs > stallWarnMs) {
+          const now = Date.now();
+          if (logger && now - lastPrecheckLog >= LOG_DEDUP_MS) {
+            lastPrecheckLog = now;
+            logger(`outbox: preCheck has been blocking delivery for ` +
+                   `${Math.round(stalledMs / 1000)}s — ${files.length} file(s) ` +
+                   `queued but nothing is being sent`);
+          }
+        }
+        return;
+      }
+      precheckFailSince = 0;
       const fpath = path.join(outboxDir, f);
       // Already sent in a previous tick but unlink() failed — retry the
       // unlink only; do NOT re-send. Only clear the guard when the file is
@@ -310,8 +334,48 @@ function startOutboxPoller({
         ? Math.round((Date.now() - runningSince) / 1000)
         : 0,
       idle_s: Math.round((Date.now() - lastTickEnd) / 1000),
+      // > 0 means preCheck (e.g. `client.isReady()`) has been refusing
+      // delivery for that many seconds — the blind spot `stalled_s` cannot
+      // see (incident 2026-07-27). 0 means preCheck is passing or unused.
+      precheck_stalled_s: precheckFailSince
+        ? Math.round((Date.now() - precheckFailSince) / 1000)
+        : 0,
     }),
   };
 }
 
-module.exports = { startOutboxPoller };
+/**
+ * Count envelopes in the SHARED outbox directory belonging to `channel`.
+ *
+ * The directory is shared by every bridge daemon, so a naive
+ * `readdirSync(outboxDir).length` counts every channel's backlog as if it
+ * were the caller's own — on 2026-07-27 whatsapp, discord and email all
+ * reported `pending_outbox: 5` in their /status while 100% of the 5 files
+ * were `channel: "discord"`, wasting incident-response time checking two
+ * bridges that were never affected. Unparseable/channel-less files are not
+ * counted for any channel — they show up in the dead-letter path instead.
+ *
+ * @param {string} outboxDir
+ * @param {string} channel
+ * @returns {number}
+ */
+function countPending(outboxDir, channel) {
+  let files;
+  try {
+    files = fs.readdirSync(outboxDir).filter((f) => f.endsWith('.json'));
+  } catch {
+    return 0;
+  }
+  let n = 0;
+  for (const f of files) {
+    try {
+      const payload = JSON.parse(fs.readFileSync(path.join(outboxDir, f), 'utf8'));
+      if (payload.channel === channel) n++;
+    } catch {
+      // unparseable — not attributable to any channel
+    }
+  }
+  return n;
+}
+
+module.exports = { startOutboxPoller, countPending };

@@ -239,25 +239,47 @@ The engine that performs a turn is operator-selectable — one setting,
 `spec.web_chat.worker_engine`, resolved through the shared `delegation_policy`
 module. No surface may carry its own routing rule.
 
-**Reach today (verified 2026-07-26): the Console web-chat only.** The messenger
-bridges (`adapter.py`) have no Tier-1 delegation path at all — they never call
-`worker_engine_target`, never read the setting, and ACS fan-out is documented as
-absent there (delegation-routing.md §4). A bridge turn therefore always runs the
-direct OS-turn, which *matches* the `native` default by accident, not by wiring:
-big-data work does NOT reach ACS on a bridge, and there is no `/delegate` there.
-Remote triggers are in the same position. Do not describe the setting as
-cross-surface until the bridge path actually calls the shared rule.
+**Reach today (verified 2026-07-28).** The **Console web-chat** calls the full
+rule on every turn. The **messenger bridges** now call it too, but only behind
+a flag that ships dark, so a default install is unchanged:
+
+| Flag (both default OFF) | What a bridge turn gets |
+|---|---|
+| neither | the direct OS-turn, always. Matches `native` by wiring now, not by accident. |
+| `bridge_big_data_delegation` | the big-data carve-out only — no `/delegate`, no triage, no mode-awareness (`_maybe_delegate_big_data`). |
+| `bridge_worker_engine_parity` | the full rule (ADR-0255, `_maybe_delegate_worker`): the operator's `worker_engine` mode, an explicit `/delegate`, and the console's own triage heuristic — the same `should_delegate_bundled` function, not a copy. Supersedes the row above while on. |
+
+**TDE is still unreachable from a bridge either way** — `_worker_engine_target`
+hard-codes `tde_available=False`, so `mode: tde` degrades to the direct turn
+there (ADR-0221 P3/P4 stay frozen behind ADR-0222's measured gate). **Remote
+triggers still have no Tier-1 delegation at all.** Don't describe the setting as
+fully cross-surface: two of four surfaces reach it, one only on an opt-in.
+
+The OS-model side is now genuinely single-source: both surfaces resolve through
+`model_selector.resolve_os_model()` (ADR-0024/0119/0123/0043). Before
+2026-07-27 `chat_runtime` hand-rolled Tiers 1+3 only, so the console's own
+"OS Model" setting had no effect on the console's own chat.
 
 | Value | Meaning |
 |---|---|
-| `native` (**DEFAULT**) | Claude Code does the work in-process. The ONLY auto-delegation left is big-data-shaped work → ACS. |
+| `native` (**DEFAULT**) | Claude Code does the work in-process. The ONLY auto-delegation left is **structured-data**-shaped work → ACS. |
 | `acs` | Delegate qualifying turns to the ACS manager/worker fan-out. |
 | `tde` | Delegate qualifying turns to the Tiered Delegation Engine. **Off by default** — TDE only ever runs on an explicit operator opt-in. |
 
 Invariants:
 - Default install = `native`. TDE is **never** entered without an explicit setting change.
-- Big-data-shaped work routes to ACS even in `native` mode (per-worker context isolation
-  genuinely wins there); everything else stays native.
+- **Structured-data**-shaped work routes to ACS even in `native` mode (per-worker context
+  isolation genuinely wins there); everything else stays native. Narrowed 2026-07-28 to
+  four affirmative shapes — big-data vocabulary · a tabular paste of ≥10 rows · a
+  CSV/spreadsheet file or database/SQL operation PAIRED with a bulk data verb or a volume ·
+  a volume/count tied to a data noun, minus hardware and **code** clauses. An ordinary
+  request, prose, or a coding task must never trigger it: every ACS run charges one
+  `compute_units_per_day`. Don't widen it back, and don't make a bare mention of
+  "Datenbank"/"SQL"/"Tabelle" sufficient on its own. → delegation-routing.md § 2a.
+- A chat turn shows at most 20 artifact chips, and runtime bookkeeping (`acs/`, `tasks/`,
+  `tde/`, `voice/` under the session workdir) is never a chat artifact — a `delegate_*`
+  call writes `acs/runs/<id>/{manifest,result}.json` per invocation, which once flooded one
+  turn with 144 identical chips. → delegation-routing.md § 7a.
 - An explicit `/delegate` from the user still beats the classifier (delegation-routing.md §6).
 - Every degrade ladder ends at **`native`**, not at another delegation engine: ACS quota
   exhausted / TDE unavailable → run the turn natively, never silently swap engines.

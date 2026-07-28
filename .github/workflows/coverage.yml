@@ -82,10 +82,12 @@ jobs:
             tests/ \
             core/compute/tests/ \
             core/plugins/tests/ \
+            core/plugins/plugin_builder/tests/ \
             core/gateway/tests/ \
             core/observability/tests/ \
             core/orchestration/tests/ \
             ops/launcher/tests/ \
+            ops/launcher/corvin/tests/ \
             --import-mode=importlib \
             --cov=operator \
             --cov=core \

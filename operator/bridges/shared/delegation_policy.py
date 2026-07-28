@@ -26,6 +26,31 @@ import re
 WORKER_ENGINE_MODES: tuple[str, ...] = ("native", "acs", "tde")
 WORKER_ENGINE_DEFAULT = "native"
 
+#: The explicit user override that beats every classifier (ADR-0255). Shared so
+#: a bridge caller and the console parse the SAME directive instead of a second
+#: hand-rolled prefix check drifting from the console's word-boundary guard.
+DELEGATE_PREFIX = "/delegate"
+
+
+def strip_delegate_prefix(prompt: str) -> tuple[str, bool]:
+    """Detect + strip an explicit ``/delegate`` routing directive (ADR-0255).
+
+    Word-boundary match: the prefix must be the WHOLE token, so
+    ``"/delegatex foo"`` is a plain prompt, not a command (2026-07-24 console
+    review, mirrored here so a bridge caller uses the identical rule). Returns
+    ``(possibly-stripped prompt, whether the directive was present)``.
+
+    Every caller must call this BEFORE computing routing signals AND before
+    handing the prompt to any turn — delegated or not: the raw "/delegate "
+    text must never reach an LLM, even on the degrade-to-native path.
+    """
+    p = prompt.strip()
+    pl = p.lower()
+    force_delegate = pl == DELEGATE_PREFIX or pl.startswith(DELEGATE_PREFIX + " ")
+    if not force_delegate:
+        return prompt, False
+    return p[len(DELEGATE_PREFIX):].strip(), True
+
 
 def worker_engine_target(
     *,
@@ -397,6 +422,106 @@ def _clause_has_data_noun(clause: str) -> bool:
     return any(s in low for s in _DATA_SUBSTR)
 
 
+# ── Structured-data gate (maintainer decision 2026-07-28) ─────────────────────
+# The auto-ACS route is now spelled out affirmatively: it fires on the three
+# shapes the maintainer named — CSV/spreadsheet FILES, DATABASE work, and
+# genuine TABULAR mass data — plus the pre-existing "volume + data noun" clause.
+# An ordinary conversational request, prose, or a normal coding task must never
+# reach it: every ACS run burns one compute_units_per_day, and the console chat
+# that triggered this change (2026-07-27) showed how expensive a wrong positive
+# is. Each regex below is anchored and bounded — no variable-length run followed
+# by a window — so the ReDoS properties of _is_big_data_task are preserved.
+
+# (a) A tabular/columnar data FILE or container. Extensions are matched with a
+#     leading dot so "csv" inside a word ("csvinjection") is not a source.
+_DATA_FILE_RE = re.compile(
+    r"\.(?:csv|tsv|psv|parquet|avro|orc|feather|xlsx?|xlsm|ods|jsonl|ndjson)\b"
+    r"|\b(?:csv|tsv|parquet|avro|jsonl|ndjson|excel|xlsx)[\s\-]?"
+    r"(?:datei\w*|files?|export\w*|dump\w*|tabellen?|sheets?)\b"
+    r"|\b(?:spreadsheets?|tabellenkalkulation\w*|data[\s\-]?frames?|dataframes?)\b",
+    re.IGNORECASE,
+)
+# (b) A database / query operation. Deliberately NOT a bare "Tabelle": the word
+#     alone is ordinary German ("erstelle eine Tabelle" is a formatting wish,
+#     asserted non-big-data since the 2026-07-24 round-3 refutation) — only a
+#     DB-qualified table counts.
+_DB_RE = re.compile(
+    r"\b(?:datenbank\w*|databases?|sql|nosql|postgre(?:s|sql)?|mysql|mariadb|"
+    r"sqlite|mongodb|clickhouse|bigquery|redshift|snowflake|duckdb|oracle[\s\-]?db|"
+    r"dwh|olap)\b"
+    r"|\b(?:select|insert\s+into|update|delete\s+from)\b[^\n]{0,80}?\bfrom\b"
+    r"|\b(?:inner|left|right|outer|cross)\s+joins?\b"
+    r"|\bgroup\s+by\b|\border\s+by\b"
+    r"|\b(?:db|sql|datenbank)[\s\-]?(?:tabellen?|tables?|schemas?|queries|query|"
+    r"abfrage\w*|dumps?|migration\w*)\b",
+    re.IGNORECASE,
+)
+# (c) A BULK data-processing verb. The discriminator that keeps a mere mention
+#     of a database or a CSV from fanning out: "Wie verbinde ich mich mit
+#     MySQL?" and "Fasse die Datenbank-Migration zusammen" name a source but ask
+#     for prose. Summarise/explain/document verbs are deliberately absent.
+_DATA_WORK_VERB_RE = re.compile(
+    r"\b(?:analysier\w*|analyz\w*|analys\w*|auswert\w*|werte\s+\w+\s+aus|"
+    r"aggregier\w*|aggregat\w*|gruppier\w*|pivot\w*|"
+    r"importier\w*|import\w*|exportier\w*|"
+    r"bereinig\w*|dedupliz\w*|deduplicat\w*|"
+    r"joine?\w*|verkn[üu]pf\w*|merge[nrs]?\b|"
+    r"abfrag\w*|quer(?:y|ies|ie)\w*|"
+    r"verarbeit\w*|process(?:es|ed|ing)?\b|"
+    r"durchsuch\w*|scanne?\w*|parse[nrs]?\b|"
+    r"statistik\w*|kennzahl\w*|auswertung\w*)\b",
+    re.IGNORECASE,
+)
+# (d) Code context — a volume/count that is ABOUT source code is a coding task,
+#     and "Coding never routes into the ACS fan-out" (delegation-routing.md §6).
+#     "2 Millionen Zeilen Code refaktorieren" used to fan out because "Zeilen"
+#     is a data noun; clause-scoped like the hardware carve-out above.
+_CODE_NOUN_RE = re.compile(
+    r"\b(?:code|quellcode|sourcecode|source\s?code|codezeilen|loc|"
+    r"lines?\s+of\s+code|repositor(?:y|ies)|codebase|commits?)\b",
+    re.IGNORECASE,
+)
+# (e) A genuinely TABULAR paste: a pipe/markdown table. A three-row table inside
+#     an ordinary question is not mass data, so a real row FLOOR is required.
+_TABLE_MIN_ROWS = 10
+# Table rows are the PAYLOAD, so they are scanned past _BIG_DATA_MAX_SCAN (which
+# bounds the task DESCRIPTION). Own, larger cap: the row scan is one linear
+# anchored pass, but an unbounded paste should still not be re-scanned in full.
+_TABLE_MAX_SCAN = 200_000
+_TABLE_ROW_RE = re.compile(r"^[ \t]*\|.*\|[ \t]*$", re.MULTILINE)
+# A markdown separator row (|---|---|) is structure, not data.
+_TABLE_SEP_ROW_RE = re.compile(r"^[ \t]*\|[\s:\-|]+\|[ \t]*$")
+
+
+def _table_row_count(text: str) -> int:
+    """How many content rows a pipe/markdown table in ``text`` contributes.
+
+    Markdown separator rows (``|---|---|``) are pure structure and excluded; a
+    header row is counted, which is why the floor is 10 rather than a number
+    tuned to exact record counts.
+    Linear in ``len(text)``: one anchored MULTILINE scan, no backtracking.
+    """
+    return sum(
+        1 for m in _TABLE_ROW_RE.finditer(text[:_TABLE_MAX_SCAN])
+        if not _TABLE_SEP_ROW_RE.match(m.group(0))
+    )
+
+
+def _has_volume_signal(prompt: str) -> bool:
+    """A TB/PB/GB volume (not hardware) or a big count, anywhere in ``prompt``.
+
+    Used only once a structured SOURCE is already established, so — unlike the
+    legacy clause-proximity path below — no data noun is required; the hardware
+    carve-out still applies so "die Postgres-VM hat 64 GB RAM" is not a volume.
+    """
+    for rx in (_TBPB_RE, _GB_RE):
+        for m in rx.finditer(prompt):
+            lo, hi = _clause_bounds(prompt, m.start(), m.end())
+            if not _HW_NOUN_RE.search(prompt[lo:hi]):
+                return True
+    return bool(_BIG_COUNT_RE.search(prompt))
+
+
 _ABBREV_DOT_RE = re.compile(r"\b(mio|mrd)\.", re.IGNORECASE)
 # The big-data signal (a volume/count + a nearby data noun) is a property of the
 # TASK DESCRIPTION, which comes first; anything past this is pasted data, which
@@ -408,22 +533,54 @@ _BIG_DATA_MAX_SCAN = 2000
 
 
 def _is_big_data_task(prompt: str) -> bool:
-    """Deterministic big-data signal for the TDE-vs-ACS split (ADR-0217).
+    """Deterministic structured-data signal — the ONE auto-delegation to ACS.
+
+    Four affirmative shapes, in cost order (maintainer decision 2026-07-28,
+    narrowing ADR-0217's original "any volume + any data noun" rule):
+
+    1. Self-describing big-data vocabulary ("Big Data", "Data Lake", "riesige
+       Datenmengen") — the shape ADR-0217 was written for.
+    2. A genuinely TABULAR paste: a pipe/markdown table of at least
+       ``_TABLE_MIN_ROWS`` data rows. The table IS the mass data.
+    3. A named structured SOURCE — a CSV/spreadsheet-class file or a
+       database/SQL operation — PAIRED with a bulk data-processing verb or a
+       volume. The pairing is load-bearing: naming a database is not doing
+       database work, and "Wie verbinde ich mich mit MySQL?" must stay a
+       normal in-process turn.
+    4. The legacy clause-proximity rule: a volume/count (GB/TB/PB, millions,
+       grouped counts) tied to a data noun in the SAME clause — now with a
+       CODE carve-out, so "2 Millionen Zeilen Code refaktorieren" stays on the
+       sequential direct turn as delegation-routing.md §6 requires.
+
+    Everything else — ordinary questions, prose, normal coding requests — is
+    False, and a False here means the turn runs natively and costs no quota.
 
     Bounded: only the first _BIG_DATA_MAX_SCAN chars are scanned, so the whole
     routine (including the per-match clause scans) is O(_BIG_DATA_MAX_SCAN²)
     worst case (~a few hundred K ops), constant in the real prompt length — no
     O(n²) blowup on a pasted numeric blob (2026-07-24 round-3 refutation)."""
+    full = prompt
     prompt = prompt[:_BIG_DATA_MAX_SCAN]
     # Drop the period in "Mio."/"Mrd." so it isn't read as a clause boundary
     # that would split the magnitude word off its data noun.
     prompt = _ABBREV_DOT_RE.sub(r"\1", prompt)
+    # (1) Self-describing big-data vocabulary.
     if _BIGDATA_VOCAB_RE.search(prompt):
         return True
-    # TB/PB: big data unless the clause names hardware (SSD/HDD/…).
+    # (2) A pasted table with enough rows to BE mass data. Counted on the
+    # UNTRUNCATED prompt: a big table's rows are the payload, and the task
+    # description that _BIG_DATA_MAX_SCAN bounds sits above them.
+    if _table_row_count(full) >= _TABLE_MIN_ROWS:
+        return True
+    # (3) A named CSV/spreadsheet or database source doing actual bulk work.
+    if _DATA_FILE_RE.search(prompt) or _DB_RE.search(prompt):
+        if _DATA_WORK_VERB_RE.search(prompt) or _has_volume_signal(prompt):
+            return True
+    # (4) TB/PB: big data unless the clause names hardware (SSD/HDD/…) or code.
     for m in _TBPB_RE.finditer(prompt):
         lo, hi = _clause_bounds(prompt, m.start(), m.end())
-        if not _HW_NOUN_RE.search(prompt[lo:hi]):
+        _clause = prompt[lo:hi]
+        if not _HW_NOUN_RE.search(_clause) and not _CODE_NOUN_RE.search(_clause):
             return True
     # GB and big counts: require a data noun in the SAME clause. Dedup by
     # clause: once a clause has been checked and lacked a data noun, skip the
@@ -436,7 +593,8 @@ def _is_big_data_task(prompt: str) -> bool:
             if m.start() < _checked_hi:
                 continue  # same clause as a previous no-data-noun match
             lo, hi = _clause_bounds(prompt, m.start(), m.end())
-            if _clause_has_data_noun(prompt[lo:hi]):
+            _clause = prompt[lo:hi]
+            if _clause_has_data_noun(_clause) and not _CODE_NOUN_RE.search(_clause):
                 return True
             _checked_hi = hi
     return False

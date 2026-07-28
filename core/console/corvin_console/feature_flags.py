@@ -110,11 +110,23 @@ class FeatureFlag:
 REGISTRY: tuple[FeatureFlag, ...] = (
     FeatureFlag(
         id="execution_context_badge",
-        label="Execution context badge",
+        label="Execution context badge (capture only — no badge yet)",
         description=(
-            "Attach structured per-turn execution metadata (engine, model "
-            "source, token counts, delegation mode) to each turn and show it "
-            "in the chat UI."
+            "INCOMPLETE, and this toggle currently changes nothing — audited "
+            "2026-07-28. Per-turn execution metadata (engine, model source, "
+            "token counts, delegation mode) IS captured and persisted into "
+            "turns.jsonl on every console turn, and the Audit view and the "
+            "turn filter in /chat/turns both read it. What does not exist is "
+            "the badge: no console component renders execution_context, and "
+            "on the messenger bridges execution_context_renderer.js plus its "
+            "six daemon call sites never fire because adapter.py never puts "
+            "an execution_context key on an outbox payload. Nothing reads "
+            "this flag id either — grep it. Flipping it on or off is a no-op "
+            "on both surfaces. Left registered rather than deleted because "
+            "the capture half is real and shipped; the flag becomes live when "
+            "a renderer does. Do NOT add a second setting for the same thing: "
+            "the bridge renderer's `show_execution_context` key is exactly "
+            "that mistake, and it is dead for the same reason."
         ),
         owner="maintainer",
         target_release="0.11.x",
@@ -155,6 +167,25 @@ REGISTRY: tuple[FeatureFlag, ...] = (
             "carve-out the Console already has. Charges the shared "
             "agentic-compute pool. Off means bridges behave exactly as before: "
             "every task runs as one direct turn."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("delegation", "bridges"),
+    ),
+    FeatureFlag(
+        id="bridge_worker_engine_parity",
+        label="Worker-engine parity on messenger bridges",
+        description=(
+            "Route a bridge turn (Discord/Telegram/Slack/WhatsApp/etc.) through "
+            "the SAME native/acs/tde decision the console uses — the operator's "
+            "worker_engine mode, an explicit /delegate override, and the "
+            "console's own triage heuristic — instead of only the narrow "
+            "big-data-shaped carve-out. Makes spec.engine_models.<engine_id>."
+            "worker_model reachable on bridges for ordinary conversation, not "
+            "only big-data prompts. TDE stays unreachable from bridges either "
+            "way (ADR-0221/0222/0255) — mode=tde always degrades to native "
+            "here. Off means bridges behave exactly as before: only "
+            "bridge_big_data_delegation's narrow carve-out applies. ADR-0255."
         ),
         owner="maintainer",
         target_release="0.11.x",

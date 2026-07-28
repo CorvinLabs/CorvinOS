@@ -24,6 +24,12 @@
 
 const fs = require('fs');
 const path = require('path');
+// Resolves the operator SOURCE tree, which is where the Python CLIs below live.
+// Not `__dirname/..`: a daemon spawned by bridge_manager runs from
+// <corvin_home>/bridges/<channel>/ with only shared/js mirrored beside it, so
+// `__dirname/..` there is a directory with no Python in it at all. See
+// bridge_paths.js::operatorRoot for the full failure mode.
+const bridgePaths = require('./bridge_paths');
 
 const HERE = __dirname;
 const COWORK_BUNDLE_DIR = path.resolve(HERE, '../../../cowork/personas');
@@ -204,8 +210,8 @@ function setDebugEnabled(settingsFile, chatKey, enabled) {
 const HELP_TEXT = (currentPersona, channel) => `What you can do in this chat:
 
 AI control:
-  /on, /off            turn AI on/off for this chat (WhatsApp)
-  /status              is the AI active?
+  /on, /off            turn AI on/off for this chat (WhatsApp) — aliases: /open, /close (SPG)
+  /status              is the AI active? (compact context overview: goal, persona, schedule, LDD)
   /stop, /cancel       abort the running task immediately (SIGTERM)
   /btw <text>          inject a follow-up note while the task is still running
                        (e.g.  /btw and please also check the env file)
@@ -214,6 +220,16 @@ AI control:
   /all                 audience for this chat (default: owner only)
   /all on              let everyone in this chat talk to the bot
   /all off             back to owner-only (whitelist)
+  /settings, /einstellungen, /config
+                       one-shot dump of paths + session + system state
+  /lang [<code>|clear|list]
+                       set/show/clear this chat's reply language (BCP-47),
+                       drives voice summaries, audience block, disclosure card
+
+Session Participation Gate (ADR-0166 — owner controls who may interact):
+  /invite <uid> [duration]  owner: admit a guest (30s|5m|1h|24h|7d, default: session)
+  /uninvite <uid>, /kick <uid>  owner: remove a guest
+  /who                  list who's currently admitted
 
 Personas (cowork roles, per chat):
   /personas            list all available cowork personas
@@ -325,6 +341,29 @@ LDD (loss-driven development) layer toggles:
   /dialectic-set <site> <fast|skill|cli|off>
   /dialectic-show on|off             reply-footer toggle
 
+Delegation, workflows & objectives:
+  /engine [name]        owner: pin which worker CLI runs delegated work
+                       (claude | codex | opencode | hermes | copilot — see
+                       /engine aliases); omit to show. NOT the native/acs/tde
+                       delegation mode: that is one operator setting
+                       (Settings → AI Engines) and has no chat command.
+  /workflow list|show <n>|validate <n>|run <n> [k=v …]|help
+                       AWP workflow bridge (Layer 26 — DAG + delegation)
+  /workflows            alias for /workflow list
+  /goal [<text>|show|clear]
+                       sticky session objective injected into every LLM turn
+  /objective list|add <high|medium|low> <text>|...
+                       owner: user-defined learning objectives (ADR-0163)
+
+Compliance (GDPR / EU AI Act):
+  /privacy, /datenschutz  information right (GDPR Art. 13/14)
+  /decision-review, /decision  admin: human-oversight review (EU AI Act Art. 14)
+
+Personal tools (Layer 27 — your permanent me.* forge library):
+  /tools                 list your saved tools
+  /tool save <name> [as <alias>]  save the most recent forge tool
+  /tool rm|show <name>   delete / inspect a saved tool
+
 Process & resource control (Phase 3 layers):
   /ps [-a]             active claude sessions (process table)
   /kill <id> [-9]      terminate a session (SIGTERM / SIGKILL)
@@ -339,6 +378,12 @@ A2A agent network (Layer 38 — agent-to-agent):
   /a2a <name> <msg>    send an instruction to a named remote agent
   /a2a-label <id> <name>  give an agent a friendly name (e.g. "Hetzner Server")
   Set this agent's name: corvin-instance-id label "MyName"
+
+Plugin Builder (ADR-0253 — interview-driven plugin design):
+  /plugin-builder       start (or continue) an interview; ends in an Idea Doc,
+                       Architecture Concept, ADR, Build Plan and a code scaffold
+  /plugin-builder status  show the active interview's current phase + question
+  /plugin-builder cancel  stop the interview, write nothing
 
 Diagnostics:
   /skills              what can I do (in this persona)?
@@ -554,54 +599,54 @@ function welcomeReply(ctx) {
 // independent of where the daemon is launched from. (`path` is already
 // required at the top of this file.)
 const { spawnSync } = require('child_process');
-const SCHEDULE_CLI = path.resolve(__dirname, '..', '..', '..', 'voice', 'scripts', 'schedule_cli.py');
-const PROFILE_CLI  = path.resolve(__dirname, '..', '..', '..', 'voice', 'scripts', 'profile_cli.py');
+const SCHEDULE_CLI = bridgePaths.voiceScript('schedule_cli.py');
+const PROFILE_CLI  = bridgePaths.voiceScript('profile_cli.py');
 // i18n — `/lang` slash-command. Validates BCP-47 codes via i18n.normalise()
 // and persists to profile.display_language. Tiny wrapper, intentionally
 // separate from /profile so the user-facing command stays terse.
-const LANG_CLI     = path.resolve(__dirname, '..', '..', '..', 'voice', 'scripts', 'lang_cli.py');
-const MEMORY_CLI   = path.resolve(__dirname, '..', '..', '..', 'voice', 'scripts', 'memory_cli.py');
-const VAULT_CLI    = path.resolve(__dirname, '..', '..', '..', 'voice', 'scripts', 'vault_cli.py');
-const SESSION_RESET_CLI = path.resolve(__dirname, '..', 'session_reset.py');
-const DIALECTIC_CLI = path.resolve(__dirname, '..', 'dialectic.py');
+const LANG_CLI     = bridgePaths.voiceScript('lang_cli.py');
+const MEMORY_CLI   = bridgePaths.voiceScript('memory_cli.py');
+const VAULT_CLI    = bridgePaths.voiceScript('vault_cli.py');
+const SESSION_RESET_CLI = bridgePaths.bridgeSharedPy('session_reset.py');
+const DIALECTIC_CLI = bridgePaths.bridgeSharedPy('dialectic.py');
 // Layer-29 companion — per-chat worker-engine preference. Slash-command
 // `/engine` shells out to engine_switch.py so the JS layer never has to
 // re-implement the alias resolver / validator / audit emit. The Python
 // module is the single source of truth.
-const ENGINE_SWITCH_CLI = path.resolve(__dirname, '..', 'engine_switch.py');
-const LDD_CLI = path.resolve(__dirname, '..', 'ldd.py');
+const ENGINE_SWITCH_CLI = bridgePaths.bridgeSharedPy('engine_switch.py');
+const LDD_CLI = bridgePaths.bridgeSharedPy('ldd.py');
 // Layer-17/18/19/20 unified Phase-3 CLI wrapper (process table, pipe
 // registry, service manager, context budget — all in one entry point).
-const PHASE3_CLI = path.resolve(__dirname, '..', 'phase3_cli.py');
+const PHASE3_CLI = bridgePaths.bridgeSharedPy('phase3_cli.py');
 // Layer-17 — per-user observer-transcript consent gate. CLI wraps the
 // shared/consent.py module; reachable from read-only senders too via
 // dispatchReadOnlyConsent() so a Mitleser can grant consent without
 // having owner privileges.
-const CONSENT_CLI = path.resolve(__dirname, '..', 'consent.py');
+const CONSENT_CLI = bridgePaths.bridgeSharedPy('consent.py');
 // Layer-18 — capability-bundle role system (owner / admin / member /
 // observer). CLI wraps shared/roles.py; reachable from owner + admin
 // via /grant /revoke /role /roles /leave. Identity is bound to the
 // caller's platform uid (ctx.uid) the same way consent does it.
-const ROLES_CLI = path.resolve(__dirname, '..', 'roles.py');
+const ROLES_CLI = bridgePaths.bridgeSharedPy('roles.py');
 // Layer-19 — bot-disclosure card + /join self-service. CLI wraps
 // shared/disclosure.py; /join + /pass are reachable from read-only-side
 // senders via dispatchReadOnlyDisclosure(), the daemon should call it
 // alongside dispatchReadOnlyConsent before maybeForwardAsObserver.
-const DISCLOSURE_CLI = path.resolve(__dirname, '..', 'disclosure.py');
+const DISCLOSURE_CLI = bridgePaths.bridgeSharedPy('disclosure.py');
 // Layer-20 — quota + audit-view. /quota for self + owner/admin operator
 // flows; /audit me / /audit chat for capability-gated visibility into
 // the unified hash chain.
-const QUOTA_CLI = path.resolve(__dirname, '..', 'quota.py');
-const AUDIT_VIEW_CLI = path.resolve(__dirname, '..', 'audit_view.py');
+const QUOTA_CLI = bridgePaths.bridgeSharedPy('quota.py');
+const AUDIT_VIEW_CLI = bridgePaths.bridgeSharedPy('audit_view.py');
 // Layer-21 — curated proposal stack. /propose adds, /proposals lists,
 // /proposal rm + /proposal clear curate, /go consumes + triggers LLM.
-const PROPOSAL_CLI = path.resolve(__dirname, '..', 'proposal.py');
+const PROPOSAL_CLI = bridgePaths.bridgeSharedPy('proposal.py');
 
 // Session goal — /goal [<text>|clear]. Stored per chat, injected into every LLM turn.
-const GOAL_CLI = path.resolve(__dirname, '..', 'goal.py');
+const GOAL_CLI = bridgePaths.bridgeSharedPy('goal.py');
 
 // ULO (ADR-0163 M1) — /objective and /objectives slash commands.
-const ULO_CLI = path.resolve(__dirname, '..', 'ulo.py');
+const ULO_CLI = bridgePaths.bridgeSharedPy('ulo.py');
 // ADR-0007 multi-tenant axis: ULO objectives are per-tenant. The CLI does NOT
 // read the env (no env-fallback by design) — the caller must pass the tenant
 // explicitly so the writer (these CLI calls) and the reader (the injection path
@@ -613,23 +658,23 @@ const ULO_CLI = path.resolve(__dirname, '..', 'ulo.py');
 const _uloTenantArgs = () => ['--tenant-id', process.env.CORVIN_TENANT_ID || '_default'];
 
 // Layer-38 A2A agent naming — /agents and /a2a <name> <instruction>.
-const A2A_CLI = path.resolve(__dirname, '..', '..', '..', 'voice', 'scripts', 'corvin_a2a.py');
+const A2A_CLI = bridgePaths.voiceScript('corvin_a2a.py');
 
 // ADR-0073 G-010 / G-016 — decision registry + privacy notice.
-const DECISION_REGISTRY_CLI = path.resolve(__dirname, '..', 'decision_registry.py');
+const DECISION_REGISTRY_CLI = bridgePaths.bridgeSharedPy('decision_registry.py');
 
 // ADR-0166 — Session Participation Gate (SPG).
-const SPG_CLI = path.resolve(__dirname, '..', 'spg.py');
+const SPG_CLI = bridgePaths.bridgeSharedPy('spg.py');
 
 // Layer-27 personal tools — /tool save / /tool rm / /tools.
 // Operator-side curation of the user's permanent me.* forge library.
-const PERSONAL_TOOLS_CLI = path.resolve(__dirname, '..', 'personal_tools.py');
+const PERSONAL_TOOLS_CLI = bridgePaths.bridgeSharedPy('personal_tools.py');
 
 // `/settings` (aliases /einstellungen, /config) — single-message dump
 // of paths, session-scoped config, and system-scoped config. Aggregator
 // lives in bridges/shared/settings_view.py; the CLI sub-command is
 // `render <channel> <chat_key> [--uid <uid>] [--lang de|en]`.
-const SETTINGS_CLI = path.resolve(__dirname, '..', 'settings_view.py');
+const SETTINGS_CLI = bridgePaths.bridgeSharedPy('settings_view.py');
 
 // Layer-26 — AWP workflow bridge. The python package lives at
 // core/workflows/corvin_workflows; PYTHONPATH must point at the
@@ -895,7 +940,7 @@ function langReply(ctx, tail) {
 // slash-command latency in the millisecond range.
 function _tString(key, lang, fmt) {
   fmt = fmt || {};
-  const bundleDir = path.resolve(__dirname, '..', '..', '..', 'voice', 'i18n');
+  const bundleDir = path.join(bridgePaths.operatorRoot(), 'voice', 'i18n');
   const candidates = [String(lang || 'en')];
   const base = String(lang || 'en').split('-')[0];
   if (base !== candidates[0]) candidates.push(base);
@@ -3102,7 +3147,7 @@ function toolReply(ctx, sub, rest) {
 // ─── Layer-38 — A2A Agent Naming ──────────────────────────────────────────
 
 // Path to the remote_endpoints dir (relative to this file's location).
-const _A2A_ENDPOINTS_DIR = path.resolve(__dirname, '..', '..', '..', 'cowork', 'remote_endpoints');
+const _A2A_ENDPOINTS_DIR = path.join(bridgePaths.operatorRoot(), 'cowork', 'remote_endpoints');
 
 function _listAgentsText() {
   // Read endpoint files directly for a fast synchronous listing.

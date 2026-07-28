@@ -553,6 +553,8 @@ const HERMES_MODEL_OPTIONS = [
 // ── Slash commands ────────────────────────────────────────────────────────
 
 const SLASH_COMMANDS = [
+  // ── Help ──
+  { cmd: "/help",              args: "",               desc: "List available console commands" },
   // ── Session management ──
   { cmd: "/stop",             args: "",                desc: "Abort the running task (aliases: /cancel, /halt)" },
   { cmd: "/new",              args: "",                desc: "Start a new session" },
@@ -562,6 +564,9 @@ const SLASH_COMMANDS = [
   { cmd: "/use-engine tiered_delegation", args: "<task>", desc: "TDE: parallel three-gate delegation — needs Settings → Worker Engine = tde" },
   { cmd: "/use-engine acs",   args: "<task>",          desc: "Force ACS manager/worker fan-out" },
   { cmd: "/use-engine claude_code", args: "<task>",    desc: "Force the sequential OS engine" },
+  { cmd: "/delegate",         args: "<task>",          desc: "Force ACS delegation for this turn" },
+  { cmd: "/engine-auto",      args: "<task>",          desc: "Explicit auto-detection (normal behavior)" },
+  { cmd: "/debug-engine",     args: "<task>",          desc: "Show engine-selection signals for this turn" },
   // ── CCC — entity creation (ADR-0168 M6) ──
   { cmd: "/create workflow",  args: '[name="…"] [schedule="*/5 * * * *"]', desc: "CCC: create a workflow" },
   { cmd: "/create task",      args: '[name="…"]',      desc: "CCC: create an ATS task" },
@@ -584,6 +589,8 @@ const SLASH_COMMANDS = [
   { cmd: "/role",             args: "",                desc: "Show your current role" },
   { cmd: "/dialectic-on",     args: "",                desc: "Enable dialectic reasoning" },
   { cmd: "/dialectic-off",    args: "",                desc: "Disable dialectic reasoning" },
+  // ── Plugin Builder (ADR-0253) ──
+  { cmd: "/plugin-builder",   args: "[status|cancel]", desc: "Interview-driven plugin design (Idea/Architecture/ADR/Plan + scaffold)" },
 ];
 
 function CommandPalette({
@@ -2275,6 +2282,20 @@ const MessageBubble = React.memo(function MessageBubble({
             </div>
           ) : p.kind === "artifact" ? (
             <ArtifactCard key={i} artifact={p} />
+          ) : p.kind === "notice" ? (
+            /* An in-band runtime message about this turn (quota fallback,
+             * engine degrade, artifact-list truncation) — deliberately styled
+             * apart from the model's answer so it cannot be read as one.
+             * Backend emitted these since ADR-0201; nothing rendered them
+             * until 2026-07-28, which made every "announced, never silent"
+             * degrade silent in the only place the user looks. */
+            <p
+              key={i}
+              data-notice={p.subtype}
+              className="mt-1 rounded-md border border-border bg-muted/50 px-2 py-1 text-xs text-muted-foreground"
+            >
+              {p.text}
+            </p>
           ) : (
             <ToolUseCard key={i} name={p.name} input={p.input} />
           ),

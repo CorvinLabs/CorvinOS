@@ -22,7 +22,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { makeLogger }            = require('../shared/js/logger');
 const { makeSettingsAccessor }  = require('../shared/js/settings');
 const { makeAuth }              = require('../shared/js/auth');
-const { startOutboxPoller }     = require('../shared/js/outbox');
+const { startOutboxPoller, countPending } = require('../shared/js/outbox');
 const { startHealthServer }     = require('../shared/js/health-server');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
@@ -513,7 +513,14 @@ async function sendTelegram(payload, _fpath) {
   activeChats.delete(chatId);
 }
 
-startOutboxPoller({
+// Delivery liveness (incidents 2026-07-26 + 2026-07-27). `paired` and an open
+// socket say nothing about whether the outbox is draining: a wedged tick
+// (`poller_stalled_s`) delivered nothing for 38 minutes on Discord, and a
+// preCheck that keeps refusing (`precheck_stalled_s`) held 5 replies for 90
+// minutes without tripping the first field. Both counters lived in the shared
+// poller but only Discord's health endpoint read them, so the other four
+// poller-backed bridges had the same blind spot with no way to see it.
+const outboxPoller = startOutboxPoller({
   outboxDir: OUTBOX, channel: CHANNEL, sendFn: sendTelegram, logger: log,
 });
 
@@ -526,7 +533,12 @@ startHealthServer({
     paired: !!botInfo,
     bot_username: botInfo?.username || null,
     whitelist_size: (currentSettings().whitelist || []).length,
-    pending_outbox: fs.readdirSync(OUTBOX).filter(f => f.endsWith('.json')).length,
+    pending_outbox: countPending(OUTBOX, CHANNEL),
+    // See the comment on `const outboxPoller` above — these two are the only
+    // signals a watchdog has that delivery has stopped while everything else
+    // still looks healthy.
+    poller_stalled_s:   outboxPoller.stats().stalled_s,
+    precheck_stalled_s: outboxPoller.stats().precheck_stalled_s,
   }),
 });
 

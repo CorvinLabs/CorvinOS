@@ -160,8 +160,12 @@ spec:
     # ccc_command_routing: true       # entity extraction on every turn
     # acs_context_sync: true          # ADR-0213 transcript replay after delegation
     # bridge_big_data_delegation: true  # big-data messenger tasks → ACS
+    # bridge_worker_engine_parity: true # bridges use the SAME native/acs decision
+    #                                   # as the console (mode + /delegate + triage),
+    #                                   # not only the big-data carve-out (ADR-0255)
     # browser_automation: true        # /browser — launches a real Chrome
     # execution_context_badge: true   # per-turn engine/model/token badge
+    # plugin_builder_enabled: true    # /plugin-builder — interview-driven plugin design (ADR-0253)
 
   # ── User-Defined Learning Objectives (ADR-0163) ────────────────────────────────
   # Deny-by-default: ULO is inactive unless a tenant explicitly opts in.

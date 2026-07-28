@@ -198,14 +198,11 @@ def voice_session_dir(
 
 
 # ── ADR-0008 — bridge runtime state out of repo ──────────────────────────
-_BRIDGE_CHANNELS = frozenset({
-    "telegram",
-    "discord",
-    "slack",
-    "whatsapp",
-    "email",
-    "shared",
-})
+# NOTE: there is deliberately no channel allow-list here. Channel identity in
+# this resolver is a CHARSET rule (_BRIDGE_CHANNEL_RE below), not an enumeration
+# — a frozenset used to sit at this spot, was never read by anything, and had
+# gone stale (no "signal", no "teams"), so a reader took it for the canonical
+# list. The canonical list is operator/bridges/shared/channels.py.
 _BRIDGE_KINDS = frozenset({
     "inbox",
     "outbox",

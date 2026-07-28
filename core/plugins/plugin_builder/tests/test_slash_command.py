@@ -12,6 +12,7 @@ corvin_console = pytest.importorskip("corvin_console")
 from corvin_console import feature_flags, slash_commands  # noqa: E402
 
 from plugin_builder import session_store  # noqa: E402
+from plugin_builder import turn as pb_turn  # noqa: E402
 
 TENANT = "test-tenant-plugin-builder"
 FINGERPRINT = "fp-1"
@@ -62,7 +63,7 @@ def test_flag_on_status_with_no_session(monkeypatch):
 
 def test_flag_on_full_interview_writes_artifacts(monkeypatch, tmp_path):
     _enable_flag(monkeypatch)
-    monkeypatch.setattr(slash_commands, "_plugin_builder_output_dir", lambda tenant_id: tmp_path)
+    monkeypatch.setattr(pb_turn, "output_dir", lambda tenant_id: tmp_path)
 
     def turn(text):
         return slash_commands.handle(

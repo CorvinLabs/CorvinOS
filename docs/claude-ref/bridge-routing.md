@@ -4,7 +4,17 @@ Fast-chat routing: conversational turns can use the engine's fast model
 tier; everything else keeps the user's chosen model / the adaptive tiers.
 **Opt-in, default OFF, fail-closed.**
 
-## Resolution chain (`adapter.py::_resolve_os_model`)
+## Resolution chain (`model_selector.py::resolve_os_model`)
+
+**2026-07-27 update:** the 6-tier cascade moved out of
+`adapter.py::_resolve_os_model_bundled` into
+`operator/bridges/shared/model_selector.py::resolve_os_model()` — the SAME
+function the console web-chat (`chat_runtime.py`) now calls too, closing a
+gap where the console's own "OS Model" setting under Settings → AI Engines
+had no effect on the console's own chat. `adapter.py::_resolve_os_model_bundled`
+is now a thin backward-compat wrapper around it; behavior for the bridge is
+unchanged. See `docs/claude-ref/layer-engines.md` (Layer 29.5 Phase 3) for the
+full history.
 
 Tier order (top wins): 1 `CORVIN_OS_MODEL_OVERRIDE` · 2 explicit
 `profile.model` pin · 1.5 persona pin (ADR-0123) · 2.5 per-engine tenant

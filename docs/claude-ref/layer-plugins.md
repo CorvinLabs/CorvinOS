@@ -1394,6 +1394,54 @@ flag on or off, is "no interview is active"; checking the session first means
 that common case costs one dict lookup, not a disk read, on every chat turn
 in the console.
 
+**Reach: Console AND messenger bridges (2026-07-27).** The interview state
+machine, artifact writing and reply text live in `plugin_builder.turn` — a
+transport-agnostic module both callers drive, keyed by `(tenant_id,
+session_key)`. The console's `session_key` is its `fingerprint`; the bridge's
+is `f"{channel}:{chat_key}"` — NOT bare `chat_key` (`chat_id or sender`).
+Bare `chat_key` is just one messenger's id space, and two different channels
+can produce the identical string (a Discord numeric id and a Telegram numeric
+id colliding, a WhatsApp fallback-to-sender matching some other channel's
+sender) — an adversarial review (2026-07-27) reproduced exactly this as a
+cross-channel session hijack (one user's plain message silently consumed as
+the answer to a DIFFERENT user's in-progress interview on another channel)
+before the `channel:` prefix was added. Same discipline this file already
+applies to session directories via `_session_dir(channel, chat_key, ...)` —
+never namespace a bridge identity by `chat_key` alone. Regression test:
+`test_same_chat_id_on_two_channels_does_not_collide`.
+
+`slash_commands.py`'s `_plugin_builder_continue`/`_plugin_builder_command`
+are thin wrappers around `plugin_builder.turn`;
+`operator/bridges/shared/adapter.py`'s `_plugin_builder_bridge_reply` (defined
+just above `process_one`) is the bridge-side twin, called from the plain-text
+`else` branch of `process_one` right after `prompt` is finalized — guarded to
+skip audio/image/document/video turns (a transcription/caption is an
+engineered prompt, not the user's literal words) AND to skip any OTHER
+`/`-leading text (mirroring the console's `handle()`, which only ever routes
+non-slash text into `_plugin_builder_continue` — a stray/unrecognized slash
+command must fall through to the engine, never get silently recorded as an
+interview answer; regression test:
+`test_unrelated_slash_command_mid_interview_is_not_read_as_an_answer`). Same
+ordering discipline as the console: check the (cheap, in-memory) session
+store before the (disk, uncached) feature flag. The literal `/plugin-builder`
+command itself always gets an answer — even flag-off, it returns the "Plugin
+Builder is off" pointer rather than falling through to the engine, matching
+`slash_commands.py`'s "never leak a command to the model" rule; only OTHER
+plain text (not the command, no active session) reaches the engine unchanged.
+Both `turn.drive`/`turn.command` calls on the bridge path are wrapped in a
+broad `except Exception` that resets the session and returns a safe fallback
+message — a bridge message-queue turn has no natural HTTP-response error
+boundary the way a console request does, so an uncaught exception here would
+otherwise silently quarantine the message with no reply at all (the exact
+"silent drop" failure class this repo's own incident history flags).
+
+One process-wide caveat inherited from the bridge architecture generally (see
+"Worker Engine Selection" in CLAUDE.md): `tenant_id` for a bridge turn is
+`CORVIN_TENANT_ID` or `_default` for the WHOLE adapter process — there is no
+per-Discord-guild/per-Slack-workspace tenant mapping, so a scaffold from any
+channel on one adapter process lands under that one tenant's `plugin-builder/`
+dir and index.
+
 `InterviewSession.answer()` holds a per-instance lock for its whole body — two
 overlapping calls on the SAME session (a client retry, a double-submit) are
 serialized rather than racing on `_answer_index`/`_answers`. Adversarial review
@@ -1422,9 +1470,50 @@ independently of `plugin_console_surface`) reads it back and renders a
 because a scaffold was never registered (ADR-0244 still holds: recording it in
 the index is bookkeeping, not loading).
 
+### The runtime CLI half, and the wall it sat behind (2026-07-28)
+
+`corvin plugin` has two halves with two different owners.
+`ops/launcher/corvin/plugin_cmd.py` is the OFFLINE, ADR-0244 half (`types`,
+`new`, `check` — it never touches a registry), and
+`ops/launcher/corvin/plugin_runtime_cmd.py` is the RUNTIME half (`install`,
+`uninstall`, `list`, `enable`, `disable` against
+`corvin_plugins.tenant_plugins.TenantPluginRegistry`).
+
+Until 2026-07-28 **the whole runtime half was unreachable**: all five commands
+imported `core.plugins.tenant_plugins`, a module that has never existed under
+that name (`core/` has no `__init__.py`; the package ships and is imported as
+`corvin_plugins`). Each one hit its own `except ImportError` and exited 2 with
+`plugin system not available: No module named 'core.plugins.tenant_plugins'`.
+
+Two further defects were sitting *behind* that wall, unreachable and therefore
+untested, and only appeared once the import was fixed and the round trip
+actually ran:
+
+* `corvin plugin new` emitted the legacy `layer:` key, so `corvin plugin check`
+  warned about the manifest it had itself just generated — the "scaffolds
+  contradicted their own manifest" class again (cf. 51f7f8a). The key is
+  `boot_layer`; see the boot-layer axis section above for why `layer` is a name
+  this repo cannot use.
+* `TenantPluginEntry.installed_at` was `datetime.now(timezone.utc).isoformat()
+  + "Z"` → `…+00:00Z`, two timezone designators and not valid RFC 3339.
+
+The lesson is the one `surface_map.py` states one level up, restated for a CLI:
+an `except ImportError` that prints a plausible sentence is indistinguishable
+from a feature that is merely off. A dead mechanism needs a call-site test —
+here, a test that runs the command.
+
 ### Must NOT do
 
 - Don't add a second `PluginRegistry`, lifecycle, or plugin taxonomy.
+- Don't import a `core.*` dotted path from the launcher. `core/` is not a
+  package; every shipped module under it is remapped to a TOP-LEVEL name by
+  `[tool.hatch.build.targets.wheel.sources]` (`corvin_plugins`, `plugin_builder`,
+  `corvin_compute`, …). `core.plugins.tenant_plugins` is what made all five
+  runtime plugin commands dead code.
+- Don't read a runtime asset that the wheel's `**/*.md` exclude eats.
+  `plugin_builder/templates/skill_plugin.md` was the whole SKILL scaffold path
+  and shipped in no wheel; non-`.py` assets need an explicit `force-include`
+  entry, which bypasses `exclude`.
 - Don't wrap `assert_compliance()` in `except: pass`, and don't move it after the
   first request is served.
 - Don't build a `PluginContext` by hand at a new call site — use
