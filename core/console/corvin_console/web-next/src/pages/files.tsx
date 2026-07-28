@@ -232,7 +232,12 @@ export function FilesPage() {
   const csrf = session?.csrf_token ?? "";
   const qc = useQueryClient();
 
-  const [selectedDir, setSelectedDir] = React.useState("files");
+  // Start at the tenant ROOT (not the empty files/ cloud zone) so the user
+  // immediately sees ALL the data Corvin keeps for them — sessions/, browser/,
+  // compute/, global/, files/ — for data transparency (GDPR Art. 15). Secret
+  // material (keys/, secrets.enc, BYOK PEMs, audit chain) stays hidden by the
+  // backend access policy.
+  const [selectedDir, setSelectedDir] = React.useState("");
   const [previewPath, setPreviewPath] = React.useState<string | null>(null);
   const [dragging, setDragging] = React.useState(false);
   const [showMkdir, setShowMkdir] = React.useState(false);
@@ -446,6 +451,14 @@ export function FilesPage() {
             >
               Cancel
             </Button>
+          </div>
+        )}
+
+        {/* Root data-transparency note (GDPR Art. 15) */}
+        {selectedDir === "" && (
+          <div className="shrink-0 border-b bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
+            This is your tenant folder — every piece of data Corvin stores for
+            you. Keys, secrets and the audit log are hidden for security.
           </div>
         )}
 
