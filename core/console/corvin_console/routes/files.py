@@ -10,7 +10,9 @@ Extends the read-only workspaces endpoint with mutation endpoints:
   POST /files/mkdir     — create directory
 
 Access levels:
-  none  — audit.jsonl, policy.json, secrets.json, recall.db, etc.: blocked
+  none  — audit.jsonl, policy.json, secrets.json/.enc, recall.db, .env, the
+          keys/ dir + tenant_master.key, BYOK PEMs, and ANY .key/.pem/.p12/.pfx
+          material anywhere in the tree: blocked (GDPR Art. 32)
   read  — forge/, skill-forge/: list + download only
   full  — everything else (tenants/<tid>/files/ is the cloud zone)
 """
@@ -56,6 +58,19 @@ def _tenant_used_bytes(root: Path) -> int:
 _NO_ACCESS: frozenset[str] = frozenset({
     "audit.jsonl", "policy.json", "secrets.json", "recall.db",
     ".env", "instance_id.json", "vault",
+    # New tenant architecture (2026-07): the old name-only list predates
+    # secrets.enc / the keys/ dir / BYOK PEMs, so all of them were served at
+    # "full" and downloadable by any authenticated session — a full secret
+    # compromise (the master key decrypts secrets.enc). Block them explicitly
+    # AND by suffix below (defense in depth). GDPR Art. 32.
+    "secrets.enc", "keys", "tenant_master.key",
+    "byok_privkey.pem", "byok_pubkey.pem", "byok.key",
+})
+
+# Any key / certificate material is protected wherever it sits in the tree —
+# a suffix rule catches a new secret file that lands outside the named set.
+_NO_ACCESS_SUFFIXES: frozenset[str] = frozenset({
+    ".key", ".pem", ".p12", ".pfx", ".keystore", ".jks",
 })
 
 _READ_ONLY: frozenset[str] = frozenset({"forge", "skill-forge"})
@@ -81,6 +96,10 @@ def _access(rel_path: str) -> Literal["full", "read", "none"]:
     # any authenticated session (round-2 HIGH). Scan ALL parts for a NO_ACCESS
     # component first, THEN decide read/full.
     if any(part in _NO_ACCESS for part in parts):
+        return "none"
+    # Key/cert material anywhere in the path is protected regardless of its
+    # parent dir — catches secret files the name-only set doesn't enumerate.
+    if any(Path(part).suffix.lower() in _NO_ACCESS_SUFFIXES for part in parts):
         return "none"
     if any(part in _READ_ONLY for part in parts):
         return "read"

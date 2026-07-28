@@ -43,6 +43,37 @@ class FilesAccessControlTests(unittest.TestCase):
         self.assertEqual(_access("outputs/report.md"), "full")
         self.assertEqual(_access(""), "full")
 
+    def test_new_tenant_architecture_secrets_blocked(self):
+        """Regression (2026-07-28): the name-only NO_ACCESS list predated the
+        new tenant architecture, so keys/tenant_master.key, secrets.enc and the
+        BYOK PEMs were served at 'full' — a full secret compromise via
+        /files/download. All must be 'none'."""
+        for p in (
+            "keys",
+            "keys/tenant_master.key",
+            "global/secrets.enc",
+            "global/agent/byok_privkey.pem",
+            "global/agent/byok_pubkey.pem",
+        ):
+            self.assertEqual(_access(p), "none", f"{p} must be protected")
+
+    def test_key_and_cert_suffixes_blocked_anywhere(self):
+        """Any key/cert material is protected wherever it lands — defense in
+        depth against a secret file outside the enumerated name set."""
+        for p in (
+            "sessions/x/whatever.key",
+            "files/uploaded_cert.pem",
+            "global/some.p12",
+            "a/b/c/private.pfx",
+        ):
+            self.assertEqual(_access(p), "none", f"{p} must be protected by suffix")
+
+    def test_user_data_dirs_stay_visible(self):
+        """The point of the feature: the user's own data dirs remain browsable."""
+        for p in ("sessions", "browser", "compute", "global", "global/memory",
+                  "files", "sessions/voice/discord"):
+            self.assertEqual(_access(p), "full", f"{p} should stay visible")
+
 
 if __name__ == "__main__":
     unittest.main()
