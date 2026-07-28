@@ -35,8 +35,8 @@ def cmd_install(args: argparse.Namespace) -> int:
     from corvinOS.shared.paths import _resolve_tenant_id
 
     try:
-        from core.plugins.tenant_plugins import get_tenant_registry
-        from core.plugins.corvin_plugins.validation import validate_manifest_file
+        from corvin_plugins.tenant_plugins import get_tenant_registry
+        from corvin_plugins.validation import validate_manifest_file
     except ImportError as exc:
         _err(f"plugin system not available: {exc}")
         return 2
@@ -112,7 +112,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     from corvinOS.shared.paths import _resolve_tenant_id
 
     try:
-        from core.plugins.tenant_plugins import get_tenant_registry
+        from corvin_plugins.tenant_plugins import get_tenant_registry
     except ImportError as exc:
         _err(f"plugin system not available: {exc}")
         return 2
@@ -139,7 +139,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     from corvinOS.shared.paths import _resolve_tenant_id
 
     try:
-        from core.plugins.tenant_plugins import get_tenant_registry
+        from corvin_plugins.tenant_plugins import get_tenant_registry
     except ImportError as exc:
         _err(f"plugin system not available: {exc}")
         return 2
@@ -180,7 +180,7 @@ def cmd_enable(args: argparse.Namespace) -> int:
     from corvinOS.shared.paths import _resolve_tenant_id
 
     try:
-        from core.plugins.tenant_plugins import get_tenant_registry
+        from corvin_plugins.tenant_plugins import get_tenant_registry
     except ImportError as exc:
         _err(f"plugin system not available: {exc}")
         return 2
@@ -205,7 +205,7 @@ def cmd_disable(args: argparse.Namespace) -> int:
     from corvinOS.shared.paths import _resolve_tenant_id
 
     try:
-        from core.plugins.tenant_plugins import get_tenant_registry
+        from corvin_plugins.tenant_plugins import get_tenant_registry
     except ImportError as exc:
         _err(f"plugin system not available: {exc}")
         return 2

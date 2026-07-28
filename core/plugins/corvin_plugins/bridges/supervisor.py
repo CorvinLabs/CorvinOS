@@ -420,6 +420,17 @@ class BridgeSupervisorPlugin:
             pass
         # Prefer the validated node for anything the daemon itself spawns.
         env["PATH"] = str(Path(node).parent) + os.pathsep + env.get("PATH", "")
+        # The daemon runs from the runtime dir (cwd=rt below) where only
+        # shared/js is mirrored, so it cannot reach the Python CLIs its in-chat
+        # commands shell out to by walking up from __dirname. bridge_manager's
+        # own two spawn sites set the same variable; this is the third, and it
+        # borrows the path from bridge_manager rather than deriving its own
+        # (the module docstring's "never reimplement process knowledge" rule).
+        try:
+            env.setdefault(
+                "CORVIN_BRIDGE_OPERATOR_ROOT", str(bm._BRIDGE_DIR.parent))
+        except Exception:  # noqa: BLE001 — a missing hint only restores the old behaviour
+            pass
 
         try:
             log_fh: Any = open(rt / "daemon-start.log", "ab")

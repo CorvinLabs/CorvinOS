@@ -1576,19 +1576,34 @@ persona was removed in v1.2.
 ## Layer 29.5 Phase 3 — Adaptive OS-Turn Model Selection (ADR-0024)
 
 Phase 3 replaces Phase 2's static `helper_model_default` flag with a
-**4-Tier adaptive selector** that picks Haiku for small turns and
+**6-Tier adaptive selector** that picks Haiku for small turns and
 Sonnet for large ones automatically, with a Persona-Floor pin for
 safety-critical personas (forge) and a Retry-on-Thrashing backstop.
 
-### 4-Tier resolution order (`_resolve_os_model`)
+**Single source of truth (fixed 2026-07-27):** the resolution cascade
+lives in ONE place — `operator/bridges/shared/model_selector.py::resolve_os_model()`.
+Both the console web-chat (`chat_runtime.py`) and the bridge adapter
+(`adapter.py::_resolve_os_model_bundled`, a thin backward-compat wrapper)
+call this same function. Before this fix, `chat_runtime.py` hand-rolled
+only Tier 1 + Tier 3 and never consulted Tier 2.5 — the console's own
+"OS Model" setting under Settings → AI Engines (`spec.engine_models.<engine_id>.os_model`)
+had no effect on the console's own chat, only on bridges.
+
+### 6-Tier resolution order (`model_selector.resolve_os_model()`)
 
 ```
-1. CORVIN_OS_MODEL_OVERRIDE env       → operator kill-switch (beats explicit)
-2. profile.model                       → explicit per-persona/profile pin
-3. autoselect_os_model(payload_chars)  → adaptive (default path)
-   + apply_floor(chosen, os_model_floor)
-4. None                                → CLI subscription default (Opus/Sonnet)
+1.   CORVIN_OS_MODEL_OVERRIDE env                            → operator kill-switch (beats explicit)
+2.   profile.model                                            → explicit per-persona/profile pin
+1.5. profile._persona_os_model                                → per-persona pin (ADR-0123)
+2.5. spec.engine_models.<engine_id>.os_model in tenant YAML   → per-engine tenant default (ADR-0119)
+2.7. ADR-0043 workload classification (CHAT fast-path only)   → opt-in tenant feature flag
+3.   autoselect_os_model(payload_chars) + apply_floor          → adaptive (default path)
+4.   None                                                      → CLI subscription default (Opus/Sonnet)
 ```
+
+A caller with no persona/profile concept (the console) passes `profile=None`;
+Tiers 2 and 1.5 then no-op and fall through to Tier 2.5, which is the tier
+that makes the two surfaces agree.
 
 **Tier 1** wins over everything including `model:` — use for incident
 response without editing every persona.
@@ -1910,10 +1925,18 @@ narrower bound always wins) and is race-safe capped at
 
 - `Corvin-ADR: decisions/0024-adaptive-os-model-selection.md` — the ADR
 - `Corvin-ADR: decisions/0112-acs-worker-model-inheritance.md` — worker split
-- `operator/bridges/shared/model_selector.py` — core module
+- `operator/bridges/shared/model_selector.py::resolve_os_model()` — the single
+  6-Tier resolver both surfaces call (moved here from
+  `adapter.py::_resolve_os_model_bundled` 2026-07-27, see ADR-0119/0123)
 - `operator/bridges/shared/test_model_selector.py` — 37 cases
+- `operator/bridges/shared/test_os_model_single_source_of_truth.py` — proves
+  console (`profile=None`) and bridge (`profile={}`) resolve identically
 - `operator/bridges/shared/test_adapter_os_model.py` — Phase-3 cases
-- `operator/bridges/shared/adapter.py::_resolve_os_model` — 4-Tier resolver
+- `operator/bridges/shared/adapter.py::_resolve_os_model` — composing wrapper
+  (bundled 6-Tier answer + ADR-0251 hook); bundled tier now delegates to
+  `model_selector.resolve_os_model()`
+- `core/console/corvin_console/chat_runtime.py` — console call site, same
+  `model_selector.resolve_os_model()` call, `profile=None`
 - `operator/bridges/shared/adapter.py::_resolve_spawn_inputs` — Phase-3c estimator wiring
 - `operator/forge/forge/security_events.py` — `os_model.*` event types
 - `core/gateway/corvin_gateway/audit_metrics.py` — 2 new metric families

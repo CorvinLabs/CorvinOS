@@ -34,8 +34,10 @@ OLD: Bridge-centric Monolith
   └─ One crash = everything down
 
 NEW: Headless Core + Open Core Plugins
-  ├─ boot_layer=compliance  = immutable regulatory mechanisms
-  ├─ boot_layer=core        = bundled reference implementations, replaceable
+  ├─ boot_layer=compliance  = immutable regulatory mechanisms (Audit, Consent, Flow Guard, House Rules, Erasure)
+  ├─ boot_layer=core        = two classes:
+  │   ├─ immutable, License-gated: A2A Orchestration, Continuance (Recall), TDE, Delegation, Workflows
+  │   └─ replaceable reference implementations: Engine Control, Voice Summary, Admin API
   ├─ boot_layer=bundled     = shipped in the wheel, enable/disable per tenant
   └─ boot_layer=installed   = user-installed into the tenant plugin directory
 ```

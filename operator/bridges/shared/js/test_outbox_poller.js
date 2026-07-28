@@ -10,7 +10,7 @@ const fs   = require('fs');
 const os   = require('os');
 const path = require('path');
 
-const { startOutboxPoller } = require('./outbox');
+const { startOutboxPoller, countPending } = require('./outbox');
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'corvin-outbox-test-'));
 
@@ -277,6 +277,63 @@ async function main() {
   assert(fs.existsSync(path.join(dlDead, 'truncated.json.reason.json')),
          'the diagnosis sidecar says why');
   fs.rmSync(dlRoot, { recursive: true, force: true });
+
+  // 12. Regression (incident 2026-07-27): a preCheck that stays false forever
+  //     settles every tick instantly, so `stalled_s` (test 10) never sees it —
+  //     that gap let a Discord daemon look healthy (`poller_stalled_s: 0`)
+  //     for 90 minutes while 5 replies sat undelivered with zero log lines.
+  //     A stuck preCheck must be logged the same way a stuck tick is.
+  const pcRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'outbox-precheck-'));
+  fs.writeFileSync(path.join(pcRoot, 'h.json'), JSON.stringify({ channel: 'testchan', text: 'gated' }));
+  const logs12 = [];
+  let pcReady = false;
+  const poller12 = startOutboxPoller({
+    outboxDir: pcRoot,
+    channel: 'testchan',
+    sendFn: async () => {},
+    preCheck: () => pcReady,
+    logger: (m) => logs12.push(m),
+    intervalMs: 20,
+    stallWarnMs: 80,
+  });
+  await sleep(250);
+  assert(logs12.some((m) => m.includes('preCheck has been blocking delivery')),
+         'a preCheck stuck false is logged, not silent');
+  assert(logs12.filter((m) => m.includes('preCheck has been blocking delivery')).length === 1,
+         'the preCheck-stall log is deduped, not spammed every 20ms tick');
+  const st12 = poller12.stats();
+  // Rounded to whole seconds (like stalled_s in test 10) — at these ms-scale
+  // test intervals it may legitimately round to 0, so only the type/shape is
+  // checked here; the "> 0 while stuck" behavior is exercised for real by the
+  // dedup-log assertion above, which only fires once stalledMs > stallWarnMs.
+  assert(st12.precheck_stalled_s >= 0 && typeof st12.precheck_stalled_s === 'number',
+         'stats() exposes precheck_stalled_s for /status');
+
+  // preCheck flipping true clears the stall and lets delivery resume — the
+  // gate is transient (a reconnect), not a permanent failure.
+  pcReady = true;
+  await sleep(100);
+  poller12.stop();
+  assert(!fs.existsSync(path.join(pcRoot, 'h.json')), 'delivery resumes once preCheck passes again');
+  assert(poller12.stats().precheck_stalled_s === 0, 'precheck_stalled_s resets once the gate opens');
+  fs.rmSync(pcRoot, { recursive: true, force: true });
+
+  // 13. countPending() — the SHARED outbox directory holds every channel's
+  //     envelopes. A naive `readdirSync(...).length` (removed 2026-07-27)
+  //     reported the same total for whatsapp/discord/email regardless of
+  //     which channel actually owned the backlog. countPending must filter
+  //     by the envelope's own `channel` field.
+  const cpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'outbox-countpending-'));
+  fs.writeFileSync(path.join(cpRoot, 'x1.json'), JSON.stringify({ channel: 'discord', text: 'a' }));
+  fs.writeFileSync(path.join(cpRoot, 'x2.json'), JSON.stringify({ channel: 'discord', text: 'b' }));
+  fs.writeFileSync(path.join(cpRoot, 'x3.json'), JSON.stringify({ channel: 'email', text: 'c' }));
+  fs.writeFileSync(path.join(cpRoot, 'x4.json'), 'not valid json');
+  fs.writeFileSync(path.join(cpRoot, 'x5.txt'), 'ignored, not .json');
+  assert(countPending(cpRoot, 'discord') === 2, 'counts only envelopes for the requested channel');
+  assert(countPending(cpRoot, 'email') === 1, 'a different channel gets its own count, not the shared total');
+  assert(countPending(cpRoot, 'whatsapp') === 0, 'a channel with no envelopes counts zero, not the total');
+  assert(countPending('/no/such/dir', 'discord') === 0, 'a missing outbox directory counts zero, does not throw');
+  fs.rmSync(cpRoot, { recursive: true, force: true });
 
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 

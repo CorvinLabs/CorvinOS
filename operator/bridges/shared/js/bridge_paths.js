@@ -113,8 +113,48 @@ function legacyBridgeRuntimeDir(channel, kind) {
   return path.join(channelDir, kind);
 }
 
+// ── Where the Python CLIs live (source/vendored tree, NOT the runtime dir) ───
+//
+// A daemon runs from `<corvin_home>/bridges/<channel>/` on every wheel install
+// (`bridge_manager.start_channel_detached` → `Popen(cwd=runtime_dir)`), and
+// `_materialise_shared_js()` mirrors ONLY `shared/js/*.{js,mjs,cjs,json}` next
+// to it. So `__dirname/..` — which in_chat_commands.js used for all 17 of its
+// `*_CLI` constants, plus the six under `voice/scripts/` — resolved to
+// `<corvin_home>/bridges/shared/`, a directory that contains inbox/, outbox/
+// and js/ and not one Python file. Every slash command that shells out
+// (`/new`, `/reset`, `/engine`, `/role`, `/grant`, `/quota`, `/audit`,
+// `/consent`, `/join`, `/pass`, `/goal`, `/objective`, `/propose`,
+// `/dialectic*`, `/ps`, `/kill`, `/lang`, `/profile`, `/settings`, `/a2a`, …)
+// therefore failed with ENOENT on a pip install while working perfectly in a
+// git checkout, where `__dirname/..` happens to BE the source tree.
+//
+// `CORVIN_BRIDGE_OPERATOR_ROOT` is exported by bridge_manager when it spawns a
+// daemon; the self-locating fallback keeps a hand-started source-tree daemon
+// (the dev setup, and how every existing install runs today) working unchanged.
+function operatorRoot() {
+  const env = process.env.CORVIN_BRIDGE_OPERATOR_ROOT;
+  if (env && fs.existsSync(path.join(env, 'bridges', 'shared'))) {
+    return path.resolve(env);
+  }
+  // __dirname = <operator>/bridges/shared/js  →  <operator>
+  return path.resolve(__dirname, '..', '..', '..');
+}
+
+/** Absolute path of a Python CLI in `operator/bridges/shared/`. */
+function bridgeSharedPy(name) {
+  return path.join(operatorRoot(), 'bridges', 'shared', name);
+}
+
+/** Absolute path of a Python CLI in `operator/voice/scripts/`. */
+function voiceScript(name) {
+  return path.join(operatorRoot(), 'voice', 'scripts', name);
+}
+
 module.exports = {
   corvinHome,
+  operatorRoot,
+  bridgeSharedPy,
+  voiceScript,
   bridgesHome,
   bridgeChannelDir,
   bridgeRuntimeDir,

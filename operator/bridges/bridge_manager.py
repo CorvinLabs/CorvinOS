@@ -50,7 +50,24 @@ _BRIDGE_DIR = Path(__file__).parent
 # signal + teams were long console-configurable but absent here — the console
 # saved their settings and then NOTHING could ever start the daemons (silent
 # half-wiring, fresh-install audit 2026-07-22). Both have complete daemons.
-_CHANNELS = ["discord", "telegram", "whatsapp", "slack", "email", "signal", "teams"]
+# Since 2026-07-28 the list lives in ONE place (shared/channels.py) because the
+# same omission had independently re-occurred in session_reset, settings_view
+# and bridges_migrate; the fallback keeps this module importable if it is ever
+# loaded without shared/ reachable.
+# APPEND, never insert(0): shared/ holds ~200 flat modules with names like
+# `audit`, `paths`, `profile`, `types` and `channels`, and prepending that
+# directory makes every one of them shadow a stdlib or site-packages module for
+# the whole launcher process. That exact mistake killed the webui service once
+# (`operator/__init__.py` shadowing stdlib `operator`, 5187bd4) and was fixed
+# once already in the plugin loader (94325c8).
+_SHARED_DIR = str(_BRIDGE_DIR / "shared")
+if _SHARED_DIR not in sys.path:
+    sys.path.append(_SHARED_DIR)
+try:
+    from channels import BRIDGE_CHANNELS as _CHANNELS_TUPLE  # type: ignore
+    _CHANNELS = list(_CHANNELS_TUPLE)
+except Exception:  # noqa: BLE001 — never let a path quirk break the launcher
+    _CHANNELS = ["discord", "telegram", "whatsapp", "slack", "email", "signal", "teams"]
 
 
 def _corvin_home() -> Path:
@@ -168,6 +185,16 @@ def _adapter_queue_env(env: dict) -> None:
     # daemons) resolves the SAME home.
     env["CORVIN_ADAPTER_SANDBOX"] = "0"
     env.setdefault("CORVIN_HOME", str(_corvin_home()))
+    # Where the Python CLIs live. Same reader≠writer split as the queues above,
+    # one layer up: shared/js is mirrored next to the daemon but shared/*.py and
+    # voice/scripts/*.py are not, so a daemon started here resolved every
+    # `*_CLI` constant in in_chat_commands.js into <corvin_home>/bridges/shared/,
+    # which holds no Python at all. `/new`, `/role`, `/quota`, `/consent`,
+    # `/goal`, `/engine`, `/audit` and the rest of the shell-out commands were
+    # ENOENT on every wheel install and fine in every git checkout, because
+    # there `__dirname/..` happens to be the source tree.
+    # See bridge_paths.js::operatorRoot (the reader).
+    env.setdefault("CORVIN_BRIDGE_OPERATOR_ROOT", str(_BRIDGE_DIR.parent))
 
 
 # ── Node.js discovery ──────────────────────────────────────────────────────────
@@ -596,6 +623,9 @@ def start_fg(channels: Optional[list[str]] = None) -> int:
                mutate_env: Optional["callable"] = None) -> None:  # type: ignore[name-defined]
         env = os.environ.copy()
         _load_service_env(env)
+        # Same reason as in start_channel_detached: these daemons also run from
+        # the runtime dir, where only shared/js was mirrored.
+        env.setdefault("CORVIN_BRIDGE_OPERATOR_ROOT", str(_BRIDGE_DIR.parent))
         if mutate_env is not None:
             mutate_env(env)
         proc = subprocess.Popen(cmd, cwd=cwd, env=env)
@@ -1095,6 +1125,11 @@ def start_channel_detached(
         # Prepend our node's bin dir so the daemon (and anything it spawns)
         # resolves the same >=20 node we validated, not an older system Node.
         env["PATH"] = str(Path(node).parent) + os.pathsep + env.get("PATH", "")
+        # The daemon runs from the RUNTIME dir (cwd=rt below) where only
+        # shared/js is mirrored, so it cannot find the Python CLIs its
+        # in-chat commands shell out to by walking up from __dirname.
+        # See _adapter_queue_env's note and bridge_paths.js::operatorRoot.
+        env.setdefault("CORVIN_BRIDGE_OPERATOR_ROOT", str(_BRIDGE_DIR.parent))
         if port:
             env.setdefault("WA_HTTP_PORT", str(port))
         cmd = [node, str(daemon)] + list(extra_args or [])

@@ -46,15 +46,27 @@ path before any model sees the task. Two things decide it, in this order:
    `delegation_policy.worker_engine_target(mode, force_delegate, is_big_data,
    tde_available, quota_ok)`:
 
-> **Reach (2026-07-26).** The **Console web-chat** calls the full rule. The
-> **messenger bridges** got the big-data half only, behind the dark
-> `bridge_big_data_delegation` flag (`adapter.py::_maybe_delegate_big_data`):
-> with the flag on, a big-data-shaped message fans out to ACS; everything else
-> — and every failure — runs the normal direct turn. Bridges still have no
-> `/delegate`, no TDE and no general fan-out. The **remote-trigger** path has
-> no Tier-1 delegation at all.
+> **Reach (2026-07-27, ADR-0255).** The **Console web-chat** calls the full
+> rule. The **messenger bridges** now have two paths, both dark by default:
 >
-> Both surfaces classify with the SAME `delegation_policy.is_big_data_task`
+> - `bridge_big_data_delegation` (`adapter.py::_maybe_delegate_big_data`,
+>   unchanged since 2026-07-26): big-data-shaped messages only, no
+>   `/delegate`, no triage heuristic, no mode-awareness.
+> - `bridge_worker_engine_parity` (`adapter.py::_maybe_delegate_worker`,
+>   ADR-0255): the FULL rule — the operator's `worker_engine` mode, an
+>   explicit `/delegate`, and the SAME triage heuristic the console runs
+>   (`chat_runtime.should_delegate_bundled`, imported directly — a bridge
+>   turn and a console turn given identical input classify identically).
+>   Falls back to the unchanged `bridge_big_data_delegation` path while off,
+>   so an existing install that has not opted in sees no behavior change.
+>   TDE stays unreachable from a bridge either way: `_worker_engine_target`
+>   hard-codes `tde_available=False`, so `mode="tde"` always degrades to the
+>   direct turn on a bridge (ADR-0221 P3/P4 stay frozen pending ADR-0222's
+>   measured gate — this ADR deliberately does not build TDE execution for
+>   bridges). The **remote-trigger** path still has no Tier-1 delegation at
+>   all.
+>
+> Both flags classify big-data with the SAME `delegation_policy.is_big_data_task`
 > (moved out of `chat_runtime.py` on 2026-07-26 — while it lived there the
 > bridges could not have routed big data even in principle).
 
@@ -64,9 +76,10 @@ path before any model sees the task. Two things decide it, in this order:
 | `acs` | ACS delegation_loop |
 | `tde` | TDE, while it is available and the pool has headroom; otherwise the direct OS-turn |
 
-An explicit `/delegate` and a big-data shape (`_is_big_data_task()` — explicit
-GB/TB volumes, million-row corpora, big-data/data-lake vocabulary) route to ACS
-in **every** mode; a stock (`native`) install performs no other auto-delegation.
+An explicit `/delegate` and a **structured-data** shape (`_is_big_data_task()`)
+route to ACS in **every** mode; a stock (`native`) install performs no other
+auto-delegation. Since 2026-07-28 that shape is spelled out affirmatively —
+see § 2a — and an ordinary request, prose, or a coding task no longer reaches it.
 Every degrade ends at the direct OS-turn, never at a different delegation
 engine: an unavailable TDE or an exhausted pool must not silently swap the
 operator's selection. (The ACS branch keeps its own hardened ADR-0201 ladder
@@ -95,6 +108,39 @@ had Tier 2 (adapter.py `<acs_directive>` injection); the console got it in
 `chat_runtime._acs_directive_block` (same shared classifier, heuristic stage
 only, fail-open). ATO (`ato_classify.py`, ADR-0165) stays a third, purely
 observational layer: audit hints, no routing.
+
+## 2a. What counts as a structured-data (auto-ACS) shape
+
+`delegation_policy._is_big_data_task()` is the ONE auto-delegation a `native`
+install performs, and every ACS run charges one `compute_units_per_day` — so
+the rule is affirmative and narrow (maintainer decision 2026-07-28). Four
+shapes, in the order they are checked:
+
+| # | Shape | Fires on | Does NOT fire on |
+|---|---|---|---|
+| 1 | **Big-data vocabulary** | "Big Data", "Data Lake", "Data Warehouse", "riesige Datenmengen/Datasets/Logfiles" | — (self-describing) |
+| 2 | **Tabular paste** | a pipe/markdown table of ≥ `_TABLE_MIN_ROWS` (10) content rows — the table IS the mass data | a 3-row table inside an ordinary question; the bare word "Tabelle" ("erstelle eine Tabelle" stays native) |
+| 3 | **Structured source + bulk work** | a CSV/TSV/Parquet/JSONL/XLSX/spreadsheet file **or** a database/SQL operation (`_DATA_FILE_RE` / `_DB_RE`), PAIRED with a bulk data verb (`_DATA_WORK_VERB_RE`: analysieren, aggregieren, gruppieren, joinen, importieren, bereinigen, deduplizieren, parsen, abfragen, …) **or** a volume | naming a source without doing data work — "Wie verbinde ich mich mit MySQL?", "Erkläre mir SQL", "Fasse die Datenbank-Migration zusammen" |
+| 4 | **Volume + data noun** (legacy) | a GB/TB/PB volume or a big count (millions, grouped ≥1e6, `500k`) tied to a data noun in the SAME clause | hardware volumes ("128 GB Arbeitsspeicher", "2 TB SSD" — `_HW_NOUN_RE`) and **code** clauses ("2 Millionen Zeilen Code", "3 TB Codebase-History" — `_CODE_NOUN_RE`) |
+
+The pairing in rule 3 is load-bearing: *naming* a database is not *doing*
+database work, and without it a smalltalk question that mentions SQL would burn
+a compute unit. The code carve-out in rule 4 is what finally makes
+"Coding never routes into the ACS fan-out" (§ 6) true for big-count coding
+prompts — "Zeilen" is a data noun, which is exactly how they used to slip
+through rule 1c, which sits ABOVE the coding gate.
+
+Everything else — ordinary conversation, prose, normal coding requests — is
+False, and False means the turn runs natively and costs no quota. That
+asymmetry is deliberate: a wrong positive spends the operator's daily pool on
+the wrong mechanism, a wrong negative only runs the turn on the documented
+degrade floor.
+
+The ReDoS bounds survive the additions: `_BIG_DATA_MAX_SCAN` (2000) still caps
+the task-description scan, the table row count gets its own larger
+`_TABLE_MAX_SCAN` (200 000) because table rows are payload rather than
+description, and every new regex is anchored with no variable-length run
+followed by a window.
 
 ## 3. The priority ladder (the actual decision order)
 
@@ -174,7 +220,7 @@ a capability the surface lacks.
 | Mechanism | Console web-chat | Messenger bridges | Voice | MCP (model-chosen) |
 |---|---|---|---|---|
 | Direct OS-turn | ✓ | ✓ | ✓ (via bridge) | — |
-| ACS fan-out | ✓ (triage/`/delegate`) | big-data only, behind `bridge_big_data_delegation` (dark) | ✗ | ✓ `acs_delegate` |
+| ACS fan-out | ✓ (triage/`/delegate`) | full triage/`/delegate`/mode behind `bridge_worker_engine_parity` (dark, ADR-0255); big-data-only fallback behind `bridge_big_data_delegation` (dark) while parity is off | ✗ | ✓ `acs_delegate` |
 | DAG workflows | ✓ (routes) | via MCP tools in-turn | via MCP | ✓ `workflow_run` |
 | Scheduler | via MCP/in-turn | ✓ (native, 30 s tick) | ✓ | — |
 | Goal | in-turn advisory | ✓ `/goal` | ✓ | — |
@@ -240,6 +286,18 @@ only via `run_delegate(budget_ceiling_s=…)`, never from the MCP tool surface
   ties volumes to a DATA noun in either
   order, so "3 GB RAM" / "128 GB Arbeitsspeicher" (hardware) never route to
   the ACS fan-out; grouped ("1.000.000") and suffixed ("500k") counts match.
+  Since 2026-07-28 it additionally requires a STRUCTURED-DATA shape (§ 2a) —
+  CSV/spreadsheet file, database/SQL work, or a real tabular paste — and
+  carves out code clauses. Do not widen it back to "any volume + any data
+  noun", and do not make a bare source mention (the word "Datenbank", "SQL",
+  or "Tabelle") sufficient on its own: both regressions put ordinary chat
+  turns on the metered fan-out.
+- A chat turn surfaces at most `_MAX_TURN_ARTIFACTS` (20) artifact chips, and
+  runtime bookkeeping trees (`_SESSION_INTERNAL_DIRS` — `acs/`, `tasks/`,
+  `tde/`, `voice/`) are never chat artifacts at all. Filtering happens BEFORE
+  the cap so internal state cannot consume a real output file's budget, and
+  truncation emits an `artifacts_truncated` notice rather than dropping files
+  silently. See § 7a.
 - The TDE plan is untrusted LM output: `initial_analysis.from_dict` REJECTS a
   plan over `MAX_PLAN_STEPS` (64) and clamps per-step / total token estimates,
   and the executor bounds real subprocess fan-out per batch
@@ -294,6 +352,30 @@ now handles:
   the manager semantics instead of reusing `acs_runtime._manager_loop`.
 - ATO (`ato_classify.py`) overlaps ACS-X vocabulary but stays advisory-only;
   candidates for merging into the shared table.
+
+## 7a. Delegation bookkeeping is not a chat artifact (2026-07-28)
+
+Every model-chosen `delegate_*` MCP call writes a WDAT run record under
+`<session>/acs/runs/<run_id>/{manifest,result}.json`
+(`corvin_delegate.delegation._write_wdat_run`) so the run shows up in the
+Agentic-Compute panel. That tree lives inside the session workdir, and the
+direct OS-turn's artifact scan diffs the WHOLE workdir
+(`after_files - _before_files`).
+
+In the console chat `web:ISGd-xIvqn` (2026-07-27) one turn made 72 such calls,
+so the scan emitted **144 artifact chips** — 72× `manifest.json`, 72×
+`result.json` — which is what the operator saw as "hundertmal dasselbe". Note
+what it was NOT: that turn ran `native` with `will_delegate: false`
+(`chat_debug.jsonl`), so no ACS fan-out was involved. The repeated chips were
+*named* after ACS runs, which is why the symptom read as an ACS problem.
+
+The ACS delegation branch already filtered these (`_ACS_SKIP_DIRS` /
+`_ACS_SKIP_ROOT_FILES`) — but only relative to its OWN `run_dir`, so the direct
+turn, which is the path that actually ran, had no filter at all. The scan now
+lives in `chat_runtime._scan_turn_artifacts()` (extracted so it is testable
+without a subprocess) and applies `_is_session_internal()` plus the
+`_MAX_TURN_ARTIFACTS` cap. Regression tests:
+`core/console/tests/test_turn_artifact_scan.py`.
 
 ## 8. TDE inline badge (chat UI, ADR-0214/0216)
 

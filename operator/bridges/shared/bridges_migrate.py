@@ -40,7 +40,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_CHANNELS = ("telegram", "discord", "slack", "whatsapp", "email")
+# Every shipped channel, from the one list (channels.py). The hand-written copy
+# that used to sit here listed five, so legacy Signal/Teams state under the
+# pre-ADR-0008 layout was never migrated to `<corvin_home>/bridges/<channel>/`.
+from channels import BRIDGE_CHANNELS as _CHANNELS  # noqa: E402
 
 # Directory-shaped sources: (channel, kind) → moves dir → dir.
 _DIR_KINDS = ("inbox", "outbox", "processed", "attachments", "auth")

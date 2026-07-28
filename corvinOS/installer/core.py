@@ -129,7 +129,13 @@ _SYSTEM_UNITS = [
 class CorvinInstaller:
     """Full installation orchestrator — driven by corvin-install / corvin-uninstall."""
 
-    BRIDGES = ["discord", "whatsapp", "telegram", "slack", "email"]
+    # All seven shipped channels. Kept in lockstep with
+    # operator/bridges/shared/channels.py::BRIDGE_CHANNELS by
+    # operator/bridges/shared/test_channel_list_ssot.py — this list held five
+    # until 2026-07-28, so an installer run could never select Signal or Teams
+    # even though both ship complete daemons and are startable from the Console.
+    BRIDGES = ["discord", "whatsapp", "telegram", "slack", "email",
+               "signal", "teams"]
 
     def __init__(self, interactive: bool = True, repo_root: "Path | None" = None):
         self.interactive = interactive
@@ -356,6 +362,8 @@ class CorvinInstaller:
             "telegram": "Chat via Telegram",
             "slack": "Chat via Slack",
             "email": "Receive tasks via email (IMAP/SMTP)",
+            "signal": "Chat via Signal (signal-cli REST API)",
+            "teams": "Chat via Microsoft Teams (Bot Framework)",
         }
 
         if not self.interactive:
@@ -388,7 +396,9 @@ class CorvinInstaller:
 
         print()
         while True:
-            choice = input("  Select a bridge [1-5] or [a]ll or [n]one: ").strip().lower()
+            _n = len(self.BRIDGES)
+            choice = input(
+                f"  Select a bridge [1-{_n}] or [a]ll or [n]one: ").strip().lower()
 
             if choice == "n":
                 self.selected_bridges = []
@@ -404,7 +414,8 @@ class CorvinInstaller:
                 print(f"  ✓ Selected: {self.BRIDGES[idx]}")
                 break
             else:
-                print("  ✗ Invalid choice. Enter a number 1-5, 'a' for all, or 'n' for none.")
+                print(f"  ✗ Invalid choice. Enter a number 1-{_n}, "
+                      "'a' for all, or 'n' for none.")
 
         if self.selected_bridges:
             print()
@@ -1017,7 +1028,10 @@ class CorvinInstaller:
 
             # WA-7: also sweep any per-bridge Scheduled Tasks left behind so a
             # bridge doesn't keep auto-launching after "uninstall".
-            for _bridge in ("discord", "telegram", "slack", "whatsapp", "email"):
+            # self.BRIDGES, not a third hand-written copy: this sweep listed
+            # five, so a Signal or Teams Scheduled Task kept auto-launching
+            # the bridge after the user had uninstalled CorvinOS.
+            for _bridge in self.BRIDGES:
                 _bt = f"CorvinOS-Bridge-{_bridge}"
                 try:
                     q = subprocess.run(

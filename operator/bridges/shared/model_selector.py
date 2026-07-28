@@ -530,6 +530,166 @@ def _write_event(event_type: str, details: dict) -> None:
         pass  # audit is observability; never crash the OS turn
 
 
+# ── ADR-0119/0123/0251 — the single OS-model resolver for BOTH surfaces ───────
+
+
+def resolve_os_model(
+    profile: dict | None,
+    *,
+    payload_chars: int = 0,
+    engine_id: str = "claude_code",
+    tenant_id: str = "_default",
+    workload_hint: dict | None = None,
+    chat_key: str | None = None,
+    audit_fn=None,
+) -> str | None:
+    """Layer 29.5 Phase 3 (ADR-0024) / ADR-0119 / ADR-0123 — 6-Tier adaptive OS model selection.
+
+    THE single source of truth for OS-turn model resolution. Both the console
+    web-chat (``chat_runtime.py``) and the bridge adapter (``adapter.py``) call
+    this SAME function so the two surfaces cannot silently diverge again:
+    before this, ``chat_runtime.py`` hand-rolled only Tier 1 + Tier 3 and
+    never consulted Tier 2.5 at all — the console's own "OS Model" setting
+    under Settings → AI Engines had no effect on the console's own chat.
+
+    Resolution order (top wins):
+      1.   CORVIN_OS_MODEL_OVERRIDE env                              → operator-wide kill-switch
+      2.   profile.model                                             → explicit per-persona/profile pin
+      1.5. profile._persona_os_model                                → per-persona pin (ADR-0123)
+      2.5. spec.engine_models.<engine_id>.os_model in tenant YAML   → per-engine tenant default (ADR-0119)
+      2.7. ADR-0043 workload classification (CHAT fast-path only)    → opt-in tenant feature flag
+      3.   autoselect(payload_chars) + floor                         → adaptive (default path)
+      4.   None                                                      → CLI subscription default
+
+    ``profile`` is optional — a caller with no persona/profile concept (the
+    console) passes ``None``; Tiers 2 and 1.5 then simply no-op and fall
+    through to Tier 2.5, which is the tier that matters for parity.
+
+    ``workload_hint`` / ``chat_key`` / ``audit_fn`` are ADR-0043 bridge
+    concerns: a caller that never passes ``workload_hint`` never reaches
+    Tier 2.7 and never needs to supply ``audit_fn``.
+
+    When ``CORVIN_OS_MODEL_AUTOSELECT=off``, Tier 3 is skipped → Tier 4
+    (``None``). On estimate failure, Tier 3 returns HIGH (Sonnet) as a safe
+    default — never silently picks LOW on an unknown payload size.
+    """
+    # Tier 1 — operator-wide kill-switch (wins even over explicit model:)
+    override = os_model_override()
+    if override:
+        return override
+
+    # Tier 2 — explicit per-persona / per-chat-profile pin
+    profile = profile or {}
+    explicit = profile.get("model")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+
+    # Tier 1.5 — per-persona JSON pin (ADR-0123); injected by call_claude_streaming
+    persona_os_model = profile.get("_persona_os_model")
+    if isinstance(persona_os_model, str) and persona_os_model.strip():
+        return persona_os_model.strip()
+
+    # Tier 2.5 — per-engine tenant default (ADR-0119)
+    try:
+        from engine_models import get_tenant_engine_model  # type: ignore  # noqa: PLC0415,I001
+    except ImportError:
+        try:
+            from .engine_models import get_tenant_engine_model  # type: ignore  # noqa: PLC0415
+        except Exception:  # noqa: BLE001
+            get_tenant_engine_model = None  # type: ignore
+    if get_tenant_engine_model is not None:
+        try:
+            tenant_os_model = get_tenant_engine_model(tenant_id, engine_id, "os_model")
+            if tenant_os_model:
+                return tenant_os_model
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Tier 2.7 — ADR-0043 workload classification (hybrid CHAT/CODE routing).
+    # The hint arrives as a PARAMETER threaded from the caller's request
+    # handler, NOT via env vars: os.environ is process-global in a daemon
+    # serving parallel chats/tenants, so an env channel is both racy and a
+    # cross-tenant leak by construction (adversarial review 2026-07-18).
+    # Only the CHAT fast-path acts here. CODE/UNCERTAIN fall through to the
+    # existing tiers (adaptive Tier 3 / subscription Tier 4) — ADR-0043 says
+    # "respect the user's model choice", and hard-pinning the full tier for
+    # CODE would bypass ADR-0112 adaptive selection.
+    if workload_hint:
+        try:
+            from engine_models import _load_tenant_spec, resolve_model_for_workload  # type: ignore  # noqa: PLC0415,I001,I001
+        except ImportError:
+            try:
+                from .engine_models import _load_tenant_spec, resolve_model_for_workload  # type: ignore  # noqa: PLC0415,I001
+            except Exception:  # noqa: BLE001
+                _load_tenant_spec = None  # type: ignore
+                resolve_model_for_workload = None  # type: ignore
+        if resolve_model_for_workload is not None:
+            try:
+                workload_class = str(workload_hint.get("workload") or "")
+                if workload_class == "chat":
+                    # Feature flag: (1) profile, (2) tenant YAML
+                    # spec.features.fast_chat_mode. Deliberately NO env-var
+                    # switch: a process-wide env flag would enable the
+                    # feature across all tenants (CLAUDE.md multi-tenant
+                    # rule) and bypass the operator's opt-in. Default false
+                    # → fail-closed.
+                    fast_chat_enabled = bool(profile.get("fast_chat_mode", False))
+                    if not fast_chat_enabled and _load_tenant_spec is not None:
+                        try:
+                            tenant_spec = _load_tenant_spec(tenant_id)
+                            fast_chat_enabled = bool(
+                                (tenant_spec.get("features") or {}).get("fast_chat_mode", False))
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if fast_chat_enabled:
+                        try:
+                            conf = float(workload_hint.get("confidence", 0.0))
+                        except (ValueError, TypeError):
+                            conf = 0.0
+                        model = resolve_model_for_workload(
+                            engine_id,
+                            workload_type=workload_class,
+                            user_chosen_model=None,  # explicit pin already returned at Tier 2
+                            confidence=conf,
+                            fast_chat_enabled=True,
+                        )
+                        if model:
+                            # ADR-0043 §6: audit every routing decision (BUG#15).
+                            # No user-message content — workload/confidence/model only.
+                            if audit_fn is not None:
+                                try:
+                                    audit_fn(
+                                        "bridge.workload_model_selection",
+                                        chat_key=chat_key or "unknown",
+                                        details={
+                                            "workload_type": workload_class,
+                                            "confidence": conf,
+                                            "selected_model": model,
+                                            "engine": engine_id,
+                                            "tier": "2.7_workload",
+                                        },
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    pass  # audit failure is non-fatal
+                            return model
+            except Exception:  # noqa: BLE001
+                pass  # Tier 2.7 routing failure is non-fatal; fall through to Tier 3
+
+    # Tier 3 — adaptive autoselect (the new default path)
+    if autoselect_enabled():
+        try:
+            chosen = autoselect_os_model(payload_chars)
+            floor = profile.get("os_model_floor")
+            chosen = apply_floor(chosen, floor)
+            return chosen
+        except Exception:  # noqa: BLE001
+            # estimate_failed → safe-default HIGH (never silently pick LOW)
+            return high_model()
+
+    # Tier 4 — fallthrough to CLI subscription default
+    return None
+
+
 # ── ADR-0251 — the `engine.model_selection` call site ─────────────────────────
 
 

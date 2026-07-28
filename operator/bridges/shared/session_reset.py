@@ -98,7 +98,13 @@ except Exception:  # noqa: BLE001
     _abp_cancel_session = None  # type: ignore[assignment]
 
 
-VALID_CHANNELS = ("discord", "telegram", "whatsapp", "slack", "email")
+# Every shipped channel, from the one list (channels.py). This tuple used to be
+# hand-written with five entries, which made `--channel signal` / `--channel
+# teams` an argparse error — so `/new` and `/reset` failed on both bridges with
+# "session reset failed: invalid choice" and the session was never reset.
+from channels import BRIDGE_CHANNELS  # noqa: E402  — local module, HERE is on sys.path
+
+VALID_CHANNELS = BRIDGE_CHANNELS
 VALID_REASONS = ("manual", "timeout")
 
 

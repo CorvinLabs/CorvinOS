@@ -36,6 +36,7 @@ const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
 const inChatCmds                = require('../shared/js/in_chat_commands');
 const { bridgeSettingsPath }    = require('../shared/js/bridge_paths');
+const { countPending }          = require('../shared/js/outbox');
 const {
   normalizeExecutionContext, shouldRenderContext,
   formatEngineId, formatDelegationMode, formatDuration, formatTokens,
@@ -526,7 +527,7 @@ startHealthServer({
     paired: imapReady,
     address: connectedAddress,
     whitelist_size: (currentSettings().whitelist || []).length,
-    pending_outbox: fs.readdirSync(OUTBOX).filter(f => f.endsWith('.json')).length,
+    pending_outbox: countPending(OUTBOX, CHANNEL),
   }),
 });
 

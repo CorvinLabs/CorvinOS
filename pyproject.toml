@@ -256,6 +256,11 @@ exclude = [
     "**/.pytest_cache/**",
     "**/.venv/**",
     "**/*.md",
+    # The plugin templates ship exactly once, at corvin_plugins/templates/ via
+    # the force-include below. Without this line the `core` package mapping ALSO
+    # dropped a second copy at core/plugins/templates/ — a path that is not on
+    # sys.path, so it was pure dead weight in every wheel.
+    "core/plugins/templates/**",
     "**/requirements.txt",
     "**/bootstrap.sh",
     "**/install-systemd.sh",
@@ -310,6 +315,10 @@ path = "hatch_build.py"
 # ("second file added at the same path"), and would drop core/awpkg/awpkg.py next to
 # the awpkg/ package.
 "core/plugins/corvin_plugins" = "corvin_plugins"
+# Plugin-Builder (ADR-0253) — a sibling package next to corvin_plugins, same
+# remap reason as the line above: without it the package ships at
+# core/plugins/plugin_builder/ in site-packages, which is off sys.path.
+"core/plugins/plugin_builder" = "plugin_builder"
 "core/observability/corvin_logging" = "corvin_logging"
 "core/compliance/corvin_compliance_reports" = "corvin_compliance_reports"
 "core/compute/corvin_compute" = "corvin_compute"
@@ -332,6 +341,14 @@ path = "hatch_build.py"
 # described above: nothing wrong in the repo, nothing red in CI, dead in the wheel.
 # `plugin_cmd._template_path` looks here second, after the source-tree location.
 "core/plugins/templates" = "corvin_plugins/templates"
+# Plugin-Builder's own scaffold template for a SKILL plugin (ADR-0253). Its
+# siblings are .py and ride along with the `core/plugins/plugin_builder`
+# package mapping; this one is .md and the generic `**/*.md` exclude above ate
+# it, so `/plugin-builder` raised FileNotFoundError the moment the classifier
+# said "skill" — on every pip install, never in a checkout. Verified against a
+# built wheel 2026-07-28. Named as a single file rather than the directory so
+# it cannot collide with the .py siblings the package mapping already ships.
+"core/plugins/plugin_builder/templates/skill_plugin.md" = "plugin_builder/templates/skill_plugin.md"
 # Ship the pre-built React SPA so `pip install corvinOS` works
 # without requiring npm on the target machine. The wheel builder must run
 # `npm run build` in core/console/corvin_console/web-next/ before packaging.

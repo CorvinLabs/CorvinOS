@@ -36,7 +36,7 @@ const { Client, GatewayIntentBits, IntentsBitField, Partials, AttachmentBuilder 
 const { makeLogger }            = require('../shared/js/logger');
 const { makeSettingsAccessor }  = require('../shared/js/settings');
 const { makeAuth }              = require('../shared/js/auth');
-const { startOutboxPoller }     = require('../shared/js/outbox');
+const { startOutboxPoller, countPending } = require('../shared/js/outbox');
 const { isNetworkError, networkUp } = require('../shared/js/net_probe');
 const { startHealthServer }     = require('../shared/js/health-server');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
@@ -1101,12 +1101,17 @@ startHealthServer({
     paired: !!client.user,
     bot_tag: client.user?.tag || null,
     whitelist_size: (currentSettings().whitelist || []).length,
-    pending_outbox: fs.readdirSync(OUTBOX).filter(f => f.endsWith('.json')).length,
+    pending_outbox: countPending(OUTBOX, CHANNEL),
     // Delivery liveness. `paired` and an open gateway socket say nothing about
     // whether the outbox is draining — on 2026-07-26 both looked healthy for
     // 38 minutes while a wedged poller delivered nothing. poller_stalled_s > 0
     // is the signal a watchdog needs to restart this daemon.
     poller_stalled_s: outboxPoller.stats().stalled_s,
+    // `client.isReady()` (this daemon's preCheck) can also refuse forever
+    // without ever tripping poller_stalled_s — that gap is what let 5
+    // replies sit undelivered for 90 minutes on 2026-07-27 while this very
+    // field would have shown it. > 0 means preCheck is the blocker.
+    precheck_stalled_s: outboxPoller.stats().precheck_stalled_s,
   }),
 });
 

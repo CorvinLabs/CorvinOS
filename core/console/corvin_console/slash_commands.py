@@ -81,6 +81,11 @@ _HELP = (
     "- `/persona`, `/skills`, `/memory` — open the matching tab to manage these\n"
     "- `/dialectic-on`, `/dialectic-off` — toggle in the Engines/Settings tab\n"
     "- `/create workflow|task|tool|skill`, `/erase`, `/audit` — CCC entity actions\n"
+    "- `/delegate <task>` — force ACS delegation for this turn\n"
+    "- `/use-engine tiered_delegation|acs|claude_code <task>` — force a specific "
+    "engine for this turn\n"
+    "- `/engine-auto <task>` — explicit auto-detection (normal behavior)\n"
+    "- `/debug-engine <task>` — show engine-selection signals for this turn\n"
     "- `/plugin-builder` — interview-driven plugin design (Idea/Architecture/ADR"
     "/Plan + scaffold), `/plugin-builder status|cancel` — check or stop it\n"
     "- `/stop` (Stop button), `/new`, `/clear`, `/reset` — session controls\n"
@@ -105,65 +110,6 @@ def _plugin_builder_enabled(tenant_id: str) -> bool:
         return False
 
 
-def _plugin_builder_output_dir(tenant_id: str):
-    from forge import paths as _forge_paths  # noqa: PLC0415
-    return _forge_paths.tenant_home(tenant_id) / "plugin-builder"
-
-
-def _write_plugin_builder_artifacts(session, *, tenant_id: str) -> str:
-    from plugin_builder.generators import write_artifacts  # noqa: PLC0415
-
-    result = session.result()
-    if result is None:  # pragma: no cover — defensive; only reached on a state bug
-        return "Something went wrong — the interview did not reach a final result."
-    idea, classification = result
-    try:
-        scaffold = write_artifacts(idea, classification, _plugin_builder_output_dir(tenant_id))
-    except FileExistsError:
-        return (
-            f"A plugin named **{idea.plugin_name}** was already scaffolded "
-            "earlier — rename the idea and run `/plugin-builder` again."
-        )
-    except Exception as exc:  # noqa: BLE001 — never break the turn on a write failure
-        log.error("plugin-builder artifact write failed: %s", type(exc).__name__)
-        return (
-            "The interview finished but writing the artifacts failed "
-            f"({type(exc).__name__}). Nothing was left half-written; try "
-            "`/plugin-builder` again."
-        )
-
-    try:
-        from plugin_builder import index_store  # noqa: PLC0415
-        index_store.record(tenant_id, idea, scaffold)
-    except Exception as exc:  # noqa: BLE001 — the scaffold is already on disk;
-        # a listing-index failure must never look like the write itself failed.
-        log.error("plugin-builder index record failed: %s", type(exc).__name__)
-
-    lines = [
-        f"Done — classified as **{classification.kind.value}** "
-        f"(Tier {classification.tier.value}, "
-        f"confidence {classification.confidence:.0%}).",
-        f"Written to `{scaffold.dest}`:",
-        *(f"- `{p.name}`" for p in scaffold.scaffold_files),
-        *(f"- `docs/{p.name}`" for p in scaffold.doc_files),
-        "",
-        "See it listed under Settings → Plugins → Scaffolded by Plugin-Builder.",
-    ]
-    lines.extend(f"⚠ {w}" for w in scaffold.warnings)
-    return "\n".join(lines)
-
-
-def _drive_plugin_builder(session, text: str, *, tenant_id: str, fingerprint: str) -> str:
-    from plugin_builder import session_store  # noqa: PLC0415
-
-    reply = session.answer(text)
-    if session.is_finished():
-        if session.phase.value == "done":
-            reply = f"{reply}\n\n{_write_plugin_builder_artifacts(session, tenant_id=tenant_id)}"
-        session_store.clear(tenant_id, fingerprint)
-    return reply
-
-
 def _plugin_builder_continue(text: str, *, tenant_id: str, fingerprint: str) -> "str | None":
     """Route a non-slash turn to an active interview, if one exists.
 
@@ -177,9 +123,15 @@ def _plugin_builder_continue(text: str, *, tenant_id: str, fingerprint: str) -> 
     `_tenant_spec`); checking it first would put a disk read on EVERY plain-
     text turn on EVERY install, flag on or off, when the overwhelming common
     case (no active interview) never needs one.
+
+    The interview state machine, artifact writing and reply text all live in
+    ``plugin_builder.turn`` — the messenger bridges drive the exact same
+    module via ``operator/bridges/shared/adapter.py``'s own thin wrapper, so
+    the two transports can never drift.
     """
     try:
         from plugin_builder import session_store  # noqa: PLC0415
+        from plugin_builder import turn as _pb_turn
     except ImportError:
         return None
     session = session_store.get(tenant_id, fingerprint)
@@ -190,7 +142,7 @@ def _plugin_builder_continue(text: str, *, tenant_id: str, fingerprint: str) -> 
         # rather than let a now-disabled feature keep consuming turns.
         session_store.clear(tenant_id, fingerprint)
         return None
-    return _drive_plugin_builder(session, text, tenant_id=tenant_id, fingerprint=fingerprint)
+    return _pb_turn.drive(session, text, tenant_id=tenant_id, session_key=fingerprint)
 
 
 def _plugin_builder_command(arg: str, *, tenant_id: str, fingerprint: str) -> str:
@@ -200,30 +152,10 @@ def _plugin_builder_command(arg: str, *, tenant_id: str, fingerprint: str) -> st
             "**Settings → Features** (`plugin_builder_enabled`)."
         )
     try:
-        from plugin_builder import session_store  # noqa: PLC0415
+        from plugin_builder import turn as _pb_turn  # noqa: PLC0415
     except ImportError:
         return "Plugin Builder is enabled but not installed in this build."
-
-    sub = arg.strip().lower()
-    if sub in ("cancel", "stop"):
-        existing = session_store.get(tenant_id, fingerprint)
-        if existing is None:
-            return "No Plugin-Builder interview is active."
-        session_store.clear(tenant_id, fingerprint)
-        return "Plugin-Builder interview cancelled. Nothing was written."
-    if sub == "status":
-        existing = session_store.get(tenant_id, fingerprint)
-        if existing is None:
-            return "No Plugin-Builder interview is active. Type `/plugin-builder` to start one."
-        return f"Interview in progress (phase: {existing.phase.value}).\n\n{existing.ask()}"
-
-    session = session_store.start(tenant_id, fingerprint)
-    return (
-        "**Plugin-Builder** (ADR-0253) — a few questions, then I'll classify "
-        "your idea and generate an Idea Doc, Architecture Concept, ADR and "
-        "Build Plan plus a code scaffold. Reply `/plugin-builder cancel` any "
-        "time to stop.\n\n" + session.ask()
-    )
+    return _pb_turn.command(arg, tenant_id=tenant_id, session_key=fingerprint)
 
 
 def handle(text: str, *, tier: str | None, tenant_id: str,

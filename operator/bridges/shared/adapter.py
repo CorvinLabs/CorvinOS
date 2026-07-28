@@ -2595,28 +2595,15 @@ def _resolve_os_model_bundled(
     workload_hint: dict | None = None,
     chat_key: str | None = None,
 ) -> str | None:
-    """Layer 29.5 Phase 3 (ADR-0024) / ADR-0119 / ADR-0123 — 6-Tier adaptive OS model selection.
+    """Bridge entry point for the shared 6-Tier OS model resolver.
 
-    Resolution order (top wins):
-      1.   CORVIN_OS_MODEL_OVERRIDE env                              → operator-wide kill-switch
-      2.   profile.model                                             → explicit per-persona/profile pin
-      1.5. profile._persona_os_model                                → per-persona pin (ADR-0123)
-      2.5. spec.engine_models.<engine_id>.os_model in tenant YAML   → per-engine tenant default (ADR-0119)
-      3.   autoselect(payload_chars) + floor                         → adaptive (default path)
-      4.   None                                                      → CLI subscription default
-
-    profile._persona_os_model is injected by call_claude_streaming() when the
-    active persona JSON declares os_model (ADR-0123 Tier 1.5).
-
-    payload_chars is supplied by _resolve_spawn_inputs after the full
-    system-prompt + MCP-config string have been assembled.
-
-    engine_id is used for per-engine tenant config lookup (ADR-0119).
-    tenant_id defaults to "_default"; callers should pass the active tenant.
-
-    When CORVIN_OS_MODEL_AUTOSELECT=off, Tier 3 is skipped → Tier 4 (None).
-    On estimate failure, Tier 3 returns HIGH (Sonnet) as a safe default —
-    never silently picks LOW on an unknown payload size.
+    Thin wrapper — the actual 6-Tier cascade (ADR-0024 / ADR-0119 / ADR-0123 /
+    ADR-0043) now lives in ``model_selector.resolve_os_model()`` so the
+    console web-chat (``chat_runtime.py``) and this bridge adapter call the
+    SAME function and cannot silently diverge again. See that function's
+    docstring for the full tier order. Kept under this name/signature for
+    backward compatibility with existing bridge call sites and tests
+    (``test_adapter_os_model.py``).
     """
     try:
         from . import model_selector as _ms  # type: ignore
@@ -2632,115 +2619,15 @@ def _resolve_os_model_bundled(
         explicit = profile.get("model")
         return explicit.strip() if isinstance(explicit, str) and explicit.strip() else None
 
-    # Tier 1 — operator-wide kill-switch (wins even over explicit model:)
-    override = _ms.os_model_override()
-    if override:
-        return override
-
-    # Tier 2 — explicit per-persona / per-chat-profile pin
-    profile = profile or {}
-    explicit = profile.get("model")
-    if isinstance(explicit, str) and explicit.strip():
-        return explicit.strip()
-
-    # Tier 1.5 — per-persona JSON pin (ADR-0123); injected by call_claude_streaming
-    persona_os_model = profile.get("_persona_os_model")
-    if isinstance(persona_os_model, str) and persona_os_model.strip():
-        return persona_os_model.strip()
-
-    # Tier 2.5 — per-engine tenant default (ADR-0119)
-    try:
-        from . import engine_models as _em  # type: ignore  # noqa: PLC0415
-    except ImportError:
-        try:
-            import engine_models as _em  # type: ignore  # noqa: PLC0415
-        except ImportError:
-            _em = None  # type: ignore
-    if _em is not None:
-        try:
-            tenant_os_model = _em.get_tenant_engine_model(tenant_id, engine_id, "os_model")
-            if tenant_os_model:
-                return tenant_os_model
-        except Exception:  # noqa: BLE001
-            pass
-
-    # Tier 2.7 — ADR-0043 workload classification (hybrid CHAT/CODE routing).
-    # The hint arrives as a PARAMETER threaded from the request handler
-    # (call_claude / call_claude_streaming → _resolve_spawn_inputs → here),
-    # NOT via env vars: os.environ is process-global in a daemon serving
-    # parallel chats/tenants, so an env channel is both racy and a cross-
-    # tenant leak by construction (adversarial review 2026-07-18).
-    # Only the CHAT fast-path acts here. CODE/UNCERTAIN fall through to the
-    # existing tiers (adaptive Tier 3 / subscription Tier 4) — ADR-0043 says
-    # "respect the user's model choice", and hard-pinning the full tier for
-    # CODE would bypass ADR-0112 adaptive selection.
-    if _em is not None and workload_hint:
-        try:
-            workload_class = str(workload_hint.get("workload") or "")
-            if workload_class == "chat":
-                # Feature flag: (1) profile, (2) tenant YAML spec.features.
-                # fast_chat_mode. Deliberately NO env-var switch: a process-
-                # wide env flag would enable the feature across all tenants
-                # (CLAUDE.md multi-tenant rule) and bypass the operator's
-                # opt-in. Default false → fail-closed.
-                fast_chat_enabled = bool(profile.get("fast_chat_mode", False))
-                if not fast_chat_enabled:
-                    try:
-                        tenant_spec = _em._load_tenant_spec(tenant_id)
-                        fast_chat_enabled = bool(
-                            (tenant_spec.get("features") or {}).get("fast_chat_mode", False))
-                    except Exception:  # noqa: BLE001
-                        pass
-                if fast_chat_enabled:
-                    try:
-                        conf = float(workload_hint.get("confidence", 0.0))
-                    except (ValueError, TypeError):
-                        conf = 0.0
-                    model = _em.resolve_model_for_workload(
-                        engine_id,
-                        workload_type=workload_class,
-                        user_chosen_model=None,  # explicit pin already returned at Tier 2
-                        confidence=conf,
-                        fast_chat_enabled=True,
-                    )
-                    if model:
-                        # ADR-0043 §6: audit every routing decision (BUG#15).
-                        # No user-message content — workload/confidence/model only.
-                        try:
-                            _audit_event(
-                                "bridge.workload_model_selection",
-                                chat_key=chat_key or "unknown",
-                                details={
-                                    "workload_type": workload_class,
-                                    "confidence": conf,
-                                    "selected_model": model,
-                                    "engine": engine_id,
-                                    "tier": "2.7_workload",
-                                },
-                            )
-                        except Exception:  # noqa: BLE001
-                            pass  # Audit failure is non-fatal
-                        return model
-        except Exception as e:  # noqa: BLE001
-            # Workload routing failure is non-fatal; fall through to Tier 3
-            # But log the error so operators can debug
-            import traceback
-            print(f"[WARN] Tier 2.7 workload routing failed: {e}", file=__import__("sys").stderr)
-            traceback.print_exc(file=__import__("sys").stderr, limit=3)
-
-    # Tier 3 — adaptive autoselect (the new default path)
-    if _ms.autoselect_enabled():
-        try:
-            chosen = _ms.autoselect_os_model(payload_chars)
-            floor = profile.get("os_model_floor")
-            chosen = _ms.apply_floor(chosen, floor)
-            return chosen
-        except Exception:  # noqa: BLE001
-            # estimate_failed → safe-default HIGH (never silently pick LOW)
-            return _ms.high_model()
-
-    # Tier 4 — fallthrough to CLI subscription default
-    return None
+    return _ms.resolve_os_model(
+        profile,
+        payload_chars=payload_chars,
+        engine_id=engine_id,
+        tenant_id=tenant_id,
+        workload_hint=workload_hint,
+        chat_key=chat_key,
+        audit_fn=_audit_event,
+    )
 
 
 def _resolve_spawn_inputs(
@@ -7470,6 +7357,111 @@ def _truncate_at_boundary(text: str, max_chars: int) -> str:
     return window.rstrip() + "…"
 
 
+def _run_acs_delegation(
+    prompt: str,
+    *,
+    channel: str,
+    chat_key: str,
+    persona: str | None,
+    tenant_id: str,
+    log_prefix: str = "delegation",
+    quota_channel_suffix: str = "worker",
+    workflow_name_suffix: str = "worker-delegation",
+) -> str | None:
+    """Compliance-gated ACS fan-out spawn (ADR-0255).
+
+    Extracted from the former monolithic ``_maybe_delegate_big_data`` so the
+    L34/L35 gates, the compute-quota charge and the ACS runtime spawn exist
+    exactly ONCE, shared by both bridge delegation entry points
+    (``_maybe_delegate_big_data`` — the big-data-only carve-out — and
+    ``_maybe_delegate_worker`` — full native/acs routing parity). The
+    ``*_suffix``/``log_prefix`` parameters only affect naming (quota
+    bucketing, workflow label, log text) — never the gates, quota check or
+    spawn logic itself, which are byte-identical for both callers.
+
+    Returns the delegated answer, or ``None``. EVERY failure path returns
+    ``None``: an unavailable runtime, a denied gate, an exhausted pool or a
+    broken run must degrade to the direct turn, never fail the message and
+    never silently swap engines.
+    """
+    # Compliance gates for the ACS spawn class. `name="acs"` is the engine id
+    # both the L34 matrix and egress_gate already know for the fan-out. The
+    # two wrappers take DIFFERENT keyword sets — L34 classifies the prompt,
+    # L35 only needs the route — so they are called separately rather than in
+    # a loop (a shared **kwargs call raised TypeError and, caught below, would
+    # have disabled the feature silently).
+    class _AcsEngine:
+        name = "acs"
+
+    _acs_engine = _AcsEngine()
+    try:
+        refusal = _check_compliance_or_fail(
+            _acs_engine, prompt=prompt, persona=persona,
+            channel=channel, chat_key=str(chat_key), tenant_id=tenant_id)
+        if refusal is None:
+            refusal = _check_egress_or_fail(
+                _acs_engine, channel=channel, chat_key=str(chat_key),
+                tenant_id=tenant_id)
+    except Exception as e:  # noqa: BLE001 — a broken gate must not fan out
+        log(f"{log_prefix}: gate raised ({e!r}) — direct turn")
+        return None
+    if refusal is not None:
+        # The gate denied ACS for this content. The direct turn is a DIFFERENT
+        # compliance row and runs its own gates, so degrade rather than
+        # refusing the message outright.
+        log(f"{log_prefix}: gate denied the ACS spawn class — direct turn")
+        return None
+
+    # Compute quota — fail CLOSED toward the direct turn.
+    try:
+        from license.compute_quota import increment_and_check as _cq  # type: ignore  # noqa: PLC0415
+        _home = Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
+        _cq(_home, channel=f"{channel}-{quota_channel_suffix}", chat_key=str(chat_key))
+    except Exception as e:  # noqa: BLE001 — over quota, or no license module
+        log(f"{log_prefix}: compute quota unavailable/exhausted ({type(e).__name__})"
+            " — direct turn")
+        return None
+
+    # Run the fan-out.
+    try:
+        import acs_runtime as _acs  # type: ignore  # noqa: PLC0415
+        run_id = f"acs-{channel}-{int(time.time())}-{secrets.token_hex(3)}"
+        spec = {
+            "awp": "1.0.0",
+            "workflow": {"name": f"{channel}-{workflow_name_suffix}",
+                         "description": prompt[:500], "version": "1.0.0"},
+            "orchestration": {"engine": "delegation_loop",
+                              "delegation_loop": {"budget": {}}},
+            "state": {"initial": {"task": prompt}},
+        }
+        runtime = _acs.ACSRuntime(tenant_id=tenant_id, bridge=channel, chat=str(chat_key))
+        res = asyncio.run(runtime.run(spec, run_id=run_id))
+    except RuntimeError as e:
+        # asyncio.run inside an existing loop, or a runtime-level abort.
+        log(f"{log_prefix}: run aborted ({e!r}) — direct turn")
+        return None
+    except Exception as e:  # noqa: BLE001 — ANY failure degrades to native
+        log(f"{log_prefix}: run failed ({type(e).__name__}) — direct turn")
+        return None
+
+    answer = ""
+    for attr in ("final_output", "summary"):
+        val = getattr(res, attr, None)
+        if isinstance(val, str) and val.strip():
+            answer = val.strip()
+            break
+        if isinstance(val, dict):
+            inner = val.get("text") or val.get("result") or ""
+            if isinstance(inner, str) and inner.strip():
+                answer = inner.strip()
+                break
+    if not answer:
+        log(f"{log_prefix}: run produced no text — direct turn")
+        return None
+    log(f"{log_prefix}: run {run_id} produced {len(answer)} chars")
+    return answer
+
+
 def _maybe_delegate_big_data(
     prompt: str,
     *,
@@ -7488,7 +7480,10 @@ def _maybe_delegate_big_data(
 
     Deliberately narrow: no ``/delegate`` override, no TDE, no fan-out for
     ordinary long tasks. Only the big-data shape, only behind the
-    ``bridge_big_data_delegation`` flag (ships dark).
+    ``bridge_big_data_delegation`` flag (ships dark). Kept as the flag-off
+    fallback for ``_maybe_delegate_worker`` (ADR-0255) so an existing install
+    that has not opted into ``bridge_worker_engine_parity`` keeps this exact
+    behavior.
 
     The direct turn that runs when this returns ``None`` carries its OWN
     L34/L35/L44 gates (call_claude_streaming) — the gates here are the ones for
@@ -7513,82 +7508,137 @@ def _maybe_delegate_big_data(
         log(f"big-data delegation: classifier unavailable ({e!r}) — direct turn")
         return None
 
-    # 3. Compliance gates for the ACS spawn class. `name="acs"` is the engine id
-    #    both the L34 matrix and egress_gate already know for the fan-out.
-    #    The two wrappers take DIFFERENT keyword sets — L34 classifies the
-    #    prompt, L35 only needs the route — so they are called separately
-    #    rather than in a loop (a shared **kwargs call raised TypeError and,
-    #    caught below, would have disabled the feature silently).
-    class _AcsEngine:
-        name = "acs"
+    # 3-5. Compliance gates, quota, ACS spawn — shared with the worker-parity
+    # path (ADR-0255) so there is exactly one gated spawn implementation.
+    return _run_acs_delegation(
+        prompt, channel=channel, chat_key=chat_key, persona=persona, tenant_id=tid,
+        log_prefix="big-data delegation",
+        quota_channel_suffix="bigdata",
+        workflow_name_suffix="bigdata-delegation",
+    )
 
-    _acs_engine = _AcsEngine()
+
+def _worker_engine_target(
+    prompt: str,
+    *,
+    mode: str,
+    force_delegate: bool,
+    tenant_id: str = "_default",
+) -> str:
+    """Which engine runs this bridge turn: "native" | "acs" | "tde" (ADR-0255).
+
+    Structurally identical to ``chat_runtime.py::_worker_engine_target`` — the
+    same shared ``delegation_policy.resolve_worker_engine`` call, the same
+    signal — so a bridge turn and a console turn given the same tenant config
+    and the same prompt land on the same engine.
+
+    ``tde_available``/``quota_ok`` are hard-coded ``False``: no TDE execution
+    path exists on bridges — ADR-0221 P3/P4 stay frozen pending ADR-0222's
+    measured gate (see ADR-0255, which stays inside that freeze on purpose).
+    This means ``mode == "tde"`` always degrades to ``"native"`` here, exactly
+    like a console install with no ``claude`` CLI degrades today via the
+    ladder's existing "TDE unavailable → native" rung — reusing an existing
+    behavior, not adding a new one.
+    """
+    from delegation_policy import is_big_data_task, resolve_worker_engine  # noqa: PLC0415
+    return resolve_worker_engine(
+        mode=mode,
+        force_delegate=force_delegate,
+        is_big_data=is_big_data_task(prompt),
+        tde_available=False,
+        quota_ok=False,
+        tenant_id=tenant_id,
+    )
+
+
+def _maybe_delegate_worker(
+    prompt: str,
+    *,
+    channel: str,
+    chat_key: str,
+    persona: str | None,
+    tenant_id: str | None = None,
+) -> tuple[str | None, str]:
+    """Bridge worker-engine parity (ADR-0255).
+
+    Gives a bridge turn the SAME reach the console already has: the
+    operator's Settings → AI Engines ``worker_engine`` mode (native/acs/tde),
+    an explicit ``/delegate`` override, and the console's own ADR-0202/0203
+    triage heuristic — not only the big-data shape.
+
+    Returns ``(answer, prompt)``: ``answer`` is the delegated answer or
+    ``None`` (run the normal direct turn); ``prompt`` is returned because an
+    explicit ``/delegate`` strips its own directive from the text EVEN on the
+    degrade-to-native path — the raw command text must never reach the LLM
+    (mirrors ``chat_runtime.py``'s ``_task_text`` handling).
+
+    Flag-gated (``bridge_worker_engine_parity``, ships dark): when off, this
+    is a pass-through to the UNCHANGED ``_maybe_delegate_big_data`` — an
+    existing install that has not opted in keeps today's exact behavior.
+    """
+    tid = tenant_id or os.environ.get("CORVIN_TENANT_ID") or "_default"
+
     try:
-        refusal = _check_compliance_or_fail(
-            _acs_engine, prompt=prompt, persona=persona,
-            channel=channel, chat_key=str(chat_key), tenant_id=tid)
-        if refusal is None:
-            refusal = _check_egress_or_fail(
-                _acs_engine, channel=channel, chat_key=str(chat_key),
-                tenant_id=tid)
-    except Exception as e:  # noqa: BLE001 — a broken gate must not fan out
-        log(f"big-data delegation: gate raised ({e!r}) — direct turn")
-        return None
-    if refusal is not None:
-        # The gate denied ACS for this content. The direct turn is a DIFFERENT
-        # compliance row and runs its own gates, so degrade rather than
-        # refusing the message outright.
-        log("big-data delegation: gate denied the ACS spawn class — direct turn")
-        return None
+        from corvin_console import feature_flags as _ff  # type: ignore  # noqa: PLC0415
+        parity_on = _ff.is_enabled("bridge_worker_engine_parity", tid)
+    except Exception:  # noqa: BLE001 — console package absent → feature is off
+        parity_on = False
 
-    # 4. Compute quota — fail CLOSED toward the direct turn.
+    if not parity_on:
+        return (
+            _maybe_delegate_big_data(
+                prompt, channel=channel, chat_key=chat_key, persona=persona,
+                tenant_id=tid,
+            ),
+            prompt,
+        )
+
+    from delegation_policy import strip_delegate_prefix  # noqa: PLC0415
+    prompt, force_delegate = strip_delegate_prefix(prompt)
+
+    if force_delegate and not prompt.strip():
+        # A bare "/delegate" with no task. force_delegate alone routes to ACS in
+        # every mode, so without this guard the bridge spun up a fan-out on an
+        # EMPTY task and charged a compute_units_per_day for it. The console has
+        # always guarded this (`if not _task_text` before both the ACS and TDE
+        # runs); the bridge path inherited the directive without the guard.
+        return None, prompt
+
+    if not force_delegate:
+        # The console's own triage heuristic — same function, same verdict.
+        # Absent (stripped/bridge-only install) or broken → NOT delegation-
+        # worthy: a missing classifier must degrade toward the direct turn,
+        # never toward silently fanning out more than before.
+        try:
+            from corvin_console.chat_runtime import should_delegate_bundled  # noqa: PLC0415
+            delegation_worthy = should_delegate_bundled(prompt)
+        except Exception as e:  # noqa: BLE001
+            log(f"worker delegation: triage heuristic unavailable ({e!r}) — direct turn")
+            delegation_worthy = False
+        if not delegation_worthy:
+            return None, prompt
+
     try:
-        from license.compute_quota import increment_and_check as _cq  # type: ignore  # noqa: PLC0415
-        _home = Path(os.environ.get("CORVIN_HOME") or (Path.home() / ".corvin"))
-        _cq(_home, channel=f"{channel}-bigdata", chat_key=str(chat_key))
-    except Exception as e:  # noqa: BLE001 — over quota, or no license module
-        log(f"big-data delegation: compute quota unavailable/exhausted ({type(e).__name__})"
-            " — direct turn")
-        return None
+        mode = _ff.worker_engine_mode(tid)
+    except Exception:  # noqa: BLE001 — fail toward the safe default
+        mode = "native"
 
-    # 5. Run the fan-out.
-    try:
-        import acs_runtime as _acs  # type: ignore  # noqa: PLC0415
-        run_id = f"acs-{channel}-{int(time.time())}-{secrets.token_hex(3)}"
-        spec = {
-            "awp": "1.0.0",
-            "workflow": {"name": f"{channel}-bigdata-delegation",
-                         "description": prompt[:500], "version": "1.0.0"},
-            "orchestration": {"engine": "delegation_loop",
-                              "delegation_loop": {"budget": {}}},
-            "state": {"initial": {"task": prompt}},
-        }
-        runtime = _acs.ACSRuntime(tenant_id=tid, bridge=channel, chat=str(chat_key))
-        res = asyncio.run(runtime.run(spec, run_id=run_id))
-    except RuntimeError as e:
-        # asyncio.run inside an existing loop, or a runtime-level abort.
-        log(f"big-data delegation: run aborted ({e!r}) — direct turn")
-        return None
-    except Exception as e:  # noqa: BLE001 — ANY failure degrades to native
-        log(f"big-data delegation: run failed ({type(e).__name__}) — direct turn")
-        return None
+    target = _worker_engine_target(
+        prompt, mode=mode, force_delegate=force_delegate, tenant_id=tid,
+    )
+    if target != "acs":
+        # "native" (mode says so, or ACS unavailable) or "tde" (always
+        # degrades to native on a bridge — see _worker_engine_target) — either
+        # way, run the direct turn.
+        return None, prompt
 
-    answer = ""
-    for attr in ("final_output", "summary"):
-        val = getattr(res, attr, None)
-        if isinstance(val, str) and val.strip():
-            answer = val.strip()
-            break
-        if isinstance(val, dict):
-            inner = val.get("text") or val.get("result") or ""
-            if isinstance(inner, str) and inner.strip():
-                answer = inner.strip()
-                break
-    if not answer:
-        log("big-data delegation: run produced no text — direct turn")
-        return None
-    log(f"big-data delegation: run {run_id} produced {len(answer)} chars")
-    return answer
+    answer = _run_acs_delegation(
+        prompt, channel=channel, chat_key=chat_key, persona=persona, tenant_id=tid,
+        log_prefix="worker delegation",
+        quota_channel_suffix="worker",
+        workflow_name_suffix="worker-delegation",
+    )
+    return answer, prompt
 
 
 # Flags a summarizer CLI may legitimately name back at us in an error. Anything
@@ -8878,18 +8928,36 @@ def _new_session_model_summary(channel: str, chat_key: str) -> str:
     Best-effort: any import failure falls back to a safe static string so
     the /new reset is never blocked by a model-info lookup error.
     """
-    # OS model — at /new time there is no payload yet, so we show the HIGH
-    # model (Sonnet) as the expected default and note if adaptive Haiku
-    # downgrade is enabled for short turns.
+    # OS model — resolved through the SAME 6-Tier cascade that will actually
+    # run the next turn (`model_selector.resolve_os_model`), not a re-derivation.
+    # This block used to consult only Tier 1 (the env override) and otherwise
+    # print `high_model()`, so an operator who had pinned
+    # `spec.engine_models.<engine>.os_model` (Tier 2.5) was told "Sonnet" by
+    # `/new` while every turn afterwards ran their pinned model — the same
+    # surface-specific re-derivation ADR-0255 removed from chat_runtime, left
+    # behind on this one ack.
+    #
+    # payload_chars=0: at /new time no prompt exists yet, so Tier 3 reports what
+    # a short turn would pick; the "(adaptive)" suffix is what tells the user
+    # the choice still moves with payload size.
     try:
         import model_selector as _ms  # type: ignore
-        override = _ms.os_model_override()
-        if override:
-            os_label = _model_label(override)
+        resolved = _ms.resolve_os_model(
+            None, payload_chars=0, engine_id="claude_code",
+            tenant_id=os.environ.get("CORVIN_TENANT_ID") or "_default",
+        )
+        if resolved:
+            os_label = _model_label(resolved)
+            # Only Tier 3 keeps moving with payload size; a Tier 1/2.5 pin does not.
+            if (not _ms.os_model_override()
+                    and _ms.autoselect_enabled()
+                    and _ms.haiku_downgrade_allowed()):
+                _low = _model_label(_ms.low_model())
+                if _low != os_label:
+                    os_label += f" / {_low} (adaptive)"
         else:
+            # Tier 4 — no pin, autoselect off: the CLI subscription default.
             os_label = _model_label(_ms.high_model())
-            if _ms.haiku_downgrade_allowed():
-                os_label += f" / {_model_label(_ms.low_model())} (adaptive)"
     except Exception:  # noqa: BLE001
         os_label = "Sonnet 4.6"
 
@@ -8975,6 +9043,95 @@ def _mirror_new_artifacts(
         except OSError as _e:
             log(f"artifact→outputs mirror failed for {_ap.name}: {_e}")
     return mirrored
+
+
+# ── /plugin-builder (ADR-0253) — bridge integration ─────────────────────────
+#
+# Drives the SAME transport-agnostic interview the Console's /plugin-builder
+# uses (plugin_builder.turn / plugin_builder.session_store), keyed by
+# (tenant_id, session_key) instead of the console's (tenant_id, fingerprint).
+# `session_key` is `"<channel>:<chat_key>"` — NOT bare chat_key — because
+# chat_key alone (chat_id or sender) is just a string from ONE messenger's id
+# space; two different channels can produce the identical string (a Discord
+# numeric id and a Telegram numeric id colliding, a WhatsApp fallback-to-
+# sender matching some other channel's sender). Bare chat_key would let two
+# unrelated users on two different bridges silently share one interview —
+# found by adversarial review (2026-07-27), reproduced end to end before this
+# fix. Same discipline this file already applies to session directories via
+# `_session_dir(channel, chat_key, ...)` — never namespace an inbox identity
+# by chat_key alone.
+#
+# Feature-gated by `plugin_builder_enabled` (default off), checked in the same
+# cheap-session-first order `corvin_console/slash_commands.py` uses: an active
+# session is a plain in-memory dict lookup, while the flag read hits disk
+# uncached — checking the session first means the common case (no active
+# interview) costs nothing extra on every bridge text turn, flag on or off.
+
+def _plugin_builder_flag_enabled(tenant_id: str) -> bool:
+    try:
+        from corvin_console import feature_flags as _pb_ff  # type: ignore
+    except ImportError:
+        return False
+    try:
+        return _pb_ff.is_enabled("plugin_builder_enabled", tenant_id)
+    except Exception:  # noqa: BLE001 — a broken flag lookup must not break a turn
+        return False
+
+
+def _plugin_builder_bridge_reply(
+    text: str, *, tenant_id: str, channel: str, chat_key: str
+) -> "str | None":
+    """Handle one bridge text turn for ``/plugin-builder``.
+
+    Returns ``None`` for every case that should fall through to a normal
+    engine turn: the plugin_builder package isn't installed, this isn't a
+    ``/plugin-builder`` invocation, no interview is currently active for this
+    chat, or the text is SOME OTHER slash-command-shaped string — mirroring
+    the console's own ``handle()``, which only ever routes non-slash text into
+    ``_plugin_builder_continue`` and lets a leading ``/`` fall through to its
+    own command dispatch instead of being read as a literal interview answer.
+    """
+    try:
+        from plugin_builder import session_store as _pb_store
+    except ImportError:
+        return None
+
+    session_key = f"{channel}:{chat_key}"
+    stripped = text.strip()
+    head, _, arg = stripped.partition(" ")
+    is_command = head.lower() == "/plugin-builder"
+
+    if not is_command:
+        if stripped.startswith("/"):
+            return None  # some other slash command — never an interview answer
+        session = _pb_store.get(tenant_id, session_key)
+        if session is None:
+            return None
+        if not _plugin_builder_flag_enabled(tenant_id):
+            # Flag toggled off mid-interview — drop the orphaned session
+            # rather than let a disabled feature keep consuming turns.
+            _pb_store.clear(tenant_id, session_key)
+            return None
+        from plugin_builder import turn as _pb_turn
+        try:
+            return _pb_turn.drive(session, text, tenant_id=tenant_id, session_key=session_key)
+        except Exception as exc:  # noqa: BLE001 — never silently swallow a bridge turn
+            log(f"plugin-builder drive failed session={session_key}: "
+                f"{type(exc).__name__}: {exc}")
+            _pb_store.clear(tenant_id, session_key)
+            return ("Something went wrong with the Plugin-Builder interview — "
+                     "it's been reset. Try `/plugin-builder` again.")
+
+    if not _plugin_builder_flag_enabled(tenant_id):
+        return ("Plugin Builder is off. An operator can enable it in "
+                "Settings → Features (plugin_builder_enabled).")
+    from plugin_builder import turn as _pb_turn
+    try:
+        return _pb_turn.command(arg, tenant_id=tenant_id, session_key=session_key)
+    except Exception as exc:  # noqa: BLE001 — never silently swallow a bridge turn
+        log(f"plugin-builder command failed session={session_key}: "
+            f"{type(exc).__name__}: {exc}")
+        return "Something went wrong starting Plugin-Builder — try again in a moment."
 
 
 def process_one(inbox_file: Path, settings: dict) -> None:
@@ -9875,6 +10032,29 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         inbox_file.unlink(missing_ok=True)
         return
 
+    # /plugin-builder (ADR-0253) — only for a genuine plain-text turn (the
+    # `else` branch above), never for a transcription/caption/summary prompt
+    # synthesized for audio/image/document/video: an interview answer must be
+    # the user's real words, not an engineered prompt built around an attachment.
+    if not (msg.get("audio_path") or msg.get("image_path")
+            or msg.get("document_path") or msg.get("video_path")):
+        _pb_chat_key = chat_id or sender
+        _pb_tenant_id = os.environ.get("CORVIN_TENANT_ID") or "_default"
+        _pb_reply = _plugin_builder_bridge_reply(
+            prompt, tenant_id=_pb_tenant_id, channel=channel, chat_key=_pb_chat_key,
+        )
+        if _pb_reply is not None:
+            ack_envelope = {"channel": channel, "to": sender, "text": _pb_reply}
+            if chat_id is not None:
+                ack_envelope["chat_id"] = chat_id
+            (OUTBOX / f"{msg_id}_00.json").write_text(
+                json.dumps(ack_envelope, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            PROCESSED.mkdir(exist_ok=True)
+            shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
+            return
+
     # Observer-transcript prepend (Layer 16, Phase 2 + Layer 17 re-validation).
     # If read-only senders in this chat have left a transcript since the
     # last owner turn, fold it in front of the actual prompt as a clearly
@@ -10120,10 +10300,13 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         # only as a *protocol / declarative standard*. Engines (Claude
         # Code / Codex CLI / Gemini CLI / ...) do all execution. See
         # docs/decisions/0005-awp-standards-only.md.
-        # Big-data carve-out (ships dark behind `bridge_big_data_delegation`).
-        # Returns None for everything else — including any failure — so the
-        # normal gated dispatcher below stays the default path.
-        answer = _maybe_delegate_big_data(
+        # Worker-engine parity (ships dark behind `bridge_worker_engine_parity`,
+        # ADR-0255) — falls back to the unchanged big-data-only carve-out
+        # (`bridge_big_data_delegation`) while parity is off. Returns None for
+        # everything else — including any failure — so the normal gated
+        # dispatcher below stays the default path. May also return a
+        # `/delegate`-stripped prompt even on the degrade path.
+        answer, prompt = _maybe_delegate_worker(
             prompt, channel=channel, chat_key=chat_key,
             persona=str((profile or {}).get("persona")
                         or (profile or {}).get("name") or ""),

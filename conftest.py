@@ -20,8 +20,48 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parent
 
+# The protected paths, resolved ONCE at import time — before any test can patch
+# `HOME` or `Path.home`.
+#
+# Resolving them per snapshot was a false-positive generator, and a guard that
+# cries wolf about the exact incident it exists to catch is worse than no guard.
+# Two tests in `tests/` monkeypatch the home directory (one via
+# `monkeypatch.setenv("HOME", tmp_path)`, one via `monkeypatch.setattr(Path,
+# "home", …)` — which patches the shared `pathlib.Path` class this file uses
+# too). Fixture teardown for those patches runs AFTER this tripwire's teardown,
+# so the "after" snapshot resolved `~` to an empty tmp dir, found no
+# `corvin-voice` and no `corvin-*` units there, and reported:
+#
+#   LIVE OPERATOR STATE DESTROYED by this test
+#     ~/.config/corvin-voice: was DELETED
+#     ~/.config/systemd/user corvin-* units: directory itself was DELETED
+#
+# while both were fully intact on disk. Verified 2026-07-28: 30 corvin-* units
+# present and every service running, immediately after the failure.
+#
+# Freezing the paths also makes the guard STRICTER, which is the point: a test
+# that patches `HOME` and then deletes the REAL `~/.config/corvin-voice` through
+# some other route is now still caught, whereas before the patched lookup could
+# have hidden it.
+def _frozen_paths() -> "dict[str, Path] | None":
+    try:
+        home = Path.home()
+    except (OSError, RuntimeError):
+        return None
+    return {
+        "repo_corvin": _REPO_ROOT / ".corvin",
+        "voice_config": home / ".config" / "corvin-voice",
+        "systemd_user": home / ".config" / "systemd" / "user",
+        "plugin_cache": home / ".claude" / "plugins" / "cache" / "corvin-voice-local",
+    }
 
-def _protected_state() -> "dict[str, object] | None":
+
+_PROTECTED_PATHS = _frozen_paths()
+
+
+def _protected_state(
+    paths: "dict[str, Path] | None" = None,
+) -> "dict[str, object] | None":
     """Snapshot the live roots a mis-isolated test has historically deleted.
 
     Returns None when the snapshot itself cannot be taken (missing HOME on
@@ -29,24 +69,32 @@ def _protected_state() -> "dict[str, object] | None":
     iterdir — a live bridge legitimately runs next to pytest in this repo).
     The tripwire then skips its comparison for that test instead of
     erroring an innocent test with a raw traceback.
+
+    Reads only :data:`_PROTECTED_PATHS`, never ``Path.home()`` — see the note
+    above that constant.
+
+    ``paths`` overrides the roots for ONE call, so
+    ``tests/test_live_state_tripwire.py`` can exercise the comparison against a
+    sandbox tree. It is a parameter rather than a monkeypatch of the module
+    global for the same fixture-ordering reason this whole guard was mis-firing:
+    a patched global is still in place when the tripwire's own teardown runs, so
+    the guard would read the sandbox and report every real entry as deleted.
     """
+    p = paths if paths is not None else _PROTECTED_PATHS
+    if p is None:
+        return None
     try:
-        home = Path.home()
-        repo_corvin = _REPO_ROOT / ".corvin"
-        systemd_user = home / ".config" / "systemd" / "user"
         return {
             "repo .corvin top-level entries": (
-                frozenset(p.name for p in repo_corvin.iterdir())
-                if repo_corvin.is_dir() else None
+                frozenset(q.name for q in p["repo_corvin"].iterdir())
+                if p["repo_corvin"].is_dir() else None
             ),
-            "~/.config/corvin-voice": (home / ".config" / "corvin-voice").is_dir(),
+            "~/.config/corvin-voice": p["voice_config"].is_dir(),
             "~/.config/systemd/user corvin-* units": (
-                frozenset(p.name for p in systemd_user.glob("corvin-*"))
-                if systemd_user.is_dir() else None
+                frozenset(q.name for q in p["systemd_user"].glob("corvin-*"))
+                if p["systemd_user"].is_dir() else None
             ),
-            "~/.claude/plugins/cache/corvin-voice-local": (
-                home / ".claude" / "plugins" / "cache" / "corvin-voice-local"
-            ).is_dir(),
+            "~/.claude/plugins/cache/corvin-voice-local": p["plugin_cache"].is_dir(),
         }
     except (OSError, RuntimeError):
         return None

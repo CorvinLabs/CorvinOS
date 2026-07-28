@@ -152,7 +152,10 @@ class TenantPluginRegistry:
             version=metadata.get("version", "0.1.0"),
             display_name=metadata.get("display_name", plugin_id),
             enabled=True,
-            installed_at=datetime.now(timezone.utc).isoformat() + "Z",
+            # `.isoformat()` on an aware datetime already ends in "+00:00";
+            # appending "Z" produced "…+00:00Z", which is not a valid RFC 3339
+            # timestamp and fails every strict parser.
+            installed_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             installed_by=installed_by,
             boot_layer=metadata.get("boot_layer", "installed"),
         )

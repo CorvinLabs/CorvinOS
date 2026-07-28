@@ -48,8 +48,39 @@ class _FlagOn:
         return False
 
 
+class _FlagOff:
+    """Turn every flag off without touching the operator's real config.
+
+    Not optional symmetry with :class:`_FlagOn`: until 2026-07-28 the OFF half
+    of this file pinned nothing and simply read whatever the machine's
+    `.corvin/tenants/<tid>/global/features.json` happened to say. On a box where
+    the operator had switched `bridge_big_data_delegation` on — the maintainer's
+    own — the dark-flag suite went red inside the MANDATORY pre-commit gate for a
+    reason that had nothing to do with the commit, while the two weaker tests
+    above still passed by accident (the spy runtime raises, the failure degrades
+    to `None`, and `None` is what they assert). A gate whose verdict depends on
+    ambient operator state is not a gate.
+    """
+
+    def __enter__(self):
+        import corvin_console.feature_flags as ff
+        self._p = patch.object(ff, "is_enabled",
+                               side_effect=lambda fid, tid="_default": False)
+        self._p.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._p.stop()
+        return False
+
+
 class FlagOffTest(unittest.TestCase):
     """The shipped default: bridges behave exactly as before."""
+
+    def setUp(self):
+        self._off = _FlagOff()
+        self._off.__enter__()
+        self.addCleanup(self._off.__exit__)
 
     def test_big_data_is_not_delegated_while_dark(self):
         self.assertIsNone(_call(), "a dark flag must leave the direct turn alone")

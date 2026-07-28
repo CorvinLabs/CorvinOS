@@ -18,7 +18,15 @@ import { emitCCCEvent } from "./ccc-bus";
 export type MessagePart =
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; input: Record<string, unknown> }
-  | { kind: "artifact"; name: string; path: string; mime: string; size: number; sid: string; label?: string };
+  | { kind: "artifact"; name: string; path: string; mime: string; size: number; sid: string; label?: string }
+  // Live-only, never persisted in turns.jsonl: an in-band runtime message about
+  // THIS turn that is not part of the model's answer — an ACS quota fallback,
+  // an engine degrade, an artifact-list truncation. The backend has emitted
+  // `{"type":"notice"}` since ADR-0201, and until 2026-07-28 nothing in the
+  // frontend handled the event at all: every one of them was dropped on the
+  // floor, so `quota_fallback`, `acs_fallback` and `artifacts_truncated` were
+  // "announced" only in the server's own logs.
+  | { kind: "notice"; subtype: string; text: string };
 
 /** ADR-0214 Phase 2: TDE progress metrics for audit graph visualization.
  *
@@ -83,7 +91,12 @@ export interface ChatMessage {
 
 export interface StreamEvent {
   type: "ready" | "delta" | "tool_use" | "result" | "error" | "done" | "info" |
-        "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine" | "engine_progress";
+        "pong" | "session_title" | "artifact" | "ccc_action" | "voice" | "engine" |
+        "engine_progress" | "notice";
+  /** `notice` only: which runtime message this is ("quota_fallback",
+   *  "acs_fallback", "artifacts_truncated"). Rendered as a distinct chip so a
+   *  degrade is never mistaken for part of the model's answer. */
+  subtype?: string;
   text?: string;
   name?: string;
   input?: Record<string, unknown>;
@@ -358,6 +371,22 @@ function applyEvent(entry: SessionEntry, sid: string, evt: StreamEvent): void {
           m.id === aid ? { ...m, parts: [...m.parts, part] } : m
         );
       }
+      return;
+    }
+
+    case "notice": {
+      const aid = entry.currentAssistantId;
+      const text = evt.message;
+      if (!aid || !text) return;
+      entry.messages = entry.messages.map((m) =>
+        m.id === aid
+          ? { ...m, parts: [...m.parts, {
+              kind: "notice" as const,
+              subtype: evt.subtype ?? "notice",
+              text,
+            }] }
+          : m
+      );
       return;
     }
 
