@@ -225,26 +225,35 @@ def resolve_key(key_name: str) -> str | None:
     if candidates is None:
         return None
 
-    # Check process environment first (highest priority)
+    # Check process environment first for ALL candidates (highest priority) —
+    # an explicit env-var override always beats anything stored in a file,
+    # regardless of how specific the file's key is.
     for name in candidates:
         value = (os.environ.get(name) or "").strip()
         if value:
             return value
 
-    # Check encrypted secrets store (Phase 1b)
+    # Below the env axis, preserve CANDIDATE SPECIFICITY across stores: for each
+    # candidate in specificity order (dedicated name first, then general/legacy),
+    # check secrets.enc THEN service.env and return on the first hit. The old
+    # code drained secrets.enc for EVERY candidate before touching service.env,
+    # so a GENERIC key in the higher-precedence store (e.g. a stray placeholder
+    # OPENAI_API_KEY in secrets.enc) shadowed a SPECIFIC key
+    # (CORVIN_STT_OPENAI_KEY) that lived in service.env — the exact bug that made
+    # a saved STT/TTS key resolve to the wrong value (2026-07-28). Within a
+    # single candidate the store order (secrets.enc before service.env) is
+    # unchanged. Decrypt once, not per candidate.
+    enc_secrets: dict = {}
     try:
-        store = SecretsStore()
-        for name in candidates:
-            secret = store.load_secret(name)
-            if secret:
-                return secret
+        enc_secrets = SecretsStore().decrypt_secrets()
     except Exception:
-        # Secrets store not available or unreadable — continue to service.env
-        pass
-
-    # Check service.env file (lowest priority)
+        # Secrets store not available/unreadable — fall through to service.env.
+        enc_secrets = {}
     service_env = service_env_path()
     for name in candidates:
+        secret = enc_secrets.get(name)
+        if secret:
+            return secret
         value = _load_from_file(name, service_env)
         if value:
             return value

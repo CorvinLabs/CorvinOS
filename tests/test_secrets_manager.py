@@ -414,6 +414,42 @@ class TestSecretsStoreIntegrationWithResolver:
         result = resolve_key("openai_api_key")
         assert result == "sk-from-env"
 
+    def test_specific_key_in_service_env_beats_generic_placeholder_in_secrets_enc(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression (2026-07-28): a GENERIC key sitting in the higher-precedence
+        store (secrets.enc) must NOT shadow a SPECIFIC dedicated key that lives in
+        the lower-precedence store (service.env).
+
+        The real incident: a stray 19-char placeholder OPENAI_API_KEY had been
+        written into the live secrets.enc; resolve_key drained secrets.enc for
+        EVERY candidate before touching service.env, so the STT/TTS lookup returned
+        that placeholder via the openai_api_key PARENT candidate and never reached
+        the real CORVIN_STT_OPENAI_KEY in service.env. Candidate specificity must
+        win across stores below the env axis."""
+        monkeypatch.setenv("CORVIN_HOME", str(tmp_path))
+        monkeypatch.setenv("VOICE_CONFIG_DIR", str(tmp_path))
+        for k in ("OPENAI_API_KEY", "OPENAI_APIKEY",
+                  "CORVIN_STT_OPENAI_KEY", "CORVIN_TTS_OPENAI_KEY"):
+            monkeypatch.delenv(k, raising=False)
+
+        # The REAL dedicated STT key lives in service.env (lower precedence).
+        (tmp_path / "service.env").write_text(
+            "CORVIN_STT_OPENAI_KEY=sk-real-stt-key-1234\n")
+        # A GENERIC placeholder pollutes secrets.enc (higher precedence).
+        SecretsStore().save_secret("OPENAI_API_KEY", "placeholder-enc")
+
+        # The dedicated key must win over the generic placeholder.
+        assert resolve_key("stt_openai_api_key") == "sk-real-stt-key-1234"
+        # Same for TTS (also parents to openai_api_key).
+        (tmp_path / "service.env").write_text(
+            "CORVIN_TTS_OPENAI_KEY=sk-real-tts-key-5678\n"
+            "CORVIN_STT_OPENAI_KEY=sk-real-stt-key-1234\n")
+        assert resolve_key("tts_openai_api_key") == "sk-real-tts-key-5678"
+        # A bare openai_api_key lookup (no dedicated) still sees the placeholder —
+        # that is correct; the fix is about specificity, not about hiding a value.
+        assert resolve_key("openai_api_key") == "placeholder-enc"
+
 
 class TestSecretsStoreLoad:
     """Load_secret error handling and edge cases."""
