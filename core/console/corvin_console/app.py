@@ -480,4 +480,3 @@ def mount_static(app: FastAPI, *, url_prefix: str = "/console") -> None:
             ),
             status_code=503,
         )
-    )
