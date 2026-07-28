@@ -131,7 +131,11 @@ _TTS_MAX_CONCURRENCY = int(os.environ.get("CORVIN_TTS_MAX_CONCURRENCY", "4"))
 # Waiting forever would just move the queue instead of bounding it. A caller that
 # cannot get a slot in time is told "no audio" (204) — TTS is an optional
 # enhancement and degrading silently is this module's established contract.
-_TTS_SLOT_WAIT_S = float(os.environ.get("CORVIN_TTS_SLOT_WAIT_S", "20"))
+# ROBUST FALLBACK (2026-07-28): Dynamic timeout based on text length (longer text = more wait time).
+# Base 20s for short summaries, +2s per 500 chars up to max 45s. Avoids "Voice synthesis unavailable"
+# on long voice summaries / session recaps. Exceeding max_wait means aggressive truncation.
+_TTS_SLOT_WAIT_BASE_S = float(os.environ.get("CORVIN_TTS_SLOT_WAIT_BASE_S", "20"))
+_TTS_SLOT_WAIT_MAX_S = float(os.environ.get("CORVIN_TTS_SLOT_WAIT_MAX_S", "45"))
 
 _tts_sem: "asyncio.Semaphore | None" = None
 _tts_sem_lock = threading.Lock()
@@ -171,16 +175,40 @@ def _get_recap_semaphore() -> "asyncio.Semaphore":
     return _recap_sem
 
 
-async def _run_with_tts_slot(sync_fn, *args, no_slot_log: str = "") -> Response:
+def _compute_tts_wait_timeout(text_len: int) -> float:
+    """Compute dynamic TTS slot-wait timeout based on text length.
+
+    Longer texts require more synthesis time. Formula:
+      base 20s + (text_len / 500) * 2s, clamped to [base, max]
+
+    Rationale: TTS synthesis is O(text_len). A 400-char summary uses ~5-8s.
+    A 4000-char full text uses ~15-20s. Adding dynamic wait prevents false
+    "voice synthesis unavailable" timeouts on long voice-summaries and session
+    recaps. If this still exceeds max, fallback to aggressive truncation.
+    """
+    extra = (text_len / 500) * 2
+    timeout = _TTS_SLOT_WAIT_BASE_S + extra
+    return min(timeout, _TTS_SLOT_WAIT_MAX_S)
+
+
+async def _run_with_tts_slot(
+    sync_fn, *args, no_slot_log: str = "", text_len: int = 0
+) -> Response:
     """Bounded async wrapper shared by every synthesis route (voice_tts,
     voice_session_summary, voice_segment): acquire a synthesis slot with a
     bounded wait, run the actual (blocking) work in the threadpool, always
     release. Each route's own log message on a slot-acquire timeout is kept
     caller-specific (they describe what gets skipped in different terms);
     voice_session_summary passes none, silently 204ing like the others did
-    before this was consolidated."""
+    before this was consolidated.
+
+    ROBUST FALLBACK (2026-07-28): text_len enables dynamic timeout. Longer
+    texts get more wait time up to max, preventing false timeouts on long
+    voice summaries / session recaps (ADR feedback: Voice must be robust).
+    """
+    wait_timeout = _compute_tts_wait_timeout(text_len)
     try:
-        await asyncio.wait_for(_get_tts_semaphore().acquire(), _TTS_SLOT_WAIT_S)
+        await asyncio.wait_for(_get_tts_semaphore().acquire(), wait_timeout)
     except asyncio.TimeoutError:
         if no_slot_log:
             _log.warning(no_slot_log)
@@ -1049,12 +1077,14 @@ async def voice_tts(
 ) -> Response:
     """Bounded async wrapper — see _TTS_MAX_CONCURRENCY. The synthesis itself is
     unchanged and still runs in the threadpool, but only once a slot is free."""
+    wait_timeout = _compute_tts_wait_timeout(len(body.text or ""))
     resp = await _run_with_tts_slot(
         _voice_tts_sync, body, rec,
         no_slot_log=(
-            f"voice_tts: no synthesis slot within {_TTS_SLOT_WAIT_S:.0f}s "
+            f"voice_tts: no synthesis slot within {wait_timeout:.0f}s "
             f"({_TTS_MAX_CONCURRENCY} concurrent) — skipping playback for this turn"
         ),
+        text_len=len(body.text or ""),
     )
     # Live-attach the just-archived player onto the open chat WS (ADR-0194
     # live-replay) — additive to, and independent of, the ephemeral playTts()
@@ -1288,7 +1318,7 @@ async def voice_session_summary(
     drain the shared anyio threadpool (see the semaphore's comment).
     """
     try:
-        await asyncio.wait_for(_get_recap_semaphore().acquire(), _TTS_SLOT_WAIT_S)
+        await asyncio.wait_for(_get_recap_semaphore().acquire(), _TTS_SLOT_WAIT_BASE_S)
     except asyncio.TimeoutError:
         return Response(status_code=http_status.HTTP_204_NO_CONTENT)
     try:
@@ -1299,7 +1329,8 @@ async def voice_session_summary(
         return text_result
     recap_text, lang = text_result
     return await _run_with_tts_slot(
-        _voice_session_summary_tts, body, rec, recap_text, lang)
+        _voice_session_summary_tts, body, rec, recap_text, lang,
+        text_len=len(recap_text or ""))
 
 
 def _voice_session_summary_sync(
@@ -1458,12 +1489,14 @@ async def voice_segment(
 ) -> Response:
     """Bounded async wrapper — see _TTS_MAX_CONCURRENCY. A read-aloud fires one
     of these per segment, so this route is the easier of the two to pile up."""
+    wait_timeout = _compute_tts_wait_timeout(len(body.text))
     resp = await _run_with_tts_slot(
         _voice_segment_sync, body, rec,
         no_slot_log=(
-            f"voice_segment: no synthesis slot within {_TTS_SLOT_WAIT_S:.0f}s — "
+            f"voice_segment: no synthesis slot within {wait_timeout:.0f}s — "
             "ending the read-aloud playlist here"
         ),
+        text_len=len(body.text),
     )
     # Live-attach this segment's player, labelled the same way attach_voice_
     # artifacts numbers it on reload ("voice i/n"), so a mid-playlist reload
