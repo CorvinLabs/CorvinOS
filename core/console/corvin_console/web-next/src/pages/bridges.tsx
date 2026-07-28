@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/dialog";
 import { ReauthDialog } from "@/components/reauth-dialog";
 import { CommandsHelpModal } from "@/components/commands-help-modal";
+import { DiscordSetupDialog } from "@/components/DiscordSetupDialog";
 import {
   getBridgeSettings,
   getBridgeSetup,
@@ -1855,7 +1856,22 @@ export function BridgesPage() {
   const [wizardChannel, setWizardChannel] = React.useState<string | null>(null);
   const [manageChannel, setManageChannel] = React.useState<string | null>(null);
   const [helpOpen, setHelpOpen] = React.useState(false);
+  // Discord has a dedicated zero-config setup dialog (paste bot token → validate
+  // against Discord's API → OAuth2 invite URL → save). The generic wizard only
+  // exposed the setup HINT with no token field, so the bot could never be
+  // configured from the UI (2026-07-28). Route Discord's Connect to it.
+  const [discordSetupOpen, setDiscordSetupOpen] = React.useState(false);
+  const { session } = useAuth();
+  const csrf = session?.csrf_token ?? "";
   const qc = useQueryClient();
+
+  const handleConnect = React.useCallback(
+    (channel: string) => {
+      if (channel === "discord") setDiscordSetupOpen(true);
+      else setWizardChannel(channel);
+    },
+    [],
+  );
 
   const configured = list.data?.bridges.filter((b) => b.configured) ?? [];
   const unconfigured = list.data?.bridges.filter((b) => !b.configured) ?? [];
@@ -1921,7 +1937,7 @@ export function BridgesPage() {
                   <BridgeTile
                     key={b.channel}
                     bridge={b}
-                    onConnect={() => setWizardChannel(b.channel)}
+                    onConnect={() => handleConnect(b.channel)}
                     onManage={() => setManageChannel(b.channel)}
                   />
                 ))}
@@ -1940,7 +1956,7 @@ export function BridgesPage() {
                   <BridgeTile
                     key={b.channel}
                     bridge={b}
-                    onConnect={() => setWizardChannel(b.channel)}
+                    onConnect={() => handleConnect(b.channel)}
                     onManage={() => setManageChannel(b.channel)}
                   />
                 ))}
@@ -1998,6 +2014,17 @@ export function BridgesPage() {
           />
         )}
       </Dialog>
+
+      {/* Discord dedicated setup dialog (token → validate → OAuth2 → save) */}
+      {discordSetupOpen && (
+        <DiscordSetupDialog
+          csrf={csrf}
+          onClose={() => setDiscordSetupOpen(false)}
+          onSuccess={() => {
+            void qc.invalidateQueries({ queryKey: ["bridges", "list"] });
+          }}
+        />
+      )}
 
       {/* Commands help dialog */}
       <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
