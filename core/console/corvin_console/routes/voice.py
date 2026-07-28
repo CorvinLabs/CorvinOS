@@ -790,6 +790,11 @@ class TtsRequest(BaseModel):
     # behaviour. Pattern-bounded because it becomes a path component downstream.
     sid: str | None = Field(None, min_length=1, max_length=128,
                             pattern=r"^[A-Za-z0-9_-]+$")
+    # System-generated content (e.g. welcome greeting from setup) — when True,
+    # TTS skips summarization and goes directly to synthesis. This ensures trusted
+    # system-generated strings like localized welcome prompts are never misclassified
+    # or blocked (ADR-0194 Phase 2 voice trust model).
+    system_generated: bool = Field(False)
     model_config = {"extra": "forbid"}
 
 
@@ -1130,22 +1135,32 @@ def _voice_tts_sync(
         rec.tenant_id, rec.sid_fingerprint, audit_action="voice.tts",
     )
 
-    # summarize.py now BOUNDS even its degraded (no-LLM) fallback to the spoken
-    # budget (2026-07-24) — it can no longer return the whole answer, so the
-    # common path is always a short summary. The `or body.text` branch is the
-    # last-ditch case where summarize.py could not run at all (spawn failure);
-    # even then we must not read the whole answer word-for-word, so it is bounded
-    # to a spoken size here rather than clamped only at the 4096 provider limit.
-    _summary = _summarize_for_speech(body.text, body.lang)
-    if _summary:
-        tts_text = _summary[:_TTS_PROVIDER_CHAR_LIMIT]
-    else:
-        # No summary at all — bound the raw answer to roughly the spoken budget
-        # at a sentence boundary instead of speaking up to 4096 raw chars.
+    # For system-generated content (welcome greetings without a chat session ID),
+    # skip summarization and use the text directly. System text is trusted and
+    # should never be misclassified or blocked by gates. Summarization is an
+    # expensive LLM call that adds no value for pre-composed system messages.
+    if body.system_generated or not body.sid:
         _raw = " ".join((body.text or "").split())
         _cut = _raw[: _TTS_SUMMARIZE_MAX_CHARS * 2]
         _dot = max(_cut.rfind(". "), _cut.rfind("! "), _cut.rfind("? "))
         tts_text = (_cut[: _dot + 1] if _dot > 80 else _cut).strip()
+    else:
+        # summarize.py now BOUNDS even its degraded (no-LLM) fallback to the spoken
+        # budget (2026-07-24) — it can no longer return the whole answer, so the
+        # common path is always a short summary. The `or body.text` branch is the
+        # last-ditch case where summarize.py could not run at all (spawn failure);
+        # even then we must not read the whole answer word-for-word, so it is bounded
+        # to a spoken size here rather than clamped only at the 4096 provider limit.
+        _summary = _summarize_for_speech(body.text, body.lang)
+        if _summary:
+            tts_text = _summary[:_TTS_PROVIDER_CHAR_LIMIT]
+        else:
+            # No summary at all — bound the raw answer to roughly the spoken budget
+            # at a sentence boundary instead of speaking up to 4096 raw chars.
+            _raw = " ".join((body.text or "").split())
+            _cut = _raw[: _TTS_SUMMARIZE_MAX_CHARS * 2]
+            _dot = max(_cut.rfind(". "), _cut.rfind("! "), _cut.rfind("? "))
+            tts_text = (_cut[: _dot + 1] if _dot > 80 else _cut).strip()
 
     # Resolve the user's pins ONCE, before choosing a synthesis path. Before
     # this restructure the OpenAI branch ran FIRST — on raw un-summarized text,
