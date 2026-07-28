@@ -26,6 +26,20 @@ curl -fsSL https://corvin-labs.com/install.sh | bash
 irm https://corvin-labs.com/install.ps1 | iex
 ```
 
+> **DNS error?** If PowerShell reports `irm : The remote name could not be
+> resolved: 'corvin-labs.com'`, the domain itself is up — this is a local DNS
+> resolution issue on your machine (a stale negative-cache entry, VPN/corporate
+> DNS, or a flaky resolver). Try, in order:
+> 1. Flush the local DNS cache and retry: `ipconfig /flushdns`
+> 2. If it still fails, use the GitHub-hosted copy of the same script instead
+>    (identical content, different domain):
+>    ```powershell
+>    irm https://raw.githubusercontent.com/CorvinLabs/CorvinOS/main/install.ps1 | iex
+>    ```
+> 3. Still failing? Your resolver may be blocking/mis-resolving both domains —
+>    temporarily switch your network adapter's DNS to `1.1.1.1` (Cloudflare)
+>    or `8.8.8.8` (Google) and retry.
+
 Both one-liners bootstrap the `uv` runtime (which brings its own Python — no system Python, pip, or
 package manager needed), then `uv tool install corvinos` into an isolated tool environment and add
 it to your PATH. They also provision the local Hermes model and the voice (STT + TTS) models so the
