@@ -187,7 +187,17 @@ def create_app() -> FastAPI:
             _boot_platform = None  # type: ignore[assignment]
             log.debug("corvin_plugins absent — compliance tripwires not available")
         if _boot_platform is not None:
-            _plugins_loaded = _boot_platform()  # raises -> boot aborts
+            try:
+                _plugins_loaded = _boot_platform()  # raises -> boot aborts
+            except Exception as e:
+                # Fresh install robustness: provide actionable error message
+                log.error(
+                    "Platform bootstrap failed: %s (%s). "
+                    "This may be a fresh install or corrupted configuration. "
+                    "Try: rm -rf ~/.corvin && corvin start",
+                    e, type(e).__name__
+                )
+                raise
 
         # ── Phase 1a: Voice config migration (best-effort — never blocks startup) ─
         # Auto-migrate voice configuration from legacy ~/.config/corvin-voice/
