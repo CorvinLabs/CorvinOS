@@ -1135,11 +1135,22 @@ def _voice_tts_sync(
         rec.tenant_id, rec.sid_fingerprint, audit_action="voice.tts",
     )
 
-    # For system-generated content (welcome greetings without a chat session ID),
-    # skip summarization and use the text directly. System text is trusted and
+    # For system-generated content (e.g. the welcome greeting), skip
+    # summarization and use the text directly. System text is trusted and
     # should never be misclassified or blocked by gates. Summarization is an
     # expensive LLM call that adds no value for pre-composed system messages.
-    if body.system_generated or not body.sid:
+    #
+    # Gated on the EXPLICIT flag only — `or not body.sid` was removed
+    # (2026-07-29): sid is optional for reasons unrelated to trust (ADR-0194
+    # Phase 1 — any caller without a chat session simply omits it), so that
+    # clause skipped summarization for ANY sid-less request regardless of
+    # whether its text was actually system-generated. A real user-answer TTS
+    # call that happens not to pass sid would have silently regressed to
+    # reading the raw, un-summarized, un-localized answer verbatim — the
+    # exact bug the 2026-07-24 unconditional-summarization fix eliminated
+    # (caught by test_voice_tts_speaks_the_summary_not_the_raw_text, which
+    # constructs a sid-less TtsRequest for an ordinary long answer).
+    if body.system_generated:
         _raw = " ".join((body.text or "").split())
         _cut = _raw[: _TTS_SUMMARIZE_MAX_CHARS * 2]
         _dot = max(_cut.rfind(". "), _cut.rfind("! "), _cut.rfind("? "))

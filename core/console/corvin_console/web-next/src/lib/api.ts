@@ -3959,9 +3959,16 @@ export function getLastTtsReason(): string | null {
 }
 
 export async function ttsBlob(text: string, lang: string, csrf: string,
-                              sid?: string, signal?: AbortSignal): Promise<Blob> {
+                              sid?: string, signal?: AbortSignal,
+                              systemGenerated?: boolean): Promise<Blob> {
   // `signal`: see ttsSegment — client-side abort on Stop/supersede; an
   // already-running server synthesis finishes on its own schedule.
+  // `systemGenerated`: explicit trust flag (e.g. the first-boot welcome
+  // greeting) — skips server-side summarization for trusted, pre-composed
+  // system text. Must be set EXPLICITLY by a caller that means it; the
+  // server no longer infers this from sid being absent (2026-07-29 — that
+  // inference skipped summarization for ANY sid-less request, including a
+  // real answer that simply didn't pass a session id).
   const res = await fetch("/v1/console/voice/tts", {
     method: "POST",
     credentials: "include",
@@ -3972,7 +3979,11 @@ export async function ttsBlob(text: string, lang: string, csrf: string,
     // ADR-0194 Phase 1: naming the session archives this audio into the session's
     // voice/ dir, so the turn keeps a replayable player. Callers without a chat
     // session (e.g. the first-boot greeting) omit it and get the old behaviour.
-    body: JSON.stringify(sid ? { text, lang, sid } : { text, lang }),
+    body: JSON.stringify({
+      text, lang,
+      ...(sid ? { sid } : {}),
+      ...(systemGenerated ? { system_generated: true } : {}),
+    }),
     signal,
   });
   if (res.status === 204) {

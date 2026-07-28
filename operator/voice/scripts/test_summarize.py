@@ -421,29 +421,10 @@ def test_hermes_backend_tried_when_cli_unavailable() -> None:
     assert out == "A concise Hermes summary."
 
 
-def test_short_reply_short_circuits_verbatim_without_persona_or_audience(monkeypatch) -> None:
-    """The 'auto' backend's fast path: an already-in-budget reply with no
-    persona/audience configured is spoken back verbatim, with NO LLM backend
-    invoked (instant, and immune to the model inventing/paraphrasing content
-    it shouldn't touch)."""
-    from unittest.mock import patch
-    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
-    short_text = "Erledigt, alles gut."
-    with (
-        patch.object(summarize, "_summarize_via_cli") as cli,
-        patch.object(summarize, "_summarize_via_hermes") as herm,
-    ):
-        out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5")
-    cli.assert_not_called()
-    herm.assert_not_called()
-    assert out == short_text
-
-
 def test_short_reply_with_persona_still_gets_llm_styling(monkeypatch) -> None:
-    """Regression: the verbatim short-circuit used to skip the LLM pass for
-    EVERY short reply, silently dropping persona tone-modulation for anyone
-    who configured one — persona/audience opt in to an LLM pass on every
-    reply, short or long, same as before the short-circuit existed."""
+    """A short reply with a persona configured still gets the LLM pass — no
+    length-based bypass exists (removed 2026-07-24, see summarize()'s own
+    docstring), so persona tone-modulation is never silently dropped."""
     from unittest.mock import patch
     monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
     short_text = "Erledigt, alles gut."
@@ -539,29 +520,6 @@ def test_system_prompt_emits_no_language_directive_for_de_en_region_variants() -
     assert summarize._system_for("de", 800, has_task=False,
                                  output_language="fr-FR") != \
         summarize._system_for("de", 800, has_task=False)
-
-
-def test_short_reply_with_de_en_or_empty_output_language_keeps_the_fast_path(monkeypatch) -> None:
-    """Backward-compat guard for the fix above: de/en/empty output_language
-    emits no translation directive anyway (see _system_for), so the instant
-    verbatim path must survive for them."""
-    from unittest.mock import patch
-    monkeypatch.delenv("VOICE_SUMMARIZE_BACKEND", raising=False)
-    short_text = "Der Bug ist behoben."
-    # "german" normalises to "de"; de-DE/en-US are the MOST common locale
-    # spellings (system_language() returns them, profile pins pass through
-    # normalise() untouched) — an exact-match gate threw them off the fast
-    # path (adversarial round, 2026-07-17), hence the primary-subtag check.
-    for ol in ("", "de", "en", "german", "de-DE", "en-US"):
-        with (
-            patch.object(summarize, "_summarize_via_cli") as cli,
-            patch.object(summarize, "_summarize_via_hermes") as herm,
-        ):
-            out = summarize.summarize(short_text, "de", 400, "claude-haiku-4-5",
-                                      output_language=ol)
-        cli.assert_not_called()
-        herm.assert_not_called()
-        assert out == short_text
 
 
 def test_summarize_via_cli_oserror_falls_back_to_hermes(monkeypatch) -> None:
