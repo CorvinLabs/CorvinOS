@@ -7,6 +7,21 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.67] — 2026-07-28
+
+### Fixed — Audit chain corruption blocks platform boot
+
+- **Root cause:** Portable Tenant changes (Phase 1a/1b) corrupted the audit chain.
+  The tripwire correctly refused to boot, but with no healing mechanism users
+  were stuck with no recovery path except `rm -rf ~/.corvin`.
+- **Audit Chain Healing:** When recent records are broken, truncate the chain at
+  the last good record and allow boot to continue. The corruption is logged but
+  does not prevent startup. Historical records are preserved.
+- **Impact:** Fresh installs and corrupted chains now heal automatically instead
+  of crashing with "audit writer is not sound". Users can now start CorvinOS
+  without manual intervention.
+
+
 ## [0.10.66] — 2026-07-28
 
 ### Fixed — Console SPA not served (Windows / all platforms)
