@@ -6,6 +6,19 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
+## [0.10.65] — 2026-07-28
+
+### Fixed — Fresh-install startup robustness
+
+- **Error messages:** Service bootstrap now provides actionable error messages
+  when startup fails (missing config, corrupted audit chain, plugin errors).
+  Instead of silent timeout, users see: "Try: rm -rf ~/.corvin && corvin start"
+- **Fail-closed logging:** Bootstrap errors are logged with context (error type,
+  error message) so operator can diagnose fresh-install issues from logs.
+  No swallowing of exceptions — tripwire failures still abort the boot, but
+  with clear visibility.
+
 ## [0.10.64] — 2026-07-28
 
 ### Added — a way back out of `headless_api_mode`
