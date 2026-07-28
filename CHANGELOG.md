@@ -4,6 +4,38 @@ All notable changes to this project are documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.10.64] — 2026-07-28
+
+### Added — a way back out of `headless_api_mode`
+
+`headless_api_mode` was a one-way door. Turning it on unmounts `/console/`, which
+is where Settings → Features lives — so the switch removed the only supported way
+to un-flip it. It rendered as an ordinary checkbox, promising a reversibility it
+did not have, and the only recovery was hand-editing `features.json`. It is a
+deployment mode wearing a rollout flag's clothes.
+
+- **CLI off-ramp.** `corvin config set features.<flag_id> <true|false>` now writes
+  the same per-tenant overlay the Settings route writes
+  (`<tenant>/global/features.json`). That overlay is the highest-precedence layer,
+  so `corvin config set features.headless_api_mode false` also overrides a
+  `spec.features.headless_api_mode: true` in `tenant.corvin.yaml` — no YAML editing.
+  A non-boolean value is refused instead of being stored as a truthy string, and an
+  unregistered flag id is refused with the registry printed. Deliberately **not** an
+  env var: an env override would be the kill-flag shape this repo has ruled out.
+  The command prints that a restart is needed, because `mount_static()` decides the
+  SPA mount once at app creation.
+- **Confirmation gate in the Console.** The registry entry now carries
+  `self_locking=True`, and `/settings/features` exports `self_locking` plus a
+  `recovery_command`. The Features panel shows a warning icon and a "no way back
+  from the UI" badge, and a toggle opens a confirmation dialog that names the
+  consequence and prints the recovery command *before* the door shuts. Nothing is
+  persisted until the operator confirms. The UI reads `self_locking` from the
+  backend and never hard-codes a flag id, so the next self-locking flag inherits
+  the warning. The REST route stays a plain `PUT` — putting the gate there would
+  have broken the CLI off-ramp, which must write the flag with no dialog anywhere.
+
 ## [0.10.63]
 
 ### Fixed — `/new` and every other shell-out command, on the bridges that had them broken

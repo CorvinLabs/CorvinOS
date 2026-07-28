@@ -415,6 +415,57 @@ independent on purpose. Coupling them would make "core + CLI + bridges, no brows
 unreachable. A guard test (`test_headless_mode.py::TestNoHiddenCoupling`) fails if the
 bridge supervisor ever starts reading `headless_api_mode`.
 
+### It is SELF-LOCKING — the off-ramp is the CLI
+
+`headless_api_mode` is the one flag in the registry that removes the surface which could
+switch it back off. Every other flag is reversible where it was flipped; this one deletes
+`/console/`, and with it Settings → Features. CLAUDE.md's rule — *"toggleable from the
+Console, no file editing, no restart"* — silently assumes reversibility at the same
+surface, and this flag is the counter-example. It is not a rollout flag, it is a
+deployment mode wearing a rollout flag's clothes.
+
+Two surfaces close the trap. Neither is an env var: an env override would be the
+kill-flag shape this repo has ruled out, and it would not survive the next process.
+
+**1. The CLI off-ramp (recovery).**
+
+```bash
+corvin config set features.headless_api_mode false
+# then restart the service
+```
+
+`cli.py::_set_feature_flag_config` handles any `features.<flag_id>` key and writes the
+same per-tenant overlay the Settings route writes
+(`feature_flags.set_enabled` → `<tenant>/global/features.json`). That overlay is the
+**highest-precedence** layer, so it also overrides a `spec.features.headless_api_mode:
+true` entry in `tenant.corvin.yaml` — the operator never has to edit YAML to get out.
+The value must be a boolean spelling (`true|yes|1|on|enabled` /
+`false|no|0|off|disabled`); anything else is refused rather than stored as a truthy
+string. An unregistered flag id is refused and the registry is printed.
+
+**A restart is required, and the CLI says so.** `mount_static()` runs once when the app
+is created, so writing the file does not remount the SPA into a running headless process.
+The gateway's `_headless_ui()` *is* read per request — that only keeps its redirect
+targets honest, it does not mount anything.
+
+**2. The confirmation gate (prevention).** The registry entry carries
+`self_locking=True`, and `describe_all()` exports `self_locking` plus a
+`recovery_command` string. The Settings panel renders a warning icon, a "no way back
+from the UI" badge, and — instead of writing straight through — a confirmation dialog
+that names the consequence and prints the recovery command *before* the door shuts, which
+is the last moment the operator can read it there. Nothing is persisted until they
+confirm.
+
+The UI decides this from the `self_locking` field, **never** from a hard-coded flag id, so
+the next self-locking flag inherits the warning automatically. The gate lives in the UI
+and not in the REST route on purpose: the route has to stay a plain `PUT` so the CLI
+off-ramp can write the flag with no dialog anywhere.
+
+Tests: `ops/launcher/corvin/tests/test_config_features_cli.py` (CLI parse, precedence over
+YAML, refusals, no env-var override) and `core/console/tests/test_settings_features_api.py`
+(the `self_locking` / `recovery_command` contract the UI renders from, plus a
+console-locks-it / CLI-unlocks-it round trip).
+
 ### Deployment models = flag combinations, not a preset mechanism
 
 There is **no "deployment mode" setting and no preset mechanism** — `grep -rn preset`

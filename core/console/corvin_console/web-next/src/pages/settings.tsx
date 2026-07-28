@@ -5,16 +5,17 @@
  */
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Cpu, Edit2, FileText, FlaskConical, HeartPulse, Loader2, RefreshCw, Save, Server, Upload, Users, Wrench, X } from "lucide-react";
+import { AlertTriangle, Check, Copy, Cpu, Edit2, FileText, FlaskConical, HeartPulse, Loader2, RefreshCw, Save, Server, Upload, Users, Wrench, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ReauthDialog } from "@/components/reauth-dialog";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/lib/auth";
-import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, getInstanceStats, getFeatureFlags, setFeatureFlag, getWorkerEngine, setWorkerEngine, type DelegationBudgetResponse, type HealingConfigResponse, type WorkerEngineMode } from "@/lib/api";
+import { api, updateSettingsFile, getAutoUpdate, setAutoUpdate, getServiceTier, setServiceTier, getDelegationBudget, setDelegationBudget, getHealingConfig, setHealingConfig, getInstanceStats, getFeatureFlags, setFeatureFlag, getWorkerEngine, setWorkerEngine, type DelegationBudgetResponse, type FeatureFlagState, type HealingConfigResponse, type WorkerEngineMode } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 
@@ -848,8 +849,59 @@ function WorkerEngineCard({ csrf }: { csrf: string }) {
   );
 }
 
-/** Feature flags — new features ship dark; this is where they get switched on. */
-function FeatureFlagsCard({ csrf }: { csrf: string }) {
+/** A shell-command line with a copy button — used for the lock-out off-ramp. */
+function CommandBlock({ command }: { command: string }) {
+  const [copied, setCopied] = React.useState(false);
+  return (
+    <div className="flex items-center gap-2 rounded border border-border bg-muted/60 px-2.5 py-2">
+      <code
+        data-testid="feature-recovery-command"
+        className="min-w-0 flex-1 select-all break-all font-mono text-[11px]"
+      >
+        {command}
+      </code>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        className="h-6 shrink-0 px-2"
+        aria-label="Copy command"
+        onClick={() => {
+          void navigator.clipboard?.writeText(command).then(
+            () => {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1500);
+            },
+            () => undefined,   // clipboard blocked (non-secure context) — the code is select-all anyway
+          );
+        }}
+      >
+        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Feature flags — new features ship dark; this is where they get switched on.
+ *
+ * SELF-LOCKING flags get a confirmation gate. A normal flag is reversible from
+ * this same panel, so a bare switch is honest UI. `headless_api_mode` is not:
+ * turning it on unmounts /console/, and the panel the operator just clicked is
+ * gone on the next boot. Rendering that as an ordinary checkbox is the actual
+ * defect — it promises a reversibility the flag does not have.
+ *
+ * So enabling a self-locking flag requires an explicit confirmation that names
+ * the consequence AND shows the CLI off-ramp *before* the door shuts, which is
+ * the only moment the operator can still read it here. Disabling one is also
+ * confirmed, because it is a boot-affecting deployment change — but the tone
+ * there is a restart notice, not a warning.
+ *
+ * Which flags are self-locking is decided by the backend registry
+ * (`feature_flags.FeatureFlag.self_locking`), never by a flag id hard-coded in
+ * this file — otherwise the next self-locking flag ships without the warning.
+ */
+export function FeatureFlagsCard({ csrf }: { csrf: string }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["feature-flags"],
@@ -857,8 +909,10 @@ function FeatureFlagsCard({ csrf }: { csrf: string }) {
   });
   const [saving, setSaving] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  // Pending self-locking toggle awaiting confirmation. null = no dialog open.
+  const [pending, setPending] = React.useState<{ flag: FeatureFlagState; next: boolean } | null>(null);
 
-  const toggle = async (id: string, enabled: boolean) => {
+  const apply = async (id: string, enabled: boolean) => {
     setError(null);
     setSaving(id);
     try {
@@ -869,6 +923,27 @@ function FeatureFlagsCard({ csrf }: { csrf: string }) {
     } finally {
       setSaving(null);
     }
+  };
+
+  /**
+   * Every switch goes through here. A self-locking flag is diverted into the
+   * dialog instead of being written straight through — fail-closed: nothing is
+   * persisted until the operator confirms.
+   */
+  const requestToggle = (f: FeatureFlagState, next: boolean) => {
+    if (f.self_locking) {
+      setError(null);
+      setPending({ flag: f, next });
+      return;
+    }
+    void apply(f.id, next);
+  };
+
+  const confirmPending = async () => {
+    if (!pending) return;
+    const { flag, next } = pending;
+    setPending(null);
+    await apply(flag.id, next);
   };
 
   const features = q.data?.features ?? [];
@@ -895,19 +970,35 @@ function FeatureFlagsCard({ csrf }: { csrf: string }) {
             <div key={f.id} className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
+                  {f.self_locking && (
+                    <span data-testid={`feature-warning-${f.id}`} title="Removes the Console web interface — needs the CLI to undo">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" aria-label="Self-locking feature" />
+                    </span>
+                  )}
                   <span className="text-sm font-medium">{f.label}</span>
                   <Badge variant="outline" className="font-mono text-[10px]">{f.id}</Badge>
                   {f.source === "tenant_yaml" && (
                     <Badge variant="secondary" className="text-[10px]">from tenant.corvin.yaml</Badge>
                   )}
+                  {f.self_locking && (
+                    <Badge variant="secondary" className="text-[10px] text-amber-600 dark:text-amber-400">
+                      no way back from the UI
+                    </Badge>
+                  )}
                 </div>
                 <p className="mt-0.5 text-[11px] text-muted-foreground">{f.description}</p>
+                {f.self_locking && f.recovery_command && (
+                  <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                    Undo needs a terminal:{" "}
+                    <code className="select-all font-mono">{f.recovery_command}</code>
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {saving === f.id && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                 <Switch
                   checked={f.enabled}
-                  onCheckedChange={(next) => void toggle(f.id, next)}
+                  onCheckedChange={(next) => requestToggle(f, next)}
                   disabled={saving !== null}
                   aria-label={f.label}
                 />
@@ -919,6 +1010,65 @@ function FeatureFlagsCard({ csrf }: { csrf: string }) {
           <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1.5">{error}</p>
         )}
       </CardContent>
+
+      {/* Confirmation gate — nothing is written until the operator confirms. */}
+      <Dialog open={pending !== null} onOpenChange={(open) => { if (!open) setPending(null); }}>
+        <DialogContent className="max-w-lg" data-testid="feature-self-lock-dialog">
+          {pending && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  {pending.next && <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" />}
+                  {pending.next
+                    ? `Turn on ${pending.flag.label}?`
+                    : `Turn off ${pending.flag.label}?`}
+                </DialogTitle>
+                <DialogDescription>
+                  {pending.next ? (
+                    <>
+                      This disables the Console web interface. After the next restart
+                      there is no <code className="font-mono">/console/</code> page — so
+                      you cannot come back to this panel to switch it off again. The REST
+                      API stays available.
+                    </>
+                  ) : (
+                    <>
+                      Turning off API-Only Mode re-enables the web interface. Restart the
+                      service for the Console to be served again.
+                    </>
+                  )}
+                </DialogDescription>
+              </DialogHeader>
+
+              {pending.next && pending.flag.recovery_command && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium">
+                    Write this down first — it is the only way back:
+                  </p>
+                  <CommandBlock command={pending.flag.recovery_command} />
+                  <p className="text-[11px] text-muted-foreground">
+                    Run it on the machine hosting Corvin, then restart the service.
+                  </p>
+                </div>
+              )}
+
+              <DialogFooter>
+                <Button variant="ghost" onClick={() => setPending(null)} disabled={saving !== null}>
+                  Cancel
+                </Button>
+                <Button
+                  variant={pending.next ? "destructive" : "default"}
+                  onClick={() => void confirmPending()}
+                  disabled={saving !== null}
+                  data-testid="feature-self-lock-confirm"
+                >
+                  {pending.next ? "Disable the web interface" : "Re-enable the web interface"}
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

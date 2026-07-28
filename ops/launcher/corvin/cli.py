@@ -9,6 +9,7 @@ Commands:
   corvin gateway stop
   corvin gateway setup
   corvin config set <key> <value>
+  corvin config set features.headless_api_mode false   Re-enable the web console
   corvin config show
   corvin secrets set|get|delete|list|migrate  Manage encrypted secrets (Phase 1b)
   corvin status
@@ -501,9 +502,99 @@ def _set_telemetry_config(key: str, value: str) -> int:
     return 0
 
 
+_TRUE_WORDS = ("true", "yes", "1", "on", "enabled")
+_FALSE_WORDS = ("false", "no", "0", "off", "disabled")
+
+
+def _set_feature_flag_config(key: str, value: str) -> int:
+    """``features.<flag_id>`` keys — the Console-independent off-ramp.
+
+    Feature flags normally live in Console → Settings → Features, and CLAUDE.md
+    requires exactly that: "toggleable from the Console, no file editing, no
+    restart". One flag breaks the assumption behind that rule. ``headless_api_
+    mode`` unmounts ``/console/`` when it is on, so the panel that would switch
+    it back off is the very thing it removes. Without a second surface the flag
+    is a one-way door: an operator who ticks it has no supported way back short
+    of hand-editing ``features.json``.
+
+    This writes the same per-tenant overlay the Settings route writes
+    (``feature_flags.set_enabled`` → ``<tenant>/global/features.json``), which
+    is the HIGHEST-precedence layer, so it also wins over a
+    ``spec.features.<id>`` entry in ``tenant.corvin.yaml``. It is deliberately
+    NOT an env var: an env override would be a kill-flag shape this repo has
+    ruled out, and it would not survive the next process either.
+    """
+    flag_id = key.split(".", 1)[1].strip()
+    if not flag_id:
+        print("  invalid feature key: expected features.<flag_id>")
+        return 1
+
+    lowered = value.strip().lower()
+    if lowered in _TRUE_WORDS:
+        enabled = True
+    elif lowered in _FALSE_WORDS:
+        enabled = False
+    else:
+        # Not pass-through like telemetry: a feature flag is a boolean, and a
+        # typo'd "flase" silently stored as a truthy string would leave the
+        # operator believing they had switched something off.
+        print(f"  {_red('invalid value')}: {value!r} — expected true or false")
+        return 1
+
+    try:
+        # corvin_console FIRST — importing it runs _operator_bootstrap, which puts
+        # the vendored operator/ subtrees on sys.path so the bare `forge` import
+        # below resolves on a wheel install. Same ordering hazard as
+        # _set_telemetry_config; see its docstring for the incident.
+        from corvin_console import feature_flags  # noqa: PLC0415
+        from forge.tenants import current_tenant  # noqa: PLC0415
+    except ImportError as exc:
+        print(f"  feature config requires the console extras: {exc}")
+        return 1
+
+    try:
+        entry = feature_flags.flag(flag_id)
+    except feature_flags.UnknownFlagError:
+        print(f"  {_red('unknown feature flag')}: {flag_id!r}")
+        print("  known flags:")
+        for f in feature_flags.REGISTRY:
+            print(f"    {f.id}")
+        return 1
+
+    try:
+        tenant_id = current_tenant()
+    except Exception as exc:  # noqa: BLE001 — bad CORVIN_TENANT_ID must not traceback
+        print(f"  could not resolve the tenant: {exc}")
+        return 1
+
+    try:
+        stored = feature_flags.set_enabled(flag_id, enabled, tenant_id)
+    except OSError as exc:
+        print(f"  could not write the feature overlay: {exc}")
+        return 1
+
+    state = _green("on") if stored else _yellow("off")
+    print(f"  features.{flag_id} = {state}  (tenant {tenant_id})")
+
+    if entry.self_locking:
+        if stored:
+            print(_yellow(
+                "\n  This flag removes the Console web interface. You will not be\n"
+                "  able to switch it back off from Settings — use this command:"
+            ))
+            print(f"    {_bold(feature_flags.recovery_command(flag_id))}")
+        else:
+            print("\n  The Console web interface is switched back on.")
+    print(_yellow("  Restart the service for this to take effect "
+                  "(the UI mount is decided at boot).\n"))
+    return 0
+
+
 def cmd_config_set(args: argparse.Namespace) -> int:
     if args.key.startswith("telemetry."):
         return _set_telemetry_config(args.key, args.value)
+    if args.key.startswith("features."):
+        return _set_feature_flag_config(args.key, args.value)
     key_map = {
         "ollama-url": "ollama_url",
         "model":      "model",
@@ -562,6 +653,10 @@ def _build_parser() -> argparse.ArgumentParser:
               corvin gateway start         Start the gateway (foreground)
               corvin gateway setup         Connect a messaging platform
               corvin status                Show running state
+
+            Locked out of the web console?
+              corvin config set features.headless_api_mode false
+                                           Re-enable the UI, then restart
         """),
     )
     sub = p.add_subparsers(dest="command", metavar="command")
@@ -624,7 +719,9 @@ def _build_parser() -> argparse.ArgumentParser:
     cs.add_argument(
         "key", metavar="KEY",
         help="ollama-url | model | bridge | image | telemetry.<subkey> "
-             "(e.g. telemetry.ping_enabled)",
+             "(e.g. telemetry.ping_enabled) | features.<flag_id> "
+             "(e.g. features.headless_api_mode — the off-ramp when a flag has "
+             "removed the Console UI)",
     )
     cs.add_argument("value", metavar="VALUE")
     co_sub.add_parser("show", help="Print current configuration")
