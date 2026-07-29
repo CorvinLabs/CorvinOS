@@ -744,22 +744,48 @@ def put_bridge_enabled(
 # Phase 2 of Discord Zero-Config: Console UI integration.
 
 
-def _strip_token(v: str) -> str:
-    """Strip surrounding whitespace/newlines from a pasted token.
+def _make_token_stripper(min_len: int, max_len: int):
+    """Builds a strip-then-length-check validator for a specific bound pair.
 
-    Without this, a token copy-pasted with a trailing newline (common from a
+    Discord tokens use min_length=20, Telegram tokens use min_length=10 —
+    parameterized rather than hardcoded so both get the identical strip +
+    re-check behavior instead of two near-duplicate functions drifting
+    apart (an earlier pass added this fix to the Discord models only and
+    silently missed both Telegram models — caught by
+    test_bridges_token_validation.py's parametrized coverage, 2026-07-30).
+
+    Strips surrounding whitespace/newlines from a pasted token: without
+    this, a token copy-pasted with a trailing newline (common from a
     terminal/password manager) reaches Node's `https.request()` with a raw
     `\\n` in the Authorization header value, which throws synchronously
     ("Invalid character in header content") — a cryptic Node error instead
-    of an actionable "invalid token" message. The min_length/max_length
-    bounds on the Field below apply BEFORE this validator in pydantic v2's
-    ordering here (they're plain constraints, not chained validators), so a
-    token that's only whitespace still correctly fails length validation.
+    of an actionable "invalid token" message.
+
+    Re-checks length AFTER stripping rather than relying on the Field's
+    min_length/max_length (which apply to the RAW, pre-strip value — a
+    whitespace-only string can pass min_length on its raw length and then
+    strip to an empty token; a real token padded with spaces can strip
+    below min_length and still be accepted). Neither was a security hole
+    (a bad token still fails cleanly against the provider's API), but the
+    length guarantee didn't hold for the real token content.
     """
-    return v.strip()
+    def _stripper(v: str) -> str:
+        stripped = v.strip()
+        if len(stripped) < min_len or len(stripped) > max_len:
+            raise ValueError(
+                f"token must be {min_len}-{max_len} characters after "
+                f"stripping whitespace (got {len(stripped)})"
+            )
+        return stripped
+    return _stripper
+
+
+_strip_token = _make_token_stripper(20, 200)      # Discord
+_strip_telegram_token = _make_token_stripper(10, 200)  # Telegram
 
 
 _Token = Annotated[str, AfterValidator(_strip_token)]
+_TelegramToken = Annotated[str, AfterValidator(_strip_telegram_token)]
 
 
 class ValidateTokenRequest(BaseModel):
@@ -1172,7 +1198,7 @@ async def save_discord_token(
 # Validate token via Telegram API → Save to settings.json
 
 class ValidateTelegramTokenRequest(BaseModel):
-    token: str = Field(..., min_length=10, max_length=200, description="Telegram bot token")
+    token: _TelegramToken = Field(..., min_length=10, max_length=200, description="Telegram bot token")
 
 
 class ValidateTelegramTokenResponse(BaseModel):
@@ -1184,7 +1210,7 @@ class ValidateTelegramTokenResponse(BaseModel):
 
 
 class SaveTelegramTokenRequest(BaseModel):
-    token: str = Field(..., min_length=10, max_length=200, description="Telegram bot token")
+    token: _TelegramToken = Field(..., min_length=10, max_length=200, description="Telegram bot token")
 
 
 class SaveTelegramTokenResponse(BaseModel):

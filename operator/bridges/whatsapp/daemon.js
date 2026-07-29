@@ -24,6 +24,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { bridgeSettingsPath } = require('../shared/js/bridge_paths');
 const { countPending } = require('../shared/js/outbox');
+const { computeReconnectDelay } = require('./reconnect_backoff');
 
 require('../shared/js/bridge_state').exitIfDisabled('whatsapp');
 
@@ -954,20 +955,24 @@ if (MOCK) {
     // twice when it delivers the same message in multiple reconnect batches.
     const seenToggleIds = new Set();
 
-    let sock = makeSocket();
-    attachHandlers(sock);
-    return;
-
-    // Reconnect backoff (2026-07-30): a persistent non-logout disconnect
-    // (e.g. reason 405/unknown, seen in the wild — WhatsApp intermittently
-    // refusing registration) used to retry on a FIXED 1s delay forever, with
-    // no cap. That hammers WhatsApp's servers indefinitely and risks a
+    // Reconnect backoff (2026-07-30, corrected 2026-07-30 — an earlier pass
+    // added this comment and the disconnectedSince/status-field plumbing but
+    // never actually wired the backoff into the reconnect call below, found
+    // by an adversarial re-review): a persistent non-logout disconnect (e.g.
+    // reason 405/unknown, seen in the wild — WhatsApp intermittently
+    // refusing registration) retried on a FIXED 1s delay forever, with no
+    // cap. That hammers WhatsApp's servers indefinitely and risks a
     // rate-limit or IP/account-level ban — the exact failure mode that took
     // this bridge down until a human manually stopped the service. Code 515
     // (restartRequired, the expected close right after a QR scan) still gets
     // the original fast ~1s reconnect so pairing stays snappy; every OTHER
     // close backs off exponentially (1s, 2s, 4s, ... capped at 60s) with
     // jitter, and the counter resets to 0 on the next successful 'open'.
+    let reconnectAttempts = 0;
+
+    let sock = makeSocket();
+    attachHandlers(sock);
+    return;
 
     // ─── helpers ──────────────────────────────────────────────────────────
     function attachHandlers(s) {
@@ -1015,6 +1020,7 @@ if (MOCK) {
         log(`Connected. JID=${s.user?.id}`);
         waSocket = s;
         disconnectedSince = 0;
+        reconnectAttempts = 0;
         // Pair-only success: only exit once registered=true. The first 'open'
         // (right after QR scan) typically has registered=false; Baileys then
         // emits close-515, we reconnect, and the SECOND 'open' has it true.
@@ -1050,13 +1056,19 @@ if (MOCK) {
           process.exit(0);
         }
         // 515 = restartRequired is the EXPECTED close right after a QR scan.
-        // Reconnecting completes the registration. For all other transient
-        // failures we so retry — only loggedOut (401) is terminal.
-        log('Reconnecting in 1s...');
+        // Reconnecting completes the registration — keep it fast and don't
+        // count it against the backoff (it's not a failure, it's the normal
+        // mid-pairing handshake). Every OTHER transient close (network
+        // blips, WhatsApp intermittently refusing registration with an
+        // "unknown" reason — the real 2026-07-29 incident) backs off
+        // exponentially instead of hammering on a fixed 1s retry forever.
+        const { delayMs, attemptsAfter } = computeReconnectDelay(reason, reconnectAttempts);
+        reconnectAttempts = attemptsAfter;
+        log(`Reconnecting in ${Math.round(delayMs / 1000)}s (attempt ${reconnectAttempts})...`);
         setTimeout(() => {
           sock = makeSocket();
           attachHandlers(sock);
-        }, 1000);
+        }, delayMs);
       }
     });
     s.ev.on('messages.upsert', async ({ messages, type }) => {
