@@ -3,14 +3,6 @@ name: adr_gate
 description: ADR Gate — evaluates after non-trivial tasks whether an ADR is warranted; writes to Corvin-ADR repo when yes, names the skip reason when no, requires three-level analysis (conceptual/structural/implementation), and generates E2E tests for every new structural invariant so LDD has a loss signal.
 ---
 
----
-name: adr_gate
-type: domain
-description: 'ADR Gate — evaluates after non-trivial tasks whether an ADR is warranted; writes to Corvin-ADR repo when yes, names the skip reason when no, requires three-level analysis (conceptual/structural/implementation), and generates E2E tests for every new structural invariant so LDD has a loss signal.'
-claim:
-references: []
----
-
 # ADR Gate — Architectural Decision Record discipline
 
 Apply this gate once at the END of any non-trivial implementation task, immediately before declaring "done." Most tasks will not produce an ADR — that is the correct and expected outcome.

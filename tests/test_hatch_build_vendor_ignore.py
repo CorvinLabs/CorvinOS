@@ -121,6 +121,44 @@ def test_voice_i18n_bundle_files_present_on_disk_for_the_vendored_source():
     assert {"de.json", "en.json", "zh-Hans.json"}.issubset(names), names
 
 
+def test_bundle_skills_dir_is_vendored():
+    """Regression (found 2026-07-29 adding the e2e-wiring-proof skill and
+    applying its own reachability rule to itself): only
+    operator/bundle/config-templates was ever in _VENDOR_MAP -- the 12 LDD
+    quality-discipline skills (adr_gate, e2e-wiring-proof, ...) plus
+    install.sh and manifest.yaml were NEVER vendored. A fresh `pip install
+    corvinos` shipped none of them; only a git checkout running install.sh
+    (or `corvin pkg install ./operator/bundle/`) ever seeded
+    ~/.claude/skills/, exactly the same failure class as the i18n bug
+    above."""
+    sources = [src for src, _dest in hb._VENDOR_MAP]
+    for required in (
+        "operator/bundle/skills",
+        "operator/bundle/install.sh",
+        "operator/bundle/manifest.yaml",
+    ):
+        assert required in sources, (
+            f"{required} missing from _VENDOR_MAP -- wheel installs ship "
+            f"without it. Current sources: {sources}"
+        )
+    dest_map = dict(hb._VENDOR_MAP)
+    assert dest_map["operator/bundle/skills"] == "corvin_console/_vendor/operator/bundle/skills"
+    assert dest_map["operator/bundle/install.sh"] == "corvin_console/_vendor/operator/bundle/install.sh"
+    assert dest_map["operator/bundle/manifest.yaml"] == "corvin_console/_vendor/operator/bundle/manifest.yaml"
+
+
+def test_all_twelve_ldd_skill_files_present_on_disk_for_the_vendored_source():
+    """The vendor map entry alone doesn't prove the files exist -- confirm
+    every skill directory under skills/ldd/ actually has a SKILL.md to copy,
+    so a future skill added to the directory but never written correctly
+    fails here instead of shipping an empty dir."""
+    ldd_dir = _REPO / "operator" / "bundle" / "skills" / "ldd"
+    skill_dirs = [p for p in ldd_dir.iterdir() if p.is_dir()]
+    assert len(skill_dirs) >= 12, f"expected >= 12 LDD skills, found {len(skill_dirs)}"
+    missing_skill_md = [p.name for p in skill_dirs if not (p / "SKILL.md").is_file()]
+    assert not missing_skill_md, f"skill dirs with no SKILL.md: {missing_skill_md}"
+
+
 def _git(*args: str, cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=str(cwd), check=True, capture_output=True)
 

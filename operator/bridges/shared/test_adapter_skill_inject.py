@@ -212,7 +212,12 @@ def _resolve_chat_channel_id(chat_key: str) -> str:
 
 
 def case_no_skill_forge_no_inject(failures: list[str]) -> None:
-    print("\n=== case A: skill-forge available but no skills → no block ===")
+    print("\n=== case A: no registered skills → only the always-on core quality skills inject ===")
+    # ADR-0259: adr_gate/e2e-wiring-proof are core quality-discipline skills
+    # that inject unconditionally (read from the bundle, not the SkillForge
+    # registry) so a fresh install with an empty registry still gets them.
+    # This case now asserts THAT behavior, not "no block at all" — the old
+    # assertion predates ADR-0259's always-on core skills.
     sandbox = _make_sandbox("a")
     home = sandbox / "home"
     slot = sandbox / "slot"
@@ -233,9 +238,16 @@ def case_no_skill_forge_no_inject(failures: list[str]) -> None:
             raise AssertionError(f"no dump entry; dump={dump}")
         args = e["args"]
         sp = system_prompt_from_args(args)
-        if "Active session skills" in sp:
-            raise AssertionError("skill block injected without any skills present")
-        print("PASS: no skills → no block")
+        if "Active session skills" not in sp:
+            raise AssertionError(
+                f"core quality skills did not inject with an empty registry; "
+                f"tail={sp[-400:]!r}"
+            )
+        if "adr_gate" not in sp:
+            raise AssertionError(f"adr_gate core skill missing; tail={sp[-400:]!r}")
+        if "e2e-wiring-proof" not in sp:
+            raise AssertionError(f"e2e-wiring-proof core skill missing; tail={sp[-400:]!r}")
+        print("PASS: empty registry still injects adr_gate + e2e-wiring-proof")
     except AssertionError as ex:
         failures.append(f"case-A: {ex}")
         print(f"FAIL: case-A: {ex}")
@@ -636,6 +648,13 @@ def case_skill_body_escape_blocked(failures: list[str]) -> None:
     slot = sandbox / "slot"
     chat_key = "chat-I"
     cid = _resolve_chat_channel_id(chat_key)
+    # Suppress the always-on core quality skills (ADR-0259) for this case —
+    # it deliberately probes the wrapper/sanitization logic on exactly ONE
+    # crafted skill, and adr_gate/e2e-wiring-proof would otherwise add their
+    # own genuine </auto_skill> closes, breaking the "exactly 1" assertion
+    # below for reasons unrelated to what this case actually tests.
+    (home / "global").mkdir(parents=True, exist_ok=True)
+    (home / "global" / "quality-layers.json").write_text(json.dumps({"enabled": False}))
     # Body uses `</auto_skill>` literal — that's the wrapper-escape vector
     # we want to neutralize. We deliberately do NOT include prompt-injection
     # phrases (e.g. "system override", "ignore previous") because the

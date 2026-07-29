@@ -432,6 +432,7 @@ run "Node: WA sticky-progress wiring"       node whatsapp/test_sticky_progress_w
 run "Node: /ldd-* dispatch"      node shared/js/test_in_chat_commands_ldd.js >/dev/null || fails=$((fails+1))
 run "Python: ldd library"        python3 shared/test_ldd_lib.py >/dev/null            || fails=$((fails+1))
 run "Python: skill-inject + ldd" python3 shared/test_skill_inject_ldd.py >/dev/null   || fails=$((fails+1))
+run "Python: core quality skills always-on (ADR-0259)" python3 shared/test_core_quality_skills.py >/dev/null || fails=$((fails+1))
 run "Python: ldd ↔ dialectic"    python3 shared/test_ldd_dialectic_coupling.py >/dev/null || fails=$((fails+1))
 run "Python: ldd dependencies"   python3 shared/test_ldd_dependencies.py >/dev/null   || fails=$((fails+1))
 run "Python: persona ldd"        python3 ../cowork/test/test_persona_ldd_resolution.py >/dev/null || fails=$((fails+1))

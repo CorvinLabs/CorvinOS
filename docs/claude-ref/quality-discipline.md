@@ -226,14 +226,34 @@ Never stop at "tests pass" — verify the real system works as intended.
 
 ## Integration with LDD
 
-Quality disciplines are **LDD Layer 14 (LDD-Toggle-System)**.
+Quality disciplines are **LDD Layer 14 (LDD-Toggle-System)**. This section is about the 10
+"process" LDD skills only — `adr_gate` and `e2e-wiring-proof` are a separate mechanism
+(see below).
 
-Each persona declares which disciplines are active via `ldd_preset`:
-- `"off"` (default) — disciplines available but not auto-recommended
-- `"audit"` — core disciplines only (ADR Gate, docs-as-definition-of-done)
-- `"all"` — all 12 LDD layers enabled
+Each persona declares which of the 12 LDD layers are active via `ldd_preset`, a per-persona
+JSON field consumed by `operator/cowork/lib/resolver.py` and expanded via
+`operator/bridges/shared/ldd.py`'s `PRESETS` dict — the actual code-enforced enum is:
+- `"off"` (default for every shipped persona) — all 12 layers off; skills available in the
+  prompt via `skill_forge_enabled: true`, not enforced
+- `"quick"` — a curated subset on (`e2e_driven_iteration`, `dialectical_reasoning`,
+  `docs_as_dod`, `per_subtask_e2e`), the rest off
+- `"default"` / `"strict"` — all 12 layers on
 
-Standard personas (assistant, coder, browser, research) use `"off"` but have `skill_forge_enabled: true` — disciplines are **available in the prompt**, not enforced. This respects the philosophy: *guidance available, judgment yours.*
+(Earlier drafts of this doc described `"off"/"audit"/"all"` — that enum was never
+implemented; the three values above are the ones `ldd.PRESETS` actually defines.) A persona
+can also override individual layers via `ldd_layers: {layer_id: bool}` without changing its
+coarse preset. Standard personas (assistant, coder, browser, research) all ship
+`ldd_preset: "off"` — disciplines are **available in the prompt**, not enforced. This
+respects the philosophy: *guidance available, judgment yours.*
+
+**`adr_gate` and `e2e-wiring-proof` are NOT part of the 12-layer toggle set above** — see
+"E2E Wiring Proof" and "ADR Gate" sections. They are gated by the separate
+`operator/bridges/shared/quality_layers.py` module (global `<corvin_home>/global/
+quality-layers.json`, exposed via the `quality-layer-control` skill), and are injected
+unconditionally by `skill_inject.py` regardless of SkillForge registry state or
+`ldd_preset` — this is the mechanism that makes them "on by default, every installation"
+(ADR-0259) while the 10 process-LDD skills above stay off-by-default until a persona/chat
+opts in.
 
 ---
 
