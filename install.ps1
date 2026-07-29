@@ -341,13 +341,13 @@ Write-Log "supervisor starting: $ServeCmdEscaped --no-browser"
 # INST-2 / WA-2 / WA-3: mark every serve process THIS supervisor launches as
 # supervised. serve_backend.py sees CORVIN_SUPERVISED=1 and skips its own
 # in-process self-update handoff, so it never fights the one-time
-# `uv tool upgrade` this supervisor already ran above (which would otherwise
+# "uv tool upgrade" this supervisor already ran above (which would otherwise
 # burn the 5-per-300s restart budget on a handoff the locked venv can't finish
 # in 5s). Set on the supervisor process → inherited by every child.
 `$env:CORVIN_SUPERVISED = "1"
 
 # ── One-time auto-update per logon/boot ─────────────────────────────────────
-# The Windows install is `uv tool install`d, so upgrade with `uv tool upgrade`
+# The Windows install is "uv tool install"d, so upgrade with "uv tool upgrade"
 # (that venv has no pip). Runs ONCE here -- before the restart loop -- so a crash
 # loop never hammers PyPI. Honours the console's auto_update toggle and never
 # blocks startup: any failure/timeout/offline just logs and continues.
@@ -368,9 +368,16 @@ if (Get-CorvinAutoUpdate) {
         if (Test-Path `$cand) { `$uv = `$cand }
     }
     if (`$uv) {
-        Write-Log "auto-update: uv tool upgrade corvinos"
+        # --reinstall-package corvinos (2026-07-29, adversarial review): WITHOUT
+        # this, "uv tool upgrade" can resolve against uv's OWN cached view of
+        # the package index and silently no-op (exit 0, nothing installed) even
+        # though a newer release genuinely exists on PyPI -- indistinguishable
+        # from a real upgrade by exit code alone. Same fix as serve_backend.py's
+        # _pick_upgrade_command (must stay in parity -- see that function's
+        # comment for the full writeup and the live non-convergence it fixes).
+        Write-Log "auto-update: uv tool upgrade corvinos --reinstall-package corvinos"
         try {
-            `$job = Start-Job -ScriptBlock { param(`$u) & `$u tool upgrade corvinos 2>&1 } -ArgumentList `$uv
+            `$job = Start-Job -ScriptBlock { param(`$u) & `$u tool upgrade corvinos --reinstall-package corvinos 2>&1 } -ArgumentList `$uv
             if (Wait-Job `$job -Timeout 120) {
                 Write-Log ("auto-update result: " + ((Receive-Job `$job) -join ' '))
             } else {
