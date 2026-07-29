@@ -8831,8 +8831,8 @@ def _resolve_engine_via_policy(prompt: str, profile: dict | None,
                 {"zone": zone, "allowed_count": len(allowed)},
                 severity="error",
             )
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001 — a custom notify() must never break the turn
+            log(f"notification_backend.notify failed (engine_policy.no_healthy_engine): {e}")
     return None, zone, True
 
 
@@ -11078,8 +11078,8 @@ def main() -> int:
                         {"problem_count": problem_count},
                         severity="critical",
                     )
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as e:  # noqa: BLE001 — a custom notify() must never break the turn
+                    log(f"notification_backend.notify failed (audit.chain_integrity_failure): {e}")
         else:
             log("audit-chain: integrity ok")
     except Exception as e:  # noqa: BLE001

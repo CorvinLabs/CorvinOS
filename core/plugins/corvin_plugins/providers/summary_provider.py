@@ -34,7 +34,13 @@ class ClaudeCliSummaryProvider:
     def _script_path(self) -> str | None:
         from pathlib import Path
         candidates = [
-            Path(__file__).resolve().parents[6]
+            # core/plugins/corvin_plugins/providers/summary_provider.py ->
+            # parents[4] is the repo root (providers/corvin_plugins/plugins/
+            # core/<root>). Was parents[6] (2026-07-30 fix) — resolved to
+            # /home/<user>, silently making the path never exist and this
+            # provider permanently fall back to naive-truncation with no
+            # error signal.
+            Path(__file__).resolve().parents[4]
             / "operator/voice/scripts/summarize.py",
         ]
         for p in candidates:
