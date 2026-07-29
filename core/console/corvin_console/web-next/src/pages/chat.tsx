@@ -2611,11 +2611,30 @@ function ToolUseCard({ name, input }: { name: string; input: Record<string, unkn
 }
 
 function EmptyChat({ onTry }: { onTry: (text: string) => void }) {
-  const samples = [
-    "What is the probability of rain in Berlin tomorrow?",
-    "Write me a short Python function that filters prime numbers up to n.",
-    "How do I add a new messaging channel?",
-    "Which files were last changed under core/console/?",
+  // label: what the card shows (inviting, plain language).
+  // prompt: what actually lands in the input box on click (may be a slash
+  // command) — kept separate so a card can read like a friendly suggestion
+  // while still triggering the real feature underneath.
+  //
+  // The 4th card used to be "Which files were last changed under
+  // core/console/?" — a CorvinOS-maintainer question that only makes sense
+  // against the CorvinOS repo itself. Against every real install (a user's
+  // own working directory, not this source tree) it produced a confusing
+  // "no such folder, is this even a git repo?" reply — the opposite of
+  // "simple and inviting". Replaced with a one-click way to try the plugin
+  // builder: `/plugin-builder` degrades gracefully (a friendly "enable it in
+  // Settings → Features" message) when the plugin_builder_enabled flag is
+  // off, and starts the real interview when it's on — either way a better
+  // first experience than a broken path lookup.
+  const samples: { label: string; prompt: string }[] = [
+    { label: "What is the probability of rain in Berlin tomorrow?",
+      prompt: "What is the probability of rain in Berlin tomorrow?" },
+    { label: "Write me a short Python function that filters prime numbers up to n.",
+      prompt: "Write me a short Python function that filters prime numbers up to n." },
+    { label: "How do I add a new messaging channel?",
+      prompt: "How do I add a new messaging channel?" },
+    { label: "Help me build a custom plugin",
+      prompt: "/plugin-builder" },
   ];
   return (
     <div className="flex flex-col items-center gap-6 py-16 text-center">
@@ -2629,13 +2648,13 @@ function EmptyChat({ onTry }: { onTry: (text: string) => void }) {
         </p>
       </div>
       <div className="grid w-full max-w-2xl gap-2 sm:grid-cols-2">
-        {samples.map((s) => (
+        {samples.map(({ label, prompt }) => (
           <button
-            key={s}
-            onClick={() => onTry(s)}
+            key={label}
+            onClick={() => onTry(prompt)}
             className="rounded-lg border border-border/60 bg-card/40 px-3 py-2.5 text-left text-sm text-muted-foreground transition-colors hover:border-accent/40 hover:bg-card hover:text-foreground"
           >
-            {s}
+            {label}
           </button>
         ))}
       </div>
