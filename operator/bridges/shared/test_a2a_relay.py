@@ -171,5 +171,39 @@ class TestRelayRoutingState(unittest.TestCase):
         self.assertEqual(asyncio.run(self.state.deliver("kidG", {"i": 999})), "dropped")
 
 
+# ── 3. Stage 2 — mesh-VPN address detection (ADR-0258 Verification) ──────────
+
+class TestStage2MeshVpnDetection(unittest.TestCase):
+    """ADR-0258 Stage 2: detect_mesh_vpn_address shells out to `tailscale ip -4`
+    and degrades to "" on ANY failure — never raises, never blocks the ladder."""
+
+    def test_absent_cli_returns_empty(self):
+        import unittest.mock as mock
+        with mock.patch("shutil.which", return_value=None):
+            self.assertEqual(ft.detect_mesh_vpn_address(), "")
+
+    def test_present_cli_returns_validated_ipv4(self):
+        import subprocess
+        import unittest.mock as mock
+        fake = mock.Mock(returncode=0, stdout="100.64.1.2\n")
+        with mock.patch("shutil.which", return_value="/usr/bin/tailscale"), \
+             mock.patch("subprocess.run", return_value=fake):
+            self.assertEqual(ft.detect_mesh_vpn_address(), "100.64.1.2")
+
+    def test_garbage_output_is_rejected_not_returned(self):
+        import unittest.mock as mock
+        fake = mock.Mock(returncode=0, stdout="not-an-ip\n")
+        with mock.patch("shutil.which", return_value="/usr/bin/tailscale"), \
+             mock.patch("subprocess.run", return_value=fake):
+            self.assertEqual(ft.detect_mesh_vpn_address(), "")
+
+    def test_cli_error_degrades_to_empty(self):
+        import subprocess
+        import unittest.mock as mock
+        with mock.patch("shutil.which", return_value="/usr/bin/tailscale"), \
+             mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired("tailscale", 2)):
+            self.assertEqual(ft.detect_mesh_vpn_address(), "")
+
+
 if __name__ == "__main__":
     unittest.main()
