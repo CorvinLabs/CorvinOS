@@ -110,3 +110,15 @@ the verification gaps* + a *reproducible, UI-level proof* — not new architectu
   These are a continued work block — honestly beyond a single bridge turn's
   budget; this doc is the handoff so no progress is lost (unlike the crashed
   Session-1 that started this).
+
+- 2026-07-29 — Adversarial review rounds 2-3 (relay client + listener):
+  ROUND 2 found TWO real bugs in RelayListener._handle_deliver, both FIXED:
+  (1) sync receiver.receive() blocked the console's asyncio loop → now
+  asyncio.to_thread; (2) an unhandled raise after decrypt tore down the socket
+  → reconnect storm DoS on replayed bad deliveries → now wrapped, one bad
+  delivery drops just that message. Plus 2 client nits fixed (get_running_loop,
+  malformed_response guard). ROUND 3: _relay_post's asyncio.run is consistent
+  with send()'s SYNC contract (no await callers) — not a bug. Review gate MET
+  (real bugs found+fixed); code solid. 3 new listener-robustness tests →
+  22 relay tests green. Review concluded at round 3 (max was 10; diminishing
+  returns on a ~500-line module already covered).

@@ -337,9 +337,10 @@ async def relay_deliver_and_wait(
                 "nonce": nonce_hex, "ciphertext": ciphertext_hex, "task_id": task_id,
             }))
 
-            deadline = _asyncio.get_event_loop().time() + timeout_s
+            _loop = _asyncio.get_running_loop()  # get_event_loop() is deprecated inside a coroutine
+            deadline = _loop.time() + timeout_s
             while True:
-                remaining = deadline - _asyncio.get_event_loop().time()
+                remaining = deadline - _loop.time()
                 if remaining <= 0:
                     raise RelayTransportError("response_timeout")
                 raw = await _asyncio.wait_for(ws.recv(), timeout=remaining)
@@ -350,7 +351,10 @@ async def relay_deliver_and_wait(
                     continue  # "delivered" or "queued" — keep waiting for the actual response
                 if (msg.get("type") == "deliver" and msg.get("task_id") == task_id
                         and msg.get("to_kid") == my_kid and msg.get("from_kid") == to_kid):
-                    return {"nonce": msg["nonce"], "ciphertext": msg["ciphertext"]}
+                    r_nonce, r_ct = msg.get("nonce"), msg.get("ciphertext")
+                    if not (isinstance(r_nonce, str) and isinstance(r_ct, str)):
+                        raise RelayTransportError("malformed_response")
+                    return {"nonce": r_nonce, "ciphertext": r_ct}
                 # Anything else (a stale/unrelated message) — ignore and keep waiting.
     except RelayTransportError:
         raise
@@ -467,14 +471,28 @@ class RelayListener:
         except (_ft.RelayDecryptError, ValueError, UnicodeDecodeError):
             return  # tampered/corrupt — silently drop, exactly like a bad HMAC on the direct path
 
-        response = self._receiver.receive(envelope)
-        response_dict = response.to_dict()
-        resp_nonce, resp_ct = _ft.encrypt_for_relay(
-            my_hmac_key, json.dumps(response_dict).encode("utf-8"))
-        await ws.send(json.dumps({
-            "type": "deliver", "to_kid": from_kid, "from_kid": to_kid,
-            "nonce": resp_nonce, "ciphertext": resp_ct, "task_id": task_id,
-        }))
+        # Adversarial review round 2 (2026-07-29): two fixes.
+        # (1) RemoteTriggerReceiver.receive() is SYNC and does signature verify +
+        #     nonce-store DB I/O — run it off the event loop so one delivery can't
+        #     stall the whole console process's asyncio loop (this listener runs as
+        #     a lifespan background task there).
+        # (2) Wrap receive/encrypt/send so ONE malformed or hostile delivery drops
+        #     just that message instead of raising out of the `async for` — an
+        #     unhandled raise there tears down the WebSocket and forces a reconnect,
+        #     so a peer replaying bad deliveries could keep us in a reconnect storm
+        #     and offline. A dead socket is still noticed by the next `ws.recv()`.
+        import asyncio as _asyncio
+        try:
+            response = await _asyncio.to_thread(self._receiver.receive, envelope)
+            response_dict = response.to_dict()
+            resp_nonce, resp_ct = _ft.encrypt_for_relay(
+                my_hmac_key, json.dumps(response_dict).encode("utf-8"))
+            await ws.send(json.dumps({
+                "type": "deliver", "to_kid": from_kid, "from_kid": to_kid,
+                "nonce": resp_nonce, "ciphertext": resp_ct, "task_id": task_id,
+            }))
+        except Exception:  # noqa: BLE001 — one bad delivery must not drop the socket
+            return
 
 
 def build_relay_app() -> FastAPI:

@@ -18,6 +18,7 @@ Run: python3 operator/bridges/shared/test_a2a_relay.py
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import unittest
@@ -94,12 +95,19 @@ class TestRelayCryptoTrust(unittest.TestCase):
 # ── 2. Routing correctness ───────────────────────────────────────────────────
 
 class _FakeWS:
-    """Minimal WebSocket stand-in — records what the relay tried to forward."""
+    """Minimal WebSocket stand-in — records what was forwarded. Provides BOTH
+    `send_text` (FastAPI/Starlette server side, used by RelayState.deliver) and
+    `send` (websockets client side, used by RelayListener)."""
     def __init__(self, fail: bool = False):
         self.sent: list[str] = []
         self.fail = fail
 
     async def send_text(self, text: str) -> None:
+        if self.fail:
+            raise RuntimeError("socket dead")
+        self.sent.append(text)
+
+    async def send(self, text: str) -> None:  # websockets client API
         if self.fail:
             raise RuntimeError("socket dead")
         self.sent.append(text)
@@ -203,6 +211,64 @@ class TestStage2MeshVpnDetection(unittest.TestCase):
         with mock.patch("shutil.which", return_value="/usr/bin/tailscale"), \
              mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired("tailscale", 2)):
             self.assertEqual(ft.detect_mesh_vpn_address(), "")
+
+
+# ── 4. RelayListener robustness (adversarial review round 2 fixes) ───────────
+
+class TestRelayListenerRobustness(unittest.TestCase):
+    """A single malformed/hostile delivery must be dropped, NOT allowed to raise
+    out of the receive loop (which would tear down the socket and cause a
+    reconnect storm). And a good delivery must produce an encrypted response."""
+
+    def _listener(self, receiver):
+        return relay.RelayListener(relay_url="ws://x", receiver=receiver, origins_dir="/tmp/nope")
+
+    def _good_delivery(self, hmac_key):
+        nonce, ct = ft.encrypt_for_relay(hmac_key, b'{"task":"x"}')
+        return {"to_kid": "meKid", "from_kid": "peerKid", "nonce": nonce,
+                "ciphertext": ct, "task_id": "t1"}
+
+    def test_receiver_exception_does_not_raise(self):
+        import unittest.mock as mock
+        k = _key()
+        bad_receiver = mock.Mock()
+        bad_receiver.receive.side_effect = RuntimeError("boom in receive()")
+        lst = self._listener(bad_receiver)
+        ws = _FakeWS()
+        # Must NOT raise — the fix wraps receive/encrypt/send.
+        asyncio.run(lst._handle_deliver(ws, self._good_delivery(k), {"meKid": k}))
+        self.assertEqual(ws.sent, [])  # nothing sent, but no crash
+
+    def test_good_delivery_sends_encrypted_response(self):
+        import unittest.mock as mock
+        k = _key()
+        resp = mock.Mock()
+        resp.to_dict.return_value = {"ok": True}
+        receiver = mock.Mock()
+        receiver.receive.return_value = resp
+        lst = self._listener(receiver)
+        ws = _FakeWS()
+        asyncio.run(lst._handle_deliver(ws, self._good_delivery(k), {"meKid": k}))
+        self.assertEqual(len(ws.sent), 1)
+        sent = json.loads(ws.sent[0])
+        # response is addressed back to the sender, and is encrypted (decrypts
+        # back to the receiver's response dict with the shared key)
+        self.assertEqual(sent["to_kid"], "peerKid")
+        pt = ft.decrypt_from_relay(k, sent["nonce"], sent["ciphertext"])
+        self.assertEqual(json.loads(pt), {"ok": True})
+
+    def test_undecryptable_delivery_is_dropped(self):
+        import unittest.mock as mock
+        k = _key()
+        receiver = mock.Mock()
+        lst = self._listener(receiver)
+        ws = _FakeWS()
+        # ciphertext encrypted with a DIFFERENT key → decrypt fails → drop,
+        # receiver never even called.
+        bad = self._good_delivery(_key())
+        asyncio.run(lst._handle_deliver(ws, bad, {"meKid": k}))
+        receiver.receive.assert_not_called()
+        self.assertEqual(ws.sent, [])
 
 
 if __name__ == "__main__":
