@@ -87,6 +87,7 @@ def _webui_env_vars() -> dict:
             dirs = [
                 "core/console", "core/gateway", "core/license",
                 "core/compliance", "operator/forge", "operator/skill-forge",
+                "core/plugins",
             ]
             paths = [str(_REPO_ROOT / d) for d in dirs if (_REPO_ROOT / d).exists()]
             if paths:

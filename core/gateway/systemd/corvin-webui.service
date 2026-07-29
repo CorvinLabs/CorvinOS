@@ -24,7 +24,10 @@ WorkingDirectory=__REPO_ROOT__
 # (service.env, loaded below, may override this with the operator's chosen home;
 # both must agree across ALL units.)
 Environment=CORVIN_HOME=__REPO_ROOT__/.corvin
-Environment=PYTHONPATH=__REPO_ROOT__/core/console:__REPO_ROOT__/core/gateway:__REPO_ROOT__/core/license:__REPO_ROOT__/core/compliance:__REPO_ROOT__/operator/forge:__REPO_ROOT__/operator/skill-forge:__REPO_ROOT__/operator/bridges/shared
+# core/plugins (the parent dir) makes bare `import plugin_builder` find
+# core/plugins/plugin_builder/__init__.py — mirroring the wheel build's path
+# remap of that directory to top-level plugin_builder/ (2026-07-29).
+Environment=PYTHONPATH=__REPO_ROOT__/core/console:__REPO_ROOT__/core/gateway:__REPO_ROOT__/core/license:__REPO_ROOT__/core/compliance:__REPO_ROOT__/operator/forge:__REPO_ROOT__/operator/skill-forge:__REPO_ROOT__/operator/bridges/shared:__REPO_ROOT__/core/plugins
 # Hot-reload is DELIBERATELY OFF for the systemd (always-on) deployment.
 # The console is the operator command-centre: chat turns routinely edit repo
 # code under core/console / core/gateway, and uvicorn --reload closes every
