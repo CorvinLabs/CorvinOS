@@ -770,10 +770,14 @@ def get_my_a2a_url(
     stored = _ft.get_my_url()
 
     # Build a suggested URL when none is stored yet.
-    # Priority:
+    # Priority (ADR-0258 Stage 2 inserts step 2 — mesh-VPN address — between
+    # the reverse-proxy hint and the raw outbound-IP trick; the mesh address
+    # is a STABLE address the operator deliberately set up, so it outranks
+    # a plain local interface IP that changes on every network switch):
     #   1. X-Forwarded-Host (set by reverse proxies / Cloudflare)
-    #   2. Outbound IP of this machine (connect trick — no packet sent)
-    #   3. Request Host header as last resort
+    #   2. Tailscale/Headscale address, if the CLI is present (ADR-0258)
+    #   3. Outbound IP of this machine (connect trick — no packet sent)
+    #   4. Request Host header as last resort
     suggested: str | None = None
     if not stored:
         try:
@@ -782,10 +786,19 @@ def get_my_a2a_url(
 
             # 1. Behind a reverse proxy / Cloudflare tunnel?
             fwd_host = request.headers.get("x-forwarded-host", "")
+            mesh_addr = _ft.detect_mesh_vpn_address() if not fwd_host else ""
             if fwd_host:
                 suggested = f"{scheme}://{fwd_host}"
+            elif mesh_addr:
+                # 2. Stable mesh-VPN address (ADR-0258 Stage 2).
+                host_header = request.headers.get("host", "")
+                port_str = "8765"
+                if ":" in host_header:
+                    _, port_str = host_header.rsplit(":", 1)
+                port_part = f":{port_str}" if port_str not in ("80", "443") else ""
+                suggested = f"{scheme}://{mesh_addr}{port_part}"
             else:
-                # 2. Detect the machine's actual outbound IP (no packet sent).
+                # 3. Detect the machine's actual outbound IP (no packet sent).
                 host_header = request.headers.get("host", "")
                 # Extract port from Host header if present.
                 if ":" in host_header:

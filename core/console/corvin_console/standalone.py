@@ -228,6 +228,36 @@ def create_app() -> FastAPI:
             _start_hb(_fp.corvin_home())
         except Exception:
             pass
+
+        # ADR-0258 Stage 3 — A2A relay listener (best-effort, never blocks
+        # startup). Inert unless BOTH the feature flag is on AND a relay URL
+        # is configured — the common case (flag off) does nothing here at
+        # all, matching every other ship-dark flag in this file.
+        # `_a2a_receiver`/`_a2a_available` are assigned later in create_app()
+        # (below, at the A2A route-wiring block) — valid: this closure is
+        # only CALLED by uvicorn after create_app() has fully returned, and
+        # Python resolves free variables in the enclosing scope by name at
+        # call time, not at definition time.
+        _relay_listener = None
+        _relay_task = None
+        try:
+            from corvin_console import feature_flags as _relay_ff
+            import a2a_friendship as _relay_ft  # type: ignore[import-not-found]
+            if _a2a_available and _a2a_receiver is not None and _relay_ff.is_enabled("a2a_relay_fallback"):
+                _relay_url = _relay_ft.get_my_relay_url()
+                if _relay_url:
+                    import asyncio as _relay_asyncio
+                    import a2a_relay as _relay_mod  # type: ignore[import-not-found]
+                    from .routes.a2a_pair import _origins_dir as _relay_origins_dir
+                    _relay_listener = _relay_mod.RelayListener(
+                        relay_url=_relay_url, receiver=_a2a_receiver,
+                        origins_dir=_relay_origins_dir(),
+                    )
+                    _relay_task = _relay_asyncio.create_task(_relay_listener.run_forever())
+                    log.info("A2A relay listener started: %s", _relay_url)
+        except Exception:
+            log.exception("A2A relay listener failed to start (non-fatal)")
+
         yield
         # Detach provider slots so a draining request cannot be routed into a
         # half-torn-down plugin. Best-effort: shutdown must not raise.
@@ -237,6 +267,10 @@ def create_app() -> FastAPI:
                 _plugin_shutdown(_plugins_loaded)
             except Exception:
                 pass
+        if _relay_listener is not None:
+            _relay_listener.stop()
+        if _relay_task is not None:
+            _relay_task.cancel()
 
     app = FastAPI(
         title="CorvinOS Console",
