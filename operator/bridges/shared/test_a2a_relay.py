@@ -169,6 +169,39 @@ class TestRelayRoutingState(unittest.TestCase):
         slot.queue[0].expires_at = 0.0
         self.assertEqual(self.state.flush_queue("kidF"), [])
 
+    def test_total_slot_table_is_bounded(self):
+        """2026-07-30 DoS fix: the queue per-kid was always bounded, but the
+        routing TABLE itself (self._slots) had no ceiling — an attacker
+        opening connections, registering many fake kids, disconnecting, and
+        repeating could grow it forever. A never-before-seen kid must be
+        rejected once the process-wide cap is hit."""
+        original = relay._MAX_TOTAL_SLOTS
+        try:
+            relay._MAX_TOTAL_SLOTS = 3
+            self.assertIsNone(self.state.register("c1", "kidX1", "auth1"))
+            self.assertIsNone(self.state.register("c1", "kidX2", "auth2"))
+            self.assertIsNone(self.state.register("c1", "kidX3", "auth3"))
+            # table is now at the (patched) cap of 3 distinct kids
+            self.assertEqual(
+                self.state.register("c1", "kidX4", "auth4"), "relay_at_capacity"
+            )
+        finally:
+            relay._MAX_TOTAL_SLOTS = original
+
+    def test_reregistering_an_existing_kid_is_never_blocked_by_capacity(self):
+        """The cap must only ever refuse a BRAND NEW kid — an already-
+        tracked kid reconnecting (even with the SAME credential, the normal
+        case) must always succeed regardless of table size, or a legitimate
+        peer would be locked out by an unrelated flood."""
+        original = relay._MAX_TOTAL_SLOTS
+        try:
+            relay._MAX_TOTAL_SLOTS = 1
+            self.assertIsNone(self.state.register("c1", "kidY1", "authY1"))
+            # table is at cap (1), but kidY1 already exists — must still work
+            self.assertIsNone(self.state.register("c2", "kidY1", "authY1"))
+        finally:
+            relay._MAX_TOTAL_SLOTS = original
+
     def test_queue_is_bounded(self):
         self.state.register("c1", "kidG", "authG")
         self.state.close_connection("c1")
