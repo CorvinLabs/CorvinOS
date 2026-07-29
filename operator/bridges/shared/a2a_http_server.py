@@ -63,6 +63,24 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+# ── dir resolution for the friendship-ack handler ──────────────────────────
+# Mirrors OriginRegistry / RemoteEndpointRegistry's own defaults EXACTLY
+# (remote_trigger_receiver.py / remote_trigger_sender.py, same directory) so
+# a friendship-ack write lands in the SAME place the receiver/sender already
+# read from — a second, independently-computed default would silently
+# diverge on a wheel install.
+_DEFAULT_COWORK_DIR = Path(__file__).resolve().parents[2] / "cowork"
+
+
+def _endpoints_dir() -> Path:
+    env = os.environ.get("REMOTE_ENDPOINTS_DIR")
+    return Path(env) if env else _DEFAULT_COWORK_DIR / "remote_endpoints"
+
+
+def _pending_friendships_dir() -> Path:
+    env = os.environ.get("REMOTE_PENDING_FRIENDSHIPS_DIR")
+    return Path(env) if env else _DEFAULT_COWORK_DIR / "remote_pending_friendships"
+
 import instance_identity  # type: ignore[import-not-found]
 from remote_trigger_receiver import (  # type: ignore[import-not-found]
     PROTOCOL_VERSION,
@@ -260,6 +278,13 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
     # Set by build_server() (class-level — stdlib constructs handlers per request).
     receiver: RemoteTriggerReceiver  # type: ignore[assignment]
     google_adapter: Any = None       # GoogleA2AAdapter | None
+    # Explicit dirs for the friendship-ack handler (None = env-var-or-default,
+    # see _endpoints_dir()/_pending_friendships_dir()). Two servers built with
+    # explicit, DIFFERENT dirs in the same process (e.g. two test instances)
+    # need these set — see _handle_friendship_ack for why the env-var default
+    # alone is unsafe there.
+    endpoints_dir: "Path | None" = None
+    pending_dir: "Path | None" = None
     # Body cap: large enough for one max-size attachment payload
     # (1 MiB raw → ~1.33 MiB base64) plus envelope overhead and JSON
     # wrappers. The attachment-layer caps in a2a_attachments.py are the
@@ -352,6 +377,12 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
         # No nonce store — ±30s freshness window suffices.
         if self.path == "/v1/a2a/ping":
             self._handle_ping()
+            return
+
+        # Reciprocal friendship handshake (2026-07-29) — see
+        # a2a_friendship.process_friendship_ack_request docstring.
+        if self.path == "/v1/a2a/friendship-ack":
+            self._handle_friendship_ack()
             return
 
         # Native L38
@@ -502,6 +533,65 @@ class _A2AHandler(http.server.BaseHTTPRequestHandler):
         status, payload = process_ping_request(req, self.receiver)
         self._respond(status, (json.dumps(payload) + "\n").encode())
 
+    def _handle_friendship_ack(self) -> None:
+        """Reciprocal friendship handshake (2026-07-29): a redeemer's
+        callback after importing our token, so WE complete a bidirectional
+        pairing in this same round trip instead of requiring a second,
+        independent token exchange in reverse. See
+        a2a_friendship.process_friendship_ack_request for the full
+        verification + write-back + reachability-ping logic (shared core,
+        both backends — same pattern as _handle_ping)."""
+        length_hdr = self.headers.get("Content-Length", "0")
+        try:
+            length = int(length_hdr)
+        except ValueError:
+            self._respond(400, b'{"reason":"invalid_content_length"}\n')
+            return
+        if length <= 0 or length > self.max_body_bytes:
+            self._respond(413, b'{"reason":"body_too_large_or_empty"}\n')
+            return
+
+        raw = self.rfile.read(length)
+        try:
+            req = json.loads(raw)
+        except Exception:
+            self._respond(400, b'{"reason":"invalid_json"}\n')
+            return
+        if not isinstance(req, dict):
+            self._respond(400, b'{"reason":"envelope_not_object"}\n')
+            return
+
+        try:
+            from a2a_friendship import (  # type: ignore[import-not-found]
+                process_friendship_ack_request,
+            )
+            # Use the RECEIVER's actual configured origins dir (same object
+            # process_ping_request reads via receiver._registry) rather than
+            # re-deriving one from the env var independently — two servers
+            # built with EXPLICIT, DIFFERENT origins_dir in the same process
+            # (e.g. two test instances) would otherwise both resolve to
+            # whatever REMOTE_ORIGINS_DIR happens to be set to, silently
+            # writing the wrong instance's directory.
+            registry = getattr(self.receiver, "_registry", None)
+            origins_dir = getattr(registry, "_dir", None) or (
+                _DEFAULT_COWORK_DIR / "remote_origins"
+            )
+            endpoints_dir = self.endpoints_dir or _endpoints_dir()
+            pending_dir = self.pending_dir or _pending_friendships_dir()
+            status, payload = process_friendship_ack_request(
+                req,
+                pending_dir=pending_dir,
+                origins_dir=origins_dir,
+                endpoints_dir=endpoints_dir,
+            )
+        except Exception:
+            if os.environ.get("CORVIN_A2A_HTTP_LOG", "") == "1":
+                import traceback
+                traceback.print_exc()
+            self._respond(500, b'{"reason":"internal_error"}\n')
+            return
+        self._respond(status, (json.dumps(payload) + "\n").encode())
+
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _respond(self, status: int, body: bytes) -> None:
@@ -517,6 +607,8 @@ def build_server(
     host: str = "127.0.0.1",
     port: int = 0,
     origins_dir: Path | None = None,
+    endpoints_dir: Path | None = None,
+    pending_dir: Path | None = None,
     engine_factory: Any = None,
     force_m1_only: bool | None = None,
     instance_id: str | None = None,
@@ -544,6 +636,14 @@ def build_server(
         Optional forge security_events module override for test isolation.
         When provided, the receiver (and sender) use this instead of the
         module-level _forge_se, preventing cross-test mock contamination.
+
+    endpoints_dir / pending_dir
+        Explicit dirs for the friendship-ack handler (POST
+        /v1/a2a/friendship-ack). None = env-var-or-default. Two servers
+        built with explicit, DIFFERENT dirs in the same process (e.g. two
+        test instances) MUST set these — env vars are process-global and
+        would otherwise let one instance's ack handler write into the
+        other's directory.
     """
     receiver = RemoteTriggerReceiver(
         origins_dir=origins_dir,
@@ -579,6 +679,8 @@ def build_server(
 
     _Handler.receiver = receiver
     _Handler.google_adapter = google_adapter
+    _Handler.endpoints_dir = endpoints_dir
+    _Handler.pending_dir = pending_dir
     return http.server.ThreadingHTTPServer((host, port), _Handler)
 
 

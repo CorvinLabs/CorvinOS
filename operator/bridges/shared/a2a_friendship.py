@@ -28,6 +28,7 @@ import os
 import secrets
 import sys
 import time
+import urllib.request as _urllib_request
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -327,6 +328,21 @@ def to_endpoint_dict(token: FriendshipToken) -> dict[str, Any]:
     """Build endpoint config dict for ``remote_endpoints/<kid>.json``.
 
     url is empty string when peer URL is not yet known (PENDING state).
+
+    ``origin_id_for_send`` — CRITICAL, found 2026-07-29: without this field,
+    RemoteTriggerSender.send()/ping()/send_reconnect() all fall back to
+    ``self._instance_id`` (a random UUID generated at THIS instance's first
+    boot) as the ``origin_id`` embedded in every outbound envelope/ping. The
+    peer's origin file for this pairing is named ``<kid>.json`` — the
+    sender's own instance_id essentially never matches that filename, so the
+    peer's ``OriginRegistry.load(origin_id)`` fails and every authenticated
+    call from a friendship-token-paired endpoint is rejected as "unknown
+    origin", REGARDLESS of whether ``state`` says ACTIVE. This made the
+    friendship-token flow structurally unable to actually exchange a single
+    message even in the rare case both sides ended up correctly paired — the
+    two directions' own ``kid`` is the same symmetric pairing identifier on
+    both sides by construction (see ``_derive_channel_keys``), so it is the
+    correct, stable value to send as our own origin_id.
     """
     active = token.url is not None
     url_str = (token.url + "/v1/a2a/receive") if token.url else ""
@@ -336,6 +352,7 @@ def to_endpoint_dict(token: FriendshipToken) -> dict[str, Any]:
         "url": url_str,
         "hmac_key": hmac_key,   # signs outbound envelopes TO peer
         "recv_key": recv_key,   # verifies inbound responses FROM peer
+        "origin_id_for_send": token.kid,  # see docstring — CRITICAL
         "_friendship_key_version": 2,
         "enabled": active,
         "state": "ACTIVE" if active else "PENDING",
@@ -975,3 +992,365 @@ def get_endpoint_last_heartbeat(origin_id: str) -> float | None:
     for cross-process / cross-restart visibility.
     """
     return _endpoint_heartbeat_cache.get(origin_id)
+
+
+# ── Reciprocal friendship handshake (bidirectional pairing, 2026-07-29) ────
+#
+# The friendship-token flow as originally shipped was NOT bidirectional:
+# create_friendship_token() wrote nothing to disk, so the issuer (A) had no
+# record of the pairing until a SECOND, entirely independent token exchange
+# happened in reverse — producing two unlinked kid/keypairs instead of one
+# shared connection, and NEVER checking whether either side could actually
+# reach the other before flipping state to "ACTIVE" (found 2026-07-29 while
+# debugging an "A2A shows paired but the peer is unreachable" report;
+# empirically reproduced in output/friendship_e2e_run.log).
+#
+# Fix, in one round trip:
+#   1. A calls create_friendship_token() as before, but now ALSO persists a
+#      short-lived PENDING record (save_pending_friendship) — just enough
+#      (kid + the shared key) to verify an incoming reciprocal ack later.
+#      Nothing sensitive beyond what the token itself already carries.
+#   2. B imports the token as before (local origin+endpoint files, unchanged
+#      to_origin_dict/to_endpoint_dict). If a peer URL is known, B ALSO calls
+#      back to A's /v1/a2a/friendship-ack (send_friendship_ack), signed with
+#      the SAME shared key both sides can derive independently
+#      (_derive_channel_keys) — no separate credential, no operator action.
+#   3. A verifies the ack against its pending record
+#      (process_friendship_ack_request), writes ITS OWN origin+endpoint files
+#      for B (reusing to_origin_dict/to_endpoint_dict via a reconstructed
+#      FriendshipToken), then PINGS B back (ADR-0199 sender.ping) BEFORE ever
+#      reporting the connection as reachable — url-presence alone is no
+#      longer suf/ficient for either side to claim a live connection.
+#   4. Both sides end up with the SAME kid, know about each other, and each
+#      side's local `state` reflects a check IT PERFORMED ITSELF (never the
+#      peer's self-report) — "ACTIVE" only after a successful ping, else
+#      "UNREACHABLE" (a url is known but unreachable right now, distinct
+#      from "PENDING" = no url known yet).
+
+_ACK_MAX_URL_LEN = 512
+_ACK_FRESHNESS_S = 30  # mirrors process_ping_request's ±30s window
+
+
+def _pending_path(pending_dir: Path, kid: str) -> Path:
+    return pending_dir / f"{kid}.json"
+
+
+def save_pending_friendship(token: FriendshipToken, *, pending_dir: Path) -> None:
+    """Issuer-side (A): persist just enough of a freshly-created token to
+    verify a future reciprocal ack for this ``kid`` — called from
+    create_friendship_token() call sites, never from import. Single-use:
+    consumed and deleted by the first valid ack (see
+    process_friendship_ack_request)."""
+    d: dict[str, Any] = {
+        "kid": token.kid,
+        "key": token.key,
+        "label": token.label,
+        "constraints": token.constraints,
+        "expires": token.expires,
+        "created_at": time.time(),
+    }
+    _atomic_write(_pending_path(pending_dir, token.kid), d)
+
+
+def load_pending_friendship(kid: str, *, pending_dir: Path) -> dict[str, Any] | None:
+    """Return the pending record for ``kid``, or None if absent/expired."""
+    path = _pending_path(pending_dir, kid)
+    if not path.exists():
+        return None
+    try:
+        d = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    expires = d.get("expires")
+    if expires is not None:
+        try:
+            if time.time() > float(expires) + _EXPIRY_TOLERANCE_S:
+                return None
+        except (TypeError, ValueError):
+            return None
+    return d
+
+
+def delete_pending_friendship(kid: str, *, pending_dir: Path) -> None:
+    try:
+        _pending_path(pending_dir, kid).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _ack_url_rejection_reason(url: str) -> str | None:
+    """First-pairing host gate for a redeemer-declared callback URL.
+
+    Deliberately MORE permissive than :func:`_reconnect_url_rejection_reason`
+    (which only allows private/LAN addresses when the PREVIOUS stored url was
+    also private/LAN — there is no "previous" on a brand-new pairing, so that
+    rule would reject the common two-LAN-machines case this feature exists
+    for). Only the unconditionally-dangerous "forbidden" category (loopback,
+    link-local incl. cloud metadata, unspecified, multicast, reserved —
+    including embedded in NAT64/6to4/v4-mapped IPv6) is rejected; both
+    private/LAN and global addresses are accepted for a first pairing.
+    """
+    from urllib.parse import urlsplit
+    if not url or len(url) > _ACK_MAX_URL_LEN:
+        return "ack_url_invalid_length"
+    if not url.isprintable() or any(c.isspace() for c in url):
+        return "ack_url_bad_chars"
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "ack_url_unparseable"
+    if (parts.scheme or "").lower() not in ("http", "https"):
+        return "ack_url_bad_scheme"
+    try:
+        host = parts.hostname
+    except ValueError:
+        return "ack_url_unparseable"
+    if not host:
+        return "ack_url_no_host"
+    host_l = host.strip("[]").lower()
+    if host_l == "localhost" or host_l.endswith(".localhost") or host_l.endswith(".onion"):
+        return "ack_url_forbidden_host"
+    classes = _resolve_host_classes(host_l, (parts.scheme or "").lower(), parts.port)
+    if classes is None:
+        return "ack_url_unresolvable"
+    if "forbidden" in classes:
+        return "ack_url_forbidden_host"
+    return None
+
+
+class _AckNoRedirect(_urllib_request.HTTPRedirectHandler):
+    """Minimal no-redirect urllib handler for the ack POST (mirrors
+    remote_trigger_sender._NoRedirect) — a 3xx must become an error, never a
+    silently-followed internal fetch."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401, ANN001
+        return None
+
+
+def send_friendship_ack(
+    token: FriendshipToken, *, my_url: str, my_label: str | None = None,
+    timeout_s: float = 10,
+) -> dict[str, Any]:
+    """Redeemer-side (B): notify the issuer (A) that their token was
+    imported, so A can complete a RECIPROCAL pairing in this SAME round trip
+    instead of requiring a second, independent token exchange in reverse.
+
+    Signed with the hmac_key BOTH sides derive independently from the
+    token's shared key (_derive_channel_keys) — no separate credential, no
+    extra operator step. Best-effort: any failure returns
+    ``{"ok": False, "error": <category>}`` and NEVER raises — a network
+    hiccup here must not break the LOCAL import that already succeeded.
+    """
+    import urllib.error as _urlerr
+    import urllib.request as _urlreq
+
+    if not token.url:
+        return {"ok": False, "error": "no_issuer_url"}
+    my_url = (my_url or "").strip().rstrip("/")
+    if not my_url:
+        return {"ok": False, "error": "no_own_url"}
+
+    hmac_key, recv_key = _derive_channel_keys(token.key)
+    issued_at = int(time.time())
+    req_body: dict[str, Any] = {
+        "kid": token.kid,
+        "issued_at": issued_at,
+        "peer_url": my_url,
+    }
+    clean_label = sanitize_label(my_label) if my_label else ""
+    if clean_label:
+        req_body["peer_label"] = clean_label
+    canonical = json.dumps(req_body, separators=(",", ":"), sort_keys=True)
+    req_body["signature"] = _hmac.new(
+        bytes.fromhex(hmac_key), canonical.encode("utf-8"), "sha256",
+    ).hexdigest()
+
+    ack_url = token.url.rstrip("/") + "/v1/a2a/friendship-ack"
+    opener = _urlreq.build_opener(_AckNoRedirect())
+    data = json.dumps(req_body).encode("utf-8")
+    http_req = _urlreq.Request(
+        ack_url, data=data, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with opener.open(http_req, timeout=timeout_s) as resp:
+            raw = resp.read(64 * 1024 + 1)
+            if len(raw) > 64 * 1024:
+                return {"ok": False, "error": "response_too_large"}
+            payload = json.loads(raw.decode("utf-8"))
+    except _urlerr.HTTPError as exc:
+        return {"ok": False, "error": f"http_{exc.code}"}
+    except (_urlerr.URLError, OSError, TimeoutError):
+        return {"ok": False, "error": "unreachable"}
+    except (ValueError, UnicodeDecodeError):
+        return {"ok": False, "error": "invalid_response"}
+
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "invalid_response"}
+    sig = payload.get("signature")
+    if not isinstance(sig, str):
+        return {"ok": False, "error": "unsigned_response"}
+    body_for_verify = {k: v for k, v in payload.items() if k != "signature"}
+    expected = _hmac.new(
+        bytes.fromhex(recv_key),
+        json.dumps(body_for_verify, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        "sha256",
+    ).hexdigest()
+    if not _hmac.compare_digest(expected, sig):
+        return {"ok": False, "error": "bad_response_signature"}
+
+    return {
+        "ok": bool(payload.get("ok")),
+        "reachable": bool(payload.get("reachable", False)),
+        "peer_instance_id": payload.get("instance_id"),
+    }
+
+
+def process_friendship_ack_request(
+    req: Any, *, pending_dir: Path, origins_dir: Path, endpoints_dir: Path,
+) -> tuple[int, dict[str, Any]]:
+    """Issuer-side (A): shared core for ``POST /v1/a2a/friendship-ack``.
+
+    Verifies a redeemer's reciprocal ack against the PENDING record saved by
+    :func:`save_pending_friendship`, then completes a bidirectional pairing
+    in this single round trip: writes A's own origin+endpoint files for the
+    redeemer (reusing :func:`to_origin_dict`/:func:`to_endpoint_dict` via a
+    reconstructed :class:`FriendshipToken`), PINGS the redeemer back
+    (ADR-0199) to prove real reachability before ever reporting the
+    connection as live, and returns a signed response so the redeemer's own
+    UI reflects the SAME verified state.
+
+    Anti-oracle ordering: signature is verified BEFORE any other rejection
+    reason is distinguished — unknown-kid and bad-signature share one opaque
+    403 (mirrors process_ping_request), so an unauthenticated caller cannot
+    enumerate valid pending kids.
+    """
+    if not isinstance(req, dict):
+        return 400, {"reason": "envelope_not_object"}
+
+    kid = req.get("kid")
+    issued_at = req.get("issued_at")
+    peer_url = req.get("peer_url")
+    peer_label = req.get("peer_label")
+    signature = req.get("signature")
+
+    if not all((kid, issued_at, peer_url, signature)):
+        return 400, {"reason": "missing_fields"}
+    if not isinstance(kid, str) or not isinstance(peer_url, str) or not isinstance(signature, str):
+        return 400, {"reason": "missing_fields"}
+    if isinstance(issued_at, bool) or not isinstance(issued_at, int):
+        return 400, {"reason": "invalid_issued_at"}
+    if peer_label is not None and not isinstance(peer_label, str):
+        return 400, {"reason": "missing_fields"}
+
+    kid = kid[:128]
+    peer_url = peer_url.strip().rstrip("/")[:_ACK_MAX_URL_LEN]
+
+    pending = load_pending_friendship(kid, pending_dir=pending_dir)
+    if pending is None:
+        # Opaque — indistinguishable from a bad signature (anti-enumeration).
+        return 403, {"reason": "ack_rejected"}
+
+    # ADR-0094 a2a_peers_max — the issuer's own record for this kid is about
+    # to be created by THIS handler for the first time (friendship_create
+    # never checked this; it wrote nothing to disk). Skip the check for a
+    # kid we already have a record of (a retry/reconnect ack must not be
+    # blocked by a limit that was already satisfied when the record was
+    # first created).
+    if not (origins_dir / f"{kid}.json").exists():
+        try:
+            from license.validator import get_limit as _lic_get_limit  # type: ignore[import-not-found]
+        except Exception:  # noqa: BLE001
+            _lic_get_limit = None
+        if _lic_get_limit is not None:
+            try:
+                _max = _lic_get_limit("a2a_peers_max")
+            except Exception:  # noqa: BLE001
+                _max = None
+            if _max is not None:
+                _limit = 1 if _max is True else (0 if _max is False else int(_max))
+                _existing = sum(1 for _ in origins_dir.glob("*.json")) if origins_dir.exists() else 0
+                if _existing >= _limit:
+                    return 402, {"reason": "license_limit"}
+
+    try:
+        hmac_key, recv_key = _derive_channel_keys(str(pending["key"]))
+    except (KeyError, TypeError, ValueError):
+        return 403, {"reason": "ack_rejected"}
+
+    canonical_dict: dict[str, Any] = {"kid": kid, "issued_at": issued_at, "peer_url": peer_url}
+    if peer_label is not None:
+        canonical_dict["peer_label"] = peer_label
+    canonical = json.dumps(canonical_dict, separators=(",", ":"), sort_keys=True)
+    expected_sig = _hmac.new(bytes.fromhex(hmac_key), canonical.encode("utf-8"), "sha256").hexdigest()
+    if not _hmac.compare_digest(signature, expected_sig):
+        return 403, {"reason": "ack_rejected"}
+
+    # Freshness — authenticated callers only past this point, so a distinct
+    # reason string is safe (mirrors process_ping_request's ordering).
+    now = int(time.time())
+    if abs(now - issued_at) > _ACK_FRESHNESS_S:
+        return 400, {"reason": "stale_ack"}
+
+    rejection = _ack_url_rejection_reason(peer_url)
+    if rejection is not None:
+        return 400, {"reason": rejection}
+
+    label = (sanitize_label(peer_label) if peer_label else "") or pending.get("label") or None
+    constraints = dict(pending.get("constraints") or {})
+    reconstructed = FriendshipToken(
+        kid=kid, key=str(pending["key"]), url=peer_url, label=label,
+        expires=pending.get("expires"), constraints=constraints,
+    )
+
+    origin_path = origins_dir / f"{kid}.json"
+    endpoint_path = endpoints_dir / f"{kid}.json"
+    with config_file_lock(origins_dir, endpoints_dir):
+        _atomic_write(origin_path, to_origin_dict(reconstructed))
+        _atomic_write(endpoint_path, to_endpoint_dict(reconstructed))
+
+    delete_pending_friendship(kid, pending_dir=pending_dir)
+
+    # Reachability proof (ADR-0199) — url-presence is no longer sufficient
+    # for EITHER side to claim a live connection; ping the redeemer back
+    # before this side reports itself reachable.
+    reachable = False
+    try:
+        from remote_trigger_sender import (  # type: ignore[import-not-found]
+            RemoteEndpointRegistry as _RER, RemoteTriggerSender as _RTS,
+        )
+        _sender = _RTS(endpoints_dir, _RER(endpoints_dir))
+        reachable = bool(_sender.ping(kid, timeout_s=5).reachable)
+    except Exception:  # noqa: BLE001 — reachability check is best-effort
+        reachable = False
+
+    if not reachable:
+        with config_file_lock(origins_dir, endpoints_dir):
+            for p in (origin_path, endpoint_path):
+                if not p.exists():
+                    continue
+                try:
+                    cfg = json.loads(p.read_text("utf-8"))
+                except (OSError, ValueError):
+                    continue
+                cfg["state"] = "UNREACHABLE"
+                _atomic_write(p, cfg)
+
+    iid = ""
+    try:
+        from instance_identity import get_instance_id as _get_iid  # type: ignore[import-not-found]
+        iid = _get_iid()
+    except Exception:  # noqa: BLE001
+        iid = ""
+
+    response: dict[str, Any] = {
+        "ok": True,
+        "kid": kid,
+        "reachable": reachable,
+        "instance_id": iid,
+    }
+    resp_canonical = json.dumps(response, separators=(",", ":"), sort_keys=True)
+    response["signature"] = _hmac.new(
+        bytes.fromhex(recv_key), resp_canonical.encode("utf-8"), "sha256",
+    ).hexdigest()
+    return 200, response

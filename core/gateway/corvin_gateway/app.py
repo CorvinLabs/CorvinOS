@@ -581,6 +581,49 @@ async def a2a_ping(request: Request) -> JSONResponse:
     return JSONResponse(content=payload, status_code=status_code)
 
 
+@app.post("/v1/a2a/friendship-ack")
+async def a2a_friendship_ack(request: Request) -> JSONResponse:
+    """Reciprocal friendship handshake (2026-07-29) — the redeemer's callback
+    after importing our token, so we complete a BIDIRECTIONAL pairing in one
+    round trip instead of requiring a second, independent token exchange in
+    reverse. HMAC-authenticated against the pending record saved at
+    token-creation time; delegates to the SAME shared core as the stdlib
+    server (a2a_http_server.process_friendship_ack_request) so the two
+    backends cannot drift — same invariant as /v1/a2a/ping above.
+    """
+    if not _A2A_AVAILABLE or _a2a_receiver is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "a2a_not_configured"},
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "invalid_json"},
+        )
+    import os as _os_ack
+    from pathlib import Path as _Path_ack
+    from a2a_friendship import process_friendship_ack_request  # type: ignore[import-not-found]
+    from a2a_http_server import (  # type: ignore[import-not-found]
+        _endpoints_dir as _a2a_endpoints_dir,
+        _pending_friendships_dir as _a2a_pending_friendships_dir,
+    )
+    _origins_env = _os_ack.environ.get("REMOTE_ORIGINS_DIR")
+    origins_dir_path = (
+        _Path_ack(_origins_env) if _origins_env
+        else _a2a_shared.parent.parent / "cowork" / "remote_origins"
+    )
+    status_code, payload = process_friendship_ack_request(
+        body,
+        pending_dir=_a2a_pending_friendships_dir(),
+        origins_dir=origins_dir_path,
+        endpoints_dir=_a2a_endpoints_dir(),
+    )
+    return JSONResponse(content=payload, status_code=status_code)
+
+
 # ── Auth note ────────────────────────────────────────────────────────
 #
 # Static atlr_* token auth has been removed. For local deployments the

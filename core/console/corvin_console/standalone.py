@@ -37,9 +37,10 @@ is untouched — the mode is API-only, not off.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -285,6 +286,111 @@ def create_app() -> FastAPI:
 
     # Mount all console API routes at /v1/console
     app.include_router(router, prefix="/v1/console")
+
+    # ── Layer 38 — A2A inbound receive + ping (ADR-0048 / ADR-0199) ─────────
+    # `corvin_console.standalone` is what `corvinos-serve` runs (see the module
+    # docstring) — the DEFAULT process on every install.ps1/install.sh autostart
+    # path. Until this wiring existed, this app had NO listener for incoming A2A
+    # calls at all: `corvin_gateway.app` already wires these same two routes, but
+    # nothing starts the gateway by default — so two paired `corvinos-serve`
+    # instances could never reach each other inbound, no matter how correct the
+    # pairing/token exchange was (found 2026-07-29 debugging a "friendship shows
+    # connected but is unreachable" report). Mirrors corvin_gateway.app's
+    # /v1/a2a/receive and /v1/a2a/ping wiring EXACTLY — same shared receiver
+    # module, same CORVIN_A2A_ENGINE selector, same process_ping_request core —
+    # so the two hosts cannot drift. Mounted at the app ROOT (not under
+    # /v1/console) and outside require_session/require_csrf: the caller is a
+    # remote peer instance authenticated via its own HMAC pairing keys, not a
+    # logged-in browser session — matching the wire path RemoteEndpointRegistry
+    # stores (".../v1/a2a/receive").
+    try:
+        from remote_trigger_receiver import (  # type: ignore[import-not-found]
+            RemoteTriggerReceiver as _RemoteTriggerReceiver,
+        )
+
+        _a2a_engine_name = os.environ.get("CORVIN_A2A_ENGINE", "claude").strip().lower()
+        _a2a_engine_factory = None
+        if _a2a_engine_name == "compute":
+            from a2a_compute_engine import (  # type: ignore[import-not-found]
+                DeterministicComputeEngine as _DCE,
+            )
+            _a2a_engine_factory = lambda: _DCE()  # noqa: E731
+
+        _a2a_receiver = _RemoteTriggerReceiver(engine_factory=_a2a_engine_factory)
+        _a2a_available = True
+    except Exception:
+        log.exception("A2A receiver unavailable — /v1/a2a/receive and /v1/a2a/ping will 503")
+        _a2a_available = False
+        _a2a_receiver = None
+
+    @app.post("/v1/a2a/receive", include_in_schema=False)
+    async def _a2a_receive(request: Request) -> JSONResponse:
+        """Layer 38 — A2A inbound receive.
+
+        HMAC-authenticated (no bearer token, no session cookie). Validates the
+        signed TaskEnvelope, anchors the exchange in the L16 audit chain, and
+        returns a signed ResponseEnvelope. ADR-0048.
+        """
+        if not _a2a_available or _a2a_receiver is None:
+            raise HTTPException(status_code=503, detail={"reason": "a2a_not_configured"})
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail={"reason": "invalid_json"})
+        response = _a2a_receiver.receive(body)
+        return JSONResponse(content=response.to_dict())
+
+    @app.post("/v1/a2a/ping", include_in_schema=False)
+    async def _a2a_ping(request: Request) -> JSONResponse:
+        """ADR-0199 — lightweight peer-liveness check (receiver side).
+
+        HMAC-authenticated signed probe; responds with a recv_key-signed body
+        echoing task_id=ping_id. Delegates to the SAME shared core as the
+        stdlib server (a2a_http_server.process_ping_request) so the backends
+        cannot drift.
+        """
+        if not _a2a_available or _a2a_receiver is None:
+            raise HTTPException(status_code=503, detail={"reason": "a2a_not_configured"})
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail={"reason": "invalid_json"})
+        from a2a_http_server import process_ping_request  # type: ignore[import-not-found]
+        status_code, payload = process_ping_request(body, _a2a_receiver)
+        return JSONResponse(content=payload, status_code=status_code)
+
+    @app.post("/v1/a2a/friendship-ack", include_in_schema=False)
+    async def _a2a_friendship_ack(request: Request) -> JSONResponse:
+        """Reciprocal friendship handshake (2026-07-29) — the redeemer's
+        callback after importing a token, so the issuer completes a
+        BIDIRECTIONAL pairing in one round trip instead of requiring a
+        second, independent token exchange in reverse. HMAC-authenticated
+        against the pending record saved at token-creation time (see
+        a2a_friendship.save_pending_friendship /
+        process_friendship_ack_request) — no session cookie, no bearer
+        token."""
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail={"reason": "invalid_json"})
+        from a2a_friendship import process_friendship_ack_request  # type: ignore[import-not-found]
+        # Reuse the SAME dir resolvers the pairing routes already use (env-var
+        # override else repo-relative default) rather than re-deriving the
+        # path here — a second, independently-computed default would silently
+        # diverge from where friendship_create/friendship_import actually
+        # read and write on a wheel install.
+        from .routes.a2a_pair import (
+            _endpoints_dir as _a2a_endpoints_dir,
+            _origins_dir as _a2a_origins_dir,
+            _pending_friendships_dir as _a2a_pending_friendships_dir,
+        )
+        status_code, payload = process_friendship_ack_request(
+            body,
+            pending_dir=_a2a_pending_friendships_dir(),
+            origins_dir=_a2a_origins_dir(),
+            endpoints_dir=_a2a_endpoints_dir(),
+        )
+        return JSONResponse(content=payload, status_code=status_code)
 
     # Mount the pre-built React SPA at /console
     mount_static(app, url_prefix="/console")

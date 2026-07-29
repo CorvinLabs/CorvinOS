@@ -466,9 +466,12 @@ are dropped and replaced with `"redacted"` — never raised on, never sent.
 
 ## Lightweight peer liveness — `a2a_ping` (ADR-0199)
 
-**Status: sender + receiver implemented in BOTH backends (2026-07-22)** —
-`POST /v1/a2a/ping` is served by `a2a_http_server.py` and the gateway
-(`corvin_gateway/app.py`); both delegate to the shared core
+**Status: sender + receiver implemented in ALL THREE hosts (2026-07-29)** —
+`POST /v1/a2a/ping` is served by `a2a_http_server.py`, the gateway
+(`corvin_gateway/app.py`), AND `corvin_console.standalone` (added 2026-07-29,
+ADR-0257 — see below; `corvinos-serve`, the default autostart target on every
+OS, runs `corvin_console.standalone` and had NO A2A listener at all before
+this). All three delegate to the shared core
 `a2a_http_server.process_ping_request()` so the backends cannot drift
 (ADR-0199's parity requirement holds by construction).
 
@@ -513,6 +516,66 @@ Receiver-side behavior (2026-07-22 adversarial-review hardening):
 - The ADR-0199 §2 heartbeat-cache fast path is deliberately NOT implemented
   sender-side yet — it needs receiver-side last-seen records that do not
   exist; `source` is always `"network_probe"` for now.
+
+---
+
+## Reciprocal friendship handshake (ADR-0257, 2026-07-29)
+
+The friendship-token flow (`create_friendship_token` → `import`) previously
+produced two INDEPENDENT one-way trust records, not one bidirectional
+pairing — the issuer had no record of the redeemer until the WHOLE token
+exchange was repeated a second time in reverse, and `state="ACTIVE"` was set
+purely from url-presence, never a reachability check. Fixed via a new
+signed callback, one round trip, no extra operator step:
+
+- `create_friendship_token()` call sites now also call
+  `a2a_friendship.save_pending_friendship()` — a short-lived, single-use
+  record (`kid` + the shared key) under a NEW directory,
+  `operator/cowork/remote_pending_friendships/` (env override
+  `REMOTE_PENDING_FRIENDSHIPS_DIR`, same 0600/atomic-write convention as
+  `remote_origins`/`remote_endpoints`).
+- `friendship_import` (redeemer B), after writing its local files as before,
+  calls `a2a_friendship.send_friendship_ack()` — a signed `POST
+  {issuer_url}/v1/a2a/friendship-ack`, authenticated with the SAME
+  `hmac_key` both sides derive independently from the token's shared key
+  (`_derive_channel_keys` — no new credential).
+- The issuer (A)'s `a2a_friendship.process_friendship_ack_request()` (shared
+  core, all three hosts — same "ships together" invariant as ping above)
+  verifies the ack against its pending record (anti-oracle 403, same pattern
+  as ping's unknown-origin/bad-signature), writes ITS OWN origin+endpoint
+  files for B under the SAME `kid` (reusing `to_origin_dict`/
+  `to_endpoint_dict` via a reconstructed `FriendshipToken`), PINGS B back
+  (ADR-0199 `sender.ping()`) before ever reporting `state="ACTIVE"`, and
+  deletes the pending record (single-use).
+- New route: `POST /remote-trigger/pair/friendship/{kid}/recheck` —
+  re-verify an existing connection (ADR-0199 ping) without repeating the
+  token exchange.
+- `state` now has THREE values: `PENDING` (no url known yet — unchanged),
+  `UNREACHABLE` (a url is known but this side's own probe failed — **new**,
+  replaces the old "ACTIVE by url-presence"), `ACTIVE` (this side's own
+  probe succeeded). The connection record also carries `_peer_knows_us` /
+  `_peer_reports_reachable` — separate from `state` — so the UI can tell "I
+  can reach them" apart from "they can also reach me back" (the latter needs
+  Settings → A2A → "My URL" configured; without it, an ack can never be
+  sent and the pairing stays one-way).
+- **Host gate for the ack's declared URL** (`a2a_friendship._ack_url_rejection_reason`)
+  is DELIBERATELY more permissive than the ADR-0198 reconnect gate above: a
+  first-time pairing has no "previous" stored URL to compare against, so
+  private/LAN addresses are allowed unconditionally (only the "forbidden"
+  category — loopback, link-local incl. cloud metadata, unspecified,
+  multicast, reserved, `.onion` — is rejected). Two LAN machines pairing for
+  the first time is the common case this whole feature exists for.
+- **`origin_id_for_send` fix (found while implementing the above):**
+  `to_endpoint_dict()` previously never set this field, so every
+  `send()`/`ping()`/`send_reconnect()` for a friendship-token pairing fell
+  back to the sender's own random `instance_id` as the outbound `origin_id`
+  — which could never match the receiver's origin file (named `<kid>.json`).
+  Every authenticated call from a friendship-token-paired endpoint was
+  rejected as "unknown origin" REGARDLESS of `state`. Now set to `token.kid`.
+- Tests: `operator/bridges/shared/test_a2a_friendship_handshake.py` (real
+  HTTP, two instances, same harness style as `test_a2a_bidirectional.py`).
+- Existing pre-2026-07-29 friendship connections lack `origin_id_for_send`
+  and were never reciprocal — delete and re-pair them.
 
 ---
 
