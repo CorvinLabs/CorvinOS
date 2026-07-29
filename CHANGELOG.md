@@ -7,6 +7,81 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.74] — 2026-07-30
+
+### Fixed — Discord Console setup was completely broken (CRITICAL)
+
+- **Root cause:** the token-validation helper constructed
+  `AutoOAuth2Generator({log: () => {}})` — an object where the constructor
+  expects a bare function. Every `/validate-token` and `/save-token` call
+  failed with a `TypeError`, regardless of whether the pasted token was
+  valid — a new user could not complete Discord setup through the Console
+  at all.
+- **Fix:** corrected the constructor call. Verified live: an invalid token
+  now correctly returns "Invalid token (401 Unauthorized)" instead of
+  crashing. Also added whitespace/newline stripping (with a proper
+  post-strip length re-check) to Discord and Telegram token fields — a
+  copy-pasted token with a trailing newline previously threw a cryptic
+  Node error instead of a clean validation message.
+
+### Fixed — Discord answered everyone, forever, on an empty whitelist
+
+- A tested `AutoOwnershipBridge` (locks ownership to the first sender, then
+  denies everyone else) existed but was never wired into the daemon — the
+  live behavior on a fresh install was "empty whitelist = every sender is
+  owner, with no lock, ever." Wired it in; the zero-config "just start
+  talking to it" setup is preserved, only the "stays open forever" gap is
+  closed.
+
+### Fixed — WhatsApp's reconnect loop could hammer WhatsApp's own servers
+
+- A persistent non-logout disconnect (seen in the wild: reason 405/unknown)
+  retried on a fixed 1-second delay forever — a real ban-risk DoS against
+  WhatsApp's infrastructure, only stopped by a human manually killing the
+  service. Added exponential backoff (1s → 2s → 4s → ... capped at 60s,
+  with jitter) for every non-logout, non-515 disconnect; code 515 (the
+  expected close right after a QR scan) keeps its fast ~1s reconnect so
+  pairing still feels instant.
+
+### Fixed — the bridge watchdog could only detect crashed processes, never wedged ones
+
+- `watchdog.sh` checked only the HTTP response code — a wedged-but-alive
+  daemon still answers 200. Rewrote it to parse the `/status` JSON body and
+  restart on a sustained stall (Discord's `poller_stalled_s`/
+  `precheck_stalled_s`, a new WhatsApp `disconnected_s`), with a threshold
+  safely above the new WhatsApp backoff cap so a legitimate backoff window
+  is never misread as a wedge.
+
+### Fixed — assorted core/plugin bugs found during an overnight adversarial review
+
+- `recall_backend.py`/`summary_provider.py`: a path-resolution bug
+  (`parents[6]` instead of `parents[4]`) silently degraded conversation
+  recall and LLM summarization to no-ops for any caller other than the
+  bridge adapter; fixing it exposed a second bug (a module-registration
+  ordering issue in the manual import loader), also fixed.
+- `tripwire.py`'s audit-chain auto-healing (from an earlier release) never
+  actually wrote the audit event its own docstring claimed to, and wrote
+  its healed file non-atomically (crash-unsafe). Both fixed, with new test
+  coverage — this path had zero tests before tonight.
+- The A2A relay's routing table had no size cap, a latent memory-exhaustion
+  DoS; bounded it.
+- Two silent `except: pass` blocks around notification-backend calls now
+  log instead of swallowing.
+- A 5th PYTHONPATH-building site (`corvinOS/installer/steps/console.py`,
+  used on Windows and in the restore/self-heal flow) was missing
+  `core/plugins`, independently of the fix in 0.10.70/c4e2684.
+
+### Process note
+
+An adversarial refutation pass (a second, independent review specifically
+tasked with trying to break everything above) found two real gaps in the
+first draft of this release: the WhatsApp backoff was initially
+comment-only (the actual reconnect call was never rewired), and the token
+length re-check was backwards (checked the raw, pre-strip value) and only
+applied to Discord, not Telegram. Both are corrected in what shipped here,
+with new tests specifically covering the failure modes that let them slip
+through the first time.
+
 ## [0.10.70] — 2026-07-29
 
 ### Fixed — Console SyntaxError shipped in 0.10.69 (CRITICAL)
