@@ -699,7 +699,13 @@ cmd_console() {
   fi
 
   # Build the same PYTHONPATH the systemd unit uses.
-  local pypath="$repo_root/core/console:$repo_root/core/gateway:$repo_root/core/license:$repo_root/core/compliance:$repo_root/operator/forge:$repo_root/operator/skill-forge:$repo_root/operator/bridges/shared"
+  # core/plugins (the PARENT dir, not core/plugins/plugin_builder itself) makes
+  # `import plugin_builder` (bare, as slash_commands.py/adapter.py use it) find
+  # core/plugins/plugin_builder/__init__.py as the package — mirroring the wheel
+  # build's [tool.hatch.build.targets.wheel.sources] remap of that same directory
+  # to top-level plugin_builder/. Without this the plugin_builder_enabled flag
+  # could be ON with nothing importable behind it (2026-07-29).
+  local pypath="$repo_root/core/console:$repo_root/core/gateway:$repo_root/core/license:$repo_root/core/compliance:$repo_root/operator/forge:$repo_root/operator/skill-forge:$repo_root/operator/bridges/shared:$repo_root/core/plugins"
 
   local env_file="$HOME/.config/corvin-voice/service.env"
   if [[ -f "$env_file" ]]; then

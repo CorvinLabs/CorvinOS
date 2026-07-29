@@ -467,6 +467,7 @@ class CorvinInstaller:
         pythonpath_dirs = [
             "core/console", "core/gateway", "core/license", "core/compliance",
             "operator/forge", "operator/skill-forge",
+            "core/plugins",
         ]
         # Only include dirs that actually exist (source-tree install).
         paths = [str(self.repo_root / d) for d in pythonpath_dirs if (self.repo_root / d).exists()]
