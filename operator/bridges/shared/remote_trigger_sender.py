@@ -34,6 +34,9 @@ Audit contract (L16 hash chain, three new event types):
                                           error, bad signature, or rejection
   ``A2A.ping_result``           INFO/WARN ADR-0199: one event per ping() call
                                           (reachable → INFO, else WARNING)
+  ``A2A.relay_fallback_used``   INFO     ADR-0258: send()'s direct HTTP POST
+                                          failed and the relay path delivered
+                                          it instead
   ============================= ======== =========================================
 
 Audit ``details`` allow-list (enforced fail-closed by
@@ -878,28 +881,47 @@ class RemoteTriggerSender:
                  "our_chain_tail": sender_chain_tail[:16]},
             )
 
-        # 3) HTTP POST
+        # 3) HTTP POST — with an ADR-0258 Stage 3 relay fallback on failure.
+        # The relay attempt reuses the IDENTICAL envelope (just AEAD-wrapped
+        # for transit) and returns the same shape _http_post does, so
+        # everything below (signature verification, instance_id pin,
+        # audit) is unchanged regardless of which transport actually
+        # delivered it. Inert (raises immediately) when the feature flag is
+        # off or no relay is configured — a direct-only deployment sees
+        # byte-identical behavior to before this stage existed.
         try:
             raw = self._http_post(cfg["url"], envelope, timeout_s)
-        except TransportError as exc:
-            # ADR-0197: Map transport error to specific category before auditing
-            error_cat, error_det = self._categorize_transport_error(exc)
-            self._audit_best_effort(
-                "A2A.response_rejected", "WARNING",
-                {"endpoint_id": endpoint_id, "task_id": task_id,
-                 "reason": exc.reason, "status": "error",
-                 "http_status": exc.http_status,
-                 "error_category": error_cat,
-                 "error_detail": error_det,
-                 "duration_ms": _ms(start)},
-            )
-            return SendResult(
-                ok=False, status="error", task_id=task_id,
-                instance_id="", instance_id_match=False, data={},
-                attachments=[], duration_ms=_ms(start),
-                error_category=error_cat,
-                error_detail=error_det,
-            )
+        except TransportError as direct_exc:
+            try:
+                raw = self._relay_post(cfg, endpoint_id, envelope, timeout_s)
+                self._audit_best_effort(
+                    "A2A.relay_fallback_used", "INFO",
+                    {"endpoint_id": endpoint_id, "task_id": task_id,
+                     "reason": direct_exc.reason, "duration_ms": _ms(start)},
+                )
+            except TransportError as exc:
+                # ADR-0197: Map transport error to specific category before auditing.
+                # Audit the DIRECT failure's category (the primary path) —
+                # the relay attempt's own failure reason is not yet part of
+                # the ADR-0197 closed template set and must never leak
+                # verbatim; direct_exc.reason already is.
+                error_cat, error_det = self._categorize_transport_error(direct_exc)
+                self._audit_best_effort(
+                    "A2A.response_rejected", "WARNING",
+                    {"endpoint_id": endpoint_id, "task_id": task_id,
+                     "reason": direct_exc.reason, "status": "error",
+                     "http_status": direct_exc.http_status,
+                     "error_category": error_cat,
+                     "error_detail": error_det,
+                     "duration_ms": _ms(start)},
+                )
+                return SendResult(
+                    ok=False, status="error", task_id=task_id,
+                    instance_id="", instance_id_match=False, data={},
+                    attachments=[], duration_ms=_ms(start),
+                    error_category=error_cat,
+                    error_detail=error_det,
+                )
 
         # 4) Verify response signature + task_id binding
         try:
@@ -1485,6 +1507,76 @@ class RemoteTriggerSender:
         ).hexdigest()
         env["signature"] = sig
         return env
+
+    @staticmethod
+    def _relay_post(cfg: dict, endpoint_id: str, envelope: dict, timeout_s: int) -> dict:
+        """ADR-0258 Stage 3 — relay fallback for the direct HTTP POST.
+
+        Returns the SAME shape ``_http_post`` would (a parsed, still-signed
+        response dict) so ``_verify_response`` works completely unchanged —
+        the relay is a drop-in ALTERNATIVE TRANSPORT for the identical
+        envelope, never a different protocol. Raises ``TransportError`` on
+        any failure (feature flag off, no relay configured, connect/
+        registration/delivery failure, timeout, or response decrypt
+        failure) so the caller's existing ``except TransportError`` handling
+        already covers both transports with one code path.
+
+        Routing-id note: the pairing's ``kid`` is SHARED and IDENTICAL on
+        both sides (by construction — see a2a_friendship._derive_channel_
+        keys), so it cannot ALSO serve as this sender's own reply-to
+        routing id without colliding with the peer's own listen
+        registration. This call therefore registers under a fresh,
+        per-request ephemeral id (`"<kid>:reply:<task_id>"`, random
+        registration credential) that only needs to live for the duration
+        of this one exchange — the receiver's RelayListener echoes back
+        whatever "from_kid" the request declared, so this resolves
+        correctly without either side needing to know the other's
+        instance_id.
+        """
+        try:
+            from corvin_console import feature_flags as _ff  # type: ignore[import-not-found]  # noqa: PLC0415
+            if not _ff.is_enabled("a2a_relay_fallback"):
+                raise TransportError("relay_fallback_disabled")
+        except ImportError:
+            raise TransportError("relay_fallback_disabled")
+
+        import a2a_friendship as _ft  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        relay_url = _ft.get_my_relay_url()
+        if not relay_url:
+            raise TransportError("relay_not_configured")
+
+        hmac_key = cfg.get("hmac_key", "")
+        to_kid = cfg.get("endpoint_id") or endpoint_id
+        if not hmac_key or not to_kid:
+            raise TransportError("relay_endpoint_config_incomplete")
+
+        task_id = envelope.get("task_id", "")
+        my_kid = f"{to_kid}:reply:{task_id}"
+
+        import secrets as _secrets  # noqa: PLC0415
+        my_relay_auth_key = _secrets.token_hex(32)  # ephemeral, single-use — no TOFU needed
+
+        try:
+            import a2a_relay as _relay  # type: ignore[import-not-found]  # noqa: PLC0415
+            import asyncio as _asyncio  # noqa: PLC0415
+
+            plaintext = json.dumps(envelope).encode("utf-8")
+            nonce_hex, ct_hex = _ft.encrypt_for_relay(hmac_key, plaintext)
+
+            result = _asyncio.run(_relay.relay_deliver_and_wait(
+                relay_url=relay_url, my_kid=my_kid, my_relay_auth_key=my_relay_auth_key,
+                to_kid=to_kid, nonce_hex=nonce_hex, ciphertext_hex=ct_hex,
+                task_id=task_id, timeout_s=timeout_s,
+            ))
+        except Exception as exc:  # noqa: BLE001 — a2a_relay.RelayTransportError or any transport failure
+            raise TransportError("relay_error:" + _safe_exc_type_name(exc)) from exc
+
+        try:
+            resp_plain = _ft.decrypt_from_relay(hmac_key, result["nonce"], result["ciphertext"])
+            return json.loads(resp_plain)
+        except Exception as exc:  # noqa: BLE001 — RelayDecryptError, KeyError, JSONDecodeError
+            raise TransportError("relay_response_invalid") from exc
 
     @staticmethod
     def _http_post(url: str, envelope: dict, timeout_s: int) -> dict:

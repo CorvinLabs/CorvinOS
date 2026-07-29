@@ -111,6 +111,44 @@ def set_my_url(url: str) -> None:
     os.replace(tmp, p)
 
 
+# ── ADR-0258 Stage 3 — instance-wide relay URL ──────────────────────────
+#
+# v1 scope decision: ONE relay per instance, used as the fallback for every
+# pairing that wants it, rather than a per-pairing relay override. Both
+# peers must independently configure the SAME relay URL as part of setup
+# (an explicit rendezvous agreement, like choosing a shared meeting point)
+# — this module never invents or defaults one. A per-pairing override is a
+# plausible future refinement, not needed for the CGNAT/roaming case this
+# stage exists to solve.
+
+def _my_relay_url_path() -> Path:
+    return _corvin_home() / "global" / "remote_trigger" / "my_a2a_relay_url"
+
+
+def get_my_relay_url() -> str | None:
+    """Return this instance's configured relay URL (ws:// or wss://), or
+    None if never set — Stage 3 is inert without one, even if the
+    a2a_relay_fallback feature flag is on."""
+    env = os.environ.get("CORVIN_A2A_RELAY_URL")
+    if env:
+        return env.strip().rstrip("/") or None
+    p = _my_relay_url_path()
+    if p.exists():
+        val = p.read_text("utf-8").strip().rstrip("/")
+        return val or None
+    return None
+
+
+def set_my_relay_url(url: str) -> None:
+    """Persist this instance's relay URL to config file (mode 0600)."""
+    p = _my_relay_url_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(url.strip().rstrip("/"), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, p)
+
+
 # ── base64url helpers ───────────────────────────────────────────────────
 
 def _b64_enc(data: bytes) -> str:
@@ -295,6 +333,99 @@ def _derive_channel_keys(shared_key_hex: str) -> tuple[str, str]:
     hmac_key = _hm.new(kb, b"a2a-hmac-v1", _hl.sha256).hexdigest()
     recv_key  = _hm.new(kb, b"a2a-recv-v1", _hl.sha256).hexdigest()
     return hmac_key, recv_key
+
+
+def _derive_enc_key(hmac_key_hex: str) -> bytes:
+    """ADR-0258 Stage 3 — derive the AES-256-GCM key for relay-path payload
+    confidentiality.
+
+    Input is the pairing's ALREADY-STORED ``hmac_key`` (identical on both
+    sides — origin_dict's and endpoint_dict's ``hmac_key`` are the same
+    value by construction, see :func:`_derive_channel_keys`), NOT the raw
+    friendship-token shared secret — that secret is never persisted to disk
+    after pairing completes (ADR-0099's whole point: a leaked stored key
+    must not let an attacker derive sibling keys from the original secret).
+    Chaining a further HMAC off an already-derived key is a standard,
+    sound KDF pattern (HMAC is a PRF regardless of whether its key input is
+    an "original" secret or itself derived).
+
+    Returns raw 32 bytes (AESGCM wants key bytes, not hex) — unlike
+    hmac_key/recv_key this is never persisted to disk or serialised; it is
+    re-derived on demand at the point of encryption/decryption.
+    """
+    import hashlib as _hl
+    import hmac as _hm
+    kb = bytes.fromhex(hmac_key_hex)
+    return _hm.new(kb, b"a2a-enc-v1", _hl.sha256).digest()  # 32 bytes
+
+
+def derive_relay_auth_key(hmac_key_hex: str) -> str:
+    """ADR-0258 Stage 3 — derive the relay REGISTRATION credential.
+
+    Input is the pairing's stored ``hmac_key`` (see :func:`_derive_enc_key`
+    docstring for why — same reasoning applies here). Deliberately NOT a
+    zero-knowledge proof: this raw value is sent to the relay at
+    registration time and pinned there (trust-on-first-use) as a routing
+    credential for the ``kid`` it registers — see a2a_relay.py's module
+    docstring for the full trust-model writeup, including the accepted
+    first-registration-race residual. Leaking THIS key to the relay is
+    safe: it grants routing only, never content confidentiality (needs
+    enc_key) or message forgery (needs hmac_key/recv_key themselves).
+
+    Returns hex (unlike enc_key, this one IS sent over the wire as a JSON
+    string, so hex — not raw bytes — is the natural form here).
+    """
+    import hashlib as _hl
+    import hmac as _hm
+    kb = bytes.fromhex(hmac_key_hex)
+    return _hm.new(kb, b"a2a-relay-auth-v1", _hl.sha256).hexdigest()
+
+
+def encrypt_for_relay(hmac_key_hex: str, plaintext: bytes) -> tuple[str, str]:
+    """ADR-0258 Stage 3 — AEAD-encrypt a payload for relay transit.
+
+    The relay is a dumb pipe: it must not be able to read a single byte of
+    routed content even if fully compromised. AES-256-GCM via the
+    already-vendored `cryptography` package (no new dependency). Returns
+    ``(nonce_hex, ciphertext_hex)`` — the nonce is not secret and travels
+    alongside the ciphertext; GCM's tag is appended to the ciphertext by
+    the library and verified on decrypt (tamper-evident: a modified
+    ciphertext raises rather than decrypting to garbage).
+
+    ``hmac_key_hex`` — see :func:`_derive_enc_key`: the pairing's stored
+    hmac_key, not the raw friendship-token secret.
+    """
+    import os as _os
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
+
+    key = _derive_enc_key(hmac_key_hex)
+    nonce = _os.urandom(12)  # 96-bit, AESGCM's recommended nonce size
+    aesgcm = AESGCM(key)
+    ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+    return nonce.hex(), ciphertext.hex()
+
+
+class RelayDecryptError(Exception):
+    """Raised when relay-path AEAD decryption/verification fails — a
+    tampered ciphertext, wrong key, or corrupted transit. The caller must
+    treat this identically to a bad HMAC signature: reject, do not process."""
+
+
+def decrypt_from_relay(hmac_key_hex: str, nonce_hex: str, ciphertext_hex: str) -> bytes:
+    """Inverse of :func:`encrypt_for_relay`. Raises :class:`RelayDecryptError`
+    on any failure (bad hex, wrong key, tampered ciphertext/tag) — never
+    returns partial or unverified plaintext."""
+    from cryptography.exceptions import InvalidTag  # noqa: PLC0415
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
+
+    try:
+        key = _derive_enc_key(hmac_key_hex)
+        nonce = bytes.fromhex(nonce_hex)
+        ciphertext = bytes.fromhex(ciphertext_hex)
+        aesgcm = AESGCM(key)
+        return aesgcm.decrypt(nonce, ciphertext, None)
+    except (InvalidTag, ValueError) as exc:
+        raise RelayDecryptError("relay payload decryption failed") from exc
 
 
 def to_origin_dict(token: FriendshipToken) -> dict[str, Any]:
@@ -820,6 +951,67 @@ def detect_local_ip() -> str:
             return s.getsockname()[0]
     except OSError:
         return ""
+
+
+# ── ADR-0258 Stage 2 — mesh-VPN preferred address ───────────────────────
+#
+# If the operator already runs Tailscale/Headscale, that mesh VPN already
+# solves "stable address regardless of physical network" — prefer it over
+# detect_local_ip()'s raw interface address instead of reinventing NAT
+# traversal. Scoped to Tailscale/Headscale for v1 (one well-documented,
+# stable, scriptable CLI contract: `tailscale ip -4`). Generic WireGuard has
+# no portable way to discover "the interface's intended stable address"
+# without assuming a specific setup — an operator running plain WireGuard
+# can already get the same effect today with zero new code by typing that
+# address into Settings -> A2A -> My URL by hand.
+_TAILSCALE_TIMEOUT_S = 2.0
+
+
+def detect_mesh_vpn_address() -> str:
+    """Best-effort Tailscale/Headscale IPv4 address, or "" on any failure.
+
+    Shells out to `tailscale ip -4` — silently degrades (empty string) when
+    the CLI is not installed, not logged in, or times out, exactly like
+    detect_local_ip()'s degrade-on-any-failure contract. Never raises.
+    """
+    import shutil
+    import subprocess
+
+    exe = shutil.which("tailscale")
+    if not exe:
+        return ""
+    try:
+        proc = subprocess.run(
+            [exe, "ip", "-4"],
+            capture_output=True, text=True, timeout=_TAILSCALE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    addr = proc.stdout.strip().splitlines()[0].strip() if proc.stdout.strip() else ""
+    try:
+        import ipaddress as _ipa
+        _ipa.IPv4Address(addr)
+    except ValueError:
+        return ""
+    return addr
+
+
+def suggest_my_url(*, scheme: str = "http", port: int = 8765) -> str | None:
+    """Best local-address suggestion for 'My URL', precedence: mesh-VPN
+    address (stable, preferred) > raw local-interface address (existing
+    fallback). Returns None when neither is available. Callers needing the
+    request-derived reverse-proxy hint (X-Forwarded-Host) keep that logic —
+    this only covers the two locally-detected sources ADR-0258 adds/reuses.
+    """
+    mesh = detect_mesh_vpn_address()
+    if mesh:
+        return f"{scheme}://{mesh}:{port}"
+    local = detect_local_ip()
+    if local:
+        return f"{scheme}://{local}:{port}"
+    return None
 
 
 def _last_known_ip_path() -> Path:

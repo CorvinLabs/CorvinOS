@@ -318,6 +318,31 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("plugins", "bridges"),
     ),
     FeatureFlag(
+        id="a2a_relay_fallback",
+        label="A2A encrypted relay fallback",
+        description=(
+            "ADR-0258 Stage 3: when a direct A2A send()/ping() to a paired peer "
+            "fails (peer behind CGNAT, hotel/airport WiFi, roaming with no "
+            "direct route — the case Stage 1's LAN reconnect and Stage 2's "
+            "mesh-VPN detection cannot cover), retry the SAME signed envelope "
+            "through a configured relay instead of failing immediately. The "
+            "envelope is AES-256-GCM encrypted with a key derived from the "
+            "pairing's own hmac_key before it ever reaches the relay — the "
+            "relay is a dumb pipe and cannot read routed content even if "
+            "fully compromised, but it CAN see routing metadata (which kid "
+            "talks to which, timing, volume). This is a genuine trust-model "
+            "change (a third party — even a blind one — now sits in the path "
+            "for some messages), which is why it ships dark: off means every "
+            "send()/ping() behaves byte-identically to before this stage "
+            "existed, even with a relay URL configured. Turning this on with "
+            "no relay URL set (Settings -> A2A -> Relay URL) is a no-op, not "
+            "an error."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("a2a",),
+    ),
+    FeatureFlag(
         id="headless_api_mode",
         label="Headless API-only boot",
         description=(
