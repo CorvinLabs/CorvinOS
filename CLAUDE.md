@@ -101,6 +101,7 @@ without operator review · add in-process MCP server without operator review.
 | Failing test / bug iteration | `e2e-driven-iteration` | BEFORE each iteration |
 | Recommendation / trade-off / plan | `dialectical-reasoning` | BEFORE stating conclusion |
 | Bug, root cause unknown | `root-cause-by-layer` | BEFORE any fix attempt |
+| Code generation adding a new entry point (function/endpoint/route/CLI/UI/plugin/hook) | `e2e-wiring-proof` | BEFORE declaring done |
 | Any task marked "done" | `docs-as-definition-of-done` | BEFORE declaring done |
 
 **Must NOT do (hard rules):**
@@ -108,6 +109,7 @@ without operator review · add in-process MCP server without operator review.
 - Don't declare task "done" without running `docs-as-definition-of-done`.
 - Don't skip LDD because task "looks small" — every skip is tech debt.
 - Don't downgrade to LDD-off or partial-LDD via any env var.
+- Don't declare a new entry point "done" without running `e2e-wiring-proof` — a unit test proves the function returns the right value *when called*, not that anything calls it.
 
 → Full reference: [ldd-mandatory.md](docs/claude-ref/ldd-mandatory.md)
 
@@ -332,6 +334,45 @@ auto-skip security/compliance mechanisms without justification · declare "done"
 change without running this gate · leave a skip implicit.
 
 → Full reference: [adr-gate.md](docs/claude-ref/adr-gate.md)
+
+---
+
+## E2E Wiring Proof — reachability + functional proof (load-bearing)
+
+**Sibling gate to ADR Gate.** ADR Gate asks "does this decision need a record?"; this gate asks
+"does this code actually run, and can I prove it?" New code is unreachable until proven
+otherwise — a unit test proves a function returns the right value *when called*, not that
+anything in the running system *calls* it. CorvinOS has shipped this exact failure class before
+(plugin types that register but are never invoked; an auth invariant unit-tested but reachable
+from zero live call sites) — both were "tested," both were dead.
+
+**Fires on:** any new function/endpoint/route/CLI command/UI component/plugin/hook/bridge handler
+intended to be reachable from outside its own file. Skips trivial edits, pure refactors with
+existing E2E coverage, config tuning, and explicitly-marked WIP prototypes.
+
+**Two-phase gate:**
+1. **Reachability proof (cheap, first):** find ≥1 real call site outside the definition file
+   AND outside test files, traceable to a real trigger (route table, CLI registration, UI render
+   tree, plugin registry, cron config, message-bus subscription). Zero found → **block**,
+   dispatch `root-cause-by-layer` — fix the wiring, don't lower the bar.
+2. **Generate/extend one E2E test, then run it (only after Phase 1 passes):** the test MUST go
+   through the real transport/interface boundary — an actual HTTP request, CLI subprocess,
+   browser interaction, plugin-registry dispatch, bridge message, or MCP tool call. **Hard rule:**
+   a test that imports the target directly and calls it, skipping that boundary, is a unit test
+   wearing an E2E label and does NOT satisfy this gate. Capture the real execution evidence
+   (exit code/output) — a bare "I added a test" claim does not close the loop.
+
+**Infeasibility exception:** when the real entry point genuinely can't be driven end-to-end
+(hardware dependency, unavailable external system), name the reason explicitly — never skip
+silently. Phase 1 still applies unconditionally.
+
+**Must NOT do:** declare a new-entry-point task "done" without this gate · treat "unit tests
+pass" as equivalent to "reachable and works end-to-end" · write an E2E test that bypasses the
+real transport/interface boundary and call it satisfying · mock the exact component under test
+inside its own "E2E" test · leave an infeasibility skip implicit.
+
+→ Full reference: [quality-discipline.md](docs/claude-ref/quality-discipline.md) ·
+Skill: `operator/bundle/skills/ldd/e2e-wiring-proof/SKILL.md`
 
 ---
 
