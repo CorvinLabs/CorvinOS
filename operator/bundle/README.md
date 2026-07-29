@@ -42,7 +42,7 @@ bridge.sh restart
 | Directory | What | Count |
 |---|---|---|
 | `personas/` | Cowork persona definitions | 8 |
-| `skills/ldd/` | Loss-Driven Development skill suite | 11 |
+| `skills/ldd/` | Loss-Driven Development skill suite | 12 |
 | `tools/` | Forge tool definitions (trading backtest) | 3 |
 | `bridge-config/` | Settings templates (no secrets) | 5 |
 

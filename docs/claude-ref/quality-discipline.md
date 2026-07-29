@@ -174,6 +174,30 @@ After writing an ADR, ask: *"If this mechanism broke or were accidentally revert
 
 ---
 
+## E2E Wiring Proof — reachability + functional proof
+
+**Tier:** Core quality discipline — standard in all default personas, sibling gate to ADR Gate.
+
+**When to apply:** Immediately before declaring "done" on any code generation that adds a new entry point — function, endpoint, route, CLI command, UI component, plugin, hook, or bridge handler.
+
+**The bar:** New code is unreachable until proven otherwise. A unit test proves a function returns the right value *when called* — it says nothing about whether anything in the running system *calls* it.
+
+**Why this exists:** CorvinOS has shipped structural instances of exactly this failure — plugin types that register successfully but are never invoked by any real code path, and an auth invariant that is unit-tested but reachable from zero live call sites. Both were "tested," both were dead.
+
+### Two-phase gate
+
+**Phase 1 — Reachability proof (cheap, first):** trace the call graph for the new symbol/route/component. Require at least one call site outside the definition file AND outside test files, traceable to a real trigger (routing table, CLI registration, UI render tree, plugin registry, cron config, message-bus subscription). Zero call sites found → **block**, dispatch `root-cause-by-layer` to find why the code is orphaned. Do not write a test for code nothing calls.
+
+**Phase 2 — Generate or extend one E2E test (only after Phase 1 passes):** the test must exercise the new code through its **real, user-facing entry point** — an actual HTTP request, an actual CLI subprocess, an actual browser interaction, an actual plugin-registry dispatch, an actual bridge message, an actual MCP tool call. **Hard anti-gaming rule:** a test that imports the target directly and calls it, skipping the transport/interface boundary, is a unit test wearing an E2E label and does NOT satisfy this gate.
+
+**Phase 3 — Execute and capture evidence:** run the test, capture the real exit code/output, include it as evidence. A bare "I added a test" claim without an execution transcript does not close the loop.
+
+**Infeasibility exception:** when the real entry point genuinely can't be driven end-to-end (hardware dependency, unavailable external system), name the reason explicitly instead of skipping silently. Phase 1 still applies unconditionally.
+
+Full rubric: `/operator/bundle/skills/ldd/e2e-wiring-proof/SKILL.md`
+
+---
+
 ## Complementary Disciplines
 
 ### docs-as-definition-of-done
@@ -239,6 +263,9 @@ Standard personas (assistant, coder, browser, research) use `"off"` but have `sk
 - Defer docs to a follow-up commit when docs-as-definition-of-done applies
 - Add E2E tests after committing (tests and implementation same commit)
 - Mix code changes and ADR changes (separate PRs in separate repos)
+- Declare a code-generation task "done" without running E2E Wiring Proof when it adds a new entry point
+- Treat "unit tests pass" as equivalent to "this is reachable and works end-to-end"
+- Write an E2E test that bypasses the real transport/interface boundary and label it as satisfying the wiring gate
 
 ---
 
