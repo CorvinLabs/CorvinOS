@@ -55,6 +55,17 @@ _MAX_QUEUE_PER_KID = 32          # bounded — a liveness bridge, not a mailbox
 _QUEUE_TTL_S = 300.0             # 5 min — long enough for a brief reconnect
 _MAX_MESSAGE_BYTES = 512 * 1024  # ciphertext + envelope overhead; generous
 _MAX_KIDS_PER_CONNECTION = 64    # one operator process may pair with many peers
+# 2026-07-30 — memory-exhaustion DoS fix: `register()` accepted any
+# syntactically-valid kid from ANY unauthenticated caller (TOFU pinning is
+# the point — there's no shared secret to check against on first contact),
+# and _KidSlot entries were never evicted, only the per-slot message QUEUE
+# was bounded. An attacker could open a connection, register up to
+# _MAX_KIDS_PER_CONNECTION fake kids, disconnect, and repeat indefinitely —
+# permanently growing self._slots with no ceiling. This caps the TOTAL
+# number of distinct kids the process will track; once at capacity, a
+# never-before-seen kid is rejected (an already-registered kid re-pinning
+# its own slot still succeeds — this bounds growth, not legitimate re-use).
+_MAX_TOTAL_SLOTS = 10_000
 
 
 class RelayError(Exception):
@@ -97,9 +108,14 @@ class RelayState:
             for this kid (TOFU pin conflict — the connecting client does not
             hold the same shared secret as whoever registered first).
           - "too_many_kids" — this connection already registered the max.
+          - "relay_at_capacity" — the process-wide slot table is full (see
+            _MAX_TOTAL_SLOTS); only applies to a BRAND NEW kid, never to one
+            already tracked (re-registering/reconnecting always succeeds).
         """
         slot = self._slots.get(kid)
         if slot is None:
+            if len(self._slots) >= _MAX_TOTAL_SLOTS:
+                return "relay_at_capacity"
             self._slots[kid] = _KidSlot(auth_key=auth_key, connection_id=connection_id)
             return None
         if slot.auth_key != auth_key:
