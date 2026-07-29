@@ -519,6 +519,14 @@ function renderExecutionContextFooter(context) {
 // (or in mock mode, just logs and removes them). Each file has the shape:
 //   { to: "phone@s.whatsapp.net", text: "...", voice_path?: "..." }
 let waSocket = null;
+// 2026-07-30: how long the socket has been continuously disconnected — 0
+// while connected. The previous /status only exposed `paired: !!waSocket`,
+// indistinguishable between "reconnecting on schedule" and "wedged"; the
+// watchdog (operator/bridges/watchdog.sh) needs a duration, not a boolean,
+// to safely decide when a disconnect has gone on long enough to be abnormal
+// (see the reconnect-backoff comment above: legitimate backoff can take up
+// to ~60s between attempts, so a naive "not paired" check would fight it).
+let disconnectedSince = 0;
 async function processOutbox() {
   let files;
   try {
@@ -795,6 +803,11 @@ const httpServer = http.createServer(async (req, res) => {
     res.end(JSON.stringify({
       mock: MOCK,
       paired: !!waSocket,
+      // Duration-based, not boolean — see `disconnectedSince` declaration
+      // for why the watchdog needs this instead of just `paired`.
+      disconnected_s: disconnectedSince
+        ? Math.round((Date.now() - disconnectedSince) / 1000)
+        : 0,
       whitelist_size: (currentSettings().whitelist || []).length,
       enabled_chats: (currentSettings().enabled_chats || []).length,
       pending_outbox: countPending(OUTBOX, CHANNEL),
@@ -945,6 +958,17 @@ if (MOCK) {
     attachHandlers(sock);
     return;
 
+    // Reconnect backoff (2026-07-30): a persistent non-logout disconnect
+    // (e.g. reason 405/unknown, seen in the wild — WhatsApp intermittently
+    // refusing registration) used to retry on a FIXED 1s delay forever, with
+    // no cap. That hammers WhatsApp's servers indefinitely and risks a
+    // rate-limit or IP/account-level ban — the exact failure mode that took
+    // this bridge down until a human manually stopped the service. Code 515
+    // (restartRequired, the expected close right after a QR scan) still gets
+    // the original fast ~1s reconnect so pairing stays snappy; every OTHER
+    // close backs off exponentially (1s, 2s, 4s, ... capped at 60s) with
+    // jitter, and the counter resets to 0 on the next successful 'open'.
+
     // ─── helpers ──────────────────────────────────────────────────────────
     function attachHandlers(s) {
 
@@ -990,6 +1014,7 @@ if (MOCK) {
       if (connection === 'open') {
         log(`Connected. JID=${s.user?.id}`);
         waSocket = s;
+        disconnectedSince = 0;
         // Pair-only success: only exit once registered=true. The first 'open'
         // (right after QR scan) typically has registered=false; Baileys then
         // emits close-515, we reconnect, and the SECOND 'open' has it true.
@@ -1007,6 +1032,7 @@ if (MOCK) {
         const reasonName = Object.entries(DisconnectReason || {}).find(([_, v]) => v === reason)?.[0] || 'unknown';
         log(`Connection closed (reason=${reason}/${reasonName}).`);
         waSocket = null;
+        if (!disconnectedSince) disconnectedSince = Date.now();
         if (reason === DisconnectReason?.loggedOut) {
           // The server invalidated this session — the stored creds are dead
           // weight and, worse, `state.creds.registered` stays truthy, which

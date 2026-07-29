@@ -36,6 +36,7 @@ const { Client, GatewayIntentBits, IntentsBitField, Partials, AttachmentBuilder 
 const { makeLogger }            = require('../shared/js/logger');
 const { makeSettingsAccessor }  = require('../shared/js/settings');
 const { makeAuth }              = require('../shared/js/auth');
+const { AutoOwnershipBridge }   = require('./auto_ownership');
 const { startOutboxPoller, countPending } = require('../shared/js/outbox');
 const { isNetworkError, networkUp } = require('../shared/js/net_probe');
 const { startHealthServer }     = require('../shared/js/health-server');
@@ -134,6 +135,30 @@ const { rateAllow, authOk, readOnlyOk } = makeAuth({
   settingsFile: SETTINGS_FILE, currentSettings, loadSettings, logger: log,
   channel: CHANNEL,
 });
+
+// 2026-07-30: an empty whitelist previously made authOk() return true for
+// EVERY sender, forever (auth.js's legacy fail-open — Discord never opted
+// into the shared `denyOnEmptyWhitelist` hardening that the email bridge
+// uses, since email's fully-public threat model doesn't apply here). But
+// the tested, purpose-built AutoOwnershipBridge (this dir) — which locks
+// ownership to the FIRST sender and denies everyone else — was never
+// `require()`d anywhere, so its safety net was dead code: a fresh install's
+// bot answered literally anyone who found the invite link, indefinitely.
+// Wiring it in here keeps the zero-config "just start talking to it" setup
+// (no whitelist to configure by hand) while closing the "everyone forever"
+// gap: only the first sender is promoted, and that promotion is persisted
+// to settings.json so it survives a restart.
+const _autoOwnership = new AutoOwnershipBridge(log, settings);
+function _isOwnerCheck(userId, text, channelId) {
+  const cs = currentSettings();
+  const wlEmpty = !cs.whitelist || cs.whitelist.length === 0;
+  if (wlEmpty && cs.auto_owner !== false) {
+    const access = _autoOwnership.determineAccess(userId);
+    if (access.promoted) saveSettings(settings);
+    return access.authorized;
+  }
+  return authOk(userId, text, channelId);
+}
 
 const READ_ONLY_ACK = '🔒 You are read-only in this chat — you can read along, but you cannot drive the bot. Ask the owner to add you to the whitelist if that is wrong.';
 
@@ -325,7 +350,7 @@ client.on('interactionCreate', async (interaction) => {
     // admitted to the chat but must NOT inherit the owner command surface
     // (/vault, /invite, /grant, …). Hardcoding isOwner:true here was a
     // privilege-escalation (security review 2026-06-27).
-    const _isOwner = authOk(userId, text, channelId);
+    const _isOwner = _isOwnerCheck(userId, text, channelId);
     if (!_isOwner) {
       // ADR-0166: check SPG invitation before rejecting non-whitelisted sender
       let _spgAllowed = false;
@@ -612,7 +637,7 @@ client.on('messageCreate', async (msg) => {
     // ADR-0166 privilege model: whitelist ⇒ owner, SPG-admitted ⇒ guest.
     // `_isOwner` MUST flow to every command dispatch below (see interaction
     // path). An SPG guest is admitted but must NOT inherit the owner surface.
-    const _isOwner = authOk(userId, text, msg.channel.id);
+    const _isOwner = _isOwnerCheck(userId, text, msg.channel.id);
     if (!_isOwner) {
       // ADR-0166: check SPG invitation before rejecting non-whitelisted sender
       let _spgAllowed = false;

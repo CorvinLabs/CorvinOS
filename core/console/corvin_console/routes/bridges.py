@@ -37,7 +37,8 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi import status as http_status
-from pydantic import BaseModel, Field
+
+from pydantic import AfterValidator, BaseModel, Field
 
 from .. import audit as console_audit
 from .. import auth as session_auth
@@ -742,8 +743,27 @@ def put_bridge_enabled(
 # Endpoints for token validation and OAuth2 URL generation.
 # Phase 2 of Discord Zero-Config: Console UI integration.
 
+
+def _strip_token(v: str) -> str:
+    """Strip surrounding whitespace/newlines from a pasted token.
+
+    Without this, a token copy-pasted with a trailing newline (common from a
+    terminal/password manager) reaches Node's `https.request()` with a raw
+    `\\n` in the Authorization header value, which throws synchronously
+    ("Invalid character in header content") — a cryptic Node error instead
+    of an actionable "invalid token" message. The min_length/max_length
+    bounds on the Field below apply BEFORE this validator in pydantic v2's
+    ordering here (they're plain constraints, not chained validators), so a
+    token that's only whitespace still correctly fails length validation.
+    """
+    return v.strip()
+
+
+_Token = Annotated[str, AfterValidator(_strip_token)]
+
+
 class ValidateTokenRequest(BaseModel):
-    token: str = Field(..., min_length=20, max_length=200, description="Discord bot token")
+    token: _Token = Field(..., min_length=20, max_length=200, description="Discord bot token")
 
 
 class ValidateTokenResponse(BaseModel):
@@ -756,7 +776,7 @@ class ValidateTokenResponse(BaseModel):
 
 
 class SaveTokenRequest(BaseModel):
-    token: str = Field(..., min_length=20, max_length=200, description="Discord bot token")
+    token: _Token = Field(..., min_length=20, max_length=200, description="Discord bot token")
 
 
 class SaveTokenResponse(BaseModel):
@@ -1022,7 +1042,7 @@ def _validate_discord_token_via_node(token: str, bridges_dir: Path) -> dict[str,
     # Use Node.js inline script (safe structure, token via env)
     script = """
 const { AutoOAuth2Generator } = require(process.env.AUTO_OAUTH2_PATH);
-const gen = new AutoOAuth2Generator({log: () => {}});
+const gen = new AutoOAuth2Generator(() => {});
 gen.generateAuthorizationUrl(process.env.DISCORD_TOKEN).then(result => {
   console.log(JSON.stringify(result));
 }).catch(err => {
