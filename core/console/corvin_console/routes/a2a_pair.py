@@ -101,6 +101,19 @@ def _pending_dir() -> Path:
     return Path(env) if env else _PENDING_DEFAULT
 
 
+_PENDING_FRIENDSHIPS_DEFAULT = _COWORK_DIR / "remote_pending_friendships"
+
+
+def _pending_friendships_dir() -> Path:
+    """Issuer-side bookkeeping for the reciprocal friendship handshake — see
+    a2a_friendship.save_pending_friendship / process_friendship_ack_request.
+    Deliberately a SEPARATE directory from _pending_dir() (pending_invites,
+    the older 3-step invite-code flow) — different record shape, different
+    protocol."""
+    env = os.environ.get("REMOTE_PENDING_FRIENDSHIPS_DIR")
+    return Path(env) if env else _PENDING_FRIENDSHIPS_DEFAULT
+
+
 # ── crypto helpers ────────────────────────────────────────────────────
 
 def _gen_key() -> str:
@@ -854,7 +867,14 @@ def friendship_create(
     body: FriendshipCreateRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> FriendshipCreateResponse:
-    """Generate a friendship token.  Writes nothing to disk here."""
+    """Generate a friendship token AND persist the issuer's half of the
+    reciprocal handshake (a2a_friendship.save_pending_friendship) — without
+    this, the issuer never learns the redeemer imported the token (a
+    SEPARATE, unlinked token exchange in reverse was previously the only
+    way to make the pairing bidirectional, found 2026-07-29). The pending
+    record is single-use, consumed by the redeemer's ack (see
+    /remote-trigger/pair/friendship/import and the /v1/a2a/friendship-ack
+    wire endpoint)."""
     url_val: str | None = body.url.strip().rstrip("/") or None
     label_val: str | None = body.label.strip() or None
     ttl: float | None = body.ttl_hours * 3600 if body.ttl_hours > 0 else None
@@ -874,6 +894,11 @@ def friendship_create(
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid request") from exc
+
+    try:
+        _ft.save_pending_friendship(token, pending_dir=_pending_friendships_dir())
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail="could not persist pending friendship") from exc
 
     if body.remember_url and url_val:
         _ft.set_my_url(url_val)
@@ -905,6 +930,14 @@ class FriendshipImportResponse(BaseModel):
     label: str | None
     personas: list[str]
     expires: float | None
+    # Reciprocal-handshake outcome (2026-07-29) — see module docstring at the
+    # top of a2a_friendship.py's "Reciprocal friendship handshake" section.
+    # peer_knows_us: the issuer (A) verified our ack and now has ITS OWN
+    # origin+endpoint record for us — i.e. this is a genuinely bidirectional
+    # pairing, not just a one-way import. False when we have no own A2A URL
+    # configured yet (Settings → A2A → "My URL") or A could not be reached.
+    peer_knows_us: bool = False
+    peer_reports_reachable: bool = False
 
 
 @router.post("/remote-trigger/pair/friendship/import")
@@ -912,7 +945,21 @@ def friendship_import(
     body: FriendshipImportRequest,
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> FriendshipImportResponse:
-    """Import a friendship token: write origin + endpoint config files."""
+    """Import a friendship token: write origin + endpoint config files, then
+    complete the pairing bidirectionally in the SAME round trip.
+
+    Two checks now gate the reported ``state`` — url-presence alone is no
+    longer sufficient for either side to claim a live connection (found
+    2026-07-29, see a2a_friendship.py):
+
+    1. We ping the issuer back (ADR-0199) — proves WE can reach THEM.
+    2. If our own A2A URL is configured, we also send a signed reciprocal
+       ack (a2a_friendship.send_friendship_ack) so the issuer writes ITS OWN
+       record for us and pings US back — proving THEY can reach US. Without
+       this, only step 1 ever ran and the issuer never learned we existed
+       (a second, independent token exchange in reverse was the only
+       workaround).
+    """
     try:
         token = _ft.parse_and_verify(body.token.strip())
     except _ft.FriendshipError as exc:
@@ -942,6 +989,42 @@ def friendship_import(
         _write_secure(endpoint_path, _ft.to_endpoint_dict(token))
 
     state = "ACTIVE" if token.url is not None else "PENDING"
+    peer_knows_us = False
+    peer_reports_reachable = False
+
+    if token.url is not None:
+        # Note on ordering: the issuer (A) has NO record of us at all until a
+        # successful ack completes (that write happens INSIDE
+        # process_friendship_ack_request) — a ping FROM us TO them before the
+        # ack would always fail (their origin registry has nothing to look up
+        # yet), so this is the only correct order. The ack round trip itself
+        # (an authenticated HTTP POST that must actually reach A and get a
+        # verified signed response back) IS the proof of OUR->THEM
+        # reachability; A's own ping-back to US (performed server-side,
+        # inside the ack handler) is the proof of THEM->US reachability, and
+        # travels back in the ack response's ``reachable`` field.
+        my_own_url = _ft.get_my_url()
+        if my_own_url:
+            ack_result = _ft.send_friendship_ack(token, my_url=my_own_url)
+            peer_knows_us = bool(ack_result.get("ok"))
+            peer_reports_reachable = bool(ack_result.get("reachable"))
+            state = "ACTIVE" if (peer_knows_us and peer_reports_reachable) else "UNREACHABLE"
+        else:
+            # We have no own URL configured (Settings -> A2A -> "My URL") —
+            # the issuer can never be told about us, so this can only ever be
+            # a one-way import. Do not claim ACTIVE on url-presence alone.
+            state = "UNREACHABLE"
+
+        with _pair_lock:
+            for p in (origin_path, endpoint_path):
+                if not p.exists():
+                    continue
+                cfg = json.loads(p.read_text("utf-8"))
+                cfg["state"] = state
+                cfg["_peer_knows_us"] = peer_knows_us
+                cfg["_peer_reports_reachable"] = peer_reports_reachable
+                _write_secure(p, cfg)
+
     console_audit.action_performed(
         tenant_id=rec.tenant_id,
         sid_fingerprint=rec.sid_fingerprint,
@@ -957,6 +1040,8 @@ def friendship_import(
         label=token.label,
         personas=token.personas or ["assistant"],
         expires=token.expires,
+        peer_knows_us=peer_knows_us,
+        peer_reports_reachable=peer_reports_reachable,
     )
 
 
@@ -1070,6 +1155,11 @@ def friendship_connections(
             "personas": cfg.get("allowed_personas", []),
             "url": None,
             "expires": cfg.get("_ft_expires"),
+            # Reciprocal-handshake bookkeeping (2026-07-29) — see
+            # a2a_friendship.py. Absent on connections paired before this
+            # existed; defaults to False (unknown = not proven bidirectional).
+            "peer_knows_us": bool(cfg.get("_peer_knows_us", False)),
+            "peer_reports_reachable": bool(cfg.get("_peer_reports_reachable", False)),
         }
 
     for path in sorted(_endpoints_dir().glob("*.json")):
@@ -1092,10 +1182,64 @@ def friendship_connections(
                 "personas": [],
                 "url": url,
                 "expires": cfg.get("_ft_expires"),
+                "peer_knows_us": bool(cfg.get("_peer_knows_us", False)),
+                "peer_reports_reachable": bool(cfg.get("_peer_reports_reachable", False)),
             }
 
     connections = sorted(seen.values(), key=lambda c: c["kid"])
     return {"connections": connections, "count": len(connections)}
+
+
+# ── POST /remote-trigger/pair/friendship/{kid}/recheck ─────────────────
+
+@router.post("/remote-trigger/pair/friendship/{kid}/recheck")
+def friendship_recheck(
+    kid: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Re-verify reachability for an existing friendship connection (manual
+    "recheck" action / periodic UI refresh) without redoing the whole token
+    exchange. Pings the peer (ADR-0199) and updates ``state`` accordingly —
+    ACTIVE only on a genuine signed pong, else UNREACHABLE. Does not touch
+    ``_peer_knows_us`` (that is only ever set by a completed ack round trip)."""
+    if not kid or "/" in kid or "\\" in kid or ":" in kid or kid.startswith("."):
+        raise HTTPException(status_code=400, detail="invalid kid")
+    endpoint_path = _endpoints_dir() / f"{kid}.json"
+    if not endpoint_path.exists():
+        raise HTTPException(status_code=404, detail="not found")
+
+    try:
+        cfg = json.loads(endpoint_path.read_text("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="unreadable connection") from exc
+    if not cfg.get("_friendship"):
+        raise HTTPException(status_code=404, detail="not found")
+    if not cfg.get("url"):
+        return {"ok": True, "kid": kid, "state": "PENDING", "reachable": False}
+
+    reachable = False
+    try:
+        from remote_trigger_sender import (  # type: ignore[import-not-found]
+            RemoteEndpointRegistry as _RER, RemoteTriggerSender as _RTS,
+        )
+        _sender = _RTS(_endpoints_dir(), _RER(_endpoints_dir()))
+        reachable = bool(_sender.ping(kid, timeout_s=5).reachable)
+    except Exception:  # noqa: BLE001 — reachability check is best-effort
+        reachable = False
+
+    new_state = "ACTIVE" if reachable else "UNREACHABLE"
+    with _pair_lock:
+        for p in (_origins_dir() / f"{kid}.json", endpoint_path):
+            if not p.exists():
+                continue
+            try:
+                pcfg = json.loads(p.read_text("utf-8"))
+            except Exception:
+                continue
+            pcfg["state"] = new_state
+            _write_secure(p, pcfg)
+
+    return {"ok": True, "kid": kid, "state": new_state, "reachable": reachable}
 
 
 # ── PATCH /remote-trigger/origins/{origin_id} ─────────────────────────

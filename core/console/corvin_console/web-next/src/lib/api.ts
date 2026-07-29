@@ -3123,20 +3123,27 @@ export interface FriendshipImportRequest {
 export interface FriendshipImportResponse {
   ok: boolean;
   kid: string;
-  state: "PENDING" | "ACTIVE";
+  state: "PENDING" | "ACTIVE" | "UNREACHABLE";
   url: string | null;
   label: string | null;
   personas: string[];
   expires: number | null;
+  // Reciprocal-handshake outcome (2026-07-29): whether the issuer verified
+  // our callback and now has its OWN record for us (true bidirectionality),
+  // and whether the issuer itself reports being able to reach us back.
+  peer_knows_us: boolean;
+  peer_reports_reachable: boolean;
 }
 
 export interface FriendshipConnection {
   kid: string;
-  state: "PENDING" | "ACTIVE";
+  state: "PENDING" | "ACTIVE" | "UNREACHABLE";
   label: string | null;
   personas: string[];
   url: string | null;
   expires: number | null;
+  peer_knows_us: boolean;
+  peer_reports_reachable: boolean;
 }
 
 export interface FriendshipConnectionsResponse {
@@ -3210,6 +3217,19 @@ export async function listFriendshipConnections(
 ): Promise<FriendshipConnectionsResponse> {
   return api<FriendshipConnectionsResponse>("/remote-trigger/pair/friendship/connections", {
     signal,
+  });
+}
+
+// Manual re-verify (ADR-0199 ping) for an existing connection — pings the
+// peer and updates state (ACTIVE / UNREACHABLE) without redoing the token
+// exchange. Does not touch peer_knows_us (only a completed ack sets that).
+export async function recheckFriendshipConnection(
+  kid: string,
+  csrf: string,
+): Promise<{ ok: boolean; kid: string; state: string; reachable: boolean }> {
+  return api(`/remote-trigger/pair/friendship/${encodeURIComponent(kid)}/recheck`, {
+    method: "POST",
+    csrf,
   });
 }
 

@@ -59,6 +59,7 @@ import {
   setFriendshipUrl,
   revokeFriendshipToken,
   listFriendshipConnections,
+  recheckFriendshipConnection,
   patchA2AOrigin,
   deleteA2AOrigin,
   patchA2AEndpoint,
@@ -131,7 +132,7 @@ function CopyChip({ value, short }: { value: string; short?: string }) {
   );
 }
 
-function StateBadge({ state }: { state: "PENDING" | "ACTIVE" | string }) {
+function StateBadge({ state }: { state: "PENDING" | "ACTIVE" | "UNREACHABLE" | string }) {
   if (state === "ACTIVE") {
     return (
       <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 text-[10px]">
@@ -139,10 +140,38 @@ function StateBadge({ state }: { state: "PENDING" | "ACTIVE" | string }) {
       </Badge>
     );
   }
+  if (state === "UNREACHABLE") {
+    // A url IS known but the last real ping (ADR-0199) failed — distinct
+    // from PENDING (no url yet at all). Red, not amber: this connection
+    // WILL NOT deliver messages right now (2026-07-29 — url-presence alone
+    // used to be reported as ACTIVE, which was misleading).
+    return (
+      <Badge className="bg-red-500/15 text-red-700 dark:text-red-400 border-red-500/30 text-[10px]">
+        UNREACHABLE
+      </Badge>
+    );
+  }
   return (
     <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30 text-[10px]">
       PENDING
     </Badge>
+  );
+}
+
+// Small secondary indicator for the reciprocal-handshake outcome
+// (2026-07-29) — whether the PEER also has its own record of us, i.e.
+// whether this is a genuinely bidirectional pairing or a one-way import
+// that is waiting on "Settings -> A2A -> My URL" to be configured.
+function PeerKnowsUsHint({ state, peerKnowsUs }: { state: string; peerKnowsUs: boolean }) {
+  if (state === "PENDING") return null;
+  if (peerKnowsUs) return null;
+  return (
+    <span
+      className="text-[10px] text-amber-600 dark:text-amber-400 shrink-0"
+      title="The peer does not have its own record of you yet — set your own A2A URL (Settings -> A2A -> My URL) so the connection becomes bidirectional."
+    >
+      peer can&apos;t reach you back
+    </span>
   );
 }
 
@@ -1295,6 +1324,17 @@ function FriendshipConnectionsList() {
   const [deletePendingKid, setDeletePendingKid] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState(false);
   const [deleteError, setDeleteError] = React.useState("");
+  const [rechecking, setRechecking] = React.useState<string | null>(null);
+
+  async function handleRecheck(kid: string) {
+    setRechecking(kid);
+    try {
+      await recheckFriendshipConnection(kid, csrf);
+      void qc.invalidateQueries({ queryKey: ["a2a", "friendship-connections"] });
+    } finally {
+      setRechecking(null);
+    }
+  }
 
   async function handleSetUrl(kid: string) {
     setUrlSaving(true);
@@ -1371,7 +1411,15 @@ function FriendshipConnectionsList() {
                       until {new Date(c.expires * 1000).toLocaleDateString()}
                     </span>
                   )}
+                  <PeerKnowsUsHint state={c.state} peerKnowsUs={c.peer_knows_us} />
                   <div className="ml-auto flex gap-1.5 shrink-0">
+                    {(c.state === "ACTIVE" || c.state === "UNREACHABLE") && (
+                      <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs"
+                        onClick={() => handleRecheck(c.kid)}
+                        disabled={rechecking === c.kid}>
+                        {rechecking === c.kid ? "…" : "Recheck"}
+                      </Button>
+                    )}
                     {c.state === "PENDING" && deletePendingKid !== c.kid && (
                       <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs"
                         onClick={() => { setSetUrlKid(c.kid); setUrlInput(c.url ?? ""); }}>
