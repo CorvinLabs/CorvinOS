@@ -41,15 +41,37 @@ class SqliteRecallBackend:
             import sys
             from pathlib import Path
             for _p in [
-                Path(__file__).resolve().parents[6]
+                # core/plugins/corvin_plugins/providers/recall_backend.py ->
+                # parents[4] is the repo root. Was parents[6] (2026-07-30
+                # fix) — resolved to /home/<user>, so this fallback path
+                # never existed and index_turn/recall/forget silently
+                # degraded to a no-op for any caller other than the adapter
+                # (which masks this by inserting shared/ onto sys.path
+                # earlier, making the primary bare `import
+                # conversation_recall` succeed before this fallback is ever
+                # reached).
+                Path(__file__).resolve().parents[4]
                 / "operator/bridges/shared/conversation_recall.py",
             ]:
                 if _p.exists():
                     spec = importlib.util.spec_from_file_location(
                         "conversation_recall", _p)
                     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-                    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+                    # Register in sys.modules BEFORE exec_module, not after:
+                    # conversation_recall.py declares @dataclass classes at
+                    # module level, and dataclasses' own type-hint resolution
+                    # does `sys.modules.get(cls.__module__).__dict__` DURING
+                    # that decorator's execution — i.e. while exec_module is
+                    # still running. With the registration after exec_module
+                    # (as this previously was), that lookup returns None and
+                    # raises `AttributeError: 'NoneType' object has no
+                    # attribute '__dict__'` before the module ever loads.
+                    # This is the standard importlib idiom for exactly this
+                    # reason. Never exercised before the 2026-07-30 path fix
+                    # above — the wrong parents[N] made `_p.exists()` false,
+                    # so this whole block was dead until now.
                     sys.modules["conversation_recall"] = mod
+                    spec.loader.exec_module(mod)  # type: ignore[union-attr]
                     return mod
         except Exception:
             pass

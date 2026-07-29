@@ -25,6 +25,7 @@ Usage (boot):
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -156,8 +157,21 @@ def _heal_chain_at_line(path: Path, last_good_line: int) -> None:
         # Truncate at the last good line
         truncated = lines[:last_good_line]
 
-        with open(path, 'w', encoding='utf-8') as f:
+        # Atomic write: write to a sibling temp file, then os.replace() —
+        # never open the real path with 'w' directly. The previous code did
+        # open(path, 'w') straight away, which truncates the file to empty
+        # BEFORE any new content is written; a crash or power loss between
+        # that open() and the writelines() completing turned "delete a
+        # broken tail" into "lose the entire audit chain" (2026-07-30 review
+        # finding). os.replace() is atomic on POSIX and Windows — the file
+        # is always either the old (pre-heal) or new (healed) content, never
+        # a half-written truncated-to-nothing state.
+        tmp_path = path.with_suffix(path.suffix + f".healing-{os.getpid()}.tmp")
+        with open(tmp_path, 'w', encoding='utf-8') as f:
             f.writelines(truncated)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
 
         _log.info(f"audit_chain healed: truncated from {len(lines)} to {last_good_line} records")
     except (OSError, ValueError) as e:
@@ -240,6 +254,35 @@ def audit_chain_intact() -> TripwireResult:
                     f"audit_chain_intact: healed {len(recent)} broken record(s) "
                     f"by truncating at line {last_good_line}"
                 )
+                # The docstring above ("An audit event is written to mark
+                # the healing") and this module's module-level comment made
+                # this claim since 12a3c54 (release 0.10.67) — but nothing
+                # ever wrote it: this success path returns TripwireResult
+                # directly, never through _record_finding (which only fires
+                # for REPORTING_ONLY failures). Deleting 536 records from a
+                # GDPR Art. 30/32 audit trail with zero trace of the
+                # deletion IN that trail is the exact failure this event
+                # exists to prevent (2026-07-30 review finding). Written
+                # AFTER the heal so it becomes the first new entry in the
+                # now-continuing (healed) chain — best-effort: a write
+                # failure here must not re-block a boot that already
+                # recovered.
+                try:
+                    audit = _audit_module()
+                    if audit is not None:
+                        audit.audit_event(
+                            "compliance.chain_discontinuity_healed",
+                            details={
+                                "tripwire": name,
+                                "broken_records": len(recent),
+                                "truncated_at_line": last_good_line,
+                            },
+                        )
+                except Exception as audit_exc:  # noqa: BLE001
+                    _log.error(
+                        f"could not record chain_discontinuity_healed event: "
+                        f"{type(audit_exc).__name__}"
+                    )
                 return TripwireResult(
                     name, True,
                     f"chain healed: truncated {len(recent)} broken record(s) at end"
