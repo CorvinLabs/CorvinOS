@@ -117,9 +117,26 @@ def _pick_upgrade_command(latest: str) -> tuple[list[str] | None, str]:
     if _is_uv_tool_install() or (uv and not _pip_available()):
         if uv:
             # `uv tool upgrade` pulls the latest compatible release (we already
-            # confirmed a newer one exists), and reuses the tool's own venv.
-            return [uv, "tool", "upgrade", "corvinos"], "uv tool upgrade corvinos"
-        return None, "uv tool upgrade corvinos"  # uv-managed but uv not found
+            # confirmed a newer one exists via a direct, uncached PyPI JSON
+            # query), and reuses the tool's own venv.
+            #
+            # --reinstall-package corvinos (2026-07-29, found via adversarial
+            # review): WITHOUT this, `uv tool upgrade` resolves against uv's
+            # OWN cached view of the package index — a SEPARATE cache from
+            # the raw PyPI JSON check above, which can lag behind it (fresh
+            # upload not yet visible to uv's resolver). When that happens,
+            # `uv tool upgrade` finds "nothing newer than what's installed",
+            # does nothing, and still exits 0 — indistinguishable from a real
+            # upgrade by exit code alone. `--reinstall-package` implies
+            # `--refresh-package`, forcing a fresh index lookup for exactly
+            # this package (not a full `--no-cache`, which would needlessly
+            # slow down resolving every other dependency too). Observed live:
+            # a real 0.10.70 -> 0.10.71 handoff exited 0 but never converged.
+            return (
+                [uv, "tool", "upgrade", "corvinos", "--reinstall-package", "corvinos"],
+                "uv tool upgrade corvinos --reinstall-package corvinos",
+            )
+        return None, "uv tool upgrade corvinos --reinstall-package corvinos"  # uv-managed but uv not found
 
     return (
         [sys.executable, "-m", "pip", "install", f"corvinos=={latest}", "--quiet"],
@@ -325,7 +342,9 @@ def _ps_array_literal(items: list[str]) -> str:
     return "@(" + ",".join(_ps_quote(i) for i in items) + ")"
 
 
-def _spawn_windows_self_updater(cmd: list[str], relaunch_argv: list[str]) -> bool:
+def _spawn_windows_self_updater(
+    cmd: list[str], relaunch_argv: list[str], *, target_version: str = "",
+) -> bool:
     """Hand off the upgrade to a detached PowerShell script and return True.
 
     We cannot upgrade our own running venv in place (Windows locks this
@@ -339,6 +358,21 @@ def _spawn_windows_self_updater(cmd: list[str], relaunch_argv: list[str]) -> boo
     in %TEMP% since nothing will be attached to a console by the time most of
     it runs. Caller must exit promptly after this returns True so the target
     files actually become unlocked.
+
+    AVAILABILITY INVARIANT (2026-07-29 — found via adversarial review after a
+    live non-convergence): the ORIGINAL corvin-serve process has ALREADY
+    exited by the time this script's upgrade step runs (that is the whole
+    reason a detached script is needed at all). A previous version of this
+    script `exit 1`'d — WITHOUT relaunching — on either an upgrade launch
+    exception or a non-zero exit code. That is a guaranteed TOTAL OUTAGE on
+    any transient upgrade failure (network blip, permission error, antivirus
+    quarantine, disk full, temporary PyPI hiccup) — the one thing this whole
+    mechanism must never cause. The script now ALWAYS relaunches at the end,
+    regardless of whether the upgrade step succeeded: a failed upgrade just
+    means the relaunch picks up the version already on disk (fail-open to
+    "still running the old, working version"), never "nothing running".
+    Every failure is still logged clearly, so it is diagnosable — it is just
+    no longer fatal to the relaunch.
     """
     import tempfile
     import textwrap
@@ -364,6 +398,60 @@ def _spawn_windows_self_updater(cmd: list[str], relaunch_argv: list[str]) -> boo
         script_path = Path(tempfile.gettempdir()) / f"corvin-self-update-{pid}.ps1"
         cmd_str = " ".join(cmd)
         relaunch_str = " ".join(relaunch_argv)
+        # Version-convergence check (2026-07-29): `uv tool upgrade`'s exit
+        # code alone cannot distinguish "upgraded successfully" from
+        # "resolved against a stale cached index, found nothing to do, exited
+        # 0 anyway" — the second case previously relaunched silently on the
+        # OLD version with no diagnostic, surfacing only as a confusing
+        # "already attempted an update … not retrying" message on the NEXT
+        # manual start. `uv[0]` (cmd[0]) is the same absolute uv path used for
+        # the upgrade itself. Best-effort only: any failure to even RUN this
+        # check just skips the extra log line — it must never block the
+        # relaunch below.
+        uv_exe = cmd[0]
+        version_check = ""
+        if target_version:
+            # The mismatch log line interpolates a LIVE PowerShell variable
+            # ($ver, parsed moments earlier from uv's own output) in the
+            # MIDDLE of an otherwise Python-injected string. `Log <a> + <b>`
+            # (two separate _ps_quote()'d strings joined with `+` OUTSIDE the
+            # call) is NOT string concatenation in PowerShell's bareword-call
+            # syntax — it calls `Log <a>` and silently discards `+ <b>` as an
+            # unused expression, dropping the actual detected version from
+            # the log (found via a real pwsh parse+execute check, 2026-07-29:
+            # the message logged was truncated exactly at that boundary).
+            # Fix: escape the two STATIC halves with the same three
+            # replacements _ps_quote() applies (backtick, then double-quote,
+            # then $), and hand-assemble ONE double-quoted PowerShell string
+            # with $ver left live in the middle — mirrors how $_/$p.ExitCode
+            # are already interpolated live elsewhere in this same script.
+            def _ps_escape_static(s: str) -> str:
+                return s.replace("`", "``").replace('"', '`"').replace("$", "`$")
+
+            _mismatch_prefix = _ps_escape_static(
+                f"version check: expected {target_version} but 'uv tool list' reports "
+            )
+            _mismatch_suffix = _ps_escape_static(
+                " -- upgrade did NOT converge (stale index cache? pinned receipt? "
+                "partial failure?). Relaunching whatever is actually on disk."
+            )
+            mismatch_log_expr = f'"{_mismatch_prefix}$ver{_mismatch_suffix}"'
+            version_check = textwrap.dedent(f"""
+                try {{
+                    $installed = & {_ps_quote(uv_exe)} tool list 2>$null |
+                        Select-String -Pattern '^corvinos\\s+v?([0-9][^\\s]*)'
+                    if ($installed) {{
+                        $ver = $installed.Matches[0].Groups[1].Value
+                        if ($ver -eq {_ps_quote(target_version)}) {{
+                            Log {_ps_quote(f"version check: now on {target_version} -- converged")}
+                        }} else {{
+                            Log {mismatch_log_expr}
+                        }}
+                    }}
+                }} catch {{
+                    Log "version check skipped (uv tool list failed): $_"
+                }}
+            """)
         script = textwrap.dedent(f"""
             $ErrorActionPreference = "Continue"
             $log = {_ps_quote(str(log_path))}
@@ -373,28 +461,34 @@ def _spawn_windows_self_updater(cmd: list[str], relaunch_argv: list[str]) -> boo
                 Start-Sleep -Milliseconds 400
             }}
             Log {_ps_quote(f"pid {pid} exited -- running upgrade: {cmd_str}")}
+            $upgradeOk = $true
             try {{
                 $p = Start-Process -FilePath {_ps_quote(cmd[0])} `
                     -ArgumentList {_ps_array_literal(cmd[1:])} `
                     -WindowStyle Hidden -Wait -PassThru
+                if ($p.ExitCode -ne 0) {{
+                    $upgradeOk = $false
+                    Log {_ps_quote(f"upgrade FAILED (exit code below) -- relaunching the CURRENT (unupgraded) install so the service does not go down. Run manually to retry: {cmd_str}")}
+                    Log "exit code: $($p.ExitCode)"
+                }}
             }} catch {{
-                Log {_ps_quote(f"upgrade FAILED to launch (exception below) -- corvin-serve NOT relaunched. Run manually: {cmd_str}")}
+                $upgradeOk = $false
+                Log {_ps_quote(f"upgrade FAILED to launch (exception below) -- relaunching the CURRENT (unupgraded) install so the service does not go down. Run manually to retry: {cmd_str}")}
                 Log "exception: $_"
-                exit 1
             }}
-            if ($p.ExitCode -ne 0) {{
-                Log {_ps_quote(f"upgrade FAILED (exit code below) -- corvin-serve NOT relaunched. Run manually: {cmd_str}")}
-                Log "exit code: $($p.ExitCode)"
-                exit 1
+            if ($upgradeOk) {{
+                Log {_ps_quote(f"upgrade command exited 0 -- relaunching: {relaunch_str}")}
+                {version_check.strip()}
+            }} else {{
+                Log {_ps_quote(f"relaunching regardless of upgrade outcome (availability invariant): {relaunch_str}")}
             }}
-            Log {_ps_quote(f"upgrade ok -- relaunching: {relaunch_str}")}
             try {{
                 Start-Process -FilePath {_ps_quote(relaunch_argv[0])} `
                     -ArgumentList {_ps_array_literal(relaunch_argv[1:])} `
                     -WindowStyle Hidden
                 Log "relaunch dispatched"
             }} catch {{
-                Log {_ps_quote(f"relaunch FAILED (exception below) -- run manually: {relaunch_str}")}
+                Log {_ps_quote(f"relaunch FAILED (exception below) -- corvin-serve is DOWN. Run manually: {relaunch_str}")}
                 Log "exception: $_"
                 exit 1
             }}
@@ -560,7 +654,7 @@ def maybe_pypi_autoupdate(relaunch_argv: list[str] | None = None) -> bool:
                 )
                 return False
             print("handing off to background updater …", end=" ", flush=True)
-            if _spawn_windows_self_updater(cmd, relaunch_argv):
+            if _spawn_windows_self_updater(cmd, relaunch_argv, target_version=latest):
                 # M3: arm the convergence guard only NOW — after the handoff
                 # actually started. A spawn that failed below leaves no marker
                 # and is retried on the next start.

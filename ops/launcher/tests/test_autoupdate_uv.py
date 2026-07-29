@@ -7,6 +7,8 @@ failed there and the autostart never updated. ``_pick_upgrade_command`` must pic
 """
 from __future__ import annotations
 
+import shutil
+import subprocess
 import sys
 import time
 import unittest
@@ -43,8 +45,18 @@ class UpgradeCommandTests(unittest.TestCase):
         sb._is_uv_tool_install = lambda: True
         sb.shutil.which = lambda x: "/home/u/.local/bin/uv" if x == "uv" else None
         cmd, manual = sb._pick_upgrade_command("0.10.8")
-        self.assertEqual(cmd, ["/home/u/.local/bin/uv", "tool", "upgrade", "corvinos"])
-        self.assertEqual(manual, "uv tool upgrade corvinos")
+        # --reinstall-package corvinos (2026-07-29): forces uv to refresh its
+        # OWN cached index view for this package, closing a silent-no-op class
+        # (uv resolves against a stale cache, exits 0, installs nothing) that
+        # is otherwise indistinguishable from a real upgrade by exit code
+        # alone — see _pick_upgrade_command's docstring/comment for the full
+        # writeup and the live non-convergence (0.10.70 -> 0.10.71) it fixes.
+        self.assertEqual(
+            cmd,
+            ["/home/u/.local/bin/uv", "tool", "upgrade", "corvinos",
+             "--reinstall-package", "corvinos"],
+        )
+        self.assertEqual(manual, "uv tool upgrade corvinos --reinstall-package corvinos")
 
     def test_uv_flavour_when_pip_missing(self) -> None:
         # Not detected as uv-managed by path, but pip is unavailable and uv exists
@@ -53,7 +65,11 @@ class UpgradeCommandTests(unittest.TestCase):
         sb._pip_available = lambda: False
         sb.shutil.which = lambda x: "/usr/bin/uv" if x == "uv" else None
         cmd, manual = sb._pick_upgrade_command("0.10.8")
-        self.assertEqual(cmd, ["/usr/bin/uv", "tool", "upgrade", "corvinos"])
+        self.assertEqual(
+            cmd,
+            ["/usr/bin/uv", "tool", "upgrade", "corvinos",
+             "--reinstall-package", "corvinos"],
+        )
 
     def test_uv_managed_but_uv_missing_returns_none(self) -> None:
         sb._is_uv_tool_install = lambda: True
@@ -69,7 +85,7 @@ class UpgradeCommandTests(unittest.TestCase):
             finally:
                 sb.Path.home = orig_home  # type: ignore[assignment]
         self.assertIsNone(cmd)
-        self.assertEqual(manual, "uv tool upgrade corvinos")
+        self.assertEqual(manual, "uv tool upgrade corvinos --reinstall-package corvinos")
 
     def test_detect_uv_tool_install_by_prefix(self) -> None:
         orig_prefix = sb.sys.prefix
@@ -213,7 +229,7 @@ class WindowsSelfUpdateHandoffTests(unittest.TestCase):
             AssertionError("subprocess.run must not be called when handing off")
         )
         spawn_calls = []
-        sb._spawn_windows_self_updater = lambda cmd, relaunch_argv: (
+        sb._spawn_windows_self_updater = lambda cmd, relaunch_argv, **kw: (
             spawn_calls.append((cmd, relaunch_argv)) or True
         )
 
@@ -233,7 +249,7 @@ class WindowsSelfUpdateHandoffTests(unittest.TestCase):
         sb._pick_upgrade_command = lambda latest: (
             ["uv", "tool", "upgrade", "corvinos"], "uv tool upgrade corvinos",
         )
-        sb._spawn_windows_self_updater = lambda cmd, relaunch_argv: False
+        sb._spawn_windows_self_updater = lambda cmd, relaunch_argv, **kw: False
 
         orig_version, orig_urlopen, _meta, _ur = self._fake_pypi("0.10.6", "9.9.9")
         try:
@@ -350,7 +366,7 @@ class ConvergenceGuardTests(unittest.TestCase):
             ["uv", "tool", "upgrade", "corvinos"], "uv tool upgrade corvinos",
         )
         spawn_calls = []
-        sb._spawn_windows_self_updater = lambda cmd, argv: spawn_calls.append(1) or True
+        sb._spawn_windows_self_updater = lambda cmd, argv, **kw: spawn_calls.append(1) or True
 
         import importlib.metadata as _meta
         import json as _json
@@ -474,6 +490,91 @@ class SpawnWindowsSelfUpdaterScriptGenTests(unittest.TestCase):
             script = fh.read()
         self.assertIn(resolved, script)
         self.assertNotIn('-FilePath "corvin-serve"', script)
+
+    def test_relaunch_reachable_regardless_of_upgrade_outcome(self) -> None:
+        """AVAILABILITY INVARIANT (2026-07-29, found via adversarial review
+        after a live non-convergence): a previous version of this script
+        `exit 1`'d on either upgrade-launch-exception or non-zero exit code
+        -- WITHOUT relaunching. The original corvin-serve process has
+        ALREADY exited by the time this script runs (that is the entire
+        reason a detached script exists), so that `exit 1` was a
+        GUARANTEED TOTAL OUTAGE on any transient upgrade failure (network
+        blip, permission error, antivirus quarantine). The relaunch
+        Start-Process call must now be structurally UNREACHABLE only via
+        the relaunch's OWN try/catch (a real relaunch failure), never via
+        the upgrade step's outcome."""
+        sb.subprocess.Popen = lambda *a, **k: None
+        sb.shutil.which = lambda _name: None
+
+        sb._spawn_windows_self_updater(
+            ["uv", "tool", "upgrade", "corvinos", "--reinstall-package", "corvinos"],
+            ["corvin-serve"],
+            target_version="9.9.9",
+        )
+
+        import glob
+        matches = glob.glob(f"{__import__('tempfile').gettempdir()}/corvin-self-update-*.ps1")
+        with open(matches[-1], encoding="utf-8") as fh:
+            script = fh.read()
+
+        # The old fatal pattern must be gone entirely.
+        self.assertNotIn("NOT relaunched", script)
+        # Both upgrade-failure branches must set a flag and fall through,
+        # never `exit` before the relaunch Start-Process is reached.
+        upgrade_try_idx = script.index("$upgradeOk = $true")
+        relaunch_start_idx = script.rindex("Start-Process -FilePath")
+        between = script[upgrade_try_idx:relaunch_start_idx]
+        # No bare `exit 1` may appear between the upgrade attempt and the
+        # relaunch call — the only `exit 1` in the whole script must be
+        # AFTER the relaunch's own Start-Process, guarding a real relaunch
+        # failure (nothing left to fall back to at that point).
+        self.assertNotIn("exit 1", between)
+        self.assertIn("exit 1", script)  # still present, just moved past relaunch
+        self.assertGreater(script.rindex("exit 1"), relaunch_start_idx)
+        # The relaunch call itself must be unconditional (not nested inside
+        # the upgrade's own try/if branches) -- one Start-Process for
+        # relaunch, reachable via straight-line execution after the
+        # upgrade's try/catch and if/else have both completed.
+        self.assertEqual(script.count('-FilePath "corvin-serve"'), 1)
+
+    @unittest.skipUnless(shutil.which("pwsh"), "PowerShell Core (pwsh) not installed")
+    def test_generated_script_is_valid_powershell(self) -> None:
+        """Real parser validation (not just string matching) -- catches
+        e.g. the backtick-immediately-before-'u' Unicode-escape trap
+        (`` `uv `` in a double-quoted here-string is parsed as an invalid
+        `` `u{...} `` escape by PowerShell 6+) that a pure string-content
+        test cannot see. Skips gracefully where pwsh is not installed
+        (most CI images) rather than failing the whole suite.
+
+        Deliberately does NOT mock subprocess.Popen here (unlike the other
+        tests in this class): sb.subprocess IS the same shared module object
+        as this test file's own `subprocess` import (Python only loads a
+        module once), so mocking Popen would also break the real `pwsh`
+        subprocess.run call below. Not mocking it is safe: the script file
+        is written to disk BEFORE _spawn_windows_self_updater attempts to
+        launch "powershell" (which does not exist on this Linux test box),
+        and that launch failure is already caught by the function's own
+        try/except.
+        """
+        sb.shutil.which = lambda _name: None
+
+        sb._spawn_windows_self_updater(
+            ["uv", "tool", "upgrade", "corvinos", "--reinstall-package", "corvinos"],
+            ["corvin-serve", "--no-browser"],
+            target_version="9.9.9",
+        )
+
+        import glob
+        matches = glob.glob(f"{__import__('tempfile').gettempdir()}/corvin-self-update-*.ps1")
+        self.assertTrue(matches, "script was not written")
+        result = subprocess.run(
+            ["pwsh", "-NoProfile", "-Command",
+             "$e=$null;$t=$null;"
+             f"[System.Management.Automation.Language.Parser]::ParseFile('{matches[-1]}',[ref]$t,[ref]$e)|Out-Null;"
+             "if ($e.Count -gt 0) { $e | ForEach-Object { Write-Output $_.Message }; exit 1 }"],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, msg=f"pwsh parse errors:\n{result.stdout}\n{result.stderr}")
 
 
 class VersionComparisonTests(unittest.TestCase):
