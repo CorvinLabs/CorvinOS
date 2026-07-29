@@ -32,6 +32,15 @@ _PYTHONPATH_DIRS = [
     "core/compliance",
     "operator/forge",
     "operator/skill-forge",
+    "operator/bridges/shared",
+    # core/plugins (the PARENT dir) makes bare `import plugin_builder` find
+    # core/plugins/plugin_builder/__init__.py — mirroring the wheel build's
+    # path remap of that directory to top-level plugin_builder/. This list
+    # is the Windows/non-systemd/self-heal-restore path — the systemd-unit
+    # PYTHONPATH (bridge.sh, corvin-webui.service, service_entry.py,
+    # installer/core.py's _webui_env_vars) was fixed for this same gap in
+    # c4e2684, but this independent list was missed (2026-07-30).
+    "core/plugins",
 ]
 
 _PORT = 8765
