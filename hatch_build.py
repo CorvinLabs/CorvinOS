@@ -200,6 +200,20 @@ _VENDOR_MAP: tuple[tuple[str, str], ...] = (
     # compliance paths. Without this the model dropdowns come up empty on a
     # fresh pip install.
     ("operator/bundle/config-templates", "corvin_console/_vendor/operator/bundle/config-templates"),
+    # The 12 LDD quality-discipline skills (adr_gate, e2e-wiring-proof, etc.)
+    # plus the bundle's own manifest.yaml and install.sh. Same class of bug as
+    # the i18n/personas fixes above: docs/claude-ref/quality-discipline.md
+    # documents these as "bundled with the product... available on every
+    # installation", but only operator/bundle/config-templates was ever
+    # vendored — a fresh `pip install corvinos` never carried
+    # operator/bundle/skills at all, so `install.sh` (which a source checkout
+    # or `corvin pkg install ./operator/bundle/` runs to seed
+    # ~/.claude/skills/) had nothing to copy on a pip-only install. Found
+    # 2026-07-29 while adding the e2e-wiring-proof skill and applying that
+    # skill's own reachability-proof rule to itself.
+    ("operator/bundle/skills", "corvin_console/_vendor/operator/bundle/skills"),
+    ("operator/bundle/install.sh", "corvin_console/_vendor/operator/bundle/install.sh"),
+    ("operator/bundle/manifest.yaml", "corvin_console/_vendor/operator/bundle/manifest.yaml"),
 )
 
 

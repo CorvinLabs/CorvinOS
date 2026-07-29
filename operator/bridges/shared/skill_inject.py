@@ -47,6 +47,8 @@ except Exception:  # noqa: BLE001
 _SKILL_TO_LAYER = {
     "adr_gate": "adr_gate",
     "adr-gate": "adr_gate",
+    "e2e_wiring_proof": "e2e_wiring_proof",
+    "e2e-wiring-proof": "e2e_wiring_proof",
     "docs_as_definition_of_done": "docs_as_definition_of_done",
     "docs-as-definition-of-done": "docs_as_definition_of_done",
     "e2e_driven_iteration": "e2e_driven_iteration",
@@ -54,6 +56,111 @@ _SKILL_TO_LAYER = {
     "usability_first": "usability_first",
     "usability-first": "usability_first",
 }
+
+# ── Core quality-discipline skills — always candidates, any install ────────
+#
+# ADR-0259: adr_gate and e2e-wiring-proof must be on by DEFAULT on every
+# CorvinOS installation, unlike the 10 process LDD skills (which stay off
+# until a persona/chat opts in via ldd_preset). Relying on the SkillForge
+# registry alone does not achieve that: a fresh install's registry
+# (<scope_root>/skill-forge/skills/) starts EMPTY, so collect_active_skills()
+# would silently inject nothing for either skill until a human manually
+# grades/promotes them through the task->session->project ladder — the same
+# "looks wired, isn't reachable" failure class e2e-wiring-proof itself exists
+# to catch. These two are therefore read directly from the bundled skill
+# files (shipped in every install per the operator/bundle/skills vendor
+# entry) and merged into the candidate list unconditionally, still subject
+# to the quality_layers.py on/off gate (so quality-layer-control's
+# disable_layer("adr_gate") keeps working) but NOT subject to SkillForge
+# grading eligibility or the ldd_preset filter — they are not LDD layers.
+_CORE_QUALITY_SKILL_NAMES: tuple[str, ...] = ("adr_gate", "e2e-wiring-proof")
+
+# operator/bridges/shared/skill_inject.py -> operator/bundle/skills/ldd/<name>
+#
+# Source-tree: _HERE (.../operator/bridges/shared) -> .parent.parent
+# (.../operator) -> bundle/skills/ldd.
+#
+# Wheel: this file is vendored to
+# corvin_console/_vendor/operator/bridges/shared/skill_inject.py, so
+# _HERE.parent.parent.parent (.../corvin_console/_vendor, the vendor root)
+# -> operator/bundle/skills/ldd (matches the parents[3]-from-shared/
+# convention hatch_build.py documents for every other vendored resource).
+#
+# Plain `.parent` chains only (never `.parents[N]` indexing) — `.parent` on
+# a filesystem root just returns itself rather than raising, so this can
+# never IndexError regardless of how shallow the actual path turns out to be.
+_BUNDLE_SKILLS_DIR_CANDIDATES: tuple[Path, ...] = (
+    _HERE.parent.parent / "bundle" / "skills" / "ldd",
+    _HERE.parent.parent.parent / "operator" / "bundle" / "skills" / "ldd",
+)
+
+
+def _resolve_bundle_skills_dir() -> Path | None:
+    """Locate operator/bundle/skills/ldd/ in source-tree OR wheel layout."""
+    for candidate in _BUNDLE_SKILLS_DIR_CANDIDATES:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+class _CoreSkillSpec:
+    """Minimal stand-in for a SkillForge registry spec — just enough shape
+    for collect_active_skills()'s sort/format code to treat it identically
+    to a real registry entry. Carries its own ``body`` since ``reg``
+    (a real SkillForge MultiSkillRegistry, when one even exists) has no
+    knowledge of a bundle-sourced pseudo-spec."""
+
+    __slots__ = ("name", "description", "body", "n_grades", "mean_score", "created_at")
+
+    def __init__(self, name: str, description: str, body: str) -> None:
+        self.name = name
+        self.description = description
+        self.body = body
+        # Always-eligible: bypasses the inject_ungraded grading-count filter
+        # (n_grades/mean_score are only consulted there, never re-checked).
+        self.n_grades = 1
+        self.mean_score = 1.0
+        # created_at is irrelevant here — core skills are never subject to
+        # the cap/sort competition against registry skills (see
+        # collect_active_skills), only present for shape-compatibility.
+        self.created_at = 0.0
+
+
+def _load_core_quality_skills() -> list[tuple[str, "_CoreSkillSpec"]]:
+    """Return (scope, spec) pairs for adr_gate/e2e-wiring-proof, read
+    directly from the bundled SKILL.md files. Best-effort — returns an
+    empty list if the bundle directory cannot be resolved (never raises;
+    matches this module's overall optional-dependency design)."""
+    bundle_dir = _resolve_bundle_skills_dir()
+    if bundle_dir is None:
+        return []
+    out: list[tuple[str, "_CoreSkillSpec"]] = []
+    for name in _CORE_QUALITY_SKILL_NAMES:
+        skill_md = bundle_dir / name / "SKILL.md"
+        if not skill_md.is_file():
+            continue
+        try:
+            text = skill_md.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        description = _frontmatter_description(text) or name
+        out.append(("core", _CoreSkillSpec(name=name, description=description, body=text)))
+    return out
+
+
+def _frontmatter_description(text: str) -> str | None:
+    """Pull the `description:` value out of a SKILL.md's YAML frontmatter
+    without a YAML dependency (frontmatter here is always a flat key: value
+    block, no nested structures, matching every bundle skill's format)."""
+    if not text.startswith("---"):
+        return None
+    end = text.find("\n---", 3)
+    if end == -1:
+        return None
+    for line in text[3:end].splitlines():
+        if line.strip().startswith("description:"):
+            return line.split(":", 1)[1].strip().strip("'\"")
+    return None
 
 try:  # pragma: no cover — import-time
     import quality_layers as _ql  # type: ignore
@@ -156,15 +263,42 @@ def collect_active_skills(
         with at least one grade and mean_score > 0 are eligible.
       - profile.max_injected_skills overrides max_skills (default 5).
 
-    Returns None when skill-forge is not importable, when injection is
-    disabled, or when the cap-limited eligible list is empty.
-    """
-    if _sf is None:
-        return None
+    Returns None when skill-forge is not importable AND no core quality
+    skill is eligible, when injection is disabled, or when the cap-limited
+    eligible list is empty.
 
+    ``adr_gate`` and ``e2e-wiring-proof`` are core quality-discipline skills
+    (ADR-0259): they are always candidates, read directly from the bundled
+    SKILL.md files, independent of SkillForge availability and the
+    registry's task->session->project grading ladder — the dedicated
+    ``quality_layers.py`` on/off toggle (exposed via the
+    ``quality-layer-control`` skill) governs the discipline itself, and
+    ``profile.inject_skills=False`` still suppresses them too (that flag
+    means "no skill-forge content in this prompt at all," a per-call
+    opt-out distinct from the persistent discipline toggle). This is
+    deliberate: a fresh install's SkillForge registry starts empty, so
+    gating these two behind the normal registry/grading path would silently
+    leave them un-injected on every new installation until a human manually
+    promoted them.
+    """
     profile = profile or {}
+    reg = None
+
+    # profile.inject_skills=False is a TRUE kill-switch for this call — it
+    # means "no skill-forge content in this prompt at all," and applies to
+    # core quality skills too. It is deliberately NOT the same knob as
+    # quality_layers.py: inject_skills is a per-call/per-context opt-out
+    # (e.g. a structured-output turn that must not carry extra prose),
+    # quality_layers.py is the operator-facing, persistent on/off for the
+    # discipline itself (surfaced via the quality-layer-control skill).
     if profile.get("inject_skills") is False:
         return None
+
+    core_pairs = _load_core_quality_skills()
+    core_pairs = _apply_quality_layer_filter(core_pairs)
+    core_bodies = {spec.name: spec.body for _scope, spec in core_pairs}  # type: ignore[attr-defined]
+
+    registry_disabled = _sf is None
 
     cap = profile.get("max_injected_skills")
     if not isinstance(cap, int) or cap <= 0:
@@ -172,50 +306,62 @@ def collect_active_skills(
 
     inject_ungraded = bool(profile.get("inject_ungraded", False))
 
-    # Resolve a stable project_root if the caller didn't pass one — the
-    # forge.scope project resolver shells out to `git` when project_root
-    # is None, which we want to avoid (no subprocess churn per turn, and
-    # tests that patch subprocess.Popen would see those calls). Walk up
-    # from this file for a `plugins/` marker — same heuristic as
-    # forge.paths.corvin_home.
-    if project_root is None:
-        project_root = _detect_project_root()
+    eligible: list[tuple[str, Any]] = list(core_pairs)
 
-    try:
-        reg = _sf.MultiSkillRegistry(
-            channel_id=channel_id,
-            project_root=project_root,
+    if not registry_disabled:
+        # Resolve a stable project_root if the caller didn't pass one — the
+        # forge.scope project resolver shells out to `git` when project_root
+        # is None, which we want to avoid (no subprocess churn per turn, and
+        # tests that patch subprocess.Popen would see those calls). Walk up
+        # from this file for a `plugins/` marker — same heuristic as
+        # forge.paths.corvin_home.
+        if project_root is None:
+            project_root = _detect_project_root()
+
+        try:
+            reg = _sf.MultiSkillRegistry(
+                channel_id=channel_id,
+                project_root=project_root,
+            )
+            scoped = reg.list_with_scope()
+        except Exception:  # noqa: BLE001
+            scoped = []
+
+        registry_eligible: list[tuple[str, Any]] = []
+        core_names = {spec.name for _scope, spec in core_pairs}  # type: ignore[attr-defined]
+        for scope, spec in scoped:
+            if spec.name in core_names:
+                continue  # core copy already wins — avoid double-injecting
+            if not inject_ungraded:
+                if spec.n_grades < 1 or spec.mean_score <= 0:
+                    continue
+            registry_eligible.append((scope, spec))
+
+        registry_eligible = _apply_ldd_filter(registry_eligible, profile)
+        registry_eligible = _apply_quality_layer_filter(registry_eligible)
+        # Sort by mean_score desc, then created_at desc — newest among ties.
+        registry_eligible.sort(
+            key=lambda pair: (
+                float(pair[1].mean_score),
+                float(getattr(pair[1], "created_at", 0.0) or 0.0),
+            ),
+            reverse=True,
         )
-        scoped = reg.list_with_scope()
-    except Exception:  # noqa: BLE001
-        return None
-
-    eligible: list[tuple[str, Any]] = []
-    for scope, spec in scoped:
-        if not inject_ungraded:
-            if spec.n_grades < 1 or spec.mean_score <= 0:
-                continue
-        eligible.append((scope, spec))
-
-    eligible = _apply_ldd_filter(eligible, profile)
-    eligible = _apply_quality_layer_filter(eligible)
+        # Core skills are NEVER subject to the cap or crowded out by
+        # higher-scoring registry entries — "always on" means always, not
+        # "usually, unless enough other skills outrank it." Only the
+        # registry-sourced remainder is capped.
+        eligible.extend(registry_eligible[:cap])
 
     if not eligible:
         return None
 
-    # Sort by mean_score desc, then created_at desc — newest among ties.
-    eligible.sort(
-        key=lambda pair: (
-            float(pair[1].mean_score),
-            float(getattr(pair[1], "created_at", 0.0) or 0.0),
-        ),
-        reverse=True,
-    )
-    eligible = eligible[:cap]
-
     parts: list[str] = [_HEADER, ""]
     for scope, spec in eligible:
-        body = _load_body(reg, spec.name) or ""
+        if scope == "core":
+            body = core_bodies.get(spec.name, "")
+        else:
+            body = _load_body(reg, spec.name) or ""
         body = _strip_front_matter(body).strip()
         # Sanitize wrapper-tag escapes BEFORE capping so the cap-marker
         # ends up cleanly outside the wrapper text.

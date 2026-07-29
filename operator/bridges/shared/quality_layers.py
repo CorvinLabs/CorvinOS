@@ -5,10 +5,11 @@ that are injected into Claude Code sessions. This module manages the global qual
 config and provides queries about layer status.
 """
 
+import copy
 import json
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 
 def _quality_layers_path() -> Path:
@@ -28,6 +29,7 @@ DEFAULT_CONFIG = {
     "enabled": True,
     "layers": {
         "adr_gate": True,
+        "e2e_wiring_proof": True,
         "docs_as_definition_of_done": True,
         "e2e_driven_iteration": True,
         "usability_first": False,
@@ -36,14 +38,27 @@ DEFAULT_CONFIG = {
 
 
 def load_config() -> Dict:
-    """Load quality-layers.json, return defaults if missing."""
+    """Load quality-layers.json, return defaults if missing.
+
+    Returns a DEEP copy of DEFAULT_CONFIG — a shallow ``.copy()`` here left
+    ``config["layers"]`` pointing at the SAME nested dict object as the
+    module-level ``DEFAULT_CONFIG["layers"]``. Any caller that mutated the
+    returned config in place before saving it (``enable_layer``/
+    ``disable_layer`` both do exactly this) permanently corrupted the
+    process-wide default for the rest of the run: the first
+    ``disable_layer("adr_gate")`` call made with no config file on disk yet
+    silently flipped ``DEFAULT_CONFIG["layers"]["adr_gate"]`` to ``False``
+    forever, so every SUBSEQUENT "file missing → return defaults" call in
+    the same process saw the poisoned value instead of the true default.
+    Found via test_core_quality_skills.py exercising disable_layer/
+    disable_all/reset in sequence in one process."""
     if _quality_layers_path().exists():
         try:
             with open(_quality_layers_path(), "r") as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            return DEFAULT_CONFIG.copy()
-    return DEFAULT_CONFIG.copy()
+            return copy.deepcopy(DEFAULT_CONFIG)
+    return copy.deepcopy(DEFAULT_CONFIG)
 
 
 def save_config(config: Dict) -> None:

@@ -89,7 +89,7 @@ User override personas take priority over bundle personas with the same name.
 | `skill_forge_enabled` | boolean | `false` | Whether SkillForge (runtime skill creation) is enabled. Must be explicitly opted in. |
 | `memory_recall_enabled` | boolean | `false` | Whether recall indexing and user model injection are active. |
 | `working_dir` | string | repo root | The `--add-dir` working directory passed to the underlying engine. |
-| `ldd_preset` | enum | `"off"` | LDD preset: `"off"` / `"light"` / `"full"`. |
+| `ldd_preset` | enum | `"off"` | LDD preset (`operator/bridges/shared/ldd.py::PRESETS`): `"off"` / `"quick"` / `"default"` / `"strict"`. Governs the 10 process-LDD skills only — `adr_gate`/`e2e-wiring-proof` are always-on regardless (ADR-0259), toggled via `quality_layers.py` instead. |
 | `add_dirs` | array | `[]` | Additional `--add-dir` paths passed to the engine for this persona. |
 | `delegate_enabled` | boolean | `false` | Enables the orchestrator delegation tools (`delegate_claude_code`, `delegate_codex`, etc.). |
 | `delegate_inject_skills` | boolean | `false` | Whether active skills are visible to delegated workers. |
