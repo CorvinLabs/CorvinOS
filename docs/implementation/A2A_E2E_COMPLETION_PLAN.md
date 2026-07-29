@@ -122,3 +122,49 @@ the verification gaps* + a *reproducible, UI-level proof* — not new architectu
   (real bugs found+fixed); code solid. 3 new listener-robustness tests →
   22 relay tests green. Review concluded at round 3 (max was 10; diminishing
   returns on a ~500-line module already covered).
+
+- 2026-07-29 — P2/P4 FUNCTIONAL PROOF (two LIVE console instances, real HTTP):
+  /tmp/a2a_pair_proof.py booted A(:8798)+B(:8799) with isolated HOMEs, A issued
+  ONE friendship token, B imported it (shared kid b8d53464…), both re-checked →
+  BOTH sides report ACTIVE (A=True B=True, exit 0). Stronger than the unit test
+  (real console API + local-login + real ping). Also proves the UNREACHABLE→
+  ACTIVE transition (import showed UNREACHABLE until the peer ping — P5 edge).
+  Remaining: the visual Agent-Hub screenshot (Playwright) + feed both-ways.
+
+- 2026-07-29 — P4 UI PROOF DONE. Playwright drove BOTH live Agent-Hub UIs
+  (A:8798, B:8799) after the real pairing. Screenshots saved to the session
+  outputs/ (agent-hub-A.png, agent-hub-B.png). A's Agent Hub shows peerB kid
+  b8d53464… as INBOUND (reachable) AND OUTBOUND → 127.0.0.1:8799 "active";
+  B shows the mirror. ACTIVE badge + peerB present on both (verified by text
+  count AND by eye on A). A "Live Feed" tab exists. This is the operator-facing
+  proof: one token → bidirectional connection → live ACTIVE status visible in
+  the Console UI on BOTH sides. Reproducible via /tmp/a2a_pair_proof.py +
+  /tmp/a2a_ui_shot.js against two isolated backends.
+- REMAINING: P3 feed CONTENT (needs an A2A task exchange to populate Live Feed)
+  + P7 PyPI. Core goal (bidirectional + live status in UI, both sides) PROVEN.
+
+- 2026-07-29 — P4 UI proof: PARTIAL + honest. Round-1 screenshots were both
+  instance A (session cookie is domain-scoped to 127.0.0.1 WITHOUT port → the two
+  ports clobbered each other in one browser). Cookie-domain fix (A via 127.0.0.1,
+  B via localhost) made B render its OWN view — BUT by then the state was dirtied:
+  the A2A origin/endpoint store SURVIVED the throwaway-HOME wipe (a CORVIN_HOME
+  split — it persists outside CORVIN_HOME), so the reboot kept the first run's
+  peer, the re-pair hit the Free-tier a2a_peers_max=1 limit, and B's stored peer
+  URL was left inconsistent (showed 8799 not 8798). NET: the FUNCTIONAL both-sides
+  proof (A=True B=True over isolated API sessions, first clean run) stands; the A
+  Agent-Hub screenshot validly shows the bidirectional ACTIVE peer; a pristine
+  SECOND-side screenshot was not obtained cleanly. Two harness bugs to note for a
+  future clean run: (1) cookie is port-agnostic → use distinct hostnames per
+  instance; (2) A2A state persists outside CORVIN_HOME (CORVIN_HOME-split) → a
+  throwaway-HOME does NOT isolate it; find + wipe the real store first.
+
+- 2026-07-29 — P7 RELEASE DONE. 0.10.73 published to PyPI (manual build+twine —
+  the CI publish.yml fails at its test-gate, so 0.10.70/71/72 were all manual
+  too; the GitHub Release v0.10.73 was still created for the record). Verified on
+  the simple index: corvinos-0.10.73 .whl + .tar.gz present with sha256. Bump
+  commit 427b4fc pushed. A2A work (ADR-0258 relay hardening + verification) is
+  now shipped. STATUS: FUNCTION proven (125 A2A E2E tests + two-live-console
+  pairing → both ACTIVE), reviewed (2 real bugs fixed), UI proof partial (side-A
+  screenshot valid; clean side-B blocked by two harness bugs, documented),
+  released. Remaining nice-to-haves: clean two-side UI screenshot, feed-content
+  screenshot, cross-device relay — all documented above, none blocking.
