@@ -10,6 +10,7 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
 | Bot-disclosure card (`/join`/`/pass`/`/leave`, one-time per uid) | L19 | EU AI Act Art. 50 | ✅ Locked |
 | Per-user consent gate (`/consent on\|off\|<ttl>`, deny-by-default) | L16 Phase 4 | GDPR Art. 6, 7 | ✅ Locked |
 | Hash-chained tamper-evident audit log (`audit.jsonl` + daily verify) | L16 | GDPR Art. 30, 32 | ✅ Locked |
+| Boot tripwire audit-chain healing — bounded, minimal-truncation, fail-closed on whole-chain failure (`tripwire.py::audit_chain_intact`) | L16 / ADR-0232 | GDPR Art. 30, 32 | ✅ Locked |
 | Compliance-zone routing (`tenant.corvin.yaml::data_residency`) | ADR-0007 | EU AI Act Art. 14 | ✅ Verified |
 | Engine-policy allowlist (`allowed_engines` / `forbid_engines`) | ADR-0007 | EU AI Act Art. 14 | ✅ Verified |
 | Secret-vault capability split (vault → bwrap env, never LLM context) | L16 v3 | GDPR Art. 32 | ✅ Locked |
@@ -33,6 +34,17 @@ Every feature must answer: *does this weaken a structural compliance guarantee?*
 
 4. **Don't lower audit-chain integrity** — no event skips the hash-chain link.
    Every spawn, tool-call, audit-emit must write to `audit.jsonl` before the action.
+   - **Boot-tripwire healing is bounded and fail-closed** (`tripwire.py::audit_chain_intact`,
+     2026-07-30 review): a *tail-local* break (records before it verify AND there is
+     established history beyond the `TAIL_RECORDS` window) truncates at the record just
+     before the FIRST break — deleting the minimum, never the whole tail window. A break
+     that reaches the pre-tail history, or a chain that fits entirely inside the tail
+     window, or a whole-chain failure (the anchor-key-loss shape, every record
+     `mac_tampered`) is **NOT** healed — boot is refused so the operator restores
+     `~/.config/corvin-voice/audit_anchor.key` or a backup. Every heal writes a
+     `compliance.chain_discontinuity_healed` event carrying `records_deleted`, and the
+     healed file keeps `0600`. Don't make healing delete more, don't let it fire on a
+     whole-chain failure, and don't add an override.
 
 5. **Don't leak PII** into Prometheus labels, audit details, or log lines.
    Audit allow-lists are strictly enforced per layer; see the respective layer docs.

@@ -12,7 +12,7 @@
  */
 
 import { useState } from 'react'
-import { CheckCircle, AlertCircle, ExternalLink, Loader } from 'lucide-react'
+import { CheckCircle, AlertCircle, ExternalLink, Loader, X } from 'lucide-react'
 
 interface ValidateTelegramTokenResponse {
   valid: boolean
@@ -33,9 +33,15 @@ interface TelegramSetupDialogProps {
   /** CSRF token of the active console session (session.csrf_token) —
    * the validate/save endpoints are mutations and require x-csrf-token. */
   csrf: string
+  /** Close the dialog without saving (backdrop click, X button). When omitted
+   * the dialog has no dismiss affordance (legacy full-page usage). */
+  onClose?: () => void
+  /** Called after a successful save instead of the window.location.reload()
+   * fallback, so an embedding flow (onboarding) can advance in-place. */
+  onSuccess?: () => void
 }
 
-export function TelegramSetupDialog({ csrf }: TelegramSetupDialogProps) {
+export function TelegramSetupDialog({ csrf, onClose, onSuccess }: TelegramSetupDialogProps) {
   const [step, setStep] = useState<DialogStep>('input')
   const [token, setToken] = useState('')
   const [validationResult, setValidationResult] = useState<ValidateTelegramTokenResponse | null>(null)
@@ -112,12 +118,27 @@ export function TelegramSetupDialog({ csrf }: TelegramSetupDialogProps) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+      onClick={onClose ? (e) => { if (e.target === e.currentTarget) onClose() } : undefined}
+    >
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="sticky top-0 bg-gradient-to-r from-sky-600 to-blue-600 text-white px-6 py-4">
-          <h2 className="text-xl font-bold">🤖 Telegram Bot Aktivierung</h2>
-          <p className="text-sm text-sky-100 mt-1">Nur 2 Schritte bis der Bot einsatzbereit ist</p>
+        <div className="sticky top-0 bg-gradient-to-r from-sky-600 to-blue-600 text-white px-6 py-4 flex items-start justify-between">
+          <div>
+            <h2 className="text-xl font-bold">🤖 Telegram Bot Aktivierung</h2>
+            <p className="text-sm text-sky-100 mt-1">Nur 2 Schritte bis der Bot einsatzbereit ist</p>
+          </div>
+          {onClose && (
+            <button
+              onClick={onClose}
+              disabled={step === 'validating' || step === 'saving'}
+              className="text-sky-100 hover:text-white disabled:opacity-40"
+              aria-label="Schließen"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          )}
         </div>
 
         {/* Content */}
@@ -216,10 +237,10 @@ export function TelegramSetupDialog({ csrf }: TelegramSetupDialogProps) {
                 Falls der Bot nicht sofort antwortet, kann es 30 Sekunden dauern bis die Verbindung hergestellt ist.
               </p>
               <button
-                onClick={() => window.location.reload()}
+                onClick={() => (onSuccess ? onSuccess() : window.location.reload())}
                 className="px-6 py-2 bg-sky-600 text-white rounded-md hover:bg-sky-700 transition font-medium"
               >
-                Schließen &amp; Neu laden
+                {onSuccess ? 'Weiter' : 'Schließen & Neu laden'}
               </button>
             </div>
           )}

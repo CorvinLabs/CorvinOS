@@ -166,3 +166,67 @@ def test_no_healable_records_still_blocks_boot(tmp_path, monkeypatch):
 
     result = tripwire.audit_chain_intact()
     assert not result.ok, "corruption with nothing good to truncate to must still block boot"
+
+
+def test_tail_local_break_deletes_only_the_broken_tail_not_the_window(tmp_path, monkeypatch):
+    """C1 (2026-07-30): with the REAL TAIL_RECORDS=200, a single broken record
+    at the very end must delete ~1 record, not ~199. The old code truncated at
+    `tail_start - 1` (= total-200), destroying up to 199 intact GDPR records to
+    remove one. Uses the production default — the earlier tests pin TAIL_RECORDS=3
+    which structurally hides this."""
+    chain_path = tmp_path / "audit.jsonl"
+    _write_valid_chain(chain_path, 300)
+    _corrupt_tail(chain_path, 1)  # only the last record is broken
+
+    before = chain_path.read_text(encoding="utf-8").splitlines()
+    assert len(before) == 300
+
+    audit_mod = tripwire._audit_module()
+    monkeypatch.setattr(audit_mod, "audit_path", lambda: chain_path)
+    monkeypatch.setattr(tripwire, "_audit_module", lambda: audit_mod)
+    # TAIL_RECORDS left at the real default (200).
+
+    recorded = []
+    original_event = audit_mod.audit_event
+    monkeypatch.setattr(
+        audit_mod, "audit_event",
+        lambda et, **kw: (recorded.append((et, kw)), original_event(et, **kw))[1],
+    )
+
+    result = tripwire.audit_chain_intact()
+    assert result.ok, f"a tail-local break must heal and boot: {result.detail}"
+
+    after = chain_path.read_text(encoding="utf-8").splitlines()
+    # 1 broken record removed, +1 healed-marker event appended = 300.
+    # The point: NOT 300 - 199. At least 298 of the original records survive.
+    healed = [r for r in recorded if r[0] == "compliance.chain_discontinuity_healed"]
+    assert len(healed) == 1
+    details = healed[0][1].get("details", {})
+    assert details.get("records_deleted") == 1, (
+        f"exactly one broken record should be deleted, got {details}"
+    )
+    assert details.get("truncated_at_line") == 299
+
+
+def test_whole_chain_failure_refuses_boot_and_deletes_nothing(tmp_path, monkeypatch):
+    """C2 (2026-07-30): a lost/rotated anchor key makes the ENTIRE chain verify
+    as mac_tampered. Healing must be REFUSED (not tail-local) so authentic
+    records are preserved, and boot must fail so the operator restores the key —
+    the old code would have shredded 200 records per boot while reporting green."""
+    chain_path = tmp_path / "audit.jsonl"
+    _write_valid_chain(chain_path, 300)
+    _corrupt_tail(chain_path, 300)  # every record broken == anchor-key-loss shape
+
+    before = chain_path.read_text(encoding="utf-8")
+
+    audit_mod = tripwire._audit_module()
+    monkeypatch.setattr(audit_mod, "audit_path", lambda: chain_path)
+    monkeypatch.setattr(tripwire, "_audit_module", lambda: audit_mod)
+    # real TAIL_RECORDS=200
+
+    result = tripwire.audit_chain_intact()
+    assert not result.ok, "whole-chain failure must refuse boot, not heal"
+    assert "anchor_anchor" not in result.detail  # sanity
+    assert chain_path.read_text(encoding="utf-8") == before, (
+        "not a single record may be deleted when the whole chain fails to verify"
+    )

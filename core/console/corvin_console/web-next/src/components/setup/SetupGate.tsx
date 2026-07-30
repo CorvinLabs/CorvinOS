@@ -47,6 +47,8 @@ import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { useVoicePlayback } from "@/lib/useVoicePlayback";
+import { DiscordSetupDialog } from "@/components/DiscordSetupDialog";
+import { TelegramSetupDialog } from "@/components/TelegramSetupDialog";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -910,18 +912,31 @@ function BridgeGuidePanel({ channel }: { channel: string }) {
 
 // ── Step 3: Bridge ────────────────────────────────────────────────────────
 
+// Channels with a dedicated zero-config token dialog (the "new" setup system,
+// same components the main Bridges page uses). These become fully configurable
+// INSIDE onboarding instead of showing a read-only guide with nowhere to paste
+// the token (2026-07-30 review finding W1). WhatsApp stays on its QR flow;
+// Slack/Signal/Email keep the guide (they need an external OAuth app / signal-cli
+// / IMAP app-password, i.e. steps that can't complete inside this panel).
+const DIALOG_CHANNELS = new Set(["discord", "telegram"]);
+
 function BridgeStep({
   onNext,
   onBack,
   onSkip,
+  onConfigured,
   configuredBridges,
+  csrf,
 }: {
   onNext: (chosen: string | null) => void;
   onBack: () => void;
   onSkip: () => void;
+  onConfigured: (channel: string) => void;
   configuredBridges: string[];
+  csrf: string;
 }) {
   const [chosen, setChosen] = React.useState<string | null>(null);
+  const [dialogChannel, setDialogChannel] = React.useState<string | null>(null);
   const alreadyConfigured = configuredBridges.length > 0;
 
   return (
@@ -987,8 +1002,38 @@ function BridgeStep({
               );
             })}
           </div>
-          {chosen && <BridgeGuidePanel channel={chosen} />}
+          {/* Token channels with a zero-config dialog: offer a real "Connect
+              now" button that opens the SAME dialog the main Bridges page uses,
+              so the token can actually be entered here (W1). */}
+          {chosen && DIALOG_CHANNELS.has(chosen) && (
+            <Button
+              variant="accent"
+              className="w-full gap-2"
+              onClick={() => setDialogChannel(chosen)}
+            >
+              <Check className="h-4 w-4" />
+              Connect {BRIDGE_OPTIONS.find((o) => o.id === chosen)?.label ?? chosen} now
+            </Button>
+          )}
+          {/* Everything else keeps the read-only guide (QR for WhatsApp, portal
+              steps for Slack/Signal/Email). */}
+          {chosen && !DIALOG_CHANNELS.has(chosen) && <BridgeGuidePanel channel={chosen} />}
         </>
+      )}
+
+      {dialogChannel === "discord" && (
+        <DiscordSetupDialog
+          csrf={csrf}
+          onClose={() => setDialogChannel(null)}
+          onSuccess={() => { setDialogChannel(null); onConfigured("discord"); }}
+        />
+      )}
+      {dialogChannel === "telegram" && (
+        <TelegramSetupDialog
+          csrf={csrf}
+          onClose={() => setDialogChannel(null)}
+          onSuccess={() => { setDialogChannel(null); onConfigured("telegram"); }}
+        />
       )}
 
       <div className="flex gap-2 pt-1">
@@ -1194,7 +1239,14 @@ export function SetupGate() {
                 onNext={() => setStep("done")}
                 onBack={() => setStep("engine")}
                 onSkip={() => setStep("done")}
+                onConfigured={() => {
+                  // A channel was actually connected in-place — refresh the
+                  // server status so the Done screen lists it, then advance.
+                  queryClient.invalidateQueries({ queryKey: ["setup-status"] });
+                  setStep("done");
+                }}
                 configuredBridges={bridges}
+                csrf={session?.csrf_token ?? ""}
               />
             )}
             {step === "done" && (

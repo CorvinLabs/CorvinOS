@@ -106,6 +106,21 @@ def _should_exclude(path: Path, base: Path, with_secrets: bool) -> bool:
     return False
 
 
+def _safe_extractall(tar: tarfile.TarFile, dest: str) -> None:
+    """Path-traversal-safe extractall for interpreters without tarfile's
+    ``filter=`` argument (< 3.9.17 / 3.10.12 / 3.11.4). Rejects absolute paths,
+    ``..`` escapes, and links/devices before extracting anything (2026-07-30
+    review finding C6)."""
+    dest_real = os.path.realpath(dest)
+    for member in tar.getmembers():
+        if member.islnk() or member.issym() or member.isdev():
+            raise ValueError(f"unsafe tar member (link/device): {member.name!r}")
+        target = os.path.realpath(os.path.join(dest, member.name))
+        if target != dest_real and not target.startswith(dest_real + os.sep):
+            raise ValueError(f"tar member escapes destination: {member.name!r}")
+    tar.extractall(dest)
+
+
 def _copy_tree_filtered(
     src: Path, dst: Path, with_secrets: bool = False, age_cutoff: datetime | None = None
 ) -> int:
@@ -282,11 +297,26 @@ def cmd_export(args: argparse.Namespace) -> int:
             # 9. Create tarball
             print("   ✓ Compressing archive...")
             output_path.parent.mkdir(parents=True, exist_ok=True)
+            # 2026-07-30 review finding C6: with --with-secrets the bundle
+            # contains the Fernet master key (keys/) + secrets.enc. The inner
+            # entries keep 0600 (copy2), but the CONTAINER tar was created at the
+            # umask default (0644) in $CWD — world-readable on a multi-user host,
+            # defeating Phase 1b's at-rest encryption entirely. Create it 0600
+            # BEFORE writing any content when secrets are included.
+            if with_secrets:
+                fd = os.open(output_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                os.close(fd)
             with tarfile.open(output_path, "w:gz") as tar:
                 tar.add(bundle_dir, arcname=tenant_id)
+            if with_secrets:
+                os.chmod(output_path, 0o600)
 
         size_mb = output_path.stat().st_size / (1024 ** 2)
         print(f"✅ Exported to {output_path} ({size_mb:.1f} MB)")
+        if with_secrets:
+            print("   ⚠  This bundle contains the tenant master key and "
+                  "secrets.enc — treat it like a password. It was written 0600; "
+                  "keep it that way and delete it after import.")
         return 0
 
     except Exception as e:
@@ -332,9 +362,18 @@ def cmd_import(args: argparse.Namespace) -> int:
 
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Extract bundle
+            # Extract bundle. A portable bundle is untrusted input by design
+            # ("restore on any system"), so a member like ../../../.ssh/
+            # authorized_keys or an absolute-path/symlink entry must never escape
+            # tmpdir (CVE-2007-4559). filter='data' enforces that on 3.9.17+/
+            # 3.10.12+/3.11.4+; on an older interpreter fall back to a manual
+            # containment check rather than a blind extractall (2026-07-30
+            # review finding C6).
             with tarfile.open(bundle_path, "r:gz") as tar:
-                tar.extractall(tmpdir)
+                try:
+                    tar.extractall(tmpdir, filter="data")
+                except TypeError:
+                    _safe_extractall(tar, tmpdir)
 
             extracted = Path(tmpdir) / tenant_id
             if not extracted.exists():

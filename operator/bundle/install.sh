@@ -3,6 +3,13 @@
 # Use this when corvin pkg is not yet available or for manual setup.
 # For the full managed install, run: corvin pkg install ./operator/bundle/
 set -euo pipefail
+# An unmatched glob must expand to nothing, not to the literal pattern. Without
+# this, `for f in .../personas/*.json` on a bundle that ships no personas/ dir
+# (the wheel's _vendor layout does not include it) left the literal pattern,
+# `[ -f "$f" ]` was false, the else-branch `cp "$f"` failed, and `set -e`
+# aborted the whole script BEFORE the skills step ever ran — so a manual run of
+# the vendored install.sh installed nothing (2026-07-30 review finding I3).
+shopt -s nullglob
 
 BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORVIN_HOME="${CORVIN_HOME:-$HOME/.corvin}"
