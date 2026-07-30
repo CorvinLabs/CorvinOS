@@ -67,6 +67,22 @@ _MAX_KIDS_PER_CONNECTION = 64    # one operator process may pair with many peers
 # its own slot still succeeds — this bounds growth, not legitimate re-use).
 _MAX_TOTAL_SLOTS = 10_000
 
+# 2026-07-30 relay redesign (A2/A3): the _MAX_TOTAL_SLOTS cap bounded the NUMBER
+# of slots but not slots × payload, and nothing ever evicted a slot — TTL was
+# only checked when a kid re-registered (which an attacker never does), and each
+# fallback send leaked one permanent ephemeral `*:reply:*` slot, so a busy relay
+# wedged itself after _MAX_TOTAL_SLOTS legitimate sends. These add a real reaper.
+_MAX_TOTAL_QUEUE_BYTES = 64 * 1024 * 1024  # global ceiling across ALL queues
+_SLOT_IDLE_TTL_S = 600.0                    # evict an offline, drained slot after 10 min
+_REPLY_KID_IDLE_TTL_S = 60.0               # an offline ephemeral reply slot after 1 min
+
+
+def _is_reply_kid(kid: str) -> bool:
+    """Ephemeral per-send reply slot minted by remote_trigger_sender._relay_post
+    (`f"{to_kid}:reply:{task_id}"`) — needed for exactly one round-trip, then
+    dead weight. Reaped aggressively so a busy relay cannot fill up on them."""
+    return ":reply:" in kid
+
 
 class RelayError(Exception):
     """Base for relay protocol errors — the reason is never sent verbatim
@@ -78,6 +94,7 @@ class RelayError(Exception):
 class _QueuedMessage:
     payload: dict[str, Any]
     expires_at: float
+    nbytes: int = 0
 
 
 @dataclass
@@ -87,6 +104,9 @@ class _KidSlot:
     auth_key: str
     connection_id: str | None = None
     queue: deque[_QueuedMessage] = field(default_factory=lambda: deque(maxlen=_MAX_QUEUE_PER_KID))
+    # monotonic timestamp of the last register/deliver touching this slot —
+    # drives the idle-slot reaper (A2/A3).
+    last_active: float = field(default_factory=time.monotonic)
 
 
 class RelayState:
@@ -97,6 +117,36 @@ class RelayState:
         self._slots: dict[str, _KidSlot] = {}
         # connection_id -> {WebSocket, set of kids registered on it}
         self._connections: dict[str, tuple[WebSocket, set[str]]] = {}
+        # running total of bytes held across every slot's queue — enforces the
+        # global ceiling so bounded slots × 512 KB payloads cannot exhaust RAM.
+        self._queued_bytes = 0
+
+    # ── reaper (A2/A3) ───────────────────────────────────────────────
+
+    def _prune(self) -> None:
+        """Evict dead weight. Called opportunistically from register/deliver
+        (the relay app has no scheduler): drop expired queue items, then evict
+        offline slots that are drained and idle past their TTL — aggressively
+        for ephemeral reply slots. A slot with a LIVE connection, or one still
+        holding non-expired queued messages for a peer that may reconnect, is
+        never evicted."""
+        now = time.monotonic()
+        for kid in list(self._slots.keys()):
+            slot = self._slots.get(kid)
+            if slot is None:
+                continue
+            # 1. drop expired queued messages (this is the ONLY place TTL was
+            #    ever enforced before if the kid never re-registered).
+            while slot.queue and slot.queue[0].expires_at < now:
+                stale = slot.queue.popleft()
+                self._queued_bytes -= stale.nbytes
+            # 2. never touch a live or still-queued slot.
+            if slot.connection_id is not None or slot.queue:
+                continue
+            # 3. evict an offline, drained slot once it is idle past its TTL.
+            ttl = _REPLY_KID_IDLE_TTL_S if _is_reply_kid(kid) else _SLOT_IDLE_TTL_S
+            if now - slot.last_active > ttl:
+                del self._slots[kid]
 
     # ── registration ────────────────────────────────────────────────
 
@@ -112,6 +162,7 @@ class RelayState:
             _MAX_TOTAL_SLOTS); only applies to a BRAND NEW kid, never to one
             already tracked (re-registering/reconnecting always succeeds).
         """
+        self._prune()  # reclaim dead slots before deciding we're at capacity
         slot = self._slots.get(kid)
         if slot is None:
             if len(self._slots) >= _MAX_TOTAL_SLOTS:
@@ -121,6 +172,7 @@ class RelayState:
         if slot.auth_key != auth_key:
             return "auth_key_mismatch"
         slot.connection_id = connection_id
+        slot.last_active = time.monotonic()
         return None
 
     def flush_queue(self, kid: str) -> list[dict[str, Any]]:
@@ -133,6 +185,7 @@ class RelayState:
         out: list[dict[str, Any]] = []
         while slot.queue:
             item = slot.queue.popleft()
+            self._queued_bytes -= item.nbytes
             if item.expires_at >= now:
                 out.append(item.payload)
         return out
@@ -145,11 +198,13 @@ class RelayState:
         Returns "delivered", "queued", or "dropped" (queue full / unknown
         kid with no prior registration at all — nothing to queue against).
         """
+        self._prune()  # keep expired items from counting against the byte budget
         slot = self._slots.get(to_kid)
         if slot is None:
             # No one has EVER registered this kid on this relay — queuing
             # would grow unbounded for kids that will never claim it.
             return "dropped"
+        slot.last_active = time.monotonic()
         if slot.connection_id is not None:
             conn = self._connections.get(slot.connection_id)
             if conn is not None:
@@ -161,7 +216,15 @@ class RelayState:
                     pass
         if len(slot.queue) >= _MAX_QUEUE_PER_KID:
             return "dropped"
-        slot.queue.append(_QueuedMessage(payload=payload, expires_at=time.monotonic() + _QUEUE_TTL_S))
+        # Global byte-budget: bounded slot COUNT is not enough on its own — a
+        # cap of slots × 512 KB queued payloads would still be ~5 GB. Refuse to
+        # queue once the process-wide ceiling is reached (A2).
+        nbytes = len(json.dumps(payload))
+        if self._queued_bytes + nbytes > _MAX_TOTAL_QUEUE_BYTES:
+            return "dropped"
+        slot.queue.append(_QueuedMessage(
+            payload=payload, expires_at=time.monotonic() + _QUEUE_TTL_S, nbytes=nbytes))
+        self._queued_bytes += nbytes
         return "queued"
 
     # ── connection lifecycle ────────────────────────────────────────
@@ -185,6 +248,7 @@ class RelayState:
         if conn is None:
             return
         _ws, kids = conn
+        now = time.monotonic()
         for kid in kids:
             slot = self._slots.get(kid)
             if slot is not None and slot.connection_id == connection_id:
@@ -192,6 +256,12 @@ class RelayState:
                 # any already-queued messages — a reconnect with the same
                 # credential resumes exactly where it left off.
                 slot.connection_id = None
+                # Reset the idle clock from the moment it went offline, so the
+                # reaper's TTL measures how long it has been GONE (A2/A3). An
+                # ephemeral reply slot that will never reconnect is now on the
+                # short reply-kid TTL and gets reclaimed.
+                slot.last_active = now
+        self._prune()
 
 
 # ── wire message validation ─────────────────────────────────────────────
@@ -451,11 +521,15 @@ class RelayListener:
         if not kids:
             return  # nothing to listen for yet — try again next backoff cycle
 
+        import logging as _logging  # noqa: PLC0415
+        _log = _logging.getLogger("corvin.a2a.relay-listener")
+
         async with websockets.connect(self._relay_url) as ws:
             for kid, hmac_key in kids:
                 auth_key = _ft.derive_relay_auth_key(hmac_key)
                 await ws.send(json.dumps({"type": "register", "kid": kid, "relay_auth_key": auth_key}))
             kids_by_id = dict(kids)
+            _registered: set[str] = set()
             async for raw in ws:
                 if self._stop:
                     return
@@ -463,7 +537,26 @@ class RelayListener:
                     msg = json.loads(raw)
                 except (ValueError, TypeError):
                     continue
-                if msg.get("type") != "deliver":
+                mtype = msg.get("type")
+                # A4 (2026-07-30 relay redesign): the old loop discarded every
+                # non-"deliver" frame, so `registered` / `register_rejected` were
+                # never read. A rejected registration (relay_at_capacity, >64
+                # kids, auth_key_mismatch from a squatted slot) then failed
+                # SILENTLY — the console believed it was listening and received
+                # nothing, with no log, no audit, no health signal. Surface it.
+                if mtype == "registered":
+                    k = msg.get("kid")
+                    if isinstance(k, str):
+                        _registered.add(k)
+                    continue
+                if mtype == "register_rejected":
+                    _log.warning(
+                        "relay rejected registration for kid=%s reason=%s — this "
+                        "peer is UNREACHABLE via the relay until resolved",
+                        str(msg.get("kid"))[:16], msg.get("reason"),
+                    )
+                    continue
+                if mtype != "deliver":
                     continue
                 await self._handle_deliver(ws, msg, kids_by_id)
 
@@ -486,6 +579,24 @@ class RelayListener:
             envelope = json.loads(plaintext.decode("utf-8"))
         except (_ft.RelayDecryptError, ValueError, UnicodeDecodeError):
             return  # tampered/corrupt — silently drop, exactly like a bad HMAC on the direct path
+
+        # A1 self-delivery guard (2026-07-30 relay redesign). The pairing kid is
+        # SHARED and identical on both peers, and derive_relay_auth_key(hmac_key)
+        # is identical too — so if both peers connect to the same relay, whoever
+        # registered the slot last receives BOTH directions, and one side could be
+        # handed its OWN outbound task back (same kid, same keys, verifies clean)
+        # and execute it as if it came from the peer. Refuse any envelope whose
+        # HMAC-covered sender_instance_id is our own local UUID: a task we sent can
+        # never be a task we should run. (The remaining routing ambiguity when both
+        # peers share a relay degrades to a send-side timeout+retry, not a wrong
+        # execution — a wire-level instance-scoped routing key is the follow-up.)
+        try:
+            from instance_identity import get_instance_id as _gid  # noqa: PLC0415
+            _my_instance = _gid()
+        except Exception:  # noqa: BLE001
+            _my_instance = None
+        if _my_instance and envelope.get("sender_instance_id") == _my_instance:
+            return  # our own task, routed back to us — never execute it
 
         # Adversarial review round 2 (2026-07-29): two fixes.
         # (1) RemoteTriggerReceiver.receive() is SYNC and does signature verify +

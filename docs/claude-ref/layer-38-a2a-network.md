@@ -613,3 +613,29 @@ Full decision records:
 - `Corvin-ADR: decisions/0197-a2a-send-typed-error-taxonomy.md` (error taxonomy)
 - `Corvin-ADR: decisions/0198-a2a-reconnect-broadcast.md` (proactive reconnect)
 - `Corvin-ADR: decisions/0199-a2a-ping-lightweight-peer-liveness.md` (a2a_ping)
+- `Corvin-ADR: decisions/0257-a2a-reciprocal-friendship-handshake.md`
+- `Corvin-ADR: decisions/0258-a2a-location-independent-connectivity.md` (relay fallback)
+- `Corvin-ADR: decisions/0261-a2a-relay-hardening.md` (self-delivery guard, slot reaper, byte budget, off-loop ack)
+
+---
+
+## Relay fallback hardening (ADR-0261, 2026-07-30)
+
+The relay fallback (`a2a_relay.py`, behind `a2a_relay_fallback` — **default-OFF**; the
+relay *server* is mounted nowhere in the shipped hosts, only `python -m a2a_relay`) was
+hardened after an adversarial review:
+
+- **Self-delivery guard.** The pairing `kid` and derived relay keys are identical on both
+  peers, so a relay could route an instance's own outbound task back to it. `RelayListener`
+  refuses any envelope whose HMAC-covered `sender_instance_id` is this instance's own UUID.
+  (The residual shared-`kid` routing ambiguity degrades to a send-side timeout+retry, not a
+  wrong execution; an instance-scoped routing key is a tracked follow-up.)
+- **Slot reaper + byte budget.** `RelayState._prune()` drops expired queue items and evicts
+  offline, drained slots past an idle TTL (aggressively for ephemeral `*:reply:*` slots);
+  a global `_MAX_TOTAL_QUEUE_BYTES` caps queued bytes across all slots. This closes the
+  memory-exhaustion DoS and the self-wedge after `_MAX_TOTAL_SLOTS` legitimate sends.
+- **Registration results are read.** The listener now logs `register_rejected`
+  (capacity / >64 kids / auth mismatch) instead of silently listening to nothing.
+- **Off-loop ack.** Both hosts' friendship-ack routes run the sync
+  `process_friendship_ack_request` via `asyncio.to_thread` so one ack cannot freeze the
+  event loop.

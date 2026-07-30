@@ -418,7 +418,15 @@ def create_app() -> FastAPI:
             _origins_dir as _a2a_origins_dir,
             _pending_friendships_dir as _a2a_pending_friendships_dir,
         )
-        status_code, payload = process_friendship_ack_request(
+        # A5 (2026-07-30 relay redesign): process_friendship_ack_request is
+        # fully SYNC and blocks on fcntl.flock, socket.getaddrinfo (no timeout,
+        # on a peer-supplied hostname) and a 5 s urllib ping. Called directly in
+        # this async handler it froze the ENTIRE console event loop — including
+        # the relay-listener background task — for ≥5 s per ack. Run it off the
+        # loop (the RelayListener already uses this exact idiom).
+        import asyncio as _asyncio
+        status_code, payload = await _asyncio.to_thread(
+            process_friendship_ack_request,
             body,
             pending_dir=_a2a_pending_friendships_dir(),
             origins_dir=_a2a_origins_dir(),
