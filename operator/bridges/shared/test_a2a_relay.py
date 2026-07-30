@@ -211,6 +211,44 @@ class TestRelayRoutingState(unittest.TestCase):
         # one more must be dropped, not grow unbounded
         self.assertEqual(asyncio.run(self.state.deliver("kidG", {"i": 999})), "dropped")
 
+    def test_offline_reply_kid_is_reaped(self):
+        """A3 (2026-07-30): each fallback send mints an ephemeral `*:reply:*`
+        slot; before the reaper they were never evicted, so a busy relay wedged
+        itself after _MAX_TOTAL_SLOTS legitimate sends. An offline reply slot
+        must be reclaimed once idle past its short TTL."""
+        cid = self.state.open_connection(_FakeWS())
+        self.state.register(cid, "K:reply:t1", "auth1")
+        self.state.note_registered_kid(cid, "K:reply:t1")
+        self.state.close_connection(cid)  # offline
+        self.state._slots["K:reply:t1"].last_active -= relay._REPLY_KID_IDLE_TTL_S + 10
+        self.state._prune()
+        self.assertNotIn("K:reply:t1", self.state._slots)
+
+    def test_offline_slot_with_queue_is_not_reaped(self):
+        """The reaper must never drop a slot still holding non-expired messages
+        for a peer that may reconnect."""
+        self.state.register("c1", "kidQ", "authQ")
+        self.state.close_connection("c1")
+        asyncio.run(self.state.deliver("kidQ", {"m": 1}))
+        self.state._slots["kidQ"].last_active -= relay._SLOT_IDLE_TTL_S + 10
+        self.state._prune()
+        self.assertIn("kidQ", self.state._slots)  # queue still pending → kept
+
+    def test_global_byte_budget_refuses_overflow(self):
+        """A2 (2026-07-30): bounded slot COUNT alone still allowed slots × 512 KB
+        of queued payloads. Once the global byte ceiling is hit, further queuing
+        is dropped rather than growing RAM without limit."""
+        original = relay._MAX_TOTAL_QUEUE_BYTES
+        try:
+            relay._MAX_TOTAL_QUEUE_BYTES = 50  # tiny ceiling
+            self.state.register("c1", "kidB1", "auth1")
+            self.state.close_connection("c1")
+            asyncio.run(self.state.deliver("kidB1", {"m": "x" * 20}))
+            self.assertEqual(
+                asyncio.run(self.state.deliver("kidB1", {"m": "y" * 60})), "dropped")
+        finally:
+            relay._MAX_TOTAL_QUEUE_BYTES = original
+
 
 # ── 3. Stage 2 — mesh-VPN address detection (ADR-0258 Verification) ──────────
 
@@ -301,6 +339,26 @@ class TestRelayListenerRobustness(unittest.TestCase):
         bad = self._good_delivery(_key())
         asyncio.run(lst._handle_deliver(ws, bad, {"meKid": k}))
         receiver.receive.assert_not_called()
+        self.assertEqual(ws.sent, [])
+
+    def test_self_delivery_is_refused(self):
+        """A1 (2026-07-30): the pairing kid + relay keys are identical on both
+        peers, so a relay can route our OWN outbound task back to us. An envelope
+        whose HMAC-covered sender_instance_id is our own local UUID must never be
+        executed — otherwise we run the task we meant for the peer and hand back
+        a self-signed 'reply'."""
+        import unittest.mock as mock
+        k = _key()
+        receiver = mock.Mock()
+        lst = self._listener(receiver)
+        ws = _FakeWS()
+        # envelope that claims to come from OUR instance id
+        nonce, ct = ft.encrypt_for_relay(k, b'{"task":"x","sender_instance_id":"me-uuid"}')
+        delivery = {"to_kid": "meKid", "from_kid": "peerKid", "nonce": nonce,
+                    "ciphertext": ct, "task_id": "t1"}
+        with mock.patch("instance_identity.get_instance_id", return_value="me-uuid"):
+            asyncio.run(lst._handle_deliver(ws, delivery, {"meKid": k}))
+        receiver.receive.assert_not_called()  # our own task — never executed
         self.assertEqual(ws.sent, [])
 
 

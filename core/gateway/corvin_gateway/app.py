@@ -615,7 +615,12 @@ async def a2a_friendship_ack(request: Request) -> JSONResponse:
         _Path_ack(_origins_env) if _origins_env
         else _a2a_shared.parent.parent / "cowork" / "remote_origins"
     )
-    status_code, payload = process_friendship_ack_request(
+    # A5 (2026-07-30 relay redesign): run the fully-sync ack handler (flock,
+    # getaddrinfo, 5 s urllib ping) off the event loop so one ack can't freeze
+    # the gateway. Same fix as corvin_console.standalone's ack route.
+    import asyncio as _asyncio_ack
+    status_code, payload = await _asyncio_ack.to_thread(
+        process_friendship_ack_request,
         body,
         pending_dir=_a2a_pending_friendships_dir(),
         origins_dir=origins_dir_path,
