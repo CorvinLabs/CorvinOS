@@ -230,6 +230,39 @@ until proven live (`voice-mode-2-adr0194` memory).
   base `plugin_builder_enabled` flag is on — brainstorming mode is a
   deliberate choice, not a default variant of opening the builder.
 
+**Round progression governed by LDD (amended into ADR-0263).** The
+"capped number of rounds" above is not an ad-hoc counter — it is three
+discrete [Loss-Driven Development](https://github.com/veegee82/loss-driven-development)
+tasks, each announced with its own level/creativity from the start (LDD's
+architect-mode forbids changing creativity level mid-task, so the
+creative-to-structured arc is implemented as task hand-offs, not a live
+dial):
+
+1. **Ideation** — architect-mode, `level=L4` (forced via `LDD=max:`),
+   `creativity=inventive`. Genuinely creative, source-grounded proposals,
+   scored against the inventive rubric (differentiation from prior art,
+   validation path, fallback path). Requires the mandatory `inventive`
+   acknowledgment gate, reworded into plain, session-language prose — never
+   LDD's internal rubric terminology — so a non-technical user isn't asked
+   to parse "prior-art overlap penalty."
+2. **Formalization** — a fresh architect-mode task, `level=L4`,
+   `creativity=standard`, once a candidate idea is chosen. This is the
+   natural home for §3's doc-generation step (Idea/Architecture/ADR/Build
+   Plan) — 3 candidates on a load-bearing axis, standard 10-item rubric,
+   dialectical pass.
+3. **Build** — plain LDD reactive stack (inner loop), not architect-mode,
+   `level=L4`. §3's targeted confirmation, checkpoint, scaffold, and
+   generated E2E tests — architect-mode's own scope note already excludes
+   "feature additions to existing code" once code is being written.
+
+`LDD=max` governs the rigor/discipline underneath (grounding checks,
+dialectical scrutiny, 4-axis trace logging), not the literal spoken
+surface — the trace renders as a text block in the console UI and as a
+spoken-language equivalent over voice, same content, format adapted to
+transport (same principle as the checkpoint's verbatim-warning rule in
+ADR-0262). Full detail: `Corvin-ADR/decisions/0263-...md`, Amendment
+section.
+
 ---
 
 ## 6. Risks / open questions
