@@ -786,15 +786,10 @@ def _pid_cmdline(pid: int) -> str:
     if pid <= 0:
         return ""
     if os.name == "nt":
-        try:
-            out = subprocess.run(
-                ["wmic", "process", "where", f"ProcessId={pid}", "get",
-                 "CommandLine", "/FORMAT:LIST"],
-                capture_output=True, text=True, check=False, timeout=10,
-            ).stdout
-        except (OSError, subprocess.TimeoutExpired):
+        procs, confident = _win_process_snapshot()
+        if not confident:
             return ""
-        return out
+        return procs.get(pid, "")
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as fh:
             return fh.read().replace(b"\x00", b" ").decode("utf-8", "replace")
@@ -867,6 +862,77 @@ def adapter_running_pid() -> int:
     return _adapter_running_pid(_BRIDGE_DIR / "shared" / "adapter.py")
 
 
+# ── Windows process enumeration (2026-07-30 — wmic deprecation fix) ────────
+#
+# wmic.exe has been deprecated since Windows 10 21H1 and is REMOVED BY
+# DEFAULT on newer Windows 11 builds (Microsoft's own guidance: use CIM
+# cmdlets instead). Every Windows process-enumeration call in this module
+# used to shell out to wmic exclusively — on a machine where it is absent,
+# every call fails with FileNotFoundError, is caught, and returns
+# confident=False. _scan_channel_daemon_pid()'s caller (bridge supervisor,
+# core/plugins/corvin_plugins/bridges/supervisor.py) treats
+# confident=False as "cannot verify, refuse to start" (by design — starting
+# a possible duplicate is worse) — so a channel (observed live: WhatsApp)
+# could NEVER auto-start on an affected Windows install, no config change
+# possible, no error the operator could act on beyond "cannot verify
+# whether a daemon is already running". _pid_cmdline() has the same
+# dependency and gates adapter-duplicate detection (adapter_running_pid()).
+#
+# Fix: prefer PowerShell's Get-CimInstance (the modern WMI-via-CIM
+# provider — NOT the deprecated wmic.exe CLI, so unaffected by its
+# removal) for a full process snapshot, falling back to wmic only if
+# PowerShell itself is unavailable (exotic/locked-down installs).
+def _win_process_snapshot() -> tuple[dict[int, str], bool]:
+    """(pid -> commandline map, confident) for every process on Windows.
+
+    confident=False only when NEITHER PowerShell's CIM cmdlets NOR the
+    legacy wmic.exe could be run at all — "found nothing" and "could not
+    look" must stay distinguishable (see _scan_channel_daemon_pid).
+    """
+    powershell = shutil.which("powershell") or shutil.which("pwsh")
+    if powershell:
+        try:
+            out = subprocess.run(
+                [powershell, "-NoProfile", "-NonInteractive", "-Command",
+                 "Get-CimInstance Win32_Process | "
+                 "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"],
+                capture_output=True, text=True, check=False, timeout=15,
+            ).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            out = ""
+        if out.strip():
+            procs: dict[int, str] = {}
+            for line in out.splitlines():
+                pid_s, sep, cmdline = line.partition("\t")
+                if sep and pid_s.strip().isdigit():
+                    procs[int(pid_s.strip())] = cmdline
+            if procs:
+                return procs, True
+
+    # Fallback: legacy wmic.exe (older Windows, or PowerShell itself blocked).
+    try:
+        out = subprocess.run(
+            ["wmic", "process", "get", "ProcessId,CommandLine", "/FORMAT:LIST"],
+            capture_output=True, text=True, check=False, timeout=15,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}, False
+    if not out.strip():
+        return {}, False
+    procs = {}
+    cur_cmdline: str | None = None
+    for line in out.splitlines():
+        line = line.strip()
+        if line.lower().startswith("commandline="):
+            cur_cmdline = line.split("=", 1)[1]
+        elif line.lower().startswith("processid=") and cur_cmdline is not None:
+            value = line.split("=", 1)[1].strip()
+            if value.isdigit():
+                procs[int(value)] = cur_cmdline
+            cur_cmdline = None
+    return procs, True
+
+
 def _cmdline_names_daemon(cmdline: str, channel: str) -> bool:
     """True when a process command line runs THIS channel's daemon.js.
 
@@ -905,25 +971,14 @@ def _scan_channel_daemon_pid(channel: str) -> tuple[int, bool]:
         return 0, True
 
     if os.name == "nt":
-        try:
-            out = subprocess.run(
-                ["wmic", "process", "get", "ProcessId,CommandLine", "/FORMAT:LIST"],
-                capture_output=True, text=True, check=False, timeout=15,
-            ).stdout
-        except (OSError, subprocess.TimeoutExpired):
+        procs, confident = _win_process_snapshot()
+        if not confident:
             return 0, False
-        if not out.strip():
-            return 0, False
-        matched = False
-        for line in out.splitlines():
-            line = line.strip()
-            if line.lower().startswith("commandline="):
-                matched = _cmdline_names_daemon(line, channel)
-            elif line.lower().startswith("processid=") and matched:
-                value = line.split("=", 1)[1].strip()
-                if value.isdigit() and int(value) != os.getpid():
-                    return int(value), True
-                matched = False
+        for pid, cmdline in procs.items():
+            if pid == os.getpid():
+                continue
+            if _cmdline_names_daemon(cmdline, channel):
+                return pid, True
         return 0, True
 
     # macOS / BSD — no procfs, no wmic.
