@@ -1182,13 +1182,29 @@ async def save_discord_token(
             target_id="discord",
         )
 
+        # 2026-07-30 review finding (console C1): first-time activation of a
+        # previously-unconfigured channel REQUIRES a daemon (re)start — the
+        # module docstring says so, and the generic put_bridge_settings path
+        # calls _apply_runtime_change for exactly this reason. This dedicated
+        # save path (wired in 015a4ac) skipped it, so the UI reported "bot
+        # activated" while the daemon never started and the bot stayed offline
+        # on a fresh install. Start it here; a start failure is reported but
+        # does not lose the (already-persisted) token.
+        runtime = _apply_runtime_change("discord", enabled=None)
+        if not runtime.get("applied", True):
+            return SaveTokenResponse(
+                success=True,
+                error="Token saved, but the bridge did not start — "
+                      "check Settings → Bridges → Discord.",
+            )
+
         return SaveTokenResponse(success=True)
 
     except Exception as e:
         _log.error(f"Token save error: {e}")
         return SaveTokenResponse(
             success=False,
-            error=f"Failed to save token: {str(e)[:100]}",
+            error="Failed to save token — see server logs.",
         )
 
 
@@ -1336,13 +1352,23 @@ async def save_telegram_token(
             target_id="telegram",
         )
 
+        # First-time activation needs a daemon (re)start — see save_discord_token
+        # (2026-07-30 review finding console C1).
+        runtime = _apply_runtime_change("telegram", enabled=None)
+        if not runtime.get("applied", True):
+            return SaveTelegramTokenResponse(
+                success=True,
+                error="Token saved, but the bridge did not start — "
+                      "check Settings → Bridges → Telegram.",
+            )
+
         return SaveTelegramTokenResponse(success=True)
 
     except Exception as e:
         _log.error(f"Token save error: {e}")
         return SaveTelegramTokenResponse(
             success=False,
-            error=f"Failed to save token: {str(e)[:100]}",
+            error="Failed to save token — see server logs.",
         )
 
 

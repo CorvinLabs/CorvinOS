@@ -149,11 +149,13 @@ const { rateAllow, authOk, readOnlyOk } = makeAuth({
 // gap: only the first sender is promoted, and that promotion is persisted
 // to settings.json so it survives a restart.
 const _autoOwnership = new AutoOwnershipBridge(log, settings);
-function _isOwnerCheck(userId, text, channelId) {
+function _isOwnerCheck(userId, text, channelId, addressed = true) {
   const cs = currentSettings();
   const wlEmpty = !cs.whitelist || cs.whitelist.length === 0;
   if (wlEmpty && cs.auto_owner !== false) {
-    const access = _autoOwnership.determineAccess(userId);
+    // `addressed` gates the one-shot auto-owner promotion to messages actually
+    // aimed at the bot (DM or @mention) — see auto_ownership.js B1 fix.
+    const access = _autoOwnership.determineAccess(userId, addressed);
     if (access.promoted) saveSettings(settings);
     return access.authorized;
   }
@@ -637,7 +639,11 @@ client.on('messageCreate', async (msg) => {
     // ADR-0166 privilege model: whitelist ⇒ owner, SPG-admitted ⇒ guest.
     // `_isOwner` MUST flow to every command dispatch below (see interaction
     // path). An SPG guest is admitted but must NOT inherit the owner surface.
-    const _isOwner = _isOwnerCheck(userId, text, msg.channel.id);
+    // Addressed = a DM to the bot, or a guild message that @mentions it. With
+    // the MessageContent intent the bot also sees un-addressed guild chatter;
+    // only an addressed message may claim auto-ownership (B1).
+    const _addressed = !msg.guild || (!!meId && !!msg.mentions?.users?.has(meId));
+    const _isOwner = _isOwnerCheck(userId, text, msg.channel.id, _addressed);
     if (!_isOwner) {
       // ADR-0166: check SPG invitation before rejecting non-whitelisted sender
       let _spgAllowed = false;

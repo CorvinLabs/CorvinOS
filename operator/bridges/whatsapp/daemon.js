@@ -276,8 +276,26 @@ const sticky = makeStickyProgress({ ttlMs: 60_000 });
 // fromMe=true. Without this set we'd loop on our own replies in 1:1 chats.
 // Grows by O(messages per session); harmless in practice.
 const ownSentIds = new Set();
+// A hung socket.sendMessage() (half-dead Baileys socket that never settles)
+// used to keep the whole outbox tick pending forever → outboxRunning stayed
+// true → no further delivery, no log, no stall metric: the exact 38-minute
+// wedge of the 2026-07-26 incident, un-migrated onto WhatsApp (2026-07-30
+// review finding B2). Bound every send: on timeout we throw, the caller leaves
+// the envelope on disk for retry, and the tick settles so the poller frees up.
+// Trade-off (same as the shared poller): the underlying send may still land,
+// so a later retry can duplicate — a rare duplicate beats a silent total stall.
+const WA_SEND_TIMEOUT_MS = 30000;
 async function safeSend(socket, jid, content) {
-  const sent = await socket.sendMessage(jid, content);
+  let timer;
+  const sent = await Promise.race([
+    socket.sendMessage(jid, content),
+    new Promise((_, rej) => {
+      timer = setTimeout(
+        () => rej(new Error(`sendMessage timed out after ${WA_SEND_TIMEOUT_MS}ms`)),
+        WA_SEND_TIMEOUT_MS,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
   if (sent?.key?.id) ownSentIds.add(sent.key.id);
   return sent;
 }
@@ -739,13 +757,38 @@ async function processOutbox() {
 // it (e.g. Baileys' sharp-based thumbnail crashing on a malformed PNG) can
 // not take the whole daemon down.
 let outboxRunning = false;
+let outboxRunningSince = 0;
+let outboxGen = 0;        // increments at each tick start
+let outboxActiveGen = 0;  // the generation currently believed to be running
+// Backstop: if a tick somehow runs longer than this (should be impossible now
+// that every send is timeout-bounded, but belt-and-braces against an unforeseen
+// hang), force-release so delivery resumes. Generation-guarded so a released
+// predecessor's .finally() can NOT clobber the flag of the tick that
+// superseded it (the finally-clobber race the shared poller was flagged for).
+const WA_OUTBOX_STALL_MS = 120000;
 setInterval(() => {
-  if (outboxRunning) return; // skip overlapping ticks
+  if (outboxRunning) {
+    if (outboxRunningSince && Date.now() - outboxRunningSince > WA_OUTBOX_STALL_MS) {
+      log(`outbox: force-releasing a wedged tick after ` +
+          `${Math.round((Date.now() - outboxRunningSince) / 1000)}s (stall backstop)`);
+    } else {
+      return; // still within budget — skip overlapping tick
+    }
+  }
+  const myGen = ++outboxGen;
+  outboxActiveGen = myGen;
   outboxRunning = true;
+  outboxRunningSince = Date.now();
   Promise.resolve()
     .then(() => processOutbox())
     .catch(e => log(`processOutbox tick error: ${e.message}`))
-    .finally(() => { outboxRunning = false; });
+    .finally(() => {
+      // Only clear if I am still the active generation.
+      if (outboxActiveGen === myGen) {
+        outboxRunning = false;
+        outboxRunningSince = 0;
+      }
+    });
 }, 500);
 
 // Also catch any unhandledRejection so Baileys' internal failures (sharp,

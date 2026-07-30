@@ -166,12 +166,30 @@ def _heal_chain_at_line(path: Path, last_good_line: int) -> None:
         # finding). os.replace() is atomic on POSIX and Windows — the file
         # is always either the old (pre-heal) or new (healed) content, never
         # a half-written truncated-to-nothing state.
+        # The canonical writer creates audit.jsonl with os.open(..., 0o600)
+        # "independent of umask. GDPR Art. 32 requires restricted permissions."
+        # A plain open(tmp, 'w') here inherits the umask (typically 0o644), and
+        # os.replace() carries the SOURCE file's mode onto audit.jsonl — silently
+        # downgrading the trail to world-readable. Create the temp file 0o600 via
+        # os.open() so the healed chain keeps the writer's restriction
+        # (2026-07-30 review finding C3).
         tmp_path = path.with_suffix(path.suffix + f".healing-{os.getpid()}.tmp")
-        with open(tmp_path, 'w', encoding='utf-8') as f:
-            f.writelines(truncated)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
+        try:
+            fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                f.writelines(truncated)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        except BaseException:
+            # On any failure (disk-full mid-write, fsync error, replace error)
+            # the temp file must not survive: it is a 0o600 but still-present
+            # copy of the chain prefix that nothing would ever clean up.
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+            raise
 
         _log.info(f"audit_chain healed: truncated from {len(lines)} to {last_good_line} records")
     except (OSError, ValueError) as e:
@@ -247,8 +265,35 @@ def audit_chain_intact() -> TripwireResult:
         # The writer is producing records that do not chain. Try to heal by
         # truncating at the last good record before the corruption started.
         try:
-            last_good_line = tail_start - 1
-            if last_good_line > 0:
+            # Truncate at the record just before the FIRST break inside the tail
+            # window — NOT at the window boundary. The old `tail_start - 1` always
+            # cut at total-200, so a single broken record at the very end deleted
+            # up to 199 intact, hash-verified GDPR Art. 30 records to remove one
+            # (2026-07-30 review finding C1).
+            first_tail_break = min(int(pr.get("line", 0)) for pr in recent)
+            last_good_line = first_tail_break - 1
+
+            # Only self-heal a chain that HAS established history beyond the tail
+            # window (tail_start > 1, i.e. total > TAIL_RECORDS). A chain that
+            # fits entirely inside the tail window (a young writer) with a break
+            # means the writer is not sound RIGHT NOW — truncating a young chain
+            # is not healing, it is data loss, so refuse and let the operator
+            # look. This preserves the pre-existing "small chain with a current
+            # break refuses to boot" contract while fixing the over-deletion.
+            has_history_before_tail = tail_start > 1
+
+            # Guard against the anchor-key-loss shredder: if ANY problem sits at
+            # or before last_good_line, the corruption is NOT tail-local. The
+            # canonical case is a rotated/lost audit_anchor.key, after which the
+            # WHOLE chain verifies as mac_tampered — healing would then delete
+            # another 200 records on every boot while reporting green, silently
+            # destroying authentic evidence. Refuse to boot instead, so the
+            # operator restores the key/backup (2026-07-30 review finding C2).
+            corruption_reaches_history = any(
+                int(pr.get("line", 0)) <= last_good_line for pr in problems
+            )
+            if has_history_before_tail and last_good_line > 0 and not corruption_reaches_history:
+                records_deleted = total - last_good_line
                 _heal_chain_at_line(path, last_good_line)
                 _log.warning(
                     f"audit_chain_intact: healed {len(recent)} broken record(s) "
@@ -276,6 +321,11 @@ def audit_chain_intact() -> TripwireResult:
                                 "tripwire": name,
                                 "broken_records": len(recent),
                                 "truncated_at_line": last_good_line,
+                                # The number of records actually removed — NOT the
+                                # same as broken_records once truncation cuts a
+                                # contiguous tail. Reporting only broken_records
+                                # under-stated the deletion (2026-07-30 finding).
+                                "records_deleted": records_deleted,
                             },
                         )
                 except Exception as audit_exc:  # noqa: BLE001
@@ -290,12 +340,24 @@ def audit_chain_intact() -> TripwireResult:
         except Exception as heal_exc:  # noqa: BLE001
             _log.error(f"audit_chain healing failed: {type(heal_exc).__name__}")
 
-        # Healing failed or no good records to truncate to — refuse to serve.
-        return TripwireResult(
-            name, False,
-            f"{len(recent)} broken record(s) in the last {TAIL_RECORDS} — "
-            "the audit writer is not sound (healing failed)",
+        # Healing failed, or was refused because the corruption is not
+        # tail-local (whole-chain failure, e.g. a lost/rotated audit_anchor.key).
+        # Refuse to serve — deleting records here would be the shredder C2 warns
+        # about. The operator recovers by restoring ~/.config/corvin-voice/
+        # audit_anchor.key (or a backup of the chain), NOT by truncating.
+        all_broken = len(problems) >= total
+        detail = (
+            f"{len(recent)} broken record(s) in the last {TAIL_RECORDS}; "
+            + (
+                "the ENTIRE chain fails to verify — this is a lost/rotated "
+                "audit_anchor.key, not tail corruption. Restore "
+                "~/.config/corvin-voice/audit_anchor.key (healing refused so "
+                "authentic records are not destroyed)"
+                if all_broken
+                else "the audit writer is not sound (healing failed)"
+            )
         )
+        return TripwireResult(name, False, detail)
     return TripwireResult(
         name, True,
         f"last {TAIL_RECORDS} records verify (chain has "

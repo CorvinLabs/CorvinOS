@@ -295,8 +295,23 @@ class TenantRegistry:
         if not isinstance(raw, dict):
             raise RegistryCorrupt(f"{path} is not a mapping")
 
+        # The CLI registry (tenant_plugins.py) writes `plugins:` as a LIST at the
+        # SAME path; this reader expects a dict. The bare `.items()` below then
+        # raised AttributeError, which the console route only catches as an
+        # unhandled 500. Surface it as RegistryCorrupt so the route degrades
+        # cleanly ("written by a different tool") and — critically — does NOT
+        # fall through to a save() that overwrites the file (2026-07-30 finding
+        # P1; the fix stays fail-closed per the refutation's warning).
+        plugins_raw = raw.get("plugins") or {}
+        if not isinstance(plugins_raw, dict):
+            raise RegistryCorrupt(
+                f"{path}: 'plugins' is a {type(plugins_raw).__name__}, not a mapping "
+                "— this file was written by the `corvin plugin` CLI "
+                "(a different registry format); not overwriting it"
+            )
+
         records: Dict[str, PluginRecord] = {}
-        for pid, data in (raw.get("plugins") or {}).items():
+        for pid, data in plugins_raw.items():
             if not isinstance(data, dict):
                 raise RegistryCorrupt(f"{path}: record {pid!r} is not a mapping")
             records[pid] = _downgrade_privileged_boot_layer(

@@ -65,6 +65,21 @@ _NO_ACCESS: frozenset[str] = frozenset({
     # AND by suffix below (defense in depth). GDPR Art. 32.
     "secrets.enc", "keys", "tenant_master.key",
     "byok_privkey.pem", "byok_pubkey.pem", "byok.key",
+    # 2026-07-30 review finding C5/F2: the name+suffix denylist above still
+    # served seven further secret CLASSES that are plain .json / .yaml — the
+    # suffix rule never matched them. Block the whole config file and every
+    # directory whose ENTIRE contents are machine secrets (keypairs, HMAC
+    # secrets, DB credentials). These names are global/-subtree machine state,
+    # not user data, so blocking them does not weaken the Art. 15 file browser.
+    "tenant.corvin.yaml",
+})
+
+# Directory components whose entire contents are machine secrets (private keys,
+# HMAC/recv keys, webhook secrets, DB credentials). Anything under one of these
+# is "none". Fail-closed: if a user ever creates a same-named dir under files/,
+# hiding it is safer than leaking a keypair (2026-07-30 review finding C5/F2).
+_NO_ACCESS_DIRS: frozenset[str] = frozenset({
+    "gateway", "social", "orgs", "remote_trigger", "datasource_connections",
 })
 
 # Any key / certificate material is protected wherever it sits in the tree —
@@ -88,6 +103,19 @@ _IMAGE_EXTS: frozenset[str] = frozenset({
 
 def _access(rel_path: str) -> Literal["full", "read", "none"]:
     parts = Path(rel_path).parts if rel_path else ()
+    # Case-insensitive component matching. The denylist is lowercase, but on
+    # case-insensitive filesystems (macOS APFS, Windows NTFS — both mandatory
+    # platform targets) "Audit.jsonl" / "Secrets.enc" open the REAL file while
+    # slipping past an exact-match set (2026-07-30 review finding C5/F3). Windows
+    # also strips a trailing dot, so casefold + a stripped-dot compare is needed.
+    def _norm(p: str) -> str:
+        return p.casefold().rstrip(".")
+
+    normed = [_norm(p) for p in parts]
+    no_access = {n.casefold() for n in _NO_ACCESS}
+    no_access_dirs = {n.casefold() for n in _NO_ACCESS_DIRS}
+    read_only = {n.casefold() for n in _READ_ONLY}
+
     # NO_ACCESS must WIN over READ_ONLY regardless of component order. The
     # hash-chained audit log lives at global/forge/audit.jsonl, so the old
     # first-match loop hit "forge" (→ read) and never reached "audit.jsonl"
@@ -95,15 +123,42 @@ def _access(rel_path: str) -> Literal["full", "read", "none"]:
     # under a forge/ or skill-forge/ subtree downloadable via /files/download by
     # any authenticated session (round-2 HIGH). Scan ALL parts for a NO_ACCESS
     # component first, THEN decide read/full.
-    if any(part in _NO_ACCESS for part in parts):
+    if any(n in no_access for n in normed):
+        return "none"
+    if any(n in no_access_dirs for n in normed):
         return "none"
     # Key/cert material anywhere in the path is protected regardless of its
     # parent dir — catches secret files the name-only set doesn't enumerate.
-    if any(Path(part).suffix.lower() in _NO_ACCESS_SUFFIXES for part in parts):
+    if any(Path(p).suffix.casefold() in _NO_ACCESS_SUFFIXES for p in parts):
         return "none"
-    if any(part in _READ_ONLY for part in parts):
+    if any(n in read_only for n in normed):
         return "read"
     return "full"
+
+
+def _effective_access(root: Path, rel: str) -> Literal["full", "read", "none"]:
+    """Access verdict on BOTH the raw request path and the symlink-resolved path,
+    taking the more restrictive of the two.
+
+    ``_access`` alone judges the raw request string, so a symlink INSIDE the
+    tenant tree (files/leak -> keys/tenant_master.key) passed ``_resolve_safe``'s
+    containment check yet was graded "full" on its harmless-looking link name —
+    the download then served the secret (2026-07-30 review finding C5/F4). Any
+    turn / forge tool / compute worker writes into this same tree, so a symlink
+    can appear without the file API ever creating one. Grading the resolved
+    target closes that gap centrally for every endpoint.
+    """
+    verdict = _access(rel)
+    if verdict == "none":
+        return "none"
+    try:
+        resolved = (root / rel).resolve()
+        rel_resolved = resolved.relative_to(root.resolve())
+    except (ValueError, OSError):
+        return verdict
+    resolved_verdict = _access(str(rel_resolved))
+    order = {"full": 0, "read": 1, "none": 2}
+    return verdict if order[verdict] >= order[resolved_verdict] else resolved_verdict
 
 
 def _resolve_safe(root: Path, rel: str) -> Path:
@@ -178,7 +233,7 @@ def files_tree(
     if not target.exists():
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="path not found")
 
-    acc = _access(path)
+    acc = _effective_access(root, path)
     if acc == "none":
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="path is protected")
 
@@ -216,7 +271,7 @@ def files_content(
     root = _forge_paths.tenant_home(rec.tenant_id)
     target = _resolve_safe(root, path)
 
-    acc = _access(path)
+    acc = _effective_access(root, path)
     if acc == "none":
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="path is protected")
     if not target.exists() or not target.is_file():
@@ -267,7 +322,7 @@ def files_download(
     root = _forge_paths.tenant_home(rec.tenant_id)
     target = _resolve_safe(root, path)
 
-    acc = _access(path)
+    acc = _effective_access(root, path)
     if acc == "none":
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="path is protected")
     if not target.exists() or not target.is_file():
@@ -293,7 +348,7 @@ async def files_upload(
     root = _forge_paths.tenant_home(rec.tenant_id)
     dest_dir = _resolve_safe(root, dir)
 
-    acc = _access(dir)
+    acc = _effective_access(root, dir)
     if acc in ("none", "read"):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
@@ -305,6 +360,17 @@ async def files_upload(
     safe_name = Path(file.filename or "upload").name
     if not safe_name or safe_name.startswith("."):
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="invalid filename")
+
+    # C4 (2026-07-30 review finding): the checks above only graded the DIRECTORY.
+    # delete/mkdir grade the full path, upload did not — so an upload to a
+    # writable dir with a protected FILENAME (e.g. dir="global", name=
+    # "secrets.enc") overwrote the tenant's secrets/keys. Grade the final path.
+    final_rel = f"{dir.rstrip('/')}/{safe_name}" if dir else safe_name
+    if _effective_access(root, final_rel) != "full":
+        raise HTTPException(
+            status_code=http_status.HTTP_403_FORBIDDEN,
+            detail="destination filename is protected",
+        )
 
     # Quota pre-check: reject early if already at limit
     used = _tenant_used_bytes(root)

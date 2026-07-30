@@ -508,6 +508,25 @@ def flag(flag_id: str) -> FeatureFlag:
         raise UnknownFlagError(flag_id) from exc
 
 
+def _coerce_flag(value: object) -> bool:
+    """Interpret a stored flag value as on/off, fail-DARK.
+
+    ``bool(value)`` is wrong for the config layer: ``bool("false")`` is ``True``,
+    so a hand-edited (or quoted-YAML) ``headless_api_mode: "false"`` turned the
+    feature ON — violating "absent/invalid = off, never on because unset"
+    (2026-07-30 review finding D2). Only a real ``True`` or an explicit truthy
+    string counts as on; everything else (incl. any other string, None, numbers
+    other than 1) is off.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().casefold() in {"true", "1", "yes", "on"}
+    if isinstance(value, (int, float)):
+        return value == 1
+    return False
+
+
 def is_enabled(flag_id: str, tenant_id: str = "_default") -> bool:
     """Resolve a flag for a tenant. Unregistered id → ``False`` (fail-dark).
 
@@ -519,10 +538,10 @@ def is_enabled(flag_id: str, tenant_id: str = "_default") -> bool:
         return False
     overlay = _read_overlay(tenant_id).get("flags")
     if isinstance(overlay, dict) and flag_id in overlay:
-        return bool(overlay[flag_id])
+        return _coerce_flag(overlay[flag_id])
     spec_flags = _tenant_spec(tenant_id).get("features")
     if isinstance(spec_flags, dict) and flag_id in spec_flags:
-        return bool(spec_flags[flag_id])
+        return _coerce_flag(spec_flags[flag_id])
     return entry.default
 
 

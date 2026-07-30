@@ -71,6 +71,7 @@ operator/bridges/shared/attachments/
 operator/cowork/remote_origins/
 operator/cowork/remote_endpoints/
 operator/cowork/pending_invites/
+operator/cowork/remote_pending_friendships/
 
 # Voice / cowork per-session state (transcripts, recordings, session JSON)
 operator/voice/sessions/

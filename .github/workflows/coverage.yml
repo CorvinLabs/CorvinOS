@@ -102,8 +102,14 @@ jobs:
             --cov=core \
             --cov-report=term-missing:skip-covered \
             --cov-report=html \
-            --cov-fail-under=75 \
             -v
+          # NOTE: --cov-fail-under is deliberately NOT here. This is only the
+          # FIRST of several --cov-append pytest invocations (Console suite +
+          # per-directory suites below); on its own it covers ~47%, so a
+          # threshold here made the whole job permanently red and the later
+          # suites never ran (2026-07-30 review finding I2). The 75% floor is
+          # enforced once, on the AGGREGATED total, by the "Check coverage
+          # thresholds" step at the end of the job.
 
       - name: Console suite (wall-clock bounded)
         timeout-minutes: 25
@@ -297,8 +303,10 @@ jobs:
           #
           # NOTE: a per-module CRITICAL_THRESHOLDS map used to be defined here
           # but was never wired to any check (dead code). Removed rather than
-          # left dangling; the enforced gate is the overall 75% floor below
-          # (which also matches --cov-fail-under=75 in the pytest step).
+          # left dangling; the enforced gate is the overall 75% floor below —
+          # this is the SINGLE place the threshold is enforced, on the
+          # aggregated coverage total across every --cov-append suite (the
+          # per-step --cov-fail-under was removed, see finding I2).
           try:
             with open('.coverage.json', 'r') as f:
               data = json.load(f)
