@@ -282,6 +282,44 @@ def create_app() -> FastAPI:
         except Exception:
             pass
 
+        # Ensure the bridge adapter (adapter.py) is running (best-effort —
+        # never blocks startup). adapter.py is the ONLY thing that reads the
+        # shared inbox and writes replies to the shared outbox; the Node
+        # bridge daemons (discord/whatsapp/...) only relay messages in and
+        # out of those directories. Nothing in this boot path started it —
+        # historically the sole trigger was a console button click
+        # (routes/setup.py's "Start WhatsApp bridge") or a bridge-settings
+        # save (routes/bridges.py::_apply_runtime_change, win32 branch,
+        # 0.10.82) — so if the adapter process ever died (crash, this same
+        # self-updater's relaunch replacing corvin-serve's process tree,
+        # manual kill, machine sleep/wake) nothing ever brought it back:
+        # inbound messages kept arriving (the daemon needs no Python) while
+        # every reply silently never got written to the outbox, until a user
+        # happened to touch a bridge setting again. Live-reported as
+        # "Discord receives messages but never replies" with a stale
+        # adapter.pid and no adapter.py process at all. ensure_adapter_detached
+        # is itself idempotent (cmdline-verified pidfile probe) so this is a
+        # true no-op on the common case where the adapter is already alive.
+        try:
+            import sys as _sys
+            _repo = Path(__file__).resolve().parents[3]
+            for _cand in (_repo / "operator" / "bridges",
+                          Path(__file__).resolve().parent / "_vendor" / "operator" / "bridges"):
+                if (_cand / "bridge_manager.py").is_file():
+                    if str(_cand) not in _sys.path:
+                        _sys.path.insert(0, str(_cand))
+                    break
+            import bridge_manager as _bm  # type: ignore[import-not-found]
+            _adapter_status = _bm.ensure_adapter_detached()
+            if _adapter_status.get("ok"):
+                if not _adapter_status.get("already_running"):
+                    log.info("bridge adapter started: pid=%s", _adapter_status.get("pid"))
+            else:
+                log.warning("bridge adapter could not be ensured at boot: %s",
+                            _adapter_status.get("error"))
+        except Exception:
+            log.debug("bridge adapter ensure-at-boot skipped", exc_info=True)
+
         # ADR-0258 Stage 3 — A2A relay listener (best-effort, never blocks
         # startup). Inert unless BOTH the feature flag is on AND a relay URL
         # is configured — the common case (flag off) does nothing here at
