@@ -75,6 +75,7 @@ class FakeBridgeManager:
             d = self._rt("discord")
             d.mkdir(parents=True, exist_ok=True)
             (d / "daemon.js").write_text("// fake daemon", encoding="utf-8")
+            (d / "node_modules").mkdir(exist_ok=True)
 
     def _rt(self, channel: str) -> Path:
         return self.tmp / "runtime" / channel
@@ -386,6 +387,23 @@ class TestStart(_SupervisorTestCase):
         p.on_load(_ctx())
         self.assertEqual(self.spawned, [])
         self.assertTrue(p.health_check().ok)
+
+    def test_daemon_js_without_node_modules_starts_nothing(self):
+        """The exact regression: a wheel install's vendored source dir
+        always has daemon.js (it ships in the package) but can never have
+        node_modules (deliberately never vendored, often read-only too).
+        Treating daemon.js alone as "provisioned" spawned a daemon
+        guaranteed to crash on its first require() -- live-reported as
+        "Discord bridge files completely missing" even though daemon.js
+        was right there the whole time. daemon.js without node_modules next
+        to it must be exactly as inert as no daemon.js at all."""
+        p = self._plugin()
+        (self.bm._rt("discord") / "node_modules").rmdir()
+        p.on_load(_ctx())
+        self.assertEqual(self.spawned, [])
+        h = p.health_check()
+        self.assertTrue(h.ok)
+        self.assertEqual(h.details["state"], "not_provisioned")
 
     def test_missing_node_starts_nothing_and_stays_green(self):
         p = self._plugin(node=None)
