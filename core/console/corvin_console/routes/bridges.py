@@ -1119,7 +1119,7 @@ async def validate_discord_token(
     Calls AutoOAuth2Generator (Node.js) to verify token is valid via Discord API
     and generate the OAuth2 authorization URL for the user.
     """
-    _log.info(f"Validating Discord token (user: {rec.user_id})")
+    _log.info(f"Validating Discord token (session: {rec.sid_fingerprint})")
 
     bridges_dir = _resolve_bridges_dir()
     response_data = _validate_discord_token_via_node(body.token, bridges_dir)
@@ -1152,7 +1152,7 @@ async def save_discord_token(
        once at first boot, so writing there loses every later rotation)
     3. Atomic write (tmp → fsync → rename) + 0600 via _write_atomic
     """
-    _log.info(f"Saving Discord token (user: {rec.user_id})")
+    _log.info(f"Saving Discord token (session: {rec.sid_fingerprint})")
 
     try:
         # Validate token first (reuse secure helper; bridges_dir only locates
@@ -1297,7 +1297,7 @@ async def validate_telegram_token(
     rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
 ) -> ValidateTelegramTokenResponse:
     """Validate a Telegram bot token and extract bot info."""
-    _log.info(f"Validating Telegram token (user: {rec.user_id})")
+    _log.info(f"Validating Telegram token (session: {rec.sid_fingerprint})")
 
     bridges_dir = _resolve_bridges_dir()
     response_data = _validate_telegram_token_via_node(body.token, bridges_dir)
@@ -1324,7 +1324,7 @@ async def save_telegram_token(
     """Save Telegram bot token to the CANONICAL runtime settings.json
     (atomic write + validation) — same writer≠reader rationale as
     save_discord_token."""
-    _log.info(f"Saving Telegram token (user: {rec.user_id})")
+    _log.info(f"Saving Telegram token (session: {rec.sid_fingerprint})")
 
     try:
         # Validate first (bridges_dir only locates the vendored JS validator)
