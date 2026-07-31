@@ -27,6 +27,20 @@ interface SaveTokenResponse {
 
 type DialogStep = 'input' | 'validating' | 'confirm' | 'saving' | 'success' | 'error'
 
+/** A non-2xx response's body carries the real error (FastAPI's global
+ * exception handler puts it in `detail`) -- reading only response.statusText
+ * discarded it and showed a bare "HTTP 500: Internal Server Error" with no
+ * way to diagnose the actual failure. */
+async function _errorDetail(response: Response): Promise<string> {
+  try {
+    const body = await response.json()
+    if (body?.detail) return `HTTP ${response.status}: ${body.detail}`
+  } catch {
+    // body wasn't JSON (or was already consumed) -- fall through
+  }
+  return `HTTP ${response.status}: ${response.statusText}`
+}
+
 interface DiscordSetupDialogProps {
   /** CSRF token of the active console session (session.csrf_token) —
    * the validate/save endpoints are mutations and require x-csrf-token. */
@@ -63,7 +77,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
       })
 
       if (!response.ok) {
-        setError(`HTTP ${response.status}: ${response.statusText}`)
+        setError(await _errorDetail(response))
         setStep('error')
         return
       }
@@ -96,7 +110,7 @@ export function DiscordSetupDialog({ csrf, onClose, onSuccess }: DiscordSetupDia
       })
 
       if (!response.ok) {
-        setError(`HTTP ${response.status}: ${response.statusText}`)
+        setError(await _errorDetail(response))
         setStep('error')
         return
       }
