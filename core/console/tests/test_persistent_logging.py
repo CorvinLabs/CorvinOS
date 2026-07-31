@@ -109,6 +109,37 @@ class PersistentLoggingTests(unittest.TestCase):
         self.assertTrue(log_path.exists())
         self.assertIn("persistent console log", log_path.read_text(encoding="utf-8"))
 
+    def test_unhandled_exception_reaches_client_and_log(self) -> None:
+        """A route handler that raises unexpectedly (the exact class of bug
+        a bare '500 Internal Server Error' with no detail hid, e.g. the
+        Discord token-validation 500) must now: (1) come back to the caller
+        as a real HTTP response the frontend can render (not a network-level
+        failure), carrying the actual exception text; (2) also land in the
+        persistent log file -- proven through the real ASGI transport via
+        Starlette's TestClient, not a direct function call."""
+        from fastapi.testclient import TestClient
+
+        from corvin_console.standalone import create_app
+
+        app = create_app()
+
+        @app.get("/__test_boom__")
+        async def _boom() -> None:  # pragma: no cover - exercised via TestClient
+            raise RuntimeError("test-marker-boom-42")
+
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.get("/__test_boom__")
+
+        self.assertEqual(resp.status_code, 500)
+        body = resp.json()
+        self.assertIn("test-marker-boom-42", body["detail"])
+        self.assertIn("RuntimeError", body["detail"])
+
+        log_path = Path(self._tmp.name) / "logs" / "console.log"
+        content = log_path.read_text(encoding="utf-8")
+        self.assertIn("test-marker-boom-42", content)
+        self.assertIn("Unhandled exception", content)
+
 
 if __name__ == "__main__":
     unittest.main()
