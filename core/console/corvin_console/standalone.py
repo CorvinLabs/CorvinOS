@@ -143,6 +143,57 @@ _LOCAL_STATS_HTML = """<!DOCTYPE html>
 
 log = logging.getLogger(__name__)
 
+# ── Persistent logging (2026-07-30) ────────────────────────────────────────
+#
+# `corvin-serve` runs this app via `uvicorn corvin_console.standalone:
+# create_app --factory` (ops/launcher/corvin/serve_backend.py::start()) — a
+# path that NEVER reaches this module's `if __name__ == "__main__":` block
+# (that only fires for `python -m corvin_console.standalone`, which nothing
+# in production actually invokes), so the `logging.basicConfig()` call
+# there never runs for a real install. Worse, the Windows autostart path
+# (install.ps1's hidden Scheduled Task supervisor, `-NoNewWindow`) gives the
+# process no attached console at all — so every `log.warning(...)` /
+# `log.error(...)` anywhere in the console (bridges.py's Discord/Telegram
+# token-validation failures, plugin load errors, ...) went to a stderr that
+# nothing was reading. A real bug (a 500 on Discord bot-token validation)
+# was reported live with no way to see WHY short of stopping the background
+# service and re-running in a visible terminal — a real but heavy ask every
+# single time. This makes a durable log file exist unconditionally.
+def _configure_persistent_logging() -> None:
+    """Attach a rotating file handler to the root logger, once, regardless
+    of how this process was launched. Idempotent (checks for an existing
+    handler first) and fully best-effort: any failure here must never
+    block console startup — logging infrastructure is not allowed to be a
+    single point of failure for the thing it exists to help debug."""
+    try:
+        import logging.handlers as _lh
+        import forge.paths as _fp  # type: ignore[import]
+
+        log_dir = _fp.corvin_home() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "console.log"
+
+        root = logging.getLogger()
+        for h in root.handlers:
+            if getattr(h, "_corvin_console_log", False):
+                return  # already configured — e.g. a uvicorn --reload re-import
+
+        handler = _lh.RotatingFileHandler(
+            str(log_path), maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8",
+        )
+        handler._corvin_console_log = True  # type: ignore[attr-defined]
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
+        ))
+        handler.setLevel(logging.INFO)
+        root.addHandler(handler)
+        if root.level == logging.NOTSET or root.level > logging.INFO:
+            root.setLevel(logging.INFO)
+        log.info("persistent console log: %s", log_path)
+    except Exception:  # noqa: BLE001 — logging setup must never block startup
+        pass
+
+
 # ── App factory ──────────────────────────────────────────────────────────────
 
 
@@ -152,6 +203,8 @@ def create_app() -> FastAPI:
     Callable as a uvicorn ``--factory`` target:
     ``corvin_console.standalone:create_app``
     """
+    _configure_persistent_logging()
+
     from contextlib import asynccontextmanager
 
     @asynccontextmanager
