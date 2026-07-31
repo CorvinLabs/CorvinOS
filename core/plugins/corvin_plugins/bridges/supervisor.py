@@ -290,6 +290,19 @@ class BridgeSupervisorPlugin:
         Runtime first because that is where a wheel install puts ``node_modules``
         (ADR-0130); the source dir is the fallback for source-tree installs where
         ``bridge.sh`` runs the daemon in place.
+
+        Requires ``node_modules`` next to ``daemon.js`` (module docstring's
+        start-gate #5), not ``daemon.js`` alone: a wheel install's vendored
+        source dir (``corvin_console/_vendor/operator/bridges/<channel>``)
+        always has ``daemon.js`` but can never have ``node_modules`` (it is
+        deliberately never vendored, and site-packages is typically
+        read-only besides). Accepting ``daemon.js`` alone made this "quiet
+        no-op when unprovisioned" gate instead spawn a daemon that crashes
+        on its first ``require()`` with no readable log (the vendored dir
+        is where ``daemon-start.log`` would try to write, and often can't) —
+        live-reported as "Discord bridge files completely missing" even
+        though ``daemon.js``/``package.json`` were present in the vendored
+        tree the whole time.
         """
         for name in ("_runtime_channel_dir", "_source_channel_dir"):
             getter = getattr(bm, name, None)
@@ -297,7 +310,7 @@ class BridgeSupervisorPlugin:
                 continue
             try:
                 d = Path(getter(self.channel))
-                if (d / "daemon.js").is_file():
+                if (d / "daemon.js").is_file() and (d / "node_modules").is_dir():
                     return d
             except Exception:  # noqa: BLE001 — a probe must not break the boot
                 continue

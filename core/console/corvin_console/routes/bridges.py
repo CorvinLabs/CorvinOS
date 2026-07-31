@@ -30,6 +30,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -302,6 +303,33 @@ def _systemctl_action(channel: str, action: str) -> dict[str, Any]:
     }
 
 
+def _import_bridge_manager():
+    """Resolve bridge_manager from repo (source) or the wheel _vendor tree.
+
+    Mirrors routes/setup.py's helper of the same name (used there for the
+    "Start WhatsApp bridge" button) -- kept as a local copy rather than a
+    cross-module import to match this file's "borrow process knowledge from
+    bridge_manager, never reimplement it" convention without adding a
+    routes/setup.py <-> routes/bridges.py coupling.
+    """
+    try:
+        import bridge_manager  # type: ignore[import]
+        return bridge_manager
+    except ImportError:
+        pass
+    for cand in (_REPO / "operator" / "bridges",
+                 _THIS_DIR.parent / "_vendor" / "operator" / "bridges"):
+        if (cand / "bridge_manager.py").is_file():
+            if str(cand) not in sys.path:
+                sys.path.insert(0, str(cand))
+            try:
+                import bridge_manager  # type: ignore[import]
+                return bridge_manager
+            except ImportError:
+                continue
+    return None
+
+
 def _run_bridge_sh_up() -> dict[str, Any]:
     """Run ``bridge.sh up`` to install missing units + start configured
     channels. Idempotent. Bounded at 120 s to cover npm install on
@@ -356,7 +384,25 @@ def _apply_runtime_change(
         _ensure_npm_modules(channel)
         action = "restart" if _unit_active(channel) else "start"
         return _systemctl_action(channel, action)
-    # Unit not installed yet: first-time setup via bridge.sh up.
+
+    # Unit not installed yet: first-time setup. bridge.sh up + systemd units
+    # are Linux/WSL2-only (see the module comment above) -- on native Windows
+    # there is no systemd AND typically no `bash` on PATH, so _run_bridge_sh_up
+    # always no-ops there (bridge_manager.py:305 "bash not on PATH"). That left
+    # a freshly-saved token on Windows with settings.json written but the
+    # daemon never materialised (npm install) or started -- reported live as
+    # "Discord bridge files completely missing" after the token dialog itself
+    # started working (0.10.80). Reuse the SAME cross-platform materialise +
+    # spawn path the console's "Start WhatsApp bridge" button already relies
+    # on (start_channel_detached handles Windows npm.cmd / creation flags),
+    # instead of writing a second spawn implementation.
+    if sys.platform == "win32":
+        bm = _import_bridge_manager()
+        if bm is None:
+            return {"applied": False, "reason": "bridge_manager not importable"}
+        result = bm.start_channel_detached(channel)
+        return {"applied": bool(result.get("ok")), "via": "start_channel_detached", **result}
+
     return _run_bridge_sh_up()
 
 
