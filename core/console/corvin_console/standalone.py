@@ -333,6 +333,22 @@ def create_app() -> FastAPI:
         lifespan=_lifespan,
     )
 
+    # Any exception a route handler doesn't catch itself used to reach the
+    # client as a bare "500 Internal Server Error" with zero detail, AND
+    # (before _configure_persistent_logging above) went to a stderr nothing
+    # was reading — so a real reported bug (Discord bot-token validation
+    # 500) was undiagnosable without stopping the background service and
+    # re-running in a foreground terminal. The console is localhost-only
+    # (see CLAUDE.md — local-login has no remote auth path), so returning
+    # the real exception text to the caller is not a cross-tenant leak.
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        log.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"{type(exc).__name__}: {exc}"[:500]},
+        )
+
     # Reject an oversized upload on its Content-Length, BEFORE Starlette parses
     # the multipart body. /voice/transcribe declares a 25 MiB cap but enforced it
     # with `if len(await audio.read()) > _MAX_AUDIO_BYTES` — after the entire body
