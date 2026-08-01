@@ -87,6 +87,52 @@ class TestLinuxServiceManager:
             assert "StartLimitBurst=5" in content
 
 
+class TestRestartService:
+    """2026-08-02 fresh-install-vs-upgrade finding: `corvin-install` re-run on
+    an existing system (the documented repair/upgrade path) must actually
+    replace an ALREADY-RUNNING service with the just-rewritten unit/plist/
+    task definition — `start_service()` alone is a no-op against an active
+    systemd unit and would silently leave the OLD process running."""
+
+    def test_linux_restart_service_uses_systemctl_restart_not_start(self):
+        mgr = LinuxServiceManager()
+        with mock.patch.object(mgr, "_run_systemctl") as run:
+            mgr.restart_service("webui")
+            run.assert_called_once_with("restart", "corvin-webui.service")
+
+    def test_darwin_restart_service_reuses_unload_then_load(self):
+        """Reuses enable_autostart()'s unload-then-load sequence — the same
+        mechanism M2 already documented as necessary to pick up an updated
+        plist while the agent is currently loaded."""
+        mgr = DarwinServiceManager()
+        with mock.patch.object(mgr, "enable_autostart") as enable:
+            mgr.restart_service("webui")
+            enable.assert_called_once_with("webui")
+
+    def test_windows_restart_service_stops_then_starts(self):
+        mgr = WindowsServiceManager()
+        with mock.patch.object(mgr, "stop_service") as stop, \
+             mock.patch.object(mgr, "start_service") as start:
+            mgr.restart_service("webui")
+            stop.assert_called_once_with("webui")
+            start.assert_called_once_with("webui")
+
+
+class TestInstallerUsesRestartOnStep15AndStep17:
+    """The installer steps that (re)start services on every `corvin-install`
+    run must call restart_service, not start_service — see TestRestartService
+    above for why start_service alone is unsafe on an upgrade."""
+
+    def test_core_py_uses_restart_service_not_start_service(self):
+        core_src = (
+            Path(__file__).resolve().parent.parent
+            / "corvinOS" / "installer" / "core.py"
+        ).read_text()
+        assert 'restart_service("voice-bridge-adapter")' in core_src
+        assert 'restart_service(f"voice-bridge-{bridge}")' in core_src
+        assert 'restart_service("webui")' in core_src
+
+
 class TestLinger:
     """ADR-0184 Stufe-1: systemd --user units must survive a headless
     reboot (no login ever), which requires `loginctl enable-linger`."""
@@ -347,6 +393,7 @@ class TestGetServiceManager:
         required_methods = [
             "install_service",
             "start_service",
+            "restart_service",
             "stop_service",
             "enable_autostart",
             "disable_autostart",
