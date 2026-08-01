@@ -107,6 +107,31 @@ def _looks_like_missing_system_deps(exc: BaseException) -> bool:
     return "missing dependencies" in msg or "install-deps" in msg
 
 
+# 2026-08-02: distinct from both messages above. Chromium's own renderer
+# sandbox setup code refuses outright to start when the launching process is
+# root and --no-sandbox wasn't passed — installer/system_service_manager.py
+# explicitly supports running the console as a root systemd service, so this
+# is a real, reachable deploy shape, not a theoretical one. Before this fix
+# the failure fell through to a bare `raise` (matched neither of the two
+# checks above), got caught by browser.py's generic exception handler, and
+# was flattened into "browser action failed — observe() the page and retry"
+# — a retry can never succeed here since the launch fails identically every
+# time, so the user just sees the browser "always crash".
+_BROWSER_ROOT_NO_SANDBOX = (
+    "Chromium refuses to start as root without disabling its sandbox. "
+    "Either run the console as a non-root user (recommended), or set "
+    "CORVIN_BROWSER_NO_SANDBOX=1 in its environment to accept the reduced "
+    "renderer isolation and restart the service."
+)
+
+
+def _looks_like_root_no_sandbox(exc: BaseException) -> bool:
+    """True iff *exc* is Chromium's 'running as root without --no-sandbox is
+    not supported' launch failure."""
+    msg = str(exc).lower()
+    return "running as root" in msg and "--no-sandbox" in msg
+
+
 def _find_chrome_binary() -> tuple[str, bool]:
     """Locate a real Google Chrome (or Chromium) executable for the attach launch
     command. Returns (path_or_name, found). Probes the actual per-OS install
@@ -559,6 +584,8 @@ class BrowserSession:
                 # …/chromium-XXXX/…". Translate that into the actionable message
                 # so the user learns they need to fetch the browser, instead of
                 # the opaque "not available".
+                if _looks_like_root_no_sandbox(exc):
+                    raise BrowserActionError(_BROWSER_ROOT_NO_SANDBOX) from exc
                 if _looks_like_missing_system_deps(exc):
                     raise BrowserActionError(_BROWSER_MISSING_SYSTEM_DEPS) from exc
                 if _looks_like_missing_browser(exc):
