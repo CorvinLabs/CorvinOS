@@ -24,6 +24,7 @@ const { makeSettingsAccessor }  = require('../shared/js/settings');
 const { makeAuth }              = require('../shared/js/auth');
 const { startOutboxPoller, countPending } = require('../shared/js/outbox');
 const { startHealthServer }     = require('../shared/js/health-server');
+const { startEventLoopWatchdog } = require('../shared/js/event-loop-watchdog');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
 const inChatCmds                = require('../shared/js/in_chat_commands');
@@ -527,6 +528,7 @@ const outboxPoller = startOutboxPoller({
 process.on('unhandledRejection', r => log(`unhandledRejection: ${r && r.message || r}`));
 
 // ─── Health HTTP server ─────────────────────────────────────────────────────
+startEventLoopWatchdog({ logger: log });
 startHealthServer({
   port: HTTP_PORT, kind: 'telegram', logger: log,
   getStatus: () => ({

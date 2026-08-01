@@ -238,6 +238,11 @@ function log(...args) {
   console.log(`[${ts}] [wa-daemon]`, ...args);
 }
 
+// Event-loop freeze watchdog (2026-08-01): force-restart the process via the
+// platform supervisor if the MAIN loop wedges (Windows restart-on-exit never
+// fires on a hang). Idle ≠ frozen — the heartbeat is event-loop-driven.
+require('../shared/js/event-loop-watchdog').startEventLoopWatchdog({ logger: log });
+
 function newMsgId() {
   return Date.now().toString(36) + '_' + crypto.randomBytes(3).toString('hex');
 }
