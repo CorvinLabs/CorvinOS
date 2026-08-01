@@ -278,6 +278,52 @@ async function main() {
          'the diagnosis sidecar says why');
   fs.rmSync(dlRoot, { recursive: true, force: true });
 
+  // 11b. A TRANSIENT read failure (e.g. an AV scanner or OneDrive briefly
+  //      holding a sharing lock right after the Python side creates the
+  //      file) must NOT be treated as a corrupt envelope. Before this fix,
+  //      readFileSync and JSON.parse shared one try/catch — any
+  //      readFileSync error was indistinguishable from bad JSON and
+  //      immediately dead-lettered (or deleted, with no deadLetterDir
+  //      configured), destroying a perfectly good, already-produced reply
+  //      for a purely transient filesystem hiccup. Simulated here by
+  //      monkey-patching fs.readFileSync to throw exactly once for the
+  //      target file, then succeed normally on the next tick.
+  const trRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'outbox-transient-'));
+  fs.writeFileSync(path.join(trRoot, 'flaky.json'),
+                    JSON.stringify({ channel: 'testchan', text: 'transient-read-survivor' }));
+  const logs11b = [];
+  let trSends = 0;
+  let readAttempts = 0;
+  const realReadFileSync = fs.readFileSync;
+  fs.readFileSync = function (p, ...rest) {
+    if (typeof p === 'string' && p.endsWith('flaky.json')) {
+      readAttempts++;
+      if (readAttempts === 1) {
+        const err = new Error('EBUSY: resource busy or locked');
+        err.code = 'EBUSY';
+        throw err;
+      }
+    }
+    return realReadFileSync.call(fs, p, ...rest);
+  };
+  const poller11b = startOutboxPoller({
+    outboxDir: trRoot,
+    channel: 'testchan',
+    sendFn: async () => { trSends++; },
+    logger: (m) => logs11b.push(m),
+    intervalMs: 20,
+  });
+  await sleep(150);
+  poller11b.stop();
+  fs.readFileSync = realReadFileSync;
+  assert(readAttempts >= 2, `readFileSync was retried after the transient failure (attempts=${readAttempts})`);
+  assert(trSends === 1, `the envelope was delivered exactly once despite the transient read error (sends=${trSends})`);
+  assert(logs11b.some((m) => m.includes('transient read error')),
+         'the transient read failure is logged distinctly from a bad-JSON drop');
+  assert(!logs11b.some((m) => m.includes('bad JSON') || m.includes('unparseable')),
+         'a transient read error is never misreported as a parse/corruption failure');
+  fs.rmSync(trRoot, { recursive: true, force: true });
+
   // 12. Regression (incident 2026-07-27): a preCheck that stays false forever
   //     settles every tick instantly, so `stalled_s` (test 10) never sees it —
   //     that gap let a Discord daemon look healthy (`poller_stalled_s: 0`)
