@@ -10,7 +10,9 @@ import ast
 import io
 import os
 import sys
+import tempfile
 import unittest
+import unittest.mock as mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -249,6 +251,66 @@ class ResolveClaudeBinTests(unittest.TestCase):
             os.environ.pop("CORVIN_CLAUDE_BIN_FALLBACKS", None)
             os.environ["PATH"] = d
             self.assertEqual(helper_model.resolve_claude_bin(), str(fake))
+
+
+class WindowsBinFallbacksTests(unittest.TestCase):
+    """helper_model.py's own copy of the Windows npm-shim fallback logic
+    (ADR-0265 P1) — must mirror agents.claude_code._windows_bin_fallbacks
+    since this module is deliberately dependency-free and can't import
+    the engine package to share the implementation."""
+
+    def setUp(self) -> None:
+        self._snap = {k: os.environ.get(k) for k in
+                      ("APPDATA", "USERPROFILE", "CORVIN_CLAUDE_BIN",
+                       "CORVIN_CLAUDE_BIN_FALLBACKS", "PATH")}
+
+    def tearDown(self) -> None:
+        for k, v in self._snap.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_windows_bin_fallbacks_reads_appdata_and_userprofile(self) -> None:
+        os.environ["APPDATA"] = r"C:\Users\op\AppData\Roaming"
+        os.environ["USERPROFILE"] = r"C:\Users\op"
+        cands = helper_model._windows_bin_fallbacks()
+        self.assertIn(os.path.join(r"C:\Users\op\AppData\Roaming", "npm", "claude.cmd"), cands)
+        self.assertIn(os.path.join(r"C:\Users\op", ".local", "bin", "claude.exe"), cands)
+
+    def test_resolve_claude_bin_finds_windows_npm_shim_when_platform_is_windows(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            appdata = Path(d) / "AppData" / "Roaming"
+            npm_dir = appdata / "npm"
+            npm_dir.mkdir(parents=True)
+            shim = npm_dir / "claude.cmd"
+            shim.write_text("@echo off\n")
+            os.environ["APPDATA"] = str(appdata)
+            os.environ.pop("USERPROFILE", None)
+            os.environ.pop("CORVIN_CLAUDE_BIN", None)
+            os.environ.pop("CORVIN_CLAUDE_BIN_FALLBACKS", None)
+            os.environ["PATH"] = "/nonexistent-dir-xyz"
+            with mock.patch.object(helper_model.sys, "platform", "win32"), \
+                 mock.patch.object(helper_model.shutil, "which", return_value=None), \
+                 mock.patch.object(helper_model.os, "access", return_value=True):
+                resolved = helper_model.resolve_claude_bin()
+            self.assertEqual(resolved, str(shim))
+
+    def test_resolve_claude_bin_ignores_windows_fallbacks_on_posix(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            appdata = Path(d) / "AppData" / "Roaming"
+            npm_dir = appdata / "npm"
+            npm_dir.mkdir(parents=True)
+            shim = npm_dir / "claude.cmd"
+            shim.write_text("@echo off\n")
+            os.environ["APPDATA"] = str(appdata)
+            os.environ.pop("CORVIN_CLAUDE_BIN", None)
+            os.environ.pop("CORVIN_CLAUDE_BIN_FALLBACKS", None)
+            os.environ["PATH"] = "/nonexistent-dir-xyz"
+            with mock.patch.object(helper_model.sys, "platform", "linux"), \
+                 mock.patch.object(helper_model.shutil, "which", return_value=None):
+                resolved = helper_model.resolve_claude_bin()
+            self.assertNotEqual(resolved, str(shim))
 
 
 class AllSitesCoverageTests(unittest.TestCase):

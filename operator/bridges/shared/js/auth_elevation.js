@@ -27,10 +27,40 @@ const path = require('path');
 
 const DEFAULT_TTL_S = 600;
 
+function _expandVars(p) {
+  // Mirrors Python's os.path.expandvars: ${VAR} / $VAR (POSIX) and
+  // %VAR% (Windows). Unset vars are left untouched, same as Python.
+  return p
+    .replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (m, name) => (
+      process.env[name] !== undefined ? process.env[name] : m
+    ))
+    .replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, name) => (
+      process.env[name] !== undefined ? process.env[name] : m
+    ))
+    .replace(/%([A-Za-z_][A-Za-z0-9_]*)%/g, (m, name) => (
+      process.env[name] !== undefined ? process.env[name] : m
+    ));
+}
+
+function _expandUser(p) {
+  // Mirrors Python's os.path.expanduser: a leading ~ or ~/ resolves
+  // against the current user's home directory.
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/') || p.startsWith('~\\')) {
+    return path.join(os.homedir(), p.slice(2));
+  }
+  return p;
+}
+
 function corvinHome() {
-  const env = process.env.CORVIN_HOME;
+  // Mirrors shared/paths.py::corvin_home(); kept in sync with
+  // shared/js/bridge_paths.js::corvinHome().
+  const raw = process.env.CORVIN_HOME;
+  // A whitespace-only value is not a real override — treat it the
+  // same as unset. Mirrors paths.py::_resolve_env().
+  const env = raw ? raw.trim() : '';
   if (env) {
-    return path.resolve(env);
+    return path.resolve(_expandUser(_expandVars(env)));
   }
   // Walk up from this file looking for a plugins/ marker.
   let cur = path.resolve(__dirname);
