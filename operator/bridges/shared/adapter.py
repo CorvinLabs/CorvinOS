@@ -9076,7 +9076,11 @@ def _mirror_new_artifacts(
 #
 # Drives the SAME transport-agnostic interview the Console's /plugin-builder
 # uses (plugin_builder.turn / plugin_builder.session_store), keyed by
-# (tenant_id, session_key) instead of the console's (tenant_id, fingerprint).
+# (tenant_id, session_key) — the same conversation-scoped identity the
+# console itself passes as its own `session_key` (the chat's `sid`, NOT the
+# login fingerprint; see `corvin_console/slash_commands.py`'s `handle()`
+# docstring, fixed 2026-08-01 after the console was found still keying on
+# the login fingerprint and bleeding an interview across chat tabs).
 # `session_key` is `"<channel>:<chat_key>"` — NOT bare chat_key — because
 # chat_key alone (chat_id or sender) is just a string from ONE messenger's id
 # space; two different channels can produce the identical string (a Discord

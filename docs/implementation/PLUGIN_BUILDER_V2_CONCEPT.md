@@ -1,6 +1,9 @@
 # Plugin-Builder V2 — Concept
 
-**Status:** Draft / Proposed (concept only, no implementation yet)
+**Status:** Implemented (2026-07-30) — see ADR-0262/ADR-0263 status headers in
+`Corvin-ADR/decisions/` for the exact scope shipped and the known cuts.
+Working tree only as of this writing — not yet committed/pushed in either
+repo.
 **Date:** 2026-07-30
 **Builds on:** ADR-0253 (Assisted Plugin Development, Implemented), ADR-0244–0249
 (Plugin-Builder series, all Implemented), `docs/implementation/PLUGIN_SYSTEM_ACTIVATION_PLAN.md`

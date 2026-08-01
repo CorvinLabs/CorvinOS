@@ -1,0 +1,73 @@
+<svg viewBox="0 0 900 460" xmlns="http://www.w3.org/2000/svg">
+  <text x="450" y="30" font-size="22" font-weight="bold" text-anchor="middle" fill="#333">
+    Plugin-Builder V2 — Entry Points, Phases, Hand-off (ADR-0262/0263)
+  </text>
+
+  <!-- Entry points -->
+  <rect x="40" y="60" width="180" height="50" fill="#e8f4f8" stroke="#2c5aa0" stroke-width="2"/>
+  <text x="130" y="90" font-size="13" text-anchor="middle" fill="#2c5aa0">Console /plugin-builder</text>
+
+  <rect x="40" y="130" width="180" height="50" fill="#e8f4f8" stroke="#2c5aa0" stroke-width="2"/>
+  <text x="130" y="160" font-size="13" text-anchor="middle" fill="#2c5aa0">Bridge /plugin-builder</text>
+
+  <rect x="40" y="200" width="180" height="50" fill="#f0e8f8" stroke="#7a2ca0" stroke-width="2"/>
+  <text x="130" y="225" font-size="13" text-anchor="middle" fill="#7a2ca0">--ideas (ADR-0263)</text>
+  <text x="130" y="240" font-size="11" text-anchor="middle" fill="#555">ack → grounded rounds</text>
+
+  <!-- Arrow from ideas mode to IDEA phase (hand off) -->
+  <line x1="220" y1="225" x2="270" y2="260" stroke="#7a2ca0" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="220" y1="85" x2="270" y2="260" stroke="#2c5aa0" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="220" y1="155" x2="270" y2="260" stroke="#2c5aa0" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Phase chain -->
+  <rect x="270" y="235" width="140" height="50" fill="#fff3cd" stroke="#b8860b" stroke-width="2"/>
+  <text x="340" y="255" font-size="13" text-anchor="middle" fill="#333">IDEA</text>
+  <text x="340" y="270" font-size="10" text-anchor="middle" fill="#555">idea_text + name</text>
+
+  <line x1="410" y1="260" x2="450" y2="260" stroke="#333" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="450" y="235" width="140" height="50" fill="#fff3cd" stroke="#b8860b" stroke-width="2"/>
+  <text x="520" y="255" font-size="13" text-anchor="middle" fill="#333">CONFIRM_GAPS</text>
+  <text x="520" y="270" font-size="10" text-anchor="middle" fill="#555">only unresolved fields</text>
+
+  <line x1="590" y1="260" x2="630" y2="260" stroke="#333" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="630" y="235" width="110" height="50" fill="#fff3cd" stroke="#b8860b" stroke-width="2"/>
+  <text x="685" y="260" font-size="13" text-anchor="middle" fill="#333">REVIEW</text>
+
+  <line x1="685" y1="285" x2="685" y2="325" stroke="#333" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="590" y="325" width="200" height="55" fill="#e8f8e8" stroke="#2c8a2c" stroke-width="2"/>
+  <text x="690" y="348" font-size="13" text-anchor="middle" fill="#333">CHECKPOINT</text>
+  <text x="690" y="365" font-size="10" text-anchor="middle" fill="#555">docs written, text+voice summary</text>
+
+  <line x1="590" y1="352" x2="480" y2="352" stroke="#333" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="330" y="325" width="150" height="55" fill="#f8e8e8" stroke="#a02c2c" stroke-width="2"/>
+  <text x="405" y="348" font-size="13" text-anchor="middle" fill="#333">DONE</text>
+  <text x="405" y="365" font-size="10" text-anchor="middle" fill="#555">scaffold + generated tests</text>
+
+  <!-- Bypass 1: CONFIRM_GAPS skipped entirely when free text already
+       resolved every field (interview.py's IDEA -> REVIEW shortcut) -->
+  <path d="M340,285 Q340,305 685,285" fill="none" stroke="#888" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrow-grey)"/>
+  <text x="500" y="308" font-size="10" text-anchor="middle" fill="#777">bypass: nothing unresolved</text>
+
+  <!-- Bypass 2: REVIEW -> DONE directly when plugin_builder_checkpoint_review is off -->
+  <path d="M685,285 Q560,300 405,325" fill="none" stroke="#888" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrow-grey)"/>
+  <text x="560" y="322" font-size="10" text-anchor="middle" fill="#777">bypass: checkpoint flag off</text>
+
+  <!-- Flags note -->
+  <rect x="40" y="410" width="820" height="40" fill="#f5f5f5" stroke="#999" stroke-width="1" stroke-dasharray="4,4"/>
+  <text x="450" y="434" font-size="12" text-anchor="middle" fill="#555">
+    Each stage behind its own default-off flag: plugin_builder_idea_first_interview · plugin_builder_checkpoint_review · plugin_builder_generate_e2e_tests · plugin_builder_ideas_mode
+  </text>
+
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#333"/>
+    </marker>
+    <marker id="arrow-grey" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#888"/>
+    </marker>
+  </defs>
+</svg>

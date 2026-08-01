@@ -399,6 +399,75 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         target_release="0.12.x",
         tags=("plugins",),
     ),
+    FeatureFlag(
+        id="plugin_builder_idea_first_interview",
+        label="Plugin Builder: idea-first interview",
+        description=(
+            "Replace the fixed 5+6-question interview with one open idea "
+            "question plus a short-name question; the safety-relevant "
+            "Dependencies fields (external libs, auth, network egress, "
+            "egress hosts) are inferred from that free text where possible, "
+            "and only the unresolved ones are asked (ADR-0262). Also detects "
+            "and pins the session's language from the first answer. Off "
+            "means the original ADR-0253 question sequence, unchanged. "
+            "Requires `plugin_builder_enabled`."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("plugins",),
+    ),
+    FeatureFlag(
+        id="plugin_builder_checkpoint_review",
+        label="Plugin Builder: checkpoint review",
+        description=(
+            "Insert a Zwischenstand checkpoint between generating the Idea/"
+            "Architecture/ADR/Build-Plan docs and writing the code scaffold: "
+            "a text and voice summary of the docs and the classification "
+            "(risk flags carried verbatim) is shown, and a second explicit "
+            "confirmation is required before any code is written (ADR-0262). "
+            "Off means `confirm` writes docs and scaffold together in one "
+            "step, as ADR-0253 always did. Requires `plugin_builder_enabled`."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("plugins",),
+    ),
+    FeatureFlag(
+        id="plugin_builder_generate_e2e_tests",
+        label="Plugin Builder: generate E2E tests",
+        description=(
+            "Generate edge-case tests and, for a Provider plugin type the "
+            "live Extension-Surface Map (ADR-0245) marks as consumed, a real "
+            "registration wiring test alongside the scaffold — an honest "
+            "`pytest.mark.skip` naming the live reason for a type nothing "
+            "invokes yet, never a fabricated pass (ADR-0262). Off means a "
+            "scaffold with no generated tests, as ADR-0253 always produced. "
+            "Requires `plugin_builder_enabled`."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("plugins",),
+    ),
+    FeatureFlag(
+        id="plugin_builder_ideas_mode",
+        label="Plugin Builder: --ideas co-ideation mode",
+        description=(
+            "Enable `/plugin-builder --ideas`: a bounded, moderated dialogue "
+            "where CorvinOS proposes plugin ideas grounded in real signals "
+            "(Extension-Surface Map gaps, Marketplace category sparsity, "
+            "what the user already said) instead of the user arriving with "
+            "one already formed (ADR-0263). Converges into the SAME idea-"
+            "first interview flow `plugin_builder_idea_first_interview` "
+            "governs for a plain `/plugin-builder` call — but always uses "
+            "that flow regardless of that flag's own on/off state, since "
+            "--ideas has no other flow to hand its converged idea into. "
+            "Writes nothing to disk on its own. Off means `--ideas` is not "
+            "recognized. Requires `plugin_builder_enabled`."
+        ),
+        owner="maintainer",
+        target_release="0.13.x",
+        tags=("plugins",),
+    ),
 )
 
 

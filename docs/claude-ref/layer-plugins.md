@@ -1385,7 +1385,7 @@ strategies:
 `/plugin-builder` is the one STATEFUL command in
 `corvin_console/slash_commands.py` — a multi-turn interview needs session
 state, held in `plugin_builder.session_store` (in-memory, TTL-evicted, keyed by
-`(tenant_id, fingerprint)`). Every other command in that dispatcher is a pure
+`(tenant_id, session_key)`). Every other command in that dispatcher is a pure
 function of its arguments; this is the deliberate, documented exception.
 `_plugin_builder_continue` checks the (cheap, in-memory) session store BEFORE
 the feature flag — `feature_flags.is_enabled()` reads `features.json` from
@@ -1397,18 +1397,26 @@ in the console.
 **Reach: Console AND messenger bridges (2026-07-27).** The interview state
 machine, artifact writing and reply text live in `plugin_builder.turn` — a
 transport-agnostic module both callers drive, keyed by `(tenant_id,
-session_key)`. The console's `session_key` is its `fingerprint`; the bridge's
-is `f"{channel}:{chat_key}"` — NOT bare `chat_key` (`chat_id or sender`).
-Bare `chat_key` is just one messenger's id space, and two different channels
-can produce the identical string (a Discord numeric id and a Telegram numeric
-id colliding, a WhatsApp fallback-to-sender matching some other channel's
-sender) — an adversarial review (2026-07-27) reproduced exactly this as a
-cross-channel session hijack (one user's plain message silently consumed as
-the answer to a DIFFERENT user's in-progress interview on another channel)
-before the `channel:` prefix was added. Same discipline this file already
-applies to session directories via `_session_dir(channel, chat_key, ...)` —
-never namespace a bridge identity by `chat_key` alone. Regression test:
-`test_same_chat_id_on_two_channels_does_not_collide`.
+session_key)`. The console's `session_key` is its chat-CONVERSATION `sid`
+(the WebSocket path parameter in `routes/chat.py`'s `/chat/sessions/{sid}/
+stream`) — NOT `fingerprint` (the login-cookie hash `handle()` also carries,
+used only for display/audit, e.g. `/whoami`). Keying on `fingerprint` was the
+original (2026-07) shape and is a genuine bug: `fingerprint` is shared by
+EVERY chat conversation the same browser login has open, so an interview
+started in one tab would capture plain-text turns typed in any other tab/
+saved chat under that login. Fixed 2026-08-01; regression test:
+`test_interview_does_not_leak_across_chat_tabs_with_same_login`. The bridge's
+`session_key` is `f"{channel}:{chat_key}"` — NOT bare `chat_key` (`chat_id or
+sender`). Bare `chat_key` is just one messenger's id space, and two different
+channels can produce the identical string (a Discord numeric id and a
+Telegram numeric id colliding, a WhatsApp fallback-to-sender matching some
+other channel's sender) — an adversarial review (2026-07-27) reproduced
+exactly this as a cross-channel session hijack (one user's plain message
+silently consumed as the answer to a DIFFERENT user's in-progress interview
+on another channel) before the `channel:` prefix was added. Same discipline
+this file already applies to session directories via `_session_dir(channel,
+chat_key, ...)` — never namespace a bridge identity by `chat_key` alone.
+Regression test: `test_same_chat_id_on_two_channels_does_not_collide`.
 
 `slash_commands.py`'s `_plugin_builder_continue`/`_plugin_builder_command`
 are thin wrappers around `plugin_builder.turn`;
@@ -1469,6 +1477,118 @@ independently of `plugin_console_surface`) reads it back and renders a
 "Scaffolded by Plugin-Builder" section — read-only, no enable/disable/settings,
 because a scaffold was never registered (ADR-0244 still holds: recording it in
 the index is bookkeeping, not loading).
+
+### Plugin-Builder V2 — idea-first interview, checkpoint, generated tests, `--ideas` (ADR-0262/0263, 2026-07-30)
+
+Four independent, default-off flags layered on top of `plugin_builder_enabled`,
+each degrading to the exact ADR-0253 shape above when off:
+
+* **`plugin_builder_idea_first_interview`** — swaps the fixed 5+6-question
+  form for one open question (`idea_text`) plus a short-name question
+  (`interview.py`'s new `IDEA` phase). `classifier.extract_dependency_hints()`
+  tries to resolve the four safety-relevant Dependencies fields (external
+  libs, auth, network egress, egress hosts — the exact ADR-0247 Validation
+  Gate inputs) from that free text via deterministic keyword/regex matching,
+  same "keyword-scored, not ML" discipline as `classify()`. Only the fields
+  it can't resolve get asked, in a new `CONFIRM_GAPS` phase — zero unresolved
+  fields skips that phase entirely. Session language (`de`/`en`) is detected
+  once from the first `IDEA`-phase answer and pinned for the rest of the
+  session (`language.py::LanguagePin`) — every later idea-first prompt is
+  translated, the legacy question bank is not (no such promise for it).
+* **`plugin_builder_checkpoint_review`** — inserts a new `CHECKPOINT` phase
+  between Review's `confirm` and scaffold-writing: the four docs are written
+  first (`generators.write_idea_docs`), a text+voice summary is built
+  (`checkpoint.py::build_checkpoint` — risk flags and low-confidence
+  classification carry VERBATIM, never paraphrased, reusing the lesson from
+  the `voice-summary-drops-critical-warnings` incident), and a SECOND
+  `confirm` is required before `generators.write_scaffold_after_checkpoint`
+  runs. **Known cut:** that split-path scaffold write always uses the
+  Builder-owned generic template, never the `corvin plugin new` reuse
+  `write_artifacts()` (checkpoint off) still gets — the reuse path assumes
+  it owns creating its `dest` directory, which the checkpoint's doc-write
+  step already did. **Known cut:** `build_checkpoint()`'s `voice_text` is
+  real and unit-tested, but no live turn reaches it — neither
+  `slash_commands.py` nor `adapter.py`'s `_plugin_builder_bridge_reply`
+  (which writes straight to the bridge outbox) currently extracts a
+  `<voice>` tag (`voice_tag.py`) from a Plugin-Builder reply at all; wiring
+  that in is unstarted, named rather than silently claimed.
+* **`plugin_builder_generate_e2e_tests`** — `generators/e2e_tests.py` writes
+  edge-case tests (module imports, class instantiates, `health_check()`,
+  `on_unload()`) plus, for a `PluginKind.PROVIDER` type the Extension-Surface
+  Map marks `consumed` (looked up LIVE via `surface_map.surface_for()` at
+  generation time, never a hardcoded list), a real wiring test —
+  `set_active()`/`get_active()` against the REAL `corvin_plugins/providers/`
+  registry module, proving the plugin's own registration call-site works
+  (not that the real consumer invokes it — that still needs a live boot).
+  For an unconsumed type: an honest `pytest.mark.skip(reason=...)` citing the
+  live `dead_reason`, never a fabricated pass. The scaffold's class name is
+  found via `ast.parse()` on the written file, never assumed.
+* **`plugin_builder_ideas_mode`** (ADR-0263) — `/plugin-builder --ideas`
+  (`ideation.py`), a separate, smaller session store (own TTL/bound, mirrors
+  `session_store.py`'s shape) driving a bounded round loop: a plain-language
+  acknowledgment gate, then up to `ideation.ROUND_CAP` rounds offering
+  proposals grounded ONLY in live signals (`surface_map.unconsumed_types()`,
+  Marketplace category sparsity when a `Corvin-Marketplace` checkout is
+  present as a sibling repo) — no code path can produce an ungrounded
+  suggestion. Convergence (a numeric pick, or any other free text, read as
+  the user's own contribution) hands the idea text into a REAL, normal
+  idea-first `InterviewSession` via `session_store.start()`, pre-answering
+  its `idea_text` question — `--ideas` is a front door onto the same
+  pipeline above, never a parallel copy. Starting `--ideas` replaces any
+  in-progress plain interview for the same caller (and says so), same
+  "replacing any prior one" contract `session_store.start()` already has for
+  the symmetric direction.
+
+Both the console (`slash_commands.py`) and the bridge adapter read all four
+flags and pass them through identically — `--ideas` and the three interview
+flags are reachable from both transports, not console-only.
+
+**Cross-store discipline (hardened across review rounds 3–7, see ADR-0262's
+"Review Log" for the full account, kept out of this file to avoid
+duplicating it):** a plain interview (`session_store`) and an `--ideas`
+dialogue (`ideation.py`'s own store) are mutually exclusive per caller,
+serialized by `session_store.cross_store_lock` across every writer to
+either store (`session_store.start()`, `ideation.start()`,
+`ideation._handoff_to_interview()`, `turn.command()`). `turn._checkpoint_state`
+is keyed by `id(session)` (object identity), not the deterministic
+`session_id` string every `InterviewSession` for one caller shares.
+`session_store.clear()`/`ideation.clear()` take an `expected=` parameter —
+an atomic, single-lock-acquisition check-and-delete — used by every caller
+that has a specific session object in hand, so a stale/delayed cleanup (a
+cancelled or finished session, a bridge retry) can never destroy a newer,
+legitimate session for the same caller. `session_store.register_removal_hook()`
+lets a dependent (`turn.py`, for `_checkpoint_state`) learn about EVERY way
+a session ever leaves the store — `clear()`, TTL eviction, the
+`MAX_SESSIONS` bound, and `start()`'s own replace-in-place — not just the
+paths a caller remembers to pair with its own cleanup call, closing the
+`id()`-reuse gap `clear()`'s `expected=` alone didn't cover.
+`ideation.py`'s own `_sessions` store gained the same `_remove_locked()`
+single-deletion-point shape (round 7) — no hook registry yet, since
+nothing keys off `id(IdeationSession)` today, but a future dependent only
+needs to add hooks there instead of a new removal path first. Round 7 also
+closed a subtler gap in the hook itself: `turn._checkpoint_reply()` writes
+its cache entry only AFTER `write_idea_docs()` (unbounded disk I/O)
+returns, so it now re-checks `session_store.get(tenant_id, session_key) is
+session` inside the same locked write — without that, a concurrent
+`session_store.start()` replacing the session while the write was still in
+flight could fire the removal hook as a no-op (nothing to remove yet) and
+then have this function write an entry the hook would never fire for
+again, a permanent orphan the hook's own promise doesn't cover on its own.
+`tests/test_clear_call_sites_completeness.py` mechanically enforces the
+`expected=` half of this: it AST-parses every `.clear()` call site and
+fails if one lacks `expected=` and isn't in a small, reasoned allowlist —
+with a documented scope cut (import aliases, indirect/`getattr` calls, a
+fixed file list) named explicitly in its own docstring rather than
+silently assumed airtight.
+
+**Diagram:** `docs/diagrams/plugin-builder-v2-flow.svg` — the two entry
+points (Console, bridge), `--ideas`' hand-off into the `IDEA` phase, and the
+phase chain through `CHECKPOINT`/`DONE`, with the four independent flags
+noted. Added round 3 of the ADR-0262/0263 review after an initial "no
+diagram, named skip" write-up was itself flagged as not meeting
+testing-and-docs.md's placeholder-diagram escalation step for a new
+architecture feature — the right response to that rule is a minimal SVG,
+not a longer explanation for skipping it.
 
 ### The runtime CLI half, and the wall it sat behind (2026-07-28)
 

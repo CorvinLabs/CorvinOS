@@ -70,6 +70,21 @@ def _enable_plugin_builder(home: Path, tenant_id: str = "_default") -> None:
     )
 
 
+def _enable_flags(home: Path, *flag_ids: str, tenant_id: str = "_default") -> None:
+    """Same as `_enable_plugin_builder`, plus any ADR-0262/0263 sub-flags —
+    added for the bridge `--ideas` coverage gap flagged by the ADR-0262
+    review round 1 (Quality finding: this file predated those flags and
+    never exercised them, so `run-all-tests.sh` could pass green without
+    ever running the new bridge code path)."""
+    overlay_dir = home / "tenants" / tenant_id / "global"
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    flags = {"plugin_builder_enabled": True}
+    flags.update({f: True for f in flag_ids})
+    (overlay_dir / "features.json").write_text(
+        json.dumps({"flags": flags}), encoding="utf-8"
+    )
+
+
 def _sandbox():
     base = Path(tempfile.mkdtemp(prefix="adapter-plugin-builder-"))
     inbox, outbox, processed, home = (
@@ -374,6 +389,138 @@ def test_unrelated_slash_command_mid_interview_is_not_read_as_an_answer() -> Non
         shutil.rmtree(base, ignore_errors=True)
 
 
+# ── ADR-0262/0263: idea-first + checkpoint + --ideas, reachable from a bridge ──
+
+def test_ideas_flag_off_returns_pointer_and_creates_no_ideation_session() -> None:
+    base, inbox, outbox, _processed, home = _sandbox()
+    try:
+        _enable_plugin_builder(home)  # base flag on, plugin_builder_ideas_mode NOT
+        adapter = _fresh_adapter(_sandbox_env(base, inbox, outbox, home))
+        from plugin_builder import ideation as pb_ideation
+        channel, chat_id, sender = "discord", "chan-pb-ideas-off", "u-pb-ideas-off"
+        key = _session_key(channel, chat_id)
+        pb_ideation.clear("_default", key)
+
+        _send(adapter, inbox, msg_id="pbi-off-1", channel=channel, chat_id=chat_id,
+              sender=sender, text="/plugin-builder --ideas")
+        ack = _last_ack_text(outbox, "pbi-off-1")
+        assert "off" in ack.lower(), ack
+        assert pb_ideation._get("_default", key) is None  # noqa: SLF001
+        print("PASS: --ideas flag off -> pointer, no ideation session created")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_ideas_flag_on_full_round_trip_via_discord_channel() -> None:
+    """--ideas through a real bridge turn: ack -> accept -> user's own free
+    text converges -> hands off into a real idea-first interview session
+    (session_store, not ideation's own store) -> drains CONFIRM_GAPS ->
+    review -> checkpoint -> scaffold + generated test on disk."""
+    base, inbox, outbox, _processed, home = _sandbox()
+    try:
+        _enable_flags(
+            home, "plugin_builder_idea_first_interview",
+            "plugin_builder_checkpoint_review", "plugin_builder_generate_e2e_tests",
+            "plugin_builder_ideas_mode",
+        )
+        adapter = _fresh_adapter(_sandbox_env(base, inbox, outbox, home))
+        from plugin_builder import ideation as pb_ideation
+        from plugin_builder import session_store as pb_store
+        channel, chat_id, sender = "discord", "chan-pb-ideas-on", "u-pb-ideas-on"
+        key = _session_key(channel, chat_id)
+        pb_ideation.clear("_default", key)
+        pb_store.clear("_default", key)
+
+        _send(adapter, inbox, msg_id="pbi-1", channel=channel, chat_id=chat_id,
+              sender=sender, text="/plugin-builder --ideas")
+        assert "?" in _last_ack_text(outbox, "pbi-1")
+        assert pb_ideation._get("_default", key) is not None  # noqa: SLF001
+
+        _send(adapter, inbox, msg_id="pbi-2", channel=channel, chat_id=chat_id,
+              sender=sender, text="yes")
+        assert pb_ideation._get("_default", key) is not None  # noqa: SLF001, still in ROUNDS
+
+        _send(adapter, inbox, msg_id="pbi-3", channel=channel, chat_id=chat_id,
+              sender=sender,
+              text="Talks to api.example.com, needs an API key, uses `requests`, routes messages.")
+        handoff_ack = _last_ack_text(outbox, "pbi-3")
+        assert "normal flow" in handoff_ack.lower() or "übernommen" in handoff_ack.lower()
+        assert pb_ideation._get("_default", key) is None  # noqa: SLF001 — handed off
+        interview = pb_store.get("_default", key)
+        assert interview is not None
+        assert interview.phase.value == "idea"  # idea_text pre-filled, name still pending
+
+        _send(adapter, inbox, msg_id="pbi-4", channel=channel, chat_id=chat_id,
+              sender=sender, text="Bridge Router")
+        session = pb_store.get("_default", key)
+        while session is not None and session.phase.value == "confirm_gaps":
+            _send(adapter, inbox, msg_id=f"pbi-gap-{session._answer_index}",  # noqa: SLF001
+                  channel=channel, chat_id=chat_id, sender=sender, text="none")
+            session = pb_store.get("_default", key)
+
+        _send(adapter, inbox, msg_id="pbi-review", channel=channel, chat_id=chat_id,
+              sender=sender, text="confirm")
+        checkpoint_ack = _last_ack_text(outbox, "pbi-review")
+        assert "nothing beyond these documents" in checkpoint_ack.lower()
+
+        _send(adapter, inbox, msg_id="pbi-done", channel=channel, chat_id=chat_id,
+              sender=sender, text="confirm")
+        final_ack = _last_ack_text(outbox, "pbi-done")
+        assert "written to" in final_ack.lower(), final_ack
+        assert pb_store.get("_default", key) is None
+
+        plugin_builder_dir = home / "tenants" / "_default" / "plugin-builder"
+        scaffold_dirs = [p for p in plugin_builder_dir.iterdir() if p.is_dir()]
+        assert scaffold_dirs, list(plugin_builder_dir.iterdir())
+        assert (scaffold_dirs[0] / "tests").is_dir()
+        assert list((scaffold_dirs[0] / "tests").glob("test_*_e2e.py"))
+        print("PASS: --ideas -> idea-first interview -> checkpoint -> scaffold+tests, "
+              "all driven through real Discord-shaped process_one() calls")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_disabling_flag_mid_ideas_session_stops_it_not_just_plain_interview() -> None:
+    """Round-2 regression: `_plugin_builder_bridge_reply` used to check
+    `ideation.continue_active()` BEFORE the `plugin_builder_enabled` flag,
+    so disabling the flag mid-`--ideas` left the dialogue running (including
+    live surface_map lookups) — only the plain-interview branch checked the
+    flag. Reproduced live before the fix; this pins the fix."""
+    base, inbox, outbox, _processed, home = _sandbox()
+    try:
+        _enable_flags(home, "plugin_builder_ideas_mode")
+        adapter = _fresh_adapter(_sandbox_env(base, inbox, outbox, home))
+        from plugin_builder import ideation as pb_ideation
+        channel, chat_id, sender = "discord", "chan-pb-ideas-toggle", "u-pb-ideas-toggle"
+        key = _session_key(channel, chat_id)
+        pb_ideation.clear("_default", key)
+
+        _send(adapter, inbox, msg_id="pbt-1", channel=channel, chat_id=chat_id,
+              sender=sender, text="/plugin-builder --ideas")
+        assert pb_ideation._get("_default", key) is not None  # noqa: SLF001
+
+        # Disable the base flag mid-dialogue.
+        (home / "tenants" / "_default" / "global" / "features.json").write_text(
+            json.dumps({"flags": {"plugin_builder_enabled": False}}), encoding="utf-8"
+        )
+
+        _send(adapter, inbox, msg_id="pbt-2", channel=channel, chat_id=chat_id,
+              sender=sender, text="yes")
+        ack = _last_ack_text(outbox, "pbt-2")
+        assert "[fake" in ack, (
+            f"turn must fall through to the (faked) engine once disabled, not "
+            f"keep running the ideation dialogue: {ack!r}"
+        )
+        assert pb_ideation._get("_default", key) is None, (  # noqa: SLF001
+            "the orphaned ideation session must be cleared when the flag "
+            "is found off, not left running"
+        )
+        print("PASS: disabling plugin_builder_enabled mid --ideas stops it, "
+              "same as it already did for a plain interview")
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_flag_off_plugin_builder_command_gets_pointer_not_engine_call()
     test_flag_on_full_interview_via_discord_channel()
@@ -382,4 +529,7 @@ if __name__ == "__main__":
     test_same_chat_id_on_two_channels_does_not_collide()
     test_flag_on_but_audio_message_is_not_intercepted()
     test_unrelated_slash_command_mid_interview_is_not_read_as_an_answer()
+    test_ideas_flag_off_returns_pointer_and_creates_no_ideation_session()
+    test_ideas_flag_on_full_round_trip_via_discord_channel()
+    test_disabling_flag_mid_ideas_session_stops_it_not_just_plain_interview()
     print("\nALL PASS")
