@@ -42,6 +42,7 @@ const { makeSettingsAccessor } = require('../shared/js/settings');
 const { makeAuth }             = require('../shared/js/auth');
 const { startOutboxPoller, countPending } = require('../shared/js/outbox');
 const { startHealthServer }    = require('../shared/js/health-server');
+const { startEventLoopWatchdog } = require('../shared/js/event-loop-watchdog');
 const { makeAnnouncer }        = require('../shared/js/local-announce');
 
 // ── Teams-specific ────────────────────────────────────────────────────────────
@@ -201,6 +202,7 @@ const outboxPoller = startOutboxPoller({
 });
 
 // ── Health server ─────────────────────────────────────────────────────────────
+startEventLoopWatchdog({ logger: log });
 startHealthServer({
   port: HEALTH_PORT, kind: 'teams', logger: log,
   getStatus: () => ({

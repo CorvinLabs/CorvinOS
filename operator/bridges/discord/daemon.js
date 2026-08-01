@@ -40,6 +40,7 @@ const { AutoOwnershipBridge }   = require('./auto_ownership');
 const { startOutboxPoller, countPending } = require('../shared/js/outbox');
 const { isNetworkError, networkUp } = require('../shared/js/net_probe');
 const { startHealthServer }     = require('../shared/js/health-server');
+const { startEventLoopWatchdog } = require('../shared/js/event-loop-watchdog');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
 const { makeStickyProgress }    = require('../shared/js/sticky_progress');
@@ -1124,6 +1125,13 @@ const outboxPoller = startOutboxPoller({
 });
 
 process.on('unhandledRejection', r => log(`unhandledRejection: ${r && r.message || r}`));
+
+// Event-loop freeze watchdog (2026-08-01): if the MAIN loop wedges (process
+// alive, /status unresponsive, no events) a worker thread force-restarts the
+// process via the platform supervisor. Closes the Windows gap where the
+// restart-on-EXIT Scheduled Task never fires on a hang (Linux watchdog.sh
+// already covered it). Idle ≠ frozen: the heartbeat is event-loop-driven.
+startEventLoopWatchdog({ logger: log });
 
 // HTTP /status
 startHealthServer({

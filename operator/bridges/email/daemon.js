@@ -32,6 +32,7 @@ const { makeLogger }            = require('../shared/js/logger');
 const { makeSettingsAccessor }  = require('../shared/js/settings');
 const { makeAuth }              = require('../shared/js/auth');
 const { startHealthServer }     = require('../shared/js/health-server');
+const { startEventLoopWatchdog } = require('../shared/js/event-loop-watchdog');
 const { makeAnnouncer }         = require('../shared/js/local-announce');
 const { newMsgId }              = require('../shared/js/msg-id');
 const inChatCmds                = require('../shared/js/in_chat_commands');
@@ -520,6 +521,7 @@ setInterval(() => {
 
 // ─── HTTP /status ───────────────────────────────────────────────────────────
 
+startEventLoopWatchdog({ logger: log });
 startHealthServer({
   port: HTTP_PORT, kind: CHANNEL, logger: log,
   getStatus: () => ({
