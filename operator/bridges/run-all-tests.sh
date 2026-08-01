@@ -126,6 +126,26 @@ run "Python: quota+audit (L20)"  python3 shared/test_quota.py >/dev/null || fail
 run "Python: proposal (L21)"     python3 shared/test_proposal.py >/dev/null || fails=$((fails+1))
 run "Python: settings view (/settings)" python3 shared/test_settings_view.py >/dev/null || fails=$((fails+1))
 run "Python: agents (L22)"       env CORVIN_AGENTS_SKIP_LIVE=1 CORVIN_INTEGRATION_TEST=1 python3 shared/agents/test_engines_e2e.py >/dev/null || fails=$((fails+1))
+# ── Windows parity (ADR-0159, ADR-0265) ─────────────────────────────────
+# 2026-08-01: none of these were referenced by this script before — they
+# ran in NO CI pipeline at all (same audit that found the 7 A2A files
+# above). Each guards a Windows-specific bug fixed this session or in
+# ADR-0159 (platform-independence M1-M3): process-tree termination via
+# CTRL_BREAK_EVENT/taskkill, npm-shim claude-CLI discovery under
+# %APPDATA%, CORVIN_HOME %VAR%/~ expansion, ACS run-dir ':'-in-path
+# sanitisation, and outbox/inbox UTF-8 decoding. Simulated via
+# sys.platform mocks (see each file's docstring) — real Windows CI is a
+# separate, larger addition tracked in ADR-0265.
+run "Python: process-tree termination (ADR-0265)" python3 shared/agents/test_terminate_process_tree.py >/dev/null || fails=$((fails+1))
+run "Python: claude-CLI bin resolution (ADR-0265)" python3 shared/agents/test_claude_bin_resolution.py >/dev/null || fails=$((fails+1))
+run "Python: atomic outbox writes (ADR-0265)"     python3 shared/test_atomic_write_outbox.py >/dev/null || fails=$((fails+1))
+run "Python: adapter UTF-8 decoding (ADR-0265)"   python3 shared/test_adapter_encoding.py >/dev/null || fails=$((fails+1))
+run "Python: bridge_manager shutdown (ADR-0265)"  bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" test_bridge_manager_shutdown.py -q >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: ACS run-dir Windows path (2026-07-13)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_acs_runtime_windows_path.py -q >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: platform independence (ADR-0159)"    python3 shared/test_adr0159_platform.py >/dev/null || fails=$((fails+1))
+# Node: bridge_paths.js's CORVIN_HOME whitespace-guard/expandvars/tilde
+# cases (this session's fix) ride the existing "Node: bridge_paths
+# (ADR-0008 P8.1)" line further down — same file, no separate entry needed.
 run "Python: delegation lib (L29)" python3 ../../core/delegate/tests/test_delegation.py >/dev/null || fails=$((fails+1))
 run "Python: delegate MCP (L29)" python3 ../../core/delegate/tests/test_mcp_server.py >/dev/null || fails=$((fails+1))
 run "Python: delegate resolver (L29)" python3 ../cowork/test/test_resolver_delegate.py >/dev/null || fails=$((fails+1))
@@ -573,6 +593,20 @@ run "Python: L38 a2a_worker + injection (ADR-0048)"    python3 shared/test_a2a_w
 run "Python: L38 bidirectional E2E (ADR-0048)"         python3 shared/test_a2a_bidirectional.py >/dev/null            || fails=$((fails+1))
 run "Python: L38 v3 attachments (ADR-0048)"            python3 shared/test_a2a_attachments.py >/dev/null              || fails=$((fails+1))
 run "Python: L38 v3 LIVE compute E2E (ADR-0048)"       python3 shared/test_a2a_e2e_compute.py >/dev/null              || fails=$((fails+1))
+# 2026-08-01 audit: these 7 A2A test files existed but were referenced by
+# NEITHER this script NOR coverage.yml (operator/bridges/shared/ is
+# explicitly excluded there — see that workflow's "KNOWINGLY NOT RUN HERE"
+# note) — so they ran in NO CI pipeline at all. Found while wiring
+# Windows-parity tests into CI (ADR-0265 P1); added here rather than left
+# silently uncovered, since several guard the crypto/replay/revocation
+# invariants A2A's security model depends on.
+run "Python: L38 manifest-required origin guard"       bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_a2a_manifest_required.py -q >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: L38 instance revocation guard"            bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_a2a_instance_revocation.py -q >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: L38 Google A2A adapter"                   python3 shared/test_a2a_google_adapter.py >/dev/null           || fails=$((fails+1))
+run "Python: L38 Google A2A E2E"                       python3 shared/test_a2a_google_e2e.py >/dev/null               || fails=$((fails+1))
+run "Python: L38 relay hardening (ADR-0258)"           python3 shared/test_a2a_relay.py >/dev/null                    || fails=$((fails+1))
+run "Python: L38 crypto+protocol E2E"                  python3 shared/test_a2a_crypto_e2e.py >/dev/null               || fails=$((fails+1))
+run "Python: L38 friendship handshake"                 python3 shared/test_a2a_friendship_handshake.py >/dev/null    || fails=$((fails+1))
 run "Python: L38 console route (ADR-0048)"             bash -c '
   if [ -x ../../core/console/.venv/bin/python ]; then
     ../../core/console/.venv/bin/python ../../core/console/tests/test_remote_trigger_log.py >/dev/null
