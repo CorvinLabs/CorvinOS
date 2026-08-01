@@ -111,14 +111,30 @@ try:
 except Exception:
     _load_a2a_manifest = None  # type: ignore[assignment]
 
+def _default_repo_relative(*parts: str) -> Path:
+    """<repo_root>/operator/<parts>, found by walking up for a repo marker
+    rather than a fixed Path.parents[N] index (2026-08-01: a minimal
+    standalone deployment of this file — e.g. dropped onto a bare Windows
+    box with only its direct stdlib-only dependencies, no full repo tree
+    beneath it — sits shallower than the repo layout assumes, and
+    parents[2] raised IndexError at IMPORT TIME, crashing the whole module
+    before any caller-supplied dir even had a chance to be used). Falls
+    back to a directory next to this file when no repo root is found,
+    matching paths.py::_repo_root()'s own fallback shape. Mirrors the
+    identical fix in remote_trigger_sender.py::_default_endpoints_dir()."""
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
+            return parent / "operator" / Path(*parts)
+    return here.parent / Path(*parts)
+
+
 # ── A2A network pubkey path (ADR-0103 M2) ────────────────────────────────
-_A2A_NETWORK_PUBKEY_PATH = (
-    Path(__file__).resolve().parents[2] / "license" / "a2a_network_pubkey.pem"
-)
+_A2A_NETWORK_PUBKEY_PATH = _default_repo_relative("license", "a2a_network_pubkey.pem")
 
 # ── Origin registry resolution ────────────────────────────────────────────
 _REMOTE_ORIGINS_ENV = "REMOTE_ORIGINS_DIR"
-_REMOTE_ORIGINS_DEFAULT = Path(__file__).resolve().parents[2] / "cowork" / "remote_origins"
+_REMOTE_ORIGINS_DEFAULT = _default_repo_relative("cowork", "remote_origins")
 
 # ── Endpoint registry resolution (ADR-0198 reconnect token) — mirrors
 # RemoteEndpointRegistry's own default in remote_trigger_sender.py. A signed
@@ -126,7 +142,7 @@ _REMOTE_ORIGINS_DEFAULT = Path(__file__).resolve().parents[2] / "cowork" / "remo
 # kid, so the receiver needs to locate the same directory the local sender
 # uses, not just its own inbound origins directory.
 _REMOTE_ENDPOINTS_ENV = "REMOTE_ENDPOINTS_DIR"
-_REMOTE_ENDPOINTS_DEFAULT = Path(__file__).resolve().parents[2] / "cowork" / "remote_endpoints"
+_REMOTE_ENDPOINTS_DEFAULT = _default_repo_relative("cowork", "remote_endpoints")
 
 # Reconnect new_url: same scheme/length bar as other operator-controlled
 # A2A URLs (see a2a_friendship.set_my_url) — bounded length, http(s) only.

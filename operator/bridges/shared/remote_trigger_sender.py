@@ -128,9 +128,26 @@ except ImportError:
 
 # ── Endpoint registry resolution ──────────────────────────────────────────
 _REMOTE_ENDPOINTS_ENV = "REMOTE_ENDPOINTS_DIR"
-_REMOTE_ENDPOINTS_DEFAULT = (
-    Path(__file__).resolve().parents[2] / "cowork" / "remote_endpoints"
-)
+
+
+def _default_endpoints_dir() -> Path:
+    """<repo_root>/operator/cowork/remote_endpoints, found by walking up for
+    a repo marker rather than a fixed Path.parents[N] index (2026-08-01: a
+    minimal standalone deployment of this file — e.g. dropped onto a bare
+    Windows box with only its direct stdlib-only dependencies, no full repo
+    tree beneath it — sits shallower than the repo layout assumes, and
+    parents[2] raised IndexError at IMPORT TIME, crashing the whole module
+    before any caller-supplied endpoints_dir even had a chance to be used).
+    Falls back to a directory next to this file when no repo root is found,
+    matching paths.py::_repo_root()'s own fallback shape."""
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
+            return parent / "operator" / "cowork" / "remote_endpoints"
+    return here.parent / "cowork" / "remote_endpoints"
+
+
+_REMOTE_ENDPOINTS_DEFAULT = _default_endpoints_dir()
 
 # Default outbound timeouts; operators may override per call.
 _DEFAULT_TIMEOUT_S = 30
