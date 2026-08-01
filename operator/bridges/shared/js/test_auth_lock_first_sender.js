@@ -105,5 +105,25 @@ console.log('\n[denyOnEmptyWhitelist takes precedence over lockFirstSender]');
   t('fail-closed wins: sender denied, no silent claim', auth.authOk('user1', 'hi', 'user1') === false);
 }
 
+// 6. Drift guard: every daemon.js that relies on the SHARED lockFirstSender
+//    mechanism (rather than its own bespoke ownership logic, like Discord's
+//    AutoOwnershipBridge or WhatsApp/Email's fail-closed authOk()) must
+//    actually pass lockFirstSender: true to makeAuth() — Signal was found
+//    missing this on 2026-08-02 (same gap as Telegram/Slack/Teams before
+//    them), so this guards against a FIFTH bridge quietly reintroducing the
+//    same forever-open-on-empty-whitelist bug.
+console.log('\n[drift guard: all lockFirstSender bridges actually wire it]');
+{
+  const path2 = require('path');
+  const fs2 = require('fs');
+  const bridgesDir = path2.join(__dirname, '..', '..');
+  for (const bridge of ['telegram', 'slack', 'teams', 'signal']) {
+    const daemonPath = path2.join(bridgesDir, bridge, 'daemon.js');
+    const src = fs2.readFileSync(daemonPath, 'utf-8');
+    t(`${bridge}/daemon.js wires lockFirstSender: true`,
+      /lockFirstSender:\s*true/.test(src), daemonPath);
+  }
+}
+
 console.log(`\n${pass + fail} total, ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

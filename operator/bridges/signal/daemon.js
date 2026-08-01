@@ -143,6 +143,12 @@ const auth = makeAuth({
   settingsFile: SETTINGS_FILE, currentSettings, loadSettings, logger: log,
   normalize: normPhone,
   channel: CHANNEL,
+  // 2026-08-02: without this, an empty whitelist meant EVERY sender was
+  // owner, forever, with no lock — the same gap Discord/WhatsApp/Email each
+  // fixed with their own bespoke mechanism. This is the shared equivalent
+  // (see auth.js's lockFirstSender doc): first sender claims the whitelist,
+  // persisted, everyone after is denied.
+  lockFirstSender: true,
 });
 
 // ── Local desktop announce ────────────────────────────────────────────────────
