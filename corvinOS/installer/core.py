@@ -802,14 +802,21 @@ class CorvinInstaller:
         # ── Step 5: Restart webui ──────────────────────────────────────────
         print("\n[4/5] Starting webui...")
         if _webui_stopped_via_systemd and sys.platform != "win32":
+            # restart, not start: Step 3's `systemctl stop` above is
+            # best-effort (its own failure only logs "not running via
+            # systemd" and falls through to _kill_port) — if the stop
+            # silently didn't take, `start` against a still-active unit is a
+            # no-op and the pre-restore process would survive untouched,
+            # reproducing the exact race restart_service() was added to
+            # close elsewhere in this file (2026-08-02).
             result = subprocess.run(
-                ["systemctl", "--user", "start", "corvin-webui.service"],
+                ["systemctl", "--user", "restart", "corvin-webui.service"],
                 capture_output=True, check=False,
             )
             if result.returncode == 0:
                 print("  ✓ corvin-webui.service started")
             else:
-                print("  ⚠ systemd start failed — falling back to direct launch")
+                print("  ⚠ systemd restart failed — falling back to direct launch")
                 _console.start_server(self.repo_root)
         else:
             _console.start_server(self.repo_root)
@@ -818,7 +825,12 @@ class CorvinInstaller:
         print("\n[5/5] Restarting services...")
         for svc in managed_services:
             try:
-                self.service_manager.start_service(svc)
+                # restart_service, not start_service — same reasoning as the
+                # webui restart above: Step 2's stop_service() call is only
+                # best-effort (logged, not enforced), so a service that
+                # didn't actually stop must still be replaced here rather
+                # than silently surviving as a no-op start.
+                self.service_manager.restart_service(svc)
                 print(f"  ✓ Started: {svc}")
             except Exception as e:
                 print(f"  ⚠ Could not start {svc}: {e}")

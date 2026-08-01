@@ -331,7 +331,7 @@ class TestRestore:
             (installer.voice_config / "installer.json").write_text("{not valid json!!")
 
             with mock.patch.object(installer.service_manager, "stop_service"), \
-                 mock.patch.object(installer.service_manager, "start_service"), \
+                 mock.patch.object(installer.service_manager, "restart_service"), \
                  mock.patch("corvinOS.installer.core.subprocess.run",
                             return_value=SimpleNamespace(returncode=1)), \
                  mock.patch("corvinOS.installer.core._IS_WHEEL_INSTALL", True), \
@@ -355,7 +355,7 @@ class TestRestore:
             (dist_dir / "index.html").write_text("<html></html>")
 
             with mock.patch.object(installer.service_manager, "stop_service"), \
-                 mock.patch.object(installer.service_manager, "start_service"), \
+                 mock.patch.object(installer.service_manager, "restart_service"), \
                  mock.patch("corvinOS.installer.core.subprocess.run",
                             return_value=SimpleNamespace(returncode=1)), \
                  mock.patch("corvinOS.installer.core._IS_WHEEL_INSTALL", False), \
@@ -383,7 +383,7 @@ class TestRestore:
                 return SimpleNamespace(returncode=0)
 
             with mock.patch.object(installer.service_manager, "stop_service"), \
-                 mock.patch.object(installer.service_manager, "start_service"), \
+                 mock.patch.object(installer.service_manager, "restart_service"), \
                  mock.patch("corvinOS.installer.core.subprocess.run", side_effect=_fake_run), \
                  mock.patch("corvinOS.installer.core._IS_WHEEL_INSTALL", True), \
                  mock.patch("corvinOS.installer.core._console.start_server") as mock_start, \
@@ -405,7 +405,7 @@ class TestRestore:
                 return SimpleNamespace(returncode=1)  # "start" fails
 
             with mock.patch.object(installer.service_manager, "stop_service"), \
-                 mock.patch.object(installer.service_manager, "start_service"), \
+                 mock.patch.object(installer.service_manager, "restart_service"), \
                  mock.patch("corvinOS.installer.core.subprocess.run", side_effect=_fake_run), \
                  mock.patch("corvinOS.installer.core._IS_WHEEL_INSTALL", True), \
                  mock.patch("corvinOS.installer.core._console.start_server") as mock_start, \
@@ -426,7 +426,7 @@ class TestRestore:
             )
 
             with mock.patch.object(installer.service_manager, "stop_service"), \
-                 mock.patch.object(installer.service_manager, "start_service"), \
+                 mock.patch.object(installer.service_manager, "restart_service"), \
                  mock.patch("corvinOS.installer.core.subprocess.run",
                             return_value=SimpleNamespace(returncode=1)), \
                  mock.patch("corvinOS.installer.core._IS_WHEEL_INSTALL", True), \
