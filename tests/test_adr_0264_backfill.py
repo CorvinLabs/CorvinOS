@@ -24,7 +24,9 @@ sys.path.insert(0, str(_REPO))
 
 from scripts.adr_backfill import (  # noqa: E402
     analyze,
+    apply_docs_sync,
     find_id_collisions,
+    needs_docs_sync,
     render_frontmatter,
 )
 from scripts.adr_graph import load_graph  # noqa: E402
@@ -192,6 +194,113 @@ class TestRenderedFrontmatterIsValidAndMarkedBackfilled:
         assert parsed["paths"] == []
 
 
+class TestDocsExtraction:
+    """docs: is extracted the same generous way as `related` ADR mentions
+    (Tier 4) -- any literal doc-path-shaped string in the body, not just a
+    hedged/explicit one, because it's informational and low-stakes."""
+
+    def test_doc_path_mention_is_captured(self, adr_repo, corvin_repo):
+        f = adr_repo / "decisions" / "0100-a.md"
+        f.write_text(
+            "# ADR-0100 — A\n\nSee docs/claude-ref/layer-16-security.md for details.\n",
+            encoding="utf-8",
+        )
+        r = analyze(f, corvin_repo)
+        assert r.docs == ["docs/claude-ref/layer-16-security.md"]
+
+    def test_claude_md_and_readme_are_recognized_without_a_docs_prefix(self, adr_repo, corvin_repo):
+        f = adr_repo / "decisions" / "0100-a.md"
+        f.write_text(
+            "# ADR-0100 — A\n\nUpdate CLAUDE.md and README.md after merging.\n",
+            encoding="utf-8",
+        )
+        r = analyze(f, corvin_repo)
+        assert set(r.docs) == {"CLAUDE.md", "README.md"}
+
+    def test_no_doc_mention_yields_empty_list_not_a_guess(self, adr_repo, corvin_repo):
+        f = adr_repo / "decisions" / "0100-a.md"
+        f.write_text("# ADR-0100 — A\n\nNo doc references here at all.\n", encoding="utf-8")
+        r = analyze(f, corvin_repo)
+        assert r.docs == []
+
+
+class TestDocsSyncForPreviouslyBackfilledFiles:
+    """The upgrade path for the 244 ADRs backfilled BEFORE docs: existed as
+    a field (ADR-0264 second amendment) -- add docs: without disturbing any
+    other field this script already wrote in an earlier run."""
+
+    def test_needs_docs_sync_true_for_backfilled_file_missing_docs(self, adr_repo):
+        f = adr_repo / "decisions" / "0100-a.md"
+        f.write_text(
+            "---\nid: ADR-0100\nstatus: accepted\nsupersedes: []\ndepends_on: []\n"
+            "related: []\ncommits: []\npaths: []\nbackfilled: true\n"
+            "backfill_date: 2026-08-01\n---\n\n# ADR-0100 — A\n\nSee docs/x.md.\n",
+            encoding="utf-8",
+        )
+        fm = needs_docs_sync(f)
+        assert fm is not None
+        assert fm["id"] == "ADR-0100"
+
+    def test_needs_docs_sync_false_when_docs_already_present(self, adr_repo):
+        f = adr_repo / "decisions" / "0100-a.md"
+        f.write_text(
+            "---\nid: ADR-0100\nstatus: accepted\nsupersedes: []\ndepends_on: []\n"
+            "related: []\ncommits: []\npaths: []\ndocs: []\nbackfilled: true\n"
+            "backfill_date: 2026-08-01\n---\n\n# ADR-0100 — A\n",
+            encoding="utf-8",
+        )
+        assert needs_docs_sync(f) is None
+
+    def test_needs_docs_sync_false_for_hand_authored_adr(self, adr_repo):
+        """No `backfilled: true` marker -- e.g. ADR-0264 itself -- must
+        NEVER be touched by the sync pass, even if it lacks `docs:`."""
+        f = adr_repo / "decisions" / "0100-a.md"
+        f.write_text(
+            "---\nid: ADR-0100\nstatus: accepted\nsupersedes: []\ndepends_on: []\n"
+            "related: []\ncommits: []\npaths: []\n---\n\n# ADR-0100 — A\n",
+            encoding="utf-8",
+        )
+        assert needs_docs_sync(f) is None
+
+    def test_apply_docs_sync_preserves_every_other_field_exactly(self, adr_repo):
+        f = adr_repo / "decisions" / "0100-a.md"
+        f.write_text(
+            "---\nid: ADR-0100\nstatus: accepted\nsupersedes: []\n"
+            "depends_on: [ADR-0050]\nrelated: [ADR-0060]\n"
+            "commits: [deadbeef]\npaths: []\nbackfilled: true\n"
+            "backfill_date: 2026-05-01\n---\n\n# ADR-0100 — A\n\nSee docs/x.md.\n",
+            encoding="utf-8",
+        )
+        fm = needs_docs_sync(f)
+        docs = apply_docs_sync(f, fm)
+        assert docs == ["docs/x.md"]
+
+        from scripts.adr_graph import _parse_frontmatter
+        reparsed = _parse_frontmatter(f.read_text(encoding="utf-8"))
+        assert reparsed["depends_on"] == ["ADR-0050"]
+        assert reparsed["related"] == ["ADR-0060"]
+        assert reparsed["commits"] == ["deadbeef"]
+        assert reparsed["docs"] == ["docs/x.md"]
+        # The ORIGINAL backfill_date is preserved, not overwritten with today.
+        assert str(reparsed["backfill_date"]) == "2026-05-01"
+
+    def test_docs_extracted_from_body_only_never_from_the_old_frontmatter_block(self, adr_repo):
+        """A stray 'docs/...' -shaped string sitting in an existing field
+        (e.g. paths:) must never leak into the newly-added docs: -- only
+        the BODY (after the frontmatter) is scanned."""
+        f = adr_repo / "decisions" / "0100-a.md"
+        f.write_text(
+            '---\nid: ADR-0100\nstatus: accepted\nsupersedes: []\ndepends_on: []\n'
+            'related: []\ncommits: []\npaths:\n  - "docs/should-not-leak.md"\n'
+            'backfilled: true\nbackfill_date: 2026-08-01\n---\n\n# ADR-0100 — A\n'
+            'No real doc mention in the body.\n',
+            encoding="utf-8",
+        )
+        fm = needs_docs_sync(f)
+        docs = apply_docs_sync(f, fm)
+        assert docs == []
+
+
 class TestRealCliEndToEnd:
     """Real subprocess runs against a real fixture repo -- not direct
     function calls -- so a regression in the CLI wiring itself is caught."""
@@ -290,3 +399,38 @@ class TestRealCliEndToEnd:
         nodes = load_graph(adr_repo / "decisions")
         assert "ADR-0002" in nodes
         assert "ADR-0001" not in nodes  # both collision files stayed untouched
+
+    def test_full_run_backfills_fresh_files_and_syncs_docs_on_old_ones_together(
+        self, adr_repo, corvin_repo,
+    ):
+        """The real-world scenario this session ran against Corvin-ADR: one
+        file has no frontmatter at all (fresh backfill), another already
+        has ADR-0264 frontmatter WITHOUT docs: (pre-dates the schema
+        upgrade) -- a single --write run must handle both correctly in one
+        pass, real subprocess, real fixture files."""
+        fresh = adr_repo / "decisions" / "0100-fresh.md"
+        fresh.write_text(
+            "# ADR-0100 — Fresh\n\n**Status:** Accepted\n\nSee docs/fresh.md.\n",
+            encoding="utf-8",
+        )
+        old_backfill = adr_repo / "decisions" / "0200-old.md"
+        old_backfill.write_text(
+            "---\nid: ADR-0200\nstatus: accepted\nsupersedes: []\ndepends_on: []\n"
+            "related: []\ncommits: []\npaths: []\nbackfilled: true\n"
+            "backfill_date: 2026-08-01\n---\n\n# ADR-0200 — Old\n\nSee docs/old.md.\n",
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [sys.executable, str(_SCRIPT), "--write",
+             "--decisions-dir", str(adr_repo / "decisions"),
+             "--adr-repo", str(adr_repo), "--corvin-repo", str(corvin_repo)],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Wrote frontmatter to 1 file" in result.stdout
+        assert "Synced `docs:` onto 1 previously-backfilled file" in result.stdout
+
+        nodes = load_graph(adr_repo / "decisions")
+        assert nodes["ADR-0100"].docs == ["docs/fresh.md"]
+        assert nodes["ADR-0200"].docs == ["docs/old.md"]
