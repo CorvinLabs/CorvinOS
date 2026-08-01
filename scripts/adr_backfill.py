@@ -83,6 +83,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import yaml
+
 _REPO = Path(__file__).resolve().parent.parent
 _ADR_REPO = _REPO.parent / "Corvin-ADR"
 _DECISIONS_DIR = _ADR_REPO / "decisions"
@@ -99,6 +101,11 @@ _SUPERSEDED_BY_RE = re.compile(
     r"supersed(?:e|es|ed)\s+by\s+ADR-(\d{4})", re.IGNORECASE)
 _DEPENDS_RE = re.compile(
     r"(?:depends on|builds on|requires)\s+ADR-(\d{4})", re.IGNORECASE)
+# Tier 4 (generous, like related ADR mentions): a literal doc-path-shaped
+# string in the body is real evidence the ADR names that doc, even if the
+# surrounding sentence is boilerplate ("update CLAUDE.md") rather than a
+# deep explanation -- same low-stakes reasoning as _ADR_MENTION_RE.
+_DOC_MENTION_RE = re.compile(r"\b(docs/[A-Za-z0-9_./-]+\.md|CLAUDE\.md|README\.md)\b")
 
 _STATUS_NORMALIZE = {
     "accepted": "accepted", "proposed": "proposed", "draft": "proposed",
@@ -116,6 +123,7 @@ class BackfillResult:
     depends_on: list[str] = field(default_factory=list)
     related: list[str] = field(default_factory=list)
     commits: list[str] = field(default_factory=list)
+    docs: list[str] = field(default_factory=list)
     skipped_reason: str = ""
 
 
@@ -170,6 +178,14 @@ def _extract_status(text: str) -> str:
     return _STATUS_NORMALIZE.get(word, "unknown")
 
 
+def _extract_docs(text: str) -> list[str]:
+    """Every doc-path-shaped mention in the body (docs/**/*.md, CLAUDE.md,
+    README.md), deduped. Same generous, low-stakes treatment as `related`
+    ADR mentions -- `docs:` is informational, not a status-driving field,
+    so an occasional boilerplate mention costs nothing."""
+    return sorted(set(_DOC_MENTION_RE.findall(text)))
+
+
 def _extract_commits(adr_id: str, corvin_repo: Path) -> list[str]:
     try:
         proc = subprocess.run(
@@ -205,10 +221,11 @@ def analyze(path: Path, corvin_repo: Path) -> BackfillResult | None:
     related = sorted(all_mentions - set(supersedes) - set(depends_on) - {adr_id})
 
     commits = _extract_commits(adr_id, corvin_repo)
+    docs = _extract_docs(text)
 
     return BackfillResult(
         file=path, id_=adr_id, status=status, supersedes=supersedes,
-        depends_on=depends_on, related=related, commits=commits,
+        depends_on=depends_on, related=related, commits=commits, docs=docs,
     )
 
 
@@ -225,7 +242,7 @@ def render_frontmatter(r: BackfillResult, backfill_date: str) -> str:
         f"related: {_list(r.related)}",
         f"commits: {_list(r.commits)}",
         "paths: []",
-        "docs: []",
+        f"docs: {_list(r.docs)}",
         "backfilled: true",
         f"backfill_date: {backfill_date}",
         "---",
@@ -237,6 +254,52 @@ def render_frontmatter(r: BackfillResult, backfill_date: str) -> str:
 def apply_backfill(r: BackfillResult, backfill_date: str) -> None:
     text = r.file.read_text(encoding="utf-8")
     r.file.write_text(render_frontmatter(r, backfill_date) + text, encoding="utf-8")
+
+
+def needs_docs_sync(path: Path) -> dict | None:
+    """A file this script backfilled before `docs:` existed as a field:
+    `backfilled: true` present, `docs` key absent. Returns the parsed
+    frontmatter dict if so, else None (hand-authored ADRs -- no
+    `backfilled` marker -- and already-synced ADRs both return None, and
+    are left completely alone).
+    """
+    text = path.read_text(encoding="utf-8")
+    if not _has_frontmatter(text):
+        return None
+    end = text.find("\n---", 4)
+    try:
+        fm = yaml.safe_load(text[4:end])
+    except yaml.YAMLError:
+        return None
+    if not isinstance(fm, dict) or not fm.get("backfilled") or "docs" in fm:
+        return None
+    return fm
+
+
+def apply_docs_sync(path: Path, fm: dict) -> list[str]:
+    """Add `docs:` to a file's existing frontmatter (from needs_docs_sync),
+    extracted from its BODY text (everything after the frontmatter block --
+    never re-reads the frontmatter itself as body, which would let a stray
+    `docs/...` value inside e.g. `paths:` get picked up as a body mention).
+    Every other field is preserved byte-for-byte from what was already
+    written; this touches nothing this script did not already decide.
+    """
+    text = path.read_text(encoding="utf-8")
+    end = text.find("\n---", 4)
+    body = text[end + 4:]
+    docs = _extract_docs(body)
+
+    r = BackfillResult(
+        file=path, id_=str(fm.get("id", "")), status=str(fm.get("status", "unknown")),
+        supersedes=[str(x) for x in (fm.get("supersedes") or [])],
+        depends_on=[str(x) for x in (fm.get("depends_on") or [])],
+        related=[str(x) for x in (fm.get("related") or [])],
+        commits=[str(x) for x in (fm.get("commits") or [])],
+        docs=docs,
+    )
+    backfill_date = str(fm.get("backfill_date", ""))
+    path.write_text(render_frontmatter(r, backfill_date) + body, encoding="utf-8")
+    return docs
 
 
 def validate(decisions_dir: Path, touched_ids: set[str]) -> list[str]:
@@ -314,9 +377,19 @@ def main(argv: list[str] | None = None) -> int:
     n_depends = sum(1 for r in to_write if r.depends_on)
     n_related = sum(1 for r in to_write if r.related)
     n_commits = sum(1 for r in to_write if r.commits)
+    n_docs = sum(1 for r in to_write if r.docs)
     print(f"     status known: {n_status_known}/{len(to_write)}  "
           f"supersedes: {n_supersedes}  depends_on: {n_depends}  "
-          f"related>0: {n_related}  commits>0: {n_commits}")
+          f"related>0: {n_related}  commits>0: {n_commits}  docs>0: {n_docs}")
+
+    # Second pass, independent of the above: files THIS SCRIPT already
+    # backfilled in an earlier run, before the `docs:` field existed
+    # (schema upgrade -- see ADR-0264's second amendment). Every other
+    # field stays exactly as previously written; only `docs:` is added.
+    docs_sync_candidates = [(r.file, fm) for r in already
+                             if (fm := needs_docs_sync(r.file)) is not None]
+    print(f"  -> {len(docs_sync_candidates)} previously-backfilled file(s) "
+          f"missing `docs:` will be synced.")
 
     if not args.write:
         print("\n(dry-run -- pass --write to actually modify files)")
@@ -325,13 +398,27 @@ def main(argv: list[str] | None = None) -> int:
             print(render_frontmatter(r, args.backfill_date), end="")
         if len(to_write) > 10:
             print(f"\n... and {len(to_write) - 10} more (showing first 10)")
+        for f, fm in docs_sync_candidates[:10]:
+            preview = _extract_docs((f.read_text(encoding="utf-8")))
+            print(f"\n--- docs-sync {f.name} --- would add docs: {preview}")
+        if len(docs_sync_candidates) > 10:
+            print(f"\n... and {len(docs_sync_candidates) - 10} more docs-sync candidates")
         return 0
 
     for r in to_write:
         apply_backfill(r, args.backfill_date)
     print(f"\nWrote frontmatter to {len(to_write)} file(s).")
 
-    problems = validate(decisions_dir, {r.id_ for r in to_write})
+    n_docs_added = 0
+    for f, fm in docs_sync_candidates:
+        docs = apply_docs_sync(f, fm)
+        if docs:
+            n_docs_added += 1
+    print(f"Synced `docs:` onto {len(docs_sync_candidates)} previously-backfilled "
+          f"file(s) ({n_docs_added} got at least one doc pointer).")
+
+    touched_ids = {r.id_ for r in to_write} | {fm.get("id") for _, fm in docs_sync_candidates}
+    problems = validate(decisions_dir, {i for i in touched_ids if i})
     if problems:
         print(f"\n{len(problems)} validation note(s):")
         for p in problems:
