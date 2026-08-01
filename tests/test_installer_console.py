@@ -73,6 +73,27 @@ def _make_webnext_with_package_json(tmp_path: Path) -> Path:
     return webnext_dir
 
 
+def test_build_frontend_rebuilds_when_source_tree_has_a_stale_dist(tmp_path: Path) -> None:
+    """2026-08-02 fresh-install-vs-upgrade regression: a SOURCE-TREE checkout
+    (package.json present) with a stale dist/index.html left over from a
+    PREVIOUS version must still rebuild — `corvin-install` is exactly what a
+    user runs after `git pull` to apply an upgrade. Checking dist_dir.exists()
+    before checking for source (the old order) skipped npm entirely here,
+    silently serving the old compiled SPA against the new gateway/API."""
+    webnext_dir = _make_webnext_with_package_json(tmp_path)
+    dist_dir = webnext_dir / "dist"
+    dist_dir.mkdir(parents=True)
+    (dist_dir / "index.html").write_text("<html>stale</html>")
+
+    with mock.patch.object(console_mod, "_find_npm", return_value="npm"), \
+         mock.patch.object(console_mod.subprocess, "run", return_value=mock.Mock(returncode=0)) as m_run:
+        ok = console_mod.build_frontend(tmp_path)
+
+    assert ok is True
+    m_run.assert_any_call(["npm", "install"], cwd=webnext_dir, check=False)
+    m_run.assert_any_call(["npm", "run", "build"], cwd=webnext_dir, check=False)
+
+
 def test_build_frontend_returns_false_when_npm_not_found(tmp_path: Path) -> None:
     _make_webnext_with_package_json(tmp_path)
 

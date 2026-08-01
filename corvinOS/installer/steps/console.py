@@ -67,21 +67,29 @@ def build_frontend(repo_root: Path) -> bool:
     webnext_dir = repo_root / "core" / "console" / "corvin_console" / "web-next"
     dist_dir = webnext_dir / "dist" / "index.html"
 
-    # Check if frontend is already built (wheel install)
-    if dist_dir.exists():
-        print(f"✓ Frontend already built (from wheel/distribution)")
-        return True
-
-    print(f"\n[Console] Building frontend at {webnext_dir} ...")
-
-    if not webnext_dir.exists():
+    # A WHEEL install has no source to build from at all — dist/ is the
+    # vendored, pre-built artifact, and skipping is correct (there is
+    # nothing else to do). A SOURCE-TREE checkout, on the other hand, always
+    # has both directories, and `corvin-install` is exactly what a user runs
+    # after `git pull` to apply an upgrade — checking `dist_dir.exists()`
+    # FIRST (the old order) treated any dist/ left over from a PREVIOUS
+    # version as "already built" and skipped npm entirely, so the console
+    # kept serving the OLD compiled SPA against the NEW gateway/API on every
+    # upgrade. Only the separate `corvin-installer restore` subcommand did a
+    # clean rebuild (rmtree dist/ first) — this makes the common path
+    # (`corvin-install`) upgrade-safe too, matching MEMORY.md's "Frontend
+    # Rebuild nach WebUI" operational note, which this bakes into the
+    # installer instead of leaving it a manual reminder.
+    has_source = webnext_dir.exists() and (webnext_dir / "package.json").exists()
+    if not has_source:
+        if dist_dir.exists():
+            print(f"✓ Frontend already built (from wheel/distribution)")
+            return True
         print(f"⚠ web-next directory not found — this is normal for pre-built wheels")
         print(f"  The web console will work with the pre-built frontend")
         return True
 
-    if not (webnext_dir / "package.json").exists():
-        print(f"⚠ package.json not found — skipping build")
-        return True
+    print(f"\n[Console] Building frontend at {webnext_dir} ...")
 
     npm_cmd = _find_npm()
     if not npm_cmd:
