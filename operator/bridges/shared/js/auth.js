@@ -50,12 +50,38 @@ function audienceFor(settingsFile, chatKey) {
  *                                            true` setting re-opens the legacy
  *                                            empty-whitelist=owner behaviour for
  *                                            local testing only.
+ * @param {boolean}  [cfg.lockFirstSender] — 2026-08-02: for DM-style channels
+ *                                            (not fully public like email, but
+ *                                            not yet safe to leave open forever
+ *                                            either — Telegram/Slack/Teams).
+ *                                            The legacy `denyOnEmptyWhitelist:
+ *                                            false` default keeps EVERY sender
+ *                                            authorized indefinitely as long as
+ *                                            the operator never populates
+ *                                            `whitelist` — Discord and WhatsApp
+ *                                            had (and fixed) this exact gap
+ *                                            with bespoke per-bridge ownership
+ *                                            locks. This is the shared
+ *                                            equivalent: when set, the FIRST
+ *                                            sender on an empty whitelist is
+ *                                            persisted into `whitelist` (same
+ *                                            write path as the PIN-auth claim
+ *                                            below), so every later call sees
+ *                                            a non-empty whitelist and denies
+ *                                            anyone not in it — converging
+ *                                            through the existing whitelist
+ *                                            check rather than a second,
+ *                                            parallel state machine. Mutually
+ *                                            exclusive with denyOnEmptyWhitelist
+ *                                            (fail-closed already means no
+ *                                            first-sender claim is possible).
  */
-function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normalize, channel, denyOnEmptyWhitelist }) {
+function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normalize, channel, denyOnEmptyWhitelist, lockFirstSender }) {
   const nrm = normalize || ((x) => String(x));
   const rateMap = new Map();
   const ch = channel || '';
   const denyEmpty = !!denyOnEmptyWhitelist;
+  const lockFirst = !!lockFirstSender && !denyEmpty;
 
   // PENTEST-3c: is an empty whitelist allowed to mean "everyone is owner"?
   // Legacy DEV/first-run behaviour keeps this true. Fail-closed channels flip
@@ -146,6 +172,26 @@ function makeAuth({ settingsFile, currentSettings, loadSettings, logger, normali
     const cs = currentSettings();
     const wl = (cs.whitelist || []).map(nrm);
     if (wl.length === 0 && emptyWhitelistIsOwner(cs)) {
+      const u0 = nrm(uid);
+      if (lockFirst) {
+        // First sender on an empty whitelist claims it, permanently (until an
+        // operator edits whitelist by hand) — persisted via the SAME
+        // read-modify-write the PIN-auth claim below uses, so every later
+        // call sees a non-empty whitelist and the existing `wl.includes(u)`
+        // check below denies anyone else. No separate state machine, no
+        // in-memory-only flag that resets on restart.
+        const cur = loadSettings();
+        cur.whitelist = (cur.whitelist || []).concat([u0]);
+        const tmp = settingsFile + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(cur, null, 2));
+        fs.renameSync(tmp, settingsFile);
+        if (logger) logger(`auth: empty whitelist, locking to first sender ${u0}`);
+        _audit('bridge.login', {
+          channel: ch, user: u0, chatKey: chatKey || '',
+          details: { method: 'first_sender_lock' },
+        });
+        return true;
+      }
       // Legacy first-run / DEV: empty whitelist means "no owner claimed yet",
       // so the first sender is trusted. Fail-closed channels (email) skip this
       // and fall through — an empty whitelist there denies everyone except a

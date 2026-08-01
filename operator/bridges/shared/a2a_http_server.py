@@ -69,7 +69,24 @@ if str(_HERE) not in sys.path:
 # a friendship-ack write lands in the SAME place the receiver/sender already
 # read from — a second, independently-computed default would silently
 # diverge on a wheel install.
-_DEFAULT_COWORK_DIR = Path(__file__).resolve().parents[2] / "cowork"
+#
+# Repo-marker walk-up rather than a fixed Path.parents[N] index (2026-08-02):
+# remote_trigger_sender.py's IDENTICAL `parents[2]` pattern raised IndexError
+# at IMPORT TIME on a real Windows VM in a minimal/standalone deployment
+# (this file sits shallower than the full repo tree the fixed index assumed)
+# — that fix (repo-marker walk-up, `_default_endpoints_dir()`) was applied
+# to remote_trigger_sender.py/remote_trigger_receiver.py but missed this
+# file, which has the exact same unguarded pattern. Mirrors
+# `paths.py::_repo_root()`'s already-proven-safe pattern.
+def _default_cowork_dir() -> Path:
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
+            return parent / "operator" / "cowork"
+    return here.parent / "cowork"
+
+
+_DEFAULT_COWORK_DIR = _default_cowork_dir()
 
 
 def _endpoints_dir() -> Path:
@@ -664,7 +681,7 @@ def build_server(
             Path(os.environ.get("REMOTE_ORIGINS_DIR", ""))
             if os.environ.get("REMOTE_ORIGINS_DIR")
             else origins_dir
-            or (Path(__file__).resolve().parents[2] / "cowork" / "remote_origins")
+            or (_DEFAULT_COWORK_DIR / "remote_origins")
         )
         google_adapter = GoogleA2AAdapter(
             receiver=receiver,

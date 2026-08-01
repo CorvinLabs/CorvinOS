@@ -20,6 +20,12 @@ This test proves BOTH modules import cleanly from a directory with zero
 repo markers (real subprocess import, real shallow tmp dir — not a mock),
 and that the in-repo resolution is byte-identical to before the fix.
 
+2026-08-02: an adversarial re-review found the IDENTICAL unguarded
+``parents[2]`` pattern in ``a2a_http_server.py`` (module-level
+``_DEFAULT_COWORK_DIR`` and again inside ``build_server()``) — missed by
+the original 2026-08-01 fix, which only touched the sender/receiver.
+Fixed the same way and added to this suite's coverage below.
+
 Run: python3 operator/bridges/shared/test_a2a_shallow_path_import.py
 """
 from __future__ import annotations
@@ -38,6 +44,7 @@ _HERE = Path(__file__).resolve().parent
 _MIN_FILES = (
     "remote_trigger_sender.py",
     "remote_trigger_receiver.py",
+    "a2a_http_server.py",
     "audit.py",
     "instance_identity.py",
     "a2a_friendship.py",
@@ -88,6 +95,17 @@ class TestShallowStandaloneImport(unittest.TestCase):
         )
         self.assertNotIn("IndexError", result.stderr)
 
+    def test_http_server_imports_cleanly_from_shallow_standalone_dir(self):
+        """2026-08-02: a2a_http_server.py had the identical unguarded
+        parents[2] pattern, missed by the 2026-08-01 fix that only covered
+        the sender/receiver — this is the regression guard for it."""
+        result = self._import_in_subprocess("a2a_http_server")
+        self.assertEqual(
+            result.returncode, 0,
+            f"import crashed:\nstdout={result.stdout}\nstderr={result.stderr}",
+        )
+        self.assertNotIn("IndexError", result.stderr)
+
     def test_fallback_default_dir_is_under_shallow_root_not_crashing(self):
         script = (
             "import remote_trigger_sender as rts\n"
@@ -132,6 +150,14 @@ class TestInRepoResolutionUnchanged(unittest.TestCase):
         self.assertEqual(
             rtr._A2A_NETWORK_PUBKEY_PATH,
             repo_root / "operator" / "license" / "a2a_network_pubkey.pem",
+        )
+
+    def test_http_server_default_matches_pre_fix_path(self):
+        import a2a_http_server as a2ahs
+        repo_root = _HERE.parent.parent.parent
+        self.assertEqual(
+            a2ahs._DEFAULT_COWORK_DIR,
+            repo_root / "operator" / "cowork",
         )
 
 
