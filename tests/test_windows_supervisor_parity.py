@@ -83,6 +83,41 @@ class TestBoundedRestartParity:
                 f"{label}: restart cap is checked but the loop doesn't `break`"
             )
 
+    def test_both_files_fail_safe_on_an_ambiguous_port_check(self) -> None:
+        """2026-08-02 adversarial finding: the port-busy standby check used to
+        treat ANY exception lacking `.Exception.Response` as "port is free"
+        — which also covers a connect TIMEOUT (firewall/proxy silently
+        dropping the connection, or a process alive-but-slow-to-answer), not
+        just a genuine refused connection. That risked launching a SECOND
+        competing instance against an existing one that just hadn't
+        responded within 3s yet. Fixed to require the specific, well-defined
+        `ConnectFailure` status before concluding the port is free; anything
+        else (including Timeout) is treated as busy. Pinned in both files —
+        parity is load-bearing, same as the restart-cap shape above."""
+        for label, src in (
+            ("corvin-supervisor.ps1", _SUPERVISOR.read_text(encoding="utf-8")),
+            ("install.ps1 generated block", _generated_supervisor_block()),
+        ):
+            assert "WebExceptionStatus" in src and "ConnectFailure" in src, (
+                f"{label}: port-busy check must distinguish ConnectFailure "
+                f"(genuinely free) from other failures (Timeout etc., "
+                f"treated as busy) instead of a bare `if ($_.Exception.Response)`"
+            )
+            # The ConnectFailure branch must be the only one that clears
+            # portBusy to $false — everything else in the catch block must
+            # default to busy ($true), never a bare fallthrough that leaves
+            # the pre-try $portBusy = $false unexamined.
+            catch_idx = src.find("catch {")
+            connectfailure_idx = src.find("ConnectFailure", catch_idx)
+            assert catch_idx != -1 and connectfailure_idx != -1, (
+                f"{label}: could not locate the port-busy catch block"
+            )
+            window = src[catch_idx:connectfailure_idx + 200]
+            assert "portBusy = $false" in window and "portBusy = $true" in window, (
+                f"{label}: expected an explicit else-branch defaulting to "
+                f"busy, not just the ConnectFailure allow-list"
+            )
+
 
 class TestScheduledTaskSettingsParity:
     """The Scheduled-Task registration itself (Trigger/Settings/RunLevel) is
@@ -155,6 +190,31 @@ class TestNoClosableWindow:
         assert "-WindowStyle Hidden" in window, (
             "install.ps1's no-autostart fallback must launch corvinos-serve with "
             "-WindowStyle Hidden, not a visible/minimized window"
+        )
+
+
+class TestScheduledTaskArgumentQuoting:
+    """2026-08-02 adversarial finding: bridge.ps1's Install-AutostartTask
+    built a flat Scheduled-Task action-argument string with $Supervisor
+    correctly quoted but $TargetArg/$BridgeArg interpolated bare — the exact
+    class of quoting mistake corvin-supervisor.ps1's own header docstring
+    says this whole design (native array args, not a flat re-parsed string)
+    exists to avoid. $BridgeArg in particular is operator-supplied (the
+    -Bridge CLI argument); a name containing a space or embedded quote would
+    break the CLI parsing powershell.exe does on the action string."""
+
+    def test_target_and_bridge_args_are_quoted_in_the_action_string(self) -> None:
+        src = _BRIDGE_PS1.read_text(encoding="utf-8")
+        idx = src.index("$ArgString")
+        window = src[idx:idx + 400]
+        assert '-Target `"$TargetArg`"' in window or '-Target "$TargetArg"' in window, (
+            "bridge.ps1: -Target value must be quoted in the Scheduled Task "
+            "action string, matching how $Supervisor is already quoted"
+        )
+        assert '-Bridge `"$BridgeArg`"' in window or '-Bridge "$BridgeArg"' in window, (
+            "bridge.ps1: -Bridge value must be quoted in the Scheduled Task "
+            "action string — an operator-supplied bridge name with a space "
+            "or quote would otherwise break the action's own CLI parsing"
         )
 
 
