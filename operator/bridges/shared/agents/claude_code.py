@@ -107,6 +107,24 @@ _DEFAULT_BIN_FALLBACKS = (
 )
 
 
+def _windows_bin_fallbacks() -> tuple[str, ...]:
+    """Windows-only fallback locations, resolved from env vars rather than
+    hardcoded (unlike ``_DEFAULT_BIN_FALLBACKS``, %APPDATA%/%USERPROFILE%
+    are per-user and not expressible as a ``~``-relative literal). npm's
+    global installer (``npm install -g @anthropic-ai/claude-code``) drops
+    ``claude.cmd``/``claude.exe`` shims under ``%APPDATA%\\npm`` on
+    Windows — the platform's PATH equivalent of ``~/.local/bin``."""
+    candidates: list[str] = []
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidates.append(os.path.join(appdata, "npm", "claude.cmd"))
+        candidates.append(os.path.join(appdata, "npm", "claude.exe"))
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        candidates.append(os.path.join(userprofile, ".local", "bin", "claude.exe"))
+    return tuple(candidates)
+
+
 def _resolve_claude_bin(name: str) -> str:
     """Return the absolute path to the claude binary, or ``name`` unchanged.
 
@@ -135,6 +153,8 @@ def _resolve_claude_bin(name: str) -> str:
         return name
     extra = os.environ.get("CORVIN_CLAUDE_BIN_FALLBACKS", "")
     candidates: tuple[str, ...] = _DEFAULT_BIN_FALLBACKS
+    if sys.platform.startswith("win"):
+        candidates = _windows_bin_fallbacks() + candidates
     if extra:
         candidates = tuple(p for p in extra.split(os.pathsep) if p) + candidates
     for cand in candidates:
@@ -152,7 +172,10 @@ def _format_binary_not_found_error(binary: str) -> str:
     *why* the lookup failed.
     """
     path_env = os.environ.get("PATH", "")
-    fallbacks = ", ".join(_DEFAULT_BIN_FALLBACKS)
+    fallback_list = _DEFAULT_BIN_FALLBACKS
+    if sys.platform.startswith("win"):
+        fallback_list = _windows_bin_fallbacks() + fallback_list
+    fallbacks = ", ".join(fallback_list)
     return (
         f"claude binary not found: {binary!r}; "
         f"PATH={path_env!r}; tried fallbacks: {fallbacks}"

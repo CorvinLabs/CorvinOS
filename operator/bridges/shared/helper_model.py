@@ -49,6 +49,24 @@ _CLAUDE_BIN_FALLBACKS: Final[tuple[str, ...]] = (
 )
 
 
+def _windows_bin_fallbacks() -> tuple[str, ...]:
+    """Windows-only fallback locations, mirrors
+    ``agents.claude_code._windows_bin_fallbacks`` — kept as a separate
+    copy since this module is deliberately dependency-free (see module
+    docstring) and must not import the engine package. %APPDATA%/
+    %USERPROFILE% are per-user and not expressible as a ``~``-relative
+    literal, so these are resolved from env vars rather than hardcoded."""
+    candidates: list[str] = []
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidates.append(os.path.join(appdata, "npm", "claude.cmd"))
+        candidates.append(os.path.join(appdata, "npm", "claude.exe"))
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        candidates.append(os.path.join(userprofile, ".local", "bin", "claude.exe"))
+    return tuple(candidates)
+
+
 def resolve_claude_bin() -> str:
     """Resolve the claude CLI path for helper ``claude -p`` subprocess spawns.
 
@@ -71,7 +89,10 @@ def resolve_claude_bin() -> str:
         if found:
             return found
         extra = os.environ.get("CORVIN_CLAUDE_BIN_FALLBACKS", "")
-        candidates = tuple(p for p in extra.split(os.pathsep) if p) + _CLAUDE_BIN_FALLBACKS
+        base_fallbacks = _CLAUDE_BIN_FALLBACKS
+        if sys.platform.startswith("win"):
+            base_fallbacks = _windows_bin_fallbacks() + base_fallbacks
+        candidates = tuple(p for p in extra.split(os.pathsep) if p) + base_fallbacks
         for cand in candidates:
             expanded = os.path.expanduser(cand)
             if os.path.isfile(expanded) and os.access(expanded, os.X_OK):

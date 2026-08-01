@@ -150,6 +150,36 @@ function caseLegacyPathPointsAtRepo() {
   }
 }
 
+function caseWhitespaceOnlyEnvIsIgnored() {
+  cleanEnv();
+  process.env.CORVIN_HOME = '   \t\n  ';
+  const p = fresh();
+  // Must fall back to the repo-walk / homedir default, not resolve to
+  // a bogus path like path.resolve('   ') relative to the cwd.
+  const resolved = p.corvinHome();
+  if (resolved === path.resolve('   \t\n  ')) {
+    throw new Error('whitespace-only CORVIN_HOME must not be used verbatim');
+  }
+}
+
+function caseExpandUserTilde() {
+  cleanEnv();
+  process.env.CORVIN_HOME = path.join('~', 'corvin-home-tilde-test');
+  const p = fresh();
+  const expected = path.join(os.homedir(), 'corvin-home-tilde-test');
+  assertEq(p.corvinHome(), expected, 'tilde must expand to homedir');
+}
+
+function caseExpandVarsDollar() {
+  cleanEnv();
+  const tmp = mktmp();
+  process.env.CORVIN_HOME_TEST_TARGET = tmp;
+  process.env.CORVIN_HOME = '${CORVIN_HOME_TEST_TARGET}/nested';
+  const p = fresh();
+  assertEq(p.corvinHome(), path.join(tmp, 'nested'), '${VAR} must expand');
+  delete process.env.CORVIN_HOME_TEST_TARGET;
+}
+
 function caseKnownChannelsAllAccepted() {
   cleanEnv();
   const tmp = mktmp();
@@ -173,6 +203,9 @@ const CASES = [
   caseInvalidKindRejected,
   caseIdentityOnlyNoFsSideEffects,
   caseLegacyPathPointsAtRepo,
+  caseWhitespaceOnlyEnvIsIgnored,
+  caseExpandUserTilde,
+  caseExpandVarsDollar,
   caseKnownChannelsAllAccepted,
 ];
 
