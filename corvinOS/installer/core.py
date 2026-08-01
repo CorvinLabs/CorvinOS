@@ -569,14 +569,20 @@ class CorvinInstaller:
             return
 
         try:
-            self.service_manager.start_service("voice-bridge-adapter")
+            # restart_service, not start_service: on an existing system
+            # `corvin-install` is the documented repair/upgrade path
+            # (docs/troubleshooting.md) and the service is usually already
+            # running with the OLD unit definition — `systemctl start`
+            # against an active unit is a no-op, so the old process would
+            # otherwise survive the upgrade untouched (2026-08-02 finding).
+            self.service_manager.restart_service("voice-bridge-adapter")
             print("  ✓ Adapter started")
         except Exception as e:
             print(f"  ⚠ Failed to start adapter: {e}")
 
         for bridge in self.selected_bridges:
             try:
-                self.service_manager.start_service(f"voice-bridge-{bridge}")
+                self.service_manager.restart_service(f"voice-bridge-{bridge}")
                 print(f"  ✓ {bridge} bridge started")
             except Exception as e:
                 print(f"  ⚠ Failed to start {bridge}: {e}")
@@ -595,7 +601,10 @@ class CorvinInstaller:
         # in-process Popen path on non-systemd platforms (macOS, Windows).
         if hasattr(self.service_manager, "_run_systemctl"):
             try:
-                self.service_manager.start_service("webui")
+                # restart_service — see step_15_start_services for why
+                # start_service is unsafe here on an upgrade of an existing
+                # install (2026-08-02 finding).
+                self.service_manager.restart_service("webui")
                 # Wait up to 15 s for the port to accept connections.
                 for _ in range(30):
                     time.sleep(0.5)

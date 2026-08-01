@@ -63,6 +63,16 @@ class ServiceManager(ABC):
         pass
 
     @abstractmethod
+    def restart_service(self, name: str) -> None:
+        """(Re)start a service so it picks up a just-rewritten unit/plist/task
+        definition even if it was already running — unlike start_service(),
+        which on some platforms (systemd) is a no-op against an active unit
+        and would leave the OLD process (old ExecStart/env) running through
+        an upgrade. Must behave correctly whether the service is currently
+        running or stopped."""
+        pass
+
+    @abstractmethod
     def stop_service(self, name: str) -> None:
         """Stop a service."""
         pass
@@ -220,6 +230,14 @@ class LinuxServiceManager(ServiceManager):
         """Start a systemd user service."""
         self._run_systemctl("start", f"corvin-{name}.service")
 
+    def restart_service(self, name: str) -> None:
+        """`systemctl restart` starts a stopped unit exactly like `start`
+        would, AND replaces an already-running one — unlike `start`, which is
+        a no-op against an active unit and would otherwise leave the OLD
+        process (old ExecStart/env, from before an upgrade rewrote the unit
+        file) running indefinitely. Safe for both fresh-install and upgrade."""
+        self._run_systemctl("restart", f"corvin-{name}.service")
+
     def stop_service(self, name: str) -> None:
         """Stop a systemd user service."""
         self._run_systemctl("stop", f"corvin-{name}.service")
@@ -374,6 +392,15 @@ class DarwinServiceManager(ServiceManager):
             capture_output=True,
         )
 
+    def restart_service(self, name: str) -> None:
+        """Unload-then-load the plist — same sequence as enable_autostart(),
+        which M2 already documented as needed for a re-install to pick up an
+        updated plist even while the agent is currently loaded. Reusing it
+        here (rather than stop_service+start_service) guarantees the CURRENT
+        on-disk plist definition is what actually gets (re)loaded, not just a
+        KeepAlive-triggered respawn of the previously-loaded one."""
+        self.enable_autostart(name)
+
     def stop_service(self, name: str) -> None:
         """Stop a launchd service."""
         subprocess.run(
@@ -520,6 +547,14 @@ class WindowsServiceManager(ServiceManager):
             check=True,
             capture_output=True,
         )
+
+    def restart_service(self, name: str) -> None:
+        """Stop then start — /end best-effort (no-ops if not running), /run
+        always launches fresh. This class isn't reachable from the real
+        installer (see install_service docstring above); kept for interface
+        parity with Linux/macOS."""
+        self.stop_service(name)
+        self.start_service(name)
 
     def stop_service(self, name: str) -> None:
         """Stop a Task Scheduler task."""
