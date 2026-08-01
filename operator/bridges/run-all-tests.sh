@@ -607,6 +607,7 @@ run "Python: L38 Google A2A E2E"                       python3 shared/test_a2a_g
 run "Python: L38 relay hardening (ADR-0258)"           python3 shared/test_a2a_relay.py >/dev/null                    || fails=$((fails+1))
 run "Python: L38 crypto+protocol E2E"                  python3 shared/test_a2a_crypto_e2e.py >/dev/null               || fails=$((fails+1))
 run "Python: L38 friendship handshake"                 python3 shared/test_a2a_friendship_handshake.py >/dev/null    || fails=$((fails+1))
+run "Python: L38 shallow-path import regression (2026-08-01)" python3 shared/test_a2a_shallow_path_import.py >/dev/null || fails=$((fails+1))
 run "Python: L38 console route (ADR-0048)"             bash -c '
   if [ -x ../../core/console/.venv/bin/python ]; then
     ../../core/console/.venv/bin/python ../../core/console/tests/test_remote_trigger_log.py >/dev/null
