@@ -33,9 +33,31 @@ import json
 import os
 import signal
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Protocol, runtime_checkable
+
+
+def _windows_kill_tree(pid: int) -> None:
+    """Hard-kill an entire Windows process tree rooted at *pid*.
+
+    ``proc.kill()`` alone only reaches the tracked PID — when that PID is
+    the ``cmd.exe`` wrapper npm's ``claude.cmd`` shim requires (see
+    ``_win_shim.py``), the actual ``node.exe`` process (and any tool-use
+    grandchildren it spawned) is a grandchild that ``TerminateProcess()``
+    never touches, leaking it as an orphan on every cancel/timeout. Windows
+    ships ``taskkill /T /F`` specifically for this (recursive tree kill,
+    no extra dependency). Best-effort: a tree that already exited is not
+    an error.
+    """
+    try:
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            capture_output=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def terminate_process_tree(proc: "subprocess.Popen", *, grace: float = 5.0) -> None:
@@ -49,30 +71,49 @@ def terminate_process_tree(proc: "subprocess.Popen", *, grace: float = 5.0) -> N
     direct child — the grandchild silently outlived the turn the adapter
     believed was cancelled. Mirrors the SIGTERM-then-SIGKILL-after-grace
     pattern ``adapter.py``'s ``_cancel_chat`` already uses correctly.
-    Windows has no process groups; falls back to a single-process
-    terminate()/kill() there.
+
+    Windows has no POSIX process groups, but DOES have an equivalent for the
+    graceful step — a process spawned with ``CREATE_NEW_PROCESS_GROUP`` (see
+    ``claude_code.py``'s spawn) can be sent ``CTRL_BREAK_EVENT``, which
+    Python maps to a deliverable ``SIGBREAK`` in the child (unlike
+    ``TerminateProcess``/``.terminate()``, which bypasses signal handlers
+    entirely). The hard-kill step uses ``taskkill /T /F`` to reach the whole
+    tree, not just the tracked PID — see ``_windows_kill_tree``.
     """
     if proc.poll() is not None:
         return
-    try:
-        if hasattr(os, "killpg"):
+    if hasattr(os, "killpg"):
+        try:
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        else:  # Windows — no process groups
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    elif sys.platform.startswith("win") and hasattr(signal, "CTRL_BREAK_EVENT"):
+        try:
+            proc.send_signal(signal.CTRL_BREAK_EVENT)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    else:  # pragma: no cover — exotic platform, no group concept at all
+        try:
             proc.terminate()
-    except (ProcessLookupError, PermissionError, OSError):
-        pass
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
     try:
         proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         pass
     if proc.poll() is None:
-        try:
-            if hasattr(os, "killpg"):
+        if hasattr(os, "killpg"):
+            try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            else:
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        elif sys.platform.startswith("win"):
+            _windows_kill_tree(proc.pid)
+        else:  # pragma: no cover
+            try:
                 proc.kill()
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
 
 
 # ---------------------------------------------------------------------------

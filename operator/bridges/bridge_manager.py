@@ -584,6 +584,57 @@ def _load_service_env(env: dict) -> None:
             env[k] = v  # service.env wins (matches bridge.sh set-a semantics)
 
 
+def _graceful_signal(p: subprocess.Popen) -> None:
+    """Ask *p* to shut itself down cleanly, platform-appropriately.
+
+    POSIX: .terminate() == SIGTERM, delivered to and handled by the child
+    (adapter.py registers a SIGTERM handler for exactly this — a graceful
+    drain of in-flight claude turns before exiting).
+
+    Windows: .terminate() calls Win32 TerminateProcess() — a hard kill with
+    NO signal delivery and NO handler invocation at all, unlike POSIX. The
+    graceful-drain path never fired there before this fix (every stop/
+    restart abruptly killed in-flight turns). CTRL_BREAK_EVENT is the real
+    Windows equivalent — Python maps it to a deliverable SIGBREAK, but ONLY
+    in a process spawned with CREATE_NEW_PROCESS_GROUP (see start_fg's
+    _spawn_kwargs; adapter.py registers a SIGBREAK handler for exactly this).
+    """
+    if sys.platform.startswith("win") and hasattr(signal, "CTRL_BREAK_EVENT"):
+        try:
+            p.send_signal(signal.CTRL_BREAK_EVENT)
+            return
+        except Exception:
+            pass
+    try:
+        p.terminate()
+    except Exception:
+        pass
+
+
+def _hard_kill(p: subprocess.Popen) -> None:
+    """Unconditionally end *p*, reaching its whole process tree on Windows.
+
+    p.kill() alone only reaches the tracked PID on Windows — when that PID
+    is a cmd.exe wrapper (npm's claude.cmd shim, see agents/_win_shim.py),
+    the real node.exe process it spawned is a grandchild TerminateProcess
+    never touches, leaking it as an orphan. taskkill /T /F reaches the
+    whole tree; ships with every Windows install, no extra dependency.
+    """
+    if sys.platform.startswith("win"):
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(p.pid)],
+                capture_output=True, timeout=10,
+            )
+            return
+        except Exception:
+            pass
+    try:
+        p.kill()
+    except Exception:
+        pass
+
+
 def start_fg(channels: Optional[list[str]] = None) -> int:
     """Start adapter + bridge daemons in the foreground. Returns exit code."""
     node = ensure_node()
@@ -619,6 +670,14 @@ def start_fg(channels: Optional[list[str]] = None) -> int:
 
     processes: list[subprocess.Popen] = []
 
+    # Windows-only: passed to Popen so a later CTRL_BREAK_EVENT reaches this
+    # child (and its own process group) without also hitting bridge_manager
+    # itself — by default a spawned child shares the parent's console/
+    # process group on Windows.
+    _spawn_kwargs: dict = {}
+    if sys.platform.startswith("win"):
+        _spawn_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
     def _spawn(label: str, cmd: list[str], cwd: Path,
                mutate_env: Optional["callable"] = None) -> None:  # type: ignore[name-defined]
         env = os.environ.copy()
@@ -628,17 +687,14 @@ def start_fg(channels: Optional[list[str]] = None) -> int:
         env.setdefault("CORVIN_BRIDGE_OPERATOR_ROOT", str(_BRIDGE_DIR.parent))
         if mutate_env is not None:
             mutate_env(env)
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env)
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, **_spawn_kwargs)
         processes.append(proc)
         _info(f"  started {label} (pid={proc.pid})")
 
     def _teardown(sig_name: str = "Ctrl-C") -> None:
         _info(f"\n  {sig_name} — stopping bridge...")
         for p in processes:
-            try:
-                p.terminate()
-            except Exception:
-                pass
+            _graceful_signal(p)
         deadline = time.monotonic() + 3.0
         for p in processes:
             remaining = max(0.0, deadline - time.monotonic())
@@ -647,10 +703,8 @@ def start_fg(channels: Optional[list[str]] = None) -> int:
             except Exception:
                 pass
         for p in processes:
-            try:
-                p.kill()
-            except Exception:
-                pass
+            if p.poll() is None:
+                _hard_kill(p)
         _info("  All processes stopped.")
 
     # Adapter (Python) — runs from shared/ source dir (pure Python, no npm),
