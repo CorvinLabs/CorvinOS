@@ -1,6 +1,6 @@
 ---
 name: adr_gate
-description: ADR Gate — evaluates after non-trivial tasks whether an ADR is warranted; writes to Corvin-ADR repo when yes, names the skip reason when no, requires three-level analysis (conceptual/structural/implementation), emits ADR-0264 decision-graph frontmatter (depends_on/related/paths) so scripts/adr_graph.py can traverse it, and generates E2E tests for every new structural invariant so LDD has a loss signal.
+description: ADR Gate — evaluates after non-trivial tasks whether an ADR is warranted; writes to Corvin-ADR repo when yes, names the skip reason when no, requires three-level analysis (conceptual/structural/implementation), emits ADR-0264 decision-graph frontmatter (depends_on/related/paths/docs — the three-layer Code/Docs/ADR graph) so scripts/adr_graph.py can traverse it, and generates E2E tests for every new structural invariant so LDD has a loss signal.
 ---
 
 # ADR Gate — Architectural Decision Record discipline
@@ -71,8 +71,10 @@ supersedes: []            # ADR ids this one fully replaces
 depends_on: []            # structural prerequisites — read these first
 related: []               # associative, non-blocking cross-references
 commits: []               # git SHAs implementing this, filled in at merge
-paths:                    # globs this ADR structurally constrains
+paths:                    # CODE globs this ADR structurally constrains
   - "path/or/glob/**"
+docs:                     # DOCUMENTATION globs describing this decision
+  - "docs/claude-ref/some-file.md"
 ---
 
 # ADR-XXXX — [Title]
@@ -107,10 +109,12 @@ Do NOT hand-fill `superseded_by` — leave it absent. It is derived automaticall
 node being superseded never needs editing after the fact.
 
 Populate `depends_on`/`related` with real ADR ids only when a real relationship exists;
-an empty list is the correct default for a freestanding decision. `paths` should name the
-actual files/globs this decision structurally constrains — this is the field
-`scripts/adr_graph.py adrs_for_path()` matches against, so an empty or inaccurate list
-makes this ADR invisible to that traversal, not merely undocumented.
+an empty list is the correct default for a freestanding decision. `paths` and `docs` are
+two SEPARATE surfaces, not one merged list: `paths` is the code this decision constrains
+(matched by `scripts/adr_graph.py adrs_for_path()`), `docs` is the documentation that
+explains it to a reader — exactly the artifacts the `docs-as-definition-of-done` skill
+keeps in sync (matched by `adrs_for_doc()`). An empty or inaccurate list in either makes
+this ADR invisible to that specific traversal, not merely undocumented.
 
 **Step 3** — Commit in the Corvin-ADR repo:
 
@@ -130,7 +134,11 @@ This prose pointer stays — it is what a human skimming CLAUDE.md sees — but 
 longer the only way to find this ADR from the code. `paths:` in Step 2's frontmatter is
 the machine-readable equivalent: run `python3 scripts/adr_graph.py <path>` from a
 CorvinOS checkout to confirm the new ADR is actually discoverable from the code it
-constrains before moving on.
+constrains before moving on. If the ADR also has a documented surface (a
+`docs/claude-ref/*.md` page, a CLAUDE.md section) beyond this one pointer line, add it to
+`docs:` too and check it with `--doc <path>` — this is the same query
+`docs-as-definition-of-done` runs before editing a doc, so an ADR with an accurate `docs:`
+list gets found from that direction as well, not just from code.
 
 A generated (not hand-authored) ADR — e.g. Plugin-Builder's per-plugin classification
 ADR (`core/plugins/plugin_builder/generators/adr.py`) — carries this same frontmatter

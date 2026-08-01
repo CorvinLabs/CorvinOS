@@ -90,8 +90,10 @@ supersedes: []            # ADR ids this one fully replaces
 depends_on: []            # structural prerequisites — read these first
 related: []               # associative, non-blocking cross-references
 commits: []               # git SHAs implementing this, filled in at merge
-paths:                    # globs this ADR structurally constrains
+paths:                    # CODE globs this ADR structurally constrains
   - "path/or/glob/**"
+docs:                     # DOCUMENTATION globs describing this decision
+  - "docs/claude-ref/some-file.md"
 ---
 
 # ADR-XXXX — [Title]
@@ -137,6 +139,18 @@ the derived `superseded_by` chain. A path matching no ADR is the expected defaul
 error) for the pre-ADR-0264 corpus — that older corpus is deliberately not retrofitted;
 see ADR-0264's "Decision" §4 and fall back to this file's own prose cross-references.
 
+**Three layers, not two.** `paths:` is an ADR's CODE surface; `docs:` is its
+DOCUMENTATION surface — exactly the artifacts `docs-as-definition-of-done`'s Sync Table
+governs. They are separate fields, matched by separate functions
+(`adrs_for_path()`/`adrs_for_doc()`, `--doc` on the CLI), because a code file and a doc
+file answer different questions ("what implements this" vs. "what explains it"). Both
+feed the SAME `depends_on`/`supersedes` traversal once a seed is found — Code, Docs, and
+ADRs are three views into one graph, not three graphs:
+
+```bash
+python3 scripts/adr_graph.py --doc docs/claude-ref/adr-gate.md   # doc -> governing ADR(s)
+```
+
 Any document-generator in this repo that produces an ADR-shaped artifact (e.g.
 Plugin-Builder's per-plugin classification ADR, `core/plugins/plugin_builder/generators/
 adr.py`) emits this same frontmatter, with a plugin-scoped `id` (`{plugin_id}-ADR-0001`)
@@ -159,8 +173,11 @@ rather than a bare `ADR-NNNN`, which is reserved for this repo's own sequence.
 ## Recent ADRs Implemented
 
 - **ADR-0264 (ADR Decision Graph):** frontmatter schema (`depends_on`/`related`/`paths`/
-  derived `superseded_by`) + `scripts/adr_graph.py` traversal tool; wired into
-  Plugin-Builder's generated ADR (`core/plugins/plugin_builder/generators/adr.py`)
+  `docs`/derived `superseded_by`) + `scripts/adr_graph.py` traversal tool (three layers:
+  code, docs, ADRs — `adrs_for_path()`/`adrs_for_doc()`); wired into Plugin-Builder's
+  generated ADR (`core/plugins/plugin_builder/generators/adr.py`, `docs:` points at its
+  sibling generated docs) and into `docs-as-definition-of-done`'s Sync Table; backfilled
+  across 244 of the 275 pre-convention ADRs (`scripts/adr_backfill.py`)
 - **ADR-0069 (EAOS — Engine-Agnostic OS Shell):** Tool Execution Broker (TEB), Engine Command Interface (ECI), Function-Call Bridge (FCB), SkillCompiler — all non-CC engines share L10/L16/L33 guarantees
 - **ADR-0071 (CopilotCliEngine):** GitHub Copilot CLI as 5th WorkerEngine (worker-only, `copilot -p`, task-type steering)
 - **ADR-0141 (Layer Integrity Protocol):** Cryptographic layer presence verification (CAP_VERSIONS + RS256-signed manifest)

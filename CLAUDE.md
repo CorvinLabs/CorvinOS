@@ -329,9 +329,10 @@ When skipping, name the reason in one sentence — never skip silently.
 **Destination:** `Corvin-ADR/decisions/XXXX-short-title.md` (sibling repo). Numbering: max + 1.
 Commit message: `adr: add ADR-XXXX — [title]`.
 
-**Every ADR carries ADR-0264 frontmatter** (`id`/`status`/`depends_on`/`related`/`paths`) ahead
-of the prose — this is what makes an ADR a node `scripts/adr_graph.py` can traverse to from a
-code path instead of a document a reader must already have found. Never hand-fill
+**Every ADR carries ADR-0264 frontmatter** (`id`/`status`/`depends_on`/`related`/`paths`/`docs`)
+ahead of the prose — this is what makes an ADR a node `scripts/adr_graph.py` can traverse to
+from a code path (`paths:`) or a doc path (`docs:` — the same surface `docs-as-definition-
+of-done` keeps synced) instead of a document a reader must already have found. Never hand-fill
 `superseded_by`; it is derived automatically from every other ADR's `supersedes` list. A
 document-generator that emits an ADR-shaped artifact (e.g. Plugin-Builder's per-plugin ADR,
 `core/plugins/plugin_builder/generators/adr.py`) carries the same schema, with a plugin-scoped
