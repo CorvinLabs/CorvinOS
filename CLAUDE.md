@@ -329,11 +329,20 @@ When skipping, name the reason in one sentence — never skip silently.
 **Destination:** `Corvin-ADR/decisions/XXXX-short-title.md` (sibling repo). Numbering: max + 1.
 Commit message: `adr: add ADR-XXXX — [title]`.
 
+**Every ADR carries ADR-0264 frontmatter** (`id`/`status`/`depends_on`/`related`/`paths`) ahead
+of the prose — this is what makes an ADR a node `scripts/adr_graph.py` can traverse to from a
+code path instead of a document a reader must already have found. Never hand-fill
+`superseded_by`; it is derived automatically from every other ADR's `supersedes` list. A
+document-generator that emits an ADR-shaped artifact (e.g. Plugin-Builder's per-plugin ADR,
+`core/plugins/plugin_builder/generators/adr.py`) carries the same schema, with a plugin-scoped
+`id` (`{plugin_id}-ADR-0001`, never a bare `ADR-NNNN`).
+
 **Must NOT do:** write ADR content into Corvin repo (ADRs live in Corvin-ADR only) ·
 auto-skip security/compliance mechanisms without justification · declare "done" on structural
-change without running this gate · leave a skip implicit.
+change without running this gate · leave a skip implicit · hand-fill `superseded_by`.
 
 → Full reference: [adr-gate.md](docs/claude-ref/adr-gate.md)
+→ ADR: `Corvin-ADR: decisions/0264-adr-decision-graph-hermeneutic-traversal.md`
 
 ---
 

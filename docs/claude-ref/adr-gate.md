@@ -76,7 +76,24 @@ adr: add ADR-0160 — Custom Layer System Tier Licensing
 
 ## ADR Structure (Lightweight Template)
 
+Every ADR opens with a machine-readable frontmatter block ahead of the prose (ADR-0264 —
+"ADR Decision Graph: hermeneutic-circle traversal for architectural history"). The prose
+below is unchanged and still what a human reads; the frontmatter is what lets
+`scripts/adr_graph.py` find this ADR from a code path and build the minimal relevant
+subgraph instead of a reader needing the whole corpus.
+
 ```markdown
+---
+id: ADR-XXXX
+status: proposed          # proposed | accepted | superseded | frozen
+supersedes: []            # ADR ids this one fully replaces
+depends_on: []            # structural prerequisites — read these first
+related: []               # associative, non-blocking cross-references
+commits: []               # git SHAs implementing this, filled in at merge
+paths:                    # globs this ADR structurally constrains
+  - "path/or/glob/**"
+---
+
 # ADR-XXXX — [Title]
 
 ## Status
@@ -99,6 +116,32 @@ What changes as a result? What becomes easier/harder?
 - [Layer 16](../docs/claude-ref/layer-16-security.md) — Implementation details
 ```
 
+Never hand-fill `superseded_by` — omit it. `scripts/adr_graph.py` derives it automatically
+from every other ADR's `supersedes` list at read time, so the ADR being superseded never
+needs a retroactive edit (that hand-maintained back-reference is exactly the class of fact
+that silently rots — see ADR-0264's Context).
+
+## ADR Decision Graph — traversal (ADR-0264)
+
+`scripts/adr_graph.py` (in this repo, reads `../Corvin-ADR/decisions/`) answers "which
+ADRs govern this file, and in what order should I read them":
+
+```bash
+python3 scripts/adr_graph.py core/plugins/plugin_builder/generators/adr.py
+python3 scripts/adr_graph.py --adr 0264 --format json   # machine-readable, for an agent
+```
+
+It returns the seed ADR(s) whose `paths:` glob matches the query, plus their `depends_on`
+closure, topologically sorted (dependencies first) and annotated with current status via
+the derived `superseded_by` chain. A path matching no ADR is the expected default (not an
+error) for the pre-ADR-0264 corpus — that older corpus is deliberately not retrofitted;
+see ADR-0264's "Decision" §4 and fall back to this file's own prose cross-references.
+
+Any document-generator in this repo that produces an ADR-shaped artifact (e.g.
+Plugin-Builder's per-plugin classification ADR, `core/plugins/plugin_builder/generators/
+adr.py`) emits this same frontmatter, with a plugin-scoped `id` (`{plugin_id}-ADR-0001`)
+rather than a bare `ADR-NNNN`, which is reserved for this repo's own sequence.
+
 ## Hard Rules (Must NOT do)
 
 1. **Don't write ADR content into the Corvin repo** — ADRs live in Corvin-ADR only.
@@ -115,6 +158,9 @@ What changes as a result? What becomes easier/harder?
 
 ## Recent ADRs Implemented
 
+- **ADR-0264 (ADR Decision Graph):** frontmatter schema (`depends_on`/`related`/`paths`/
+  derived `superseded_by`) + `scripts/adr_graph.py` traversal tool; wired into
+  Plugin-Builder's generated ADR (`core/plugins/plugin_builder/generators/adr.py`)
 - **ADR-0069 (EAOS — Engine-Agnostic OS Shell):** Tool Execution Broker (TEB), Engine Command Interface (ECI), Function-Call Bridge (FCB), SkillCompiler — all non-CC engines share L10/L16/L33 guarantees
 - **ADR-0071 (CopilotCliEngine):** GitHub Copilot CLI as 5th WorkerEngine (worker-only, `copilot -p`, task-type steering)
 - **ADR-0141 (Layer Integrity Protocol):** Cryptographic layer presence verification (CAP_VERSIONS + RS256-signed manifest)
