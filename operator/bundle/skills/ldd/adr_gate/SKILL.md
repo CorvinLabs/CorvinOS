@@ -1,6 +1,6 @@
 ---
 name: adr_gate
-description: ADR Gate — evaluates after non-trivial tasks whether an ADR is warranted; writes to Corvin-ADR repo when yes, names the skip reason when no, requires three-level analysis (conceptual/structural/implementation), and generates E2E tests for every new structural invariant so LDD has a loss signal.
+description: ADR Gate — evaluates after non-trivial tasks whether an ADR is warranted; writes to Corvin-ADR repo when yes, names the skip reason when no, requires three-level analysis (conceptual/structural/implementation), emits ADR-0264 decision-graph frontmatter (depends_on/related/paths) so scripts/adr_graph.py can traverse it, and generates E2E tests for every new structural invariant so LDD has a loss signal.
 ---
 
 # ADR Gate — Architectural Decision Record discipline
@@ -58,9 +58,23 @@ ls ../Corvin-ADR/decisions/ | grep -E '^[0-9]{4}' | sort | tail -1
 
 Add 1, zero-pad to 4 digits (e.g. `0068`).
 
-**Step 2** — Write to `../Corvin-ADR/decisions/XXXX-short-kebab-title.md`:
+**Step 2** — Write to `../Corvin-ADR/decisions/XXXX-short-kebab-title.md`. Every ADR
+carries **both** the human-facing prose header **and** a machine-readable frontmatter
+block (ADR-0264 — "ADR Decision Graph"): the frontmatter is what makes an ADR a node a
+coding agent can traverse to instead of a document it must have already read.
 
 ```markdown
+---
+id: ADR-XXXX
+status: proposed          # proposed | accepted | superseded | frozen
+supersedes: []            # ADR ids this one fully replaces
+depends_on: []            # structural prerequisites — read these first
+related: []               # associative, non-blocking cross-references
+commits: []               # git SHAs implementing this, filled in at merge
+paths:                    # globs this ADR structurally constrains
+  - "path/or/glob/**"
+---
+
 # ADR-XXXX — [Title]
 
 **Status:** Accepted
@@ -88,6 +102,16 @@ Add 1, zero-pad to 4 digits (e.g. `0068`).
 [What else was evaluated and why it was rejected.]
 ```
 
+Do NOT hand-fill `superseded_by` — leave it absent. It is derived automatically (by
+`scripts/adr_graph.py`, see ADR-0264) from every OTHER ADR's `supersedes` field, so the
+node being superseded never needs editing after the fact.
+
+Populate `depends_on`/`related` with real ADR ids only when a real relationship exists;
+an empty list is the correct default for a freestanding decision. `paths` should name the
+actual files/globs this decision structurally constrains — this is the field
+`scripts/adr_graph.py adrs_for_path()` matches against, so an empty or inaccurate list
+makes this ADR invisible to that traversal, not merely undocumented.
+
 **Step 3** — Commit in the Corvin-ADR repo:
 
 ```bash
@@ -101,6 +125,19 @@ git commit -m "adr: add ADR-XXXX — [title]"
 ```
 → ADR: `Corvin-ADR: decisions/XXXX-short-title.md`
 ```
+
+This prose pointer stays — it is what a human skimming CLAUDE.md sees — but it is no
+longer the only way to find this ADR from the code. `paths:` in Step 2's frontmatter is
+the machine-readable equivalent: run `python3 scripts/adr_graph.py <path>` from a
+CorvinOS checkout to confirm the new ADR is actually discoverable from the code it
+constrains before moving on.
+
+A generated (not hand-authored) ADR — e.g. Plugin-Builder's per-plugin classification
+ADR (`core/plugins/plugin_builder/generators/adr.py`) — carries this same frontmatter
+schema too, with a plugin-scoped `id` (`{plugin_id}-ADR-0001`, never a bare `ADR-NNNN`,
+which is reserved for this repo's own sequence) and `related` pointing into the real
+Corvin-ADR corpus. Any new document-generator that produces an ADR-shaped artifact
+should follow this same convention rather than emitting unstructured prose.
 
 **Step 5 — E2E tests for the ADR's mechanism (LDD loss signal)**
 

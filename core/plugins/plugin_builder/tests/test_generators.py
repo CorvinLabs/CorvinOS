@@ -1,6 +1,9 @@
 """Doc-generator + slugify tests (ADR-0253 Phase 4)."""
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
 
 from plugin_builder.classifier import classify
@@ -12,6 +15,10 @@ from plugin_builder.generators import (
 )
 from plugin_builder.generators.scaffold import slugify_plugin_id
 from plugin_builder.models import Constraints, DependencySpec, PluginIdea, ProblemStatement
+
+_REPO = Path(__file__).resolve().parents[4]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
 
 
 @pytest.fixture
@@ -73,6 +80,27 @@ def test_adr_doc_has_status_and_alternatives(idea, classification):
     assert "PROPOSED" in doc
     assert "## Alternatives" in doc
     assert "community.postgres-connector" in doc
+
+
+def test_adr_doc_carries_adr_0264_frontmatter_parseable_by_the_graph_tool(idea, classification):
+    """ADR-0264 ("achte darauf, dass dieses ADR auch im Plugin-Builder
+    verwendet wird"): every Plugin-Builder-generated ADR must carry real,
+    machine-parseable ADR-0264 frontmatter -- verified here with the SAME
+    parser scripts/adr_graph.py uses, not a string/substring check, so a
+    regression that produces frontmatter-shaped-but-invalid YAML is caught."""
+    from scripts.adr_graph import _parse_frontmatter
+
+    doc = generate_adr_doc(idea, classification, "community.postgres-connector")
+    fm = _parse_frontmatter(doc)
+    assert fm is not None, "generated doc frontmatter did not parse as YAML"
+    assert fm["id"] == "community.postgres-connector-ADR-0001"
+    assert fm["status"] == "proposed"
+    assert "ADR-0253" in fm["related"]
+    assert "ADR-0156" in fm["related"]
+    assert fm["paths"] == ["**"]
+    # Plugin-scoped id must never collide with the Corvin-ADR repo's own
+    # sequential numbering scheme (ADR-NNNN) -- it carries the plugin_id.
+    assert not fm["id"].startswith("ADR-")
 
 
 def test_build_plan_has_five_phases(idea, classification):

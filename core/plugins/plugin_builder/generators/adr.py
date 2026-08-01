@@ -4,6 +4,19 @@ Produces a small, plugin-scoped ADR in this repo's own ADR shape (Context /
 Decision / Alternatives / Consequences) — NOT a CorvinOS-repo ADR. It documents
 one decision: why this plugin idea was classified the way it was. It is meant
 to travel with the plugin's own repo, not to be filed in `Corvin-ADR/`.
+
+Carries ADR-0264 frontmatter (id/status/depends_on/related/paths) like every
+CorvinOS-repo ADR written after that convention, even though this document
+lives outside `Corvin-ADR/decisions/` and outside `scripts/adr_graph.py`'s
+default search path: the schema is what makes an ADR machine-traversable, not
+its filing location, and a plugin's own generated ADR is exactly the kind of
+node a coding agent working inside that plugin's repo should be able to enter
+the graph from. `id` is plugin-scoped (`{plugin_id}-ADR-0001`, not a
+Corvin-ADR sequence number) since a plugin may accumulate more than one
+generated ADR over its life without colliding with this repo's numbering.
+`related` points INTO the real Corvin-ADR corpus (ADR-0253, ADR-0156, the
+taxonomy ADRs) — cross-repo edges are allowed by design (ADR-0264 "Decision"
+§1: paths/edges are not required to resolve locally to be meaningful).
 """
 from __future__ import annotations
 
@@ -44,9 +57,32 @@ _KIND_ALTERNATIVES = {
 }
 
 
+_RELATED_ADRS = ("ADR-0244", "ADR-0245", "ADR-0246", "ADR-0247", "ADR-0248",
+                  "ADR-0249", "ADR-0250", "ADR-0251", "ADR-0156", "ADR-0253")
+
+
+def _adr_frontmatter(plugin_id: str) -> list[str]:
+    """ADR-0264 schema — see module docstring for why a plugin-scoped
+    generated ADR carries it even though it is filed outside Corvin-ADR/."""
+    related = ", ".join(_RELATED_ADRS)
+    return [
+        "---",
+        f"id: {plugin_id}-ADR-0001",
+        "status: proposed",
+        "supersedes: []",
+        "depends_on: []",
+        f"related: [{related}]",
+        "commits: []",
+        "paths:",
+        '  - "**"',
+        "---",
+        "",
+    ]
+
+
 def generate_adr_doc(idea: PluginIdea, classification: Classification, plugin_id: str) -> str:
     c = classification
-    lines = [
+    lines = _adr_frontmatter(plugin_id) + [
         f"# ADR: {idea.plugin_name} — Plugin Classification",
         "",
         "**Status:** PROPOSED (generated, needs human review)",
