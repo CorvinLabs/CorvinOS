@@ -38,6 +38,7 @@ import os
 import shutil
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -504,6 +505,17 @@ class ClaudeCodeEngine:
         from ._win_shim import windows_shim_command
         spawn_args = windows_shim_command(args)
 
+        # start_new_session=True is POSIX-only (setsid) and silently ignored
+        # on Windows. Windows' equivalent for group-wide signal delivery is
+        # CREATE_NEW_PROCESS_GROUP — without it, sending CTRL_BREAK_EVENT to
+        # this process (terminate_process_tree's graceful step) would also
+        # hit the PARENT (adapter.py), since by default a child shares its
+        # console/process group. Passed only on win32 — the constant does
+        # not exist in the subprocess module on POSIX.
+        _popen_kwargs: dict[str, Any] = {}
+        if sys.platform.startswith("win"):
+            _popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
         try:
             self._proc = subprocess.Popen(
                 spawn_args,
@@ -516,6 +528,7 @@ class ClaudeCodeEngine:
                 text=True,
                 encoding="utf-8",
                 bufsize=1,
+                **_popen_kwargs,
             )
         except FileNotFoundError:
             self._cleanup_system_prompt_tmp_file()

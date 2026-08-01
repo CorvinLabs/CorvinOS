@@ -191,6 +191,21 @@ class TestEndpointRegistry(unittest.TestCase):
             reg.load(ENDPOINT_ID)
         self.assertEqual(ctx.exception.reason, "endpoint_file_world_readable")
 
+    def test_world_readable_check_skipped_on_windows(self):
+        """On real Windows, os.stat().st_mode always reports group/other
+        bits set (NTFS has no POSIX permission model) — without the
+        sys.platform guard, this check would reject EVERY endpoint file
+        unconditionally, making outbound A2A send() 100% non-functional
+        on Windows. Simulates that platform via sys.platform patching
+        (no real Windows box in this CI); the file's actual chmod is
+        irrelevant once the guard skips the stat check entirely."""
+        _write_endpoint_file(self.endpoints_dir, ENDPOINT_ID, "http://x/")
+        (self.endpoints_dir / f"{ENDPOINT_ID}.json").chmod(0o644)
+        reg = rts.RemoteEndpointRegistry(self.endpoints_dir)
+        with mock.patch.object(rts.sys, "platform", "win32"):
+            cfg = reg.load(ENDPOINT_ID)  # must NOT raise
+        self.assertEqual(cfg["endpoint_id"], ENDPOINT_ID)
+
     def test_path_traversal_blocked(self):
         reg = rts.RemoteEndpointRegistry(self.endpoints_dir)
         for bad in ("../foo", "..", ".secret", "foo/bar", "a:b"):

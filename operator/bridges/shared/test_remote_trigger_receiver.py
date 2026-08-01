@@ -190,6 +190,21 @@ class TestOriginRegistry(unittest.TestCase):
             registry.load(ORIGIN_ID)
         self.assertEqual(ctx.exception.reason, "origin_file_world_readable")
 
+    def test_world_readable_check_skipped_on_windows(self):
+        """On real Windows, os.stat().st_mode always reports group/other
+        bits set (NTFS has no POSIX permission model) — without the
+        sys.platform guard, this check would reject EVERY origin file
+        unconditionally, making inbound A2A receive() 100% non-functional
+        on Windows. Simulates that platform via sys.platform patching
+        (no real Windows box in this CI); the file's actual chmod is
+        irrelevant once the guard skips the stat check entirely."""
+        path = _write_origin(self.tmp)
+        path.chmod(0o644)  # would fail the check on a real POSIX system
+        registry = rtr.OriginRegistry(self.tmp)
+        with mock.patch.object(rtr.sys, "platform", "win32"):
+            cfg = registry.load(ORIGIN_ID)  # must NOT raise
+        self.assertTrue(cfg["enabled"])
+
     def test_per_call_reread_picks_up_change(self):
         path = _write_origin(self.tmp)
         registry = rtr.OriginRegistry(self.tmp)

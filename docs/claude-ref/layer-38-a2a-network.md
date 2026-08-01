@@ -311,6 +311,17 @@ notifications — or a concurrent CLI edit could overwrite a lock-holding
 console PATCH — to silently revert a fresh operator edit such as
 `enabled: false`.
 
+**Windows parity (ADR-0265, 2026-08-01):** `RemoteEndpointRegistry.load()` and
+`OriginRegistry.load()` both reject a world-readable config file via a POSIX
+`st_mode & (S_IRWXG|S_IRWXO)` check. NTFS has no separate owner/group/other bits, so
+CPython's `nt` stat mirrors the owner bits onto group/other — this bitmask was
+unconditionally true for every existing, readable file on Windows, so the check rejected
+every endpoint/origin file unconditionally, making A2A send AND receive 100%
+non-functional on any Windows-hosted instance (send/receive to ANY peer, including
+another Windows instance). Fixed with a `sys.platform.startswith("win")` guard mirroring
+`instance_identity.py::_validate_mode_strict`'s existing, correct precedent for the same
+class of check — no-op on Windows rather than a half-implemented ACL check.
+
 **Connection names for delegation:** `RemoteEndpointRegistry.resolve(name)`
 (`remote_trigger_sender.py`) maps a reference to an endpoint_id — exact id →
 unique case-insensitive label → unique id-prefix. An **exact endpoint_id

@@ -231,9 +231,20 @@ class RemoteEndpointRegistry:
         if not path.exists():
             raise EndpointError("unknown_endpoint")
 
-        file_stat = path.stat()
-        if file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-            raise EndpointError("endpoint_file_world_readable")
+        # No-op on Windows: NTFS has no POSIX group/other bits, so
+        # os.stat().st_mode always reports a permissive-looking value there
+        # regardless of the file's real ACLs — the check would otherwise
+        # reject EVERY endpoint file unconditionally (confirmed: CPython's
+        # nt stat mirrors the owner bits onto group/other, so this bitmask
+        # can never be zero for an existing, readable file on Windows),
+        # making outbound A2A send() 100% non-functional. Same guard as
+        # instance_identity.py::_validate_mode_strict, applied here because
+        # this check gates every RemoteEndpointRegistry.load() call — i.e.
+        # every A2A send — not just identity-file reads.
+        if not sys.platform.startswith("win"):
+            file_stat = path.stat()
+            if file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+                raise EndpointError("endpoint_file_world_readable")
 
         with path.open("r", encoding="utf-8") as fh:
             config = json.load(fh)

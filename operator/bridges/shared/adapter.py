@@ -1301,32 +1301,25 @@ def _cancel_chat(chat_key: str) -> int:
         # above IS the stop signal.
         return 1 if engine_cancelled else 0
 
-    log(f"cancel_chat: SIGTERM {len(procs)} subproc(s) for chat={chat_key}")
-    for proc in procs:
-        try:
-            if hasattr(os, "killpg"):
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-            else:  # Windows — no process groups; terminate the process directly
-                proc.terminate()
-        except (ProcessLookupError, PermissionError, OSError) as e:
-            log(f"cancel_chat: SIGTERM pid={proc.pid} failed: {e}")
+    log(f"cancel_chat: terminating {len(procs)} subproc(s) for chat={chat_key}")
+    try:
+        from agents import terminate_process_tree as _terminate_process_tree  # type: ignore
+    except ImportError:
+        from .agents import terminate_process_tree as _terminate_process_tree  # type: ignore
 
-    deadline = time.time() + CANCEL_GRACE_SEC
+    # Delegates to the shared helper instead of duplicating the SIGTERM/
+    # SIGKILL(-after-grace) logic inline: on Windows the previous inline
+    # version called proc.terminate()/proc.kill() on the tracked PID only,
+    # which is the cmd.exe wrapper npm's claude.cmd shim requires — the
+    # actual node.exe process (and any tool-use grandchildren) is a
+    # grandchild that TerminateProcess never reaches, leaking it as an
+    # orphan on every /stop. terminate_process_tree fixes this (Windows:
+    # CTRL_BREAK_EVENT then taskkill /T /F; POSIX: killpg, unchanged).
     for proc in procs:
-        remaining = max(0.0, deadline - time.time())
         try:
-            proc.wait(timeout=remaining)
-        except subprocess.TimeoutExpired:
-            pass
-        if proc.poll() is None:
-            log(f"cancel_chat: SIGKILL after grace pid={proc.pid}")
-            try:
-                if hasattr(os, "killpg"):
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                else:  # Windows
-                    proc.kill()
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
+            _terminate_process_tree(proc, grace=CANCEL_GRACE_SEC)
+        except Exception as e:  # noqa: BLE001
+            log(f"cancel_chat: terminate pid={proc.pid} failed: {e}")
 
     return len(procs)
 
@@ -9078,18 +9071,33 @@ def _plugin_builder_flag_enabled(tenant_id: str) -> bool:
         return False
 
 
+def _plugin_builder_sub_flag(flag_id: str, tenant_id: str) -> bool:
+    """One of the three ADR-0262 flags, or ADR-0263's `plugin_builder_ideas_mode`
+    — same lazy, exception-swallowing lookup as the base flag above."""
+    try:
+        from corvin_console import feature_flags as _pb_ff  # type: ignore
+    except ImportError:
+        return False
+    try:
+        return _pb_ff.is_enabled(flag_id, tenant_id)
+    except Exception:  # noqa: BLE001 — a broken flag lookup must not break a turn
+        return False
+
+
 def _plugin_builder_bridge_reply(
     text: str, *, tenant_id: str, channel: str, chat_key: str
 ) -> "str | None":
-    """Handle one bridge text turn for ``/plugin-builder``.
+    """Handle one bridge text turn for ``/plugin-builder`` (+ ``--ideas``,
+    ADR-0263) and its ADR-0262 follow-on turns.
 
     Returns ``None`` for every case that should fall through to a normal
     engine turn: the plugin_builder package isn't installed, this isn't a
-    ``/plugin-builder`` invocation, no interview is currently active for this
-    chat, or the text is SOME OTHER slash-command-shaped string — mirroring
-    the console's own ``handle()``, which only ever routes non-slash text into
-    ``_plugin_builder_continue`` and lets a leading ``/`` fall through to its
-    own command dispatch instead of being read as a literal interview answer.
+    ``/plugin-builder`` invocation, no interview/ideation is currently active
+    for this chat, or the text is SOME OTHER slash-command-shaped string —
+    mirroring the console's own ``handle()``, which only ever routes non-slash
+    text into ``_plugin_builder_continue`` and lets a leading ``/`` fall
+    through to its own command dispatch instead of being read as a literal
+    interview answer.
     """
     try:
         from plugin_builder import session_store as _pb_store
@@ -9104,33 +9112,107 @@ def _plugin_builder_bridge_reply(
     if not is_command:
         if stripped.startswith("/"):
             return None  # some other slash command — never an interview answer
+
+        if not _plugin_builder_flag_enabled(tenant_id):
+            # Flag toggled off mid-interview (or mid-ideation) — drop BOTH
+            # orphaned sessions rather than let a disabled feature keep
+            # consuming turns. Checked BEFORE the ideation lookup below —
+            # a prior version called `ideation.continue_active()` first and
+            # only checked this flag on the plain-interview path after it,
+            # so an active `--ideas` dialogue kept running (including live
+            # surface_map lookups) even after an operator disabled
+            # `plugin_builder_enabled` — reproduced live (ADR-0262/0263
+            # review round 2, Gates finding 2). Matches
+            # corvin_console/slash_commands.py's `_plugin_builder_continue`,
+            # which already checked the flag first.
+            _pb_store.clear(tenant_id, session_key)
+            try:
+                from plugin_builder import ideation as _pb_ideation
+                _pb_ideation.clear(tenant_id, session_key)
+            except ImportError:
+                pass
+            return None
+
+        # An active ideation dialogue is checked BEFORE the plain interview —
+        # mutually exclusive per caller, same reasoning as
+        # corvin_console/slash_commands.py's `_plugin_builder_continue`.
+        try:
+            from plugin_builder import ideation as _pb_ideation
+            ideation_reply = _pb_ideation.continue_active(
+                text, tenant_id=tenant_id, session_key=session_key
+            )
+            if ideation_reply is not None:
+                return ideation_reply
+        except ImportError:
+            pass
+
         session = _pb_store.get(tenant_id, session_key)
         if session is None:
-            return None
-        if not _plugin_builder_flag_enabled(tenant_id):
-            # Flag toggled off mid-interview — drop the orphaned session
-            # rather than let a disabled feature keep consuming turns.
-            _pb_store.clear(tenant_id, session_key)
             return None
         from plugin_builder import turn as _pb_turn
         try:
             return _pb_turn.drive(session, text, tenant_id=tenant_id, session_key=session_key)
         except Exception as exc:  # noqa: BLE001 — never silently swallow a bridge turn
+            # Type only, never {exc} itself — this path now carries up to
+            # 8000 chars of user idea_text through drive(); a raised
+            # ValueError/exception could echo that text back into the
+            # exception message, which would then land in this log line
+            # (ADR-0262/0263 review round 3, Compliance finding — the
+            # idea-first flow made this pre-existing weak-logging pattern
+            # meaningfully more exposed than it was for ADR-0253's original,
+            # more tightly-validated question set).
             log(f"plugin-builder drive failed session={session_key}: "
-                f"{type(exc).__name__}: {exc}")
-            _pb_store.clear(tenant_id, session_key)
+                f"{type(exc).__name__}")
+            # expected=session: don't wipe a NEWER session for the same
+            # caller that may have started while this one was failing
+            # (ADR-0262/0263 review round 5, Gates finding 3).
+            _pb_store.clear(tenant_id, session_key, expected=session)
             return ("Something went wrong with the Plugin-Builder interview — "
                      "it's been reset. Try `/plugin-builder` again.")
 
     if not _plugin_builder_flag_enabled(tenant_id):
         return ("Plugin Builder is off. An operator can enable it in "
                 "Settings → Features (plugin_builder_enabled).")
+
+    idea_first = _plugin_builder_sub_flag("plugin_builder_idea_first_interview", tenant_id)
+    checkpoint_enabled = _plugin_builder_sub_flag("plugin_builder_checkpoint_review", tenant_id)
+    e2e_tests_enabled = _plugin_builder_sub_flag("plugin_builder_generate_e2e_tests", tenant_id)
+
+    if arg.strip().lower() == "--ideas":
+        if not _plugin_builder_sub_flag("plugin_builder_ideas_mode", tenant_id):
+            return ("Plugin Builder's --ideas co-ideation mode is off. An "
+                     "operator can enable it in Settings → Features "
+                     "(plugin_builder_ideas_mode).")
+        try:
+            from plugin_builder import ideation as _pb_ideation
+        except ImportError:
+            return "Plugin Builder --ideas mode is enabled but not installed in this build."
+        try:
+            return _pb_ideation.start(
+                tenant_id=tenant_id, session_key=session_key,
+                idea_first=idea_first, checkpoint_enabled=checkpoint_enabled,
+                e2e_tests_enabled=e2e_tests_enabled,
+            )
+        except Exception as exc:  # noqa: BLE001 — never silently swallow a bridge turn
+            # Only the exception TYPE, not its message — matches turn.py's
+            # discipline (never turn.py's own log.error() call logs {exc}
+            # itself, only type(exc).__name__); this file's other two
+            # plugin-builder log lines were fixed to match in review round 3.
+            log(f"plugin-builder ideation start failed session={session_key}: "
+                f"{type(exc).__name__}")
+            return "Something went wrong starting --ideas mode — try again in a moment."
+
     from plugin_builder import turn as _pb_turn
     try:
-        return _pb_turn.command(arg, tenant_id=tenant_id, session_key=session_key)
+        return _pb_turn.command(
+            arg, tenant_id=tenant_id, session_key=session_key,
+            idea_first=idea_first, checkpoint_enabled=checkpoint_enabled,
+            e2e_tests_enabled=e2e_tests_enabled,
+        )
     except Exception as exc:  # noqa: BLE001 — never silently swallow a bridge turn
+        # Type only — see the drive() handler above's comment.
         log(f"plugin-builder command failed session={session_key}: "
-            f"{type(exc).__name__}: {exc}")
+            f"{type(exc).__name__}")
         return "Something went wrong starting Plugin-Builder — try again in a moment."
 
 
@@ -11455,6 +11537,20 @@ def main() -> int:
         _shutdown_event.set()
 
     signal.signal(signal.SIGTERM, _sigterm_handler)
+
+    # Windows has no SIGTERM delivery: subprocess.Popen.terminate() calls
+    # Win32 TerminateProcess(), which hard-kills with NO signal delivery and
+    # NO handler invocation (unlike POSIX, where .terminate() == SIGTERM) —
+    # so the drain path above never fired there, meaning every stop/restart
+    # (bridge_manager.py's dev launcher, a Scheduled Task restart) abruptly
+    # killed in-flight claude turns with no chance to finish. Windows' real
+    # equivalent is CTRL_BREAK_EVENT, which Python maps to a deliverable
+    # SIGBREAK — but ONLY when this process was spawned with
+    # CREATE_NEW_PROCESS_GROUP (bridge_manager.py does this on win32) so the
+    # event doesn't also hit the sender. SIGBREAK doesn't exist in the
+    # signal module on POSIX at all, hence the hasattr guard.
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _sigterm_handler)
 
     # ── TELEMETRY INITIALIZATION ──────────────────────────────────────────────
     # Start the ping / healing-trace-upload / heartbeat daemon threads. All

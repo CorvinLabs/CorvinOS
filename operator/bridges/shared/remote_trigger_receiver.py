@@ -584,10 +584,20 @@ class OriginRegistry:
         if not path.exists():
             raise ValidationError("unknown_origin")
 
-        # Mode 0600: no group/other bits
-        file_stat = path.stat()
-        if file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-            raise ValidationError("origin_file_world_readable")
+        # Mode 0600: no group/other bits. No-op on Windows: NTFS has no
+        # POSIX group/other bits, so os.stat().st_mode always reports a
+        # permissive-looking value there regardless of the file's real
+        # ACLs — this bitmask can never be zero for an existing, readable
+        # file on Windows (CPython mirrors the owner bits onto group/other),
+        # so without this guard the check rejects EVERY origin file
+        # unconditionally, making inbound A2A receive() 100% non-functional.
+        # Same guard as instance_identity.py::_validate_mode_strict and
+        # RemoteEndpointRegistry.load() (the outbound-side twin of this
+        # check).
+        if not sys.platform.startswith("win"):
+            file_stat = path.stat()
+            if file_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+                raise ValidationError("origin_file_world_readable")
 
         with path.open() as fh:
             config = json.load(fh)
