@@ -10,6 +10,7 @@ import importlib
 import importlib.util
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -69,6 +70,21 @@ def is_available() -> bool:
 
 def console_url(port: int = _DEFAULT_PORT) -> str:
     return f"http://localhost:{port}"
+
+
+def _console_already_running(host: str, port: int) -> bool:
+    """True if something is already accepting TCP connections on host:port.
+
+    A cheap connect probe, not an HTTP healthz call: the goal here is only
+    "would launching uvicorn collide with an existing listener", which a
+    bare connect answers just as reliably and without needing the console's
+    own routes to be up yet.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
 # ── Auto-update ───────────────────────────────────────────────────────────────
@@ -828,6 +844,28 @@ def start(
     Returns the uvicorn process exit code.
     """
     url = console_url(port)
+
+    # A second instance on the same port used to be a real, live-observed
+    # failure mode on Windows: the install.ps1 supervisor's own healthz
+    # standby loop only protects ITS restart loop, but the Desktop shortcut
+    # (install.ps1's "3c. Desktop shortcut" step) launches corvinos-serve
+    # directly, with no port check anywhere in this function — so a user
+    # double-clicking the Desktop icon while the auto-started supervised
+    # console is already running spawned a SECOND uvicorn process. Windows'
+    # default SO_REUSEADDR semantics (unlike POSIX) can let a second bind
+    # to an already-listening port succeed instead of failing cleanly, so
+    # this silently produced two live console processes instead of an
+    # error — confusing, hard to diagnose, and exactly the kind of
+    # "fragile on Windows" symptom this check closes at the one place
+    # every launch path (Desktop shortcut, Scheduled Task supervisor,
+    # manual `corvin-serve`) already goes through.
+    if _console_already_running(host, port):
+        print(f"  CorvinOS console is already running at {url} — opening it "
+              "instead of starting a second instance.")
+        if open_browser:
+            _schedule_browser_open(url.rstrip("/") + open_path, delay=0.2)
+        return 0
+
     _show_telemetry_notice_once()
     _fire_startup_ping()
     _start_heartbeat()
