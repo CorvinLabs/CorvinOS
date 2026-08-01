@@ -2312,6 +2312,64 @@ def test_missing_system_deps_remedy_uses_the_venv_interpreter():
     assert _re.search(r"(?<!-m )\bplaywright install", msg) is None, msg
 
 
+def test_root_no_sandbox_detector_matches_the_real_chromium_message():
+    """2026-08-02: Chromium's launch failure when the console runs as root
+    (installer/system_service_manager.py explicitly supports this deploy
+    shape) without --no-sandbox — must be distinguished from the missing-
+    browser/missing-deps failures, which have a different remedy."""
+    from corvin_console.browser.session import (
+        _looks_like_missing_browser,
+        _looks_like_missing_system_deps,
+        _looks_like_root_no_sandbox,
+    )
+    real = ("Running as root without --no-sandbox is not supported. "
+            "See https://crbug.com/638180.")
+    assert _looks_like_root_no_sandbox(Exception(real)) is True
+    assert _looks_like_missing_browser(Exception(real)) is False
+    assert _looks_like_missing_system_deps(Exception(real)) is False
+    assert _looks_like_root_no_sandbox(Exception("Navigation timeout of 30000ms exceeded")) is False
+    assert _looks_like_root_no_sandbox(Exception("net::ERR_NAME_NOT_RESOLVED")) is False
+
+
+def test_start_translates_root_no_sandbox_into_an_actionable_error(monkeypatch):
+    """Before this fix, this failure matched neither existing detector, fell
+    through to a bare `raise`, and got flattened by browser.py's generic
+    exception handler into 'browser action failed — observe() the page and
+    retry' — a retry can never succeed since the launch fails identically
+    every time (the user-reported 'browser always crashes' pattern)."""
+    from corvin_console.browser import session as _sess
+    from corvin_console.browser import BrowserActionError
+
+    s = _sess.BrowserSession.__new__(_sess.BrowserSession)
+    s._closed = False
+    s._home = Path(tempfile.mkdtemp())
+    s.session_id = "s3"
+    s._headless = True
+    s._attached = False  # launched mode (ADR-0200)
+
+    class _PW:
+        class chromium:
+            @staticmethod
+            async def launch_persistent_context(**_kw):
+                raise RuntimeError(
+                    "Running as root without --no-sandbox is not supported. "
+                    "See https://crbug.com/638180.")
+        async def stop(self):
+            return None
+
+    async def _fake_start_pw():
+        return _PW()
+
+    import playwright.async_api as _pa
+    monkeypatch.setattr(_pa, "async_playwright", lambda: type("_A", (), {"start": staticmethod(_fake_start_pw)})())
+
+    with pytest.raises(BrowserActionError) as ei:
+        asyncio.run(s.start())
+    msg = str(ei.value)
+    assert "CORVIN_BROWSER_NO_SANDBOX" in msg
+    assert "root" in msg.lower()
+
+
 # ── ADR-0200 Phase 1: CDP attach to the user's real Chrome ───────────────────
 # The load-bearing safety invariants: attach connects instead of launching, and
 # DETACH must never close the user's tabs nor wipe a profile — it is THEIR Chrome.
