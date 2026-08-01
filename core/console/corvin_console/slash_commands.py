@@ -23,7 +23,15 @@ tenant-wide, not per-web-chat): /engine <name>, /persona, /dialectic-*, /skills,
 a short pointer rather than the model. /plugin-builder (ADR-0253, behind the
 plugin_builder_enabled flag) is the one STATEFUL command: it runs a multi-turn
 interview via plugin_builder.session_store, so plain-text turns are checked
-against an active session before the non-slash fallthrough below.
+against an active session before the non-slash fallthrough below. That
+session is keyed by ``session_key`` — the caller's chat-CONVERSATION id
+(the console's per-tab/per-chat ``sid``, or the bridge's own ``channel:
+chat_key``) — deliberately NOT ``fingerprint`` (the login-cookie hash,
+shared by every conversation the same browser login has open). Using
+``fingerprint`` here would let an interview started in one chat tab bleed
+into every other tab/conversation under the same login (found 2026-08-01:
+the console was the one caller still passing ``fingerprint`` where the
+bridge adapter already used a conversation-scoped key).
 """
 from __future__ import annotations
 
@@ -110,7 +118,7 @@ def _plugin_builder_enabled(tenant_id: str) -> bool:
         return False
 
 
-def _plugin_builder_continue(text: str, *, tenant_id: str, fingerprint: str) -> "str | None":
+def _plugin_builder_continue(text: str, *, tenant_id: str, session_key: str) -> "str | None":
     """Route a non-slash turn to an active interview, if one exists.
 
     Returns ``None`` for every other case (flag off, module absent, no active
@@ -134,18 +142,45 @@ def _plugin_builder_continue(text: str, *, tenant_id: str, fingerprint: str) -> 
         from plugin_builder import turn as _pb_turn
     except ImportError:
         return None
-    session = session_store.get(tenant_id, fingerprint)
+    if not _plugin_builder_enabled(tenant_id):
+        # Flag was toggled off mid-interview — drop any orphaned session
+        # rather than let a now-disabled feature keep consuming turns.
+        session_store.clear(tenant_id, session_key)
+        try:
+            from plugin_builder import ideation as _pb_ideation  # noqa: PLC0415
+            _pb_ideation.clear(tenant_id, session_key)
+        except ImportError:
+            pass
+        return None
+
+    # An active ideation dialogue is checked BEFORE the plain interview —
+    # the two are mutually exclusive per caller (ideation hands off into a
+    # real interview session and clears itself in the same turn, see
+    # ideation._handoff_to_interview), so at most one of these is ever
+    # non-None for a given (tenant_id, session_key).
+    try:
+        from plugin_builder import ideation as _pb_ideation  # noqa: PLC0415
+        ideation_reply = _pb_ideation.continue_active(text, tenant_id=tenant_id, session_key=session_key)
+        if ideation_reply is not None:
+            return ideation_reply
+    except ImportError:
+        pass
+
+    session = session_store.get(tenant_id, session_key)
     if session is None:
         return None
-    if not _plugin_builder_enabled(tenant_id):
-        # Flag was toggled off mid-interview — drop the orphaned session
-        # rather than let a now-disabled feature keep consuming turns.
-        session_store.clear(tenant_id, fingerprint)
-        return None
-    return _pb_turn.drive(session, text, tenant_id=tenant_id, session_key=fingerprint)
+    return _pb_turn.drive(session, text, tenant_id=tenant_id, session_key=session_key)
 
 
-def _plugin_builder_command(arg: str, *, tenant_id: str, fingerprint: str) -> str:
+def _plugin_builder_flag(flag_id: str, tenant_id: str) -> bool:
+    try:
+        from . import feature_flags
+        return feature_flags.is_enabled(flag_id, tenant_id)
+    except Exception:  # noqa: BLE001 — a broken flag lookup must not break a turn
+        return False
+
+
+def _plugin_builder_command(arg: str, *, tenant_id: str, session_key: str) -> str:
     if not _plugin_builder_enabled(tenant_id):
         return (
             "Plugin Builder is off. An operator can enable it in "
@@ -155,13 +190,46 @@ def _plugin_builder_command(arg: str, *, tenant_id: str, fingerprint: str) -> st
         from plugin_builder import turn as _pb_turn  # noqa: PLC0415
     except ImportError:
         return "Plugin Builder is enabled but not installed in this build."
-    return _pb_turn.command(arg, tenant_id=tenant_id, session_key=fingerprint)
+    idea_first = _plugin_builder_flag("plugin_builder_idea_first_interview", tenant_id)
+    checkpoint_enabled = _plugin_builder_flag("plugin_builder_checkpoint_review", tenant_id)
+    e2e_tests_enabled = _plugin_builder_flag("plugin_builder_generate_e2e_tests", tenant_id)
+    if arg.strip().lower() == "--ideas":
+        if not _plugin_builder_flag("plugin_builder_ideas_mode", tenant_id):
+            return (
+                "Plugin Builder's --ideas co-ideation mode is off. An "
+                "operator can enable it in **Settings → Features** "
+                "(`plugin_builder_ideas_mode`)."
+            )
+        try:
+            from plugin_builder import ideation as _pb_ideation  # noqa: PLC0415
+        except ImportError:
+            return "Plugin Builder --ideas mode is enabled but not installed in this build."
+        return _pb_ideation.start(
+            tenant_id=tenant_id,
+            session_key=session_key,
+            idea_first=idea_first,
+            checkpoint_enabled=checkpoint_enabled,
+            e2e_tests_enabled=e2e_tests_enabled,
+        )
+    return _pb_turn.command(
+        arg, tenant_id=tenant_id, session_key=session_key,
+        idea_first=idea_first, checkpoint_enabled=checkpoint_enabled,
+        e2e_tests_enabled=e2e_tests_enabled,
+    )
 
 
 def handle(text: str, *, tier: str | None, tenant_id: str,
-           fingerprint: str, configured_engine: str) -> "str | None":
+           fingerprint: str, session_key: str, configured_engine: str) -> "str | None":
     """Dispatch a slash-command. Returns a result string, or None to pass through
-    (CCC command or non-slash prompt). Pure function of its inputs — testable."""
+    (CCC command or non-slash prompt). Pure function of its inputs — testable.
+
+    ``fingerprint`` identifies the LOGIN (shown in ``/whoami``); ``session_key``
+    identifies the CHAT CONVERSATION the turn belongs to (the console's per-tab
+    ``sid``, the bridge's ``channel:chat_key``). The two are usually different
+    strings from the same login — /plugin-builder state is keyed by
+    ``session_key`` so an interview never bleeds into another tab/conversation
+    under the same login.
+    """
     text = (text or "").strip()
     if not text.startswith("/"):
         # An active /plugin-builder interview captures plain-text turns (its
@@ -169,7 +237,7 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
         # before the normal-prompt fallthrough so mid-interview turns never
         # reach the engine. Returns None immediately when the flag is off or
         # no interview is active, so this costs nothing on a stock install.
-        pb_reply = _plugin_builder_continue(text, tenant_id=tenant_id, fingerprint=fingerprint)
+        pb_reply = _plugin_builder_continue(text, tenant_id=tenant_id, session_key=session_key)
         if pb_reply is not None:
             return pb_reply
         return None  # normal prompt
@@ -183,7 +251,7 @@ def handle(text: str, *, tier: str | None, tenant_id: str,
         return None
 
     if cmd == "/plugin-builder":
-        return _plugin_builder_command(arg, tenant_id=tenant_id, fingerprint=fingerprint)
+        return _plugin_builder_command(arg, tenant_id=tenant_id, session_key=session_key)
 
     # Force-delegation → downstream stream_turn._force_delegate branch.
     if cmd in _PASSTHROUGH_CMDS:

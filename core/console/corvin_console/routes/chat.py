@@ -651,6 +651,11 @@ async def chat_stream(
                         tier=getattr(rec, "tier", None),
                         tenant_id=rec.tenant_id,
                         fingerprint=rec.sid_fingerprint,
+                        # Chat-conversation id, NOT the login fingerprint — stateful
+                        # commands (/plugin-builder) must stay scoped to this one
+                        # conversation, not bleed into every other tab/chat under
+                        # the same login (see slash_commands.handle()'s docstring).
+                        session_key=sid,
                         configured_engine=chat_runtime._configured_os_engine(rec.tenant_id),
                     )
                 except Exception:  # noqa: BLE001

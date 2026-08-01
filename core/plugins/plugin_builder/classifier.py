@@ -17,7 +17,9 @@ skipped, and the ``Classification`` is marked with a ``risk_flag`` saying so.
 """
 from __future__ import annotations
 
-from .models import Classification, PluginIdea, PluginKind, Tier
+import re
+
+from .models import Classification, DependencySpec, PluginIdea, PluginKind, ProblemStatement, Tier
 
 try:
     from corvin_plugins.protocol import KNOWN_PLUGIN_TYPES
@@ -275,4 +277,169 @@ def classify(idea: PluginIdea) -> Classification:
     )
 
 
-__all__ = ["classify"]
+# ── Free-text extraction (ADR-0262) ─────────────────────────────────────────
+#
+# The idea-first interview asks one open question instead of the fixed
+# Phase-1/3 form. This section tries to resolve the SAFETY/COMPLIANCE-relevant
+# Dependencies fields (the exact ADR-0247 Validation Gate inputs — external
+# libraries, auth, network egress, egress hosts) directly from that free text,
+# so the Phase-B confirmation only asks about what genuinely could not be
+# inferred. Deterministic and keyword-based, same discipline as `classify()`
+# above — conservative on purpose: an unresolved field is asked explicitly
+# rather than guessed, because guessing wrong on an egress host is worse than
+# one more question.
+
+DEPENDENCY_FIELDS = (
+    "external_libraries",
+    "requires_auth",
+    "requires_network_egress",
+    "egress_hosts",
+)
+
+_EGRESS_POSITIVE = (
+    "calls out", "call out", "api call", "webhook", "fetches from", "talks to",
+    "connects to", "http request", "network call", "external api",
+    "third-party api", "third party api",
+)
+_EGRESS_NEGATIVE = (
+    "no network", "offline", "local only", "locally only", "no internet",
+    "does not call out", "doesn't call out", "no external calls",
+    "fully local", "no api calls",
+)
+_AUTH_POSITIVE = (
+    "api key", "oauth", "requires auth", "needs login", "credentials",
+    "access token", "sign in", "password", "bearer token", "needs a login",
+)
+_AUTH_NEGATIVE = (
+    "no auth", "no login", "public api", "no credentials", "anonymous access",
+    "without authentication", "no authentication needed",
+)
+_NO_LIBRARY_PHRASES = (
+    "no external libraries", "no dependencies", "no external dependencies",
+    "no libraries needed", "stdlib only", "standard library only",
+)
+
+#: Matches a bare domain-shaped token (api.example.com, example.io) — used to
+#: pull egress hosts out of free text. Deliberately excludes a leading
+#: scheme/path so it also catches a host mentioned without "https://".
+_HOST_RE = re.compile(
+    r"\b((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})\b", re.IGNORECASE
+)
+#: Backtick-quoted tokens — the one unambiguous way free text names a library
+#: without full NLU ("using the `httpx` library").
+_BACKTICK_RE = re.compile(r"`([a-zA-Z0-9_.\-]+)`")
+
+#: A real hostname is at most 253 chars (DNS spec) — this is deliberately
+#: generous headroom above that, not a tuned "just big enough" number.
+_MAX_HOST_TOKEN_LEN = 300
+
+
+def _find_hosts(text: str) -> tuple[str, ...]:
+    """Host-shaped tokens in ``text`` — scanned per WHITESPACE-SEPARATED
+    TOKEN, each capped at :data:`_MAX_HOST_TOKEN_LEN`, rather than running
+    :data:`_HOST_RE` over the whole string in one call.
+
+    ``_HOST_RE``'s nested quantifiers backtrack quadratically on a long run
+    with no dot at all — measured live: ~20s against an 80,000-character
+    string of ``"a-"`` pairs with no terminating dot (this project has a
+    documented prior ReDoS incident, ADR-0217; this is the same failure
+    class). A real host is never anywhere near 300 characters, so bounding
+    each regex application to one token this short makes the worst case
+    trivially fast (worst case ~300² operations, not O(text_length²)) — this
+    fixes the actual quadratic-complexity root cause, not just papers over
+    it with a global input-length cap.
+    """
+    hosts: list[str] = []
+    for token in text.split():
+        if len(token) > _MAX_HOST_TOKEN_LEN:
+            continue  # never a real hostname at this length — skip, don't scan
+        hosts.extend(m.lower() for m in _HOST_RE.findall(token))
+    return tuple(dict.fromkeys(hosts))
+
+
+def _contains_any(haystack: str, phrases: tuple[str, ...]) -> bool:
+    return any(p in haystack for p in phrases)
+
+
+def extract_dependency_hints(text: str) -> tuple[DependencySpec, frozenset[str]]:
+    """Best-effort ``DependencySpec`` from free text, plus which
+    :data:`DEPENDENCY_FIELDS` were confidently resolved.
+
+    Unresolved fields keep the ``DependencySpec`` default (``False`` / empty
+    tuple) — callers MUST consult the returned resolved-set before treating a
+    default as a real answer, never infer "false" from absence alone.
+    """
+    # Hyphens normalized to spaces for KEYWORD matching only (never for the
+    # host/backtick regexes below, which run on the original `text` and need
+    # real hyphens for domain names like `api-service.example.com`) — found
+    # live: German compounds ("API-Key") and English hyphenation ("sign-in")
+    # otherwise miss phrases written with a space ("api key", "sign in").
+    haystack = (text or "").lower().replace("-", " ")
+    resolved: set[str] = set()
+
+    requires_network_egress = False
+    egress_hosts: tuple[str, ...] = ()
+    hosts_found = _find_hosts(text or "")
+    if hosts_found:
+        requires_network_egress = True
+        egress_hosts = hosts_found
+        resolved.add("requires_network_egress")
+        resolved.add("egress_hosts")
+    elif _contains_any(haystack, _EGRESS_POSITIVE):
+        requires_network_egress = True
+        resolved.add("requires_network_egress")
+        # host left unresolved — caller still asks "which host(s)?"
+    elif _contains_any(haystack, _EGRESS_NEGATIVE):
+        resolved.add("requires_network_egress")
+        resolved.add("egress_hosts")  # no egress ⇒ no hosts to ask about
+
+    requires_auth = False
+    if _contains_any(haystack, _AUTH_POSITIVE):
+        requires_auth = True
+        resolved.add("requires_auth")
+    elif _contains_any(haystack, _AUTH_NEGATIVE):
+        resolved.add("requires_auth")
+
+    external_libraries: tuple[str, ...] = ()
+    backticked = tuple(dict.fromkeys(_BACKTICK_RE.findall(text or "")))
+    if backticked:
+        external_libraries = backticked
+        resolved.add("external_libraries")
+    elif _contains_any(haystack, _NO_LIBRARY_PHRASES):
+        resolved.add("external_libraries")
+
+    spec = DependencySpec(
+        external_libraries=external_libraries,
+        requires_auth=requires_auth,
+        requires_network_egress=requires_network_egress,
+        egress_hosts=egress_hosts,
+    )
+    return spec, frozenset(resolved)
+
+
+def problem_statement_from_idea_text(idea_text: str) -> ProblemStatement:
+    """The single Phase-A free-text answer, reshaped into the same
+    :class:`~.models.ProblemStatement` the legacy 5-question Phase 1 produced.
+
+    ``target_audience``/``time_scope`` cannot be reliably split out of open
+    prose with keyword matching (unlike the Dependencies fields above, which
+    have sharp yes/no/host signals) — they get honest placeholders rather
+    than a guessed value that would silently misrepresent the idea in the
+    generated docs. ``problem`` carries the full text verbatim, so nothing
+    the user said is lost even where a sub-field can't be split out.
+    """
+    text = (idea_text or "").strip()
+    return ProblemStatement(
+        problem=text,
+        target_audience="(not specified separately — see problem description)",
+        existing_solutions="",
+        time_scope="(not specified — defaulting to MVP scope)",
+    )
+
+
+__all__ = [
+    "classify",
+    "extract_dependency_hints",
+    "problem_statement_from_idea_text",
+    "DEPENDENCY_FIELDS",
+]

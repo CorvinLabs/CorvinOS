@@ -12,7 +12,7 @@ sys.path.insert(0, str(_REPO / "core" / "console"))
 from corvin_console import slash_commands as SC  # type: ignore
 
 _KW = dict(tier="member", tenant_id="_default", fingerprint="abc123def456",
-           configured_engine="claude_code")
+           session_key="chat-sid-1", configured_engine="claude_code")
 
 
 def _h(text):

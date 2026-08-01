@@ -68,6 +68,18 @@ def _class_name(plugin_id: str) -> str:
     return "".join(p.capitalize() for p in parts if p) + "Plugin"
 
 
+#: Unicode bidi-override / zero-width / BOM characters — a "Trojan Source"
+#: class risk (CVE-2021-42574): none of these can break out of the string-
+#: literal context `_display_name` guards against, but left in place they
+#: could make a generated scaffold's source DISPLAY differently than it
+#: reads byte-for-byte to a later reviewer or tool. Stripped alongside the
+#: syntax-breaking characters below rather than only escaping the latter
+#: (ADR-0262/0263 review round 6, Compliance finding).
+_BIDI_AND_INVISIBLE_RE = re.compile(
+    "[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]"
+)
+
+
 def _display_name(plugin_name: str) -> str:
     """The ``__DISPLAY_NAME__`` substitution value — free text from the
     interview, so this MUST be safe to splice into both a Python string
@@ -78,6 +90,7 @@ def _display_name(plugin_name: str) -> str:
     early, where an escaped one still could (e.g. a literal backslash right
     before the closing quote)."""
     cleaned = re.sub(r'[\r\n"\\]', "", plugin_name)
+    cleaned = _BIDI_AND_INVISIBLE_RE.sub("", cleaned)
     cleaned = " ".join(cleaned.split())
     return cleaned or "Untitled Plugin"
 
@@ -286,4 +299,138 @@ def write_artifacts(
     )
 
 
-__all__ = ["ScaffoldResult", "slugify_plugin_id", "write_artifacts"]
+# ── Split docs/scaffold writing for the ADR-0262 checkpoint step ────────────
+#
+# `write_artifacts` above writes docs + scaffold in one atomic call, on
+# `confirm` — unchanged, still the whole story when the checkpoint review is
+# off. When it's on, the checkpoint needs the FOUR DOCS on disk (so the user
+# can be shown what was generated) before the code scaffold exists at all;
+# the two functions below split that one call into two, called from two
+# different interview phases (`turn.py` drives the split, not this module).
+#
+# Known, deliberate scope cut for this first cut of the split path: only the
+# Builder-owned templates (`_scaffold_via_builder_template`'s kind/generic
+# templates) are supported here, not the `corvin plugin new` AST-rewrite
+# reuse `write_artifacts` uses for buildable provider types. That reuse path
+# bakes in an assumption this split breaks — it treats `dest` not existing
+# yet as its own success signal, and here `dest` legitimately already exists
+# (the docs step created it). Reimplementing that path safely against a
+# pre-existing `dest` is possible but out of scope for this pass; the
+# `write_artifacts` legacy path (checkpoint off) keeps full parity. A plugin
+# whose type has an official template still gets the Builder-owned generic
+# provider template here instead — functionally complete, just not the same
+# bytes `corvin plugin new` would have produced.
+
+
+def write_idea_docs(
+    idea: PluginIdea, classification: Classification, output_dir: Path
+) -> tuple[Path, str, tuple[Path, ...]]:
+    """Write ONLY the four Markdown docs — no code scaffold yet.
+
+    Returns ``(dest, plugin_id, doc_files)``. ``dest`` is created if needed
+    and is the SAME directory :func:`write_scaffold_after_checkpoint` must be
+    given afterward for the same idea.
+    """
+    plugin_id = slugify_plugin_id(idea.plugin_name)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    dest = output_dir / _dirname(plugin_id)
+    dest.mkdir(parents=True, exist_ok=True)
+    docs_dir = dest / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+
+    doc_sources = {
+        "plugin-idea.md": generate_idea_doc(idea, classification),
+        "plugin-architecture.md": generate_architecture_doc(idea, classification),
+        f"plugin-adr-{plugin_id.replace('.', '-')}.md": generate_adr_doc(
+            idea, classification, plugin_id
+        ),
+        "build-plan.md": generate_build_plan_doc(idea, classification),
+    }
+    doc_files = []
+    for name, content in doc_sources.items():
+        path = docs_dir / name
+        path.write_text(content, encoding="utf-8")
+        doc_files.append(path)
+    return dest, plugin_id, tuple(doc_files)
+
+
+def write_scaffold_after_checkpoint(
+    idea: PluginIdea, classification: Classification, plugin_id: str, dest: Path
+) -> ScaffoldResult:
+    """Write the code scaffold into ``dest`` (already created by
+    :func:`write_idea_docs`) after the ADR-0262 checkpoint go-ahead.
+
+    Refuses to overwrite an existing scaffold FILE — not the ``dest``
+    directory itself, which legitimately already exists from the docs step.
+    """
+    dest = Path(dest)
+    docs_dir = dest / "docs"
+    existing_code = [
+        p for p in dest.glob("*") if p.is_file() and p.parent == dest and p != docs_dir
+    ]
+    if existing_code:
+        raise FileExistsError(
+            f"a scaffold already exists in {dest} — plugin_id {plugin_id!r} "
+            "was already scaffolded."
+        )
+
+    kind = classification.kind
+    template_name = _KIND_TEMPLATE_FILE.get(kind, "provider_plugin_generic.py")
+    src = (_TEMPLATES_DIR / template_name).read_text(encoding="utf-8")
+
+    plugin_type = classification.plugin_type or "data_connector"
+    replacements = {
+        "__PLUGIN_ID__": plugin_id,
+        "__DISPLAY_NAME__": _display_name(idea.plugin_name),
+        "__PLUGIN_TYPE__": plugin_type,
+        "__CTX_HANDLE__": _CTX_HANDLE_GUESS.get(plugin_type, "data_connector_registry"),
+        "__EXTENSION_POINT__": classification.extension_point or "engine.model_selection",
+    }
+    for token, value in replacements.items():
+        src = src.replace(token, value)
+
+    out_name = "plugin.md" if template_name.endswith(".md") else "plugin.py"
+    out_path = dest / out_name
+    out_path.write_text(src, encoding="utf-8")
+
+    warnings: tuple[str, ...] = ()
+    if kind not in _KIND_TEMPLATE_FILE and classification.plugin_type is None:
+        warnings = (
+            "No plugin_type was classified — the generic provider template "
+            "was written with a placeholder `data_connector` type; correct "
+            "it before relying on the manifest.",
+        )
+    if classification.kind == PluginKind.PROVIDER and classification.plugin_type:
+        try:
+            from corvin_plugins.surface_map import buildable_types
+
+            if classification.plugin_type in buildable_types():
+                warnings = warnings + (
+                    f"'{classification.plugin_type}' has an official "
+                    "`corvin plugin new` template, but the checkpoint-review "
+                    "path always uses the Plugin-Builder's own generic "
+                    "template — see scaffold.py's module notes for why.",
+                )
+        except ImportError:
+            pass
+
+    doc_files = tuple(sorted(docs_dir.glob("*.md"))) if docs_dir.is_dir() else ()
+
+    return ScaffoldResult(
+        dest=dest,
+        plugin_id=plugin_id,
+        classification=classification,
+        doc_files=doc_files,
+        scaffold_files=(out_path,),
+        warnings=warnings,
+    )
+
+
+__all__ = [
+    "ScaffoldResult",
+    "slugify_plugin_id",
+    "write_artifacts",
+    "write_idea_docs",
+    "write_scaffold_after_checkpoint",
+]
