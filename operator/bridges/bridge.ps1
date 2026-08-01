@@ -177,8 +177,18 @@ else:
         function Install-AutostartTask {
             param([string]$TaskName, [string]$TargetArg, [string]$BridgeArg)
 
-            $ArgString = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Supervisor`" -Target $TargetArg"
-            if ($BridgeArg) { $ArgString += " -Bridge $BridgeArg" }
+            # 2026-08-02: $TargetArg/$BridgeArg were interpolated UNQUOTED into
+            # this flat string, unlike $Supervisor two lines... above, which
+            # IS quoted -- the exact class of bug this whole script's
+            # doc-comment (corvin-supervisor.ps1's header) says it exists to
+            # avoid. $TargetArg is only ever a hardcoded "console"/"bridge"
+            # literal from the call sites below, but $BridgeArg is operator-
+            # supplied (the -Bridge CLI argument) and a name containing a
+            # space or embedded quote would break the CLI parsing
+            # powershell.exe does on this action string. Quoting both closes
+            # that gap regardless of what either value ever contains.
+            $ArgString = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Supervisor`" -Target `"$TargetArg`""
+            if ($BridgeArg) { $ArgString += " -Bridge `"$BridgeArg`"" }
 
             $Action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $ArgString
             $Trigger  = New-ScheduledTaskTrigger -AtLogOn

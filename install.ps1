@@ -416,7 +416,23 @@ while (`$true) {
         Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8765/healthz" -TimeoutSec 3 -ErrorAction Stop | Out-Null
         `$portBusy = `$true
     } catch {
-        if (`$_.Exception.Response) { `$portBusy = `$true }
+        if (`$_.Exception.Response) {
+            `$portBusy = `$true
+        } elseif (`$_.Exception.Status -eq [System.Net.WebExceptionStatus]::ConnectFailure) {
+            # 2026-08-02: ConnectFailure is .NET's well-defined signal for
+            # "nothing is listening / connection actively refused" -- the
+            # genuinely free-port case. Only THIS status may clear
+            # `$portBusy; a bare catch-all previously treated a Timeout
+            # (firewall/proxy silently dropping the connection, or a
+            # process alive-but-not-yet-answering) the same as "free",
+            # risking a second competing instance against a slow-to-answer
+            # existing one. Kept identical to
+            # operator/bridges/shared/corvin-supervisor.ps1 -- parity is
+            # load-bearing (test_windows_supervisor_parity.py).
+            `$portBusy = `$false
+        } else {
+            `$portBusy = `$true
+        }
     }
     if (`$portBusy) {
         Write-Log "port 8765 already serving (install wizard or another instance) -- standing by, re-check in 30s"

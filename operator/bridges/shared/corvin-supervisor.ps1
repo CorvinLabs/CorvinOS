@@ -75,13 +75,35 @@ function Find-Python {
             if ($ver -match "^3\.(\d+)" -and [int]$Matches[1] -ge 11) { return $cmd }
         } catch {}
     }
-    return "python"   # last resort -- Start-Process will error clearly if this isn't on PATH either
+    # 2026-08-02: the old fallback here was `return "python"`, reasoning
+    # "Start-Process will error clearly if this isn't on PATH either" — false
+    # whenever something named `python` IS on PATH but isn't usable (a fresh
+    # Windows install's default-enabled "python" App Execution Alias, which
+    # either opens the Store or exits instantly doing nothing; or a stray
+    # Python 2 / pre-3.11 install). In both cases Start-Process "succeeds"
+    # launching a process that never runs corvinOS, its quick exit gets
+    # treated as a normal crash, and the while($true) loop burns through
+    # MaxRestarts doing nothing useful before giving up — a silent failure
+    # loop, not the clear, immediate error the old comment assumed. Returning
+    # $null here lets the caller (a pre-loop check, unlike bridge.ps1's own
+    # one-shot `exit 1` which would be wrong INSIDE this restart-forever
+    # loop) log a clear CRITICAL and stop before ever entering the loop.
+    return $null
 }
 
 # Build the (FilePath, ArgumentList[], WorkingDirectory) for the chosen target
 # as NATIVE PowerShell values -- never as a string that has to be re-parsed.
 if ($Target -eq "console") {
     $FilePath = Find-Python
+    if (-not $FilePath) {
+        # Fail fast HERE, before the while($true) loop below -- a silent
+        # crash-loop burning MaxRestarts on a doomed launch is worse than
+        # stopping immediately with a clear, actionable message. Logged to
+        # the same file an operator already checks after a CRITICAL restart
+        # cutoff, so this failure mode is observable the same way.
+        Write-SupervisorLog "CRITICAL: no usable Python 3.11+ found (checked venv, python/python3/py on PATH) -- supervisor cannot start the console. Install Python 3.11+ or run install.ps1, then restart with: Start-ScheduledTask <task-name>"
+        exit 1
+    }
     $ArgList = @("-m", "corvinOS", "serve", "--no-browser")
     $WorkDir = $BridgeRoot
 } else {
@@ -121,7 +143,30 @@ while ($true) {
             Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8765/healthz" -TimeoutSec 3 -ErrorAction Stop | Out-Null
             $portBusy = $true
         } catch {
-            if ($_.Exception.Response) { $portBusy = $true }
+            if ($_.Exception.Response) {
+                $portBusy = $true
+            } elseif ($_.Exception.Status -eq [System.Net.WebExceptionStatus]::ConnectFailure) {
+                # 2026-08-02: ConnectFailure is .NET's well-defined signal for
+                # "nothing is listening / connection actively refused" -- the
+                # genuinely free-port case. This is the ONLY status that
+                # should clear $portBusy; the old code treated EVERY
+                # exception lacking a Response the same way, which also
+                # covers a Timeout (firewall/proxy silently dropping the
+                # connection, or a process alive-but-not-yet-answering) --
+                # indistinguishable from "free" under the old check, so a
+                # slow-to-respond existing instance could get a SECOND
+                # competing instance launched against it. Fail SAFE:
+                # anything that isn't a confirmed ConnectFailure keeps
+                # $portBusy = $false only via this explicit allow-list, never
+                # via a bare catch-all.
+                $portBusy = $false
+            } else {
+                # Timeout, or any other ambiguous failure -- do not conclude
+                # the port is free. Standing by needlessly for 30s costs
+                # nothing (no restart budget consumed); wrongly launching a
+                # second instance against a live one does.
+                $portBusy = $true
+            }
         }
         if ($portBusy) {
             Write-SupervisorLog "port 8765 already serving (another instance) -- standing by, re-check in 30s"
