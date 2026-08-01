@@ -45,6 +45,11 @@ What gets filled, and from where (four confidence tiers):
                 ADR-0264's own "lazy backfill" already covers this: paths
                 get added the moment a NEW adr's depends_on references an
                 old one.
+    docs     <- same reasoning as paths, one layer over: an old ADR's
+                documentation surface (which docs/claude-ref/*.md page, if
+                any, describes it) is not mechanically derivable from the
+                ADR's own body text without real risk of pointing at the
+                wrong file. Left [] for the same lazy-backfill reason.
 
 Every backfilled node also carries `backfilled: true` and `backfill_date:`
 so it is visibly distinguishable from hand-authored frontmatter (a new ADR
@@ -220,6 +225,7 @@ def render_frontmatter(r: BackfillResult, backfill_date: str) -> str:
         f"related: {_list(r.related)}",
         f"commits: {_list(r.commits)}",
         "paths: []",
+        "docs: []",
         "backfilled: true",
         f"backfill_date: {backfill_date}",
         "---",

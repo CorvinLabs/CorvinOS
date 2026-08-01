@@ -22,7 +22,7 @@ import pytest
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
-from scripts.adr_graph import adrs_for_path, load_graph, subgraph  # noqa: E402
+from scripts.adr_graph import adrs_for_doc, adrs_for_path, load_graph, subgraph  # noqa: E402
 
 _SCRIPT = _REPO / "scripts" / "adr_graph.py"
 
@@ -31,6 +31,7 @@ def _write_adr(decisions_dir: Path, filename: str, *, id_: str, title: str,
                 depends_on: list[str] | None = None,
                 supersedes: list[str] | None = None,
                 paths: list[str] | None = None,
+                docs: list[str] | None = None,
                 status: str = "accepted") -> Path:
     fm_lines = [
         "---",
@@ -44,6 +45,9 @@ def _write_adr(decisions_dir: Path, filename: str, *, id_: str, title: str,
     ]
     for p in (paths or []):
         fm_lines.append(f'  - "{p}"')
+    fm_lines.append("docs:")
+    for d in (docs or []):
+        fm_lines.append(f'  - "{d}"')
     fm_lines.append("---")
     fm_lines.append("")
     fm_lines.append(f"# {id_} — {title}")
@@ -143,6 +147,40 @@ class TestPathMatching:
         assert adrs_for_path("README.md", nodes) == []
 
 
+class TestDocMatching:
+    """Three layers, not two (ADR-0264 second amendment): `docs:` is a
+    SEPARATE surface from `paths:`, matched by its own function, so
+    docs-as-definition-of-done can find the ADR governing a doc it's about
+    to edit without accidentally also matching code queries or vice versa."""
+
+    def test_doc_path_matches_docs_field_not_paths_field(self, decisions_dir):
+        _write_adr(decisions_dir, "0100-a.md", id_="ADR-0100", title="A",
+                   paths=["scripts/adr_graph.py"],
+                   docs=["docs/claude-ref/adr-gate.md"])
+        nodes = load_graph(decisions_dir)
+        assert [n.id for n in adrs_for_doc("docs/claude-ref/adr-gate.md", nodes)] == ["ADR-0100"]
+
+    def test_code_query_does_not_match_docs_field(self, decisions_dir):
+        """A path that is in `docs:` must not leak into adrs_for_path()."""
+        _write_adr(decisions_dir, "0100-a.md", id_="ADR-0100", title="A",
+                   docs=["docs/claude-ref/adr-gate.md"])
+        nodes = load_graph(decisions_dir)
+        assert adrs_for_path("docs/claude-ref/adr-gate.md", nodes) == []
+
+    def test_doc_query_does_not_match_paths_field(self, decisions_dir):
+        """The reverse: a path in `paths:` must not leak into adrs_for_doc()."""
+        _write_adr(decisions_dir, "0100-a.md", id_="ADR-0100", title="A",
+                   paths=["scripts/adr_graph.py"])
+        nodes = load_graph(decisions_dir)
+        assert adrs_for_doc("scripts/adr_graph.py", nodes) == []
+
+    def test_unrelated_doc_matches_nothing(self, decisions_dir):
+        _write_adr(decisions_dir, "0100-a.md", id_="ADR-0100", title="A",
+                   docs=["docs/claude-ref/adr-gate.md"])
+        nodes = load_graph(decisions_dir)
+        assert adrs_for_doc("README.md", nodes) == []
+
+
 class TestSubgraphTraversal:
     def test_transitive_depends_on_closure_in_topological_order(self, decisions_dir):
         """C depends on B depends on A. Querying C must return [A, B, C] --
@@ -240,6 +278,33 @@ class TestRealCliEndToEnd:
             pytest.skip("sibling Corvin-ADR checkout not present")
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--adr", "0264"],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "ADR-0264" in result.stdout
+
+    def test_cli_doc_flag_json_output_is_well_formed(self, decisions_dir):
+        _write_adr(decisions_dir, "0100-a.md", id_="ADR-0100", title="Root",
+                   docs=["docs/claude-ref/adr-gate.md"])
+        result = subprocess.run(
+            [sys.executable, str(_SCRIPT), "--doc", "docs/claude-ref/adr-gate.md",
+             "--decisions-dir", str(decisions_dir), "--format", "json"],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["seeds"] == ["ADR-0100"]
+        assert payload["matched_via"] == "docs"
+
+    def test_cli_doc_flag_against_the_real_repo_finds_adr_0264(self):
+        """Dogfooding check for the doc layer specifically: ADR-0264 points
+        `docs:` at docs/claude-ref/adr-gate.md in the real committed file --
+        --doc must find it, proving docs-as-definition-of-done's reverse
+        lookup actually works end-to-end, not just in a fixture."""
+        if not (_REPO.parent / "Corvin-ADR" / "decisions").is_dir():
+            pytest.skip("sibling Corvin-ADR checkout not present")
+        result = subprocess.run(
+            [sys.executable, str(_SCRIPT), "--doc", "docs/claude-ref/adr-gate.md"],
             capture_output=True, text=True, timeout=10,
         )
         assert result.returncode == 0, result.stderr

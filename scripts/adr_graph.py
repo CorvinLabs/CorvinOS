@@ -9,21 +9,34 @@ subgraph -- the seed ADR(s) plus everything they transitively depend_on --
 in topological (dependency-first) reading order, with each node's current
 status (accepted / superseded / frozen) resolved via `superseded_by`.
 
+Three layers, not two: `paths:` is an ADR's CODE surface, `docs:` is its
+DOCUMENTATION surface (README sections, docs/claude-ref/*.md, CLAUDE.md
+mechanisms -- the artifacts `docs-as-definition-of-done` keeps in sync with
+that code). Kept as separate fields deliberately: a code file and a doc
+file answer different questions ("what implements this decision" vs. "what
+explains it to a reader") and a caller querying one should not silently
+also match the other's namespace. adrs_for_path() / adrs_for_doc() are the
+two independent entry points into the same underlying graph; both feed the
+identical `depends_on`/`supersedes` traversal once a seed is found, so
+Code, Docs, and ADRs are three views into one graph, not three graphs.
+
 ADRs without ADR-0264 frontmatter (the pre-0264 corpus) are silently
 excluded from the graph -- by design (ADR-0264 "no retrofit"). Querying a
 path with no frontmatter match returns an empty, non-error result: absence
 from the graph is the expected default, not a failure.
 
 Usage:
-    python3 scripts/adr_graph.py <repo-relative-path>       # path -> subgraph
+    python3 scripts/adr_graph.py <repo-relative-path>       # code path -> subgraph
+    python3 scripts/adr_graph.py --doc <repo-relative-path> # doc path -> subgraph
     python3 scripts/adr_graph.py --adr 0264                 # one ADR -> subgraph
     python3 scripts/adr_graph.py --adr 0264 --format json   # machine-readable
 
 Library use (for an agent or another tool to call directly instead of
 shelling out):
-    from scripts.adr_graph import load_graph, adrs_for_path, subgraph
+    from scripts.adr_graph import load_graph, adrs_for_path, adrs_for_doc, subgraph
     nodes = load_graph()
     seeds = adrs_for_path("operator/bundle/skills/ldd/adr_gate/SKILL.md", nodes)
+    doc_seeds = adrs_for_doc("docs/claude-ref/adr-gate.md", nodes)
     ordered = subgraph([n.id for n in seeds], nodes)
 """
 from __future__ import annotations
@@ -53,6 +66,7 @@ class AdrNode:
     related: list[str] = field(default_factory=list)
     commits: list[str] = field(default_factory=list)
     paths: list[str] = field(default_factory=list)
+    docs: list[str] = field(default_factory=list)
     title: str = ""
 
     def to_dict(self) -> dict:
@@ -67,6 +81,7 @@ class AdrNode:
             "related": self.related,
             "commits": self.commits,
             "paths": self.paths,
+            "docs": self.docs,
         }
 
 
@@ -127,6 +142,7 @@ def load_graph(decisions_dir: Path = _DEFAULT_DECISIONS_DIR) -> dict[str, AdrNod
             related=[str(x) for x in (fm.get("related") or [])],
             commits=[str(x) for x in (fm.get("commits") or [])],
             paths=[str(x) for x in (fm.get("paths") or [])],
+            docs=[str(x) for x in (fm.get("docs") or [])],
             title=_title_from_body(text),
         )
         nodes[node.id] = node
@@ -138,20 +154,36 @@ def load_graph(decisions_dir: Path = _DEFAULT_DECISIONS_DIR) -> dict[str, AdrNod
     return nodes
 
 
-def adrs_for_path(rel_path: str, nodes: dict[str, AdrNode]) -> list[AdrNode]:
-    """ADRs whose `paths:` globs match rel_path (repo-relative, posix-style).
-
-    fnmatch's `*` already matches `/`, so a trailing `/**` glob (e.g.
+def _glob_match_any(rel_path: str, patterns: list[str]) -> bool:
+    """fnmatch's `*` already matches `/`, so a trailing `/**` glob (e.g.
     "core/plugins/plugin_builder/**") matches every file under that
     directory without special-casing -- verified: fnmatch does not apply
-    shell/pathlib's directory-boundary semantics to `*`.
+    shell/pathlib's directory-boundary semantics to `*`."""
+    return any(fnmatch.fnmatch(rel_path, pattern) for pattern in patterns)
+
+
+def adrs_for_path(rel_path: str, nodes: dict[str, AdrNode]) -> list[AdrNode]:
+    """ADRs whose `paths:` (CODE surface) globs match rel_path.
+
+    Deliberately checks `paths` only, never `docs` -- a code file and a doc
+    file are different questions ("what implements this decision" vs. "what
+    explains it"). Use adrs_for_doc() for the documentation surface.
     """
     rel_path = rel_path.replace("\\", "/")
-    matches = []
-    for node in nodes.values():
-        if any(fnmatch.fnmatch(rel_path, pattern) for pattern in node.paths):
-            matches.append(node)
-    return matches
+    return [n for n in nodes.values() if _glob_match_any(rel_path, n.paths)]
+
+
+def adrs_for_doc(rel_path: str, nodes: dict[str, AdrNode]) -> list[AdrNode]:
+    """ADRs whose `docs:` (DOCUMENTATION surface) globs match rel_path.
+
+    This is the reverse lookup `docs-as-definition-of-done` needs: given a
+    doc file you are about to edit (or just edited), which ADRs describe
+    the same decision and might need an amendment too. Checks `docs` only,
+    never `paths` -- see adrs_for_path()'s docstring for why the two stay
+    separate.
+    """
+    rel_path = rel_path.replace("\\", "/")
+    return [n for n in nodes.values() if _glob_match_any(rel_path, n.docs)]
 
 
 def subgraph(seed_ids: list[str], nodes: dict[str, AdrNode]) -> list[AdrNode]:
@@ -180,8 +212,11 @@ def subgraph(seed_ids: list[str], nodes: dict[str, AdrNode]) -> list[AdrNode]:
     return [visited[i] for i in order]
 
 
-def format_report(seed_ids: set[str], sub: list[AdrNode]) -> str:
-    lines = [f"{len(sub)} ADR(s) in reading order (dependencies first):"]
+def format_report(seed_ids: set[str], sub: list[AdrNode], matched_via: str = "") -> str:
+    header = f"{len(sub)} ADR(s) in reading order (dependencies first)"
+    if matched_via:
+        header += f" — seed matched via {matched_via}"
+    lines = [header + ":"]
     for node in sub:
         marker = "→" if node.id in seed_ids else " "
         flag = ""
@@ -191,12 +226,17 @@ def format_report(seed_ids: set[str], sub: list[AdrNode]) -> str:
             flag = f"  [{node.status.upper()}]"
         lines.append(f"  {marker} {node.id} — {node.title}{flag}")
         lines.append(f"      {node.file}")
+        if node.paths:
+            lines.append(f"      code: {', '.join(node.paths)}")
+        if node.docs:
+            lines.append(f"      docs: {', '.join(node.docs)}")
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("target", nargs="?", help="repo-relative path to query")
+    parser.add_argument("target", nargs="?", help="repo-relative CODE path to query (matches `paths:`)")
+    parser.add_argument("--doc", help="repo-relative DOC path to query (matches `docs:`)")
     parser.add_argument("--adr", help="query the subgraph for one ADR id, e.g. 0264 or ADR-0264")
     parser.add_argument("--format", choices=["text", "json"], default="text")
     parser.add_argument("--decisions-dir", default=str(_DEFAULT_DECISIONS_DIR))
@@ -204,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
 
     decisions_dir = Path(args.decisions_dir)
     nodes = load_graph(decisions_dir)
+    matched_via = ""
 
     if args.adr:
         adr_id = args.adr.upper()
@@ -217,7 +258,22 @@ def main(argv: list[str] | None = None) -> int:
                 print(msg, file=sys.stderr)
             return 1
         seeds = [nodes[adr_id]]
+    elif args.doc:
+        matched_via = "docs"
+        seeds = adrs_for_doc(args.doc, nodes)
+        if not seeds:
+            if args.format == "json":
+                print(json.dumps({"seeds": [], "nodes": [],
+                                   "note": "no ADR-0264 docs: frontmatter matches this path"}))
+            else:
+                print(f"No ADR `docs:` frontmatter matches path {args.doc!r}.")
+                print("(Expected for most doc files -- most docs aren't tied to a "
+                      "single ADR. This is the query docs-as-definition-of-done "
+                      "should run before editing a doc: if it DOES match, the "
+                      "matched ADR may need an amendment alongside the doc edit.)")
+            return 0
     elif args.target:
+        matched_via = "code paths"
         seeds = adrs_for_path(args.target, nodes)
         if not seeds:
             if args.format == "json":
@@ -239,10 +295,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.format == "json":
         print(json.dumps({
             "seeds": sorted(seed_ids),
+            "matched_via": matched_via or "adr_id",
             "nodes": [n.to_dict() for n in sub],
         }, indent=2))
     else:
-        print(format_report(seed_ids, sub))
+        print(format_report(seed_ids, sub, matched_via))
     return 0
 
 

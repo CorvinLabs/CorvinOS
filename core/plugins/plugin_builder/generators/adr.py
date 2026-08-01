@@ -5,18 +5,24 @@ Decision / Alternatives / Consequences) — NOT a CorvinOS-repo ADR. It document
 one decision: why this plugin idea was classified the way it was. It is meant
 to travel with the plugin's own repo, not to be filed in `Corvin-ADR/`.
 
-Carries ADR-0264 frontmatter (id/status/depends_on/related/paths) like every
-CorvinOS-repo ADR written after that convention, even though this document
-lives outside `Corvin-ADR/decisions/` and outside `scripts/adr_graph.py`'s
-default search path: the schema is what makes an ADR machine-traversable, not
-its filing location, and a plugin's own generated ADR is exactly the kind of
-node a coding agent working inside that plugin's repo should be able to enter
-the graph from. `id` is plugin-scoped (`{plugin_id}-ADR-0001`, not a
-Corvin-ADR sequence number) since a plugin may accumulate more than one
-generated ADR over its life without colliding with this repo's numbering.
-`related` points INTO the real Corvin-ADR corpus (ADR-0253, ADR-0156, the
-taxonomy ADRs) — cross-repo edges are allowed by design (ADR-0264 "Decision"
-§1: paths/edges are not required to resolve locally to be meaningful).
+Carries ADR-0264 frontmatter (id/status/depends_on/related/paths/docs) like
+every CorvinOS-repo ADR written after that convention, even though this
+document lives outside `Corvin-ADR/decisions/` and outside
+`scripts/adr_graph.py`'s default search path: the schema is what makes an ADR
+machine-traversable, not its filing location, and a plugin's own generated
+ADR is exactly the kind of node a coding agent working inside that plugin's
+repo should be able to enter the graph from. `id` is plugin-scoped
+(`{plugin_id}-ADR-0001`, not a Corvin-ADR sequence number) since a plugin may
+accumulate more than one generated ADR over its life without colliding with
+this repo's numbering. `related` points INTO the real Corvin-ADR corpus
+(ADR-0253, ADR-0156, the taxonomy ADRs) — cross-repo edges are allowed by
+design (ADR-0264 "Decision" §1: paths/edges are not required to resolve
+locally to be meaningful). `docs:` points at this ADR's own SIBLING generated
+docs (`plugin-idea.md`, `plugin-architecture.md`, `build-plan.md` — see
+generators/scaffold.py's `doc_sources`), the concrete three-layer example
+ADR-0264's second amendment describes: the generated code scaffold, these
+generated docs, and this generated ADR all cross-reference one plugin's single
+classification decision.
 """
 from __future__ import annotations
 
@@ -61,11 +67,21 @@ _RELATED_ADRS = ("ADR-0244", "ADR-0245", "ADR-0246", "ADR-0247", "ADR-0248",
                   "ADR-0249", "ADR-0250", "ADR-0251", "ADR-0156", "ADR-0253")
 
 
+_SIBLING_DOCS = ("plugin-idea.md", "plugin-architecture.md", "build-plan.md")
+
+
 def _adr_frontmatter(plugin_id: str) -> list[str]:
     """ADR-0264 schema — see module docstring for why a plugin-scoped
-    generated ADR carries it even though it is filed outside Corvin-ADR/."""
+    generated ADR carries it even though it is filed outside Corvin-ADR/.
+
+    `docs:` names its sibling generated docs (relative to the shared
+    `docs/` dir all four generators write into, see generators/scaffold.py)
+    -- the concrete three-layer example ADR-0264's second amendment
+    describes: generated code, generated docs, and this generated ADR all
+    cross-reference the same classification decision.
+    """
     related = ", ".join(_RELATED_ADRS)
-    return [
+    lines = [
         "---",
         f"id: {plugin_id}-ADR-0001",
         "status: proposed",
@@ -75,9 +91,11 @@ def _adr_frontmatter(plugin_id: str) -> list[str]:
         "commits: []",
         "paths:",
         '  - "**"',
-        "---",
-        "",
+        "docs:",
     ]
+    lines += [f'  - "{name}"' for name in _SIBLING_DOCS]
+    lines += ["---", ""]
+    return lines
 
 
 def generate_adr_doc(idea: PluginIdea, classification: Classification, plugin_id: str) -> str:

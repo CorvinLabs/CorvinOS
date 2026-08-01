@@ -89,6 +89,7 @@ When one fires: stop, grep, edit docs, re-stage, commit as one logical unit.
 | Changed performance characteristic | Performance docs, SLO docs, benchmark tables |
 | Added new public behavior | Add a new section where similar behaviors live, not a dangling appendix |
 | Changed architecture / ownership | Architecture docs, ownership files (CODEOWNERS, TEAM.md) |
+| Changed code covered by an ADR's `paths:`, or editing a doc covered by an ADR's `docs:` | Run `python3 scripts/adr_graph.py <changed-path>` (code) or `--doc <changed-path>` (doc) — a match means an ADR describes this decision and may need an amendment alongside the doc sync (ADR-0264, "ADR Decision Graph") |
 
 Adapt the table to your project — the principle is the same: **code change → specific doc sections to check.**
 
@@ -134,3 +135,4 @@ Measured behavior change for this skill is documented in `tests/fixtures/docs-as
 - **`root-cause-by-layer`** — a bug report against a doc-described behavior should walk the ladder on the doc as well as the code; stale docs are a Layer-3 (contract) violation between the reader and the codebase.
 - **`loss-backprop-lens`** — docs are a regularizer. Shipping a code change without doc sync raises generalization loss (future decisions built on a stale model).
 - **`dialectical-reasoning`** — the antithesis of "done" is "what doc statement is now false?" If you can't name one, you haven't looked.
+- **`adr_gate`** — a sibling discipline, not a duplicate: this skill keeps the DOCS surface synced with code; `adr_gate` keeps the DECISION RECORD synced with structural changes. `scripts/adr_graph.py` is the traversal tool both meet at — an ADR's `paths:` is its code surface, its `docs:` is exactly the surface this skill's Sync Table governs, and both feed the same graph (ADR-0264, "ADR Decision Graph"). Before closing a doc-sync task, running `scripts/adr_graph.py --doc <path>` on the doc you just edited is a cheap way to check whether an ADR needs the same attention.
