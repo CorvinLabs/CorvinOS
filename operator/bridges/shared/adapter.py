@@ -228,6 +228,40 @@ PROCESSED = Path(os.environ.get("ADAPTER_PROCESSED") or (ROOT / "processed"))
 # machine with a configured live bridge; the "test reads live config" class).
 SETTINGS_FILE = Path(os.environ.get("ADAPTER_SETTINGS") or (ROOT / "settings.json"))
 
+
+def _atomic_write_outbox(path: Path, content: str) -> None:
+    """Write an outbox envelope atomically: temp file in the SAME
+    directory, then os.replace() into the final name.
+
+    Before this helper, every outbox writer called ``path.write_text(...)``
+    directly — daemon.js's outbox poller ticks every 500ms and reads
+    whatever bytes are on disk at that instant. A poll landing mid-write
+    saw a truncated/partial file, which its parser could not tell apart
+    from a genuinely corrupt envelope (both raise/fail the same way) —
+    the poller dead-lettered or silently dropped a perfectly good answer
+    that just hadn't finished landing yet. This class of race is
+    materially worse on Windows, where a common home-directory backup/
+    sync client (e.g. OneDrive, which the installer's own %USERPROFILE%
+    default routes CORVIN_HOME through) can transiently hold a sharing
+    lock on a just-created file, further widening the truncated-read
+    window. os.replace() is documented as atomic on both POSIX (rename())
+    and Windows (MoveFileEx + MOVEFILE_REPLACE_EXISTING) as long as
+    source and destination are on the same filesystem — same directory
+    here, so that always holds. A reader either sees the old state (file
+    absent) or the fully-written new state, never a partial one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
 # Test-hygiene: when ADAPTER_INBOX is set explicitly (= sandboxed test
 # run; every test_adapter_*.py does that), and no explicit
 # VOICE_AUDIT_PATH / CORVIN_HOME was given, default both into the
@@ -355,7 +389,7 @@ except ImportError:
             )
             _sentinel = _home / "global" / "audit_import_failed.log"
             _sentinel.parent.mkdir(parents=True, exist_ok=True)
-            with open(_sentinel, "a") as _fh:
+            with open(_sentinel, "a", encoding="utf-8") as _fh:
                 _fh.write(_json.dumps(
                     {"t": _time.time(), "event": str(_args[:1])[:80]}
                 ) + "\n")
@@ -1343,7 +1377,7 @@ def load_settings() -> dict:
     if m == _settings_mtime and _settings_cache is not None:
         return _settings_cache
     try:
-        _settings_cache = json.loads(SETTINGS_FILE.read_text())
+        _settings_cache = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
         _settings_mtime = m
     except (json.JSONDecodeError, OSError):
         if _settings_cache is None:
@@ -1366,7 +1400,7 @@ def _load_channel_settings(channel: str) -> dict:
     base = Path(os.path.expanduser(_bdir)) if _bdir else ROOT.parent
     p = base / channel / "settings.json"
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
 
@@ -2777,7 +2811,7 @@ def _resolve_spawn_inputs(
         _ulo_ty_path = _tenant_yaml_path(_ulo_tenant_id)
         if _ulo_ty_path and _ulo_ty_path.is_file():
             import yaml as _ulo_yaml  # type: ignore[import-not-found]
-            _ulo_ty = _ulo_yaml.safe_load(_ulo_ty_path.read_text()) or {}
+            _ulo_ty = _ulo_yaml.safe_load(_ulo_ty_path.read_text(encoding="utf-8")) or {}
             _ulo_spec_enabled = bool((_ulo_ty.get("spec") or {}).get("ulo", {}).get("enabled", False))
     except Exception:  # noqa: BLE001
         pass
@@ -4025,7 +4059,7 @@ def _heartbeat_writer(sender: str, msg_id: str, channel: str, chat_id,
         out["chat_id"] = chat_id
     out_file = OUTBOX / f"{msg_id}_hb.json"
     try:
-        out_file.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+        _atomic_write_outbox(out_file, json.dumps(out, ensure_ascii=False))
         log(f"heartbeat sent for {msg_id}")
     except OSError:
         pass
@@ -4231,7 +4265,7 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         if dump:
             try:
                 args = _build_claude_args(prompt, mode, profile, add_dir, channel=channel, chat_key=chat_key)
-                with open(dump, "a") as fh:
+                with open(dump, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps({
                         "channel": channel, "chat_key": chat_key,
                         "mode": mode, "profile": profile, "args": args,
@@ -5031,7 +5065,7 @@ def _call_claude_streaming_via_engine(
             try:
                 import fcntl as _fcntl  # noqa: PLC0415
                 _tmp = _msf.with_suffix(".tmp")
-                with open(_tmp, "w") as _f:
+                with open(_tmp, "w", encoding="utf-8") as _f:
                     _fcntl.flock(_f, _fcntl.LOCK_EX)
                     json.dump(
                         {"session_id": _captured_session_id,
@@ -6444,7 +6478,7 @@ def call_claude_streaming(
                     _build_claude_args(prompt, mode, profile, add_dir, channel=channel, chat_key=chat_key)
                     + ["--output-format", "stream-json", "--verbose"]
                 )
-                with open(dump, "a") as fh:
+                with open(dump, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps({
                         "channel": channel, "chat_key": chat_key,
                         "mode": mode, "profile": profile, "args": args,
@@ -6494,7 +6528,7 @@ def call_claude_streaming(
     _resume_id: str | None = None
     if _main_sess_file.exists():
         try:
-            with open(_main_sess_file) as _f:
+            with open(_main_sess_file, encoding="utf-8") as _f:
                 _resume_id = json.load(_f).get("session_id") or None
         except Exception:
             _resume_id = None
@@ -6606,7 +6640,7 @@ def call_claude_streaming(
             )
             _tenant_yaml = Path(_home) / "tenants" / _tid / "tenant.corvin.yaml"
             if _tenant_yaml.exists():
-                _ty = _yaml.safe_load(_tenant_yaml.read_text()) or {}
+                _ty = _yaml.safe_load(_tenant_yaml.read_text(encoding="utf-8")) or {}
                 _spec_engine = (_ty.get("spec") or {}).get("default_engine")
                 if _spec_engine and isinstance(_spec_engine, str):
                     profile = dict(profile or {})
@@ -9218,7 +9252,7 @@ def _plugin_builder_bridge_reply(
 
 def process_one(inbox_file: Path, settings: dict) -> None:
     try:
-        msg = json.loads(inbox_file.read_text())
+        msg = json.loads(inbox_file.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         log(f"bad inbox file {inbox_file}: {e}")
         inbox_file.unlink(missing_ok=True)
@@ -9452,9 +9486,9 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                     # it Windows cp1252 raises UnicodeEncodeError (a
                     # ValueError, NOT caught by `except OSError`) and the
                     # finished stale-drop bubbles into poison quarantine.
-                    (OUTBOX / f"{msg_id}_00.json").write_text(
-                        json.dumps(_stale_env, ensure_ascii=False, indent=2),
-                        encoding="utf-8")
+                    _atomic_write_outbox(
+                        OUTBOX / f"{msg_id}_00.json",
+                        json.dumps(_stale_env, ensure_ascii=False, indent=2))
                 except OSError as _e:
                     log(f"stale-drop notice failed for {msg_id}: {_e}")
                 PROCESSED.mkdir(exist_ok=True)
@@ -9553,9 +9587,9 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 if chat_id is not None:
                     warn_envelope["chat_id"] = chat_id
                 out_file = OUTBOX / f"{msg_id}_00.json"
-                out_file.write_text(json.dumps(warn_envelope,
-                                               ensure_ascii=False, indent=2),
-                                    encoding="utf-8")
+                _atomic_write_outbox(
+                    out_file,
+                    json.dumps(warn_envelope, ensure_ascii=False, indent=2))
                 PROCESSED.mkdir(exist_ok=True)
                 shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
                 _audit_event(
@@ -9635,7 +9669,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
         out_file = OUTBOX / f"{msg_id}_00.json"
-        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_outbox(out_file, json.dumps(ack_envelope, ensure_ascii=False, indent=2))
         PROCESSED.mkdir(exist_ok=True)
         shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
         return
@@ -9662,9 +9696,9 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                 _hr_ack = {"channel": channel, "to": sender, "text": _btw_hr}
                 if chat_id is not None:
                     _hr_ack["chat_id"] = chat_id
-                (OUTBOX / f"{msg_id}_00.json").write_text(
+                _atomic_write_outbox(
+                    OUTBOX / f"{msg_id}_00.json",
                     json.dumps(_hr_ack, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
                 )
                 PROCESSED.mkdir(exist_ok=True)
                 shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
@@ -9710,7 +9744,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
         out_file = OUTBOX / f"{msg_id}_00.json"
-        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_outbox(out_file, json.dumps(ack_envelope, ensure_ascii=False, indent=2))
         PROCESSED.mkdir(exist_ok=True)
         shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
         return
@@ -9850,9 +9884,9 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         ack_envelope = {"channel": channel, "to": sender, "text": ack_text}
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
-        (OUTBOX / f"{msg_id}_00.json").write_text(
+        _atomic_write_outbox(
+            OUTBOX / f"{msg_id}_00.json",
             json.dumps(ack_envelope, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
         PROCESSED.mkdir(exist_ok=True)
         shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
@@ -9961,7 +9995,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
         out_file = OUTBOX / f"{msg_id}_00.json"
-        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_outbox(out_file, json.dumps(ack_envelope, ensure_ascii=False, indent=2))
         PROCESSED.mkdir(exist_ok=True)
         shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
         return
@@ -10001,7 +10035,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if chat_id is not None:
             ack_envelope["chat_id"] = chat_id
         out_file = OUTBOX / f"{msg_id}_00.json"
-        out_file.write_text(json.dumps(ack_envelope, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_outbox(out_file, json.dumps(ack_envelope, ensure_ascii=False, indent=2))
         PROCESSED.mkdir(exist_ok=True)
         shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
         return
@@ -10129,9 +10163,9 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             ack_envelope = {"channel": channel, "to": sender, "text": _pb_reply}
             if chat_id is not None:
                 ack_envelope["chat_id"] = chat_id
-            (OUTBOX / f"{msg_id}_00.json").write_text(
+            _atomic_write_outbox(
+                OUTBOX / f"{msg_id}_00.json",
                 json.dumps(ack_envelope, ensure_ascii=False, indent=2),
-                encoding="utf-8",
             )
             PROCESSED.mkdir(exist_ok=True)
             shutil.move(str(inbox_file), PROCESSED / inbox_file.name)
@@ -10358,10 +10392,10 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         status_seq["n"] = n + 1
         out = OUTBOX / f"{msg_id}_s{n:02d}.json"
         try:
-            out.write_text(json.dumps(
+            _atomic_write_outbox(out, json.dumps(
                 _envelope({"text": text, "_progress": True}),
                 ensure_ascii=False,
-            ), encoding="utf-8")
+            ))
             log(f"status #{n} ({tool_name or '?'}): chars={len(text)}")
         except OSError as e:
             log(f"status write failed: {e}")
@@ -10585,7 +10619,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
         if bundle_voice and i == len(chunks) - 1:
             extra["voice_path"] = str(voice_path)
         out_file = OUTBOX / f"{msg_id}_{seq:02d}.json"
-        out_file.write_text(json.dumps(_envelope(extra), ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_outbox(out_file, json.dumps(_envelope(extra), ensure_ascii=False, indent=2))
         seq += 1
 
     # Non-Discord channels always keep voice as its own outbox entry.
@@ -10593,10 +10627,10 @@ def process_one(inbox_file: Path, settings: dict) -> None:
     # so the voice appears as a dedicated standalone final message.
     if voice_path and not bundle_voice:
         out_file = OUTBOX / f"{msg_id}_{seq:02d}.json"
-        out_file.write_text(json.dumps(
+        _atomic_write_outbox(out_file, json.dumps(
             _envelope({"voice_path": str(voice_path), "_final": True}),
             ensure_ascii=False, indent=2,
-        ), encoding="utf-8")
+        ))
         seq += 1
 
     # Phase 5.18: any new file Claude wrote to outputs/ goes back as an
@@ -10619,7 +10653,7 @@ def process_one(inbox_file: Path, settings: dict) -> None:
             out["document_name"] = f.name
             out["document_mimetype"] = mt or "application/octet-stream"
         out_file = OUTBOX / f"{msg_id}_{seq:02d}.json"
-        out_file.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_outbox(out_file, json.dumps(out, ensure_ascii=False, indent=2))
         seq += 1
 
     log(
@@ -10941,7 +10975,7 @@ def _route_key(inbox_file: Path) -> str:
     Falls back to the filename so a malformed JSON still serialises with
     itself rather than crashing the dispatcher."""
     try:
-        msg = json.loads(inbox_file.read_text())
+        msg = json.loads(inbox_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return f"unknown:{inbox_file.stem}"
     channel = msg.get("channel") or "whatsapp"
@@ -10956,7 +10990,7 @@ def _peek_side_channel(inbox_file: Path) -> bool:
     subprocess (or write to the buffer) without queuing behind the very
     turn they belong to."""
     try:
-        msg = json.loads(inbox_file.read_text())
+        msg = json.loads(inbox_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
     return bool(

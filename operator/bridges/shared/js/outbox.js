@@ -196,16 +196,46 @@ function startOutboxPoller({
         if (retryUnlinked) _sentOnce.delete(fpath);
         continue;
       }
+      // Read and parse are split (not one try/catch) so a filesystem-level
+      // read failure and a content-level parse failure are diagnosed
+      // differently. Before this split, both were treated identically as
+      // "unparseable envelope" and immediately dead-lettered — but the
+      // Python side now writes every outbox file atomically (temp file +
+      // os.replace, see adapter.py::_atomic_write_outbox), so a reader can
+      // only ever see the file fully absent or fully written, never a
+      // partial write. A readFileSync failure today is therefore most
+      // likely transient (EBUSY/EPERM from an AV scanner or a sync client
+      // like OneDrive briefly holding a sharing lock right after creation —
+      // materially more common on Windows, whose installer defaults
+      // CORVIN_HOME under %USERPROFILE%, a common OneDrive-synced folder),
+      // not evidence of a corrupt file. Misclassifying it as corrupt
+      // dead-lettered (or on some configs outright deleted) a perfectly
+      // good, already-paid-for answer instead of just retrying the next
+      // tick 500ms later.
+      let raw;
+      try {
+        raw = fs.readFileSync(fpath, 'utf8');
+      } catch (e) {
+        // ENOENT: the file legitimately vanished between readdirSync() and
+        // here (already delivered by a concurrent process, or genuinely
+        // never existed) — not an error, just skip it this tick.
+        if (e.code !== 'ENOENT' && logger) {
+          logger(`outbox: transient read error for ${f}, will retry: ${e.message}`);
+        }
+        continue;
+      }
       let payload;
       try {
-        payload = JSON.parse(fs.readFileSync(fpath, 'utf8'));
+        payload = JSON.parse(raw);
       } catch (e) {
         // Dead-letter, do NOT unlink: this file is a FINISHED ANSWER the engine
-        // already produced and paid for. Unparseable JSON is usually a truncated
-        // write (crash mid-write, disk full), and the text is often still in there
-        // — recoverable by hand from the dead-letter dir, unrecoverable once
-        // deleted. Falls back to unlink only when there is no dead-letter dir,
-        // because leaving it in place would retry the same parse every tick.
+        // already produced and paid for. Atomic writes mean a successfully-read
+        // file that still fails to parse is a genuine content problem (a non-
+        // adapter writer, disk corruption, or a bug), not a read-time race —
+        // the text is often still in there, recoverable by hand from the
+        // dead-letter dir, unrecoverable once deleted. Falls back to unlink
+        // only when there is no dead-letter dir, because leaving it in place
+        // would retry the same parse every tick.
         if (deadLetterDir) {
           if (!deadLetter(fpath, f, 'unparseable envelope', e.message, 1)) {
             try { fs.unlinkSync(fpath); } catch {}
