@@ -7,6 +7,73 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.87] — 2026-08-01 — Windows bridge/A2A parity, verified on real hardware (ADR-0265)
+
+### Fixed — A2A completely non-functional on Windows (send AND receive)
+
+- `RemoteEndpointRegistry.load()` / `OriginRegistry.load()` unconditionally rejected
+  every endpoint/origin file on Windows: `os.stat().st_mode & (S_IRWXG|S_IRWXO)` always
+  reports non-zero on NTFS (no POSIX group/other bits), so the world-readable guard
+  fired on every read. Fixed with a `sys.platform.startswith("win")` guard mirroring
+  `instance_identity.py`'s existing correct precedent.
+
+### Fixed — bridge stop/restart killed in-flight turns and orphaned processes on Windows
+
+- `Popen.terminate()` on Windows calls `TerminateProcess()` (no signal delivery, no
+  graceful drain); the tracked PID was `cmd.exe`, not the real `node.exe`/`claude`
+  process it wraps, so killing it orphaned the actual work. Fixed with the standard
+  Windows subprocess-tree pattern: `CREATE_NEW_PROCESS_GROUP` at spawn +
+  `CTRL_BREAK_EVENT` (graceful) + `taskkill /T /F` (hard-kill fallback).
+
+### Fixed — adapter.py crashed on the first non-ASCII inbound message on Windows
+
+- 11 file reads lacked `encoding="utf-8"`, falling back to
+  `locale.getpreferredencoding()` — a legacy code page on a default Windows install,
+  not UTF-8. The first emoji/umlaut in an inbound message raised `UnicodeDecodeError`.
+
+### Fixed — outbox poller could dead-letter a valid, in-flight-written message
+
+- 14 outbox `.write_text()` sites replaced with an atomic temp-file + `os.replace()`
+  helper, so `daemon.js`'s 500ms poller can never observe a partially-written envelope.
+  `outbox.js` now also distinguishes a transient read failure (retry) from a genuine
+  JSON-parse failure (dead-letter).
+
+### Fixed — `CORVIN_HOME` whitespace/`~`/`%VAR%` handling missing from the Node side
+
+- `bridge_paths.js` / `auth_elevation.js`'s `corvinHome()` resolved `CORVIN_HOME` via
+  `path.resolve(env)` only — no whitespace-guard, no `~`/`${VAR}`/`%VAR%` expansion,
+  unlike the Python resolver. Added matching `_expandVars()`/`_expandUser()` helpers.
+
+### Fixed — claude CLI not found on Windows even when installed
+
+- `_resolve_claude_bin()` (Python engine spawn) and `resolve_claude_bin()` (helper
+  subprocess spawn) only probed POSIX fallback locations. npm's global installer drops
+  `claude.cmd`/`claude.exe` under `%APPDATA%\npm` on Windows — the Windows equivalent of
+  `~/.local/bin` — which was never searched. Added env-derived Windows fallback paths.
+
+### Fixed — a standalone/minimal A2A sender crashed at import time (found via real hardware)
+
+- Verified the above fixes on a real Windows-11 VM (not simulated): a real signed A2A
+  envelope sent from genuine Windows NTFS to a Linux receiver, HMAC-verified round trip.
+  The first real run surfaced a second, previously-unknown bug: `remote_trigger_sender.py`
+  and `remote_trigger_receiver.py` each computed a module-level default directory via
+  unguarded `Path(__file__).resolve().parents[2]`, which raises `IndexError` at import
+  time for any deployment shallower than the full repo tree (e.g. a minimal standalone
+  sender bundle). Fixed with a repo-marker walk-up; added a real-subprocess regression
+  test (`test_a2a_shallow_path_import.py`) that doesn't require a VM to catch a regression.
+
+### Testing
+
+- 14 test files (7 A2A security suites, 7 Windows-parity suites) that were previously
+  wired into **no CI pipeline at all** are now run on every push/PR via
+  `run-all-tests.sh`. All Windows-specific branches are verified via `sys.platform`
+  simulation on Linux CI, PLUS the A2A sender path additionally verified on a real
+  Windows-11 VM this release.
+- Not covered by this release: the A2A **receiver** running on Windows (no inbound
+  network path was available to test against the VM), macOS (no Apple hardware/legal
+  cloud-Mac in this environment), and live Discord/WhatsApp bridge crash-recovery
+  specifically on Windows. See `Corvin-ADR` ADR-0265 for the full verification record.
+
 ## [0.10.74] — 2026-07-30
 
 ### Fixed — Discord Console setup was completely broken (CRITICAL)
