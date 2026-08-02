@@ -1199,17 +1199,17 @@ function MyUrlBanner() {
                       <code className="text-sm font-mono">{suggested}</code>
                       {isPrivateUrl(suggested) && (
                         <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
-                          ⚠ Local address — not reachable by external peers.
-                          Enter the public IP or domain below.
+                          ⓘ Local network address — works for pairing with
+                          other devices on this same Wi-Fi/network. For a
+                          peer outside this network, use a VPN (e.g.
+                          Tailscale) or a public domain instead.
                         </p>
                       )}
                     </div>
-                    {!isPrivateUrl(suggested) && (
-                      <Button size="sm" disabled={saving} className="h-7 px-3 text-xs shrink-0"
-                        onClick={handleAcceptSuggested}>
-                        {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Use this URL"}
-                      </Button>
-                    )}
+                    <Button size="sm" disabled={saving} className="h-7 px-3 text-xs shrink-0"
+                      onClick={handleAcceptSuggested}>
+                      {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Use this URL"}
+                    </Button>
                   </div>
                   <Button size="sm" variant="ghost" className="h-6 px-2 text-xs text-muted-foreground"
                     onClick={() => { setUrlInput(suggested); setEditing(true); }}>

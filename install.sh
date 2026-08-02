@@ -265,6 +265,26 @@ if [ "$ALWAYS_ON" = "1" ]; then
     fi
 fi
 
+# ── 3c. firewall: allow LAN peers to reach the console/A2A port ─────────────
+# Best-effort, Linux-only (ufw), and only if ufw is already active on this
+# machine -- never touches firewall state the operator hasn't turned on
+# themselves, and never invokes sudo (this script only elevates when
+# --always-on is explicitly passed above) -- so this silently no-ops for
+# anyone without passwordless root, leaving the warning below as the
+# recovery path. Fixes a real report: A2A pairing between a Windows and
+# Linux instance on the same network got stuck at "unreachable" behind
+# ufw's default-deny inbound policy.
+if [ "$(uname -s 2>/dev/null || echo unknown)" = "Linux" ] && command -v ufw >/dev/null 2>&1; then
+    if ufw status 2>/dev/null | grep -q "Status: active"; then
+        if ufw allow 8765/tcp comment "CorvinOS console/A2A" >/dev/null 2>&1; then
+            printf '  %s ufw: allowed inbound TCP 8765 for pairing with devices on this network.\n' "$(_green '✓')"
+        else
+            printf '  %s ufw is active but this account cannot add rules — if pairing with another device on your network shows the peer as "unreachable", run: %s\n' \
+                "$(_yellow '⚠')" "$(_bold 'sudo ufw allow 8765/tcp')"
+        fi
+    fi
+fi
+
 # ── 4. start server + wait for readiness + auto-launch console ──────────────────
 echo ""
 echo "  Starting CorvinOS console server ..."

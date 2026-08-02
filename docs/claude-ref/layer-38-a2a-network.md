@@ -588,6 +588,40 @@ signed callback, one round trip, no extra operator step:
 - Existing pre-2026-07-29 friendship connections lack `origin_id_for_send`
   and were never reciprocal — delete and re-pair them.
 
+### LAN pairing usability (2026-08-02)
+
+Reported live: pairing a Windows and a Linux instance on the same home
+network got stuck at `PENDING`/`UNREACHABLE` with no visible cause, and the
+operator had no idea their own LAN IP was even relevant. Two fixes:
+
+- **`POST /remote-trigger/pair/friendship/create` never issues a token with
+  no URL when one is inferable.** Previously a blank "own URL" form field
+  produced `url=None` in the token — permanent `PENDING` on the importer's
+  side, with no recovery short of the issuer discovering their own LAN IP by
+  hand and re-pairing. It now falls back to the already-configured
+  `a2a_friendship.get_my_url()`, then to `suggest_my_url()` (the same
+  mesh-VPN-then-local-interface auto-detection `GET /my-url` already offers)
+  — so a same-LAN pairing, the case this whole feature exists for (see
+  `_ack_url_rejection_reason` note above), works without the operator ever
+  needing to know or type their own address. The auto-detected value is
+  persisted via `set_my_url()` so it shows under Settings → A2A afterward.
+- **`MyUrlBanner`'s "Use this URL" button was hidden for private/RFC1918
+  addresses** — exactly the addresses correct for LAN pairing — forcing the
+  operator to retype the same value manually via "Enter a different URL…".
+  Fixed: the button now always shows; the warning copy for a private address
+  was reworded from "not reachable by external peers" (which read as "this
+  is wrong") to explain it works for same-network pairing and only needs a
+  VPN/public domain for peers outside the network.
+- **Windows Firewall / Linux `ufw`**: `install.ps1` now adds a best-effort
+  inbound allow-rule for the console/A2A port (`Install-CorvinFirewallRule`,
+  idempotent, never fatal, no elevation check — mirrors
+  `Install-CorvinAutostart`'s try/catch idiom); `install.sh` does the Linux
+  equivalent via `ufw allow 8765/tcp`, but ONLY if `ufw` is already active
+  and NEVER via `sudo` (this installer only elevates on the explicit
+  `--always-on` flag) — Windows' and (when active) ufw's default inbound-
+  block policy otherwise silently drops the peer's reachability probe,
+  which looks identical to a misconfigured URL from the UI.
+
 ---
 
 ## Threat model

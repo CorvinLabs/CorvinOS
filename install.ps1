@@ -500,11 +500,34 @@ while (`$true) {
     }
 }
 
+function Install-CorvinFirewallRule {
+    # Best-effort inbound allow-rule for the console/A2A port so a peer on
+    # the SAME LAN (the reported scenario: pairing a Windows and a Linux
+    # instance on one home network) isn't silently dropped by Windows'
+    # default "block unless matched" inbound policy -- this showed up live
+    # as A2A pairing getting permanently stuck at UNREACHABLE with no
+    # visible cause. Idempotent (removes any stale rule by name first,
+    # mirroring Install-CorvinAutostart's Unregister-then-Register idiom
+    # above) and NEVER fatal -- New-NetFirewallRule needs admin rights,
+    # which this installer neither requires nor checks for anywhere else
+    # either; on a non-admin account it just throws and the caller's catch
+    # reports it as a warning, exactly like every other privileged step in
+    # this script.
+    param([int]$Port)
+    $RuleName = "CorvinOS Console ($Port)"
+    Remove-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue | Out-Null
+    New-NetFirewallRule -DisplayName $RuleName -Direction Inbound -Action Allow `
+        -Protocol TCP -LocalPort $Port -Profile Any `
+        -Description "Allows other CorvinOS instances on this network to reach the console/A2A endpoint (Settings -> A2A)." `
+        -ErrorAction Stop | Out-Null
+}
+
 # ── 4. start server + wait for readiness + auto-launch console ──────────────────
 Write-Host ""
 Write-Step "Starting CorvinOS console server ..."
 
-$ConsoleURL = "http://localhost:8765/console/"
+$ConsolePort = 8765
+$ConsoleURL = "http://localhost:$ConsolePort/console/"
 # Slow Windows boots (cold Python import + Defender scan) can take well over
 # 30s to answer healthz. The top-level goal is "the console opens in the
 # browser no matter what", so give the server generous headroom AND still open
@@ -551,6 +574,16 @@ try {
     } else {
         Write-Warn "corvinos-serve is still not on PATH -- open a NEW terminal (PATH updates need a fresh session) and run: corvinos-serve"
     }
+}
+
+# ── 3b2. Firewall: allow LAN peers to reach the console/A2A port ────────────
+# Best-effort, never blocks install -- Settings -> A2A still works locally
+# either way, and a manual firewall exception can always be added later.
+try {
+    Install-CorvinFirewallRule -Port $ConsolePort
+    Write-Ok "Firewall: allowed inbound connections to the console/A2A port ($ConsolePort) for pairing with devices on this network."
+} catch {
+    Write-Warn "Could not add a firewall rule ($_) -- if pairing with another device on your network shows the peer as 'unreachable', allow inbound TCP $ConsolePort in Windows Defender Firewall manually."
 }
 
 # ── 3c. Desktop shortcut ──────────────────────────────────────────────────

@@ -23,6 +23,7 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parent.parent
 _SUPERVISOR = _REPO / "operator" / "bridges" / "shared" / "corvin-supervisor.ps1"
 _INSTALL_PS1 = _REPO / "install.ps1"
+_INSTALL_SH = _REPO / "install.sh"
 _BRIDGE_PS1 = _REPO / "operator" / "bridges" / "bridge.ps1"
 
 
@@ -349,6 +350,90 @@ class TestInstallBannerReflectsRealState:
         )
 
 
+class TestLanFirewallRule:
+    """2026-08-02 real bug, reported via a screenshot: A2A pairing between a
+    Windows and a Linux instance on the same LAN got stuck at "Imported
+    (URL pending)" / UNREACHABLE. Windows' default inbound-block policy
+    silently drops the peer's reachability probe with no visible cause.
+    install.ps1 now adds a best-effort inbound firewall rule for the
+    console/A2A port, mirroring the Install-CorvinAutostart idiom: never
+    fatal, idempotent (removes any stale rule by name first), no admin/
+    elevation gate (this installer never checks for elevation anywhere
+    else either -- New-NetFirewallRule just throws on a non-admin account
+    and the caller's catch reports it as a warning like every other
+    privileged step)."""
+
+    def test_firewall_function_defined_and_idempotent(self) -> None:
+        src = _INSTALL_PS1.read_text(encoding="utf-8")
+        assert "function Install-CorvinFirewallRule" in src
+        idx = src.index("function Install-CorvinFirewallRule")
+        body = src[idx:idx + 1400]
+        assert "Remove-NetFirewallRule" in body, (
+            "must remove any stale rule by name first (idempotent re-run, "
+            "matching Install-CorvinAutostart's Unregister-then-Register)"
+        )
+        assert "New-NetFirewallRule" in body
+        assert "-Direction Inbound" in body
+        assert "-Action Allow" in body
+
+    def test_firewall_rule_is_called_with_the_real_console_port(self) -> None:
+        src = _INSTALL_PS1.read_text(encoding="utf-8")
+        assert "$ConsolePort = 8765" in src, (
+            "the console's actual default port (8765, per serve_entry.py / "
+            "cli.py) must be used, not a hardcoded/wrong port like 8000"
+        )
+        call_idx = src.index("Install-CorvinFirewallRule -Port $ConsolePort")
+        window = src[max(0, call_idx - 400):call_idx]
+        assert "try {" in window, "firewall rule creation must be wrapped in try/catch"
+
+    def test_firewall_failure_is_reported_not_swallowed(self) -> None:
+        src = _INSTALL_PS1.read_text(encoding="utf-8")
+        call_idx = src.index("Install-CorvinFirewallRule -Port $ConsolePort")
+        window = src[call_idx:call_idx + 500]
+        assert "catch {" in window
+        assert "Write-Warn" in window, (
+            "a failure to add the firewall rule must be surfaced to the "
+            "user with a manual recovery command, not silently discarded"
+        )
+
+
+class TestLinuxUfwRule:
+    """Linux counterpart of TestLanFirewallRule: install.sh must never
+    invoke sudo outside the explicit --always-on opt-in (an unconditional
+    sudo prompt mid one-liner install would be a real regression), so the
+    ufw step is gated on ufw already being active and never shells out to
+    sudo itself."""
+
+    def test_ufw_step_present_and_scoped_to_linux(self) -> None:
+        src = _INSTALL_SH.read_text(encoding="utf-8")
+        assert "command -v ufw" in src
+        idx = src.index("command -v ufw")
+        window = src[max(0, idx - 300):idx + 700]
+        assert '"Linux"' in window
+        assert "ufw allow 8765/tcp" in window
+        assert "Status: active" in window, (
+            "must only touch ufw if it is already active -- never enable a "
+            "firewall the operator hasn't turned on themselves"
+        )
+
+    def test_ufw_step_never_invokes_sudo(self) -> None:
+        # "sudo" MAY appear once, but only inside the printed recovery
+        # message (_bold 'sudo ufw allow ...') -- it must never be an
+        # actually-executed command in this block.
+        src = _INSTALL_SH.read_text(encoding="utf-8")
+        idx = src.index("command -v ufw")
+        window = src[idx:idx + 900]
+        executed_sudo = re.findall(r"(?<!')\bsudo\s+ufw\b", window)
+        assert not executed_sudo, (
+            "install.sh only elevates via sudo when --always-on is "
+            "explicitly passed -- the ufw step must degrade to a printed "
+            "manual command instead of prompting for a password unasked"
+        )
+        assert "_bold 'sudo ufw allow" in window, (
+            "expected the manual-recovery command to be printed via _bold"
+        )
+
+
 if __name__ == "__main__":
     import sys
 
@@ -373,5 +458,12 @@ if __name__ == "__main__":
     t6.test_success_banner_is_conditional_on_server_ready()
     t6.test_no_launch_path_gives_an_actionable_recovery_command()
     t6.test_fallback_start_failure_is_not_silently_swallowed()
+    t7 = TestLanFirewallRule()
+    t7.test_firewall_function_defined_and_idempotent()
+    t7.test_firewall_rule_is_called_with_the_real_console_port()
+    t7.test_firewall_failure_is_reported_not_swallowed()
+    t8 = TestLinuxUfwRule()
+    t8.test_ufw_step_present_and_scoped_to_linux()
+    t8.test_ufw_step_never_invokes_sudo()
     print("all tests passed")
     sys.exit(0)
