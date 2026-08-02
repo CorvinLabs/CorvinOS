@@ -394,3 +394,24 @@ def execution_context(
         details=details,
         severity="INFO",
     )
+
+
+def system_event(
+    *,
+    tenant_id: str | None,
+    event: str,
+    details: dict[str, Any],
+    severity: str = "INFO",
+) -> None:
+    """Generic background/system event emitter for callers that don't have
+    their own dedicated wrapper (e.g. routes/models.py's periodic model-
+    catalog refresh). ``event`` is the free-form event_type string; unlike
+    the named wrappers above it has no entry in _ALLOWED_FIELDS, so _emit()
+    skips the field-allowlist check for it (still subject to
+    _FORBIDDEN_FIELDS)."""
+    _emit(
+        event,
+        tenant_id=tenant_id,
+        details=details,
+        severity=severity,
+    )

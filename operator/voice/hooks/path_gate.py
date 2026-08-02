@@ -100,6 +100,30 @@ def _vault_path() -> Path:
     return Path(os.path.expanduser(cfg_home)) / "corvin-voice" / "secrets.json"
 
 
+_MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(/.*)?$")
+
+
+def _normalize_msys_drive(s: str) -> str:
+    """On Windows, translate a Git-Bash/MSYS2-style ``/c/Users/...`` path to
+    ``C:/Users/...`` before handing it to ``pathlib``.
+
+    Windows' Bash tool commonly runs through Git-Bash/MSYS2, whose runtime
+    translates ``/c/...`` to the real ``C:\\...`` path at execution time —
+    but this hook is a separate Python subprocess with no MSYS runtime, so
+    without this translation ``Path("/c/Users/.../forge/policy.json")``
+    resolves relative to "root of the current drive" (garbage, never equal
+    to the real protected path), and the write sails through undetected.
+    POSIX is unaffected (a real ``/c/...`` there is a normal absolute path
+    starting at the filesystem root, left untouched)."""
+    if not sys.platform.startswith("win"):
+        return s
+    m = _MSYS_DRIVE_RE.match(s)
+    if not m:
+        return s
+    drive, rest = m.group(1), (m.group(2) or "/")
+    return f"{drive.upper()}:{rest}"
+
+
 def _abs(p: str | Path) -> Path:
     """Best-effort absolute resolution. Non-existent paths are fine.
 
@@ -109,7 +133,7 @@ def _abs(p: str | Path) -> Path:
     protected-path check — yet the shell expands ~ at run time and truncates the
     real file. expandvars covers ``$HOME``/``${XDG_CONFIG_HOME}`` forms; command
     substitution ($(...)/backticks) is already fail-closed in _bash_targets."""
-    pp = Path(os.path.expanduser(os.path.expandvars(str(p))))
+    pp = Path(_normalize_msys_drive(os.path.expanduser(os.path.expandvars(str(p)))))
     if not pp.is_absolute():
         pp = Path.cwd() / pp
     try:
