@@ -7,6 +7,47 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.93] — 2026-08-02 — install.ps1 could claim "CorvinOS is ready!" when the console never started
+
+### Fixed — a fresh Windows install could report success while the console silently failed to start
+
+- Reported live: after a completely fresh Windows install, the console did not
+  open at all. Adversarial code review of `install.ps1` (no plain-pip PATH
+  quirk applies here — the Windows installer uses `uv tool install`) found
+  the real defect: the final banner printed "CorvinOS is ready!" in green
+  **unconditionally**, regardless of whether the server ever answered
+  `/v1/console/healthz`, whether Scheduled-Task/Startup-shortcut autostart
+  registration succeeded, or whether the single-shot fallback start even ran.
+  Any real error (a `Write-Warn` earlier in the scrollback) was buried under
+  a false-positive success banner at the very bottom of the output — exactly
+  what a user reads when judging whether the install worked.
+- Compounding it: the fallback path taken when autostart registration throws
+  (`try { Start-Process -FilePath "corvinos-serve" ... } catch {}`) used an
+  **empty catch block** that silently discarded the failure, and re-attempted
+  the bare, unresolved command name `corvinos-serve` — the identical lookup
+  that had just failed inside `Install-CorvinAutostart` moments earlier,
+  guaranteeing the same failure a second time with zero diagnostic output.
+- Fixed both: the fallback now resolves the actual command path (same
+  resolution `Install-CorvinAutostart` and the Desktop-shortcut step already
+  use) and reports a real error via `Write-Warn` on failure instead of
+  swallowing it. The final banner is now gated on real evidence
+  (`$ServerReady` / `$ConsoleLaunchAttempted`) and has three honest outcomes
+  instead of one false one: a genuine "ready" banner when the server actually
+  answered; a yellow "installed, but hasn't answered yet" banner with the
+  exact log path and Scheduled-Task recovery commands when a start was
+  attempted but not yet confirmed; and a red "could NOT be started" banner
+  with the exact manual recovery command (`corvinos-serve` from a new
+  terminal) when nothing launched at all.
+
+### Testing
+
+Extended `tests/test_windows_supervisor_parity.py` (regex-based inspection,
+no PowerShell interpreter needed) with `TestInstallBannerReflectsRealState`:
+pins the banner to be conditional on `$ServerReady`, pins the failure banner
+to name the exact recovery command, and regression-guards against the empty
+`catch {}` reappearing. 23/23 tests in this file (plus
+`test_uninstall_windows_autostart.py`) green.
+
 ## [0.10.92] — 2026-08-02 — Bridges started via the Console got no restart-forever supervision on Windows
 
 ### Fixed — a fresh Windows install / pip upgrade still left the bridge dead after a crash or reboot

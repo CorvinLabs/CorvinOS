@@ -185,7 +185,7 @@ class TestNoClosableWindow:
     def test_install_ps1_fallback_start_uses_hidden(self) -> None:
         src = _INSTALL_PS1.read_text(encoding="utf-8")
         fallback_idx = src.index("Could not set up any autostart")
-        window = src[fallback_idx:fallback_idx + 600]
+        window = src[fallback_idx:fallback_idx + 1200]
         assert "corvinos-serve" in window, "fallback Start-Process call not found where expected"
         assert "-WindowStyle Hidden" in window, (
             "install.ps1's no-autostart fallback must launch corvinos-serve with "
@@ -293,6 +293,62 @@ class TestSupervisorBridgeRecursionHidden:
         )
 
 
+class TestInstallBannerReflectsRealState:
+    """2026-08-02 real bug, reported live: a fresh Windows install left the
+    console not running, yet install.ps1's final banner unconditionally
+    printed "CorvinOS is ready!" -- regardless of whether the server ever
+    answered healthz, whether autostart registration succeeded, or whether
+    the direct-start fallback (see TestNoClosableWindow above) even ran.
+    The one real Write-Warn from an earlier step was buried in scrollback
+    under a big green false-positive success banner -- exactly what a user
+    reads/screenshots when reporting "it doesn't work". The banner must be
+    gated on $ServerReady / $ConsoleLaunchAttempted, not printed
+    unconditionally, and the no-launch path must give an explicit recovery
+    command rather than silently claiming success."""
+
+    def test_success_banner_is_conditional_on_server_ready(self) -> None:
+        src = _INSTALL_PS1.read_text(encoding="utf-8")
+        idx = src.index('# ── done / cheat sheet')
+        window = src[idx:idx + 800]
+        assert re.search(r"if\s*\(\$ServerReady\)", window), (
+            "install.ps1's final 'CorvinOS is ready!' banner must be gated on "
+            "$ServerReady, not printed unconditionally"
+        )
+
+    def test_no_launch_path_gives_an_actionable_recovery_command(self) -> None:
+        src = _INSTALL_PS1.read_text(encoding="utf-8")
+        idx = src.index('# ── done / cheat sheet')
+        window = src[idx:idx + 3200]
+        assert "could NOT be started" in window, (
+            "install.ps1 must have an explicit failure banner for the case "
+            "where nothing actually launched -- not fall through to a "
+            "success message"
+        )
+        assert "corvinos-serve" in window[window.index("could NOT be started"):], (
+            "the failure banner must tell the user the exact recovery "
+            "command (corvinos-serve) rather than leaving them with no "
+            "next step"
+        )
+
+    def test_fallback_start_failure_is_not_silently_swallowed(self) -> None:
+        # Regression for the specific empty `catch {}` this session found:
+        # `try { Start-Process -FilePath "corvinos-serve" ... } catch {}` --
+        # any failure (including "not found") vanished with zero output,
+        # and $ConsoleLaunchAttempted still let the banner claim success.
+        src = _INSTALL_PS1.read_text(encoding="utf-8")
+        assert 'ArgumentList "--no-browser" -WindowStyle Hidden -ErrorAction Stop } catch {}' not in src, (
+            "the single-shot fallback start must not use an empty catch "
+            "block -- a failure there must be surfaced via Write-Warn, not "
+            "discarded"
+        )
+        idx = src.index("Could not set up any autostart")
+        window = src[idx:idx + 1200]
+        assert "ConsoleLaunchAttempted" in window, (
+            "the fallback path must track whether the launch actually "
+            "succeeded, not assume success"
+        )
+
+
 if __name__ == "__main__":
     import sys
 
@@ -313,5 +369,9 @@ if __name__ == "__main__":
     t4.test_up_case_captures_daemon_output_to_a_log_file()
     t5 = TestSupervisorBridgeRecursionHidden()
     t5.test_bridge_target_arglist_passes_windowstyle_hidden()
+    t6 = TestInstallBannerReflectsRealState()
+    t6.test_success_banner_is_conditional_on_server_ready()
+    t6.test_no_launch_path_gives_an_actionable_recovery_command()
+    t6.test_fallback_start_failure_is_not_silently_swallowed()
     print("all tests passed")
     sys.exit(0)
