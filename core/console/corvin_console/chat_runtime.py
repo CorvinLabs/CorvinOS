@@ -1778,15 +1778,21 @@ def _sync_acs_result_to_transcript(sess: WebChatSession, res: Any, run_id: str,
                             task_text=task_text, purpose="context_sync")
         is_win_shim = (sys.platform == "win32" and args
                        and str(args[0]).lower().endswith((".cmd", ".bat")))
+        from agents._win_shim import no_console_window_flags  # noqa: PLC0415
         if is_win_shim:
             from agents._win_shim import windows_shim_command  # noqa: PLC0415
             argv = windows_shim_command(args)
         else:
             argv = args
+        # creationflags=no_console_window_flags(): CREATE_NO_WINDOW on
+        # Windows (2026-08-02, reported live) — without it, every context-
+        # sync spawn flashes up a brand-new, visible console. 0 (a safe
+        # no-op) on POSIX.
         proc = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, cwd=str(sess.workdir),
             text=True, encoding="utf-8", errors="replace",
+            creationflags=no_console_window_flags(),
         )
         if proc_holder is not None:
             with proc_holder.lock:

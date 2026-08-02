@@ -525,7 +525,7 @@ class ClaudeCodeEngine:
         # and a user-prompt metachar (`" & payload`) breaks out (host RCE).
         # windows_shim_command builds a cmd.exe-safe command STRING instead; on
         # POSIX / non-.cmd it returns `args` unchanged (snapshots intact).
-        from ._win_shim import windows_shim_command
+        from ._win_shim import windows_shim_command, no_console_window_flags
         spawn_args = windows_shim_command(args)
 
         # start_new_session=True is POSIX-only (setsid) and silently ignored
@@ -535,9 +535,16 @@ class ClaudeCodeEngine:
         # hit the PARENT (adapter.py), since by default a child shares its
         # console/process group. Passed only on win32 — the constant does
         # not exist in the subprocess module on POSIX.
+        # CREATE_NO_WINDOW (2026-08-02, reported live): without this, EVERY
+        # turn on Windows flashes up a brand-new, visible console for this
+        # child (a console-subsystem process spawned from a console-less
+        # parent) — closing it kills the in-flight turn. See
+        # no_console_window_flags()'s docstring for the full mechanism.
         _popen_kwargs: dict[str, Any] = {}
         if sys.platform.startswith("win"):
-            _popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            _popen_kwargs["creationflags"] = (
+                subprocess.CREATE_NEW_PROCESS_GROUP | no_console_window_flags()
+            )
 
         try:
             self._proc = subprocess.Popen(

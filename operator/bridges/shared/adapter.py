@@ -4364,13 +4364,18 @@ def call_claude(prompt: str, channel: str = "whatsapp", chat_key: str = "anon",
         # directly (WinError 193), so on Windows this crashed regardless of
         # argv content the moment `claude` resolved to the npm shim. No-op
         # on POSIX / non-.cmd binaries (returns `args` unchanged).
-        from agents._win_shim import windows_shim_command
+        from agents._win_shim import windows_shim_command, no_console_window_flags
         # Popen with start_new_session=True so /cancel can kill the whole
         # process group (claude + tool-use children) via killpg.
+        # creationflags=no_console_window_flags(): CREATE_NO_WINDOW on
+        # Windows (2026-08-02, reported live) — without it, every turn on
+        # this legacy fallback path flashes up a brand-new, visible console.
+        # 0 (a safe no-op) on POSIX.
         proc = subprocess.Popen(
             windows_shim_command(args), cwd=workdir,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, env=env, start_new_session=True,
+            creationflags=no_console_window_flags(),
         )
         _register_subproc(chat_key, proc)
         try:

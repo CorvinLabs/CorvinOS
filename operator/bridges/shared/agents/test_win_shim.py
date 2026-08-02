@@ -18,6 +18,7 @@ from _win_shim import (  # noqa: E402
     cmd_quote,
     build_cmd_c_line,
     windows_shim_command,
+    no_console_window_flags,
 )
 
 
@@ -100,6 +101,37 @@ def test_argv_roundtrips_through_CommandLineToArgvW_semantics() -> None:
     print(f"PASS: {q!r} decodes back to {payload!r}")
 
 
+def test_no_console_window_flags_is_zero_on_posix() -> None:
+    _section("no_console_window_flags: 0 on POSIX (os.name == 'posix' here)")
+    assert no_console_window_flags() == 0
+    print("PASS")
+
+
+def test_no_console_window_flags_safe_as_popen_kwarg() -> None:
+    _section("creationflags=no_console_window_flags() is accepted by Popen on POSIX")
+    # Regression guard for the exact bug this fixes: every engine spawn site
+    # now unconditionally passes creationflags=no_console_window_flags() —
+    # if that ever stopped being a safe no-op value on POSIX, every bridge/
+    # console/A2A turn on Linux/macOS would crash outright, not just misbehave.
+    proc = subprocess.Popen(
+        ["true"] if sys.platform != "win32" else ["cmd", "/c", "exit", "0"],
+        creationflags=no_console_window_flags(),
+    )
+    assert proc.wait() == 0
+    print("PASS")
+
+
+def test_no_console_window_flags_uses_windows_constant_when_nt() -> None:
+    _section("no_console_window_flags: resolves subprocess.CREATE_NO_WINDOW when os.name == 'nt'")
+    import _win_shim as mod
+    import unittest.mock as mock
+
+    with mock.patch.object(mod.os, "name", "nt"), \
+         mock.patch.object(subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True):
+        assert mod.no_console_window_flags() == 0x08000000
+    print("PASS")
+
+
 def main() -> int:
     tests = [
         test_plain_arg_is_quoted,
@@ -110,6 +142,9 @@ def main() -> int:
         test_build_line_shape,
         test_windows_shim_command_posix_noop,
         test_argv_roundtrips_through_CommandLineToArgvW_semantics,
+        test_no_console_window_flags_is_zero_on_posix,
+        test_no_console_window_flags_safe_as_popen_kwarg,
+        test_no_console_window_flags_uses_windows_constant_when_nt,
     ]
     failed = 0
     for t in tests:

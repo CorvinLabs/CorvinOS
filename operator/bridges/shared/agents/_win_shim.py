@@ -90,3 +90,29 @@ def windows_shim_command(argv: list[str]):
     if _is_windows_cmd_shim(argv):
         return build_cmd_c_line(argv)
     return argv
+
+
+def no_console_window_flags() -> int:
+    """Windows-only ``creationflags`` addend: ``CREATE_NO_WINDOW``.
+
+    2026-08-02, reported live: every engine spawn on Windows (``cmd /c``
+    wrapping a ``.cmd``/``.bat`` shim like ``claude.cmd``, or a direct
+    ``.exe``) is a console-subsystem process. Launched from a console-less
+    parent — the web console, a bridge daemon, an A2A worker, all started
+    hidden themselves — Windows allocates it a BRAND NEW, VISIBLE console
+    unless told otherwise. This happens on every single turn, not just at
+    boot, and A2A hits it identically to a bridge/console turn since it
+    spawns the same engine the same way. The visible window's title is the
+    full command line, which is why the flashed-up terminal shows the
+    ``.cmd`` shim's path (typically under ``%APPDATA%\\npm``) rather than
+    anything CorvinOS-specific-looking.
+
+    Always safe to OR into any existing ``creationflags`` value: returns 0
+    on POSIX, and 0 if ``subprocess.CREATE_NO_WINDOW`` is unavailable (any
+    non-Windows interpreter — including CI running these call sites under
+    mocks on Linux/macOS, where the real stdlib has no such attribute).
+    """
+    if os.name != "nt":
+        return 0
+    import subprocess  # noqa: PLC0415 — only needed on the Windows branch
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)

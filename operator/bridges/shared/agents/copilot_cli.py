@@ -241,7 +241,7 @@ class CopilotCliEngine:
             raw={"engine": "copilot", "task_type": effective_task_type or "chat"},
         )
 
-        from ._win_shim import windows_shim_command
+        from ._win_shim import windows_shim_command, no_console_window_flags
         proc: subprocess.Popen[bytes] | None = None
         try:
             proc = subprocess.Popen(
@@ -269,6 +269,10 @@ class CopilotCliEngine:
                 # in agents/__init__.py). No-op on Windows (no process
                 # groups there).
                 start_new_session=True,
+                # CREATE_NO_WINDOW (2026-08-02, reported live) — without this,
+                # every turn on Windows flashes up a brand-new, visible
+                # console for this child. 0 (a safe no-op) on POSIX.
+                creationflags=no_console_window_flags(),
             )
         except FileNotFoundError:
             yield StreamEvent(

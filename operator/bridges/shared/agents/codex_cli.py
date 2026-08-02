@@ -192,7 +192,7 @@ class CodexCliEngine:
         cwd = str(working_dir) if working_dir else None
         start_time = time.time()
 
-        from ._win_shim import windows_shim_command
+        from ._win_shim import windows_shim_command, no_console_window_flags
         try:
             self._proc = subprocess.Popen(
                 # Windows: npm ships this CLI as a .cmd shim — CreateProcess can't
@@ -211,6 +211,10 @@ class CodexCliEngine:
                 # tree — not the bridge's own group. On Windows this kwarg
                 # is a no-op (ignored), matching ClaudeCodeEngine.
                 start_new_session=True,
+                # CREATE_NO_WINDOW (2026-08-02, reported live) — without this,
+                # every turn on Windows flashes up a brand-new, visible
+                # console for this child. 0 (a safe no-op) on POSIX.
+                creationflags=no_console_window_flags(),
             )
         except FileNotFoundError:
             yield StreamEvent(
