@@ -889,6 +889,21 @@ def friendship_create(
     /remote-trigger/pair/friendship/import and the /v1/a2a/friendship-ack
     wire endpoint)."""
     url_val: str | None = body.url.strip().rstrip("/") or None
+    # Never issue a token with no address when one is inferable. Previously
+    # a blank form field produced url=None -> the token landed on the
+    # importer's side as permanent "URL pending"/UNREACHABLE, with no way
+    # to recover short of the issuer manually discovering their own LAN IP
+    # and re-pairing. Fall back to the already-configured "My URL" first,
+    # then to the same auto-detection GET /my-url already offers (mesh-VPN
+    # address, else local outbound-interface IP) -- so a same-LAN pairing
+    # (the common case this was reported against) just works without the
+    # operator ever needing to know or type their own address.
+    url_auto_detected = False
+    if url_val is None:
+        url_val = _ft.get_my_url()
+        if url_val is None:
+            url_val = _ft.suggest_my_url()
+            url_auto_detected = bool(url_val)
     label_val: str | None = body.label.strip() or None
     ttl: float | None = body.ttl_hours * 3600 if body.ttl_hours > 0 else None
     personas: list[str] = (
@@ -913,8 +928,14 @@ def friendship_create(
     except OSError as exc:
         raise HTTPException(status_code=500, detail="could not persist pending friendship") from exc
 
-    if body.remember_url and url_val:
-        _ft.set_my_url(url_val)
+    if (body.remember_url or url_auto_detected) and url_val:
+        # Persist the just-auto-detected address too (matching GET /my-url's
+        # own auto-save behavior) so it's visible under Settings -> A2A and
+        # the next token created doesn't need to re-detect it.
+        try:
+            _ft.set_my_url(url_val)
+        except OSError:
+            pass
 
     console_audit.action_performed(
         tenant_id=rec.tenant_id,

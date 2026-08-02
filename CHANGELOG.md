@@ -7,6 +7,51 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.94] — 2026-08-02 — A2A LAN pairing (Windows ↔ Linux) required knowing your own IP; now fully automatic
+
+### Fixed — reported live via screenshot: A2A pairing between a Windows and Linux instance on the same network got permanently stuck
+
+- Root cause #1: `POST /remote-trigger/pair/friendship/create` produced a
+  token with `url=None` whenever the "own URL" form field was blank at
+  generation time — the importer's side then showed "Imported (URL
+  pending)" forever, with no recovery short of the issuer discovering their
+  own LAN IP by hand and re-pairing. Fixed: the route now falls back to the
+  already-configured "My URL", then to the same mesh-VPN/local-interface
+  auto-detection `GET /my-url` already offered — so a same-LAN pairing
+  works without the operator ever needing to know or type their own
+  address. The auto-detected address is persisted so it's visible under
+  Settings → A2A afterward.
+- Root cause #2: the "Use this URL" button in Settings → A2A → My URL was
+  **hidden** specifically for private/RFC1918 addresses (192.168.x.x,
+  10.x.x.x, ...) — exactly the addresses correct for same-LAN pairing —
+  forcing a manual retype of the identical value. The warning text also
+  read as "this address is wrong" ("not reachable by external peers")
+  instead of explaining it's fine for local pairing. Both fixed.
+- Root cause #3: neither installer opened the console/A2A port on the
+  local firewall, so even with a correct URL, Windows' (and, when enabled,
+  Linux `ufw`'s) default inbound-block policy silently dropped the peer's
+  reachability probe — indistinguishable from a misconfigured URL from the
+  UI. `install.ps1` now adds a best-effort inbound allow-rule (idempotent,
+  never fatal, no admin/elevation gate — mirrors the existing autostart
+  registration idiom); `install.sh` does the Linux equivalent via `ufw
+  allow`, but only when `ufw` is already active and never via `sudo` (this
+  installer only ever elevates on the explicit `--always-on` flag).
+
+Net effect: pairing two CorvinOS instances on the same home network (the
+scenario this whole feature exists for) now works without either operator
+ever needing to discover, understand, or type an IP address — matching the
+Layer 38 A2A design's own stated LAN-first intent.
+
+### Testing
+
+`core/console/tests/test_a2a_friendship_create_url_autodetect.py` (5 new
+tests): blank-URL fallback to stored/auto-detected address, degrade path
+when auto-detection itself fails, explicit URLs are never silently
+overridden. `tests/test_windows_supervisor_parity.py` gained
+`TestLanFirewallRule` (Windows) and `TestLinuxUfwRule` (Linux, including a
+regression guard that the ufw step never shells out to `sudo` unasked).
+134 pre-existing + new tests green; `tsc -b` clean on the frontend change.
+
 ## [0.10.93] — 2026-08-02 — install.ps1 could claim "CorvinOS is ready!" when the console never started
 
 ### Fixed — a fresh Windows install could report success while the console silently failed to start
