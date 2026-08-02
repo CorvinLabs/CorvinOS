@@ -383,6 +383,14 @@ what makes the archive genuinely *self-learning*: the concept is what a human (o
 agent doing a deep read) consults; the skill is what gets auto-injected and auto-graded into
 ordinary turns without anyone having to remember the concept exists. Record the skill name in
 the concept's `skills:` frontmatter field.
+**A freshly minted skill needs one bootstrap grade before it does anything** —
+`skill_inject.py`'s injection gate excludes `n_grades < 1 or mean_score <= 0` by default, and a
+brand-new skill has no organic path to its own first grade (auto-grading only scores skills that
+were already injected). Immediately call `skill_grade` once with a score capped at the
+codebase's own `_AUTO_GRADE_CAP_MAX` (0.3) and notes disclosing it as a manual seed, not earned
+usage — real grades accrue from there. Skipping this step means the skill sits inert on disk
+forever, which is exactly the gap adversarial review of this mechanism found the same day it was
+built (see CONCEPT-0001's Amendment).
 
 **Operator notes are first-class.** Every concept file has an `## Operator Notes` section,
 append-only, timestamped, human-authored. AI amendments NEVER edit or remove anything under
