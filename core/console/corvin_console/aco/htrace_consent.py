@@ -252,15 +252,39 @@ def _telemetry_token_path(home: Path) -> Path:
 
 
 def load_or_create_instance_id(home: Path) -> str:
-    """Return the persistent UUID4 instance id, creating ~/.corvin/instance_id if absent."""
+    """Return the persistent UUID4 instance id, creating ~/.corvin/instance_id if absent.
+
+    Live-investigated (2026-08-02, user report: "every new version adds a
+    new entry in the same region on corvin-labs.com/stats"): a file that
+    genuinely does not exist yet (FileNotFoundError) and a file that exists
+    but could not be READ right now (a transient OSError -- e.g. Windows
+    antivirus/indexer briefly locking a just-touched file, exactly the
+    moment right after an install/upgrade writes a burst of new files) are
+    NOT the same situation, but were previously handled identically: any
+    OSError fell through to minting AND PERSISTING a brand-new uuid4,
+    silently overwriting the real instance_id on disk. That would inflate
+    the instance count in the stats every time the read race lost -- most
+    likely correlated with upgrades, since that is when a burst of nearby
+    file writes is most likely to trigger AV/indexer scanning. A read
+    failure now returns an EPHEMERAL id for this one call only, without
+    touching the file, so the next call gets a clean chance to read the
+    real one instead of the transient failure being burned into a
+    permanent identity fork.
+    """
     p = _instance_id_path(home)
     try:
         existing = p.read_text(encoding="utf-8").strip()
-        parsed = uuid.UUID(existing)
-        if parsed.version == 4 and str(parsed) == existing.lower():
-            return existing
-    except (OSError, ValueError):
-        pass
+    except FileNotFoundError:
+        existing = None
+    except OSError:
+        return str(uuid.uuid4())  # transient — do not persist, do not orphan the real file
+    if existing is not None:
+        try:
+            parsed = uuid.UUID(existing)
+            if parsed.version == 4 and str(parsed) == existing.lower():
+                return existing
+        except ValueError:
+            pass  # content genuinely corrupt — fall through and self-heal
     new_id = str(uuid.uuid4())
     p.parent.mkdir(parents=True, exist_ok=True)
     # Atomic write (tempfile + os.replace): a concurrent reader never observes a
