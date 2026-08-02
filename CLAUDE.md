@@ -103,6 +103,7 @@ without operator review · add in-process MCP server without operator review.
 | Bug, root cause unknown | `root-cause-by-layer` | BEFORE any fix attempt |
 | Code generation adding a new entry point (function/endpoint/route/CLI/UI/plugin/hook) | `e2e-wiring-proof` | BEFORE declaring done |
 | Any task marked "done" | `docs-as-definition-of-done` | BEFORE declaring done |
+| Reusable working method discovered/reapplied (non-trivial task) | Concept Gate | AFTER declaring task done, alongside ADR Gate |
 
 **Must NOT do (hard rules):**
 - Don't make ANY non-trivial code edit without running E2E and capturing loss signal first.
@@ -344,6 +345,62 @@ change without running this gate · leave a skip implicit · hand-fill `supersed
 
 → Full reference: [adr-gate.md](docs/claude-ref/adr-gate.md)
 → ADR: `Corvin-ADR: decisions/0264-adr-decision-graph-hermeneutic-traversal.md`
+
+---
+
+## Concept Gate — self-learning working-method archive
+
+**Sibling gate to ADR Gate, same placement (end of task, before declaring "done"), same HIGH
+BAR.** ADR Gate asks "does this decision need a record?"; Concept Gate asks "did I just execute
+or discover a reusable WAY OF WORKING — not a one-off decision, not a one-off bug fix — that
+would save real time if a future agent had it pre-loaded?" Default answer is **NO concept
+needed**. Most tasks produce none — that is correct and expected, exactly like ADR Gate.
+
+**Write/amend a concept only when at least one holds:**
+1. The same investigation/fix/verification SHAPE recurred across 2+ distinct tasks in ways that
+   weren't already duplicated code.
+2. A structural fix (root cause, not symptom) generalizes beyond the one bug it closed, worth
+   naming so the next similar bug gets the deep fix on the first pass.
+3. A verification technique (live-VM proof, wheel-content inspection, deploy-then-curl-the-
+   real-URL) proved decisive in a way that will recur.
+
+**Skip reasons:** a single bug fix with nothing generalizable; a one-off tooling workaround;
+already fully captured by an existing concept (amend it, never create a near-duplicate) or by a
+Skill (if a ≤8KB behavioral snippet is genuinely sufficient, a full concept adds nothing). When
+skipping, name the reason in one sentence — never skip silently, exactly like ADR Gate.
+
+**Destination:** `Corvin-ADR/concepts/CONCEPT-NNNN-slug.md` (sibling repo, own numbering,
+never `ADR-NNNN`). Fallback if Corvin-ADR is unreachable: `CorvinOS/docs/concepts/`. Commit
+message: `concept: add/amend CONCEPT-NNNN — [title]`.
+
+**A concept is not an ADR and not a Skill** — it is the narrative middle layer: *why* a way of
+working keeps paying off, with real evidence (cited commits/tasks), Alternatives Considered, and
+an explicit "when NOT to use" boundary — the same depth ADR-0264 models, applied to process
+instead of architecture. Every durable concept SHOULD mint or update a companion SkillForge
+skill (`skill_create`/`skill_promote`, `type: learned-experience`, `scope: project`) whose body
+distills the Method section (≤8KB) and points back at the full concept file for depth — this is
+what makes the archive genuinely *self-learning*: the concept is what a human (or a future
+agent doing a deep read) consults; the skill is what gets auto-injected and auto-graded into
+ordinary turns without anyone having to remember the concept exists. Record the skill name in
+the concept's `skills:` frontmatter field.
+
+**Operator notes are first-class.** Every concept file has an `## Operator Notes` section,
+append-only, timestamped, human-authored. AI amendments NEVER edit or remove anything under
+that heading — they may only add a new dated sub-entry above it, exactly like ADR-0264-style
+amendments are prepended under "Status," never rewriting prior text.
+
+**Must NOT do:** write concept content into the CorvinOS repo when Corvin-ADR is reachable ·
+create a near-duplicate concept instead of amending the existing one · edit or delete anything
+under an existing concept's `## Operator Notes` heading · mint a SkillForge skill above a
+persona's namespace-gate prefix (skills created under the `assistant` persona must be named
+`assistant.<name>` — see `operator/skill-forge/README.md`'s namespace-gate section) · declare
+"done" on a task that clearly meets a Concept Gate trigger without running this gate · leave a
+skip implicit.
+
+→ Full reference: [concept-gate.md](docs/claude-ref/concept-gate.md)
+→ Concept: `Corvin-ADR: concepts/0001-self-learning-project-concept-archive.md`
+→ Concept: `Corvin-ADR: concepts/0002-live-report-driven-root-cause-method.md`
+→ Skill: `assistant.corvinOS_live_report_root_cause` (project scope, `learned-experience`)
 
 ---
 
