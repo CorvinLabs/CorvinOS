@@ -247,7 +247,11 @@ def case_no_skill_forge_no_inject(failures: list[str]) -> None:
             raise AssertionError(f"adr_gate core skill missing; tail={sp[-400:]!r}")
         if "e2e-wiring-proof" not in sp:
             raise AssertionError(f"e2e-wiring-proof core skill missing; tail={sp[-400:]!r}")
-        print("PASS: empty registry still injects adr_gate + e2e-wiring-proof")
+        if "concept_gate" not in sp:
+            raise AssertionError(
+                f"concept_gate core skill missing; tail={sp[-400:]!r}"
+            )
+        print("PASS: empty registry still injects adr_gate + e2e-wiring-proof + concept_gate")
     except AssertionError as ex:
         failures.append(f"case-A: {ex}")
         print(f"FAIL: case-A: {ex}")

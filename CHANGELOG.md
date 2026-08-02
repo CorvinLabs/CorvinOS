@@ -7,6 +7,36 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.98] — 2026-08-02 — Concept Gate now unconditionally active, matching ADR Gate
+
+### Fixed — a second adversarial review of the just-added Concept Gate mechanism found it was structurally weaker than its own CLAUDE.md table entry implied
+
+- `concept_gate` had no bundled skill file (`operator/bundle/skills/ldd/concept_gate/SKILL.md`)
+  — every sibling in the same CLAUDE.md LDD table row (`adr_gate`, `docs-as-definition-of-done`,
+  etc.) has one; Concept Gate existed only as CLAUDE.md prose. Added, mirroring `adr_gate`'s
+  format and discipline.
+- `concept_gate` is now part of `_CORE_QUALITY_SKILL_NAMES` in
+  `operator/bridges/shared/skill_inject.py` — the same unconditional, grading-independent
+  injection tier `adr_gate`/`e2e-wiring-proof` already use (ADR-0259), since Concept Gate is
+  explicitly a sibling gate to ADR Gate (same placement, same discipline), not one of the 10
+  process LDD skills that stay off until a persona opts in.
+- Wiring this in surfaced a real, distinct bug: `concept_gate` was missing from
+  `_SKILL_TO_LAYER`, so `quality-layers.json`'s `disable_layer()`/`enabled: false` toggle
+  — which correctly suppresses `adr_gate`/`e2e-wiring-proof` — silently did NOT suppress
+  `concept_gate`, breaking an existing security-escape test's isolation assumption
+  (`case_skill_body_escape_blocked` expects exactly one core skill's worth of injected content
+  when quality layers are globally disabled). Fixed by adding the mapping and registering
+  `concept_gate` in `quality_layers.py`'s `DEFAULT_CONFIG` alongside its siblings.
+
+### Testing
+
+Extended the existing real end-to-end test (`operator/bridges/shared/test_adapter_skill_inject.py`
+— spawns a genuine sandboxed adapter subprocess and inspects its actual system prompt) to assert
+`concept_gate` is present. All 9 cases in that file pass, including the security-sensitive
+escape-injection case that would have silently broken without the `quality_layers.py` fix.
+`test_core_quality_skills.py` (18 cases) and `test_skill_inject_ldd.py` (18 cases) also green,
+no regressions.
+
 ## [0.10.96] — 2026-08-02 — A2A ping/Recheck and friendship-ack now relay-routable
 
 ### Fixed — a relay-only-reachable A2A peer could never show as reachable

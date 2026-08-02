@@ -55,6 +55,8 @@ _SKILL_TO_LAYER = {
     "e2e-driven-iteration": "e2e_driven_iteration",
     "usability_first": "usability_first",
     "usability-first": "usability_first",
+    "concept_gate": "concept_gate",
+    "concept-gate": "concept_gate",
 }
 
 # ── Core quality-discipline skills — always candidates, any install ────────
@@ -73,7 +75,15 @@ _SKILL_TO_LAYER = {
 # to the quality_layers.py on/off gate (so quality-layer-control's
 # disable_layer("adr_gate") keeps working) but NOT subject to SkillForge
 # grading eligibility or the ldd_preset filter — they are not LDD layers.
-_CORE_QUALITY_SKILL_NAMES: tuple[str, ...] = ("adr_gate", "e2e-wiring-proof")
+#
+# 2026-08-02: concept_gate joins this tuple for the same reason. It is
+# explicitly a SIBLING gate to adr_gate (same placement, same discipline —
+# see CLAUDE.md's "Concept Gate" section), not one of the 10 process LDD
+# skills, so relying on ldd_preset opt-in or SkillForge grading to surface
+# it would leave it silently unenforced on a fresh install exactly like
+# adr_gate would have been pre-ADR-0259 — the same failure class an
+# adversarial review of this mechanism found the same day it was built.
+_CORE_QUALITY_SKILL_NAMES: tuple[str, ...] = ("adr_gate", "e2e-wiring-proof", "concept_gate")
 
 # operator/bridges/shared/skill_inject.py -> operator/bundle/skills/ldd/<name>
 #
