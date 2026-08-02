@@ -9,7 +9,17 @@ function isChunkLoadError(e: Error): boolean {
     msg.includes("Failed to fetch dynamically imported module") ||
     msg.includes("Importing a module script failed") ||
     msg.includes("Loading chunk") ||
-    msg.includes("ChunkLoadError")
+    msg.includes("ChunkLoadError") ||
+    // Vite's CSS-specific preload failure (distinct wording from its JS
+    // chunk failures above) -- live-reported: "Unable to preload CSS for
+    // /console/assets/highlight-BEHUn5zE.css". Without this, the error
+    // fell through to RouteErrorBoundary's "Try again", which resets
+    // component state and can never re-fetch a 404'd asset -- a dead end
+    // that looked like it "tried to reload itself" but never actually did
+    // a real page reload. main.tsx's `vite:preloadError` listener now
+    // catches this case before it ever reaches React; this check stays as
+    // defense-in-depth for any path that listener doesn't cover.
+    msg.includes("Unable to preload CSS")
   );
 }
 

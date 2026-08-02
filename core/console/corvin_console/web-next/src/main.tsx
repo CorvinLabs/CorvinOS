@@ -11,9 +11,19 @@ import "@fontsource-variable/fraunces";
 import "./index.css";
 import { startTaskCleanupSchedule } from "./lib/task-lifecycle";
 import { ApiError } from "./lib/api";
+import {
+  installPreloadErrorRecovery,
+  clearPreloadErrorGuardAfterSuccessfulRender,
+} from "./lib/preload-error-recovery";
 
 // ADR-0082: Initialize task persistence
 startTaskCleanupSchedule();
+
+// Stale-deployment recovery (see lib/preload-error-recovery.ts for the full
+// rationale -- live-reported "Unable to preload CSS for /console/assets/
+// highlight-BEHUn5zE.css" after a console restart left a tab holding
+// asset references from the OLD build).
+installPreloadErrorRecovery();
 
 const queryClient = new QueryClient({
   // Re-check session on any 401 so RequireAuth can redirect to /login immediately.
@@ -57,3 +67,5 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </QueryClientProvider>
   </React.StrictMode>,
 );
+
+clearPreloadErrorGuardAfterSuccessfulRender();
