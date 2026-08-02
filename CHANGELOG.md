@@ -7,6 +7,41 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.96] — 2026-08-02 — A2A ping/Recheck and friendship-ack now relay-routable
+
+### Fixed — a relay-only-reachable A2A peer could never show as reachable
+
+ADR-0258's Stage 3 (encrypted relay fallback) was wired into the real
+task-send path (`RemoteTriggerSender.send()`) only. Two other call paths
+stayed direct-HTTP-only, so the console's Recheck button and the initial
+reciprocal-ack handshake could never reflect a relay-only-reachable peer
+even once a relay was correctly configured and enabled on both sides:
+
+- `ping()` / `_http_ping_probe()` gained the same relay fallback
+  (`_relay_ping`) `send()` already had. Since the peer-side ack handler
+  already calls `ping()` internally for its own reachability proof, this
+  closes both directions of the handshake at once.
+- `send_friendship_ack()`'s B→A ack POST gained a relay fallback too
+  (`_relay_send_ack`), refactored around a shared `_ack_round_trip()`
+  core. New `retry_friendship_ack()` lets a Recheck re-attempt the ack
+  using the already-derived keys persisted on disk (the raw token key is
+  discarded after import and can't be re-derived).
+- `RelayListener._handle_deliver()` now dispatches three disjoint payload
+  shapes (task envelope / ping request / friendship-ack request) instead
+  of one, each to its own shared-core handler — with a new
+  transport-only self-delivery guard for the two new shapes (they carry
+  no signed `sender_instance_id` slot of their own; adding one would have
+  broken direct-HTTP backward compatibility with older peers).
+- `friendship_recheck()` now refreshes `_peer_knows_us` when a ping just
+  succeeded and it was previously false — previously only the original
+  import-time ack ever set that field, so "peer can't reach you back"
+  could persist forever even after the issuer became reachable again.
+
+Triggered by a live operator report reproducing ADR-0258's own motivating
+scenario (a pairing over an Apple Personal Hotspot address that stopped
+existing once the tethering session ended). 40 new/updated tests; the
+full existing A2A suite (154 tests) stays green — additive only.
+
 ## [0.10.95] — 2026-08-02 — Windows bridge: extra visible terminal + silent duplicate-daemon restart loop
 
 ### Fixed — two compounding bugs found while investigating a live report of an unreliable Windows bridge
