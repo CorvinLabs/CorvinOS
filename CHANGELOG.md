@@ -7,6 +7,73 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.88] — 2026-08-02 — fresh-install-vs-upgrade parity + remaining Windows/bridge gaps
+
+Iterative adversarial review across the whole codebase, framed around one question:
+what behaves differently on a fresh install vs. an existing/upgraded system, with
+Windows and the messenger bridges (A2A, Discord, WhatsApp, Telegram, Slack, Signal,
+Teams, Email) held to the same stability/robustness/fault-tolerance bar as Linux.
+0.10.87 was tagged but never actually published to PyPI; this release supersedes it
+and folds in its content plus the fixes below.
+
+### Fixed — a2a_http_server.py crashed on a shallow/standalone deployment
+
+- Same unguarded `Path(__file__).resolve().parents[2]` pattern ADR-0265 already fixed
+  in the A2A sender/receiver, but missed here (module-level `_DEFAULT_COWORK_DIR` and
+  `build_server()`'s `eff_origins_dir`). Fixed with the same repo-marker walk-up
+  pattern; verified via a real subprocess import from a shallow tmp directory.
+
+### Fixed — Telegram/Slack/Teams/Signal stayed open to any sender forever on a fresh install
+
+- An empty whitelist (nobody has logged in yet) meant every sender was treated as
+  owner, with no lock, indefinitely — unlike Discord (`AutoOwnershipBridge`) and
+  WhatsApp/Email (fail-closed `authOk()`), which each already handle this correctly.
+  Added a shared `lockFirstSender` option to `auth.js`'s `makeAuth()` factory: the
+  first sender claims the whitelist, persisted, everyone after is denied. Wired into
+  all four affected bridges, with a drift-guard test so a fifth bridge can't silently
+  reintroduce the same gap.
+
+### Fixed — Windows supervisor could silently loop doing nothing, or race a slow-to-answer instance
+
+- `Find-Python` fell back to a bare `"python"` string that "succeeds" launching a
+  Windows Store Python stub (or a stray pre-3.11 install) that never runs CorvinOS —
+  burning the restart budget on a doomed launch. Now fails fast with a clear
+  CRITICAL log instead of entering the restart loop at all.
+- The console port-busy check treated any exception lacking `.Exception.Response`
+  as "port is free," which also covers a connect *timeout* (not just a genuine
+  refused connection) — risking a second competing instance launched against one
+  that just hadn't answered yet. Now requires the specific `ConnectFailure` status.
+- `bridge.ps1`'s Scheduled Task action string quoted `$Supervisor` but not
+  `$TargetArg`/`$BridgeArg` — an operator-supplied bridge name with a space or quote
+  could break the action's own CLI parsing. Both are now quoted.
+- Pinned in both `corvin-supervisor.ps1` and `install.ps1`'s generated equivalent
+  (drift-guard tests), since the two must stay behaviorally identical.
+
+### Fixed — `corvin-install` re-run on an existing system didn't reliably apply an upgrade
+
+- `build_frontend()` checked `dist/index.html` before distinguishing a wheel install
+  (no source, correctly skip) from a source-tree checkout — `corvin-install` is the
+  documented upgrade path after `git pull`, so a `dist/` left over from a previous
+  version was treated as "already built" and `npm run build` never ran, silently
+  serving the old compiled SPA against the new gateway/API.
+- `ServiceManager` had no `restart_service()` — only `start_service()`, which is a
+  no-op against an already-active systemd unit on Linux. Step 14 rewrites the unit
+  file on every `corvin-install` run, but the old process (old `ExecStart`/env) kept
+  running through the upgrade untouched. Added `restart_service()` (systemd
+  `restart` on Linux, unload+load on macOS, stop+start on Windows) and switched
+  every call site, including the two remaining `start_service` calls inside
+  `corvin-restore` an adversarial re-check found.
+
+### Fixed — browser automation failed identically on every retry when the console ran as root
+
+- Chromium refuses to launch as root without `--no-sandbox` — a deploy shape the
+  installer explicitly supports (root systemd service). That failure matched
+  neither existing launch-error classifier, fell through to a bare `raise`, and got
+  flattened by the generic exception handler into "browser action failed — retry,"
+  which can never succeed since the launch fails identically every time. Added a
+  third classifier with an actionable message (run as non-root, or opt into
+  `CORVIN_BROWSER_NO_SANDBOX=1`).
+
 ## [0.10.87] — 2026-08-01 — Windows bridge/A2A parity, verified on real hardware (ADR-0265)
 
 ### Fixed — A2A completely non-functional on Windows (send AND receive)
