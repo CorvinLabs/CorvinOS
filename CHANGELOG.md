@@ -7,6 +7,39 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.89] — 2026-08-02 — console audit AttributeError + path-gate MSYS hardening
+
+Investigated a diagnostic report from a live Windows CorvinOS instance (a different
+machine than this dev environment).
+
+### Fixed — console model-catalog refresh crashed every 5 minutes with AttributeError
+
+- `routes/models.py`'s periodic background refresh called
+  `console_audit.system_event(...)`, which `corvin_console/audit.py` never defined.
+  Every call raised `AttributeError`, silently swallowed by the refresh loop's broad
+  `except`, so the audit trail for model-catalog events was permanently empty and the
+  failure recurred on every scheduled refresh — confirmed via static code inspection,
+  matching the reported symptom exactly ("repeated every 5 minutes").
+
+### Hardened — path-gate Git-Bash/MSYS2 drive-path bypass on Windows (defensive, unconfirmed)
+
+- `path_gate.py`'s protected-path comparison had zero platform-aware handling. Windows'
+  Bash tool commonly runs through Git-Bash/MSYS2, which translates a `/c/Users/...`-style
+  path to the real `C:\Users\...` at shell-execution time — but the hook runs as a
+  separate Python subprocess with no MSYS runtime, so `Path("/c/Users/.../forge/
+  policy.json")` would resolve relative to "root of the current drive" and never equal
+  the real protected path, letting a write through undetected. Added a Windows-only MSYS
+  drive-prefix normalizer (no-op on POSIX) as a plausible root-cause hardening for the
+  report's other claim (path-gate self-test failures) — not independently confirmed on
+  real Windows, no Windows box available in this environment.
+
+### Testing
+
+131 existing path-gate tests + all sibling suites green (no regression). New:
+`test_audit_system_event.py` (4 tests, including an AST check that pins the real call
+sites' kwargs against the fixed function's signature) and
+`test_path_gate_windows_msys.py` (6 tests, `sys.platform`-mocked).
+
 ## [0.10.88] — 2026-08-02 — fresh-install-vs-upgrade parity + remaining Windows/bridge gaps
 
 Iterative adversarial review across the whole codebase, framed around one question:
