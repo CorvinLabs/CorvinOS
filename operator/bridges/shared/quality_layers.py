@@ -30,6 +30,7 @@ DEFAULT_CONFIG = {
     "layers": {
         "adr_gate": True,
         "e2e_wiring_proof": True,
+        "concept_gate": True,
         "docs_as_definition_of_done": True,
         "e2e_driven_iteration": True,
         "usability_first": False,
