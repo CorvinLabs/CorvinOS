@@ -7,6 +7,49 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.100] — 2026-08-02 — Windows bridge no longer flashes a visible terminal on every turn
+
+### Fixed — every engine spawn on Windows allocated a brand-new, visible console
+
+Reported live: a stray terminal appears on Windows, closing it kills the
+in-flight turn/connection. Traced the full autostart chain first (Scheduled
+Task → supervisor → node.js daemon — already fixed in 0.10.91/0.10.95), but
+the actual source is separate and much more frequent: every engine spawn
+that resolves to a `.cmd`/`.bat` npm shim (`claude.cmd`, `codex.cmd`,
+`opencode.cmd`, `copilot.cmd`) runs via `cmd /c "<shim>" ...`, a
+console-subsystem process. Spawned from a console-less parent (the web
+console / bridge daemon / A2A worker, all started hidden themselves)
+without `CREATE_NO_WINDOW`, Windows allocates it a brand-new, VISIBLE
+console — on every single turn, not just at boot, identically for a
+bridge, console, or A2A turn, since they all call the same engine-spawn
+code. The window's title is the full command line, which is why the
+flashed terminal shows the shim's path under `%APPDATA%\npm` rather than
+anything CorvinOS-specific.
+
+Added `_win_shim.no_console_window_flags()` (0 on POSIX / when
+`subprocess.CREATE_NO_WINDOW` is unavailable, always safe to pass) and
+wired it into all seven affected `Popen` call sites: `claude_code.py`,
+`codex_cli.py`, `opencode_cli.py`, `copilot_cli.py`,
+`adapter.py::call_claude`, `acs_runtime.py` (manager + worker),
+`chat_runtime.py`'s context-sync spawn. A new drift-guard test pins all
+seven so an eighth spawn site added later can't silently reintroduce the
+gap.
+
+### Honest verification status
+
+19 new/updated tests (unit coverage for the new flag helper + a static
+drift-guard across all seven call sites); the full existing suite across
+all eight touched files (196 tests) stays green. That proves the flag is
+wired correctly and is a safe no-op on POSIX — it does **not** prove the
+fix by itself on a real Windows machine: no Windows box was available to
+observe the actual absence of a flashed console this session, and the A2A
+relay/ping/ack fix from 0.10.96 (which shares the exact same engine-spawn
+code path) has only ever been exercised through mocked-transport
+integration tests, never a genuine two-instance round trip over a real
+relay server. Both are logically sound and thoroughly unit-tested, not
+live-Windows-verified. Flagged explicitly rather than claimed as proven —
+see the corresponding thread for the reasoning.
+
 ## [0.10.99] — 2026-08-02 — Fixed: freshly created SkillForge skills were invisible to Claude Code's native plugin loader in every real production session
 
 ### Fixed — `SkillRegistry.plugin_slot_dir()` silently misrouted its mirror away from the path the engine actually scans
