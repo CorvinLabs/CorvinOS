@@ -7,6 +7,38 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.92] — 2026-08-02 — Bridges started via the Console got no restart-forever supervision on Windows
+
+### Fixed — a fresh Windows install / pip upgrade still left the bridge dead after a crash or reboot
+
+- Reported live, even after 0.10.91's terminal-detach fix: on a fresh Windows
+  install or after a `pip` upgrade, the bridge and A2A still weren't running —
+  neither Windows 10 nor 11 kept them up in the background with self-restart.
+- Root cause: `start_channel_detached()` (the engine behind the web Console's
+  "Start bridge" button — the only real bridge-start entry point on Windows)
+  already genuinely detaches the daemon and adapter from the caller's
+  terminal, but a detached process is still a one-shot spawn — nothing
+  supervises it afterward. Console autostart (Scheduled-Task
+  restart-forever supervision) was already registered by default via
+  `install.ps1`; bridge autostart was **opt-in only**, gated behind a
+  separate `bridge.ps1 install-autostart` command nobody knew to run.
+- Fixed by adding `ensure_windows_autostart(channel)` to `bridge_manager.py`,
+  called automatically at the end of every `start_channel_detached()` run
+  (Windows-only, no-op elsewhere; best-effort — never blocks the bridge start
+  that already succeeded). It registers the exact same Scheduled-Task
+  restart-forever supervision the manual opt-in command already used, so a
+  bridge started via the Console now gets restart-on-crash and
+  restart-on-reboot/relogin automatically, with no separate step required.
+
+### Testing
+
+New `operator/bridges/test_bridge_manager_windows_autostart.py` (8 tests):
+argv correctness, idempotent per-channel skip, POSIX no-op, missing-`bridge.ps1`
+and non-zero-exit error paths, exceptions caught not raised, and a source-level
+reachability proof that `start_channel_detached()` actually calls the new
+function. 23/23 pre-existing tests exercising `start_channel_detached()` still
+green (zero regression).
+
 ## [0.10.91] — 2026-08-02 — Windows bridge daemon no longer tied to the launching terminal
 
 ### Fixed — `bridge.ps1 up` attached the daemon to the caller's own terminal
