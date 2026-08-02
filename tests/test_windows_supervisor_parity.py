@@ -25,6 +25,7 @@ _SUPERVISOR = _REPO / "operator" / "bridges" / "shared" / "corvin-supervisor.ps1
 _INSTALL_PS1 = _REPO / "install.ps1"
 _INSTALL_SH = _REPO / "install.sh"
 _BRIDGE_PS1 = _REPO / "operator" / "bridges" / "bridge.ps1"
+_BRIDGE_MANAGER = _REPO / "operator" / "bridges" / "bridge_manager.py"
 
 
 def _generated_supervisor_block() -> str:
@@ -434,6 +435,94 @@ class TestLinuxUfwRule:
         )
 
 
+class TestBridgeUpBlocksUnderSupervision:
+    """2026-08-02 real bug, found while investigating a live report of an
+    unreliable Windows bridge: corvin-supervisor.ps1's bridge target
+    launches `bridge.ps1 up` via `Start-Process ... -Wait` -- but `up`
+    always returned within ~1s of firing off the DETACHED node.js daemon,
+    whether or not that daemon was still alive. The supervisor's -Wait was
+    therefore only ever waiting on the launcher script, not the real
+    daemon, so its while($true) loop launched a BRAND NEW node.js daemon
+    every ~5s forever regardless of the previous one's health -- silent
+    duplicate daemons fighting over the same Discord/WhatsApp session
+    (session-file locking, duplicate replies, rate-limit bans). Fixed:
+    `up` now blocks on the daemon's own Process object when
+    CORVIN_SUPERVISED=1 (the same signal corvin-supervisor.ps1 already
+    sets before every launch), so the supervisor's -Wait finally reflects
+    the daemon's real lifetime. An interactive, unsupervised
+    `.\bridge.ps1 up` must keep returning immediately."""
+
+    def test_up_case_waits_for_the_daemon_when_supervised(self) -> None:
+        src = _BRIDGE_PS1.read_text(encoding="utf-8")
+        start_idx = src.index('"up" {')
+        # Bounded to this case's own block -- the next top-level case
+        # ("doctor") starts the next section.
+        end_idx = src.index('"doctor" {', start_idx)
+        block = src[start_idx:end_idx]
+        assert "$Proc = Start-Process" in block, (
+            "expected the daemon Start-Process call (-PassThru) in the up case"
+        )
+        proc_idx = block.index("$Proc = Start-Process")
+        after = block[proc_idx:]
+        assert re.search(r"CORVIN_SUPERVISED", after), (
+            "the up case must check the supervised signal after launching "
+            "the daemon"
+        )
+        assert re.search(r"\$Proc\.WaitForExit\(\)", after), (
+            "under supervision, up must block on the daemon's OWN Process "
+            "object (not the launcher script) so the supervisor's -Wait "
+            "reflects the daemon's real lifetime instead of restarting a "
+            "fresh duplicate daemon on a fixed interval"
+        )
+
+    def test_wait_for_exit_is_conditional_not_unconditional(self) -> None:
+        # A manual, interactive `.\bridge.ps1 up` (CORVIN_SUPERVISED unset)
+        # must still return immediately -- regression guard against
+        # accidentally making WaitForExit unconditional, which would make
+        # a manual run hang until the daemon exits.
+        src = _BRIDGE_PS1.read_text(encoding="utf-8")
+        idx = src.index("$Proc.WaitForExit()")
+        window = src[max(0, idx - 200):idx]
+        assert re.search(r"if\s*\(\$env:CORVIN_SUPERVISED", window), (
+            "WaitForExit() must be gated behind an if ($env:CORVIN_SUPERVISED "
+            "...) check, not called unconditionally"
+        )
+
+
+class TestWindowsAutostartRegistrationHasNoVisibleWindow:
+    """2026-08-02 real bug, reported live: an extra terminal window flashed
+    up on Windows that the user had to click away/close. Root cause:
+    bridge_manager.py's ensure_windows_autostart() (added in the 0.10.92
+    fix for missing bridge autostart supervision) spawns powershell.exe via
+    a bare subprocess.run with no CREATE_NO_WINDOW/DETACHED_PROCESS flag --
+    reintroducing, for THIS specific call, exactly the class of bug 0.10.91
+    had just fixed for the node daemon's own launch. Windows allocates a
+    brand-new, VISIBLE console window for any console app spawned without
+    that flag from a parent that itself has no attached console (the web
+    console backend, started hidden)."""
+
+    def test_ensure_windows_autostart_spawns_with_no_visible_window(self) -> None:
+        src = _BRIDGE_MANAGER.read_text(encoding="utf-8")
+        idx = src.index("def ensure_windows_autostart")
+        next_def_idx = src.index("\ndef ", idx + 1)
+        body = src[idx:next_def_idx]
+        assert "subprocess.run(" in body
+        run_idx = body.index("subprocess.run(")
+        # The creationflags kwarg must be part of THIS specific call, not
+        # some other subprocess.run elsewhere in the file.
+        call_end = body.index(")", body.index("timeout=60", run_idx))
+        call_text = body[run_idx:call_end]
+        assert "creationflags" in call_text, (
+            "ensure_windows_autostart's subprocess.run call must pass "
+            "creationflags=...CREATE_NO_WINDOW... -- otherwise Windows "
+            "opens a new, visible console window for powershell.exe when "
+            "spawned from a console-less parent (the hidden web console "
+            "backend), exactly matching the live report of an extra "
+            "terminal window the user has to dismiss"
+        )
+        assert "CREATE_NO_WINDOW" in call_text
+
+
 if __name__ == "__main__":
     import sys
 
@@ -465,5 +554,10 @@ if __name__ == "__main__":
     t8 = TestLinuxUfwRule()
     t8.test_ufw_step_present_and_scoped_to_linux()
     t8.test_ufw_step_never_invokes_sudo()
+    t9 = TestBridgeUpBlocksUnderSupervision()
+    t9.test_up_case_waits_for_the_daemon_when_supervised()
+    t9.test_wait_for_exit_is_conditional_not_unconditional()
+    t10 = TestWindowsAutostartRegistrationHasNoVisibleWindow()
+    t10.test_ensure_windows_autostart_spawns_with_no_visible_window()
     print("all tests passed")
     sys.exit(0)

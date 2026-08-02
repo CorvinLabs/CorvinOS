@@ -869,7 +869,7 @@ wheels = [
 
 [[package]]
 name = "corvinos"
-version = "0.10.94"
+version = "0.10.95"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
