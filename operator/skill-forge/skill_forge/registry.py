@@ -90,22 +90,45 @@ def plugin_slot_dir() -> Path:
     """Resolve the plugin-source ``dyn/`` directory for slot mirrors.
 
     Resolution order:
-      1. ``CORVIN_PLUGIN_SLOT_DIR`` env override.
-      2. ``CORVIN_HOME`` set → ``<home>/plugin-slot/`` — keeps test
-         sandboxes that already redirect the home from polluting the
-         real plugin tree, even when they didn't know about this knob.
-      3. Walk up from this file's location for a ``plugins/`` marker →
-         ``<repo>/operator/skill-forge/skills/dyn/``.
-      4. Fallback ``~/.corvin/plugin-slot/``.
+      1. ``CORVIN_PLUGIN_SLOT_DIR`` env override — the ONLY test-isolation
+         signal for this function. Every test in this codebase that
+         exercises create()/delete() already sets this explicitly (see
+         docs/claude-ref/layer-plugins.md's "Test isolation" note) — it is a
+         dedicated, single-purpose variable used nowhere else, so its mere
+         presence is an unambiguous "redirect me" signal on its own.
+      2. Walk up from this file's location for a ``.corvin_repo``/``plugins/``
+         marker → ``<repo>/operator/skill-forge/skills/dyn/`` — the REAL
+         production path. Confirmed by `test_engine_visibility.py`'s actual
+         `claude -p` subprocess run: the native engine's plugin-skill loader
+         only ever sees skills mirrored here, not anywhere CORVIN_HOME-derived.
+      3. Fallback ``~/.corvin/plugin-slot/`` (no repo marker found — e.g. a
+         pip-installed wheel with no `plugins/` directory on disk).
 
-    CORVIN_PLUGIN_SLOT_DIR and CORVIN_HOME aliases removed in Phase 7 (v1.0).
+    2026-08-02 fix (adversarial review of the Concept Gate mechanism, found
+    while verifying a freshly-seeded SkillForge skill's actual reachability):
+    a prior branch here treated bare ``CORVIN_HOME`` presence as a
+    test-sandbox signal and redirected the slot to ``<CORVIN_HOME>/
+    plugin-slot/`` too — but CORVIN_HOME is the canonical runtime root set in
+    EVERY real CorvinOS session (CLAUDE.md: "Canonical runtime root:
+    ~/.corvin/"), not just tests. That branch therefore silently redirected
+    every real production install's plugin-slot mirror away from the path
+    the native engine actually scans, making every freshly created
+    project/user-scope skill invisible to Claude Code's own plugin loader —
+    the exact "looks wired, isn't reachable" failure class this codebase's
+    own `e2e-wiring-proof` skill exists to catch, just one level deeper than
+    that skill's own file-tree checks would find. Removed the CORVIN_HOME
+    branch entirely rather than gating it behind a second flag (e.g.
+    CORVIN_TEST_MODE): every existing test already sets the more specific
+    CORVIN_PLUGIN_SLOT_DIR directly (verified across all 15 call sites before
+    this change), so removing it changes zero test behavior while fixing
+    production. See Corvin-ADR/concepts/0001-self-learning-project-concept-
+    archive.md's Production-Readiness Roadmap, item P0-1, for the fuller
+    writeup and the two stale test assertions this change corrects in
+    test_plugin_slot_compat.py.
     """
     env = os.environ.get("CORVIN_PLUGIN_SLOT_DIR")
     if env:
         return Path(os.path.expanduser(os.path.expandvars(env)))
-    home_env = os.environ.get("CORVIN_HOME")
-    if home_env:
-        return Path(os.path.expanduser(os.path.expandvars(home_env))) / "plugin-slot"
     # Walk up from this file looking for the plugins/ marker — same heuristic
     # as forge.paths.corvin_home, but we don't import it to keep registry.py
     # standalone.
