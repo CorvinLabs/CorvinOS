@@ -7,6 +7,38 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.91] — 2026-08-02 — Windows bridge daemon no longer tied to the launching terminal
+
+### Fixed — `bridge.ps1 up` attached the daemon to the caller's own terminal
+
+- Reported live: "on Windows the bridge starts in a new terminal — closing that
+  terminal kills the bridge." `bridge.ps1`'s `up` case launched the Node daemon via
+  the call operator (`& node $BridgeScript`), which runs it as a direct child of the
+  invoking PowerShell session, sharing its console — closing that window killed the
+  whole process tree, daemon included.
+- Fixed the same way the `console` subcommand in the same file already worked:
+  `Start-Process -WindowStyle Hidden` gives the daemon its own independent, invisible
+  console, fully detached from the caller's terminal. stdout/stderr — no longer
+  visible in an attached terminal once detached — are now captured to
+  `<CORVIN_HOME>\logs\<bridge>-daemon.log` instead of being silently lost (the
+  WhatsApp pairing QR code and daemon startup errors both go through this output).
+- Also closed a smaller, related defense-in-depth gap: `corvin-supervisor.ps1`'s
+  `bridge` autostart target recurses into `bridge.ps1 up` via a nested
+  `powershell.exe`, whose own `-WindowStyle` switch was missing (every other
+  Scheduled-Task action string in this codebase already passes `-WindowStyle Hidden`
+  as belt-and-suspenders alongside the outer `Start-Process -NoNewWindow`).
+- Verified (not assumed) that two other Windows startup paths were already correct:
+  the web Console's "Start bridge" button (`bridge_manager.py::
+  start_channel_detached`) and the opt-in `bridge.ps1 install-autostart`
+  Scheduled-Task path were both already properly detached before this fix.
+
+### Testing
+
+New regex-based tests in `tests/test_windows_supervisor_parity.py` (no PowerShell
+interpreter needed) pin both fixes — the `up` case must not attach to the caller's
+console, must use `Start-Process -WindowStyle Hidden` with output captured to a log
+file, and must never fall back to `-NoNewWindow`. 14/14 tests in this file green.
+
 ## [0.10.90] — 2026-08-02 — console audit AttributeError + path-gate MSYS hardening
 
 Investigated a diagnostic report from a live Windows CorvinOS instance (a different
