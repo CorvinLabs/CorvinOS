@@ -1146,6 +1146,73 @@ def ensure_adapter_detached() -> dict:
     return {"ok": True, "pid": proc.pid}
 
 
+_WINDOWS_AUTOSTART_ATTEMPTED: set[str] = set()
+
+
+def ensure_windows_autostart(channel: str) -> dict:
+    """Register `channel` for Scheduled-Task restart-forever supervision on
+    Windows (systemd's `Restart=always` has no Windows equivalent).
+
+    Reported live: a fresh Windows install or a pip upgrade left the bridge
+    NOT running after a reboot / relogin, or dead-and-never-restarted after a
+    crash. Root cause: start_channel_detached() (this function's caller, the
+    engine behind the Console's "Start bridge" button) genuinely detaches the
+    daemon+adapter processes from the caller's terminal (DETACHED_PROCESS,
+    see the module docstring above) — but a detached process is still just a
+    ONE-SHOT spawn. Nothing supervises it: no restart on crash, and nothing
+    re-launches it after a reboot or user relogin. Console autostart IS
+    registered by default (install.ps1's Install-CorvinAutostart), but
+    bridge autostart was previously opt-in-only (`bridge.ps1
+    install-autostart`, a separate command a user has to know exists and run
+    by hand) -- so on a stock install, only the console ever came back after
+    a reboot; the bridge silently stayed dead until someone noticed and
+    clicked Start again.
+
+    Fix: call bridge.ps1's own `install-autostart <channel>` (Register-
+    ScheduledTask, AtLogOn trigger, -RestartCount 999, -Hidden -- the exact
+    same Scheduled-Task shape already used for the console) automatically,
+    every time a channel is started this way. Reuses bridge.ps1 --
+    `_BRIDGE_DIR` always resolves to bridge_manager.py's OWN directory, so
+    `_BRIDGE_DIR / "bridge.ps1"` finds the right sibling copy whether this
+    is a dev checkout (operator/bridges/) or a vendored wheel install
+    (corvin_console/_vendor/operator/bridges/) -- no separate resolution
+    needed, no duplicated PowerShell logic to drift out of sync with
+    bridge.ps1's own Install-AutostartTask.
+
+    bridge.ps1 install-autostart's own Register-ScheduledTask call is
+    already idempotent (Unregister ... -ErrorAction SilentlyContinue then
+    re-register), so calling this twice for the same channel is safe --
+    _WINDOWS_AUTOSTART_ATTEMPTED just skips the (~1-2s) PowerShell spawn on
+    a repeat call within the same running process, it is not a correctness
+    requirement. Best-effort and non-fatal: a failure here must never block
+    the actual bridge start that already succeeded (the reason this always
+    runs AFTER the daemon+adapter are confirmed up, never before)."""
+    if not sys.platform.startswith("win"):
+        return {"ok": True, "skipped": "not windows"}
+    if channel in _WINDOWS_AUTOSTART_ATTEMPTED:
+        return {"ok": True, "already_attempted": True}
+    bridge_ps1 = _BRIDGE_DIR / "bridge.ps1"
+    if not bridge_ps1.exists():
+        return {"ok": False, "error": f"bridge.ps1 not found at {bridge_ps1}"}
+    try:
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", str(bridge_ps1), "install-autostart", channel],
+            cwd=str(_BRIDGE_DIR), capture_output=True, text=True, timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        _info(f"  ⚠ windows autostart registration for {channel} failed: {exc}")
+        return {"ok": False, "error": str(exc)}
+    if proc.returncode != 0:
+        _info(
+            f"  ⚠ windows autostart registration for {channel} exited "
+            f"{proc.returncode}: {(proc.stderr or proc.stdout or '').strip()[:300]}"
+        )
+        return {"ok": False, "error": f"install-autostart exited {proc.returncode}"}
+    _WINDOWS_AUTOSTART_ATTEMPTED.add(channel)
+    return {"ok": True}
+
+
 def start_channel_detached(
     channel: str,
     progress: Optional["callable"] = None,  # type: ignore[name-defined]
@@ -1280,8 +1347,19 @@ def start_channel_detached(
         if not adapter_status.get("ok"):
             _info(f"  ⚠ adapter start failed: {adapter_status.get('error')}")
 
+        # A detached process is still just a one-shot spawn — nothing
+        # restarts it after a crash or a reboot/relogin without this.
+        # Windows-only (no-ops elsewhere); best-effort, never blocks the
+        # bridge start that already succeeded above.
+        autostart_status = ensure_windows_autostart(channel)
+        if not autostart_status.get("ok"):
+            _info(f"  ⚠ windows autostart registration failed: {autostart_status.get('error')}")
+
         _p("Bridge started — waiting for WhatsApp to generate the QR…")
-        return {"ok": True, "pid": proc.pid, "adapter": adapter_status}
+        return {
+            "ok": True, "pid": proc.pid, "adapter": adapter_status,
+            "windows_autostart": autostart_status,
+        }
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"Unexpected error starting {channel}: {exc}"}
 
