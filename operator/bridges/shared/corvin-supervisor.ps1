@@ -109,8 +109,14 @@ if ($Target -eq "console") {
 } else {
     # Recurse into bridge.ps1's own "up" case -- reuses its existing TCP-loopback
     # port allocation + node-daemon launch logic exactly, no duplication.
+    # -WindowStyle Hidden here is belt-and-suspenders (the outer Start-Process
+    # below already passes -NoNewWindow, so this nested powershell.exe shares
+    # the supervisor's own already-hidden console rather than getting a new
+    # one) -- matches every OTHER Scheduled-Task action string in this
+    # codebase (install.ps1, bridge.ps1's own Install-AutostartTask), which
+    # is the exact parity test_windows_supervisor_parity.py checks for.
     $FilePath = "powershell.exe"
-    $ArgList = @("-NoProfile", "-ExecutionPolicy", "Bypass",
+    $ArgList = @("-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
                  "-File", (Join-Path $BridgeRoot "bridge.ps1"), "up", $Bridge)
     $WorkDir = $BridgeRoot
 }

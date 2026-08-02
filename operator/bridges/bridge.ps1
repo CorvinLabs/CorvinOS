@@ -91,8 +91,32 @@ switch ($Subcommand) {
         # Launch the bridge adapter
         $BridgeScript = Join-Path $ScriptDir "$Bridge\daemon.js"
         if (Test-Path $BridgeScript) {
+            # 2026-08-02: this used to invoke node via the call operator
+            # ('&'), which runs it as a DIRECT CHILD of the current
+            # PowerShell session, sharing its console. Closing that console/
+            # terminal window killed the whole process tree, daemon
+            # included -- reported live as "the bridge starts in a new
+            # terminal, closing it kills the bridge". Start-Process below
+            # (deliberately WITHOUT the "share the parent's console" switch)
+            # gives the child its OWN independent console instead of
+            # attaching to this one -- WindowStyle=Hidden just keeps that
+            # separate console invisible. This is the exact same pattern the
+            # "console" case above already uses (line 155) for the same
+            # reason; "up" was the one case that still attached to the
+            # caller's window. stdout/stderr, no longer visible in the
+            # terminal once detached, are captured to a log file instead --
+            # the WhatsApp pairing QR code and any daemon startup errors are
+            # the reason this can't just be discarded.
+            $LogDir = Join-Path $env:CORVIN_HOME "logs"
+            $null = New-Item -ItemType Directory -Force -Path $LogDir
+            $LogFile = Join-Path $LogDir "$Bridge-daemon.log"
             Write-Host "  Launching Node.js daemon: $BridgeScript" -ForegroundColor DarkGray
-            & node $BridgeScript
+            Write-Host "  Running in the background -- closing this window will NOT stop it." -ForegroundColor DarkGray
+            Write-Host "  Output: $LogFile" -ForegroundColor DarkGray
+            $Proc = Start-Process -FilePath "node" -ArgumentList "`"$BridgeScript`"" `
+                -WorkingDirectory $ScriptDir -WindowStyle Hidden -PassThru `
+                -RedirectStandardOutput $LogFile -RedirectStandardError "$LogFile.err"
+            Write-Host "  Started (PID $($Proc.Id))." -ForegroundColor Green
         } else {
             Write-Error "Bridge script not found: $BridgeScript"
             exit 1
