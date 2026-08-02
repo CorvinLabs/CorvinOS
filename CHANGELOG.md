@@ -7,6 +7,44 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.99] — 2026-08-02 — Fixed: freshly created SkillForge skills were invisible to Claude Code's native plugin loader in every real production session
+
+### Fixed — `SkillRegistry.plugin_slot_dir()` silently misrouted its mirror away from the path the engine actually scans
+
+- Root-caused via the Production-Readiness Roadmap opened in
+  `Corvin-ADR/concepts/0001-self-learning-project-concept-archive.md` (item P0-1),
+  itself found while adversarially reviewing the Concept Gate mechanism added earlier
+  today (see the 0.10.98 entry above).
+- `plugin_slot_dir()` treated bare `CORVIN_HOME` presence as a "this is an isolated
+  test sandbox" signal and redirected the plugin-slot mirror to
+  `<CORVIN_HOME>/plugin-slot/` — but `CORVIN_HOME` is the canonical runtime root set
+  in **every** real CorvinOS session, not only tests. In production this silently
+  redirected every project/user-scope skill's engine-visible mirror away from
+  `operator/skill-forge/skills/dyn/`, the path Claude Code's own native plugin
+  loader actually scans (confirmed by `test_engine_visibility.py`'s real `claude -p`
+  subprocess round trip, and by the test author's own pre-existing workaround of
+  explicitly overriding `CORVIN_PLUGIN_SLOT_DIR` back to the real path). Net effect:
+  a freshly created skill was invisible to the native loader on every real install.
+- Fixed by removing the `CORVIN_HOME` branch entirely. `CORVIN_PLUGIN_SLOT_DIR` — a
+  dedicated, single-purpose variable used nowhere else in the codebase — remains the
+  sole, unambiguous test-isolation override; every one of the 15 existing call sites
+  across the test suite already set it explicitly, so this changes zero test behavior
+  while fixing the real bug.
+
+### Testing
+
+`test_plugin_slot_compat.py`'s two tests that previously asserted the *old* (buggy)
+behavior as correct were rewritten to assert the fix directly: bare `CORVIN_HOME`
+no longer redirects the slot (falls through to the real repo path), and
+`CORVIN_PLUGIN_SLOT_DIR` still wins when both are set. Full regression sweep across
+every affected file — `test_engine_visibility.py`, `test_grading.py`,
+`test_namespace_gate.py`, `test_plugin_slot.py`, `test_mcp_notification.py`,
+`test_registry.py`, `test_cleanup.py`, `test_multi_scope.py`, `test_linter.py`,
+`test_skill_inject_ldd.py`, `test_adapter_skill_inject.py`,
+`test_skill_outcome_grading.py`, `test_ldd_dependencies.py`, `test_skill_auto_grade.py`,
+`test_session_reset.py`, `test_core_quality_skills.py` — 300+ assertions, zero
+regressions.
+
 ## [0.10.98] — 2026-08-02 — Concept Gate now unconditionally active, matching ADR Gate
 
 ### Fixed — a second adversarial review of the just-added Concept Gate mechanism found it was structurally weaker than its own CLAUDE.md table entry implied

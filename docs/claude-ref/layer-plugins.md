@@ -437,12 +437,30 @@ on our side.
 
 **Slot-path resolution** (`registry.plugin_slot_dir()`):
 
-1. `CORVIN_PLUGIN_SLOT_DIR` env override (used by tests).
-2. `CORVIN_HOME` set → `<home>/plugin-slot/` — keeps test sandboxes
-   that redirected `CORVIN_HOME` from polluting the real plugin tree.
-3. Walk-up from `registry.py`'s location for a `.corvin_repo` marker →
-   `<repo>/operator/skill-forge/skills/dyn/`.
-4. Fallback `~/.corvin/plugin-slot/` (legacy: `~/.corvinOS/plugin-slot/` until Phase 7).
+1. `CORVIN_PLUGIN_SLOT_DIR` env override — the sole test-isolation signal.
+   A dedicated, single-purpose variable used nowhere else in this codebase,
+   so its mere presence is unambiguous; every test that exercises
+   `create()`/`delete()` sets it explicitly.
+2. Walk-up from `registry.py`'s location for a `.corvin_repo`/`plugins/`
+   marker → `<repo>/operator/skill-forge/skills/dyn/` — the real
+   production path, confirmed by `test_engine_visibility.py`'s actual
+   `claude -p` subprocess run to be what the native engine loader scans.
+3. Fallback `~/.corvin/plugin-slot/` (no repo marker found — e.g. a
+   pip-installed wheel with no `plugins/` directory on disk).
+
+**2026-08-02 fix:** a prior step 2 read `CORVIN_HOME` and, if set,
+redirected to `<CORVIN_HOME>/plugin-slot/` — reasoning that this "kept
+test sandboxes... from polluting the real plugin tree." But `CORVIN_HOME`
+is the canonical runtime root set in *every* real CorvinOS session, not
+only tests, so that step silently redirected every production install's
+slot mirror away from the path the engine actually scans — every
+freshly-created project/user-scope skill was invisible to Claude Code's
+own plugin loader in production. Removed the `CORVIN_HOME` branch
+entirely (every existing test already sets the more specific
+`CORVIN_PLUGIN_SLOT_DIR` directly, so this changed zero test behavior).
+Found via adversarial review of the Concept Gate mechanism; see
+`Corvin-ADR/concepts/0001-self-learning-project-concept-archive.md`'s
+Production-Readiness Roadmap, item P0-1.
 
 **Lifecycle hooks:**
 
@@ -469,11 +487,13 @@ matches the existing voice / cowork convention that settings hot-reload
 between subprocess boots, not within them.
 
 **Test isolation:** any test that exercises `SkillRegistry.create()` /
-`delete()` MUST set `CORVIN_PLUGIN_SLOT_DIR` (or `CORVIN_HOME`)
-before importing — otherwise the walk-up fallback writes into the real
-`operator/skill-forge/skills/dyn/` and pollutes the workspace. The
-existing tests in `operator/skill-forge/tests/` set this at module load
-via `tempfile.mkdtemp(prefix="sf-slot-test-")`.
+`delete()` MUST set `CORVIN_PLUGIN_SLOT_DIR` before importing —
+`CORVIN_HOME` alone no longer redirects the slot (2026-08-02 fix, above),
+so setting only `CORVIN_HOME` would leave the walk-up fallback writing
+into the real `operator/skill-forge/skills/dyn/` and pollute the
+workspace. The existing tests in `operator/skill-forge/tests/` set
+`CORVIN_PLUGIN_SLOT_DIR` at module load via
+`tempfile.mkdtemp(prefix="sf-slot-test-")`.
 
 ### Adapter-injection layer (live skill availability)
 

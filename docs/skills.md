@@ -288,10 +288,20 @@ leak across chats through the engine's plugin-skill loader.
 
 **Slot-path resolution** (`registry.plugin_slot_dir()`):
 
-1. `CORVIN_PLUGIN_SLOT_DIR` env override (used by tests)
-2. `CORVIN_HOME` set → `<home>/plugin-slot/`
-3. Walk-up from `registry.py` for a `.corvin_repo` marker → repo path
-4. Fallback `~/.corvin/plugin-slot/`
+1. `CORVIN_PLUGIN_SLOT_DIR` env override — the sole test-isolation signal;
+   a dedicated, single-purpose variable every test that exercises
+   `create()`/`delete()` sets explicitly.
+2. Walk-up from `registry.py` for a `.corvin_repo`/`plugins/` marker →
+   `<repo>/operator/skill-forge/skills/dyn/` — the real production path.
+3. Fallback `~/.corvin/plugin-slot/` (no repo marker found).
+
+2026-08-02: a prior step-2 redirected to `<CORVIN_HOME>/plugin-slot/`
+whenever `CORVIN_HOME` was set — but `CORVIN_HOME` is the canonical
+runtime root in every real session, not just tests, so that step
+silently misrouted every production install's slot mirror away from the
+path the engine actually scans. Removed; see
+`Corvin-ADR/concepts/0001-self-learning-project-concept-archive.md`'s
+Production-Readiness Roadmap item P0-1.
 
 **Limit — visibility is one subprocess delayed:** the engine reads
 plugin skills at subprocess boot. A skill created mid-turn via
