@@ -141,6 +141,7 @@ run "Python: claude-CLI bin resolution (ADR-0265)" python3 shared/agents/test_cl
 run "Python: atomic outbox writes (ADR-0265)"     python3 shared/test_atomic_write_outbox.py >/dev/null || fails=$((fails+1))
 run "Python: adapter UTF-8 decoding (ADR-0265)"   python3 shared/test_adapter_encoding.py >/dev/null || fails=$((fails+1))
 run "Python: bridge_manager shutdown (ADR-0265)"  bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" test_bridge_manager_shutdown.py -q >/dev/null 2>&1' || fails=$((fails+1))
+run "Python: bridge_manager windows autostart (2026-08-02)" python3 test_bridge_manager_windows_autostart.py >/dev/null || fails=$((fails+1))
 run "Python: ACS run-dir Windows path (2026-07-13)" bash -c 'PYTEST="${PYTEST:-}"; [[ -z "$PYTEST" ]] && { echo "(skip: pytest not found)"; exit 0; }; "$PYTEST" shared/test_acs_runtime_windows_path.py -q >/dev/null 2>&1' || fails=$((fails+1))
 run "Python: platform independence (ADR-0159)"    python3 shared/test_adr0159_platform.py >/dev/null || fails=$((fails+1))
 # Node: bridge_paths.js's CORVIN_HOME whitespace-guard/expandvars/tilde
