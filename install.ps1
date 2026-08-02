@@ -516,6 +516,12 @@ $ServerReady = $false
 # Launched via the always-on Scheduled Task (or its Startup-folder fallback)
 # above so it's durable from the first boot -- not just a one-off process
 # tied to this installer window.
+# Tracks whether corvinos-serve was actually launched by SOME mechanism
+# (Scheduled Task, Startup shortcut, or the single-shot fallback below) --
+# used to decide, further down, whether the final banner is allowed to claim
+# success. Previously this was assumed true unconditionally, so an install
+# where every one of these paths failed still printed "CorvinOS is ready!".
+$ConsoleLaunchAttempted = $false
 try {
     $AutostartMode = Install-CorvinAutostart
     if ($AutostartMode -eq "task") {
@@ -523,12 +529,28 @@ try {
     } else {
         Write-Ok "Console will auto-start on login via a Startup-folder shortcut (this account can't register Scheduled Tasks)."
     }
+    $ConsoleLaunchAttempted = $true
 } catch {
     Write-Warn "Could not set up any autostart ($_) -- starting once instead (won't survive logoff/reboot). Re-run install.ps1 later to retry."
-    # -Hidden, not -Minimized: a minimized window still has a taskbar entry
-    # the user can click and close, killing this process exactly like closing
-    # a visible console would -- Hidden has no window at all to close.
-    try { Start-Process -FilePath "corvinos-serve" -ArgumentList "--no-browser" -WindowStyle Hidden -ErrorAction Stop } catch {}
+    # Resolve the actual command path rather than relying on the bare name
+    # "corvinos-serve" -- Install-CorvinAutostart just threw because Get-Command
+    # couldn't resolve it either, so retrying the identical unresolved lookup
+    # here would silently fail the exact same way. -Hidden, not -Minimized: a
+    # minimized window still has a taskbar entry the user can click and close,
+    # killing this process exactly like closing a visible console would --
+    # Hidden has no window at all to close.
+    $FallbackServeCmd = (Get-Command corvinos-serve -ErrorAction SilentlyContinue).Source
+    if (-not $FallbackServeCmd) { $FallbackServeCmd = (Get-Command corvin-serve -ErrorAction SilentlyContinue).Source }
+    if ($FallbackServeCmd) {
+        try {
+            Start-Process -FilePath $FallbackServeCmd -ArgumentList "--no-browser" -WindowStyle Hidden -ErrorAction Stop
+            $ConsoleLaunchAttempted = $true
+        } catch {
+            Write-Warn "Could not start the console either ($_). Open a NEW terminal and run: corvinos-serve"
+        }
+    } else {
+        Write-Warn "corvinos-serve is still not on PATH -- open a NEW terminal (PATH updates need a fresh session) and run: corvinos-serve"
+    }
 }
 
 # ── 3c. Desktop shortcut ──────────────────────────────────────────────────
@@ -584,17 +606,52 @@ try { Start-Process $ConsoleURL -ErrorAction Stop; if ($ServerReady) { Write-Ok 
 catch { Write-Ok "Open the console in your browser: $ConsoleURL" }
 
 # ── done / cheat sheet ────────────────────────────────────────────────────────
+# Previously this banner printed unconditionally -- a user whose console
+# never actually came up (autostart AND the fallback single-shot start both
+# failed, or corvinos-serve is stuck in a crash loop) still saw a green
+# "CorvinOS is ready!" the moment the script finished, with the one real
+# Write-Warn buried earlier in the scrollback. Gate it on real evidence.
+$LogCorvinHome = if ($env:CORVIN_HOME) { $env:CORVIN_HOME } else { Join-Path $env:USERPROFILE ".corvin" }
+$SupervisorLog = Join-Path $LogCorvinHome "logs\console-supervisor.log"
 Write-Host ""
-Write-Head "========================================================"
-Write-Host " CorvinOS is ready!" -ForegroundColor Green
-Write-Head "========================================================"
-Write-Host ""
-Write-Host " The console now starts automatically at login and restarts itself" -ForegroundColor White
-Write-Host " if it ever crashes or the machine reboots -- nothing more to run:" -ForegroundColor White
-Write-Host ""
-Write-Cmd  "$ConsoleURL"
-Write-Hint "# check status:  Get-ScheduledTask CorvinOS-Console"
-Write-Hint "# turn off:      Unregister-ScheduledTask CorvinOS-Console"
+if ($ServerReady) {
+    Write-Head "========================================================"
+    Write-Host " CorvinOS is ready!" -ForegroundColor Green
+    Write-Head "========================================================"
+    Write-Host ""
+    Write-Host " The console now starts automatically at login and restarts itself" -ForegroundColor White
+    Write-Host " if it ever crashes or the machine reboots -- nothing more to run:" -ForegroundColor White
+    Write-Host ""
+    Write-Cmd  "$ConsoleURL"
+    Write-Hint "# check status:  Get-ScheduledTask CorvinOS-Console"
+    Write-Hint "# turn off:      Unregister-ScheduledTask CorvinOS-Console"
+} elseif ($ConsoleLaunchAttempted) {
+    Write-Head "========================================================"
+    Write-Host " CorvinOS installed -- console hasn't answered yet" -ForegroundColor Yellow
+    Write-Head "========================================================"
+    Write-Host ""
+    Write-Host " Autostart was registered and a start was attempted, but the console" -ForegroundColor White
+    Write-Host " did not respond within ${MaxRetries}s. It may still be coming up (slow first" -ForegroundColor White
+    Write-Host " boot / Defender scan), or it could be crash-looping. Check:" -ForegroundColor White
+    Write-Host ""
+    Write-Cmd  "$ConsoleURL   # try reloading in a few seconds"
+    Write-Hint "# see why it isn't starting:  Get-Content `"$SupervisorLog`" -Tail 40"
+    Write-Hint "# check task status:          Get-ScheduledTask CorvinOS-Console"
+    Write-Hint "# restart it by hand:         Start-ScheduledTask CorvinOS-Console"
+} else {
+    Write-Head "========================================================"
+    Write-Host " CorvinOS installed -- but the console could NOT be started" -ForegroundColor Red
+    Write-Head "========================================================"
+    Write-Host ""
+    Write-Host " Neither autostart registration nor a direct start succeeded (see the" -ForegroundColor White
+    Write-Host " warning(s) above for the specific error). The package IS installed --" -ForegroundColor White
+    Write-Host " open a NEW terminal window (so PATH updates take effect) and run:" -ForegroundColor White
+    Write-Host ""
+    Write-Cmd  "corvinos-serve"
+    Write-Hint "# if that command isn't found, re-run this installer -- it retries"
+    Write-Hint "# every step and is safe to run more than once:"
+    Write-Hint "irm https://corvin-labs.com/install.ps1 | iex"
+}
 Write-Host ""
 Write-Head "========================================================"
 Write-Host " Commands" -ForegroundColor White
