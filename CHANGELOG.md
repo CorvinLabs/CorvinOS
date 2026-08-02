@@ -7,6 +7,53 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.95] — 2026-08-02 — Windows bridge: extra visible terminal + silent duplicate-daemon restart loop
+
+### Fixed — two compounding bugs found while investigating a live report of an unreliable Windows bridge
+
+- **A visible terminal window flashed up that the user had to close/dismiss.**
+  Root cause: `ensure_windows_autostart()` (added in 0.10.92) spawns
+  `powershell.exe` via a bare `subprocess.run` with no
+  `creationflags=CREATE_NO_WINDOW`. Spawning a console app from a
+  console-less parent (the web console backend, itself started hidden)
+  makes Windows allocate a brand-new, **visible** console window for the
+  child — exactly the class of bug 0.10.91 had just fixed for the node
+  daemon's own launch, reintroduced here for this one call. Fixed.
+- **The bridge supervisor was not actually supervising the bridge.**
+  `corvin-supervisor.ps1`'s bridge target launches `bridge.ps1 up` via
+  `Start-Process ... -Wait`, expecting that to block until the daemon
+  exits. But `bridge.ps1 up` always returned within ~1s of firing off the
+  DETACHED node.js daemon, whether or not that daemon was still alive —
+  so the supervisor's `-Wait` was only ever waiting on the *launcher*
+  script, never the real daemon. Its `while ($true)` restart loop
+  therefore launched a **brand-new, additional node.js daemon every ~5s,
+  forever**, regardless of the previous one's health — silent duplicate
+  daemons competing for the same Discord/WhatsApp session (session-file
+  locking, duplicate replies, eventual rate-limit bans). This is the
+  actual mechanism behind "the bridge doesn't reliably stay up on
+  Windows" reports that looked like crash-restarts but weren't. Fixed:
+  `bridge.ps1 up` now blocks on the daemon's own `Process` object via
+  `.WaitForExit()` when `CORVIN_SUPERVISED=1` (the same signal
+  `corvin-supervisor.ps1` already sets before every launch) — so the
+  supervisor's `-Wait` finally reflects the daemon's real lifetime and
+  only restarts once it has genuinely died, reconnecting with whatever
+  session/credentials the bridge already has on disk (nothing about
+  session persistence changes — daemon.js already reuses its saved
+  WhatsApp/Discord session on any relaunch; the bug was launching
+  redundant *extra* daemons, not losing the session). A manual,
+  interactive `.\bridge.ps1 up` (no supervisor, `CORVIN_SUPERVISED`
+  unset) keeps returning immediately, unchanged.
+
+### Testing
+
+`tests/test_windows_supervisor_parity.py` gained
+`TestBridgeUpBlocksUnderSupervision` (supervised blocking is present and
+correctly conditional — a manual run must never hang) and
+`TestWindowsAutostartRegistrationHasNoVisibleWindow` (pins the
+`creationflags=CREATE_NO_WINDOW` regression). Extended
+`operator/bridges/test_bridge_manager_windows_autostart.py`'s existing
+argv test to also assert the `creationflags` kwarg. 25 + 8 tests green.
+
 ## [0.10.94] — 2026-08-02 — A2A LAN pairing (Windows ↔ Linux) required knowing your own IP; now fully automatic
 
 ### Fixed — reported live via screenshot: A2A pairing between a Windows and Linux instance on the same network got permanently stuck

@@ -117,6 +117,31 @@ switch ($Subcommand) {
                 -WorkingDirectory $ScriptDir -WindowStyle Hidden -PassThru `
                 -RedirectStandardOutput $LogFile -RedirectStandardError "$LogFile.err"
             Write-Host "  Started (PID $($Proc.Id))." -ForegroundColor Green
+
+            # 2026-08-02: corvin-supervisor.ps1's restart-forever loop launches
+            # THIS script ("bridge.ps1 up") via `Start-Process ... -Wait` --
+            # but up to this point, this script always returned within about a
+            # second of firing off the detached node.js process above, whether
+            # or not that daemon was actually still alive. The supervisor's
+            # -Wait therefore only ever waited on THIS launcher script, not on
+            # the real daemon -- so its while($true) loop relaunched a BRAND
+            # NEW node.js daemon every ~5s FOREVER, regardless of whether the
+            # previous one was healthy, silently piling up duplicate daemon
+            # processes fighting over the same Discord/WhatsApp session (the
+            # actual root cause of live reports of an unreliable Windows
+            # bridge -- not the crash-restart it looked like). Fix: when
+            # invoked BY the supervisor (CORVIN_SUPERVISED=1, set by
+            # corvin-supervisor.ps1 before every launch -- same signal already
+            # used to suppress the console's self-update handoff under
+            # supervision), block here until the real daemon process exits, so
+            # the supervisor's -Wait genuinely reflects the daemon's own
+            # lifetime and only restarts once it has actually died. A manual,
+            # interactive `.\bridge.ps1 up` (CORVIN_SUPERVISED unset) keeps
+            # today's fire-and-forget behavior -- the "closing this window
+            # will NOT stop it" message two lines up stays true for that case.
+            if ($env:CORVIN_SUPERVISED -eq "1") {
+                $Proc.WaitForExit()
+            }
         } else {
             Write-Error "Bridge script not found: $BridgeScript"
             exit 1

@@ -76,6 +76,13 @@ class TestEnsureWindowsAutostart(unittest.TestCase):
         # channel must be the LAST positional arg, not swallowed by an
         # earlier flag's own value.
         self.assertEqual(argv[-1], "discord")
+        # 2026-08-02: without CREATE_NO_WINDOW, spawning powershell.exe from
+        # a console-less parent (the hidden web console backend) makes
+        # Windows allocate a brand-new, VISIBLE console window -- reported
+        # live as an extra terminal the user has to dismiss.
+        kwargs = run_mock.call_args.kwargs
+        self.assertIn("creationflags", kwargs)
+        self.assertEqual(kwargs["creationflags"], getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
     def test_nonzero_exit_reports_failure(self):
         with mock.patch.object(bridge_manager.sys, "platform", "win32"), \

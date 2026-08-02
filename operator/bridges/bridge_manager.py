@@ -1195,10 +1195,23 @@ def ensure_windows_autostart(channel: str) -> dict:
     if not bridge_ps1.exists():
         return {"ok": False, "error": f"bridge.ps1 not found at {bridge_ps1}"}
     try:
+        # CREATE_NO_WINDOW (0x08000000): without this, spawning a console
+        # app (powershell.exe) from a parent that itself has no attached
+        # console (the web console backend, started hidden) makes Windows
+        # allocate a BRAND-NEW, VISIBLE console window for the child --
+        # exactly the flash-of-a-terminal-the-user-has-to-dismiss bug
+        # 0.10.91 had just fixed for the node daemon, reintroduced here for
+        # this call. getattr(...) with a 0 default keeps this a no-op on
+        # non-Windows test runs, where the real stdlib `subprocess` module
+        # has no CREATE_NO_WINDOW attribute at all (this branch is already
+        # Windows-only per the sys.platform check above, but the attribute
+        # access itself must still not raise when subprocess.run is mocked
+        # out in tests running on Linux CI).
         proc = subprocess.run(
             ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", str(bridge_ps1), "install-autostart", channel],
             cwd=str(_BRIDGE_DIR), capture_output=True, text=True, timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         _info(f"  ⚠ windows autostart registration for {channel} failed: {exc}")
