@@ -1521,13 +1521,17 @@ def _call_manager_sync(
     # command string (a bare ["cmd","/c",*_argv] list lets a user-prompt
     # metachar break out of the quotes → host RCE); no-op on POSIX. encoding
     # pinned: claude emits UTF-8 JSON, cp1252 mojibakes umlauts mid-turn.
-    from agents._win_shim import windows_shim_command
+    from agents._win_shim import windows_shim_command, no_console_window_flags
     _argv = windows_shim_command(_argv)
+    # creationflags=no_console_window_flags(): CREATE_NO_WINDOW on Windows
+    # (2026-08-02, reported live) — without it, every turn flashes up a
+    # brand-new, visible console. 0 (a safe no-op) on POSIX.
     proc = subprocess.Popen(
         _argv,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", env=env,
+        creationflags=no_console_window_flags(),
     )
     if proc_holder is not None:
         with proc_holder.lock:
@@ -1711,13 +1715,17 @@ def _call_worker_sync(
     # Windows .cmd-shim: cmd.exe-safe command string + pinned UTF-8 decode —
     # same rationale as the manager spawn above (WinError 193 / cp1252 mojibake
     # / metachar-breakout RCE via a bare cmd /c list).
-    from agents._win_shim import windows_shim_command
+    from agents._win_shim import windows_shim_command, no_console_window_flags
     _argv = windows_shim_command(_argv)
+    # creationflags=no_console_window_flags(): CREATE_NO_WINDOW on Windows
+    # (2026-08-02, reported live) — without it, every turn flashes up a
+    # brand-new, visible console. 0 (a safe no-op) on POSIX.
     proc = subprocess.Popen(
         _argv,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace", env=env,
+        creationflags=no_console_window_flags(),
     )
     if proc_holder is not None:
         with proc_holder.lock:

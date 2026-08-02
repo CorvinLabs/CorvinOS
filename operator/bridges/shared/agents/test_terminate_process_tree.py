@@ -146,6 +146,54 @@ class TestSpawnCreatesNewProcessGroupOnWindows(unittest.TestCase):
         src = (Path(__file__).resolve().parent / "claude_code.py").read_text()
         self.assertIn("CREATE_NEW_PROCESS_GROUP", src)
         self.assertIn('sys.platform.startswith("win")', src)
+        self.assertIn("no_console_window_flags", src)
+
+
+class TestNoConsoleWindowDriftGuard(unittest.TestCase):
+    """2026-08-02, reported live: every engine spawn on Windows (cmd /c
+    wrapping a .cmd/.bat shim, or a direct .exe) allocated a brand-new,
+    VISIBLE console — every single turn, not just at boot, and identically
+    for a bridge turn, a console turn, or an A2A worker turn (they all call
+    the same engine spawn code). Static source-check (not a live Windows
+    spawn — unavailable here) pinning that all SEVEN affected call sites
+    actually wire creationflags=no_console_window_flags(), so an eighth
+    engine/spawn site added later can't silently reintroduce the same gap."""
+
+    _AGENTS_DIR = Path(__file__).resolve().parent
+    _SHARED_DIR = _AGENTS_DIR.parent
+    _CONSOLE_DIR = _SHARED_DIR.parent.parent.parent / "core" / "console" / "corvin_console"
+
+    _SITES = (
+        _AGENTS_DIR / "claude_code.py",
+        _AGENTS_DIR / "codex_cli.py",
+        _AGENTS_DIR / "opencode_cli.py",
+        _AGENTS_DIR / "copilot_cli.py",
+        _SHARED_DIR / "adapter.py",
+        _SHARED_DIR / "acs_runtime.py",
+        _CONSOLE_DIR / "chat_runtime.py",
+    )
+
+    def test_every_known_spawn_site_wires_no_console_window_flags(self):
+        for path in self._SITES:
+            with self.subTest(file=path.name):
+                self.assertTrue(path.exists(), f"expected file not found: {path}")
+                src = path.read_text(encoding="utf-8")
+                self.assertIn(
+                    "no_console_window_flags", src,
+                    f"{path.name}: missing the CREATE_NO_WINDOW fix — a Windows "
+                    f"engine/context-sync spawn here would flash up a visible "
+                    f"console on every turn",
+                )
+
+    def test_acs_runtime_wires_it_at_both_manager_and_worker_spawns(self):
+        src = (self._SHARED_DIR / "acs_runtime.py").read_text(encoding="utf-8")
+        # Trailing comma distinguishes the real kwarg usage from the
+        # explanatory comment above each Popen call (which also mentions the
+        # function name, but ends in ":" not ",").
+        self.assertEqual(
+            src.count("creationflags=no_console_window_flags(),"), 2,
+            "expected both the manager and worker Popen calls to wire the fix",
+        )
 
 
 if __name__ == "__main__":
