@@ -23,6 +23,7 @@ LDD skill before any edit is made or any conclusion is stated.
 | Recommendation / trade-off / plan | `dialectical-reasoning` | **BEFORE stating conclusion** |
 | Bug with unknown root cause | `root-cause-by-layer` | **BEFORE any fix attempt** |
 | Any task marked "done" | `docs-as-definition-of-done` | **BEFORE declaring done** |
+| Reusable working method discovered/reapplied (non-trivial task) | Concept Gate | **AFTER declaring done, alongside ADR Gate** |
 | First observation of a failure | `reproducibility-first` | **BEFORE any diagnosis** |
 | Per-subtask E2E for security changes | real subprocess + real filesystem + real bwrap | **MANDATORY, no exception** |
 
