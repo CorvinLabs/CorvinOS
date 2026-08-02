@@ -1233,9 +1233,20 @@ def friendship_recheck(
 ) -> dict[str, Any]:
     """Re-verify reachability for an existing friendship connection (manual
     "recheck" action / periodic UI refresh) without redoing the whole token
-    exchange. Pings the peer (ADR-0199) and updates ``state`` accordingly —
-    ACTIVE only on a genuine signed pong, else UNREACHABLE. Does not touch
-    ``_peer_knows_us`` (that is only ever set by a completed ack round trip)."""
+    exchange. Pings the peer (ADR-0199, now with an ADR-0258 Stage 3 relay
+    fallback) and updates ``state`` accordingly — ACTIVE only on a genuine
+    signed pong, else UNREACHABLE.
+
+    2026-08-02: also refreshes ``_peer_knows_us`` when it is currently
+    false and the ping just succeeded — previously this field was ONLY ever
+    set by the initial import's ack round trip, so a connection whose first
+    ack attempt failed (issuer unreachable at import time, or — before the
+    same fix — reachable only via a relay the ack itself never tried) kept
+    showing "peer can't reach you back" in the UI forever, even after the
+    issuer became reachable again. A successful ping alone does not prove
+    the issuer has recorded US, so this re-runs the actual ack handshake
+    (``retry_friendship_ack``) rather than inferring it from the ping.
+    """
     if not kid or "/" in kid or "\\" in kid or ":" in kid or kid.startswith("."):
         raise HTTPException(status_code=400, detail="invalid kid")
     endpoint_path = _endpoints_dir() / f"{kid}.json"
@@ -1261,6 +1272,21 @@ def friendship_recheck(
     except Exception:  # noqa: BLE001 — reachability check is best-effort
         reachable = False
 
+    peer_knows_us = bool(cfg.get("_peer_knows_us", False))
+    peer_reports_reachable = bool(cfg.get("_peer_reports_reachable", False))
+    if reachable and not peer_knows_us:
+        try:
+            ack_result = _ft.retry_friendship_ack(kid, endpoints_dir=_endpoints_dir())
+            peer_knows_us = bool(ack_result.get("ok"))
+            peer_reports_reachable = bool(ack_result.get("reachable"))
+        except Exception:  # noqa: BLE001 — best-effort; a failed retry just leaves the hint showing
+            pass
+
+    # `state` stays purely about "can I ping them" (unchanged semantics —
+    # see StateBadge's comment in agent-hub.tsx); peer_knows_us/
+    # peer_reports_reachable are the SEPARATE bidirectional indicator the
+    # frontend's PeerKnowsUsHint renders, refreshed above but intentionally
+    # not folded into `state` itself.
     new_state = "ACTIVE" if reachable else "UNREACHABLE"
     with _pair_lock:
         for p in (_origins_dir() / f"{kid}.json", endpoint_path):
@@ -1271,9 +1297,14 @@ def friendship_recheck(
             except Exception:
                 continue
             pcfg["state"] = new_state
+            pcfg["_peer_knows_us"] = peer_knows_us
+            pcfg["_peer_reports_reachable"] = peer_reports_reachable
             _write_secure(p, pcfg)
 
-    return {"ok": True, "kid": kid, "state": new_state, "reachable": reachable}
+    return {
+        "ok": True, "kid": kid, "state": new_state, "reachable": reachable,
+        "peer_knows_us": peer_knows_us,
+    }
 
 
 # ── PATCH /remote-trigger/origins/{origin_id} ─────────────────────────

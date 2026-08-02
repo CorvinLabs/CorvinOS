@@ -463,6 +463,83 @@ class TestSendReconnectDelivery(unittest.TestCase):
                 sender.send_reconnect(ENDPOINT_ID, "https://new.example.com"))
 
 
+# ── ADR-0258 Stage 3 relay fallback for ping (2026-08-02) ───────────────────
+
+class TestPingRelayFallback(unittest.TestCase):
+    """ping()/_http_ping_probe() gained the same relay fallback send()
+    already had (ADR-0258 Stage 3) — closing the gap where a relay-only-
+    reachable peer could never be reported reachable by the console's
+    Recheck button, even once a relay was configured and enabled."""
+
+    def setUp(self) -> None:
+        self._tmp_endpoints = tempfile.TemporaryDirectory()
+        self._tmp_iid = tempfile.TemporaryDirectory()
+        self.endpoints_dir = Path(self._tmp_endpoints.name)
+        os.environ["CORVIN_INSTANCE_ID_PATH"] = str(
+            Path(self._tmp_iid.name) / "instance_id.json")
+        _write_endpoint_file(
+            self.endpoints_dir, ENDPOINT_ID,
+            "https://peer.example.com/v1/a2a/receive")
+
+    def tearDown(self) -> None:
+        os.environ.pop("CORVIN_INSTANCE_ID_PATH", None)
+        self._tmp_endpoints.cleanup()
+        self._tmp_iid.cleanup()
+
+    def _sender(self):
+        return rts.RemoteTriggerSender(endpoints_dir=self.endpoints_dir)
+
+    def test_ping_falls_back_to_relay_on_direct_failure(self):
+        import a2a_friendship as ft
+
+        def _fake_relay_deliver_and_wait(*, relay_url, my_kid, my_relay_auth_key,
+                                          to_kid, nonce_hex, ciphertext_hex,
+                                          task_id, timeout_s):
+            # Decrypt what the sender encrypted, build a valid signed pong,
+            # re-encrypt it — exactly what a real relay+peer round trip does.
+            plain = ft.decrypt_from_relay(HMAC_KEY, nonce_hex, ciphertext_hex)
+            req = json.loads(plain)
+            resp = {"ok": True, "task_id": req["ping_id"], "instance_id": "peer-iid",
+                    "protocol_version": "8", "server_time": int(time.time())}
+            resp_canon = json.dumps(resp, separators=(",", ":"), sort_keys=True)
+            resp["signature"] = _hmac.new(
+                bytes.fromhex(RECV_KEY), resp_canon.encode("utf-8"), hashlib.sha256,
+            ).hexdigest()
+            n, c = ft.encrypt_for_relay(HMAC_KEY, json.dumps(resp).encode("utf-8"))
+            return {"nonce": n, "ciphertext": c}
+
+        sender = self._sender()
+        with mock.patch.object(rts.RemoteTriggerSender, "_http_post",
+                               side_effect=rts.TransportError("connection_failed")), \
+             mock.patch("corvin_console.feature_flags.is_enabled", return_value=True), \
+             mock.patch("a2a_friendship.get_my_relay_url", return_value="ws://relay.example"), \
+             mock.patch("a2a_relay.relay_deliver_and_wait",
+                        side_effect=_fake_relay_deliver_and_wait):
+            result = sender.ping(ENDPOINT_ID, timeout_s=5)
+        self.assertTrue(result.reachable)
+
+    def test_ping_reports_unreachable_when_relay_also_unavailable(self):
+        sender = self._sender()
+        with mock.patch.object(rts.RemoteTriggerSender, "_http_post",
+                               side_effect=rts.TransportError("connection_failed")), \
+             mock.patch("corvin_console.feature_flags.is_enabled", return_value=False):
+            result = sender.ping(ENDPOINT_ID, timeout_s=5)
+        self.assertFalse(result.reachable)
+
+    def test_relay_ping_raises_when_flag_disabled(self):
+        cfg = {"hmac_key": HMAC_KEY, "endpoint_id": ENDPOINT_ID}
+        with mock.patch("corvin_console.feature_flags.is_enabled", return_value=False):
+            with self.assertRaises(rts.TransportError):
+                rts.RemoteTriggerSender._relay_ping(cfg, ENDPOINT_ID, {"ping_id": "p1"}, 5)
+
+    def test_relay_ping_raises_when_no_relay_configured(self):
+        cfg = {"hmac_key": HMAC_KEY, "endpoint_id": ENDPOINT_ID}
+        with mock.patch("corvin_console.feature_flags.is_enabled", return_value=True), \
+             mock.patch("a2a_friendship.get_my_relay_url", return_value=None):
+            with self.assertRaises(rts.TransportError):
+                rts.RemoteTriggerSender._relay_ping(cfg, ENDPOINT_ID, {"ping_id": "p1"}, 5)
+
+
 # ── ADR-0198 no-redirect POST (SSRF hardening, 2026-07-19) ──────────────────
 
 class TestNoRedirectPost(unittest.TestCase):

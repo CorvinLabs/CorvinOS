@@ -45,6 +45,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
@@ -456,13 +457,32 @@ class RelayListener:
     """Receiver-side persistent connection to a configured relay.
 
     Registers every ``kid`` this instance has an ACTIVE origin record for,
-    listens for inbound "deliver" messages, decrypts+dispatches each
-    through the SAME ``RemoteTriggerReceiver.receive()`` pipeline a direct
-    HTTP POST to /v1/a2a/receive would use, and relays the signed response
-    back. Reconnects with backoff on any drop — this is a best-effort
-    liveness bridge, not a guaranteed-delivery channel; a peer that only
-    reaches us via the relay simply retries at the send() layer like any
-    other transient failure.
+    listens for inbound "deliver" messages, decrypts+dispatches each to the
+    right handler for its shape, and relays the signed response back.
+    Reconnects with backoff on any drop — this is a best-effort liveness
+    bridge, not a guaranteed-delivery channel; a peer that only reaches us
+    via the relay simply retries at the send()/ping() layer like any other
+    transient failure.
+
+    Three disjoint payload shapes are dispatched (2026-08-02, closing the
+    gap where only real task delivery had a relay path — ping/recheck and
+    the friendship-ack handshake stayed direct-only, so the console's
+    reachability status could never reflect a relay-only-reachable peer
+    even once one was configured):
+
+    - Task envelope (``task_id``+``instruction`` present) → the SAME
+      ``RemoteTriggerReceiver.receive()`` pipeline a direct HTTP POST to
+      ``/v1/a2a/receive`` would use (unchanged from before this date).
+    - Ping request (``ping_id`` present, ADR-0199) →
+      ``a2a_http_server.process_ping_request()``, the same shared core the
+      direct ``POST /v1/a2a/ping`` route uses.
+    - Friendship-ack request (``peer_url``+``kid`` present, no ``task_id``/
+      ``ping_id``, ADR-0257) →
+      ``a2a_friendship.process_friendship_ack_request()``, the same shared
+      core the direct ``POST /v1/a2a/friendship-ack`` route uses. Requires
+      ``pending_dir``/``endpoints_dir`` to be configured; a listener built
+      without them (e.g. an older caller, or existing tests) silently
+      drops ack deliveries instead of raising — inert, not broken.
 
     Intended lifecycle: one instance constructed and run as a background
     asyncio task from an app's lifespan (see corvin_console.standalone),
@@ -470,10 +490,15 @@ class RelayListener:
     configured — inert (never constructed) otherwise.
     """
 
-    def __init__(self, *, relay_url: str, receiver: Any, origins_dir: "Any") -> None:
+    def __init__(
+        self, *, relay_url: str, receiver: Any, origins_dir: "Any",
+        pending_dir: "Any | None" = None, endpoints_dir: "Any | None" = None,
+    ) -> None:
         self._relay_url = relay_url
         self._receiver = receiver
         self._origins_dir = origins_dir
+        self._pending_dir = pending_dir
+        self._endpoints_dir = endpoints_dir
         self._stop = False
 
     def stop(self) -> None:
@@ -576,29 +601,17 @@ class RelayListener:
 
         try:
             plaintext = _ft.decrypt_from_relay(my_hmac_key, nonce, ciphertext)
-            envelope = json.loads(plaintext.decode("utf-8"))
+            payload = json.loads(plaintext.decode("utf-8"))
         except (_ft.RelayDecryptError, ValueError, UnicodeDecodeError):
             return  # tampered/corrupt — silently drop, exactly like a bad HMAC on the direct path
 
-        # A1 self-delivery guard (2026-07-30 relay redesign). The pairing kid is
-        # SHARED and identical on both peers, and derive_relay_auth_key(hmac_key)
-        # is identical too — so if both peers connect to the same relay, whoever
-        # registered the slot last receives BOTH directions, and one side could be
-        # handed its OWN outbound task back (same kid, same keys, verifies clean)
-        # and execute it as if it came from the peer. Refuse any envelope whose
-        # HMAC-covered sender_instance_id is our own local UUID: a task we sent can
-        # never be a task we should run. (The remaining routing ambiguity when both
-        # peers share a relay degrades to a send-side timeout+retry, not a wrong
-        # execution — a wire-level instance-scoped routing key is the follow-up.)
         try:
             from instance_identity import get_instance_id as _gid  # noqa: PLC0415
             _my_instance = _gid()
         except Exception:  # noqa: BLE001
             _my_instance = None
-        if _my_instance and envelope.get("sender_instance_id") == _my_instance:
-            return  # our own task, routed back to us — never execute it
 
-        # Adversarial review round 2 (2026-07-29): two fixes.
+        # Adversarial review round 2 (2026-07-29): two fixes, unchanged below.
         # (1) RemoteTriggerReceiver.receive() is SYNC and does signature verify +
         #     nonce-store DB I/O — run it off the event loop so one delivery can't
         #     stall the whole console process's asyncio loop (this listener runs as
@@ -610,8 +623,56 @@ class RelayListener:
         #     and offline. A dead socket is still noticed by the next `ws.recv()`.
         import asyncio as _asyncio
         try:
-            response = await _asyncio.to_thread(self._receiver.receive, envelope)
-            response_dict = response.to_dict()
+            if "ping_id" in payload:
+                # Ping request (ADR-0199). No signed sender_instance_id slot
+                # exists in ping_request's HMAC-covered canonical — adding
+                # one would break the direct-HTTP path's backward
+                # compatibility with older peers (the exact ADR-0198
+                # precedent for additive signed fields). The relay SENDER
+                # (remote_trigger_sender._relay_ping) instead stamps
+                # `_relay_sender_instance_id` into the plaintext AFTER
+                # signing — outside the signed contract, relay-transport-only,
+                # silently ignored by process_ping_request's own canonical
+                # reconstruction. Same A1 self-delivery protection as the
+                # task-envelope path below, applied via that field instead.
+                if _my_instance and payload.get("_relay_sender_instance_id") == _my_instance:
+                    return
+                from a2a_http_server import process_ping_request as _ppr  # noqa: PLC0415
+                _status, response_dict = _ppr(payload, self._receiver)
+            elif "peer_url" in payload and "kid" in payload and "task_id" not in payload:
+                # Friendship-ack request (ADR-0257) — same self-delivery
+                # reasoning as the ping branch above (ack requests carry no
+                # sender_instance_id slot either).
+                if _my_instance and payload.get("_relay_sender_instance_id") == _my_instance:
+                    return
+                if self._pending_dir is None or self._endpoints_dir is None:
+                    return  # ack dispatch not configured on this listener — inert
+                from a2a_friendship import process_friendship_ack_request as _pfar  # noqa: PLC0415
+                _status, response_dict = _pfar(
+                    payload, pending_dir=Path(self._pending_dir),
+                    origins_dir=Path(self._origins_dir),
+                    endpoints_dir=Path(self._endpoints_dir),
+                )
+            else:
+                # Task envelope — unchanged trust path. A1 self-delivery guard
+                # (2026-07-30 relay redesign): the pairing kid is SHARED and
+                # identical on both peers, and derive_relay_auth_key(hmac_key)
+                # is identical too — so if both peers connect to the same
+                # relay, whoever registered the slot last receives BOTH
+                # directions, and one side could be handed its OWN outbound
+                # task back (same kid, same keys, verifies clean) and execute
+                # it as if it came from the peer. Refuse any envelope whose
+                # HMAC-covered sender_instance_id is our own local UUID: a
+                # task we sent can never be a task we should run. (The
+                # remaining routing ambiguity when both peers share a relay
+                # degrades to a send-side timeout+retry, not a wrong
+                # execution — a wire-level instance-scoped routing key is the
+                # follow-up.)
+                if _my_instance and payload.get("sender_instance_id") == _my_instance:
+                    return  # our own task, routed back to us — never execute it
+                response = await _asyncio.to_thread(self._receiver.receive, payload)
+                response_dict = response.to_dict()
+
             resp_nonce, resp_ct = _ft.encrypt_for_relay(
                 my_hmac_key, json.dumps(response_dict).encode("utf-8"))
             await ws.send(json.dumps({

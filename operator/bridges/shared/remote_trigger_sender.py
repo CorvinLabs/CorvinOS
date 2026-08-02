@@ -1242,11 +1242,24 @@ class RemoteTriggerSender:
             base = base[: -len("/v1/a2a/receive")]
         ping_url = base.rstrip("/") + "/v1/a2a/ping"
 
+        # ADR-0258 Stage 3 relay fallback (2026-08-02) — mirrors send()'s
+        # Stage 1→3 ladder exactly. Without this, a peer only reachable via
+        # relay could never be reported as reachable by ping()/Recheck, even
+        # once a relay was correctly configured and enabled on both sides —
+        # the console's UNREACHABLE badge would never clear.
         try:
             raw = self._http_post(ping_url, ping_request, timeout_s)
-        except TransportError as exc:
-            error_cat, error_det = self._categorize_transport_error(exc)
-            return False, error_cat, error_det
+        except TransportError as direct_exc:
+            try:
+                raw = self._relay_ping(cfg, endpoint_id, ping_request, timeout_s)
+                self._audit_best_effort(
+                    "A2A.relay_fallback_used", "INFO",
+                    {"endpoint_id": endpoint_id, "reason": direct_exc.reason,
+                     "source": "ping"},
+                )
+            except TransportError as exc:
+                error_cat, error_det = self._categorize_transport_error(direct_exc)
+                return False, error_cat, error_det
 
         # Verify response signature with recv_key
         try:
@@ -1596,6 +1609,81 @@ class RemoteTriggerSender:
                 relay_url=relay_url, my_kid=my_kid, my_relay_auth_key=my_relay_auth_key,
                 to_kid=to_kid, nonce_hex=nonce_hex, ciphertext_hex=ct_hex,
                 task_id=task_id, timeout_s=timeout_s,
+            ))
+        except Exception as exc:  # noqa: BLE001 — a2a_relay.RelayTransportError or any transport failure
+            raise TransportError("relay_error:" + _safe_exc_type_name(exc)) from exc
+
+        try:
+            resp_plain = _ft.decrypt_from_relay(hmac_key, result["nonce"], result["ciphertext"])
+            return json.loads(resp_plain)
+        except Exception as exc:  # noqa: BLE001 — RelayDecryptError, KeyError, JSONDecodeError
+            raise TransportError("relay_response_invalid") from exc
+
+    @staticmethod
+    def _relay_ping(cfg: dict, endpoint_id: str, ping_request: dict, timeout_s: int) -> dict:
+        """ADR-0258 Stage 3 — relay fallback for the ping probe (ADR-0199).
+
+        Same transport as ``_relay_post`` (AEAD-wrapped delivery through the
+        configured relay, inert when the feature flag is off or no relay is
+        configured), but keyed on ``ping_id`` rather than ``task_id`` for the
+        ephemeral reply-slot and relay correlation, since ping_request has no
+        ``task_id`` field.
+
+        Stamps a transport-only ``_relay_sender_instance_id`` into the
+        plaintext AFTER the ping's own HMAC signature is computed — this key
+        is NOT part of the signed canonical (ping_request's signature covers
+        only ``{ping_id, issued_at, origin_id}``, unchanged), so it cannot
+        affect the direct-HTTP path or any receiver's signature verification.
+        It exists solely so the receiving ``RelayListener`` can detect and
+        drop a self-delivered ping — the shared-kid routing ambiguity
+        ADR-0261 already closed for task envelopes via the (signed)
+        ``sender_instance_id`` field, applied here without a wire-format
+        change since ping_request has no signed slot for it.
+        """
+        try:
+            from corvin_console import feature_flags as _ff  # type: ignore[import-not-found]  # noqa: PLC0415
+            if not _ff.is_enabled("a2a_relay_fallback"):
+                raise TransportError("relay_fallback_disabled")
+        except ImportError:
+            raise TransportError("relay_fallback_disabled")
+
+        import a2a_friendship as _ft  # type: ignore[import-not-found]  # noqa: PLC0415
+
+        relay_url = _ft.get_my_relay_url()
+        if not relay_url:
+            raise TransportError("relay_not_configured")
+
+        hmac_key = cfg.get("hmac_key", "")
+        to_kid = cfg.get("endpoint_id") or endpoint_id
+        if not hmac_key or not to_kid:
+            raise TransportError("relay_endpoint_config_incomplete")
+
+        ping_id = ping_request.get("ping_id", "")
+        my_kid = f"{to_kid}:reply:{ping_id}"
+
+        import secrets as _secrets  # noqa: PLC0415
+        my_relay_auth_key = _secrets.token_hex(32)  # ephemeral, single-use — no TOFU needed
+
+        try:
+            import instance_identity as _iid  # type: ignore[import-not-found]  # noqa: PLC0415
+            my_instance_id = _iid.get_instance_id()
+        except Exception:  # noqa: BLE001
+            my_instance_id = ""
+
+        relay_payload = dict(ping_request)
+        relay_payload["_relay_sender_instance_id"] = my_instance_id
+
+        try:
+            import a2a_relay as _relay  # type: ignore[import-not-found]  # noqa: PLC0415
+            import asyncio as _asyncio  # noqa: PLC0415
+
+            plaintext = json.dumps(relay_payload).encode("utf-8")
+            nonce_hex, ct_hex = _ft.encrypt_for_relay(hmac_key, plaintext)
+
+            result = _asyncio.run(_relay.relay_deliver_and_wait(
+                relay_url=relay_url, my_kid=my_kid, my_relay_auth_key=my_relay_auth_key,
+                to_kid=to_kid, nonce_hex=nonce_hex, ciphertext_hex=ct_hex,
+                task_id=ping_id, timeout_s=timeout_s,
             ))
         except Exception as exc:  # noqa: BLE001 — a2a_relay.RelayTransportError or any transport failure
             raise TransportError("relay_error:" + _safe_exc_type_name(exc)) from exc

@@ -1319,33 +1319,90 @@ class _AckNoRedirect(_urllib_request.HTTPRedirectHandler):
         return None
 
 
-def send_friendship_ack(
-    token: FriendshipToken, *, my_url: str, my_label: str | None = None,
-    timeout_s: float = 10,
-) -> dict[str, Any]:
-    """Redeemer-side (B): notify the issuer (A) that their token was
-    imported, so A can complete a RECIPROCAL pairing in this SAME round trip
-    instead of requiring a second, independent token exchange in reverse.
+def _relay_send_ack(
+    to_kid: str, hmac_key: str, req_body: dict[str, Any], timeout_s: float,
+) -> dict[str, Any] | None:
+    """ADR-0258 Stage 3 — relay fallback for the B->A friendship-ack POST.
 
-    Signed with the hmac_key BOTH sides derive independently from the
-    token's shared key (_derive_channel_keys) — no separate credential, no
-    extra operator step. Best-effort: any failure returns
-    ``{"ok": False, "error": <category>}`` and NEVER raises — a network
-    hiccup here must not break the LOCAL import that already succeeded.
+    Mirrors ``remote_trigger_sender._relay_post``'s transport (same AEAD
+    wrapping, same relay wire protocol, same feature-flag/relay-URL guards)
+    but returns ``None`` on any failure instead of raising — this module has
+    no ``TransportError`` type of its own, and the caller
+    (:func:`send_friendship_ack`) already treats ``None`` identically to a
+    direct-path failure (``{"ok": False, "error": "unreachable"}``).
+
+    ``req_body`` already carries its own signature (covering only
+    ``{kid, issued_at, peer_url, peer_label?}`` — unchanged); a
+    ``_relay_sender_instance_id`` marker is stamped into the plaintext
+    AFTER that signature so the receiving ``RelayListener`` can detect and
+    drop a self-delivered ack, without altering the signed contract the
+    direct-HTTP ``/v1/a2a/friendship-ack`` route also verifies.
+    """
+    try:
+        from corvin_console import feature_flags as _ff  # type: ignore[import-not-found]
+        if not _ff.is_enabled("a2a_relay_fallback"):
+            return None
+    except ImportError:
+        return None
+
+    relay_url = get_my_relay_url()
+    if not relay_url:
+        return None
+
+    correlation_id = secrets.token_hex(16)
+    my_kid = f"{to_kid}:reply:{correlation_id}"
+    my_relay_auth_key = secrets.token_hex(32)  # ephemeral, single-use — no TOFU needed
+
+    try:
+        from instance_identity import get_instance_id as _get_iid  # type: ignore[import-not-found]
+        my_instance_id = _get_iid()
+    except Exception:  # noqa: BLE001
+        my_instance_id = ""
+
+    relay_payload = dict(req_body)
+    relay_payload["_relay_sender_instance_id"] = my_instance_id
+
+    try:
+        import a2a_relay as _relay  # type: ignore[import-not-found]
+        import asyncio as _asyncio
+
+        plaintext = json.dumps(relay_payload).encode("utf-8")
+        nonce_hex, ct_hex = encrypt_for_relay(hmac_key, plaintext)
+
+        result = _asyncio.run(_relay.relay_deliver_and_wait(
+            relay_url=relay_url, my_kid=my_kid, my_relay_auth_key=my_relay_auth_key,
+            to_kid=to_kid, nonce_hex=nonce_hex, ciphertext_hex=ct_hex,
+            task_id=correlation_id, timeout_s=timeout_s,
+        ))
+        resp_plain = decrypt_from_relay(hmac_key, result["nonce"], result["ciphertext"])
+        return json.loads(resp_plain)
+    except Exception:  # noqa: BLE001 — connect/registration/delivery/decrypt failure
+        return None
+
+
+def _ack_round_trip(
+    *, kid: str, hmac_key: str, recv_key: str, issuer_url: str, my_url: str,
+    my_label: str | None, timeout_s: float,
+) -> dict[str, Any]:
+    """Shared core: build+sign a friendship-ack request against ``issuer_url``,
+    POST it (falling back to the relay on direct failure), and verify the
+    signed response. Used by both :func:`send_friendship_ack` (fresh
+    import, derives keys from the token) and :func:`retry_friendship_ack`
+    (recheck refresh, reuses the ALREADY-derived keys already persisted on
+    disk — the raw shared token key is never stored after import, so a
+    retry cannot re-derive it and must go through this keys-based path
+    instead). Best-effort: never raises.
     """
     import urllib.error as _urlerr
     import urllib.request as _urlreq
 
-    if not token.url:
-        return {"ok": False, "error": "no_issuer_url"}
     my_url = (my_url or "").strip().rstrip("/")
     if not my_url:
         return {"ok": False, "error": "no_own_url"}
 
-    hmac_key, recv_key = _derive_channel_keys(token.key)
     issued_at = int(time.time())
     req_body: dict[str, Any] = {
-        "kid": token.kid,
+        "kid": kid,
         "issued_at": issued_at,
         "peer_url": my_url,
     }
@@ -1357,7 +1414,7 @@ def send_friendship_ack(
         bytes.fromhex(hmac_key), canonical.encode("utf-8"), "sha256",
     ).hexdigest()
 
-    ack_url = token.url.rstrip("/") + "/v1/a2a/friendship-ack"
+    ack_url = issuer_url.rstrip("/") + "/v1/a2a/friendship-ack"
     opener = _urlreq.build_opener(_AckNoRedirect())
     data = json.dumps(req_body).encode("utf-8")
     http_req = _urlreq.Request(
@@ -1373,7 +1430,15 @@ def send_friendship_ack(
     except _urlerr.HTTPError as exc:
         return {"ok": False, "error": f"http_{exc.code}"}
     except (_urlerr.URLError, OSError, TimeoutError):
-        return {"ok": False, "error": "unreachable"}
+        # ADR-0258 Stage 3 (2026-08-02): the issuer's direct URL is
+        # unreachable — try the relay before giving up. Without this, an
+        # issuer only reachable via relay (the exact CGNAT/hotspot scenario
+        # ADR-0258 was written for) can never complete the reciprocal
+        # handshake, so `_peer_knows_us` stays permanently false even once a
+        # relay is configured and enabled on both sides.
+        payload = _relay_send_ack(kid, hmac_key, req_body, timeout_s)
+        if payload is None:
+            return {"ok": False, "error": "unreachable"}
     except (ValueError, UnicodeDecodeError):
         return {"ok": False, "error": "invalid_response"}
 
@@ -1396,6 +1461,84 @@ def send_friendship_ack(
         "reachable": bool(payload.get("reachable", False)),
         "peer_instance_id": payload.get("instance_id"),
     }
+
+
+def send_friendship_ack(
+    token: FriendshipToken, *, my_url: str, my_label: str | None = None,
+    timeout_s: float = 10,
+) -> dict[str, Any]:
+    """Redeemer-side (B): notify the issuer (A) that their token was
+    imported, so A can complete a RECIPROCAL pairing in this SAME round trip
+    instead of requiring a second, independent token exchange in reverse.
+
+    Signed with the hmac_key BOTH sides derive independently from the
+    token's shared key (_derive_channel_keys) — no separate credential, no
+    extra operator step. Best-effort: any failure returns
+    ``{"ok": False, "error": <category>}`` and NEVER raises — a network
+    hiccup here must not break the LOCAL import that already succeeded.
+    """
+    if not token.url:
+        return {"ok": False, "error": "no_issuer_url"}
+    if not (my_url or "").strip():
+        return {"ok": False, "error": "no_own_url"}
+
+    hmac_key, recv_key = _derive_channel_keys(token.key)
+    return _ack_round_trip(
+        kid=token.kid, hmac_key=hmac_key, recv_key=recv_key,
+        issuer_url=token.url, my_url=my_url, my_label=my_label,
+        timeout_s=timeout_s,
+    )
+
+
+def retry_friendship_ack(
+    kid: str, *, endpoints_dir: Path, my_label: str | None = None,
+    timeout_s: float = 10,
+) -> dict[str, Any]:
+    """Re-attempt the reciprocal ack for an EXISTING connection (recheck
+    refresh, 2026-08-02) — without redoing the whole token exchange.
+
+    The initial :func:`send_friendship_ack` (at import time) is the only
+    place ``_peer_knows_us`` is ever set; a plain reachability recheck
+    (``friendship_recheck`` in ``routes/a2a_pair.py``) only re-pings and
+    never touched it, so a connection whose first ack attempt failed
+    (issuer unreachable at import time, or — before this fix — reachable
+    only via a relay the ack itself never tried) stayed stuck showing
+    "peer can't reach you back" forever, even after the issuer became
+    reachable again. This reuses the ALREADY-derived ``hmac_key``/
+    ``recv_key`` persisted in the endpoint file (the raw shared token key
+    itself is discarded after import, so a genuine re-derivation is not
+    possible — nor needed, since these derived keys are exactly what the
+    ack round trip signs and verifies with).
+
+    Returns the same shape as :func:`send_friendship_ack`. Best-effort:
+    never raises; a missing/unreadable endpoint file or missing own URL
+    returns ``{"ok": False, "error": ...}`` like any other failure.
+    """
+    endpoint_path = Path(endpoints_dir) / f"{kid}.json"
+    try:
+        cfg = json.loads(endpoint_path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {"ok": False, "error": "endpoint_unreadable"}
+    if not cfg.get("_friendship"):
+        return {"ok": False, "error": "not_a_friendship_connection"}
+
+    hmac_key = cfg.get("hmac_key")
+    recv_key = cfg.get("recv_key")
+    issuer_url = cfg.get("url") or ""
+    if issuer_url.endswith("/v1/a2a/receive"):
+        issuer_url = issuer_url[: -len("/v1/a2a/receive")]
+    if not (isinstance(hmac_key, str) and isinstance(recv_key, str) and issuer_url):
+        return {"ok": False, "error": "endpoint_config_incomplete"}
+
+    my_url = get_my_url()
+    if not my_url:
+        return {"ok": False, "error": "no_own_url"}
+
+    return _ack_round_trip(
+        kid=kid, hmac_key=hmac_key, recv_key=recv_key,
+        issuer_url=issuer_url, my_url=my_url, my_label=my_label,
+        timeout_s=timeout_s,
+    )
 
 
 def process_friendship_ack_request(
