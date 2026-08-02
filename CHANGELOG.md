@@ -7,7 +7,7 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
-## [0.10.89] — 2026-08-02 — console audit AttributeError + path-gate MSYS hardening
+## [0.10.90] — 2026-08-02 — console audit AttributeError + path-gate MSYS hardening
 
 Investigated a diagnostic report from a live Windows CorvinOS instance (a different
 machine than this dev environment).
@@ -39,6 +39,14 @@ machine than this dev environment).
 `test_audit_system_event.py` (4 tests, including an AST check that pins the real call
 sites' kwargs against the fixed function's signature) and
 `test_path_gate_windows_msys.py` (6 tests, `sys.platform`-mocked).
+
+Also fixed a pre-existing CI test-gate bug found while cutting this release (unrelated
+to the two fixes above): `operator/forge/tests/test_forge.py`'s
+`test_windows_preexec_fn_skipped` mutated the real, process-wide `sys.platform`
+attribute to simulate Windows, which leaked into `shutil.which()`'s own internal
+`sys.platform` check and crashed with `AttributeError` on real POSIX CI runners
+(`_winapi` is only ever bound on real Windows). Fixed by passing `use_sandbox=False`
+to skip the affected code path without touching what the test actually verifies.
 
 ## [0.10.88] — 2026-08-02 — fresh-install-vs-upgrade parity + remaining Windows/bridge gaps
 
