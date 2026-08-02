@@ -72,7 +72,14 @@ approach generalizes beyond this one file."
    or update a companion SkillForge skill (`skill_create`/`skill_promote`, `type:
    learned-experience`, `scope: project`) distilling the Method section, pointing back at the
    full concept file for depth. Record the skill name in the concept's `skills:` frontmatter
-   field.
+   field. **Then immediately call `skill_grade` once** — `skill_inject.py`'s injection gate
+   excludes any skill with `n_grades < 1 or mean_score <= 0` by default
+   (`inject_ungraded` defaults `False`), and a brand-new skill has **no organic path to its own
+   first grade** (auto-grading only scores skills that were already injected — a real
+   chicken-and-egg gap, found via adversarial review 2026-08-02, see CONCEPT-0001's Amendment).
+   Score the bootstrap grade at the codebase's own `_AUTO_GRADE_CAP_MAX` ceiling (0.3), with
+   notes disclosing it as a manual seed, not earned usage. Skipping this step leaves the skill
+   inert on disk forever.
 6. **If no:** name the skip reason in one sentence in your summary.
 
 ## Concept Destination
@@ -168,7 +175,16 @@ the concept's `skills:` field, not the name you originally intended.
   read real code first, separate CONFIRMED from PLAUSIBLE, verify live when proportionate, fix
   the structural root cause, check for a deeper bug before stopping, test what a regression
   would look like, close the loop with docs+release+deploy-verify in the same change. Companion
-  skill: `assistant.corvinOS_live_report_root_cause` (project scope).
+  skill: `assistant.corvinOS_live_report_root_cause` (project scope), bootstrap-graded (0.3,
+  manual seed) same day after adversarial review found the zero-grade injection gap above.
+
+**Known, separately tracked gap (not blocking, not caused by this concept):**
+`SkillRegistry._write_slot()`'s plugin-slot mirror for Claude Code's native engine skill loader
+resolves to `<CORVIN_HOME>/plugin-slot/` whenever `CORVIN_HOME` is set — true for essentially
+every real live session, not just the test sandboxes the code comment names. This likely makes
+that second surfacing path structurally unreachable in normal production use, for every
+SkillForge-created skill, not specific to this framework. Flagged in CONCEPT-0001's Amendment;
+not fixed here (shared registry precedence, needs its own investigation).
 
 ## Related
 
