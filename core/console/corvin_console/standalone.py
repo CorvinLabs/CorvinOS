@@ -339,10 +339,24 @@ def create_app() -> FastAPI:
                 if _relay_url:
                     import asyncio as _relay_asyncio
                     import a2a_relay as _relay_mod  # type: ignore[import-not-found]
-                    from .routes.a2a_pair import _origins_dir as _relay_origins_dir
+                    from .routes.a2a_pair import (
+                        _origins_dir as _relay_origins_dir,
+                        _pending_friendships_dir as _relay_pending_dir,
+                        _endpoints_dir as _relay_endpoints_dir,
+                    )
+                    # pending_dir/endpoints_dir (2026-08-02): without these,
+                    # the listener can still relay real task traffic but
+                    # silently drops friendship-ack deliveries (see
+                    # RelayListener._handle_deliver's "ack dispatch not
+                    # configured" inert-return) — a peer only reachable via
+                    # relay could complete a ping round trip but never finish
+                    # the initial reciprocal-ack handshake, leaving
+                    # `_peer_knows_us` stuck false forever.
                     _relay_listener = _relay_mod.RelayListener(
                         relay_url=_relay_url, receiver=_a2a_receiver,
                         origins_dir=_relay_origins_dir(),
+                        pending_dir=_relay_pending_dir(),
+                        endpoints_dir=_relay_endpoints_dir(),
                     )
                     _relay_task = _relay_asyncio.create_task(_relay_listener.run_forever())
                     log.info("A2A relay listener started: %s", _relay_url)

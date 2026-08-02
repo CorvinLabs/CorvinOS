@@ -362,5 +362,130 @@ class TestRelayListenerRobustness(unittest.TestCase):
         self.assertEqual(ws.sent, [])
 
 
+class TestRelayListenerPingAckDispatch(unittest.TestCase):
+    """2026-08-02: ping (ADR-0199) and friendship-ack (ADR-0257) requests now
+    also have a relay fallback, closing the gap where only real task delivery
+    was relay-routable — the console's Recheck button and the initial
+    reciprocal-ack handshake stayed direct-only, so status could never
+    reflect a relay-only-reachable peer. These three shapes are dispatched
+    disjointly in _handle_deliver: task envelope (unchanged), ping request
+    (`ping_id` present), friendship-ack request (`peer_url`+`kid`, no
+    `task_id`/`ping_id`)."""
+
+    def _listener(self, receiver=None, *, pending_dir=None, endpoints_dir=None):
+        import unittest.mock as mock
+        return relay.RelayListener(
+            relay_url="ws://x", receiver=receiver or mock.Mock(),
+            origins_dir="/tmp/nope", pending_dir=pending_dir, endpoints_dir=endpoints_dir,
+        )
+
+    def test_ping_shaped_delivery_dispatches_to_process_ping_request(self):
+        import unittest.mock as mock
+        k = _key()
+        ping_req = {"ping_id": "p1", "issued_at": 123, "origin_id": "o1", "signature": "sig"}
+        nonce, ct = ft.encrypt_for_relay(k, json.dumps(ping_req).encode("utf-8"))
+        delivery = {"to_kid": "meKid", "from_kid": "peerKid", "nonce": nonce,
+                    "ciphertext": ct, "task_id": "t1"}
+        lst = self._listener()
+        ws = _FakeWS()
+        with mock.patch("a2a_http_server.process_ping_request",
+                        return_value=(200, {"ok": True, "task_id": "p1"})) as ppr:
+            asyncio.run(lst._handle_deliver(ws, delivery, {"meKid": k}))
+        ppr.assert_called_once()
+        called_payload = ppr.call_args[0][0]
+        self.assertEqual(called_payload["ping_id"], "p1")
+        self.assertEqual(len(ws.sent), 1)
+        sent = json.loads(ws.sent[0])
+        pt = ft.decrypt_from_relay(k, sent["nonce"], sent["ciphertext"])
+        self.assertEqual(json.loads(pt), {"ok": True, "task_id": "p1"})
+
+    def test_ping_self_delivery_is_refused(self):
+        import unittest.mock as mock
+        k = _key()
+        ping_req = {"ping_id": "p1", "issued_at": 123, "origin_id": "o1",
+                    "signature": "sig", "_relay_sender_instance_id": "me-uuid"}
+        nonce, ct = ft.encrypt_for_relay(k, json.dumps(ping_req).encode("utf-8"))
+        delivery = {"to_kid": "meKid", "from_kid": "peerKid", "nonce": nonce,
+                    "ciphertext": ct, "task_id": "t1"}
+        lst = self._listener()
+        ws = _FakeWS()
+        with mock.patch("instance_identity.get_instance_id", return_value="me-uuid"), \
+             mock.patch("a2a_http_server.process_ping_request") as ppr:
+            asyncio.run(lst._handle_deliver(ws, delivery, {"meKid": k}))
+        ppr.assert_not_called()
+        self.assertEqual(ws.sent, [])
+
+    def test_ack_shaped_delivery_dispatches_when_configured(self):
+        import unittest.mock as mock
+        k = _key()
+        ack_req = {"kid": "meKid", "issued_at": 123, "peer_url": "http://peer",
+                   "signature": "sig"}
+        nonce, ct = ft.encrypt_for_relay(k, json.dumps(ack_req).encode("utf-8"))
+        delivery = {"to_kid": "meKid", "from_kid": "peerKid", "nonce": nonce,
+                    "ciphertext": ct, "task_id": "t1"}
+        lst = self._listener(pending_dir="/tmp/pending", endpoints_dir="/tmp/endpoints")
+        ws = _FakeWS()
+        with mock.patch("a2a_friendship.process_friendship_ack_request",
+                        return_value=(200, {"ok": True, "kid": "meKid"})) as pfar:
+            asyncio.run(lst._handle_deliver(ws, delivery, {"meKid": k}))
+        pfar.assert_called_once()
+        _args, kwargs = pfar.call_args
+        self.assertEqual(kwargs["pending_dir"], Path("/tmp/pending"))
+        self.assertEqual(kwargs["endpoints_dir"], Path("/tmp/endpoints"))
+        self.assertEqual(len(ws.sent), 1)
+
+    def test_ack_shaped_delivery_is_inert_when_not_configured(self):
+        """A listener built without pending_dir/endpoints_dir (e.g. an older
+        caller, or the existing task-only tests above) must silently drop an
+        ack delivery instead of raising."""
+        import unittest.mock as mock
+        k = _key()
+        ack_req = {"kid": "meKid", "issued_at": 123, "peer_url": "http://peer",
+                   "signature": "sig"}
+        nonce, ct = ft.encrypt_for_relay(k, json.dumps(ack_req).encode("utf-8"))
+        delivery = {"to_kid": "meKid", "from_kid": "peerKid", "nonce": nonce,
+                    "ciphertext": ct, "task_id": "t1"}
+        lst = self._listener()  # pending_dir/endpoints_dir both None
+        ws = _FakeWS()
+        with mock.patch("a2a_friendship.process_friendship_ack_request") as pfar:
+            asyncio.run(lst._handle_deliver(ws, delivery, {"meKid": k}))
+        pfar.assert_not_called()
+        self.assertEqual(ws.sent, [])
+
+    def test_ack_self_delivery_is_refused(self):
+        import unittest.mock as mock
+        k = _key()
+        ack_req = {"kid": "meKid", "issued_at": 123, "peer_url": "http://peer",
+                   "signature": "sig", "_relay_sender_instance_id": "me-uuid"}
+        nonce, ct = ft.encrypt_for_relay(k, json.dumps(ack_req).encode("utf-8"))
+        delivery = {"to_kid": "meKid", "from_kid": "peerKid", "nonce": nonce,
+                    "ciphertext": ct, "task_id": "t1"}
+        lst = self._listener(pending_dir="/tmp/pending", endpoints_dir="/tmp/endpoints")
+        ws = _FakeWS()
+        with mock.patch("instance_identity.get_instance_id", return_value="me-uuid"), \
+             mock.patch("a2a_friendship.process_friendship_ack_request") as pfar:
+            asyncio.run(lst._handle_deliver(ws, delivery, {"meKid": k}))
+        pfar.assert_not_called()
+        self.assertEqual(ws.sent, [])
+
+    def test_task_envelope_dispatch_still_works_alongside_new_shapes(self):
+        """Regression guard: adding the ping/ack branches must not change the
+        existing task-envelope path's dispatch."""
+        import unittest.mock as mock
+        k = _key()
+        receiver = mock.Mock()
+        resp = mock.Mock()
+        resp.to_dict.return_value = {"ok": True}
+        receiver.receive.return_value = resp
+        nonce, ct = ft.encrypt_for_relay(k, b'{"task_id":"t1","instruction":"x"}')
+        delivery = {"to_kid": "meKid", "from_kid": "peerKid", "nonce": nonce,
+                    "ciphertext": ct, "task_id": "t1"}
+        lst = self._listener(receiver)
+        ws = _FakeWS()
+        asyncio.run(lst._handle_deliver(ws, delivery, {"meKid": k}))
+        receiver.receive.assert_called_once()
+        self.assertEqual(len(ws.sent), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
