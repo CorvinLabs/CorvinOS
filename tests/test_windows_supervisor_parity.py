@@ -218,6 +218,81 @@ class TestScheduledTaskArgumentQuoting:
         )
 
 
+class TestBridgeUpDaemonIsDetached:
+    """2026-08-02 real bug, reported live: `bridge.ps1 up`'s node-daemon
+    launch used `& node $BridgeScript` — the call operator (`&`) runs node as
+    a DIRECT CHILD of the invoking PowerShell session, sharing its console.
+    Closing that terminal window kills the whole process tree, daemon
+    included. `Start-Process` (without -NoNewWindow) gives the child its OWN
+    independent console instead — -WindowStyle Hidden just keeps that
+    separate console invisible; the child's lifecycle is no longer tied to
+    the caller's window at all. This is the same pattern the "console" case
+    in the same file already used (Start-Process ... -WindowStyle Hidden)."""
+
+    def test_up_case_does_not_attach_the_daemon_to_the_caller_console(self) -> None:
+        src = _BRIDGE_PS1.read_text(encoding="utf-8")
+        up_idx = src.index('"up" {')
+        doctor_idx = src.index('"doctor" {')
+        window = src[up_idx:doctor_idx]
+        assert "& node $BridgeScript" not in window, (
+            "bridge.ps1: the 'up' case must not launch node via the call "
+            "operator (&) — that attaches the daemon to the caller's own "
+            "console, so closing that terminal kills the bridge"
+        )
+
+    def test_up_case_uses_start_process_hidden_for_the_daemon(self) -> None:
+        src = _BRIDGE_PS1.read_text(encoding="utf-8")
+        up_idx = src.index('"up" {')
+        doctor_idx = src.index('"doctor" {')
+        window = src[up_idx:doctor_idx]
+        assert "Start-Process" in window and '-FilePath "node"' in window, (
+            "bridge.ps1: the 'up' case must launch node via Start-Process, "
+            "not the call operator"
+        )
+        assert "-WindowStyle Hidden" in window, (
+            "bridge.ps1: the 'up' case's node launch must be -WindowStyle "
+            "Hidden — a Minimized/Normal/Maximized window is still closable"
+        )
+        assert "-NoNewWindow" not in window, (
+            "bridge.ps1: the 'up' case must NOT pass -NoNewWindow — that "
+            "would put the daemon back on the caller's own console, the "
+            "exact thing -WindowStyle Hidden's separate console avoids"
+        )
+
+    def test_up_case_captures_daemon_output_to_a_log_file(self) -> None:
+        """A detached process's stdout/stderr is invisible in the terminal —
+        must not be silently discarded (the WhatsApp pairing QR code and any
+        daemon startup error both go through this output)."""
+        src = _BRIDGE_PS1.read_text(encoding="utf-8")
+        up_idx = src.index('"up" {')
+        doctor_idx = src.index('"doctor" {')
+        window = src[up_idx:doctor_idx]
+        assert "-RedirectStandardOutput" in window, (
+            "bridge.ps1: the 'up' case must capture the detached daemon's "
+            "stdout to a log file"
+        )
+
+
+class TestSupervisorBridgeRecursionHidden:
+    """corvin-supervisor.ps1's "bridge" target recurses into `bridge.ps1 up`
+    via a nested powershell.exe — that nested process's OWN -WindowStyle
+    switch should be Hidden too (belt-and-suspenders alongside the outer
+    Start-Process's -NoNewWindow), matching every other Scheduled-Task
+    action string in this codebase (install.ps1, bridge.ps1's own
+    Install-AutostartTask)."""
+
+    def test_bridge_target_arglist_passes_windowstyle_hidden(self) -> None:
+        src = _SUPERVISOR.read_text(encoding="utf-8")
+        idx = src.index('$FilePath = "powershell.exe"')
+        window = src[idx:idx + 300]
+        assert '"-WindowStyle", "Hidden"' in window or "-WindowStyle Hidden" in window, (
+            "corvin-supervisor.ps1: the bridge-target recursion into "
+            "bridge.ps1 must pass -WindowStyle Hidden to the nested "
+            "powershell.exe, matching every other Scheduled-Task action "
+            "string in this codebase"
+        )
+
+
 if __name__ == "__main__":
     import sys
 
@@ -232,5 +307,11 @@ if __name__ == "__main__":
     t3 = TestNoClosableWindow()
     t3.test_no_closable_windowstyle_anywhere()
     t3.test_install_ps1_fallback_start_uses_hidden()
+    t4 = TestBridgeUpDaemonIsDetached()
+    t4.test_up_case_does_not_attach_the_daemon_to_the_caller_console()
+    t4.test_up_case_uses_start_process_hidden_for_the_daemon()
+    t4.test_up_case_captures_daemon_output_to_a_log_file()
+    t5 = TestSupervisorBridgeRecursionHidden()
+    t5.test_bridge_target_arglist_passes_windowstyle_hidden()
     print("all tests passed")
     sys.exit(0)
