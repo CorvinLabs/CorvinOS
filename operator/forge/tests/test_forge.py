@@ -291,7 +291,22 @@ def test_windows_preexec_fn_skipped():
         with tempfile.TemporaryDirectory() as td:
             reg = Registry(Path(td))
             reg.create("echo", "echo tool", ECHO_SCHEMA, ECHO_IMPL)
-            r = run_tool(reg, "echo", {"msg": "hi"}, permission_mode="yes")
+            # use_sandbox=False: setting sys.platform="win32" above is a raw
+            # attribute mutation on the real, process-wide sys module (there
+            # is only ever one), not a scoped mock — every stdlib call made
+            # while it's set sees "win32" too. use_sandbox=True would reach
+            # have_bwrap() -> shutil.which("bwrap"), whose CPython
+            # implementation branches on sys.platform == "win32" and then
+            # dereferences _winapi.NeedCurrentDirectoryForExePath — but
+            # _winapi is only ever bound when the REAL os.name is "nt", so on
+            # an actual POSIX CI runner it's None, crashing with
+            # AttributeError before this test ever reaches its own
+            # assertion. use_sandbox=False skips have_bwrap() entirely
+            # (line ~550: `if use_sandbox and have_bwrap()`) without
+            # affecting preexec_fn's computation, which happens later and
+            # unconditionally (line ~957) — the thing this test verifies.
+            r = run_tool(reg, "echo", {"msg": "hi"}, permission_mode="yes",
+                         use_sandbox=False)
         t("tool still runs correctly under simulated Windows", r.ok)
         t("preexec_fn is None when sys.platform == 'win32'",
           captured.get("preexec_fn") is None,
