@@ -684,3 +684,34 @@ hardened after an adversarial review:
 - **Off-loop ack.** Both hosts' friendship-ack routes run the sync
   `process_friendship_ack_request` via `asyncio.to_thread` so one ack cannot freeze the
   event loop.
+
+## Relay config surface + path visibility (ADR-0258, 2026-08-03)
+
+Previously the `a2a_relay_fallback` flag's own description promised a Console UI
+("Settings -> A2A -> Relay URL") that did not exist — the relay URL could only be set via
+`CORVIN_A2A_RELAY_URL` or by hand-editing `~/.corvin/global/remote_trigger/my_a2a_relay_url`.
+This closed that gap, plus two related ones (no visibility into which transport actually
+answered, no single contextual action to enable relay for a struggling peer):
+
+- `GET`/`POST /remote-trigger/pair/relay-url` (`a2a_pair.py`) — Console-facing relay URL
+  config, validated for `ws://`/`wss://` scheme, non-empty host, no embedded credentials.
+- `POST /remote-trigger/pair/friendship/{kid}/enable-relay` — one-click opt-in surfaced in
+  the pairing/recheck UI exactly when a direct connection to that peer fails. Sets the relay
+  URL if given, flips `a2a_relay_fallback` via the SAME tenant overlay `feature_flags.
+  set_enabled` / the Settings toggle both use (audited as `a2a.relay.enabled_for_peer`,
+  fully visible afterward with `source="console"` — nothing hidden), then re-verifies
+  reachability. The flag stays instance-wide and OFF by default on every fresh install —
+  this endpoint only collapses the number of manual steps once an operator has decided, for
+  one peer, to allow it.
+- `PingResult.via` (`"direct"` | `"relay"`) — `remote_trigger_sender.ping()` now reports
+  which transport actually answered; `friendship_recheck`/`friendship_connections` persist it
+  as a sticky `_last_via` field (survives a subsequent failed recheck) and expose it as
+  `via`. The Console shows a "via relay" badge next to the state badge.
+- A 60 s client-side poll re-runs recheck for any `UNREACHABLE` connection automatically
+  (self-healing), deliberately slower than the read-only 15 s list refetch since each poll is
+  a real network probe — and, when it falls back, real traffic through a third party.
+
+**Explicitly NOT built here** (see ADR-0258's 2026-08-03 status entry): a CorvinOS-Labs-
+operated public default relay. That would remove the "you must supply a relay host"
+step entirely, but is a separate infrastructure/hosting/liability decision left undecided —
+self-hosting a relay (`python -m a2a_relay`) remains the only supported path.

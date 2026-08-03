@@ -3144,6 +3144,10 @@ export interface FriendshipConnection {
   expires: number | null;
   peer_knows_us: boolean;
   peer_reports_reachable: boolean;
+  // ADR-0258 Stage 3 — which transport last answered a successful ping
+  // ("direct" | "relay"), or null if never successfully reached yet.
+  // Sticky across a failed recheck (last known-good path).
+  via: "direct" | "relay" | null;
 }
 
 export interface FriendshipConnectionsResponse {
@@ -3226,9 +3230,44 @@ export async function listFriendshipConnections(
 export async function recheckFriendshipConnection(
   kid: string,
   csrf: string,
-): Promise<{ ok: boolean; kid: string; state: string; reachable: boolean }> {
+): Promise<{ ok: boolean; kid: string; state: string; reachable: boolean; via: string | null }> {
   return api(`/remote-trigger/pair/friendship/${encodeURIComponent(kid)}/recheck`, {
     method: "POST",
+    csrf,
+  });
+}
+
+// ── ADR-0258 Stage 3 — relay config (2026-08-03) ──────────────────────────
+
+export interface RelayUrlResponse {
+  url: string | null;
+  flag_enabled: boolean;
+}
+
+export async function getA2ARelayUrl(signal?: AbortSignal): Promise<RelayUrlResponse> {
+  return api<RelayUrlResponse>("/remote-trigger/pair/relay-url", { signal });
+}
+
+export async function setA2ARelayUrl(url: string, csrf: string): Promise<{ ok: boolean; url: string }> {
+  return api("/remote-trigger/pair/relay-url", {
+    method: "POST",
+    body: { url },
+    csrf,
+  });
+}
+
+// One-click, contextual opt-in surfaced when a direct connection to a peer
+// fails: sets the relay URL (if given) and flips the a2a_relay_fallback
+// flag (same tenant overlay Settings -> Features uses), then re-verifies
+// reachability through the same path a manual Recheck would use.
+export async function enableRelayForPeer(
+  kid: string,
+  relayUrl: string,
+  csrf: string,
+): Promise<{ ok: boolean; kid: string; state: string; reachable: boolean; via: string | null; relay_enabled: boolean }> {
+  return api(`/remote-trigger/pair/friendship/${encodeURIComponent(kid)}/enable-relay`, {
+    method: "POST",
+    body: { relay_url: relayUrl },
     csrf,
   });
 }
