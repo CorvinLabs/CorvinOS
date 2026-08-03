@@ -112,16 +112,48 @@ except Exception:
     _load_a2a_manifest = None  # type: ignore[assignment]
 
 def _default_repo_relative(*parts: str) -> Path:
-    """<repo_root>/operator/<parts>, found by walking up for a repo marker
-    rather than a fixed Path.parents[N] index (2026-08-01: a minimal
-    standalone deployment of this file — e.g. dropped onto a bare Windows
-    box with only its direct stdlib-only dependencies, no full repo tree
-    beneath it — sits shallower than the repo layout assumes, and
-    parents[2] raised IndexError at IMPORT TIME, crashing the whole module
-    before any caller-supplied dir even had a chance to be used). Falls
-    back to a directory next to this file when no repo root is found,
-    matching paths.py::_repo_root()'s own fallback shape. Mirrors the
-    identical fix in remote_trigger_sender.py::_default_endpoints_dir()."""
+    """<repo_root>/operator/<parts>.
+
+    Resolution order (2026-08-04 — found live debugging a real installed
+    deployment where this landed on a DIFFERENT directory than
+    ``core/console/corvin_console/routes/a2a_pair.py``'s own default,
+    silently splitting one instance's inbound-origin storage from its
+    Console-side friendship-ack writer: the ack wrote a valid origin file,
+    the receiver's OWN registry never saw it, every request from a freshly
+    paired peer failed closed with ``unknown_origin``):
+
+    1. Anchor off the INSTALLED ``corvin_console`` package's own location,
+       when importable. ``corvin_console`` always sits at the same fixed
+       depth under the interpreter's site-packages/venv root regardless of
+       how deeply *this* file (vendored under
+       ``corvin_console/_vendor/operator/bridges/shared/``) ends up nested
+       — so anchoring off it, not off ``__file__``, is what actually
+       guarantees agreement with ``a2a_pair.py``'s own
+       ``Path(__file__).resolve().parents[3]`` (identical nesting depth
+       from ``corvin_console/routes/``). This is the path that fixes the
+       divergence; the two steps below are unchanged pre-existing
+       fallbacks for when ``corvin_console`` genuinely isn't installed.
+    2. Walk up from this file's own location for a repo marker
+       (``.corvin_repo`` / ``plugins/``) — the repo-checkout case, and the
+       original "minimal standalone deployment... no full repo tree
+       beneath it" case this function was written for on 2026-08-01
+       (before ``corvin_console`` was assumed available at all).
+    3. Fall back to a directory next to this file when no repo root is
+       found, matching ``paths.py::_repo_root()``'s own fallback shape.
+
+    Mirrors the identical fix in
+    ``remote_trigger_sender.py::_default_endpoints_dir()`` — both must stay
+    in lock-step or the divergence this fixes reappears in the opposite
+    direction (sender vs. receiver instead of receiver vs. console).
+    """
+    try:
+        import corvin_console as _cc  # type: ignore[import-not-found]
+        _cc_file = getattr(_cc, "__file__", None)
+        if _cc_file:
+            _anchor = Path(_cc_file).resolve().parents[3]
+            return _anchor / "operator" / Path(*parts)
+    except Exception:
+        pass
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
         if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():

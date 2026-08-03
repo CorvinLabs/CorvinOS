@@ -715,3 +715,50 @@ answered, no single contextual action to enable relay for a struggling peer):
 operated public default relay. That would remove the "you must supply a relay host"
 step entirely, but is a separate infrastructure/hosting/liability decision left undecided —
 self-hosting a relay (`python -m a2a_relay`) remains the only supported path.
+
+## Gateway RelayListener wiring + origin/endpoint path consolidation (2026-08-04)
+
+Two structural bugs found live-debugging a real installed (uv-tool) deployment where a
+freshly paired peer failed closed with `unknown_origin` on every single request, despite a
+demonstrably successful friendship-ack handshake:
+
+- **`corvin_gateway/app.py` never started the ADR-0258 Stage 3 RelayListener at all** —
+  `corvin_console/standalone.py` had the wiring (added 2026-07-29), `corvin_gateway/app.py`
+  did not, even though both hosts mount the identical `/v1/a2a/receive` /
+  `/v1/a2a/ping` / `/v1/a2a/friendship-ack` routes and are meant to never drift. Fixed:
+  identical lifespan block added to `corvin_gateway/app.py`, same inert-unless-flag-and-URL
+  guard, same start/stop symmetry. Note: `corvin serve` (the CLI entry point most installs
+  actually run) launches `corvin_console.standalone:create_app`, not `corvin_gateway.app` —
+  this fix matters for deployments that run the gateway directly (`corvin-webui.service`,
+  `ops/launcher/service_entry.py`), a different, less common path than `corvin serve`.
+- **Four independently-computed "default origin/endpoint directory" functions** —
+  `remote_trigger_receiver.py::_default_repo_relative()`,
+  `remote_trigger_sender.py::_default_endpoints_dir()`, `a2a_http_server.py::
+  _default_cowork_dir()`, and `a2a_google_sender.py`'s inline default — all walk up from
+  their OWN `__file__` for a `.corvin_repo`/`plugins` marker (a 2026-08-01/02 fix for a prior
+  `IndexError` crash), with a "directory next to this file" fallback when no marker is
+  found. In an installed/vendored deployment (these files live under
+  `corvin_console/_vendor/operator/bridges/shared/`) no marker exists anywhere up the tree,
+  so all four silently fall back to a bogus location — DIFFERENT from
+  `core/console/corvin_console/routes/a2a_pair.py`'s own default (a fixed
+  `Path(__file__).resolve().parents[3]`, which happens to still land correctly in this
+  layout by coincidental nesting depth). The friendship-ack handler (via `a2a_pair.py`)
+  writes to one directory; the receiver's `OriginRegistry` (via the four functions above)
+  reads from another. Fixed: all four now anchor off the INSTALLED `corvin_console`
+  package's own location first (`Path(corvin_console.__file__).resolve().parents[3]` —
+  fixed depth relative to site-packages/venv-root regardless of how deep the calling file
+  itself is nested, so it agrees with `a2a_pair.py` by construction), falling back to the
+  marker-walk only when `corvin_console` genuinely isn't importable (the original minimal-
+  standalone-deployment scenario). Regression test:
+  `operator/bridges/shared/test_a2a_installed_path_consistency.py` simulates an installed
+  layout and asserts all four resolvers agree.
+
+**Still not fixed / left as a documented gap:** `corvin serve --host 0.0.0.0` (or an
+equivalent LAN-reachable bind) is still not the default — the receiver stays loopback-only
+out of the box, matching the loopback-security-boundary design documented at the top of
+`corvin_gateway/app.py`. An operator who wants two LAN peers to reach each other directly
+must still explicitly opt in (`corvin serve --host 0.0.0.0` + a firewall rule on the
+receiving side) — this was evaluated and deliberately NOT changed to a default-on binding,
+since that would silently change the security posture of every existing and new install
+(violates the project's "ship dark by default" feature-flag policy). A friendlier opt-in
+(e.g. an explicit install-time prompt) remains a documented follow-up, not yet built.

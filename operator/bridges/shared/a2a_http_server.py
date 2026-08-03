@@ -79,6 +79,19 @@ if str(_HERE) not in sys.path:
 # file, which has the exact same unguarded pattern. Mirrors
 # `paths.py::_repo_root()`'s already-proven-safe pattern.
 def _default_cowork_dir() -> Path:
+    """2026-08-04: anchors off the INSTALLED ``corvin_console`` package's own
+    location first, when importable — same fix, same rationale, as
+    ``remote_trigger_receiver.py::_default_repo_relative()`` (see that
+    docstring for the full story). Falls back to the 2026-08-02 repo-marker
+    walk, then to a directory next to this file."""
+    try:
+        import corvin_console as _cc  # type: ignore[import-not-found]
+        _cc_file = getattr(_cc, "__file__", None)
+        if _cc_file:
+            _anchor = Path(_cc_file).resolve().parents[3]
+            return _anchor / "operator" / "cowork"
+    except Exception:
+        pass
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
         if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():

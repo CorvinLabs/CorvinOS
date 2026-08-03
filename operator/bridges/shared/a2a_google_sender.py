@@ -98,10 +98,31 @@ except ImportError:
     from audit import audit_path  # type: ignore[import-not-found]
 
 # ── Endpoint registry ─────────────────────────────────────────────────────
+# 2026-08-04: the unguarded `parents[2]` index here is the exact bug class
+# already fixed (repo-marker walk + corvin_console-anchor) in
+# remote_trigger_receiver.py::_default_repo_relative() and
+# remote_trigger_sender.py::_default_endpoints_dir() — this file was missed
+# by that pass. Same fix, same rationale, applied here.
 _REMOTE_ENDPOINTS_ENV = "REMOTE_ENDPOINTS_DIR"
-_REMOTE_ENDPOINTS_DEFAULT = (
-    Path(__file__).resolve().parents[2] / "cowork" / "remote_endpoints"
-)
+
+
+def _default_google_sender_endpoints_dir() -> Path:
+    try:
+        import corvin_console as _cc  # type: ignore[import-not-found]
+        _cc_file = getattr(_cc, "__file__", None)
+        if _cc_file:
+            _anchor = Path(_cc_file).resolve().parents[3]
+            return _anchor / "operator" / "cowork" / "remote_endpoints"
+    except Exception:
+        pass
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
+            return parent / "operator" / "cowork" / "remote_endpoints"
+    return here.parent / "cowork" / "remote_endpoints"
+
+
+_REMOTE_ENDPOINTS_DEFAULT = _default_google_sender_endpoints_dir()
 
 _DEFAULT_TIMEOUT_S = 30
 _DEFAULT_TTL_S = 60
