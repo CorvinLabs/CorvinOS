@@ -336,14 +336,18 @@ def audit_health_check(path: Path | None = None) -> tuple[bool, int]:
     target = path if path is not None else audit_path()
     try:
         # Acquire a shared read-lock before verify_chain reads the file so that
-        # a concurrent write_event() (which holds LOCK_EX) cannot produce a
-        # partial-read TOCTOU race that yields a spurious chain-broken verdict.
-        import fcntl as _fcntl
+        # a concurrent write_event() (which holds an exclusive lock) cannot
+        # produce a partial-read TOCTOU race that yields a spurious
+        # chain-broken verdict. Reuses security_events.py's own
+        # _lock_chain/_unlock_chain (real msvcrt-based locking on Windows,
+        # not the inert fcntl shim — see that module for why the shim is
+        # wrong for this specific cross-process case) rather than a second,
+        # POSIX-only implementation here.
         if target.exists():
             with target.open("r") as _lf:
-                _fcntl.flock(_lf, _fcntl.LOCK_SH)
+                _se._lock_chain(_lf, shared=True)
                 ok, problems = _se.verify_chain(target)
-                _fcntl.flock(_lf, _fcntl.LOCK_UN)
+                _se._unlock_chain(_lf)
         else:
             ok, problems = True, []
     except Exception as exc:

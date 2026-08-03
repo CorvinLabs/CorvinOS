@@ -40,6 +40,76 @@ import time
 from pathlib import Path
 from typing import Any
 
+# 2026-08-03, reported live: a real Windows install's audit.jsonl accumulated
+# 1092 scattered hash-chain breaks over its history and eventually hit a
+# hard, non-recoverable boot failure (ADR-0232/0233 tripwire, no override —
+# core/compliance/corvin_compliance_reports/tripwire.py). Root cause: this
+# module's cross-process write lock is `fcntl.flock()`, and forge's own
+# Windows compat shim (forge/_wincompat.py, installed before any forge
+# submodule's `import fcntl` runs) intentionally degrades flock/lockf to a
+# NO-OP on Windows — correct for forge's REGISTRY files (single-host,
+# already atomic via temp-file+rename per that shim's own docstring), but
+# that assumption does not hold here: the lock below exists BECAUSE
+# voice-adapter and forge-MCP-server are different PROCESSES writing the
+# same chain — exactly the "cross-process advisory locks" case the shim's
+# docstring waves off as "a Linux multi-process-deployment concern". That
+# dismissal is wrong for CorvinOS specifically: adapter + console + N
+# bridge daemons are separate processes on every platform, Windows
+# included, so multi-process is the NORMAL case here, not an edge one.
+# With no real lock, two racing processes can both read the same
+# `prev_hash` and both append a record claiming to follow it — a
+# hash-chain fork that manifests as exactly the observed scattered,
+# intermittent corruption, permanent because the chain is append-only.
+#
+# Fixed with real Windows locking via msvcrt.locking() for this one
+# security-critical section, instead of relying on the (correctly) inert
+# fcntl shim. msvcrt has no whole-file or shared/exclusive distinction like
+# flock — the portable fix locks a single, well-known byte (offset 0) as a
+# pure mutex indicator: every writer/reader locks that SAME byte before
+# touching the file, regardless of where the real read/append happens,
+# which correctly serializes access. Operates on the raw fd via os.lseek
+# (not the buffered TextIOWrapper's own seek) so it is unaffected by the
+# file being opened in append mode. Locking a byte beyond the current EOF
+# (a fresh/empty chain) is well-defined Windows behaviour and the standard
+# basis for this exact cross-platform locking idiom.
+#
+# Branches on msvcrt's IMPORTABILITY, not sys.platform, and checks it at
+# call time rather than gating the def at module-import time — the module
+# only exists on a real Windows Python build, so this is equivalent in
+# production, but it also means a test can monkeypatch the module-level
+# `msvcrt` name (e.g. a fake module) to exercise the Windows branch on any
+# platform, instead of needing an import-time reload.
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None  # type: ignore[assignment]
+
+
+def _lock_chain(fh, shared: bool = False) -> None:  # noqa: ARG001 - no distinct shared mode on Windows
+    if msvcrt is not None:
+        fd = fh.fileno()
+        saved = os.lseek(fd, 0, os.SEEK_CUR)
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        finally:
+            os.lseek(fd, saved, os.SEEK_SET)
+    else:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+
+
+def _unlock_chain(fh) -> None:
+    if msvcrt is not None:
+        fd = fh.fileno()
+        saved = os.lseek(fd, 0, os.SEEK_CUR)
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        finally:
+            os.lseek(fd, saved, os.SEEK_SET)
+    else:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
 
 EVENT_SEVERITY: dict[str, str] = {
     # registry lifecycle (past-tense canonical names, emitted by registry.py)
@@ -1531,7 +1601,7 @@ def write_event(
         # independent of umask. GDPR Art. 32 requires restricted permissions.
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         with open(fd, "a", closefd=True) as fh:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            _lock_chain(fh)
             try:
                 if hash_chain:
                     # Re-read prev hash *after* taking the lock — another
@@ -1686,7 +1756,7 @@ def write_event(
                         pass
                     raise
             finally:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                _unlock_chain(fh)
     return rec
 
 
