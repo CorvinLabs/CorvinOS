@@ -275,9 +275,62 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             pass  # best-effort — never blocks gateway startup, and never
                    # skips the remaining seeders in this loop
 
+    # ADR-0258 Stage 3 — A2A relay listener (best-effort, never blocks
+    # startup). Inert unless BOTH the feature flag is on AND a relay URL is
+    # configured — the common case (flag off) does nothing here at all,
+    # matching every other ship-dark flag in this file. Mirrors
+    # corvin_console.standalone's identical block: that host wires the
+    # listener but corvin_gateway.app — the process the default systemd
+    # unit / Windows autostart actually run (corvin-webui.service,
+    # ops/launcher/service_entry.py) — never did, so Stage 3 relay
+    # reception was structurally dead on the standard install even with
+    # both peers correctly configured (found 2026-08-03 while debugging a
+    # live pairing: kids_registered on the operator's own relay never
+    # exceeded the sender-side ephemeral reply slots). `_A2A_AVAILABLE`/
+    # `_a2a_receiver` are module globals assigned further below (line
+    # ~526) — valid: this closure is only CALLED by uvicorn after the
+    # whole module has finished executing, and Python resolves free
+    # variables in the enclosing scope by name at call time, not at
+    # definition time (same reasoning standalone.py's block documents).
+    _relay_listener = None
+    _relay_task = None
+    try:
+        from corvin_console import feature_flags as _relay_ff
+        import a2a_friendship as _relay_ft  # type: ignore[import-not-found]
+        if _A2A_AVAILABLE and _a2a_receiver is not None and _relay_ff.is_enabled("a2a_relay_fallback"):
+            _relay_url = _relay_ft.get_my_relay_url()
+            if _relay_url:
+                import asyncio as _relay_asyncio
+                import a2a_relay as _relay_mod  # type: ignore[import-not-found]
+                from corvin_console.routes.a2a_pair import (
+                    _origins_dir as _relay_origins_dir,
+                    _pending_friendships_dir as _relay_pending_dir,
+                    _endpoints_dir as _relay_endpoints_dir,
+                )
+                _relay_listener = _relay_mod.RelayListener(
+                    relay_url=_relay_url, receiver=_a2a_receiver,
+                    origins_dir=_relay_origins_dir(),
+                    pending_dir=_relay_pending_dir(),
+                    endpoints_dir=_relay_endpoints_dir(),
+                )
+                _relay_task = _relay_asyncio.create_task(_relay_listener.run_forever())
+                import logging as _relay_log
+                _relay_log.getLogger(__name__).info(
+                    "A2A relay listener started: %s", _relay_url,
+                )
+    except Exception:
+        import logging as _relay_log
+        _relay_log.getLogger(__name__).exception(
+            "A2A relay listener failed to start (non-fatal)"
+        )
+
     try:
         yield
     finally:
+        if _relay_listener is not None:
+            _relay_listener.stop()
+        if _relay_task is not None:
+            _relay_task.cancel()
         # Stop polling before unloading, or a poll can land on a plugin that is
         # halfway through on_unload().
         if _health_collector is not None:

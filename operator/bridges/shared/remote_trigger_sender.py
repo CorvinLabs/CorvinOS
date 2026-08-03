@@ -131,15 +131,25 @@ _REMOTE_ENDPOINTS_ENV = "REMOTE_ENDPOINTS_DIR"
 
 
 def _default_endpoints_dir() -> Path:
-    """<repo_root>/operator/cowork/remote_endpoints, found by walking up for
-    a repo marker rather than a fixed Path.parents[N] index (2026-08-01: a
-    minimal standalone deployment of this file — e.g. dropped onto a bare
-    Windows box with only its direct stdlib-only dependencies, no full repo
-    tree beneath it — sits shallower than the repo layout assumes, and
-    parents[2] raised IndexError at IMPORT TIME, crashing the whole module
-    before any caller-supplied endpoints_dir even had a chance to be used).
-    Falls back to a directory next to this file when no repo root is found,
-    matching paths.py::_repo_root()'s own fallback shape."""
+    """<repo_root>/operator/cowork/remote_endpoints.
+
+    2026-08-04: anchors off the INSTALLED ``corvin_console`` package's own
+    location first, when importable — mirrors the identical fix (same
+    rationale) in ``remote_trigger_receiver.py::_default_repo_relative()``;
+    see that docstring for the full story of the divergence this closes.
+    Falls back to the original 2026-08-01 repo-marker walk (a minimal
+    standalone deployment with no ``corvin_console`` available at all), and
+    finally to a directory next to this file, matching
+    ``paths.py::_repo_root()``'s own fallback shape.
+    """
+    try:
+        import corvin_console as _cc  # type: ignore[import-not-found]
+        _cc_file = getattr(_cc, "__file__", None)
+        if _cc_file:
+            _anchor = Path(_cc_file).resolve().parents[3]
+            return _anchor / "operator" / "cowork" / "remote_endpoints"
+    except Exception:
+        pass
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
         if (parent / ".corvin_repo").exists() or (parent / "plugins").is_dir():
