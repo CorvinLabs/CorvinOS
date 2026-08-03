@@ -31,6 +31,24 @@ def _autoupdate_pre_exec() -> "str | None":
     return f'"{sys.executable}" "{script}"'
 
 
+def _webui_bind_host() -> str:
+    """127.0.0.1 unless the operator opted in to a2a_lan_bind (Settings ->
+    Features) — mirrors ops/launcher/corvin/cli.py::_default_bind_host() /
+    corvinOS/installer/core.py::_webui_bind_host(). Best-effort: any failure
+    to resolve the flag degrades to loopback-only, never to an
+    accidentally-wide-open bind. Read only at `corvin-service install` time
+    — flipping the flag afterward does not retroactively rewrite an
+    already-registered service; re-run `corvin-service install` to pick up
+    a later change."""
+    try:
+        from corvin_console import feature_flags as _ff  # noqa: PLC0415
+        if _ff.is_enabled("a2a_lan_bind"):
+            return "0.0.0.0"
+    except Exception:  # noqa: BLE001
+        pass
+    return "127.0.0.1"
+
+
 def _webui_command() -> str:
     # Quote the interpreter path: all three SystemServiceManagers re-tokenize
     # this string (shlex.split / systemd ExecStart) — an unquoted
@@ -38,7 +56,7 @@ def _webui_command() -> str:
     # service can never start (same M1/WA-5 class already fixed in core.py).
     return (
         f'"{sys.executable}" -m uvicorn corvin_gateway.app:app '
-        "--host 127.0.0.1 --port 8765 --log-level info"
+        f"--host {_webui_bind_host()} --port 8765 --log-level info"
     )
 
 

@@ -461,6 +461,26 @@ class CorvinInstaller:
 
     # ── Step 14: Register services ─────────────────────────────────────────
 
+    def _webui_bind_host(self) -> str:
+        """127.0.0.1 unless the operator opted in to a2a_lan_bind (Settings ->
+        Features) — mirrors ops/launcher/corvin/cli.py::_default_bind_host().
+        Best-effort: any failure to resolve the flag degrades to the
+        loopback-only default, never to an accidentally-wide-open bind.
+        Registering (or re-registering, e.g. on a package upgrade) the
+        autostart service is the only point this is read — flipping the flag
+        after the service is already registered does not retroactively
+        rewrite it; the operator needs to re-run install / `corvin-service
+        install` (or edit the unit by hand) for a running install to pick up
+        a later flag change."""
+        try:
+            sys.path.insert(0, str(self.repo_root / "core" / "console"))
+            from corvin_console import feature_flags as _ff  # noqa: PLC0415
+            if _ff.is_enabled("a2a_lan_bind"):
+                return "0.0.0.0"
+        except Exception:  # noqa: BLE001
+            pass
+        return "127.0.0.1"
+
     def _webui_env_vars(self) -> dict:
         """Build Environment= vars for the webui systemd unit / launchd plist."""
         sep = ";" if sys.platform == "win32" else ":"
@@ -531,7 +551,7 @@ class CorvinInstaller:
             # (shlex.split(..., posix=False)); an unquoted path tears at the space.
             webui_cmd = (
                 f'"{sys.executable}" -m uvicorn corvin_gateway.app:app'
-                " --host 127.0.0.1 --port 8765 --log-level info"
+                f" --host {self._webui_bind_host()} --port 8765 --log-level info"
             )
             # WA-19: a plain two-token command needs no shell quoting (unlike
             # inlining `python -c "..."` directly into a systemd unit / launchd
