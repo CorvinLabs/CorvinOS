@@ -563,9 +563,19 @@ class CorvinInstaller:
 
     def step_15_start_services(self) -> None:
         print("\n[Step 15] Starting services...")
-        # On Windows, services aren't registered, so skip this step
+        # 2026-08-02, reported live: a bridge configured during this same
+        # wizard run (Step 13, configure_bridges) previously sat "configured
+        # but never started" on Windows forever — step_14 skips systemd-style
+        # service registration here (needs admin rights CorvinOS never
+        # requires), and nothing else ever called the equivalent Windows
+        # start path unless the operator separately clicked "Start" in the
+        # web console. Fixed by calling the SAME detached-start +
+        # Scheduled-Task-autostart engine the console's Start button already
+        # uses (operator/bridges/bridge_manager.py) — hidden window
+        # (DETACHED_PROCESS, see that module), durable across reboot
+        # (ensure_windows_autostart), no new mechanism to keep in sync.
         if sys.platform == "win32":
-            print("  ℹ Windows: services will be available from the web console")
+            self._win32_start_services()
             return
 
         try:
@@ -584,6 +594,47 @@ class CorvinInstaller:
             try:
                 self.service_manager.restart_service(f"voice-bridge-{bridge}")
                 print(f"  ✓ {bridge} bridge started")
+            except Exception as e:
+                print(f"  ⚠ Failed to start {bridge}: {e}")
+
+    def _win32_start_services(self) -> None:
+        """Windows equivalent of the systemd/launchd branch above: start the
+        adapter + every selected bridge detached (hidden, no window — see
+        bridge_manager.py's DETACHED_PROCESS creationflags) and register each
+        for Scheduled-Task autostart, using the EXACT same engine the web
+        console's "Start bridge" button already calls. Never raises — every
+        failure here is best-effort and reported, matching the
+        try/except-per-service shape of the non-Windows branch; a failure
+        must never abort the rest of the install."""
+        bridges_dir = self.repo_root / "operator" / "bridges"
+        bridges_dir_str = str(bridges_dir)
+        if bridges_dir_str not in sys.path:
+            sys.path.insert(0, bridges_dir_str)
+        try:
+            import bridge_manager as _bm  # type: ignore[import-not-found]
+        except Exception as e:
+            print(f"  ⚠ Could not load bridge_manager ({e}) — start bridges "
+                  f"manually from the web console.")
+            return
+
+        try:
+            adapter_status = _bm.ensure_adapter_detached()
+            if adapter_status.get("ok"):
+                print("  ✓ Adapter started" if not adapter_status.get("already_running")
+                      else "  ✓ Adapter already running")
+            else:
+                print(f"  ⚠ Failed to start adapter: {adapter_status.get('error')}")
+        except Exception as e:
+            print(f"  ⚠ Failed to start adapter: {e}")
+
+        for bridge in self.selected_bridges:
+            try:
+                status = _bm.start_channel_detached(bridge)
+                if status.get("ok"):
+                    print(f"  ✓ {bridge} bridge started" if not status.get("already_running")
+                          else f"  ✓ {bridge} bridge already running")
+                else:
+                    print(f"  ⚠ Failed to start {bridge}: {status.get('error')}")
             except Exception as e:
                 print(f"  ⚠ Failed to start {bridge}: {e}")
 

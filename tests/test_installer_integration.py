@@ -147,6 +147,64 @@ class TestCorvinInstallerIntegration:
         assert not installer.interactive
 
 
+class TestWin32StartServices:
+    """2026-08-02, reported live: a bridge configured during the wizard
+    (step_12_configure_bridges) sat "configured but never started" on
+    Windows forever — step_15 just printed a message and returned instead
+    of actually starting anything. Fixed by calling the same detached-start
+    engine (operator/bridges/bridge_manager.py) the console's Start button
+    already uses."""
+
+    def _fake_bridge_manager_module(self, adapter_result=None, bridge_result=None):
+        import types
+        mod = types.ModuleType("bridge_manager")
+        mod.ensure_adapter_detached = mock.Mock(
+            return_value=adapter_result or {"ok": True, "pid": 123})
+        mod.start_channel_detached = mock.Mock(
+            return_value=bridge_result or {"ok": True, "pid": 456})
+        return mod
+
+    def test_win32_calls_bridge_manager_for_adapter_and_each_bridge(self):
+        installer = CorvinInstaller(interactive=False)
+        installer.selected_bridges = ["discord", "whatsapp"]
+        fake_mod = self._fake_bridge_manager_module()
+        with mock.patch.object(sys, "platform", "win32"), \
+             mock.patch.dict(sys.modules, {"bridge_manager": fake_mod}):
+            installer.step_15_start_services()
+        fake_mod.ensure_adapter_detached.assert_called_once()
+        fake_mod.start_channel_detached.assert_any_call("discord")
+        fake_mod.start_channel_detached.assert_any_call("whatsapp")
+        assert fake_mod.start_channel_detached.call_count == 2
+
+    def test_win32_does_not_use_the_systemd_service_manager_path(self):
+        installer = CorvinInstaller(interactive=False)
+        installer.selected_bridges = ["discord"]
+        fake_mod = self._fake_bridge_manager_module()
+        with mock.patch.object(sys, "platform", "win32"), \
+             mock.patch.dict(sys.modules, {"bridge_manager": fake_mod}), \
+             mock.patch.object(installer.service_manager, "restart_service") as rs:
+            installer.step_15_start_services()
+        rs.assert_not_called()
+
+    def test_win32_a_single_bridge_failure_does_not_abort_the_rest(self):
+        installer = CorvinInstaller(interactive=False)
+        installer.selected_bridges = ["discord", "whatsapp"]
+        fake_mod = self._fake_bridge_manager_module()
+        fake_mod.start_channel_detached = mock.Mock(
+            side_effect=[{"ok": False, "error": "node missing"}, {"ok": True}])
+        with mock.patch.object(sys, "platform", "win32"), \
+             mock.patch.dict(sys.modules, {"bridge_manager": fake_mod}):
+            installer.step_15_start_services()  # must not raise
+        assert fake_mod.start_channel_detached.call_count == 2
+
+    def test_win32_missing_bridge_manager_module_does_not_raise(self):
+        installer = CorvinInstaller(interactive=False)
+        installer.selected_bridges = ["discord"]
+        with mock.patch.object(sys, "platform", "win32"), \
+             mock.patch.dict(sys.modules, {"bridge_manager": None}):
+            installer.step_15_start_services()  # must not raise
+
+
 class TestStep14AutoUpdatePreExec:
     """WA-19: the WebUI service registration must wire the PyPI auto-update
     check as pre_exec — otherwise autostart never upgrades, only a manual
