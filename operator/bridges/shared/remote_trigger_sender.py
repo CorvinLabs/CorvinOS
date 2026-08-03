@@ -453,12 +453,17 @@ class PingResult:
     error_category : str | None — ADR-0197: failure reason if reachable=False
     error_detail   : str | None — Template-based error detail (ADR-0197 §2)
     duration_ms    : int    — Wall time spent (network: 2-10s max)
+    via            : str    — "direct" or "relay" (ADR-0258 Stage 3) — which
+                              transport actually answered. Console surfaces
+                              this so an operator can see a connection is
+                              alive only via relay fallback, not just ACTIVE.
     """
     reachable: bool
     source: str
     error_category: str | None = None
     error_detail: str | None = None
     duration_ms: int = 0
+    via: str = "direct"
 
 
 # ── ADR-0197 §2: FIXED TEMPLATE SET for error_detail ──────────────────────
@@ -1161,7 +1166,7 @@ class RemoteTriggerSender:
 
         # Network probe: signed request + signed-response verification
         try:
-            ok, error_cat, error_det = self._http_ping_probe(
+            ok, error_cat, error_det, via = self._http_ping_probe(
                 endpoint_id, timeout_s=timeout_s
             )
             result = PingResult(
@@ -1170,6 +1175,7 @@ class RemoteTriggerSender:
                 error_category=error_cat if not ok else None,
                 error_detail=error_det if not ok else None,
                 duration_ms=_ms(start),
+                via=via,
             )
         except Exception as exc:
             # Catch-all: any unexpected error maps to INTERNAL_ERROR with an
@@ -1180,6 +1186,7 @@ class RemoteTriggerSender:
                 error_category=ErrorCategory.INTERNAL_ERROR,
                 error_detail=_safe_exc_type_name(exc),
                 duration_ms=_ms(start),
+                via="direct",
             )
 
         # ADR-0199: one audit event per ping outcome. endpoint_id is the
@@ -1191,6 +1198,7 @@ class RemoteTriggerSender:
             {"endpoint_id": endpoint_id,
              "reachable": result.reachable,
              "source": result.source,
+             "via": result.via,
              "error_category": result.error_category,
              "duration_ms": result.duration_ms},
         )
@@ -1198,12 +1206,16 @@ class RemoteTriggerSender:
 
     def _http_ping_probe(
         self, endpoint_id: str, timeout_s: float = 5
-    ) -> tuple[bool, str | None, str | None]:
+    ) -> tuple[bool, str | None, str | None, str]:
         """ADR-0199: Signed ping request-response (network probe).
 
-        Returns: (reachable, error_category, error_detail)
+        Returns: (reachable, error_category, error_detail, via)
         - reachable=True: peer responded with valid signature
         - reachable=False: error_category=UNREACHABLE|TIMEOUT_TRANSPORT|AUTH_FAILED|...
+        - via: "direct" or "relay" — which transport actually delivered the
+          probe. Always "direct" on a failure (the direct attempt is the one
+          whose error_category is reported; a relay attempt that also failed
+          contributes nothing distinguishable here).
         """
         start = time.time()
 
@@ -1211,7 +1223,7 @@ class RemoteTriggerSender:
             cfg = self._registry.load(endpoint_id)
         except EndpointError as exc:
             error_cat, error_det = self._categorize_transport_error(exc)
-            return False, error_cat, error_det
+            return False, error_cat, error_det, "direct"
 
         # Build ping request: {ping_id, issued_at, origin_id, signature}
         ping_id = str(uuid.uuid4())
@@ -1247,11 +1259,13 @@ class RemoteTriggerSender:
         # relay could never be reported as reachable by ping()/Recheck, even
         # once a relay was correctly configured and enabled on both sides —
         # the console's UNREACHABLE badge would never clear.
+        via = "direct"
         try:
             raw = self._http_post(ping_url, ping_request, timeout_s)
         except TransportError as direct_exc:
             try:
                 raw = self._relay_ping(cfg, endpoint_id, ping_request, timeout_s)
+                via = "relay"
                 self._audit_best_effort(
                     "A2A.relay_fallback_used", "INFO",
                     {"endpoint_id": endpoint_id, "reason": direct_exc.reason,
@@ -1259,7 +1273,7 @@ class RemoteTriggerSender:
                 )
             except TransportError as exc:
                 error_cat, error_det = self._categorize_transport_error(direct_exc)
-                return False, error_cat, error_det
+                return False, error_cat, error_det, "direct"
 
         # Verify response signature with recv_key
         try:
@@ -1268,7 +1282,7 @@ class RemoteTriggerSender:
             )
         except ResponseVerificationError as exc:
             error_cat, error_det = self._categorize_verification_error(exc)
-            return False, error_cat, error_det
+            return False, error_cat, error_det, via
 
         # ADR-0199 §4: ping is authenticated — non-negotiable. The legacy
         # unsigned-rejection tolerance in _verify_response (ADR-0077 C-5)
@@ -1278,17 +1292,17 @@ class RemoteTriggerSender:
         if not is_signed:
             return False, ErrorCategory.AUTH_FAILED, self._sanitize_error(
                 "Unsigned ping response rejected"
-            )
+            ), via
 
         # Verify response shape: {ok, instance_id, protocol_version, server_time}
         if not response.get("ok"):
             # Peer rejected the ping (shouldn't happen for valid ping)
             return False, ErrorCategory.REJECTED, self._sanitize_error(
                 "Peer rejected ping"
-            )
+            ), via
 
         # Success
-        return True, None, None
+        return True, None, None, via
 
     # ── Internals ─────────────────────────────────────────────────────
 

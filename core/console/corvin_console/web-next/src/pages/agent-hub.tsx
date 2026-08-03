@@ -60,6 +60,8 @@ import {
   revokeFriendshipToken,
   listFriendshipConnections,
   recheckFriendshipConnection,
+  getA2ARelayUrl,
+  enableRelayForPeer,
   patchA2AOrigin,
   deleteA2AOrigin,
   patchA2AEndpoint,
@@ -172,6 +174,91 @@ function PeerKnowsUsHint({ state, peerKnowsUs }: { state: string; peerKnowsUs: b
     >
       peer can&apos;t reach you back
     </span>
+  );
+}
+
+// ADR-0258 Stage 3 — shows which transport last actually delivered a
+// successful ping. Sticky (reflects the last known-good path, not just the
+// current one), so it still reads "via relay" right after a connection
+// drops rather than disappearing the moment it goes UNREACHABLE.
+function ViaBadge({ via }: { via: "direct" | "relay" | null }) {
+  if (via !== "relay") return null;
+  return (
+    <Badge
+      variant="outline"
+      className="border-sky-500/40 text-sky-700 dark:text-sky-400 text-[10px] gap-1"
+      title="Last reached through the encrypted relay fallback (ADR-0258 Stage 3), not a direct connection."
+    >
+      <Globe2 className="h-2.5 w-2.5" /> via relay
+    </Badge>
+  );
+}
+
+// Contextual, one-click Stage-3 opt-in offered exactly where/when a direct
+// connection just failed, instead of requiring the operator to separately
+// find the a2a_relay_fallback flag in Settings -> Features and hand-edit a
+// relay URL via env var / config file. Collapses to a single URL prompt the
+// first time (or zero prompts if a relay URL is already configured).
+function EnableRelayPrompt({
+  kid, csrf, onEnabled,
+}: { kid: string; csrf: string; onEnabled: () => void }) {
+  const [open, setOpen] = React.useState(false);
+  const [url, setUrl] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  const relayCfg = useQuery({
+    queryKey: ["a2a", "relay-url"],
+    queryFn: ({ signal }) => getA2ARelayUrl(signal),
+    enabled: open,
+  });
+
+  React.useEffect(() => {
+    if (relayCfg.data?.url && !url) setUrl(relayCfg.data.url);
+  }, [relayCfg.data, url]);
+
+  async function handleEnable() {
+    setBusy(true);
+    setError("");
+    try {
+      await enableRelayForPeer(kid, url.trim(), csrf);
+      setOpen(false);
+      onEnabled();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs gap-1"
+        onClick={() => setOpen(true)}
+        title="Fall back to an encrypted relay when a direct connection to this peer fails (ADR-0258 Stage 3). The relay sees routing metadata (timing, volume) but never message content.">
+        <Globe2 className="h-3 w-3" /> Enable relay fallback
+      </Button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 rounded border border-border/60 bg-muted/30 px-2 py-1">
+      <Input
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        placeholder="wss://your-relay.example.com"
+        className="h-6 w-56 text-[11px]"
+      />
+      <Button size="sm" className="h-6 px-2 text-[10px]" disabled={busy || !url.trim()}
+        onClick={handleEnable}>
+        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : "Enable"}
+      </Button>
+      <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px]"
+        onClick={() => { setOpen(false); setError(""); }}>
+        Cancel
+      </Button>
+      {error && <span className="text-[10px] text-destructive">{error}</span>}
+    </div>
   );
 }
 
@@ -1326,6 +1413,29 @@ function FriendshipConnectionsList() {
   const [deleteError, setDeleteError] = React.useState("");
   const [rechecking, setRechecking] = React.useState<string | null>(null);
 
+  // Self-healing recheck (2026-08-03): a peer that comes back reachable
+  // (roaming device reconnects, relay was just enabled, DNS/IP settles)
+  // used to require a manual "Recheck" click to notice — the 15s query
+  // refetch above only re-reads the LAST stored state, it never re-pings.
+  // Poll UNREACHABLE connections on a slower cadence than the read-only
+  // refetch (a live network probe is much more expensive than a file read,
+  // and every relay-fallback attempt is real traffic through a third party).
+  const connectionsRef = React.useRef<FriendshipConnection[]>([]);
+  connectionsRef.current = conns.data?.connections ?? [];
+
+  React.useEffect(() => {
+    const interval = setInterval(() => {
+      const unreachable = connectionsRef.current.filter(c => c.state === "UNREACHABLE");
+      if (unreachable.length === 0) return;
+      void Promise.all(
+        unreachable.map(c => recheckFriendshipConnection(c.kid, csrf).catch(() => null)),
+      ).then(() => {
+        void qc.invalidateQueries({ queryKey: ["a2a", "friendship-connections"] });
+      });
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [csrf, qc]);
+
   async function handleRecheck(kid: string) {
     setRechecking(kid);
     try {
@@ -1411,8 +1521,16 @@ function FriendshipConnectionsList() {
                       until {new Date(c.expires * 1000).toLocaleDateString()}
                     </span>
                   )}
+                  <ViaBadge via={c.via} />
                   <PeerKnowsUsHint state={c.state} peerKnowsUs={c.peer_knows_us} />
                   <div className="ml-auto flex gap-1.5 shrink-0">
+                    {c.state === "UNREACHABLE" && (
+                      <EnableRelayPrompt
+                        kid={c.kid}
+                        csrf={csrf}
+                        onEnabled={() => void qc.invalidateQueries({ queryKey: ["a2a", "friendship-connections"] })}
+                      />
+                    )}
                     {(c.state === "ACTIVE" || c.state === "UNREACHABLE") && (
                       <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs"
                         onClick={() => handleRecheck(c.kid)}

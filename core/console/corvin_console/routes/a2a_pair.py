@@ -56,6 +56,7 @@ from pydantic import BaseModel, Field
 from ..utils import atomic_write_json
 from .. import audit as console_audit
 from .. import auth as session_auth
+from .. import feature_flags as _ff
 from ..deps import require_csrf, require_session
 
 # ── path helpers ──────────────────────────────────────────────────────
@@ -858,6 +859,77 @@ def set_my_a2a_url(
     return {"ok": True, "url": body.url.strip().rstrip("/")}
 
 
+# ── ADR-0258 Stage 3 — relay URL config surface ────────────────────────
+#
+# Previously the only way to set this was ``CORVIN_A2A_RELAY_URL`` or
+# hand-editing ``~/.corvin/global/remote_trigger/my_a2a_relay_url`` — no
+# Console route existed at all, despite the ``a2a_relay_fallback`` feature
+# flag's own description promising "Settings -> A2A -> Relay URL". This
+# closes that gap so the relay fallback can be configured the same way
+# every other A2A setting is: through the Console, CSRF-gated, audited.
+
+def _validate_relay_url(raw: str) -> str:
+    """Schema-check an operator-supplied relay URL.
+
+    ws/wss only — the relay is a WebSocket store-and-forward service
+    (a2a_relay.py), a different protocol from the http(s) direct A2A URLs,
+    so this deliberately does NOT reuse ``_validate_endpoint_url``'s
+    scheme allowlist. Raises HTTPException(400) on violation.
+    """
+    from urllib.parse import urlsplit
+    url = raw.strip().rstrip("/")
+    if not url or len(url) > 512:
+        raise HTTPException(status_code=400, detail="relay URL must be 1-512 characters")
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="unparseable relay URL")
+    if parts.scheme not in ("ws", "wss"):
+        raise HTTPException(status_code=400, detail="relay URL must use ws:// or wss://")
+    if not parts.hostname:
+        raise HTTPException(status_code=400, detail="relay URL missing host")
+    if parts.username or parts.password:
+        raise HTTPException(status_code=400, detail="relay URL must not embed credentials")
+    return url
+
+
+@router.get("/remote-trigger/pair/relay-url")
+def get_my_a2a_relay_url(
+    rec: Annotated[session_auth.SessionRecord, Depends(require_session)],
+) -> dict[str, Any]:
+    """Return this instance's configured relay URL and whether the
+    ``a2a_relay_fallback`` feature flag is currently on for this tenant."""
+    return {
+        "url": _ft.get_my_relay_url(),
+        "flag_enabled": _ff.is_enabled("a2a_relay_fallback", tenant_id=rec.tenant_id),
+    }
+
+
+class RelayUrlRequest(BaseModel):
+    url: str = Field(..., min_length=1, max_length=512)
+
+
+@router.post("/remote-trigger/pair/relay-url")
+def set_my_a2a_relay_url(
+    body: RelayUrlRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Persist this instance's relay URL. Does NOT enable the feature flag —
+    setting a relay URL while the flag is off is a documented no-op (see the
+    flag's description); use the flag toggle in Settings, or the one-click
+    ``/friendship/{kid}/enable-relay`` below, to actually activate it."""
+    url = _validate_relay_url(body.url)
+    _ft.set_my_relay_url(url)
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="a2a.config.relay_url_set",
+        target_kind="a2a_config",
+        target_id="my_relay_url",
+    )
+    return {"ok": True, "url": url}
+
+
 # ── POST /remote-trigger/pair/friendship/create ───────────────────────
 
 class FriendshipCreateRequest(BaseModel):
@@ -1194,6 +1266,7 @@ def friendship_connections(
             # existed; defaults to False (unknown = not proven bidirectional).
             "peer_knows_us": bool(cfg.get("_peer_knows_us", False)),
             "peer_reports_reachable": bool(cfg.get("_peer_reports_reachable", False)),
+            "via": cfg.get("_last_via"),
         }
 
     for path in sorted(_endpoints_dir().glob("*.json")):
@@ -1218,6 +1291,7 @@ def friendship_connections(
                 "expires": cfg.get("_ft_expires"),
                 "peer_knows_us": bool(cfg.get("_peer_knows_us", False)),
                 "peer_reports_reachable": bool(cfg.get("_peer_reports_reachable", False)),
+                "via": cfg.get("_last_via"),
             }
 
     connections = sorted(seen.values(), key=lambda c: c["kid"])
@@ -1226,29 +1300,14 @@ def friendship_connections(
 
 # ── POST /remote-trigger/pair/friendship/{kid}/recheck ─────────────────
 
-@router.post("/remote-trigger/pair/friendship/{kid}/recheck")
-def friendship_recheck(
-    kid: str,
-    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
-) -> dict[str, Any]:
-    """Re-verify reachability for an existing friendship connection (manual
-    "recheck" action / periodic UI refresh) without redoing the whole token
-    exchange. Pings the peer (ADR-0199, now with an ADR-0258 Stage 3 relay
-    fallback) and updates ``state`` accordingly — ACTIVE only on a genuine
-    signed pong, else UNREACHABLE.
-
-    2026-08-02: also refreshes ``_peer_knows_us`` when it is currently
-    false and the ping just succeeded — previously this field was ONLY ever
-    set by the initial import's ack round trip, so a connection whose first
-    ack attempt failed (issuer unreachable at import time, or — before the
-    same fix — reachable only via a relay the ack itself never tried) kept
-    showing "peer can't reach you back" in the UI forever, even after the
-    issuer became reachable again. A successful ping alone does not prove
-    the issuer has recorded US, so this re-runs the actual ack handshake
-    (``retry_friendship_ack``) rather than inferring it from the ping.
-    """
-    if not kid or "/" in kid or "\\" in kid or ":" in kid or kid.startswith("."):
-        raise HTTPException(status_code=400, detail="invalid kid")
+def _recheck_connection(kid: str) -> dict[str, Any]:
+    """Core of the reachability recheck (ADR-0199 ping + ADR-0258 Stage 3
+    relay fallback + reciprocal-ack retry). Shared by the manual
+    ``/recheck`` route and the one-click ``/enable-relay`` flow below, so
+    enabling relay for a peer immediately re-verifies it through the same
+    path a plain recheck would use — see ``friendship_recheck``'s original
+    docstring for the full behavioral rationale (state semantics,
+    peer_knows_us refresh)."""
     endpoint_path = _endpoints_dir() / f"{kid}.json"
     if not endpoint_path.exists():
         raise HTTPException(status_code=404, detail="not found")
@@ -1260,15 +1319,18 @@ def friendship_recheck(
     if not cfg.get("_friendship"):
         raise HTTPException(status_code=404, detail="not found")
     if not cfg.get("url"):
-        return {"ok": True, "kid": kid, "state": "PENDING", "reachable": False}
+        return {"ok": True, "kid": kid, "state": "PENDING", "reachable": False, "via": None}
 
     reachable = False
+    via: str | None = None
     try:
         from remote_trigger_sender import (  # type: ignore[import-not-found]
             RemoteEndpointRegistry as _RER, RemoteTriggerSender as _RTS,
         )
         _sender = _RTS(_endpoints_dir(), _RER(_endpoints_dir()))
-        reachable = bool(_sender.ping(kid, timeout_s=5).reachable)
+        ping_result = _sender.ping(kid, timeout_s=5)
+        reachable = bool(ping_result.reachable)
+        via = ping_result.via if reachable else None
     except Exception:  # noqa: BLE001 — reachability check is best-effort
         reachable = False
 
@@ -1299,12 +1361,108 @@ def friendship_recheck(
             pcfg["state"] = new_state
             pcfg["_peer_knows_us"] = peer_knows_us
             pcfg["_peer_reports_reachable"] = peer_reports_reachable
+            # Sticky: only overwritten on a reachable check (a failed check
+            # has no transport to report), so the UI can still show "last
+            # seen via relay" immediately after a connection drops.
+            if via is not None:
+                pcfg["_last_via"] = via
             _write_secure(p, pcfg)
 
     return {
         "ok": True, "kid": kid, "state": new_state, "reachable": reachable,
-        "peer_knows_us": peer_knows_us,
+        "peer_knows_us": peer_knows_us, "via": via,
     }
+
+
+@router.post("/remote-trigger/pair/friendship/{kid}/recheck")
+def friendship_recheck(
+    kid: str,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """Re-verify reachability for an existing friendship connection (manual
+    "recheck" action / periodic UI refresh) without redoing the whole token
+    exchange. Pings the peer (ADR-0199, now with an ADR-0258 Stage 3 relay
+    fallback) and updates ``state`` accordingly — ACTIVE only on a genuine
+    signed pong, else UNREACHABLE.
+
+    2026-08-02: also refreshes ``_peer_knows_us`` when it is currently
+    false and the ping just succeeded — previously this field was ONLY ever
+    set by the initial import's ack round trip, so a connection whose first
+    ack attempt failed (issuer unreachable at import time, or — before the
+    same fix — reachable only via a relay the ack itself never tried) kept
+    showing "peer can't reach you back" in the UI forever, even after the
+    issuer became reachable again. A successful ping alone does not prove
+    the issuer has recorded US, so this re-runs the actual ack handshake
+    (``retry_friendship_ack``) rather than inferring it from the ping.
+    """
+    if not kid or "/" in kid or "\\" in kid or ":" in kid or kid.startswith("."):
+        raise HTTPException(status_code=400, detail="invalid kid")
+    return _recheck_connection(kid)
+
+
+# ── POST /remote-trigger/pair/friendship/{kid}/enable-relay ────────────
+
+class EnableRelayRequest(BaseModel):
+    relay_url: str = Field(default="", max_length=512)
+
+
+@router.post("/remote-trigger/pair/friendship/{kid}/enable-relay")
+def friendship_enable_relay(
+    kid: str,
+    body: EnableRelayRequest,
+    rec: Annotated[session_auth.SessionRecord, Depends(require_csrf)],
+) -> dict[str, Any]:
+    """One-click ADR-0258 Stage 3 opt-in, surfaced contextually in the
+    pairing/recheck UI the moment a direct connection to THIS peer fails
+    — instead of requiring the operator to separately discover the
+    ``a2a_relay_fallback`` flag in Settings -> Features AND hand-edit an
+    env var / config file for the relay URL (previously the only way to
+    set one at all).
+
+    This still goes through the SAME documented, audited, off-by-default
+    feature flag — ``_ff.set_enabled`` writes to the identical tenant
+    overlay the Settings toggle would, so it shows up there afterward with
+    source="console" like any other manual change. Nothing is hidden or
+    bypassed; this endpoint only collapses the number of manual steps an
+    operator needs once they have decided, for this one peer, that a
+    third-party relay seeing routing metadata (not content — see the
+    flag's own description) is an acceptable trade-off.
+
+    Deliberately instance-wide (the flag and relay URL are both
+    instance-wide, per ADR-0258 v1 scope), not stored as a per-friendship
+    override — the "for this peer" framing is a UX entry point, not a
+    narrower trust boundary than what Stage 3 already provides.
+    """
+    if not kid or "/" in kid or "\\" in kid or ":" in kid or kid.startswith("."):
+        raise HTTPException(status_code=400, detail="invalid kid")
+    endpoint_path = _endpoints_dir() / f"{kid}.json"
+    if not endpoint_path.exists():
+        raise HTTPException(status_code=404, detail="not found")
+
+    relay_url = body.relay_url.strip()
+    if relay_url:
+        relay_url = _validate_relay_url(relay_url)
+        _ft.set_my_relay_url(relay_url)
+
+    if not _ft.get_my_relay_url():
+        raise HTTPException(
+            status_code=400,
+            detail="no relay URL configured — pass relay_url or set one first via /relay-url",
+        )
+
+    _ff.set_enabled("a2a_relay_fallback", True, tenant_id=rec.tenant_id)
+
+    console_audit.action_performed(
+        tenant_id=rec.tenant_id,
+        sid_fingerprint=rec.sid_fingerprint,
+        action="a2a.relay.enabled_for_peer",
+        target_kind="a2a_friendship",
+        target_id=kid,
+    )
+
+    result = _recheck_connection(kid)
+    result["relay_enabled"] = True
+    return result
 
 
 # ── PATCH /remote-trigger/origins/{origin_id} ─────────────────────────
