@@ -53,6 +53,13 @@ class AdapterEnsuredAtBootTests(unittest.TestCase):
         self.fake_bm.ensure_adapter_detached = MagicMock(
             return_value={"ok": True, "pid": 4242},
         )
+        self.fake_bm._CHANNELS = ["discord", "whatsapp"]
+        self.fake_bm.channel_configured = MagicMock(
+            side_effect=lambda ch: ch == "discord",
+        )
+        self.fake_bm.ensure_windows_autostart = MagicMock(
+            return_value={"ok": True},
+        )
         sys.modules["bridge_manager"] = self.fake_bm
         self.addCleanup(self._restore_module)
 
@@ -78,6 +85,24 @@ class AdapterEnsuredAtBootTests(unittest.TestCase):
             pass  # __enter__/__exit__ drive the real lifespan startup/shutdown
 
         self.fake_bm.ensure_adapter_detached.assert_called_once()
+
+    def test_windows_autostart_refreshed_for_every_configured_channel_on_boot(self) -> None:
+        """2026-08-03: a package upgrade fixing bridge.ps1's own Scheduled-
+        Task Action never took effect on an install whose bridge daemon was
+        already running from before the upgrade -- ensure_windows_autostart
+        was only ever reached from start_channel_detached()'s fresh-start
+        path, which an already-alive daemon never hits. Refreshing it for
+        every CONFIGURED channel at boot (mirroring ensure_adapter_detached
+        above) makes the registration self-heal on the very next restart,
+        with no operator action needed."""
+        from fastapi.testclient import TestClient
+        from corvin_console.standalone import create_app
+
+        app = create_app()
+        with TestClient(app):
+            pass
+
+        self.fake_bm.ensure_windows_autostart.assert_called_once_with("discord")
 
     def test_adapter_ensure_failure_does_not_block_boot(self) -> None:
         """A failing/missing bridge_manager must never prevent the console

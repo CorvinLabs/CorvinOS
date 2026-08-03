@@ -68,6 +68,27 @@ def test_start_channel_detached_short_circuits_when_unit_activating():
         m_find_node.assert_not_called()  # must short-circuit BEFORE any install work
 
 
+def test_start_channel_detached_refreshes_windows_autostart_when_already_running():
+    """2026-08-03, reported live: a package upgrade fixing bridge.ps1's own
+    Scheduled-Task Action never took effect for an install whose bridge
+    daemon was already running from before the upgrade -- this early
+    return used to skip ensure_windows_autostart() entirely, so the OLD
+    Task (still pointing at the pre-fix Action) kept firing forever with
+    no code path that ever refreshed it. It must now be called (best-
+    effort) even on the already-running short-circuit, so the very next
+    'is it running?' check after an upgrade self-heals the registration."""
+    with mock.patch.object(bridge_manager, "_port_open", return_value=True), \
+         mock.patch.object(bridge_manager, "ensure_windows_autostart",
+                            return_value={"ok": True}) as m_autostart:
+        # whatsapp is the one channel with an HTTP port in _CHANNEL_HTTP_PORT
+        # (the QR-code port) -- that's the branch this guards.
+        result = bridge_manager.start_channel_detached("whatsapp")
+        assert result["ok"] is True
+        assert result["already_running"] is True
+        assert result["windows_autostart"] == {"ok": True}
+        m_autostart.assert_called_once_with("whatsapp")
+
+
 def test_start_channel_detached_proceeds_when_neither_port_nor_unit_active():
     """Sanity: the new guard must not swallow the legitimate 'genuinely not
     running yet, go ahead and start it' path."""
