@@ -1275,7 +1275,24 @@ def start_channel_detached(
     try:
         port = _CHANNEL_HTTP_PORT.get(channel)
         if port and _port_open(port):
-            return {"ok": True, "already_running": True}
+            # 2026-08-03, reported live: a package upgrade that fixes THIS
+            # function's own Windows Scheduled-Task registration (e.g. the
+            # wscript.exe-wrapper fix in bridge.ps1) never took effect on an
+            # install where the bridge daemon was already running from
+            # BEFORE the upgrade -- this early return used to skip
+            # ensure_windows_autostart() entirely whenever the daemon was
+            # already up, so the OLD Task (still pointing at the pre-fix
+            # Action) kept firing at every logon/crash-restart forever,
+            # with no code path that ever refreshed it short of manually
+            # stopping the bridge first. Register-ScheduledTask's own
+            # Unregister-then-Register is idempotent and cheap (~1-2s), so
+            # refreshing it here on every call -- not just on a fresh
+            # start -- makes a package upgrade self-heal an already-running
+            # bridge's autostart registration the next time this is
+            # invoked, without requiring the operator to manually stop and
+            # restart the bridge first.
+            autostart_status = ensure_windows_autostart(channel)
+            return {"ok": True, "already_running": True, "windows_autostart": autostart_status}
         # ADR-0215: close the systemd-unit-starting-but-port-not-bound-yet
         # race window (see _systemd_unit_active() docstring) before falling
         # through to a raw, non-systemd-tracked spawn below.

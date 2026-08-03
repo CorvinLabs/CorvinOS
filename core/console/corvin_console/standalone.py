@@ -317,6 +317,32 @@ def create_app() -> FastAPI:
             else:
                 log.warning("bridge adapter could not be ensured at boot: %s",
                             _adapter_status.get("error"))
+
+            # 2026-08-03, reported live: a package upgrade that fixed a bug
+            # in bridge.ps1's own Scheduled-Task Action (the wscript.exe-
+            # wrapper console-flash fix) never took effect for an install
+            # whose bridge daemon was already running from BEFORE the
+            # upgrade -- ensure_windows_autostart() is only ever called
+            # from start_channel_detached()'s "start a fresh daemon" path,
+            # which an already-alive daemon never reaches, so the OLD
+            # Task (still pointing at the pre-fix Action) kept firing at
+            # every logon forever with no code path that ever refreshed
+            # it short of the operator manually stopping the bridge
+            # first. Register-ScheduledTask's own Unregister-then-Register
+            # is idempotent (~1-2s per channel), so refreshing every
+            # CONFIGURED channel's registration here, at every console
+            # boot -- exactly like ensure_adapter_detached() above --
+            # makes a package upgrade self-heal an already-running
+            # bridge's autostart registration on its very next restart,
+            # with no operator action needed. Windows-only; a true no-op
+            # everywhere else (ensure_windows_autostart's own platform
+            # check).
+            for _ch in _bm._CHANNELS:
+                try:
+                    if _bm.channel_configured(_ch):
+                        _bm.ensure_windows_autostart(_ch)
+                except Exception:
+                    log.debug("windows autostart refresh skipped for %s", _ch, exc_info=True)
         except Exception:
             log.debug("bridge adapter ensure-at-boot skipped", exc_info=True)
 

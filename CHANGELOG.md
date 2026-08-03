@@ -7,6 +7,45 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.106] — 2026-08-03 — Windows autostart Scheduled Task never picked up code fixes on an already-running bridge
+
+### Fixed — package upgrades didn't refresh an already-registered Scheduled Task
+
+Reported live: after upgrading to 0.10.104 (the wscript.exe-wrapper fix
+for the Task Scheduler console-flash bug), a bridge that was already
+running from before the upgrade still showed a visible console window
+and appeared "not online." The fix in 0.10.104 was correct, but nothing
+ever re-applied it to an install whose Scheduled Task was registered
+*before* the upgrade.
+
+Root cause: `bridge_manager.py::ensure_windows_autostart()` (the function
+that (re-)registers a channel's Scheduled Task with the current
+bridge.ps1 code) was only ever reached from `start_channel_detached()`'s
+fresh-daemon-start path — the moment a bridge's TCP port is already open,
+the function returns `already_running` immediately, without ever calling
+it. So a bridge that was running before an upgrade kept its OLD Task
+registration (pointing at the pre-fix, direct-powershell.exe Action)
+indefinitely, with no code path that ever refreshed it short of manually
+stopping the bridge first.
+
+Fixed in two places, mirroring the existing `ensure_adapter_detached()`
+self-heal pattern:
+- `start_channel_detached()` now calls `ensure_windows_autostart()`
+  (best-effort) even on the already-running short-circuit.
+- The console's boot sequence (`standalone.py`'s lifespan startup) now
+  refreshes every *configured* channel's Windows autostart registration
+  once at every boot, exactly like it already does for the bridge
+  adapter — both are idempotent (Unregister-then-Register / cmdline-
+  verified pidfile probe), so this is a cheap no-op on POSIX and on an
+  already-correctly-registered Windows install.
+
+**If you're on an already-running bridge from before this fix:** after
+upgrading, toggling the bridge off and back on once in the Console UI
+forces an immediate re-registration (no reboot needed). Simply upgrading
+and rebooting also works, but may take one extra logon cycle for the
+Task's own action to be refreshed before the daemon that uses it
+restarts with the fix.
+
 ## [0.10.104] — 2026-08-03 — Task Scheduler autostart still flashed a console window
 
 ### Fixed — Windows autostart's Scheduled Task Action executed powershell.exe directly
