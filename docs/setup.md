@@ -421,6 +421,12 @@ bash operator/bridges/bridge.sh fg
 | **WSL2** | Systemd is optional (requires `systemd=true` in `/etc/wsl.conf`). Without systemd, use `bridge.sh fg`. Run `wsl --update` if you encounter WSL2 kernel version warnings. |
 | **Windows native** | `pip install corvinOS` → open a new PowerShell → `corvin serve`. The installer auto-adds the Scripts directory to PATH. Voice works via edge-tts (no API key needed). The `install.ps1` one-liner registers a per-user Scheduled Task so the console starts automatically at login and restarts itself on crash/reboot; on accounts where the Task Scheduler store denies that (some managed/family/education Windows images) it automatically falls back to a Startup-folder shortcut instead — still no admin rights needed either way. A `CorvinOS.lnk` Desktop shortcut is also created so you can start the console by hand. |
 
+Run **`corvin stop`** to shut Corvin down cleanly on any platform — it stops the
+login-autostart process (Windows Scheduled Task / macOS LaunchAgent / Linux
+systemd user unit) and, where systemd is available, every messaging-bridge
+channel unit too. Start it again with `corvin serve` (or let autostart bring it
+back at your next login).
+
 ### Autostart: "start at login" vs. "always-on, no login ever" (ADR-0184)
 
 Every install (Linux/macOS/Windows) already starts CorvinOS automatically the

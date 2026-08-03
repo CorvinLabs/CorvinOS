@@ -7,6 +7,48 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.107] — 2026-08-03 — Added a real `corvin stop` command; `corvin gateway stop` was silently broken
+
+### Added — `corvin stop` (top-level alias for `corvin gateway stop`)
+
+An operator asked for a Console command that shuts Corvin down cleanly so it
+can be restarted with `corvin serve`. Investigating what existed already
+found `corvin gateway stop` was silently broken on the most common native
+install path — see Fixed below — and there was no discoverable top-level
+verb mirroring `corvin start`. Added `corvin stop` as a direct alias.
+
+### Fixed — `corvin gateway stop` never actually stopped anything on the native (pip-install) path
+
+`native_backend.stop()` called `bridge.sh stop` on POSIX — not a real
+bridge.sh subcommand (only `up|down|status|restart|install-units|logs|tail|
+fg|console|doctor` exist). Every call hit the usage/error branch and did
+nothing, with the failure swallowed by `capture_output=True` and a discarded
+return code — a failed stop was indistinguishable from a successful one. On
+Windows, `stop()` was an explicit no-op: the actual persistent process there
+(the Stufe-1 login-autostart Scheduled Task `CorvinOS-Console`, registered
+by `install.ps1` per ADR-0184, running `corvin-supervisor.ps1` which
+relaunches the console on crash) was never touched at all.
+
+Fixed by reusing `ops.launcher.service_entry._quiesce_stage1` — the same
+cross-platform console-stop logic `corvin-service` already uses for the
+Stufe1→Stufe2 handoff — instead of re-implementing per-OS subprocess calls:
+it already gets Windows (`schtasks /end`), macOS (`launchctl bootout` in the
+right GUI domain), and Linux (`systemctl --user disable --now`) each right,
+including SUDO_USER/uid edge cases. On POSIX with systemd --user available,
+`stop()` additionally calls `bridge.sh down` (the real subcommand) to also
+tear down every messaging-bridge channel unit and timer, which
+`_quiesce_stage1` does not touch. A failing `bridge.sh down` is now surfaced
+(printed) instead of silently discarded.
+
+Known gap, not silently claimed as complete: Windows bridge channels
+registered via `bridge_manager.py`'s own per-channel autostart
+(`ensure_windows_autostart`) are separate Scheduled Tasks this fix does not
+enumerate — the console (the primary, default-registered autostart target)
+is covered.
+
+Regression tests: `ops/launcher/corvin/tests/test_stop_command.py` (9 cases)
+— full `ops/launcher` suite: 101 passed, 1 skipped, 0 regressions.
+
 ## [0.10.106] — 2026-08-03 — Windows autostart Scheduled Task never picked up code fixes on an already-running bridge
 
 ### Fixed — package upgrades didn't refresh an already-registered Scheduled Task
