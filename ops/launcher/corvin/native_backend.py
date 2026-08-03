@@ -101,10 +101,69 @@ def start(foreground: bool = True) -> int:
 
 
 def stop() -> None:
+    """Stop whatever native daemon this instance is running as.
+
+    2026-08-03 fix: this used to call ``bridge.sh stop`` on POSIX — not a
+    real subcommand (bridge.sh only knows ``up|down|status|restart|
+    install-units|logs|tail|fg|console|doctor``), so every call silently
+    no-op'd and ``corvin gateway stop`` never actually stopped anything on
+    the most common native install path. On Windows it was an explicit
+    no-op, leaving the DEFAULT Stufe-1 login-autostart (``install.ps1`` /
+    ADR-0184 — a Scheduled Task named ``CorvinOS-Console`` running
+    ``corvin-supervisor.ps1``, which relaunches the console on crash) with
+    no way to be stopped from this CLI at all.
+
+    Two complementary mechanisms, both best-effort and never fatal:
+
+    1. ``ops.launcher.service_entry._quiesce_stage1(stop_running=True)`` —
+       the SAME cross-platform console-stop logic ``corvin-service`` already
+       uses when handing off Stufe 1 → Stufe 2 (ADR-0184). Reused rather
+       than re-implemented: it already gets the Windows Scheduled Task
+       (``schtasks /end``), the macOS LaunchAgent (``launchctl bootout`` in
+       the right GUI domain), and the Linux systemd user unit
+       (``systemctl --user disable --now corvin-webui.service``) each
+       right, including edge cases (SUDO_USER resolution, missing uid) this
+       function would otherwise have to duplicate and could easily get
+       subtly wrong. Covers the console on all three platforms.
+    2. ``bridge.sh down`` (POSIX with systemd --user only) — additionally
+       tears down every messaging-bridge channel unit and timer
+       ``bridge.sh up`` started (``ALL_UNITS`` — Discord/Telegram/Slack/…
+       plus the session-timeout/audit-verify/etc. timers), which
+       ``_quiesce_stage1`` does not touch. On macOS / WSL2 without systemd
+       this call itself prints a clear fallback message rather than
+       silently doing nothing (bridge.sh's own ``require_systemd`` guard) —
+       the console is still covered by step 1 above on that host.
+
+    Windows bridge channels registered via ``bridge_manager.py``'s own
+    per-channel autostart (``ensure_windows_autostart``) are NOT covered by
+    either mechanism — a narrower, separate Scheduled Task per channel this
+    function does not enumerate. The console (the primary, default-registered
+    autostart target) is covered; a channel-specific gap is a known
+    follow-up, not silently claimed as complete.
+    """
+    try:
+        from ops.launcher.service_entry import _quiesce_stage1  # noqa: PLC0415
+        _quiesce_stage1(stop_running=True)
+    except Exception:  # noqa: BLE001 — best-effort; must never block the rest of stop()
+        pass
+
     if os.name == "nt":
-        # bridge_manager.py has no persistent daemon to stop — processes are
-        # children of the foreground Python process and die when it exits.
         return
     bridge_sh = _find_bridge_sh()
-    if bridge_sh:
-        subprocess.run(["bash", str(bridge_sh), "stop"], capture_output=True)
+    if not bridge_sh:
+        # No source-tree bridge.sh (e.g. a POSIX pip-wheel install without a
+        # bash on PATH) — bridge_manager.py, the vendored fallback, has no
+        # daemon-mode verb to stop either (only fg/ensure-node/doctor), so
+        # there is nothing more this backend manages beyond the console
+        # already handled above.
+        return
+    result = subprocess.run(
+        ["bash", str(bridge_sh), "down"], capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        # Surface it — silently swallowing this (the old `capture_output=True`
+        # with the result discarded) is exactly how the "stop" typo above
+        # went unnoticed: a failed stop looked identical to a successful one.
+        out = (result.stdout or "") + (result.stderr or "")
+        if out.strip():
+            print(out.strip())

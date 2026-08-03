@@ -3,6 +3,7 @@ corvin — Corvin launcher CLI
 
 Commands:
   corvin start                         Smart start: setup if needed, then launch + open browser
+  corvin stop                          Shut Corvin down (console + bridges); restart with `corvin serve`
   corvin open                          Open the web console in your browser
   corvin setup [--yes] [--model TAG] [--profile eu-production]
   corvin gateway start
@@ -405,7 +406,22 @@ def cmd_gateway_stop(args: argparse.Namespace) -> int:
     b = be.get()
     b.stop()
     print("  Corvin stopped.")
+    print(f"  Run {_bold('corvin serve')} to start it again.")
     return 0
+
+
+# ── stop (top-level alias) ────────────────────────────────────────────────────
+
+def cmd_stop(args: argparse.Namespace) -> int:
+    """Shut Corvin down — whatever is currently running natively or as a
+    Scheduled Task/systemd daemon — so it can be started again with
+    ``corvin serve``. Top-level alias for ``corvin gateway stop`` — the
+    ``gateway`` noun reads as "just the messaging bridges" even though the
+    same call also tears down the console unit on Linux; a bare top-level
+    verb matching ``corvin start`` is the more discoverable shape for "shut
+    everything down."
+    """
+    return cmd_gateway_stop(args)
 
 
 def cmd_gateway_setup(args: argparse.Namespace) -> int:
@@ -644,9 +660,11 @@ def _build_parser() -> argparse.ArgumentParser:
             Quick start (pip install, no Docker needed):
               corvin serve                 Start console directly, open browser
               corvin serve --port 9000     Use a custom port
+              corvin stop                  Shut Corvin down; restart with `corvin serve`
 
             Quick start (Docker):
               corvin start                 Setup if needed, start gateway, open browser
+              corvin stop                  Shut Corvin down (console + bridges)
               corvin open                  Open the web console in your browser
               corvin setup                 Interactive configuration wizard
               corvin setup --yes --model qwen3:8b   Non-interactive (for ollama launch)
@@ -680,6 +698,9 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="Port for native mode (default: 8765)")
     st.add_argument("--no-browser", action="store_true",
                     help="Do not open the browser (native mode)")
+
+    # stop (top-level alias for `gateway stop`)
+    sub.add_parser("stop", help="Shut Corvin down (console + bridges) so it can be restarted")
 
     # open
     sub.add_parser("open", help="Open the web console in your browser")
@@ -757,6 +778,9 @@ def main() -> None:
 
     elif args.command == "start":
         sys.exit(cmd_start(args))
+
+    elif args.command == "stop":
+        sys.exit(cmd_stop(args))
 
     elif args.command == "open":
         sys.exit(cmd_open(args))
