@@ -7,6 +7,44 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.102] — 2026-08-03 — audit chain had zero cross-process write locking on Windows
+
+### Fixed — GDPR-relevant compliance gap: concurrent writers could silently fork the audit hash-chain on Windows
+
+Reported live: a real Windows install's boot was permanently refused by
+the mandatory, non-overridable compliance tripwire (ADR-0232/0233) —
+"audit_chain_intact: 2 broken record(s) in the last 200; the audit
+writer is not sound (healing failed)". The tripwire worked exactly as
+designed; the writer underneath it did not.
+
+Root cause: the audit chain's cross-process write lock is
+`fcntl.flock()`, and forge's own Windows compat shim intentionally
+degrades `flock`/`lockf` to a no-op on Windows — correct for forge's
+registry files (single-host, already atomic via temp-file+rename), but
+wrong for the audit chain specifically: the lock exists because
+voice-adapter, the console, and every messenger-bridge daemon are
+different **processes** writing the same chain, on every platform
+including Windows. With no real lock, two racing writers could both
+read the same `prev_hash` and both append a record claiming to follow
+it — a silent, permanent hash-chain fork (the chain is append-only),
+accumulating over time until enough breaks reached the tripwire's
+tail-check window.
+
+Fixed with real Windows locking via `msvcrt.locking()` (a fixed
+mutex-byte-at-offset-0 idiom, since `msvcrt` has no whole-file or
+shared/exclusive lock like `flock`) for this one security-critical
+section. POSIX behavior is unchanged (still real `fcntl.flock`). See
+ADR-0266 for the full three-level analysis.
+
+**Does not repair a chain already corrupted by this gap before
+upgrading** — an operator hitting the boot tripwire on an
+already-corrupted chain still needs to archive the broken chain (never
+delete — it remains evidence) and let a fresh one start, or restore a
+backup. This release only prevents *new* corruption going forward.
+
+185 tests green (full existing audit-chain suite unaffected, plus a new
+dedicated Windows-lock test file).
+
 ## [0.10.100] — 2026-08-02 — Windows bridge no longer flashes a visible terminal on every turn
 
 ### Fixed — every engine spawn on Windows allocated a brand-new, visible console
