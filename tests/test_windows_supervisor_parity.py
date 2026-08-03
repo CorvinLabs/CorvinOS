@@ -493,34 +493,136 @@ class TestWindowsAutostartRegistrationHasNoVisibleWindow:
     """2026-08-02 real bug, reported live: an extra terminal window flashed
     up on Windows that the user had to click away/close. Root cause:
     bridge_manager.py's ensure_windows_autostart() (added in the 0.10.92
-    fix for missing bridge autostart supervision) spawns powershell.exe via
+    fix for missing bridge autostart supervision) spawned powershell.exe via
     a bare subprocess.run with no CREATE_NO_WINDOW/DETACHED_PROCESS flag --
     reintroducing, for THIS specific call, exactly the class of bug 0.10.91
     had just fixed for the node daemon's own launch. Windows allocates a
     brand-new, VISIBLE console window for any console app spawned without
     that flag from a parent that itself has no attached console (the web
-    console backend, started hidden)."""
+    console backend, started hidden).
+
+    2026-08-03: bridge_manager.py's own subprocess.run() call sites (this
+    one included) were consolidated behind a single `_run()` wrapper that
+    applies CREATE_NO_WINDOW by default for every plain subprocess.run() in
+    the file (see operator/bridges/tests/test_bridge_manager_no_console_
+    window.py, which pins _run() itself and drift-guards that no bare
+    subprocess.run() call bypasses it). This test now only pins that
+    ensure_windows_autostart routes through that wrapper rather than
+    reintroducing its own bare subprocess.run()."""
 
     def test_ensure_windows_autostart_spawns_with_no_visible_window(self) -> None:
         src = _BRIDGE_MANAGER.read_text(encoding="utf-8")
         idx = src.index("def ensure_windows_autostart")
         next_def_idx = src.index("\ndef ", idx + 1)
         body = src[idx:next_def_idx]
-        assert "subprocess.run(" in body
-        run_idx = body.index("subprocess.run(")
-        # The creationflags kwarg must be part of THIS specific call, not
-        # some other subprocess.run elsewhere in the file.
-        call_end = body.index(")", body.index("timeout=60", run_idx))
-        call_text = body[run_idx:call_end]
-        assert "creationflags" in call_text, (
-            "ensure_windows_autostart's subprocess.run call must pass "
-            "creationflags=...CREATE_NO_WINDOW... -- otherwise Windows "
-            "opens a new, visible console window for powershell.exe when "
+        assert "subprocess.run(" not in body, (
+            "ensure_windows_autostart must call the module's _run() wrapper, "
+            "not a bare subprocess.run() -- a bare call here would bypass "
+            "the centralized CREATE_NO_WINDOW fix and reintroduce the "
+            "visible-console-window bug for this specific spawn"
+        )
+        assert "_run(" in body, (
+            "ensure_windows_autostart must spawn powershell.exe via the "
+            "module's _run() wrapper so CREATE_NO_WINDOW is applied -- "
+            "otherwise Windows opens a new, visible console window when "
             "spawned from a console-less parent (the hidden web console "
             "backend), exactly matching the live report of an extra "
             "terminal window the user has to dismiss"
         )
-        assert "CREATE_NO_WINDOW" in call_text
+
+
+class TestScheduledTaskLaunchesViaHiddenVbsWrapper:
+    """2026-08-03 real bug, reported live AGAIN after 0.10.103 (which only
+    fixed bridge_manager.py's own Python-side subprocess spawns): a console
+    window still flashed at logon. Root cause this time: the Scheduled Task
+    Action itself executes `powershell.exe -WindowStyle Hidden ...` directly
+    -- and powershell.exe's own -WindowStyle switch is a well-known, widely
+    reported Windows/Task-Scheduler limitation (conhost/Windows Terminal
+    shows the console window BEFORE powershell.exe can hide itself), not
+    something fixable by passing the switch differently. No prior fix round
+    touched this because it's the Task Scheduler Action's own Execute
+    target, not a spawn made from already-running Python or PowerShell code.
+
+    Fix: both bridge.ps1's Install-AutostartTask and install.ps1's
+    Install-CorvinAutostart now generate a WScript.Shell .vbs wrapper and
+    point the Scheduled Task Action at `wscript.exe` (a GUI-subsystem
+    executable with no console of its own) instead of `powershell.exe`
+    directly. WScript.Shell.Run(cmd, 0, False) suppresses the real
+    powershell.exe child's window AT CREATION, not after -- the standard,
+    documented fix for this exact class of bug."""
+
+    def test_bridge_ps1_action_executes_wscript_not_powershell(self) -> None:
+        src = _BRIDGE_PS1.read_text(encoding="utf-8")
+        idx = src.index("function Install-AutostartTask")
+        end_idx = src.index("Install-AutostartTask -TaskName", idx)
+        body = src[idx:end_idx]
+        assert 'New-ScheduledTaskAction -Execute "wscript.exe"' in body, (
+            "bridge.ps1: the Scheduled Task Action must execute wscript.exe "
+            "(running a generated .vbs wrapper), not powershell.exe directly "
+            "-- powershell.exe's own -WindowStyle Hidden does not reliably "
+            "suppress the console window when launched by Task Scheduler"
+        )
+        assert 'New-ScheduledTaskAction -Execute "powershell.exe"' not in body, (
+            "bridge.ps1: the Scheduled Task Action must not execute "
+            "powershell.exe directly anymore"
+        )
+
+    def test_install_ps1_action_executes_wscript_not_powershell(self) -> None:
+        src = _INSTALL_PS1.read_text(encoding="utf-8")
+        idx = src.index("function Install-CorvinAutostart")
+        end_idx = src.index("function Install-CorvinFirewallRule", idx)
+        body = src[idx:end_idx]
+        assert 'New-ScheduledTaskAction -Execute "wscript.exe"' in body, (
+            "install.ps1: the Scheduled Task Action must execute wscript.exe "
+            "(running a generated .vbs wrapper), not powershell.exe directly"
+        )
+        assert 'New-ScheduledTaskAction -Execute "powershell.exe"' not in body, (
+            "install.ps1: the Scheduled Task Action must not execute "
+            "powershell.exe directly anymore"
+        )
+
+    def test_both_files_generate_a_vbs_wrapper_using_wscript_shell_run_hidden(self) -> None:
+        for label, path in (("bridge.ps1", _BRIDGE_PS1), ("install.ps1", _INSTALL_PS1)):
+            src = path.read_text(encoding="utf-8")
+            assert 'CreateObject(""WScript.Shell"").Run' in src, (
+                f"{label}: expected a generated .vbs body using "
+                f"WScript.Shell.Run to launch powershell.exe hidden"
+            )
+            # The third Run() argument (window style) must be 0 (hidden at
+            # creation) -- 1/Normal or any nonzero-but-visible style would
+            # reintroduce a visible window.
+            run_idx = src.index('CreateObject(""WScript.Shell"").Run')
+            window = src[run_idx:run_idx + 300]
+            assert re.search(r",\s*0,\s*False", window), (
+                f"{label}: WScript.Shell.Run must be called with windowStyle=0 "
+                f"(hidden) and waitOnReturn=False"
+            )
+
+    def test_both_files_launch_wscript_with_batch_flag_and_quoted_path(self) -> None:
+        for label, path in (("bridge.ps1", _BRIDGE_PS1), ("install.ps1", _INSTALL_PS1)):
+            src = path.read_text(encoding="utf-8")
+            assert '-Argument "//B `"$VbsPath`""' in src, (
+                f"{label}: the Scheduled Task Action argument must invoke "
+                f"wscript.exe with //B (batch mode, suppresses error dialogs) "
+                f"against the quoted .vbs path"
+            )
+
+    def test_install_ps1_fallback_shortcut_and_immediate_start_use_wscript_too(self) -> None:
+        """The Startup-folder-shortcut fallback (denied Scheduled-Task
+        permission) must get the same real hiding as the primary path -- a
+        .lnk's own WindowStyle property has no true 'hidden' state, only
+        Minimized, which still leaves a closable taskbar entry."""
+        src = _INSTALL_PS1.read_text(encoding="utf-8")
+        idx = src.index("falling back to a Startup-folder shortcut")
+        window = src[idx:idx + 1200]
+        assert '-TargetPath "wscript.exe"' in window, (
+            "install.ps1: the Startup-folder shortcut fallback must target "
+            "wscript.exe (running the same .vbs wrapper), not powershell.exe"
+        )
+        assert '-FilePath "wscript.exe"' in window, (
+            "install.ps1: the immediate one-shot start in this fallback "
+            "must also launch via wscript.exe, not powershell.exe directly"
+        )
 
 
 if __name__ == "__main__":
@@ -559,5 +661,11 @@ if __name__ == "__main__":
     t9.test_wait_for_exit_is_conditional_not_unconditional()
     t10 = TestWindowsAutostartRegistrationHasNoVisibleWindow()
     t10.test_ensure_windows_autostart_spawns_with_no_visible_window()
+    t11 = TestScheduledTaskLaunchesViaHiddenVbsWrapper()
+    t11.test_bridge_ps1_action_executes_wscript_not_powershell()
+    t11.test_install_ps1_action_executes_wscript_not_powershell()
+    t11.test_both_files_generate_a_vbs_wrapper_using_wscript_shell_run_hidden()
+    t11.test_both_files_launch_wscript_with_batch_flag_and_quoted_path()
+    t11.test_install_ps1_fallback_shortcut_and_immediate_start_use_wscript_too()
     print("all tests passed")
     sys.exit(0)
