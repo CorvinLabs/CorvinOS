@@ -69,6 +69,41 @@ try:
 except Exception:  # noqa: BLE001 — never let a path quirk break the launcher
     _CHANNELS = ["discord", "telegram", "whatsapp", "slack", "email", "signal", "teams"]
 
+try:
+    from agents._win_shim import no_console_window_flags  # type: ignore
+except Exception:  # noqa: BLE001 — see _run()'s own fallback below
+    no_console_window_flags = None  # type: ignore[assignment]
+
+
+def _run(cmd, **kwargs):
+    """subprocess.run(), but never flashes a console window on Windows.
+
+    2026-08-03, reported live: after a fresh Windows install, starting a
+    bridge from the console still popped a visible console window — despite
+    0.10.91/0.10.95/850e50f each having already fixed a DIFFERENT spawn site
+    in this exact codebase for this exact symptom. Root cause: this module
+    alone has 10+ one-shot subprocess.run() call sites (node --version,
+    winget/npm install, tasklist, wmic, powershell CIM, taskkill...), each
+    hand-rolled, each needing its own CREATE_NO_WINDOW — every prior fix
+    round closed one call site and left the next one to be found the hard
+    way. bridge_manager.py's web-console caller has no console of its own
+    (started detached/hidden), so spawning ANY console-subsystem child
+    without CREATE_NO_WINDOW makes Windows allocate a brand-new, visible one
+    for it. Routing every plain subprocess.run() in this file through this
+    one wrapper makes the flag structural instead of a per-call-site thing
+    to remember — a new call site gets it for free.
+
+    Deliberately NOT used for start_fg()'s own Popen (the explicit
+    foreground CLI command — inheriting the user's own console there is
+    correct, not a bug) or the long-lived daemon Popen calls in
+    start_channel_detached()/ensure_adapter_detached() (already carry their
+    own DETACHED_PROCESS combo, which implies CREATE_NO_WINDOW). no-op on
+    non-Windows: subprocess.run() accepts creationflags=0 on every platform.
+    """
+    if no_console_window_flags is not None:
+        kwargs.setdefault("creationflags", no_console_window_flags())
+    return subprocess.run(cmd, **kwargs)
+
 
 def _corvin_home() -> Path:
     """Resolve the runtime home the SAME way the daemons + adapter do, so the
@@ -208,7 +243,7 @@ _MIN_NODE_MAJOR = 20
 def _node_major(node_path: str) -> Optional[int]:
     """Return the major version of a node binary (e.g. 22), or None on error."""
     try:
-        r = subprocess.run([node_path, "--version"], capture_output=True, text=True, timeout=5)
+        r = _run([node_path, "--version"], capture_output=True, text=True, timeout=5)
         v = (r.stdout or "").strip().lstrip("v")
         return int(v.split(".")[0]) if v else None
     except Exception:  # noqa: BLE001
@@ -266,7 +301,7 @@ def ensure_node() -> Optional[str]:
 
     if sys.platform == "win32" and shutil.which("winget"):
         _info("  → winget install OpenJS.NodeJS.LTS")
-        rc = subprocess.run(
+        rc = _run(
             [
                 "winget", "install", "--silent",
                 "--accept-package-agreements",
@@ -440,7 +475,7 @@ def _materialise_channel(channel: str, npm_bin: str) -> Optional[Path]:
         # system v18 and Baileys fails its "requires Node 20+" engine gate.
         env = os.environ.copy()
         env["PATH"] = str(Path(npm_bin).parent) + os.pathsep + env.get("PATH", "")
-        r = subprocess.run(
+        r = _run(
             _npm_install_cmd(npm_bin),
             cwd=runtime,
             capture_output=True,
@@ -622,7 +657,7 @@ def _hard_kill(p: subprocess.Popen) -> None:
     """
     if sys.platform.startswith("win"):
         try:
-            subprocess.run(
+            _run(
                 ["taskkill", "/T", "/F", "/PID", str(p.pid)],
                 capture_output=True, timeout=10,
             )
@@ -795,7 +830,7 @@ def _systemd_unit_active(channel: str) -> bool:
     applies — this is additive, not a replacement.
     """
     try:
-        proc = subprocess.run(
+        proc = _run(
             ["systemctl", "--user", "is-active", f"corvin-voice-bridge-{channel}.service"],
             capture_output=True, text=True, timeout=5, check=False,
         )
@@ -816,7 +851,7 @@ def _pid_alive(pid: int) -> bool:
         return False
     if os.name == "nt":
         try:
-            out = subprocess.run(
+            out = _run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                 capture_output=True, text=True, check=False, timeout=10,
             ).stdout
@@ -850,7 +885,7 @@ def _pid_cmdline(pid: int) -> str:
     except OSError:
         # macOS / no procfs — fall back to ps.
         try:
-            return subprocess.run(
+            return _run(
                 ["ps", "-p", str(pid), "-o", "command="],
                 capture_output=True, text=True, check=False, timeout=10,
             ).stdout
@@ -892,7 +927,7 @@ def _adapter_running_pid(adapter_py: Path) -> int:
                 return other
     else:
         try:
-            out = subprocess.run(
+            out = _run(
                 ["pgrep", "-f", marker], capture_output=True, text=True,
                 check=False, timeout=10,
             ).stdout
@@ -946,7 +981,7 @@ def _win_process_snapshot() -> tuple[dict[int, str], bool]:
     powershell = shutil.which("powershell") or shutil.which("pwsh")
     if powershell:
         try:
-            out = subprocess.run(
+            out = _run(
                 [powershell, "-NoProfile", "-NonInteractive", "-Command",
                  "Get-CimInstance Win32_Process | "
                  "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"],
@@ -965,7 +1000,7 @@ def _win_process_snapshot() -> tuple[dict[int, str], bool]:
 
     # Fallback: legacy wmic.exe (older Windows, or PowerShell itself blocked).
     try:
-        out = subprocess.run(
+        out = _run(
             ["wmic", "process", "get", "ProcessId,CommandLine", "/FORMAT:LIST"],
             capture_output=True, text=True, check=False, timeout=15,
         ).stdout
@@ -1037,7 +1072,7 @@ def _scan_channel_daemon_pid(channel: str) -> tuple[int, bool]:
 
     # macOS / BSD — no procfs, no wmic.
     try:
-        out = subprocess.run(
+        out = _run(
             ["pgrep", "-f", f"{channel}/daemon.js"],
             capture_output=True, text=True, check=False, timeout=10,
         ).stdout
@@ -1195,23 +1230,10 @@ def ensure_windows_autostart(channel: str) -> dict:
     if not bridge_ps1.exists():
         return {"ok": False, "error": f"bridge.ps1 not found at {bridge_ps1}"}
     try:
-        # CREATE_NO_WINDOW (0x08000000): without this, spawning a console
-        # app (powershell.exe) from a parent that itself has no attached
-        # console (the web console backend, started hidden) makes Windows
-        # allocate a BRAND-NEW, VISIBLE console window for the child --
-        # exactly the flash-of-a-terminal-the-user-has-to-dismiss bug
-        # 0.10.91 had just fixed for the node daemon, reintroduced here for
-        # this call. getattr(...) with a 0 default keeps this a no-op on
-        # non-Windows test runs, where the real stdlib `subprocess` module
-        # has no CREATE_NO_WINDOW attribute at all (this branch is already
-        # Windows-only per the sys.platform check above, but the attribute
-        # access itself must still not raise when subprocess.run is mocked
-        # out in tests running on Linux CI).
-        proc = subprocess.run(
+        proc = _run(
             ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", str(bridge_ps1), "install-autostart", channel],
             cwd=str(_BRIDGE_DIR), capture_output=True, text=True, timeout=60,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         _info(f"  ⚠ windows autostart registration for {channel} failed: {exc}")
@@ -1384,7 +1406,7 @@ def cmd_doctor() -> int:
     failures = 0
     node = find_node()
     if node:
-        ver = subprocess.run(
+        ver = _run(
             [node, "--version"], capture_output=True, text=True
         ).stdout.strip()
         _info(f"  ✓ Node.js {ver} ({node})")

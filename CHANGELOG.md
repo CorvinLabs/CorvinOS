@@ -7,6 +7,37 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.103] — 2026-08-03 — bridge start still flashed a visible console on Windows
+
+### Fixed — bridge_manager.py had 10+ subprocess spawns with no CREATE_NO_WINDOW
+
+Reported live: after a fresh Windows install, starting a bridge from the
+console still popped a visible console window — despite 0.10.91, 0.10.95
+and the previous engine-spawn fix each having already closed a different
+spawn site for this exact symptom this session.
+
+Root cause: `bridge_manager.py` alone had 10+ independent, hand-rolled
+`subprocess.run()` call sites (Node.js version check, winget/npm install,
+`tasklist`, `wmic`, PowerShell `Get-CimInstance`, `taskkill`, `systemctl`,
+`ps`, `pgrep`) — none of them set `CREATE_NO_WINDOW`. The web console
+backend that spawns these has no console of its own (started detached/
+hidden), so any console-subsystem child spawned without that flag makes
+Windows allocate a brand-new, visible one. The most likely match for the
+reported symptom: `_materialise_channel()`'s `npm install`, which runs on
+every first-time bridge start where `node_modules` doesn't exist yet —
+exactly what a fresh install triggers.
+
+Every prior fix round in this area closed exactly one call site and left
+the next one to be found the hard way. Fixed structurally this time: all
+plain `subprocess.run()` calls in `bridge_manager.py` now go through one
+local `_run()` wrapper that applies `agents._win_shim
+.no_console_window_flags()` by default, so a future call site gets the
+fix for free instead of needing to remember it. A new static drift-guard
+test (AST-based, not a grep) fails the build if a bare `subprocess.run()`
+call ever reappears outside that wrapper. `bridge.ps1` and
+`corvin-supervisor.ps1` were audited too — both already use
+`-WindowStyle Hidden` correctly, no changes needed there.
+
 ## [0.10.102] — 2026-08-03 — audit chain had zero cross-process write locking on Windows
 
 ### Fixed — GDPR-relevant compliance gap: concurrent writers could silently fork the audit hash-chain on Windows
