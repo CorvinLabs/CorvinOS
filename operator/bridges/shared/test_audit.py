@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "operator" / "bridges" / "shared"))
@@ -326,11 +327,42 @@ def test_forge_broken_import_indistinguishable_from_absent():
           health_absent == health_broken == (True, 0))
 
 
+def test_audit_health_check_reuses_shared_lock_helper() -> None:
+    """2026-08-03, reported live: audit_health_check's shared read-lock used
+    to be its OWN fcntl-only implementation — a second copy of the exact
+    Windows-locking gap fixed in security_events.py's write lock (the inert
+    fcntl shim there silently disabled cross-process mutual exclusion,
+    corrupting the audit chain over time on Windows). Now reuses
+    security_events._lock_chain/_unlock_chain (real msvcrt locking on
+    Windows) instead of a second, drifting implementation."""
+    if _voice_audit._se is None:
+        t("audit_health_check reuses _se._lock_chain/_unlock_chain",
+          False, detail="forge not importable in this environment — cannot verify")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "audit.jsonl"
+        _voice_audit.audit_event("test.probe", details={}, channel="", chat_key="", user="")
+        # Re-point audit_path() at our tmp file for a clean, isolated check.
+        with mock.patch.object(_voice_audit, "audit_path", return_value=p):
+            _voice_audit.audit_event("test.probe", details={}, channel="", chat_key="", user="")
+            with mock.patch.object(_voice_audit._se, "_lock_chain",
+                                    wraps=_voice_audit._se._lock_chain) as lock_spy, \
+                 mock.patch.object(_voice_audit._se, "_unlock_chain",
+                                    wraps=_voice_audit._se._unlock_chain) as unlock_spy:
+                _voice_audit.audit_health_check(p)
+        t("audit_health_check reuses _se._lock_chain/_unlock_chain",
+          lock_spy.call_count == 1 and unlock_spy.call_count == 1)
+        t("audit_health_check takes the SHARED lock, not exclusive",
+          lock_spy.call_args.kwargs.get("shared") is True
+          or (len(lock_spy.call_args.args) > 1 and lock_spy.call_args.args[1] is True))
+
+
 def main() -> int:
     test_bridge_events_chain_verifies_clean()
     test_tampered_audit_fails_verify()
     test_audit_silent_noop_when_forge_missing()
     test_forge_broken_import_indistinguishable_from_absent()
+    test_audit_health_check_reuses_shared_lock_helper()
     print(f"\n{PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 
