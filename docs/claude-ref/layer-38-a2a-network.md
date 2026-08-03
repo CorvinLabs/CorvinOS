@@ -753,12 +753,24 @@ demonstrably successful friendship-ack handshake:
   `operator/bridges/shared/test_a2a_installed_path_consistency.py` simulates an installed
   layout and asserts all four resolvers agree.
 
-**Still not fixed / left as a documented gap:** `corvin serve --host 0.0.0.0` (or an
-equivalent LAN-reachable bind) is still not the default — the receiver stays loopback-only
-out of the box, matching the loopback-security-boundary design documented at the top of
-`corvin_gateway/app.py`. An operator who wants two LAN peers to reach each other directly
-must still explicitly opt in (`corvin serve --host 0.0.0.0` + a firewall rule on the
-receiving side) — this was evaluated and deliberately NOT changed to a default-on binding,
-since that would silently change the security posture of every existing and new install
-(violates the project's "ship dark by default" feature-flag policy). A friendlier opt-in
-(e.g. an explicit install-time prompt) remains a documented follow-up, not yet built.
+**LAN bind toggle (`a2a_lan_bind`, 2026-08-04).** Deliberately did NOT change the default
+bind to `0.0.0.0` (would silently change the security posture of every install). Instead
+added a single feature flag, off by default, that all three places a bind host gets decided
+now read:
+
+- `ops/launcher/corvin/cli.py::_default_bind_host()` — `corvin serve` with no explicit
+  `--host` flag.
+- `corvinOS/installer/core.py::_webui_bind_host()` — Stufe-1 login-autostart command,
+  read when the autostart entry is (re-)registered.
+- `ops/launcher/service_entry.py::_webui_bind_host()` — Stufe-2 opt-in always-on service,
+  read at `corvin-service install` time.
+
+An explicit `--host` on `corvin serve` always overrides the flag in either direction. The
+flag shows up automatically in Settings -> Features (generic `GET`/`PUT
+/settings/features` — no custom frontend needed) since every registered `FeatureFlag`
+renders there by construction. Flipping the flag does NOT retroactively rebind an
+already-running process or an already-registered autostart service — it only changes what
+the NEXT `corvin serve` / next (re-)registration binds to; the operator still restarts (or
+re-installs the autostart entry) once, same as any other bind-address change would require
+in any server. Tests: `ops/launcher/corvin/tests/test_lan_bind_flag.py` (7, both flag
+states + explicit-override + fail-closed-on-resolution-error).

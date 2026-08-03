@@ -343,6 +343,30 @@ REGISTRY: tuple[FeatureFlag, ...] = (
         tags=("a2a",),
     ),
     FeatureFlag(
+        id="a2a_lan_bind",
+        label="Bind A2A/Console to all network interfaces (0.0.0.0)",
+        description=(
+            "Off (default): corvin serve / the login-autostart / the opt-in "
+            "always-on service all bind 127.0.0.1 only — the loopback binding "
+            "IS the security boundary for the A2A receiver (/v1/a2a/receive, "
+            "/v1/a2a/ping, /v1/a2a/friendship-ack all live on the same port) "
+            "and the Console API. On: the NEXT server start binds 0.0.0.0 "
+            "instead, so a paired peer on the same LAN can reach this instance "
+            "directly (Stage 1, no relay needed) without hand-editing a "
+            "--host flag or a systemd/Task-Scheduler unit. This is a genuine "
+            "trust-model change — anything on the local network segment can "
+            "then reach the A2A endpoints and, unless a firewall rule is also "
+            "added, attempt to pair. Does NOT take effect on an already-"
+            "running process — restart corvin serve (or the autostart "
+            "service) after flipping this for it to bind the new interface. "
+            "An explicit --host CLI flag on corvin serve always overrides "
+            "this flag in either direction."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("a2a", "network"),
+    ),
+    FeatureFlag(
         id="headless_api_mode",
         label="Headless API-only boot",
         description=(

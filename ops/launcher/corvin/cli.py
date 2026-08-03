@@ -192,6 +192,21 @@ def _print_hermes_status() -> None:
         pass  # Hermes status is informational; never block console start
 
 
+def _default_bind_host() -> str:
+    """127.0.0.1 unless the operator opted in to a2a_lan_bind (Settings ->
+    Features), in which case 0.0.0.0 — best-effort, never raises: any
+    failure to resolve the flag (feature_flags import error, corrupt
+    overlay, no tenant configured yet on first boot) must degrade to the
+    loopback-only default, never to an accidentally-wide-open bind."""
+    try:
+        from corvin_console import feature_flags as _ff  # noqa: PLC0415
+        if _ff.is_enabled("a2a_lan_bind"):
+            return "0.0.0.0"
+    except Exception:  # noqa: BLE001
+        pass
+    return "127.0.0.1"
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     """Start the CorvinOS console directly via uvicorn — no Docker required.
 
@@ -201,7 +216,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
     """
     port: int = getattr(args, "port", 8765)
     no_browser: bool = getattr(args, "no_browser", False)
-    host: str = getattr(args, "host", "127.0.0.1")
+    # An explicit --host always wins in either direction (advanced/scripted
+    # use). Absent that, Settings -> Features -> a2a_lan_bind decides —
+    # default off, so a fresh/upgraded install stays loopback-only.
+    host: str = getattr(args, "host", None) or _default_bind_host()
 
     relaunch_argv = (
         ["corvin", "serve", f"--port={port}", f"--host={host}"]
@@ -685,8 +703,9 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="TCP port to listen on (default: 8765)")
     sv.add_argument("--no-browser", action="store_true",
                     help="Do not open the browser automatically")
-    sv.add_argument("--host", default="127.0.0.1", metavar="HOST",
-                    help="Bind address (default: 127.0.0.1)")
+    sv.add_argument("--host", default=None, metavar="HOST",
+                    help="Bind address (default: 127.0.0.1, or 0.0.0.0 if "
+                         "Settings -> Features -> a2a_lan_bind is on)")
 
     # start
     st = sub.add_parser("start", help="Setup if needed, start gateway, open browser")
