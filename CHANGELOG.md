@@ -7,6 +7,40 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.104] — 2026-08-03 — Task Scheduler autostart still flashed a console window
+
+### Fixed — Windows autostart's Scheduled Task Action executed powershell.exe directly
+
+Reported live, still reproducing after 0.10.103: a console window still
+flashed/stayed visible at Windows logon, even though 0.10.103 had already
+closed every subprocess.run() spawn site missing CREATE_NO_WINDOW in
+`bridge_manager.py`. That fix was Python-side only — it never touched the
+Windows autostart Scheduled Task itself, which is registered and launched
+entirely by PowerShell, before any Python process is involved.
+
+Root cause: both `bridge.ps1`'s `Install-AutostartTask` and `install.ps1`'s
+`Install-CorvinAutostart` register a Scheduled Task whose Action directly
+executes `powershell.exe -WindowStyle Hidden ...`. `powershell.exe`'s own
+`-WindowStyle` switch is a well-known, widely-reported Windows/Task
+Scheduler limitation: conhost/Windows Terminal allocates and briefly shows
+the console window *before* powershell.exe gets a chance to hide itself,
+so a window can still flash — or on some systems stay fully visible and
+closable — regardless of how correctly the switch is passed. No prior fix
+round touched this because it's the Task Scheduler Action's own launch
+target, not a spawn made by already-running code.
+
+Fixed by generating a small WScript.Shell `.vbs` wrapper and pointing the
+Scheduled Task Action at `wscript.exe` (a GUI-subsystem executable with no
+console of its own) instead of `powershell.exe` directly.
+`WScript.Shell.Run(cmd, 0, False)` suppresses the real powershell.exe
+child's window *at creation*, through a different OS code path than
+`-WindowStyle Hidden`'s hide-after-creation — the standard, documented fix
+for this exact class of bug. Applied to both the primary Scheduled Task
+path and the Startup-folder-shortcut fallback (accounts where Task
+Scheduler registration is denied) in both `bridge.ps1` and `install.ps1`,
+keeping the two files' autostart behavior in parity as already enforced by
+`tests/test_windows_supervisor_parity.py`.
+
 ## [0.10.103] — 2026-08-03 — bridge start still flashed a visible console on Windows
 
 ### Fixed — bridge_manager.py had 10+ subprocess spawns with no CREATE_NO_WINDOW

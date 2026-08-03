@@ -239,7 +239,35 @@ else:
             $ArgString = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Supervisor`" -Target `"$TargetArg`""
             if ($BridgeArg) { $ArgString += " -Bridge `"$BridgeArg`"" }
 
-            $Action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $ArgString
+            # 2026-08-03: reported live, still reproducing after 0.10.91/
+            # 0.10.92/0.10.103 each closed a DIFFERENT spawn site for this
+            # same "visible console at startup" symptom class -- because
+            # none of those touched THIS one. powershell.exe's own
+            # -WindowStyle Hidden is a well-known, widely-reported Windows
+            # limitation, not something fixable by passing it more
+            # correctly: conhost/Windows Terminal allocates and briefly
+            # shows the console window BEFORE powershell.exe gets a chance
+            # to hide itself, so a window still flashes (and on some
+            # systems stays fully visible/closable) at every logon,
+            # regardless of how this argument is passed. Task Scheduler
+            # executing powershell.exe directly as the Action can't avoid
+            # this from PowerShell's side at all.
+            #
+            # Fix: execute a generated WScript.Shell .vbs wrapper instead.
+            # wscript.exe is a GUI-subsystem executable (it never has a
+            # console of its own), and WScript.Shell.Run(cmd, 0, False)
+            # suppresses the CHILD's window at creation via a different OS
+            # code path than -WindowStyle Hidden's hide-after-creation --
+            # the standard, widely-documented fix for exactly this Task-
+            # Scheduler console-flash class of bug.
+            $VbsDir = Join-Path $env:CORVIN_HOME "bin"
+            $null = New-Item -ItemType Directory -Force -Path $VbsDir
+            $VbsPath = Join-Path $VbsDir "$TaskName.vbs"
+            $VbsEscapedArgs = $ArgString.Replace('"', '""')
+            $VbsContent = "CreateObject(""WScript.Shell"").Run ""powershell.exe $VbsEscapedArgs"", 0, False"
+            Set-Content -Path $VbsPath -Value $VbsContent -Encoding ASCII
+
+            $Action   = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$VbsPath`""
             $Trigger  = New-ScheduledTaskTrigger -AtLogOn
             # -Hidden mirrors install.ps1's Install-CorvinAutostart (keep both
             # supervisor registrations IDENTICAL in this regard -- a visible/

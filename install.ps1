@@ -286,15 +286,13 @@ function New-CorvinShortcut {
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][string]$TargetPath,
         [string]$Arguments = "",
-        [string]$Description = "CorvinOS",
-        [switch]$Hidden
+        [string]$Description = "CorvinOS"
     )
     $WshShell = New-Object -ComObject WScript.Shell
     $Shortcut = $WshShell.CreateShortcut($Path)
     $Shortcut.TargetPath = $TargetPath
     if ($Arguments) { $Shortcut.Arguments = $Arguments }
     $Shortcut.Description = $Description
-    if ($Hidden) { $Shortcut.WindowStyle = 7 }  # 7 = minimized; .lnk has no true "hidden"
     $Shortcut.Save()
 }
 
@@ -458,7 +456,22 @@ while (`$true) {
 "@ | Set-Content -Path $Supervisor -Encoding UTF8
 
     $SupervisorArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$SupervisorEscaped`""
-    $Action   = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $SupervisorArgs
+
+    # 2026-08-03: see bridge.ps1's Install-AutostartTask for the full
+    # writeup -- powershell.exe's own -WindowStyle Hidden is a well-known,
+    # widely-reported Windows limitation (conhost/Windows Terminal shows
+    # the console briefly BEFORE powershell.exe can hide itself), not
+    # something fixable by passing the switch more correctly. Launch via a
+    # generated WScript.Shell .vbs wrapper instead -- wscript.exe has no
+    # console of its own, and WScript.Shell.Run(cmd, 0, False) suppresses
+    # the child's window at creation, not after. Parity with bridge.ps1 is
+    # load-bearing (test_windows_supervisor_parity.py).
+    $VbsPath = Join-Path $BinDir "CorvinOS-Console.vbs"
+    $VbsEscapedArgs = $SupervisorArgs.Replace('"', '""')
+    $VbsContent = "CreateObject(""WScript.Shell"").Run ""powershell.exe $VbsEscapedArgs"", 0, False"
+    Set-Content -Path $VbsPath -Value $VbsContent -Encoding ASCII
+
+    $Action   = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B `"$VbsPath`""
     $Trigger  = New-ScheduledTaskTrigger -AtLogOn
     # -Hidden: belt-and-suspenders on top of the Action's own -WindowStyle
     # Hidden -- marks the TASK ITSELF as hidden in Task Scheduler's UI/API, so
@@ -491,11 +504,18 @@ while (`$true) {
     } catch {
         Write-Warn "Scheduled Task registration denied ($_) -- falling back to a Startup-folder shortcut (no admin rights needed)."
         $StartupDir = [Environment]::GetFolderPath("Startup")
+        # Target the SAME .vbs wrapper as the Scheduled Task path above, not
+        # powershell.exe directly -- a .lnk's own WindowStyle property (what
+        # -Hidden used to set here) has no true "hidden" state (only
+        # Minimized, hence the old comment), and even Minimized still leaves
+        # a taskbar entry the user can click and close. Routing through
+        # wscript.exe + WScript.Shell.Run(cmd, 0, False) gives this fallback
+        # the exact same real hiding the primary path now gets.
         New-CorvinShortcut -Path (Join-Path $StartupDir "CorvinOS.lnk") `
-            -TargetPath "powershell.exe" -Arguments $SupervisorArgs `
-            -Description "Starts the CorvinOS console at login" -Hidden
+            -TargetPath "wscript.exe" -Arguments "//B `"$VbsPath`"" `
+            -Description "Starts the CorvinOS console at login"
         # Start it once right now too -- this install shouldn't need a logoff/logon first.
-        Start-Process -FilePath "powershell.exe" -ArgumentList $SupervisorArgs -WindowStyle Hidden
+        Start-Process -FilePath "wscript.exe" -ArgumentList "//B", "`"$VbsPath`""
         return "startup-shortcut"
     }
 }
