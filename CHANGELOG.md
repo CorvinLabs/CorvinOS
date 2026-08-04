@@ -7,6 +7,39 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.111] — 2026-08-04 — Windows bridge autostart registration silently never ran (Access Denied on the Console task aborted it first)
+
+### Fixed — a failed Console Scheduled-Task registration blocked the Bridge task from ever being attempted
+
+Live-reported: every configured bridge (discord, whatsapp) logged
+`windows autostart registration for {channel} exited 1` on every
+`corvin-serve` start, with `Register-ScheduledTask : Access is denied`
+visible in the log at `bridge.ps1:286`.
+
+Root cause: `bridge.ps1` sets `$ErrorActionPreference = "Stop"` at file
+scope, turning every cmdlet error into a terminating one. Its
+`install-autostart <channel>` handler registered "CorvinOS-Console" FIRST,
+unconditionally, before "CorvinOS-Bridge-$Bridge" — so when the Console
+task failed (most likely a stale/foreign-ACL task left behind by
+install.ps1's own separate registration of the exact same task name), the
+whole command aborted before the per-channel Bridge task was ever
+attempted. `bridge_manager.ensure_windows_autostart()` calls this once per
+configured channel on every boot, so every bridge silently never got its
+own restart-on-reboot task, even though the bridge daemon itself was
+already running fine (this call is strictly best-effort, made after the
+daemon is confirmed up).
+
+Fixed two ways: each of the two Scheduled-Task registrations now has its
+own try/catch (independent failure domains — a Console-task failure can no
+longer block the Bridge task or vice versa), and
+`ensure_windows_autostart()` now sets `CORVIN_AUTOSTART_BRIDGE_ONLY=1` when
+invoking `bridge.ps1`, skipping the redundant Console re-registration
+entirely on the automatic path (install.ps1 already owns that task; a
+manual `bridge.ps1 install-autostart` run by hand still registers both,
+unchanged). Verified with real PowerShell Core execution: the actual
+`install-autostart` case body, extracted verbatim, run against faked
+Scheduled-Task cmdlets that reproduce the live failure.
+
 ## [0.10.110] — 2026-08-04 — `corvin serve` / `corvin-serve` crashed on Windows: `ModuleNotFoundError: No module named 'ops'`
 
 ### Fixed — `ops` and `ops.launcher` were implicit namespace packages, not regular packages
