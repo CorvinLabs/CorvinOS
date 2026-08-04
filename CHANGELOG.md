@@ -7,6 +7,70 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.114] — 2026-08-05 — Audit chain multi-tenant hardening + unification detection (ADR-0007)
+
+### Fixed — multi-tenant audit chain split now detected and reported non-blocking
+
+Live diagnostics found that ADR-0007's multi-tenant migration left the audit
+chain in two states: Core Audit (`tenants/_default/global/audit.jsonl`, small,
+with CRITICAL security events) and Forge Audit (`tenants/_default/global/forge/audit.jsonl`,
+full history). This split is expected during migration, but the system had no way
+to detect or report it to the operator.
+
+**Boot hardening**: Added `_check_audit_unification()` tripwire (reporting-only,
+never blocks boot) that detects when old (~/.corvin/global/forge/audit.jsonl) and
+new (~/.corvin/tenants/_default/global/forge/audit.jsonl) audit chains both exist
+with divergent content. Operator sees this in compliance reports so they know
+migration is in-progress.
+
+**Documentation**: Multi-tenant core audit chain may legitimately be small (e.g.,
+2 CRITICAL events from L34 flow guard) while forge chain has full history. This
+is expected and not a boot blocker.
+
+**Tests**: Verify the unification check never raises, is reporting-only, and is
+wired into the tripwire chain. See `core/compliance/tests/test_tripwire_multitenant.py`.
+
+Resolves 2026-08-05 diagnostic report findings: CRITICAL events in small core
+chain were legitimate security gates, not failures. System is now robust to
+multi-tenant audit split.
+
+## [0.10.113] — 2026-08-04 — Console voice summary: fixed two real truncation causes (adversarial review)
+
+### Fixed — automatic voice summary could be cut off mid-word for long answers
+
+Live-reported: "the voice summary in the Console chat sometimes gets cut
+off or doesn't come out complete." Adversarial review of the whole voice
+pipeline found two independent, confirmed causes.
+
+**Backend**: `_voice_tts_sync` clamped the summarized text to
+`_TTS_PROVIDER_CHAR_LIMIT` (4000 chars) with a bare `text[:limit]` slice —
+unlike its own neighboring fallback branches, which already cut at the last
+sentence boundary. `summarize.py::adaptive_target()` scales the
+summarizer's target to ~85% of the ORIGINAL answer's length with no hard
+cap ("completeness wins"), so a long chat answer (roughly >4700 chars) can
+legitimately produce a summary itself longer than 4000 chars — and the raw
+slice then cut it mid-word. A new `_cut_at_sentence_boundary()` helper is
+now used uniformly across all three truncation sites in `routes/voice.py`
+(the automatic summary, the `system_generated` fallback, and the standalone
+`/voice/summarize` endpoint's empty-output fallback).
+
+**Frontend**: `playFull()` (the "read full answer" segment-by-segment
+player) treated ANY HTTP 204 for a mid-playlist segment as the normal
+end-of-playlist signal and silently stopped, indistinguishable from a
+genuine synthesis failure (subprocess timeout, TTS provider chain
+exhaustion, or a concurrency slot-wait timeout on a busy console). The
+loop's own `while (index < total)` bound already handles the TRUE end of
+the playlist without ever needing a 204 from the server — so a 204 received
+while `index` is still below the already-known `total` is always a genuine
+failure. `playFull()` now surfaces this via `onError` instead of silently
+truncating a read-aloud that had already been playing successfully.
+
+Both fixes verified with real (not mocked-away) reproduction: a Python test
+constructs a summary longer than the provider limit and asserts the final
+text sent to the TTS provider ends at a sentence boundary; a Vitest test
+drives `playFull()` through a real mid-playlist `null` response and asserts
+`onError` fires with a distinguishing message, not silence.
+
 ## [0.10.112] — 2026-08-04 — LSAD/CLAG "Permission denied" on Windows: audit.jsonl self-heals a stale read-only attribute
 
 ### Fixed — a Windows-only read-only file attribute permanently blocked the shared audit writer
