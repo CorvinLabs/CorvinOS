@@ -107,6 +107,33 @@ try {
         } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 } catch {}
+try {
+    # INST-14 (2026-08-04, live report: fresh install still hit
+    # "ModuleNotFoundError: No module named 'ops'" -- `uv tool list -v`
+    # showed "Failed find package `corvinos` in tool environment", i.e. a
+    # CORRUPTED venv, not just a missing __init__.py). Root cause: the
+    # generated corvin-supervisor.ps1 (Install-CorvinAutostart below) runs
+    # `uv tool upgrade corvinos --reinstall-package corvinos` in a
+    # background Start-Job on EVERY logon, with up to a 120s window, BEFORE
+    # its restart loop. That job's own `uv.exe` child process matches
+    # neither pattern in the cleanup above (its command line never contains
+    # "corvin-serve" etc., and its process Name is "uv", not "python"/
+    # "corvin") -- so a re-run of install.ps1 shortly after a logon/reboot
+    # can start `uv tool install --force --refresh` while the supervisor's
+    # own `uv tool upgrade` is STILL WRITING to the exact same
+    # `%APPDATA%\uv\tools\corvinos` directory, corrupting its metadata.
+    # Stopping the Task first (above) does not help: Start-Job's worker is
+    # not reliably torn down by Stop-ScheduledTask. Killing any in-flight uv
+    # process still touching corvinos here, immediately before our own
+    # install starts, closes the race -- the following --force --refresh
+    # then fully rewrites the venv regardless of what state the killed
+    # process left it in.
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.Name -eq "uv.exe" -and $_.CommandLine -match "corvinos"
+        } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+} catch {}
 
 if ($EditablePath -ne "") {
     Write-Step "Installing CorvinOS (editable) from $EditablePath ..."
