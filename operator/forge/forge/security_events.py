@@ -1599,7 +1599,36 @@ def write_event(
         path.parent.mkdir(parents=True, exist_ok=True)
         # Use os.open with O_CREAT so the file is always created 0600,
         # independent of umask. GDPR Art. 32 requires restricted permissions.
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        except PermissionError:
+            # 2026-08-04, live report: LSAD (ADR-0132) and CLAG (ADR-0133) —
+            # both callers of THIS function — logged "Permission denied" on
+            # this exact audit.jsonl on a real Windows install that had
+            # already survived several crash/reinstall incidents this
+            # session. Windows' os.chmod cannot set POSIX mode bits (see
+            # _validate_mode_strict's docstring above); a file left behind
+            # with its READ-ONLY attribute set — by an interrupted prior
+            # write, a different security context, or antivirus quarantine
+            # touching it — makes every subsequent os.open(..., O_WRONLY)
+            # fail with PermissionError forever, with no self-heal, even
+            # though the file is otherwise perfectly fine to append to.
+            # One targeted retry: clear the read-only attribute (Windows-
+            # only; os.chmod is a no-op for this purpose elsewhere) and try
+            # again exactly once. Never widens who can READ the file — only
+            # clears a write BLOCK that should not have been there. If the
+            # file doesn't exist yet, or the second attempt still fails
+            # (a genuine permissions/ACL issue, not a stale attribute),
+            # the original exception propagates unchanged to the caller,
+            # which already treats this as non-fatal/best-effort.
+            if msvcrt is not None and Path(path).exists():
+                try:
+                    os.chmod(str(path), 0o600)
+                except OSError:
+                    pass
+                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            else:
+                raise
         with open(fd, "a", closefd=True) as fh:
             _lock_chain(fh)
             try:
