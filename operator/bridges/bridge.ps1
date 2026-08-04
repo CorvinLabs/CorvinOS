@@ -292,12 +292,58 @@ else:
             Write-Host "  Registered + started: $TaskName" -ForegroundColor Green
         }
 
-        Install-AutostartTask -TaskName "CorvinOS-Console" -TargetArg "console"
-        Install-AutostartTask -TaskName "CorvinOS-Bridge-$Bridge" -TargetArg "bridge" -BridgeArg $Bridge
+        # INST-16 (2026-08-04, live report): `$ErrorActionPreference = "Stop"`
+        # (top of this file) turns Register-ScheduledTask's own errors into
+        # TERMINATING errors -- so when the Console task below failed with
+        # "Access is denied" (a stale/foreign-ACL "CorvinOS-Console" task,
+        # most likely left behind by install.ps1's OWN, separate
+        # registration of the exact same task name), this ENTIRE command
+        # aborted right there and the per-channel Bridge task was never even
+        # attempted. bridge_manager.ensure_windows_autostart() calls this
+        # once per configured channel on every corvin-serve boot -- so every
+        # single startup logged "windows autostart registration for
+        # {channel} exited 1", and NO bridge ever got its own restart-on-
+        # reboot task registered, even though the actual bridge daemon was
+        # running fine (this command runs strictly best-effort, after the
+        # daemon is already confirmed up).
+        #
+        # Fixed two ways:
+        #  1. Each registration gets its own try/catch, so a Console-task
+        #     failure can never block the Bridge-task attempt (and vice
+        #     versa) -- they are independent Scheduled Tasks and must fail
+        #     independently.
+        #  2. $env:CORVIN_AUTOSTART_BRIDGE_ONLY (set by
+        #     ensure_windows_autostart(), never by a human running this
+        #     command by hand) skips the Console registration entirely --
+        #     on a pip/uv-tool install, install.ps1's Install-CorvinAutostart
+        #     already owns that task; re-registering it here on every boot,
+        #     for every configured channel, was pure redundant blast radius
+        #     with no benefit. A manual `.\bridge.ps1 install-autostart`
+        #     (the documented dev-checkout entry point, which owns no other
+        #     Console registration) still gets both tasks, unchanged.
+        $ConsoleTaskFailed = $false
+        if ($env:CORVIN_AUTOSTART_BRIDGE_ONLY -ne "1") {
+            try {
+                Install-AutostartTask -TaskName "CorvinOS-Console" -TargetArg "console"
+            } catch {
+                $ConsoleTaskFailed = $true
+                Write-Host "  Warning: console autostart registration failed: $_" -ForegroundColor Yellow
+            }
+        }
+        try {
+            Install-AutostartTask -TaskName "CorvinOS-Bridge-$Bridge" -TargetArg "bridge" -BridgeArg $Bridge
+        } catch {
+            Write-Host "  Bridge autostart registration failed: $_" -ForegroundColor Red
+            exit 1
+        }
 
         Write-Host ""
-        Write-Host "Autostart installed. The console + $Bridge bridge now restart automatically" -ForegroundColor Green
-        Write-Host "on crash and at every logon. Logs: %USERPROFILE%\.corvin\logs\*-supervisor.log" -ForegroundColor DarkGray
+        if ($ConsoleTaskFailed) {
+            Write-Host "Autostart installed for the $Bridge bridge (console task registration failed -- see warning above; the console's own autostart is normally handled by install.ps1)." -ForegroundColor Yellow
+        } else {
+            Write-Host "Autostart installed. The console + $Bridge bridge now restart automatically" -ForegroundColor Green
+            Write-Host "on crash and at every logon. Logs: %USERPROFILE%\.corvin\logs\*-supervisor.log" -ForegroundColor DarkGray
+        }
         Write-Host "Undo with: .\bridge.ps1 uninstall-autostart" -ForegroundColor DarkGray
     }
 

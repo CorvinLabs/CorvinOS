@@ -1230,10 +1230,25 @@ def ensure_windows_autostart(channel: str) -> dict:
     if not bridge_ps1.exists():
         return {"ok": False, "error": f"bridge.ps1 not found at {bridge_ps1}"}
     try:
+        # CORVIN_AUTOSTART_BRIDGE_ONLY=1 (INST-16, 2026-08-04): this call site
+        # only ever wants the PER-CHANNEL Scheduled Task refreshed -- the
+        # console's own autostart task is install.ps1's Install-CorvinAutostart
+        # responsibility. Without this, bridge.ps1's install-autostart handler
+        # also re-registers "CorvinOS-Console" every time (once per configured
+        # channel, on every boot), which is not just redundant but a single
+        # point of failure: a real incident found the console task
+        # Access-Denied (a stale/foreign-ACL registration) ABORTING the whole
+        # command before the per-channel Bridge task was ever attempted --
+        # every configured bridge silently never got its own restart-on-
+        # reboot task. A human running `bridge.ps1 install-autostart` by hand
+        # never sets this env var, so that entry point still gets both tasks.
+        env = os.environ.copy()
+        env["CORVIN_AUTOSTART_BRIDGE_ONLY"] = "1"
         proc = _run(
             ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-File", str(bridge_ps1), "install-autostart", channel],
             cwd=str(_BRIDGE_DIR), capture_output=True, text=True, timeout=60,
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         _info(f"  ⚠ windows autostart registration for {channel} failed: {exc}")
