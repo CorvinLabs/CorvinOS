@@ -552,7 +552,12 @@ $ConsoleURL = "http://localhost:$ConsolePort/console/"
 # 30s to answer healthz. The top-level goal is "the console opens in the
 # browser no matter what", so give the server generous headroom AND still open
 # the browser even if the probe times out (the server is durable via autostart).
-$MaxRetries = 60
+# 90s (was 60s, 2026-08-02): a FRESH install is the single slowest cold start
+# CorvinOS ever has -- no bytecode cache yet, every .py/.pyd file in the
+# freshly-written venv is new to Defender's on-access scanner, so this window
+# is disproportionately more likely to be lost on install than on a routine
+# restart later. Still bounded; a genuinely broken server does not wait longer.
+$MaxRetries = 90
 $RetryCount = 0
 $ServerReady = $false
 
@@ -657,6 +662,44 @@ if (-not $ServerReady) {
 }
 try { Start-Process $ConsoleURL -ErrorAction Stop; if ($ServerReady) { Write-Ok "Server is ready -- opening the console in your browser ..." } }
 catch { Write-Ok "Open the console in your browser: $ConsoleURL" }
+
+# Safety net for the not-ready case (2026-08-02, live report: "after a fresh
+# install the console doesn't open by itself"): the tab opened above shows a
+# native browser connection-error page once the ${MaxRetries}s budget is lost
+# on a slow cold start -- and NOTHING in that page can self-refresh, because
+# it never loaded anything CorvinOS served in the first place. A user who
+# doesn't know (or forgets) to manually reload perceives this as "the
+# console never opened," even though autostart genuinely is bringing it up
+# in the background. A small DETACHED watcher (survives this installer
+# window closing -- Pause-AndExit below would otherwise kill any foreground
+# job) keeps polling healthz for a few more minutes and opens a FRESH,
+# working tab the moment the server actually answers, instead of leaving the
+# user stuck on a dead page with no automatic recovery.
+if (-not $ServerReady) {
+    try {
+        $WatcherPath = Join-Path $env:TEMP "corvin-install-watcher-$PID.ps1"
+        @"
+`$ErrorActionPreference = 'SilentlyContinue'
+for (`$i = 0; `$i -lt 300; `$i++) {
+    try {
+        `$r = Invoke-WebRequest -Uri 'http://localhost:$ConsolePort/v1/console/healthz' -TimeoutSec 2 -UseBasicParsing
+        if (`$r -and `$r.StatusCode -ge 200 -and `$r.StatusCode -lt 400) {
+            Start-Process '$ConsoleURL'
+            break
+        }
+    } catch {}
+    Start-Sleep -Seconds 1
+}
+Remove-Item -Path '$WatcherPath' -Force -ErrorAction SilentlyContinue
+"@ | Set-Content -Path $WatcherPath -Encoding UTF8
+        Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -ArgumentList `
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$WatcherPath`""
+        Write-Hint "A background check will open the console automatically once it's ready (up to 5 more minutes)."
+    } catch {
+        # Best-effort only -- the immediate open above + the honest banner
+        # below already cover the case where even this cannot be started.
+    }
+}
 
 # ── done / cheat sheet ────────────────────────────────────────────────────────
 # Previously this banner printed unconditionally -- a user whose console
