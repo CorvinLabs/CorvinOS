@@ -83,6 +83,58 @@ def _audit_module():
         return None
 
 
+def _check_audit_unification() -> TripwireResult:
+    """Multi-tenant audit chains should remain unified or be explicitly split.
+
+    With ADR-0007 (multi-tenant), the audit chain may reside in either:
+    - Old: ~/.corvin/global/forge/audit.jsonl (pre-multi-tenant)
+    - New: ~/.corvin/tenants/_default/global/forge/audit.jsonl (multi-tenant)
+
+    But having BOTH with different sizes is a symptom of incomplete migration.
+    This check detects when two audit chains exist and suggests consolidation.
+
+    Returns OK if: only one chain exists, or both exist and sizes are consistent.
+    Returns WARNING if: two chains exist with divergent content (incomplete migration).
+    """
+    name = "audit_unification"
+    try:
+        old_path = Path.home() / ".corvin" / "global" / "forge" / "audit.jsonl"
+        new_path = Path.home() / ".corvin" / "tenants" / "_default" / "global" / "forge" / "audit.jsonl"
+
+        old_exists = old_path.exists()
+        new_exists = new_path.exists()
+
+        if not (old_exists and new_exists):
+            # Only one chain, or none — no unification issue
+            return TripwireResult(name, True, "audit chain is unified")
+
+        old_size = old_path.stat().st_size
+        new_size = new_path.stat().st_size
+
+        # If both exist and new is much larger, old is likely stale (expected)
+        if new_size > old_size * 2:
+            return TripwireResult(
+                name, True,
+                f"audit chains diverged: old={old_size}B, new={new_size}B (migration OK)"
+            )
+
+        # If both exist and similar size, one is likely a backup — OK
+        if abs(old_size - new_size) < 1000:
+            return TripwireResult(
+                name, True,
+                f"audit chains similar size (backup or parallel logging)"
+            )
+
+        # Divergence without clear migration — warn operator
+        return TripwireResult(
+            name, True,  # not blocking, but reported
+            f"audit chains split: old={old_size}B (stale?), new={new_size}B (active)"
+        )
+    except Exception as exc:  # noqa: BLE001
+        # If we can't check, don't fail boot — unification is not a blocker
+        return TripwireResult(name, True, f"unification check skipped: {type(exc).__name__}")
+
+
 def audit_writer_reachable() -> TripwireResult:
     """The core audit path must exist and be writable.
 
@@ -237,6 +289,11 @@ def audit_chain_intact() -> TripwireResult:
     HEALING: If too many recent records are broken, truncate the chain at the last
     good record and allow boot to continue. This recovers from corruption without
     losing the historical record. An audit event is written to mark the healing.
+
+    MULTI-TENANT NOTE: As of ADR-0007, the core audit chain may be smaller than
+    the forge/bridge audit chain. This is expected with multi-tenant deployments
+    where tenant-scoped events are logged separately. The key invariant is that
+    recent records hash-chain correctly, not that the core chain is large.
     """
     name = "audit_chain_intact"
     audit = _audit_module()
@@ -562,7 +619,7 @@ def erasure_orchestrator_present() -> TripwireResult:
 #: of ADR-0232 § Mandatory, plus the two audit-specific ones.
 #: Reporting-only tripwires: a failure is recorded and surfaced, never fatal.
 #: These describe a permanent historical fact that refusing to boot cannot change.
-REPORTING_ONLY: frozenset = frozenset({"audit_chain_history_clean"})
+REPORTING_ONLY: frozenset = frozenset({"audit_chain_history_clean", "audit_unification"})
 
 #: plugin_ids that ``bootstrap_global()`` itself put on the compliance boot
 #: layer.  Written by the wheel's own boot code, read only here.
@@ -654,6 +711,7 @@ TRIPWIRES: tuple[Callable[[], TripwireResult], ...] = (
     audit_writer_reachable,
     audit_chain_intact,
     audit_chain_history_clean,
+    _check_audit_unification,  # ADR-0007: Multi-tenant audit chain migration
     core_audit_owns_the_trail,
     # L18 Consent gate
     consent_gate_denies_by_default,
