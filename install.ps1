@@ -97,12 +97,21 @@ try {
     # Also match corvin_gateway/uvicorn: the wizard and the always-on (Stufe-2)
     # service run `python -m uvicorn corvin_gateway.app:app`, which the old
     # pattern missed -- leaving the venv locked and the install failing.
+    # Also match adapter.py (INST-15, 2026-08-04 ground-truth live report):
+    # bridge_manager.ensure_adapter_detached() spawns it as
+    # `<tool-env>\Scripts\python.exe ... adapter.py`, out of the SAME tool
+    # env this install is about to replace -- a real incident found it
+    # holding a lock on corvin_console\_vendor\operator\bridges\shared\,
+    # which made a `uv tool upgrade --reinstall-package` delete step fail
+    # with "used by another process", leaving corvinos completely
+    # uninstalled (dependencies intact, no corvinos dist-info) until the
+    # operator manually killed the orphaned adapter.py processes.
     # Guard: only kill python-ish processes so an editor/terminal that merely
     # has a corvin path in its argv is never collateral.
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
         Where-Object {
             $_.CommandLine -and
-            $_.CommandLine -match "corvinos-serve|corvin-serve|corvin_console|corvin_gateway" -and
+            $_.CommandLine -match "corvinos-serve|corvin-serve|corvin_console|corvin_gateway|adapter\.py" -and
             $_.Name -match "^python|^corvin"
         } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -393,6 +402,35 @@ if (Get-CorvinAutoUpdate) {
         if (Test-Path `$cand) { `$uv = `$cand }
     }
     if (`$uv) {
+        # INST-15 (2026-08-04, ground-truth live report): --reinstall-package
+        # makes uv UNINSTALL corvinos (delete its tool-env files) before
+        # reinstalling. On a real machine that delete step failed with
+        # "The process cannot access the file because it is being used by
+        # another process" (os error 32) -- two orphaned adapter.py
+        # processes (bridge_manager.ensure_adapter_detached(), spawned from
+        # this SAME tool env) were still holding files open under
+        # corvin_console\_vendor\operator\bridges\shared\. uv's uninstall
+        # step doesn't roll back on a partial failure: corvinos' own files
+        # (incl. the ops package every entry point imports) were gone, only
+        # its 73 dependencies remained -- "uv tool list -v" then reported
+        # "Failed find package 'corvinos' in tool environment" and every
+        # corvin* command died with "ModuleNotFoundError: No module named
+        # 'ops'". Killing every corvin-serve/adapter.py process out of THIS
+        # tool env right before the reinstall closes the gap: this call runs
+        # ONCE, before the restart loop below has started anything THIS
+        # supervisor invocation owns, so nothing legitimate is ever
+        # collateral -- only genuinely orphaned processes from a previous
+        # run/reboot can still be alive here.
+        Write-Log "auto-update: clearing any process still holding tool-env files open"
+        try {
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object {
+                    `$_.CommandLine -and
+                    `$_.CommandLine -match "corvinos-serve|corvin-serve|corvin_console|corvin_gateway|adapter\.py" -and
+                    `$_.Name -match "^python|^corvin"
+                } |
+                ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }
+        } catch {}
         # --reinstall-package corvinos (2026-07-29, adversarial review): WITHOUT
         # this, "uv tool upgrade" can resolve against uv's OWN cached view of
         # the package index and silently no-op (exit 0, nothing installed) even
