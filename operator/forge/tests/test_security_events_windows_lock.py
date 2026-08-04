@@ -19,11 +19,14 @@ otherwise (POSIX, unchanged).
 """
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import types
 from pathlib import Path
 from unittest import mock
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -147,6 +150,59 @@ def test_write_event_end_to_end_with_fake_msvcrt_lock_path():
     assert len(fake.calls) == 4  # lock+unlock per write, two writes
 
 
+def test_write_event_self_heals_from_a_stale_permission_denied():
+    """2026-08-04, live report: LSAD (ADR-0132) and CLAG (ADR-0133) -- both
+    callers of write_event() -- logged "Permission denied" on a real
+    Windows install's audit.jsonl. os.chmod cannot set POSIX mode bits on
+    Windows (only toggles the read-only attribute), so a file left behind
+    read-only by an interrupted prior write / different security context /
+    AV quarantine made every subsequent append fail forever with no
+    self-heal. Simulated here with a real 0o400 (no write bit) file --
+    genuinely triggers PermissionError on POSIX too -- with msvcrt faked
+    present so the Windows retry branch is exercised."""
+    fake = _fake_msvcrt()
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "audit.jsonl"
+        p.write_text("")
+        os.chmod(p, 0o400)
+        with mock.patch.object(se, "msvcrt", fake):
+            rec = se.write_event(p, "test.event", details={"k": "v"})
+        assert rec["event_type"] == "test.event"
+        ok, problems = se.verify_chain(p)
+    assert ok, problems
+
+
+def test_write_event_does_not_retry_permission_denied_on_posix():
+    """Regression guard: on a real POSIX box (msvcrt genuinely absent), a
+    genuine permission problem must propagate unchanged -- no silent
+    chmod-and-retry masking a real POSIX permissions issue that this
+    self-heal was never meant to paper over."""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "audit.jsonl"
+        p.write_text("")
+        os.chmod(p, 0o400)
+        try:
+            with mock.patch.object(se, "msvcrt", None):
+                with pytest.raises(PermissionError):
+                    se.write_event(p, "test.event", details={"k": "v"})
+        finally:
+            os.chmod(p, 0o600)  # so tempdir cleanup can remove it
+
+
+def test_write_event_reraises_when_the_file_was_never_created():
+    """The self-heal only ever chmods an EXISTING file -- if the target was
+    never created at all (e.g. a genuine ACL/permissions problem on the
+    parent directory, not a stale attribute on the file itself), there is
+    nothing to heal and the original error must still surface, not loop or
+    swallow it."""
+    fake = _fake_msvcrt()
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "never-created" / "audit.jsonl"
+        with mock.patch.object(se, "msvcrt", fake), \
+             mock.patch.object(se.os, "open", side_effect=PermissionError(13, "Permission denied")):
+            with pytest.raises(PermissionError):
+                se.write_event(p, "test.event", details={"k": "v"})
+
+
 if __name__ == "__main__":
-    import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

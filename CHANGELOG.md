@@ -7,6 +7,38 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.112] — 2026-08-04 — LSAD/CLAG "Permission denied" on Windows: audit.jsonl self-heals a stale read-only attribute
+
+### Fixed — a Windows-only read-only file attribute permanently blocked the shared audit writer
+
+Live-reported: `LSAD seed setup failed (non-fatal): [Errno 13] Permission
+denied` and `CLAG gate at license load failed (non-fatal): ... audit write
+failed: [Errno 13] Permission denied` on every `corvin-serve` boot. Both
+ADR-0132 (LSAD) and ADR-0133 (CLAG) call the same shared
+`security_events.write_event()` to append to `audit.jsonl`.
+
+Root cause: Windows' `os.chmod()` cannot set POSIX mode bits — it can only
+toggle the file's read-only ATTRIBUTE. If `audit.jsonl` was ever left with
+that attribute set (an interrupted prior write, a different security
+context, antivirus quarantine touching it — this exact machine had already
+survived several crash/reinstall incidents this session), every subsequent
+`os.open(..., O_WRONLY)` fails with `PermissionError` forever, with no way
+to recover short of an operator manually clearing the attribute. LSAD/CLAG
+already treat this as non-fatal (by design — a chain-DNA/gate failure must
+never block the license from activating), so the app kept working, but the
+security features silently degraded on every single boot.
+
+Fixed with a single targeted retry inside `write_event()`: on
+`PermissionError`, if the target file exists, clear its read-only
+attribute once (`os.chmod(path, 0o600)` — a no-op for this purpose on
+POSIX, exactly what's needed on Windows) and retry the open exactly once.
+A genuine permissions/ACL problem (file never existed, or the retry also
+fails) still propagates unchanged — this never widens who can read the
+file, it only clears a write block that should not have been there.
+Verified with a real `PermissionError` (a genuinely read-only 0o400 test
+file) and a faked Windows branch (this repo's established
+capability-branching test pattern, not `sys.platform`).
+
 ## [0.10.111] — 2026-08-04 — Windows bridge autostart registration silently never ran (Access Denied on the Console task aborted it first)
 
 ### Fixed — a failed Console Scheduled-Task registration blocked the Bridge task from ever being attempted
