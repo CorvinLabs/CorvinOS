@@ -1,25 +1,40 @@
-"""install.ps1 must kill an in-flight `uv.exe` process for corvinos before
-starting its own `uv tool install` (2026-08-04, INST-14).
+"""install.ps1 / the generated supervisor must never let `uv tool
+upgrade|install ... corvinos` run while a process from the SAME tool env is
+still holding files open (2026-08-04, INST-14 + INST-15).
 
 Live-reported TWICE on real Windows installs: `corvin serve` / `corvin-serve`
 crashed with `ModuleNotFoundError: No module named 'ops'` even AFTER shipping
 0.10.110 (which added the missing `ops/__init__.py` / `ops/launcher/__init__.py`
-files -- a real, necessary fix, but not sufficient on its own). The second
-report's `uv tool list -v` showed `Failed find package 'corvinos' in tool
-environment` -- a genuinely CORRUPTED venv, not just a namespace-package
-resolution quirk.
+files -- a real, necessary fix, but not sufficient on its own).
 
-Root cause: the generated `corvin-supervisor.ps1` (Install-CorvinAutostart)
-runs `uv tool upgrade corvinos --reinstall-package corvinos` in a background
-Start-Job on EVERY logon, with up to a 120s window, before its restart loop.
-install.ps1's own pre-install cleanup (INST-2) stops/disables the
-CorvinOS-Console scheduled task and kills corvin-serve.exe-ish processes, but
-never touches `uv.exe` -- so re-running install.ps1 shortly after a
-logon/reboot can start `uv tool install --force --refresh` while the
-supervisor's own `uv tool upgrade` is STILL WRITING to the exact same
-`%APPDATA%/uv/tools/corvinos` directory, corrupting its metadata. Fixed by
-killing any in-flight `uv.exe` process whose command line mentions
-`corvinos` immediately before install.ps1 starts its own install.
+INST-14 (this file's original guard): a defensive fix for install.ps1's OWN
+`uv tool install --force --refresh` racing an in-flight `uv.exe` process for
+corvinos (e.g. a second install.ps1 run, or the supervisor's own upgrade job
+still mid-flight). Kept as a real, cheap safety net -- but ground-truth
+diagnosis of the SECOND live report (below) found the actual mechanism was
+simpler and more direct than a two-`uv.exe`-processes race.
+
+INST-15 (the confirmed root cause, added after the operator supplied a real
+`uv tool list -v` trace): `uv tool upgrade ... --reinstall-package` UNINSTALLS
+corvinos (deletes its tool-env files) before reinstalling. On the real
+machine that delete step failed with "The process cannot access the file
+because it is being used by another process" (os error 32) -- two orphaned
+`adapter.py` processes (`bridge_manager.ensure_adapter_detached()`, spawned
+from the SAME tool env: `<tool-env>\\Scripts\\python.exe ... adapter.py`)
+were still holding files open under
+`corvin_console\\_vendor\\operator\\bridges\\shared\\`. uv's uninstall step
+does not roll back on partial failure: corvinos' own files (including the
+`ops` package every entry point imports) were gone while its 73 dependencies
+remained -- `uv tool list -v` then reported "Failed find package 'corvinos'
+in tool environment" and every `corvin*` command died with
+`ModuleNotFoundError: No module named 'ops'`. Neither install.ps1's own
+pre-install cleanup NOR the supervisor's auto-update block ever killed
+adapter.py before this session -- fixed by (a) adding `adapter\\.py` to
+install.ps1's own pre-install cleanup pattern, and (b) adding an equivalent
+cleanup immediately before the supervisor's OWN
+`uv tool upgrade --reinstall-package` call, since THAT is the code path that
+actually failed live (it runs unattended on every logon with no prior
+cleanup at all).
 
 Run: python3 -m pytest tests/test_install_ps1_uv_race_guard.py
 """
@@ -113,6 +128,165 @@ $matched | ForEach-Object {{ Write-Output $_.Tag }}
         )
         out = self._run_filter(procs)
         self.assertIn("MATCH_install", out)
+
+
+class AdapterPyPreinstallCleanupTests(unittest.TestCase):
+    """INST-15: install.ps1's own pre-install cleanup must also kill
+    adapter.py -- the process that actually held the lock in the live
+    incident."""
+
+    def setUp(self) -> None:
+        self.src = _INSTALL_PS1.read_text(encoding="utf-8")
+
+    def test_preinstall_cleanup_pattern_includes_adapter_py(self) -> None:
+        self.assertIn(
+            'corvinos-serve|corvin-serve|corvin_console|corvin_gateway|adapter\\.py',
+            self.src,
+        )
+
+
+@unittest.skipUnless(shutil.which("pwsh"), "PowerShell Core (pwsh) not installed")
+class AdapterPyRealFilterExecutionTests(unittest.TestCase):
+    """Same real-pwsh-execution discipline as RealFilterExecutionTests
+    above, but for the broadened preinstall-cleanup predicate: proves it
+    actually matches an adapter.py-shaped process (Name python.exe, as
+    bridge_manager.ensure_adapter_detached() spawns it via sys.executable)
+    and does not collaterally match an unrelated editor with a corvin path
+    in its argv."""
+
+    def _run_filter(self, processes_ps_literal: str) -> str:
+        script = f"""
+$fakeProcs = {processes_ps_literal}
+$matched = $fakeProcs | Where-Object {{
+    $_.CommandLine -and
+    $_.CommandLine -match "corvinos-serve|corvin-serve|corvin_console|corvin_gateway|adapter\\.py" -and
+    $_.Name -match "^python|^corvin"
+}}
+$matched | ForEach-Object {{ Write-Output $_.Tag }}
+"""
+        path = Path("/tmp/corvin_adapter_cleanup_test.ps1")
+        path.write_text(script, encoding="utf-8")
+        try:
+            result = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(path)],
+                capture_output=True, text=True, timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_orphaned_adapter_process_is_matched(self) -> None:
+        procs = (
+            '@('
+            '[PSCustomObject]@{ Tag = "MATCH_adapter"; Name = "python.exe"; '
+            'CommandLine = "C:\\Users\\sjurk\\AppData\\Roaming\\uv\\tools\\corvinos\\Scripts\\python.exe '
+            'C:\\Users\\sjurk\\AppData\\Roaming\\uv\\tools\\corvinos\\Lib\\site-packages\\corvin_console\\_vendor'
+            '\\operator\\bridges\\shared\\adapter.py" },'
+            '[PSCustomObject]@{ Tag = "NOMATCH_editor"; Name = "Code.exe"; '
+            'CommandLine = "Code.exe C:\\projects\\corvinos\\adapter.py" }'
+            ')'
+        )
+        out = self._run_filter(procs)
+        self.assertIn("MATCH_adapter", out)
+        self.assertNotIn("NOMATCH_editor", out)
+
+
+class SupervisorReinstallCleanupTests(unittest.TestCase):
+    """INST-15's actual fix: the supervisor's OWN auto-update block (the
+    code path that failed live -- it runs unattended on every logon with no
+    prior cleanup) must clear locking processes before
+    `uv tool upgrade --reinstall-package`."""
+
+    def setUp(self) -> None:
+        self.src = _INSTALL_PS1.read_text(encoding="utf-8")
+
+    def test_supervisor_cleanup_block_present(self) -> None:
+        self.assertIn(
+            '`$_.CommandLine -match "corvinos-serve|corvin-serve|corvin_console|corvin_gateway|adapter\\.py" -and',
+            self.src,
+        )
+
+    def test_supervisor_cleanup_runs_before_reinstall_package(self) -> None:
+        cleanup_idx = self.src.index(
+            'Write-Log "auto-update: clearing any process still holding tool-env files open"'
+        )
+        reinstall_idx = self.src.index(
+            'Write-Log "auto-update: uv tool upgrade corvinos --reinstall-package corvinos"'
+        )
+        self.assertLess(cleanup_idx, reinstall_idx,
+                         "the supervisor's process cleanup must run BEFORE --reinstall-package")
+
+    def test_supervisor_cleanup_is_inside_the_uv_available_branch(self) -> None:
+        # Must not run (and Stop-Process) when $uv resolved to nothing --
+        # keeps this block scoped to the exact moment a reinstall is about
+        # to happen, same as the pre-existing --reinstall-package call it
+        # guards.
+        uv_if_idx = self.src.index("if (`$uv) {")
+        cleanup_idx = self.src.index(
+            'Write-Log "auto-update: clearing any process still holding tool-env files open"'
+        )
+        reinstall_idx = self.src.index(
+            'Write-Log "auto-update: uv tool upgrade corvinos --reinstall-package corvinos"'
+        )
+        self.assertLess(uv_if_idx, cleanup_idx)
+        self.assertLess(cleanup_idx, reinstall_idx)
+
+
+@unittest.skipUnless(shutil.which("pwsh"), "PowerShell Core (pwsh) not installed")
+class SupervisorGeneratedScriptStillParsesTests(unittest.TestCase):
+    """The new cleanup block sits inside install.ps1's OWN here-string that
+    generates corvin-supervisor.ps1 -- must not break the generated file's
+    own validity. Runs the real generation logic (Install-CorvinAutostart's
+    heredoc) through a harness mirroring install.ps1's actual interpolation,
+    then parses the RESULT with a real PowerShell parser."""
+
+    def test_generated_supervisor_still_parses_cleanly(self) -> None:
+        harness = r"""
+$CorvinHomeEscaped = "C:\Users\tester\.corvin"
+$ServeCmdEscaped = "C:\Users\tester\AppData\Roaming\uv\tools\corvinos\Scripts\corvin-serve.exe"
+$SupervisorEscaped = "C:\Users\tester\.corvin\bin\corvin-supervisor.ps1"
+$OutPath = "/tmp/corvin_supervisor_generated_test.ps1"
+"""
+        # Extract the heredoc body verbatim from install.ps1 (between the
+        # opening @" line and the closing "@ | Set-Content), same technique
+        # test_windows_supervisor_parity.py's _generated_supervisor_block()
+        # uses, but generated live through pwsh instead of Python string
+        # slicing so the interpolation is real, not simulated.
+        src = _INSTALL_PS1.read_text(encoding="utf-8")
+        start = src.index('@"\n# Auto-generated by install.ps1')
+        end = src.index('"@ | Set-Content', start) + len('"@')
+        heredoc = src[start:end]
+        full_script = harness + f'{heredoc} | Set-Content -Path $OutPath -Encoding UTF8\n'
+
+        harness_path = Path("/tmp/corvin_supervisor_gen_harness.ps1")
+        harness_path.write_text(full_script, encoding="utf-8")
+        out_path = Path("/tmp/corvin_supervisor_generated_test.ps1")
+        try:
+            result = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(harness_path)],
+                capture_output=True, text=True, timeout=15,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(out_path.exists(), "harness did not write the generated supervisor script")
+
+            parse_check = f"""
+$errs = $null
+[System.Management.Automation.Language.Parser]::ParseFile('{out_path}', [ref]$null, [ref]$errs) | Out-Null
+if ($errs.Count -gt 0) {{ $errs | ForEach-Object {{ Write-Host $_.Message }}; exit 1 }}
+"""
+            parse_result = subprocess.run(
+                ["pwsh", "-NoProfile", "-Command", parse_check],
+                capture_output=True, text=True, timeout=15,
+            )
+            self.assertEqual(parse_result.returncode, 0, parse_result.stdout + parse_result.stderr)
+
+            content = out_path.read_text(encoding="utf-8")
+            self.assertIn("adapter\\.py", content)
+            self.assertIn("clearing any process still holding tool-env files open", content)
+        finally:
+            harness_path.unlink(missing_ok=True)
+            out_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
