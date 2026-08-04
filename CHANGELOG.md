@@ -7,6 +7,35 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.110] — 2026-08-04 — `corvin serve` / `corvin-serve` crashed on Windows: `ModuleNotFoundError: No module named 'ops'`
+
+### Fixed — `ops` and `ops.launcher` were implicit namespace packages, not regular packages
+
+Live-reported on a real, fresh Windows install: every `corvin*` console
+script (`corvin`, `corvin-serve`, `corvinos`, `corvinos-serve`, ...) is
+`ops.launcher....:main` (see `[project.scripts]`), and `ops` has been a
+declared wheel package (`packages = ["corvinOS", "core", "ops"]`) since
+2026-06-29 — but `ops/` and `ops/launcher/` had no `__init__.py`, only the
+nested `ops/launcher/corvin/` did. That resolved fine as a PEP 420 implicit
+namespace package under plain `pip install` and `uv tool install` on Linux
+(verified directly against the live PyPI 0.10.109 wheel), but implicit
+namespace packages depend on `sys.path` directory-scanning behavior
+documented to differ across platforms/importers — explicit `__init__.py` is
+the standard fix, converting `ops`/`ops.launcher` into regular, unambiguous
+packages.
+
+Fixing this surfaced a second, more dangerous gap: the release build hook
+ships only `git ls-files`-tracked content (the same mechanism that caused
+the untracked-audio-file wheel pollution fixed for 0.10.33). A freshly
+created `ops/__init__.py` was silently ABSENT from a real `uv build --wheel`
+output until `git add`ed — any future new top-level file in a packaged
+directory that isn't staged before a release build vanishes from the wheel
+with no error anywhere in the pipeline. New tests
+(`tests/test_ops_package_ships_complete.py`) build a REAL wheel, inspect its
+real contents, and install it into a fresh venv to prove
+`from ops.launcher.corvin.cli import main` actually succeeds — closing the
+exact gap that let this ship for over a month undetected.
+
 ## [0.10.107] — 2026-08-03 — Added a real `corvin stop` command; `corvin gateway stop` was silently broken
 
 ### Added — `corvin stop` (top-level alias for `corvin gateway stop`)
