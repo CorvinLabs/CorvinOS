@@ -7,6 +7,22 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.117] — 2026-08-05 — corvin diagnose windows for Windows 11 error detection
+
+### Added — CLI command to auto-detect installation errors on Windows
+
+Implemented M1 of Windows error diagnostics: `corvin diagnose windows` auto-detects five categories:
+- CRITICAL: duplicate httpcore2/httpx2 packages (HTTP-request failures in A2A, Bridges)
+- HIGH: Ollama not in autostart (Hermes unavailable after restart)
+- HIGH: CorvinOS Scheduled Task missing (no automatic login startup)
+- MEDIUM: Installation incomplete at Step 8 (Piper model not downloaded)
+- MEDIUM: pywin32 version compatibility (rare COM registration issues)
+
+Each check outputs: ✓ Pass or ✗ Fail + suggested fix. Points to recovery scripts in
+`docs/windows-installation-errors.md` with full PowerShell diagnostics and step-by-step fixes.
+
+**M2 future work:** Auto-apply fixes (currently manual recovery scripts only).
+
 ## [0.10.116] — 2026-08-05 — Windows 11 installation error diagnosis & recovery guide
 
 ### Documentation — Windows 11 fresh-install error analysis
