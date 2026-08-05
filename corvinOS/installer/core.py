@@ -1279,10 +1279,23 @@ class CorvinInstaller:
         # the user opts into the Step 9/10 purge prompts below — so a
         # subsequent reinstall silently skips onboarding and reuses the old
         # engine, even though the whole point of uninstall+reinstall is a
-        # clean slate. Unlike API keys/audit logs (genuinely worth protecting
-        # behind a confirmation prompt), these are just UI/session state with
-        # nothing to lose, so they are reset unconditionally.
-        print("\n[8/11] Resetting onboarding + engine selection...")
+        # clean slate. Unlike API keys (genuinely worth protecting behind a
+        # confirmation prompt), these are just UI/session state with nothing
+        # to lose, so they are reset unconditionally.
+        #
+        # 2026-08-03, reported live: also ALWAYS delete the hash-chained
+        # audit log (audit.jsonl + .verified/.compact files) even if the user
+        # declines to delete the entire ~/.corvin/ in Step 10. The audit
+        # chain is not like API keys — it's an implementation detail that
+        # MUST be fresh on every install. A defective, leftover audit.jsonl
+        # from a prior install/crash causes the new installation's bootstrap
+        # validation to refuse to run, leaving the user with "audit chain
+        # integrity check failed" on startup and no clear recovery path
+        # (other than a manual `rm -rf ~/.corvin`). Audit logs themselves
+        # have no durable value (they're ephemeral compliance bookkeeping) —
+        # only the chain's VALIDITY matters, and validity REQUIRES starting
+        # fresh.
+        print("\n[8/11] Resetting onboarding, engine selection, and audit chain...")
         removed_any = False
         setup_complete_flag = self.voice_config / ".corvin_setup_complete"
         if setup_complete_flag.exists():
@@ -1322,7 +1335,26 @@ class CorvinInstaller:
                             removed_any = True
                     except Exception as e:
                         print(f"  ⚠ Could not reset engine selection in {tenant_yaml}: {e}")
-        if not removed_any:
+        # Also ALWAYS delete the audit chain, even if the user declines to
+        # remove the entire ~/.corvin/ in Step 10 below. The chain must be
+        # fresh on every install (see docstring above).
+        audit_removed = False
+        tenants_dir = self.corvin_home / "tenants"
+        if tenants_dir.is_dir():
+            for tenant_dir in sorted(tenants_dir.iterdir()):
+                global_dir = tenant_dir / "global"
+                for audit_file in (global_dir / "audit.jsonl",
+                                   global_dir / "audit.jsonl.verified",
+                                   global_dir / "audit.jsonl.compact"):
+                    if audit_file.exists():
+                        try:
+                            audit_file.unlink()
+                            if not audit_removed:
+                                print(f"  ✓ Cleared audit chain (always reset on uninstall)")
+                                audit_removed = True
+                        except OSError as e:
+                            print(f"  ⚠ Could not remove {audit_file.name}: {e}")
+        if not removed_any and not audit_removed:
             print("  ℹ Nothing to reset — no prior onboarding/engine state found")
 
         # ── Step 9: Remove voice config (~/.config/corvin-voice/) ──────────

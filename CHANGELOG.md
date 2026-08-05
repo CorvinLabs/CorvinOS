@@ -7,6 +7,25 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.115] — 2026-08-05 — corvin-uninstall now always deletes audit chain for clean reinstalls
+
+### Fixed — leftover audit.jsonl from prior install blocked reinstall with "integrity check failed"
+
+Reported live: running `corvin-uninstall` followed by a fresh install
+resulted in "audit chain failed its integrity check" startup failure. Root
+cause: when the user declined Step 10 (delete entire ~/.corvin/), the
+uninstaller left audit.jsonl behind. The next install tried to start with
+a fresh audit chain but discovered the old, defective one already existing,
+and failed bootstrap validation (fail-closed, by design). The user was
+left with no clear recovery path besides a manual `rm -rf ~/.corvin`.
+
+Fixed by ensuring audit.jsonl, .verified, and .compact files are ALWAYS
+deleted during uninstall (like Step 8's onboarding reset), independent of
+the user's choice in Step 10 (delete all ~/.corvin/ or keep it). The audit
+chain is implementation detail — it MUST be fresh on every install. Unlike
+API keys or session data (which users may want to preserve), audit logs
+carry no durable value and their validity REQUIRES starting clean.
+
 ## [0.10.114] — 2026-08-05 — Audit chain multi-tenant hardening + unification detection (ADR-0007)
 
 ### Fixed — multi-tenant audit chain split now detected and reported non-blocking
