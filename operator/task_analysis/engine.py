@@ -12,6 +12,8 @@ from .filtering import GraphFilteringPipeline, FilterConfig
 from .validation import GraphValidator
 from .enrichment import TaskEnricher
 from .delegation import DelegationRouter, DelegationTarget
+from .metrics import TaskMetrics, MetricsPhase, MetricsOutcome
+from .contracts import PhaseContracts, ContractViolation
 
 
 class EngineError(Exception):
@@ -63,11 +65,12 @@ class EngineResult:
 class TaskEngine:
     """Complete task routing pipeline (Phases 0–5)."""
 
-    def __init__(self, filter_config: FilterConfig = None):
+    def __init__(self, filter_config: FilterConfig = None, metrics: TaskMetrics = None):
         """Initialize engine components.
 
         Args:
             filter_config: Filtering configuration (uses defaults if None).
+            metrics: Optional TaskMetrics collector for Prometheus export.
         """
         self.normalizer = TaskNormalizer()
         self.classifier = TaskClassifier()
@@ -76,9 +79,10 @@ class TaskEngine:
         self.enricher = TaskEnricher()
         self.router = DelegationRouter()
         self.filter_config = filter_config or FilterConfig()
+        self.metrics = metrics or TaskMetrics()
 
     def route_task(self, raw_task: str) -> EngineResult:
-        """Route a task through all 6 phases.
+        """Route a task through all 6 phases (with Prometheus metrics).
 
         Pipeline:
         1. Normalize: Extract metadata, validate sufficiency
@@ -98,26 +102,83 @@ class TaskEngine:
             InsufficientTaskInfo: Task is too vague to process.
             EngineError: Any phase fails (includes phase context).
         """
+        self.metrics.reset()
+
         try:
             # Phase 0: Normalize
-            normalized = self.normalizer.normalize(raw_task)
+            with self.metrics.phase_timer(MetricsPhase.NORMALIZATION) as ctx:
+                normalized = self.normalizer.normalize(raw_task)
+                try:
+                    PhaseContracts.validate_phase0_output(normalized)
+                except ContractViolation as e:
+                    ctx["contract_violation"] = True
+                    ctx["violation_details"] = str(e)
+                    raise
 
             # Phase 1: Classify
-            classified = self.classifier.classify(normalized)
+            with self.metrics.phase_timer(MetricsPhase.CLASSIFICATION) as ctx:
+                classified = self.classifier.classify(normalized)
+                try:
+                    PhaseContracts.validate_phase1_output(classified)
+                except ContractViolation as e:
+                    ctx["contract_violation"] = True
+                    ctx["violation_details"] = str(e)
+                    raise
+                self.metrics.record_confidence(classified.confidence)
 
             # Phase 2: Filter
-            filtered = self.filter_pipeline.process(
-                classified, normalized=normalized, config=self.filter_config
-            )
+            with self.metrics.phase_timer(MetricsPhase.FILTERING) as ctx:
+                filtered = self.filter_pipeline.process(
+                    classified, normalized=normalized, config=self.filter_config
+                )
+                try:
+                    PhaseContracts.validate_phase2_output(filtered)
+                except ContractViolation as e:
+                    ctx["contract_violation"] = True
+                    ctx["violation_details"] = str(e)
+                    raise
+                # Record redundancy: ratio of deduped graphs
+                original_count = len(classified.classification) if classified.classification else 0
+                filtered_count = len(filtered.filtered_graphs)
+                if original_count > 0:
+                    self.metrics.record_redundancy(original_count, filtered_count)
 
             # Phase 3: Validate
-            validated = self.validator.validate(filtered)
+            with self.metrics.phase_timer(MetricsPhase.VALIDATION) as ctx:
+                validated = self.validator.validate(filtered)
+                try:
+                    PhaseContracts.validate_phase3_output(validated)
+                except ContractViolation as e:
+                    ctx["contract_violation"] = True
+                    ctx["violation_details"] = str(e)
+                    raise
+                self.metrics.record_confidence(validated.final_confidence)
 
             # Phase 4: Enrich
-            enriched = self.enricher.enrich(validated)
+            with self.metrics.phase_timer(MetricsPhase.ENRICHMENT) as ctx:
+                enriched = self.enricher.enrich(validated)
+                try:
+                    PhaseContracts.validate_phase4_output(enriched)
+                except ContractViolation as e:
+                    ctx["contract_violation"] = True
+                    ctx["violation_details"] = str(e)
+                    raise
+                self.metrics.record_model_selection(enriched.model_recommendation)
+                self.metrics.record_cost(enriched.estimated_cost_usd)
 
             # Phase 5: Delegate
-            decision = self.router.route(enriched)
+            with self.metrics.phase_timer(MetricsPhase.DELEGATION) as ctx:
+                decision = self.router.route(enriched)
+                try:
+                    PhaseContracts.validate_phase5_output(decision)
+                except ContractViolation as e:
+                    ctx["contract_violation"] = True
+                    ctx["violation_details"] = str(e)
+                    raise
+                self.metrics.record_decision(
+                    decision.delegation_target.value, decision.carve_out_reason
+                )
+                self.metrics.record_confidence(decision.confidence)
 
             # Build result
             return EngineResult(
@@ -136,6 +197,7 @@ class TaskEngine:
                     "validation_notes": validated.validation_notes,
                     "final_confidence": validated.final_confidence,
                     "estimated_tokens": enriched.estimated_tokens,
+                    "metrics_summary": self.metrics.summary(),
                 },
             )
 

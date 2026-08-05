@@ -55,6 +55,20 @@ from .skill_injector import (
     SkillInjector,
 )
 
+from .engine import (
+    TaskEngine,
+    EngineResult,
+    EnginePhase,
+    EngineError,
+)
+
+from .metrics import (
+    TaskMetrics,
+    MetricsPhase,
+    MetricsOutcome,
+    PhaseMetrics,
+)
+
 __all__ = [
     # Normalizer (Phase 0)
     'TaskNormalizer',
@@ -82,6 +96,18 @@ __all__ = [
 
     # Skill Injector (Phase 1)
     'SkillInjector',
+
+    # Engine (Phases 0–5)
+    'TaskEngine',
+    'EngineResult',
+    'EnginePhase',
+    'EngineError',
+
+    # Metrics & Monitoring
+    'TaskMetrics',
+    'MetricsPhase',
+    'MetricsOutcome',
+    'PhaseMetrics',
 ]
 
 __version__ = '0.2.0'  # Phase 1 completion
