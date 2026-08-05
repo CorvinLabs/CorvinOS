@@ -98,6 +98,64 @@ class TestTaskEngine:
         assert result1.task_complexity == result2.task_complexity
         assert result1.model_recommendation == result2.model_recommendation
 
+    def test_engine_end_to_end_realistic_workflow(self, engine):
+        """End-to-end test: realistic task through all 6 phases.
+
+        This verifies the complete pipeline works, not just isolated phases.
+        """
+        # Realistic high-severity bug-fix task
+        task = (
+            "Fix high-severity crash in core/voice/renderer.py when processing "
+            "audio files longer than 5 minutes. Affects 1000+ users in production."
+        )
+
+        result = engine.route_task(task)
+
+        # Verify decision was made through all 6 phases
+        assert isinstance(result.decision_target, type(result.decision_target))
+        assert result.decision_target.value in ["native", "acs", "tde"]
+
+        # Verify model selection
+        assert result.model_recommendation in ["haiku", "opus"]
+
+        # High-severity bug-fix should have moderate-to-high complexity
+        assert result.task_complexity > 0.4
+
+        # Verify metadata was collected from all phases
+        assert "normalized_type" in result.enriched_metadata
+        assert "classified_confidence" in result.enriched_metadata
+        assert "filtered_graphs" in result.enriched_metadata
+        assert "validation_notes" in result.enriched_metadata
+        assert "final_confidence" in result.enriched_metadata
+        assert "estimated_tokens" in result.enriched_metadata
+
+        # Verify cost estimation
+        assert result.estimated_cost_usd >= 0.0
+        assert result.estimated_cost_usd <= 1.0  # Sanity check
+
+        # Verify confidence is bounded
+        assert 0.0 <= result.confidence <= 1.0
+
+    def test_engine_end_to_end_big_data_detection(self, engine):
+        """E2E: Big-data task routes correctly through all phases."""
+        task = (
+            "Process 10 GB of customer data from data warehouse. "
+            "Aggregate millions of records into summary statistics."
+        )
+
+        result = engine.route_task(task)
+
+        # Big-data should route to ACS (not native)
+        assert result.decision_target.value == "acs"
+        assert "big_data" in result.carve_out_reason
+
+    def test_engine_end_to_end_error_context(self, engine):
+        """E2E: Errors include phase context."""
+        insufficient_task = "fix"  # Too short
+
+        with pytest.raises(InsufficientTaskInfo):
+            engine.route_task(insufficient_task)
+
 
 class TestPhaseContracts:
     """Test phase contract validation."""
