@@ -7,6 +7,40 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 
+## [0.10.116] — 2026-08-05 — Windows 11 installation error diagnosis & recovery guide
+
+### Documentation — Windows 11 fresh-install error analysis
+
+Systematic audit of Windows 11 CorvinOS installations revealed four categories of errors:
+
+#### 🔴 CRITICAL — Duplicate/Conflicting HTTP Packages
+`httpcore==1.0.9` + `httpcore2==2.9.1` and `httpx==0.28.1` + `httpx2==2.9.1` installed simultaneously.
+Root cause: dependency resolver allowed both old and new HTTP library versions to coexist.
+Impact: HTTP-request failures in A2A, Bridges, Cloud features due to wrong module import.
+Recovery: `pip uninstall httpcore2 httpx2 -y && pip install --upgrade httpcore httpx`
+
+#### 🟠 HIGH — Ollama not in Windows autostart
+Ollama service doesn't auto-launch on Windows at boot; "self-heals on first run" claim unverified.
+Impact: Hermes (qwen3:8b) unavailable on next restart; `corvin serve` fails.
+Recovery: Register Ollama as Scheduled Task with AtLogOn trigger, Run Level Highest.
+
+#### 🟠 HIGH — CorvinOS Scheduled Task missing after install
+Uninstaller reported: "Scheduled Task not found: CorvinOS-Console". Installation Step 8 (speech model) ends abruptly without autostart registration.
+Impact: CorvinOS does not start automatically at login; manual `corvin serve` required.
+Recovery: Register task via `Register-ScheduledTask -TaskName CorvinOS-Console -Action ... -Trigger AtLogOn`.
+
+#### 🟡 MEDIUM — Installation incomplete (Step 8 truncation)
+Log ends mid-speech-model-selection without final status. Piper (Kerstin de) model possibly not fetched.
+Impact: Voice synthesis may fail at runtime; TTS degradation (OpenAI → edge-tts → Piper chain).
+Recovery: `corvin-voice --lang de --speaker kerstin` to backfill missing model.
+
+#### 🟡 MEDIUM — pywin32 version compatibility
+`pywin32==312` may cause COM registration drift on Windows 11 22H2+.
+Recovery (optional): `pip install --upgrade pywin32 && python -m pywin32_postinstall -install`.
+
+**Added**: Full Windows 11 error diagnosis document in `docs/windows-installation-errors.md` with PowerShell recovery scripts for each category.
+**CLI recovery**: `corvin diagnose windows` (future work: M2) to auto-detect and suggest fixes.
+
 ## [0.10.115] — 2026-08-05 — corvin-uninstall now always deletes audit chain for clean reinstalls
 
 ### Fixed — leftover audit.jsonl from prior install blocked reinstall with "integrity check failed"
