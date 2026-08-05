@@ -1,0 +1,264 @@
+---
+# AlertManager Rules für Task Engine
+# Production-ready alert definitions für Prometheus/AlertManager
+# Kategorien: CRITICAL (instant), WARNING (daily), INFO (dashboard)
+#
+# Metriken erwartete Quelle: operator/task_analysis/metrics.py
+# Alerting-Kanal: escalation@corvinlabs.io (CRITICAL) → logging (WARNING)
+# Dashboard: Grafana::TaskEngine::Health
+
+groups:
+  - name: task_engine_critical
+    interval: 30s
+    rules:
+      # === CRITICAL: Contract Violations (Fail-Closed Mechanism) ===
+      - alert: TaskEngineContractViolation
+        expr: rate(task_engine_contract_violation_total[1m]) > 0
+        for: 10s  # Instant escalation — contract breach = immediate action
+        labels:
+          severity: critical
+          component: task_engine
+          escalate: "true"
+        annotations:
+          summary: "Task Engine contract violation detected"
+          description: |
+            Contract violation detected in Task Engine.
+            Rate: {{ $value | humanize }}/min
+            This indicates a structural invariant has been broken and requires immediate investigation.
+          runbook: "https://corvin-labs.com/docs/task-engine/troubleshooting#contract-violation"
+          dashboard: "{{ $labels.instance }}/d/task-engine-health"
+
+      # === CRITICAL: Error Rate (5%+) ===
+      - alert: TaskEngineHighErrorRate
+        expr: |
+          (
+            rate(task_engine_errors_total[5m])
+            / on(instance, job) group_left
+            rate(task_engine_requests_total[5m])
+          ) > 0.05
+        for: 1m  # Allow one noisy minute, then escalate
+        labels:
+          severity: critical
+          component: task_engine
+          escalate: "true"
+        annotations:
+          summary: "Task Engine error rate > 5%"
+          description: |
+            Error rate for {{ $labels.instance }} is {{ $value | humanizePercentage }}.
+            Affected phase: {{ $labels.phase | default "unknown" }}
+            Recent errors may indicate degraded model performance, routing failure, or downstream service issue.
+          runbook: "https://corvin-labs.com/docs/task-engine/troubleshooting#high-error-rate"
+          dashboard: "{{ $labels.instance }}/d/task-engine-health?phase={{ $labels.phase }}"
+
+      # === CRITICAL: P95 Latency > 2s ===
+      - alert: TaskEngineHighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            rate(task_engine_latency_seconds_bucket[5m])
+          ) > 2.0
+        for: 2m  # Two consecutive buckets confirm sustained high latency
+        labels:
+          severity: critical
+          component: task_engine
+          escalate: "true"
+        annotations:
+          summary: "Task Engine P95 latency > 2s"
+          description: |
+            P95 latency for {{ $labels.instance }} is {{ $value | humanizeDuration }}.
+            Phase: {{ $labels.phase | default "overall" }}
+            Check downstream TDE/ACS availability, network egress, or model inference queue.
+          runbook: "https://corvin-labs.com/docs/task-engine/troubleshooting#high-latency"
+          dashboard: "{{ $labels.instance }}/d/task-engine-latency?phase={{ $labels.phase }}"
+
+  - name: task_engine_warning
+    interval: 1m
+    rules:
+      # === WARNING: Low Confidence (15–20%) ===
+      - alert: TaskEngineLowConfidenceRate
+        expr: |
+          (
+            rate(task_engine_low_confidence_total[10m])
+            / on(instance, job) group_left
+            rate(task_engine_decisions_total[10m])
+          ) * 100
+        for: 5m  # Sustained low confidence over 5 minutes
+        labels:
+          severity: warning
+          component: task_engine
+          urgency: daily_report
+        annotations:
+          summary: "Task Engine low confidence rate {{ $value | humanize }}%"
+          description: |
+            {{ $labels.instance }} has low-confidence decisions at {{ $value | humanize }}%.
+            Range: 15-20% indicates noisy routing or upstream model degradation.
+            Include in daily SLO review.
+          runbook: "https://corvin-labs.com/docs/task-engine/troubleshooting#low-confidence"
+          dashboard: "{{ $labels.instance }}/d/task-engine-quality"
+
+      # === WARNING: TDE Delegation Rate (3–5%) ===
+      - alert: TaskEngineTDEDelegationRate
+        expr: |
+          (
+            rate(task_engine_delegated_tde_total[10m])
+            / on(instance, job) group_left
+            rate(task_engine_delegations_total[10m])
+          ) * 100
+        for: 5m
+        labels:
+          severity: warning
+          component: task_engine
+          urgency: daily_report
+        annotations:
+          summary: "Task Engine TDE delegation rate {{ $value | humanize }}%"
+          description: |
+            {{ $labels.instance }} delegates to TDE at {{ $value | humanize }}%.
+            Range: 3-5% is expected; > 5% suggests compute exhaustion or model selection drift.
+            Correlate with OpusUsage and routing confidence metrics.
+          runbook: "https://corvin-labs.com/docs/task-engine/troubleshooting#tde-delegation"
+          dashboard: "{{ $labels.instance }}/d/task-engine-routing"
+
+      # === WARNING: Opus Usage (45–50%) ===
+      - alert: TaskEngineOpusUsageHigh
+        expr: |
+          (
+            rate(task_engine_model_opus_total[10m])
+            / on(instance, job) group_left
+            rate(task_engine_model_requests_total[10m])
+          ) * 100
+        for: 5m
+        labels:
+          severity: warning
+          component: task_engine
+          urgency: daily_report
+        annotations:
+          summary: "Task Engine Opus usage {{ $value | humanize }}%"
+          description: |
+            {{ $labels.instance }} uses Opus for {{ $value | humanize }}% of model calls.
+            Range: 45-50% indicates approaching cost/latency threshold.
+            Review model selector logic and budget constraints.
+          runbook: "https://corvin-labs.com/docs/task-engine/troubleshooting#model-selection"
+          dashboard: "{{ $labels.instance }}/d/task-engine-models"
+
+      # === WARNING: Redundancy > 0.6 ===
+      - alert: TaskEngineHighRedundancy
+        expr: |
+          (
+            rate(task_engine_redundant_phases_total[10m])
+            / on(instance, job) group_left
+            rate(task_engine_total_phases_total[10m])
+          )
+        for: 5m
+        labels:
+          severity: warning
+          component: task_engine
+          urgency: daily_report
+        annotations:
+          summary: "Task Engine redundancy {{ $value | humanize }}"
+          description: |
+            {{ $labels.instance }} redundancy ratio is {{ $value | humanize }}.
+            Range: > 0.6 indicates unnecessary phase reruns or validation loops.
+            Review phase-skip logic and confidence thresholds.
+          runbook: "https://corvin-labs.com/docs/task-engine/troubleshooting#redundancy"
+          dashboard: "{{ $labels.instance }}/d/task-engine-efficiency"
+
+  - name: task_engine_info
+    interval: 2m
+    rules:
+      # === INFO: Phase Latencies (Dashboard only) ===
+      - alert: TaskEnginePhaseLatenciesInfo
+        expr: |
+          histogram_quantile(0.50,
+            rate(task_engine_phase_latency_seconds_bucket[5m])
+          )
+        for: 0s  # No alert firing; recording rule only
+        labels:
+          severity: info
+          component: task_engine
+          urgency: dashboard_only
+        annotations:
+          summary: "Task Engine phase latencies"
+          description: |
+            Phase {{ $labels.phase }} median latency: {{ $value | humanizeDuration }}
+            P95: {{ $labels.p95 | default "N/A" }}
+            P99: {{ $labels.p99 | default "N/A" }}
+          dashboard: "{{ $labels.instance }}/d/task-engine-latency"
+
+      # === INFO: Routing Distribution (Dashboard only) ===
+      - alert: TaskEngineRoutingDistributionInfo
+        expr: |
+          rate(task_engine_route_total[5m])
+        for: 0s  # No alert firing; recording rule only
+        labels:
+          severity: info
+          component: task_engine
+          urgency: dashboard_only
+        annotations:
+          summary: "Task Engine routing distribution"
+          description: |
+            Route {{ $labels.route }} traffic: {{ $value | humanize }}/sec
+            Destination: {{ $labels.destination | default "unknown" }}
+            Load balance status: {{ $labels.lb_status | default "healthy" }}
+          dashboard: "{{ $labels.instance }}/d/task-engine-routing"
+
+---
+# Recording Rules für häufig verwendete Aggregate
+# Diese werden von den Alert-Rules oben verwendet.
+
+groups:
+  - name: task_engine_recording
+    interval: 1m
+    rules:
+      # Error rate aggregate
+      - record: task_engine:error_rate:5m
+        expr: |
+          (
+            rate(task_engine_errors_total[5m])
+            / on(instance, job) group_left
+            rate(task_engine_requests_total[5m])
+          )
+
+      # Low confidence rate
+      - record: task_engine:low_confidence_rate:10m
+        expr: |
+          (
+            rate(task_engine_low_confidence_total[10m])
+            / on(instance, job) group_left
+            rate(task_engine_decisions_total[10m])
+          )
+
+      # TDE delegation rate
+      - record: task_engine:tde_delegation_rate:10m
+        expr: |
+          (
+            rate(task_engine_delegated_tde_total[10m])
+            / on(instance, job) group_left
+            rate(task_engine_delegations_total[10m])
+          )
+
+      # Model distribution
+      - record: task_engine:model_distribution:5m
+        expr: |
+          rate(task_engine_model_requests_total[5m])
+          / on(instance, job) group_left()
+          sum by (instance, job) (rate(task_engine_model_requests_total[5m]))
+
+      # Phase latency P50
+      - record: task_engine:phase_latency_p50:5m
+        expr: |
+          histogram_quantile(0.50,
+            rate(task_engine_phase_latency_seconds_bucket[5m])
+          )
+
+      # Phase latency P95
+      - record: task_engine:phase_latency_p95:5m
+        expr: |
+          histogram_quantile(0.95,
+            rate(task_engine_phase_latency_seconds_bucket[5m])
+          )
+
+      # Overall latency P95
+      - record: task_engine:latency_p95:5m
+        expr: |
+          histogram_quantile(0.95,
+            rate(task_engine_latency_seconds_bucket[5m])
+          )
