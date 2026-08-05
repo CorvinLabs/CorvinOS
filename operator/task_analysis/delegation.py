@@ -169,10 +169,11 @@ class BigDataDetector:
         Examples that MATCH:
         - "10 GB of customer records"
         - "process 1 million rows from database"
+        - "code-generated CSV with 1 million records" (CSV forces big-data even with 'code')
 
         Examples that DON'T MATCH:
-        - "2 million lines of code" (code ≠ data)
-        - "10 TB codebase" (code ≠ data)
+        - "2 million lines of code" (code, NOT data)
+        - "10 TB codebase" (code, NOT data)
         """
         # Check for volume unit
         has_volume = any(
@@ -181,15 +182,20 @@ class BigDataDetector:
         if not has_volume:
             return False
 
-        # Check for data noun (but NOT code)
+        # Check for data noun (but NOT pure code)
         has_data_noun = any(
             noun in desc_lower for noun in self.DATA_NOUNS
         )
-        has_code_noun = any(
+        has_pure_code = any(
             kw in desc_lower for kw in ["code", "lines", "function", "class", "method"]
         )
 
-        return has_data_noun and not has_code_noun
+        # CSV/DB reference over-rides code noun (code-generated data is still BIG_DATA)
+        has_structured_source = self._has_structured_source(desc_lower)
+
+        # Rule 4 matches if:
+        # (data noun + no pure code) OR (data noun + structured source exists)
+        return has_data_noun and (not has_pure_code or has_structured_source)
 
 
 class DelegationRouter:
