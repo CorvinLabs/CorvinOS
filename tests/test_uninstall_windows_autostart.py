@@ -149,6 +149,80 @@ class TestWindowsAutostartUninstall:
             assert not any(c and c[0] == "schtasks" for c in calls)
 
 
+class TestUninstallAlwaysDeletesAuditChain:
+    """2026-08-03, reported live: when `corvin-uninstall` declines to delete
+    ~/.corvin/ (user types 'n' to Step 10), a leftover audit.jsonl from the
+    prior install causes the next install to fail at bootstrap with "audit
+    chain integrity check failed". The audit chain is implementation detail —
+    it MUST be deleted unconditionally on uninstall, independent of the
+    user's Step 10 choice, so the next install starts with a fresh chain."""
+
+    def test_uninstall_always_deletes_audit_jsonl_even_if_keeping_corvin_home(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            installer = _make_installer(Path(tmp))
+            # Set up a fake tenants/global with audit files.
+            tenants_dir = installer.corvin_home / "tenants" / "_default" / "global"
+            tenants_dir.mkdir(parents=True, exist_ok=True)
+            audit_jsonl = tenants_dir / "audit.jsonl"
+            audit_verified = tenants_dir / "audit.jsonl.verified"
+            audit_compact = tenants_dir / "audit.jsonl.compact"
+            audit_jsonl.write_text('{"hash": "abc"}')
+            audit_verified.write_text('verify output')
+            audit_compact.write_text('{"hash": "def"}')
+
+            def fake_run(cmd, **_kw):  # noqa: ANN001
+                result = mock.MagicMock()
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+                return result
+
+            # User answers 'n' to Step 10 (keep ~/.corvin/) but 'n' to Step 9
+            # (voice config will also be kept). Only audit chain should be deleted.
+            responses = ["n", "n", "n"]  # Step 9, Step 10, in-repo
+            response_iter = iter(responses)
+
+            def _input_mock(prompt):  # noqa: ANN001
+                return next(response_iter)
+
+            with mock.patch("corvinOS.installer.core.sys.platform", "linux"), \
+                 mock.patch("corvinOS.installer.core.shutil.which", return_value=None), \
+                 mock.patch("corvinOS.installer.core.subprocess.run", side_effect=fake_run), \
+                 mock.patch("builtins.input", side_effect=_input_mock):
+                installer.uninstall(purge=False)
+
+            # Audit chain must be gone even though user declined Step 10.
+            assert not audit_jsonl.exists(), "audit.jsonl must always be deleted"
+            assert not audit_verified.exists(), "audit.jsonl.verified must be deleted"
+            assert not audit_compact.exists(), "audit.jsonl.compact must be deleted"
+            # But ~/.corvin itself should exist (user declined Step 10).
+            assert installer.corvin_home.exists(), "user declined Step 10, so ~/.corvin/ stays"
+
+    def test_uninstall_with_purge_deletes_audit_chain(self) -> None:
+        """Sanity: audit chain deletion also works when purge=True."""
+        with tempfile.TemporaryDirectory() as tmp:
+            installer = _make_installer(Path(tmp))
+            tenants_dir = installer.corvin_home / "tenants" / "_default" / "global"
+            tenants_dir.mkdir(parents=True, exist_ok=True)
+            audit_jsonl = tenants_dir / "audit.jsonl"
+            audit_jsonl.write_text('{"hash": "abc"}')
+
+            def fake_run(cmd, **_kw):  # noqa: ANN001
+                result = mock.MagicMock()
+                result.returncode = 0
+                result.stdout = ""
+                result.stderr = ""
+                return result
+
+            with mock.patch("corvinOS.installer.core.sys.platform", "linux"), \
+                 mock.patch("corvinOS.installer.core.shutil.which", return_value=None), \
+                 mock.patch("corvinOS.installer.core.subprocess.run", side_effect=fake_run), \
+                 mock.patch("builtins.input", return_value="n"):
+                installer.uninstall(purge=True)
+
+            assert not audit_jsonl.exists(), "audit.jsonl deleted on purge=True"
+
+
 class TestUninstallTouchesOnlyInjectedRoots:
     """uninstall(purge=True) must operate exclusively on the installer's
     injected roots — never on the module-global _REPO_ROOT or Path.home().
