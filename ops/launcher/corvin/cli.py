@@ -12,6 +12,7 @@ Commands:
   corvin config set <key> <value>
   corvin config set features.headless_api_mode false   Re-enable the web console
   corvin config show
+  corvin diagnose windows              Run Windows 11 installation diagnostics
   corvin secrets set|get|delete|list|migrate  Manage encrypted secrets (Phase 1b)
   corvin status
 """
@@ -24,6 +25,7 @@ import textwrap
 from typing import Any, Optional
 
 from . import config as cfg
+from . import diagnose as _diagnose_cmd
 from . import docker_backend
 from . import ollama as oll
 from . import serve_backend
@@ -782,6 +784,9 @@ def _build_parser() -> argparse.ArgumentParser:
     from . import tenant_cmd as _tenant_cmd
     _tenant_cmd.add_parser(sub)
 
+    # diagnose — installation and runtime error diagnostics (v0.10.116+)
+    _diagnose_cmd.add_parser(sub)
+
     return p
 
 
@@ -848,6 +853,12 @@ def main() -> None:
             parser.parse_args(["tenant", "--help"])
         from . import tenant_cmd as _tenant_cmd
         sys.exit(_tenant_cmd.dispatch(args))
+
+    elif args.command == "diagnose":
+        if args.diagnose_cmd == "windows":
+            sys.exit(_diagnose_cmd.cmd_diagnose_windows(args))
+        else:
+            parser.parse_args(["diagnose", "--help"])
 
     else:
         # No subcommand: behave like `corvin start` (the most useful default)
