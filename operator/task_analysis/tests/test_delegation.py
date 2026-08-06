@@ -110,13 +110,15 @@ class TestBigDataDetector:
         """Rule 4: Volume + CODE noun should NOT trigger."""
         result, reason = detector.detect("Refactor 2 million lines of code")
         # This should NOT match because 'code' is excluded
-        assert result is False or reason != "volume_data_noun"
+        assert result is False
+        assert reason != "volume_data_noun"
 
     def test_rule4_excludes_codebase(self, detector):
         """Rule 4: Volume + codebase should NOT trigger."""
         result, reason = detector.detect("Optimize 500 GB codebase")
         # 'codebase' contains 'code', so should NOT trigger
-        assert result is False or reason != "volume_data_noun"
+        assert result is False
+        assert reason != "volume_data_noun"
 
     def test_rule4_with_tb_unit(self, detector):
         """Rule 4: Should recognize TB unit."""

@@ -244,10 +244,14 @@ class PhaseContracts:
             )
 
         # Validate should_delegate consistency
-        is_native = str(decision.delegation_target).endswith("native")
+        is_native = decision.delegation_target == DelegationTarget.NATIVE
         if is_native and decision.should_delegate:
             raise ContractViolation(
                 "Phase 5: should_delegate=True but target is NATIVE"
+            )
+        if not is_native and not decision.should_delegate:
+            raise ContractViolation(
+                "Phase 5: should_delegate=False but target is not NATIVE"
             )
 
 

@@ -141,17 +141,8 @@ class TaskClassifier:
             )
 
         except Exception as e:
-            logger.error(f"Task classification failed: {e}")
-            # Return a minimal valid result
-            return ClassifiedTask(
-                normalized=normalized_task,
-                classification={},
-                scored_routers=ScoredRouters(),
-                confidence=0.0,
-                recommended_graphs=[],
-                recommended_graph_scores={},
-                skills_to_inject=[],
-            )
+            logger.error(f"Task classification failed: {e}", exc_info=True)
+            raise
 
     def _run_routers(self, task) -> Dict[str, GraphMatch]:
         """Run all five routers.
