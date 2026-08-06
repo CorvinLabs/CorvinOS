@@ -124,6 +124,55 @@ def _normalize_msys_drive(s: str) -> str:
     return f"{drive.upper()}:{rest}"
 
 
+# A backslash acting as a Windows PATH SEPARATOR, i.e. one that is NOT the
+# start of a POSIX escape sequence we must preserve. `\ `, `\\`, `\'`, `\"`,
+# `\$` and `` \` `` are genuine shell escapes even on Windows; a backslash
+# before anything else (a letter, digit, `.`, `-`, `~`, …) is a path
+# separator in `C:\Users\...`.
+_WIN_PATH_SEP_RE = re.compile(r"\\(?=[^\s\\'\"$`])")
+# Placeholder for those separators while shlex runs: a Unicode Private Use
+# Area code point, which shlex treats as an ordinary word character and which
+# carries no meaning in any real command. Deliberately NOT NUL — NUL-poisoned
+# paths are their own (still-open) fail-closed problem in this module, and the
+# two must not become entangled. Any pre-existing sentinel in the input is
+# stripped before substitution so it can never be smuggled in to forge a
+# separator; dropping the character can only ever shorten a token, never turn
+# a protected path into an unprotected one.
+_WIN_SEP_SENTINEL = "\ue000"
+
+
+def _split_tokens(seg: str) -> list[str]:
+    """``shlex.split(seg, posix=True)``, but backslash-safe on Windows.
+
+    2026-08-06, found via the boot-time self-test on a live Windows install:
+    nine curated must-deny vectors (`tee`, `sed -i`, `truncate`, `rm`,
+    `chmod`, `ln`, `cp -t`, …) were being ALLOWED. Root cause: every path
+    extractor here tokenises with POSIX shlex, which treats ``\\`` as an
+    escape character and simply DROPS it — so
+
+        tee -a C:\\Users\\me\\.corvin\\global\\forge\\audit.jsonl
+
+    tokenises to ``C:Usersme.corvinglobalforgeaudit.jsonl``, which resolves
+    to nothing protected, and the gate lets a write to the audit chain
+    through. The redirect vectors (``>``, ``>|``, ``2>``) were unaffected
+    because _REDIRECT_RE matches the raw string and never sees shlex.
+
+    Substituting the separators for a sentinel that shlex passes through
+    untouched keeps quoting, whitespace splitting and token POSITIONS
+    byte-identical to before — call sites depend on those positions
+    (``toks[0]`` is the command name, sed -i takes the last positional).
+    POSIX hosts take the original path unchanged; there a backslash really
+    is an escape and paths use ``/``.
+
+    Companion to _normalize_msys_drive(), which covers the other shape a
+    Windows Bash path arrives in (Git-Bash/MSYS2 ``/c/Users/...``)."""
+    if not sys.platform.startswith("win"):
+        return shlex.split(seg, posix=True)
+    seg = seg.replace(_WIN_SEP_SENTINEL, "")  # no smuggled separators
+    toks = shlex.split(_WIN_PATH_SEP_RE.sub(_WIN_SEP_SENTINEL, seg), posix=True)
+    return [t.replace(_WIN_SEP_SENTINEL, "\\") for t in toks]
+
+
 def _abs(p: str | Path) -> Path:
     """Best-effort absolute resolution. Non-existent paths are fine.
 
@@ -769,7 +818,7 @@ def _seg_chdirs_into_tree(seg: str) -> bool:
     (`rm -rf tenants`) lands inside the protected tree at run time even though the
     hook resolved it against its own cwd (round-4/round-5)."""
     try:
-        raw = shlex.split(seg, posix=True)
+        raw = _split_tokens(seg)
     except ValueError:
         return False
     if not raw:
@@ -1045,7 +1094,7 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
                             + _ARCHIVE_CMDS + ("dd", "tee"))
         for _seg in segs:
             try:
-                _st = _strip_cmd_wrappers(shlex.split(_seg, posix=True))
+                _st = _strip_cmd_wrappers(_split_tokens(_seg))
             except ValueError:
                 return [], True
             if _st and _st[0].rsplit("/", 1)[-1] in _DESTRUCTIVE_ALL:
@@ -1064,7 +1113,7 @@ def _bash_targets(cmd: str) -> tuple[list[str], bool]:
     # sed -i takes its target as the last positional arg of the segment.
     for seg in segs:
         try:
-            toks = shlex.split(seg, posix=True)
+            toks = _split_tokens(seg)
         except ValueError:
             if _looks_protected(seg):
                 return [], True
