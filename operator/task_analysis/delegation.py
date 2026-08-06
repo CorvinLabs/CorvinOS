@@ -9,6 +9,8 @@ ADR-0217 Big-Data Rules (in priority order):
 4. Volume + Data Noun: GB/TB/PB + (data|records|rows|entries) — NOT code
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
 import re
@@ -100,10 +102,8 @@ class BigDataDetector:
         r"\d+\s*gb",
         r"\d+\s*tb",
         r"\d+\s*pb",
-        r"\d+\s*gb",
         r"\d+\s*gigabyte",
         r"\d+\s*terabyte",
-        r"\d+\s*million",
         r"\d+\s*million",
         r"\d+\s*millionen",  # German
     ]
@@ -145,12 +145,47 @@ class BigDataDetector:
         return any(kw in desc_lower for kw in self.BIG_DATA_KEYWORDS)
 
     def _has_markdown_table_10plus(self, task_description: str) -> bool:
-        """Check Rule 2: Markdown table with ≥10 rows."""
-        # Detect markdown table: lines with | separators
+        """Check Rule 2: Markdown table with ≥10 data rows.
+
+        Detects markdown tables via:
+        1. Lines starting/ending with | (table row markers)
+        2. Separator line with --- and | (table header separator)
+        3. Counts actual data rows (not header/separator)
+        """
         lines = task_description.split("\n")
-        table_lines = [l for l in lines if "|" in l]
-        # At least 10 table rows (header + separator + 8+ data rows)
-        return len(table_lines) >= 10
+
+        # Find potential table region (consecutive pipe-delimited lines)
+        in_table = False
+        table_data_rows = 0
+        separator_found = False
+
+        for line in lines:
+            stripped = line.strip()
+
+            # Skip empty lines
+            if not stripped:
+                in_table = False
+                continue
+
+            # Check if line is a markdown table row (starts and ends with |)
+            if stripped.startswith("|") and stripped.endswith("|"):
+                # Check if this is the separator line (contains dashes and pipes)
+                if re.search(r'\|\s*-+\s*\|', stripped):
+                    separator_found = True
+                elif separator_found:
+                    # Data row after separator
+                    table_data_rows += 1
+                    in_table = True
+                elif in_table or not separator_found:
+                    # Potential header or first data rows
+                    in_table = True
+            else:
+                # Line doesn't look like markdown table
+                if in_table:
+                    in_table = False
+
+        # Rule 2 matches if: separator found AND ≥10 data rows
+        return separator_found and table_data_rows >= 10
 
     def _has_structured_source(self, task_description: str) -> bool:
         """Check Rule 3 (part 1): CSV/DB/etc. file reference."""
@@ -182,12 +217,14 @@ class BigDataDetector:
         if not has_volume:
             return False
 
-        # Check for data noun (but NOT pure code)
+        # Check for data noun (but NOT pure code) — use word boundaries to avoid false matches
+        # E.g., "database" should not match "data" noun
         has_data_noun = any(
-            noun in desc_lower for noun in self.DATA_NOUNS
+            re.search(rf'\b{re.escape(noun)}\b', desc_lower) for noun in self.DATA_NOUNS
         )
         has_pure_code = any(
-            kw in desc_lower for kw in ["code", "lines", "function", "class", "method"]
+            re.search(rf'\b{re.escape(kw)}\b', desc_lower)
+            for kw in ["code", "lines", "function", "class", "method"]
         )
 
         # CSV/DB reference over-rides code noun (code-generated data is still BIG_DATA)
@@ -219,7 +256,14 @@ class DelegationRouter:
         Returns:
             DelegationDecision.
         """
-        normalized = enriched.validated.filtered.classified.normalized
+        # Safely traverse nested attributes
+        try:
+            normalized = enriched.validated.filtered.classified.normalized
+        except (AttributeError, TypeError) as e:
+            raise ValueError(
+                f"Invalid enriched task structure: cannot access normalized task. {e}"
+            ) from e
+
         # Check both summary and description for big-data keywords
         task_description = (
             getattr(normalized, "description", "")

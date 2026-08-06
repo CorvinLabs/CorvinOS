@@ -137,11 +137,11 @@ class TaskEngine:
                     ctx["contract_violation"] = True
                     ctx["violation_details"] = str(e)
                     raise
-                # Record redundancy: ratio of deduped graphs
-                original_count = len(classified.classification) if classified.classification else 0
-                filtered_count = len(filtered.filtered_graphs)
-                if original_count > 0:
-                    self.metrics.record_redundancy(original_count, filtered_count)
+                # Record redundancy: graphs before filtering vs after filtering
+                self.metrics.record_redundancy(
+                    len(filtered.ranked_graphs),
+                    len(filtered.filtered_graphs)
+                )
 
             # Phase 3: Validate
             with self.metrics.phase_timer(MetricsPhase.VALIDATION) as ctx:
