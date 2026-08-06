@@ -1,0 +1,39 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'staging'
+    environment: 'staging'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'localhost:9093'
+
+rule_files:
+  - 'operator/monitoring/alertmanager_rules.yaml'
+
+scrape_configs:
+  - job_name: 'taskengine-staging'
+    static_configs:
+      - targets: ['localhost:8765']
+    metrics_path: '/metrics'
+    scrape_interval: 5s
+    scrape_timeout: 5s
+    honor_labels: true
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - source_labels: [__scheme__]
+        target_label: scheme
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    metrics_path: '/metrics'
+
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['localhost:9093']
+    metrics_path: '/metrics'

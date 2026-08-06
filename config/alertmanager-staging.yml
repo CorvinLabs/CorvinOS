@@ -1,0 +1,76 @@
+global:
+  resolve_timeout: 5m
+  slack_api_url: ''  # Set via env var ALERTMANAGER_SLACK_WEBHOOK
+  pagerduty_url: 'https://events.pagerduty.com/v2/enqueue'
+
+templates:
+  - '*.tmpl'
+
+route:
+  receiver: 'staging-default'
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 4h
+
+  routes:
+    # CRITICAL: Page immediately
+    - match:
+        severity: 'CRITICAL'
+      receiver: 'staging-critical'
+      group_wait: 0s
+      repeat_interval: 1h
+
+    # WARNING: Daily digest
+    - match:
+        severity: 'WARNING'
+      receiver: 'staging-warnings'
+      group_wait: 5m
+      repeat_interval: 24h
+
+    # INFO: Dashboard only
+    - match:
+        severity: 'INFO'
+      receiver: 'staging-info'
+      repeat_interval: 24h
+
+receivers:
+  - name: 'staging-default'
+    webhook_configs:
+      - url: 'http://localhost:5001/alerts/webhook'
+        send_resolved: true
+
+  - name: 'staging-critical'
+    # Page on-call engineer
+    pagerduty_configs:
+      - service_key: 'staging-taskengine-service-key'
+    webhook_configs:
+      - url: 'http://localhost:5001/alerts/critical'
+        send_resolved: true
+
+  - name: 'staging-warnings'
+    # Slack warning channel
+    webhook_configs:
+      - url: 'http://localhost:5001/alerts/warnings'
+        send_resolved: true
+
+  - name: 'staging-info'
+    # Dashboard metrics only
+    webhook_configs:
+      - url: 'http://localhost:5001/alerts/info'
+        send_resolved: false
+
+inhibit_rules:
+  # Don't send INFO if CRITICAL exists for same alert
+  - source_match:
+      severity: 'CRITICAL'
+    target_match:
+      severity: 'INFO'
+    equal: ['alertname', 'cluster']
+
+  # Don't send WARNING if CRITICAL exists for same alert
+  - source_match:
+      severity: 'CRITICAL'
+    target_match:
+      severity: 'WARNING'
+    equal: ['alertname', 'cluster']
