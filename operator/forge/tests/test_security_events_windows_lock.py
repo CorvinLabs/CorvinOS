@@ -37,13 +37,17 @@ from forge import security_events as se  # noqa: E402
 def _fake_msvcrt():
     """A minimal stand-in for the Windows-only msvcrt module, recording
     every locking() call so tests can assert on mode/byte-count without a
-    real Windows box."""
+    real Windows box. Also records the fd's offset at call time, since
+    msvcrt.locking() locks relative to the current position and WHICH byte
+    gets locked is itself security-relevant (see the offset test below)."""
     mod = types.ModuleType("msvcrt")
     mod.LK_LOCK = 1
     mod.LK_UNLCK = 3
     mod.calls = []
+    mod.offsets = []
 
     def _locking(fd, mode, nbytes):
+        mod.offsets.append(os.lseek(fd, 0, os.SEEK_CUR))
         mod.calls.append((fd, mode, nbytes))
 
     mod.locking = _locking
@@ -86,9 +90,94 @@ def test_lock_chain_restores_file_position_around_the_msvcrt_call():
                 assert fh.tell() == 7, "position must be restored after unlock"
 
 
+def test_lock_chain_sentinel_byte_is_far_beyond_any_real_record():
+    """2026-08-06, reported live (Discord, CLAG L22.engine_spawn
+    audit_write_failed): the mutex byte must NOT sit inside the data.
+
+    Windows LockFile ranges are MANDATORY and enforced per-HANDLE, so a
+    locked byte is unreadable even by the locking process through a second
+    handle. write_event() locks, then calls _last_hash(), which re-opens the
+    chain and — on a chain smaller than _TAIL_BLOCK — starts its tail scan at
+    offset 0. With the sentinel at offset 0 that read hits our own lock and
+    raises PermissionError [Errno 13], so after the first record no
+    hash-chained write can ever succeed again. Pin the sentinel past the EOF
+    of any chain that could exist."""
+    fake = _fake_msvcrt()
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "audit.jsonl"
+        p.write_bytes(b"x" * 4096)
+        with p.open("r+b") as fh:
+            with mock.patch.object(se, "msvcrt", fake):
+                se._lock_chain(fh)
+                se._unlock_chain(fh)
+    assert fake.offsets == [se._LOCK_SENTINEL_OFFSET] * 2
+    # Comfortably past _TAIL_BLOCK — the scan window _last_hash() reads while
+    # the lock is held — and past any plausible chain size.
+    assert se._LOCK_SENTINEL_OFFSET > se._TAIL_BLOCK
+    assert se._LOCK_SENTINEL_OFFSET >= 1 << 40
+
+
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="mandatory byte-range locks are a Windows-only semantic")
+def test_write_event_on_a_short_chain_does_not_self_deadlock_on_windows():
+    """The live failure, end to end, against the REAL msvcrt: a chain with a
+    single record (well under _TAIL_BLOCK) must accept another hash-chained
+    append. Before the fix this raised PermissionError [Errno 13] from the
+    read inside _last_hash(), while the same write succeeded on a chain
+    larger than _TAIL_BLOCK and with hash_chain=False — which is exactly why
+    it read as an intermittent permissions problem rather than a lock bug."""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "audit.jsonl"
+        se.write_event(p, "test.first", details={"k": "v"})   # empty chain
+        assert p.stat().st_size < se._TAIL_BLOCK
+        se.write_event(p, "test.second", details={"k": "v2"})  # short chain
+        ok, problems = se.verify_chain(p)
+    assert ok, problems
+
+
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="mandatory byte-range locks are a Windows-only semantic")
+def test_verify_under_a_held_read_lock_can_still_read_the_chain_on_windows():
+    """audit_health_check() takes _lock_chain(shared=True) on a read handle
+    and then calls verify_chain(), which re-opens and reads the file. With
+    the sentinel inside the data that re-read raised PermissionError and the
+    bridge logged `verify_errored / PermissionError` on every boot."""
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "audit.jsonl"
+        se.write_event(p, "test.first", details={"k": "v"})
+        with p.open("r") as lf:
+            se._lock_chain(lf, shared=True)
+            try:
+                ok, problems = se.verify_chain(p)
+            finally:
+                se._unlock_chain(lf)
+    assert ok, problems
+
+
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="mandatory byte-range locks are a Windows-only semantic")
+def test_sentinel_lock_still_excludes_a_second_handle_on_windows():
+    """Moving the sentinel must not weaken what the lock is FOR: a second
+    handle to the same chain still cannot take it while it is held."""
+    import msvcrt as real_msvcrt
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "audit.jsonl"
+        p.touch()
+        with p.open("r+b") as held:
+            se._lock_chain(held)
+            try:
+                with p.open("r+b") as other:
+                    fd = other.fileno()
+                    os.lseek(fd, se._LOCK_SENTINEL_OFFSET, os.SEEK_SET)
+                    with pytest.raises(OSError):
+                        real_msvcrt.locking(fd, real_msvcrt.LK_NBLCK, 1)
+            finally:
+                se._unlock_chain(held)
+
+
 def test_lock_chain_works_on_an_empty_file():
-    """A fresh/empty chain (nothing written yet) must not raise — locking
-    byte 0 beyond EOF is the whole point of this idiom."""
+    """A fresh/empty chain (nothing written yet) must not raise — locking a
+    byte beyond EOF is the whole point of this idiom."""
     fake = _fake_msvcrt()
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "audit.jsonl"

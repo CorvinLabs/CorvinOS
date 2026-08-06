@@ -96,13 +96,38 @@ def _run(cmd, **kwargs):
     Deliberately NOT used for start_fg()'s own Popen (the explicit
     foreground CLI command — inheriting the user's own console there is
     correct, not a bug) or the long-lived daemon Popen calls in
-    start_channel_detached()/ensure_adapter_detached() (already carry their
-    own DETACHED_PROCESS combo, which implies CREATE_NO_WINDOW). no-op on
-    non-Windows: subprocess.run() accepts creationflags=0 on every platform.
+    start_channel_detached()/ensure_adapter_detached() — those carry
+    _WIN_DAEMON_FLAGS instead. no-op on non-Windows: subprocess.run()
+    accepts creationflags=0 on every platform.
     """
     if no_console_window_flags is not None:
         kwargs.setdefault("creationflags", no_console_window_flags())
     return subprocess.run(cmd, **kwargs)
+
+
+# Windows creationflags for a LONG-LIVED BACKGROUND DAEMON (the adapter, a
+# bridge daemon) — as opposed to _run()'s one-shot helper processes.
+#
+# 2026-08-06, reported live: a console window kept appearing for
+# `…\uv\tools\corvinos\Scripts\python.exe`. Confirmed by window enumeration:
+# the adapter process owned a VISIBLE PseudoConsoleWindow hosted by Windows
+# Terminal. Root cause: these two sites used DETACHED_PROCESS, and this
+# module's own docstring above used to assert that DETACHED_PROCESS "implies
+# CREATE_NO_WINDOW". It does not — they are DIFFERENT, mutually exclusive
+# flags (CreateProcess rejects the pair):
+#
+#   DETACHED_PROCESS  the child starts with NO console. The moment anything
+#                     in it needs one, Windows allocates a BRAND NEW one —
+#                     and a console allocated after the fact is VISIBLE.
+#   CREATE_NO_WINDOW  the child gets its own console that is never displayed,
+#                     so later console use is satisfied invisibly.
+#
+# CREATE_NO_WINDOW keeps the detachment these call sites actually need: the
+# child is on its own console, not the caller's, so a console-close event
+# there cannot reach it, and CREATE_NEW_PROCESS_GROUP (kept) blocks
+# CTRL_C/CTRL_BREAK propagation. Windows never kills a child just because its
+# parent exits — only a Job Object does that, and neither flag affects jobs.
+_WIN_DAEMON_FLAGS = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
 
 
 def _corvin_home() -> Path:
@@ -1154,7 +1179,7 @@ def ensure_adapter_detached() -> dict:
         log_fh = subprocess.DEVNULL  # type: ignore[assignment]
     kwargs: dict = {"stdout": log_fh, "stderr": subprocess.STDOUT}
     if sys.platform == "win32":
-        kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | NEW_PROCESS_GROUP
+        kwargs["creationflags"] = _WIN_DAEMON_FLAGS
     else:
         kwargs["start_new_session"] = True
     try:
@@ -1383,7 +1408,7 @@ def start_channel_detached(
         log_fh = open(log_path, "wb")
         kwargs: dict = {"stdout": log_fh, "stderr": subprocess.STDOUT}
         if sys.platform == "win32":
-            kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED_PROCESS | NEW_PROCESS_GROUP
+            kwargs["creationflags"] = _WIN_DAEMON_FLAGS
         else:
             kwargs["start_new_session"] = True
         proc = subprocess.Popen(cmd, cwd=str(rt), env=env, **kwargs)

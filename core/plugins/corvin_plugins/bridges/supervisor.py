@@ -451,8 +451,12 @@ class BridgeSupervisorPlugin:
             log_fh = subprocess.DEVNULL
         kwargs: dict = {"stdout": log_fh, "stderr": subprocess.STDOUT}
         if sys.platform == "win32":
-            # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-            kwargs["creationflags"] = 0x00000008 | 0x00000200
+            # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP. NOT
+            # DETACHED_PROCESS: that leaves the daemon with no console, so the
+            # first thing that needs one makes Windows allocate a brand-new
+            # VISIBLE window (2026-08-06 — see the full writeup at
+            # bridge_manager._WIN_DAEMON_FLAGS).
+            kwargs["creationflags"] = 0x08000000 | 0x00000200
         else:
             # Own process group so on_unload can signal the whole tree — a
             # WhatsApp daemon forks helpers, and signalling only the parent

@@ -64,14 +64,34 @@ from typing import Any
 # Fixed with real Windows locking via msvcrt.locking() for this one
 # security-critical section, instead of relying on the (correctly) inert
 # fcntl shim. msvcrt has no whole-file or shared/exclusive distinction like
-# flock — the portable fix locks a single, well-known byte (offset 0) as a
-# pure mutex indicator: every writer/reader locks that SAME byte before
-# touching the file, regardless of where the real read/append happens,
-# which correctly serializes access. Operates on the raw fd via os.lseek
-# (not the buffered TextIOWrapper's own seek) so it is unaffected by the
-# file being opened in append mode. Locking a byte beyond the current EOF
-# (a fresh/empty chain) is well-defined Windows behaviour and the standard
-# basis for this exact cross-platform locking idiom.
+# flock — the portable fix locks a single, well-known byte as a pure mutex
+# indicator: every writer/reader locks that SAME byte before touching the
+# file, regardless of where the real read/append happens, which correctly
+# serializes access. Operates on the raw fd via os.lseek (not the buffered
+# TextIOWrapper's own seek) so it is unaffected by the file being opened in
+# append mode. Locking a byte beyond the current EOF is well-defined Windows
+# behaviour and the standard basis for this exact cross-platform idiom.
+#
+# 2026-08-06, reported live (Discord, CLAG L22.engine_spawn): that sentinel
+# byte must NOT be offset 0. Unlike POSIX flock, Windows LockFile ranges are
+# MANDATORY and enforced per-HANDLE, not per-process — a locked byte is
+# unreadable even by the process that locked it, through any other handle.
+# write_event() takes this lock on its append handle and then calls
+# _last_hash(path), which opens the chain a SECOND time and scans it in
+# _TAIL_BLOCK (8 KiB) blocks from the end. On a chain smaller than one block
+# that scan starts at offset 0 — i.e. straight into our own lock —
+# and fails with ERROR_LOCK_VIOLATION → PermissionError [Errno 13].
+# Symptom: after the very first record (size==0 short-circuits the scan) NO
+# hash-chained write ever succeeds again; only hash_chain=False events land,
+# and CLAG fail-closes every engine spawn with `audit_write_failed`. The same
+# collision hits audit_health_check(), whose verify_chain() re-read under the
+# read lock surfaced as `verify_errored / PermissionError`. Note this is NOT
+# the read-only-attribute failure fixed in 0.10.112 (that one is a genuine
+# os.open EACCES); the retry added there cannot help, because this
+# PermissionError is raised by the read inside _last_hash, not by os.open.
+# So: lock a byte far past any plausible EOF, where it can never overlap a
+# real record. Every participant derives it from the same constant, so the
+# cross-process mutex the lock exists for is fully preserved.
 #
 # Branches on msvcrt's IMPORTABILITY, not sys.platform, and checks it at
 # call time rather than gating the def at module-import time — the module
@@ -85,11 +105,17 @@ except ImportError:
     msvcrt = None  # type: ignore[assignment]
 
 
+# Offset of the Windows mutex sentinel byte: 1 TiB, i.e. past the EOF of any
+# audit chain that could exist (the rotation threshold is orders of magnitude
+# below this). Locking beyond EOF is legal and does not extend the file.
+_LOCK_SENTINEL_OFFSET = 1 << 40
+
+
 def _lock_chain(fh, shared: bool = False) -> None:  # noqa: ARG001 - no distinct shared mode on Windows
     if msvcrt is not None:
         fd = fh.fileno()
         saved = os.lseek(fd, 0, os.SEEK_CUR)
-        os.lseek(fd, 0, os.SEEK_SET)
+        os.lseek(fd, _LOCK_SENTINEL_OFFSET, os.SEEK_SET)
         try:
             msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
         finally:
@@ -102,7 +128,7 @@ def _unlock_chain(fh) -> None:
     if msvcrt is not None:
         fd = fh.fileno()
         saved = os.lseek(fd, 0, os.SEEK_CUR)
-        os.lseek(fd, 0, os.SEEK_SET)
+        os.lseek(fd, _LOCK_SENTINEL_OFFSET, os.SEEK_SET)
         try:
             msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
         finally:

@@ -6,6 +6,84 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed — L10 path-gate was blind to native Windows paths in Bash commands
+
+The adapter's boot-time path-gate self-test reported nine curated must-deny vectors as
+**allowed** on a live Windows install:
+
+```
+path-gate: SELF-TEST FAILED — 9 vector(s) unexpectedly allowed:
+  bash-tee, bash-tee-multi-dest, bash-sed-inplace, bash-truncate-audit, bash-rm-audit,
+  bash-chmod-audit, bash-ln-forge-tool, bash-cp-target-dir-forge, bash-cp-t-forge
+```
+
+Root cause: every path extractor in `path_gate.py` tokenises with `shlex.split(posix=True)`,
+which treats `\` as an escape character and drops it. On Windows
+
+```
+tee -a C:\Users\me\.corvin\global\forge\audit.jsonl
+```
+
+tokenises to `C:Usersme.corvinglobalforgeaudit.jsonl`, which resolves to nothing protected —
+so `rm -f`, `truncate -s0`, `tee -a`, `chmod 666`, `ln -sf`, `sed -i` and `cp -t` against the
+audit chain, the forge tool workspace and `policy.json` all passed the gate. Redirect vectors
+(`>`, `>|`, `2>`, space-less) were unaffected because `_REDIRECT_RE` matches the raw command
+string and never sees shlex, which is why the gap surfaced as a scattered handful of vectors
+rather than one systematic hole. `test_path_gate.py` was failing 45 assertions on Windows for
+this single reason.
+
+Fix: a shared `_split_tokens()` helper replaces the three `shlex.split()` call sites. On
+Windows it substitutes path-separator backslashes for a Private Use Area sentinel that shlex
+passes through untouched, then restores them — quoting, whitespace splitting and token
+*positions* stay byte-identical (call sites depend on positions: `toks[0]` is the command
+name, `sed -i` takes the last positional). Only separators are substituted; genuine POSIX
+escapes (`\ `, `\\`, `\'`, `\"`, `\$`, `` \` ``) are left alone, and any pre-existing sentinel
+in the input is stripped so one cannot be smuggled in. POSIX hosts take the original code path
+unchanged. Companion to the existing `_normalize_msys_drive()`, which covers the other shape a
+Windows Bash path arrives in (Git-Bash/MSYS2 `/c/Users/...`).
+
+`test_path_gate.py` on Windows: 86 pass / 45 fail → **139 pass / 5 fail**. The five remaining
+are the pre-existing NUL-poisoning cluster (two of them explicitly `BUG-PIN:`-prefixed pins for
+the still-missing `main()` fail-closed backstop) and are untouched by this change. New section
+42 covers all nine vectors in backslash form, a quoted backslash path, token-position
+stability, POSIX-escape preservation, and a non-protected backslash path that must still be
+allowed.
+
+### Fixed — audit chain self-deadlocked on its own Windows lock (CLAG blocked every engine spawn)
+
+Live-reported via Discord: every engine spawn was refused with
+`🔒 [security] Action blocked … Reason: audit_write_failed (check layer: L22.engine_spawn.*)`,
+and every boot logged `audit.chain_gap_detected / verify_errored / PermissionError`.
+
+Root cause: `security_events._lock_chain()` took its cross-process mutex on **byte 0 of the
+chain file itself**. Windows `LockFile` ranges are mandatory and enforced per-*handle*, not
+per-process, so that byte becomes unreadable even to the locking process through a second
+handle. `write_event()` takes the lock on its append handle and then calls `_last_hash()`,
+which re-opens the chain and scans it in `_TAIL_BLOCK` (8 KiB) blocks from the end — on a
+chain smaller than one block the scan starts at offset 0, straight into our own lock, and
+raises `PermissionError [Errno 13]`.
+
+Effect: after the very first record (`size == 0` short-circuits the scan) **no hash-chained
+write could ever succeed again**. Only `hash_chain=False` events landed, which is why the
+chain still verified clean while sitting at one hashed record. `audit_health_check()` hit the
+same collision from the other side: it holds a read lock and then has `verify_chain()` re-read
+the file, surfacing as `verify_errored / PermissionError`.
+
+This is *not* the stale read-only-attribute failure fixed in 0.10.112 — that one is a genuine
+`os.open` EACCES, and its retry cannot help here because the error comes from the read inside
+`_last_hash()`. The lock itself was introduced in "audit chain had zero cross-process locking
+on Windows".
+
+Fix: lock a sentinel byte at `_LOCK_SENTINEL_OFFSET = 1 << 40`, far past the EOF of any chain
+that can exist, so the mutex can never overlap a real record. Locking beyond EOF is
+well-defined on Windows and does not extend the file; every participant derives the offset
+from the same constant, so cross-process exclusion is unchanged. POSIX (`fcntl.flock`,
+advisory) was never affected and is untouched.
+
+Regression coverage in `operator/forge/tests/test_security_events_windows_lock.py`: the
+sentinel offset is pinned above `_TAIL_BLOCK`, plus three Windows-only end-to-end tests
+(short-chain append, verify under a held read lock, and second-handle exclusion) — all three
+fail against the pre-fix module.
 
 ## [0.10.117] — 2026-08-05 — corvin diagnose windows for Windows 11 error detection
 

@@ -9857,10 +9857,15 @@ def process_one(inbox_file: Path, settings: dict) -> None:
                         # creationflags the "detached" worker shares the
                         # parent's console/job and dies with it (the whole
                         # point of /task is surviving the spawning session).
+                        # CREATE_NO_WINDOW, not DETACHED_PROCESS: the latter
+                        # starts the worker with NO console, so the first thing
+                        # that needs one makes Windows allocate a brand-new
+                        # VISIBLE console. Same fix, same reason as
+                        # bridge_manager._WIN_DAEMON_FLAGS — see that constant.
                         _detach_flags = 0
                         if sys.platform == "win32":
                             _detach_flags = (
-                                getattr(subprocess, "DETACHED_PROCESS", 0)
+                                getattr(subprocess, "CREATE_NO_WINDOW", 0)
                                 | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                             )
                         subprocess.Popen(

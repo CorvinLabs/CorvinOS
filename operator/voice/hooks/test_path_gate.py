@@ -775,6 +775,74 @@ def main() -> int:
     )
 
     # ---------------------------------------------------------------------
+    # 42. Native Windows paths in Bash commands (2026-08-06)
+    #
+    # Found by the boot-time self-test on a live Windows install: nine
+    # must-deny vectors were being ALLOWED. Every path extractor tokenises
+    # with POSIX shlex, which treats `\` as an escape and DROPS it, so
+    # `C:\Users\me\.corvin\global\forge\audit.jsonl` became the token
+    # `C:Usersme.corvinglobalforgeaudit.jsonl` — resolving to nothing
+    # protected. Redirects (`>`, `>|`, `2>`) were unaffected: _REDIRECT_RE
+    # reads the raw string and never sees shlex, which is exactly why the
+    # gap looked like a handful of unrelated vectors rather than one bug.
+    #
+    # These assert on the backslash form specifically. The rest of the
+    # suite exercises the same commands with `HOME` (native separators on
+    # Windows, `/` on POSIX), so both shapes stay covered on both hosts.
+    # ---------------------------------------------------------------------
+    _win_home = str(Path(HOME)).replace("/", "\\")
+    _win_audit = f"{_win_home}\\global\\forge\\audit.jsonl"
+    _win_policy = f"{_win_home}\\global\\forge\\policy.json"
+    _win_tools = f"{_win_home}\\global\\forge\\tools"
+    for _label, _cmd in (
+        ("tee -a",              f"echo x | tee -a {_win_audit}"),
+        ("tee multi-dest",      f"echo x | tee /tmp/safe {_win_audit}"),
+        ("sed -i",              f"sed -i 's/x/y/' {_win_policy}"),
+        ("truncate -s0",        f"truncate -s0 {_win_audit}"),
+        ("rm -f",               f"rm -f {_win_audit}"),
+        ("chmod 666",           f"chmod 666 {_win_audit}"),
+        ("ln -sf",              f"ln -sf /tmp/evil.py {_win_tools}\\x.py"),
+        ("cp --target-directory", f"cp /tmp/evil.py --target-directory={_win_tools}"),
+        ("cp -t",               f"cp -t {_win_tools} /tmp/evil.py"),
+    ):
+        expect(
+            f"Bash backslash path: {_label} → DENY",
+            {"tool_name": "Bash", "tool_input": {"command": _cmd}},
+            blocked=True,
+        )
+
+    # A quoted backslash path must survive tokenisation too — quoting is the
+    # natural way to write a Windows path containing spaces.
+    expect(
+        "Bash backslash path: quoted rm → DENY",
+        {"tool_name": "Bash", "tool_input": {"command": f"rm -f '{_win_audit}'"}},
+        blocked=True,
+    )
+
+    # Token POSITIONS must be unchanged by the separator substitution —
+    # call sites read toks[0] as the command name and sed -i's target as the
+    # last positional, so a split that merges or adds tokens breaks them.
+    t("_split_tokens keeps token positions on a backslash path",
+      path_gate._split_tokens(f"rm -f {_win_audit}") == ["rm", "-f", _win_audit],
+      detail=f"got {path_gate._split_tokens(f'rm -f {_win_audit}')!r}")
+
+    # POSIX escapes must still be honoured: `\ ` is an escaped space, not a
+    # path separator, so this stays ONE token on every platform.
+    t("_split_tokens still honours a POSIX escaped space",
+      path_gate._split_tokens(r"rm -f /tmp/two\ words.txt")
+      == ["rm", "-f", "/tmp/two words.txt"],
+      detail=f"got {path_gate._split_tokens(r'rm -f /tmp/two\ words.txt')!r}")
+
+    # Non-protected backslash paths must NOT be over-blocked — the fix adds
+    # visibility, not blanket denial of every command containing a `\`.
+    expect(
+        "Bash backslash path outside the tree → ALLOW",
+        {"tool_name": "Bash",
+         "tool_input": {"command": r"rm -f C:\Temp\scratch\notes.txt"}},
+        blocked=False,
+    )
+
+    # ---------------------------------------------------------------------
     # Subprocess + audit-chain E2E (iteration 3)
     # ---------------------------------------------------------------------
     import json

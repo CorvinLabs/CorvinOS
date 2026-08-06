@@ -167,7 +167,11 @@ def _try_start_ollama() -> bool:
     try:
         kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
         if sys.platform == "win32":
-            kwargs["creationflags"] = 0x00000008 | 0x00000200  # DETACHED + NEW_GROUP
+            # CREATE_NO_WINDOW, not DETACHED_PROCESS: the latter leaves the
+            # child with NO console, so the first thing needing one gets a
+            # brand-new VISIBLE window (2026-08-06 — see
+            # bridge_manager._WIN_DAEMON_FLAGS for the full writeup).
+            kwargs["creationflags"] = 0x08000000 | 0x00000200  # CREATE_NO_WINDOW | NEW_GROUP
         else:
             kwargs["start_new_session"] = True
         subprocess.Popen([binary, "serve"], **kwargs)
