@@ -64,6 +64,7 @@ class RichTaskBrief:
 
     Output of Context Engineering Layer (Phase 5.5).
     Transforms sparse EnrichedTask into rich context brief.
+    Extended in Phase 2: adds related_decisions and recommended_skills.
     """
 
     raw_input: str
@@ -73,13 +74,19 @@ class RichTaskBrief:
     """EnrichedTask from Phase 4 (Enrich)."""
 
     memory_context: MemoryContext
-    """Memory lookup results."""
+    """Memory lookup results (Phase 5.5a)."""
 
     timestamp: datetime
     """When RichTaskBrief was created."""
 
-    version: str = "0.1"
-    """RichTaskBrief format version."""
+    related_decisions: List[object] = field(default_factory=list)
+    """Related decisions from GraphTraversal (Phase 5.5b)."""
+
+    recommended_skills: List[object] = field(default_factory=list)
+    """Recommended skills from SkillInjection (Phase 5.5c)."""
+
+    version: str = "0.2"
+    """RichTaskBrief format version (0.2: Phase 2 with decisions + skills)."""
 
     def __repr__(self) -> str:
         """Compact representation for logging."""
@@ -87,6 +94,8 @@ class RichTaskBrief:
             f"RichTaskBrief("
             f"input='{self.raw_input[:30]}...', "
             f"memory_matches={len(self.memory_context.matches)}, "
+            f"related_decisions={len(self.related_decisions)}, "
+            f"recommended_skills={len(self.recommended_skills)}, "
             f"confidence={self.memory_context.confidence:.2f}"
             f")"
         )

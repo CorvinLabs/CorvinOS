@@ -10,6 +10,7 @@ Phase 2: Graph Traversal + Skill Injection (ADR-0269 Phase 2).
 from .memory_lookup import MemoryLookup, MemoryMatch
 from .rich_task_brief import RichTaskBrief, MemoryContext
 from .graph_traversal import GraphTraversal, RelatedDecision, GraphTraversalResult
+from .skill_injection import SkillInjection, RecommendedSkill, SkillInjectionResult
 
 __all__ = [
     "MemoryLookup",
@@ -19,6 +20,9 @@ __all__ = [
     "GraphTraversal",
     "RelatedDecision",
     "GraphTraversalResult",
+    "SkillInjection",
+    "RecommendedSkill",
+    "SkillInjectionResult",
 ]
 
 __version__ = "0.2.0"

@@ -21,7 +21,7 @@ from .contracts import PhaseContracts, ContractViolation
 
 # Import CEL (Phase 5.5)
 try:
-    from operator.context_engineering import MemoryLookup
+    from operator.context_engineering import MemoryLookup, GraphTraversal, SkillInjection
     CEL_AVAILABLE = True
 except ImportError:
     CEL_AVAILABLE = False
@@ -114,16 +114,25 @@ class TaskEngine:
         self.filter_config = filter_config or FilterConfig()
         self.metrics = metrics or TaskMetrics()
 
-        # Phase 5.5: Context Engineering Layer (optional)
-        self.cel: Optional[MemoryLookup] = None
+        # Phase 5.5: Context Engineering Layer (optional, 3 sub-phases)
+        self.cel_memory: Optional[MemoryLookup] = None
+        self.cel_graph: Optional[GraphTraversal] = None
+        self.cel_skills: Optional[SkillInjection] = None
         if enable_cel and CEL_AVAILABLE:
             try:
-                self.cel = MemoryLookup()
-                logger.info("CEL (Phase 5.5) enabled for memory enrichment")
+                self.cel_memory = MemoryLookup()
+                self.cel_graph = GraphTraversal()
+                self.cel_skills = SkillInjection()
+                logger.info("CEL (Phase 5.5) enabled: MemoryLookup + GraphTraversal + SkillInjection")
             except Exception as e:
                 logger.warning(f"Failed to initialize CEL: {e}, continuing without it")
         elif enable_cel and not CEL_AVAILABLE:
             logger.warning("CEL requested but not available, continuing without it")
+
+    @property
+    def cel(self) -> Optional[object]:
+        """Backward-compat property for legacy code that checks self.cel."""
+        return self.cel_memory
 
     def route_task(self, raw_task: str) -> EngineResult:
         """Route a task through all 6 phases (with Prometheus metrics).
@@ -210,18 +219,37 @@ class TaskEngine:
                 self.metrics.record_model_selection(enriched.model_recommendation)
                 self.metrics.record_cost(enriched.estimated_cost_usd)
 
-            # Phase 5.5: Context Engineering Layer (Memory Enrichment, OPTIONAL)
+            # Phase 5.5: Context Engineering Layer (3 sub-phases: Memory → Graph → Skills, OPTIONAL)
             rich_brief = None
-            if self.cel:
+            if self.cel_memory and self.cel_graph and self.cel_skills:
                 try:
                     with self.metrics.phase_timer(MetricsPhase.CEL) as ctx:
-                        logger.debug("Running Phase 5.5: Context Engineering Layer")
-                        rich_brief = self.cel.enrich_task(enriched)
+                        logger.debug("Running Phase 5.5: Context Engineering Layer (Memory → Graph → Skills)")
+
+                        # Phase 5.5a: Memory Lookup
+                        rich_brief = self.cel_memory.enrich_task(enriched)
                         ctx["memory_matches"] = len(rich_brief.memory_context.matches)
                         ctx["cel_confidence"] = rich_brief.memory_context.confidence
+
+                        # Phase 5.5b: Graph Traversal (find related decisions)
+                        graph_result = self.cel_graph.find_related_decisions(enriched)
+                        related_decisions = graph_result.related_decisions
+                        ctx["related_decisions"] = len(related_decisions)
+                        ctx["graph_depth"] = graph_result.traversal_depth
+
+                        # Phase 5.5c: Skill Injection (recommend skills)
+                        skills_result = self.cel_skills.recommend_skills(enriched, related_decisions)
+                        recommended_skills = skills_result.recommended_skills
+                        ctx["recommended_skills"] = len(recommended_skills)
+
+                        # Attach to brief for agent decision
+                        rich_brief.related_decisions = related_decisions
+                        rich_brief.recommended_skills = recommended_skills
+
                         logger.info(
-                            f"Phase 5.5 complete: {len(rich_brief.memory_context.matches)} matches, "
-                            f"confidence={rich_brief.memory_context.confidence:.2f}"
+                            f"Phase 5.5 complete: {len(rich_brief.memory_context.matches)} memory matches, "
+                            f"{len(related_decisions)} related decisions, "
+                            f"{len(recommended_skills)} recommended skills"
                         )
                 except Exception as e:
                     logger.warning(f"Phase 5.5 (CEL) failed: {e}, continuing without it")
