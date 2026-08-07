@@ -601,6 +601,97 @@ class RealTdeOrchestrator:
                          task_id, exc_info=True)
             return None
 
+    @staticmethod
+    async def _run_tde_arm(
+        task_text: str, *, run_id: str, session_key: str, tenant_id: str,
+    ) -> "tuple[int, str, str | None, str | None] | None":
+        """Run TDE ITSELF for a whole task; return
+        (tde_tokens, tde_output, complexity, workload_type) or None if unusable.
+
+        The existing ``orchestrate`` takes the TDE arm as INPUT because TDE ran
+        as the main turn. In SHADOW mode TDE never ran, so we run it HERE — its
+        output is for the judge only and is NEVER shown to a user. Replicates the
+        TDE mechanic from chat_runtime._stream_tde_turn (analysis → SendIntegration
+        → select_engine_and_execute) plus the same full-instrumentation gate.
+
+        Charging: this is a REAL TDE fan-out and books the shared compute pool at
+        the execute chokepoint (_enforce_tde_compute_quota) — SELF-LIMITING: an
+        exhausted pool returns reason=quota_exhausted → no summary → None, so a
+        shadow run only ever books when there is headroom.
+        """
+        from .analysis_runner import run_initial_analysis_sync  # noqa: PLC0415
+        from .engine_registry import EngineRegistry  # noqa: PLC0415
+        from .send_integration import SendIntegration  # noqa: PLC0415
+
+        context = {"statement": {"task": task_text}, "task_text": task_text}
+        analysis = await asyncio.to_thread(
+            run_initial_analysis_sync, task_text, context)
+        integration = SendIntegration(
+            registry=EngineRegistry(real_ipc=True),
+            session_key=session_key, tenant_id=tenant_id,
+        )
+        _engine, result = await integration.select_engine_and_execute(
+            "/use-engine tiered_delegation\n" + task_text, context, analysis,
+            run_id=run_id,
+        )
+        result = result or {}
+        if result.get("reason") == "quota_exhausted":
+            _log.info("shadow %s: TDE arm skipped — shared pool exhausted", run_id)
+            return None
+        summary = result.get("summary") or {}
+        # Full-instrumentation gate (mirror chat_runtime.py's _fully_instrumented):
+        # partial instrumentation UNDER-counts TDE tokens = biased in TDE's favour.
+        steps_total = summary.get("step_count") or 0
+        steps_instr = summary.get("instrumented_step_count") or 0
+        if steps_total <= 0 or steps_instr != steps_total:
+            _log.info("shadow %s: TDE arm not fully instrumented (%s/%s) — drop",
+                      run_id, steps_instr, steps_total)
+            return None
+        tde_tokens = summary.get("total_tokens")
+        if not isinstance(tde_tokens, int) or tde_tokens <= 0:
+            return None
+        parts: list[str] = []
+        for r in result.get("results", []) or []:
+            out = getattr(r, "output", None)
+            if getattr(r, "success", False) and out:
+                parts.append(str(out))
+        tde_output = ("\n\n".join(parts)).strip()
+        if not tde_output:
+            return None
+        return (tde_tokens, tde_output,
+                summary.get("complexity"), summary.get("task_type"))
+
+    @classmethod
+    async def orchestrate_shadow(
+        cls, *, task_id: str, task_text: str, session_key: str, tenant_id: str,
+        user_model: str | None = None, engine_id: str = "claude_code",
+        proc_holder: Any = None,
+    ) -> "MeasurementSample | None":
+        """Shadow measurement — TDE never ran as the main turn (the user got the
+        NATIVE answer). Run TDE HERE (output discarded), then feed the existing
+        ``orchestrate`` with the TDE arm's real numbers.
+
+        The native answer is ONLY the trigger, NOT a measured arm: it runs WITH
+        tools/repo context, while ``whole_task_direct_baseline`` is deliberately
+        tool-less. Using the native answer as ``direct`` would inflate the
+        savings denominator and fabricate a TDE advantage — the exact defect
+        ADR-0222 exists to prevent. So ``orchestrate`` still runs its own clean
+        tool-less direct + tier baselines; the shadow only supplies the tde arm.
+        """
+        tde_arm = await cls._run_tde_arm(
+            task_text, run_id=task_id, session_key=session_key,
+            tenant_id=tenant_id)
+        if tde_arm is None:
+            return None
+        tde_tokens, tde_output, complexity, workload_type = tde_arm
+        return await cls.orchestrate(
+            task_id=task_id, task_text=task_text,
+            tde_tokens=tde_tokens, tde_output=tde_output,
+            task_complexity=complexity, user_model=user_model,
+            engine_id=engine_id, workload_type=workload_type,
+            proc_holder=proc_holder,
+        )
+
 
 def _timeout_after(seconds: float) -> Any:
     """asyncio.timeout on 3.11+, falling back to a no-op on older runtimes.
