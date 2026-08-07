@@ -40,7 +40,14 @@ export const PackageMarketplace: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
 
   useEffect(() => {
-    fetchPackages()
+    let isMounted = true
+    const load = async () => {
+      if (isMounted) await fetchPackages()
+    }
+    load()
+    return () => {
+      isMounted = false
+    }
   }, [])
 
   const fetchPackages = async () => {
@@ -87,19 +94,27 @@ export const PackageMarketplace: React.FC = () => {
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || `Upload failed: ${response.statusText}`)
+        let errorDetail = `Upload failed: ${response.statusText}`
+        try {
+          const errorData = await response.json()
+          errorDetail = errorData.error || errorData.detail || errorDetail
+        } catch {
+          // Response wasn't JSON, use statusText
+        }
+        throw new Error(errorDetail)
       }
 
       const data: UploadResponse = await response.json()
-      setUploadStatus(`Package ${data.package.name} uploaded successfully!`)
+      setUploadStatus(`Package ${data.display_name} uploaded successfully!`)
       setSelectedFile(null)
 
-      // Refresh package list
-      setTimeout(() => {
+      // Refresh package list with cleanup
+      const timeoutId = setTimeout(() => {
         fetchPackages()
         setUploadStatus(null)
       }, 1500)
+
+      return () => clearTimeout(timeoutId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
       setUploadStatus(null)
@@ -118,14 +133,23 @@ export const PackageMarketplace: React.FC = () => {
       })
 
       if (!response.ok) {
-        throw new Error(`Uninstall failed: ${response.statusText}`)
+        let errorDetail = `Uninstall failed: ${response.statusText}`
+        try {
+          const errorData = await response.json()
+          errorDetail = errorData.error || errorData.detail || errorDetail
+        } catch {
+          // Response wasn't JSON, use statusText
+        }
+        throw new Error(errorDetail)
       }
 
       setUploadStatus('Package uninstalled successfully!')
-      setTimeout(() => {
+      const timeoutId = setTimeout(() => {
         fetchPackages()
         setUploadStatus(null)
       }, 1500)
+
+      return () => clearTimeout(timeoutId)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Uninstall failed')
       setUploadStatus(null)
