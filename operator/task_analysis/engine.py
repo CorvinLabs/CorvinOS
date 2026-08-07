@@ -213,13 +213,17 @@ class TaskEngine:
             ) from e
 
     def _infer_phase_from_error(self, error: Exception) -> EnginePhase:
-        """Infer which phase caused the error (best-effort).
+        """Infer which phase caused the error (best-effort heuristic).
+
+        NOTE: This is a fallback. Preferred: errors are caught with phase context
+        in each phase's metrics.phase_timer() context manager (Zeilen 109-196).
+        This method only infers phase if error context was lost.
 
         Args:
             error: The caught exception.
 
         Returns:
-            Likely EnginePhase.
+            Likely EnginePhase (best guess based on error message keywords).
         """
         # Simple heuristics based on error type
         error_str = str(error).lower()

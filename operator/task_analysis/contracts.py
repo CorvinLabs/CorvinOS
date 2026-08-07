@@ -194,9 +194,9 @@ class PhaseContracts:
                 f"Phase 4 task_complexity must be in [0.0, 1.0], got {enriched.task_complexity}"
             )
 
-        if enriched.model_recommendation not in ["haiku", "opus"]:
+        if enriched.model_recommendation not in ["haiku", "opus", "sonnet"]:
             raise ContractViolation(
-                f"Phase 4 model_recommendation must be 'haiku' or 'opus', got '{enriched.model_recommendation}'"
+                f"Phase 4 model_recommendation must be 'haiku', 'opus' or 'sonnet', got '{enriched.model_recommendation}'"
             )
 
         if enriched.estimated_tokens <= 0:

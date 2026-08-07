@@ -239,9 +239,15 @@ class TestClassifierGraphRecommendation:
         result = classifier.classify(task)
 
         # High-confidence task should recommend fewer graphs (selective)
+        # Note: confidence depends on router results, so we check the mode:
+        # - If confidence >= 0.7: selective mode (recommend graphs with score >= 0.5)
+        # - If confidence < 0.7: fallback mode (recommend all available graphs)
         if result.confidence >= 0.7:
             # Selective mode: recommend only high-scoring graphs
             assert len(result.recommended_graphs) <= 5
+        elif result.confidence < 0.7:
+            # Fallback mode: recommend all graphs
+            assert len(result.recommended_graphs) == 5
 
     def test_low_confidence_recommends_all_graphs(self, classifier):
         """Confidence < 0.7 → recommend all graphs (fallback)."""
@@ -260,8 +266,11 @@ class TestClassifierGraphRecommendation:
         result = classifier.classify(task)
 
         # Low-confidence task should recommend all graphs
+        # Fallback mode: recommend all graphs (5 routers)
         if result.confidence < 0.7:
             assert len(result.recommended_graphs) == 5
+            # Sanity check: at least some graphs recommended
+            assert len(result.recommended_graphs) > 0
 
     def test_recommended_graphs_have_scores(self, classifier, minimal_task):
         """Each recommended graph has a score."""

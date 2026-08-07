@@ -55,7 +55,7 @@ class TestTaskEngine:
         )
 
         assert result.decision_target.value == "acs"
-        assert "big_data" in result.carve_out_reason
+        assert result.carve_out_reason == "big_data_vocabulary"
 
     def test_engine_routing_complex_refactor(self, engine):
         """Engine should route complex refactors to Opus (maybe TDE)."""
@@ -112,11 +112,12 @@ class TestTaskEngine:
         result = engine.route_task(task)
 
         # Verify decision was made through all 6 phases
-        assert isinstance(result.decision_target, type(result.decision_target))
+        from operator.task_analysis.delegation import DelegationTarget
+        assert isinstance(result.decision_target, DelegationTarget)
         assert result.decision_target.value in ["native", "acs", "tde"]
 
         # Verify model selection
-        assert result.model_recommendation in ["haiku", "opus"]
+        assert result.model_recommendation in ["haiku", "opus", "sonnet"]
 
         # High-severity bug-fix should have moderate-to-high complexity
         assert result.task_complexity > 0.4
@@ -147,7 +148,14 @@ class TestTaskEngine:
 
         # Big-data should route to ACS (not native)
         assert result.decision_target.value == "acs"
-        assert "big_data" in result.carve_out_reason
+        # Verify carve_out_reason is one of the big-data detection rules
+        big_data_reasons = [
+            "big_data_vocabulary",
+            "tabular_paste",
+            "structured_source_bulk_work",
+            "volume_data_noun",
+        ]
+        assert result.carve_out_reason in big_data_reasons
 
     def test_engine_end_to_end_error_context(self, engine):
         """E2E: Errors include phase context."""
