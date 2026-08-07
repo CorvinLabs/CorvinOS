@@ -141,7 +141,44 @@ Der User sieht NIE eine TDE-Antwort — TDEs Output geht nur an den Judge und wi
 Kosten: 3 Extra-Runs pro gemessenem Turn (direct+tier+tde), detached, nur bei Sampling,
 nicht gegen Quota gebucht. Damit füttert der Shadow genau das Gate aus Schritt 2.
 
-## Schritt 4: Bridge-Parität — erst wenn Gate grün (ADR-0221 P3/P4).
+## Schritt 4: TDE auf der Bridge testen (Operator-Wunsch — Single-User-Messtest)
+
+**Ziel (Operator):** TDE aus Discord/WhatsApp heraus TESTEN + im Hintergrund auf den
+echten Bridge-Daten messen. Als einziger Nutzer bewusst den ADR-0221-Bridge-Freeze
+aufheben — hinter einem opt-in Flag, reversibel.
+
+**GEBAUT + GETESTET (`adapter.py` + `feature_flags.py`):**
+- Flag `bridge_tde_execution` (ships-dark, default False) — hebt den Bridge-TDE-Freeze
+  PRO TENANT auf. Allein ausreichend (triggert die volle Route, schaltet nur TDE frei,
+  nicht ACS).
+- `_worker_engine_target` (adapter.py): `tde_available`/`quota_ok` nicht mehr hart False —
+  bei Flag on + mode=tde + nicht force/big-data werden die ECHTEN Console-Probes
+  (`_tde_available`/`_tde_quota_peek_ok`) wiederverwendet (kein Bridge-Copy). Flag off /
+  Probe-Fehler → frozen default (native).
+- `_maybe_delegate_worker`: `target == "tde"` → `_run_tde_delegation`. tde-Flag ODER
+  parity-Flag betritt die Route; tde-Flag allein schaltet NICHT ACS frei.
+- `_run_tde_delegation`: Bridge-Geschwister von `_run_acs_delegation`. Compliance-Gates
+  (L34/L35, engine=claude_code) → TDE via `SendIntegration.select_engine_and_execute`
+  (engine-agnostischer Core, KEIN `_stream_tde_turn`-Copy) → Antwort oder None. **Robuster
+  Degrade = Self-Healing:** None → nativer Turn (architektonisch geschenkt, die Bridge hat
+  `answer=None → native` schon). Quota: TDE bucht INTERN (kein Doppel-Charge); leerer Pool
+  → quota_exhausted → None → native.
+- **Hintergrund-Messung auf echten Daten:** `_spawn_bridge_measurement` (Daemon-THREAD, weil
+  die Bridge asyncio.run pro Turn nutzt — kein persistenter Loop wie die Console) → bestehendes
+  `orchestrate` (TDE-Zahlen als Input, tool-lose direct+tier-Baselines schatten) →
+  `measurement.jsonl`. Gated durch `_measurement_should_sample` (TDE_MEASUREMENT_ENABLED=1) +
+  Full-Instrumentation-Gate.
+- E2E `test_bridge_tde_execution.py` (7 grün): Flag-off→native, Flag-on+Probe→tde,
+  Probe-Fehler→native, TDE läuft, TDE-Fehler→native (self-healing), tde-Flag-allein≠ACS,
+  small-talk→direct. Bestehende `test_bridge_worker_engine_parity.py` (16) grün + Docstrings
+  auf „flag-off default statt by construction" aktualisiert.
+
+**Bedienung (Operator):** Settings → Features: `bridge_tde_execution` an, `worker_engine=tde`,
+`TDE_MEASUREMENT_ENABLED=1` (+ optional Sample-Rate). Dann coden über Discord/WhatsApp → TDE
+läuft real, misst still → nach ein paar Tagen `corvin tde gate` liest den Verdict.
+**OFFEN:** optionaler Circuit-Breaker (N Degrades in Folge → Flag auto-aus); commit; ADR-Amendment.
+
+## Schritt 5 (vormals 4): Bridge-ACS-Parität — Flags `bridge_worker_engine_parity` etc.
 
 ---
 
