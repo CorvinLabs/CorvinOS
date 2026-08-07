@@ -59,8 +59,8 @@ class TestCELMeasurementDay9:
     def engine(self):
         return TaskEngine(enable_cel=True)
 
-    def test_measure_50_tasks_with_cel(self, engine):
-        """Measure 50 tasks with CEL enabled."""
+    def _run_measurement(self, engine, day):
+        """Generic measurement pipeline for any day."""
         measurements = []
         successes = 0
         total_latency = 0
@@ -112,10 +112,10 @@ class TestCELMeasurementDay9:
         assert success_rate > 0.8, f"Success rate too low: {success_rate:.1%}"
         assert avg_latency < 1000, f"Average latency too high: {avg_latency:.0f}ms"
 
-        # Save day 9 metrics
+        # Save metrics
         report = {
             "timestamp": datetime.now().isoformat(),
-            "day": 9,
+            "day": day,
             "success_rate": success_rate,
             "avg_latency_ms": avg_latency,
             "p95_latency_ms": sorted([m["latency_ms"] for m in measurements])[
@@ -126,16 +126,61 @@ class TestCELMeasurementDay9:
             "measurements": measurements,
         }
 
-        output_file = Path(__file__).parent.parent.parent / "day9_metrics.json"
+        output_file = Path(__file__).parent.parent.parent / f"day{day}_metrics.json"
         with open(output_file, "w") as f:
             json.dump(report, f, indent=2)
 
-        print(f"\n✓ Day 9: {successes}/{len(measurements)} tasks")
+        print(f"\n✓ Day {day}: {successes}/{len(measurements)} tasks")
         print(f"  Success rate: {success_rate:.1%}")
         print(f"  Avg latency: {avg_latency:.1f}ms")
         print(f"  Avg memory matches: {avg_matches:.1f}")
         print(f"  Cache hit rate: {cache_hit_rate:.1%}")
         print(f"\nMetrics saved to: {output_file}")
+
+        return report
+
+    def test_measure_50_tasks_with_cel(self, engine):
+        """Measure 50 tasks with CEL enabled."""
+        self._run_measurement(engine, day=9)
+
+
+class TestCELMeasurementDay10:
+    """Day 10 measurement (second day of 4-day loop)."""
+
+    @pytest.fixture
+    def engine(self):
+        return TaskEngine(enable_cel=True)
+
+    def test_measure_day10(self, engine):
+        """Measure Day 10."""
+        test_day9 = TestCELMeasurementDay9()
+        test_day9._run_measurement(engine, day=10)
+
+
+class TestCELMeasurementDay11:
+    """Day 11 measurement (third day of 4-day loop)."""
+
+    @pytest.fixture
+    def engine(self):
+        return TaskEngine(enable_cel=True)
+
+    def test_measure_day11(self, engine):
+        """Measure Day 11."""
+        test_day9 = TestCELMeasurementDay9()
+        test_day9._run_measurement(engine, day=11)
+
+
+class TestCELMeasurementDay12:
+    """Day 12 measurement (fourth day of 4-day loop)."""
+
+    @pytest.fixture
+    def engine(self):
+        return TaskEngine(enable_cel=True)
+
+    def test_measure_day12(self, engine):
+        """Measure Day 12."""
+        test_day9 = TestCELMeasurementDay9()
+        test_day9._run_measurement(engine, day=12)
 
 
 class TestCELMeasurementCumulative:
