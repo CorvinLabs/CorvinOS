@@ -109,8 +109,9 @@ class SkillInjection:
         """
         start = time.perf_counter()
 
-        # Check cache
-        cache_key = hash((id(task), top_n))
+        # Check cache (use task_id not object identity to avoid GC reuse collisions)
+        task_id = self._get_task_id(task)
+        cache_key = hash((task_id, top_n))
         if cache_key in self._injection_cache:
             cached_skills, timestamp = self._injection_cache[cache_key]
             age = datetime.now() - timestamp

@@ -113,8 +113,9 @@ class GraphTraversal:
         """
         start = time.perf_counter()
 
-        # Check cache
-        cache_key = hash((id(task), depth, top_n, max_results))
+        # Check cache (use task_id not object identity to avoid GC reuse collisions)
+        task_id = self._get_task_id(task)
+        cache_key = hash((task_id, depth, top_n, max_results))
         if cache_key in self._traversal_cache:
             cached_results, timestamp = self._traversal_cache[cache_key]
             age = datetime.now() - timestamp
