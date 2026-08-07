@@ -19,11 +19,25 @@ from .delegation import DelegationRouter, DelegationTarget
 from .metrics import TaskMetrics, MetricsPhase, MetricsOutcome
 from .contracts import PhaseContracts, ContractViolation
 
-# Import CEL (Phase 5.5)
+# Import CEL (Phase 5.5) — use importlib to bypass stdlib operator conflict
+import importlib.util
+CEL_AVAILABLE = False
+MemoryLookup = None
+GraphTraversal = None
+SkillInjection = None
+
 try:
-    from operator.context_engineering import MemoryLookup, GraphTraversal, SkillInjection
-    CEL_AVAILABLE = True
-except ImportError:
+    # Load context_engineering module directly by file path (avoid stdlib operator)
+    cel_path = __file__.rsplit('/', 2)[0] + '/context_engineering/__init__.py'
+    spec = importlib.util.spec_from_file_location("context_engineering", cel_path)
+    if spec and spec.loader:
+        cel_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cel_module)
+        MemoryLookup = cel_module.MemoryLookup
+        GraphTraversal = cel_module.GraphTraversal
+        SkillInjection = cel_module.SkillInjection
+        CEL_AVAILABLE = True
+except (ImportError, AttributeError, FileNotFoundError):
     CEL_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
