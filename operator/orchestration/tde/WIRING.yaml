@@ -145,16 +145,20 @@ components:
 
   - name: decision_gate
     module: tde.decision_gate
-    status: deferred
+    status: live
     reason: >
       ADR-0222 Phase 2 decision logic. Its BandEvidence dataclass IS reached in
-      production (tde_measurement imports it to shape recorded samples), but the
-      verdict functions — evaluate_band / evaluate_tde_verdict — have no
-      production caller yet ON PURPOSE: they may only decide once measured
-      evidence reaches min_samples_per_band, which is the outcome of the
-      measurement week, not an input to it. Pure logic, fully unit-tested
-      (test_tde_decision_gate.py, test_tde_decision_gate_measured.py). Wire the
-      verdict into routing only when the aggregated evidence is real — wiring it
-      earlier would let assumption-sourced numbers flip a routing default, which
-      the ADR's honesty invariant forbids.
+      production (tde_measurement imports it to shape recorded samples). Since
+      2026-08-07 (TDE_ROBUST_USABLE_PLAN Step 2) the verdict functions
+      evaluate_band / evaluate_tde_verdict have a LIVE production caller:
+      `corvin tde gate` (ops/launcher/corvin/tde_cmd.py). That consumer honours
+      the honesty invariant structurally — it can only ARM (flip worker_engine
+      to tde via feature_flags.set_worker_engine_mode) when the verdict is
+      decided on MEASURED data, TDE wins ≥1 band, and NO measured band loses;
+      otherwise it fails DARK (reports, writes nothing). Without measured
+      evidence (the default state — the measurement week has not run) it can only
+      read INSUFFICIENT_DATA, so no assumption-sourced number can flip a routing
+      default. Arming is GLOBAL (there is no per-band routing yet), so a mixed
+      verdict deliberately refuses — per-band arming is a tracked follow-up.
+      Fully unit-tested (test_tde_decision_gate*.py) + E2E (test_tde_gate_cli.py).
     target_adr: "0222"

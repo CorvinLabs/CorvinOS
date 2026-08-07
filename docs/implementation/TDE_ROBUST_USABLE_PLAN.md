@@ -158,5 +158,19 @@ im measurement-tail behält die TDE-Antwort).
   `test_tde_degrade_to_native.py` (runtime + mid-run-quota, durch echten `stream_turn`):
   2 grün. Regression: `test_acs_quota_fallback` (3) + `test_delegation_routing_e2e` (15)
   grün — ACS-Pfad + nicht-degradierte Turns unberührt. Doku: `delegation-routing.md`
-  um den In-Flight-Degrade ergänzt. OFFEN: adversarial review + commit/rebase auf
-  origin/main; dann Schritt 2 (Auto-Arm-Gate).
+  um den In-Flight-Degrade ergänzt. Commit `7717c92` (lokal).
+- 2026-08-07 — **Schritt 2 GEBAUT + GETESTET.** Lebendiger Gate-Konsument
+  `corvin tde gate` (`ops/launcher/corvin/tde_cmd.py`, registriert in `cli.py`): lädt
+  `measurement.jsonl` → `MeasurementRecorder.load_from_log` → `get_aggregated_evidence`
+  → `evaluate_tde_verdict`, druckt den Verdict; mit `--arm` schaltet es global
+  `worker_engine=tde` (via `feature_flags.set_worker_engine_mode`) NUR wenn: auf
+  MEASURED-Daten entschieden UND ≥1 Band gewinnt UND KEINE gemessene Band verliert —
+  sonst fail-dark (schreibt nichts). E2E `test_tde_gate_cli.py` (echter Subprocess): 4
+  grün — keine-Daten→INSUFFICIENT+kein-Arm, alle-gewinnen→armed, mixed(trivial verliert)
+  →kein-Arm (robust), JSON valide. WIRING.yaml `decision_gate` deferred→**live**.
+  **GRENZE (bewusst):** Arming ist GLOBAL (kein per-Band-Routing heute) → ein Verdict, wo
+  TDE `complex` gewinnt aber `trivial` verliert, armt NICHT. Da TDE laut ADR-0222 auf
+  trivial/moderate wahrscheinlich verliert, feuert das globale Arm praktisch nie →
+  ehrlich, aber TDE bleibt praktisch aus. **Echte Nutzbarkeit braucht per-Band-Arming**
+  (armed-band-Store + `band`-Param durch `worker_engine_target`) — eigener ADR-Schritt.
+  OFFEN: per-Band-Entscheidung (Operator), Mess-Woche für echte Daten, commit.
