@@ -733,10 +733,14 @@ def start_fg(channels: Optional[list[str]] = None) -> int:
     # Windows-only: passed to Popen so a later CTRL_BREAK_EVENT reaches this
     # child (and its own process group) without also hitting bridge_manager
     # itself — by default a spawned child shares the parent's console/
-    # process group on Windows.
+    # process group on Windows. Also: CREATE_NO_WINDOW suppresses the visible
+    # console window when the bridge daemon starts (2026-08-05, reported live:
+    # "an extra Terminal window opens when Discord starts").
     _spawn_kwargs: dict = {}
     if sys.platform.startswith("win"):
-        _spawn_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        _spawn_kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        )
 
     def _spawn(label: str, cmd: list[str], cwd: Path,
                mutate_env: Optional["callable"] = None) -> None:  # type: ignore[name-defined]
