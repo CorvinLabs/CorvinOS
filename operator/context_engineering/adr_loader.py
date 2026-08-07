@@ -55,30 +55,78 @@ class ADRNode:
 
 
 class ADRLoader:
-    """Load ADRs from Corvin-ADR and build dependency graph."""
+    """Load ADRs from flexible paths and build dependency graph.
 
-    def __init__(self, adr_repo_path: Optional[str] = None):
-        """Initialize ADR loader.
+    Searches for ADRs in this order:
+    1. Separate Corvin-ADR/ repo (sibling to project)
+    2. docs/decisions/ (in project repo)
+    3. docs/adr/ (alternative naming)
+    4. .docs/decisions/ (dotfile variant)
+
+    Falls back gracefully if no ADRs found.
+    """
+
+    # Search paths (relative to project root) tried in order
+    SEARCH_PATHS = [
+        "../Corvin-ADR/decisions",  # Separate repo (like CorvinOS)
+        "docs/decisions",            # Same repo, docs/decisions (common pattern)
+        "docs/adr",                  # Same repo, docs/adr (alternative)
+        ".docs/decisions",           # Dotfile variant
+        "docs/architecture/decisions",  # Nested variant
+    ]
+
+    def __init__(self, adr_repo_path: Optional[str] = None, project_root: Optional[str] = None):
+        """Initialize ADR loader with flexible path discovery.
 
         Args:
-            adr_repo_path: Path to Corvin-ADR repo (default: ../Corvin-ADR/).
+            adr_repo_path: Explicit path to ADR directory (overrides search).
+            project_root: Project root to search from (default: detect from file location).
         """
-        if adr_repo_path is None:
-            # Try to find Corvin-ADR relative to CorvinOS repo
-            corvin_os_path = Path(__file__).parent.parent.parent
-            adr_repo_path = str(corvin_os_path.parent / "Corvin-ADR")
-
-        self.adr_repo = Path(adr_repo_path)
-        self.decisions_dir = self.adr_repo / "decisions"
         self.adrs: Dict[str, ADRNode] = {}
+        self.decisions_dir: Optional[Path] = None
+        self.adr_source: Optional[str] = None  # Where ADRs were loaded from
 
-        logger.info(f"ADRLoader initialized: {self.adr_repo}")
+        # Detect project root if not provided
+        if project_root is None:
+            # Start from this file's location and find project root
+            current = Path(__file__).parent.parent.parent  # operator/ → /
+            project_root = str(current)
 
-        # Load ADRs if repo exists
-        if self.decisions_dir.exists():
-            self._load_adrs()
+        self.project_root = Path(project_root)
+
+        # Try to find ADRs
+        if adr_repo_path:
+            # Explicit path provided
+            self.decisions_dir = Path(adr_repo_path)
+            if self.decisions_dir.exists():
+                self.adr_source = str(self.decisions_dir)
+                self._load_adrs()
+            else:
+                logger.warning(f"Explicit ADR path not found: {adr_repo_path}")
         else:
-            logger.warning(f"Corvin-ADR repo not found at {self.adr_repo}")
+            # Search in order
+            self._search_adr_paths()
+
+        if not self.decisions_dir:
+            logger.warning("No ADR directory found (will use Phase 2 fallback)")
+        else:
+            logger.info(f"ADRLoader initialized: {self.adr_source}")
+
+    def _search_adr_paths(self):
+        """Search for ADR directory in standard locations."""
+        for search_path in self.SEARCH_PATHS:
+            candidate = self.project_root / search_path
+            if candidate.exists() and candidate.is_dir():
+                # Check if it has .md files (confirm it's an ADR directory)
+                md_files = list(candidate.glob("*.md"))
+                if md_files:
+                    self.decisions_dir = candidate
+                    self.adr_source = str(candidate)
+                    logger.info(f"Found ADRs at: {self.adr_source} ({len(md_files)} files)")
+                    self._load_adrs()
+                    return
+
+        logger.warning(f"No ADRs found in standard paths from {self.project_root}")
 
     def _load_adrs(self):
         """Load all ADRs from decisions directory."""
