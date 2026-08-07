@@ -73,7 +73,8 @@ class PackageManager:
             ) from e
 
         # Step 3: Extract permissions (will be presented to operator for approval in console)
-        permissions = PackageValidator.validate_permissions(manifest)
+        # Note: In Phase 2, permissions will be checked against operator consent
+        PackageValidator.validate_permissions(manifest)
 
         # Step 4: Extract ZIP to packages directory
         package_path = self.packages_dir / package_id
@@ -144,18 +145,105 @@ class PackageManager:
         """Get metadata for a specific package."""
         return self.registry.get_package(package_id)
 
+    def verify_wiring(self, package_id: str) -> dict[str, Any]:
+        """
+        Verify that an installed package's components are correctly wired.
+
+        Smoke-tests all registered components:
+        - Skills YAML parseable
+        - Hooks Python syntax valid
+        - Config files JSON/YAML valid
+        - All referenced files present
+
+        Returns:
+            Verification report with status and details.
+
+        Raises:
+            ValueError if package not found
+            ValidationError if verification fails
+        """
+        pkg = self.registry.get_package(package_id)
+        if not pkg:
+            raise ValueError(f"Package not found: {package_id}")
+
+        package_path = Path(pkg.path)
+        manifest = pkg.manifest
+
+        try:
+            self._verify_wiring(package_id, package_path, manifest)
+            return {
+                "status": "ok",
+                "package_id": package_id,
+                "message": "All components verified successfully",
+            }
+        except Exception as e:
+            raise ValidationError(
+                f"Package {package_id} wiring verification failed: {e}",
+                field="wiring"
+            ) from e
+
+    def enable_package(self, package_id: str) -> None:
+        """Enable (activate) a package."""
+        pkg = self.registry.get_package(package_id)
+        if not pkg:
+            raise ValueError(f"Package not found: {package_id}")
+
+        if pkg.enabled:
+            return  # Already enabled
+
+        pkg.enabled = True
+        self.registry.register_package(pkg)
+
+    def disable_package(self, package_id: str) -> None:
+        """Disable (deactivate) a package."""
+        pkg = self.registry.get_package(package_id)
+        if not pkg:
+            raise ValueError(f"Package not found: {package_id}")
+
+        if not pkg.enabled:
+            return  # Already disabled
+
+        pkg.enabled = False
+        self.registry.register_package(pkg)
+
+    def get_package_status(self, package_id: str) -> dict[str, Any]:
+        """
+        Get detailed status of a package.
+
+        Returns:
+            Status dictionary with package metadata, enabled status, and wiring status.
+        """
+        pkg = self.registry.get_package(package_id)
+        if not pkg:
+            raise ValueError(f"Package not found: {package_id}")
+
+        package_path = Path(pkg.path)
+
+        return {
+            "id": pkg.id,
+            "version": pkg.version,
+            "name": pkg.manifest.get("name", ""),
+            "enabled": pkg.enabled,
+            "path": pkg.path,
+            "installed_at": pkg.installed_at,
+            "size_bytes": sum(f.stat().st_size for f in package_path.rglob('*') if f.is_file()),
+            "manifest": pkg.manifest,
+        }
+
     def _verify_wiring(
         self, package_id: str, package_path: Path, manifest: dict[str, Any]
     ) -> None:
         """
-        Verify package wiring is correct.
+        Verify package wiring is correct (smoke test all components).
 
         Checks:
         - manifest.json exists and is valid
         - Skills are parseable (YAML syntax)
         - Hooks are importable (Python syntax)
-        - Configuration schema valid
+        - Configuration files are valid JSON/YAML
         """
+        import yaml
+
         # Verify manifest.json
         manifest_file = package_path / "manifest.json"
         if not manifest_file.exists():
@@ -169,7 +257,15 @@ class PackageManager:
                 raise FileNotFoundError(
                     f"Skill file not found: {skill_entry.get('file')}"
                 )
-            # TODO: Parse YAML and validate skill format
+            # Parse and validate YAML
+            try:
+                with open(skill_file, "r") as f:
+                    yaml.safe_load(f)
+            except yaml.YAMLError as e:
+                raise ValidationError(
+                    f"Skill YAML syntax error in {skill_entry.get('file')}: {e}",
+                    field="skills"
+                ) from e
 
         # Verify hooks (Python syntax check)
         hooks = manifest.get("contents", {}).get("hooks", [])
@@ -179,12 +275,39 @@ class PackageManager:
                 raise FileNotFoundError(
                     f"Hook file not found: {hook_entry.get('file')}"
                 )
-            # TODO: Check Python syntax (compile)
+            # Check Python syntax by compiling
+            try:
+                with open(hook_file, "r") as f:
+                    code = f.read()
+                compile(code, str(hook_file), "exec")
+            except SyntaxError as e:
+                raise ValidationError(
+                    f"Hook Python syntax error in {hook_entry.get('file')}: {e}",
+                    field="hooks"
+                ) from e
 
-        # Verify configuration
+        # Verify configuration files (JSON/YAML)
         config_files = list(package_path.glob("config/**/*.yaml")) + list(
-            package_path.glob("config/**/*.json")
+            package_path.glob("config/**/*.yml")
         )
-        if config_files:
-            # TODO: Parse config and validate against schema
-            pass
+        for config_file in config_files:
+            try:
+                with open(config_file, "r") as f:
+                    yaml.safe_load(f)
+            except yaml.YAMLError as e:
+                raise ValidationError(
+                    f"Config YAML syntax error in {config_file.name}: {e}",
+                    field="config"
+                ) from e
+
+        # Verify JSON config files
+        json_config_files = list(package_path.glob("config/**/*.json"))
+        for config_file in json_config_files:
+            try:
+                with open(config_file, "r") as f:
+                    json.load(f)
+            except json.JSONDecodeError as e:
+                raise ValidationError(
+                    f"Config JSON syntax error in {config_file.name}: {e}",
+                    field="config"
+                ) from e

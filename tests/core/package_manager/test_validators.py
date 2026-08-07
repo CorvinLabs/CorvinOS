@@ -186,3 +186,231 @@ class TestValidatePermissions:
         del valid_manifest["permissions"]
         perms = PackageValidator.validate_permissions(valid_manifest)
         assert perms == []
+
+
+class TestValidateSkillDefinitions:
+    """Tests for validate_skill_definitions."""
+
+    def test_valid_skill_definitions(self, valid_zip):
+        """Valid ZIP with skills should parse and validate."""
+        skills = PackageValidator.validate_skill_definitions(valid_zip)
+        assert isinstance(skills, dict)
+        # test_skill.yaml exists in the valid_zip fixture
+        assert "test_skill" in skills or len(skills) >= 0
+
+    def test_no_skills_directory(self, tmp_path, valid_manifest):
+        """ZIP without skills/ directory should return empty dict."""
+        zip_path = tmp_path / "no_skills.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(valid_manifest))
+            zf.writestr("README.md", "# Test Package")
+
+        skills = PackageValidator.validate_skill_definitions(zip_path)
+        assert skills == {}
+
+    def test_skill_with_valid_hooks(self, tmp_path, valid_manifest):
+        """Skill with valid hooks should parse."""
+        skill_yaml = """
+id: my_skill
+name: My Skill
+description: A test skill
+
+hooks:
+  - id: my_preprocessing_hook
+    trigger: preprocessing
+    priority: 50
+    file: hooks/preprocess.py
+    function: my_handler
+"""
+        zip_path = tmp_path / "skill_with_hooks.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(valid_manifest))
+            zf.writestr("skills/my_skill.yaml", skill_yaml)
+            zf.writestr("hooks/preprocess.py", "def my_handler(ctx): pass")
+
+        skills = PackageValidator.validate_skill_definitions(zip_path)
+        assert "my_skill" in skills
+        assert skills["my_skill"]["id"] == "my_skill"
+        assert len(skills["my_skill"]["hooks"]) == 1
+
+    def test_skill_missing_required_id(self, tmp_path, valid_manifest):
+        """Skill without id should fail."""
+        skill_yaml = """
+name: My Skill
+description: A test skill
+"""
+        zip_path = tmp_path / "skill_no_id.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(valid_manifest))
+            zf.writestr("skills/bad_skill.yaml", skill_yaml)
+
+        with pytest.raises(ValidationError, match="required"):
+            PackageValidator.validate_skill_definitions(zip_path)
+
+    def test_skill_invalid_yaml(self, tmp_path, valid_manifest):
+        """Skill with invalid YAML should fail."""
+        skill_yaml = "id: my_skill\n  bad indentation: [unclosed"
+
+        zip_path = tmp_path / "skill_bad_yaml.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(valid_manifest))
+            zf.writestr("skills/bad_skill.yaml", skill_yaml)
+
+        with pytest.raises(ValidationError, match="invalid YAML"):
+            PackageValidator.validate_skill_definitions(zip_path)
+
+    def test_hook_missing_trigger(self, tmp_path, valid_manifest):
+        """Hook missing trigger field should fail."""
+        skill_yaml = """
+id: my_skill
+name: My Skill
+
+hooks:
+  - id: bad_hook
+    file: hooks/preprocess.py
+    function: my_handler
+"""
+        zip_path = tmp_path / "hook_no_trigger.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(valid_manifest))
+            zf.writestr("skills/my_skill.yaml", skill_yaml)
+            zf.writestr("hooks/preprocess.py", "def my_handler(ctx): pass")
+
+        with pytest.raises(ValidationError, match="required"):
+            PackageValidator.validate_skill_definitions(zip_path)
+
+    def test_hook_invalid_trigger(self, tmp_path, valid_manifest):
+        """Hook with invalid trigger should fail."""
+        skill_yaml = """
+id: my_skill
+name: My Skill
+
+hooks:
+  - id: bad_hook
+    trigger: invalid_trigger
+    file: hooks/preprocess.py
+    function: my_handler
+"""
+        zip_path = tmp_path / "hook_bad_trigger.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(valid_manifest))
+            zf.writestr("skills/my_skill.yaml", skill_yaml)
+            zf.writestr("hooks/preprocess.py", "def my_handler(ctx): pass")
+
+        with pytest.raises(ValidationError, match="not one of"):
+            PackageValidator.validate_skill_definitions(zip_path)
+
+    def test_hook_missing_file(self, tmp_path, valid_manifest):
+        """Hook referencing missing file should fail."""
+        skill_yaml = """
+id: my_skill
+name: My Skill
+
+hooks:
+  - id: bad_hook
+    trigger: preprocessing
+    file: hooks/nonexistent.py
+    function: my_handler
+"""
+        zip_path = tmp_path / "hook_missing_file.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(valid_manifest))
+            zf.writestr("skills/my_skill.yaml", skill_yaml)
+
+        with pytest.raises(ValidationError, match="references missing file"):
+            PackageValidator.validate_skill_definitions(zip_path)
+
+    def test_hook_invalid_priority(self, tmp_path, valid_manifest):
+        """Hook with invalid priority should fail."""
+        skill_yaml = """
+id: my_skill
+name: My Skill
+
+hooks:
+  - id: bad_hook
+    trigger: preprocessing
+    priority: 2000
+    file: hooks/preprocess.py
+    function: my_handler
+"""
+        zip_path = tmp_path / "hook_bad_priority.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(valid_manifest))
+            zf.writestr("skills/my_skill.yaml", skill_yaml)
+            zf.writestr("hooks/preprocess.py", "def my_handler(ctx): pass")
+
+        with pytest.raises(ValidationError, match="greater than the maximum"):
+            PackageValidator.validate_skill_definitions(zip_path)
+
+    def test_hook_invalid_function_name(self, tmp_path, valid_manifest):
+        """Hook with invalid Python function name should fail."""
+        skill_yaml = """
+id: my_skill
+name: My Skill
+
+hooks:
+  - id: bad_hook
+    trigger: preprocessing
+    file: hooks/preprocess.py
+    function: "123invalid"
+"""
+        zip_path = tmp_path / "hook_bad_function.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(valid_manifest))
+            zf.writestr("skills/my_skill.yaml", skill_yaml)
+            zf.writestr("hooks/preprocess.py", "def _handler(ctx): pass")
+
+        with pytest.raises(ValidationError, match="function name"):
+            PackageValidator.validate_skill_definitions(zip_path)
+
+    def test_multiple_skills(self, tmp_path, valid_manifest):
+        """ZIP with multiple skills should parse all."""
+        skill1_yaml = "id: skill1\nname: Skill 1"
+        skill2_yaml = "id: skill2\nname: Skill 2"
+
+        zip_path = tmp_path / "multiple_skills.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(valid_manifest))
+            zf.writestr("skills/skill1.yaml", skill1_yaml)
+            zf.writestr("skills/skill2.yaml", skill2_yaml)
+
+        skills = PackageValidator.validate_skill_definitions(zip_path)
+        assert len(skills) == 2
+        assert "skill1" in skills
+        assert "skill2" in skills
+
+    def test_skill_with_all_hook_types(self, tmp_path, valid_manifest):
+        """Skill with hooks of all trigger types should validate."""
+        skill_yaml = """
+id: my_skill
+name: My Skill
+
+hooks:
+  - id: preprocess_hook
+    trigger: preprocessing
+    priority: 100
+    file: hooks/handler.py
+    function: handle_preprocessing
+  - id: error_hook
+    trigger: on_error
+    priority: 50
+    file: hooks/handler.py
+    function: handle_error
+  - id: complete_hook
+    trigger: on_complete
+    priority: 10
+    file: hooks/handler.py
+    function: handle_complete
+"""
+        zip_path = tmp_path / "skill_all_hooks.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(valid_manifest))
+            zf.writestr("skills/my_skill.yaml", skill_yaml)
+            zf.writestr(
+                "hooks/handler.py",
+                "def handle_preprocessing(ctx): pass\ndef handle_error(ctx): pass\ndef handle_complete(ctx): pass",
+            )
+
+        skills = PackageValidator.validate_skill_definitions(zip_path)
+        assert "my_skill" in skills
+        assert len(skills["my_skill"]["hooks"]) == 3

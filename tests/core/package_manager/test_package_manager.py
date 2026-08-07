@@ -152,3 +152,59 @@ class TestPackageManagerGetPackage:
     def test_get_nonexistent_package(self, pm):
         """Get non-existent package should return None."""
         assert pm.get_package("nonexistent") is None
+
+
+class TestPackageManagerVerifyWiring:
+    """Tests for PackageManager.verify_wiring public method."""
+
+    def test_verify_wiring_succeeds(self, pm, test_zip):
+        """Verify wiring should succeed for valid package."""
+        pkg = pm.load_from_zip(test_zip)
+        result = pm.verify_wiring(pkg.id)
+        assert result["status"] == "ok"
+        assert result["package_id"] == pkg.id
+
+    def test_verify_wiring_nonexistent_package(self, pm):
+        """Verify wiring for non-existent package should raise."""
+        with pytest.raises(ValueError, match="Package not found"):
+            pm.verify_wiring("nonexistent")
+
+    def test_verify_wiring_with_yaml_syntax_error(self, pm, tmp_path):
+        """Verify wiring should fail if skill YAML has syntax error."""
+        manifest = {
+            "id": "bad-yaml-pkg",
+            "version": "1.0.0",
+            "name": "Bad YAML Package",
+            "contents": {
+                "skills": [{"id": "bad_skill", "file": "skills/bad_skill.yaml"}],
+            },
+        }
+
+        zip_path = tmp_path / "bad_yaml.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(manifest))
+            # Write invalid YAML
+            zf.writestr("skills/bad_skill.yaml", "{ invalid: yaml: content:")
+
+        with pytest.raises(ValidationError, match="YAML"):
+            pm.load_from_zip(zip_path)
+
+    def test_verify_wiring_with_python_syntax_error(self, pm, tmp_path):
+        """Verify wiring should fail if hook has Python syntax error."""
+        manifest = {
+            "id": "bad-python-pkg",
+            "version": "1.0.0",
+            "name": "Bad Python Package",
+            "contents": {
+                "hooks": [{"id": "bad_hook", "file": "hooks/bad_hook.py", "trigger": "on_start"}],
+            },
+        }
+
+        zip_path = tmp_path / "bad_python.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("manifest.json", json.dumps(manifest))
+            # Write invalid Python
+            zf.writestr("hooks/bad_hook.py", "def bad_func(\n  incomplete")
+
+        with pytest.raises(ValidationError, match="Python"):
+            pm.load_from_zip(zip_path)
