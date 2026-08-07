@@ -136,12 +136,23 @@ class GraphTraversal:
 
         logger.debug(f"Graph traversal cache miss: searching (depth={depth})")
 
-        # Placeholder: In real implementation, would traverse classifier graphs
-        # For now, return empty list (tests will mock this)
-        related = []
+        # Extract seed nodes from task
+        seed_nodes = self._extract_seed_nodes(task, top_n)
+        logger.debug(f"Extracted {len(seed_nodes)} seed nodes")
+
+        # BFS traversal
+        all_decisions = []
+        visited = set()
+
+        for seed in seed_nodes:
+            decisions = self._bfs_traverse(seed, depth, visited)
+            all_decisions.extend(decisions)
+
+        # Score by relevance + distance
+        scored = self._score_decisions(all_decisions, task)
 
         # Sort by relevance (descending)
-        ranked = sorted(related, key=lambda d: d.relevance_score, reverse=True)
+        ranked = sorted(scored, key=lambda d: d.relevance_score, reverse=True)
 
         # Cache results
         elapsed_ms = (time.perf_counter() - start) * 1000
@@ -160,6 +171,79 @@ class GraphTraversal:
             cache_hit=False,
             traversal_depth=depth,
         )
+
+    def _extract_seed_nodes(self, task: object, top_n: int) -> List[str]:
+        """Extract top N decision nodes from task as BFS seeds.
+
+        In real implementation, would extract from classifier output.
+        For now, returns empty list (tests will provide mocks).
+
+        Args:
+            task: Task object.
+            top_n: Number of seeds to extract.
+
+        Returns:
+            List of decision node IDs.
+        """
+        # Placeholder: In real implementation, would extract from classifier
+        return []
+
+    def _bfs_traverse(self, seed_node: str, depth: int, visited: set) -> List[Dict]:
+        """BFS traverse from seed node to specified depth.
+
+        Args:
+            seed_node: Starting node ID.
+            depth: Max depth to traverse.
+            visited: Set of already-visited nodes (for deduplication).
+
+        Returns:
+            List of discovered decisions (dicts with id, title, type, etc.).
+        """
+        # Placeholder: In real implementation, would traverse graph edges
+        # Returns empty list for now
+        return []
+
+    def _score_decisions(self, decisions: List[Dict], task: object) -> List[RelatedDecision]:
+        """Score decisions by relevance and distance.
+
+        Scoring: relevance = (task_similarity * 0.7) + (distance_factor * 0.3)
+        - task_similarity: how similar decision context is to current task (keyword overlap)
+        - distance_factor: inverse of graph distance (1.0 at distance 0, 0.5 at distance 2)
+
+        Args:
+            decisions: List of raw decision dicts from BFS.
+            task: Current task for similarity scoring.
+
+        Returns:
+            List of RelatedDecision objects with scores.
+        """
+        if not decisions:
+            return []
+
+        related = []
+        for decision in decisions:
+            # Placeholder scoring: for now, all scores are 0.5
+            # Real implementation would calculate task similarity
+            score = 0.5
+            distance = decision.get("distance", 2)
+
+            try:
+                related.append(
+                    RelatedDecision(
+                        decision_id=decision.get("id", "unknown"),
+                        title=decision.get("title", "Unknown"),
+                        relevance_score=score,
+                        distance=distance,
+                        decision_type=decision.get("type", "unknown"),
+                        context=decision.get("context", ""),
+                    )
+                )
+            except ValueError:
+                # Skip invalid scores
+                logger.warning(f"Invalid score for decision {decision.get('id')}")
+                continue
+
+        return related
 
     def _get_task_id(self, task: object) -> str:
         """Extract task identifier."""
