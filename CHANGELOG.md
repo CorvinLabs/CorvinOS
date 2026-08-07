@@ -6,6 +6,22 @@ versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
+## [0.10.119] — 2026-08-05 — Bridge daemons now start hidden on Windows
+
+### Fixed — visible console window opened when starting Discord/WhatsApp/other bridges
+
+Reported live: whenever a bridge daemon (Discord, WhatsApp, Telegram, Slack,
+Signal, Teams) started on Windows, a visible console window opened (and stayed
+open as long as the daemon ran). Closing that window terminated the daemon and
+severed the bridge connection.
+
+Root cause: `start_fg()` spawned Node.js bridge daemons via `subprocess.Popen()`
+with only `CREATE_NEW_PROCESS_GROUP` flag, but not `CREATE_NO_WINDOW`. Node.js
+is a console-subsystem app spawned from a parent with no console (the web backend
+runs detached), so Windows allocates and displays a new terminal window. Fixed
+by bitwise-OR'ing `CREATE_NO_WINDOW` alongside the existing process-group flag.
+
 ### Fixed — L10 path-gate was blind to native Windows paths in Bash commands
 
 The adapter's boot-time path-gate self-test reported nine curated must-deny vectors as
