@@ -10,7 +10,7 @@ from .classifier import ClassifiedTask
 from .filtering import FilteredGraphs
 from .validation import ValidatedGraphs
 from .enrichment import EnrichedTask
-from .delegation import DelegationDecision
+from .delegation import DelegationDecision, DelegationTarget
 
 
 class ContractViolation(Exception):

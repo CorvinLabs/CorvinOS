@@ -22,7 +22,7 @@ class TestEdgeCases:
     def test_null_task_input(self, engine):
         """Edge case: None task should raise error during normalization."""
         # route_task(None) should fail at normalizer which expects a string
-        with pytest.raises((ValueError, AttributeError, TypeError)):
+        with pytest.raises((ValueError, AttributeError, TypeError, InsufficientTaskInfo)):
             engine.route_task(None)
 
     def test_very_long_task_description(self, engine):

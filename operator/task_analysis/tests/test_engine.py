@@ -112,7 +112,7 @@ class TestTaskEngine:
         result = engine.route_task(task)
 
         # Verify decision was made through all 6 phases
-        from operator.task_analysis.delegation import DelegationTarget
+        from ..delegation import DelegationTarget
         assert isinstance(result.decision_target, DelegationTarget)
         assert result.decision_target.value in ["native", "acs", "tde"]
 
