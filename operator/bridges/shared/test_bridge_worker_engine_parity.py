@@ -196,8 +196,13 @@ class TriageHeuristicTest(unittest.TestCase):
 
 
 class TdeStaysFrozenTest(unittest.TestCase):
-    """ADR-0221 P3/P4 stay frozen: mode=tde always degrades to native on a
-    bridge — no TDE execution path exists here, by construction."""
+    """ADR-0221 P3/P4: mode=tde degrades to native on a bridge BY DEFAULT.
+
+    Since TDE_ROBUST_USABLE_PLAN Step 4 the freeze is the flag-OFF default
+    (the opt-in `bridge_tde_execution` flag lifts it per tenant), not "by
+    construction" any more. These tests do NOT enable that flag, so they pin the
+    shipped default: mode=tde → native. Flag-on real TDE execution + degrade +
+    background measurement are covered in test_bridge_tde_execution.py."""
 
     def test_tde_mode_never_produces_a_tde_answer(self):
         with _Flags(parity=True, mode="tde"), \
@@ -237,8 +242,9 @@ class ConsoleBridgeAgreementTest(unittest.TestCase):
                     prompt, mode=mode, force_delegate=False)
                 console = cr._worker_engine_target(
                     prompt, mode=mode, force_delegate=False)
-                # Structural invariant regardless of mode: the bridge can
-                # never produce "tde" — no execution path exists (§3).
+                # Regardless of mode: with the default (bridge_tde_execution
+                # off — these tests don't enable it) the bridge never produces
+                # "tde". Flag-on TDE execution is covered separately.
                 self.assertNotEqual(bridge, "tde")
                 if mode == "tde" and prompt != BIG:
                     # Rung 5 (TDE availability) is the only rung where bridge

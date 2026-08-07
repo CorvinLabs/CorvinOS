@@ -209,14 +209,35 @@ REGISTRY: tuple[FeatureFlag, ...] = (
             "console's own triage heuristic — instead of only the narrow "
             "big-data-shaped carve-out. Makes spec.engine_models.<engine_id>."
             "worker_model reachable on bridges for ordinary conversation, not "
-            "only big-data prompts. TDE stays unreachable from bridges either "
-            "way (ADR-0221/0222/0255) — mode=tde always degrades to native "
-            "here. Off means bridges behave exactly as before: only "
+            "only big-data prompts. TDE stays unreachable via THIS flag "
+            "(mode=tde degrades to native here) — real TDE execution on bridges "
+            "is the separate opt-in bridge_tde_execution flag (ADR-0221/0222). "
+            "Off means bridges behave exactly as before: only "
             "bridge_big_data_delegation's narrow carve-out applies. ADR-0255."
         ),
         owner="maintainer",
         target_release="0.11.x",
         tags=("delegation", "bridges"),
+    ),
+    FeatureFlag(
+        id="bridge_tde_execution",
+        label="TDE execution on messenger bridges (measured opt-in)",
+        description=(
+            "Single-operator measured test (TDE_ROBUST_USABLE_PLAN Step 4, "
+            "ADR-0221/0222): lift the bridge TDE freeze for THIS tenant. When on, "
+            "a bridge turn with worker_engine=tde actually runs the Tiered "
+            "Delegation Engine (via the shared TDE core) instead of degrading to "
+            "native, and — if TDE_MEASUREMENT_ENABLED=1 — a detached background "
+            "thread measures each run against the tool-less {direct, tier} "
+            "baselines (measurement.jsonl) on your REAL messenger tasks, feeding "
+            "the ADR-0222 gate (corvin tde gate). Robust: ANY TDE failure or an "
+            "exhausted shared pool degrades to the native turn. Each TDE turn "
+            "books the shared compute pool. This flag alone unlocks TDE (not the "
+            "broader ACS parity); enable only for a deliberate measurement run."
+        ),
+        owner="maintainer",
+        target_release="0.11.x",
+        tags=("delegation", "measurement", "bridges"),
     ),
     FeatureFlag(
         id="plugin_health_monitoring",

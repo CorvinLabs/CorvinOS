@@ -7564,23 +7564,217 @@ def _worker_engine_target(
     signal — so a bridge turn and a console turn given the same tenant config
     and the same prompt land on the same engine.
 
-    ``tde_available``/``quota_ok`` are hard-coded ``False``: no TDE execution
-    path exists on bridges — ADR-0221 P3/P4 stay frozen pending ADR-0222's
-    measured gate (see ADR-0255, which stays inside that freeze on purpose).
-    This means ``mode == "tde"`` always degrades to ``"native"`` here, exactly
-    like a console install with no ``claude`` CLI degrades today via the
-    ladder's existing "TDE unavailable → native" rung — reusing an existing
-    behavior, not adding a new one.
+    TDE on bridges was frozen (ADR-0221 P3/P4) with ``tde_available``/``quota_ok``
+    hard-coded ``False``. Since TDE_ROBUST_USABLE_PLAN Step 4 that freeze is
+    LIFTED PER TENANT behind the ships-dark ``bridge_tde_execution`` flag — a
+    single-operator measured test (ADR-0222). When that flag is on (and only for
+    ``mode == "tde"``, not ``/delegate`` and not a big-data shape, exactly like
+    the console) we probe TDE for real using the SAME ``_tde_available`` /
+    ``_tde_quota_peek_ok`` the console uses — no bridge-local copy — so the turn
+    actually runs TDE via ``_run_tde_delegation``. Flag OFF (the default) keeps
+    the historical frozen behavior: ``mode == "tde"`` degrades to ``"native"``.
+    Any probe failure also degrades — the freeze is the safe default.
     """
     from delegation_policy import is_big_data_task, resolve_worker_engine  # noqa: PLC0415
+
+    _is_bd = is_big_data_task(prompt)
+    tde_available = False
+    quota_ok = False
+    if mode == "tde" and not force_delegate and not _is_bd:
+        try:
+            from corvin_console import feature_flags as _ff  # noqa: PLC0415
+            if _ff.is_enabled("bridge_tde_execution", tenant_id):
+                # Reuse the console's real probes (TDE modules importable + the
+                # `claude` CLI resolvable + shared-pool headroom). The bridge
+                # already imports from chat_runtime (should_delegate_bundled),
+                # so this is an established cross-package reuse, not a new one.
+                from corvin_console.chat_runtime import (  # noqa: PLC0415
+                    _tde_available,
+                    _tde_quota_peek_ok,
+                )
+                tde_available = bool(_tde_available())
+                quota_ok = bool(_tde_quota_peek_ok())
+        except Exception as e:  # noqa: BLE001 — any failure → frozen default
+            log(f"bridge TDE probe failed ({e!r}) — mode=tde degrades to native")
+            tde_available = False
+            quota_ok = False
+
     return resolve_worker_engine(
         mode=mode,
         force_delegate=force_delegate,
-        is_big_data=is_big_data_task(prompt),
-        tde_available=False,
-        quota_ok=False,
+        is_big_data=_is_bd,
+        tde_available=tde_available,
+        quota_ok=quota_ok,
         tenant_id=tenant_id,
     )
+
+
+def _run_tde_delegation(
+    prompt: str,
+    *,
+    channel: str,
+    chat_key: str,
+    persona: str | None,
+    tenant_id: str,
+) -> str | None:
+    """Compliance-gated TDE fan-out on a bridge (TDE_ROBUST_USABLE_PLAN Step 4).
+
+    The bridge sibling of ``_run_acs_delegation``, for the Tiered Delegation
+    Engine. Reuses the engine-agnostic TDE core
+    (``SendIntegration.select_engine_and_execute`` — the SAME call
+    ``tde_measurement._run_tde_arm`` uses) instead of duplicating the console's
+    ``_stream_tde_turn``. Returns the TDE answer, or ``None`` on ANY failure so
+    the caller degrades to the native turn — the bridge's built-in robust
+    degrade, which is the self-healing on this path.
+
+    Quota: unlike ACS, the TDE fan-out books the shared pool INTERNALLY at its
+    own execute chokepoint (``_enforce_tde_compute_quota``) — so this does NOT
+    charge again. An exhausted pool surfaces as ``reason=quota_exhausted`` → None.
+
+    On success it fires a detached background measurement of this real run
+    against the tool-less {direct, tier} baselines (measurement.jsonl), feeding
+    the ADR-0222 gate with evidence from the operator's real messenger tasks.
+    """
+    # Compliance gates for the local claude_code spawn class the TDE workers use
+    # (TDE fans out to local `claude -p` one-shots — locality=local, engine
+    # claude_code is the row L34/L35 already know).
+    class _TdeEngine:
+        name = "claude_code"
+
+    _eng = _TdeEngine()
+    try:
+        refusal = _check_compliance_or_fail(
+            _eng, prompt=prompt, persona=persona,
+            channel=channel, chat_key=str(chat_key), tenant_id=tenant_id)
+        if refusal is None:
+            refusal = _check_egress_or_fail(
+                _eng, channel=channel, chat_key=str(chat_key),
+                tenant_id=tenant_id)
+    except Exception as e:  # noqa: BLE001 — a broken gate must not fan out
+        log(f"tde delegation: gate raised ({e!r}) — direct turn")
+        return None
+    if refusal is not None:
+        log("tde delegation: gate denied the TDE spawn class — direct turn")
+        return None
+
+    # Import the engine-agnostic TDE core (no console _stream_tde_turn copy).
+    try:
+        _orch = Path(__file__).resolve().parents[2] / "orchestration"
+        if _orch.is_dir() and str(_orch) not in sys.path:
+            sys.path.insert(0, str(_orch))
+        from tde.analysis_runner import run_initial_analysis_sync  # noqa: PLC0415
+        from tde.engine_registry import EngineRegistry  # noqa: PLC0415
+        from tde.send_integration import SendIntegration  # noqa: PLC0415
+    except ImportError as e:
+        log(f"tde delegation: orchestration tree unavailable ({e!r}) — direct turn")
+        return None
+
+    run_id = f"tde-{channel}-{int(time.time())}-{secrets.token_hex(3)}"
+    session_key = f"{tenant_id}:{channel}:{chat_key}"
+    try:
+        context = {"statement": {"task": prompt}, "task_text": prompt}
+        analysis = run_initial_analysis_sync(prompt, context)
+        integration = SendIntegration(
+            registry=EngineRegistry(real_ipc=True),
+            session_key=session_key, tenant_id=tenant_id,
+        )
+        _engine, result = asyncio.run(integration.select_engine_and_execute(
+            "/use-engine tiered_delegation\n" + prompt, context, analysis,
+            run_id=run_id,
+        ))
+    except RuntimeError as e:
+        log(f"tde delegation: run aborted ({e!r}) — direct turn")
+        return None
+    except Exception as e:  # noqa: BLE001 — ANY failure degrades to native
+        log(f"tde delegation: run failed ({type(e).__name__}: {e}) — direct turn")
+        return None
+
+    result = result or {}
+    if result.get("reason") == "quota_exhausted":
+        log("tde delegation: shared pool exhausted — direct turn")
+        return None
+    summary = result.get("summary") or {}
+    parts: list[str] = []
+    for r in result.get("results", []) or []:
+        out = getattr(r, "output", None)
+        if getattr(r, "success", False) and out:
+            parts.append(str(out))
+    answer = ("\n\n".join(parts)).strip()
+    if not result.get("success") or not answer:
+        log("tde delegation: run produced no usable answer — direct turn")
+        return None
+    log(f"tde delegation: run {run_id} produced {len(answer)} chars")
+
+    # Background measurement on the operator's REAL task (best-effort, threaded).
+    # Only sampled runs that are FULLY token-instrumented are measured — a
+    # partial count would under-report TDE tokens (biased in TDE's favour).
+    steps_total = summary.get("step_count") or 0
+    steps_instr = summary.get("instrumented_step_count") or 0
+    tde_tokens = summary.get("total_tokens")
+    if (steps_total > 0 and steps_instr == steps_total
+            and isinstance(tde_tokens, int) and tde_tokens > 0):
+        _spawn_bridge_measurement({
+            "task_id": run_id,
+            "task_text": prompt,
+            "tde_tokens": tde_tokens,
+            "tde_output": answer,
+            "task_complexity": summary.get("complexity"),
+            "user_model": None,
+            "workload_type": summary.get("task_type"),
+        })
+    return answer
+
+
+async def _bridge_measure(ctx: dict) -> None:
+    """Body of one detached bridge measurement — TDE already ran as the main
+    turn (its numbers are inputs), so this runs the tool-less {direct, tier}
+    baselines + judges via the existing orchestrate() and records the sample."""
+    from tde.tde_measurement import (  # noqa: PLC0415
+        MeasurementRecorder,
+        RealTdeOrchestrator,
+    )
+    sample = await RealTdeOrchestrator.orchestrate(
+        task_id=ctx["task_id"],
+        task_text=ctx["task_text"],
+        tde_tokens=ctx["tde_tokens"],
+        tde_output=ctx["tde_output"],
+        task_complexity=ctx["task_complexity"],
+        user_model=ctx["user_model"],
+        workload_type=ctx["workload_type"],
+    )
+    if sample is None:
+        return
+    await MeasurementRecorder.get_instance().record_sample(sample)
+    log(f"tde bridge measurement recorded for {sample.task_id} "
+        f"(band={sample.task_band})")
+
+
+def _spawn_bridge_measurement(ctx: dict) -> None:
+    """Detached background TDE measurement on a REAL bridge task (Step 4).
+
+    The bridge runs each turn under ``asyncio.run`` (no persistent loop), so
+    unlike the console's ``_spawn_tde_measurement`` (``asyncio.create_task``)
+    this uses a daemon THREAD with its own event loop. Gated by
+    ``_measurement_should_sample`` (``TDE_MEASUREMENT_ENABLED=1``). Best-effort:
+    a process shutdown mid-measure loses that sample.
+    """
+    try:
+        from corvin_console.chat_runtime import _measurement_should_sample  # noqa: PLC0415
+        if not _measurement_should_sample():
+            return
+    except Exception:  # noqa: BLE001 — no sampler available → no measurement
+        return
+
+    import threading  # noqa: PLC0415
+
+    def _worker() -> None:
+        try:
+            asyncio.run(_bridge_measure(ctx))
+        except Exception as e:  # noqa: BLE001 — best-effort, never crash anything
+            log(f"tde bridge measurement failed: {type(e).__name__}: {e}")
+
+    threading.Thread(target=_worker, daemon=True,
+                     name="tde-bridge-measure").start()
 
 
 def _maybe_delegate_worker(
@@ -7613,10 +7807,16 @@ def _maybe_delegate_worker(
     try:
         from corvin_console import feature_flags as _ff  # type: ignore  # noqa: PLC0415
         parity_on = _ff.is_enabled("bridge_worker_engine_parity", tid)
+        tde_on = _ff.is_enabled("bridge_tde_execution", tid)
     except Exception:  # noqa: BLE001 — console package absent → feature is off
         parity_on = False
+        tde_on = False
 
-    if not parity_on:
+    # bridge_tde_execution (TDE_ROBUST_USABLE_PLAN Step 4) ALSO enters the full
+    # route, so a `mode=tde` bridge turn can reach real TDE even if the operator
+    # has not enabled the broader ACS parity. Neither flag → unchanged
+    # pass-through to the (frozen) big-data-only carve-out.
+    if not parity_on and not tde_on:
         return (
             _maybe_delegate_big_data(
                 prompt, channel=channel, chat_key=chat_key, persona=persona,
@@ -7658,19 +7858,30 @@ def _maybe_delegate_worker(
     target = _worker_engine_target(
         prompt, mode=mode, force_delegate=force_delegate, tenant_id=tid,
     )
-    if target != "acs":
-        # "native" (mode says so, or ACS unavailable) or "tde" (always
-        # degrades to native on a bridge — see _worker_engine_target) — either
-        # way, run the direct turn.
-        return None, prompt
-
-    answer = _run_acs_delegation(
-        prompt, channel=channel, chat_key=chat_key, persona=persona, tenant_id=tid,
-        log_prefix="worker delegation",
-        quota_channel_suffix="worker",
-        workflow_name_suffix="worker-delegation",
-    )
-    return answer, prompt
+    if target == "tde":
+        # bridge_tde_execution on + mode=tde + TDE probed available
+        # (_worker_engine_target). Run TDE for real; a None answer (ANY failure
+        # or an exhausted pool) degrades to the native turn — the bridge's
+        # built-in robust degrade, which IS the self-healing on this path.
+        answer = _run_tde_delegation(
+            prompt, channel=channel, chat_key=chat_key, persona=persona,
+            tenant_id=tid,
+        )
+        return answer, prompt
+    if target == "acs":
+        if not parity_on:
+            # ACS parity needs its OWN flag; bridge_tde_execution alone only
+            # unlocks TDE, never a silent ACS fan-out the operator didn't ask for.
+            return None, prompt
+        answer = _run_acs_delegation(
+            prompt, channel=channel, chat_key=chat_key, persona=persona, tenant_id=tid,
+            log_prefix="worker delegation",
+            quota_channel_suffix="worker",
+            workflow_name_suffix="worker-delegation",
+        )
+        return answer, prompt
+    # "native" — run the direct turn.
+    return None, prompt
 
 
 # Flags a summarizer CLI may legitimately name back at us in an error. Anything

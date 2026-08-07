@@ -59,12 +59,18 @@ path before any model sees the task. Two things decide it, in this order:
 >   turn and a console turn given identical input classify identically).
 >   Falls back to the unchanged `bridge_big_data_delegation` path while off,
 >   so an existing install that has not opted in sees no behavior change.
->   TDE stays unreachable from a bridge either way: `_worker_engine_target`
->   hard-codes `tde_available=False`, so `mode="tde"` always degrades to the
->   direct turn on a bridge (ADR-0221 P3/P4 stay frozen pending ADR-0222's
->   measured gate — this ADR deliberately does not build TDE execution for
->   bridges). The **remote-trigger** path still has no Tier-1 delegation at
->   all.
+>   TDE on a bridge is gated by the separate opt-in flag `bridge_tde_execution`
+>   (TDE_ROBUST_USABLE_PLAN Step 4, default OFF): with it OFF, `_worker_engine_target`
+>   reports `tde_available=False`, so `mode="tde"` degrades to the direct turn on a
+>   bridge exactly as before (ADR-0221 P3/P4 frozen default). With it ON (a
+>   single-operator measured test), the bridge probes TDE for real via the SAME
+>   `_tde_available`/`_tde_quota_peek_ok` the console uses and runs it through
+>   `_run_tde_delegation` (engine-agnostic core, `SendIntegration.select_engine_and_execute`),
+>   degrading to native on ANY failure or an exhausted pool (self-healing), and — when
+>   `TDE_MEASUREMENT_ENABLED=1` — measures each real run in a daemon thread against the
+>   tool-less baselines into `measurement.jsonl` (feeds `corvin tde gate`). The flag alone
+>   unlocks only TDE, not ACS parity. The **remote-trigger** path still has no Tier-1
+>   delegation at all.
 >
 > Both flags classify big-data with the SAME `delegation_policy.is_big_data_task`
 > (moved out of `chat_runtime.py` on 2026-07-26 — while it lived there the
