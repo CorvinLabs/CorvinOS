@@ -56,6 +56,15 @@ class TestValidateZipIntegrity:
         assert manifest["id"] == "com.example.test-package"
         assert manifest["version"] == "1.0.0"
 
+    def test_validate_zip_integrity_valid(self, valid_zip):
+        """Valid ZIP archive with proper manifest returns parsed manifest."""
+        manifest = PackageValidator.validate_zip_integrity(valid_zip)
+        assert manifest is not None
+        assert isinstance(manifest, dict)
+        assert manifest["id"] == "com.example.test-package"
+        assert manifest["version"] == "1.0.0"
+        assert manifest["name"] == "Test Package"
+
     def test_missing_zip_file(self):
         """Missing ZIP file should raise."""
         with pytest.raises(ValidationError, match="ZIP file not found"):
@@ -69,14 +78,18 @@ class TestValidateZipIntegrity:
         with pytest.raises(ValidationError, match="ZIP archive corrupted"):
             PackageValidator.validate_zip_integrity(bad_zip)
 
-    def test_missing_manifest(self, tmp_path):
-        """ZIP without manifest.json should raise."""
+    def test_validate_zip_integrity_missing_manifest(self, tmp_path):
+        """ZIP without manifest.json raises ValidationError with clear message."""
         zip_path = tmp_path / "no_manifest.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:
-            zf.writestr("README.md", "No manifest here")
+            zf.writestr("README.md", "# Test Package")
+            zf.writestr("LICENSE", "MIT License")
 
-        with pytest.raises(ValidationError, match="manifest.json not found"):
+        with pytest.raises(ValidationError) as exc_info:
             PackageValidator.validate_zip_integrity(zip_path)
+
+        assert "manifest.json" in str(exc_info.value.message)
+        assert exc_info.value.field == "manifest.json"
 
     def test_invalid_manifest_json(self, tmp_path):
         """ZIP with invalid JSON manifest should raise."""
