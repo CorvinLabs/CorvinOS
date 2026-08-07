@@ -23,9 +23,23 @@ docs:
 
 # ADR-0268 — Skill Package System: Marketplace-Compatible ZIP-Based Distribution
 
-**Status:** Proposed  
+**Status:** In Progress (Phase 1-2.5 Complete)  
 **Date:** 2026-08-07  
-**Deciders:** Operator (pending review)  
+**Deciders:** Operator  
+
+## Implementation Status
+
+✅ **Phase 1 (COMPLETE):** PackageManager + Validators + Console Routes (41 tests)
+- Commit c177452: ZIP extraction, manifest parsing, dependency checking, console API
+
+✅ **Phase 2 (COMPLETE):** Preprocessing Hook Pipeline (12 tests)
+- Commit adc652f: HookRegistry, PreprocessContext, async hooks, fail-closed errors
+
+✅ **Phase 2.5 (COMPLETE):** Integration with chat_runtime (6 tests)
+- Commit f1b80a2: run_preprocessing_hooks(), package hook registration, multi-tenant support
+
+🔄 **Phase 3 (PENDING):** RSA-2048 Signature Verification + Marketplace API
+⏳ **Phase 4 (PENDING):** Console UI + Marketplace Browse/Upload
 
 ---
 
