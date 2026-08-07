@@ -82,6 +82,7 @@ class RichTaskBrief:
     """RichTaskBrief format version."""
 
     def __repr__(self) -> str:
+        """Compact representation for logging."""
         return (
             f"RichTaskBrief("
             f"input='{self.raw_input[:30]}...', "
