@@ -487,6 +487,34 @@ class ExecutionContextBuilder:
         return self._ctx
 
 
+# ── Delegation transparency badge (shared: console + bridge) ────────────────
+
+#: How a turn was delegated, in ONE place so the console chip and the bridge
+#: text-suffix render the identical string. `orch_mode` is the AWP
+#: `orchestration.engine` value where one exists (delegation_loop → "loop",
+#: dag → "graph", chat → "chat"); TDE has no such mode ("tiered"); native has
+#: none. NB: there is no AWP engine "goal" — for interactive tasks the ACS axis
+#: is always delegation_loop, so "loop" is what actually runs.
+_BADGE_ENGINE_LABELS = {
+    "native": "native", "claude_code": "native",
+    "acs": "ACS", "tde": "TDE", "tiered_delegation": "TDE",
+    "hermes": "Hermes",
+}
+_BADGE_ORCH_LABELS = {
+    "delegation_loop": "loop", "dag": "graph", "chat": "chat",
+    "tiered": "tiered", "parallel-batch": "tiered",
+}
+
+
+def format_delegation_badge(engine: str, orch_mode: "str | None" = None) -> str:
+    """Human-readable 'how was this task delegated' label, e.g. 'ACS · loop',
+    'TDE · tiered', 'native'. Shared by the console engine chip and the bridge
+    text-suffix so both surfaces read identically."""
+    eng = _BADGE_ENGINE_LABELS.get((engine or "").lower(), engine or "native")
+    mode = _BADGE_ORCH_LABELS.get((orch_mode or "").lower()) if orch_mode else None
+    return f"{eng} · {mode}" if mode else eng
+
+
 # ── Timestamp Utilities ────────────────────────────────────────────────────
 
 def _iso8601_now() -> str:

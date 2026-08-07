@@ -139,5 +139,37 @@ class MaybeDelegateWorkerTest(unittest.TestCase):
         spy.assert_not_called()
 
 
+class DelegationBadgeTest(unittest.TestCase):
+    """The delegation-transparency badge (flag delegation_badge): _maybe_delegate
+    _worker reports engine/mode via `meta`, and the shared formatter renders it."""
+
+    def test_meta_reports_tde_engine_and_mode(self):
+        with _TdeReady(), \
+             patch.object(adapter, "_run_tde_delegation", return_value="x"):
+            m: dict = {}
+            answer, _ = adapter._maybe_delegate_worker(
+                "do X", channel="discord", chat_key="c1", persona="", meta=m)
+        self.assertEqual(answer, "x")
+        self.assertEqual(m.get("engine"), "tde")
+        self.assertEqual(m.get("mode"), "tiered")
+
+    def test_meta_empty_on_degrade_to_native(self):
+        with _TdeReady(), \
+             patch.object(adapter, "_run_tde_delegation", return_value=None):
+            m: dict = {}
+            answer, _ = adapter._maybe_delegate_worker(
+                "do X", channel="discord", chat_key="c1", persona="", meta=m)
+        self.assertIsNone(answer)
+        self.assertNotIn("engine", m, "a degrade is native — no delegation meta")
+
+    def test_shared_badge_format(self):
+        from corvin_console.execution_context import (  # noqa: PLC0415
+            format_delegation_badge as f,
+        )
+        self.assertEqual(f("tde", "tiered"), "TDE · tiered")
+        self.assertEqual(f("acs", "delegation_loop"), "ACS · loop")
+        self.assertEqual(f("native", None), "native")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
