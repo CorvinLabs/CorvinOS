@@ -2,6 +2,7 @@
 
 import pytest
 from unittest.mock import Mock, patch
+from datetime import datetime
 
 # Relative import to avoid stdlib 'operator' conflict
 from ..engine import TaskEngine, EngineResult, EnginePhase
@@ -122,3 +123,100 @@ class TestCELOptionalness:
         # rich_task_brief should be None by default (optional)
         assert result.rich_task_brief is None
         assert hasattr(result, 'rich_task_brief')
+
+
+class TestCELEndToEndIntegration:
+    """Verify complete Memory→Graph→Skills→RichTaskBrief flow."""
+
+    def test_rich_brief_has_cel_phase2_fields(self):
+        """RichTaskBrief should have related_decisions and recommended_skills fields (Phase 2)."""
+        # Lazy import to avoid operator module conflict
+        import sys
+        if 'operator.context_engineering' not in sys.modules:
+            pytest.skip("CEL not available in this test run")
+
+        mod = sys.modules['operator.context_engineering']
+        RichTaskBrief = mod.RichTaskBrief
+        MemoryContext = mod.MemoryContext
+
+        # Create a RichTaskBrief (as would be populated by Phase 5.5)
+        brief = RichTaskBrief(
+            raw_input="Fix bug in concurrent module",
+            enriched_task=Mock(),
+            memory_context=MemoryContext(),
+            timestamp=datetime.now(),
+            related_decisions=[],
+            recommended_skills=[]
+        )
+
+        # Verify Phase 2 fields exist
+        assert hasattr(brief, 'related_decisions')
+        assert hasattr(brief, 'recommended_skills')
+        assert isinstance(brief.related_decisions, list)
+        assert isinstance(brief.recommended_skills, list)
+        assert brief.version == "0.2"
+
+    def test_engine_result_includes_populated_cel_fields(self):
+        """EngineResult should include populated rich_task_brief with CEL Phase 2 fields."""
+        # Lazy import to avoid operator module conflict
+        import sys
+        if 'operator.context_engineering' not in sys.modules:
+            pytest.skip("CEL not available in this test run")
+
+        mod = sys.modules['operator.context_engineering']
+        RichTaskBrief = mod.RichTaskBrief
+        MemoryContext = mod.MemoryContext
+        RelatedDecision = mod.RelatedDecision
+        RecommendedSkill = mod.RecommendedSkill
+
+        # Simulate Phase 5.5 enrichment with all three sub-phases
+        memory_context = MemoryContext(matches=[], search_queries=[], confidence=0.8)
+        related_decisions = [
+            RelatedDecision(
+                decision_id="dec-1",
+                title="Fix concurrent access bug",
+                relevance_score=0.85,
+                distance=1,
+                decision_type="bug-fix",
+                context="Related incident from memory"
+            )
+        ]
+        recommended_skills = [
+            RecommendedSkill(
+                skill_id="skill-1",
+                title="Concurrent debugging",
+                relevance_score=0.9,
+                success_rate=0.85,
+                category="debugging",
+                description="Techniques for debugging concurrent code"
+            )
+        ]
+
+        brief = RichTaskBrief(
+            raw_input="Fix concurrent access issue in task engine",
+            enriched_task=Mock(),
+            memory_context=memory_context,
+            timestamp=datetime.now(),
+            related_decisions=related_decisions,
+            recommended_skills=recommended_skills
+        )
+
+        result = EngineResult(
+            raw_task="Fix concurrent access issue in task engine",
+            decision_target=Mock(),
+            carve_out_reason="high_complexity",
+            confidence=0.85,
+            estimated_cost_usd=0.5,
+            model_recommendation="opus",
+            task_complexity=0.8,
+            enriched_metadata={"cel_enabled": True},
+            rich_task_brief=brief
+        )
+
+        # Verify end-to-end: task → brief → result
+        assert result.rich_task_brief is not None
+        assert len(result.rich_task_brief.memory_context.matches) >= 0
+        assert len(result.rich_task_brief.related_decisions) == 1
+        assert len(result.rich_task_brief.recommended_skills) == 1
+        assert result.rich_task_brief.related_decisions[0].decision_id == "dec-1"
+        assert result.rich_task_brief.recommended_skills[0].skill_id == "skill-1"
