@@ -1,0 +1,426 @@
+PACKAGE MANAGER MODULE - DIRECTORY STRUCTURE & CODE PATHS
+Generated: 2026-08-07
+
+================================================================================
+DIRECTORY STRUCTURE
+================================================================================
+
+core/package_manager/
+├── __init__.py                          # Root module - exports main API classes
+│                                         # Exports: PackageManager, PackageRegistry, PackageValidator
+├── corvin_package_manager.py            # EXISTING - Main PackageManager class
+│                                         # Methods: load_from_zip, unload_package, list_packages, enable/disable
+│
+├── package_registry.py                  # EXISTING - Persistent registry storage
+│                                         # Classes: InstalledPackage, PackageRegistry
+│                                         # Storage: ~/.corvin/tenants/{tenant_id}/packages/package_registry.json
+│
+├── validators.py                        # EXISTING - ZIP & manifest validation
+│                                         # Classes: ValidationError, PackageValidator
+│                                         # Manifest schema: JSON Schema validation
+│
+├── README.md                            # Architecture documentation (created)
+│                                         # Contains full API usage, design decisions, integration guide
+│
+├── setup.py                             # Setup configuration (created)
+│                                         # Dependencies: pydantic>=2.0, jsonschema
+│
+├── schema/                              # JSON schemas directory (created)
+│   └── (placeholder for manifest schemas)
+│
+├── package_manager/                     # NEW SUBMODULE - Modular architecture
+│   ├── __init__.py                      # Submodule initialization
+│   │
+│   ├── manager.py                       # Coordinator - top-level API
+│   │   └── class PackageManager:
+│   │       ├── install(file, scope, force, auto_update_deps)
+│   │       ├── update(pkg_id, target_version, scope, check_only)
+│   │       ├── remove(pkg_id, scope, purge)
+│   │       ├── install_multiple(files, scope, stop_on_error)
+│   │       ├── list_installed(scope)
+│   │       ├── search(query, scope)
+│   │       ├── get_info(pkg_id)
+│   │       ├── check_updates(scope)
+│   │       ├── validate_all(scope)
+│   │       ├── resolve_dependencies(pkg_id, version, scope)
+│   │       └── audit(scope)
+│   │
+│   ├── lifecycle.py                     # Lifecycle state management
+│   │   ├── @dataclass PackageLifecycleState
+│   │   │   ├── id, version, scope
+│   │   │   ├── installed_at (ISO 8601)
+│   │   │   ├── updated_at
+│   │   │   ├── status (active, disabled, pending_update, error)
+│   │   │   └── metadata
+│   │   │
+│   │   └── class PackageLifecycleManager:
+│   │       ├── install_and_track(file, scope)
+│   │       ├── update_package(pkg_id, new_version, scope)
+│   │       ├── remove_and_untrack(pkg_id, scope)
+│   │       ├── get_lifecycle_state(pkg_id, scope)
+│   │       └── list_tracked_packages(scope)
+│   │
+│   ├── registry.py                      # Catalog & availability management
+│   │   ├── @dataclass PackageMetadata
+│   │   │   ├── id, name, version
+│   │   │   ├── description, author, license
+│   │   │   ├── dependencies (dict[id -> constraint])
+│   │   │   ├── components (dict[type -> files])
+│   │   │   ├── permissions
+│   │   │   ├── checksum
+│   │   │   └── scope
+│   │   │
+│   │   ├── @dataclass RegistryEntry
+│   │   │   ├── metadata
+│   │   │   ├── available_versions (list)
+│   │   │   ├── latest_version
+│   │   │   ├── is_installed (bool)
+│   │   │   ├── installed_version
+│   │   │   └── available_locations
+│   │   │
+│   │   └── class PackageRegistry:
+│   │       ├── register_package(metadata)
+│   │       ├── unregister_package(pkg_id, version)
+│   │       ├── lookup_package(pkg_id)
+│   │       ├── search_packages(query, scope)
+│   │       ├── list_all_packages(scope)
+│   │       ├── get_available_versions(pkg_id)
+│   │       ├── mark_installed(pkg_id, version, scope)
+│   │       └── mark_uninstalled(pkg_id, scope)
+│   │
+│   ├── resolver.py                      # Dependency resolution engine
+│   │   ├── @dataclass Dependency
+│   │   │   ├── id, version_constraint
+│   │   │   ├── optional (bool)
+│   │   │   └── reason
+│   │   │
+│   │   ├── @dataclass ResolutionResult
+│   │   │   ├── resolved (bool)
+│   │   │   ├── packages (dict[id -> version])
+│   │   │   ├── conflicts (list of tuples)
+│   │   │   ├── missing (list)
+│   │   │   └── explanations
+│   │   │
+│   │   └── class DependencyResolver:
+│   │       ├── resolve_dependencies(root_pkg_id, root_version, installed, scope)
+│   │       ├── validate_constraints(pkg_id, version, installed_versions)
+│   │       ├── detect_conflicts(packages)
+│   │       └── get_transitive_dependencies(pkg_id, version)
+│   │
+│   └── validator.py                     # Enhanced validation framework
+│       ├── @dataclass ValidationError
+│       │   ├── error_type
+│       │   ├── message
+│       │   └── severity (error, warning, info)
+│       │
+│       ├── @dataclass ValidationResult
+│       │   ├── valid (bool)
+│       │   ├── errors (list)
+│       │   ├── warnings (list)
+│       │   └── metadata
+│       │
+│       └── class PackageValidator:
+│           ├── validate_package_file(file)
+│           ├── validate_installed_package(pkg_id, scope)
+│           ├── verify_signature(file)
+│           ├── verify_checksum(file, expected)
+│           ├── validate_compatibility(pkg_id, version, os, python)
+│           ├── scan_security_issues(file)
+│           └── audit_permissions(pkg_id, scope)
+│
+└── tests/                               # Test suite (created)
+    ├── __init__.py
+    ├── conftest.py                      # Pytest fixtures
+    │   ├── temp_corvin_home
+    │   ├── temp_project_root
+    │   └── mock_package_file
+    │
+    ├── test_lifecycle.py                # (TODO)
+    ├── test_registry.py                 # (TODO)
+    ├── test_resolver.py                 # (TODO)
+    ├── test_validator.py                # (TODO)
+    ├── test_manager_integration.py      # (TODO)
+    │
+    └── fixtures/                        # Test packages (TODO)
+
+================================================================================
+EXISTING CODE PATHS
+================================================================================
+
+ROOT LEVEL (ADR-0268 Phase 1)
+
+File: core/package_manager/__init__.py
+- Exports: PackageManager, PackageRegistry, PackageValidator
+- Public API entry point
+
+File: core/package_manager/corvin_package_manager.py
+- Main implementation for ADR-0268 Phase 1
+- Tenant-aware via tenant_id parameter (default: "_default")
+- Installation path: ~/.corvin/tenants/{tenant_id}/packages/{package_id}/
+- Key operations:
+  1. Validate ZIP integrity + manifest
+  2. Check dependencies
+  3. List permissions (require approval)
+  4. Extract to tenant packages directory
+  5. Register skills/hooks/plugins
+  6. Smoke-test wiring
+  7. Add to registry
+
+File: core/package_manager/package_registry.py
+- Persistent registry storage (JSON format)
+- Registry location: ~/.corvin/tenants/{tenant_id}/packages/package_registry.json
+- Classes:
+  - InstalledPackage: metadata for installed packages
+  - PackageRegistry: manages registry persistence
+- Methods:
+  - register_package(pkg)
+  - unregister_package(package_id)
+  - get_package(package_id)
+  - get_all_packages()
+
+File: core/package_manager/validators.py
+- Package validation logic
+- Manifest schema validation (JSON Schema)
+- ZIP integrity checks
+- Classes:
+  - ValidationError: exception for validation failures
+  - PackageValidator: validation implementation
+- Methods:
+  - validate_zip_integrity(zip_path)
+  - validate_manifest(manifest)
+  - validate_dependencies(manifest)
+
+================================================================================
+NEW SCAFFOLDING (package_manager/ submodule)
+================================================================================
+
+COORDINATOR API
+File: core/package_manager/package_manager/manager.py
+- Top-level class: PackageManager
+- Composes all other managers:
+  - self.lifecycle = PackageLifecycleManager()
+  - self.registry = PackageRegistry()
+  - self.resolver = DependencyResolver()
+  - self.validator = PackageValidator()
+- Provides unified high-level API for all package operations
+
+LIFECYCLE MANAGEMENT
+File: core/package_manager/package_manager/lifecycle.py
+- Classes:
+  - PackageLifecycleState: dataclass tracking lifecycle
+  - PackageLifecycleManager: high-level operations with state tracking
+- Wraps low-level install/remove with metadata tracking:
+  - installed_at (ISO 8601 timestamp)
+  - updated_at
+  - status (active/disabled/pending_update/error)
+  - custom metadata
+
+REGISTRY & CATALOG
+File: core/package_manager/package_manager/registry.py
+- Higher-level registry with catalog features
+- Classes:
+  - PackageMetadata: package catalog information
+  - RegistryEntry: registry entry with versions
+  - PackageRegistry: catalog management
+- Features:
+  - Package search and discovery
+  - Version management
+  - Installation status tracking
+  - Scope-based filtering
+
+DEPENDENCY RESOLUTION
+File: core/package_manager/package_manager/resolver.py
+- Classes:
+  - Dependency: dependency specification
+  - ResolutionResult: resolution outcome
+  - DependencyResolver: resolution engine
+- Capabilities:
+  - Resolve dependency graphs
+  - Detect version conflicts
+  - Validate version constraints
+  - Transitive dependency traversal
+
+VALIDATION FRAMEWORK
+File: core/package_manager/package_manager/validator.py
+- Enhanced validation layer
+- Classes:
+  - ValidationError: validation error details
+  - ValidationResult: validation outcome
+  - PackageValidator: comprehensive validator
+- Validation types:
+  - File integrity (ZIP)
+  - Manifest validation
+  - Installed package integrity
+  - Signature verification
+  - Checksum validation
+  - Compatibility checking
+  - Security scanning
+  - Permission auditing
+
+================================================================================
+INTEGRATION WITH AWPKG
+================================================================================
+
+AWPKG Location: core/awpkg/
+
+Key Classes:
+- awpkg.installer.InstalledPackage
+- awpkg.manifest.Manifest
+- awpkg.builder.build()
+- awpkg.inspector.inspect()
+- awpkg.audit.emit()
+
+Installation Scopes (same as Package Manager):
+- user → ~/.corvin/packages/
+- project → <project>/.corvin/packages/
+- session → ~/.corvin/sessions/_awpkg_session/packages/
+
+Integration Points:
+1. Lifecycle → AWPKG Installer
+   - PackageLifecycleManager wraps install/remove with state tracking
+
+2. Registry → AWPKG Manifest
+   - RegistryEntry.metadata populated from Manifest
+
+3. Resolver → AWPKG Dependencies
+   - DependencyResolver traverses manifest.dependencies
+
+4. Validator → AWPKG Safety Checks
+   - PackageValidator orchestrates existing AWPKG checks
+
+================================================================================
+THREE-SCOPE MODEL (ADR-0007)
+================================================================================
+
+SCOPE: user
+- Storage: ~/.corvin/packages/
+- Registry: ~/.corvin/packages/package_registry.json
+- Access: Global to current user
+- Use: User-installed skills, plugins, workflows
+
+SCOPE: project
+- Storage: <project>/.corvin/packages/
+- Registry: <project>/.corvin/packages/package_registry.json
+- Access: Project-local only
+- Use: Project-specific extensions
+
+SCOPE: session
+- Storage: ~/.corvin/sessions/_awpkg_session/packages/
+- Registry: ~/.corvin/sessions/_awpkg_session/packages/package_registry.json
+- Access: Single session only
+- Use: Temporary packages
+
+================================================================================
+MANIFEST FORMATS
+================================================================================
+
+Existing (ADR-0268 Phase 1) - manifest.json:
+{
+  "id": "com.example.skill",
+  "version": "1.0.0",
+  "name": "Example Skill",
+  "display_name": "Display Name",
+  "corvinOS": {"min_version": "0.10.0", "max_version": "1.0.0"},
+  "permissions": ["network", "filesystem"],
+  "dependencies": [{"id": "com.example.base", "version": ">=1.0.0"}],
+  "contents": {
+    "skills": [...],
+    "hooks": [...],
+    "plugins": [],
+    "routes": []
+  },
+  "capabilities": ["skill", "hook"],
+  "exports": ["ExampleSkill"],
+  "configuration": {"required": ["api_key"], "optional": ["timeout"]}
+}
+
+AWPKG Format - manifest.yaml:
+id: com.example.workflow
+version: 1.0.0
+name: Example Workflow
+description: A workflow example
+# ... See core/awpkg/schema/manifest.v1.json
+
+================================================================================
+DEPENDENCIES
+================================================================================
+
+External (Python):
+- pydantic>=2.0 — Data validation
+- jsonschema — JSON Schema validation
+- zipfile — ZIP archive handling (stdlib)
+- pathlib — Path handling (stdlib)
+
+Internal (CorvinOS):
+- core/awpkg/ — Low-level package format
+- core/compliance/ — Audit trail integration
+- core/observability/ — Logging and monitoring
+
+================================================================================
+KEY DESIGN PRINCIPLES
+================================================================================
+
+1. Layered Architecture
+   - Low-level: AWPKG (format, file operations, safety)
+   - Mid-level: Package Manager (lifecycle, state, validation)
+   - High-level: PackageManager coordinator (unified API)
+
+2. Fail-Closed
+   - All validation before extraction
+   - Invalid packages rejected outright
+   - No silent degradation
+
+3. Multi-Tenant
+   - Separate registries per tenant
+   - Isolated package directories
+   - Tenant-aware operations
+
+4. Separation of Concerns
+   - Lifecycle: install/update/remove + state
+   - Registry: catalog, metadata, search
+   - Resolver: dependency graphs, conflicts
+   - Validator: comprehensive validation
+
+5. Auditability
+   - All operations logged via awpkg.audit.emit()
+   - Persistent lifecycle tracking
+   - Timestamped metadata
+
+================================================================================
+USAGE EXAMPLES
+================================================================================
+
+Install a Package:
+  from package_manager import PackageManager
+  pm = PackageManager()
+  result = pm.install(Path("skill.awpkg"), scope="user", auto_update_deps=True)
+
+Check for Updates:
+  updates = pm.check_updates(scope="user")
+  for update in updates:
+      print(f"{update['id']}: {update['current']} → {update['latest']}")
+
+Resolve Dependencies:
+  resolution = pm.resolve_dependencies("com.example.workflow", "1.0.0")
+  if resolution.resolved:
+      for pkg, ver in resolution.packages.items():
+          print(f"  {pkg} v{ver}")
+
+Validate Packages:
+  results = pm.validate_all(scope="user")
+  for pkg_id, result in results.items():
+      print(f"{'✓' if result.valid else '✗'} {pkg_id}")
+
+================================================================================
+RELATED DOCUMENTATION
+================================================================================
+
+- ADR-0268: Skill Package System (ZIP distribution, marketplace)
+- ADR-0032: AWPKG format and installer
+- ADR-0007: Multi-tenant architecture (scopes)
+- CLAUDE.md: Compliance requirements (fail-closed, audit)
+- Layer Stack: Layer 6 Forge, Layer 7 SkillForge
+
+================================================================================
+Document Version: 1.0
+Last Updated: 2026-08-07

@@ -97,6 +97,7 @@ from .routes import (
     custom_provider as custom_provider_route,
     mcp_plugins as mcp_plugins_route,
     plugins as plugins_route,
+    packages as packages_route,
     admin as admin_route,
     data_sources as data_sources_route,
     chain_dual_track as chain_dual_track_route,
@@ -227,6 +228,9 @@ router.include_router(mcp_plugins_route.router, tags=["console-mcp-plugins"])
 # 404s while the `plugin_console_surface` flag is off (ships dark), so the gate
 # lives in one place instead of in the mount condition.
 router.include_router(plugins_route.router, tags=["console-plugins"])
+# ADR-0268 — Skill Package System (marketplace-compatible ZIP distribution).
+# Routes always mounted; 404s when `skill_package_system` flag is off (ships dark).
+router.include_router(packages_route.router, tags=["console-packages"])
 # ADR-0239/0243 — admin control plane. UI-independent /api/admin/* routes, always
 # mounted and each one 404s while the `admin_control_plane` flag is off (ships
 # dark), so the gate lives in the route rather than in the mount condition.
